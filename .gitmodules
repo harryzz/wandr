@@ -1,0 +1,4 @@
+[submodule "vendor/skia-src"]
+	path = vendor/skia-src
+	url = https://github.com/rust-skia/skia.git
+	shallow = true
