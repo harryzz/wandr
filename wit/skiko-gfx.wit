@@ -366,6 +366,35 @@ interface haptics {
     vibrate-ms: func(duration-ms: u32)   -> bool;
 }
 
+/// Hardware indicator lights (notification LED, backlight, battery,
+/// keyboard, etc). On Android, backed by
+/// android.hardware.light.ILights/default. SELinux on stock devices may
+/// block access without system uid; set() degrades to returning false in
+/// that case. light-type enum order matches AIDL LightType ordinals
+/// (BACKLIGHT=0 .. MICROPHONE=8) so the host can cast directly.
+interface lights {
+    enum light-type {
+        backlight, keyboard, buttons, battery, notifications,
+        attention, bluetooth, wifi, microphone,
+    }
+    enum flash-mode { %none, timed, hardware }
+    record light-state {
+        /// Packed 0xAARRGGBB. Matches AIDL HwLightState.color.
+        color-argb:    u32,
+        /// Milliseconds the light is on per flash cycle (ignored if mode=none).
+        flash-on-ms:   u32,
+        /// Milliseconds the light is off per flash cycle (ignored if mode=none).
+        flash-off-ms:  u32,
+        flash-mode:    flash-mode,
+    }
+    /// Set every light of this kind. Returns true if at least one logical
+    /// light of `kind` was updated; false if device has no such light or
+    /// the binder call failed.
+    set:      func(kind: light-type, state: light-state) -> bool;
+    /// True if the device exposes any light of this kind.
+    supports: func(kind: light-type) -> bool;
+}
+
 /// Cursor / pointer-icon control. No-op on touch-only devices (Android
 /// phones). Real implementation would call View.setPointerIcon() via JNI
 /// when targeting stylus or mouse-equipped surfaces (ChromeOS, foldables
@@ -420,6 +449,7 @@ world skiko-ui {
     import text-segmentation;
     import lifecycle;
     import haptics;
+    import lights;
     import locale;
     import clipboard;
     import pointer-icon;
