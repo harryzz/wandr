@@ -2,3 +2,7 @@
 	path = vendor/skia-src
 	url = https://github.com/rust-skia/skia.git
 	shallow = true
+[submodule "vendor/aosp-hardware-interfaces"]
+	path = vendor/aosp-hardware-interfaces
+	url = https://android.googlesource.com/platform/hardware/interfaces
+	shallow = true
