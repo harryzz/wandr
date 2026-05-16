@@ -26,6 +26,8 @@ import org.jetbrains.skiko.wasi.WasiScheduler
 import org.jetbrains.skiko.wasi.wit.Canvas as WitCanvas
 import org.jetbrains.skiko.wasi.wit.Clipboard as WitClipboard
 import org.jetbrains.skiko.wasi.wit.Haptics as WitHaptics
+import org.jetbrains.skiko.wasi.wit.Power as WitPower
+import org.jetbrains.skiko.wasi.wit.Thermal as WitThermal
 import org.jetbrains.skiko.wasi.wit.Locale as WitLocale
 import org.jetbrains.skiko.wasi.wit.PointerIcon as WitPointerIcon
 import org.jetbrains.skiko.wasi.wit.TextSegmentation as WitTextSeg
@@ -105,6 +107,21 @@ fun main() {
     WasiLifecycle.addObserver { state ->
         WitCanvas.Import.logMessage("android-lifecycle smoke: → ${state}")
     }
+
+    // android-power + android-thermal smoke: probe IPower + IThermal HALs.
+    // Backed by android.hardware.{power.IPower,thermal.IThermal}/default
+    // via rsbinder (task 19). Expected true on rooted Pixel with setenforce
+    // 0; on stock devices SELinux untrusted_app→hal_{power,thermal}_default
+    // is denied so set/boost are no-ops and queries return false / empty.
+    val intHintSup = WitPower.Import.isHintSupported(WitPower.Hint.INTERACTION)
+    WitPower.Import.boost(WitPower.Hint.INTERACTION, 100u)
+    val overall    = WitThermal.Import.overallThrottle()
+    val allTemps   = WitThermal.Import.listTemperatures()
+    WitCanvas.Import.logMessage(
+        "android-power-thermal smoke: hint(INTERACTION) supported=${intHintSup}, boost sent, " +
+        "overallThrottle=${overall}, sensors=${allTemps.size}" +
+        (if (allTemps.isNotEmpty()) " first=${allTemps.first().kind}/${allTemps.first().celsius}°C" else "")
+    )
 
     // android-haptics smoke: try a tap + an explicit 50ms vibrate.
     // Backed by android.hardware.vibrator.IVibrator/default via rsbinder
