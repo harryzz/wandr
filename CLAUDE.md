@@ -266,15 +266,16 @@ Kotlin wart-app (wasmWasiMain)
 - **Build pipeline** (Kotlin → cwasm). Full step-by-step in
   `~/wart/wart-app/BUILD.md`; minimal form:
   ```bash
-  # 1. (only if you changed Skiko itself) republish skiko-wasm-wasi.klib
+  # 1. (only if you changed Skiko itself) republish skiko-wasm-wasi.klib (~1m 40s)
   cd ~/wart/skiko/skiko
-  ./gradlew :skiko:publishKotlinMultiplatformDecoratedPublicationToMavenLocal \
+  ./gradlew publishWasmWasiPublicationToMavenLocal \
       -Pskiko.wasmWasi.enabled=true \
-      -Dorg.gradle.configureondemand=false
+      -Dorg.gradle.configureondemand=false \
+      --console=plain --no-daemon
 
-  # 2. compile the app to .wasm (links against the 11 sibling fat klibs — ~55 s)
+  # 2. compile the app to .wasm (links against the 11 sibling fat klibs — ~2 min)
   cd ~/wart/wart-app
-  ./gradlew wasmWasiProductionExecutable --console=plain --no-daemon
+  ./gradlew compileProductionExecutableKotlinWasmWasi --console=plain --no-daemon
 
   # 3. embed WIT + adapt P1→P2 + AOT-compile for aarch64-android
   wasm-tools component embed \
