@@ -109,11 +109,18 @@ shipping the full Compose port — not as discrete sequential milestones.
 | 12 | Image rect drawing | ✅ complete |
 | 13 | ColorFilter (tint, invert) | ✅ complete |
 | 14 | Paragraph layout — full layout + getRectsForRange / getGlyphPositionAtCoordinate / getWordBoundary | ✅ complete |
+| 15 | rsbinder pipeline — AIDL submodule, ProcessState init, codegen wiring | ✅ device-verified 2026-05-17 |
+| 16 | Vibrator HAL via IVibrator binder (+ @nullable null-callback workaround) | ✅ device-verified 2026-05-17 — phone buzzes |
+| 17 | Lights HAL via ILights binder + new WIT lights interface | ✅ implementation verified; graceful no-op on Pixel 2 XL (no AIDL ILights HAL on this device, Pixel 3+ has it) |
+| 19 | IPower + IThermal HALs — performance hints + thermal state | 🟡 scoped |
+| 20 | Sensors via ISensorManager (frameworks-layer AIDL) — accel/gyro/proximity/light/etc | 🟡 scoped |
+| 21 | AudioFlinger playback (path A: AAudio NDK / path B: rsbinder direct) | 🟡 scoped |
 
 **What's verified on device:** BasicTextField + TextFieldState + hardware
 keyboard, in-canvas soft keyboard, Material3 widgets (Button, Checkbox,
 DropdownMenu, Switch, Slider), LazyColumn + scrolling, warm-resume across
-lifecycle events, host-side WasiDrawable transforms.
+lifecycle events, host-side WasiDrawable transforms, **vibrator HAL via
+rsbinder binder transactions** (task 16).
 
 **Known issue (not blocking):** indeterminate `ProgressIndicator` leaks
 ~0.4 MB/s in wasm linear memory due to Kotlin/Wasm continuation retention
@@ -121,9 +128,14 @@ in `while(true){ withFrameNanos {} }` loops. Mitigation: use static
 `progress = { 0.5f }` widgets. See feedback memory
 `feedback_indeterminate_progress_leak`.
 
-**Next work** (post-PoC): IME / soft-keyboard production polish (JNI to
-Android `InputMethodManager`), Skottie / shaper for Lottie animation, more
-exotic ColorFilter modes, address the ProgressIndicator memory leak.
+**Next work** (scoped, not started): tasks 19 (IPower+IThermal), 20
+(sensors), 21 (audio playback) — see `tasks/` for details. Longer-term
+direction in `post-art-roadmap.md`. Also outstanding: IME / soft-keyboard
+production polish (JNI to Android `InputMethodManager`), Skottie / shaper
+for Lottie animation, more exotic ColorFilter modes, address the
+ProgressIndicator memory leak. Task 18 (Compose `DefaultHapticFeedback`
+adapter → WIT haptics) is the natural follow-up to tasks 16/18 once
+device-side HAL is wanted from Compose `performHapticFeedback()`.
 
 ---
 
@@ -181,12 +193,13 @@ wart/
 
 ---
 
-## Task file index (all complete)
+## Task file index
 
-These task notes describe how each WIT-surface expansion was originally
-scoped. The actual implementations landed organically during the Compose
-port; the files are kept as historical reference for the WIT/host/Kotlin
-decisions made.
+WIT-surface expansion notes (tasks 8–14) describe how each Skia/Compose
+feature was originally scoped — implementations landed organically during
+the Compose port. HAL-pipeline tasks (15–17) are recent and were executed
+sequentially; tasks 19–21 are scoped follow-ups for the runtime-to-HAL
+boundary from `post-art-roadmap.md` §3.
 
 | # | File | What it covers |
 |---|------|----------------|
@@ -197,6 +210,12 @@ decisions made.
 | 12 | `tasks/12-image-rect.md` | drawImageRect, Image Kotlin class — ✅ |
 | 13 | `tasks/13-color-filter.md` | ColorFilter tint + invert — ✅ |
 | 14 | `tasks/14-paragraph.md` | Paragraph layout + getRectsForRange / getGlyphPositionAtCoordinate / getWordBoundary — ✅ |
+| 15 | `tasks/15-rsbinder-pipeline.md` | rsbinder + rsbinder-aidl pipeline; AOSP HAL AIDL submodule; SDK 29→30 bump — ✅ |
+| 16 | `tasks/16-vibrator-hal.md` | Vibrator HAL via IVibrator binder; @nullable workaround via manual parcel — ✅ device-verified |
+| 17 | `tasks/17-lights-hal.md` | New WIT lights interface; ILights binder; graceful no-op on devices w/o AIDL HAL — ✅ |
+| 19 | `tasks/19-power-thermal-hal.md` | IPower performance hints + IThermal read-only state — 🟡 scoped |
+| 20 | `tasks/20-sensors-hal.md` | ISensorManager (frameworks-layer AIDL); pull-model sensor sample polling — 🟡 scoped |
+| 21 | `tasks/21-audioflinger-playback.md` | Audio playback — path A (AAudio NDK) vs path B (rsbinder to IAudioFlinger) — 🟡 scoped |
 
 ---
 
