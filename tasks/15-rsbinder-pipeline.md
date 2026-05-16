@@ -76,7 +76,7 @@ Per the bitter lesson in `CLAUDE.md`: `min_sdk_version` and `.cargo/config.toml`
 In `Cargo.toml`:
 
 - `[target.'cfg(target_os = "android")'.dependencies]`:
-  - `rsbinder = { version = "=0.7.0", features = ["android_11"] }`
+  - `rsbinder = { version = "=0.7.0", features = ["android_11_plus"] }` — **was `["android_11"]`**; bumped during task-16 device verification because rsbinder's `hub::get_interface` panics with `default: Unsupported Android SDK version: 35` on a Pixel 2 XL running Android 15. SDK 35 is matched against the `android_14` feature inside rsbinder (rsbinder groups SDK 34 + 35 → android_14 feature), and `android_11_plus` includes `android_11..android_14, android_16` so the runtime version dispatch finds a valid arm.
   - `async-trait = "0.1"` — required by rsbinder-aidl's generated code (`#[::async_trait::async_trait]` is emitted unconditionally on the AsyncService traits)
   - **Note:** default features (`tokio`) are kept. An earlier attempt with `default-features = false, features = ["android_11", "async"]` produced `BoxFuture not found` errors from rsbinder's own internal service-manager codegen. The `tokio` feature is needed even though we only make sync HAL calls — the async trait machinery is hard-wired into rsbinder's macros at v0.7.0.
 - `[build-dependencies]`:

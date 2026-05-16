@@ -1,6 +1,6 @@
 # Task 17 — Lights HAL (new WIT interface)
 
-> **Status: ✅ implementation + Kotlin gradle verification complete (2026-05-16), device verification pending.** Adds a brand-new `lights` WIT interface backed by `android.hardware.light.ILights` via rsbinder. Hand-edited Kotlin bindings (WIT mirror + SkikoUi.kt + InternalSkikoUi.kt) compile cleanly: skiko klib republishes (1m 37s), `compileProductionExecutableKotlinWasmWasi` in wart-app succeeds (1m 53s) producing `wart-app.wasm` 11.3 MB. compose-multiplatform-core did NOT need recompilation (additive change). Production access likely blocked by SELinux on stock devices until boot-model work — see Known issues.
+> **Status: ✅ device-verified on Pixel 2 XL 2026-05-17 (graceful no-op confirmed).** The Pixel 2 XL doesn't ship the stable AIDL `android.hardware.light.ILights/default` — only the older HIDL `android.hardware.light@2.0::ILight/default`. `rsbinder::hub::get_interface` correctly returns `Err("Service ... not found")`; `lights.supports(NOTIFICATIONS)` and `lights.set(...)` both return `false` with no crash. Behavior on a device that DOES ship the AIDL HAL (Pixel 3+) is implementation-ready but not yet verified on hardware. Hand-edited Kotlin bindings + Rust impl + Kotlin gradle build all confirmed working end-to-end via the wart-app .wasm pipeline.
 
 ## Goal
 
@@ -109,11 +109,11 @@ Two files, mirror the existing `Haptics` pattern:
   1. `cd ~/wart/skiko/skiko && ./gradlew publishWasmWasiPublicationToMavenLocal -Pskiko.wasmWasi.enabled=true -Dorg.gradle.configureondemand=false --console=plain --no-daemon` — republishes the wasmWasi klib with the new Lights bindings. **Note:** CLAUDE.md showed the task name as `:skiko:publishKotlinMultiplatformDecoratedPublicationToMavenLocal` but the actual task is `publishWasmWasiPublicationToMavenLocal` (no `:skiko:` prefix because we're already in the skiko project root; publication is named `wasmWasi`, not `KotlinMultiplatformDecorated`). 1m 37s.
   2. `cd ~/wart/wart-app && ./gradlew compileProductionExecutableKotlinWasmWasi --console=plain --no-daemon` — compiles guest against new klib. **Note:** task name in CLAUDE.md (`wasmWasiProductionExecutable`) doesn't exist; correct task is `compileProductionExecutableKotlinWasmWasi`. 1m 53s, produces `build/compileSync/wasmWasi/main/productionExecutable/kotlin/wart-app.wasm` (~11.3 MB).
   3. Additive-only skiko change → compose-multiplatform-core did NOT need recompilation. Confirmed: wart-app builds clean against new skiko + cached compose klibs.
-- **Device (pending, requires Pixel 2 XL with `adb shell setenforce 0`):**
-  - Build APK + AOT + deploy per `~/wart/wart-app/BUILD.md`.
-  - In `Main.kt`: `Lights.Import.set(Lights.LightType.NOTIFICATIONS, Lights.LightState(colorArgb = 0xFF00FF00u, flashOnMs = 500u, flashOffMs = 500u, flashMode = Lights.FlashMode.TIMED))`
-  - Expect: green LED blinking. Or `false` returned + logcat AVC denial if SELinux blocks — fine, code didn't crash.
-  - `Lights.Import.supports(Lights.LightType.NOTIFICATIONS)` should return `true` on Pixel 2 XL (has a notification LED).
+- **Device (Pixel 2 XL, verified 2026-05-17, graceful no-op):**
+  - Verified via temporary smoke-test invocations in Main.kt (since reverted): `Lights.Import.supports(NOTIFICATIONS) → false` and `Lights.Import.set(NOTIFICATIONS, green-flash) → false`.
+  - Root cause: `adb shell service list | grep light` shows `lights: [android.hardware.lights.ILightsManager]` (framework-side wrapper) but NO `android.hardware.light.ILights/default` (the stable AIDL vendor HAL). `adb shell lshal | grep light` confirms only the HIDL `android.hardware.light@2.0::ILight/default` is registered. Stable AIDL `ILights` shipped starting Android 12 / Pixel 3+; the Pixel 2 XL HAL was implemented before the AIDL conversion and never updated.
+  - Logcat confirms graceful failure: `E rsbinder::hub::servic..: Service android.hardware.light.ILights/default not found` followed by `false` returns from our impl. No panic, no AVC denials specific to lights (servicemanager denial happens before our code runs).
+  - **Pending device test on Pixel 3+ or later** to verify positive case: notification LED actually blinks when `Lights.set(NOTIFICATIONS, green-flash)` is called.
 
 ---
 
