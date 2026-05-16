@@ -5,7 +5,7 @@ End-to-end pipeline: Kotlin source → `.wasm` → WASM Component → AOT
 
 > **TL;DR for an impatient day-to-day build:**
 > ```bash
-> cd ~/wart/wart-app && ./gradlew wasmWasiProductionExecutable
+> cd ~/wart/wart-app && ./gradlew compileProductionExecutableKotlinWasmWasi
 > bash ~/wart/scripts/build-aot.sh   # if it exists; otherwise see §3
 > ```
 
@@ -105,7 +105,7 @@ touches the configurations we actually consume.
 
 ```bash
 cd ~/wart/wart-app
-./gradlew wasmWasiProductionExecutable --console=plain --no-daemon
+./gradlew compileProductionExecutableKotlinWasmWasi --console=plain --no-daemon
 ```
 
 Output: `build/compileSync/wasmWasi/main/productionExecutable/kotlin/wart-app.wasm`
@@ -240,7 +240,7 @@ Once you have the prerequisites, the whole cycle is:
 
 ```bash
 cd ~/wart/wart-app && \
-    ./gradlew wasmWasiProductionExecutable --console=plain --no-daemon && \
+    ./gradlew compileProductionExecutableKotlinWasmWasi --console=plain --no-daemon && \
 mkdir -p /tmp/wart-aot && \
 wasm-tools component embed \
     --world my:skiko-gfx/skiko-ui \
