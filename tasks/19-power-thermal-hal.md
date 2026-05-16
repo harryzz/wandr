@@ -1,6 +1,6 @@
 # Task 19 — IPower + IThermal HALs
 
-> **Status: 🟡 scoped, not started.** Add two more stable AIDL vendor HALs via the rsbinder pipeline established in task 15 — `android.hardware.power.IPower/default` for performance hints, and `android.hardware.thermal.IThermal/default` for thermal state. Both exist on the Pixel 2 XL (confirmed by `service check` 2026-05-17). Both reuse the existing `wart-host/vendor/aosp-hardware-interfaces` submodule — only the sparse-checkout needs expanding.
+> **Status: ✅ device-verified on Pixel 2 XL 2026-05-17.** Both HALs reachable via the rsbinder pipeline. Smoke output: `hint(INTERACTION) supported=true, boost sent, overallThrottle=NONE, sensors=11 first=CPU/39.0°C`. Required (a) bumping the AOSP HAL AIDL submodule from `android-11.0.0_r48` to `android-15.0.0_r36` (stable AIDL thermal didn't exist before Android 13), (b) adding `common/aidl` + `common/fmq/aidl` to sparse-checkout for transitive imports, (c) stubbing `android.os.PersistableBundle` in `vendor/aidl-stubs/` because the newer vibrator AIDL references it, (d) splitting WIT `list-temperatures(filter: option<kind>)` into two methods to avoid hand-rolling the option<enum> arg ABI, and (e) byte-reading the u8-backed enum fields with the correct 12-byte stride for the record layout (canonical ABI keeps WIT field order, doesn't reorder like Rust does — Rust's `size_of::<Temperature>() = 8` is a misleading host-side number).
 
 ## Goal
 
