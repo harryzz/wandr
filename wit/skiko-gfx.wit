@@ -1,0 +1,427 @@
+package my:skiko-gfx@0.1.0;
+
+interface canvas {
+    // ── paint enums ───────────────────────────────────────────────────────
+    enum paint-style { fill, stroke, fill-and-stroke }
+
+    enum blend-mode {
+        src-over,
+        src,
+        dst-in,
+        dst-out,
+        src-atop,
+        dst-atop,
+        xor,
+        multiply,
+        screen,
+        overlay,
+        darken,
+        lighten,
+        color-dodge,
+        color-burn,
+        hard-light,
+        soft-light,
+        difference,
+        exclusion,
+        clear,
+    }
+
+    enum stroke-cap  { butt, round, square }
+    enum stroke-join { miter, round, bevel }
+
+    enum color-filter-kind { none, blend, invert }
+
+    record paint-attrs {
+        color:              u32,
+        style:              paint-style,
+        stroke-width:       f32,
+        stroke-miter:       f32,
+        stroke-cap:         stroke-cap,
+        stroke-join:        stroke-join,
+        anti-alias:         bool,
+        alpha:              u8,
+        blend-mode:         blend-mode,
+        shader-id:          u32,
+        color-filter-kind:  color-filter-kind,
+        color-filter-color: u32,
+    }
+
+    // ── surface dimensions ────────────────────────────────────────────────
+    surface-width:  func() -> u32;
+    surface-height: func() -> u32;
+
+    begin-frame: func();
+    end-frame:   func();
+
+    // ── transform stack ───────────────────────────────────────────────────
+    save:             func();
+    save-layer:       func(x: f32, y: f32, w: f32, h: f32, has-bounds: bool, alpha: u8);
+    restore:          func();
+    translate:        func(dx: f32, dy: f32);
+    scale:            func(sx: f32, sy: f32);
+    rotate:           func(degrees: f32);
+    skew:             func(sx: f32, sy: f32);
+    /// 3x3 matrix in row-major order: [a b c / d e f / g h i]
+    concat:           func(a: f32, b: f32, c: f32,
+                           d: f32, e: f32, f: f32,
+                           g: f32, h: f32, i: f32);
+    reset-matrix:     func();
+
+    // ── clip ─────────────────────────────────────────────────────────────
+    clip-rect:  func(x: f32, y: f32, w: f32, h: f32, anti-alias: bool);
+    clip-rrect: func(x: f32, y: f32, w: f32, h: f32, rx: f32, ry: f32, anti-alias: bool);
+
+    // ── drawing ───────────────────────────────────────────────────────────
+    clear:       func(argb: u32);
+    draw-paint:  func(paint: paint-attrs);
+    draw-rect:   func(x: f32, y: f32, w: f32, h: f32, paint: paint-attrs);
+    draw-rrect:  func(x: f32, y: f32, w: f32, h: f32, rx: f32, ry: f32, paint: paint-attrs);
+    /// Donut shape: outer rrect with inner rrect hole.
+    draw-drrect: func(ox: f32, oy: f32, ow: f32, oh: f32, orx: f32, ory: f32,
+                      ix: f32, iy: f32, iw: f32, ih: f32, irx: f32, iry: f32,
+                      paint: paint-attrs);
+    draw-oval:   func(x: f32, y: f32, w: f32, h: f32, paint: paint-attrs);
+    draw-line:   func(x0: f32, y0: f32, x1: f32, y1: f32, paint: paint-attrs);
+    draw-arc:    func(x: f32, y: f32, w: f32, h: f32,
+                      start-angle: f32, sweep-angle: f32,
+                      include-center: bool, paint: paint-attrs);
+
+    /// Serialised path as UTF-8 SVG path string (M/L/C/Q/A/Z).
+    draw-path: func(path-data: list<u8>, paint: paint-attrs);
+
+    // ── text blobs ────────────────────────────────────────────────────────
+    create-text-blob: func(text: list<u8>, font-family: list<u8>, size: f32, weight: u32, italic: bool) -> u32;
+    draw-text-blob:   func(id: u32, x: f32, y: f32, paint: paint-attrs);
+    drop-text-blob:   func(id: u32);
+
+    // ── multi-run text blob builder (task 10) ─────────────────────────────
+    begin-text-blob: func();
+    add-text-run:    func(text: list<u8>, font-family: list<u8>,
+                          size: f32, weight: u32, italic: bool,
+                          x: f32, y: f32);
+    end-text-blob:   func() -> u32;
+
+    // ── images ────────────────────────────────────────────────────────────
+    create-image:     func(width: u32, height: u32, pixels: list<u8>) -> u32;
+    draw-image:       func(image-id: u32, x: f32, y: f32, alpha: u8);
+    draw-image-rect:  func(image-id: u32,
+                           src-x: f32, src-y: f32, src-w: f32, src-h: f32,
+                           dst-x: f32, dst-y: f32, dst-w: f32, dst-h: f32,
+                           paint: paint-attrs);
+    drop-image:       func(image-id: u32);
+
+    // ── shaders (task 11) ─────────────────────────────────────────────────
+    create-linear-gradient: func(x0: f32, y0: f32, x1: f32, y1: f32,
+                                  colors: list<u32>, stops: list<f32>,
+                                  tile-mode: u8) -> u32;
+    create-radial-gradient: func(cx: f32, cy: f32, radius: f32,
+                                  colors: list<u32>, stops: list<f32>,
+                                  tile-mode: u8) -> u32;
+    drop-shader: func(id: u32);
+
+    // ── clip-path (task 09) ───────────────────────────────────────────────
+    clip-path: func(path-data: list<u8>, anti-alias: bool);
+
+    // ── picture recording (Tier A skia shim) ──────────────────────────────
+    // A PictureRecorder captures draw commands into a Picture that can be
+    // replayed onto another canvas. While a recorder is in "recording"
+    // state, ALL canvas draw calls on this interface (draw-rect, draw-path,
+    // draw-text-blob, …) route to the recorder's internal canvas instead
+    // of the screen surface — there is no separate "recording canvas"
+    // handle. Nesting is not supported (Compose / upstream skia-safe don't
+    // nest recordings).
+    //
+    // Usage from Kotlin mirrors org.jetbrains.skia.PictureRecorder:
+    //   val rec = PictureRecorder()                    // create-picture-recorder
+    //   val canvas = rec.beginRecording(rect, bbh)     // begin-picture-recording
+    //   canvas.drawRect(...)                            // routes to recorder
+    //   val pic = rec.finishRecordingAsPicture()        // finish-recording-as-picture
+    //   rec.close()                                     // close-picture-recorder
+    //   onScreen.drawPicture(pic)                       // draw-picture
+    create-picture-recorder:     func() -> u32;
+    begin-picture-recording:     func(recorder-id: u32,
+                                      left: f32, top: f32, right: f32, bottom: f32,
+                                      with-rtree: bool);
+    finish-recording-as-picture: func(recorder-id: u32) -> u32;
+    close-picture-recorder:      func(recorder-id: u32);
+    draw-picture:                func(picture-id: u32);
+    drop-picture:                func(picture-id: u32);
+
+    // ── deferred-replay drawables ─────────────────────────────────────────
+    // A WasiDrawable is a C++ SkDrawable subclass with a *swappable*
+    // inner-drawable field. Parent recordings capture `draw-drawable(id)`
+    // ops; at parent-replay time, the wrapper's onDraw delegates to the
+    // CURRENT inner — so a child layer can re-record (swap its inner via
+    // set-drawable-from-recorder) without parents needing to re-record.
+    //
+    // The inner is obtained from `finish-recording-as-drawable` (not
+    // `finish-recording-as-picture`): `finish-as-picture` snapshots
+    // embedded child drawables into frozen SkPictures at finish time
+    // (SkBigPicture::SnapshotArray), breaking deferred lookup. The
+    // drawable form keeps the SkRecord + drawable-list, so playback
+    // invokes each child drawable's `onDraw` live.
+    create-drawable:              func() -> u32;
+    /// Finish the recorder's recording as an SkDrawable and install it as
+    /// the wrapper's inner. The recorder is reset (just like
+    /// finish-recording-as-picture); call begin-picture-recording again
+    /// to reuse it.
+    set-drawable-from-recorder:   func(drawable-id: u32, recorder-id: u32);
+    set-drawable-bounds:          func(drawable-id: u32,
+                                       l: f32, t: f32, r: f32, b: f32);
+    draw-drawable:                func(drawable-id: u32);
+    drop-drawable:                func(drawable-id: u32);
+
+    /// Live transform attrs applied at `WasiDrawable.onDraw` time (NOT
+    /// captured into any recording). Setting these mutates host state;
+    /// the next replay of any `draw-drawable(id)` op uses the updated
+    /// values. This is the wasi analogue of an Android RenderNode's live
+    /// transform properties — it lets a child layer reposition itself
+    /// (e.g. during Modifier.verticalScroll) without invalidating any
+    /// parent's recording.
+    ///
+    /// Order applied inside onDraw:
+    ///   1. canvas.translate(layer-x, layer-y)        -- parent-space pos
+    ///   2. canvas.translate(translation-x, y)
+    ///   3. T(pivot) · S · R · T(-pivot)              -- scale/rotate
+    ///   4. coarse shadow from current clip shape     (if elevation > 0)
+    ///   5. clip per current clip-shape               (none/rect/rrect)
+    ///   6. saveLayer with alpha                      (if alpha < 1)
+    ///   7. drawDrawable(inner)
+    ///   8. restore
+    set-drawable-transform: func(
+        drawable-id: u32,
+        layer-x: f32, layer-y: f32,
+        translation-x: f32, translation-y: f32,
+        scale-x: f32, scale-y: f32,
+        rotation-z: f32,
+        pivot-x: f32, pivot-y: f32,
+        alpha: f32,
+    );
+    /// Clip applied after transforms. (Path clip not yet supported here —
+    /// for path-shaped outlines fall back to parent-recording-captured
+    /// canvas.clipPath. Compose mostly uses rect/rrect via
+    /// RoundedCornerShape.)
+    set-drawable-clip-rect:  func(drawable-id: u32, l: f32, t: f32, r: f32, b: f32, antialias: bool);
+    set-drawable-clip-rrect: func(drawable-id: u32, l: f32, t: f32, r: f32, b: f32, radii: list<f32>, antialias: bool);
+    clear-drawable-clip:     func(drawable-id: u32);
+    /// Shadow elevation in dp. Host draws a coarse translucent-black fill
+    /// of the current clip shape, offset downward proportional to
+    /// elevation, before applying clip. 0 = no shadow.
+    set-drawable-shadow-elevation: func(drawable-id: u32, elevation: f32);
+
+    // ── debug log ─────────────────────────────────────────────────────────
+    log-message: func(msg: string);
+}
+
+interface paragraph {
+    record text-style {
+        font-size:   f32,
+        font-weight: u32,
+        italic:      bool,
+        color:       u32,
+        font-family: list<u8>,
+    }
+
+    create-paragraph-builder: func(width: f32) -> u32;
+    push-text-style:          func(id: u32, style: text-style);
+    add-text:                 func(id: u32, text: list<u8>);
+    pop-text-style:           func(id: u32);
+    build-paragraph:          func(id: u32) -> u32;
+    drop-paragraph-builder:   func(id: u32);
+
+    layout:                   func(id: u32, width: f32);
+    paint-paragraph:          func(id: u32, x: f32, y: f32);
+    get-height:               func(id: u32) -> f32;
+    get-line-count:           func(id: u32) -> u32;
+    // Metrics used by Compose's Text layout. layout(width) must be called
+    // before these return meaningful values; max-intrinsic-width is what
+    // Compose uses to decide how wide to make the column when measuring.
+    get-max-width:               func(id: u32) -> f32;
+    get-max-intrinsic-width:     func(id: u32) -> f32;
+    get-min-intrinsic-width:     func(id: u32) -> f32;
+    get-alphabetic-baseline:     func(id: u32) -> f32;
+    get-ideographic-baseline:    func(id: u32) -> f32;
+
+    // ── Rect-for-range queries ────────────────────────────────────────────
+    // Used by SkiaParagraph.getHorizontalPosition / getCursorRect to walk
+    // backward/forward from the cursor offset and find a glyph rect.
+    // Without these, getHorizontalPosition falls back to TextAlign.Start →
+    // x=0 for every offset (cursor stays at position 0 visually even though
+    // selection state advances correctly).
+    //
+    // Two-stage protocol to avoid needing `list<f32>` return marshaling:
+    //  1) prepare-rects-for-range computes the result host-side and caches
+    //     it inside the renderer; returns the number of rects produced.
+    //  2) the get-cached-rect-* getters read individual fields by index.
+    // height-mode: 0=TIGHT 1=MAX 2=LINE_SPACING_MIDDLE 3=LINE_SPACING_TOP
+    //              4=LINE_SPACING_BOTTOM 5=STRUT
+    // width-mode:  0=TIGHT 1=MAX
+    // direction:   0=LTR  1=RTL
+    prepare-rects-for-range:   func(id: u32, start: u32, end: u32,
+                                    height-mode: u32, width-mode: u32) -> u32;
+    get-cached-rect-left:      func(index: u32) -> f32;
+    get-cached-rect-top:       func(index: u32) -> f32;
+    get-cached-rect-right:     func(index: u32) -> f32;
+    get-cached-rect-bottom:    func(index: u32) -> f32;
+    get-cached-rect-direction: func(index: u32) -> u32;
+
+    /// Returns the text offset (in characters) at the given paragraph-local
+    /// coordinate. Used by Compose's tap-to-position-cursor: without this,
+    /// every tap maps to offset 0 → cursor doesn't move when you tap inside
+    /// the text. The affinity bit isn't returned (Compose only uses
+    /// `.position` from the chain).
+    get-glyph-position-at-coordinate: func(id: u32, x: f32, y: f32) -> u32;
+
+    /// Returns the [start, end) range of the word containing the given
+    /// text offset. Used by long-press to select a word. Two calls instead
+    /// of one record return.
+    get-word-boundary-start: func(id: u32, offset: u32) -> u32;
+    get-word-boundary-end:   func(id: u32, offset: u32) -> u32;
+
+    drop-paragraph:           func(id: u32);
+}
+
+interface renderer {
+    enum pointer-kind { down, up, move, scroll }
+    enum key-kind     { down, up }
+
+    render-frame:          func(nanos: u64);
+    on-pointer-event:      func(kind: pointer-kind, x: f32, y: f32);
+    on-key-event:          func(kind: key-kind, key-code: u32);
+    on-resize:             func(w: u32, h: u32);
+    /// Fired by the host when a previously scheduled callback comes due.
+    /// callback-id is whatever the guest passed to schedule-delayed.
+    on-scheduled-callback: func(callback-id: u32);
+    /// Enriched pointer event — same semantics as on-pointer-event plus
+    /// multi-touch pointer-id (0..N) and normalized pressure (0.0..1.0,
+    /// 0.0 if the device doesn't report it). Hosts emit both v1 and v2
+    /// for every touch; guests can ignore whichever they don't need.
+    on-pointer-event-v2:   func(pointer-id: u32, kind: pointer-kind, x: f32, y: f32, pressure: f32);
+    /// Enriched key event — same semantics as on-key-event plus the
+    /// resolved UTF-32 code-point (for printable chars; 0 if not
+    /// printable) and a `key-id` whose numeric value matches Compose's
+    /// webMain `Key(keyCode: Long)` constants (8=Backspace, 9=Tab,
+    /// 13=Enter, 37=ArrowLeft, 38=ArrowUp, 39=ArrowRight, 40=ArrowDown,
+    /// 46=Delete, 27=Escape, 0=Unknown). For printable text the guest
+    /// should use `code-point` to build a Compose `KeyEvent`; for
+    /// special keys (backspace, arrows, enter) the guest uses `key-id`.
+    on-key-event-v2:       func(kind: key-kind, code-point: u32, key-id: u32);
+    /// Lifecycle state transition. Fired by the host on every observed
+    /// transition (initial Resumed when the activity comes up, Stopped
+    /// when it's backgrounded, Destroyed on exit).
+    on-lifecycle-changed:  func(state: u32);
+}
+
+/// Delayed-task scheduler. schedule-delayed registers a callback for a future
+/// frame; the host fires renderer.on-scheduled-callback with the given
+/// callback-id when the deadline has passed. Granularity = frame rate (~16 ms).
+/// cancel removes a previously scheduled task by handle; a no-op if already fired.
+interface scheduler {
+    schedule-delayed: func(delay-ms: u32, callback-id: u32) -> u32;
+    cancel:           func(handle: u32);
+}
+
+/// Unicode text segmentation (icu_segmenter from icu4x on the host).
+/// Replaces java.text.BreakIterator used by upstream Compose's WordIterator
+/// (ui-text) and StringHelpers (foundation). Offsets are UTF-8 byte indices
+/// because that's what icu_segmenter returns natively; Kotlin callers can
+/// convert to/from UTF-16 char indices via Kotlin stdlib if needed.
+interface text-segmentation {
+    enum boundary-kind { grapheme, word, line, sentence }
+
+    /// Smallest boundary >= `start-offset`. If none, returns text length in bytes.
+    next-boundary: func(text: string, kind: boundary-kind, start-offset: u32) -> u32;
+    /// Largest boundary <= `end-offset`. If none, returns 0.
+    prev-boundary: func(text: string, kind: boundary-kind, end-offset:   u32) -> u32;
+}
+
+/// Host-side android-window queries.
+/// density = dpi / 160 — px-per-dp factor at the Android baseline.
+/// font-scale follows the user accessibility setting.
+interface window {
+    get-density:    func() -> f32;
+    get-font-scale: func() -> f32;
+    get-dpi:        func() -> u32;
+}
+
+/// Activity / window lifecycle.
+/// Mirrors Android's standard lifecycle states; populated by winit's
+/// resumed/suspended/exiting callbacks underneath. get-state() is a
+/// query; the host also fires renderer.on-lifecycle-changed when the
+/// state transitions.
+interface lifecycle {
+    enum state { initialized, created, started, resumed, paused, stopped, destroyed }
+    get-state: func() -> state;
+}
+
+/// Haptic feedback. Implementation writes to sysfs (/sys/class/timed_output
+/// or /sys/class/leds/vibrator), which on most devices requires root.
+/// Returns true if the request was issued, false if no vibrator was found
+/// or the write was rejected.
+interface haptics {
+    enum feedback { tap, long-press, virtual-key, click, double-click }
+    /// Trigger a predefined feedback by semantic kind.
+    perform:    func(feedback: feedback) -> bool;
+    /// Vibrate for an arbitrary duration in milliseconds (1..1000).
+    vibrate-ms: func(duration-ms: u32)   -> bool;
+}
+
+/// Cursor / pointer-icon control. No-op on touch-only devices (Android
+/// phones). Real implementation would call View.setPointerIcon() via JNI
+/// when targeting stylus or mouse-equipped surfaces (ChromeOS, foldables
+/// with trackpads, dex). The WIT shape matches upstream Compose's
+/// PointerIcon variants so a guest can call it unconditionally.
+interface pointer-icon {
+    enum kind {
+        default, text, hand, crosshair, wait, help, progress,
+        not-allowed, grab, grabbing, copy, %move,
+        resize-ns, resize-ew, resize-nesw, resize-nwse,
+        all-scroll, zoom-in, zoom-out
+    }
+    /// Request a cursor change. May silently no-op if the host device
+    /// has no cursor or the requested icon isn't supported.
+    set: func(kind: kind);
+}
+
+/// In-process clipboard. Holds a single text payload shared within the
+/// wasm process. Cross-app clipboard (system ClipboardManager) requires
+/// binder/JNI — see CLAUDE-TODO.md "Investigation queue".
+interface clipboard {
+    /// Current clipboard text. Empty string if nothing has been set.
+    get-text: func() -> string;
+    /// Replace clipboard content. Empty string is allowed (still counts as
+    /// "has content"). To clear, use clear() instead.
+    set-text: func(text: string);
+    /// True if set-text has been called and clear() hasn't.
+    has-text: func() -> bool;
+    clear:    func();
+}
+
+/// User locale + i18n preferences from Android system properties.
+/// Replaces upstream Compose's CalendarLocale, TimeFormat.is24HourFormat,
+/// and LayoutDirection defaults in material3 + ui-text.
+interface locale {
+    enum layout-direction { ltr, rtl }
+
+    /// BCP-47 tag of the user's primary locale, e.g. "en-US" or "zh-Hans-CN".
+    /// Falls back to "en-US" if no preference is set.
+    primary-locale:    func() -> string;
+    /// True when the user prefers 24-hour clock; otherwise 12-hour.
+    is-24-hour-format: func() -> bool;
+    /// Writing direction for the primary locale (RTL for ar/he/fa/ur/yi/dv).
+    get-layout-direction: func() -> layout-direction;
+}
+
+world skiko-ui {
+    import canvas;
+    import paragraph;
+    import window;
+    import scheduler;
+    import text-segmentation;
+    import lifecycle;
+    import haptics;
+    import locale;
+    import clipboard;
+    import pointer-icon;
+    export renderer;
+}

@@ -1,0 +1,5 @@
+# Each of these subdirs is a separate git repo (or vendored sibling project)
+# and is NOT tracked from this top-level. They have their own .gitignore files.
+compose-*/
+skiko/
+wart-*/
