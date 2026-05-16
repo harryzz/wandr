@@ -7,6 +7,8 @@ mod text_segmentation_impl;
 mod lifecycle_impl;
 mod haptics_impl;
 mod lights_impl;
+mod power_impl;
+mod thermal_impl;
 mod locale_impl;
 mod clipboard_impl;
 mod pointer_icon_impl;

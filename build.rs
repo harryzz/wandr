@@ -85,21 +85,40 @@ fn main() {
 
         // ── rsbinder-aidl codegen for vendored AOSP HALs ─────────────────────
         // Vendored under vendor/aosp-hardware-interfaces/ as a shallow
-        // submodule pinned to android-11.0.0_r48. Sparse-checkout limits
-        // the working tree to vibrator/aidl and light/aidl (~544 KB).
+        // submodule pinned to android-15.0.0_r36. Sparse-checkout limits
+        // the working tree to vibrator/aidl, light/aidl, power/aidl, and
+        // thermal/aidl (~700 KB). r36 is required for the stable AIDL
+        // thermal HAL — earlier versions don't have it.
         use std::path::PathBuf;
         let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
         let vendor = PathBuf::from("vendor/aosp-hardware-interfaces");
         let vibrator_aidl = vendor.join("vibrator/aidl");
         let light_aidl    = vendor.join("light/aidl");
+        let power_aidl    = vendor.join("power/aidl");
+        let thermal_aidl  = vendor.join("thermal/aidl");
+        let fmq_aidl      = vendor.join("common/fmq/aidl");
+        let common_aidl   = vendor.join("common/aidl");
+        // Framework-side AIDL types that hardware/interfaces depends on but
+        // we don't vendor (the real ones live in frameworks/base). We provide
+        // empty `parcelable Foo;` stubs that satisfy the import resolver but
+        // are never actually constructed because the methods that use them
+        // are not called from our host.
+        let stubs = PathBuf::from("vendor/aidl-stubs");
         // Pass only the interface .aidl files; parcelables/enums in the same
         // package are resolved automatically via include_dir. Passing the full
         // dir causes the package modules to be re-emitted once per file (~3×).
         rsbinder_aidl::Builder::new()
             .source(vibrator_aidl.join("android/hardware/vibrator/IVibrator.aidl"))
             .source(light_aidl.join("android/hardware/light/ILights.aidl"))
+            .source(power_aidl.join("android/hardware/power/IPower.aidl"))
+            .source(thermal_aidl.join("android/hardware/thermal/IThermal.aidl"))
             .include_dir(vibrator_aidl.clone())
             .include_dir(light_aidl.clone())
+            .include_dir(power_aidl.clone())
+            .include_dir(thermal_aidl.clone())
+            .include_dir(fmq_aidl.clone())
+            .include_dir(common_aidl.clone())
+            .include_dir(stubs.clone())
             .set_async_support(true)
             .output(PathBuf::from(&out_dir).join("aosp_hal_bindings.rs"))
             .generate()
@@ -107,6 +126,11 @@ fn main() {
 
         println!("cargo:rerun-if-changed={}", vibrator_aidl.display());
         println!("cargo:rerun-if-changed={}", light_aidl.display());
+        println!("cargo:rerun-if-changed={}", power_aidl.display());
+        println!("cargo:rerun-if-changed={}", thermal_aidl.display());
+        println!("cargo:rerun-if-changed={}", fmq_aidl.display());
+        println!("cargo:rerun-if-changed={}", common_aidl.display());
+        println!("cargo:rerun-if-changed={}", stubs.display());
     }
 
     println!("cargo:rerun-if-changed=build.rs");
