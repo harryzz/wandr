@@ -107,11 +107,14 @@ fun main() {
     }
 
     // android-haptics smoke: try a tap + an explicit 50ms vibrate.
+    // Backed by android.hardware.vibrator.IVibrator/default via rsbinder
+    // (task 16). Expected true on rooted Pixel with `setenforce 0`; on
+    // stock devices the SELinux untrusted_app→hal_vibrator_default policy
+    // denies the binder call → returns false (no crash).
     val tapOk      = WitHaptics.Import.perform(WitHaptics.Feedback.TAP)
     val vibrateOk  = WitHaptics.Import.vibrateMs(50u)
     WitCanvas.Import.logMessage(
-        "android-haptics smoke: perform(TAP)=${tapOk}, vibrateMs(50)=${vibrateOk} " +
-        "(false expected on non-system UID — sysfs vibrator owned by system:system)"
+        "android-haptics smoke: perform(TAP)=${tapOk}, vibrateMs(50)=${vibrateOk}"
     )
 
     // android-locale smoke: read user's locale, time format, direction.
