@@ -1,0 +1,76 @@
+[package]
+name    = "wasm-android-host"
+version = "0.1.0"
+edition = "2021"
+
+# Build for Android APK: cargo apk build --release
+# Build for desktop:     cargo build --release
+
+[lib]
+name      = "wasm_android_host"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "wasm-android-host"
+path = "src/main.rs"
+
+[dependencies]
+wasmtime           = { version = "44", features = ["component-model"] }
+wasmtime-wasi      = { version = "44" }
+anyhow             = "1"
+log                = "0.4"
+android_logger     = { version = "0.14", optional = true }
+env_logger         = { version = "0.11", optional = true }
+raw-window-handle  = "0.6"
+icu_segmenter      = "2"
+
+# skia-safe: GL backend only (no Vulkan needed — EGL gives us GLES)
+[dependencies.skia-safe]
+version  = "0.93.1"
+features = ["gl", "textlayout", "embed-icudtl"]
+
+# winit for window + event loop — android-native-activity on Android
+[dependencies.winit]
+version  = "0.30"
+features = []
+
+[target.'cfg(target_os = "android")'.dependencies]
+winit            = { version = "0.30", features = ["android-native-activity"] }
+android_logger   = "0.14"
+ndk              = "0.9"
+ndk-context      = "0.1"
+android_system_properties = "0.1"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+env_logger = "0.11"
+winit      = { version = "0.30", features = [] }
+
+[build-dependencies]
+cc = "1"
+
+[features]
+default = []
+
+[package.metadata.android]
+package = "com.example.wasmruntime"
+assets  = "assets"
+
+[package.metadata.android.sdk]
+min_sdk_version    = 29
+target_sdk_version = 34
+
+[package.metadata.android.application]
+label = "WASM Runtime"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.READ_EXTERNAL_STORAGE"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.WRITE_EXTERNAL_STORAGE"
+
+[package.metadata.android.signing.release]
+path     = "/home/harry/.android/debug.keystore"
+keystore_password = "android"
+alias    = "androiddebugkey"
+key_password = "android"
+
