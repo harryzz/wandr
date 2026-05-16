@@ -10,6 +10,8 @@ mod locale_impl;
 mod clipboard_impl;
 mod pointer_icon_impl;
 mod input;
+mod binder;
+mod binder_aidl;
 #[cfg(target_os = "android")]
 mod bionic_compat;
 
@@ -130,6 +132,9 @@ impl App {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if let Err(reason) = binder::init() {
+            log::warn!("binder init: {reason} — HAL calls will fall back to sysfs");
+        }
         let window = Arc::new(
             event_loop
                 .create_window(Window::default_attributes()

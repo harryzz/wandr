@@ -81,6 +81,32 @@ fn main() {
         println!("cargo:rustc-link-lib=log");
         println!("cargo:rustc-link-lib=GLESv2");
         println!("cargo:rustc-link-lib=dl");
+        println!("cargo:rustc-link-lib=binder_ndk");
+
+        // ── rsbinder-aidl codegen for vendored AOSP HALs ─────────────────────
+        // Vendored under vendor/aosp-hardware-interfaces/ as a shallow
+        // submodule pinned to android-11.0.0_r48. Sparse-checkout limits
+        // the working tree to vibrator/aidl and light/aidl (~544 KB).
+        use std::path::PathBuf;
+        let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
+        let vendor = PathBuf::from("vendor/aosp-hardware-interfaces");
+        let vibrator_aidl = vendor.join("vibrator/aidl");
+        let light_aidl    = vendor.join("light/aidl");
+        // Pass only the interface .aidl files; parcelables/enums in the same
+        // package are resolved automatically via include_dir. Passing the full
+        // dir causes the package modules to be re-emitted once per file (~3×).
+        rsbinder_aidl::Builder::new()
+            .source(vibrator_aidl.join("android/hardware/vibrator/IVibrator.aidl"))
+            .source(light_aidl.join("android/hardware/light/ILights.aidl"))
+            .include_dir(vibrator_aidl.clone())
+            .include_dir(light_aidl.clone())
+            .set_async_support(true)
+            .output(PathBuf::from(&out_dir).join("aosp_hal_bindings.rs"))
+            .generate()
+            .expect("rsbinder-aidl codegen failed");
+
+        println!("cargo:rerun-if-changed={}", vibrator_aidl.display());
+        println!("cargo:rerun-if-changed={}", light_aidl.display());
     }
 
     println!("cargo:rerun-if-changed=build.rs");
