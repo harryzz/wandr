@@ -40,7 +40,7 @@ android_logger   = "0.14"
 ndk              = "0.9"
 ndk-context      = "0.1"
 android_system_properties = "0.1"
-rsbinder         = { version = "=0.7.0", features = ["android_11"] }
+rsbinder         = { version = "=0.7.0", features = ["android_11_plus"] }
 async-trait      = "0.1"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]

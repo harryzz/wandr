@@ -8,54 +8,36 @@ use std::path::Path;
 // The service is registered as "android.hardware.vibrator.IVibrator/default"
 // in servicemanager on Android 11+. SELinux on stock devices may block this
 // from an untrusted_app domain; `setenforce 0` is required during dev.
+//
+// `on()` and `perform()` in AOSP IVibrator.aidl take a `@nullable
+// IVibratorCallback`. Older HALs (Pixel 2 XL, etc.) return
+// `getCapabilities() & CAP_*_CALLBACK = 0` and **require** the callback
+// argument to be null; passing a real binder gets EX_UNSUPPORTED. Newer
+// HALs accept either.
+//
+// rsbinder-aidl 0.7.0 doesn't translate @nullable to `Option<&Strong>` —
+// the generated proxy methods take `&Strong<dyn IVibratorCallback>`,
+// non-null only. We therefore bypass the generated proxy entirely for
+// these two methods and write the parcel by hand, using
+// `Option::<Strong>::None` (which rsbinder's blanket Serialize impl
+// writes as a null binder reference). Works on every HAL regardless of
+// CAP_*_CALLBACK because we never want completion notifications.
 
 #[cfg(target_os = "android")]
 mod binder_path {
     use crate::binder_aidl::android::hardware::vibrator::{
         Effect::Effect, EffectStrength::EffectStrength,
         IVibrator::IVibrator,
-        IVibratorCallback::{IVibratorCallback, IVibratorCallbackAsyncService, BnVibratorCallback},
+        IVibratorCallback::IVibratorCallback,
     };
     use std::sync::OnceLock;
 
-    // The vibrator HAL methods take a `@nullable` IVibratorCallback in AIDL,
-    // but rsbinder-aidl 0.7.0 doesn't translate that to Option<&Strong>. So
-    // we pass a no-op callback. The callback gets called once when the
-    // vibration completes; we don't care, return Ok(()).
-    struct NopCallback;
-    impl rsbinder::Interface for NopCallback {}
-    #[async_trait::async_trait]
-    impl IVibratorCallbackAsyncService for NopCallback {
-        async fn r#onComplete(&self) -> rsbinder::status::Result<()> { Ok(()) }
-    }
-
-    // BinderAsyncRuntime is required by new_async_binder. NopCallback::onComplete
-    // returns Poll::Ready immediately on the first poll, so a trivial executor
-    // suffices — no tokio or other runtime needed. Polling once and panicking
-    // on Pending is correct because any other future on this runtime would be
-    // a bug.
-    struct TrivialRuntime;
-    impl rsbinder::BinderAsyncRuntime for TrivialRuntime {
-        fn block_on<F: std::future::Future>(&self, f: F) -> F::Output {
-            use std::task::{Context, Poll, Waker, RawWaker, RawWakerVTable};
-            fn raw() -> RawWaker {
-                fn no_op(_: *const ()) {}
-                fn clone(_: *const ()) -> RawWaker { raw() }
-                const VT: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
-                RawWaker::new(std::ptr::null(), &VT)
-            }
-            let waker = unsafe { Waker::from_raw(raw()) };
-            let mut cx = Context::from_waker(&waker);
-            let mut fut = std::pin::pin!(f);
-            match fut.as_mut().poll(&mut cx) {
-                Poll::Ready(v) => v,
-                Poll::Pending  => panic!("TrivialRuntime: future must be Ready on first poll"),
-            }
-        }
-    }
+    // IVibrator transaction codes — order from r48 IVibrator.aidl method
+    // declarations: getCapabilities, off, on, perform, ...
+    const TXN_ON:      rsbinder::TransactionCode = rsbinder::FIRST_CALL_TRANSACTION + 2;
+    const TXN_PERFORM: rsbinder::TransactionCode = rsbinder::FIRST_CALL_TRANSACTION + 3;
 
     static VIB: OnceLock<Option<rsbinder::Strong<dyn IVibrator>>> = OnceLock::new();
-    static CB:  OnceLock<rsbinder::Strong<dyn IVibratorCallback>> = OnceLock::new();
 
     fn service() -> Option<&'static rsbinder::Strong<dyn IVibrator>> {
         VIB.get_or_init(|| {
@@ -65,29 +47,74 @@ mod binder_path {
         }).as_ref()
     }
 
-    fn callback() -> &'static rsbinder::Strong<dyn IVibratorCallback> {
-        CB.get_or_init(|| BnVibratorCallback::new_async_binder(NopCallback, TrivialRuntime))
+    /// Send IVibrator.on(timeout_ms, null) directly as a binder
+    /// transaction, bypassing the generated proxy (which can't pass
+    /// null in rsbinder-aidl 0.7.0).
+    fn transact_on(svc: &rsbinder::Strong<dyn IVibrator>, ms: i32) -> bool {
+        let binder = svc.as_binder();
+        let proxy = match binder.as_proxy() {
+            Some(p) => p,
+            None => { log::warn!("haptics: svc binder is not a proxy"); return false; }
+        };
+        let mut data = match proxy.prepare_transact(true) {
+            Ok(d) => d,
+            Err(e) => { log::warn!("haptics: prepare_transact: {e:?}"); return false; }
+        };
+        if let Err(e) = data.write(&ms) {
+            log::warn!("haptics: parcel write timeout: {e:?}"); return false;
+        }
+        let null_cb: Option<rsbinder::Strong<dyn IVibratorCallback>> = None;
+        if let Err(e) = data.write(&null_cb) {
+            log::warn!("haptics: parcel write null callback: {e:?}"); return false;
+        }
+        match proxy.submit_transact(TXN_ON, &data, 0) {
+            Ok(_)  => { log::info!("haptics: IVibrator.on({ms}ms, null) → ok"); true }
+            Err(e) => { log::warn!("haptics: IVibrator.on({ms}ms, null) err={e:?}"); false }
+        }
+    }
+
+    /// Send IVibrator.perform(effect, strength, null) directly.
+    fn transact_perform(svc: &rsbinder::Strong<dyn IVibrator>, e: Effect, s: EffectStrength) -> bool {
+        let binder = svc.as_binder();
+        let proxy = match binder.as_proxy() {
+            Some(p) => p,
+            None => return false,
+        };
+        let mut data = match proxy.prepare_transact(true) {
+            Ok(d) => d, Err(_) => return false,
+        };
+        if data.write(&e).is_err() { return false; }
+        if data.write(&s).is_err() { return false; }
+        let null_cb: Option<rsbinder::Strong<dyn IVibratorCallback>> = None;
+        if data.write(&null_cb).is_err() { return false; }
+        match proxy.submit_transact(TXN_PERFORM, &data, 0) {
+            Ok(_)  => { log::info!("haptics: IVibrator.perform({e:?},{s:?},null) → ok"); true }
+            Err(err) => {
+                log::warn!("haptics: IVibrator.perform({e:?},{s:?},null) err={err:?}");
+                false
+            }
+        }
     }
 
     pub fn vibrate_ms(ms: u32) -> bool {
-        let Some(svc) = service() else { return false };
-        svc.r#on(ms as i32, callback()).is_ok()
+        let svc = match service() {
+            Some(s) => s,
+            None => { log::warn!("haptics: vibrator service not available"); return false; }
+        };
+        transact_on(svc, ms as i32)
     }
 
     pub fn perform(f: super::Feedback) -> bool {
-        let Some(svc) = service() else { return false };
+        let svc = match service() {
+            Some(s) => s,
+            None => return false,
+        };
         let (effect, strength) = map_feedback(f);
-        // Returns the actual duration the HAL chose, or EX_UNSUPPORTED if the
-        // device's vibrator doesn't implement this effect. Either way we
-        // treat "no error" as success; the caller didn't ask for a duration.
-        match svc.r#perform(effect, strength, callback()) {
-            Ok(_) => true,
-            Err(_) => {
-                // Effect unsupported on this device — fall back to a raw
-                // timed vibration of approximately the right duration.
-                vibrate_ms(super::feedback_duration(f))
-            }
+        if transact_perform(svc, effect, strength) {
+            return true;
         }
+        // Effect unsupported on this device — try a raw timed vibration.
+        transact_on(svc, super::feedback_duration(f) as i32)
     }
 
     fn map_feedback(f: super::Feedback) -> (Effect, EffectStrength) {
