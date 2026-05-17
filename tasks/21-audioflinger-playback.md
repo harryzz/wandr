@@ -1,181 +1,142 @@
-# Task 21 — AudioFlinger playback
+# Task 21 — Audio playback via rsbinder (IAAudioService)
 
-> **Status: 🟡 scoped, not started — significantly larger than 19/20.** Wire WASM Compose apps to play sound through Android's `media.audio_flinger` daemon (`android.media.IAudioFlinger` AIDL). Confirmed service present on Pixel 2 XL. **This is a much bigger task than 19/20** — AudioFlinger is a native C++ daemon (not a HAL), its AIDL surface is large (60+ methods, dozens of parcelables), and the actual playback path goes through **shared memory + ParcelFileDescriptor**, not pure binder calls. Worth scoping carefully before committing to the rsbinder route vs. alternatives.
+> **Status: 🟡 in-progress. A1 (vendoring) committed; A2–B5 queued for a fresh session.** Resumes from `wart-host` commit `f6a9f9a` (vendors `aosp-frameworks-av` + `aosp-system-hardware-interfaces` at android-15.0.0_r36, plus `AttributionSourceState` stub). Estimated 20–30 hours of focused work remaining (≈3 working days).
 
-## Goal
+## Path decision (resolved 2026-05-17)
 
-Let WASM apps play PCM audio (and ideally compressed-PCM via the framework's mixer). Minimum viable: a guest can call `audio.create-track(format)` to get a handle, then `audio.write(handle, &[f32])` to queue samples that the speaker plays.
+**Path B with the IAAudioService variant.** Originally the task scoped two paths (NDK AAudio vs rsbinder → IAudioFlinger). Investigation at kickoff surfaced a third option that beats both:
 
-Reference: `~/wart/post-art-roadmap.md` §3. AudioFlinger is the dominant native-daemon-not-Java-framework case from §6.5 ("Keep — already native daemons, talk to them via binder") — so it survives the ART replacement and is the right long-term target.
+| | Path A (NDK AAudio) | Path B-orig (IAudioFlinger) | **Path B-AAudio (chosen)** |
+|---|---|---|---|
+| AIDL methods on target | n/a (FFI to libaaudio.so) | 50+ | **10** |
+| Validates Pattern 5 for media | ❌ | ✅ | ✅ |
+| Vendoring needed | none | frameworks/av + system/hardware/interfaces + frameworks/base stub + more | **frameworks/av + system/hardware/interfaces + 1 stub** |
+| Shared-mem + fd primitives | n/a | required | required (same code) |
+| Estimated total work | hours | 3–5 days | **3–4 days** |
+| Unlocks camera + codec2 later? | ❌ | ✅ | ✅ |
 
----
+`media.aaudio` and `media.audio_flinger` are both confirmed present on the Pixel 2 XL (Android 15). `media.aaudio` (the AAudio service daemon at `aaudio.IAAudioService` binder) sits **one layer above** AudioFlinger and is what NDK AAudio talks to internally. For app-level playback it's the right level — AudioFlinger is below it.
 
-## Architecture decision needed before starting
+## Why factor primitives first
 
-AudioFlinger is in `platform/frameworks/av` (yet another AOSP repo to submodule). Its AIDL is `frameworks/av/media/libaudioclient/aidl/android/media/`. Key interfaces:
+The shared-memory + fd + atomic-ring-buffer pattern that IAAudioService uses is **the same pattern** that IAudioFlinger, CameraService BufferQueue, and Codec2 use:
 
-- **`IAudioFlinger`** (the daemon entry point): `createTrack(input) → CreateTrackResponse` (returns IAudioTrack handle + a SharedFileRegion for the sample memory + a ParcelFileDescriptor for an event pipe)
-- **`IAudioTrack`** (per-track binder): `start()`, `stop()`, `pause()`, `flush()`, etc. The *actual sample writing* is **NOT** a binder call — samples are written to the shared memory ring buffer and signaled via the fd.
-
-Three implementation paths, ranked by effort:
-
-### Path A: NDK AAudio (no binder at all)
-- Skip AudioFlinger AIDL entirely. Use the NDK `AAudio` C API via thin Rust FFI.
-- AAudio is a stable C API since Android 8 (`<aaudio/AAudio.h>` in NDK r19+). Handles all the AudioFlinger / shared-memory plumbing internally.
-- Pros: ~200 lines total. No binder, no AIDL, no submodule. Works on every Android 8+ device including non-rooted. Lower latency than AudioFlinger directly.
-- Cons: not the binder pattern. NDK headers + cc-rs FFI shim. Doesn't validate rsbinder for media services.
-
-### Path B: rsbinder to IAudioFlinger.createTrack + shm via rust-ashmem
-- True binder path. Call `createTrack`, parse the returned `CreateTrackResponse`, mmap the `SharedFileRegion`, write PCM frames to the ring buffer, signal via the event fd.
-- Pros: matches the post-ART end-state architecture (no NDK dep).
-- Cons: rsbinder needs `SharedFileRegion` + `ParcelFileDescriptor` parcelable support — `ParcelFileDescriptor` IS provided (`rsbinder::file_descriptor::ParcelFileDescriptor`), `SharedFileRegion` is less certain. Ring-buffer protocol + fd signaling is intricate. Days of work, not hours.
-
-### Path C: Compose's existing media (no native work)
-- Defer until apps actually need audio. The current PoC test apps don't play sound.
-
-**Recommendation: defer choice between A and B until first real audio need surfaces in a test app.** Document both paths here; pick when execution starts.
-
----
-
-## WIT design (path-agnostic — the guest doesn't care which path the host uses)
-
-```wit
-/// Minimum audio: PCM playback through one or more tracks. Mirrors the
-/// abstraction of AAudio / iOS AVAudioPlayerNode / Web Audio AudioBuffer
-/// — guest creates a track, writes interleaved float frames, the host
-/// pipes them to the speaker. No 3D positioning, no effects, no input.
-interface audio {
-    enum format {
-        pcm-f32,   // 32-bit float per sample, interleaved (default)
-        pcm-i16,   // 16-bit signed int per sample, interleaved
-    }
-    enum channel-layout {
-        mono,
-        stereo,
-    }
-    record track-config {
-        sample-rate-hz: u32,         // 8000..192000
-        format:         format,
-        channels:       channel-layout,
-    }
-    /// Allocates an audio track. Returns 0 on failure (unsupported format,
-    /// no audio device, permission denied).
-    create-track:   func(config: track-config) -> u32;
-    /// Write `frames` to track's queue. `samples` length must be
-    /// (frames * channels). Returns frames actually accepted (may be less
-    /// than requested if the ring buffer is full — guest should retry).
-    write-pcm-f32:  func(handle: u32, samples: list<f32>) -> u32;
-    write-pcm-i16:  func(handle: u32, samples: list<s16>) -> u32;
-    /// Start / pause playback.
-    start:          func(handle: u32);
-    pause:          func(handle: u32);
-    /// Drain queued samples and release the track.
-    close:          func(handle: u32);
-    /// Number of frames currently queued but not yet played (latency hint).
-    pending-frames: func(handle: u32) -> u32;
-}
+```
+binder RPC (control plane) ←── rsbinder
+       │
+       ▼
+[Service.openSession()] returns:
+  ├─ ParcelFileDescriptor   (event fd for signaling)
+  ├─ SharedFileRegion       (mmap'd shared memory)
+  └─ Atomic ring buffer protocol on top
 ```
 
-Deliberately minimal — no audio focus, no spatial audio, no codecs, no MIDI, no streaming-from-URL. Those are separate WIT interfaces if/when needed.
+The first two boxes are common; the third differs per service. By factoring the common primitives into reusable modules (`binder_shared_memory` + `eventfd_signal`), the AAudio-specific work in B3 stays narrow, AND the same primitives unlock camera + codec2 with much less per-task effort.
+
+## Existing crates we should compose (not reimplement)
+
+Researched at kickoff — Rust ecosystem has the primitives:
+
+- **`rsbinder::file_descriptor::ParcelFileDescriptor`** — already pulled in; gives us the fd
+- **`memmap2`** — battle-tested mmap wrapper
+- **`nix::sys::eventfd`** — eventfd primitive for kernel-level signaling
+- **`ndk::shared_memory::SharedMemory`** — could compose if useful (we get fd via PFD so probably not needed)
+- **`ashmem-rs`** (kinetiknz/ashmem-rs) — wraps ASharedMemory API; useful reference for the older-Android compat fallback even if we don't depend on it
+
+The ~630 lines of AAudio C++ binding code in `frameworks/av/media/libaaudio/src/binding/` are domain-specific (atomic counters per AAudio's particular layout); but the primitives those 630 lines build on are well-trodden in Rust.
+
+## Sub-task plan (A1 done; A2–B5 queued)
+
+### ✅ A1 — Vendor AOSP submodules (committed `f6a9f9a`)
+- `vendor/aosp-frameworks-av` (sparse: `media/libaaudio/src/binding/aidl` + `media/libshmem/aidl`) — 432 KB
+- `vendor/aosp-system-hardware-interfaces` (sparse: `media/aidl`) — 532 KB
+- `vendor/aidl-stubs/android/content/AttributionSourceState.aidl` — stub
+
+### 🔲 A2 — `binder_shared_memory` Rust primitive (~3–4 hours)
+New `wart-host/src/binder_shared_memory.rs`:
+- Input: `SharedFileRegion { fd: ParcelFileDescriptor, offset: i64, size: i64, writeable: bool }`
+- Process: extract raw fd via `into_raw_fd()`, `memmap2::MmapOptions::new().offset(offset).len(size).map_mut(...)` for writable regions or `.map(...)` for read-only
+- Output: `BinderMappedMemory { mmap: Mmap or MmapMut }` that exposes `as_slice() -> &[u8]` and `as_mut_slice() -> &mut [u8]`
+- Tests: round-trip mmap on a `memfd_create`d fd locally (host-side test, no device needed)
+- **Reusable for camera + codec2.** Sized for that audience, not just audio.
+
+Add `memmap2 = "0.9"` to `Cargo.toml` `[target.'cfg(target_os = "android")'.dependencies]`.
+
+### 🔲 A3 — `eventfd_signal` Rust primitive (~1–2 hours)
+New `wart-host/src/eventfd_signal.rs`:
+- Wrap a `RawFd` obtained from PFD; provide `notify(count: u64) -> Result<()>` (write 8 bytes) and `wait() -> Result<u64>` (read 8 bytes, blocking)
+- Use `nix::unistd::{read, write}` directly (we already have nix transitively via rsbinder)
+- Optional: `wait_nonblocking()` variant for poll-style use
+- **Reusable.** Same primitive for any service that signals via eventfd.
+
+### 🔲 B1 — Inspect AAudio C++ protocol (~2–3 hours)
+**Read, don't write.** Document the protocol carefully so B3 has a spec to implement:
+- `media/libaaudio/src/binding/RingBufferParcelable.cpp` — counter layout
+- `media/libaaudio/src/binding/AudioEndpointParcelable.cpp` — how Endpoint's `sharedMemories[]` maps to RingBuffer's `sharedMemoryIndex`
+- `media/libaaudio/src/binding/SharedMemoryParcelable.cpp` — fd extraction + mmap pattern (verifies our A2 design)
+- `media/libaaudio/src/binding/AAudioBinderClient.cpp` — control-plane sequence (open → getStreamDescription → enable → write loop)
+- `media/libaaudio/src/core/AudioStreamInternal.cpp` (or similar) — the actual write-frames loop with atomic counter ordering
+
+Output: short markdown in this task file's appendix describing the protocol (read counter, write counter, ordering, when to signal eventfd, framesPerBurst semantics).
+
+### 🔲 B2 — IAAudioService AIDL codegen + WIT (~4–6 hours)
+- Extend `build.rs` rsbinder-aidl `Builder` with `IAAudioService.aidl` + supporting parcelables (StreamRequest, StreamParameters, Endpoint, RingBuffer, SharedRegion, SharedFileRegion, AudioFormatDescription + transitive deps from `system-hardware-interfaces/media/aidl`)
+- Expect transitive-import whack-a-mole — likely 2–4 more stubs needed (e.g. types from `frameworks/base` that AudioFormatDescription depends on). Pattern is the same as task 19/20 stubbing.
+- Add WIT `interface audio` to `wit/skiko-gfx.wit`: `create-track / write-pcm-f32 / start / pause / close / pending-frames`. Out of scope: focus, routing, recording, codecs, PCM-i16.
+- Sync mirror to skiko.
+
+### 🔲 B3 — `audio_impl.rs` — AAudio protocol on primitives (~6–8 hours)
+The hard part. Implements the protocol from B1 using primitives from A2 + A3:
+- `OnceLock<Strong<dyn IAAudioService>>` for service
+- Per-track state: `IAAudioStream` strong + mmap'd RingBuffers + eventfd
+- `create_track(config)`:
+  1. Build StreamRequest from WIT TrackConfig (sample rate, channels, AudioFormatDescription PCM-f32)
+  2. `svc.openStream(request, out paramsOut)` → stream handle
+  3. `svc.getStreamDescription(handle, out endpoint)` → Endpoint
+  4. mmap each SharedFileRegion in endpoint.sharedMemories via A2 primitive
+  5. Resolve RingBuffer's 3 SharedRegions (read counter, write counter, data) into slices
+  6. Store all this in a `HashMap<u32, AudioTrackState>` keyed by guest-visible handle
+- `write_pcm_f32(handle, samples)`:
+  1. Look up state
+  2. Compute available write space from atomic counter delta
+  3. Copy as many frames as fit; update write counter
+  4. Signal eventfd if necessary (per protocol from B1)
+  5. Return frames actually written (may be less than asked — guest retries next frame)
+- `start(handle)` → `svc.startStream(handle)`
+- `pause(handle)` → `svc.pauseStream(handle)`
+- `close(handle)` → `svc.closeStream(handle)`, drop state, mmap drops auto-unmap
+- `pending_frames(handle)` → counter delta read
+
+### 🔲 B4 — Hand-edit Kotlin bindings (~2–3 hours)
+- `Audio` interface in `SkikoUi.kt`: TrackConfig (3 fields), enums for format / channel-layout
+- `write-pcm-f32(handle, list<f32>)` — list<f32> arg means writing the float array to linear memory + passing (ptr, len). Pattern similar to canvas TextBlob.
+- `pending-frames` returns u32
+
+### 🔲 B5 — Build verify + device verify 440 Hz sine (~2–4 hours)
+- Full pipeline through cargo apk build, skiko klib, wart-app .wasm, cwasm, deploy
+- Smoke test in Main.kt: synthesize 1 second of 48000 Hz mono PCM-f32 sine at 440 Hz, `create-track + write-pcm-f32 + start`, hear a beep on the Pixel 2 XL speaker
+- Negative test: `setenforce 1` → call should still work (media.aaudio typically allows untrusted_app) or gracefully return false
 
 ---
 
-## Steps (Path A — AAudio NDK, the recommended starting path)
+## Known risks (carried from earlier scoping)
 
-### 1. Add `aaudio` link
+1. **AIDL transitive import whack-a-mole** — every task in series 16/19/20 surfaced 1–3 new stubs needed. Audio likely 3–5 more (AudioFormatDescription pulls in AudioFormatType, AudioEncapsulationMode, etc).
 
-In `wart-host/build.rs` Android-only block, append:
+2. **rsbinder + ParcelFileDescriptor maturity** — docs note PFD "still in development" in rsbinder 0.7.0. The fd-extraction primitive may need its own workaround.
 
-```rust
-println!("cargo:rustc-link-lib=aaudio");
-```
+3. **Async runtime for IAAudioService callbacks** — IAAudioClient callback (events) requires a Bn-side binder server, same as task 20's IEventQueueCallback. Reuse the tokio current-thread runtime pattern. If we DON'T need callbacks (poll model), we can pass a null IAAudioClient if the AIDL allows `@nullable`.
 
-`libaaudio.so` is in the NDK sysroot at `sysroot/usr/lib/aarch64-linux-android/<api>/libaaudio.so` (present from API 26+).
+4. **Ring buffer atomic ordering** — the AAudio protocol uses release/acquire ordering on the counters. Getting this wrong = audio glitches or deadlocks. Document carefully in B1; implement carefully in B3.
 
-### 2. FFI shim
+5. **SELinux on stock devices** — `untrusted_app → media.aaudio` is usually allowed (apps need audio playback), but the chain through audio HAL may still be denied on non-rooted devices. Verify on first test.
 
-Either hand-write a minimal extern block (~80 lines covers builder + stream + read/write + close) or use `bindgen` against `<aaudio/AAudio.h>`. Hand-written is cleaner for this small surface and avoids dragging bindgen into build-deps.
+## Out of scope (deferred)
 
-```rust
-// wart-host/src/audio_ffi.rs
-#[repr(C)] pub struct AAudioStream { _opaque: [u8; 0] }
-#[repr(C)] pub struct AAudioStreamBuilder { _opaque: [u8; 0] }
-
-extern "C" {
-    pub fn AAudio_createStreamBuilder(builder: *mut *mut AAudioStreamBuilder) -> i32;
-    pub fn AAudioStreamBuilder_setSampleRate(builder: *mut AAudioStreamBuilder, rate: i32);
-    pub fn AAudioStreamBuilder_setFormat(builder: *mut AAudioStreamBuilder, format: i32);
-    pub fn AAudioStreamBuilder_setChannelCount(builder: *mut AAudioStreamBuilder, count: i32);
-    pub fn AAudioStreamBuilder_openStream(builder: *mut AAudioStreamBuilder, stream: *mut *mut AAudioStream) -> i32;
-    pub fn AAudioStream_write(stream: *mut AAudioStream, buffer: *const std::ffi::c_void, num_frames: i32, timeout_ns: i64) -> i32;
-    pub fn AAudioStream_requestStart(stream: *mut AAudioStream) -> i32;
-    pub fn AAudioStream_requestPause(stream: *mut AAudioStream) -> i32;
-    pub fn AAudioStream_close(stream: *mut AAudioStream) -> i32;
-    // ... ~12 more
-}
-```
-
-### 3. `wart-host/src/audio_impl.rs`
-
-- `HashMap<u32, *mut AAudioStream>` keyed by handle (assigned monotonically), guarded by `Mutex`
-- `create_track(config)` → AAudioStreamBuilder + setSampleRate/Format/ChannelCount + openStream → store handle
-- `write_pcm_f32(handle, samples)` → look up stream, `AAudioStream_write(stream, ptr, frames, 0)` (non-blocking)
-- `close(handle)` → `AAudioStream_close` + remove from map
-
-### 4. WIT + Kotlin bindings + lib.rs wiring
-
-Same hand-edit pattern as previous tasks. `track-config` is 3-field flat record (3 i32s); `write-pcm-f32` takes `list<f32>` (pointer-based marshalling — list types need allocator-based writes, copy pattern from canvas TextBlob handling).
-
-### 5. Verification on device
-
-- Build chain + deploy
-- Main.kt smoke: synthesize a 440 Hz sine wave at 48 kHz, write 1 second of samples, hear a beep
-  ```kotlin
-  val h = Audio.Import.createTrack(Audio.TrackConfig(48000u, Audio.Format.PCM_F32, Audio.ChannelLayout.MONO))
-  val samples = FloatArray(48000) { i -> sin(2.0 * PI * 440.0 * i / 48000.0).toFloat() * 0.3f }
-  Audio.Import.writePcmF32(h, samples.toList())
-  Audio.Import.start(h)
-  ```
-- Phone speaker should play a clear 440 Hz tone for 1 second.
-
----
-
-## Steps (Path B — rsbinder to AudioFlinger, deferred alternative)
-
-Outline only — fill in if Path A proves insufficient (e.g., need to access AudioPolicyManager features, BT audio routing, or specific AudioFlinger-only metadata).
-
-1. Add submodule `vendor/aosp-frameworks-av` pinned to `android-11.0.0_r48`, sparse-checkout `media/libaudioclient/aidl/`.
-2. rsbinder-aidl `IAudioFlinger.aidl` — large parcelable surface (CreateTrackInput, CreateTrackOutput, AudioConfig, AttributionSourceState, …).
-3. Look up service `media.audio_flinger` via rsbinder hub.
-4. Call `createTrack(input)`. Parse `CreateTrackOutput` for the IAudioTrack binder + SharedFileRegion + event ParcelFileDescriptor.
-5. mmap the SharedFileRegion (POSIX `mmap` via `nix` crate or directly).
-6. Implement the audio ring-buffer protocol: write PCM frames at the current write index, update the shared header counter, optionally write to the event fd to wake up AudioFlinger.
-7. `IAudioTrack.start()` / `stop()` / `pause()` over binder for transport control.
-
-Estimated: 3-5 days for a basic mono playback. Significantly more for AudioPolicy interaction (audio focus, routing).
-
----
-
-## Known issues / risks
-
-1. **VIBRATE-style permission scope.** Audio playback typically requires no permission (any app can call `MediaPlayer` / AAudio). Verify on first test that our APK doesn't trip any AVC denial.
-
-2. **AAudio vs OpenSL ES.** AAudio is the modern API (API 26+). OpenSL ES is legacy. Don't bother with OpenSL ES.
-
-3. **Latency expectations.** AAudio in `EXCLUSIVE` mode achieves ~10 ms latency; `SHARED` mode is ~30-50 ms. Pixel 2 XL supports both. Default to SHARED in WIT; expose EXCLUSIVE later if a real low-latency app needs it.
-
-4. **No audio input** in this WIT. Recording is a separate concern (permission gates, focus, etc).
-
-5. **Path A doesn't validate the post-ART binder story.** If AudioFlinger is one of the native daemons we keep, eventually we'll need Path B to prove the rsbinder pattern scales to media services. Path A is the quick-deploy answer; Path B is the long-term-correct answer.
-
----
-
-## Out of scope
-
-- Recording / `AAudioStreamBuilder_setDirection(INPUT)`.
-- Audio focus / ducking (`AudioManager.requestAudioFocus()`).
-- Audio routing (USB headset, Bluetooth A2DP routing).
-- Codec decoding (MP3, AAC, FLAC) — Compose can do that in pure WASM if needed; or extend WIT later.
-- Spatial audio / surround / Atmos.
-- MIDI.
-- The entire `IAudioPolicyService` surface.
+- Audio focus / `acquireFocus` (lives in AudioPolicyService which we're dropping)
+- Audio routing (USB / Bluetooth / HDMI / speaker selection)
+- Recording (mic capture; different shared-memory direction; needs RECORD_AUDIO)
+- Codecs (Codec2 is a separate native daemon — separate task)
+- PCM-i16 (PCM-f32 only in v1; adding i16 is a follow-up commit)
+- Spatial / Atmos audio
+- IAAudioClient callbacks for event-driven model (poll-via-eventfd should be enough for v1)
