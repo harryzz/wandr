@@ -3,28 +3,25 @@
     kotlin.wasm.unsafe.ComponentModelInternalApi::class,
 )
 
-// Task 24 step 1 — Minimal Kotlin/Wasm + kotlinx-coroutines repro.
-// NO Compose runtime, NO Compose UI, NO SkiaLayer.
+// Task 25 step 1 — Tightened reproducer. ZERO wart-side code in the
+// suspend cycle: no WasiScheduler, no HashMap, no callback IDs, no
+// per-tick lambda. Pure Kotlin/Wasm `suspendCoroutine` driven
+// directly from the wart-host's per-frame WIT renderFrame call.
 //
-// The wart-host calls `renderer.render-frame(nanos)` per frame via
-// RendererExports.kt → RendererImpl. RendererImpl routes to
-// `currentSkiaLayer?.doFrame(...)` — we never set `currentSkiaLayer`,
-// so render frames are null-safe no-ops on the draw side.
+// Suspend cycle each "tick":
+//   1. Coroutine calls `awaitNextFrame()`.
+//   2. `suspendCoroutine { cont -> pendingNextFrame = cont }`
+//      allocates a state-machine instance, stores cont in a single
+//      global slot, returns to the dispatcher.
+//   3. wart-host's render loop fires `render-frame(nanos)`.
+//   4. `RendererExports.kt::__wasm_export_renderFrame` calls
+//      `LeakReproDriver.tick()` (our override of the default body).
+//   5. `LeakReproDriver.tick()` drains `pendingNextFrame` and resumes
+//      the continuation. The state-machine instance from step 2
+//      SHOULD now be unreachable.
 //
-// We hook our own per-frame tick by replacing the default `appMain`
-// + by having a dispatcher that gets ticked from RendererImpl's
-// scheduler path. Concretely:
-//
-//   1. main() launches a coroutine doing `while(true) { tick() }`
-//      where `tick()` is `suspendCoroutine { storeCont(it) }`.
-//   2. We piggyback on WasiScheduler — schedule a callback for "1 ms
-//      from now" in `tick()`, the scheduler fires it, resumes our
-//      continuation, we go around again.
-//
-// If THIS leaks (same ~8 MB/min rate seen in task 23), the bug is
-// in Kotlin/Wasm continuation codegen or in WasiScheduler /
-// kotlinx-coroutines-wasmWasi. If NOT, the leak is above this layer
-// — Compose Snapshot / Recomposer / etc.
+// If this still leaks at task-24-step-1 rates (~9 MB/s), the bug is
+// irrefutably in Kotlin/Wasm `suspend` codegen.
 
 package testapp
 
@@ -33,64 +30,48 @@ import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.startCoroutine
 import kotlin.coroutines.suspendCoroutine
-import org.jetbrains.skiko.wasi.WasiScheduler
 import org.jetbrains.skiko.wasi.wit.Canvas as WitCanvas
 
-// Single-slot park for the next-frame continuation. Mirrors the
-// minimal kotlinx-coroutines pattern for `suspendCancellableCoroutine`
-// but without any of kotlinx's machinery — just bare stdlib.
+// Single-slot park for the next-frame continuation.
 private var pendingNextFrame: Continuation<Unit>? = null
 
-// Step 1b — reused-lambda variant: ONE instance of the resume
-// callback, allocated once at startup. If the OOM seen in the first
-// step-1 run was caused by per-tick lambda allocation, switching to a
-// single shared lambda kills it. If the OOM persists, the leak is
-// purely in Kotlin/Wasm's `suspend` state-machine codegen — nothing
-// else left in this scope.
-private val resumeLambda: () -> Unit = {
-    val c = pendingNextFrame
-    pendingNextFrame = null
-    c?.resume(Unit)
+/// Called directly from `RendererExports.kt::__wasm_export_renderFrame`
+/// (overridden to bypass `RendererImpl` for this reproducer). No
+/// HashMap, no callback IDs, no host-side scheduler. Just a direct
+/// resume of the parked continuation.
+internal object LeakReproDriver {
+    fun tick() {
+        val c = pendingNextFrame
+        pendingNextFrame = null
+        c?.resume(Unit)
+    }
 }
 
-private suspend fun awaitNextScheduledTick(): Unit = suspendCoroutine { cont ->
+private suspend fun awaitNextFrame(): Unit = suspendCoroutine { cont ->
     pendingNextFrame = cont
-    // Schedule a wake 1 ms from now; the wart-host's scheduler will fire
-    // back via on-scheduled-callback → WasiScheduler.fire → resumeLambda.
-    WasiScheduler.schedule(1u, resumeLambda)
+    // Nothing else. The wart-host already calls our @WasmExport
+    // renderFrame every frame; that IS our wake.
 }
 
 private var frameCount: Long = 0L
 
 fun main() {
     WitCanvas.Import.logMessage(
-        "leak-repro: starting bare-coroutine loop — no Compose, no Snapshot, no Recomposer"
+        "leak-repro: starting tightened repro — no WasiScheduler, no lambda alloc, " +
+        "no HashMap. Pure suspendCoroutine + direct render-frame driver."
     )
 
-    // Launch the suspend loop as a free coroutine (no parent Job, no
-    // CoroutineScope). Each iteration parks the continuation in
-    // `pendingNextFrame`, schedules a 1ms wake via WasiScheduler, and
-    // resumes on the wake. If Kotlin/Wasm continuation codegen retains
-    // the old continuation between iterations, the WasmGC heap will
-    // grow without bound.
     suspend {
         while (true) {
-            awaitNextScheduledTick()
+            awaitNextFrame()
             frameCount++
             if (frameCount % 600L == 0L) {
-                // Log every ~600 ticks (~10 s at 1 ms tick rate, but
-                // wart-host throttles to vsync so this is more like
-                // every 10 s of wall clock).
-                WitCanvas.Import.logMessage(
-                    "leak-repro: tick #${frameCount}"
-                )
+                WitCanvas.Import.logMessage("leak-repro: tick #${frameCount}")
             }
         }
     }.startCoroutine(object : Continuation<Unit> {
         override val context = EmptyCoroutineContext
         override fun resumeWith(result: Result<Unit>) {
-            // The loop is infinite; this is only reached if something
-            // throws or main scope dies. Log so we notice.
             WitCanvas.Import.logMessage(
                 "leak-repro: coroutine ended unexpectedly: ${result.exceptionOrNull()}"
             )
@@ -98,6 +79,6 @@ fun main() {
     })
 
     WitCanvas.Import.logMessage(
-        "leak-repro: initial coroutine launched, scheduler primed at tick=0"
+        "leak-repro: initial coroutine launched, awaiting first render-frame as wake"
     )
 }

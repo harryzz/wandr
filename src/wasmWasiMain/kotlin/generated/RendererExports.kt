@@ -8,6 +8,7 @@ package org.jetbrains.skiko.wasi.wit
 import org.jetbrains.skiko.wasi.RendererImpl
 import kotlin.wasm.unsafe.*
 import testapp.main as appMain
+import testapp.LeakReproDriver
 
 @WasmExport
 fun cabi_realloc(ptr: Int, oldSize: Int, align: Int, newSize: Int): Int =
@@ -15,19 +16,23 @@ fun cabi_realloc(ptr: Int, oldSize: Int, align: Int, newSize: Int): Int =
 
 private var booted = false
 
+// Task 25 step 1 — TIGHTENED REPRO PATCH.
+// Original body called `RendererImpl.renderFrame(p0.toULong())`.
+// Replaced with a direct call into `LeakReproDriver.tick()` so the
+// suspend cycle never touches WasiScheduler / RendererImpl /
+// SkiaLayer at all. Eliminates every wart-side component from the
+// leak diagnostic — what's left is purely Kotlin/Wasm
+// `suspendCoroutine`.
 @WasmExport("my:skiko-gfx/renderer@0.1.0#render-frame")
 fun __wasm_export_renderFrame(p0: Long): Unit {
     freeAllComponentModelReallocAllocatedMemory()
     if (!booted) {
         booted = true
         appMain()
-        // appMain runs initial composition which can pull in Random.Default →
-        // wasiRandomGet → cabi_realloc → reallocAllocator polluted. Clean up
-        // again before the per-frame allocator scope.
         freeAllComponentModelReallocAllocatedMemory()
     }
     withScopedMemoryAllocator { _ ->
-        RendererImpl.renderFrame(p0.toULong())
+        LeakReproDriver.tick()
     }
 }
 
