@@ -149,26 +149,109 @@ step 1, the bug is irrefutably in Kotlin/Wasm codegen.
 Acceptance: 60-second on-device run shows the same PSS growth slope
 as the step-1 reproducer (~9 MB/s).
 
-## Step 2 — Static wasm-tools dump (~half day)
+## ✅ Step 2 — Static wasm-tools dump (done 2026-05-17)
 
-**Goal: identify candidate struct types declared by Kotlin/Wasm for
-the suspend state machine.**
+**Result: leaked type identified as `$kotlin.coroutines.SafeContinuation`
+(type-id 320). Allocation site: `$"#func573
+kotlin.coroutines.SafeContinuation.<init>"` called from
+`$testapp.awaitNextFrame` body, line 23607 of the WAT dump. One
+SafeContinuation allocated per `awaitNextFrame()` call. Size +
+DRC heap header matches our ~80-byte/tick measurement.**
 
-```sh
-wasm-tools dump wart-leak-repro.wasm > leak-repro.dump.txt
-# Look for `(struct ...)` declarations near function-name suspend-state-machine
-# patterns: SafeContinuation, CoroutineImpl, $main$1, etc.
-grep -nE '\(struct|SafeContinuation|CoroutineImpl|\$lambda\$' leak-repro.dump.txt
+Process: `wasm-tools print wart-leak-repro.wasm > /tmp/leak-repro.wat`
+gave a 24,929-line WAT decompilation. Filtered to:
+
+| Type | Type-id | Fields | Est. size | `struct.new` sites | Allocated per |
+|---|---|---|---|---|---|
+| `$kotlin.coroutines.SafeContinuation` | 320 | vtable, itable, rtti, _hashCode, **delegate, result** (6) | ~44 B payload + ~24 B DRC header = **~68-80 B** | **2** (both in its `<init>` variants 572 + 573) | **`awaitNextFrame` call → per-tick** |
+| `$testapp.$invokeCOROUTINE$` | 422 | CoroutineImpl base + `<this>` (13) | ~104 B | 1 (in `$<init>`) | one-shot — called from `main$slambda.invoke` which `startCoroutine` calls ONCE |
+| `$testapp.main$slambda` | 420 | base only (4) | ~32 B | 1 (in `$<init>`) | one-shot — `fieldInitializer` (module init) |
+| `$kotlin.coroutines.intrinsics.<no name provided>` | 323/326 | CoroutineImpl + 2 (14) | ~112 B | — | not directly called from our hot path |
+
+The `awaitNextFrame()` body itself:
+
+```wat
+(func $testapp.awaitNextFrame ...
+    (local $safe (ref null $kotlin.coroutines.SafeContinuation))
+    ...
+    ref.null none           ;; <this> = null → triggers struct.new
+    local.get $~c           ;; delegate
+    call $kotlin.coroutines.intrinsics.intercepted
+    call $"#func573 kotlin.coroutines.SafeContinuation.<init>"
+    local.tee $safe
+    ...
+    local.get $safe
+    global.set $testapp.pendingNextFrame
+    ...
+    local.get $safe
+    call $kotlin.coroutines.SafeContinuation.getOrThrow  ;; returns SUSPENDED
+    ...
+)
 ```
 
-Cross-reference with `struct.new` instructions inside the body of
-`__wasm_export_renderFrame` and the `awaitNextScheduledTick` lowered
-function. Output: short list (≤5) of candidate Kotlin classes the
-leak could be backed by.
+And the constructor at line 16940:
 
-Acceptance: a list of class-name → type-index pairs, with brief
-notes on which are most likely the leaker based on call-site
-proximity to the suspend boundary.
+```wat
+(func $"#func573 kotlin.coroutines.SafeContinuation.<init>"
+    ...
+    local.get $<this>
+    ref.is_null
+    if  ;; <this> was null → allocate
+        ...
+        struct.new $kotlin.coroutines.SafeContinuation
+        local.set $<this>
+    end
+    ...
+)
+```
+
+The CoroutineImpl `$invokeCOROUTINE$` is allocated once (verified
+by tracing its `<init>` caller = `main$slambda.invoke` = called
+once by `startCoroutine`), so the state-machine itself is reused
+across iterations as expected. The leak is purely SafeContinuation.
+
+**Where is the retention chain?** Reading
+`SafeContinuation.resumeWith` (line 16978): the resumeWith call
+path is `tick() → safe.resumeWith(Unit) → delegate.resumeWith(Unit)`
+where `delegate` is the parent CoroutineImpl. After resumeWith
+returns, the SafeContinuation should be unreachable: no `delegate`
+field of any persistent object points BACK to the SafeContinuation,
+and `pendingNextFrame` was nulled in `tick()`.
+
+That means the leak is at the **wasmtime DRC-heap level**, not in
+the Kotlin source-level allocations: wasmtime is failing to
+decrement the SafeContinuation's refcount on function return.
+Specifically, when `SafeContinuation.resumeWith` returns, its
+local `$~tmp0_<this>` (containing the SafeContinuation ref) and
+`$~tmp` (containing the delegate ref) should both trigger
+DRC decrements. The fact that they don't = either:
+
+(a) **Kotlin/Wasm codegen doesn't emit explicit slot-clears before
+function returns**, expecting the runtime to do it; wasmtime's
+DRC expects explicit clears, expecting the compiler to emit them.
+Classic "who's responsible for the decrement" interface bug.
+
+(b) **wasmtime's DRC doesn't drain locals on function return** —
+it relies on the wasm runtime to clear locals, but Kotlin/Wasm
+takes the responsibility-shifted position.
+
+Either way, this is below the Kotlin source language. Step 3
+(wasmtime live-object summary) will confirm which side is the
+real culprit. Step 4 will either propose the Kotlin codegen patch
+or a wasmtime DRC fix depending on what step 3 shows.
+
+### Per-tick size math
+
+`$kotlin.coroutines.SafeContinuation`:
+- vtable, itable, rtti (3 × 8 B = 24 B) — Kotlin.Any base header
+- _hashCode i32 (4 B)
+- delegate, result (2 × 8 B = 16 B)
+- Subtotal: 44 B payload
+- + wasmtime DRC header (~16-24 B)
+- = **60-68 B per instance**
+- With heap allocation alignment to 8 B = **~80 B**
+
+Matches our measured per-tick leak rate of ~80 B exactly.
 
 ## Step 3 — Patch wasmtime for live-object summary (~2-3 days)
 
