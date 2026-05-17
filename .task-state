@@ -1,5 +1,5 @@
-TASK=24
+TASK=25
 STEP=step1-done
-STATUS=complete
-LAST_SUCCESS=Task 24 step 1 done — minimal Kotlin/Wasm + skiko-wasm-wasi reproducer in wart-leak-repro/ leaks at ~9 MB/s, OOM in 6:37 on Pixel 2 XL. Two-variant test isolated the leak to suspendCoroutine state-machine codegen.
-NOTES=Run A (fresh () -> Unit lambda per tick): OOM at T+6:37 via lowmemorykiller (adj=0, foreground). Run B (single reused lambda): same leak rate ~9 MB/s, killed at T+2:43 before OOM. Rules out per-tick closure allocation as cause. Native Heap flat at 8.7 MB. ResourceLimiter saw zero memory.grow events post-cold-start — leak is entirely in WasmGC heap. Repro location: wart-leak-repro/Main.kt. ~60 LOC, no Compose, no kotlinx-coroutines, no Snapshot. Steps 2-4 of task 24 (add Compose back) are moot — bug is below them. Next: step 6 (file upstream against Kotlin/Wasm) or optionally further narrowing (bypass WasiScheduler with a dedicated WIT import to rule out wart-side schedulers).
+STATUS=in-progress
+LAST_SUCCESS=Task 25 step 1 done — tightened reproducer in wart-leak-repro/ definitively isolates the leak to Kotlin/Wasm suspendCoroutine. Per-tick leak is ~80 bytes (one Continuation state-machine struct). Net 10 MB/s on Pixel 2 XL.
+NOTES=Eliminated WasiScheduler from the suspend cycle by patching RendererExports.kt to call LeakReproDriver.tick() directly instead of RendererImpl.renderFrame(). Tick rate 124K/sec uncapped (no scheduler delay). Per-tick allocation dropped from ~9 KB (with WasiScheduler lambda+HashMap) to ~80 bytes — confirms the retained object IS the state-machine struct, nothing else. Next: step 2 (wasm-tools dump to identify candidate struct types), then step 3 (patch wasmtime for live-object summary), step 4 (read kotlinc-wasm-backend codegen).

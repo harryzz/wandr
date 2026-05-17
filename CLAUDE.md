@@ -119,6 +119,7 @@ shipping the full Compose port — not as discrete sequential milestones.
 | 22 | ISurfaceComposer rsbinder round-trip (roadmap §5 de-risk) | ✅ device-verified 2026-05-17 — SurfaceFlinger reachable; transport validated |
 | 23 | Profiling hooks (`ResourceLimiter` + `GuestProfiler`) | 🟡 MVP device-verified 2026-05-17 — 3/4 hooks live; GuestProfiler deferred (epoch-interruption cwasm-rebuild needed) |
 | 24 | Bisect the WasmGC-heap leak — find the real retention chain (Kotlin/Wasm continuations? kotlinx-coroutines-wasmWasi? Compose Snapshot?) | 🟡 step 1 done 2026-05-17 — minimal reproducer in `wart-leak-repro/`; leak isolated to Kotlin/Wasm `suspend` codegen (~9 MB/s, OOM in 6:37). Steps 2-4 moot; pending upstream file. |
+| 25 | Diagnose the `suspend` state-machine leak: tighten repro, identify leaked structref type, locate kotlinc-wasm-backend codegen pass | 🔲 scoped, step 1 starting |
 
 **What's verified on device:** BasicTextField + TextFieldState + hardware
 keyboard, in-canvas soft keyboard, Material3 widgets (Button, Checkbox,
@@ -228,6 +229,7 @@ boundary from `post-art-roadmap.md` §3.
 | 22 | `tasks/22-isurfacecomposer-roundtrip.md` | rsbinder probe of `SurfaceFlingerAIDL` (`android.gui.ISurfaceComposer`); roadmap §5 de-risk for the eventual boot-model migration — ✅ device-verified |
 | 23 | `tasks/23-profiling-hooks.md` (+ scope `tasks/scope-profiling-tools.md`) | Wire `ResourceLimiter` + `GuestProfiler` + per-frame data_size + call_hook behind a `profile` cargo feature; characterizes the ProgressIndicator leak quantitatively + breaks down the ~10–20 ms/frame budget — 🟡 MVP done |
 | 24 | `tasks/24-bisect-wasm-leak.md` (+ reproducer `wart-leak-repro/`) | Bisect the ~8 MB/min WasmGC-heap leak from task 23 down to its root. Step 1 done: bare `suspendCoroutine` loop with no Compose / no kotlinx-coroutines leaks at ~9 MB/s, OOMs Pixel 2 XL in 6:37. Isolated to Kotlin/Wasm `suspend` codegen — 🟡 step 1 done |
+| 25 | `tasks/25-diagnose-suspend-leak.md` | Diagnostic deep-dive on task 24's leak: tighten reproducer (eliminate WasiScheduler), identify the leaked structref class via wasm-tools dump + patched wasmtime live-object summary, read kotlinc-wasm-backend codegen to find the missing slot-clear — 🔲 scoped |
 
 ---
 
