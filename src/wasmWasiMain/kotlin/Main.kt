@@ -27,6 +27,7 @@ import org.jetbrains.skiko.wasi.wit.Canvas as WitCanvas
 import org.jetbrains.skiko.wasi.wit.Clipboard as WitClipboard
 import org.jetbrains.skiko.wasi.wit.Haptics as WitHaptics
 import org.jetbrains.skiko.wasi.wit.Power as WitPower
+import org.jetbrains.skiko.wasi.wit.Sensors as WitSensors
 import org.jetbrains.skiko.wasi.wit.Thermal as WitThermal
 import org.jetbrains.skiko.wasi.wit.Locale as WitLocale
 import org.jetbrains.skiko.wasi.wit.PointerIcon as WitPointerIcon
@@ -122,6 +123,27 @@ fun main() {
         "overallThrottle=${overall}, sensors=${allTemps.size}" +
         (if (allTemps.isNotEmpty()) " first=${allTemps.first().kind}/${allTemps.first().celsius}°C" else "")
     )
+
+    // android-sensors smoke: enumerate sensors + enable accel briefly +
+    // poll one reading. Backed by android.frameworks.sensorservice.
+    // ISensorManager/default via rsbinder (task 20). The pollLatest()
+    // fires from a delayed coroutine because the HAL needs time after
+    // enableSensor() to deliver the first event.
+    val sensors = WitSensors.Import.listSensors()
+    val accelInfo = sensors.firstOrNull { it.kind == WitSensors.Kind.ACCELEROMETER }
+    WitCanvas.Import.logMessage(
+        "android-sensors smoke: ${sensors.size} sensors; accel handle=${accelInfo?.handle ?: 0u}"
+    )
+    if (accelInfo != null) {
+        WitSensors.Import.enable(accelInfo.handle, 50u)
+        WasiScheduler.schedule(200u) {
+            val s = WitSensors.Import.pollLatest(accelInfo.handle)
+            WitCanvas.Import.logMessage(
+                "android-sensors smoke: accel ts=${s.timestampNs} x=${s.x} y=${s.y} z=${s.z} (m/s²)"
+            )
+            WitSensors.Import.disable(accelInfo.handle)
+        }
+    }
 
     // android-haptics smoke: try a tap + an explicit 50ms vibrate.
     // Backed by android.hardware.vibrator.IVibrator/default via rsbinder
