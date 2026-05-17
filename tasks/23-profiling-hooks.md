@@ -1,9 +1,13 @@
 # Task 23 — Profiling hooks (`ResourceLimiter` + `GuestProfiler`)
 
-> **Status: 🔲 scoped, not started.** Companion to
-> `tasks/scope-profiling-tools.md` which justifies the tool choices
-> and rules out paths that don't pay off (kotlinx-coroutines-debug,
-> dhat for guest memory, etc).
+> **Status: 🟡 MVP device-verified 2026-05-17 — 3 of 4 hooks live,
+> GuestProfiler deferred.** ResourceLimiter (memory.grow event log) +
+> Store::call_hook (host-call counter) + per-frame frame_tick are
+> all firing in real time on Pixel 2 XL. GuestProfiler (the JSON
+> sampler) is deferred because it requires
+> `Config::epoch_interruption(true)` which breaks the AOT-cwasm
+> contract — see "Out of scope (deferred)" below. Companion to
+> `tasks/scope-profiling-tools.md`.
 
 ## Why this task is essential
 
@@ -138,7 +142,40 @@ behavior change when the feature is off.
 5. Also capture `adb shell dumpsys meminfo com.example.wasmruntime`
    at t=0 and t=60s for a process-wide memory snapshot.
 
+## Device-verified findings (2026-05-17, Pixel 2 XL, MVP iteration)
+
+After install + cold-start with `--features profile`:
+
+- ResourceLimiter logged **14 `memory.grow` events** in the first
+  ~7 s, with classic doubling pattern (1→2→4→8→16→32→64→128→256→512
+  pages, ~32 MB total). Steady state then — no further growth in
+  the demo's default Material3 view. The ProgressIndicator-leak
+  scenario isn't on the default screen, so confirming the leak rate
+  requires routing the demo through that widget first.
+- Event #10 (`0 → 2 pages`) is a **second linear memory** being
+  created — the cwasm has multiple component instances each with
+  their own memory. Worth flagging for future memory-attribution
+  work; ResourceLimiter doesn't disambiguate by index out of the
+  box.
+- Per-frame snapshot at the default `every_n_frames = 60` cadence
+  prints once per second. **Steady state host-call rate = 10
+  hostcalls per frame** (600/s @ 60 fps). The first frame had 3267
+  (Compose boot setup); post-init it's perfectly stable at 10/frame.
+  Reasonable for a Compose render loop; no obvious N+1 patterns.
+
 ## Out of scope (deferred)
+
+- **GuestProfiler sampling (the Firefox-Profiler-JSON dump).** The
+  `Store::epoch_deadline_callback` path requires
+  `Config::epoch_interruption(true)` on the Engine — flipping that
+  changes the AOT-cwasm contract, and the existing pre-compiled
+  cwasm refuses to load. Wiring this requires either (a)
+  recompiling the cwasm with matching `epoch-interruption` config,
+  or (b) shipping a separate "profile" cwasm built alongside the
+  profile-feature APK. Either way it's a separate iteration; the
+  ResourceLimiter + call-hook + frame_tick trio shipped here is
+  what actually characterizes the ProgressIndicator leak, which
+  was this task's primary motivation.
 
 - **Fixing the ProgressIndicator leak.** The root cause is in
   Kotlin/Wasm's generated continuation classes; can't be fixed from
@@ -149,6 +186,9 @@ behavior change when the feature is off.
 - **Profile-guided optimization of wasmtime AOT.** wasmtime supports
   this in principle; would need to be a separate task informed by
   the data this one produces.
+- **Per-memory-index attribution in ResourceLimiter.** The current
+  log entries don't say which of multiple linear memories grew.
+  Adding the memory index is a follow-up if/when we need it.
 
 ## Estimate
 

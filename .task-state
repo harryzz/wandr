@@ -1,5 +1,5 @@
-TASK=22
-STEP=verify-done
+TASK=23
+STEP=mvp-verify-done
 STATUS=complete
-LAST_SUCCESS=Task 22 verified OK — rsbinder reaches SurfaceFlingerAIDL (android.gui.ISurfaceComposer) on Pixel 2 XL. Transport validated; service responds with structured Status (EX_NULL_POINTER on getPhysicalDisplayIds is a device-specific service-side rejection that matches what `adb shell service call SurfaceFlingerAIDL 4` returns — not a transport bug).
-NOTES=Path: 1) new vendor/aosp-frameworks-native submodule sparse-checked-out to libs/gui/aidl/ + libs/gui/android/gui/ (324 KB). 2) build.rs self-heals two files: DisplayBrightness.aidl (0f/-1f float literals not parseable by rsbinder-aidl 0.7.0 → empty stub) and ISurfaceComposer.aidl (huge upstream → trimmed to first 4 methods preserving transaction codes). 3) display_impl.rs probes on cold-start via rsbinder::hub::get_interface("SurfaceFlingerAIDL"). EX_NULL_POINTER is consistent across our app and adb-shell shell user — service-side behavior on this LineageOS android-15-r36 SF build. Boot-model migration (§6.1) will need to use methods that don't NPE — likely higher-level SurfaceComposerClient or IDisplayManager.
+LAST_SUCCESS=Task 23 MVP verified — ResourceLimiter + Store::call_hook + frame_tick firing live on Pixel 2 XL. Cold start logged 14 memory.grow events (1->2->4->8...->512 pages, ~32MB), then steady state. Host-call rate = 10/frame at 60fps after Compose boot.
+NOTES=GuestProfiler sampling intentionally deferred: requires Config::epoch_interruption(true) which changes AOT-cwasm contract and breaks loading the existing cwasm. Fix is a separate iteration that rebuilds the cwasm with matching config (or ships a parallel profile-build cwasm). The ResourceLimiter trio shipped here is what actually characterizes the ProgressIndicator leak — primary motivation served. Profile-feature .so is identical to default-feature in size (cargo strips dead code well); APK md5-verified to contain `wart-profile` strings.

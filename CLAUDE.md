@@ -117,7 +117,7 @@ shipping the full Compose port — not as discrete sequential milestones.
 | 21 | Audio playback via rsbinder to IAAudioService (Path B-AAudio variant) | ✅ device-verified 2026-05-17 — 440 Hz beep audible on Pixel 2 XL speaker |
 | 18 | Compose `LocalHapticFeedback` → WIT haptics adapter | ✅ device-verified 2026-05-17 — Material3 button click buzzes Pixel 2 XL |
 | 22 | ISurfaceComposer rsbinder round-trip (roadmap §5 de-risk) | ✅ device-verified 2026-05-17 — SurfaceFlinger reachable; transport validated |
-| 23 | Profiling hooks (`ResourceLimiter` + `GuestProfiler`) | 🔲 scoped, not started |
+| 23 | Profiling hooks (`ResourceLimiter` + `GuestProfiler`) | 🟡 MVP device-verified 2026-05-17 — 3/4 hooks live; GuestProfiler deferred (epoch-interruption cwasm-rebuild needed) |
 
 **What's verified on device:** BasicTextField + TextFieldState + hardware
 keyboard, in-canvas soft keyboard, Material3 widgets (Button, Checkbox,
