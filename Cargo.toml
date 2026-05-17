@@ -70,6 +70,11 @@ rsbinder-aidl = "=0.7.0"
 
 [features]
 default = []
+# Task 23 — enable per-frame profiling hooks: ResourceLimiter on memory.grow,
+# Store::data_size() snapshot, Store::call_hook host-call counter, and
+# wasmtime::GuestProfiler firefox-profiler-JSON dump. Off by default so
+# production APK builds stay unaffected.
+profile = ["wasmtime/call-hook"]
 
 [package.metadata.android]
 package = "com.example.wasmruntime"

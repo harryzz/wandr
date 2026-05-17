@@ -20,6 +20,8 @@ mod binder_aidl;
 mod binder_shared_memory;
 mod display_impl;
 mod eventfd_signal;
+#[cfg(feature = "profile")]
+mod profiling;
 #[cfg(target_os = "android")]
 mod bionic_compat;
 
@@ -49,6 +51,10 @@ pub struct HostState {
     pub clipboard: Option<String>,
     pub wasi:      WasiCtx,
     pub table:     ResourceTable,
+    #[cfg(feature = "profile")]
+    pub growth_log: profiling::GrowthLog,
+    #[cfg(feature = "profile")]
+    pub frame_snapshot: profiling::FrameSnapshotState,
 }
 
 impl WasiView for HostState {
@@ -82,6 +88,14 @@ impl App {
         // bump async first.
         config.async_stack_size(8 * 1024 * 1024);
         config.max_wasm_stack(4 * 1024 * 1024);
+        // Note: `epoch_interruption(true)` would be needed here to drive
+        // GuestProfiler sampling, but it changes the AOT cwasm contract —
+        // the pre-compiled cwasm currently on the device was compiled
+        // without it and refuses to load if we flip the flag at runtime.
+        // Recompiling cwasm with matching config is a separate follow-up
+        // (see tasks/23-profiling-hooks.md "Out of scope"); for now the
+        // `profile` cargo feature wires only the ResourceLimiter +
+        // call-hook trio, which don't require engine config changes.
         Engine::new(&config).expect("wasmtime engine init")
     }
 
@@ -197,8 +211,29 @@ impl ApplicationHandler for App {
                 clipboard: None,
                 wasi,
                 table: ResourceTable::new(),
+                #[cfg(feature = "profile")]
+                growth_log: profiling::GrowthLog::new(),
+                #[cfg(feature = "profile")]
+                frame_snapshot: profiling::FrameSnapshotState::new(),
             };
             let mut store = Store::new(&self.engine, host);
+
+            // ── Profiling hooks (cargo feature `profile` only) ────────
+            #[cfg(feature = "profile")]
+            {
+                // (1) ResourceLimiter logs every memory.grow event.
+                store.limiter(|h| &mut h.growth_log);
+                // (2) call_hook bumps HOST_CALLS_TOTAL on each CallingHost.
+                store.call_hook(|_cx, kind| {
+                    profiling::on_call_hook(kind);
+                    Ok(())
+                });
+                // GuestProfiler sampling is intentionally NOT wired here —
+                // it requires `Config::epoch_interruption(true)` which
+                // breaks AOT-cwasm load (the cwasm was compiled without
+                // that flag). Deferred to a follow-up that ships a
+                // matched profile-build cwasm. See tasks/23-profiling-hooks.md.
+            }
 
             let mut linker: Linker<HostState> = Linker::new(&self.engine);
             wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
@@ -283,6 +318,17 @@ impl ApplicationHandler for App {
                         static FRAME_COUNT: std::sync::atomic::AtomicU32 =
                             std::sync::atomic::AtomicU32::new(0);
                         let n = FRAME_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        // Profile feature: per-frame host-call snapshot.
+                        // Linmem growth comes from the event-driven
+                        // ResourceLimiter log (more accurate than polling).
+                        #[cfg(feature = "profile")]
+                        {
+                            profiling::frame_tick(
+                                &mut s.data_mut().frame_snapshot,
+                                n as u64,
+                                60,
+                            );
+                        }
                         // Note on continuous-animation leak (~0.4 MB/s in wasm
                         // linear memory under indeterminate ProgressIndicator +
                         // LaunchedEffect+withFrameNanos workloads): wasmtime's
