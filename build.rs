@@ -96,8 +96,13 @@ fn main() {
         let light_aidl    = vendor.join("light/aidl");
         let power_aidl    = vendor.join("power/aidl");
         let thermal_aidl  = vendor.join("thermal/aidl");
+        let sensors_aidl  = vendor.join("sensors/aidl");
         let fmq_aidl      = vendor.join("common/fmq/aidl");
         let common_aidl   = vendor.join("common/aidl");
+        // Frameworks-layer AIDL — separate submodule because it's a
+        // different AOSP repo. Used by task 20 (ISensorManager etc).
+        let fwk_vendor    = PathBuf::from("vendor/aosp-frameworks-hardware-interfaces");
+        let sensorsvc_aidl = fwk_vendor.join("sensorservice/aidl");
         // Framework-side AIDL types that hardware/interfaces depends on but
         // we don't vendor (the real ones live in frameworks/base). We provide
         // empty `parcelable Foo;` stubs that satisfy the import resolver but
@@ -112,10 +117,15 @@ fn main() {
             .source(light_aidl.join("android/hardware/light/ILights.aidl"))
             .source(power_aidl.join("android/hardware/power/IPower.aidl"))
             .source(thermal_aidl.join("android/hardware/thermal/IThermal.aidl"))
+            .source(sensorsvc_aidl.join("android/frameworks/sensorservice/ISensorManager.aidl"))
+            .source(sensorsvc_aidl.join("android/frameworks/sensorservice/IEventQueue.aidl"))
+            .source(sensorsvc_aidl.join("android/frameworks/sensorservice/IEventQueueCallback.aidl"))
             .include_dir(vibrator_aidl.clone())
             .include_dir(light_aidl.clone())
             .include_dir(power_aidl.clone())
             .include_dir(thermal_aidl.clone())
+            .include_dir(sensors_aidl.clone())
+            .include_dir(sensorsvc_aidl.clone())
             .include_dir(fmq_aidl.clone())
             .include_dir(common_aidl.clone())
             .include_dir(stubs.clone())
@@ -128,6 +138,8 @@ fn main() {
         println!("cargo:rerun-if-changed={}", light_aidl.display());
         println!("cargo:rerun-if-changed={}", power_aidl.display());
         println!("cargo:rerun-if-changed={}", thermal_aidl.display());
+        println!("cargo:rerun-if-changed={}", sensors_aidl.display());
+        println!("cargo:rerun-if-changed={}", sensorsvc_aidl.display());
         println!("cargo:rerun-if-changed={}", fmq_aidl.display());
         println!("cargo:rerun-if-changed={}", common_aidl.display());
         println!("cargo:rerun-if-changed={}", stubs.display());

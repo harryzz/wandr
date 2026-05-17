@@ -42,6 +42,13 @@ ndk-context      = "0.1"
 android_system_properties = "0.1"
 rsbinder         = { version = "=0.7.0", features = ["android_11_plus"] }
 async-trait      = "0.1"
+# tokio current-thread runtime for the BnEventQueueCallback registration
+# in sensors_impl.rs. Earlier task-16 work showed that a hand-rolled
+# `BinderAsyncRuntime` with a trivial single-poll Waker leaves rsbinder's
+# local-binder bookkeeping broken (BR_INCREFS for unknown native id).
+# A real tokio runtime is needed even when the callback's onEvent never
+# actually awaits anything.
+tokio            = { version = "1", features = ["rt"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 env_logger = "0.11"
