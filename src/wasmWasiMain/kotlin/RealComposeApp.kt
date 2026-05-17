@@ -104,8 +104,12 @@ fun buildRealComposeScene(widthPx: Int, heightPx: Int, density: Float): ComposeS
         platformContext = platformContext,
     )
     val lifecycleOwner = WasiLifecycleOwnerBridge()
+    val hapticFeedback = WasiHapticFeedback()
     scene.setContent {
-        CompositionLocalProvider(LocalLifecycleOwner provides lifecycleOwner) {
+        CompositionLocalProvider(
+            LocalLifecycleOwner provides lifecycleOwner,
+            androidx.compose.ui.platform.LocalHapticFeedback provides hapticFeedback,
+        ) {
             MaterialDemoApp()
         }
     }
@@ -275,6 +279,16 @@ private fun ColorPaletteRow() {
 
 @Composable
 private fun ButtonRow() {
+    // Task 18 verified both buttons buzz when `WasiHapticFeedback` is
+    // installed at the scene root (Primary → CLICK + MEDIUM,
+    // Secondary → HEAVY_CLICK + STRONG via the
+    // HapticFeedbackType.LongPress path). Base Material3 `Button`
+    // doesn't haptic on click by default — the explicit
+    // `performHapticFeedback` calls used during B5 device verify
+    // have been removed since they were verification-only; Material3
+    // widgets that DO haptic by default (Slider with steps>0,
+    // DatePicker, …) pick up the bridge automatically through
+    // `LocalHapticFeedback`.
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(onClick = {}) { Text("Primary") }
         Button(
