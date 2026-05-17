@@ -550,6 +550,67 @@ interface clipboard {
     clear:    func();
 }
 
+/// PCM audio playback via Android's AAudio service (`media.aaudio` over
+/// rsbinder). Pull model: the guest opens a track, then pushes PCM frames
+/// per redraw via write-pcm-f32. The host translates each call into an
+/// SPSC-ring write against the AAudio service's shared-memory buffer
+/// (release-acquire counters; see tasks/21 appendix for protocol).
+///
+/// Scope (v1):
+///   - PCM-f32 only (i16 deferred); mono only (stereo deferred).
+///   - Stream is single-direction OUTPUT (recording is out of scope).
+///   - No audio focus, routing, or HAL effects.
+///   - No event callbacks from the service — the guest poll-drives
+///     write loops; XRUNs surface only as pending-frames hitting 0.
+interface audio {
+    /// PCM sample format. Only one variant in v1; the enum exists so
+    /// adding i16 later doesn't break the WIT ABI.
+    enum format { pcm-f32 }
+
+    /// Speaker layout. Mono only in v1.
+    enum channel-layout { mono, stereo }
+
+    /// Stream configuration. `sample-rate` is the audio device's native
+    /// rate (48000 is universally accepted; the HAL resamples otherwise).
+    record track-config {
+        sample-rate:    u32,
+        channel-layout: channel-layout,
+        format:         format,
+    }
+
+    /// Opaque handle returned by create-track. Sentinel 0 = invalid /
+    /// service unavailable; guest should treat as a no-op fallback.
+    type track-handle = u32;
+
+    /// Open a PCM track. Sentinel 0 on failure (service unavailable,
+    /// SELinux denial, or config rejected). The guest is expected to
+    /// fall back to silent playback gracefully.
+    create-track:   func(cfg: track-config) -> track-handle;
+
+    /// Append frames to the track's ring buffer. Returns the number of
+    /// frames actually written — may be less than `samples / channels`
+    /// if the ring is full. The guest retries leftover frames on its
+    /// next call.
+    write-pcm-f32:  func(track: track-handle, samples: list<f32>) -> u32;
+
+    /// Start data flow. Async: the service spins up its HAL thread.
+    /// Returns false on a service error.
+    start:          func(track: track-handle) -> bool;
+
+    /// Stop data flow without dropping buffered frames. Resume by
+    /// calling start again. Returns false on service error.
+    pause:          func(track: track-handle) -> bool;
+
+    /// Close the track and free the handle. Buffered frames are
+    /// discarded; the handle is invalid after this call.
+    close:          func(track: track-handle);
+
+    /// Frames the guest has written but the HAL hasn't consumed yet
+    /// (= writeCounter − readCounter). The guest can use 0 as a
+    /// "near underrun" cue and increase its write granularity.
+    pending-frames: func(track: track-handle) -> u32;
+}
+
 /// User locale + i18n preferences from Android system properties.
 /// Replaces upstream Compose's CalendarLocale, TimeFormat.is24HourFormat,
 /// and LayoutDirection defaults in material3 + ui-text.
@@ -580,5 +641,6 @@ world skiko-ui {
     import locale;
     import clipboard;
     import pointer-icon;
+    import audio;
     export renderer;
 }

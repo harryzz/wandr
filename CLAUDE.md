@@ -114,13 +114,15 @@ shipping the full Compose port — not as discrete sequential milestones.
 | 17 | Lights HAL via ILights binder + new WIT lights interface | ✅ implementation verified; graceful no-op on Pixel 2 XL (no AIDL ILights HAL on this device, Pixel 3+ has it) |
 | 19 | IPower + IThermal HALs — performance hints + thermal state | ✅ device-verified 2026-05-17 — 11 sensors, CPU 39°C, throttle NONE |
 | 20 | Sensors via ISensorManager (frameworks-layer AIDL) — accel/gyro/proximity/light/etc | ✅ device-verified 2026-05-17 — 29 sensors, accel z=9.61 m/s² |
-| 21 | Audio playback via rsbinder to IAAudioService (Path B-AAudio variant) | 🟡 A1 vendoring done; A2-B5 queued (~3 days of dense work) |
+| 21 | Audio playback via rsbinder to IAAudioService (Path B-AAudio variant) | ✅ device-verified 2026-05-17 — 440 Hz beep audible on Pixel 2 XL speaker |
 
 **What's verified on device:** BasicTextField + TextFieldState + hardware
 keyboard, in-canvas soft keyboard, Material3 widgets (Button, Checkbox,
 DropdownMenu, Switch, Slider), LazyColumn + scrolling, warm-resume across
 lifecycle events, host-side WasiDrawable transforms, **vibrator HAL via
-rsbinder binder transactions** (task 16).
+rsbinder binder transactions** (task 16), **AAudio playback (440 Hz
+sine, stereo PCM-f32, 48 kHz)** via rsbinder → `media.aaudio` → MMAP
+HAL (task 21).
 
 **Known issue (not blocking):** indeterminate `ProgressIndicator` leaks
 ~0.4 MB/s in wasm linear memory due to Kotlin/Wasm continuation retention

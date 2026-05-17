@@ -1,5 +1,5 @@
-TASK=RENAME_HOST_DIR
+TASK=21
 STEP=verify-done
 STATUS=complete
-LAST_SUCCESS=Renamed host/ -> wart-host/ and rebuilt clean in 7m24s. Binary at wart-host/target/aarch64-linux-android/release/wasm-android-host (49.9 MB, May 15 17:33). 5 pre-existing unused-function warnings only.
-NOTES=Updated references: scripts/deploy.sh, scripts/build-host-android.sh, CLAUDE.md (4 refs). Cargo package name unchanged ("wasm-android-host"). cc-rs needed CC_aarch64_linux_android / CXX_... / AR_... env vars (not in .cargo/config.toml, which only sets the rust linker).
+LAST_SUCCESS=Task 21 verified OK — 440 Hz beep heard on Pixel 2 XL speaker at app launch. Full Path B-AAudio pipeline working end-to-end via media.aaudio + rsbinder.
+NOTES=B5 surfaced 4 issues, all fixed: (1) AAUDIO_SHARING_MODE constants were swapped (EXCLUSIVE=0/SHARED=1 not alphabetical); (2) needed BnAAudioClient stub via registerClient before openStream — service requires a registered client for SHARED dispatch; (3) Pixel 2 XL HAL only MMAPs stereo, so WIT/test had to use STEREO channel layout; (4) writeCounter/data ring fds come from AAudio marked writeable=false but MUST be mmap'd PROT_READ|PROT_WRITE (AOSP libaaudio ignores that flag) — A2 honored it strictly causing SEGV_ACCERR, fixed by hard-coding /*writeable=*/true at the AAudio call site; (5) standard AAudio order is write-then-start, not start-then-write — calling start first lets the HAL mixer race the producer and skew readCounter. Scripts/build-apk.sh + scripts/env-android.sh added for reusable APK builds. AttributionSourceState left as the empty stub — full-shape attempt regressed to BadType (recursive Vec<Box<Self>> in `next` field unsupported by rsbinder-aidl 0.7.0).
