@@ -10,12 +10,15 @@ mod lights_impl;
 mod power_impl;
 mod thermal_impl;
 mod sensors_impl;
+mod audio_impl;
 mod locale_impl;
 mod clipboard_impl;
 mod pointer_icon_impl;
 mod input;
 mod binder;
 mod binder_aidl;
+mod binder_shared_memory;
+mod eventfd_signal;
 #[cfg(target_os = "android")]
 mod bionic_compat;
 

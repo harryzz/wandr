@@ -23,6 +23,16 @@ android_logger     = { version = "0.14", optional = true }
 env_logger         = { version = "0.11", optional = true }
 raw-window-handle  = "0.6"
 icu_segmenter      = "2"
+# mmap primitive for binder SharedFileRegion-style buffers (IAAudioService
+# ring buffers in task 21; reused later by camera + codec2). Cross-platform
+# so binder_shared_memory's host-side memfd round-trip test runs on the
+# Linux dev box too — rsbinder coupling lives at the audio_impl call site.
+memmap2            = "0.9"
+# Raw eventfd / memfd_create syscalls for binder_shared_memory tests and
+# the eventfd_signal primitive. libc is already pulled transitively by
+# wasmtime, ndk, winit, etc; the explicit dep makes the surface we use
+# (eventfd / read / write / memfd_create / sysconf) discoverable.
+libc               = "0.2"
 
 # skia-safe: GL backend only (no Vulkan needed — EGL gives us GLES)
 [dependencies.skia-safe]

@@ -128,6 +128,20 @@ interface IDirectReportChannel {}
         // are never actually constructed because the methods that use them
         // are not called from our host.
         let stubs = PathBuf::from("vendor/aidl-stubs");
+
+        // ── AAudio AIDL (task 21) ────────────────────────────────────────
+        // IAAudioService + supporting parcelables for PCM playback over the
+        // `media.aaudio` binder service. The audio/common types
+        // (AudioFormatDescription, AudioFormatType, PcmType, …) live in a
+        // separate AOSP repo (system/hardware/interfaces) — that vendor is
+        // pinned to android-15.0.0_r36 alongside the others.
+        let aaudio_av  = PathBuf::from("vendor/aosp-frameworks-av");
+        let aaudio_aidl = aaudio_av.join("media/libaaudio/src/binding/aidl");
+        let shmem_aidl  = aaudio_av.join("media/libshmem/aidl");
+        let audio_common_aidl = PathBuf::from(
+            "vendor/aosp-system-hardware-interfaces/media/aidl"
+        );
+
         // Pass only the interface .aidl files; parcelables/enums in the same
         // package are resolved automatically via include_dir. Passing the full
         // dir causes the package modules to be re-emitted once per file (~3×).
@@ -139,6 +153,8 @@ interface IDirectReportChannel {}
             .source(sensorsvc_aidl.join("android/frameworks/sensorservice/ISensorManager.aidl"))
             .source(sensorsvc_aidl.join("android/frameworks/sensorservice/IEventQueue.aidl"))
             .source(sensorsvc_aidl.join("android/frameworks/sensorservice/IEventQueueCallback.aidl"))
+            .source(aaudio_aidl.join("aaudio/IAAudioService.aidl"))
+            .source(aaudio_aidl.join("aaudio/IAAudioClient.aidl"))
             .include_dir(vibrator_aidl.clone())
             .include_dir(light_aidl.clone())
             .include_dir(power_aidl.clone())
@@ -147,6 +163,9 @@ interface IDirectReportChannel {}
             .include_dir(sensorsvc_aidl.clone())
             .include_dir(fmq_aidl.clone())
             .include_dir(common_aidl.clone())
+            .include_dir(aaudio_aidl.clone())
+            .include_dir(shmem_aidl.clone())
+            .include_dir(audio_common_aidl.clone())
             .include_dir(stubs.clone())
             .set_async_support(true)
             .output(PathBuf::from(&out_dir).join("aosp_hal_bindings.rs"))
@@ -161,6 +180,9 @@ interface IDirectReportChannel {}
         println!("cargo:rerun-if-changed={}", sensorsvc_aidl.display());
         println!("cargo:rerun-if-changed={}", fmq_aidl.display());
         println!("cargo:rerun-if-changed={}", common_aidl.display());
+        println!("cargo:rerun-if-changed={}", aaudio_aidl.display());
+        println!("cargo:rerun-if-changed={}", shmem_aidl.display());
+        println!("cargo:rerun-if-changed={}", audio_common_aidl.display());
         println!("cargo:rerun-if-changed={}", stubs.display());
     }
 
