@@ -18,6 +18,7 @@ mod input;
 mod binder;
 mod binder_aidl;
 mod binder_shared_memory;
+mod display_impl;
 mod eventfd_signal;
 #[cfg(target_os = "android")]
 mod bionic_compat;
@@ -141,6 +142,12 @@ impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if let Err(reason) = binder::init() {
             log::warn!("binder init: {reason} — HAL calls will fall back to sysfs");
+        }
+        // §5 de-risk: probe SurfaceFlinger via rsbinder. One-shot,
+        // read-only, no behavior change. Only runs cold once because
+        // resumed() handles cold/warm split below.
+        if self.store.is_none() {
+            display_impl::probe();
         }
         let window = Arc::new(
             event_loop

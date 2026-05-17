@@ -16,3 +16,6 @@
 [submodule "vendor/aosp-system-hardware-interfaces"]
 	path = vendor/aosp-system-hardware-interfaces
 	url = https://android.googlesource.com/platform/system/hardware/interfaces
+[submodule "vendor/aosp-frameworks-native"]
+	path = vendor/aosp-frameworks-native
+	url = https://android.googlesource.com/platform/frameworks/native

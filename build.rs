@@ -142,6 +142,55 @@ interface IDirectReportChannel {}
             "vendor/aosp-system-hardware-interfaces/media/aidl"
         );
 
+        // ── ISurfaceComposer AIDL (task 22) ──────────────────────────────
+        // SurfaceFlingerAIDL service ("android.gui.ISurfaceComposer").
+        // Parcelables live in two sibling dirs: most under libs/gui/aidl/,
+        // plus a handful (IWindowInfosListener/Publisher,
+        // StalledTransactionInfo, WindowInfo, FocusRequest, …) under
+        // libs/gui/android/gui/. Both share package `android.gui` so we
+        // include both. Zero imports leave the package. We only call
+        // getPhysicalDisplayIds (read-only, no permission) for the §5
+        // de-risk round-trip; the rest are emitted but unused.
+        let surfaceflinger_aidl_main = PathBuf::from(
+            "vendor/aosp-frameworks-native/libs/gui/aidl"
+        );
+        let surfaceflinger_aidl_extras = PathBuf::from(
+            "vendor/aosp-frameworks-native/libs/gui"
+        );
+
+        // The upstream ISurfaceComposer.aidl is huge (100+ methods, many
+        // referencing types backed by an external `gui_aidl_types_rs`
+        // crate that we don't pull in, plus `IWindowInfosPublisher`
+        // which lacks a `Default` impl). For the §5 de-risk we only call
+        // getPhysicalDisplayIds — the 4th method (transaction code
+        // FIRST_CALL_TRANSACTION + 3). Replace the file with a trimmed
+        // version that preserves the first 4 method declarations (so
+        // transaction codes match the service) and prunes the rest.
+        // Self-heals on every build, survives `git submodule update`.
+        let surface_composer_path = surfaceflinger_aidl_main
+            .join("android/gui/ISurfaceComposer.aidl");
+        let surface_composer_stub = b"\
+// Auto-patched by wart-host/build.rs to keep only the first 4 methods
+// of android.gui.ISurfaceComposer (so getPhysicalDisplayIds remains at
+// FIRST_CALL_TRANSACTION + 3, matching the SurfaceFlingerAIDL service's
+// wire protocol). The upstream interface references types
+// (IWindowInfosPublisher, WindowInfo via gui_aidl_types_rs) that
+// rsbinder-aidl 0.7.0 doesn't resolve. We only call
+// getPhysicalDisplayIds (read-only, no permission); the other three
+// methods are kept as declarations to preserve transaction codes but
+// are never invoked.
+package android.gui;
+
+interface ISurfaceComposer {
+    void bootFinished();
+    @nullable IBinder createConnection();
+    void destroyVirtualDisplay(IBinder displayToken);
+    long[] getPhysicalDisplayIds();
+}
+";
+        std::fs::write(&surface_composer_path, surface_composer_stub)
+            .expect("patch ISurfaceComposer.aidl");
+
         // Pass only the interface .aidl files; parcelables/enums in the same
         // package are resolved automatically via include_dir. Passing the full
         // dir causes the package modules to be re-emitted once per file (~3×).
@@ -155,6 +204,7 @@ interface IDirectReportChannel {}
             .source(sensorsvc_aidl.join("android/frameworks/sensorservice/IEventQueueCallback.aidl"))
             .source(aaudio_aidl.join("aaudio/IAAudioService.aidl"))
             .source(aaudio_aidl.join("aaudio/IAAudioClient.aidl"))
+            .source(surfaceflinger_aidl_main.join("android/gui/ISurfaceComposer.aidl"))
             .include_dir(vibrator_aidl.clone())
             .include_dir(light_aidl.clone())
             .include_dir(power_aidl.clone())
@@ -166,6 +216,8 @@ interface IDirectReportChannel {}
             .include_dir(aaudio_aidl.clone())
             .include_dir(shmem_aidl.clone())
             .include_dir(audio_common_aidl.clone())
+            .include_dir(surfaceflinger_aidl_main.clone())
+            .include_dir(surfaceflinger_aidl_extras.clone())
             .include_dir(stubs.clone())
             .set_async_support(true)
             .output(PathBuf::from(&out_dir).join("aosp_hal_bindings.rs"))
@@ -183,6 +235,8 @@ interface IDirectReportChannel {}
         println!("cargo:rerun-if-changed={}", aaudio_aidl.display());
         println!("cargo:rerun-if-changed={}", shmem_aidl.display());
         println!("cargo:rerun-if-changed={}", audio_common_aidl.display());
+        println!("cargo:rerun-if-changed={}", surfaceflinger_aidl_main.display());
+        println!("cargo:rerun-if-changed={}", surfaceflinger_aidl_extras.display());
         println!("cargo:rerun-if-changed={}", stubs.display());
     }
 
