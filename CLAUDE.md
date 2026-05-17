@@ -114,7 +114,7 @@ shipping the full Compose port — not as discrete sequential milestones.
 | 17 | Lights HAL via ILights binder + new WIT lights interface | ✅ implementation verified; graceful no-op on Pixel 2 XL (no AIDL ILights HAL on this device, Pixel 3+ has it) |
 | 19 | IPower + IThermal HALs — performance hints + thermal state | ✅ device-verified 2026-05-17 — 11 sensors, CPU 39°C, throttle NONE |
 | 20 | Sensors via ISensorManager (frameworks-layer AIDL) — accel/gyro/proximity/light/etc | ✅ device-verified 2026-05-17 — 29 sensors, accel z=9.61 m/s² |
-| 21 | AudioFlinger playback (path A: AAudio NDK / path B: rsbinder direct) | 🟡 scoped |
+| 21 | Audio playback via rsbinder to IAAudioService (Path B-AAudio variant) | 🟡 A1 vendoring done; A2-B5 queued (~3 days of dense work) |
 
 **What's verified on device:** BasicTextField + TextFieldState + hardware
 keyboard, in-canvas soft keyboard, Material3 widgets (Button, Checkbox,
@@ -215,7 +215,7 @@ boundary from `post-art-roadmap.md` §3.
 | 17 | `tasks/17-lights-hal.md` | New WIT lights interface; ILights binder; graceful no-op on devices w/o AIDL HAL — ✅ |
 | 19 | `tasks/19-power-thermal-hal.md` | IPower performance hints + IThermal read-only state — ✅ device-verified; submodule bumped to android-15.0.0_r36 |
 | 20 | `tasks/20-sensors-hal.md` | ISensorManager (frameworks-layer AIDL); pull-model sensor sample polling; first Bn-callback server — ✅ device-verified |
-| 21 | `tasks/21-audioflinger-playback.md` | Audio playback — path A (AAudio NDK) vs path B (rsbinder to IAudioFlinger) — 🟡 scoped |
+| 21 | `tasks/21-audioflinger-playback.md` | Audio playback via rsbinder→IAAudioService; primitives factored for reuse (binder_shared_memory + eventfd_signal) — 🟡 A1 vendoring done; A2-B5 queued |
 
 ---
 
