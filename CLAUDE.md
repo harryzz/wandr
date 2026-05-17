@@ -118,7 +118,7 @@ shipping the full Compose port — not as discrete sequential milestones.
 | 18 | Compose `LocalHapticFeedback` → WIT haptics adapter | ✅ device-verified 2026-05-17 — Material3 button click buzzes Pixel 2 XL |
 | 22 | ISurfaceComposer rsbinder round-trip (roadmap §5 de-risk) | ✅ device-verified 2026-05-17 — SurfaceFlinger reachable; transport validated |
 | 23 | Profiling hooks (`ResourceLimiter` + `GuestProfiler`) | 🟡 MVP device-verified 2026-05-17 — 3/4 hooks live; GuestProfiler deferred (epoch-interruption cwasm-rebuild needed) |
-| 24 | Bisect the WasmGC-heap leak — find the real retention chain (Kotlin/Wasm continuations? kotlinx-coroutines-wasmWasi? Compose Snapshot?) | 🔲 scoped, not started |
+| 24 | Bisect the WasmGC-heap leak — find the real retention chain (Kotlin/Wasm continuations? kotlinx-coroutines-wasmWasi? Compose Snapshot?) | 🟡 step 1 done 2026-05-17 — minimal reproducer in `wart-leak-repro/`; leak isolated to Kotlin/Wasm `suspend` codegen (~9 MB/s, OOM in 6:37). Steps 2-4 moot; pending upstream file. |
 
 **What's verified on device:** BasicTextField + TextFieldState + hardware
 keyboard, in-canvas soft keyboard, Material3 widgets (Button, Checkbox,
@@ -180,6 +180,7 @@ wart/
       org/jetbrains/skiko/             ← WasiCanvas.kt, SkiaLayerWasi.kt, wasi/RendererImpl.kt
     skiko/wit/skiko-gfx.wit            ← MIRROR — must stay byte-identical to ../wit/skiko-gfx.wit
   compose-multiplatform-core/          ← in-tree port: 32 wasm-wasi klibs [README-wasmWasi.md + BUILD-wasmWasi.md]
+  wart-leak-repro/                     ← minimal Kotlin/Wasm + skiko-wasm-wasi-only repro for task 24 — confirms the WasmGC-heap leak is in `suspendCoroutine` codegen (~9 MB/s, OOM in 6:37 on Pixel 2 XL)
   compose-runtime-wasi/                ← sibling fat klibs (11 dirs) — bundle compose-multiplatform-core
   compose-ui-base-wasi/                  source dirs via srcDirs, package into one klib per dir.
   compose-ui-graphics-wasi/              Used for fast linking (5 min vs 2 h on 32 granular klibs).
@@ -226,7 +227,7 @@ boundary from `post-art-roadmap.md` §3.
 | 18 | `tasks/18-compose-haptic-adapter.md` | Compose `LocalHapticFeedback` provider → WIT haptics; closes the Compose-UI ↔ vendor-vibrator-HAL loop set up in task 16 — ✅ device-verified |
 | 22 | `tasks/22-isurfacecomposer-roundtrip.md` | rsbinder probe of `SurfaceFlingerAIDL` (`android.gui.ISurfaceComposer`); roadmap §5 de-risk for the eventual boot-model migration — ✅ device-verified |
 | 23 | `tasks/23-profiling-hooks.md` (+ scope `tasks/scope-profiling-tools.md`) | Wire `ResourceLimiter` + `GuestProfiler` + per-frame data_size + call_hook behind a `profile` cargo feature; characterizes the ProgressIndicator leak quantitatively + breaks down the ~10–20 ms/frame budget — 🟡 MVP done |
-| 24 | `tasks/24-bisect-wasm-leak.md` | Bisect down through Kotlin/Wasm + kotlinx-coroutines-wasmWasi + Compose to find the actual retention chain behind the ~8 MB/min WasmGC-heap leak observed in task 23 — 🔲 scoped |
+| 24 | `tasks/24-bisect-wasm-leak.md` (+ reproducer `wart-leak-repro/`) | Bisect the ~8 MB/min WasmGC-heap leak from task 23 down to its root. Step 1 done: bare `suspendCoroutine` loop with no Compose / no kotlinx-coroutines leaks at ~9 MB/s, OOMs Pixel 2 XL in 6:37. Isolated to Kotlin/Wasm `suspend` codegen — 🟡 step 1 done |
 
 ---
 

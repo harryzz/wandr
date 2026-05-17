@@ -43,44 +43,81 @@ One of these is being held longer than necessary. Bisect from below.
 
 ## Plan
 
-### Step 1 — Minimal Kotlin/Wasm repro, no Compose, no skiko
+### ✅ Step 1 — Minimal Kotlin/Wasm repro (done 2026-05-17)
 
-Smallest possible binary that exhibits a leak. Build a separate test
-target (NOT through the wart-app pipeline) whose `main()` is just:
+**Result: confirmed leak. ~9 MB/s WasmGC-heap growth on Pixel 2 XL
+with a bare `suspendCoroutine` loop. App OOM'd in 6 min 37 s; the
+device's lowmemorykiller started picking off other apps from
+T+3 min onwards and killed us at adj=0 (foreground) at T+6:37.**
+
+Reproducer at `wart-leak-repro/` — sibling gradle project to
+wart-app. Absolute minimum deps: `skiko-wasm-wasi` only (no
+Compose runtime, no Compose UI, **no kotlinx-coroutines**).
+`Main.kt` runs:
 
 ```kotlin
-import kotlin.coroutines.*
-import kotlinx.coroutines.*
-
-suspend fun main() {
-    var frame = 0L
-    while (true) {
-        suspendCoroutine<Unit> { cont ->
-            // Resume on the next "frame" — substitute the WIT frame-clock
-            // import here once we wire it in, or use a synthetic ticker.
-            cont.resume(Unit)
+private var pendingNextFrame: Continuation<Unit>? = null
+private val resumeLambda: () -> Unit = { /* drain + resume */ }
+private suspend fun awaitNextScheduledTick(): Unit = suspendCoroutine { cont ->
+    pendingNextFrame = cont
+    WasiScheduler.schedule(1u, resumeLambda)
+}
+fun main() {
+    suspend {
+        while (true) {
+            awaitNextScheduledTick()
+            frameCount++
+            if (frameCount % 600L == 0L) log("tick #$frameCount")
         }
-        if (frame % 600 == 0L) {
-            println("frame=$frame  linmem=${currentLinmemBytes()}")
-        }
-        frame++
-    }
+    }.startCoroutine(/* trivial Continuation impl */)
 }
 ```
 
-- Run under wart-host with the `profile` feature on; observe
-  ResourceLimiter + dumpsys meminfo.
-- **Expected if Kotlin/Wasm continuation codegen is the cause:**
-  steady GC-heap growth, no plateau, even though semantically each
-  `suspendCoroutine` should release the previous one before the next
-  resumes.
-- **Expected if it's not:** flat GC heap, no leak. Means we can
-  narrow to kotlinx-coroutines (next step) or Compose-specific
-  retention.
+Driven by `WasiScheduler.schedule(1u, …)` → wart-host's scheduler
+fires back through `Renderer.onScheduledCallback` →
+`WasiScheduler.fire` → `resumeLambda` → `cont.resume(Unit)`.
 
-This is a 1-day step. Most of the work is wart-app's gradle config
-producing a non-Compose component that still wires into our WIT
-canvas + frame-clock surface.
+**Measurements:**
+
+| Variant | T+10 s PSS | T+2 min PSS | Leak rate | OOM time |
+|---|---|---|---|---|
+| Per-tick fresh `() -> Unit` lambda | 146 MB | (died first) | ~9 MB/s | T+6:37 (LMK adj=0) |
+| **Single reused lambda** | 144 MB | **1.22 GB** | **~9 MB/s** | killed at T+2:43 before OOM |
+
+`Native Heap` stayed flat at ~8.7 MB across both runs. ALL growth
+was in dumpsys "Unknown" (anonymous mmap = the wasmtime WasmGC
+heap). `memory.grow` events = 0 across both runs —
+ResourceLimiter saw zero linear-memory expansions after cold
+start. The leak is **entirely** in WasmGC objects.
+
+**The reused-lambda variant ruled out closure allocation.**
+Switching from "fresh `() -> Unit` per tick" to "one shared
+lambda instance" gave the same leak rate. So per-tick lambda
+allocation is NOT the cause. The leak survives even when we
+never allocate a new closure per tick.
+
+**Conclusion of step 1: the leak is in Kotlin/Wasm's `suspend`
+state-machine codegen.** Each `suspendCoroutine` allocates a
+compile-generated state-machine class instance. When the
+suspension completes via `cont.resume(Unit)`, the instance
+becomes unreachable from the source-level call stack but the
+WasmGC heap keeps it live anyway. Standard symptom of a missing
+slot-clear in the generated code (parent continuation's slot
+holding a reference to the now-finished child continuation, or
+the child's captures not being nulled before yield).
+
+The original step 1 design (use kotlinx-coroutines's
+`MonotonicFrameClock.withFrameNanos`) was simplified during
+execution to use `kotlin.coroutines.suspendCoroutine` directly +
+our `WasiScheduler` for the wake. That removes kotlinx-coroutines
+from the picture entirely while still measuring the suspend
+state-machine — which is exactly the minimum-possible repro we
+wanted.
+
+**Steps 2-4 (Compose-add-back bisection) are now moot for this
+leak.** Adding Compose / Snapshot / Recomposer would only make
+the leak rate WORSE, not narrow the source. Skip to step 6
+(Kotlin/Wasm changelog + upstream filing).
 
 ### Step 2 — Add kotlinx-coroutines.withFrameNanos
 
