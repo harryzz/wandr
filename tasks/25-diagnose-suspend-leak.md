@@ -253,9 +253,86 @@ or a wasmtime DRC fix depending on what step 3 shows.
 
 Matches our measured per-tick leak rate of ~80 B exactly.
 
-## Step 3 — Patch wasmtime for live-object summary (~2-3 days)
+## 🟡 Step 3 — Exploration changed the diagnosis (paused 2026-05-17)
 
-**Goal: per-type live-count growth data — the actual smoking gun.**
+**Before committing to the wasmtime patch, I read wasmtime DRC's
+implementation more carefully. The diagnosis is not what I thought.
+The wasmtime patch would still confirm SafeContinuation as the
+leaked type but the FIX landscape has changed — patching wasmtime
+introspection isn't on the critical path anymore.**
+
+### Key finding from reading `runtime/vm/gc/enabled/drc.rs` preamble
+
+> "we only mutate reference counts when storing `VMGcRef`s somewhere
+> that outlives the Wasm activation: into a global or table"
+> "we over-approximate the set of `VMGcRef`s that are inside Wasm
+> function activations"
+> "Periodically, we walk the stack at GC safe points, and use stack
+> map information to precisely identify the set of `VMGcRef`s
+> inside Wasm activations. Then we take the difference between this
+> precise set and our over-approximation, and decrement the
+> reference count for each of the `VMGcRef`s that are in our
+> over-approximation but not in the precise set."
+
+**DRC is lazy-decrement by design.** It doesn't dec-ref on every
+`local.set` (that would defeat the "deferred" optimization). It
+builds an over-approximation set and processes it at GC safe
+points. Without explicit `Store::gc()`, the over-approximation
+just grows.
+
+### And the heap-grow logic at `runtime/store/gc.rs`
+
+```rust
+async fn grow_or_collect_gc_heap(...) {
+    if let Some(n) = bytes_needed && n > 0 {
+        if self.grow_gc_heap(limiter, n).await.is_ok() { return; }
+    }
+    self.do_gc(asyncness).await;  // gc only if grow failed
+}
+```
+
+**Wasmtime tries to grow first; gc only fires when grow can't.**
+The hard ceiling for the GC heap is `1 << 32 = 4 GB` (hardcoded
+in `store/gc.rs:102`). On a 4 GB Pixel 2 XL, that ceiling is the
+device's physical memory — the heap just keeps doubling toward
+that, and the device's lowmemorykiller fires before wasmtime hits
+the ceiling and would auto-gc.
+
+### Revised diagnosis
+
+The "leak" is NOT a missing slot-clear in Kotlin/Wasm codegen as
+step 2 hypothesized. It's the **DRC over-approximation set
+growing unboundedly because:**
+
+1. DRC defers decrements (lazy by design).
+2. Wasmtime's heap auto-grow policy prefers grow-over-gc.
+3. The 4 GB hardcoded ceiling never gets hit on a 4 GB device —
+   the OS kills us first.
+
+This is below the Kotlin source language. It's a
+**wasmtime architecture choice that's pathological for
+high-allocation-rate workloads on memory-constrained devices.**
+
+### Fix landscape (revised)
+
+| Path | What | Effort | Trade-offs |
+|---|---|---|---|
+| **A** | Manual `Store::gc()` every N frames (band-aid we already tried) | Done | 16× reduction at 0.7 % CPU on static; user reported PI scenario costs higher |
+| **B** | Have Kotlin/Wasm avoid per-call `SafeContinuation` allocation | Months (Kotlin compiler work) | Best long-term but huge effort |
+| **C** | Patch wasmtime's heap-grow-vs-gc policy to prefer gc once heap ≥ N MB | ~1 day | Cleanest local fix, configurable. Our patch lives forever as a wasmtime fork. |
+| **D** | Switch to wasmtime's mark-and-sweep collector | Investigation needed | Different latency/throughput trade-off |
+
+The original step 3 (wasmtime live-object summary) would still
+work — give us per-type counts confirming SafeContinuation —
+but doesn't change which path A/B/C/D we pick. Pausing here to
+let the user decide which fix path before sinking 2-3 days into
+introspection.
+
+---
+
+## Step 3 — Patch wasmtime for live-object summary (~2-3 days, paused)
+
+**Original goal: per-type live-count growth data — the actual smoking gun.**
 
 Wasmtime's DRC (deferred-reference-counting) heap impl at
 `runtime/vm/gc/enabled/drc.rs` maintains internal tables of all
