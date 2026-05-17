@@ -103,6 +103,25 @@ fn main() {
         // different AOSP repo. Used by task 20 (ISensorManager etc).
         let fwk_vendor    = PathBuf::from("vendor/aosp-frameworks-hardware-interfaces");
         let sensorsvc_aidl = fwk_vendor.join("sensorservice/aidl");
+
+        // Upstream IDirectReportChannel.aidl references
+        // android.hardware.sensors.ISensors.RateLevel — a nested AIDL
+        // enum that rsbinder-aidl 0.7.0 can't resolve. We don't use
+        // direct channels in the WIT, so replace the file in place with
+        // a body-less interface. Runs every build; cheap; self-healing
+        // across `git submodule update`.
+        let direct_channel_path = sensorsvc_aidl.join(
+            "android/frameworks/sensorservice/IDirectReportChannel.aidl"
+        );
+        let direct_channel_stub = b"\
+// Auto-patched by wart-host/build.rs because the real definition
+// references android.hardware.sensors.ISensors.RateLevel which
+// rsbinder-aidl 0.7.0 doesn't resolve. We don't use direct channels.
+package android.frameworks.sensorservice;
+interface IDirectReportChannel {}
+";
+        std::fs::write(&direct_channel_path, direct_channel_stub)
+            .expect("patch IDirectReportChannel.aidl");
         // Framework-side AIDL types that hardware/interfaces depends on but
         // we don't vendor (the real ones live in frameworks/base). We provide
         // empty `parcelable Foo;` stubs that satisfy the import resolver but

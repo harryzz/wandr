@@ -3511,6 +3511,7 @@ dependencies = [
  "rsbinder",
  "rsbinder-aidl",
  "skia-safe",
+ "tokio",
  "wasmtime",
  "wasmtime-wasi",
  "winit",
