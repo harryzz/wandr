@@ -321,6 +321,9 @@ impl ApplicationHandler for App {
                         // Profile feature: per-frame host-call snapshot.
                         // Linmem growth comes from the event-driven
                         // ResourceLimiter log (more accurate than polling).
+                        // Periodic gc trigger was tried + reverted —
+                        // see profiling.rs comment and
+                        // tasks/24-bisect-wasm-leak.md.
                         #[cfg(feature = "profile")]
                         {
                             profiling::frame_tick(

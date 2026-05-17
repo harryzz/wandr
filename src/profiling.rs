@@ -139,6 +139,19 @@ pub fn frame_tick(
     );
 }
 
+// ── Periodic Store::gc trigger — tried + REJECTED ──────────────────
+//
+// We experimented with a per-300-frame `Store::gc(None)` call to
+// reduce the wasm-GC-heap growth pattern identified in the 15-min
+// soak (PSS climbed +123 MB without gc; +7.7 MB with gc — 16× cut
+// at 0.73 % CPU on the default demo). It works as a band-aid but
+// is the wrong fix: enabling ProgressIndicator dramatically raises
+// the per-gc cost, and the underlying issue (Kotlin/Wasm
+// continuation retention / kotlinx-coroutines wasmWasi weak-ref
+// gaps) stays. Findings recorded in
+// `feedback_indeterminate_progress_leak.md`; bisect plan in
+// `tasks/24-bisect-wasm-leak.md`.
+
 // ── GuestProfiler driver ───────────────────────────────────────────
 //
 // Deliberately removed in this iteration — see the module-level
