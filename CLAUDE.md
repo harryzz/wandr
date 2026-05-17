@@ -115,6 +115,7 @@ shipping the full Compose port — not as discrete sequential milestones.
 | 19 | IPower + IThermal HALs — performance hints + thermal state | ✅ device-verified 2026-05-17 — 11 sensors, CPU 39°C, throttle NONE |
 | 20 | Sensors via ISensorManager (frameworks-layer AIDL) — accel/gyro/proximity/light/etc | ✅ device-verified 2026-05-17 — 29 sensors, accel z=9.61 m/s² |
 | 21 | Audio playback via rsbinder to IAAudioService (Path B-AAudio variant) | ✅ device-verified 2026-05-17 — 440 Hz beep audible on Pixel 2 XL speaker |
+| 18 | Compose `LocalHapticFeedback` → WIT haptics adapter | ✅ device-verified 2026-05-17 — Material3 button click buzzes Pixel 2 XL |
 
 **What's verified on device:** BasicTextField + TextFieldState + hardware
 keyboard, in-canvas soft keyboard, Material3 widgets (Button, Checkbox,
@@ -122,7 +123,8 @@ DropdownMenu, Switch, Slider), LazyColumn + scrolling, warm-resume across
 lifecycle events, host-side WasiDrawable transforms, **vibrator HAL via
 rsbinder binder transactions** (task 16), **AAudio playback (440 Hz
 sine, stereo PCM-f32, 48 kHz)** via rsbinder → `media.aaudio` → MMAP
-HAL (task 21).
+HAL (task 21), **Compose `LocalHapticFeedback` → WIT haptics adapter**
+so Material3 widgets buzz the device (task 18).
 
 **Known issue (not blocking):** indeterminate `ProgressIndicator` leaks
 ~0.4 MB/s in wasm linear memory due to Kotlin/Wasm continuation retention
@@ -217,7 +219,8 @@ boundary from `post-art-roadmap.md` §3.
 | 17 | `tasks/17-lights-hal.md` | New WIT lights interface; ILights binder; graceful no-op on devices w/o AIDL HAL — ✅ |
 | 19 | `tasks/19-power-thermal-hal.md` | IPower performance hints + IThermal read-only state — ✅ device-verified; submodule bumped to android-15.0.0_r36 |
 | 20 | `tasks/20-sensors-hal.md` | ISensorManager (frameworks-layer AIDL); pull-model sensor sample polling; first Bn-callback server — ✅ device-verified |
-| 21 | `tasks/21-audioflinger-playback.md` | Audio playback via rsbinder→IAAudioService; primitives factored for reuse (binder_shared_memory + eventfd_signal) — 🟡 A1 vendoring done; A2-B5 queued |
+| 21 | `tasks/21-audioflinger-playback.md` | Audio playback via rsbinder→IAAudioService; primitives factored for reuse (binder_shared_memory + eventfd_signal) — ✅ device-verified |
+| 18 | `tasks/18-compose-haptic-adapter.md` | Compose `LocalHapticFeedback` provider → WIT haptics; closes the Compose-UI ↔ vendor-vibrator-HAL loop set up in task 16 — ✅ device-verified |
 
 ---
 
