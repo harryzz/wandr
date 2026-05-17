@@ -10,3 +10,9 @@
 	path = vendor/aosp-frameworks-hardware-interfaces
 	url = https://android.googlesource.com/platform/frameworks/hardware/interfaces
 	shallow = true
+[submodule "vendor/aosp-frameworks-av"]
+	path = vendor/aosp-frameworks-av
+	url = https://android.googlesource.com/platform/frameworks/av
+[submodule "vendor/aosp-system-hardware-interfaces"]
+	path = vendor/aosp-system-hardware-interfaces
+	url = https://android.googlesource.com/platform/system/hardware/interfaces
