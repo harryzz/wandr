@@ -190,6 +190,38 @@ After install + cold-start with `--features profile`:
   log entries don't say which of multiple linear memories grew.
   Adding the memory index is a follow-up if/when we need it.
 
+## Follow-up — gc trigger tried + reverted (2026-05-17)
+
+After the first 15-minute soak revealed that **wasm linear memory
+plateaus at T+437s while PSS keeps climbing through the "Unknown"
+anonymous-mmap category** (i.e., the wasmtime WasmGC heap), we
+wired a `maybe_periodic_gc` helper that calls `Store::gc(None)`
+every 300 frames (5 s @ 60 fps). A second 15-minute soak gave:
+
+| | No gc (Run A) | gc every 5 s (Run B) |
+|---|---|---|
+| TOTAL PSS growth, 15 min | +123 MB | **+7.7 MB** (~16× cut) |
+| memory.grow events | 16 (last at T+437s, plateaued) | 13 (last at T+261 ms) |
+| gc steady-state cost | n/a | 30.6 → 31.7 ms per call (stable) |
+| gc CPU overhead | n/a | **0.73 %** on the default static demo |
+
+The `Store::gc()` periodic-call code path was **reverted before
+merge** because:
+
+1. It only masks the symptom; the underlying issue is Kotlin/Wasm
+   continuation retention or kotlinx-coroutines wasmWasi
+   weak-ref gaps, which stays even with aggressive gc.
+2. The gc cost is highly scenario-dependent — user reports
+   per-gc cost rises substantially with ProgressIndicator on
+   screen (well above the 0.7 % we measured on the default
+   demo), making a fixed cadence wrong.
+3. Even with the 16× reduction, growth is still ~0.5 MB/min on
+   the static demo — over many hours that's still trouble.
+
+Findings recorded in
+`feedback_indeterminate_progress_leak.md`; the real diagnostic
+work continues in `tasks/24-bisect-wasm-leak.md`.
+
 ## Estimate
 
 2–4 hours total:

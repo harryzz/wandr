@@ -1,5 +1,5 @@
 TASK=23
-STEP=mvp-verify-done
+STEP=gc-reverted
 STATUS=complete
-LAST_SUCCESS=Task 23 MVP verified — ResourceLimiter + Store::call_hook + frame_tick firing live on Pixel 2 XL. Cold start logged 14 memory.grow events (1->2->4->8...->512 pages, ~32MB), then steady state. Host-call rate = 10/frame at 60fps after Compose boot.
-NOTES=GuestProfiler sampling intentionally deferred: requires Config::epoch_interruption(true) which changes AOT-cwasm contract and breaks loading the existing cwasm. Fix is a separate iteration that rebuilds the cwasm with matching config (or ships a parallel profile-build cwasm). The ResourceLimiter trio shipped here is what actually characterizes the ProgressIndicator leak — primary motivation served. Profile-feature .so is identical to default-feature in size (cargo strips dead code well); APK md5-verified to contain `wart-profile` strings.
+LAST_SUCCESS=Task 23 MVP complete (3/4 hooks live, gc-trigger experiment captured + reverted). Task 24 scoped — bisect plan for the underlying WasmGC-heap retention.
+NOTES=15-min soak comparison captured in feedback_indeterminate_progress_leak.md. Run A (no gc): +123 MB PSS in 15 min, leak entirely in WasmGC heap. Run B (gc every 5s): +7.7 MB, 16× reduction, 0.73% CPU on static demo BUT user reports gc cost is much higher with ProgressIndicator. gc trigger reverted from profile feature — band-aid not fix. Real diagnostic plan in tasks/24-bisect-wasm-leak.md: bisect bottom-up from a no-Compose suspendCoroutine loop, narrow to either Kotlin/Wasm continuation codegen or kotlinx-coroutines-wasmWasi or Compose Snapshot, file upstream.

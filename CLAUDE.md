@@ -118,6 +118,7 @@ shipping the full Compose port — not as discrete sequential milestones.
 | 18 | Compose `LocalHapticFeedback` → WIT haptics adapter | ✅ device-verified 2026-05-17 — Material3 button click buzzes Pixel 2 XL |
 | 22 | ISurfaceComposer rsbinder round-trip (roadmap §5 de-risk) | ✅ device-verified 2026-05-17 — SurfaceFlinger reachable; transport validated |
 | 23 | Profiling hooks (`ResourceLimiter` + `GuestProfiler`) | 🟡 MVP device-verified 2026-05-17 — 3/4 hooks live; GuestProfiler deferred (epoch-interruption cwasm-rebuild needed) |
+| 24 | Bisect the WasmGC-heap leak — find the real retention chain (Kotlin/Wasm continuations? kotlinx-coroutines-wasmWasi? Compose Snapshot?) | 🔲 scoped, not started |
 
 **What's verified on device:** BasicTextField + TextFieldState + hardware
 keyboard, in-canvas soft keyboard, Material3 widgets (Button, Checkbox,
@@ -224,7 +225,8 @@ boundary from `post-art-roadmap.md` §3.
 | 21 | `tasks/21-audioflinger-playback.md` | Audio playback via rsbinder→IAAudioService; primitives factored for reuse (binder_shared_memory + eventfd_signal) — ✅ device-verified |
 | 18 | `tasks/18-compose-haptic-adapter.md` | Compose `LocalHapticFeedback` provider → WIT haptics; closes the Compose-UI ↔ vendor-vibrator-HAL loop set up in task 16 — ✅ device-verified |
 | 22 | `tasks/22-isurfacecomposer-roundtrip.md` | rsbinder probe of `SurfaceFlingerAIDL` (`android.gui.ISurfaceComposer`); roadmap §5 de-risk for the eventual boot-model migration — ✅ device-verified |
-| 23 | `tasks/23-profiling-hooks.md` (+ scope `tasks/scope-profiling-tools.md`) | Wire `ResourceLimiter` + `GuestProfiler` + per-frame data_size + call_hook behind a `profile` cargo feature; characterizes the ProgressIndicator leak quantitatively + breaks down the ~10–20 ms/frame budget — 🔲 scoped |
+| 23 | `tasks/23-profiling-hooks.md` (+ scope `tasks/scope-profiling-tools.md`) | Wire `ResourceLimiter` + `GuestProfiler` + per-frame data_size + call_hook behind a `profile` cargo feature; characterizes the ProgressIndicator leak quantitatively + breaks down the ~10–20 ms/frame budget — 🟡 MVP done |
+| 24 | `tasks/24-bisect-wasm-leak.md` | Bisect down through Kotlin/Wasm + kotlinx-coroutines-wasmWasi + Compose to find the actual retention chain behind the ~8 MB/min WasmGC-heap leak observed in task 23 — 🔲 scoped |
 
 ---
 
