@@ -431,6 +431,65 @@ interface thermal {
     overall-throttle:  func() -> throttle;
 }
 
+/// Hardware sensors via the frameworks-layer ISensorManager. On Android,
+/// reaches android.frameworks.sensorservice.ISensorManager/default (stable
+/// AIDL Android 11+) which wraps the vendor sensors HAL so this works
+/// across HIDL-only Pixels (e.g. Pixel 2) and AIDL-only newer devices.
+///
+/// Pull model: host owns the binder side, accumulates the latest sample
+/// per enabled sensor; guest polls per-frame in its Compose redraw loop.
+/// Push-via-WIT-export was considered but rejected — Compose can't redraw
+/// faster than per-frame anyway so a push model adds complexity for no
+/// UX benefit.
+interface sensors {
+    /// Sensor types we know how to map. `unknown` lets the host expose
+    /// devices we don't recognize without crashing; guest can still
+    /// enable/poll them but should not interpret the float values.
+    enum kind {
+        unknown, accelerometer, magnetic-field, gyroscope, light,
+        pressure, proximity, gravity, linear-acceleration,
+        rotation-vector, relative-humidity, ambient-temperature,
+        game-rotation-vector,
+    }
+    record sensor-info {
+        /// Opaque ID for enable/disable/poll. Stable within one
+        /// sensorservice lifetime; reset on reboot.
+        handle:       u32,
+        kind:         kind,
+        max-range:    f32,  // sensor-specific units
+        resolution:   f32,
+        min-delay-ms: u32,  // shortest supported period
+        power-ma:     f32,  // estimated draw when active
+    }
+    /// One reading. `timestamp-ns = 0` means "no sample available since
+    /// last poll" — sentinel to avoid the option<record> ABI hassle.
+    /// For vec3 sensors (accel/gyro/mag/gravity/linear-accel) x/y/z are
+    /// the X/Y/Z components in SI units. For scalar sensors (light,
+    /// proximity, pressure, humidity, ambient-temperature) only x is
+    /// meaningful (y=z=0). Rotation-vector / game-rotation-vector pack
+    /// the unit quaternion's i/j/k into x/y/z; w is dropped (recoverable
+    /// from sqrt(1 - x²-y²-z²) when needed).
+    record sensor-sample {
+        timestamp-ns: u64,
+        x: f32,
+        y: f32,
+        z: f32,
+    }
+    /// Enumerate every sensor the device exposes. Cheap; cache once on
+    /// startup. Unknown sensor types still appear with kind=unknown.
+    list-sensors: func() -> list<sensor-info>;
+    /// Start streaming at rate-hz. Returns false on unknown handle, rate
+    /// below the sensor's min-delay, or HAL refusal. Calling enable a
+    /// second time on the same handle changes the rate.
+    enable:       func(handle: u32, rate-hz: u32) -> bool;
+    /// Stop streaming. Safe on a not-enabled handle (no-op).
+    disable:      func(handle: u32);
+    /// Latest sample for `handle`. Returns sentinel (timestamp-ns=0) if
+    /// no event has arrived since the last poll. Each non-sentinel poll
+    /// consumes the stored sample.
+    poll-latest:  func(handle: u32) -> sensor-sample;
+}
+
 /// Hardware indicator lights (notification LED, backlight, battery,
 /// keyboard, etc). On Android, backed by
 /// android.hardware.light.ILights/default. SELinux on stock devices may
@@ -516,6 +575,7 @@ world skiko-ui {
     import haptics;
     import power;
     import thermal;
+    import sensors;
     import lights;
     import locale;
     import clipboard;

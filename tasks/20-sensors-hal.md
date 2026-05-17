@@ -1,6 +1,6 @@
 # Task 20 — Sensors (via frameworks-layer ISensorManager)
 
-> **Status: 🟡 scoped, not started.** Add the `android.frameworks.sensorservice.ISensorManager/default` AIDL interface so WASM apps can read accelerometer, gyroscope, proximity, light, pressure, magnetometer, etc. Confirmed present on the Pixel 2 XL (`service check` 2026-05-17). Targets the **frameworks-layer** stable AIDL wrapper, not the vendor HAL — this is intentional: the wrapper is stable across every Android 11+ device, while the vendor HAL is HIDL on Pixel 2 XL and stable AIDL only on Pixel 3+.
+> **Status: ✅ device-verified on Pixel 2 XL 2026-05-17.** Smoke output: `29 sensors enumerated; accel handle=1; pollLatest x=-1.21 y=0.003 z=9.61 (m/s²)` — z≈9.81 confirms gravity dominating, real readings flowing from sensorservice → Bn callback → our HashMap → guest poll. **First task with a working Bn-side binder server** — `BnEventQueueCallback::new_async_binder(EventCollector, TokioRuntime)` registered cleanly (no `unknown native id` errors that bit us in task 16's earlier callback attempts). Targets the frameworks-layer stable AIDL wrapper rather than the vendor sensors HAL — this is intentional and proven: the wrapper exists on every Android 11+ device while the vendor HAL is HIDL on Pixel 2 XL.
 
 ## Goal
 
