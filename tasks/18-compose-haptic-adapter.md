@@ -1,9 +1,21 @@
 # Task 18 — Compose `LocalHapticFeedback` → WIT haptics adapter
 
-> **Status: ✅ device-verified 2026-05-17 — Material3 button click buzzes
-> the Pixel 2 XL** with the expected intensity gradient
-> (Confirm/click = light, LongPress = strong). Closes the loop between
-> the Compose UI layer and the vendor vibrator HAL set up in task 16.
+> **Status: ✅ device-verified 2026-05-17.** Material3 button click
+> buzzes the Pixel 2 XL with the expected intensity gradient
+> (Confirm/click = light, LongPress = strong). Closes the loop
+> between the Compose UI layer and the vendor vibrator HAL set up in
+> task 16.
+>
+> **Follow-up landed 2026-05-18 — design-system layer for
+> haptic-everywhere.** The original task wired the
+> `LocalHapticFeedback` provider but left it to call sites to call
+> `performHapticFeedback` explicitly (which the demo's verification
+> code did, then deliberately removed since it was per-widget). A
+> `HapticWidgets.kt` design-system layer was added that wraps every
+> common Material3 widget so haptic fires automatically. Plus a
+> `LocalHapticEnabled` composition local + `HapticScope` that gate
+> the whole subtree from a single user-facing toggle.
+> See "Design-system layer (2026-05-18)" below.
 
 ## What this task does
 
@@ -94,6 +106,85 @@ Compose LocalHapticFeedback.current.performHapticFeedback(type)
 After verify, the explicit calls were removed from `ButtonRow()` —
 Material3 widgets that haptic-by-default will pick up the bridge
 through `LocalHapticFeedback` automatically.
+
+## Design-system layer (2026-05-18)
+
+The original task only installed the bridge. To get haptic on every
+tappable widget without per-call boilerplate, a small wrapper layer
+landed in `wart-app/src/wasmWasiMain/kotlin/HapticWidgets.kt`:
+
+### Composition locals
+
+| Name | Type | What |
+|---|---|---|
+| `LocalHapticEnabled` | `ProvidableCompositionLocal<Boolean>` | Whether `Haptic*` widgets fire. Default `true`. |
+
+### `HapticScope`
+
+```kotlin
+HapticScope(enabled = hapticEnabled) { content() }
+```
+
+Provides `LocalHapticEnabled` for `Haptic*` widgets AND swaps
+`LocalHapticFeedback` for a no-op when `enabled=false`. The latter
+means Material3's own auto-haptic widgets (Slider with steps,
+BasicTextField selection long-press, TimePicker rotation —
+whichever exist in our compose-multiplatform-core version) also
+honor the toggle. Single source of truth.
+
+### Drop-in wrappers
+
+All follow Material3's API surface as closely as possible (same
+mandatory params; only adds an optional `feedback:
+HapticFeedbackType` for override of the default mapping). Reading
+`LocalHapticEnabled` and short-circuiting when off is centralized
+in `maybeFire(...)`.
+
+| Wrapper | Wraps | Default feedback |
+|---|---|---|
+| `HapticButton` | `Button` | `Confirm` → CLICK + MEDIUM |
+| `HapticIconButton` | `IconButton` | `Confirm` |
+| `HapticCheckbox` | `Checkbox` | `ToggleOn`/`ToggleOff` per direction |
+| `HapticSwitch` | `Switch` | `ToggleOn`/`ToggleOff` |
+| `HapticRadioButton` | `RadioButton` | `Confirm` |
+| `HapticFilterChip` | `FilterChip` | `ToggleOn`/`ToggleOff` |
+| `HapticAssistChip` | `AssistChip` | `Confirm` |
+| `HapticSuggestionChip` | `SuggestionChip` | `Confirm` |
+| `HapticInputChip` | `InputChip` | `ToggleOn`/`ToggleOff` |
+| `HapticDropdownMenuItem` | `DropdownMenuItem` | `Confirm` |
+| `HapticSlider` | `Slider` (steps required) | `SegmentTick` |
+| `HapticFloatingActionButton` | `FloatingActionButton` | `Confirm` |
+| `HapticExtendedFloatingActionButton` | `ExtendedFloatingActionButton` | `Confirm` |
+| `Modifier.hapticClickable { ... }` | `Modifier.clickable` | `Confirm` |
+| `Modifier.hapticSelectable(...)` | `Modifier.selectable` | `Confirm` |
+
+### `HapticSlider` — note
+
+compose-multiplatform-core's current Material3 `Slider` does NOT
+call `performHapticFeedback` on step crossings (the auto-haptic-on-
+step feature is in a newer upstream we haven't bumped to).
+`HapticSlider` tracks step boundaries from `value`+`steps` and
+fires the haptic itself.
+
+### Demo use
+
+`wart-app/src/wasmWasiMain/kotlin/RealComposeApp.kt`:
+`MaterialDemoApp` holds `var hapticEnabled by remember { ... }`,
+wraps all demo content in `HapticScope(enabled = hapticEnabled)`,
+and provides the toggle Switch labeled "Enable haptic". The
+Switch itself uses plain Material3 `Switch` (not `HapticSwitch`) —
+the haptic-enable gate buzzing while being flipped would be
+confusing UX.
+
+### Widgets that hit `Canvas.save: not implemented`
+
+DatePicker and SegmentedButton currently crash on cold start with
+`Canvas.save: not implemented` from skiko's wasi shim. Disabled in
+the demo with a comment pointing at this task and at
+[[canvas-stub-noop-traps-compose]] (memory). The no-op-stub
+shortcut was tried 2026-05-18 and caused SIGILL in JIT'd wasm
+within seconds of interaction — don't reattempt without proper
+save/restore plumbing.
 
 ## Out of scope
 
