@@ -1,7 +1,11 @@
 # Task 28 — Wire the abstract `org.jetbrains.skia.Canvas` to host-side skia
 
-> **Status: 🔲 scoped 2026-05-18.** Make the 42 throw-stubs on the
-> abstract `Canvas` class in
+> **Status: 🟡 Step 0 done 2026-05-18 — Path D selected.** See "Step 0
+> findings" below for the diagnostic data that drove the decision.
+> Implementation still pending; the rest of this doc is the original
+> scoping plan, kept for context but not the active plan.
+
+> **Original scope:** Make the 41 throw-stubs on the abstract `Canvas` class in
 > `skiko/skiko/src/wasmWasiMain/kotlin/org/jetbrains/skia/SkiaTypes.wasi.kt`
 > actually do something useful — currently every method throws
 > `"Canvas.X: not implemented"`, which crashes `render_frame`
@@ -362,3 +366,231 @@ restore semantics (i.e. the silent-no-op-trap mechanism wasn't
 the only issue), the problem is something deeper in Compose's
 state-tracking; document the new failure mode and consider
 disabling the affected widgets as a permanent limitation.
+
+---
+
+## Step 0 findings (2026-05-18)
+
+The diagnostic session ran the 41 stubs as **logged no-ops with
+proper save-count maintenance** (save() returns ++count, restore()
+decrements, restoreToCount(n) sets), with DatePicker +
+SegmentedButton re-enabled in `RealComposeApp.kt`. Code change was
+isolated to `SkiaTypes.wasi.kt`'s `Canvas` class — instrumentation
+was reverted at end of step.
+
+### Surprise #1 — no SIGILL
+
+The `feedback_canvas_stub_noop_traps` memory predicted SIGILL
+within 10-30 s of interaction. We observed **none** after 30+ s of
+rapid interaction including 25+ tap loops + manual tap sessions.
+Process stayed alive throughout. The original 2026-05-18 trap was
+specifically because `save()` returned **0 unconditionally** —
+Compose's save/restore invariant checks failed. Maintaining a real
+per-instance counter is enough to avoid the trap.
+
+### Surprise #2 — tiny method set
+
+Out of 41 stubs, only **7 distinct methods** were called by
+DatePicker + SegmentedButton + the existing Task27SmokeCard:
+
+  ctor(Bitmap)
+  save
+  restore
+  translate
+  scale
+  drawRect
+  drawPath
+
+Plus one outlier: `drawImageRect(src, dst, sampling, strict)` on
+the single parameterless `Canvas()` instance (Canvas@0) — that's
+the Task27SmokeCard's `Image.makeFromEncoded` codepath. No
+`saveLayer`, no `clipRect`/`clipRRect`/`clipPath`, no `drawText*`,
+no `drawArc`/`drawOval`/`drawCircle`, no `drawPicture`, no
+`drawVertices` were hit by these widgets.
+
+The pattern across all 24+ bitmap-backed instances was identical:
+ctor(Bitmap) → save → drawRect → translate → scale → drawPath →
+restore. This is recognizable as Material **vector icon
+rasterization**: each icon (checkmark, prev/next arrows) gets its
+own short-lived `Canvas(bitmap)` to render into.
+
+### Surprise #3 — selective visual breakage
+
+Widgets RENDER and INTERACT (no crash, no layout collapse).
+What's broken:
+
+  * **DatePicker:** appears fully functional. Date taps register;
+    selected-date highlight follows. Calendar grid + day labels +
+    month text all render correctly. No icons missed in this view
+    (it has them — chevrons for prev/next month — but our test
+    didn't exercise them).
+  * **SegmentedButton:** the active-pill background + the SELECTED
+    label render fine on the main canvas. Taps register, selection
+    updates, the "Week" label moves with the selection. But the
+    **unselected segments are unlabeled** — Day and Month appear
+    as blank pills. The active state's checkmark icon is also
+    missing.
+
+So the "abstract Canvas via bitmap" path is used specifically for
+content that Compose composites BACK onto the main canvas via
+some Image / Painter handoff. That handoff still happens —
+the bitmap just has no pixels in it because we no-op'd the draws.
+
+### Surprise #4 — no PictureRecorder usage
+
+The task doc's Path A assumed `PictureRecorder` would be a primary
+driver. We saw **zero** PictureRecorder activity in this widget
+set. All intermediate canvases were `Canvas(bitmap)` instances —
+i.e., raster-backed canvases that hold an image, not picture
+recordings. This means we don't need a new WIT resource for
+recording — the existing `create-picture-recorder` + recorder-stack
+machinery in `canvas_impl.rs` handles that case and these widgets
+don't use it.
+
+### Instance counts
+
+  * 25+ Canvas instances created during cold start + interaction
+  * Each instance is transient (allocate → draw 7 ops → drop
+    within ~milliseconds; the bitmap is consumed downstream then
+    GC'd)
+  * Most are 0-byte (no width/height info captured, but likely
+    small — material icon size, e.g., 24dp × 24dp)
+
+---
+
+## Path decision — Path D (new option)
+
+The original A vs B path debate is moot. The actual shape is:
+
+**Path D — Bitmap-backed host raster surfaces.** Each
+`Canvas(bitmap)` constructor allocates a host-side
+`skia_safe::Surface::new_raster_n32_premul(w, h)` and stores it
+keyed by an id. The 8 methods we observed (7 from Compose icon
+rendering + drawImageRect) get real WIT verbs that look up the
+surface by id and forward to `skia_safe::Canvas` calls on its
+inner canvas.
+
+The 33 remaining stubs (saveLayer, clip*, drawText*,
+drawOval/Circle/Arc, drawPicture, drawVertices, etc.) stay
+throwing until a future widget actually trips one — then they
+follow the same pattern.
+
+### Why this is much smaller than Path A
+
+  * No new WIT resource type — just a u32 id like the existing
+    `images`, `shaders`, `recorders` patterns
+  * No new lifecycle complications — `AutoCloseable` + a `dropBitmapCanvas(id)`
+    verb handles cleanup
+  * No `Picture` integration needed — Compose doesn't use it here
+  * The handoff from bitmap-Canvas → consuming compositor is via
+    the bitmap's underlying skia Image, which we can already
+    expose via `images: HashMap<u32, skia_safe::Image>` (reuse
+    task 27 infrastructure)
+
+### Sketch of Path D shape
+
+WIT additions:
+
+```wit
+// Bitmap is a raster surface that records draws and later exposes
+// itself as an image. Width / height fixed at create time.
+create-bitmap-canvas: func(width: u32, height: u32) -> u32;
+drop-bitmap-canvas:   func(id: u32);
+/// Finalize: snapshot the current pixels into a host-side image
+/// (using existing `images: HashMap<u32, Image>` storage) and
+/// return that image-id. Bitmap canvas remains usable.
+bitmap-canvas-snapshot: func(id: u32) -> u32;
+
+// Per-canvas draw verbs (mirror existing main-canvas verbs but
+// take canvas-id as first arg).
+bc-save:        func(id: u32) -> u32;          // returns save count
+bc-restore:     func(id: u32);
+bc-translate:   func(id: u32, dx: f32, dy: f32);
+bc-scale:       func(id: u32, sx: f32, sy: f32);
+bc-draw-rect:   func(id: u32, x: f32, y: f32, w: f32, h: f32,
+                     paint: paint-attrs);
+bc-draw-path:   func(id: u32, path-data: list<u8>, paint: paint-attrs);
+bc-draw-image-rect: func(id: u32, image-id: u32,
+                         src-x: f32, src-y: f32, src-w: f32, src-h: f32,
+                         dst-x: f32, dst-y: f32, dst-w: f32, dst-h: f32,
+                         paint: paint-attrs);
+```
+
+Host: `bitmap_canvases: HashMap<u32, skia_safe::Surface>` + 7
+methods. Each method looks up the surface, forwards via
+`surface.canvas().X(...)`.
+
+Kotlin side: `Canvas(bitmap: Bitmap)` constructor calls
+`createBitmapCanvas(bitmap.width.toUInt(), bitmap.height.toUInt())`
+and stores the returned id. The 7 stubs forward to the bc-X verbs
+keyed by that id. Need a `finalize` hook (AutoCloseable on
+Canvas? close-on-Bitmap? — TBD when implementing).
+
+### Effort estimate (revised)
+
+Original task doc: ~6 days of focused work.
+Path D revised: ~1-2 days. WIT additions (~1 h) + host impl (~3 h)
++ Kotlin wiring (~3 h) + device verify (~3 h). The smaller scope
+is justified by the empirical data — the actual stub call surface
+is one-fifth of what Path A scoped for.
+
+### Open questions
+
+1. **Bitmap drop bookkeeping.** Kotlin's no-finalizer rule means
+   we either (a) make `Canvas` AutoCloseable + require explicit
+   close calls (Compose has to cooperate), or (b) accept that
+   bitmap canvases leak host memory between GC cycles and bound
+   it with a soft cap / LRU. Need to read the Compose icon
+   rendering path to see when `Bitmap` (or its owning RenderNode)
+   is dropped.
+
+2. **Bitmap → consuming compositor path.** Once Compose has drawn
+   into our bitmap-canvas, it passes the resulting `Bitmap` /
+   `Image` somewhere — usually as part of a vector painter or
+   image-bitmap composable. Need to follow that path and make
+   sure `Bitmap` on wasi has a `toImage()` or similar that pulls
+   the host-side rasterized image via `bitmap-canvas-snapshot` →
+   `Image(id)`. This is the bit that's currently silently
+   discarded, causing the missing icons.
+
+3. **Skiko `Bitmap` lifecycle.** Today `Bitmap` on wasi is a pure
+   data stub (see task-27's deferral of `Bitmap.makeShader`). To
+   wire the snapshot path, `Bitmap` needs an `internal val id:
+   UInt?` field that holds either the bitmap-canvas id (during
+   draw) or the image id (after snapshot). Task 27's snapshot-
+   deferral memo applies — re-read before designing.
+
+---
+
+## Path D implementation steps (when ready)
+
+1. **WIT additions** — 9 new verbs (above sketch), mirror to
+   skiko WIT.
+2. **Host impl** — `bitmap_canvases: HashMap<u32, Surface>` +
+   the 9 method bodies. Reuse `make_paint_full`. Snapshot via
+   `surface.image_snapshot()` → `state.images.insert(new_id, img)`.
+3. **Kotlin wiring** — `Bitmap.id` field + `Canvas(bitmap)`
+   constructor side effect. Replace 7 throw-stubs with bc-X
+   forwarding. Drop hook via `AutoCloseable` or finalizer
+   substitute.
+4. **Bitmap → Image snapshot** — `Bitmap.toImage()` calls
+   `bitmap-canvas-snapshot` then constructs an `Image(id)`. Wire
+   into wherever Compose consumes the bitmap.
+5. **Device verify** — re-enable DatePicker + SegmentedButton in
+   `RealComposeApp.kt`, screenshot. Expect to see SegmentedButton
+   labels for unselected segments + the active-state checkmark.
+6. **Soak** — 10-min interaction, watch host RSS for unbounded
+   bitmap-canvas leaks. If unbounded, address Open Question 1.
+7. **Commit / push / update doc + memory** (`canvas-stub-noop-traps-compose`
+   gets a "Step 0 disproved the SIGILL conclusion; Path D landed
+   2026-MM-DD" footnote).
+
+### What stays throwing
+
+The 33 unobserved stubs (saveLayer, clip*, drawText*, drawArc,
+drawOval, drawCircle, drawPoint, drawLine, drawPoints, drawLines,
+drawPolygon, drawString, drawTextBlob, drawTextLine, drawDRRect,
+drawPaint, skew, resetMatrix, drawImage, drawImageRect-non-strict,
+drawVertices, drawPicture, concat, setMatrix, rotate, clear) stay
+throwing for now. Add them in follow-ups as widgets demand them
+(e.g., TimePicker may add `saveLayer` to the list).

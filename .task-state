@@ -1,5 +1,5 @@
-TASK=27
-STEP=verify-done
-STATUS=complete
-LAST_SUCCESS=Task 27 verified OK — Image.makeFromEncoded + Image.makeShader + Shader.makeSweepGradient + Shader.makeBlend live on Pixel 2 XL. Smoke card renders correct dimensions (4x4 PNG decoded) and all 4 status lines say "ok". Brush.sweepGradient visual confirms Compose's path through the new WIT verb. Bitmap.makeShader deferred (no host-side Bitmap state).
-NOTES=
+TASK=28
+STEP=0e-findings-documented
+STATUS=paused
+LAST_SUCCESS=Step 0 diagnostic complete. Instrumentation reverted. Findings + Path D plan written into tasks/28-skiko-abstract-canvas.md. Device note below.
+NOTES=Device APK + cwasm currently hold the step-0 instrumented state (logged no-op stubs + DatePicker/SegmentedButton enabled). Source is clean (reverted via git checkout). NO SIGILL observed; SegmentedButton renders+responds but unselected segment labels missing. To restore device to clean task-27 state: republish skiko + rebuild compose-*-wasi + recompile wart-app + push cwasm. Or just leave device as-is until next session picks up Path D implementation.
