@@ -58,6 +58,8 @@ import androidx.compose.ui.platform.WasiFrameDispatcher
 import androidx.compose.ui.platform.WindowInfo
 import androidx.compose.ui.scene.CanvasLayersComposeScene
 import androidx.compose.ui.scene.ComposeScene
+import androidx.compose.material3.SegmentedButton
+import kotlinx.coroutines.launch
 
 /// Single per-process dispatcher pumped by the renderer (Main.kt). Kept
 /// public so the renderDelegate can call `.flush()` once per frame after
@@ -149,6 +151,23 @@ private fun MaterialDemoApp() {
             // bottom. Bottom padding on the scroll Column reserves space
             // so the last card isn't permanently hidden by the keyboard.
             val keyboardHeight = 300.dp
+            // Hoisted so both the scroll Column (which trigers the
+            // snackbar from inside SnackbarCard) AND the sibling
+            // overlay Box (which renders the SnackbarHost) can see
+            // the state.
+            var hapticEnabled by remember { mutableStateOf(true) }
+            // Manual snackbar state — bypassing SnackbarHostState +
+            // SnackbarHost because that path uses
+            // `LaunchedEffect(currentSnackbarData)` to auto-dismiss
+            // and `mutex.withLock { suspendCancellableCoroutine }`
+            // to suspend the coroutine until dismissed. On wasi the
+            // LaunchedEffect on State<…> changes inside an overlay
+            // doesn't reliably re-fire (same family of bugs as the
+            // popup-overlay animation issue documented in
+            // feedback_popup_overlay.md), so the coroutine hangs and
+            // the snackbar never visibly renders. Hand-rolled
+            // boolean + delay works around the whole mechanism.
+            var snackbarVisible by remember { mutableStateOf(false) }
             Box(modifier = Modifier.fillMaxSize()) {
                 val scrollState = rememberScrollState()
                 Column(
@@ -169,17 +188,77 @@ private fun MaterialDemoApp() {
                         color = MaterialTheme.colorScheme.onBackground,
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-
-                    CounterCard()
-                    CheckboxRadioCard()
-                    TextFieldCard()
-                    DropdownCard()
-                    ProgressIndicatorsCard()
-                    ListCard()
-                    SliderCard()
-                    SwitchRow()
-                    ColorPaletteRow()
-                    ButtonRow()
+                    HapticScope(enabled = hapticEnabled) {
+                        CounterCard()
+                        CheckboxRadioCard()
+                        TextFieldCard()
+                        DropdownCard()
+                        ProgressIndicatorsCard()
+                        ListCard()
+                        SliderCard()
+                        FilterChipCard()
+                        // BISECT: three new cards added together
+                        // caused `Canvas.save: not implemented` —
+                        // re-enable one at a time to find which:
+                        ChipVariantsCard()
+                        FabCard()
+                        // SegmentedButtonCard + DatePickerCard hit
+                        // `Canvas.save: not implemented` (likely
+                        // saveLayer for cross-fade animations on an
+                        // intermediate canvas). We tried converting
+                        // the wasi skiko Canvas stubs to no-ops,
+                        // which let cold start succeed but produced
+                        // SIGILL in JIT'd wasm a few seconds into
+                        // interaction (corrupt save/restore state
+                        // tripping a Compose `unreachable`/`error`).
+                        // Reverted. Both widgets stay disabled until
+                        // we can wire actual save/restore semantics
+                        // through to host-side skia-safe — separate
+                        // task, not trivial.
+                        // SegmentedButtonCard()
+                        // DatePickerCard()
+                        SnackbarCard(onShow = { snackbarVisible = true })
+                        SwitchRow(
+                            hapticEnabled = hapticEnabled,
+                            onHapticEnabledChange = { hapticEnabled = it },
+                        )
+                        ColorPaletteRow()
+                        ButtonRow()
+                    }
+                }
+                // Hand-rolled snackbar overlay — pinned above the
+                // keyboard, auto-dismisses after 3 s via
+                // LaunchedEffect.
+                if (snackbarVisible) {
+                    androidx.compose.runtime.LaunchedEffect(Unit) {
+                        kotlinx.coroutines.delay(3000)
+                        snackbarVisible = false
+                    }
+                    Box(
+                        modifier = Modifier
+                            .align(androidx.compose.ui.Alignment.BottomCenter)
+                            .padding(bottom = keyboardHeight + 8.dp, start = 16.dp, end = 16.dp),
+                    ) {
+                        androidx.compose.material3.Snackbar(
+                            action = {
+                                // Snackbar background is
+                                // `colorScheme.inverseSurface`; the
+                                // action button needs an explicit
+                                // inversePrimary content color to be
+                                // legible on it. Default text-button
+                                // colors use `colorScheme.primary`
+                                // which collides with the dark snackbar.
+                                HapticButton(
+                                    onClick = { snackbarVisible = false },
+                                    colors = ButtonDefaults.textButtonColors(
+                                        contentColor = MaterialTheme.colorScheme.inversePrimary,
+                                    ),
+                                ) { Text("Undo") }
+                            },
+                        ) {
+                            Text("Snackbar from a HapticButton tap")
+                        }
+                    }
                 }
                 // Soft keyboard overlay — drawn last so it sits on top.
                 Box(modifier = Modifier.align(androidx.compose.ui.Alignment.BottomCenter)) {
@@ -213,13 +292,13 @@ private fun CounterCard() {
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Button(onClick = { count-- }) { Text("-") }
+                HapticButton(onClick = { count-- }) { Text("-") }
                 Text(
                     text = "$count",
                     fontSize = 24.sp,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
-                Button(onClick = { count++ }) { Text("+") }
+                HapticButton(onClick = { count++ }) { Text("+") }
             }
         }
     }
@@ -231,25 +310,194 @@ private fun SliderCard() {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text("Slider value: ${(v * 100).toInt()}%", fontSize = 14.sp)
-            Slider(value = v, onValueChange = { v = it })
+            // steps = 9 → 11 discrete positions (0 %, 10 %, … 100 %).
+            // HapticSlider fires haptic on each step crossing during
+            // drag, gated through HapticScope. Default SegmentTick
+            // maps to TICK+LIGHT — perceptible only on a still hand;
+            // bump to Confirm (CLICK+MEDIUM) so it's actually felt
+            // while dragging on a Pixel 2 XL.
+            HapticSlider(
+                value = v,
+                onValueChange = { v = it },
+                steps = 9,
+                feedback = androidx.compose.ui.hapticfeedback.HapticFeedbackType.Confirm,
+            )
         }
     }
 }
 
 @Composable
-private fun SwitchRow() {
-    var on by remember { mutableStateOf(true) }
+private fun FilterChipCard() {
+    val tags = listOf("Coffee", "Tea", "Juice", "Water")
+    var selected by remember { mutableStateOf(setOf("Coffee", "Tea")) }
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Filter chips", fontSize = 16.sp)
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                tags.forEach { tag ->
+                    HapticFilterChip(
+                        selected = tag in selected,
+                        onClick = {
+                            selected =
+                                if (tag in selected) selected - tag else selected + tag
+                        },
+                        label = { Text(tag) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+// Material3 DatePicker. Uses the popup-overlay path internally for
+// year/month navigation, so the existing `LocalInspectionMode
+// provides true` workaround from DropdownCard may be needed if the
+// year-selection animation doesn't drive recompose. Inline (not in
+// a Dialog) so it shows up directly in the scroll column.
+@Composable
+private fun DatePickerCard() {
+    val state = androidx.compose.material3.rememberDatePickerState()
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Date picker", fontSize = 16.sp)
+            Spacer(modifier = Modifier.height(8.dp))
+            androidx.compose.runtime.CompositionLocalProvider(
+                LocalInspectionMode provides true,
+            ) {
+                androidx.compose.material3.DatePicker(
+                    state = state,
+                    showModeToggle = false,
+                    title = null,
+                    headline = null,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SnackbarCard(onShow: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Snackbar", fontSize = 16.sp)
+            Spacer(modifier = Modifier.height(8.dp))
+            HapticButton(onClick = onShow) { Text("Show snackbar") }
+        }
+    }
+}
+
+@Composable
+private fun SegmentedButtonCard() {
+    val options = listOf("Day", "Week", "Month")
+    var selected by remember { mutableStateOf(1) }
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val hapticEnabled = LocalHapticEnabled.current
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Segmented button", fontSize = 16.sp)
+            Spacer(modifier = Modifier.height(8.dp))
+            // SegmentedButton is an extension on
+            // SingleChoiceSegmentedButtonRowScope; calling the
+            // imported function inside the row's content lambda
+            // resolves the receiver automatically.
+            androidx.compose.material3.SingleChoiceSegmentedButtonRow {
+                options.forEachIndexed { index, label ->
+                    SegmentedButton(
+                        selected = index == selected,
+                        onClick = {
+                            if (hapticEnabled) {
+                                haptic.performHapticFeedback(
+                                    androidx.compose.ui.hapticfeedback.HapticFeedbackType.Confirm
+                                )
+                            }
+                            selected = index
+                        },
+                        shape = androidx.compose.material3.SegmentedButtonDefaults.itemShape(
+                            index = index,
+                            count = options.size,
+                        ),
+                    ) { Text(label) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChipVariantsCard() {
+    // Three more chip types alongside the existing FilterChip:
+    //   * AssistChip      → non-toggling, suggests a one-shot action
+    //   * SuggestionChip  → non-toggling, content-recommendation hint
+    //   * InputChip       → toggling, used for tag-style input (we use
+    //                       it as a selectable "tag" here)
+    var inputSelected by remember { mutableStateOf(true) }
+    var assistTaps by remember { mutableStateOf(0) }
+    var suggestionTaps by remember { mutableStateOf(0) }
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Chip variants", fontSize = 16.sp)
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                HapticAssistChip(
+                    onClick = { assistTaps++ },
+                    label = { Text("Assist ($assistTaps)") },
+                )
+                HapticSuggestionChip(
+                    onClick = { suggestionTaps++ },
+                    label = { Text("Sugg ($suggestionTaps)") },
+                )
+                HapticInputChip(
+                    selected = inputSelected,
+                    onClick = { inputSelected = !inputSelected },
+                    label = { Text("Input") },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FabCard() {
+    var fabTaps by remember { mutableStateOf(0) }
+    var extTaps by remember { mutableStateOf(0) }
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Floating action buttons", fontSize = 16.sp)
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                HapticFloatingActionButton(onClick = { fabTaps++ }) {
+                    Text("+", fontSize = 24.sp)
+                }
+                Text("FAB: $fabTaps", fontSize = 14.sp)
+                HapticExtendedFloatingActionButton(
+                    onClick = { extTaps++ },
+                    text = { Text("Extended ($extTaps)") },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SwitchRow(
+    hapticEnabled: Boolean,
+    onHapticEnabledChange: (Boolean) -> Unit,
+) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { on = !on }
+                .clickable { onHapticEnabledChange(!hapticEnabled) }
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Notifications", fontSize = 16.sp)
-            Switch(checked = on, onCheckedChange = { on = it })
+            Text("Enable haptic", fontSize = 16.sp)
+            Switch(checked = hapticEnabled, onCheckedChange = onHapticEnabledChange)
         }
     }
 }
@@ -279,20 +527,17 @@ private fun ColorPaletteRow() {
 
 @Composable
 private fun ButtonRow() {
-    // Task 18 verified both buttons buzz when `WasiHapticFeedback` is
-    // installed at the scene root (Primary → CLICK + MEDIUM,
-    // Secondary → HEAVY_CLICK + STRONG via the
-    // HapticFeedbackType.LongPress path). Base Material3 `Button`
-    // doesn't haptic on click by default — the explicit
-    // `performHapticFeedback` calls used during B5 device verify
-    // have been removed since they were verification-only; Material3
-    // widgets that DO haptic by default (Slider with steps>0,
-    // DatePicker, …) pick up the bridge automatically through
-    // `LocalHapticFeedback`.
+    // Uses `HapticButton` (HapticWidgets.kt) which reads
+    // `LocalHapticEnabled` from the surrounding provider. Primary
+    // gets the default Confirm feedback (CLICK + MEDIUM); Secondary
+    // upgrades to LongPress (HEAVY_CLICK + STRONG) — same mapping
+    // as the B5 device-verify, just routed through the shared
+    // design-system layer instead of manual.
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(onClick = {}) { Text("Primary") }
-        Button(
+        HapticButton(onClick = {}) { Text("Primary") }
+        HapticButton(
             onClick = {},
+            feedback = androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress,
             colors = ButtonDefaults.outlinedButtonColors(),
         ) { Text("Secondary") }
     }
@@ -387,11 +632,10 @@ private fun CheckboxRadioCard() {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .selectable(
+                        .hapticSelectable(
                             selected = selected == i,
-                            onClick = { selected = i },
                             role = androidx.compose.ui.semantics.Role.RadioButton,
-                        )
+                        ) { selected = i }
                         .padding(vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -422,7 +666,7 @@ private fun CheckboxRow() {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { checked = !checked }
+            .hapticClickable { checked = !checked }
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -449,7 +693,7 @@ private fun DropdownCard() {
             Text("Dropdown menu", fontSize = 16.sp)
             Spacer(modifier = Modifier.height(8.dp))
             Box {
-                Button(onClick = { expanded = true }) {
+                HapticButton(onClick = { expanded = true }) {
                     Text("Selected: $choice")
                 }
                 // Task #53 PARTIALLY fixed 2026-05-13:
@@ -471,7 +715,7 @@ private fun DropdownCard() {
                         onDismissRequest = { expanded = false },
                     ) {
                         listOf("Alpha", "Beta", "Gamma").forEach { name ->
-                            DropdownMenuItem(
+                            HapticDropdownMenuItem(
                                 text = { Text(name) },
                                 onClick = { choice = name; expanded = false },
                             )
