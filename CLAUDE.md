@@ -230,6 +230,9 @@ boundary from `post-art-roadmap.md` §3.
 | 23 | `tasks/23-profiling-hooks.md` (+ scope `tasks/scope-profiling-tools.md`) | Wire `ResourceLimiter` + `GuestProfiler` + per-frame data_size + call_hook behind a `profile` cargo feature; characterizes the ProgressIndicator leak quantitatively + breaks down the ~10–20 ms/frame budget — 🟡 MVP done |
 | 24 | `tasks/24-bisect-wasm-leak.md` (+ reproducer `wart-leak-repro/`) | Bisect the ~8 MB/min WasmGC-heap leak from task 23 down to its root. Step 1 done: bare `suspendCoroutine` loop with no Compose / no kotlinx-coroutines leaks at ~9 MB/s, OOMs Pixel 2 XL in 6:37. Isolated to Kotlin/Wasm `suspend` codegen — 🟡 step 1 done |
 | 25 | `tasks/25-diagnose-suspend-leak.md` | Diagnostic deep-dive on task 24's leak: tighten reproducer (eliminate WasiScheduler), identify the leaked structref class via wasm-tools dump + patched wasmtime live-object summary, read kotlinc-wasm-backend codegen to find the missing slot-clear — 🔲 scoped |
+| 26 | `tasks/26-store-worker-thread.md` | Move wasmtime Store to a worker thread to avoid ANR from long Store::gc cascades. Implemented end-to-end + device-tested; eliminated ANR but introduced worse input-lag accumulation (5-6 s after minutes). Reverted as net regression — ❌ attempted+reverted |
+| 27 | `tasks/27-skiko-image-shader-gaps.md` | Implement the WIT-shaped skiko stubs: Image.makeFromEncoded, Shader.makeSweepGradient, Image/Bitmap.makeShader, Shader.makeBlend, Gradient-object overloads — 🔲 scoped |
+| 28 | `tasks/28-skiko-abstract-canvas.md` | Wire the abstract org.jetbrains.skia.Canvas's 42 throw-stubs to host-side skia via a new intermediate-canvas WIT resource. Unblocks DatePicker / SegmentedButton / TimePicker — 🔲 scoped |
 
 ---
 
