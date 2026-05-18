@@ -1,12 +1,48 @@
 # Task 27 — Skiko WIT-shaped gaps: Image loading + shader variants
 
-> **Status: 🔲 scoped 2026-05-18.** Implement the skiko stubs that
-> follow the existing WIT-handle pattern: `Image.makeFromEncoded`,
-> `Image.makeShader`, `Bitmap.makeShader`, `Shader.makeSweepGradient`,
-> `Shader.makeBlend`, and the `Gradient`-object overloads of
-> `makeLinearGradient`/`makeRadialGradient`. All currently throw
-> `"... not implemented on wasmWasi yet"` from
-> `SkiaTypes.wasi.kt` / `SkiaTypes2.wasi.kt`.
+> **Status: ✅ device-verified 2026-05-18.** Implemented the skiko stubs
+> that follow the existing WIT-handle pattern: `Image.makeFromEncoded`,
+> `Image.makeShader`, `Shader.makeSweepGradient`, `Shader.makeBlend`,
+> and the `Gradient`-object overloads of `makeLinearGradient` /
+> `makeRadialGradient` / `makeSweepGradient`. `Bitmap.makeShader` was
+> deferred (no host-side Bitmap state) — kept throwing with a
+> doc-comment explaining the deferral. All other stubs in
+> `SkiaTypes.wasi.kt` were replaced.
+>
+> **What landed:**
+> - WIT: 4 new verbs (`create-image-from-encoded`,
+>   `create-sweep-gradient`, `create-image-shader`, `create-blend-shader`)
+>   + 2 query verbs (`get-image-width`, `get-image-height`, used so
+>   `Image.makeFromEncoded` can return the correct dimensions to the
+>   Kotlin `Image(id, width, height)` constructor) + 2 new records
+>   (`matrix-3x3`, `sampling-options`).
+> - Host (`canvas_impl.rs`): 6 new impl methods + helpers
+>   (`sampling_options_from_wit`, `matrix3x3_from_wit`,
+>   `blend_mode_from_wit`).
+> - Kotlin bindings hand-edited in `generated/SkikoUi.kt` +
+>   `generated/InternalSkikoUi.kt` (wit-bindgen 0.53.1 wasn't installed
+>   locally). Pattern-matched against the existing `createLinearGradient`
+>   for the direct calls; `createImageShader` uses indirect (>16 flat
+>   params) with a 56-byte spill struct.
+> - `SkiaTypes.wasi.kt`: 7 throw-stubs replaced with WIT delegations;
+>   `SkiaTypes2.wasi.kt` Bitmap.makeShader stubs annotated as deferred.
+> - Smoke card on device (`Task27SmokeCard.kt`) shows the four new
+>   calls' status + a sweep / linear / radial Brush strip — visually
+>   confirmed on Pixel 2 XL.
+>
+> **ABI choice: `option<matrix-3x3>` dropped to bare `matrix-3x3`.**
+> The original WIT had `option<matrix-3x3>` for the `localMatrix`
+> parameter, but no other verb in this file uses `option<record>` so
+> wit-bindgen 0.53.1's emitted convention isn't in the existing
+> generated code to copy from. Switched to always passing a matrix
+> (identity = no-op on the host) which made the canonical-ABI marshaler
+> straightforward. Kotlin callers passing `localMatrix = null` get
+> `Matrix3x3.IDENTITY` on the wire.
+>
+> **ABI choice: `result<u32, string>` → bare `u32` (0 on failure).**
+> Same reason — no existing `result`-returning verb in this WIT to
+> copy. `Image.makeFromEncoded` returns 0 on decode failure; the
+> Kotlin wrapper throws if it sees 0.
 >
 > These are all the same shape architecturally — add WIT verb →
 > host-side `skia_safe` impl → Kotlin wrapper that replaces the

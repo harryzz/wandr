@@ -46,6 +46,26 @@ interface canvas {
         color-filter-color: u32,
     }
 
+    // ── shared records (task 27) ──────────────────────────────────────────
+    /// 3x3 affine/perspective matrix matching org.jetbrains.skia.Matrix33.
+    record matrix-3x3 {
+        scale-x: f32, skew-x:  f32, trans-x: f32,
+        skew-y:  f32, scale-y: f32, trans-y: f32,
+        persp-0: f32, persp-1: f32, persp-2: f32,
+    }
+
+    /// Image-shader / bitmap-shader sampling. Flat record:
+    ///   use-cubic = false → SamplingOptions(filter, mipmap)
+    ///   use-cubic = true  → SamplingOptions(CubicResampler { b, c })
+    /// filter: 0=nearest, 1=linear.   mipmap: 0=none, 1=nearest, 2=linear.
+    record sampling-options {
+        use-cubic: bool,
+        filter:    u8,
+        mipmap:    u8,
+        cubic-b:   f32,
+        cubic-c:   f32,
+    }
+
     // ── surface dimensions ────────────────────────────────────────────────
     surface-width:  func() -> u32;
     surface-height: func() -> u32;
@@ -103,6 +123,17 @@ interface canvas {
 
     // ── images ────────────────────────────────────────────────────────────
     create-image:     func(width: u32, height: u32, pixels: list<u8>) -> u32;
+    /// Decode PNG/JPEG/WebP/static-GIF/BMP/ICO bytes via skia. Returns 0
+    /// on decode failure (unrecognized format, truncated data, …); pair
+    /// with drop-image to free. Width/height are queryable via
+    /// get-image-width / get-image-height — needed because Kotlin's
+    /// Image constructor takes (id, width, height) up front and
+    /// makeFromEncoded doesn't know the dimensions until decode.
+    create-image-from-encoded: func(bytes: list<u8>) -> u32;
+    /// Pixel width of a live image; 0 if image-id isn't live.
+    get-image-width:  func(image-id: u32) -> u32;
+    /// Pixel height of a live image; 0 if image-id isn't live.
+    get-image-height: func(image-id: u32) -> u32;
     draw-image:       func(image-id: u32, x: f32, y: f32, alpha: u8);
     draw-image-rect:  func(image-id: u32,
                            src-x: f32, src-y: f32, src-w: f32, src-h: f32,
@@ -117,6 +148,26 @@ interface canvas {
     create-radial-gradient: func(cx: f32, cy: f32, radius: f32,
                                   colors: list<u32>, stops: list<f32>,
                                   tile-mode: u8) -> u32;
+    /// Sweep (conic) gradient around (cx, cy). `start-angle` / `end-angle`
+    /// are in degrees; pass 0 / 360 for a full revolution.
+    create-sweep-gradient: func(cx: f32, cy: f32,
+                                 start-angle: f32, end-angle: f32,
+                                 colors: list<u32>, stops: list<f32>,
+                                 tile-mode: u8) -> u32;
+    /// Image-as-pattern fill. `image-id` is borrowed (not consumed); drop
+    /// the returned shader id via drop-shader. Pass an identity matrix to
+    /// skip transform (no `option` wrapper to keep the canonical ABI
+    /// param count below the 16-flat-arg threshold). Returns 0 if the
+    /// image-id isn't live.
+    create-image-shader: func(image-id: u32,
+                               tile-x: u8, tile-y: u8,
+                               sampling: sampling-options,
+                               local-matrix: matrix-3x3) -> u32;
+    /// Composite two shaders with a blend mode. Both source shaders stay
+    /// live; the returned id is independent. Returns 0 if either source
+    /// id isn't live.
+    create-blend-shader: func(blend-mode: blend-mode,
+                               shader1-id: u32, shader2-id: u32) -> u32;
     drop-shader: func(id: u32);
 
     // ── clip-path (task 09) ───────────────────────────────────────────────

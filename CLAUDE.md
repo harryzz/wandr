@@ -120,6 +120,7 @@ shipping the full Compose port — not as discrete sequential milestones.
 | 23 | Profiling hooks (`ResourceLimiter` + `GuestProfiler`) | 🟡 MVP device-verified 2026-05-17 — 3/4 hooks live; GuestProfiler deferred (epoch-interruption cwasm-rebuild needed) |
 | 24 | Bisect the WasmGC-heap leak — find the real retention chain (Kotlin/Wasm continuations? kotlinx-coroutines-wasmWasi? Compose Snapshot?) | 🟡 step 1 done 2026-05-17 — minimal reproducer in `wart-leak-repro/`; leak isolated to Kotlin/Wasm `suspend` codegen (~9 MB/s, OOM in 6:37). Steps 2-4 moot; pending upstream file. |
 | 25 | Diagnose the `suspend` state-machine leak: tighten repro, identify leaked structref type, locate kotlinc-wasm-backend codegen pass | 🔲 scoped, step 1 starting |
+| 27 | Skiko WIT-shaped gaps: Image.makeFromEncoded, Shader.makeSweepGradient, Image.makeShader, Shader.makeBlend, Gradient-object overloads on linear/radial/sweep | ✅ device-verified 2026-05-18 — smoke card shows all four new APIs ok; Compose `Brush.sweepGradient` round-trips through the new WIT verb. Bitmap.makeShader deferred. |
 
 **What's verified on device:** BasicTextField + TextFieldState + hardware
 keyboard, in-canvas soft keyboard, Material3 widgets (Button, Checkbox,
@@ -231,7 +232,7 @@ boundary from `post-art-roadmap.md` §3.
 | 24 | `tasks/24-bisect-wasm-leak.md` (+ reproducer `wart-leak-repro/`) | Bisect the ~8 MB/min WasmGC-heap leak from task 23 down to its root. Step 1 done: bare `suspendCoroutine` loop with no Compose / no kotlinx-coroutines leaks at ~9 MB/s, OOMs Pixel 2 XL in 6:37. Isolated to Kotlin/Wasm `suspend` codegen — 🟡 step 1 done |
 | 25 | `tasks/25-diagnose-suspend-leak.md` | Diagnostic deep-dive on task 24's leak: tighten reproducer (eliminate WasiScheduler), identify the leaked structref class via wasm-tools dump + patched wasmtime live-object summary, read kotlinc-wasm-backend codegen to find the missing slot-clear — 🔲 scoped |
 | 26 | `tasks/26-store-worker-thread.md` | Move wasmtime Store to a worker thread to avoid ANR from long Store::gc cascades. Implemented end-to-end + device-tested; eliminated ANR but introduced worse input-lag accumulation (5-6 s after minutes). Reverted as net regression — ❌ attempted+reverted |
-| 27 | `tasks/27-skiko-image-shader-gaps.md` | Implement the WIT-shaped skiko stubs: Image.makeFromEncoded, Shader.makeSweepGradient, Image/Bitmap.makeShader, Shader.makeBlend, Gradient-object overloads — 🔲 scoped |
+| 27 | `tasks/27-skiko-image-shader-gaps.md` | Implement the WIT-shaped skiko stubs: Image.makeFromEncoded, Shader.makeSweepGradient, Image.makeShader, Shader.makeBlend, Gradient-object overloads — ✅ device-verified 2026-05-18. Bitmap.makeShader deferred (no host-side Bitmap state) |
 | 28 | `tasks/28-skiko-abstract-canvas.md` | Wire the abstract org.jetbrains.skia.Canvas's 42 throw-stubs to host-side skia via a new intermediate-canvas WIT resource. Unblocks DatePicker / SegmentedButton / TimePicker — 🔲 scoped |
 
 ---
@@ -308,6 +309,10 @@ Kotlin wart-app (wasmWasiMain)
       -Pskiko.wasmWasi.enabled=true \
       -Dorg.gradle.configureondemand=false \
       --console=plain --no-daemon
+  # 1b. (after step 1) republish every compose-*-wasi module that consumes
+  #     skiko — symptoms of skipping are subtle behavioral drift, not link
+  #     errors. Use the helper script (~15-30 min):
+  bash ~/wart/scripts/rebuild-compose-wasi-skiko-depend.sh
 
   # 2. compile the app to .wasm (links against the 11 sibling fat klibs — ~2 min)
   cd ~/wart/wart-app

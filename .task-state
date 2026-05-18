@@ -1,5 +1,5 @@
-TASK=26
-STEP=reverted-and-deployed
+TASK=27
+STEP=verify-done
 STATUS=complete
-LAST_SUCCESS=Task 26 (worker-thread Store refactor) attempted+reverted+committed as net regression. wart-host built+installed from current HEAD (3a519731 — pre-task-26 commit). Device is running the responsive-but-ANR-prone state. See tasks/26-store-worker-thread.md for the full negative-result analysis; wasmtime#13403 filed upstream as the real fix path.
-NOTES=No active task. Device APK = pre-task-26 (responsive, no worker thread). Expect Android LMK kill every ~30-60 min of use; restart manually. ANR risk returns at ~48 min mark on heavy continuous interaction. Real fix = upstream wasmtime#13403 tracing collector; contingency in post-art-roadmap.md §12.
+LAST_SUCCESS=Task 27 verified OK — Image.makeFromEncoded + Image.makeShader + Shader.makeSweepGradient + Shader.makeBlend live on Pixel 2 XL. Smoke card renders correct dimensions (4x4 PNG decoded) and all 4 status lines say "ok". Brush.sweepGradient visual confirms Compose's path through the new WIT verb. Bitmap.makeShader deferred (no host-side Bitmap state).
+NOTES=
