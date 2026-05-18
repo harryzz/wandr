@@ -217,6 +217,7 @@ private fun MaterialDemoApp() {
                         // task, not trivial.
                         // SegmentedButtonCard()
                         // DatePickerCard()
+                        Task27SmokeCard()
                         SnackbarCard(onShow = { snackbarVisible = true })
                         SwitchRow(
                             hapticEnabled = hapticEnabled,
