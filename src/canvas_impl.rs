@@ -813,6 +813,23 @@ impl crate::bindings::my::skiko_gfx::canvas::Host for crate::HostState {
         self.renderer.images.remove(&id);
     }
 
+    fn create_image_from_encoded(&mut self, bytes: Vec<u8>) -> u32 {
+        let data = skia_safe::Data::new_copy(&bytes);
+        let Some(img) = skia_safe::Image::from_encoded(data) else { return 0 };
+        let id = self.renderer.next_blob_id;
+        self.renderer.next_blob_id = id.wrapping_add(1).max(1);
+        self.renderer.images.insert(id, img);
+        id
+    }
+
+    fn get_image_width(&mut self, image_id: u32) -> u32 {
+        self.renderer.images.get(&image_id).map(|i| i.width() as u32).unwrap_or(0)
+    }
+
+    fn get_image_height(&mut self, image_id: u32) -> u32 {
+        self.renderer.images.get(&image_id).map(|i| i.height() as u32).unwrap_or(0)
+    }
+
     // ── shaders ───────────────────────────────────────────────────────────
 
     fn create_linear_gradient(&mut self,
@@ -852,6 +869,58 @@ impl crate::bindings::my::skiko_gfx::canvas::Host for crate::HostState {
             self.renderer.shader_cache.insert(id, s);
             id
         } else { 0 }
+    }
+
+    fn create_sweep_gradient(&mut self,
+        cx: f32, cy: f32, start_angle: f32, end_angle: f32,
+        colors: Vec<u32>, stops: Vec<f32>, tile_mode: u8,
+    ) -> u32 {
+        let center = skia_safe::Point::new(cx, cy);
+        let cols: Vec<skia_safe::Color> = colors.iter().map(|&c| Color::new(c)).collect();
+        let stops_opt: Option<&[f32]> = if stops.is_empty() { None } else { Some(&stops) };
+        let mode = tile_mode_from_u8(tile_mode);
+        let shader = skia_safe::gradient_shader::sweep(
+            center, cols.as_slice(), stops_opt, mode,
+            Some((start_angle, end_angle)), None, None,
+        );
+        if let Some(s) = shader {
+            let id = self.renderer.next_shader_id;
+            self.renderer.next_shader_id = id.wrapping_add(1).max(1);
+            self.renderer.shader_cache.insert(id, s);
+            id
+        } else { 0 }
+    }
+
+    fn create_image_shader(&mut self,
+        image_id: u32, tile_x: u8, tile_y: u8,
+        sampling: crate::bindings::my::skiko_gfx::canvas::SamplingOptions,
+        local_matrix: crate::bindings::my::skiko_gfx::canvas::Matrix3x3,
+    ) -> u32 {
+        let Some(img) = self.renderer.images.get(&image_id).cloned() else { return 0 };
+        let tmx = tile_mode_from_u8(tile_x);
+        let tmy = tile_mode_from_u8(tile_y);
+        let sampling_opts = sampling_options_from_wit(&sampling);
+        let matrix = matrix3x3_from_wit(&local_matrix);
+        let shader = img.to_shader(Some((tmx, tmy)), sampling_opts, Some(&matrix));
+        if let Some(s) = shader {
+            let id = self.renderer.next_shader_id;
+            self.renderer.next_shader_id = id.wrapping_add(1).max(1);
+            self.renderer.shader_cache.insert(id, s);
+            id
+        } else { 0 }
+    }
+
+    fn create_blend_shader(&mut self,
+        blend_mode: BlendMode, shader1_id: u32, shader2_id: u32,
+    ) -> u32 {
+        let Some(s1) = self.renderer.shader_cache.get(&shader1_id).cloned() else { return 0 };
+        let Some(s2) = self.renderer.shader_cache.get(&shader2_id).cloned() else { return 0 };
+        let mode = blend_mode_from_wit(blend_mode);
+        let shader = skia_safe::shaders::blend(mode, s1, s2);
+        let id = self.renderer.next_shader_id;
+        self.renderer.next_shader_id = id.wrapping_add(1).max(1);
+        self.renderer.shader_cache.insert(id, shader);
+        id
     }
 
     fn drop_shader(&mut self, id: u32) {
@@ -1151,5 +1220,62 @@ fn tile_mode_from_u8(m: u8) -> skia_safe::TileMode {
         2 => skia_safe::TileMode::Mirror,
         3 => skia_safe::TileMode::Decal,
         _ => skia_safe::TileMode::Clamp,
+    }
+}
+
+fn sampling_options_from_wit(
+    opts: &crate::bindings::my::skiko_gfx::canvas::SamplingOptions,
+) -> skia_safe::SamplingOptions {
+    if opts.use_cubic {
+        skia_safe::SamplingOptions::from(skia_safe::CubicResampler {
+            b: opts.cubic_b, c: opts.cubic_c,
+        })
+    } else {
+        let filter = match opts.filter {
+            1 => skia_safe::FilterMode::Linear,
+            _ => skia_safe::FilterMode::Nearest,
+        };
+        let mipmap = match opts.mipmap {
+            1 => skia_safe::MipmapMode::Nearest,
+            2 => skia_safe::MipmapMode::Linear,
+            _ => skia_safe::MipmapMode::None,
+        };
+        skia_safe::SamplingOptions::new(filter, mipmap)
+    }
+}
+
+fn matrix3x3_from_wit(
+    m: &crate::bindings::my::skiko_gfx::canvas::Matrix3x3,
+) -> skia_safe::Matrix {
+    let mut out = skia_safe::Matrix::new_identity();
+    out.set_9(&[
+        m.scale_x, m.skew_x,  m.trans_x,
+        m.skew_y,  m.scale_y, m.trans_y,
+        m.persp_0, m.persp_1, m.persp_2,
+    ]);
+    out
+}
+
+fn blend_mode_from_wit(bm: BlendMode) -> skia_safe::BlendMode {
+    match bm {
+        BlendMode::SrcOver    => skia_safe::BlendMode::SrcOver,
+        BlendMode::Src        => skia_safe::BlendMode::Src,
+        BlendMode::DstIn      => skia_safe::BlendMode::DstIn,
+        BlendMode::DstOut     => skia_safe::BlendMode::DstOut,
+        BlendMode::SrcAtop    => skia_safe::BlendMode::SrcATop,
+        BlendMode::DstAtop    => skia_safe::BlendMode::DstATop,
+        BlendMode::Xor        => skia_safe::BlendMode::Xor,
+        BlendMode::Multiply   => skia_safe::BlendMode::Multiply,
+        BlendMode::Screen     => skia_safe::BlendMode::Screen,
+        BlendMode::Overlay    => skia_safe::BlendMode::Overlay,
+        BlendMode::Darken     => skia_safe::BlendMode::Darken,
+        BlendMode::Lighten    => skia_safe::BlendMode::Lighten,
+        BlendMode::ColorDodge => skia_safe::BlendMode::ColorDodge,
+        BlendMode::ColorBurn  => skia_safe::BlendMode::ColorBurn,
+        BlendMode::HardLight  => skia_safe::BlendMode::HardLight,
+        BlendMode::SoftLight  => skia_safe::BlendMode::SoftLight,
+        BlendMode::Difference => skia_safe::BlendMode::Difference,
+        BlendMode::Exclusion  => skia_safe::BlendMode::Exclusion,
+        BlendMode::Clear      => skia_safe::BlendMode::Clear,
     }
 }
