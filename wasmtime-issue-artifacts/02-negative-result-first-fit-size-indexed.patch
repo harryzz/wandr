@@ -1,0 +1,180 @@
+From: wart maintainer
+Subject: [PATCH] DRC: NEGATIVE-RESULT — replace FreeList::first_fit O(F) with O(log F)
+
+**This patch was tested and made the wart-app workload WORSE.** Posted
+here only as a benchmark fixture so reviewers can see why allocator-
+side speedups alone don't help, and as a starting point for anyone
+exploring this corner of the design space.
+
+The change: add a parallel `BTreeSet<(len, index)>` to `FreeList`,
+maintained in lockstep with the existing `BTreeMap<index, len>` via
+three helpers. Replace `first_fit`'s `iter().find(...)` linear scan
+with `range((alloc_size, 0)..).next()` — O(log F) instead of O(F).
+Policy changes from first-fit-by-address to best-fit-by-size, ties
+broken by lowest address.
+
+All 12 existing FreeList unit tests pass.
+
+On device (Pixel 2 XL, wart-app + Compose Material3, 2026-05-18):
+
+| Metric        | Unpatched | With this patch | Δ      |
+|---------------|-----------|-----------------|--------|
+| Sweep 1 dur   | 472 ms    | 823 ms          | +74%   |
+| Sweep 2 dur   | 1222 ms   | 2010 ms         | +64%   |
+| Sweep 3 dur   | (n/a)     | 4314 ms         | new    |
+| Frame mean    | ~16 ms    | ~16 ms          | none   |
+| Guest alloc rate | 15K refs/s | 19K refs/s   | +27%   |
+
+Two reasons it made things worse for our workload:
+
+1. `first_fit` was not the bottleneck. Frame-mean cost is dominated by
+   Compose's render/layout/draw work; alloc-path microseconds we shaved
+   off didn't appear in any frame-level metric.
+
+2. Faster allocs made the leak worse. With cheaper allocs, the
+   Kotlin/Wasm guest churns SafeContinuation cycles faster, so N grew
+   faster between sweeps. Each subsequent sweep has more to walk + more
+   to dec_ref. The per-dealloc overhead from maintaining a second data
+   structure (one extra BTreeSet op per add_block / remove_block /
+   update_block_len) then compounds over N+ deallocations per sweep.
+
+The conclusion is that any allocator-side optimization for this
+workload class must be paired with sweep-side improvements (e.g.
+auto-scheduled gc, contiguous-storage over-approx set, incremental
+sweep). On its own, it accelerates the pathology.
+
+Applies on top of 01-instrumentation.patch.
+
+---
+
+--- a/src/runtime/vm/gc/enabled/free_list.rs
++++ b/src/runtime/vm/gc/enabled/free_list.rs
+@@ -1,5 +1,5 @@
+ use crate::prelude::*;
+-use alloc::collections::BTreeMap;
++use alloc::collections::{BTreeMap, BTreeSet};
+ use core::{alloc::Layout, num::NonZeroU32, ops::Bound};
+
+ /// A very simple first-fit free list for use by our garbage collectors.
+@@ -24,8 +24,19 @@ pub(crate) struct FreeList {
+     capacity: usize,
+     /// Our free blocks, as a map from index to length of the free block at that
+-    /// index.
++    /// index. Used for `dealloc`'s merge-with-address-neighbors lookups.
+     free_block_index_to_len: BTreeMap<u32, u32>,
++    /// Parallel index of free blocks sorted by (len, index). Enables O(log F)
++    /// lookup of the smallest free block satisfying a given allocation size
++    /// via `range((alloc_size, 0)..).next()`, replacing the previous O(F)
++    /// linear scan in `first_fit`. Maintained in sync with
++    /// `free_block_index_to_len` via the `add_block` / `remove_block` /
++    /// `update_block_len` helpers — every mutation goes through those.
++    ///
++    /// Policy note: this changes the allocation policy from
++    /// first-fit-by-address to best-fit-by-size (ties broken by lowest
++    /// address).
++    free_block_size_index: BTreeSet<(u32, u32)>,
+ }
+
+@@ -50,10 +61,11 @@ impl FreeList {
+     /// Create a new `FreeList` for a contiguous region of memory of the given
+     /// size.
+     pub fn new(capacity: usize) -> Self {
+         log::debug!("FreeList::new({capacity})");
+
+         let mut free_list = FreeList {
+             capacity,
+             free_block_index_to_len: BTreeMap::new(),
++            free_block_size_index: BTreeSet::new(),
+         };
+
+         let end = u32::try_from(free_list.capacity).unwrap_or_else(|_| {
+@@ -68,13 +80,68 @@ impl FreeList {
+         let len = round_u32_down_to_pow2(end.saturating_sub(start), ALIGN_U32);
+
+-        let entire_range = if len >= ALIGN_U32 {
+-            Some((start, len))
+-        } else {
+-            None
+-        };
+-
+-        free_list.free_block_index_to_len.extend(entire_range);
++        if len >= ALIGN_U32 {
++            free_list.add_block(start, len);
++        }
+
+         free_list
+     }
+
++    // Helpers that keep `free_block_index_to_len` and
++    // `free_block_size_index` in lockstep. Every mutation of the free-list
++    // state goes through these.
++
++    fn add_block(&mut self, index: u32, len: u32) {
++        debug_assert_eq!(index % ALIGN_U32, 0);
++        debug_assert_eq!(len % ALIGN_U32, 0);
++        let prev = self.free_block_index_to_len.insert(index, len);
++        debug_assert!(prev.is_none());
++        let inserted = self.free_block_size_index.insert((len, index));
++        debug_assert!(inserted);
++    }
++
++    fn remove_block(&mut self, index: u32) -> u32 {
++        let len = self.free_block_index_to_len.remove(&index)
++            .unwrap_or_else(|| panic!("remove_block: no block at {index:#x}"));
++        let removed = self.free_block_size_index.remove(&(len, index));
++        debug_assert!(removed);
++        len
++    }
++
++    fn update_block_len(&mut self, index: u32, new_len: u32) {
++        debug_assert_eq!(new_len % ALIGN_U32, 0);
++        let slot = self.free_block_index_to_len.get_mut(&index)
++            .unwrap_or_else(|| panic!("update_block_len: no block at {index:#x}"));
++        let old_len = *slot;
++        *slot = new_len;
++        let removed = self.free_block_size_index.remove(&(old_len, index));
++        debug_assert!(removed);
++        let inserted = self.free_block_size_index.insert((new_len, index));
++        debug_assert!(inserted);
++    }
++
+@@ -178,15 +245,20 @@ impl FreeList {
+-    /// Find the first free block that can hold an allocation of the given size
+-    /// and remove it from the free list.
++    /// Find the smallest free block that can hold an allocation of the given
++    /// size and remove it from the free list. Best-fit-by-size, O(log F).
+     fn first_fit(&mut self, alloc_size: u32) -> Option<(u32, u32)> {
+         debug_assert_eq!(alloc_size % ALIGN_U32, 0);
+
+-        let (&block_index, &block_len) = self
+-            .free_block_index_to_len
+-            .iter()
+-            .find(|(_idx, len)| **len >= alloc_size)?;
++        let &(block_len, block_index) = self
++            .free_block_size_index
++            .range((alloc_size, 0)..)
++            .next()?;
+
+         debug_assert_eq!(block_index % ALIGN_U32, 0);
+         debug_assert_eq!(block_len % ALIGN_U32, 0);
++        debug_assert!(block_len >= alloc_size);
+
+-        let entry = self.free_block_index_to_len.remove(&block_index);
+-        debug_assert!(entry.is_some());
++        let removed_len = self.remove_block(block_index);
++        debug_assert_eq!(removed_len, block_len);
+
+         Some((block_index, block_len))
+     }
+
+@@ -235,7 +307,7 @@ impl FreeList {
+-        self.free_block_index_to_len.insert(split_start, split_len);
++        self.add_block(split_start, split_len);
+
+         new_block_len
+     }
+
+# ... dealloc() merge sites route through add_block / remove_block /
+# update_block_len analogously. Four sites in total (see comment in
+# dealloc body). check_integrity() extended to assert the two maps
+# contain the same (len, index) pairs.

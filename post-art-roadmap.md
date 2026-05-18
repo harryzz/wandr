@@ -478,3 +478,111 @@ To be filled in by the user. Candidates from this document:
   today.
 - **Write up boot-model task (§6.1 + §5)** as a separate roadmap
   before any execution.
+
+---
+
+## 12. Memory subsystem — fallback paths if wasmtime DRC stays MVP
+
+Added 2026-05-18 after filing
+[bytecodealliance/wasmtime#13403](https://github.com/bytecodealliance/wasmtime/issues/13403)
+(per-GC sweep cost grows unbounded on steady-state Kotlin/Wasm
+workload). Documented here in case the upstream tracing-collector
+work doesn't ship on a timeline that aligns with whatever we want
+to do next.
+
+### 12.1 Why wasmtime DRC is the wrong shape for an Android UI app
+
+The current wasmtime GC implementation is a deferred ref-counting
+(DRC) collector. From the file header comments:
+*"Warning: this ref-counting collector does not have a tracing cycle
+collector. This is not a moving collector; it doesn't have a nursery
+or do any compaction."* It is explicitly an MVP per the
+[wasm-gc RFC](https://github.com/bytecodealliance/rfcs/blob/main/accepted/wasm-gc.md).
+
+For our workload (Compose-Multiplatform with continuous animation
+allocating SafeContinuations at ~15K refs/sec), DRC produces a
+super-linear cost growth in sweep duration — measured trajectory
+from a 45-min soak: 478 ms → 1248 ms → 3000 ms across 3 sweeps,
+with `N` (over-approximation-list size) going 1.2M → 2.3M → 4.6M.
+On the Android main thread this hits the 5 s input-dispatch ANR
+threshold within ~10–50 min depending on interaction load.
+
+We have local mitigations (task 26: `Store` on a worker thread,
+periodic `Store::gc(None)` every 5 s via `profiling::
+check_and_run_deferred_gc`). These eliminate the ANR but the *Compose
+recompose pipeline* still degrades over a session — tap-to-display
+latency grows to several seconds because Compose's live retained
+state (composition tree, snapshot subscribers, `LaunchedEffect`
+jobs) accumulates and gc only reclaims dead refs, not live state.
+
+### 12.2 What Android Runtime (ART) gets right that wasmtime DRC doesn't
+
+ART's GC (Concurrent Copying, post-Android-8) is the reference design
+for our use case:
+
+| Property | ART | Wasmtime DRC |
+|---|---|---|
+| Generational (eden / old) | ✅ | ❌ (single heap) |
+| Concurrent — mutator runs alongside sweep | ✅ | ❌ (STW per-store) |
+| Compacting / defrag | ✅ | ❌ (free-list fragments) |
+| Self-scheduling on alloc rate + idle | ✅ | ❌ (embedder must trigger) |
+| Bump-pointer allocation in young gen | ✅ | ❌ (`first_fit` O(F)) |
+
+Every pathology of our 5–6 s tap latency maps directly to one of
+ART's solved problems. Specifically: most of our SafeContinuations
+are eden-shaped (allocated per frame, dead by next frame); a
+generational design would keep per-gc cost O(young-set) instead
+of O(total-live-set).
+
+### 12.3 Why we can't simply use ART's GC
+
+ART runs Dex bytecode. We run WASM. Different runtime, different
+ABI, different stack-map layout. Bridging is not a small project —
+it's "rewrite the runtime."
+
+### 12.4 Fallback paths if upstream wasmtime is stuck
+
+Ordered by reversibility / cost:
+
+1. **Wait (default).** Bytecode-Alliance's tracing-collector RFC is
+   accepted; implementation pace unknown. Estimated 6–18 months
+   for a first cut. The worker-thread + periodic-gc band-aids let
+   the POC limp along in the meantime.
+
+2. **Compile to Android-native via Kotlin/JVM (least dramatic
+   refactor).** Drop the WASM layer on Android only. wart-app
+   targets `androidTarget()` instead of `wasmWasi`, runs directly
+   on ART. Lose: cross-platform-via-WIT story, security sandbox,
+   the whole reason for the PoC. Gain: sub-frame tap latency, no
+   GC tuning. Costs a few days of build-config work.
+
+3. **Embed a real GC runtime alongside wasmtime** (e.g. V8 just
+   for the GC heap, wasmtime for execution). Crazy plumbing —
+   would need to bridge `VMGcRef` semantics across two runtimes.
+   Not realistic.
+
+4. **Switch to JCO + Node-on-Android.** V8 has the GC we want.
+   But Node on Android is rough; JCO is server-shaped not
+   embedded-shaped. Would also require swapping out our entire
+   host architecture.
+
+5. **Write a tracing GC for wasmtime ourselves and upstream it.**
+   3–6 person-months of GC-engineer time. Catherine West's
+   [`gc-arena`](https://github.com/kyren/gc-arena) is reference-
+   only (its safety relies on Rust's borrow checker, which
+   JIT-compiled WASM doesn't participate in); the algorithmic core
+   would have to be hand-rolled against `GcRuntime` trait. Real
+   but expensive.
+
+### 12.5 Decision
+
+Adopt **(1)** as the active plan. Hold **(2)** as a documented
+contingency — if waiting becomes untenable, the Android-only
+JVM-target compile is the least dramatic exit. Keep ART's design as
+the reference we'd point at if anyone (us or upstream) ever writes
+**(5)**. Do not pursue **(3)** or **(4)** without a much stronger
+forcing function.
+
+The wart-host worker-thread refactor (task 26) is sufficient for
+the POC to remain usable for demo / development purposes regardless
+of which fallback we end up taking.

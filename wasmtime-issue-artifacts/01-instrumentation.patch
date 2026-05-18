@@ -1,0 +1,120 @@
+From: wart maintainer
+Subject: [PATCH] DRC: instrumentation log line in sweep + free-list counters
+
+Adds:
+  * `FreeList::wart_instr_free_block_count()` and
+    `FreeList::wart_instr_total_free_bytes()` accessors so DRC sweep can
+    record fragmentation state.
+  * One `log::info!` call at the end of `DrcHeap::sweep` reporting
+    sweep duration, list size N (over-approx), removed/kept split, and
+    free-block count F before/after the sweep.
+
+Diagnostic only. No semantic changes. Off-by-default (no feature gate —
+just lives at info level; downstream embedders can filter on the
+`wart-drc-sweep:` prefix or drop the entire patch).
+
+Tested against wasmtime 44.0.1. All 12 existing FreeList unit tests
+pass. Applied via [patch.crates-io] to a local copy of the wasmtime
+44.0.1 crate.
+
+---
+
+--- a/src/runtime/vm/gc/enabled/free_list.rs
++++ b/src/runtime/vm/gc/enabled/free_list.rs
+@@ -43,6 +43,21 @@ impl FreeList {
+     /// Get the current total capacity this free list manages.
+     pub fn current_capacity(&self) -> usize {
+         self.capacity
+     }
+
++    // WART instrumentation: expose the count of free blocks (F) so we can
++    // record fragmentation growth over time from inside the DRC sweep.
++    pub fn wart_instr_free_block_count(&self) -> usize {
++        self.free_block_index_to_len.len()
++    }
++
++    // WART instrumentation: total free bytes across all blocks.
++    pub fn wart_instr_total_free_bytes(&self) -> u64 {
++        self.free_block_index_to_len
++            .values()
++            .map(|&l| u64::from(l))
++            .sum()
++    }
++
+     /// Create a new `FreeList` for a contiguous region of memory of the given
+
+--- a/src/runtime/vm/gc/enabled/drc.rs
++++ b/src/runtime/vm/gc/enabled/drc.rs
+@@ -524,6 +524,21 @@ impl DrcHeap {
+     fn sweep(&mut self, host_data_table: &mut ExternRefHostDataTable) {
+         if log::log_enabled!(log::Level::Trace) {
+             Self::log_gc_ref_set(
+                 "over-approximated-stack-roots set before sweeping",
+                 self.iter_over_approximated_stack_roots(),
+             );
+         }
+
++        // WART instrumentation: snapshot list size + free-list state before
++        // sweep so we can correlate sweep cost with N (over-approx list len)
++        // and F (free-block count) over time. Cheap (single iteration of
++        // already-traversed list) compared to sweep work itself.
++        let wart_t0 = std::time::Instant::now();
++        let wart_n_before = self.iter_over_approximated_stack_roots().count();
++        let (wart_f_before, wart_free_bytes_before) = match &self.free_list {
++            Some(fl) => (
++                fl.wart_instr_free_block_count(),
++                fl.wart_instr_total_free_bytes(),
++            ),
++            None => (0, 0),
++        };
++        let mut wart_removed: u64 = 0;
++        let mut wart_kept: u64 = 0;
++
+         // Logically, we are taking the difference between
+@@ -578,6 +593,7 @@ impl DrcHeap {
+             if header.clear_marked() {
+                 // This GC ref was marked, meaning it is still on the stack, so
+                 // keep it in the over-approximated-stack-roots list and move on
+                 // to the next object in the list.
+                 log::trace!(
+                     "  -> {gc_ref:#p} is marked, leaving it in the over-approximated-\
+                      stack-roots list"
+                 );
++                wart_kept += 1;
+                 next = header.next_over_approximated_stack_root();
+                 prev = Some(gc_ref);
+                 continue;
+             }
++            wart_removed += 1;
+
+             // This GC ref was not marked, meaning it is no longer on the stack,
+@@ -616,6 +632,28 @@ impl DrcHeap {
+                 self.iter_over_approximated_stack_roots(),
+             );
+         }
++
++        // WART instrumentation: one log line per sweep with the trajectory
++        // numbers we need to characterize scaling. F values are post-sweep
++        // (after dec_ref deallocations have hit the free list).
++        let wart_dur_us = wart_t0.elapsed().as_micros();
++        let (wart_f_after, wart_free_bytes_after) = match &self.free_list {
++            Some(fl) => (
++                fl.wart_instr_free_block_count(),
++                fl.wart_instr_total_free_bytes(),
++            ),
++            None => (0, 0),
++        };
++        log::info!(
++            "wart-drc-sweep: dur={}us  N={} (removed={} kept={})  \
++             F_before={} F_after={}  free_bytes_before={} free_bytes_after={}",
++            wart_dur_us,
++            wart_n_before,
++            wart_removed,
++            wart_kept,
++            wart_f_before,
++            wart_f_after,
++            wart_free_bytes_before,
++            wart_free_bytes_after,
++        );
+     }
+ }

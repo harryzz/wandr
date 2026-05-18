@@ -1,5 +1,5 @@
-TASK=25
-STEP=step3-paused
-STATUS=in-progress
-LAST_SUCCESS=Task 25 step 2 done — leaked type is $kotlin.coroutines.SafeContinuation (per-tick allocation in awaitNextFrame, ~80 B with DRC overhead).
-NOTES=Step 3 PAUSED. Deep read of wasmtime DRC reveals diagnosis was wrong direction. The "leak" isn't missing slot-clear in Kotlin/Wasm codegen — it's DRC's lazy-decrement design + heap-grow-prefer-over-gc heuristic + 4GB hardcoded heap ceiling = pathological on memory-constrained devices. The over-approximation set just grows; auto-gc only fires when 4GB ceiling hits, but device runs out of physical memory + LMK fires first. Fix landscape revised: (A) manual periodic gc — band-aid we know; (B) Kotlin/Wasm codegen avoids per-call SafeContinuation — months of upstream work; (C) patch wasmtime heap-grow-vs-gc heuristic — ~1 day; (D) try mark-and-sweep collector. Step 3 wasmtime patch would only confirm SafeContinuation count growth — confirmation we don't really need since step 2's analysis is solid. Need user input on path forward.
+TASK=26
+STEP=reverted
+STATUS=failed-net-regression
+LAST_SUCCESS=Task 25 paused after filing wasmtime#13403. Task 26 attempted+reverted: worker-thread refactor eliminated ANR but introduced worse input-lag accumulation (5-6s after minutes of use). Conclusively isolated via revert A/B test. wart-host back to committed state (3a519731). See tasks/26-store-worker-thread.md for the full negative-result analysis.
+NOTES=No active task. Primary path: wait for upstream wasmtime#13403. Contingency in post-art-roadmap.md §12 (Kotlin/JVM Android-native target). Keep skiko CharProperties.wasi.kt — needed for any future compose-foundation rebuild.
