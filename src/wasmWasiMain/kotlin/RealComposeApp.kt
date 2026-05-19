@@ -218,12 +218,9 @@ private fun MaterialDemoApp() {
                         // DatePicker renders + swipe + year-pick work.
                         // Chevron `< >` taps SIGILL via Material3's
                         // IconButtonWithTooltip — a TooltipBox-on-wasi
-                        // bug bisected 2026-05-19, see
-                        // feedback_tooltip_sigill_wasi.md. Task 28
-                        // bc-* dispatch is verified innocent (see
-                        // ChevronBisectCard layers A-D).
+                        // bug bisected 2026-05-19; see
+                        // feedback_tooltip_sigill_wasi.md.
                         DatePickerCard()
-                        ChevronBisectCard()
                         Task27SmokeCard()
                         Task28SmokeCard()
                         SnackbarCard(onShow = { snackbarVisible = true })
