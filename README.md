@@ -101,6 +101,19 @@ doesn't share state with `withScopedMemoryAllocator` at all, but the
 (2.4.255-SNAPSHOT). See the toggle in `build.gradle.kts` to switch
 between stock and patched.
 
+## Fix completeness analysis
+
+See [`kt-86415-fix-completeness.md`](kt-86415-fix-completeness.md) for
+a walkthrough of:
+
+- why the patch is a no-op for top-level sibling scopes (and why
+  that's not a bug — it's the documented "scoped" contract);
+- the destroy → freeAll → new-scope chain that makes the patch work
+  for the real case;
+- a residual edge case (componentModelRealloc called with no active
+  outer scope) that the minimum patch doesn't cover, with a sketch
+  of a broader fix.
+
 ## Context
 
 Found while diagnosing a SIGILL on Android in a Compose Multiplatform
