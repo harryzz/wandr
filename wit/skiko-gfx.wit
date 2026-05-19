@@ -31,6 +31,10 @@ interface canvas {
 
     enum color-filter-kind { none, blend, invert }
 
+    /// Skia ClipOp / Kotlin org.jetbrains.skia.ClipMode. INTERSECT is the
+    /// default in upstream Compose; DIFFERENCE is used for hole-cutting.
+    enum clip-mode { intersect, difference }
+
     record paint-attrs {
         color:              u32,
         style:              paint-style,
@@ -259,6 +263,105 @@ interface canvas {
     /// of the current clip shape, offset downward proportional to
     /// elevation, before applying clip. 0 = no shadow.
     set-drawable-shadow-elevation: func(drawable-id: u32, elevation: f32);
+
+    // ── bitmap-backed canvases (task 28, Path D) ──────────────────────────
+    // Compose's vector-icon rasterization pattern creates short-lived
+    // org.jetbrains.skia.Canvas(bitmap) instances, draws into them, then
+    // hands the Bitmap to a Painter/ImageBitmap that drawImage()s the
+    // result back onto the main canvas. On wasi we back each instance
+    // with a host-side raster Surface keyed by u32 id; the bc-* draw
+    // verbs forward to skia_safe::Canvas methods on the surface's canvas.
+    //
+    // Lifecycle: create-bitmap-canvas(w, h) → bc-* draws →
+    // bitmap-canvas-snapshot(id) → drop-bitmap-canvas(id). Snapshot
+    // returns an image-id reusable with the existing draw-image* verbs
+    // on the main canvas. id 0 is sentinel ("not a bitmap canvas") and
+    // is never returned by create.
+    create-bitmap-canvas:    func(width: u32, height: u32) -> u32;
+    drop-bitmap-canvas:      func(id: u32);
+    bitmap-canvas-snapshot:  func(id: u32) -> u32;
+
+    // State / transform ----------------------------------------------------
+    bc-save:             func(id: u32) -> u32;
+    /// has-bounds=false → saveLayer(null, paint); true → saveLayer(rect, paint).
+    bc-save-layer:       func(id: u32, x: f32, y: f32, w: f32, h: f32,
+                              has-bounds: bool, paint: paint-attrs) -> u32;
+    bc-restore:          func(id: u32);
+    bc-restore-to-count: func(id: u32, save-count: u32);
+    bc-translate:        func(id: u32, dx: f32, dy: f32);
+    bc-scale:            func(id: u32, sx: f32, sy: f32);
+    /// Rotate around the given pivot point (Kotlin: rotate(deg, x, y)).
+    /// rotate(deg) is the same with pivot=(0,0).
+    bc-rotate:           func(id: u32, degrees: f32, px: f32, py: f32);
+    bc-skew:             func(id: u32, sx: f32, sy: f32);
+    bc-concat:           func(id: u32, m: matrix-3x3);
+    bc-set-matrix:       func(id: u32, m: matrix-3x3);
+    bc-reset-matrix:     func(id: u32);
+
+    // Clip -----------------------------------------------------------------
+    bc-clip-rect:   func(id: u32, x: f32, y: f32, w: f32, h: f32,
+                         mode: clip-mode, anti-alias: bool);
+    /// radii is 8 floats: top-left{x,y}, top-right{x,y}, bottom-right{x,y},
+    /// bottom-left{x,y}. Matches Kotlin RRect(left,top,right,bottom,radii).
+    bc-clip-rrect:  func(id: u32, x: f32, y: f32, w: f32, h: f32,
+                         radii: list<f32>, mode: clip-mode, anti-alias: bool);
+    bc-clip-path:   func(id: u32, path-data: list<u8>,
+                         mode: clip-mode, anti-alias: bool);
+
+    // Geometric draw -------------------------------------------------------
+    bc-clear:        func(id: u32, argb: u32);
+    bc-draw-paint:   func(id: u32, paint: paint-attrs);
+    bc-draw-rect:    func(id: u32, x: f32, y: f32, w: f32, h: f32, paint: paint-attrs);
+    /// radii: 8 floats, same layout as bc-clip-rrect.
+    bc-draw-rrect:   func(id: u32, x: f32, y: f32, w: f32, h: f32,
+                          radii: list<f32>, paint: paint-attrs);
+    bc-draw-drrect:  func(id: u32,
+                          ox: f32, oy: f32, ow: f32, oh: f32, o-radii: list<f32>,
+                          ix: f32, iy: f32, iw: f32, ih: f32, i-radii: list<f32>,
+                          paint: paint-attrs);
+    bc-draw-oval:    func(id: u32, x: f32, y: f32, w: f32, h: f32, paint: paint-attrs);
+    bc-draw-circle:  func(id: u32, x: f32, y: f32, radius: f32, paint: paint-attrs);
+    bc-draw-line:    func(id: u32, x0: f32, y0: f32, x1: f32, y1: f32, paint: paint-attrs);
+    bc-draw-arc:     func(id: u32, x: f32, y: f32, w: f32, h: f32,
+                          start-angle: f32, sweep-angle: f32,
+                          include-center: bool, paint: paint-attrs);
+    bc-draw-path:    func(id: u32, path-data: list<u8>, paint: paint-attrs);
+
+    // Point primitives -----------------------------------------------------
+    /// coords for drawPoint is a single (x,y); drawPoints / drawLines /
+    /// drawPolygon take interleaved x,y pairs. drawLines reads pairs as
+    /// line segments (4 floats per segment); drawPolygon treats them as a
+    /// connected polyline closing back to start.
+    bc-draw-point:   func(id: u32, x: f32, y: f32, paint: paint-attrs);
+    bc-draw-points:  func(id: u32, coords: list<f32>, paint: paint-attrs);
+    bc-draw-lines:   func(id: u32, coords: list<f32>, paint: paint-attrs);
+    bc-draw-polygon: func(id: u32, coords: list<f32>, paint: paint-attrs);
+
+    // Image / text / picture ----------------------------------------------
+    bc-draw-image:      func(id: u32, image-id: u32, x: f32, y: f32, alpha: u8);
+    bc-draw-image-rect: func(id: u32, image-id: u32,
+                             src-x: f32, src-y: f32, src-w: f32, src-h: f32,
+                             dst-x: f32, dst-y: f32, dst-w: f32, dst-h: f32,
+                             paint: paint-attrs);
+    bc-draw-text-blob:  func(id: u32, blob-id: u32, x: f32, y: f32, paint: paint-attrs);
+    /// TextLine maps to TextBlob on wasi (skia has no separate TextLine
+    /// resource). Same dispatch as bc-draw-text-blob.
+    bc-draw-text-line:  func(id: u32, blob-id: u32, x: f32, y: f32, paint: paint-attrs);
+    /// Picture playback. Matrix / paint variants on Kotlin's drawPicture
+    /// degrade to plain playback for now (Compose doesn't exercise them
+    /// in the observed widget set).
+    bc-draw-picture:    func(id: u32, picture-id: u32);
+
+    /// drawString is a debug convenience in upstream skia; wasi has no
+    /// Font resource yet. Implemented as a no-op until a widget needs it.
+    bc-draw-string:     func(id: u32, text: list<u8>, x: f32, y: f32, paint: paint-attrs);
+
+    /// drawVertices isn't used by the current widget set; the host impl
+    /// is a no-op stub that lets the call succeed without rendering.
+    bc-draw-vertices:   func(id: u32, vertex-mode: u8,
+                             positions: list<f32>, colors: list<u32>,
+                             tex-coords: list<f32>, indices: list<u16>,
+                             blend-mode: blend-mode, paint: paint-attrs);
 
     // ── debug log ─────────────────────────────────────────────────────────
     log-message: func(msg: string);

@@ -1,9 +1,16 @@
 # Task 28 — Wire the abstract `org.jetbrains.skia.Canvas` to host-side skia
 
-> **Status: 🟡 Step 0 done 2026-05-18 — Path D selected.** See "Step 0
-> findings" below for the diagnostic data that drove the decision.
-> Implementation still pending; the rest of this doc is the original
-> scoping plan, kept for context but not the active plan.
+> **Status: ✅ device-verified 2026-05-19.** Path D landed: full 41-stub
+> buildout with bc-* WIT verbs, host-side bitmap surfaces with LRU cap,
+> bitmap-canvas-snapshot → Image bridge fixing the missing-icon path.
+> SegmentedButton renders fully (checkmark + previously-blank labels
+> visible). DatePicker renders + swipe + year-pick all work; chevron
+> `< >` taps are blocked by an orthogonal Material3 TooltipBox bug on
+> wasi — bisected to `feedback_tooltip_sigill_wasi` and NOT a task 28
+> regression. Smoke card in wart-app exercises all 30+ bc-* verbs at
+> cold start. Earlier sections of this doc are the original scoping
+> plan; the implementation is summarised under "Closeout (2026-05-19)"
+> at the bottom.
 
 > **Original scope:** Make the 41 throw-stubs on the abstract `Canvas` class in
 > `skiko/skiko/src/wasmWasiMain/kotlin/org/jetbrains/skia/SkiaTypes.wasi.kt`
@@ -594,3 +601,120 @@ drawPaint, skew, resetMatrix, drawImage, drawImageRect-non-strict,
 drawVertices, drawPicture, concat, setMatrix, rotate, clear) stay
 throwing for now. Add them in follow-ups as widgets demand them
 (e.g., TimePicker may add `saveLayer` to the list).
+
+---
+
+## Closeout (2026-05-19)
+
+**Scope decision:** full 41-stub buildout (per the AskUserQuestion vote
+at planning time), not the minimal 8-method Step 0 set. Smoke card
+validates every method dispatches without throwing on a bitmap-backed
+Canvas — caught zero signature mismatches at device-verify time.
+
+### What landed
+
+- **WIT (`wit/skiko-gfx.wit`):** 38 new verbs in the `canvas` interface
+  — 3 lifecycle (`create-bitmap-canvas`, `drop-bitmap-canvas`,
+  `bitmap-canvas-snapshot`) + 35 `bc-*` forwarding verbs covering every
+  open method on `org.jetbrains.skia.Canvas`. New `clip-mode` enum.
+  Mirrored byte-identically to `skiko/skiko/wit/skiko-gfx.wit`.
+- **Host (`wart-host/src/canvas_impl.rs`):** `bitmap_canvases: HashMap<
+  u32, Surface>` + LRU `VecDeque` with a soft cap of 128 surfaces, since
+  Compose never calls `Canvas.close` on wasi (would otherwise leak host
+  memory; in practice the steady state is ≤4 surfaces for the current
+  widget set). All 38 method bodies forward to `skia_safe::Canvas`
+  methods via `bc_canvas_mut(id)`. `make_rrect_with_radii` helper
+  handles 0/1/2/4/8-float radii forms; `coords_to_points` for the
+  drawPoints/Lines/Polygon family. `Store::gc(None)` every 600 frames
+  (~10 s) kept as a load-bearing safety belt for the wasm DRC heap.
+- **Kotlin bindings (`skiko/skiko/src/wasmWasiMain/kotlin/generated/`):**
+  ~45 new `@WasmImport` externs + companion-object `override fun bc*`
+  wrappers with the canonical-ABI indirect lowering (paint-attrs
+  serializer `writePaintAttrs` factored out — used by ~10 indirect
+  verbs). `ClipMode` enum added to the generated `Canvas` interface.
+- **Skia stubs (`skiko/skiko/src/wasmWasiMain/kotlin/org/jetbrains/skia
+  /SkiaTypes.wasi.kt`):** `Canvas` redesigned as `internal constructor
+  (internal val id: UInt) : AutoCloseable` with three constructors
+  (parameterless = main, `Canvas(bitmap)` = bitmap-backed, two-arg form
+  delegates). Each of the 41 open methods now dispatches: forward to
+  `bc-*` when `id != 0u`, error when `id == 0u` (preserving the prior
+  parameterless-Canvas behaviour). `Bitmap.allocPixels` / `installPixels`
+  now capture width/height so `Canvas(bitmap)` can size the host surface
+  correctly. `Bitmap.surfaceId: UInt` lets `Image.makeFromBitmap` call
+  `bitmap-canvas-snapshot` and return an Image with a real host id —
+  this is the single line that fixes Compose's vector-icon rendering
+  (DrawCache → `target.drawImage(targetImage, …)` was passing the
+  sentinel `Image(0u)` previously).
+- **WasiCanvas (`skiko/.../skiko/WasiCanvas.kt`):** added overrides for
+  `concat(Matrix44)` (reduces 4×4 to 2D affine 3×3 for the main canvas
+  WIT), `concat(Matrix33)`, `setMatrix`, `drawPoint/Points/Lines/Polygon`,
+  `drawVertices` (no-op). `witAttrs()` Paint helper made `internal` so
+  `SkiaTypes.wasi.kt`'s base Canvas can use it for bitmap-canvas
+  dispatch.
+- **wart-app:** `Task28SmokeCard` exercises every bc-* method on a
+  32×32 bitmap-backed Canvas at composition time, with a runCatching
+  wrapper that reports per-method status as text — a signature mismatch
+  surfaces as a FAIL line, not a SIGILL. `ChevronBisectCard` (Layers
+  A-E) kept in source for future Tooltip-on-wasi investigation.
+  `DatePickerCard` re-enabled despite the orthogonal Tooltip-chevron
+  crash — keeps the bug visible/reproducible for the next session.
+
+### What's verified on device
+
+- Cold start clean, no errors logged past frame 5
+- SegmentedButton's unselected segment labels (`Day`, `Month`) + the
+  active-state checkmark are now visible — this is the regression
+  Step 0 documented and the headline test for the fix
+- DatePicker grid + day labels + month text render correctly
+- DatePicker swipe between months works
+- Year picker (top-left) works
+- Task28SmokeCard reports `ok` for every bc-* method
+- Task27SmokeCard still ok (image / shader APIs intact)
+- 12/12 `cargo test --lib` host-side tests pass
+
+### Known issue (NOT a task 28 regression)
+
+DatePicker `< >` chevron taps SIGILL ~5 s after first tap, regardless
+of how many bc-* methods are exercised first. Bisected end-of-task via
+`ChevronBisectCard`:
+
+| Layer | + Component | Crash |
+|---|---|---|
+| A | plain TextButton + state | ✅ |
+| B | + AnimatedContent | ✅ |
+| C | + IconButton/ripple + AnimatedContent | ✅ |
+| D | + inline ImageVector chevrons | ✅ |
+| **E** | **+ TooltipBox(PlainTooltip)** | **💥 SIGILL** |
+
+So the trigger is **`TooltipBox`** in the popup-overlay family — same
+neighbourhood as the DropdownMenu/AlertDialog issues in
+`feedback_popup_overlay`. Fixing the underlying wasi popup machinery
+is the next investigation; both should resolve together. Full notes in
+`feedback_tooltip_sigill_wasi.md`. DatePicker stays enabled in the
+demo so the bug stays visible.
+
+### Memory updates
+
+- `feedback_canvas_stub_noop_traps`: RESOLVED 2026-05-19 — Step 0's
+  diagnostic disproved the SIGILL conclusion (the original SIGILL was
+  specifically `save()` returning 0 unconditionally; with proper
+  save-count maintenance + real bc-* dispatch, the stubs are now safe).
+- `feedback_tooltip_sigill_wasi`: NEW — Material3 TooltipBox SIGILLs
+  ~5 s after tap on wasi, bisected via ChevronBisectCard layers.
+
+### Files changed at closeout
+
+```
+wit/skiko-gfx.wit                                              +38 verbs
+skiko/skiko/wit/skiko-gfx.wit                                  mirror
+wart-host/src/canvas_impl.rs                                   +bitmap canvases impl + LRU cap
+wart-host/src/lib.rs                                           +periodic Store::gc, always-on exn extract
+skiko/skiko/src/wasmWasiMain/kotlin/generated/InternalSkikoUi.kt  +externs
+skiko/skiko/src/wasmWasiMain/kotlin/generated/SkikoUi.kt          +wrappers + writePaintAttrs helper + ClipMode
+skiko/skiko/src/wasmWasiMain/kotlin/org/jetbrains/skia/SkiaTypes.wasi.kt    Canvas rewrite
+skiko/skiko/src/wasmWasiMain/kotlin/org/jetbrains/skia/SkiaTypes2.wasi.kt   Bitmap.surfaceId + allocPixels capture
+skiko/skiko/src/wasmWasiMain/kotlin/org/jetbrains/skiko/WasiCanvas.kt       new overrides; witAttrs internal
+wart-app/src/wasmWasiMain/kotlin/Task28SmokeCard.kt            new
+wart-app/src/wasmWasiMain/kotlin/ChevronBisectCard.kt          new (post-closeout investigation harness)
+wart-app/src/wasmWasiMain/kotlin/RealComposeApp.kt             re-enabled DatePickerCard + SegmentedButtonCard + new cards
+```

@@ -121,6 +121,7 @@ shipping the full Compose port — not as discrete sequential milestones.
 | 24 | Bisect the WasmGC-heap leak — find the real retention chain (Kotlin/Wasm continuations? kotlinx-coroutines-wasmWasi? Compose Snapshot?) | 🟡 step 1 done 2026-05-17 — minimal reproducer in `wart-leak-repro/`; leak isolated to Kotlin/Wasm `suspend` codegen (~9 MB/s, OOM in 6:37). Steps 2-4 moot; pending upstream file. |
 | 25 | Diagnose the `suspend` state-machine leak: tighten repro, identify leaked structref type, locate kotlinc-wasm-backend codegen pass | 🔲 scoped, step 1 starting |
 | 27 | Skiko WIT-shaped gaps: Image.makeFromEncoded, Shader.makeSweepGradient, Image.makeShader, Shader.makeBlend, Gradient-object overloads on linear/radial/sweep | ✅ device-verified 2026-05-18 — smoke card shows all four new APIs ok; Compose `Brush.sweepGradient` round-trips through the new WIT verb. Bitmap.makeShader deferred. |
+| 28 | Wire `org.jetbrains.skia.Canvas(bitmap)` to host-side raster surfaces — 38 new bc-* WIT verbs, full 41-stub buildout, Bitmap.surfaceId + Image.makeFromBitmap snapshot bridge | ✅ device-verified 2026-05-19 — SegmentedButton labels + checkmark now visible; DatePicker renders/swipe/year-pick work. Chevron `< >` blocked by orthogonal Tooltip bug ([[tooltip-sigill-wasi]]). |
 
 **What's verified on device:** BasicTextField + TextFieldState + hardware
 keyboard, in-canvas soft keyboard, Material3 widgets (Button, Checkbox,
@@ -233,7 +234,7 @@ boundary from `post-art-roadmap.md` §3.
 | 25 | `tasks/25-diagnose-suspend-leak.md` | Diagnostic deep-dive on task 24's leak: tighten reproducer (eliminate WasiScheduler), identify the leaked structref class via wasm-tools dump + patched wasmtime live-object summary, read kotlinc-wasm-backend codegen to find the missing slot-clear — 🔲 scoped |
 | 26 | `tasks/26-store-worker-thread.md` | Move wasmtime Store to a worker thread to avoid ANR from long Store::gc cascades. Implemented end-to-end + device-tested; eliminated ANR but introduced worse input-lag accumulation (5-6 s after minutes). Reverted as net regression — ❌ attempted+reverted |
 | 27 | `tasks/27-skiko-image-shader-gaps.md` | Implement the WIT-shaped skiko stubs: Image.makeFromEncoded, Shader.makeSweepGradient, Image.makeShader, Shader.makeBlend, Gradient-object overloads — ✅ device-verified 2026-05-18. Bitmap.makeShader deferred (no host-side Bitmap state) |
-| 28 | `tasks/28-skiko-abstract-canvas.md` | Wire the abstract org.jetbrains.skia.Canvas's 42 throw-stubs to host-side skia via a new intermediate-canvas WIT resource. Unblocks DatePicker / SegmentedButton / TimePicker — 🔲 scoped |
+| 28 | `tasks/28-skiko-abstract-canvas.md` | Wire the abstract org.jetbrains.skia.Canvas's 41 throw-stubs to host-side skia via 38 new bc-* WIT verbs + per-Bitmap host raster Surface. Unblocked SegmentedButton (checkmark + unselected labels visible) and DatePicker render/swipe/year-pick. Chevron taps remain blocked by an orthogonal Material3 TooltipBox bug ([[tooltip-sigill-wasi]]). ✅ device-verified 2026-05-19 |
 
 ---
 
