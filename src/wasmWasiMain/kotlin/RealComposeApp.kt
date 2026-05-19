@@ -197,27 +197,35 @@ private fun MaterialDemoApp() {
                         ListCard()
                         SliderCard()
                         FilterChipCard()
-                        // BISECT: three new cards added together
-                        // caused `Canvas.save: not implemented` —
-                        // re-enable one at a time to find which:
                         ChipVariantsCard()
                         FabCard()
-                        // SegmentedButtonCard + DatePickerCard hit
-                        // `Canvas.save: not implemented` (likely
-                        // saveLayer for cross-fade animations on an
-                        // intermediate canvas). We tried converting
-                        // the wasi skiko Canvas stubs to no-ops,
-                        // which let cold start succeed but produced
-                        // SIGILL in JIT'd wasm a few seconds into
-                        // interaction (corrupt save/restore state
-                        // tripping a Compose `unreachable`/`error`).
-                        // Reverted. Both widgets stay disabled until
-                        // we can wire actual save/restore semantics
-                        // through to host-side skia-safe — separate
-                        // task, not trivial.
-                        // SegmentedButtonCard()
-                        // DatePickerCard()
+                        // Task 28 Path D: bitmap-backed Canvas wired
+                        // through to host-side skia raster surfaces +
+                        // bc-* WIT verbs. SegmentedButton re-enabled
+                        // 2026-05-19. DatePickerCard stays disabled —
+                        // tapping its < / > chevrons consistently
+                        // SIGILLs inside JIT'd wasm after a few taps,
+                        // even with periodic Store::gc and a host-side
+                        // bitmap-canvas LRU cap. The crash bypasses
+                        // wasmtime's exception path (no Kotlin error()
+                        // message is captured), so it's not in the
+                        // bc-* dispatch itself — likely interacts with
+                        // AnimatedContent's drawable lifecycle. Swipe
+                        // to change month works fine. Tracked
+                        // separately; smoke card validates all 30+
+                        // bc-* verbs.
+                        SegmentedButtonCard()
+                        // DatePicker renders + swipe + year-pick work.
+                        // Chevron `< >` taps SIGILL via Material3's
+                        // IconButtonWithTooltip — a TooltipBox-on-wasi
+                        // bug bisected 2026-05-19, see
+                        // feedback_tooltip_sigill_wasi.md. Task 28
+                        // bc-* dispatch is verified innocent (see
+                        // ChevronBisectCard layers A-D).
+                        DatePickerCard()
+                        ChevronBisectCard()
                         Task27SmokeCard()
+                        Task28SmokeCard()
                         SnackbarCard(onShow = { snackbarVisible = true })
                         SwitchRow(
                             hapticEnabled = hapticEnabled,
