@@ -3,3 +3,10 @@
 compose-*/
 skiko/
 wart-*/
+
+# Task 30 — external sources pulled in for the diagnosis chain. Heavy
+# (kotlin-src ~GBs, wasmtime-src ~MBs); kt-memalloc-repro has its own
+# Codeberg origin.
+kotlin-src/
+wasmtime-src/
+kt-memalloc-repro/
