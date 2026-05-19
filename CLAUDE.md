@@ -235,6 +235,7 @@ boundary from `post-art-roadmap.md` §3.
 | 26 | `tasks/26-store-worker-thread.md` | Move wasmtime Store to a worker thread to avoid ANR from long Store::gc cascades. Implemented end-to-end + device-tested; eliminated ANR but introduced worse input-lag accumulation (5-6 s after minutes). Reverted as net regression — ❌ attempted+reverted |
 | 27 | `tasks/27-skiko-image-shader-gaps.md` | Implement the WIT-shaped skiko stubs: Image.makeFromEncoded, Shader.makeSweepGradient, Image.makeShader, Shader.makeBlend, Gradient-object overloads — ✅ device-verified 2026-05-18. Bitmap.makeShader deferred (no host-side Bitmap state) |
 | 28 | `tasks/28-skiko-abstract-canvas.md` | Wire the abstract org.jetbrains.skia.Canvas's 41 throw-stubs to host-side skia via 38 new bc-* WIT verbs + per-Bitmap host raster Surface. Unblocked SegmentedButton (checkmark + unselected labels visible) and DatePicker render/swipe/year-pick. Chevron taps remain blocked by an orthogonal Material3 TooltipBox bug ([[tooltip-sigill-wasi]]). ✅ device-verified 2026-05-19 |
+| 29 | `tasks/29-tooltip-sigill-bisect.md` | Diagnose the Material3 TooltipBox SIGILL on wasi. 80% bisected: trigger is `ClickableElement` Modifier.Node + `BasicTooltipBox` wrapper machinery simultaneously. Steps 1-5 scoped; `TooltipInspectionCard` harness in wart-app preserves the 16-test bisect for resumption. Distinct from the popup-overlay DropdownMenu animation bug ([[popup-overlay]]). 🔲 scoped |
 
 ---
 
