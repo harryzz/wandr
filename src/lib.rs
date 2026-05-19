@@ -336,15 +336,15 @@ impl ApplicationHandler for App {
                         // linear memory under indeterminate ProgressIndicator +
                         // LaunchedEffect+withFrameNanos workloads): wasmtime's
                         // automatic GC heuristic isn't aggressive enough.
-                        // Periodic Store::gc keeps the DRC heap from growing
-                        // unboundedly. Cadence of every 600 frames (~10 s) is
-                        // a load-bearing safety belt — at sub-second cadence
-                        // the per-call cost would creep up with continuations,
-                        // and skipping it lets the wasm GC heap balloon. See
-                        // feedback_wasmtime_drc_no_autoschedule.md.
-                        if n % 600 == 599 {
-                            let _ = s.gc(None);
-                        }
+                        // Tried a periodic Store::gc(None) every 600 frames
+                        // (~10 s) at task 28 closeout — it caused ANR
+                        // because Store::gc is synchronous and per
+                        // feedback_indeterminate_progress_leak the per-call
+                        // cost grows monotonically with retained
+                        // continuations. Mid-bisect we'd already confirmed
+                        // gc isn't load-bearing for the chevron-tap crash
+                        // either. Left off; use static widgets / accept
+                        // the leak as the practical mitigation.
                         if n < 5 {
                             log::info!("render_frame #{n}: {:?} ok={}", elapsed, result.is_ok());
                         }
