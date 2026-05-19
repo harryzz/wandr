@@ -208,6 +208,15 @@ pub struct SkiaRenderer {
     pub paragraphs:      HashMap<u32, skia_safe::textlayout::Paragraph>,
     pub font_collection: skia_safe::textlayout::FontCollection,
     pub next_para_id:    u32,
+    // Task 28 Path D: host-side raster surfaces backing Compose's
+    // org.jetbrains.skia.Canvas(bitmap) — short-lived raster targets for
+    // vector-icon rasterization. Snapshots land in `images` via the same
+    // next_blob_id counter as other images. The LRU vec tracks insertion
+    // order so a soft cap can evict the oldest surface when Compose
+    // abandons it (Compose doesn't call Canvas.close on wasi).
+    bitmap_canvases:            HashMap<u32, skia_safe::Surface>,
+    bitmap_canvas_lru:          std::collections::VecDeque<u32>,
+    next_bitmap_canvas_id:      u32,
     /// Holds the result of the last `prepare-rects-for-range` call so the
     /// guest can pull rect fields out via indexed getters (avoiding the
     /// need for `list<f32>` return marshaling in the WIT bindings). One
@@ -277,6 +286,9 @@ impl SkiaRenderer {
                 font_collection:  Self::make_font_collection(),
                 next_para_id:     1,
                 para_rect_cache:  Vec::new(),
+                bitmap_canvases:       HashMap::new(),
+                bitmap_canvas_lru:     std::collections::VecDeque::with_capacity(128),
+                next_bitmap_canvas_id: 1,
             });
         }
 
@@ -309,6 +321,9 @@ impl SkiaRenderer {
                 font_collection:  Self::make_font_collection(),
                 next_para_id:     1,
                 para_rect_cache:  Vec::new(),
+                bitmap_canvases:       HashMap::new(),
+                bitmap_canvas_lru:     std::collections::VecDeque::with_capacity(128),
+                next_bitmap_canvas_id: 1,
             })
         }
     }
@@ -337,6 +352,10 @@ impl SkiaRenderer {
         self.para_builders    = std::mem::take(&mut old.para_builders);
         self.paragraphs       = std::mem::take(&mut old.paragraphs);
         self.next_para_id     = old.next_para_id;
+        // bitmap_canvases hold a raster Surface (CPU-only), safe to inherit.
+        self.bitmap_canvases       = std::mem::take(&mut old.bitmap_canvases);
+        self.bitmap_canvas_lru     = std::mem::take(&mut old.bitmap_canvas_lru);
+        self.next_bitmap_canvas_id = old.next_bitmap_canvas_id;
         // font_collection holds a default-FontMgr; keep the freshly built
         // one to be safe (cheap to recreate).
     }
@@ -1121,11 +1140,375 @@ impl crate::bindings::my::skiko_gfx::canvas::Host for crate::HostState {
         unsafe { wasi_drawable_ffi::wasi_drawable_set_shadow_elevation(raw_d, elevation); }
     }
 
+    // ── bitmap canvases (task 28, Path D) ─────────────────────────────────
+
+    fn create_bitmap_canvas(&mut self, width: u32, height: u32) -> u32 {
+        // Compose may briefly construct a 0×0 ImageBitmap as scratch state.
+        // Skia rejects zero-sized surfaces; clamp to 1×1 to keep the id
+        // pipeline live (snapshot of an empty canvas yields a 1×1 image,
+        // which downstream `drawImage` callers tolerate).
+        let w = width.max(1) as i32;
+        let h = height.max(1) as i32;
+        let Some(surface) = skia_safe::surfaces::raster_n32_premul((w, h))
+        else {
+            return 0;
+        };
+        // Soft cap: when the LRU is at capacity, evict the oldest surface
+        // before inserting. Compose never calls Canvas.close on wasi, so
+        // every new Canvas(bitmap) leaks until either we evict it or
+        // process exit. Cap chosen to comfortably hold the steady-state
+        // set of visible vector icons (Material3 calendar fits in ~40);
+        // bump if a future widget set needs more.
+        const BITMAP_CANVAS_CAP: usize = 128;
+        while self.renderer.bitmap_canvases.len() >= BITMAP_CANVAS_CAP {
+            if let Some(old_id) = self.renderer.bitmap_canvas_lru.pop_front() {
+                self.renderer.bitmap_canvases.remove(&old_id);
+            } else {
+                break;
+            }
+        }
+        let id = self.renderer.next_bitmap_canvas_id;
+        self.renderer.next_bitmap_canvas_id = id.wrapping_add(1).max(1);
+        self.renderer.bitmap_canvases.insert(id, surface);
+        self.renderer.bitmap_canvas_lru.push_back(id);
+        id
+    }
+
+    fn drop_bitmap_canvas(&mut self, id: u32) {
+        if self.renderer.bitmap_canvases.remove(&id).is_some() {
+            self.renderer.bitmap_canvas_lru.retain(|&i| i != id);
+        }
+    }
+
+    fn bitmap_canvas_snapshot(&mut self, id: u32) -> u32 {
+        let img = match self.renderer.bitmap_canvases.get_mut(&id) {
+            Some(s) => s.image_snapshot(),
+            None    => return 0,
+        };
+        let img_id = self.renderer.next_blob_id;
+        self.renderer.next_blob_id = img_id.wrapping_add(1).max(1);
+        self.renderer.images.insert(img_id, img);
+        img_id
+    }
+
+    fn bc_save(&mut self, id: u32) -> u32 {
+        bc_canvas_mut(&mut self.renderer, id)
+            .map(|c| c.save() as u32)
+            .unwrap_or(0)
+    }
+
+    fn bc_save_layer(&mut self, id: u32, x: f32, y: f32, w: f32, h: f32,
+                     has_bounds: bool, paint: PaintAttrs) -> u32 {
+        let p = make_paint_full(&paint, &self.renderer);
+        let Some(c) = bc_canvas_mut(&mut self.renderer, id) else { return 0 };
+        let layer = skia_safe::canvas::SaveLayerRec::default().paint(&p);
+        let bounds = Rect::from_xywh(x, y, w, h);
+        let layer = if has_bounds { layer.bounds(&bounds) } else { layer };
+        c.save_layer(&layer) as u32
+    }
+
+    fn bc_restore(&mut self, id: u32) {
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) { c.restore(); }
+    }
+
+    fn bc_restore_to_count(&mut self, id: u32, save_count: u32) {
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) {
+            c.restore_to_count(save_count as usize);
+        }
+    }
+
+    fn bc_translate(&mut self, id: u32, dx: f32, dy: f32) {
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) { c.translate((dx, dy)); }
+    }
+
+    fn bc_scale(&mut self, id: u32, sx: f32, sy: f32) {
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) { c.scale((sx, sy)); }
+    }
+
+    fn bc_rotate(&mut self, id: u32, degrees: f32, px: f32, py: f32) {
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) {
+            c.rotate(degrees, Some(skia_safe::Point::new(px, py)));
+        }
+    }
+
+    fn bc_skew(&mut self, id: u32, sx: f32, sy: f32) {
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) { c.skew((sx, sy)); }
+    }
+
+    fn bc_concat(&mut self, id: u32, m: crate::bindings::my::skiko_gfx::canvas::Matrix3x3) {
+        let mat = matrix3x3_from_wit(&m);
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) { c.concat(&mat); }
+    }
+
+    fn bc_set_matrix(&mut self, id: u32, m: crate::bindings::my::skiko_gfx::canvas::Matrix3x3) {
+        let mat = matrix3x3_from_wit(&m);
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) { c.set_matrix(&mat.into()); }
+    }
+
+    fn bc_reset_matrix(&mut self, id: u32) {
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) { c.reset_matrix(); }
+    }
+
+    fn bc_clip_rect(&mut self, id: u32, x: f32, y: f32, w: f32, h: f32,
+                    mode: crate::bindings::my::skiko_gfx::canvas::ClipMode,
+                    anti_alias: bool) {
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) {
+            c.clip_rect(Rect::from_xywh(x, y, w, h),
+                Some(clip_op_from_wit(mode)), Some(anti_alias));
+        }
+    }
+
+    fn bc_clip_rrect(&mut self, id: u32, x: f32, y: f32, w: f32, h: f32,
+                     radii: Vec<f32>,
+                     mode: crate::bindings::my::skiko_gfx::canvas::ClipMode,
+                     anti_alias: bool) {
+        let rr = make_rrect_with_radii(Rect::from_xywh(x, y, w, h), &radii);
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) {
+            c.clip_rrect(rr, Some(clip_op_from_wit(mode)), Some(anti_alias));
+        }
+    }
+
+    fn bc_clip_path(&mut self, id: u32, path_data: Vec<u8>,
+                    mode: crate::bindings::my::skiko_gfx::canvas::ClipMode,
+                    anti_alias: bool) {
+        let s = String::from_utf8_lossy(&path_data);
+        if let Some(path) = skia_safe::Path::from_svg(&*s) {
+            if let Some(c) = bc_canvas_mut(&mut self.renderer, id) {
+                c.clip_path(&path, Some(clip_op_from_wit(mode)), Some(anti_alias));
+            }
+        }
+    }
+
+    fn bc_clear(&mut self, id: u32, argb: u32) {
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) {
+            c.clear(Color::new(argb));
+        }
+    }
+
+    fn bc_draw_paint(&mut self, id: u32, p: PaintAttrs) {
+        let paint = make_paint_full(&p, &self.renderer);
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) { c.draw_paint(&paint); }
+    }
+
+    fn bc_draw_rect(&mut self, id: u32, x: f32, y: f32, w: f32, h: f32, p: PaintAttrs) {
+        let paint = make_paint_full(&p, &self.renderer);
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) {
+            c.draw_rect(Rect::from_xywh(x, y, w, h), &paint);
+        }
+    }
+
+    fn bc_draw_rrect(&mut self, id: u32, x: f32, y: f32, w: f32, h: f32,
+                     radii: Vec<f32>, p: PaintAttrs) {
+        let paint = make_paint_full(&p, &self.renderer);
+        let rr = make_rrect_with_radii(Rect::from_xywh(x, y, w, h), &radii);
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) { c.draw_rrect(rr, &paint); }
+    }
+
+    fn bc_draw_drrect(&mut self, id: u32,
+        ox: f32, oy: f32, ow: f32, oh: f32, o_radii: Vec<f32>,
+        ix: f32, iy: f32, iw: f32, ih: f32, i_radii: Vec<f32>,
+        p: PaintAttrs,
+    ) {
+        let paint = make_paint_full(&p, &self.renderer);
+        let outer = make_rrect_with_radii(Rect::from_xywh(ox, oy, ow, oh), &o_radii);
+        let inner = make_rrect_with_radii(Rect::from_xywh(ix, iy, iw, ih), &i_radii);
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) {
+            c.draw_drrect(outer, inner, &paint);
+        }
+    }
+
+    fn bc_draw_oval(&mut self, id: u32, x: f32, y: f32, w: f32, h: f32, p: PaintAttrs) {
+        let paint = make_paint_full(&p, &self.renderer);
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) {
+            c.draw_oval(Rect::from_xywh(x, y, w, h), &paint);
+        }
+    }
+
+    fn bc_draw_circle(&mut self, id: u32, x: f32, y: f32, radius: f32, p: PaintAttrs) {
+        let paint = make_paint_full(&p, &self.renderer);
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) {
+            c.draw_circle((x, y), radius, &paint);
+        }
+    }
+
+    fn bc_draw_line(&mut self, id: u32, x0: f32, y0: f32, x1: f32, y1: f32, p: PaintAttrs) {
+        let paint = make_paint_full(&p, &self.renderer);
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) {
+            c.draw_line((x0, y0), (x1, y1), &paint);
+        }
+    }
+
+    fn bc_draw_arc(&mut self, id: u32, x: f32, y: f32, w: f32, h: f32,
+                   start_angle: f32, sweep_angle: f32, include_center: bool,
+                   p: PaintAttrs) {
+        let paint = make_paint_full(&p, &self.renderer);
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) {
+            c.draw_arc(Rect::from_xywh(x, y, w, h), start_angle, sweep_angle,
+                include_center, &paint);
+        }
+    }
+
+    fn bc_draw_path(&mut self, id: u32, path_data: Vec<u8>, p: PaintAttrs) {
+        let paint = make_paint_full(&p, &self.renderer);
+        let s = String::from_utf8_lossy(&path_data);
+        if let Some(path) = skia_safe::Path::from_svg(&*s) {
+            if let Some(c) = bc_canvas_mut(&mut self.renderer, id) {
+                c.draw_path(&path, &paint);
+            }
+        }
+    }
+
+    fn bc_draw_point(&mut self, id: u32, x: f32, y: f32, p: PaintAttrs) {
+        let paint = make_paint_full(&p, &self.renderer);
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) {
+            c.draw_point((x, y), &paint);
+        }
+    }
+
+    fn bc_draw_points(&mut self, id: u32, coords: Vec<f32>, p: PaintAttrs) {
+        let pts = coords_to_points(&coords);
+        let paint = make_paint_full(&p, &self.renderer);
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) {
+            c.draw_points(skia_safe::canvas::PointMode::Points, &pts, &paint);
+        }
+    }
+
+    fn bc_draw_lines(&mut self, id: u32, coords: Vec<f32>, p: PaintAttrs) {
+        let pts = coords_to_points(&coords);
+        let paint = make_paint_full(&p, &self.renderer);
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) {
+            c.draw_points(skia_safe::canvas::PointMode::Lines, &pts, &paint);
+        }
+    }
+
+    fn bc_draw_polygon(&mut self, id: u32, coords: Vec<f32>, p: PaintAttrs) {
+        let pts = coords_to_points(&coords);
+        let paint = make_paint_full(&p, &self.renderer);
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) {
+            c.draw_points(skia_safe::canvas::PointMode::Polygon, &pts, &paint);
+        }
+    }
+
+    fn bc_draw_image(&mut self, id: u32, image_id: u32, x: f32, y: f32, alpha: u8) {
+        let Some(img) = self.renderer.images.get(&image_id).cloned() else { return };
+        let mut p = Paint::default();
+        p.set_alpha(alpha);
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) {
+            c.draw_image(&img, (x, y), Some(&p));
+        }
+    }
+
+    fn bc_draw_image_rect(&mut self, id: u32, image_id: u32,
+                          src_x: f32, src_y: f32, src_w: f32, src_h: f32,
+                          dst_x: f32, dst_y: f32, dst_w: f32, dst_h: f32,
+                          p: PaintAttrs) {
+        let Some(img) = self.renderer.images.get(&image_id).cloned() else { return };
+        let paint = make_paint_full(&p, &self.renderer);
+        let src = Rect::from_xywh(src_x, src_y, src_w, src_h);
+        let dst = Rect::from_xywh(dst_x, dst_y, dst_w, dst_h);
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) {
+            c.draw_image_rect(&img,
+                Some((&src, skia_safe::canvas::SrcRectConstraint::Fast)),
+                dst, &paint);
+        }
+    }
+
+    fn bc_draw_text_blob(&mut self, id: u32, blob_id: u32, x: f32, y: f32, p: PaintAttrs) {
+        let Some((blob, _)) = self.renderer.text_blobs.get(&blob_id).cloned() else { return };
+        let paint = make_paint_full(&p, &self.renderer);
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) {
+            c.draw_text_blob(&blob, (x, y), &paint);
+        }
+    }
+
+    fn bc_draw_text_line(&mut self, id: u32, blob_id: u32, x: f32, y: f32, p: PaintAttrs) {
+        // TextLine maps to TextBlob on wasi.
+        self.bc_draw_text_blob(id, blob_id, x, y, p);
+    }
+
+    fn bc_draw_picture(&mut self, id: u32, picture_id: u32) {
+        let Some(pic) = self.renderer.pictures.get(&picture_id).cloned() else { return };
+        if let Some(c) = bc_canvas_mut(&mut self.renderer, id) {
+            c.draw_picture(&pic, None, None);
+        }
+    }
+
+    fn bc_draw_string(&mut self, _id: u32, _text: Vec<u8>, _x: f32, _y: f32, _p: PaintAttrs) {
+        // No Font resource on wasi yet — drawString is a no-op until needed.
+    }
+
+    fn bc_draw_vertices(&mut self, _id: u32, _vertex_mode: u8,
+                        _positions: Vec<f32>, _colors: Vec<u32>,
+                        _tex_coords: Vec<f32>, _indices: Vec<u16>,
+                        _blend_mode: BlendMode, _paint: PaintAttrs) {
+        // drawVertices is not used by the current widget set; no-op stub.
+    }
+
     // ── debug log ─────────────────────────────────────────────────────────
 
     fn log_message(&mut self, msg: String) {
         log::info!("[wasm] {}", msg);
     }
+}
+
+/// Look up the inner Canvas of a bitmap-canvas surface. Returns None for
+/// id 0 (sentinel) or any id not currently live.
+fn bc_canvas_mut(r: &mut SkiaRenderer, id: u32) -> Option<&Canvas> {
+    if id == 0 { return None; }
+    let surface = r.bitmap_canvases.get_mut(&id)?;
+    Some(surface.canvas())
+}
+
+fn clip_op_from_wit(
+    m: crate::bindings::my::skiko_gfx::canvas::ClipMode,
+) -> skia_safe::ClipOp {
+    use crate::bindings::my::skiko_gfx::canvas::ClipMode;
+    match m {
+        ClipMode::Intersect  => skia_safe::ClipOp::Intersect,
+        ClipMode::Difference => skia_safe::ClipOp::Difference,
+    }
+}
+
+/// Build an RRect from a Rect and a radii list:
+///   0 floats → square corners
+///   1 float  → uniform radius
+///   2 floats → (rx, ry) shared by all corners
+///   ≥ 8 floats → per-corner (rx, ry), order top-left, top-right,
+///                bottom-right, bottom-left (Kotlin RRect order)
+fn make_rrect_with_radii(rect: Rect, radii: &[f32]) -> RRect {
+    match radii.len() {
+        0 => RRect::new_rect(rect),
+        1 => RRect::new_rect_xy(rect, radii[0], radii[0]),
+        2 => RRect::new_rect_xy(rect, radii[0], radii[1]),
+        4 => {
+            // (tl, tr, br, bl) uniform per corner.
+            let pts = [
+                skia_safe::Point::new(radii[0], radii[0]),
+                skia_safe::Point::new(radii[1], radii[1]),
+                skia_safe::Point::new(radii[2], radii[2]),
+                skia_safe::Point::new(radii[3], radii[3]),
+            ];
+            RRect::new_rect_radii(rect, &pts)
+        }
+        n if n >= 8 => {
+            let pts = [
+                skia_safe::Point::new(radii[0], radii[1]),
+                skia_safe::Point::new(radii[2], radii[3]),
+                skia_safe::Point::new(radii[4], radii[5]),
+                skia_safe::Point::new(radii[6], radii[7]),
+            ];
+            RRect::new_rect_radii(rect, &pts)
+        }
+        _ => RRect::new_rect(rect),
+    }
+}
+
+/// Convert interleaved (x, y) f32 pairs to skia Points. Odd-length lists
+/// are truncated (Kotlin shouldn't emit them; defensive).
+fn coords_to_points(coords: &[f32]) -> Vec<skia_safe::Point> {
+    coords.chunks_exact(2)
+        .map(|pair| skia_safe::Point::new(pair[0], pair[1]))
+        .collect()
 }
 
 // ─── Paint helpers ───────────────────────────────────────────────────────────

@@ -336,15 +336,22 @@ impl ApplicationHandler for App {
                         // linear memory under indeterminate ProgressIndicator +
                         // LaunchedEffect+withFrameNanos workloads): wasmtime's
                         // automatic GC heuristic isn't aggressive enough.
-                        // Manual `s.gc(None)` every 60-300 frames reduces the
-                        // leak ~5x but the per-call cost grows monotonically
-                        // (DRC scans retained refs in Kotlin/Wasm-generated
-                        // continuations), pushing CPU from ~17% to ~75% over
-                        // a minute. Not enabled by default — prefer static
-                        // widgets over continuous animations as the practical
-                        // mitigation. See feedback_indeterminate_progress_leak.md.
+                        // Periodic Store::gc keeps the DRC heap from growing
+                        // unboundedly. Cadence of every 600 frames (~10 s) is
+                        // a load-bearing safety belt — at sub-second cadence
+                        // the per-call cost would creep up with continuations,
+                        // and skipping it lets the wasm GC heap balloon. See
+                        // feedback_wasmtime_drc_no_autoschedule.md.
+                        if n % 600 == 599 {
+                            let _ = s.gc(None);
+                        }
                         if n < 5 {
                             log::info!("render_frame #{n}: {:?} ok={}", elapsed, result.is_ok());
+                        }
+                        // Always extract Kotlin exception message on error
+                        // so late-firing throws are visible in logcat, not
+                        // just suppressed past frame 5.
+                        {
                             if let Err(ref e) = result {
                                 log::error!("render_frame #{n} error: {e:#}");
                                 if e.downcast_ref::<wasmtime::ThrownException>().is_some() {
