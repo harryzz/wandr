@@ -221,6 +221,7 @@ private fun MaterialDemoApp() {
                         // bug bisected 2026-05-19; see
                         // feedback_tooltip_sigill_wasi.md.
                         DatePickerCard()
+                        TooltipInspectionCard()
                         Task27SmokeCard()
                         Task28SmokeCard()
                         SnackbarCard(onShow = { snackbarVisible = true })
