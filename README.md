@@ -20,22 +20,37 @@ that stays valid for the program's lifetime.
 
 ## What it shows
 
-```
-scope A allocate(65536) -> ptr A0=0
-scope A done
-scope A first 4 bytes still readable: [0x73, 0x63, 0x6f, 0x70]
-    ^ NOT our 0x55 0x66 0x77 0x44 sentinel — another scope (from the
-      intervening println's internal buffer) already overwrote it.
+The repro matches the actual failure pattern in downstream code:
 
-scope B allocate(8)     -> ptr B0=0
-scope B done
-B0 lies inside scope A's used range? true (this is the bug)
-scope A first 4 bytes after scope B: [0x42, 0x30, 0x20, 0x6c]
-    ^ corrupted by scope B
+1. An outer `withScopedMemoryAllocator` block is active.
+2. Inside it, `componentModelRealloc` is called for a long-lived block.
+3. The outer block ends; `reallocAllocator` is still set.
+4. `freeAllComponentModelReallocAllocatedMemory()` is called.
+5. A new `withScopedMemoryAllocator` block opens and allocates — and
+   overlaps with the long-lived block.
+
+```
+$ wasmtime run …               # stock 2.4.0-RC stdlib
+outerScope probe(8)              -> ptr=0
+componentModelRealloc(65536)     -> longLivedPtr=8
+longLived range = [8, 65544)
+freeAll done
+newScope probe(8)                -> ptr=8         ← SAME as longLivedPtr!
+newScope.allocate(65536)         -> ptr=16
+newScope OVERLAPS longLivedPtr?  true  (BUG if true)
+longLivedPtr first 4 bytes:      [55,66,77,44]    ← sentinel still readable,
+                                                    but only because newScope
+                                                    didn't store to that range
 ```
 
-Every `withScopedMemoryAllocator` block's first allocation returns
-address `0` regardless of what prior scopes wrote there.
+After applying the proposed fix (see `build.gradle.kts` for how to
+switch to a locally-published patched stdlib):
+
+```
+newScope probe(8)                -> ptr=65544     ← past long-lived range
+newScope.allocate(65536)         -> ptr=65552
+newScope OVERLAPS longLivedPtr?  false            ← no overlap
+```
 
 ## Build + run
 
@@ -59,25 +74,32 @@ wasmtime run --wasm gc=y --wasm function-references=y --wasm exceptions=y \
 
 In `libraries/stdlib/wasm/src/kotlin/wasm/unsafe/MemoryAllocation.kt`:
 
-```kotlin
-internal fun destroy() {
-    destroyed = true
-    parent?.let { p ->
-        p.suspended = false
-        if (availableAddress > p.availableAddress) {
-            p.availableAddress = availableAddress
-        }
-    }
-}
+```diff
+-    private var availableAddress = startAddress
++    @PublishedApi
++    internal var availableAddress = startAddress
+...
+     internal fun destroy() {
+         destroyed = true
+-        parent?.suspended = false
++        parent?.let { p ->
++            p.suspended = false
++            if (availableAddress > p.availableAddress) {
++                p.availableAddress = availableAddress
++            }
++        }
+     }
 ```
 
-(`availableAddress` visibility needs to change from `private` to
-`internal` for the parent to read+write its own copy from `destroy()`.)
-
-This propagates the child's high-water mark up; memory becomes
-monotonic within a parent scope. A nicer fix would be to back
+This propagates the child's high-water mark up to the parent. Memory
+becomes monotonic within a parent scope. A nicer fix would be to back
 `componentModelRealloc` with a separate non-scoped allocator pool that
-doesn't share state with `withScopedMemoryAllocator` at all.
+doesn't share state with `withScopedMemoryAllocator` at all, but the
+~10-line change above is the minimum.
+
+**Empirically verified** with a locally-built patched stdlib
+(2.4.255-SNAPSHOT). See the toggle in `build.gradle.kts` to switch
+between stock and patched.
 
 ## Context
 

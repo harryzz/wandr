@@ -26,3 +26,18 @@ kotlin {
         binaries.executable()
     }
 }
+
+// Toggle: comment/uncomment to switch between stock 2.4.0-RC stdlib
+// (shows the bug) and our patched 2.4.255-SNAPSHOT (shows the fix).
+val useKt86415Patch = false
+if (useKt86415Patch) {
+    configurations.all {
+        resolutionStrategy.eachDependency {
+            if (requested.group == "org.jetbrains.kotlin" &&
+                requested.name == "kotlin-stdlib-wasm-wasi") {
+                useVersion("2.4.255-SNAPSHOT")
+                because("KT-86415 patched build from ~/xl/kotlin")
+            }
+        }
+    }
+}

@@ -1,92 +1,94 @@
-@file:OptIn(kotlin.wasm.unsafe.UnsafeWasmMemoryApi::class)
+@file:OptIn(
+    kotlin.wasm.unsafe.UnsafeWasmMemoryApi::class,
+    kotlin.wasm.unsafe.ComponentModelInternalApi::class,
+)
 
 import kotlin.wasm.unsafe.Pointer
+import kotlin.wasm.unsafe.componentModelRealloc
+import kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory
 import kotlin.wasm.unsafe.withScopedMemoryAllocator
 
-// Minimal Kotlin/Wasm 2.4.0-RC repro of the
-// `ScopedMemoryAllocator.destroy()` bug.
+// Repro that matches the wart-app failure pattern. The actual flow is:
 //
-// `destroy()` does NOT advance the parent allocator's
-// `availableAddress`. The bytes used by a child scope become
-// "available" again from the parent's perspective. A sibling scope
-// opened from the same parent reuses the SAME address range — even
-// if external code (the WASI preview1 adapter, a foreign component,
-// etc.) still has a live pointer into the destroyed child's memory.
+//  (a) An outer `withScopedMemoryAllocator` block is active when
+//      `componentModelRealloc` is called for a long-lived block (in
+//      wart this is the WASI preview1 adapter's State allocation,
+//      triggered indirectly via wasiRandomGet -> random_get ->
+//      State::new -> cabi_realloc inside a println scope).
+//  (b) The outer block ends. `reallocAllocator` is still set.
+//  (c) Code later calls `freeAllComponentModelReallocAllocatedMemory()`
+//      defensively (every WIT binding does this to satisfy the
+//      "Can't create new allocators while realloc-allocated memory
+//      is not freed" check in `createAllocatorInTheNewScope`).
+//  (d) A new `withScopedMemoryAllocator` block opens. With the bug
+//      its first allocation overwrites the long-lived block.
 //
-// This is the load-bearing piece of `feedback_wasi_adapter_state_corruption`
-// on wart: the WASI adapter's State block, allocated via cabi_realloc
-// (= componentModelRealloc → backed by ScopedMemoryAllocator), gets
-// overwritten by a subsequent unrelated `withScopedMemoryAllocator`.
-//
-// EXPECTED OUTPUT (with the bug present, today's Kotlin):
-//   scope A allocate(65536) -> ptr A0=...
-//   scope A done
-//   scope B allocate(8)     -> ptr B0=A0   ← reuses scope A's start address!
-//   B0 lies inside scope A's used range? true
-//
-// EXPECTED OUTPUT (after fixing destroy() to bump parent.availableAddress):
-//   scope A allocate(65536) -> ptr A0=...
-//   scope A done
-//   scope B allocate(8)     -> ptr B0=A0+65536  ← advanced past A's range
-//   B0 lies inside scope A's used range? false
+// Run with stock 2.4.0-RC stdlib: see overlap = true.
+// Run with patched stdlib (destroy() propagates availableAddress to
+// parent): see overlap = false.
+
+private var capturedLongLivedPtr: Int = 0
+private var capturedOuterProbePtr: Int = 0
+private var capturedNewProbePtr: Int = 0
+private var capturedNewAllocPtr: Int = 0
+private var capturedFirstFour: String = ""
 
 fun main() {
-    var aPtr = 0
-    var aSize = 65_536
-    withScopedMemoryAllocator { alloc ->
-        aPtr = alloc.allocate(aSize).address.toInt()
-        println("scope A allocate($aSize) -> ptr A0=$aPtr (0x${aPtr.toUInt().toString(16)})")
-        // Write a sentinel at start so we can observe overwrites later.
-        val p = Pointer(aPtr.toUInt())
+    val longLivedSize = 65_536
+
+    // (a) Outer scope active. componentModelRealloc creates a child.
+    //     Note: we cannot call println in this section while
+    //     reallocAllocator is non-null — it would throw.
+    withScopedMemoryAllocator { outerAllocator ->
+        capturedOuterProbePtr = outerAllocator.allocate(8).address.toInt()
+        capturedLongLivedPtr = componentModelRealloc(
+            originalPtr = 0,
+            originalSize = 0,
+            newSize = longLivedSize,
+        )
+        // Write a sentinel at longLivedPtr.
+        val p = Pointer(capturedLongLivedPtr.toUInt())
         (p + 0).storeByte(0x55.toByte())
         (p + 1).storeByte(0x66.toByte())
         (p + 2).storeByte(0x77.toByte())
         (p + 3).storeByte(0x44.toByte())
     }
-    println("scope A done")
+    // (b) Outer block ended. reallocAllocator still set.
 
-    // scope A's bytes are still in linear memory (destroy doesn't zero).
-    // Read the sentinel to confirm:
-    val ap = Pointer(aPtr.toUInt())
-    val sentinelHex = buildString {
-        append("[")
+    // (c) Defensive freeAll.
+    freeAllComponentModelReallocAllocatedMemory()
+
+    // (d) New scope. With the bug, overlaps longLivedPtr.
+    withScopedMemoryAllocator { newAllocator ->
+        capturedNewProbePtr = newAllocator.allocate(8).address.toInt()
+        capturedNewAllocPtr = newAllocator.allocate(longLivedSize).address.toInt()
+        val q = Pointer(capturedNewAllocPtr.toUInt())
+        (q + 0).storeByte(0xAA.toByte())
+        (q + 1).storeByte(0xBB.toByte())
+        (q + 2).storeByte(0xCC.toByte())
+        (q + 3).storeByte(0xDD.toByte())
+    }
+
+    // Read what's at longLivedPtr now.
+    val p = Pointer(capturedLongLivedPtr.toUInt())
+    capturedFirstFour = buildString {
         for (i in 0 until 4) {
-            if (i > 0) append(", ")
-            append("0x")
-            append((ap + i).loadByte().toInt().and(0xff).toString(16).padStart(2, '0'))
+            if (i > 0) append(",")
+            append((p + i).loadByte().toInt().and(0xff).toString(16).padStart(2, '0'))
         }
-        append("]")
     }
-    println("scope A first 4 bytes still readable: $sentinelHex (expected [0x55, 0x66, 0x77, 0x88])")
 
-    var bPtr = 0
-    withScopedMemoryAllocator { alloc ->
-        bPtr = alloc.allocate(8).address.toInt()
-        println("scope B allocate(8)     -> ptr B0=$bPtr (0x${bPtr.toUInt().toString(16)})")
-        // Write a different pattern at scope B's start.
-        val p = Pointer(bPtr.toUInt())
-        (p + 0).storeByte(0xAA.toByte())
-        (p + 1).storeByte(0xBB.toByte())
-        (p + 2).storeByte(0xCC.toByte())
-        (p + 3).storeByte(0xDD.toByte())
-    }
-    println("scope B done")
-
-    val overlaps = bPtr in aPtr until (aPtr + aSize)
-    println("B0 lies inside scope A's used range? $overlaps (this is the bug if true)")
-
-    // Re-read scope A's sentinel. Scope B's write should have clobbered it if overlap is true.
-    val sentinelHex2 = buildString {
-        append("[")
-        for (i in 0 until 4) {
-            if (i > 0) append(", ")
-            append("0x")
-            append((ap + i).loadByte().toInt().and(0xff).toString(16).padStart(2, '0'))
-        }
-        append("]")
-    }
-    println("scope A first 4 bytes after scope B: $sentinelHex2")
-    if (sentinelHex2 != sentinelHex) {
-        println("    ^ corrupted by scope B")
-    }
+    // Now safe to print — reallocAllocator is null.
+    println("outerScope probe(8)              -> ptr=$capturedOuterProbePtr")
+    println("componentModelRealloc($longLivedSize)   -> longLivedPtr=$capturedLongLivedPtr")
+    println("longLived range = [$capturedLongLivedPtr, ${capturedLongLivedPtr + longLivedSize})")
+    println("freeAll done")
+    println("newScope probe(8)                -> ptr=$capturedNewProbePtr")
+    println("newScope.allocate($longLivedSize) -> ptr=$capturedNewAllocPtr")
+    val overlaps = capturedLongLivedPtr < capturedNewAllocPtr + longLivedSize &&
+        capturedNewAllocPtr < capturedLongLivedPtr + longLivedSize
+    println("newScope OVERLAPS longLivedPtr?  $overlaps  (BUG if true)")
+    println("longLivedPtr first 4 bytes:      [$capturedFirstFour]")
+    println("  expected w/ fix:               [55,66,77,44]  (sentinel intact)")
+    println("  expected w/ bug:               [aa,bb,cc,dd]  (overwritten)")
 }
