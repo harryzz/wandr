@@ -151,6 +151,52 @@ branch is dead.
   + `MutatorMutex` + `suspendCancellableCoroutine` machinery) is part
   of the trigger. Add the real state and bisect what part of it.
 
+**Step 1 outcome (2026-05-19):**
+Ran test #17 = HandBuiltTooltipWrapperWithScope(popup-slot=true,
+DisposableEffect=true) wrapping `Box.clickable { taps++ }`. Wrapper
+faithfully replicates BasicTooltip.kt:107-136 minus the real
+TooltipState — uses a never-flipped `sentinel: MutableState<Boolean>`
+for the conditional Popup branch.
+
+- **✅ NO CRASH.** 61 taps over ~45 s soak, process PID stable,
+  logcat clean (no `Fatal signal`, no `signal 4`).
+- Decision branch: **"hand-built wrapper does NOT reproduce" → real
+  BasicTooltipState machinery is part of the trigger.**
+- Tests #18-#22 deleted as moot — dropping pieces from a
+  non-crashing base cannot reveal anything new.
+- Forward pointer: see `feedback_tooltip_sigill_wasi.md` §"Step 1
+  sub-bisect" for the full result + Step 2 implications.
+
+**For Step 2:** compare the call sequence on ClickableNode between
+test #11 (real TooltipBox + clickable → 💥) and test #17 (hand-built
+wrapper + clickable → ✅). The only difference between those two
+trees is the state-machine inside `BasicTooltipState` — whatever
+fires on ClickableNode that's unique to #11 is the closest signal.
+
+**Preference: try wart-app-side observation first** (per
+[[prefer-wart-app-edits]]). Options to explore before any
+compose-multiplatform-core edit:
+1. Wrap the inner Box with a custom `Modifier.Node` defined in
+   wart-app that logs its own `onAttach/onDetach/update` lifecycle —
+   if its lifecycle differs between #11 and #17, infer ClickableNode
+   is being similarly affected.
+2. Replace `Modifier.clickable` with a hand-rolled equivalent in
+   wart-app (gestureDetector + semantics + focusable) that has
+   logMessage instrumentation built in, then check whether that
+   variant inside real TooltipBox crashes. If yes → the
+   instrumented version IS our diagnostic. If no → there's something
+   ClickableNode-specific worth a core edit for.
+3. Observe via `SideEffect` / `DisposableEffect` per recompose how
+   many times the inner Modifier subtree is composed when wrapped in
+   TooltipBox vs. wrapper.
+
+Only if (1-3) prove insufficient: **ask the user before editing
+`compose-multiplatform-core/compose/foundation/foundation/src/
+commonMain/kotlin/androidx/compose/foundation/Clickable.kt`** to add
+`logMessage` calls inside `ClickableElement.update/onAttach/onDetach/
+onPointerEvent` (republishing `compose-foundation-wasi` to pick up
+the change, ~15-25 min).
+
 ### Step 2 — Inside-clickable instrumentation
 
 Add `WitCanvas.Import.logMessage(...)` calls inside
@@ -278,8 +324,8 @@ chevrons in the DatePicker card. Same crash, same signature.
 
 ## Verification checklist
 
-- [ ] Step 1 outcome documented (does hand-built wrapper reproduce
-      the crash?)
+- [x] Step 1 outcome documented (does hand-built wrapper reproduce
+      the crash? — NO, see Step 1 section above)
 - [ ] At least one ClickableNode instrumentation cycle landed,
       `logMessage` output captured
 - [ ] PC offset from one fresh crash decoded against the cwasm

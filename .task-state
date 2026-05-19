@@ -1,5 +1,5 @@
-TASK=28
-STEP=verify-done
-STATUS=complete
-LAST_SUCCESS=Task 28 verified OK — Path D bc-* dispatch landed; SegmentedButton labels + checkmark visible; DatePicker renders + swipe + year-pick work. Chevron taps blocked by orthogonal Tooltip-on-wasi bug ([[tooltip-sigill-wasi]]).
-NOTES=
+TASK=29
+STEP=1-done
+STATUS=in-progress
+LAST_SUCCESS=Task 29 Step 1 done — test #17 ✅ (61 taps clean, ~45 s soak). Hand-built BasicTooltipBox wrapper (scope + dead conditional Popup-slot + DisposableEffect) around Modifier.clickable does NOT reproduce SIGILL. Decision branch: real BasicTooltipState machinery is part of trigger; Step 2 (ClickableNode instrumentation) proceeds as originally scoped.
+NOTES=Tests #18-#22 deleted as moot (base ✅). Feedback memory + tasks/29 doc updated. CLAUDE.md row flipped to 🟡 step 1 done.
