@@ -1,5 +1,5 @@
 TASK=29
-STEP=1-done
-STATUS=in-progress
-LAST_SUCCESS=Task 29 Step 1 done — test #17 ✅ (61 taps clean, ~45 s soak). Hand-built BasicTooltipBox wrapper (scope + dead conditional Popup-slot + DisposableEffect) around Modifier.clickable does NOT reproduce SIGILL. Decision branch: real BasicTooltipState machinery is part of trigger; Step 2 (ClickableNode instrumentation) proceeds as originally scoped.
-NOTES=Tests #18-#22 deleted as moot (base ✅). Feedback memory + tasks/29 doc updated. CLAUDE.md row flipped to 🟡 step 1 done.
+STEP=characterized
+STATUS=complete
+LAST_SUCCESS=Task 29 — characterized end-to-end 2026-05-19. SIGILL trigger: clickable Press / long-press → BasicTooltipState.show() → suspendCancellableCoroutine+withTimeout → kotlinx Delay → WASI poll_oneoff → Rust assert! → wasmtime-uncaught SIGILL. Mitigation in place: wart-app disables TooltipBox-wrapped widgets. Step 4 workaround deferred — four paths considered, none taken now (see tasks/29 "Step 4 decision").
+NOTES=Verified: tests #23-#28 in TooltipInspectionCard.kt + 3 tombstones decoded via wasmtime objdump confirmed fault PC = `unreachable` at end of WASI adapter's assert_fail (function[32]). poll_oneoff is most-likely caller (6/16 assert_fail sites).

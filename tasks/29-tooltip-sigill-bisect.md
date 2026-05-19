@@ -1,7 +1,7 @@
 # Task 29 — Diagnose the Material3 TooltipBox SIGILL on wasi
 
-> **Status: 🔲 scoped 2026-05-19, bisect 80% done — pick up where the
-> `TooltipInspectionCard` left off.**
+> **Status: 🟡 characterized (Steps 1-3 done) 2026-05-19.
+> Workaround NOT implemented — see "Step 4 decision" below.**
 
 ## TL;DR
 
@@ -197,7 +197,27 @@ commonMain/kotlin/androidx/compose/foundation/Clickable.kt`** to add
 onPointerEvent` (republishing `compose-foundation-wasi` to pick up
 the change, ~15-25 min).
 
-### Step 2 — Inside-clickable instrumentation
+**Step 2 outcome (2026-05-19):**
+Six wart-app-side sub-bisects added to `TooltipInspectionCard.kt`
+(tests #23-#28). The common path of every crashing variant has been
+identified as **`BasicTooltipState.show()`** in `Tooltip.kt:1055-1078` —
+specifically the `suspendCancellableCoroutine` inside `mutatorMutex.mutate`.
+Two entry points into `state.show()` from a TooltipBox-wrapped tree:
+
+1. enabled-clickable + short tap → `requestFocus()` →
+   `keyboardBehavior.onFocusChanged → state.show()` (`BasicTooltip.kt:315-321`)
+2. anything + long-press → `handleGestures` timeout → `state.show(PreventUserInput)`
+   (`BasicTooltip.kt:239`)
+
+Disabled-clickable + short-tap survives because neither path reaches
+`state.show()`. This connects the SIGILL directly to the
+[[kotlin-wasm-suspendcoroutine-leak]] family — same suspension
+primitive, harder failure mode.
+
+Full sub-bisect table + per-test data → see
+`feedback_tooltip_sigill_wasi.md` §"Step 2 sub-bisect".
+
+### Step 2 — Inside-clickable instrumentation (superseded by the wart-app-side sub-bisect above)
 
 Add `WitCanvas.Import.logMessage(...)` calls inside
 `ClickableElement.update(node)`, `ClickableNode.onAttach()`,
@@ -213,7 +233,29 @@ state.isVisible is even tracked as a snapshot read). Each `update()`
 may rebind delegated nodes (pointerInput, focusable, semantics, …).
 If the rebind path leaks a Job or a continuation, that accumulates.
 
-### Step 3 — wasmtime trap surface
+**Step 3 outcome (2026-05-19):**
+Disassembled `/tmp/skiko-component.cwasm` with `wasmtime objdump` and
+mapped tombstone fault PCs back to offsets. **Result: fault offset
+`0x266804c` is the `unreachable` instruction at the end of
+`wasi_snapshot_preview1::macros::assert_fail`** (function[32] in the
+adapter). The trap IS registered in wasmtime's trap table — `objdump`
+labels it as `trap: UnreachableCodeReached`. So Step 3 hypothesis #1
+("cranelift emits a UDF whose PC isn't registered") is FALSE.
+
+**Wasmtime's signal handler is failing to catch a properly-registered
+trap on this Android build.** Likely cause: wart-host's winit/NDK
+sigaction setup shadowing wasmtime's. Needs a separate task.
+
+**Most-likely caller of `assert_fail`: `poll_oneoff`** — 6 of 16
+`bl 0x2667f80` sites in the adapter are in `poll_oneoff`
+(function[52]); next most-frequent is `cabi_import_realloc` (4),
+then `random_get` (3), `fd_write` (2), `State::new` (1). The
+state.show()→withTimeout→Delay→poll_oneoff path matches.
+
+Full disassembly + caller analysis in
+`feedback_tooltip_sigill_wasi.md` §"Step 3 cwasm decode".
+
+### Step 3 — wasmtime trap surface (superseded by the decode above)
 
 Independent of the Compose investigation: figure out why wasmtime's
 signal handler doesn't catch this SIGILL. Two possibilities:
@@ -231,7 +273,53 @@ If (1) is confirmed, file a wasmtime upstream bug AND consider
 installing a project-side SIGILL handler that logs PC + a few
 registers so the next crash gives us the exact wasm instruction.
 
-### Step 4 — Workaround until upstream fix
+## Step 4 decision (2026-05-19)
+
+**Decision: do not implement the wasi override.** The bug is
+characterized end-to-end (Steps 1-3 done — full path from clickable
+Press / long-press timeout → `BasicTooltipState.show()` →
+`suspendCancellableCoroutine`+`withTimeout` → kotlinx `Delay` → WASI
+adapter `poll_oneoff` → Rust `assert!` → wasmtime-uncaught SIGILL).
+
+The workaround attempts in this session showed why a clean wasi-only
+override is heavier than the bug warrants right now:
+
+- **commonReplacements in compose-material3-wasi/src/wasmWasiActuals/**:
+  rejected because the compose-*-wasi bundle directories are out of
+  scope and will be deleted (see [[compose-wasi-out-of-scope]]).
+- **compose-multiplatform-core/.../wasmWasiMain/ override via
+  `kotlin.exclude("**/internal/BasicTooltip.kt")`**: build failed —
+  `kotlin.exclude` only filters the source set's own srcDirs, not the
+  commonMain file inherited via `dependsOn`. Both
+  `BasicTooltip.kt` and `BasicTooltip.wasi.kt` got compiled and
+  every public declaration collided ("Conflicting overloads",
+  "Redeclaration").
+- **Edit commonMain `BasicTooltip.kt` directly to no-op the three
+  modifiers**: single-file diff but breaks Tooltip on every target in
+  our fork (jvm/native/js + wasi). Even though wart only ships wasi,
+  diverging the fork that way is bigger than the symptom.
+- **Convert the three modifiers to `expect`/`actual`**: clean KMP but
+  requires actuals in 5-7 target source sets (jvmAndAndroidMain,
+  desktopMain, darwinMain, nativeMain, jsMain, wasmJsMain, plus the
+  wasi no-op). Heavier than the symptom warrants.
+
+**Current mitigation (already in place from task 28 closeout):**
+disable Material3 widgets that internally wrap their anchor in
+`TooltipBox` on the wart-app side. DatePicker chevrons + Tooltip-
+wrapped IconButton-style widgets are off the smoke-card menu until
+this is revisited. Plain DatePicker (no chevrons) + non-Tooltip
+widgets continue to work fine. `TooltipInspectionCard` stays at the
+last deployed test (currently #28 — `clickable(enabled=false)`).
+
+**Pre-conditions for a future Step 4:**
+1. The wasmtime signal-handler-on-Android bug gets a fix (so trap
+   becomes a recoverable Err instead of a SIGILL).
+2. OR a wasi-clean kotlinx-coroutines `Delay` lands that avoids
+   tripping `poll_oneoff`'s assertion.
+3. OR the user decides to ship a commonMain patch or per-target
+   actual set despite the size.
+
+### Step 4 — Workaround until upstream fix (deferred — see "Step 4 decision" above)
 
 Patch `compose-multiplatform-core` consumers of `TooltipBox` to
 bypass it on wasi. Already validated mid-bisect that replacing
@@ -326,6 +414,16 @@ chevrons in the DatePicker card. Same crash, same signature.
 
 - [x] Step 1 outcome documented (does hand-built wrapper reproduce
       the crash? — NO, see Step 1 section above)
+- [x] Step 2 outcome documented (root path = BasicTooltipState.show()
+      / suspendCancellableCoroutine — see Step 2 section above)
+- [x] Step 3 PC decode (cwasm offset 0x266804c = `unreachable` at
+      end of wasi adapter's `assert_fail`; most likely caller is
+      `poll_oneoff`. Trap IS in wasmtime's trap table but signal
+      handler doesn't intercept it at runtime — separate host-side
+      bug. Full details in feedback_tooltip_sigill_wasi memory.)
+- [ ] Step 4 deferred — see "Step 4 decision" section. Current
+      mitigation is wart-app-side disablement of TooltipBox-wrapped
+      widgets, already in place from task 28.
 - [ ] At least one ClickableNode instrumentation cycle landed,
       `logMessage` output captured
 - [ ] PC offset from one fresh crash decoded against the cwasm
