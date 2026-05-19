@@ -121,7 +121,9 @@ shipping the full Compose port — not as discrete sequential milestones.
 | 24 | Bisect the WasmGC-heap leak — find the real retention chain (Kotlin/Wasm continuations? kotlinx-coroutines-wasmWasi? Compose Snapshot?) | 🟡 step 1 done 2026-05-17 — minimal reproducer in `wart-leak-repro/`; leak isolated to Kotlin/Wasm `suspend` codegen (~9 MB/s, OOM in 6:37). Steps 2-4 moot; pending upstream file. |
 | 25 | Diagnose the `suspend` state-machine leak: tighten repro, identify leaked structref type, locate kotlinc-wasm-backend codegen pass | 🔲 scoped, step 1 starting |
 | 27 | Skiko WIT-shaped gaps: Image.makeFromEncoded, Shader.makeSweepGradient, Image.makeShader, Shader.makeBlend, Gradient-object overloads on linear/radial/sweep | ✅ device-verified 2026-05-18 — smoke card shows all four new APIs ok; Compose `Brush.sweepGradient` round-trips through the new WIT verb. Bitmap.makeShader deferred. |
-| 28 | Wire `org.jetbrains.skia.Canvas(bitmap)` to host-side raster surfaces — 38 new bc-* WIT verbs, full 41-stub buildout, Bitmap.surfaceId + Image.makeFromBitmap snapshot bridge | ✅ device-verified 2026-05-19 — SegmentedButton labels + checkmark now visible; DatePicker renders/swipe/year-pick work. Chevron `< >` blocked by orthogonal Tooltip bug ([[tooltip-sigill-wasi]]). |
+| 28 | Wire `org.jetbrains.skia.Canvas(bitmap)` to host-side raster surfaces — 38 new bc-* WIT verbs, full 41-stub buildout, Bitmap.surfaceId + Image.makeFromBitmap snapshot bridge | ✅ device-verified 2026-05-19 — SegmentedButton labels + checkmark now visible; DatePicker renders/swipe/year-pick work. Chevron `< >` previously blocked by Tooltip SIGILL — unblocked 2026-05-19 by task 30 adapter fork. |
+| 29 | Diagnose the Material3 TooltipBox SIGILL on wasi — bisect Press/long-press path to `BasicTooltipState.show()` | ✅ resolved 2026-05-19 via task 30 — was not a Tooltip-specific bug; adapter State at linear-mem 0x10008 was corrupted by Kotlin/Wasm's allocator. Self-heal in adapter fork unblocks Tooltip + DatePicker chevrons. See [[wasi-adapter-state-corruption]]. |
+| 30 | WASI adapter `assert_fail` + wasmtime signal-handler diagnosis (root cause of task 29) | ✅ resolved 2026-05-19. Root cause traced to Kotlin/Wasm's `ScopedMemoryAllocator.destroy()` not propagating child's used range to parent — [[kotlin-wasm-scopedmemory-destroy-bug]]. Filed upstream as [KT-86415](https://youtrack.jetbrains.com/issue/KT-86415/); reproducer at <https://codeberg.org/harryzz/kt-memalloc-repro>. wasi adapter fork (`wasmtime-src/`) self-heals on corruption (slim, 65 KB release). Step 4 (signal-handler) and Step 6 (related-bug audit) still open; the user-visible SIGILL is resolved. |
 
 **What's verified on device:** BasicTextField + TextFieldState + hardware
 keyboard, in-canvas soft keyboard, Material3 widgets (Button, Checkbox,
@@ -236,6 +238,7 @@ boundary from `post-art-roadmap.md` §3.
 | 27 | `tasks/27-skiko-image-shader-gaps.md` | Implement the WIT-shaped skiko stubs: Image.makeFromEncoded, Shader.makeSweepGradient, Image.makeShader, Shader.makeBlend, Gradient-object overloads — ✅ device-verified 2026-05-18. Bitmap.makeShader deferred (no host-side Bitmap state) |
 | 28 | `tasks/28-skiko-abstract-canvas.md` | Wire the abstract org.jetbrains.skia.Canvas's 41 throw-stubs to host-side skia via 38 new bc-* WIT verbs + per-Bitmap host raster Surface. Unblocked SegmentedButton (checkmark + unselected labels visible) and DatePicker render/swipe/year-pick. Chevron taps remain blocked by an orthogonal Material3 TooltipBox bug ([[tooltip-sigill-wasi]]). ✅ device-verified 2026-05-19 |
 | 29 | `tasks/29-tooltip-sigill-bisect.md` | Diagnose the Material3 TooltipBox SIGILL on wasi. **Characterized end-to-end 2026-05-19, workaround deferred.** Trigger: clickable Press / long-press timeout → `BasicTooltipState.show()` → `suspendCancellableCoroutine`+`withTimeout` → kotlinx `Delay` → WASI adapter `poll_oneoff` → Rust `assert!` → SIGILL the wasmtime signal handler fails to convert to a Trap on Android. Mitigation in place: wart-app side disables TooltipBox-wrapped widgets (DatePicker chevrons, etc.). Step 4 deferred — see task doc "Step 4 decision" for the four workaround paths considered + why none was taken now. 🟡 characterized |
+| 30 | `tasks/30-wasi-adapter-assert-and-wasmtime-signal-handler.md` | Spin-out of task 29 Step 3 — investigate and patch the root cause. Two stacked bugs: (a) WASI P1 reactor adapter trips a Rust `assert!` inside `poll_oneoff` when driven by kotlinx-coroutines `Delay`/`withTimeout` on wasi; (b) wasmtime's signal handler on Android fails to intercept the registered `unreachable` trap, so the process aborts to debuggerd instead of returning Err. 6 steps: capture assert msg via wasi-stderr→logcat, rebuild adapter with DWARF, identify failing precondition, diagnose wasmtime sigaction-on-Android, verify against `TooltipInspectionCard` (kept in place for this purpose), audit related bugs ([[kotlin-wasm-suspendcoroutine-leak]] etc). 🔲 scoped |
 
 ---
 
@@ -326,8 +329,18 @@ Kotlin wart-app (wasmWasiMain)
       ~/wart/wit/skiko-gfx.wit \
       build/compileSync/wasmWasi/main/productionExecutable/kotlin/wart-app.wasm \
       -o /tmp/embedded.wasm
+  # ⚠ Use the wart-tree fork of the wasi preview1 reactor adapter, NOT
+  # ~/wart/skiko/wasi_snapshot_preview1.reactor.wasm. The wart fork
+  # patches `State::with` to self-heal corrupted State (see
+  # feedback_wasi_adapter_state_corruption.md + feedback_kotlin_wasm_scopedmemory_destroy_bug.md).
+  # Without this, the Tooltip / DatePicker-chevron / kotlinx-coroutines
+  # `Delay` paths SIGILL after a few seconds of interaction. Build once
+  # (release profile, ~65 KB stripped):
+  #   cd ~/wart/wasmtime-src && cargo build \
+  #     -p wasi-preview1-component-adapter \
+  #     --target wasm32-unknown-unknown --release
   wasm-tools component new /tmp/embedded.wasm \
-      --adapt ~/skiko/wasi_snapshot_preview1.reactor.wasm \
+      --adapt ~/wart/wasmtime-src/target/wasm32-unknown-unknown/release/wasi_snapshot_preview1.wasm \
       -o /tmp/skiko-component.wasm
   wasmtime compile --target aarch64-linux-android \
       --wasm component-model --wasm gc --wasm function-references --wasm exceptions \
@@ -406,3 +419,15 @@ Use these agents to keep build output out of the main context:
 - Push cwasm to Downloads — use app-specific external dir instead
 - Skip `wasm-tools component embed` — `component new` will fail without it
 - Use `adb -j2` flag — not supported by cargo-apk; use `CARGO_BUILD_JOBS=2`
+- Remove the leading `freeAllComponentModelReallocAllocatedMemory()` from
+  the skiko WIT-import bindings (see
+  [[wasi-realloc-allocator-pollution]]). Even with the
+  Kotlin/Wasm KT-86415 patch landed, the `freeAll` is still required
+  — without it, the next `withScopedMemoryAllocator` will
+  `IllegalStateException` on `check(reallocAllocator == null)`. The
+  KT-86415 fix only makes the freeAll's downstream `destroy()` chain
+  no longer leak State's range; it doesn't lift the
+  reallocAllocator-must-be-null nesting constraint. To drop the
+  freeAll workaround you'd need a separate upstream change making
+  `withScopedMemoryAllocator` suspend/resume an active
+  `reallocAllocator`. Bigger than KT-86415.

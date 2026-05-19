@@ -1,5 +1,5 @@
-TASK=29
-STEP=characterized
+TASK=30
+STEP=closed
 STATUS=complete
-LAST_SUCCESS=Task 29 — characterized end-to-end 2026-05-19. SIGILL trigger: clickable Press / long-press → BasicTooltipState.show() → suspendCancellableCoroutine+withTimeout → kotlinx Delay → WASI poll_oneoff → Rust assert! → wasmtime-uncaught SIGILL. Mitigation in place: wart-app disables TooltipBox-wrapped widgets. Step 4 workaround deferred — four paths considered, none taken now (see tasks/29 "Step 4 decision").
-NOTES=Verified: tests #23-#28 in TooltipInspectionCard.kt + 3 tombstones decoded via wasmtime objdump confirmed fault PC = `unreachable` at end of WASI adapter's assert_fail (function[32]). poll_oneoff is most-likely caller (6/16 assert_fail sites).
+LAST_SUCCESS=Task 30 complete 2026-05-19. End-to-end: SIGILL traced to wasi adapter State.magic1 corruption (lib.rs:2805) → traced via host-side call_hook + debug_exit_frames to wart-app's writePcmF32 binding for-loop overwriting State's region → traced to ScopedMemoryAllocator.destroy() not propagating child's used range to parent. Standalone Kotlin/Wasm repro at /home/harry/wart/kt-memalloc-repro/. YouTrack issue draft at kt-memalloc-repro/YOUTRACK_ISSUE.md. wasi adapter fork (wasmtime-src/) ships slim self-heal in State::with — production-ready (65 KB release-stripped, recompile cwasm without -D guest-debug=y). All diagnostic instrumentation reverted from wart-host/wart-app. APK + cwasm rebuilt and deployed clean 2026-05-19 22:24.
+NOTES=Open: file the YouTrack issue (user submits when ready). Step 4 (wasmtime signal-handler diagnosis) and Step 6 (audit related bugs) still pending as task 30 sub-tasks but the user-visible bug is resolved.
