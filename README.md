@@ -1,56 +1,66 @@
 # kt-memalloc-repro
 
-Minimal standalone Kotlin/Wasm 2.4.0-RC reproducer for a bug in
-`kotlin.wasm.unsafe.ScopedMemoryAllocator`:
+Minimal standalone Kotlin/Wasm 2.4.0-RC reproducer for
+[**KT-86415**](https://youtrack.jetbrains.com/issue/KT-86415) — a
+**use-after-free of canonical-ABI `realloc` memory**.
 
-> **`ScopedMemoryAllocator.destroy()` does not propagate the child's
-> `availableAddress` back to the parent.** When the child is destroyed,
-> the parent's bump pointer is still wherever it was before the child
-> opened, so a sibling scope opened from the same parent reuses the
-> *same* address range — overwriting bytes the destroyed child wrote.
+> A component-model runtime can use the exported `realloc`
+> (`componentModelRealloc` on the Kotlin side) as a general allocator
+> for **long-lived** storage. Kotlin's `wit-bindgen` fork assumes
+> `realloc` is only ever short-lived copy-buffer scratch — as the
+> [Canonical ABI](https://github.com/WebAssembly/component-model/blob/main/design/mvp/CanonicalABI.md)
+> describes — and so calls `freeAllComponentModelReallocAllocatedMemory()`
+> aggressively between WIT calls. After that free, the long-lived
+> block is reused by the next `withScopedMemoryAllocator` and its
+> contents are silently overwritten.
 
-This breaks `componentModelRealloc` (the Component Model canonical-ABI
-realloc, added in [KT-65030] / Kotlin 2.4.0-Beta1) for long-lived
-allocations, because `componentModelRealloc` is built on top of
-`ScopedMemoryAllocator` and the WASI Preview 1 component adapter (and
-similar hosts) expects `cabi_realloc(null, 0, ...)` to return memory
-that stays valid for the program's lifetime.
+## Framing note (read this)
 
-[KT-65030]: https://youtrack.jetbrains.com/issue/KT-65030
+An earlier version of this repro framed the bug as
+*"`ScopedMemoryAllocator.destroy()` does not propagate the child's
+`availableAddress` to the parent."* **That framing is wrong** — and
+was corrected by JetBrains (Jim Teichgräber) on KT-86415:
+
+- `ScopedMemoryAllocator` is **correct**. Scoped addresses are *meant*
+  to be invalid outside their scope; comparing addresses across scopes
+  is meaningless.
+- The actual bug is a **classic use-after-free**: the runtime holds
+  `realloc`-allocated memory with effectively static storage duration,
+  and Kotlin's `freeAll` frees it out from under the holder.
+- Who is responsible is **spec-ambiguous** — `CanonicalABI.md` neither
+  states its listed `realloc` uses are exhaustive nor forbids others.
+  JetBrains is deciding whether to support `realloc` as a general
+  long-lived allocator. KT-86415 state: *Investigating*.
+
+This repro and README are reframed accordingly: it now demonstrates
+the use-after-free directly (sentinel corruption), not an
+address-comparison.
 
 ## What it shows
 
-The repro matches the actual failure pattern in downstream code:
+`Main.kt` reproduces the failure with no skia / Compose / Android:
 
-1. An outer `withScopedMemoryAllocator` block is active.
-2. Inside it, `componentModelRealloc` is called for a long-lived block.
-3. The outer block ends; `reallocAllocator` is still set.
-4. `freeAllComponentModelReallocAllocatedMemory()` is called.
-5. A new `withScopedMemoryAllocator` block opens and allocates — and
-   overlaps with the long-lived block.
+1. Inside a `withScopedMemoryAllocator`, call `componentModelRealloc`
+   for a block, write a sentinel `55 66 77 44`, keep the pointer —
+   this models the WASI preview1 adapter's long-lived `State`.
+2. `freeAllComponentModelReallocAllocatedMemory()` — exactly what
+   every Kotlin `wit-bindgen` WIT call does between invocations.
+3. Open a new `withScopedMemoryAllocator` and allocate — this reuses
+   the just-freed address range and writes `AA BB CC DD`.
+4. Read the long-lived block back through the still-held pointer.
 
 ```
 $ wasmtime run …               # stock 2.4.0-RC stdlib
-outerScope probe(8)              -> ptr=0
-componentModelRealloc(65536)     -> longLivedPtr=8
-longLived range = [8, 65544)
-freeAll done
-newScope probe(8)                -> ptr=8         ← SAME as longLivedPtr!
-newScope.allocate(65536)         -> ptr=16
-newScope OVERLAPS longLivedPtr?  true  (BUG if true)
-longLivedPtr first 4 bytes:      [55,66,77,44]    ← sentinel still readable,
-                                                    but only because newScope
-                                                    didn't store to that range
+KT-86415 — canonical-ABI realloc use-after-free
+  long-lived realloc block @ 8; sentinel written = [55,66,77,44]
+  after freeAll + one new withScopedMemoryAllocator: read back = [aa,bb,cc,dd]
+  => USE-AFTER-FREE: long-lived realloc memory was reused and overwritten
 ```
 
-After applying the proposed fix (see `build.gradle.kts` for how to
-switch to a locally-published patched stdlib):
-
-```
-newScope probe(8)                -> ptr=65544     ← past long-lived range
-newScope.allocate(65536)         -> ptr=65552
-newScope OVERLAPS longLivedPtr?  false            ← no overlap
-```
+The long-lived block — written before the `freeAll` — comes back
+holding the *new* scope's bytes. Anything still using the original
+pointer (the adapter's `State`) is now reading another allocation's
+data.
 
 ## Build + run
 
@@ -70,56 +80,34 @@ wasmtime run --wasm gc=y --wasm function-references=y --wasm exceptions=y \
     --wasi preview2 /tmp/repro.wasm
 ```
 
-## Proposed fix
+## On the "fix"
 
-In `libraries/stdlib/wasm/src/kotlin/wasm/unsafe/MemoryAllocation.kt`:
+This repo previously proposed a `destroy()` patch that propagates a
+child scope's high-water mark to its parent (see
+[`kt-86415-fix-completeness.md`](kt-86415-fix-completeness.md), written
+*before* the JetBrains response). JetBrains **rejected it as a fix**:
+never-freeing just turns the use-after-free into a read of immutable
+memory that "works" until the first repeated allocation — *"not a
+solution to use-after-free, just defining UB conveniently (and making
+everything a memory leak)"* — and it is fragile with multiple parallel
+child allocators at the same scope.
 
-```diff
--    private var availableAddress = startAddress
-+    @PublishedApi
-+    internal var availableAddress = startAddress
-...
-     internal fun destroy() {
-         destroyed = true
--        parent?.suspended = false
-+        parent?.let { p ->
-+            p.suspended = false
-+            if (availableAddress > p.availableAddress) {
-+                p.availableAddress = availableAddress
-+            }
-+        }
-     }
-```
+So there is no clean stdlib-side patch yet. The real fix is one of:
 
-This propagates the child's high-water mark up to the parent. Memory
-becomes monotonic within a parent scope. A nicer fix would be to back
-`componentModelRealloc` with a separate non-scoped allocator pool that
-doesn't share state with `withScopedMemoryAllocator` at all, but the
-~10-line change above is the minimum.
+- **adapter-side** — the WASI preview1 component adapter must not keep
+  long-lived `State` in canonical-ABI `realloc` memory; or
+- **upstream Kotlin** decides to support `realloc` as a general
+  long-lived allocator and stops calling `freeAll` so aggressively.
 
-**Empirically verified** with a locally-built patched stdlib
-(2.4.255-SNAPSHOT). See the toggle in `build.gradle.kts` to switch
-between stock and patched.
-
-## Fix completeness analysis
-
-See [`kt-86415-fix-completeness.md`](kt-86415-fix-completeness.md) for
-a walkthrough of:
-
-- why the patch is a no-op for top-level sibling scopes (and why
-  that's not a bug — it's the documented "scoped" contract);
-- the destroy → freeAll → new-scope chain that makes the patch work
-  for the real case;
-- a residual edge case (componentModelRealloc called with no active
-  outer scope) that the minimum patch doesn't cover, with a sketch
-  of a broader fix.
+That decision (KT-86415, *Investigating*) determines where the fix
+belongs. The downstream project that hit this ships a pragmatic
+stopgap — the rejected patch *plus* a self-heal in its WASI-adapter
+fork — but that is a workaround, not a resolution.
 
 ## Context
 
 Found while diagnosing a SIGILL on Android in a Compose Multiplatform
 + wasmtime + WASI-adapter project. The WASI adapter's static `State`
 block, allocated once via `cabi_realloc` at cold init, was being
-silently overwritten by an unrelated audio-test marshalling buffer —
-because both ended up at the same parent-relative address after a
-`freeAllComponentModelReallocAllocatedMemory` ↔
-`withScopedMemoryAllocator` toggle.
+silently overwritten by an unrelated marshalling buffer — the
+use-after-free above, manifesting as adapter-state corruption.
