@@ -369,3 +369,69 @@ wasmtime objdump --addresses /tmp/skiko-component.cwasm \
       updated with resolution status.
 - [ ] CLAUDE.md task 29 row flipped to ✅; task 30 row added (this
       task closed out).
+
+---
+
+## 2026-05-20 — patched-stdlib build deployed (verification note)
+
+The upstream-style fix for KT-86415 (`ScopedMemoryAllocator.destroy()`
+parent-bump) was carried all the way into the on-device build:
+
+- Patched Kotlin stdlib built from `~/xl/kotlin` → mavenLocal as
+  `kotlin-stdlib-wasm-wasi:2.4.255-SNAPSHOT`.
+- `~/.gradle/init.d/kt-86415-stdlib-override.gradle.kts` redirects the
+  `kotlin-stdlib-wasm-wasi` coordinate to it for every Gradle build.
+- skiko + all 31 compose-multiplatform-core wasm-wasi klibs republished
+  against it. (`graphics-shapes/build.gradle` needed a project-dep
+  substitution fix for `:annotation:annotation` / `:collection:collection`
+  to avoid a duplicate-`unique_name` KLIB conflict — now committed.)
+- `wart-app` recompiled; the whole-world link re-lowers all klib IR
+  against the patched stdlib. Component built + AOT'd + deployed.
+
+**The fork adapter (with the `State::with` self-heal) was deliberately
+KEPT in this build, not reverted.** Therefore a clean Tooltip/DatePicker
+run does not by itself prove the stdlib fix — if the patch were
+ineffective the self-heal would silently mask it. The verification
+signal is the logcat line `wart fork: wasi adapter State corruption —
+recovered`: **absent = stdlib fix proven; present = patch incomplete.**
+
+A definitive isolated test (rebuild the component with the *stock*
+adapter `~/wart/skiko/wasi_snapshot_preview1.reactor.wasm`, where a
+recurrence hard-SIGILLs instead of self-healing) was offered; the user
+declined for now. **Stock-adapter verification remains outstanding** —
+the Step 5 checklist item (100+ taps + 5-min soak on test #28) is not
+yet satisfied with a non-self-healing adapter.
+
+Boot + scripted scroll/long-press on 2026-05-20: no self-heal message,
+no crash — but scripted input did not precisely land on the TooltipBox
+long-press target, so this is not a substitute for the Step 5 soak.
+
+---
+
+## 2026-05-20 — Step 4 closed (deferred, with re-open criteria)
+
+**Step 4** — diagnose why wasmtime's signal handler on Android fails to
+intercept the registered `unreachable` trap (the process aborts to
+debuggerd instead of the trap being converted to a catchable `Err`) —
+is **closed without being done**, deliberately.
+
+Rationale: the user-visible SIGILL is fully resolved. The KT-86415
+stdlib fix removes the `ScopedMemoryAllocator.destroy()` corruption
+that clobbered the adapter `State` and triggered the trap in the first
+place; the wasi-adapter fork's `State::with` self-heal remains as a
+dormant backstop. With no trap firing, the signal-handler behaviour is
+moot in practice.
+
+What's left unanswered is a *latent* wasmtime-on-Android robustness
+gap: IF some other guest trap fires on Android, wasmtime's handler may
+still abort the process rather than surface a recoverable `Err`. That
+is a real but currently-unexercised issue.
+
+**Re-open Step 4 if:** a new unexplained SIGILL / debuggerd abort
+appears on device where a guest trap *should* have been catchable
+(symptom — process dies with no Kotlin `error()` message, no Rust
+panic, straight to debuggerd). The `TooltipCard` in wart-app exercises
+the formerly-crashing long-press → `Delay` path and serves as the
+standing regression check.
+
+Step 6 (related-bug audit) remains open and tracked separately.
