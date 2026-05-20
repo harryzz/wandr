@@ -683,14 +683,12 @@ private fun CheckboxRow() {
     }
 }
 
-// Anchored menu — exercises Compose Popup overlay end-to-end.
-// `LocalInspectionMode provides true` forces Material3's Menu to use
-// `expandedState.targetState`-conditional snap instead of the
-// animated alpha/scale path. Required because on wasi the
-// `Modifier.graphicsLayer { State<Float> }` block is invoked once at
-// initial composition and never re-invoked when the State updates —
-// only inside layer (popup/dialog) compositions. Main composition
-// works. See `feedback_popup_overlay.md` for the precise repro.
+// Anchored menu — exercises Compose Popup overlay end-to-end, with the
+// real animated Material3 `DropdownMenu` (no `LocalInspectionMode`
+// snap workaround). The expand alpha/scale animation works on wasi as
+// of 2026-05-20: the `RenderNode.wasi.kt` fix stopped baking layer
+// alpha into the parent recording, so a popup that records once no
+// longer freezes its children at alpha 0.
 @Composable
 private fun DropdownCard() {
     var expanded by remember { mutableStateOf(false) }
@@ -703,30 +701,15 @@ private fun DropdownCard() {
                 HapticButton(onClick = { expanded = true }) {
                     Text("Selected: $choice")
                 }
-                // Task #53 PARTIALLY fixed 2026-05-13:
-                //   * Pure `Popup` + `Modifier.graphicsLayer { State }`
-                //     animation NOW WORKS — block re-invokes per frame
-                //     with the live State<Float> value. Confirmed via
-                //     test-app diagnostic logs (gfx-block #1..1110 with
-                //     a progressing 0→1).
-                //   * Material3 `DropdownMenu` STILL needs the
-                //     `LocalInspectionMode provides true` workaround. It
-                //     uses `MutableTransitionState` / `updateTransition`
-                //     for its expand-collapse animation — a different
-                //     animation path than `animateFloatAsState`, and
-                //     something in that path still doesn't update layer
-                //     visibility in popup compositions.
-                CompositionLocalProvider(LocalInspectionMode provides true) {
-                    DropdownMenu(
-                        expanded = expanded,
-                        onDismissRequest = { expanded = false },
-                    ) {
-                        listOf("Alpha", "Beta", "Gamma").forEach { name ->
-                            HapticDropdownMenuItem(
-                                text = { Text(name) },
-                                onClick = { choice = name; expanded = false },
-                            )
-                        }
+                DropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false },
+                ) {
+                    listOf("Alpha", "Beta", "Gamma").forEach { name ->
+                        HapticDropdownMenuItem(
+                            text = { Text(name) },
+                            onClick = { choice = name; expanded = false },
+                        )
                     }
                 }
             }
