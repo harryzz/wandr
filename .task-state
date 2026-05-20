@@ -1,5 +1,5 @@
-TASK=30
-STEP=closed
-STATUS=complete
-LAST_SUCCESS=Task 30 complete 2026-05-19. End-to-end: SIGILL traced to wasi adapter State.magic1 corruption (lib.rs:2805) → traced via host-side call_hook + debug_exit_frames to wart-app's writePcmF32 binding for-loop overwriting State's region → traced to ScopedMemoryAllocator.destroy() not propagating child's used range to parent. Standalone Kotlin/Wasm repro at /home/harry/wart/kt-memalloc-repro/. YouTrack issue draft at kt-memalloc-repro/YOUTRACK_ISSUE.md. wasi adapter fork (wasmtime-src/) ships slim self-heal in State::with — production-ready (65 KB release-stripped, recompile cwasm without -D guest-debug=y). All diagnostic instrumentation reverted from wart-host/wart-app. APK + cwasm rebuilt and deployed clean 2026-05-19 22:24.
-NOTES=Open: file the YouTrack issue (user submits when ready). Step 4 (wasmtime signal-handler diagnosis) and Step 6 (audit related bugs) still pending as task 30 sub-tasks but the user-visible bug is resolved.
+TASK=33
+STEP=1
+STATUS=scoped
+LAST_SUCCESS=Tasks 31 (popup graphicsLayer-alpha freeze) + 32 (path-combine / SegmentedButton) resolved & device-verified 2026-05-20. Task 30 fully closed (Step 4 deferred w/ re-open criteria, Step 6 audit done).
+NOTES=Task 33 = boot-model bring-up sub-roadmap. NOT STARTED. Full plan: tasks/33-boot-model-bringup.md. Step 1 = standalone-surface spike — run wart-host as a non-Activity su-launched process, create a fullscreen SurfaceControl from SurfaceFlinger via a libgui SurfaceComposerClient C++ shim, EGL-render one frame. Read post-art-roadmap.md sections 5/5.1/9/11 first.
