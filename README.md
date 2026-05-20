@@ -52,7 +52,7 @@ address-comparison.
 ```
 $ wasmtime run …               # stock 2.4.0-RC stdlib
 KT-86415 — canonical-ABI realloc use-after-free
-  long-lived realloc block @ 8; sentinel written = [55,66,77,44]
+  long-lived realloc block @ 0; sentinel written = [55,66,77,44]
   after freeAll + one new withScopedMemoryAllocator: read back = [aa,bb,cc,dd]
   => USE-AFTER-FREE: long-lived realloc memory was reused and overwritten
 ```
@@ -61,6 +61,13 @@ The long-lived block — written before the `freeAll` — comes back
 holding the *new* scope's bytes. Anything still using the original
 pointer (the adapter's `State`) is now reading another allocation's
 data.
+
+Run against the proposed stdlib patch (the rejected `destroy()`
+parent-bump, below) and the sentinel survives — `read back =
+[55,66,77,44]` — because the new scope's high-water mark is pushed
+past the long-lived block. That is the patch "working" by never
+reusing the address: it converts the use-after-free into a leak, as
+JetBrains noted.
 
 ## Build + run
 
