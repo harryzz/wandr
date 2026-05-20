@@ -113,6 +113,11 @@ interface canvas {
     /// Serialised path as UTF-8 SVG path string (M/L/C/Q/A/Z).
     draw-path: func(path-data: list<u8>, paint: paint-attrs);
 
+    /// Combine two SVG paths with a boolean op (skia SkPathOp).
+    /// op: 0=difference 1=intersect 2=union 3=xor 4=reverse-difference.
+    /// Returns the result as an SVG path string; empty = empty/failed.
+    path-combine: func(path-a: list<u8>, path-b: list<u8>, op: u32) -> list<u8>;
+
     // ── text blobs ────────────────────────────────────────────────────────
     create-text-blob: func(text: list<u8>, font-family: list<u8>, size: f32, weight: u32, italic: bool) -> u32;
     draw-text-blob:   func(id: u32, x: f32, y: f32, paint: paint-attrs);
