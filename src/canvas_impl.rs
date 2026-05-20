@@ -710,6 +710,42 @@ impl crate::bindings::my::skiko_gfx::canvas::Host for crate::HostState {
         }
     }
 
+    /// Boolean-combine two SVG paths. op: 0=difference 1=intersect
+    /// 2=union 3=xor 4=reverse-difference. Returns the result as an
+    /// SVG path string; empty on parse failure or empty result.
+    fn path_combine(&mut self, path_a: Vec<u8>, path_b: Vec<u8>, op: u32) -> Vec<u8> {
+        let sa = String::from_utf8_lossy(&path_a);
+        let sb = String::from_utf8_lossy(&path_b);
+        let (pa, pb) = match (
+            skia_safe::Path::from_svg(&*sa),
+            skia_safe::Path::from_svg(&*sb),
+        ) {
+            (Some(a), Some(b)) => (a, b),
+            _ => return Vec::new(),
+        };
+        let skop = match op {
+            0 => skia_safe::PathOp::Difference,
+            1 => skia_safe::PathOp::Intersect,
+            2 => skia_safe::PathOp::Union,
+            3 => skia_safe::PathOp::XOR,
+            4 => skia_safe::PathOp::ReverseDifference,
+            _ => skia_safe::PathOp::Difference,
+        };
+        match pa.op(&pb, skop) {
+            Some(result) => {
+                // skia path-op results use the EvenOdd fill rule, but an
+                // SVG path string carries no fill rule — re-parsing
+                // defaults to Winding and would re-fill the hole (e.g.
+                // collapsing Modifier.border's ring into a solid fill).
+                // Convert to an equivalent Winding-fill path (reverses
+                // inner contours) so the SVG round-trip renders right.
+                let winding = result.as_winding().unwrap_or(result);
+                winding.to_svg().into_bytes()
+            }
+            None => Vec::new(),
+        }
+    }
+
     // ── text blobs ────────────────────────────────────────────────────────
 
     fn create_text_blob(&mut self, text: Vec<u8>, font_family: Vec<u8>,
