@@ -199,29 +199,13 @@ private fun MaterialDemoApp() {
                         FilterChipCard()
                         ChipVariantsCard()
                         FabCard()
-                        // Task 28 Path D: bitmap-backed Canvas wired
-                        // through to host-side skia raster surfaces +
-                        // bc-* WIT verbs. SegmentedButton re-enabled
-                        // 2026-05-19. DatePickerCard stays disabled —
-                        // tapping its < / > chevrons consistently
-                        // SIGILLs inside JIT'd wasm after a few taps,
-                        // even with periodic Store::gc and a host-side
-                        // bitmap-canvas LRU cap. The crash bypasses
-                        // wasmtime's exception path (no Kotlin error()
-                        // message is captured), so it's not in the
-                        // bc-* dispatch itself — likely interacts with
-                        // AnimatedContent's drawable lifecycle. Swipe
-                        // to change month works fine. Tracked
-                        // separately; smoke card validates all 30+
-                        // bc-* verbs.
+                        // SegmentedButton + DatePicker (incl. the < > chevrons,
+                        // which route through Material3's tooltip-wrapped
+                        // IconButton) — the TooltipBox-on-wasi SIGILL that
+                        // used to block the chevrons was resolved in task 30.
                         SegmentedButtonCard()
-                        // DatePicker renders + swipe + year-pick work.
-                        // Chevron `< >` taps SIGILL via Material3's
-                        // IconButtonWithTooltip — a TooltipBox-on-wasi
-                        // bug bisected 2026-05-19; see
-                        // feedback_tooltip_sigill_wasi.md.
                         DatePickerCard()
-                        TooltipInspectionCard()
+                        TooltipCard()
                         Task27SmokeCard()
                         Task28SmokeCard()
                         SnackbarCard(onShow = { snackbarVisible = true })
