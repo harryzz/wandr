@@ -234,6 +234,31 @@ The migration is necessary only when we boot outside the app framework
 the current process. Validates the binder transport works against SF
 without changing the render path. Can be done now if useful.
 
+### 5.1 Considered & rejected — running on a Wayland compositor
+
+An alternative to being a SurfaceFlinger client: bring a Wayland
+compositor (weston / custom) onto the device and make the runtime a
+Wayland client. **Rejected for the Android target.**
+
+- Android has no Wayland. A compositor brought onto the device would
+  either (a) nest inside a SurfaceFlinger layer — pointless, SF still
+  underneath plus an extra composition hop — or (b) replace SF and
+  drive the Hardware Composer HAL / DRM-KMS itself, which means
+  re-implementing SF's vsync + HWC + vendor-display integration: a
+  roadmap "Keep" (§6.1) turned into a major, vendor-specific build.
+- SurfaceFlinger already *is* the compositor. The runtime needs
+  exactly one fullscreen layer; SF provides that trivially via
+  `ISurfaceComposer` (§5).
+- The portability appeal of Wayland (clean protocol, desktop reuse) is
+  already handled one layer up by `winit`, which abstracts
+  `ANativeWindow` (Android) vs X11/Wayland (Linux). Desktop builds
+  already run on Wayland via winit — no need to make Android speak it.
+
+Wayland / direct DRM-KMS is the right display path **only** for a
+future *bare-Linux / embedded* target with no SurfaceFlinger — the
+same fork as §9's "display server" open question. For Android
+hardware (keep the native daemons + HALs): SurfaceFlinger client.
+
 ---
 
 ## 6. system_server: replace / drop / keep
@@ -420,6 +445,36 @@ multi-component packages without committing to wac/Warg specifics.
   overhead is <20 MB, process-per-app is viable. Otherwise monolithic
   or hybrid.
 
+  *Current lean (2026-05-20):* **monolithic-first** for the PoC and
+  boot-model bring-up — it is where the runtime already is, the memory
+  math favours it (a 2nd wasmtime+skia+AOT instance ≈ ~95 MB AOT image
+  + ~50 MB host code/data duplicated — well past the viability
+  thresholds above), and the in-process arbiter is trivial.
+
+  **Caveat — monolithic is a single point of failure.** A host-side
+  crash takes down the entire app + arbiter layer at once; only the
+  kernel and the native daemons (SurfaceFlinger, AudioFlinger, …)
+  survive. That is strictly *worse* isolation than stock Android,
+  where each app is its own OS-isolated process and even a
+  `system_server` crash is a recoverable soft-reboot, not a
+  kernel-level failure.
+
+  So the production target is most likely **Hybrid** — and Hybrid is
+  essentially *how Android already organises this*: `zygote` preloads
+  the ART runtime + core framework **once**, and every app process is
+  `fork()`-ed from zygote, sharing the preloaded runtime
+  copy-on-write while still being a separate OS-isolated process. The
+  WAR Hybrid = a "zygote-equivalent": preload `wasmtime::Engine` +
+  shared AOT / skia / font caches, `fork()` a process per app,
+  COW-share the heavy read-only pages. *Caveat:* `fork()` after
+  wasmtime worker threads or EGL/GPU init is unsafe — a WAR zygote
+  must fork *before* those, exactly as Android's zygote forks before
+  starting most threads.
+
+  **Therefore:** build monolithic now, but keep the arbiter and the
+  app-loader behind a boundary that does not bake in in-process
+  assumptions, so the Hybrid (zygote-style) migration stays cheap.
+
 - **Display server**: keep SurfaceFlinger and bind via `ISurfaceComposer`,
   or replace SF entirely with a runtime-owned KMS/DRM compositor?
   (Currently leaning: keep SF — it's already a native daemon, no Java
@@ -437,6 +492,47 @@ multi-component packages without committing to wac/Warg specifics.
 - **Per-component capability gating**: how to express "this component
   may not access haptics even though the package as a whole declares
   it." Likely solved by per-component `link.wac` import restriction.
+
+### 9.1 Reference — how Android/ART organises this (comparison baseline)
+
+The baseline the runtime-model decision above is measured against.
+
+Boot chain:
+
+```
+kernel → init → zygote ──fork──► app process 1
+                  │     ──fork──► app process 2  ...
+                  └─────fork──► system_server
+       init also starts the native daemons directly —
+       surfaceflinger, audioserver, cameraserver,
+       servicemanager, vendor HAL daemons — NOT via zygote, NOT ART.
+```
+
+- **zygote** preloads the ART runtime + core Java framework classes +
+  common resources **once**. Every app process is `fork()`-ed from
+  zygote, inheriting that preload **copy-on-write** — so an app
+  process is cheap to start and cheap in memory, yet is a separate OS
+  process with its own UID and SELinux domain. That is
+  process-per-app isolation *without* the per-app cost of re-loading
+  the runtime — i.e. exactly the "Hybrid" shape above.
+- **system_server** is also forked from zygote; hosts ~80 services in
+  one process.
+- **Native daemons** (surfaceflinger, audioserver, …) are plain
+  native processes started by init — no ART, not forked from zygote.
+
+Failure domains:
+
+| Crashes | Blast radius | Recovery |
+|---|---|---|
+| An app | that app only | app restarts; rest of system untouched |
+| `system_server` | the Java framework layer | **soft reboot** — zygote + system_server restart; kernel + native daemons survive; ~seconds |
+| Kernel | everything | full reboot |
+
+Key point for WAR: Android is deliberately **not** a single point of
+failure for apps. A monolithic WAR runtime collapses "system_server +
+every app" into one process — a host crash drops the whole soft layer
+(only kernel + native daemons survive). The Hybrid model (the WAR
+"zygote") is how to recover Android's failure-domain properties.
 
 ---
 
@@ -461,23 +557,37 @@ the first change to that model. Boundary A WIT remains stable.
 
 ## 11. Next step
 
-To be filled in by the user. Candidates from this document:
+Re-baselined 2026-05-20.
 
-- **Smallest credible Boundary B implementation**: haptics via rsbinder
-  + VibratorHAL AIDL, replacing the current sysfs probe in
-  `haptics_impl.rs`. Validates the rsbinder pipeline end to end without
-  touching the render path.
-- **De-risking step for §5**: rsbinder `ISurfaceComposer.getDisplayInfo`
-  round-trip. Cheap, no behavior change.
-- **Runtime-model spike (§9)**: measure cold-start time and per-app
-  steady-state memory for a second wasmtime+skia+AOT load on the Pixel
-  2 XL. Numbers decide monolithic vs process-per-app vs hybrid before
-  any arbiter code is written.
-- **Forward-compatible loader skeleton (§7.6)**: introduce
+**Done since this doc was first written:**
+- ~~Smallest credible Boundary B — haptics via rsbinder + VibratorHAL
+  AIDL~~ — done, task 16 (device-verified). Sensors / power / thermal /
+  lights / audio HALs followed in tasks 17–21.
+- ~~De-risking step for §5 — `ISurfaceComposer` round-trip~~ — done,
+  task 22 (SurfaceFlinger reachable, binder transport validated).
+
+**Recommended next — boot-model bring-up:**
+
+1. **Write the boot-model sub-roadmap** (§6.1 + §5) before executing
+   anything: how the runtime launches as a privileged process
+   (`init.rc` service vs `su`-run binary), surface acquisition, input
+   acquisition, what gets `stop`-ed (SystemUI), and the recovery
+   story. Turns the post-ART arc into ordered, verifiable steps.
+2. **Standalone-surface spike** — step 1 of that sub-roadmap and the
+   keystone de-risk. Today the host only runs as a `NativeActivity`.
+   The spike: run it as a plain privileged process (no Activity),
+   create a fullscreen `SurfaceControl` directly from SurfaceFlinger
+   via `SurfaceComposerClient` (the libgui shim, §5), EGL-render one
+   frame. Proves the entire post-ART display path; if it fails, it is
+   the cheapest possible place to find out.
+
+**Still open, lower urgency:**
+- **Runtime-model spike (§9)** — measure 2nd-instance cold-start +
+  per-app memory. §9 now leans monolithic-first *regardless*, so this
+  measures *when* Hybrid becomes worth it, not a blocker.
+- **Forward-compatible loader skeleton (§7.6)** — introduce the
   `app-loader.rs` interface even though it only handles single-`.cwasm`
   today.
-- **Write up boot-model task (§6.1 + §5)** as a separate roadmap
-  before any execution.
 
 ---
 
@@ -583,6 +693,20 @@ the reference we'd point at if anyone (us or upstream) ever writes
 **(5)**. Do not pursue **(3)** or **(4)** without a much stronger
 forcing function.
 
-The wart-host worker-thread refactor (task 26) is sufficient for
-the POC to remain usable for demo / development purposes regardless
-of which fallback we end up taking.
+**Update 2026-05-20 — re-prioritised; task-26 status corrected.**
+
+- Task 26 (`Store` on a worker thread + periodic `Store::gc`) was
+  **attempted and reverted** — it removed the ANR but introduced
+  worse input-lag accumulation (5–6 s after minutes), a net
+  regression. So there is currently **no DRC mitigation in the
+  deployed host**; DRC runs stock (sweeps only on a `memory.grow`
+  failure). The §12.1 "local mitigations" note and the earlier
+  "sufficient for the POC" line both pre-date that revert and no
+  longer hold.
+- The §9 **monolithic-first** decision moves DRC onto the critical
+  path. A monolithic runtime shares one `Store` / GC heap across all
+  apps, so one app's sweep stall freezes *every* app — shared fate.
+  DRC must therefore get a real answer (a §12.4 fallback, or upstream
+  #13403) **before** running more than one app concurrently — it is
+  no longer a "someday" item. The single-app PoC is unaffected and
+  remains demo-usable.
