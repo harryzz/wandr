@@ -38,36 +38,29 @@ address-comparison.
 
 ## What it shows
 
-`Main.kt` reproduces the failure with no skia / Compose / Android:
+`Main.kt` runs with no skia / Compose / Android and measures **two**
+things, so a fix can be judged on both:
 
-1. Inside a `withScopedMemoryAllocator`, call `componentModelRealloc`
-   for a block, write a sentinel `55 66 77 44`, keep the pointer —
-   this models the WASI preview1 adapter's long-lived `State`.
-2. `freeAllComponentModelReallocAllocatedMemory()` — exactly what
-   every Kotlin `wit-bindgen` WIT call does between invocations.
-3. Open a new `withScopedMemoryAllocator` and allocate — this reuses
-   the just-freed address range and writes `AA BB CC DD`.
-4. Read the long-lived block back through the still-held pointer.
+- **[UAF]** — `componentModelRealloc` a block, write a sentinel
+  `55 66 77 44` (models the WASI adapter's long-lived `State`),
+  `freeAllComponentModelReallocAllocatedMemory()`, then open a new
+  `withScopedMemoryAllocator` and write `AA BB CC DD`. Read the
+  long-lived block back: sentinel intact = no use-after-free.
+- **[reclaim]** — two `realloc`/`freeAll` cycles allocate small blocks
+  `b1` then `b2`. `b2 == b1` means per-call realloc memory is actually
+  reclaimed; `b2 > b1` means it leaks.
 
-```
-$ wasmtime run …               # stock 2.4.0-RC stdlib
-KT-86415 — canonical-ABI realloc use-after-free
-  long-lived realloc block @ 0; sentinel written = [55,66,77,44]
-  after freeAll + one new withScopedMemoryAllocator: read back = [aa,bb,cc,dd]
-  => USE-AFTER-FREE: long-lived realloc memory was reused and overwritten
-```
+A correct fix must pass *both*. Results across three stdlib builds:
 
-The long-lived block — written before the `freeAll` — comes back
-holding the *new* scope's bytes. Anything still using the original
-pointer (the adapter's `State`) is now reading another allocation's
-data.
+| stdlib | [UAF] | [reclaim] | verdict |
+|--------|-------|-----------|---------|
+| stock 2.4.0-RC | overwritten (`aa,bb,cc,dd`) | `b1==b2` | **BUG** — use-after-free |
+| `destroy()` parent-bump patch | intact | `b1=131072, b2=135168` | **PARTIAL** — UAF fixed, per-call leaks |
+| Tier 2: persistent realloc allocator + watermark `freeAll` | intact | `b1==b2==65536` | **PASS** |
 
-Run against the proposed stdlib patch (the rejected `destroy()`
-parent-bump, below) and the sentinel survives — `read back =
-[55,66,77,44]` — because the new scope's high-water mark is pushed
-past the long-lived block. That is the patch "working" by never
-reusing the address: it converts the use-after-free into a leak, as
-JetBrains noted.
+Stock reclaims per-call memory but has the use-after-free. The
+`destroy()` patch fixes the UAF but stops reclaiming *anything* —
+JetBrains' "makes everything a memory leak." Only Tier 2 does both.
 
 ## Build + run
 
@@ -87,29 +80,47 @@ wasmtime run --wasm gc=y --wasm function-references=y --wasm exceptions=y \
     --wasi preview2 /tmp/repro.wasm
 ```
 
-## On the "fix"
+## On the fix
 
-This repo previously proposed a `destroy()` patch that propagates a
-child scope's high-water mark to its parent (see
+### The rejected patch — `destroy()` parent-bump
+
+This repo originally proposed making `ScopedMemoryAllocator.destroy()`
+propagate the child scope's high-water mark to its parent (see
 [`kt-86415-fix-completeness.md`](kt-86415-fix-completeness.md), written
-*before* the JetBrains response). JetBrains **rejected it as a fix**:
-never-freeing just turns the use-after-free into a read of immutable
+*before* the JetBrains response). JetBrains **rejected it**: never
+reusing an address turns the use-after-free into a read of immutable
 memory that "works" until the first repeated allocation — *"not a
 solution to use-after-free, just defining UB conveniently (and making
-everything a memory leak)"* — and it is fragile with multiple parallel
-child allocators at the same scope.
+everything a memory leak)"*. The `[reclaim]` column above is that leak.
 
-So there is no clean stdlib-side patch yet. The real fix is one of:
+### Tier 2 — persistent realloc allocator + watermark `freeAll`
 
-- **adapter-side** — the WASI preview1 component adapter must not keep
-  long-lived `State` in canonical-ABI `realloc` memory; or
-- **upstream Kotlin** decides to support `realloc` as a general
-  long-lived allocator and stops calling `freeAll` so aggressively.
+A stdlib-side change (`kotlin/wasm/unsafe/MemoryAllocation.kt`) that
+passes both probes:
 
-That decision (KT-86415, *Investigating*) determines where the fix
-belongs. The downstream project that hit this ships a pragmatic
-stopgap — the rejected patch *plus* a self-heal in its WASI-adapter
-fork — but that is a workaround, not a resolution.
+- `reallocAllocator` is **not** destroyed/nulled by `freeAll`; it
+  persists for the process lifetime.
+- The first `freeAll` records a **watermark** — the realloc high-water
+  mark at that point. The adapter's long-lived `State` sits below it.
+- Every later `freeAll` rewinds the realloc allocator to the watermark:
+  per-call memory above it is reclaimed; the long-lived block below is
+  preserved.
+- Scoped allocators opened while `reallocAllocator` is alive become its
+  children, so they sit *above* realloc memory and can't collide — the
+  `destroy()` parent-bump is no longer needed and is reverted.
+
+The catch: the watermark is a **heuristic** — "realloc memory live at
+the first `freeAll` is permanent." It holds when the adapter sets up
+`State` before the guest's first marshalling cycle (true for the WASI
+preview1 adapter), but a single monotonic watermark cannot represent a
+long-lived allocation made *after* per-call traffic starts. The fully
+general fix is a per-call realloc arena (a wit-bindgen codegen change),
+or — JetBrains' actual recommendation — adapter-side: don't keep
+`State` in canonical-ABI `realloc` memory at all.
+
+KT-86415 (*Investigating*) decides whether the stdlib should support
+`realloc` as a long-lived allocator at all — which is what determines
+whether a Tier-2-style change is acceptable upstream.
 
 ## Context
 
