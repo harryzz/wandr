@@ -1,0 +1,86 @@
+From 058822330a47698c67a63aebb94b853c77817a5d Mon Sep 17 00:00:00 2001
+From: harry <z.zahariev@mishmash.io>
+Date: Thu, 21 May 2026 11:39:16 +0300
+Subject: [PATCH] wasi-preview1 adapter: pin State at a fixed linear-memory
+ address (KT-86415)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+State::new() allocated the adapter's 64 KB State via the imported
+cabi_realloc — i.e. Kotlin/Wasm's componentModelRealloc — placing it in
+the reclaimable ScopedMemoryAllocator bump region. A later
+freeAllComponentModelReallocAllocatedMemory + withScopedMemoryAllocator
+then reuses that range and clobbers State (use-after-free, KT-86415).
+
+Place State at the fixed address 0x10000, growing linear memory to cover
+[0x10000,0x20000). Pairs with a Kotlin stdlib patch that starts the root
+ScopedMemoryAllocator at 0x20000, excluding the reserved window.
+
+Downstream wart fork (task 34); not for upstream as-is.
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+---
+ .../src/lib.rs                                | 39 ++++++++++---------
+ 1 file changed, 21 insertions(+), 18 deletions(-)
+
+diff --git a/crates/wasi-preview1-component-adapter/src/lib.rs b/crates/wasi-preview1-component-adapter/src/lib.rs
+index 3e89ea191..01c45954c 100644
+--- a/crates/wasi-preview1-component-adapter/src/lib.rs
++++ b/crates/wasi-preview1-component-adapter/src/lib.rs
+@@ -2824,16 +2824,6 @@ impl State {
+ 
+     #[cold]
+     fn new() -> *mut State {
+-        #[link(wasm_import_module = "__main_module__")]
+-        unsafe extern "C" {
+-            fn cabi_realloc(
+-                old_ptr: *mut u8,
+-                old_len: usize,
+-                align: usize,
+-                new_len: usize,
+-            ) -> *mut u8;
+-        }
+-
+         assert!(matches!(
+             unsafe { get_allocation_state() },
+             AllocationState::StackAllocated
+@@ -2841,14 +2831,27 @@ impl State {
+ 
+         unsafe { set_allocation_state(AllocationState::StateAllocating) };
+ 
+-        let ret = unsafe {
+-            cabi_realloc(
+-                ptr::null_mut(),
+-                0,
+-                mem::align_of::<UnsafeCell<State>>(),
+-                mem::size_of::<UnsafeCell<State>>(),
+-            ) as *mut State
+-        };
++        // KT-86415 (wart task 34): State lives at a fixed reserved address, NOT
++        // via cabi_realloc. cabi_realloc == Kotlin's componentModelRealloc,
++        // which places it in the reclaimable ScopedMemoryAllocator bump region;
++        // once Kotlin runs `freeAllComponentModelReallocAllocatedMemory` the
++        // next `withScopedMemoryAllocator` reuses that range and clobbers State
++        // — a use-after-free. The Kotlin stdlib is patched so its root
++        // ScopedMemoryAllocator starts at RESERVED_BASE (0x20000);
++        // [STATE_BASE, STATE_BASE + size_of::<State>()) is excluded from it.
++        // State is exactly one page (see the `_size_assert` above), so this
++        // reserved window is exactly [0x10000, 0x20000).
++        const STATE_BASE: usize = 0x10000;
++        let ret = STATE_BASE as *mut State;
++
++        // Ensure linear memory covers the reserved State page before writing.
++        let need_pages = (STATE_BASE + size_of::<State>()).div_ceil(PAGE_SIZE);
++        let have_pages = core::arch::wasm32::memory_size::<0>();
++        if have_pages < need_pages {
++            // memory.grow returns usize::MAX on failure.
++            let prev = core::arch::wasm32::memory_grow::<0>(need_pages - have_pages);
++            assert!(prev != usize::MAX);
++        }
+ 
+         unsafe { set_allocation_state(AllocationState::StateAllocated) };
+ 
+-- 
+2.47.3
+
