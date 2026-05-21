@@ -166,8 +166,18 @@ pub struct SkiaRenderer {
     gr_context: skia_safe::gpu::DirectContext,
 
     surface:    Surface,
+    /// Physical GL surface size (the EGL surface dimensions).
     pub width:  u32,
     pub height: u32,
+    /// Logical canvas size reported to the guest via surface-width/height.
+    /// Equals width/height except in the task-33 standalone rotated mode,
+    /// where the guest authors a portrait UI into a landscape GL surface.
+    pub logical_width:  u32,
+    pub logical_height: u32,
+    /// Base canvas transform re-applied at every begin_frame — identity
+    /// normally, a 90° rotation in the standalone rotated mode so the
+    /// guest's portrait drawing maps into the landscape GL surface.
+    pub base_matrix: skia_safe::Matrix,
 
     #[cfg(target_os = "android")]
     egl:        crate::egl::android::EglContext,
@@ -264,6 +274,8 @@ impl SkiaRenderer {
             return Ok(Self {
                 egl, gr_context, surface,
                 width: size.width, height: size.height,
+                logical_width: size.width, logical_height: size.height,
+                base_matrix: skia_safe::Matrix::new_identity(),
                 text_blobs:       HashMap::new(),
                 multi_blob_cache: HashMap::new(),
                 text_blob_runs:   Vec::new(),
@@ -299,6 +311,8 @@ impl SkiaRenderer {
             ).ok_or_else(|| anyhow::anyhow!("raster surface failed"))?;
             Ok(Self {
                 surface, width: size.width, height: size.height,
+                logical_width: size.width, logical_height: size.height,
+                base_matrix: skia_safe::Matrix::new_identity(),
                 text_blobs:       HashMap::new(),
                 multi_blob_cache: HashMap::new(),
                 text_blob_runs:   Vec::new(),
@@ -326,6 +340,105 @@ impl SkiaRenderer {
                 next_bitmap_canvas_id: 1,
             })
         }
+    }
+
+    /// Build a renderer directly on a raw `ANativeWindow*`, bypassing winit.
+    /// Used by the task-33 standalone (no-`NativeActivity`) mode, where the
+    /// window comes from SurfaceFlinger via the `libsf_surface` shim. The
+    /// EGL/GrContext/Skia path below is identical to `new()`'s Android branch.
+    #[cfg(target_os = "android")]
+    pub fn from_native_window(
+        native_window: *mut std::ffi::c_void,
+        intended_w: u32,
+        intended_h: u32,
+    ) -> Result<Self> {
+        let egl = crate::egl::android::EglContext::new(native_window)?;
+
+        let gl_interface = skia_safe::gpu::gl::Interface::new_load_with(
+            crate::egl::android::EglContext::proc_resolver()
+        ).ok_or_else(|| anyhow::anyhow!("GL interface failed"))?;
+
+        let mut gr_context = skia_safe::gpu::direct_contexts::make_gl(
+            gl_interface, None
+        ).ok_or_else(|| anyhow::anyhow!("GrContext failed"))?;
+
+        let surface = Self::make_gl_surface(
+            &mut gr_context, egl.width, egl.height)?;
+        // egl.{width,height} are the real (physical) GL surface dimensions.
+        let (width, height) = (egl.width as u32, egl.height as u32);
+
+        // The caller (the sf_surface shim) asks for `intended` dimensions
+        // (portrait). If the EGL surface came up with axes swapped vs that
+        // — the panel's 90° transform hint (Android pre-rotation) — we run
+        // in "rotated mode": the guest authors a portrait UI in logical
+        // coords and a 90° base transform maps it into the landscape GL
+        // surface. SurfaceFlinger's hint-rotation then lands it upright.
+        let rotated = intended_w != 0 && intended_h != 0
+            && (intended_w < intended_h) != (width < height);
+        let (base_matrix, logical_width, logical_height) = if rotated {
+            // Four affine maps take logical-portrait (1440x2880) onto the
+            // physical-landscape (2880x1440) buffer; which one renders
+            // upright depends on SurfaceFlinger's transform-hint direction
+            // and the panel install transform. Select with WART_ORIENT=0..3
+            // so all four can be tried without rebuilding; once the right
+            // one is known it becomes the default.
+            let w = width as f32;
+            let h = height as f32;
+            let orient: u32 = std::env::var("WART_ORIENT").ok()
+                .and_then(|s| s.parse().ok()).unwrap_or(0);
+            // new_all(scaleX, skewX, transX, skewY, scaleY, transY, 0,0,1)
+            let m = match orient {
+                // 1: 90° the other way — (lx,ly) -> (ly, H - lx)
+                1 => skia_safe::Matrix::new_all(0.0, 1.0, 0.0,
+                                                -1.0, 0.0, h, 0.0, 0.0, 1.0),
+                // 2: transpose — (lx,ly) -> (ly, lx)
+                2 => skia_safe::Matrix::new_all(0.0, 1.0, 0.0,
+                                                1.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+                // 3: anti-transpose — (lx,ly) -> (W - ly, H - lx)
+                3 => skia_safe::Matrix::new_all(0.0, -1.0, w,
+                                                -1.0, 0.0, h, 0.0, 0.0, 1.0),
+                // 0 (default): 90° — (lx,ly) -> (W - ly, lx)
+                _ => skia_safe::Matrix::new_all(0.0, -1.0, w,
+                                                1.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+            };
+            log::info!(
+                "renderer: rotated mode WART_ORIENT={orient} — logical {}x{}, \
+                 physical {}x{}", height, width, width, height,
+            );
+            (m, height, width)
+        } else {
+            (skia_safe::Matrix::new_identity(), width, height)
+        };
+
+        Ok(Self {
+            egl, gr_context, surface, width, height,
+            logical_width, logical_height, base_matrix,
+            text_blobs:       HashMap::new(),
+            multi_blob_cache: HashMap::new(),
+            text_blob_runs:   Vec::new(),
+            images:           HashMap::new(),
+            shader_cache:     HashMap::new(),
+            next_blob_id:     1,
+            next_shader_id:   1,
+            recorders:        HashMap::new(),
+            pictures:         HashMap::new(),
+            recording_stack:  Vec::new(),
+            next_recorder_id: 1,
+            next_picture_id:  1,
+            drawables:        HashMap::new(),
+            next_drawable_id: 1,
+            typeface_cache:   HashMap::new(),
+            text_image_cache: HashMap::new(),
+            text_image_keys:  std::collections::VecDeque::with_capacity(TEXT_IMAGE_CACHE_CAP),
+            para_builders:    HashMap::new(),
+            paragraphs:       HashMap::new(),
+            font_collection:  Self::make_font_collection(),
+            next_para_id:     1,
+            para_rect_cache:  Vec::new(),
+            bitmap_canvases:       HashMap::new(),
+            bitmap_canvas_lru:     std::collections::VecDeque::with_capacity(128),
+            next_bitmap_canvas_id: 1,
+        })
     }
 
     /// Move CPU-side caches from `old` into `self` so warm-resume preserves
@@ -577,8 +690,11 @@ fn font_candidate_paths(bold: bool, italic: bool) -> &'static [&'static str] {
 
 impl crate::bindings::my::skiko_gfx::canvas::Host for crate::HostState {
 
-    fn surface_width (&mut self) -> u32 { self.renderer.width  }
-    fn surface_height(&mut self) -> u32 { self.renderer.height }
+    // Guests lay out against the LOGICAL size — equal to the physical GL
+    // surface except in the standalone rotated mode (portrait logical,
+    // landscape physical).
+    fn surface_width (&mut self) -> u32 { self.renderer.logical_width  }
+    fn surface_height(&mut self) -> u32 { self.renderer.logical_height }
 
     fn begin_frame(&mut self) {
         #[cfg(target_os = "android")]
@@ -586,11 +702,18 @@ impl crate::bindings::my::skiko_gfx::canvas::Host for crate::HostState {
             static LOGGED: std::sync::atomic::AtomicBool =
                 std::sync::atomic::AtomicBool::new(false);
             if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                log::info!("begin_frame: size={}x{}",
+                log::info!("begin_frame: logical={}x{} physical={}x{}",
+                    self.renderer.logical_width, self.renderer.logical_height,
                     self.renderer.width, self.renderer.height);
             }
             self.renderer.egl.make_current();
         }
+        // Re-apply the base transform as this frame's canvas root —
+        // identity normally, the rotated-mode 90° rotation in standalone.
+        let base = self.renderer.base_matrix;
+        let c = self.renderer.canvas();
+        c.reset_matrix();
+        c.concat(&base);
     }
 
     fn end_frame(&mut self) {
@@ -622,7 +745,12 @@ impl crate::bindings::my::skiko_gfx::canvas::Host for crate::HostState {
     }
 
     fn reset_matrix(&mut self) {
-        self.renderer.canvas().reset_matrix();
+        // Reset to the base transform, not bare identity — otherwise the
+        // standalone rotated-mode 90° base would be lost mid-frame.
+        let base = self.renderer.base_matrix;
+        let c = self.renderer.canvas();
+        c.reset_matrix();
+        c.concat(&base);
     }
 
     fn clip_rect(&mut self, x: f32, y: f32, w: f32, h: f32, anti_alias: bool) {

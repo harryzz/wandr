@@ -31,3 +31,11 @@ Thumbs.db
 # Backtraces / core dumps
 core
 core.*
+
+# Task 33: vendored AOSP source + AIDL codegen for the (abandoned)
+# out-of-tree libgui compile — large and regenerable (scripts/gen-libgui-aidl.sh;
+# the shim now builds in-tree on the AOSP host). Not committed.
+/vendor/aosp-system-core/
+/vendor/aosp-system-libbase/
+/vendor/aosp-system-logging/
+/vendor/generated-aidl/

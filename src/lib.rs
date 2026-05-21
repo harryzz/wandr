@@ -24,6 +24,13 @@ mod eventfd_signal;
 mod profiling;
 #[cfg(target_os = "android")]
 mod bionic_compat;
+#[cfg(target_os = "android")]
+mod wasi_stderr;
+// Task 33 boot-model: standalone (no-NativeActivity) launch path.
+#[cfg(target_os = "android")]
+mod sf_surface;
+#[cfg(target_os = "android")]
+pub mod standalone;
 
 mod bindings {
     wasmtime::component::bindgen!({
@@ -75,7 +82,9 @@ pub struct App {
 }
 
 impl App {
-    fn make_engine() -> Engine {
+    // pub(crate) so the task-33 standalone path (src/standalone.rs) builds an
+    // identically-configured Engine — the cwasm contract depends on it.
+    pub(crate) fn make_engine() -> Engine {
         let mut config = wasmtime::Config::new();
         config.wasm_component_model(true);
         config.wasm_gc(true);
@@ -200,7 +209,17 @@ impl ApplicationHandler for App {
 
         log::info!("resumed (cold) — creating store and instantiating component");
         if let Some(component) = &self.component {
-            let wasi = WasiCtxBuilder::new().inherit_stdio().build();
+            // Task 30 step 1: route guest stderr to logcat *synchronously*
+            // — wasmtime-wasi 44's inherit_stderr otherwise enqueues bytes
+            // on a worker task that won't drain before a SIGILL trap kills
+            // the process. See wasi_stderr.rs for details.
+            let mut wasi_builder = WasiCtxBuilder::new();
+            wasi_builder.inherit_stdin().inherit_stdout();
+            #[cfg(target_os = "android")]
+            { wasi_builder.stderr(wasi_stderr::LogcatStderr); }
+            #[cfg(not(target_os = "android"))]
+            { wasi_builder.inherit_stderr(); }
+            let wasi = wasi_builder.build();
             let host = HostState {
                 renderer,
                 scheduler: scheduler_impl::SchedulerState::default(),
@@ -630,6 +649,11 @@ pub fn android_main(app: winit::platform::android::activity::AndroidApp) {
         android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
     );
     log::info!("android_main start");
+    // Task 30 step 1: surface wasi guest stderr (assertion text + line
+    // number from preview1 adapter's `assert_fail`) and host panics into
+    // logcat. Must run before any WasiCtxBuilder so inherit_stdio sees
+    // the redirected fd 2.
+    wasi_stderr::redirect_stderr_to_logcat();
 
     // Priority: filesystem (hot-reload) → APK assets → file arg
     let mut runner = if let Some(bytes) = find_cwasm_on_filesystem(&app) {
