@@ -33,6 +33,9 @@ memmap2            = "0.9"
 # wasmtime, ndk, winit, etc; the explicit dep makes the surface we use
 # (eventfd / read / write / memfd_create / sysconf) discoverable.
 libc               = "0.2"
+# Bytes type used by wasmtime-wasi's OutputStream trait (wart-host
+# implements a custom synchronous logcat sink — see wasi_stderr.rs).
+bytes              = "1"
 
 # skia-safe: GL backend only (no Vulkan needed — EGL gives us GLES)
 [dependencies.skia-safe]
