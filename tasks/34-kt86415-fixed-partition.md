@@ -1,7 +1,21 @@
 # Task 34 — KT-86415: fix the adapter-State use-after-free via a fixed linear-memory partition (Option B)
 
-**Status:** 🔲 scoped — not started. Self-contained for a fresh session.
+**Status:** ✅ DONE — device-verified 2026-05-21.
 **Scoped:** 2026-05-20. Spun out of task 30 and the KT-86415 investigation.
+
+> **Outcome (2026-05-21):** Option B shipped as specified. Kotlin stdlib
+> `2.4.258-SNAPSHOT` (root `ScopedMemoryAllocator` starts at
+> `RESERVED_BASE=0x20000`, `destroy()` stock); adapter fork `State::new`
+> pins `State` at `STATE_BASE=0x10000`. Pre-flight confirmed `wart-app.wasm`
+> has zero static linear data (`(memory 0)`, no `(data)` segments) so
+> `[0,0x20000)` is free — constants used unchanged. Win 1: DatePicker
+> chevrons + Tooltip long-press → 0 SIGILL / 0 corruption, verified on a
+> build with the `State::with` self-heal **removed**. Win 2: idle
+> wasm-linear-memory leak 0.111 MB/s vs the known-good 2.4.257 baseline's
+> 0.114 MB/s — identical, no regression; residual is the pre-existing
+> wasmtime-DRC leak (#13403), out of scope. Self-heal removed; init.d
+> override kept (points at 2.4.258) until KT-86415 lands upstream; the
+> superseded 2.4.255/256/257 stdlib snapshots were deleted from mavenLocal.
 
 ---
 

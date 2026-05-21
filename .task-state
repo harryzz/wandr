@@ -1,5 +1,5 @@
-TASK=33
-STEP=1
-STATUS=scoped
-LAST_SUCCESS=Tasks 31 (popup graphicsLayer-alpha freeze) + 32 (path-combine / SegmentedButton) resolved & device-verified 2026-05-20. Task 30 fully closed (Step 4 deferred w/ re-open criteria, Step 6 audit done).
-NOTES=Task 33 = boot-model bring-up sub-roadmap. NOT STARTED. Full plan: tasks/33-boot-model-bringup.md. Step 1 = standalone-surface spike — run wart-host as a non-Activity su-launched process, create a fullscreen SurfaceControl from SurfaceFlinger via a libgui SurfaceComposerClient C++ shim, EGL-render one frame. Read post-art-roadmap.md sections 5/5.1/9/11 first.
+TASK=34
+STEP=verify-done
+STATUS=complete
+LAST_SUCCESS=Task 34 (KT-86415 Option B fixed-partition) COMPLETE + Phase 5 done. Kotlin stdlib 2.4.258-SNAPSHOT (root allocator @ RESERVED_BASE=0x20000) + adapter State::new @ STATE_BASE=0x10000. Device-verified: 0 SIGILL/corruption on DatePicker chevrons + Tooltip long-press; idle leak 0.111 MB/s == 2.4.257 baseline (no regression). State::with self-heal removed. CLAUDE.md + memory updated.
+NOTES=init.d override kept @ 2.4.258 (stays until KT-86415 lands upstream). Superseded 2.4.255/256/257 stdlib snapshots deleted from mavenLocal; only 2.4.258 remains. Adapter fork now differs from upstream only by State::new.
