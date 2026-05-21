@@ -16,6 +16,15 @@
 > wasmtime-DRC leak (#13403), out of scope. Self-heal removed; init.d
 > override kept (points at 2.4.258) until KT-86415 lands upstream; the
 > superseded 2.4.255/256/257 stdlib snapshots were deleted from mavenLocal.
+>
+> **Commits & patches:** the wart repo carries this doc + CLAUDE.md +
+> the triage agents (`main` @ `e074b51e`). The two upstream-repo halves
+> can't be pushed (detached checkouts of `bytecodealliance/wasmtime` and
+> `JetBrains/kotlin`) — they sit on local `kt-86415-option-b` branches
+> (`~/wart/wasmtime-src` @ `058822330`, `~/xl/kotlin` @ `1ab69ee7dc4d`)
+> and are archived as reappliable `git am` patches in the wart repo:
+> - `~/wart/patches/kt-86415/kotlin-stdlib-reserved-base.patch`
+> - `~/wart/patches/kt-86415/wasmtime-adapter-state-fixed-address.patch`
 
 ---
 
