@@ -1,7 +1,7 @@
 # Task 33 — Boot-model bring-up: run the runtime as a standalone privileged process
 
-**Status:** 🔲 scoped — not started. This is a sub-roadmap; execute the
-steps in order, each verifiable on the rooted phone.
+**Status:** 🟡 in progress — Step 1 ✅ device-verified 2026-05-21. This is a
+sub-roadmap; execute the steps in order, each verifiable on the rooted phone.
 
 **Drafted:** 2026-05-20. Spun out of `post-art-roadmap.md` §11
 ("Recommended next — boot-model bring-up").
@@ -106,7 +106,79 @@ anything else.
 that was never a `NativeActivity`. If this fails, the showstopper is
 found at the cheapest possible point.
 
+**✅ DONE — device-verified 2026-05-21.** `cpp/sf_probe.cpp` (in the wart
+repo at `wart-host/cpp/sf_probe.cpp` + `sf_probe.bp`) runs clean on the
+Pixel 2 XL: `SurfaceComposerClient initCheck=0` → `createSurface ok` →
+transaction (top z-order, shown) → EGL → `eglSwapBuffers` → **solid blue
+frame fills the whole panel** for 10 s, from a non-`NativeActivity`
+`su`-run process. No SIGILL, no SELinux denial. The post-ART display path
+is proven.
+
+Build method (the out-of-tree libgui-header approach was abandoned — AIDL
+*and* HIDL codegen fan-out makes it infeasible; `libgui` must be compiled
+in an AOSP source tree):
+
+- Build host `a-03` (128 GB / 72 core) holds a LineageOS 22.2 tree at
+  `~/android/lineage`. `sf_probe` is a soong `cc_binary` at
+  `external/sf_probe/` (`Android.bp` = `wart-host/cpp/sf_probe.bp`).
+- Lunched **generic `aosp_arm64-trunk_staging-userdebug`** (not
+  `lineage_taimen` — that needs proprietary vendor blobs). A generic lunch
+  on a LineageOS tree needs three fixes:
+  1. neutralize the two `lineage_generator` kernel-header modules in
+     `vendor/lineage/build/soong/Android.bp` (they reference kernel
+     make-vars only defined for a device build);
+  2. `DISABLE_DEXPREOPT_CHECK=true` (LineageOS system-server-jar check);
+  3. `BUILD_BROKEN_DUP_RULES := true` in
+     `build/make/target/board/generic_arm64/BoardConfig.mk` (LineageOS vs
+     generic-product duplicate install rules, e.g. `apns-conf.xml`).
+- `breakfast`/`extract-files` artifacts (`device/google/{taimen,wahoo,
+  gs-common}`, `kernel/google/wahoo`, `vendor/google/taimen`,
+  `packages/apps/ElmyraService`) moved to `~/android/_trimmed` so the
+  generic lunch stays clean.
+- Output: `out/target/product/generic_arm64/system/bin/sf_probe` — 51 KB
+  aarch64 PIE ELF. Built-against generic AOSP-15 `libgui` runs fine on the
+  device's LineageOS-22.2 SurfaceFlinger — the libgui-ABI worry (M1/M4) is
+  empirically settled.
+
 ### Step 2 — Decouple the host from `NativeActivity` / winit-Android
+
+**🟡 partially done 2026-05-22** — the standalone scaffold landed together
+with Step 1's wart-host integration: `wart-host --standalone` is a plain
+`main()` path (no `android-activity`, no winit `EventLoop`) that acquires
+its surface from the `libsf_surface` shim and runs a render+pace loop —
+**device-verified drawing the renderer test frame on the Pixel 2 XL**.
+Files: `wart-host/src/standalone.rs`, `src/sf_surface.rs` (dlopen wrapper
+for `libsf_surface.so`), `SkiaRenderer::from_native_window`
+(`canvas_impl.rs`), `main.rs` `--standalone` dispatch. The `libgui` shim is
+`cpp/sf_surface.{cpp,bp}`, built in-tree as a soong `cc_library_shared`.
+**✅ cwasm render loop done 2026-05-22** — `standalone.rs::run_cwasm_loop`
+instantiates the component and drives `call_render_frame` + scheduler +
+lifecycle with no winit; device-verified running the full Compose PoC at
+60 fps from a non-Activity process.
+
+**🟡 Remaining in Step 2 — orientation.** Diagnosis: the shim's
+`setDisplayProjection(ROTATION_0)` makes the display portrait `1440×2880`
+and it sticks, but the taimen panel hands producers a 90° **transform
+hint** (standard Android pre-rotation), so the `Surface`/EGL surface is
+forced to `2880×1440` and `setBuffersGeometry` can't override it.
+
+A host-side **render-rotate** was implemented (`canvas_impl.rs`:
+`SkiaRenderer` gains `base_matrix` + `logical_width/height`;
+`from_native_window` builds the rotation; `begin_frame`/`reset_matrix`
+apply it; `surface-width`/`surface-height` report logical; `WART_ORIENT`
+env var selects among 4 transforms). **Device-tested all 4 — none upright:**
+`WART_ORIENT` 0/1 rotate ±90°, 2/3 are mirrored. **Conclusion: a
+base-matrix rotation alone cannot fix it** — rendering a portrait buffer
+into the landscape buffer SF hands us only reaches those 4 orientations.
+
+**Proper fix (next):** the Android pre-rotation contract — query the
+`Surface` transform hint and call `ANativeWindow_setBuffersTransform(window,
+hint)` in the `sf_surface` shim so SurfaceFlinger inverts the pre-rotation
+during composition; then pair the `base_matrix` direction with the hint.
+Alternative: clear the hint and render a true `1440×2880` portrait buffer.
+
+Also remaining: confirm the `NativeActivity` APK still builds/runs
+(no-regression — changes were additive).
 
 - Add a launch mode with a plain `main()` and **no `android-activity`
   / no winit-Android `EventLoop`**. The host's per-frame loop becomes
@@ -185,8 +257,8 @@ found at the cheapest possible point.
 
 ## Verification checklist
 
-- [ ] Step 1 — a frame on the physical display from a non-Activity
-      `su`-run process.
+- [x] Step 1 — a frame on the physical display from a non-Activity
+      `su`-run process. ✅ device-verified 2026-05-21 (solid blue frame).
 - [ ] Step 2 — standalone mode runs the render loop with no
       `android-activity` dependency; NativeActivity mode still builds
       and works.
