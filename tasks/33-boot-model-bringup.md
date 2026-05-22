@@ -236,9 +236,22 @@ Also remaining: confirm the `NativeActivity` APK still builds/runs
   a proper sepolicy domain for the `init.rc` service is later work.
 - **Do not regress the `NativeActivity` build mode** — the PoC/demo
   and desktop builds depend on it. Standalone mode is additive.
-- **DRC GC (`post-art-roadmap.md` §12):** not this task, but note —
-  monolithic means one app's GC stall freezes all; relevant once >1
-  app runs concurrently, not for this single-app bring-up.
+- **DRC GC — the long-lived standalone runtime inherits an
+  upstream-unsolved problem.** wasmtime's DRC collector never
+  auto-triggers a sweep, so `standalone.rs::run_cwasm_loop` (a forever
+  loop, no `Store::gc`) grows unbounded → OOM on a heavy Compose guest
+  (~9 MB/s). The upstream auto-GC fix
+  ([wasmtime#13403](https://github.com/bytecodealliance/wasmtime/issues/13403)
+  / PR#13422) is **NOT a drop-in fix**: device-tested 2026-05-21 it
+  bounds the heap but reintroduces screen lag / a fresh ANR — the render
+  thread stalls in `force_gc` → `trace_vmctx_roots` root scans (the
+  guest has many GC globals). It trades unbounded memory for unbounded
+  GC-frequency overhead. So the standalone runtime is demo-usable for
+  short sessions (like the `NativeActivity` PoC) but **not yet a 24/7
+  host**; this is an upstream dependency, tracked in
+  `post-art-roadmap.md` §12 — see memory `wasmtime-drc-no-autoschedule`.
+  Do not treat #13422 as a quick win. (Also: monolithic means one app's
+  GC stall freezes all — relevant once >1 app runs concurrently.)
 
 ---
 
