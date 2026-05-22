@@ -156,29 +156,62 @@ instantiates the component and drives `call_render_frame` + scheduler +
 lifecycle with no winit; device-verified running the full Compose PoC at
 60 fps from a non-Activity process.
 
-**🟡 Remaining in Step 2 — orientation.** Diagnosis: the shim's
-`setDisplayProjection(ROTATION_0)` makes the display portrait `1440×2880`
-and it sticks, but the taimen panel hands producers a 90° **transform
-hint** (standard Android pre-rotation), so the `Surface`/EGL surface is
-forced to `2880×1440` and `setBuffersGeometry` can't override it.
+**✅ orientation RESOLVED 2026-05-22 — UI renders upright, crisp, correct
+aspect, no global side effects.**
 
-A host-side **render-rotate** was implemented (`canvas_impl.rs`:
-`SkiaRenderer` gains `base_matrix` + `logical_width/height`;
-`from_native_window` builds the rotation; `begin_frame`/`reset_matrix`
-apply it; `surface-width`/`surface-height` report logical; `WART_ORIENT`
-env var selects among 4 transforms). **Device-tested all 4 — none upright:**
-`WART_ORIENT` 0/1 rotate ±90°, 2/3 are mirrored. **Conclusion: a
-base-matrix rotation alone cannot fix it** — rendering a portrait buffer
-into the landscape buffer SF hands us only reaches those 4 orientations.
+*Root cause.* EGL on this device (taimen) always hands the producer a
+buffer whose axes are the **transpose** of the `createSurface` dimensions
+— `createSurface(1440×2880)` yields a `2880×1440` landscape buffer, which
+mismatches the portrait panel. `setBuffersGeometry` cannot override it.
 
-**Proper fix (next):** the Android pre-rotation contract — query the
-`Surface` transform hint and call `ANativeWindow_setBuffersTransform(window,
-hint)` in the `sf_surface` shim so SurfaceFlinger inverts the pre-rotation
-during composition; then pair the `base_matrix` direction with the hint.
-Alternative: clear the hint and render a true `1440×2880` portrait buffer.
+*Approaches tried and rejected:*
+- **`setBuffersTransform(ROT_90/270)`** — SurfaceFlinger on this device
+  composites `ROT_90` and `ROT_270` identically; it does not honour the
+  per-buffer transform as a composition rotation. Dead end.
+- **`setDisplayProjection(ROTATION_90)` + landscape layer stack** — rotates
+  correctly, but `setDisplayProjection` is a **global** display change: it
+  rotates the launcher / SystemUI too. Wrong mechanism for a guest layer.
+- The earlier 4-way `WART_ORIENT` base-matrix render-rotate — only ever
+  reaches ±90° / mirrored, never upright (confirmed again).
 
-Also remaining: confirm the `NativeActivity` APK still builds/runs
-(no-regression — changes were additive).
+*The fix (shipped).* Exploit the transpose instead of fighting it:
+`createSurface(2880×1440)` (landscape dims) → EGL hands back a
+`1440×2880` **portrait** buffer that matches the portrait panel 1:1.
+SurfaceFlinger composes it with no rotation and no scaling; the guest
+renders a portrait UI with a plain **identity** base matrix. Step 1 of the
+shim keeps a `setDisplayProjection(ROTATION_0)` *identity* projection
+(rotates nothing — only resets stale display state, since that state
+persists across process exit). Device-verified: upright, crisp, fills the
+panel width.
+
+Files: `cpp/sf_surface.{cpp,h}` (swapped `createSurface` dims, `ROTATION_0`
+identity projection, `out_transform`), `src/sf_surface.rs` (`CreateFn`
+3-arg + `transform` field), `src/standalone.rs` (passes transform, drives
+the guest `on-resize` once after instantiate), `src/canvas_impl.rs`
+(`from_native_window` gains a `transform_hint` param + quarter-turn base
+matrix + `begin_frame` clears to opaque black).
+
+**🟡 Still open in Step 2 (deferred — belongs with Steps 4–5 "own the
+display"):**
+- *Transparent lower region.* Where Compose doesn't paint, the `wart`
+  `SurfaceControl` is transparent and the launcher composites through.
+  `eLayerOpaque` is now set via `Transaction::setFlags` and `begin_frame`
+  clears to black, but the launcher still bled through in testing — HWC
+  shows an odd `sourceCrop=[58 116 1222 2444]` (SF sampling a sub-rect of
+  the buffer). Needs a separate look.
+- *Content fills only ~top half.* The app boots with a `BasicTextField`
+  focused + soft keyboard, laid out top-aligned; the Compose scene IS
+  correctly `1440×2880`. Cannot verify other states — no standalone input
+  until Step 3 (InputFlinger).
+- *App rotates with the OS.* When another app + the accelerometer rotate
+  the display, the `wart` layer rotates too — because we are a guest layer
+  in the OS-owned display, not the display owner. Expected at this stage;
+  resolved when the runtime owns the display (Steps 4–5).
+
+**✅ no-regression confirmed 2026-05-22** — the `NativeActivity` APK
+rebuilt, installed, and ran upright on the Pixel 2 XL; `render_frame`
+steady, the shared `begin_frame` clear-to-black is harmless there (Compose
+overdraws it). Step 2 is fully closed.
 
 - Add a launch mode with a plain `main()` and **no `android-activity`
   / no winit-Android `EventLoop`**. The host's per-frame loop becomes
@@ -191,14 +224,222 @@ Also remaining: confirm the `NativeActivity` APK still builds/runs
 
 ### Step 3 — Input acquisition from InputFlinger
 
-- No Activity ⇒ no winit input. Consume from **InputFlinger's input
-  channel** (roadmap §9 leaning — InputFlinger already does touch
-  processing / key remapping / gesture detection; reading raw
-  `/dev/input/event*` would reinvent it).
-- Register an input target / obtain an `InputChannel`, consume events
-  (`InputConsumer`), route to the guest's existing
-  `on-pointer-event-v2` / `on-key-event-v2` WIT exports.
-- Likely a C++ shim (`InputConsumer` is C++) or rsbinder.
+🟡 **scoped 2026-05-22 — plan below, not yet implemented.**
+
+No Activity ⇒ no winit input. The host side is already done: `src/input.rs`
+`dispatch_pointer_v2` / `dispatch_key_v2` feed the guest's
+`on-pointer-event-v2` / `on-key-event-v2` WIT exports (the winit path uses
+exactly these). Step 3 is only: get events into `standalone.rs`'s loop.
+
+#### Approach A vs B — research outcome
+
+**Approach A — InputFlinger input channel (CHOSEN).** AOSP ships an exact,
+working reference for a *native, non-Activity* process doing this:
+`frameworks/native/libs/gui/tests/EndToEndNativeInputTest.cpp` (class
+`InputSurface`). That de-risks it — the recipe is known-good. It also reuses
+InputFlinger's transport / batching / focus / key handling rather than
+re-implementing them, fits the project's in-tree-C++-shim pattern
+(`sf_surface`), and survives Step 4 (Step 4 stops SystemUI + launcher, not
+`system_server` — InputFlinger stays up).
+
+**Approach B — direct `/dev/input/event*` (evdev), rejected for now.** Pure
+Rust, no shim, no binder, no `system_server` dependency — genuinely
+appealing for the long-term boot model. But it means re-implementing the
+multitouch protocol-B (slot) decode, raw-coordinate scaling, and evdev→
+Android keycode mapping; and InputFlinger's hit-test/batching is lost.
+Keep B as the **fallback** if SELinux blocks the `su`-domain process from
+the `inputflinger` binder or the input-channel socket.
+
+#### Approach A — concrete recipe (from `EndToEndNativeInputTest.cpp`)
+
+New in-tree C++ shim `cpp/sf_input.{cpp,bp}` (soong `cc_library_shared`
+`libsf_input`, alongside `libsf_surface` in `external/sf_input/` on a-03;
+`shared_libs: libgui libinput libutils libbinder liblog`). `wart-host`
+`dlopen`s it like `sf_surface`. The shim, given the `SurfaceControl` the
+`sf_surface` shim already created:
+
+1. `sp<IInputFlinger> if = interface_cast<IInputFlinger>(
+   defaultServiceManager()->waitForService(String16("inputflinger")))`.
+2. `if->createInputChannel("wart channel", &channelCore)` →
+   `InputChannel::create(std::move(channelCore))` → the client channel.
+3. Build `sp<gui::WindowInfoHandle>`: `token =
+   channel->getConnectionToken()`, `name`, `dispatchingTimeout = 5s`,
+   `globalScaleFactor = 1.0`, `touchableRegion.orSelf(Rect(0,0,PW,PH))`,
+   an `InputApplicationInfo` with a fresh `BBinder` token.
+4. `SurfaceComposerClient::Transaction()
+   .setInputWindowInfo(sfSurfaceControl, windowInfoHandle)
+   .setFocusedWindow(FocusRequest{token,name,...}).apply(true)` — so
+   InputDispatcher routes touches in our region to the channel and key
+   events to us as the focused window.
+5. `InputConsumer consumer(channel)`. Expose a C ABI
+   `sf_input_poll(out_events*, max) -> count` that does a non-blocking
+   `consume(&factory, /*consumeBatches=*/true, frameTime, &seq, &ev)` loop
+   (poll the channel fd with timeout 0), `sendFinishedSignal(seq,true)` per
+   event, and flattens each `MotionEvent`/`KeyEvent` into a small POD
+   struct (`kind`, `pointer_id`, `x`, `y`, `pressure`, `key_code`).
+
+Rust side:
+- `src/sf_input.rs` — `dlopen` wrapper (mirror of `sf_surface.rs`); the
+  shim needs the `ANativeWindow*`/`SurfaceControl` handle, so `sf_surface`
+  must also hand back the `SurfaceControl` (add an out-param or a getter).
+- `src/standalone.rs` — once per loop iteration, call `sf_input_poll`,
+  translate each POD event through `input::dispatch_pointer_v2` /
+  `dispatch_key_v2` before `call_render_frame`.
+
+#### Risks / unknowns to verify during implementation
+
+- **SELinux:** the `su`-domain process calling the `inputflinger` binder
+  and reading the input-channel socket may hit AVC denials — pull `logcat`
+  + `dmesg` (use `rsbinder-triage`). If hard-blocked, fall back to B.
+- The `sf_surface` shim currently returns only the `ANativeWindow*`; it
+  must also expose the `SurfaceControl` (`g_control`) for
+  `setInputWindowInfo`. Either a new getter export or merge the input
+  setup into `sf_surface` itself.
+- Coordinates: InputFlinger reports in display space; our surface is the
+  full panel at `1:1`, so no scaling — but confirm against the
+  identity-orientation path.
+- Key events need the window focused (`setFocusedWindow`) and an
+  `InputApplicationInfo`, else InputDispatcher drops them / ANRs.
+
+#### Implementation progress — Step 3 input ✅, display clip ✅, orientation ⏳
+
+##### ✅ Step 3 — input routing (device-verified 2026-05-22)
+
+Approach A, folded into the `sf_surface` shim: `register_input_window()`
+does `waitForService("inputflinger")` → `createInputChannel` →
+`InputChannel::create` → `WindowInfoHandle` → `setInputWindowInfo(g_control)`
++ `setFocusedWindow`; `sf_input_poll()` drains `InputConsumer::consume` into
+a `SfInputEvent[]` POD; `src/sf_surface.rs` exposes `poll_input()`;
+`standalone.rs`'s loop dispatches via `input::dispatch_pointer_v2`.
+
+Input geometry was initially empty (`frame=[0,0][0,0]` → taps dropped as
+`ACTION_OUTSIDE`) because `g_control` carried no buffer. That is resolved
+as a side-effect of the display fix below: `g_control` now carries the
+buffer directly, so SurfaceFlinger derives the input window geometry from
+the buffer (`frame=[0,0][1440,2880]`). `dumpsys input` shows
+`channelName='wart input', status=NORMAL`, the window `[TOUCHED]`, no AVC
+denials. Touch routes to the guest; coordinates pass straight through
+(portrait `1440×2880`, identity) — verified by the user (scrolling works).
+
+##### ✅ Display geometry — the `1440×1440` clip is fixed
+
+Symptom: the guest rendered a full portrait UI but only a `1440×1440`
+square (top-left) reached the panel; the rest showed the launcher.
+
+Root cause (two layers): `g_control->getSurface()` spins up a
+`BLASTBufferQueue` whose buffer lands on an internal **child**
+`SurfaceControl`, clipped to `g_control`'s bounds. With `g_control`
+landscape and the buffer portrait, the clip collapsed to their `1440×1440`
+overlap.
+
+Fix shipped in `cpp/sf_surface.cpp` (device-verified): attach the
+`BLASTBufferQueue` **directly to `g_control`** instead of calling
+`getSurface()` — `sp<BLASTBufferQueue>::make("wart", g_control, PW, PH, fmt)`
+then `g_bbq->getSurface(true)`. One layer, no parent/child clip. Plus
+`setFixedTransformHint(g_control, 0)` so SurfaceFlinger composites the layer
+full-portrait. Result: `dumpsys SurfaceFlinger` shows one `wart` layer, HWC
+composites `0 0 1440 2880` — **full screen, no clip**.
+
+##### ⏳ Remaining — the guest UI is rotated 90° (host-side task)
+
+**The EGL buffer transpose on taimen is unconditional.** Verified
+exhaustively: `eglQuerySurface` always returns the *transpose* of the
+requested buffer size, regardless of `createSurface` dims, BBQ size, or the
+transform hint (`setFixedTransformHint` **and** the client-cache
+`g_control->setTransformHint(0)` — which the BBQ provably reads — both had
+zero effect). The Adreno/EGL driver prerotates off the physical display
+install orientation, not the layer hint. **No shim-side lever disables it.**
+
+This couples orientation and crop:
+- BBQ landscape → EGL buffer portrait → host renders identity, **upright**,
+  but the BBQ crops to `1440×1440` (BBQ size ≠ buffer).
+- BBQ portrait → EGL buffer landscape → BBQ size == buffer, **full screen,
+  no crop**, but the host must render into a landscape buffer and the UI
+  ends up **90° rotated**.
+
+The shim currently ships the **portrait** config (full screen, no clip,
+rotated 90°) — the better trade. Closing the rotation is now a **host-side
+renderer task**, not a shim one:
+
+- The host (`wart-host/src/canvas_impl.rs`, `SkiaRenderer::from_native_window`,
+  ~lines 350–415) gets a **landscape `2880×1440`** EGL buffer and must render
+  the **portrait `1440×2880`** guest UI into it so the final on-panel image
+  is upright.
+- The `WART_ORIENT` env knob (0–3 quarter-turns; `from_native_window` reads
+  it, defaults to 1 when buffer dims look swapped) was iterated on device:
+  `1` and `3` both land **90° off** (opposite-handed); `0` and `2` force a
+  **landscape guest layout** (logical = physical). None give upright
+  portrait — the `orient` base-matrix logic conflates "swap logical dims"
+  with "rotation amount" and can't express "portrait logical `1440×2880` +
+  the rotation a prerotated landscape buffer needs."
+- Next session: rework the `orient` match block (the `base_matrix`,
+  `logical_width/height` tuple) so a portrait logical canvas can pair with
+  a 0°/180°-class mapping into the landscape buffer, then iterate
+  `WART_ORIENT` on device until the screenshot is upright. Pair the result
+  with the shim's pinned `ROT_0` hint. Consider whether the guest's input
+  coordinate space needs a matching transform (currently identity
+  passthrough — correct only while the guest is portrait `1440×2880`).
+
+**Lead — Android pre-rotation (`developer.android.com/games/optimize/`
+`vulkan-prerotation`).** This validates the current shim config and names
+the fix. The doc's model: a high-performance app renders into a buffer
+fixed at the **panel-native (identity) orientation** — landscape `2880×1440`
+on taimen — and applies a **rotation matrix** to its content matching the
+device's reported transform; the compositor then does *no* rotation. That
+is exactly the current shim's BBQ-portrait config (landscape buffer, full
+screen, no crop) — **so do not revert the shim; it is the correct setup.**
+The fix is to *match* the rotation, not guess it:
+  - **Stop guessing `WART_ORIENT`.** The doc reads the surface's actual
+    transform — `VkSurfaceCapabilitiesKHR.currentTransform` in Vulkan; the
+    EGL/GLES analogue is the `ANativeWindow` transform hint
+    (`NATIVE_WINDOW_TRANSFORM_HINT`, an `ANativeWindowQuery` from
+    `system/window.h`). The renderer should read the real value and rotate
+    by it. Query it **after EGL connects** (the hint is not populated until
+    the producer connects) — `egl.rs`/`canvas_impl.rs` already holds the
+    `ANativeWindow*`; do `nativeWindow->query(NATIVE_WINDOW_TRANSFORM_HINT,
+    &v)`. (Optionally also have the shim plumb it through `out_transform`,
+    which is currently hard-coded 0.)
+  - **Rotation direction:** the doc rotates the content MVP by the *same*
+    angle as `currentTransform` (`ROTATE_90` → `glm::rotate(…, 90°)`), with
+    the framebuffer kept at identity (landscape) extent and the full
+    viewport. That `1` and `3` both landed 90° off suggests the host's
+    `base_matrix` is the wrong sign/pivot for this case — re-derive it from
+    the doc's "rotate content by the hint, framebuffer stays identity"
+    rule rather than the existing guess-matrices.
+
+**Current shim state** (`cpp/sf_surface.cpp`, all device-verified to build
++ run): `createSurface(name, PW, PH, …)` portrait; transaction does
+`setLayer(0x7fffffff)` + `setFixedTransformHint(0)` + `setFlags(eLayerOpaque)`
++ `show`, `apply(true)`; then `g_control->setTransformHint(0)`; then
+`BLASTBufferQueue::make("wart", g_control, PW, PH, fmt)` +
+`getSurface(true)`; `register_input_window(PW, PH)`. Globals add
+`sp<BLASTBufferQueue> g_bbq` (released in `sf_destroy_surface`).
+`#include <gui/BLASTBufferQueue.h>` added.
+
+**Build / deploy / test** (build host `a-03`):
+```
+# SSH master (fast repeated calls):
+ssh -i ~/.ssh/id_rsa.my -o ControlMaster=auto -o ControlPath=/tmp/cm-a03-%r \
+    -o ControlPersist=30m harry@a-03 'echo up'
+# Build the shim — `m libsf_surface` FAILS in legacy-make dexpreopt_check
+# (unrelated LineageOS odex). Build the soong module directly:
+scp .../cpp/sf_surface.cpp harry@a-03:~/android/lineage/external/sf_surface/sf_surface.cpp
+ssh harry@a-03 'cd ~/android/lineage && \
+  SO=out/soong/.intermediates/external/sf_surface/libsf_surface/android_arm64_armv8-a_shared/libsf_surface.so && \
+  prebuilts/build-tools/linux-x86/bin/ninja -f out/combined-aosp_arm64.ninja "$SO"'
+#   (must be the COMBINED ninja — build.aosp_arm64.ninja alone fails: unknown pool highmem_pool)
+# Deploy:
+scp harry@a-03:.../libsf_surface.so /tmp/ && adb shell "su -c 'pkill -f wart-host'"
+adb push /tmp/libsf_surface.so /data/local/tmp/libsf_surface.so
+adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/wart-host --standalone'"
+# Inspect: adb shell dumpsys SurfaceFlinger | grep wart   (HWC line = composite rect)
+#          adb shell screencap -p /sdcard/s.png && adb pull /sdcard/s.png
+# WART_ORIENT iteration: prefix the run with  WART_ORIENT=<0-3>
+```
+
+**Checkpoint for the orientation fix:** a screencap showing the guest UI
+upright and full-screen, the counter (`+`/`−`) visible at the top.
+NativeActivity-APK no-regression check also still pending.
 
 ### Step 4 — Launch mechanism + SystemUI coexistence
 
@@ -275,8 +516,11 @@ Also remaining: confirm the `NativeActivity` APK still builds/runs
 - [ ] Step 2 — standalone mode runs the render loop with no
       `android-activity` dependency; NativeActivity mode still builds
       and works.
-- [ ] Step 3 — touch + key events from InputFlinger reach the guest;
-      tapping a Compose widget responds.
+- [x] Step 3 — touch from InputFlinger reaches the guest (device-verified
+      2026-05-22; scrolling works). Display `1440×1440` clip fixed
+      (BBQ-direct, full-screen composite). ⏳ guest UI still rotated 90° —
+      host-side `canvas_impl.rs` orientation rework outstanding (see
+      Step 3 "Implementation progress" above). Key events not yet wired.
 - [ ] Step 4 — documented launch + SystemUI-stop + recovery path;
       runtime owns the screen.
 - [ ] Step 5 — lifecycle (resume/pause) driven without Activity
@@ -287,7 +531,15 @@ Also remaining: confirm the `NativeActivity` APK still builds/runs
 
 ## First action for a fresh session
 
-Read `post-art-roadmap.md` §5, §5.1, §6.1, §9, §11 for the decisions
-this builds on, then start **Step 1** (standalone-surface spike). It is
-bounded, on the existing rooted phone, and proves or kills the whole
-post-ART display path at the cheapest point.
+**Steps 1–2 done; Step 3 input + display-clip done; in progress: the
+guest UI is rotated 90°.** Resume at the **Step 3 "Implementation
+progress → ⏳ Remaining"** subsection above — it is self-contained: the
+diagnosis (unconditional EGL transpose on taimen), the current shim
+state, the host-side task in `wart-host/src/canvas_impl.rs`
+(`from_native_window` orient base-matrix rework), the `WART_ORIENT`
+iteration findings, and the full build/deploy/test commands. The shim
+(`cpp/sf_surface.cpp`) needs no further change for the rotation fix —
+the work is in the Rust renderer.
+
+For the original background, `post-art-roadmap.md` §5, §5.1, §6.1,
+§9, §11.
