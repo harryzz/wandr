@@ -37,12 +37,12 @@ pub fn run() -> Result<()> {
 
     let sf = crate::sf_surface::SfSurface::create(SHIM_SO)?;
     log::info!(
-        "standalone: surface {}x{} (ANativeWindow={:p})",
-        sf.width, sf.height, sf.native_window,
+        "standalone: surface {}x{} transform 0x{:x} (ANativeWindow={:p})",
+        sf.width, sf.height, sf.transform, sf.native_window,
     );
 
     let renderer = crate::canvas_impl::SkiaRenderer::from_native_window(
-        sf.native_window, sf.width as u32, sf.height as u32,
+        sf.native_window, sf.width as u32, sf.height as u32, sf.transform,
     )?;
     log::info!(
         "standalone: renderer up — EGL/Skia on the SurfaceFlinger window ({}x{})",
@@ -55,7 +55,7 @@ pub fn run() -> Result<()> {
     match unsafe { Component::deserialize_file(&engine, CWASM_PATH) } {
         Ok(component) => {
             log::info!("standalone: loaded cwasm {CWASM_PATH}");
-            run_cwasm_loop(engine, component, renderer)
+            run_cwasm_loop(engine, component, renderer, sf)
         }
         Err(e) => {
             log::warn!(
@@ -72,8 +72,14 @@ fn run_cwasm_loop(
     engine: wasmtime::Engine,
     component: Component,
     renderer: crate::canvas_impl::SkiaRenderer,
+    sf: crate::sf_surface::SfSurface,
 ) -> Result<()> {
     use bindings::my::skiko_gfx::lifecycle::State;
+
+    // Logical surface size the guest must lay its UI out to. The winit path
+    // gets this from a `WindowEvent::Resized`; standalone has no winit, so we
+    // drive the guest's `on-resize` export explicitly once, below.
+    let (logical_w, logical_h) = (renderer.logical_width, renderer.logical_height);
 
     // ── Cold start — mirrors App::resumed's cold path ────────────────────
     let mut wasi_builder = WasiCtxBuilder::new();
@@ -113,6 +119,15 @@ fn run_cwasm_loop(
     let skiko = bindings::SkikoUi::instantiate(&mut store, &component, &linker)?;
     log::info!("standalone: component instantiated — entering render loop");
 
+    // Tell the guest the surface size before the first frame, so Compose lays
+    // out to the full panel (no winit `Resized` event to do this for us).
+    if let Err(e) = skiko
+        .my_skiko_gfx_renderer()
+        .call_on_resize(&mut store, logical_w, logical_h)
+    {
+        log::warn!("standalone: on_resize({logical_w}x{logical_h}) failed: {e:#}");
+    }
+
     // ── Render loop — mirrors WindowEvent::RedrawRequested, no winit ─────
     let frame_target = std::time::Duration::from_millis(16);
     let mut frame: u64 = 0;
@@ -122,6 +137,21 @@ fn run_cwasm_loop(
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos() as u64;
+
+        // Drain InputFlinger events and dispatch them to the guest. The
+        // shim's input channel is non-blocking; this is the standalone
+        // equivalent of winit's touch/key events (task 33 Step 3).
+        let mut input_buf = [crate::sf_surface::SfInputEvent::default(); 32];
+        for ev in sf.poll_input(&mut input_buf) {
+            if ev.kind <= 3 {
+                if let Err(e) = crate::input::dispatch_pointer_v2(
+                    &skiko, &mut store, ev.kind as u8,
+                    ev.pointer_id as u32, ev.x, ev.y, ev.pressure,
+                ) {
+                    log::warn!("standalone: dispatch_pointer_v2 failed: {e:#}");
+                }
+            }
+        }
 
         // Drain scheduler callbacks whose deadline has passed.
         let due = store.data_mut().scheduler.drain_due(std::time::Instant::now());

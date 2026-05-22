@@ -14,6 +14,7 @@ cc_library_shared {
         "libbinder",
         "liblog",
         "libnativewindow",
+        "libinput",
     ],
     cflags: ["-Wall", "-Wextra"],
 }

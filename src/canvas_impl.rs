@@ -351,6 +351,7 @@ impl SkiaRenderer {
         native_window: *mut std::ffi::c_void,
         intended_w: u32,
         intended_h: u32,
+        transform_hint: u32,
     ) -> Result<Self> {
         let egl = crate::egl::android::EglContext::new(native_window)?;
 
@@ -367,48 +368,46 @@ impl SkiaRenderer {
         // egl.{width,height} are the real (physical) GL surface dimensions.
         let (width, height) = (egl.width as u32, egl.height as u32);
 
-        // The caller (the sf_surface shim) asks for `intended` dimensions
-        // (portrait). If the EGL surface came up with axes swapped vs that
-        // — the panel's 90° transform hint (Android pre-rotation) — we run
-        // in "rotated mode": the guest authors a portrait UI in logical
-        // coords and a 90° base transform maps it into the landscape GL
-        // surface. SurfaceFlinger's hint-rotation then lands it upright.
-        let rotated = intended_w != 0 && intended_h != 0
+        // Standalone orientation (task 33). The sf_surface shim makes the
+        // SurfaceFlinger layer stack landscape and rotates it onto the portrait
+        // panel via the display projection; `transform_hint` is that
+        // ui::Rotation (0..3), carried here for diagnostics. The guest authors
+        // a logical UI; `base_matrix` rotates it by WART_ORIENT quarter-turns
+        // into the physical EGL buffer so that, after the shim's display-
+        // projection rotation, it lands upright. WART_ORIENT is the on-device
+        // iteration knob (pairs with the shim's WART_DISPLAY_ROT); 0..3 =
+        // 0°/90°/180°/270° clockwise. It defaults to 1 when the EGL buffer
+        // came up with axes swapped vs the intended dims, else 0.
+        let w = width as f32;
+        let h = height as f32;
+        let dims_swapped = intended_w != 0 && intended_h != 0
             && (intended_w < intended_h) != (width < height);
-        let (base_matrix, logical_width, logical_height) = if rotated {
-            // Four affine maps take logical-portrait (1440x2880) onto the
-            // physical-landscape (2880x1440) buffer; which one renders
-            // upright depends on SurfaceFlinger's transform-hint direction
-            // and the panel install transform. Select with WART_ORIENT=0..3
-            // so all four can be tried without rebuilding; once the right
-            // one is known it becomes the default.
-            let w = width as f32;
-            let h = height as f32;
-            let orient: u32 = std::env::var("WART_ORIENT").ok()
-                .and_then(|s| s.parse().ok()).unwrap_or(0);
-            // new_all(scaleX, skewX, transX, skewY, scaleY, transY, 0,0,1)
-            let m = match orient {
-                // 1: 90° the other way — (lx,ly) -> (ly, H - lx)
-                1 => skia_safe::Matrix::new_all(0.0, 1.0, 0.0,
-                                                -1.0, 0.0, h, 0.0, 0.0, 1.0),
-                // 2: transpose — (lx,ly) -> (ly, lx)
-                2 => skia_safe::Matrix::new_all(0.0, 1.0, 0.0,
-                                                1.0, 0.0, 0.0, 0.0, 0.0, 1.0),
-                // 3: anti-transpose — (lx,ly) -> (W - ly, H - lx)
-                3 => skia_safe::Matrix::new_all(0.0, -1.0, w,
-                                                -1.0, 0.0, h, 0.0, 0.0, 1.0),
-                // 0 (default): 90° — (lx,ly) -> (W - ly, lx)
-                _ => skia_safe::Matrix::new_all(0.0, -1.0, w,
-                                                1.0, 0.0, 0.0, 0.0, 0.0, 1.0),
-            };
-            log::info!(
-                "renderer: rotated mode WART_ORIENT={orient} — logical {}x{}, \
-                 physical {}x{}", height, width, width, height,
-            );
-            (m, height, width)
-        } else {
-            (skia_safe::Matrix::new_identity(), width, height)
+        let orient: u32 = std::env::var("WART_ORIENT").ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(if dims_swapped { 1 } else { 0 });
+        // new_all(scaleX, skewX, transX, skewY, scaleY, transY, 0,0,1).
+        // For 90°/270° the logical canvas has the buffer's axes swapped.
+        let (base_matrix, logical_width, logical_height) = match orient & 3 {
+            // 90° CW — logical (h x w): (lx,ly) -> (w - ly, lx)
+            1 => (skia_safe::Matrix::new_all(0.0, -1.0, w,
+                                             1.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+                  height, width),
+            // 180° — logical (w x h): (lx,ly) -> (w - lx, h - ly)
+            2 => (skia_safe::Matrix::new_all(-1.0, 0.0, w,
+                                             0.0, -1.0, h, 0.0, 0.0, 1.0),
+                  width, height),
+            // 270° CW — logical (h x w): (lx,ly) -> (ly, h - lx)
+            3 => (skia_safe::Matrix::new_all(0.0, 1.0, 0.0,
+                                             -1.0, 0.0, h, 0.0, 0.0, 1.0),
+                  height, width),
+            // 0° — identity
+            _ => (skia_safe::Matrix::new_identity(), width, height),
         };
+        log::info!(
+            "renderer: orientation — display rotation {transform_hint}, \
+             WART_ORIENT={orient} — logical {logical_width}x{logical_height}, \
+             physical {width}x{height}",
+        );
 
         Ok(Self {
             egl, gr_context, surface, width, height,
@@ -708,11 +707,16 @@ impl crate::bindings::my::skiko_gfx::canvas::Host for crate::HostState {
             }
             self.renderer.egl.make_current();
         }
-        // Re-apply the base transform as this frame's canvas root —
-        // identity normally, the rotated-mode 90° rotation in standalone.
+        // Clear to opaque black, then re-apply the base transform as this
+        // frame's canvas root (identity normally, a 90° rotation in the
+        // standalone rotated mode). The clear gives unpainted regions a
+        // defined opaque value — the standalone SurfaceControl is marked
+        // opaque, so without it those pixels would be garbage rather than
+        // black, and on the NativeActivity path it's a cheap redundancy.
         let base = self.renderer.base_matrix;
         let c = self.renderer.canvas();
         c.reset_matrix();
+        c.clear(skia_safe::Color::BLACK);
         c.concat(&base);
     }
 
