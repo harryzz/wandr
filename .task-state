@@ -1,19 +1,5 @@
 TASK=33
 STEP=3-display-orientation
-STATUS=in-progress
-LAST_SUCCESS=Task 33 Step 3 — InputFlinger touch routing device-verified 2026-05-22; display 1440x1440 clip fixed (BBQ-direct, full-screen composite). Remaining: guest UI rotated 90deg.
-NOTES=Resume from tasks/33-boot-model-bringup.md — the Step 3 "Implementation progress" subsection is the full self-contained handoff (diagnosis, current shim state, the remaining host-side task, WART_ORIENT findings, build/deploy/test commands).
-SUMMARY:
-- Step 3 input: DONE + device-verified. Touch routes to the guest, scrolling works.
-- Display clip (was: only a 1440x1440 square of the panel showed content): FIXED. cpp/sf_surface.cpp now attaches a BLASTBufferQueue directly to g_control (no getSurface() child layer) + setFixedTransformHint(0). One layer, HWC composites full portrait 1440x2880.
-- REMAINING: guest UI rendered 90deg rotated. Root cause: on taimen the EGL buffer transpose is UNCONDITIONAL (eglQuerySurface always returns the transpose of the requested size; transform-hint pinning has zero effect). The shim ships BBQ-portrait = full-screen no-crop but the host gets a landscape 2880x1440 EGL buffer. Fix is HOST-side: rework the orient base-matrix logic in wart-host/src/canvas_impl.rs (SkiaRenderer::from_native_window, ~lines 350-415) so a portrait 1440x2880 logical canvas maps upright into the landscape buffer. LEAD: Android pre-rotation doc (developer.android.com/games/optimize/vulkan-prerotation) confirms the current shim (landscape panel-native buffer, full-screen) is the CORRECT setup - DON'T revert it. Fix = read the ACTUAL transform (ANativeWindow NATIVE_WINDOW_TRANSFORM_HINT, query after EGL connects) instead of guessing WART_ORIENT, and rotate content by that angle with the framebuffer kept at identity landscape extent. WART_ORIENT 1 & 3 both 90deg off => host base_matrix is wrong sign/pivot; re-derive from the doc. See tasks/33 Step 3 "Lead — Android pre-rotation".
-- Also pending: NativeActivity-APK no-regression check.
-BUILD (a-03): `m libsf_surface` fails in legacy-make dexpreopt_check (unrelated) — build the soong module directly:
-  ssh harry@a-03 -i ~/.ssh/id_rsa.my  (SSH master: -o ControlMaster=auto -o ControlPath=/tmp/cm-a03-%r -o ControlPersist=30m)
-  cd ~/android/lineage; sync edited cpp into external/sf_surface/sf_surface.cpp
-  SO=out/soong/.intermediates/external/sf_surface/libsf_surface/android_arm64_armv8-a_shared/libsf_surface.so
-  prebuilts/build-tools/linux-x86/bin/ninja -f out/combined-aosp_arm64.ninja "$SO"
-  (MUST be the combined ninja — build.aosp_arm64.ninja alone fails: unknown pool highmem_pool. lunch aosp_arm64-bp1a-userdebug if soong needs regen.)
-DEPLOY: scp $SO local; adb shell "su -c 'pkill -f wart-host'"; adb push libsf_surface.so /data/local/tmp/; run su -c 'LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/wart-host --standalone' (prefix WART_ORIENT=<0-3> to iterate orientation).
-TEST: adb shell dumpsys SurfaceFlinger | grep wart (HWC line); adb shell screencap -p /sdcard/s.png && adb pull. Checkpoint: screencap shows guest upright + full-screen, counter (+/-) visible at top.
-Plan file: ~/.claude/plans/read-task-state-curried-whale.md
+STATUS=complete
+LAST_SUCCESS=Task 33 Step 3 complete — standalone runtime renders guest UI upright + full-screen with working touch input; orientation fixed (device-verified 2026-05-22).
+NOTES=Orientation root cause: eglQuerySurface lies on taimen Adreno (reports transposed 2880x1440 for a real 1440x2880 buffer). Fix: egl.rs takes geometry from ANativeWindow_getWidth/getHeight. WART_ORIENT/transform-hint dihedral decoder shipped as inert manual override. Next: Step 4 (launch + SystemUI), Step 5 (lifecycle), key events into standalone loop.

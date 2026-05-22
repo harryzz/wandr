@@ -340,106 +340,66 @@ then `g_bbq->getSurface(true)`. One layer, no parent/child clip. Plus
 full-portrait. Result: `dumpsys SurfaceFlinger` shows one `wart` layer, HWC
 composites `0 0 1440 2880` — **full screen, no clip**.
 
-##### ⏳ Remaining — the guest UI is rotated 90° (host-side task)
+##### ✅ Display orientation — fixed (device-verified 2026-05-22)
 
-**The EGL buffer transpose on taimen is unconditional.** Verified
-exhaustively: `eglQuerySurface` always returns the *transpose* of the
-requested buffer size, regardless of `createSurface` dims, BBQ size, or the
-transform hint (`setFixedTransformHint` **and** the client-cache
-`g_control->setTransformHint(0)` — which the BBQ provably reads — both had
-zero effect). The Adreno/EGL driver prerotates off the physical display
-install orientation, not the layer hint. **No shim-side lever disables it.**
+The guest UI rendered 90° rotated. **Root cause: `eglQuerySurface`
+(`EGL_WIDTH`/`EGL_HEIGHT`) lies on the taimen Adreno driver — it returns
+the *transposed* size (`2880×1440`) for what is really a `1440×2880`
+portrait buffer.** The renderer believed the surface was landscape, built a
+`2880×1440` Skia GL surface over the real `1440×2880` framebuffer, and set
+`glViewport` to the wrong extent — so content rendered rotated/clipped.
 
-This couples orientation and crop:
-- BBQ landscape → EGL buffer portrait → host renders identity, **upright**,
-  but the BBQ crops to `1440×1440` (BBQ size ≠ buffer).
-- BBQ portrait → EGL buffer landscape → BBQ size == buffer, **full screen,
-  no crop**, but the host must render into a landscape buffer and the UI
-  ends up **90° rotated**.
+The orientation was *not* a rotation-matrix problem. Confirmed by adding an
+`ANativeWindow_getWidth/getHeight` probe in `egl.rs`: `eglQuerySurface`
+reported `2880×1440` while `ANativeWindow` reported the true `1440×2880`.
+An exhaustive `WART_ORIENT 0..7` sweep also confirmed no rotation matrix
+yields upright-portrait — every transposing matrix gives a rotated or
+mirrored result, because the buffer was never actually transposed.
 
-The shim currently ships the **portrait** config (full screen, no clip,
-rotated 90°) — the better trade. Closing the rotation is now a **host-side
-renderer task**, not a shim one:
+**Fix (host-only, no shim change needed for the rotation):**
+- `egl.rs` `EglContext::new` now takes the GL buffer geometry from
+  `ANativeWindow_getWidth/getHeight` (the authoritative size GL renders
+  into), preferring it over the `eglQuerySurface` report.
+- With correct dims, `from_native_window` sees `physical == intended ==
+  1440×2880`, `base_matrix` is identity, the guest renders 1:1 upright,
+  full-screen. Input needs no transform (logical == input-window frame).
+- Device-verified: UI upright + full-screen, counter `+` taps route
+  through InputFlinger (0 → 3), NativeActivity APK no-regression confirmed
+  (it hit the same `eglQuerySurface` lie and is now also correct).
 
-- The host (`wart-host/src/canvas_impl.rs`, `SkiaRenderer::from_native_window`,
-  ~lines 350–415) gets a **landscape `2880×1440`** EGL buffer and must render
-  the **portrait `1440×2880`** guest UI into it so the final on-panel image
-  is upright.
-- The `WART_ORIENT` env knob (0–3 quarter-turns; `from_native_window` reads
-  it, defaults to 1 when buffer dims look swapped) was iterated on device:
-  `1` and `3` both land **90° off** (opposite-handed); `0` and `2` force a
-  **landscape guest layout** (logical = physical). None give upright
-  portrait — the `orient` base-matrix logic conflates "swap logical dims"
-  with "rotation amount" and can't express "portrait logical `1440×2880` +
-  the rotation a prerotated landscape buffer needs."
-- Next session: rework the `orient` match block (the `base_matrix`,
-  `logical_width/height` tuple) so a portrait logical canvas can pair with
-  a 0°/180°-class mapping into the landscape buffer, then iterate
-  `WART_ORIENT` on device until the screenshot is upright. Pair the result
-  with the shim's pinned `ROT_0` hint. Consider whether the guest's input
-  coordinate space needs a matching transform (currently identity
-  passthrough — correct only while the guest is portrait `1440×2880`).
+**Also shipped (kept as a manual override, not load-bearing):** the shim
+exports `sf_query_transform_hint()` (queries `NATIVE_WINDOW_TRANSFORM_HINT`
+post-EGL-connect) and `from_native_window` decodes the `WART_ORIENT` /
+hint as a full 0..7 dihedral bitmask (`FLIP_H=1, FLIP_V=2, ROT_90=4`). On
+taimen the hint reads 0 (uninformative — as expected, the transpose is a
+driver-internal `eglQuerySurface` quirk, not a real layer transform), so
+this path stays inert; it is an escape hatch for a panel that genuinely
+needs a rotation. The shim no longer pins `setFixedTransformHint(0)` by
+default — `WART_SF_HINT=<0..7>` re-pins it for iteration.
 
-**Lead — Android pre-rotation (`developer.android.com/games/optimize/`
-`vulkan-prerotation`).** This validates the current shim config and names
-the fix. The doc's model: a high-performance app renders into a buffer
-fixed at the **panel-native (identity) orientation** — landscape `2880×1440`
-on taimen — and applies a **rotation matrix** to its content matching the
-device's reported transform; the compositor then does *no* rotation. That
-is exactly the current shim's BBQ-portrait config (landscape buffer, full
-screen, no crop) — **so do not revert the shim; it is the correct setup.**
-The fix is to *match* the rotation, not guess it:
-  - **Stop guessing `WART_ORIENT`.** The doc reads the surface's actual
-    transform — `VkSurfaceCapabilitiesKHR.currentTransform` in Vulkan; the
-    EGL/GLES analogue is the `ANativeWindow` transform hint
-    (`NATIVE_WINDOW_TRANSFORM_HINT`, an `ANativeWindowQuery` from
-    `system/window.h`). The renderer should read the real value and rotate
-    by it. Query it **after EGL connects** (the hint is not populated until
-    the producer connects) — `egl.rs`/`canvas_impl.rs` already holds the
-    `ANativeWindow*`; do `nativeWindow->query(NATIVE_WINDOW_TRANSFORM_HINT,
-    &v)`. (Optionally also have the shim plumb it through `out_transform`,
-    which is currently hard-coded 0.)
-  - **Rotation direction:** the doc rotates the content MVP by the *same*
-    angle as `currentTransform` (`ROTATE_90` → `glm::rotate(…, 90°)`), with
-    the framebuffer kept at identity (landscape) extent and the full
-    viewport. That `1` and `3` both landed 90° off suggests the host's
-    `base_matrix` is the wrong sign/pivot for this case — re-derive it from
-    the doc's "rotate content by the hint, framebuffer stays identity"
-    rule rather than the existing guess-matrices.
-
-**Current shim state** (`cpp/sf_surface.cpp`, all device-verified to build
-+ run): `createSurface(name, PW, PH, …)` portrait; transaction does
-`setLayer(0x7fffffff)` + `setFixedTransformHint(0)` + `setFlags(eLayerOpaque)`
-+ `show`, `apply(true)`; then `g_control->setTransformHint(0)`; then
-`BLASTBufferQueue::make("wart", g_control, PW, PH, fmt)` +
-`getSurface(true)`; `register_input_window(PW, PH)`. Globals add
-`sp<BLASTBufferQueue> g_bbq` (released in `sf_destroy_surface`).
-`#include <gui/BLASTBufferQueue.h>` added.
-
-**Build / deploy / test** (build host `a-03`):
+**Build / deploy / test:**
 ```
-# SSH master (fast repeated calls):
+# Host (local cross-compile — the only build the rotation fix needs):
+bash scripts/build-host-android.sh
+adb shell "su -c 'pkill -f wart-host'"
+adb push wart-host/target/aarch64-linux-android/release/wasm-android-host \
+    /data/local/tmp/wart-host
+adb shell "su -c 'chmod 755 /data/local/tmp/wart-host'"
+adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/wart-host --standalone'"
+adb shell screencap -p /sdcard/s.png && adb pull /sdcard/s.png
+
+# Shim (only if cpp/sf_surface.cpp changes — build host a-03):
 ssh -i ~/.ssh/id_rsa.my -o ControlMaster=auto -o ControlPath=/tmp/cm-a03-%r \
     -o ControlPersist=30m harry@a-03 'echo up'
-# Build the shim — `m libsf_surface` FAILS in legacy-make dexpreopt_check
-# (unrelated LineageOS odex). Build the soong module directly:
-scp .../cpp/sf_surface.cpp harry@a-03:~/android/lineage/external/sf_surface/sf_surface.cpp
+scp wart-host/cpp/sf_surface.cpp harry@a-03:~/android/lineage/external/sf_surface/sf_surface.cpp
 ssh harry@a-03 'cd ~/android/lineage && \
   SO=out/soong/.intermediates/external/sf_surface/libsf_surface/android_arm64_armv8-a_shared/libsf_surface.so && \
   prebuilts/build-tools/linux-x86/bin/ninja -f out/combined-aosp_arm64.ninja "$SO"'
 #   (must be the COMBINED ninja — build.aosp_arm64.ninja alone fails: unknown pool highmem_pool)
-# Deploy:
-scp harry@a-03:.../libsf_surface.so /tmp/ && adb shell "su -c 'pkill -f wart-host'"
+scp harry@a-03:~/android/lineage/$SO /tmp/libsf_surface.so
 adb push /tmp/libsf_surface.so /data/local/tmp/libsf_surface.so
-adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/wart-host --standalone'"
-# Inspect: adb shell dumpsys SurfaceFlinger | grep wart   (HWC line = composite rect)
-#          adb shell screencap -p /sdcard/s.png && adb pull /sdcard/s.png
-# WART_ORIENT iteration: prefix the run with  WART_ORIENT=<0-3>
+# Override knobs: WART_ORIENT=<0-7> (host base-matrix), WART_SF_HINT=<0-7> (shim pin)
 ```
-
-**Checkpoint for the orientation fix:** a screencap showing the guest UI
-upright and full-screen, the counter (`+`/`−`) visible at the top.
-NativeActivity-APK no-regression check also still pending.
 
 ### Step 4 — Launch mechanism + SystemUI coexistence
 
@@ -518,28 +478,26 @@ NativeActivity-APK no-regression check also still pending.
       and works.
 - [x] Step 3 — touch from InputFlinger reaches the guest (device-verified
       2026-05-22; scrolling works). Display `1440×1440` clip fixed
-      (BBQ-direct, full-screen composite). ⏳ guest UI still rotated 90° —
-      host-side `canvas_impl.rs` orientation rework outstanding (see
-      Step 3 "Implementation progress" above). Key events not yet wired.
+      (BBQ-direct, full-screen composite). Guest UI orientation fixed
+      (device-verified 2026-05-22 — `eglQuerySurface` reported a transposed
+      size; renderer now takes geometry from `ANativeWindow`). Key events
+      not yet wired.
 - [ ] Step 4 — documented launch + SystemUI-stop + recovery path;
       runtime owns the screen.
 - [ ] Step 5 — lifecycle (resume/pause) driven without Activity
       callbacks.
-- [ ] No regression — NativeActivity APK still boots and renders.
+- [x] No regression — NativeActivity APK still boots and renders
+      (device-verified 2026-05-22, post orientation fix).
 
 ---
 
 ## First action for a fresh session
 
-**Steps 1–2 done; Step 3 input + display-clip done; in progress: the
-guest UI is rotated 90°.** Resume at the **Step 3 "Implementation
-progress → ⏳ Remaining"** subsection above — it is self-contained: the
-diagnosis (unconditional EGL transpose on taimen), the current shim
-state, the host-side task in `wart-host/src/canvas_impl.rs`
-(`from_native_window` orient base-matrix rework), the `WART_ORIENT`
-iteration findings, and the full build/deploy/test commands. The shim
-(`cpp/sf_surface.cpp`) needs no further change for the rotation fix —
-the work is in the Rust renderer.
+**Steps 1–3 done — standalone runtime renders the guest UI upright,
+full-screen, with working touch input (device-verified 2026-05-22).**
+Next: **Step 4** (launch mechanism + SystemUI coexistence) and **Step 5**
+(lifecycle without Activity callbacks). Key events (hardware keyboard)
+into the standalone loop are also still unwired — see Step 3 input notes.
 
 For the original background, `post-art-roadmap.md` §5, §5.1, §6.1,
 §9, §11.
