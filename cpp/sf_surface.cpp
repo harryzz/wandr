@@ -35,8 +35,10 @@
 #include <android/native_window.h>
 #include <android/input.h>
 #include <android/log.h>
+#include <system/window.h>
 
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <vector>
 #include <poll.h>
@@ -184,7 +186,7 @@ ANativeWindow* sf_create_fullscreen_surface(int32_t* out_w, int32_t* out_h,
         return nullptr;
     }
 
-    // Step 3 — show it, top z-order, marked opaque, transform hint pinned.
+    // Step 3 — show it, top z-order, marked opaque; transform hint handling.
     //
     // eLayerOpaque tells SurfaceFlinger the layer fully covers its bounds, so
     // it does NOT blend whatever is behind it (the launcher) through pixels
@@ -193,34 +195,42 @@ ANativeWindow* sf_create_fullscreen_surface(int32_t* out_w, int32_t* out_h,
     // uses a different, unrelated enum. The host pairs this by clearing the
     // surface to opaque black each frame (SkiaRenderer::begin_frame).
     //
-    // Transform hint, ROT_0 — the keystone. The taimen panel is physically
-    // landscape-native, so SurfaceFlinger would otherwise hand this layer a
-    // ROT_90 transform hint; EGL reacts to that hint and PRE-ROTATES — it
-    // hands the producer a buffer transposed from the requested size, the
-    // guest UI ends up 90deg off. Two calls pin it to ROT_0:
-    //   - setFixedTransformHint(ROT_0): SurfaceFlinger composites the layer
-    //     with a fixed ROT_0 hint and reports ROT_0 in frame stats.
-    //   - g_control->setTransformHint(0): the client-side SurfaceControl hint
-    //     cache is set ONCE at createSurface (to the natural ROT_90) and never
-    //     auto-updates — setFixedTransformHint does NOT refresh it. The
-    //     BLASTBufferQueue below reads exactly this cache
-    //     (mSurfaceControl->getTransformHint()) and forwards it to the
-    //     producer, so EGL sees whatever is here. It must be 0 before the BBQ
-    //     is constructed, hence this explicit poke.
-    // Net: EGL gets hint 0, no prerotation, buffer == requested portrait
-    // 1440x2880, host renders identity. SurfaceFlinger rotates for the
-    // landscape panel itself (one composite step — fine for one fullscreen
-    // layer).
+    // Transform hint (task 33 orientation fix). The taimen panel is
+    // physically landscape-native, so SurfaceFlinger hands this layer a
+    // ROT_90 transform hint and EGL PRE-ROTATES — the producer's buffer is
+    // transposed from the requested size. Rather than fight that, the host
+    // now reads the real hint back via sf_query_transform_hint() and renders
+    // pre-rotated to match it (the Android pre-rotation model). So by default
+    // we do NOT pin the hint — SurfaceFlinger's natural hint flows through to
+    // the producer and is queryable. WART_SF_HINT=<0..7>, if set, pins the
+    // layer + client-cache hint to that value for on-device iteration:
+    //   - setFixedTransformHint: SurfaceFlinger composites + reports it fixed.
+    //   - g_control->setTransformHint: the client-side cache the BLASTBuffer
+    //     queue forwards to the EGL producer (set ONCE at createSurface and
+    //     never auto-updated by setFixedTransformHint), so it must be poked
+    //     before the BBQ is constructed below.
+    const char* pin_env = getenv("WART_SF_HINT");
+    int pinned_hint = -1;
+    if (pin_env != nullptr && pin_env[0] != '\0') {
+        pinned_hint = atoi(pin_env);
+    }
     {
         SurfaceComposerClient::Transaction t;
         t.setLayer(g_control, 0x7fffffff);
-        t.setFixedTransformHint(g_control, 0 /* ui::ROTATION_0 */);
+        if (pinned_hint >= 0) {
+            t.setFixedTransformHint(g_control, pinned_hint);
+        }
         t.setFlags(g_control, layer_state_t::eLayerOpaque,
                    layer_state_t::eLayerOpaque);
         t.show(g_control);
         t.apply(/*synchronous=*/true);
     }
-    g_control->setTransformHint(0);
+    if (pinned_hint >= 0) {
+        g_control->setTransformHint(pinned_hint);
+        LOGI("transform hint pinned to %d (WART_SF_HINT)", pinned_hint);
+    } else {
+        LOGI("transform hint NOT pinned — SurfaceFlinger natural hint in use");
+    }
 
     // Step 3b — attach a BLASTBufferQueue DIRECTLY to g_control.
     //
@@ -228,8 +238,9 @@ ANativeWindow* sf_create_fullscreen_surface(int32_t* out_w, int32_t* out_h,
     // "[BBQ] wart" CHILD SurfaceControl and put the buffer there. That child
     // is clipped to g_control's bounds — a parent/child clip we avoid by
     // owning the BBQ ourselves (the same call getSurface() makes internally,
-    // minus the child). One layer, no parent/child clip; with the ROT_0 hint
-    // the BBQ's portrait 1440x2880 buffer fills the panel upright.
+    // minus the child). One layer, no parent/child clip — the BBQ buffer
+    // composites full-screen; the host pre-rotates content per the queried
+    // transform hint so the guest UI lands upright.
     g_bbq = sp<BLASTBufferQueue>::make(
         "wart", g_control, PW, PH, PIXEL_FORMAT_RGBA_8888);
     g_surface = g_bbq->getSurface(/*includeSurfaceControlHandle=*/true);
@@ -241,13 +252,14 @@ ANativeWindow* sf_create_fullscreen_surface(int32_t* out_w, int32_t* out_h,
     // Step 4 — register an InputFlinger input window (task 33 Step 3).
     register_input_window(PW, PH);
 
-    // The caller authors a portrait UI 1:1 with the portrait panel: report the
-    // portrait size and transform 0 (no rotation — the buffer already matches).
+    // Report the portrait logical size. out_transform stays 0 here — the
+    // real producer transform hint is only valid post-EGL-connect and is
+    // read separately via sf_query_transform_hint().
     if (out_w) *out_w = static_cast<int32_t>(PW);
     if (out_h) *out_h = static_cast<int32_t>(PH);
     if (out_transform) *out_transform = 0;
-    LOGI("surface created: portrait %ux%u layer+buffer (transform hint pinned "
-         "ROT_0, no prerotation) matching the panel", PW, PH);
+    LOGI("surface created: portrait %ux%u logical (host reads the transform "
+         "hint post-connect via sf_query_transform_hint)", PW, PH);
     return g_surface.get();
 }
 
@@ -306,6 +318,26 @@ int32_t sf_input_poll(SfInputEvent* out, int32_t max) {
         }
     }
     return n;
+}
+
+// Query the live Android producer transform hint
+// (NATIVE_WINDOW_TRANSFORM_HINT, a 0..7 bitmask: FLIP_H=1, FLIP_V=2,
+// ROT_90=4). Must be called AFTER the host's EGL producer connects — the
+// hint is not populated before then. Returns 0 if the surface is not up or
+// the query fails. The host (canvas_impl.rs) maps its base transform from
+// this value.
+uint32_t sf_query_transform_hint() {
+    if (g_surface == nullptr) {
+        return 0;
+    }
+    int v = 0;
+    status_t st = g_surface->query(NATIVE_WINDOW_TRANSFORM_HINT, &v);
+    if (st != OK) {
+        LOGE("query(NATIVE_WINDOW_TRANSFORM_HINT) failed: %d", st);
+        return 0;
+    }
+    LOGI("transform hint queried: %d", v);
+    return static_cast<uint32_t>(v);
 }
 
 // Release the surface, control, client and input plumbing.

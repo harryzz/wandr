@@ -346,14 +346,21 @@ impl SkiaRenderer {
     /// Used by the task-33 standalone (no-`NativeActivity`) mode, where the
     /// window comes from SurfaceFlinger via the `libsf_surface` shim. The
     /// EGL/GrContext/Skia path below is identical to `new()`'s Android branch.
+    ///
+    /// `query_hint` is invoked *after* EGL connects to read the Android
+    /// producer transform hint (`NATIVE_WINDOW_TRANSFORM_HINT`) — that hint
+    /// is not populated until the producer connects, so it cannot be passed
+    /// in pre-connect.
     #[cfg(target_os = "android")]
     pub fn from_native_window(
         native_window: *mut std::ffi::c_void,
         intended_w: u32,
         intended_h: u32,
-        transform_hint: u32,
+        query_hint: impl FnOnce() -> u32,
     ) -> Result<Self> {
         let egl = crate::egl::android::EglContext::new(native_window)?;
+        // EGL producer is connected now — the transform hint is populated.
+        let hint = query_hint() & 7;
 
         let gl_interface = skia_safe::gpu::gl::Interface::new_load_with(
             crate::egl::android::EglContext::proc_resolver()
@@ -365,47 +372,75 @@ impl SkiaRenderer {
 
         let surface = Self::make_gl_surface(
             &mut gr_context, egl.width, egl.height)?;
-        // egl.{width,height} are the real (physical) GL surface dimensions.
+        // egl.{width,height} are the real GL buffer dimensions — taken from
+        // the ANativeWindow, not eglQuerySurface (which lies with a transposed
+        // size on the taimen Adreno driver; see egl.rs). They match the
+        // SurfaceFlinger buffer, so the guest renders 1:1, upright.
         let (width, height) = (egl.width as u32, egl.height as u32);
 
-        // Standalone orientation (task 33). The sf_surface shim makes the
-        // SurfaceFlinger layer stack landscape and rotates it onto the portrait
-        // panel via the display projection; `transform_hint` is that
-        // ui::Rotation (0..3), carried here for diagnostics. The guest authors
-        // a logical UI; `base_matrix` rotates it by WART_ORIENT quarter-turns
-        // into the physical EGL buffer so that, after the shim's display-
-        // projection rotation, it lands upright. WART_ORIENT is the on-device
-        // iteration knob (pairs with the shim's WART_DISPLAY_ROT); 0..3 =
-        // 0°/90°/180°/270° clockwise. It defaults to 1 when the EGL buffer
-        // came up with axes swapped vs the intended dims, else 0.
+        // Standalone orientation (task 33). With the real buffer dimensions
+        // above, the guest's portrait logical canvas maps 1:1 into the EGL
+        // buffer and `base_matrix` is identity — no rotation needed.
+        //
+        // The `WART_ORIENT` env var / queried transform hint remain a manual
+        // override: a 0..7 bitmask (FLIP_H=1, FLIP_V=2, ROT_90=4; ROT_180=3,
+        // ROT_270=7) selecting any of the 8 dihedral placements, for a device
+        // whose panel genuinely needs a rotation. Unset + a correctly-sized
+        // buffer ⇒ orient 0 (identity), the normal path.
         let w = width as f32;
         let h = height as f32;
         let dims_swapped = intended_w != 0 && intended_h != 0
             && (intended_w < intended_h) != (width < height);
+        // Effective transform: WART_ORIENT override, else the queried hint;
+        // if neither is informative but the buffer came up axis-swapped,
+        // fall back to a plain 90° rotation (ROT_90).
         let orient: u32 = std::env::var("WART_ORIENT").ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(if dims_swapped { 1 } else { 0 });
+            .unwrap_or(if hint != 0 { hint }
+                       else if dims_swapped { 4 /* ROT_90 */ }
+                       else { 0 })
+            & 7;
+        // base_matrix maps a logical point into the physical EGL buffer.
         // new_all(scaleX, skewX, transX, skewY, scaleY, transY, 0,0,1).
-        // For 90°/270° the logical canvas has the buffer's axes swapped.
-        let (base_matrix, logical_width, logical_height) = match orient & 3 {
-            // 90° CW — logical (h x w): (lx,ly) -> (w - ly, lx)
-            1 => (skia_safe::Matrix::new_all(0.0, -1.0, w,
-                                             1.0, 0.0, 0.0, 0.0, 0.0, 1.0),
-                  height, width),
-            // 180° — logical (w x h): (lx,ly) -> (w - lx, h - ly)
-            2 => (skia_safe::Matrix::new_all(-1.0, 0.0, w,
+        // The ROT_90 bit swaps the logical axes (portrait UI into a landscape
+        // buffer); the FLIP bits select the mirrored variants.
+        let (base_matrix, logical_width, logical_height) = match orient {
+            // ── ROT_90 clear — logical == buffer (w × h) ──
+            // identity
+            0 => (skia_safe::Matrix::new_identity(), width, height),
+            // FLIP_H: (lx,ly) -> (w - lx, ly)
+            1 => (skia_safe::Matrix::new_all(-1.0, 0.0, w,
+                                             0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+                  width, height),
+            // FLIP_V: (lx,ly) -> (lx, h - ly)
+            2 => (skia_safe::Matrix::new_all(1.0, 0.0, 0.0,
                                              0.0, -1.0, h, 0.0, 0.0, 1.0),
                   width, height),
-            // 270° CW — logical (h x w): (lx,ly) -> (ly, h - lx)
-            3 => (skia_safe::Matrix::new_all(0.0, 1.0, 0.0,
+            // ROT_180 (FLIP_H|FLIP_V): (lx,ly) -> (w - lx, h - ly)
+            3 => (skia_safe::Matrix::new_all(-1.0, 0.0, w,
+                                             0.0, -1.0, h, 0.0, 0.0, 1.0),
+                  width, height),
+            // ── ROT_90 set — logical axes swapped (h × w) ──
+            // ROT_90 — 90° CW: (lx,ly) -> (w - ly, lx)
+            4 => (skia_safe::Matrix::new_all(0.0, -1.0, w,
+                                             1.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+                  height, width),
+            // ROT_90|FLIP_H — transpose: (lx,ly) -> (ly, lx)
+            5 => (skia_safe::Matrix::new_all(0.0, 1.0, 0.0,
+                                             1.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+                  height, width),
+            // ROT_90|FLIP_V — anti-transpose: (lx,ly) -> (w - ly, h - lx)
+            6 => (skia_safe::Matrix::new_all(0.0, -1.0, w,
                                              -1.0, 0.0, h, 0.0, 0.0, 1.0),
                   height, width),
-            // 0° — identity
-            _ => (skia_safe::Matrix::new_identity(), width, height),
+            // ROT_270 (ROT_90|FLIP_H|FLIP_V) — 90° CCW: (lx,ly) -> (ly, h - lx)
+            _ => (skia_safe::Matrix::new_all(0.0, 1.0, 0.0,
+                                             -1.0, 0.0, h, 0.0, 0.0, 1.0),
+                  height, width),
         };
         log::info!(
-            "renderer: orientation — display rotation {transform_hint}, \
-             WART_ORIENT={orient} — logical {logical_width}x{logical_height}, \
+            "renderer: orientation — transform hint {hint}, effective \
+             orient {orient} — logical {logical_width}x{logical_height}, \
              physical {width}x{height}",
         );
 

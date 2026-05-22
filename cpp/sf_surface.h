@@ -1,5 +1,5 @@
 // sf_surface — C ABI of the task-33 libgui surface shim (libsf_surface.so).
-// wart-host dlopen()s the .so and dlsym()s these two symbols; this header is
+// wart-host dlopen()s the .so and dlsym()s these symbols; this header is
 // the contract (and documentation for the Rust mirror in src/sf_surface.rs).
 #pragma once
 #include <stdint.h>
@@ -34,6 +34,12 @@ struct SfInputEvent {
 // count written. Non-blocking — call once per frame. Returns 0 if the input
 // channel was never set up (e.g. inputflinger unavailable).
 int32_t sf_input_poll(struct SfInputEvent* out, int32_t max);
+
+// Query the live Android producer transform hint (NATIVE_WINDOW_TRANSFORM_HINT,
+// a 0..7 bitmask: FLIP_H=1, FLIP_V=2, ROT_90=4). Call only AFTER the host's
+// EGL producer has connected — the hint is unpopulated before then. Returns 0
+// if the surface is down or the query fails.
+uint32_t sf_query_transform_hint(void);
 
 // Release the surface/control/client and input plumbing.
 void sf_destroy_surface(void);

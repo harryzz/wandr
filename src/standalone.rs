@@ -41,8 +41,11 @@ pub fn run() -> Result<()> {
         sf.width, sf.height, sf.transform, sf.native_window,
     );
 
+    // The producer transform hint is only valid once EGL connects, so the
+    // renderer queries it through this closure mid-`from_native_window`.
     let renderer = crate::canvas_impl::SkiaRenderer::from_native_window(
-        sf.native_window, sf.width as u32, sf.height as u32, sf.transform,
+        sf.native_window, sf.width as u32, sf.height as u32,
+        || sf.query_transform_hint(),
     )?;
     log::info!(
         "standalone: renderer up — EGL/Skia on the SurfaceFlinger window ({}x{})",

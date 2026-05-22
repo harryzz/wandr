@@ -110,7 +110,31 @@ pub mod android {
                 eglQuerySurface(display, surface, 0x3056 /* EGL_WIDTH  */, &mut w);
                 eglQuerySurface(display, surface, 0x3057 /* EGL_HEIGHT */, &mut h);
 
-                Ok(EglContext { display, surface, context, width: w, height: h })
+                // The authoritative GL buffer geometry is the ANativeWindow's
+                // — it is what GL actually renders into. eglQuerySurface
+                // EGL_WIDTH/HEIGHT can disagree: on the taimen Adreno driver
+                // it reports the *transposed* pre-rotation size (e.g.
+                // 2880x1440 for a 1440x2880 buffer), which would make us build
+                // a mismatched Skia surface and render rotated/clipped. Prefer
+                // the ANativeWindow dims whenever they are valid.
+                #[link(name = "android")]
+                extern "C" {
+                    fn ANativeWindow_getWidth(w: *mut c_void) -> i32;
+                    fn ANativeWindow_getHeight(w: *mut c_void) -> i32;
+                }
+                let nw_w = ANativeWindow_getWidth(native_window);
+                let nw_h = ANativeWindow_getHeight(native_window);
+                log::info!(
+                    "EGL surface dims — eglQuerySurface {w}x{h}, \
+                     ANativeWindow {nw_w}x{nw_h}"
+                );
+                let (width, height) = if nw_w > 0 && nw_h > 0 {
+                    (nw_w, nw_h)
+                } else {
+                    (w, h)
+                };
+
+                Ok(EglContext { display, surface, context, width, height })
             }
         }
 

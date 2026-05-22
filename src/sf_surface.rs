@@ -14,6 +14,8 @@ use std::ffi::{c_void, CString};
 type CreateFn = unsafe extern "C" fn(*mut i32, *mut i32, *mut u32) -> *mut c_void;
 /// `int32_t sf_input_poll(SfInputEvent*, int32_t)`.
 type InputPollFn = unsafe extern "C" fn(*mut SfInputEvent, i32) -> i32;
+/// `uint32_t sf_query_transform_hint(void)`.
+type QueryHintFn = unsafe extern "C" fn() -> u32;
 
 /// POD input event drained from the shim's InputFlinger channel. Mirrors
 /// `struct SfInputEvent` in `cpp/sf_surface.{cpp,h}` — keep all three in sync.
@@ -46,6 +48,9 @@ pub struct SfSurface {
     pub transform: u32,
     /// `sf_input_poll` — `None` if the shim predates task-33 Step 3.
     input_poll: Option<InputPollFn>,
+    /// `sf_query_transform_hint` — `None` if the shim predates the task-33
+    /// orientation fix; query it only *after* EGL has connected the producer.
+    query_hint: Option<QueryHintFn>,
 }
 
 impl SfSurface {
@@ -73,6 +78,16 @@ impl SfSurface {
                 Some(std::mem::transmute(poll_sym))
             };
 
+            // sf_query_transform_hint is optional too — an older shim leaves
+            // the renderer to fall back on its dims-swapped heuristic.
+            let hint_name = CString::new("sf_query_transform_hint").unwrap();
+            let hint_sym = libc::dlsym(handle, hint_name.as_ptr());
+            let query_hint: Option<QueryHintFn> = if hint_sym.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute(hint_sym))
+            };
+
             let mut w: i32 = 0;
             let mut h: i32 = 0;
             let mut t: u32 = 0;
@@ -86,8 +101,17 @@ impl SfSurface {
                 height: h,
                 transform: t,
                 input_poll,
+                query_hint,
             })
         }
+    }
+
+    /// Query the live Android producer transform hint
+    /// (`NATIVE_WINDOW_TRANSFORM_HINT`, a 0..7 bitmask). Call this only
+    /// *after* EGL has connected the producer — the hint is not populated
+    /// before that. Returns 0 if the shim predates this export.
+    pub fn query_transform_hint(&self) -> u32 {
+        self.query_hint.map(|f| unsafe { f() }).unwrap_or(0)
     }
 
     /// Drain pending input events from the shim into `buf`; returns the slice
