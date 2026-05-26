@@ -336,52 +336,102 @@ components plus an instruction file (likely `wac`) describing how to
 link them. Single-`.cwasm`-per-app is fine for today's PoC but should
 not be baked into the runtime's loader interface.
 
-### 7.1 Package shape (target)
+### 7.1 Shipped package shape (the artifact)
 
 ```
-<app-id>-<version>/
-  package.toml                  ← metadata + entry + declared world
-  link.wac                      ← composition script (or inline)
+<app-id>-<version>.warpkg/        ← portable; same bytes for every device
+  package.toml                    ← metadata + entry + declared world
+  link.wac                        ← composition script (or inline)
   components/
-    ui.wasm
+    ui.wasm                       ← portable component bytes
     logic.wasm
-    persist.wasm                ← optional
+    persist.wasm                  ← optional
   assets/
     fonts/, images/
-  ui.cwasm   logic.cwasm   persist.cwasm   ← per-component AOT cache
+  SIGN                            ← signature(s), format Q5b-pending
 ```
 
-### 7.2 Loader job (what replaces PackageManagerService)
+**Key correction (2026-05-26):** packages ship `.wasm` only — NOT
+pre-compiled `.cwasm`. Pre-compiled native code is per-device (depends
+on architecture, wasmtime version, engine config); shipping it
+defeats the point. This mirrors **Android**: APKs ship `.dex`
+bytecode; the runtime (dex2oat before N, hybrid JIT+AOT after) emits
+per-device `.oat`/`.vdex`/`.art` at install time + first launches,
+under `/data/dalvik-cache/`.
 
+### 7.1b On-device cache layout (per install)
+
+```
+/data/wart/apps/<app-id>/<version>/
+  package.toml                    ← copy of the shipped manifest
+  link.wac                        ← copy of the shipped script
+  components/                     ← .wasm bytes
+    ui.wasm   logic.wasm   persist.wasm
+  assets/                         ← copy of the shipped assets
+  cache/                          ← per-device, regeneratable
+    ui.cwasm   logic.cwasm   persist.cwasm     ← Engine::precompile_component output
+    cache-key.toml                ← (wasmtime-version, engine-config-hash, component-bytes-hash)
+                                    drives auto-rebuild on any change
+```
+
+The cache survives reboots but is **regeneratable**: any of (wasmtime
+upgrade, engine-config change, component bytes change) flips a key in
+`cache-key.toml`, triggering a re-precompile on next install/launch.
+
+### 7.2 Installer + loader split
+
+**Installer** (replaces `PackageManagerService` + `dex2oat`):
 1. Read `package.toml`; verify declared world is satisfiable by the
-   runtime's offered worlds
+   runtime's offered worlds.
 2. Resolve `link.wac` to a concrete component graph (which exports
-   satisfy which imports, including host-provided WIT)
-3. AOT-compile each component separately (per-component cache survives
-   partial updates)
-4. Instantiate the graph; hand the entry component to the lifecycle
-   manager
+   satisfy which imports, including host-provided WIT).
+3. Verify signatures (Q5b — format pending).
+4. Copy `.wasm`s + assets to `/data/wart/apps/<app-id>/<version>/`.
+5. For each component: `engine.precompile_component(&wasm_bytes)` →
+   write to `cache/<name>.cwasm`. Stamp `cache-key.toml`.
+6. Register in the on-device package db (whatever
+   `PackageManagerService`-equivalent we land on).
+
+**Loader** (per-launch, much lighter):
+1. Look up app-id → install dir.
+2. Re-verify cache-key (re-precompile if stale; usually not).
+3. `Component::deserialize_file(&cache/<entry>.cwasm)`.
+4. Hand the entry to the lifecycle manager.
+
+This split mirrors Android's separation between
+`PackageManagerService` (install + dex2oat orchestration) and the
+runtime's per-process class-loader (launch-time bytecode → class).
 
 ### 7.3 Why this is nicer than APK semantics
 
+- **Ship is portable.** One `.warpkg` runs on any device with a
+  compatible wasmtime + WIT-world set. No per-arch builds, no
+  splits-by-density, no signing-per-track gymnastics.
+- **Per-device native cache is auto.** Like dex2oat but with a
+  one-call API (`Engine::precompile_component`). Wasmtime upgrade
+  invalidates + rebuilds without dev intervention.
 - **Permissions = imports.** A component's WIT imports literally are
   its capability requests; the runtime grants or refuses by
   providing/withholding the host impl. No XML `<uses-permission>` list
   to keep in sync with code.
-- **Updates are per-component.** Re-AOT 5 MB instead of 60 MB.
+- **Updates per-component.** Re-precompile 5 MB instead of 60 MB.
   Impossible with APK / DEX.
-- **Linking is declarative.** Auditable separately from the components.
+- **Linking declarative.** Auditable separately from the components.
   Signing the linking decisions is meaningful (an APK's behavior is
   determined by code that signatures can't summarize).
 
 ### 7.4 Current ecosystem state (Jan 2026)
 
-- `wac` (composition language) — usable
-- `wkg` / Warg (registry + package transport over OCI) — pre-1.0
+- `wac` (composition language) — usable.
+- `wkg` / Warg (registry + package transport over OCI) — pre-1.0.
 - True runtime dynamic linking (lazy load on demand) — not stable in
   wasmtime; what *is* stable is build-time-style composition done at
-  load time, which covers "install an app, run it"
-- Cross-component resource/handle delegation — works, rough edges
+  load time, which covers "install an app, run it."
+- Cross-component resource/handle delegation — works, rough edges.
+- **`Engine::precompile_component(bytes) -> Result<Vec<u8>>`** —
+  stable in wasmtime 44 (already pinned in `wart-host/Cargo.toml`).
+  Same compilation path as the `wasmtime compile` CLI; on-device
+  Cranelift AOT works today.
 
 ### 7.5 Minimum manifest (subject to revision)
 
@@ -393,8 +443,8 @@ entry   = "ui"
 world   = "war:app/main@1.0.0"
 
 [components]
-ui     = { path = "components/ui.wasm",     aot = "ui.cwasm" }
-logic  = { path = "components/logic.wasm",  aot = "logic.cwasm" }
+ui     = { path = "components/ui.wasm" }
+logic  = { path = "components/logic.wasm" }
 
 [link]
 script = "link.wac"
@@ -403,12 +453,39 @@ script = "link.wac"
 dir    = "assets"
 ```
 
+(No `aot = "..."` field — pre-compiled artifacts aren't in the
+shipped package; they're per-device cache.)
+
 ### 7.6 Roadmap implication
 
-Write `app-loader.rs` *now* with this interface even though today's
-implementation only handles a single `.cwasm`. Keep the boundary
-between loader, lifecycle, and window-manager forward-compatible with
-multi-component packages without committing to wac/Warg specifics.
+Carve the **installer** + **loader** boundary now even though today's
+implementation is a hard-coded `Component::deserialize_file` from
+`/data/local/tmp/skiko-component.cwasm` (a dev shortcut around the
+real install path — see §7.7). Two distinct concerns, two distinct
+modules.
+
+The boundary doubles as the Hybrid (zygote) migration boundary §9
+locked in — keep both modules behind interfaces that don't bake in
+in-process assumptions, so a future `fork()`-shared engine + per-app
+process layout stays cheap.
+
+Scope: `tasks/scope-app-install.md`.
+
+### 7.7 Dev workflow vs the install path
+
+CLAUDE.md's "Build pipeline" runs the full
+`wasm-tools embed` → `wasm-tools component new --adapt` →
+`wasmtime compile --target aarch64-linux-android` chain on the dev
+machine and `adb push`es the resulting `.cwasm` straight to
+`/data/local/tmp/skiko-component.cwasm`. That bypasses §7.2
+entirely — there is no package, no manifest, no signature, no install
+DB entry, no `cache-key.toml`. It exists for fast iteration; a 5-min
+Kotlin compile is followed by a sub-second push + relaunch.
+
+The dev path stays as is. The installer (when built) is the
+non-developer path: receive a `.warpkg`, do steps 7.2-1..6, register
+with the package db. Either path produces a `.cwasm` the loader can
+deserialize; the dev path just sidesteps every check.
 
 ---
 
