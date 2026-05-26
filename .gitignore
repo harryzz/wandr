@@ -16,6 +16,9 @@ md-smoke-rust/
 # markdown-renderer/.
 emoji-picker/
 
+# Third system component (task 41) — /system/fonts/ enumerator.
+system-fonts/
+
 # Task 30 — external sources pulled in for the diagnosis chain. Heavy
 # (kotlin-src ~GBs, wasmtime-src ~MBs); kt-memalloc-repro has its own
 # Codeberg origin.
