@@ -229,6 +229,7 @@ private fun MaterialDemoApp() {
                         Task28SmokeCard()
                         MarkdownCard()
                         EmojiCard()
+                        FontsCard()
                         SnackbarCard(onShow = { snackbarVisible = true })
                         SwitchRow(
                             hapticEnabled = hapticEnabled,

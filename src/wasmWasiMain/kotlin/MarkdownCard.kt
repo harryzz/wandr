@@ -140,7 +140,13 @@ private fun RenderSimpleBlock(block: SimpleBlock) {
 
 @Composable
 private fun RenderRuns(runs: List<Run>) {
-    Text(text = runsToAnnotated(runs), fontSize = 13.sp)
+    // Task 41 — body paragraphs in Noto Serif (mapped by host's
+    // family_alias_paths to /system/fonts/NotoSerif-*.ttf).
+    Text(
+        text = runsToAnnotated(runs),
+        fontSize = 13.sp,
+        fontFamily = FontFamily.Serif,
+    )
 }
 
 @Composable
@@ -155,6 +161,7 @@ private fun RenderHeading(level: Int, runs: List<Run>) {
         text = runsToAnnotated(runs),
         fontSize = size,
         fontWeight = FontWeight.Bold,
+        fontFamily = FontFamily.Serif,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(top = 4.dp),
     )
