@@ -52,9 +52,13 @@ mkdir -p "$OUT/components"
 cp "$COMPONENT" "$OUT/components/ui.wasm"
 
 cat > "$OUT/package.toml" <<EOF
-app_id  = "com.example.smoke"
-version = "0.0.1"
-world   = "my:skiko-gfx/skiko-ui"
+app_id      = "com.example.smoke"
+version     = "0.0.1"
+world       = "my:skiko-gfx/skiko-ui"
+# Task 36 / Q6: composition mode is required. Leaf consumer apps that
+# never get used as a dep still must declare it. See
+# tasks/36-cross-app-deps.md.
+composition = "same-store"
 
 [components]
 ui = "components/ui.wasm"

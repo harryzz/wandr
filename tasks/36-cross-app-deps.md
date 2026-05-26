@@ -1,14 +1,35 @@
 # Task 36 — cross-app dependencies + system components
 
-> **Status:** 🔲 scoped — promoted from `scope-cross-app-deps.md` on
-> 2026-05-26 once task 35 (single-app install) shipped device-verified.
-> Follow-on to `tasks/35-app-install.md`. Covers what happens when
-> **App A imports an interface that some other component exports** —
-> i.e. cross-app composition, system components, and the dependency
-> graph the installer has to walk. Pre-implementation gate: Q6
-> (same-Store vs separate-Store default) needs a concrete second
-> component to drive the decision; see "First action for a fresh
-> session" at the bottom.
+> **Status:** 🟡 in progress — steps 1–6 landed 2026-05-26.
+> Library-level wiring is complete; device end-to-end run (step 7)
+> deferred to a follow-up session.
+>
+> **What works:** Markdown system bundle installs at
+> `<root>/system-apps/war.markdown.renderer/0.1.0/`, declares
+> `composition = "same-store"` + `kind = "system"`. Consumer manifests
+> declare `[dependencies.x = { system = "..." | app = "..." | host = "..." }]`
+> + Q6's required `[package].composition`. Installer resolves each
+> dep (refuse install on missing; record kind + resolved-version +
+> wasm-sha256 in `cache-key.toml`'s new `[dependencies_resolved]`
+> section). Loader reads that section, deserializes each system dep's
+> cwasm into the consumer's Store, wires its exports into the
+> consumer's `Linker::instance(<interface>)` via the cloned
+> `Guest` accessor — first concrete dep wired by name
+> (`war:markdown/renderer@0.1.0`); refactor to a registry pattern
+> once N > 1. Smoke consumer (`wart-app-md-smoke/`) built; composed
+> component validates with the right import/export shape.
+>
+> **What's not yet validated:** End-to-end device round-trip. Two
+> blockers:
+> - Kotlin/Wasm + wasmtime CLI run throws "thrown Wasm exception" on
+>   `println` or any meaningful body; structurally separate from the
+>   dep wiring (the composition validates fine).
+> - wart-host has no mode that drives `wasi:cli/run.run()` — current
+>   standalone path expects `bindings::SkikoUi`. Either a parallel
+>   `--run-once` mode needs adding, or the consumer needs pre-composing
+>   via `wac plug` into a single component.
+>
+> Step 7 picks up both.
 
 ## Why this matters
 
