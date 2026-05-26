@@ -49,16 +49,10 @@ mod bindings {
     });
 }
 
-/// Host-side bindings for the markdown system component (task 36
-/// step 5). Lets `app_loader` typed-call `render()` on an instantiated
-/// markdown dep. First concrete dep wired by name — refactor into a
-/// registry pattern once a second runtime-bundled component exists.
-pub(crate) mod markdown_bindings {
-    wasmtime::component::bindgen!({
-        path: "../wit/markdown.wit",
-        world: "renderer-world",
-    });
-}
+// markdown_bindings module deleted (task 39 — replaced by generic
+// dep wiring via wasmtime introspection in app_loader.rs). Per-dep
+// `bindgen!` modules are no longer needed; any cross-app dep wires
+// up automatically via `wire_dep_into_linker`'s component-type walk.
 
 use winit::{
     application::ApplicationHandler,

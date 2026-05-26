@@ -446,69 +446,116 @@ fn load_dev_asset(engine: &Engine, bytes: &[u8]) -> Result<(Component, String)> 
     Ok((entry, format!("asset:{}B", bytes.len())))
 }
 
-/// Same-Store composition glue — task 36 step 5.
+/// Same-Store composition glue — task 36 step 5 + task 39 generic refactor.
 ///
-/// Instantiates the dep into the consumer's `Store`, then registers
-/// the dep's exports as proxy entries in the consumer's `Linker`. The
-/// consumer's subsequent `SkikoUi::instantiate` finds its
-/// `import war:markdown/renderer` satisfied by the proxy that
-/// delegates back to the dep instance.
+/// Instantiates the dep into the consumer's `Store`, walks its
+/// component type to discover every exported interface + function,
+/// and registers a proxy on the consumer's `Linker` for each one. The
+/// consumer's subsequent instantiate finds its imports satisfied by
+/// proxies that delegate back through the dep instance via dynamic
+/// `Func::call` with `Val` params/results.
 ///
-/// First concrete dep wired by name. When a second runtime-bundled
-/// system component lands, refactor into a `(interface) → impl`
-/// registry pattern instead of this match.
+/// **No per-dep code in wart-host.** The dep's WIT type is encoded in
+/// the component binary (`Component::component_type()`); wart-host
+/// introspects it at load time. Any future system component with any
+/// WIT interface installs + runs without wart-host changes.
+///
+/// Trade-off vs the old typed `bindgen!` path: per-call `Val` boxing
+/// instead of compile-time-generated typed wrappers. For ~1 Hz calls
+/// (markdown render at composition time, emoji list at composition)
+/// the overhead is negligible. If a future dep needs 60 Hz calls,
+/// revisit with a typed fast-path for that specific interface.
+///
+/// Resources, top-level exported functions, and async dispatch are
+/// out of scope — see `tasks/39-generic-dep-wiring.md` "Out of scope".
 fn wire_dep_into_linker(
     linker: &mut Linker<HostState>,
     store: &mut Store<HostState>,
     dep: &LoadedDep,
 ) -> Result<()> {
-    match dep.interface.as_str() {
-        "war:markdown/renderer@0.1.0" => wire_markdown_dep(linker, store, dep),
-        other => bail!(
-            "dependency `{}`: interface {other:?} is not yet wired in wart-host. \
-             Supported interfaces this iteration: war:markdown/renderer@0.1.0. \
-             See tasks/36-cross-app-deps.md.",
-            dep.name,
-        ),
-    }
-}
+    use wasmtime::component::types::ComponentItem;
 
-fn wire_markdown_dep(
-    linker: &mut Linker<HostState>,
-    store: &mut Store<HostState>,
-    dep: &LoadedDep,
-) -> Result<()> {
-    use crate::markdown_bindings::{exports::war::markdown::renderer as md_exports, RendererWorld};
+    let engine = store.engine().clone();
 
-    // Build a dep-local linker — markdown only imports WASI, no skiko.
-    let mut dep_linker: Linker<HostState> = Linker::new(&store.engine().clone());
+    // Build a dep-local linker. Today's deps only import WASI — no
+    // skiko, no cross-dep references. If a future dep imports skiko
+    // (e.g. wants to draw), add that bind here.
+    let mut dep_linker: Linker<HostState> = Linker::new(&engine);
     wasmtime_wasi::p2::add_to_linker_sync(&mut dep_linker)
         .map_err(|e| anyhow!("dep linker wasi add: {e:#}"))?;
 
-    let world = RendererWorld::instantiate(&mut *store, &dep.component, &dep_linker)
+    // Instantiate the dep into the consumer's store. Its exports
+    // become reachable via `instance.get_export` / `instance.get_func`.
+    let instance = dep_linker.instantiate(&mut *store, &dep.component)
         .map_err(|e| anyhow!("instantiate dep `{}`: {e:#}", dep.name))?;
-    // `Guest` derives `Clone` and holds only `wasmtime::component::Func`
-    // handles (instance-indices, not borrows), so cloning the accessor
-    // lets us drop `world` while keeping the call site usable from a
-    // `'static` linker closure.
-    let renderer = world.war_markdown_renderer().clone();
+
+    // Walk the dep's component type. Top-level exports are usually
+    // ComponentInstance (i.e. an interface like
+    // `war:markdown/renderer@0.1.0`); inside each instance live the
+    // exported functions.
+    let component_type = dep.component.component_type();
+    let mut wired_fns = 0usize;
+    let mut wired_ifaces = 0usize;
+
+    for (export_name, item) in component_type.exports(&engine) {
+        match item {
+            ComponentItem::ComponentInstance(inst_ty) => {
+                // `get_export` returns (ComponentItem, ComponentExportIndex);
+                // we only need the index to look up funcs inside.
+                let (_, instance_idx) = instance
+                    .get_export(&mut *store, None, export_name)
+                    .ok_or_else(|| anyhow!(
+                        "dep `{}`: instance missing exported interface {export_name:?}",
+                        dep.name,
+                    ))?;
+                let mut consumer_inst = linker.instance(export_name)
+                    .map_err(|e| anyhow!("linker.instance({export_name:?}): {e:#}"))?;
+                wired_ifaces += 1;
+                for (fn_name, fn_item) in inst_ty.exports(&engine) {
+                    if !matches!(fn_item, ComponentItem::ComponentFunc(_)) {
+                        // Resources / types / nested instances — not
+                        // registered as call-able linker entries.
+                        continue;
+                    }
+                    let (_, fn_idx) = instance
+                        .get_export(&mut *store, Some(&instance_idx), fn_name)
+                        .ok_or_else(|| anyhow!(
+                            "dep `{}`: interface {export_name:?} missing fn {fn_name:?}",
+                            dep.name,
+                        ))?;
+                    let func = instance
+                        .get_func(&mut *store, &fn_idx)
+                        .ok_or_else(|| anyhow!(
+                            "dep `{}`: interface {export_name:?}.{fn_name:?}: get_func returned None",
+                            dep.name,
+                        ))?;
+                    // `Func` is `Copy` — capture it directly into the
+                    // closure for `'static`-safe registration. The 2nd
+                    // closure arg (the function's static type) is unused;
+                    // wasmtime validates at call time.
+                    consumer_inst.func_new(fn_name, move |mut store, _ty, params, results| {
+                        func.call(&mut store, params, results)
+                    }).map_err(|e| anyhow!(
+                        "linker proxy {export_name:?}.{fn_name:?}: {e:#}"
+                    ))?;
+                    wired_fns += 1;
+                }
+            }
+            ComponentItem::ComponentFunc(_) => {
+                log::warn!(
+                    "loader: dep `{}` exports top-level fn `{export_name}` — \
+                     wiring at the world level isn't implemented; skipping.",
+                    dep.name,
+                );
+            }
+            _ => { /* Resources / types — not runtime call sites. */ }
+        }
+    }
+
     log::info!(
-        "loader: dep `{}` instantiated; wiring war:markdown/renderer@0.1.0 \
-         → consumer linker",
+        "loader: dep `{}` instantiated; wired {wired_fns} fn(s) across {wired_ifaces} \
+         interface(s) into consumer linker (generic)",
         dep.name,
     );
-
-    // Stash the per-call entry point in the consumer's linker. Each
-    // call forwards `(source)` to the dep instance's `render` and
-    // returns the resulting `Document`.
-    let mut inst = linker.instance("war:markdown/renderer@0.1.0")
-        .map_err(|e| anyhow!("linker.instance(war:markdown/renderer@0.1.0): {e:#}"))?;
-    inst.func_wrap(
-        "render",
-        move |mut store, (source,): (String,)| -> wasmtime::Result<(md_exports::Document,)> {
-            let doc = renderer.call_render(&mut store, &source)?;
-            Ok((doc,))
-        },
-    ).map_err(|e| anyhow!("linker proxy `render`: {e:#}"))?;
     Ok(())
 }
