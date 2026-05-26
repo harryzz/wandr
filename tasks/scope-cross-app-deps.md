@@ -179,10 +179,38 @@ haptics     = { kind = "host",   wit = "my:skiko-gfx/haptics", version = "1" }
 Any dep update flips a hash → A's cache invalidates → re-precompile
 on next launch (same mechanism as wasmtime upgrade). No special case.
 
+## Where true lazy linking *would* have helped (and the workaround used instead)
+
+Lazy linking — load A first, then later resolve A's missing imports
+from B without reinstantiating A, OR hot-swap a dep while A is
+running — is **not stable in wasmtime** as of 2026-05-26 (§7.4).
+Audit of where this matters for the first cut, with the workaround
+each uses instead:
+
+| Case | Lazy would buy | Workaround in first-cut |
+|---|---|---|
+| **Cold-path / rarely-called dep** (A imports a video transcoder used in 5 % of sessions) | Don't precompile + instantiate B until first call | Treat as **separate-Store** dep. Host proxy holds an `OnceCell<Store<HostState>>` and only instantiates B on first call. Functionally lazy *at the Store level* even though the Component is precompiled at install. Stable today. |
+| **Heavy / memory-constrained dep** | Defer the resident memory cost | Same — separate-Store + on-demand instantiation. |
+| **Multi-version coexistence in one app** (A wants B@1 *and* B@2 simultaneously) | Both versions in one Store, resolved per call site | Two separate Stores, one per dep version; A talks to both via two host proxies. More boilerplate, works today. |
+| **Plugin systems with no-relaunch UX** (host app picks up a newly-installed plugin while running) | Plugin instantiates on first use, live, no restart | **Relaunch consumer on dep install** — installer signals consumers; consumers next launch picks up the plugin. UX hit; works. Revisit if a concrete plugin host appears. |
+| **Live service discovery** (A is a notification framework; new apps register a `notification-source` interface at install) | A sees new sources without restart | **Registry-component pattern** — system-bundled "registry" component all sources push to; A reads from it. State lives in the registry, not in lazy instantiation. Sidesteps the lazy requirement entirely. |
+| **OTA component update without restart** | New dep version picked up by running consumer | Restart on host/dep upgrade (standard for any platform). |
+
+**Marker for revisit:** when wasmtime's lazy-component-instantiation
+APIs stabilize (track via wasmtime release notes / §7.4 re-check),
+the first two rows (separate-Store + OnceCell) can collapse into a
+genuine same-Store lazy import, dropping the host-proxy boilerplate.
+The plugin and live-discovery rows would also become cleaner.
+
+Until then: separate-Store mode is the lazy-emulation knob, and the
+workaround table above is what each case maps to. The scope does
+**not** block on lazy linking; first-cut implementation should
+proceed without it.
+
 ## What stays out of scope (for the first cut)
 
 - **True lazy linking.** Not stable in wasmtime; not needed for
-  "install B then A".
+  "install B then A" (workarounds tabled above).
 - **Capability gating per dep edge.** Q5 said `link.wac` is the
   authority; per-dep finer-grained denial (e.g. "A depends on B but
   only A.ui can use it") is a `link.wac` authoring concern, not new
