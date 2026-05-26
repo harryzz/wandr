@@ -785,6 +785,31 @@ interface locale {
     get-layout-direction: func() -> layout-direction;
 }
 
+/// Task 38 — read-only access to assets shipped inside the installed
+/// warpkg. The host reads from `<install_dir>/assets/<name>`; the guest
+/// just hands a relative path. Standard Kotlin/Wasm 2.4 stdlib doesn't
+/// expose WASI filesystem calls (no fd_read / path_open wrappers), so
+/// this host verb is the practical way for Kotlin guests to load
+/// bundled data files. The WASI filesystem preopen at `/assets` is also
+/// wired (free, in linker) for any future Kotlin stdlib that does expose
+/// file APIs; this interface is the immediate-use path.
+///
+/// Returns `none` when:
+///   - the file does not exist
+///   - the load is from a dev path (no install dir → no assets)
+///   - the bundle shipped no `assets/` directory
+///   - the read failed for any I/O reason (host logs the cause)
+///
+/// `name` is interpreted relative to the bundle's `assets/` root. It
+/// MUST NOT escape (no `..`, no absolute path); the host rejects such
+/// names with `none` and a warning log.
+interface assets {
+    /// Read the entire file. Returns `none` for any failure mode (see
+    /// interface doc). Suited to small-to-medium reads (~MB range); a
+    /// streaming variant is a follow-up if/when bigger payloads matter.
+    read: func(name: string) -> option<list<u8>>;
+}
+
 world skiko-ui {
     import canvas;
     import paragraph;
@@ -801,5 +826,6 @@ world skiko-ui {
     import clipboard;
     import pointer-icon;
     import audio;
+    import assets;
     export renderer;
 }

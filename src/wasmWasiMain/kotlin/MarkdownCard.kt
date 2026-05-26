@@ -46,6 +46,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.jetbrains.skiko.wasi.wit.Canvas as WitCanvas
+import testapp.assets.readAsset
 import testapp.markdown.Block
 import testapp.markdown.Document
 import testapp.markdown.InlineStyle
@@ -54,41 +55,16 @@ import testapp.markdown.Run
 import testapp.markdown.SimpleBlock
 import testapp.markdown.renderDocument
 
-private const val SOURCE = """
-# Cross-app dep demo
+/// Fallback rendered if `assets/demo.md` is missing — happens only on
+/// dev loads (no install dir) or if the bundle didn't ship the file.
+private const val FALLBACK_SOURCE = """
+# Asset missing
 
-This text was parsed by **markdown-renderer**, a *separate* WASM
-component installed under `/data/.../system-apps/war.markdown.renderer/`,
-running in the **same** Store as this Compose UI.
+`assets/demo.md` was not readable. Likely causes:
 
-## How it works
-
-The cross-app dep linker proxy lives in `wart-host/src/app_loader.rs`
-(`wire_markdown_dep`). When this card composes, it calls `render()`
-through the proxy — into the markdown component — which returns the
-parsed `document` tree back into wart-app's linear memory.
-
-- One block per `LazyColumn` row
-- Inline runs carry stacked styles
-- `option<string>` link-url for hyperlinks
-
-1. Install the dep (system bundle).
-2. Install the consumer with `[dependencies.markdown]`.
-3. Run `wart-host --standalone --app com.example.wart-app`.
-
-> Cross-app deps now work for **both** CLI (`md-smoke-rust`) and
-> Compose (this card) consumers — same `wire_markdown_dep` proxy,
-> different consumer shape.
-
-```rust
-fn render(source: String) -> Document {
-    // pulldown-cmark → WIT records
-}
-```
-
----
-
-That horizontal rule above came from a thematic break.
+- App loaded from a dev path (no install dir → no `/assets/`).
+- Bundle didn't ship an `assets/` directory.
+- Host's `assets.read` returned `none` — check logcat for the cause.
 """
 
 @Composable
@@ -121,7 +97,15 @@ internal fun MarkdownCard() {
 }
 
 private fun renderOnce(): Document? = try {
-    val d = renderDocument(SOURCE)
+    val assetBytes = readAsset("demo.md")
+    val source = if (assetBytes != null) {
+        WitCanvas.Import.logMessage("markdown-card: read assets/demo.md (${assetBytes.size} bytes)")
+        assetBytes.decodeToString()
+    } else {
+        WitCanvas.Import.logMessage("markdown-card: assets/demo.md missing — using fallback")
+        FALLBACK_SOURCE
+    }
+    val d = renderDocument(source)
     WitCanvas.Import.logMessage("markdown-card: render() → ${d.blocks.size} blocks (full tree lifted)")
     d
 } catch (t: Throwable) {
