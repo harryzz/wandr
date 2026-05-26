@@ -159,7 +159,20 @@ private fun MaterialDemoApp() {
     androidx.compose.runtime.CompositionLocalProvider(
         androidx.compose.ui.platform.LocalSoftwareKeyboardController provides keyboardController,
     ) {
-    MaterialTheme(colorScheme = darkColorScheme()) {
+    // Task: system theme — pick dark/light scheme from
+    // my:skiko-gfx/theme.get-night-mode at composition. Read once via
+    // remember; live re-theming would need a watcher (deferred). Auto
+    // → dark (the historical default for wart-app).
+    val nightMode = androidx.compose.runtime.remember { testapp.theme.getNightMode() }
+    val scheme = when (nightMode) {
+        testapp.theme.NightMode.OFF -> androidx.compose.material3.lightColorScheme()
+        testapp.theme.NightMode.ON,
+        testapp.theme.NightMode.AUTO -> darkColorScheme()
+    }
+    org.jetbrains.skiko.wasi.wit.Canvas.Import.logMessage(
+        "real-compose: system night-mode=${nightMode} → ${if (scheme == darkColorScheme()) "dark" else "scheme-applied"}"
+    )
+    MaterialTheme(colorScheme = scheme) {
         Surface(
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.background,

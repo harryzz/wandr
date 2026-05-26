@@ -785,6 +785,31 @@ interface locale {
     get-layout-direction: func() -> layout-direction;
 }
 
+/// System UI theme — Android night-mode setting + future Material You
+/// accent color. Read at composition time; live updates would need a
+/// watcher (deferred). v1 honors `cmd uimode night` (yes/no/auto) on
+/// the device; accent-color returns 0 until a Material You hook lands.
+interface theme {
+    enum night-mode {
+        /// System follows time/location/manual schedule — guest should
+        /// pick its own default (typically dark).
+        auto,
+        /// Light theme requested by the user / system.
+        off,
+        /// Dark theme requested by the user / system.
+        on,
+    }
+
+    /// Current system night-mode preference.
+    get-night-mode: func() -> night-mode;
+
+    /// Material You / system accent color as ARGB u32 (0xAARRGGBB).
+    /// Returns 0 when the device doesn't expose a system accent
+    /// (pre-Material-You, or sysprop not set) — callers should fall
+    /// back to a hardcoded palette in that case.
+    get-accent-color: func() -> u32;
+}
+
 /// Task 38 — read-only access to assets shipped inside the installed
 /// warpkg. The host reads from `<install_dir>/assets/<name>`; the guest
 /// just hands a relative path. Standard Kotlin/Wasm 2.4 stdlib doesn't
@@ -827,5 +852,6 @@ world skiko-ui {
     import pointer-icon;
     import audio;
     import assets;
+    import theme;
     export renderer;
 }
