@@ -1,5 +1,5 @@
 TASK=33
-STEP=4-launch-and-systemui
+STEP=5-lifecycle-and-shutdown
 STATUS=complete
-LAST_SUCCESS=Task 33 Step 4 complete — scripts/standalone-launch.sh preflight + push + am force-stop SystemUI/launcher + EXIT trap; scripts/standalone-recover.sh idempotent backup; device-verified 2026-05-26.
-NOTES=am force-stop is non-persistent — recovery ladder documented in tasks/33 (script → manual am start → adb reboot → fastboot → recovery). Init.rc / sepolicy domain remain deferred (production-only). Next: Step 5 (lifecycle without Activity callbacks) + hardware-key wiring into the standalone loop.
+LAST_SUCCESS=Task 33 Step 5 complete — src/lifecycle_standalone.rs adds sigaction shutdown (TERM/INT/HUP → Destroyed → drain → clean exit), screen-state watcher (debug.tracing.screen_state → Paused/Resumed), panic hook + crash marker round-trip; device-verified 2026-05-26.
+NOTES=Cold-start Created/Started/Resumed auto-walks via the existing bridge. SIGABRT/SIGSEGV bypass the panic hook (uncatchable); rely on launcher's next-launch log to notice them. Outstanding: hardware-key wiring into standalone loop; upstream DRC GC (wasmtime#13403/#13422). Task 33 boot-model bring-up sub-roadmap fully landed.

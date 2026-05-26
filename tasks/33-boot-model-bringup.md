@@ -451,11 +451,37 @@ adb push /tmp/libsf_surface.so /data/local/tmp/libsf_surface.so
 
 ### Step 5 — Lifecycle / minimal arbiter
 
-- One app, fullscreen — the ActivityManager-equivalent is mostly the
-  existing `LocalLifecycleOwner` bridge (`feedback_lifecycle_owner_bridge`).
-- Drive created/resumed/paused from the runtime itself (no Activity
-  callbacks). The multi-app arbiter is **out of scope** for this task
-  (monolithic, single app).
+- One app, fullscreen — the ActivityManager-equivalent is the existing
+  `LocalLifecycleOwner` bridge (`feedback_lifecycle_owner_bridge`); the
+  bridge maps WIT `lifecycle::State` 1:1 onto `androidx.lifecycle.State`,
+  and the registry auto-walks intermediate states, so firing a single
+  terminal state moves the guest through the right edges.
+- **Created / Resumed (cold start)** are already dispatched by the
+  existing `pending: Some(Resumed)` slot in `lifecycle_impl::LifecycleState`,
+  fired by `run_cwasm_loop` after the first successful frame.
+- **Paused / Resumed (display state)** — a background watcher thread in
+  `src/lifecycle_standalone.rs` polls `getprop debug.tracing.screen_state`
+  every 500 ms (Android `Display.STATE_OFF=1`, `STATE_ON=2`, `DOZE=3`,
+  `DOZE_SUSPEND=4`); the render loop drains the channel each iteration
+  and fires `Paused` when the panel goes non-live (Off/Doze/DozeSuspend/
+  OnSuspend), `Resumed` when it comes back. Graceful no-op if the prop
+  isn't present (older devices).
+- **Stopped / Destroyed (clean shutdown)** — `sigaction` for `SIGTERM`,
+  `SIGINT`, `SIGHUP` sets an async-signal-safe `AtomicBool`. The render
+  loop polls it every iteration; on set, breaks out, fires `Destroyed`
+  (LifecycleRegistry walks Resumed → Paused → Stopped → Created →
+  Destroyed), drains 3 render frames so observers can react, and returns
+  `Ok(())`. The launcher script's `adb shell -t` exit status sees the
+  clean exit and the EXIT trap restores SystemUI normally.
+- **Crash resilience** — `std::panic::set_hook` chains a writer that
+  drops a small JSON marker at `/data/local/tmp/wart-host-crash.json`
+  (`{ ts, panic }`). `record_clean_exit` removes it on normal return;
+  `drain_prior_crash_marker` logs+removes it at startup. SIGABRT /
+  SIGSEGV bypass the hook (uncatchable from Rust); use the launcher's
+  next-launch log to notice them. **Out of scope:** auto-restart loops
+  / init.rc respawn — those land with sepolicy work later.
+- The multi-app arbiter is **out of scope** for this task (monolithic,
+  single app).
 
 ---
 
@@ -522,8 +548,12 @@ adb push /tmp/libsf_surface.so /data/local/tmp/libsf_surface.so
 - [x] Step 4 — documented launch + SystemUI-stop + recovery path;
       runtime owns the screen. ✅ device-verified 2026-05-26
       (`scripts/standalone-launch.sh` + `scripts/standalone-recover.sh`).
-- [ ] Step 5 — lifecycle (resume/pause) driven without Activity
-      callbacks.
+- [x] Step 5 — lifecycle (resume/pause) driven without Activity
+      callbacks. ✅ device-verified 2026-05-26 — SIGTERM fires clean
+      Destroyed → drain → exit; screen On↔Doze drives Paused/Resumed
+      via `debug.tracing.screen_state` watcher; crash marker
+      `/data/local/tmp/wart-host-crash.json` round-trips
+      (`src/lifecycle_standalone.rs`).
 - [x] No regression — NativeActivity APK still boots and renders
       (device-verified 2026-05-22, post orientation fix).
 
@@ -531,9 +561,15 @@ adb push /tmp/libsf_surface.so /data/local/tmp/libsf_surface.so
 
 ## First action for a fresh session
 
-**Steps 1–3 done — standalone runtime renders the guest UI upright,
-full-screen, with working touch input (device-verified 2026-05-22).**
-The dev entry point is now one command:
+**Steps 1, 3, 4, 5 done — standalone runtime renders the guest UI
+upright, full-screen, with working touch input; SystemUI is stopped
+during the session and restored on exit; lifecycle (cold-start
+Created/Started/Resumed, screen-driven Paused/Resumed, signal-driven
+Destroyed) flows through the existing `LocalLifecycleOwner` bridge
+with no `Activity` callbacks; crash-marker writes survive across
+launches. (Latest device verification 2026-05-26.)**
+
+The dev entry point is one command:
 
 ```bash
 bash scripts/standalone-launch.sh
@@ -543,10 +579,14 @@ bash scripts/standalone-launch.sh
 It preflights, pushes whatever's newer, stops SystemUI + the launcher,
 runs wart-host in the foreground, and restores SystemUI + the launcher
 on any exit. If the trap doesn't fire (script killed, ssh dropped):
-`bash scripts/standalone-recover.sh`.
+`bash scripts/standalone-recover.sh`. Step 2's checklist (formally
+decouple from `android-activity` at the dependency level) is the last
+item not ticked — the standalone codepath already works as if it were,
+but the crate still pulls winit-Android in for the NativeActivity path.
 
-Next: **Step 4** (launch mechanism + SystemUI coexistence) and **Step 5**
-(lifecycle without Activity callbacks). Key events (hardware keyboard)
+Outstanding work outside the 5 steps: hardware-key events into the
+standalone loop (touch is wired; keyboard isn't), and the upstream DRC
+GC dependency (see "Known issues / constraints"). Key events (hardware keyboard)
 into the standalone loop are also still unwired — see Step 3 input notes.
 
 For the original background, `post-art-roadmap.md` §5, §5.1, §6.1,
