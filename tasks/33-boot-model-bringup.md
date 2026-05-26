@@ -404,13 +404,50 @@ adb push /tmp/libsf_surface.so /data/local/tmp/libsf_surface.so
 ### Step 4 — Launch mechanism + SystemUI coexistence
 
 - **Dev:** `su`-run binary from `/data/local/tmp` — reversible, easy
-  to iterate.
+  to iterate. The launch is wrapped in `scripts/standalone-launch.sh`:
+  preflight (device/root/binary/shim/cwasm) → push artifacts (newer-mtime
+  only) → `am force-stop com.android.systemui` + the resolved home
+  package → install an EXIT trap → run wart-host in the foreground via
+  `adb shell -t`. Ctrl-C / normal exit / wart-host crash all fire the
+  trap and restore the UI.
 - **Production:** an `init.rc` service entry (later — needs a sepolicy
   domain).
-- `stop` SystemUI (and the launcher) so the runtime owns the screen.
-  **Document the exact `stop`/`start` commands and the recovery
-  path** (`start` them back, or reboot) so a wedged device is always
-  recoverable.
+- **Stop SystemUI + launcher** (the gentle, non-persistent path):
+
+  ```
+  adb shell "su -c 'am force-stop com.android.systemui'"
+  adb shell "su -c 'am force-stop <home-pkg>'"   # org.lineageos.trebuchet on Lineage
+  ```
+
+  `am force-stop` is per-app, non-persistent, and reverses on the next
+  `am start` or reboot — exactly the safety profile we want. **Do not
+  use `pm disable`** — that persists across reboots and would wedge the
+  device. Also avoid `stop` of init services (`stop zygote`,
+  `stop surfaceflinger`) — too nuclear, and surfaceflinger is what wart
+  talks to.
+
+- **Restore** (what the EXIT trap and `scripts/standalone-recover.sh` run):
+
+  ```
+  adb shell "su -c 'pkill -9 -f wart-host'"
+  adb shell "su -c 'am start -n com.android.systemui/.SystemUIService'"
+  adb shell "input keyevent KEYCODE_HOME"
+  ```
+
+  `am start` is needed because `force-stop` kills but doesn't restart;
+  `KEYCODE_HOME` bounces whichever resolved-home launcher back up via
+  the normal intent path (launcher-agnostic).
+
+- **Recovery escalation ladder** — from cheapest to nuclear:
+  1. `bash scripts/standalone-recover.sh` (idempotent, runs the three
+     commands above).
+  2. Run those three commands manually if adb works but the script is
+     unavailable.
+  3. `adb reboot` — `am force-stop` is non-persistent, so SystemUI and
+     the launcher come back at boot.
+  4. Power + Volume Down → bootloader → `fastboot reboot`.
+  5. (Last resort, never needed in dev so far) LineageOS recovery →
+     reboot to system.
 
 ### Step 5 — Lifecycle / minimal arbiter
 
@@ -482,8 +519,9 @@ adb push /tmp/libsf_surface.so /data/local/tmp/libsf_surface.so
       (device-verified 2026-05-22 — `eglQuerySurface` reported a transposed
       size; renderer now takes geometry from `ANativeWindow`). Key events
       not yet wired.
-- [ ] Step 4 — documented launch + SystemUI-stop + recovery path;
-      runtime owns the screen.
+- [x] Step 4 — documented launch + SystemUI-stop + recovery path;
+      runtime owns the screen. ✅ device-verified 2026-05-26
+      (`scripts/standalone-launch.sh` + `scripts/standalone-recover.sh`).
 - [ ] Step 5 — lifecycle (resume/pause) driven without Activity
       callbacks.
 - [x] No regression — NativeActivity APK still boots and renders
@@ -495,6 +533,18 @@ adb push /tmp/libsf_surface.so /data/local/tmp/libsf_surface.so
 
 **Steps 1–3 done — standalone runtime renders the guest UI upright,
 full-screen, with working touch input (device-verified 2026-05-22).**
+The dev entry point is now one command:
+
+```bash
+bash scripts/standalone-launch.sh
+# defaults: --shim /tmp/libsf_surface.so --cwasm /tmp/skiko-component.cwasm
+```
+
+It preflights, pushes whatever's newer, stops SystemUI + the launcher,
+runs wart-host in the foreground, and restores SystemUI + the launcher
+on any exit. If the trap doesn't fire (script killed, ssh dropped):
+`bash scripts/standalone-recover.sh`.
+
 Next: **Step 4** (launch mechanism + SystemUI coexistence) and **Step 5**
 (lifecycle without Activity callbacks). Key events (hardware keyboard)
 into the standalone loop are also still unwired — see Step 3 input notes.
