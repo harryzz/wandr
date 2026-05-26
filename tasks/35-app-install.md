@@ -1,10 +1,25 @@
-# Scope: app installer (+ thin loader) — the multi-component package boundary
+# Task 35 — app installer (+ thin loader) — the multi-component package boundary
 
-> Preparatory analysis, 2026-05-26 (revised from "scope-app-loader"
-> after the ship-wasm/cache-cwasm correction). Carves the **installer**
-> and **loader** boundaries `post-art-roadmap.md` §7 (revised) calls
-> for. The implementation lives in a future numbered task once this
-> scope is accepted; this doc is the why + the contract.
+> **Status:** ✅ device-verified 2026-05-26. All six steps landed.
+> CLI: `wart-host --install <warpkg>` AOT-precompiles + stamps
+> `cache-key.toml`; `wart-host --standalone --app <id>` loads via
+> `AppRef::Installed`. Both halves device-tested on Pixel 2 XL:
+> install writes the spec-shaped layout
+> (`/<root>/<app_id>/<version>/{package.toml, components/, cache/,
+> cache-key.toml}`); load reports `loaded installed:com.example.smoke:0.0.1:ui`
+> + Compose frames render; drift self-heal verified by deleting the
+> cached cwasm — loader re-precompiles + re-stamps + boots normally
+> (~42 s on-device Cranelift AOT for the 15 MB component → 92 MB cwasm).
+> `WART_APPS_ROOT` env override on both `default_for_target()` keeps
+> `/data/wart/` sepolicy out of the smoke loop; production root unchanged.
+> Smoke fixture script: `scripts/smoke-warpkg.sh`. Possible follow-ups
+> (not required): wkg / Warg transport, Q5b signing, update/rollback
+> policy, cross-app deps task.
+> **Why now:** carves the **installer** and **loader** boundaries that
+> `post-art-roadmap.md` §7 (revised) + §9 (resolved 2026-05-26) call
+> for, before a second app or signing format forces the rewrite under
+> time pressure. The "Steps" section below is the implementation plan;
+> the rest of this doc is the contract + rationale.
 
 ## Why this is "installer," not just "loader"
 
@@ -184,7 +199,7 @@ These would inflate scope past "carve the boundary":
   is still built by the caller. Splitting `HostStateFactory` out
   belongs with the Hybrid `fork()` work.
 
-## Steps (when the numbered task starts)
+## Steps
 
 1. **Add `src/app_loader.rs`** with the trait + `LoadedApp` + `AppRef`
    enum + `WartLoader` (Installed path stubbed, Dev paths implemented).
@@ -230,17 +245,14 @@ Total ~2–3 days.
 
 ## First action for a fresh session
 
-1. Read this scope + `post-art-roadmap.md` §7 (revised) + §9
+1. Read this task + `post-art-roadmap.md` §7 (revised) + §9
    (resolved 2026-05-26) + the `wasmtime::Engine::precompile_component`
    docs (`wasmtime-src/crates/wasmtime/src/engine.rs:709`).
-2. Promote the scope into `tasks/35-app-install.md` (CLAUDE.md
-   numbered-task format) with the steps above as the implementation
-   plan, status `🟡 in progress — step 1 starting`.
-3. Add `wart-host/src/app_loader.rs` first per the proposed types.
-   Register in `wart-host/src/lib.rs` (`mod app_loader;`).
-4. Refactor `standalone.rs` (step 2 above); device-verify before
+2. Add `wart-host/src/app_loader.rs` per the proposed types (step 1
+   above). Register in `wart-host/src/lib.rs` (`mod app_loader;`).
+3. Refactor `standalone.rs` (step 2 above); device-verify before
    touching `lib.rs`.
-5. Save `app_installer.rs` for after the loader half is green.
+4. Save `app_installer.rs` for after the loader half is green.
 
 Related: `post-art-roadmap.md` §7 (revised — ships `.wasm`, caches
 `.cwasm` like Android's `/data/dalvik-cache/`) + §9 (Hybrid migration

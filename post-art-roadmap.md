@@ -469,7 +469,7 @@ locked in — keep both modules behind interfaces that don't bake in
 in-process assumptions, so a future `fork()`-shared engine + per-app
 process layout stays cheap.
 
-Single-app install: scope at `tasks/scope-app-install.md`.
+Single-app install: `tasks/35-app-install.md` (in progress).
 
 **Cross-app deps + system components** (the second installable
 package the day there is one): scope at

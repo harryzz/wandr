@@ -1,14 +1,14 @@
 # Scope: cross-app dependencies + system components
 
 > Preparatory analysis, 2026-05-26. Follow-on to
-> `tasks/scope-app-install.md` (single-app install). Covers what
+> `tasks/35-app-install.md` (single-app install). Covers what
 > happens when **App A imports an interface that some other component
 > exports** — i.e. cross-app composition, system components, and the
 > dependency graph the installer has to walk.
 
 ## Why this matters
 
-`scope-app-install.md` handles one app — read manifest, precompile,
+`tasks/35-app-install.md` handles one app — read manifest, precompile,
 cache, deserialize, instantiate. That's strictly single-package.
 
 In practice that's not enough:
@@ -161,7 +161,7 @@ Uninstall: refuse to uninstall B if any A depends on it (or warn +
 cascade — policy TBD). The reverse dep set is computable by walking
 all `[dependencies]` lists in installed apps' manifests.
 
-## Cache key extension (incremental over scope-app-install)
+## Cache key extension (incremental over task 35)
 
 `cache-key.toml` per install adds dep hashes:
 
@@ -227,14 +227,14 @@ proceed without it.
   at install; cache is invalidated on dep update. Per-launch
   resolution belongs with future true-dynamic-linking work.
 
-## How this layers on `scope-app-install.md`
+## How this layers on `tasks/35-app-install.md`
 
-scope-app-install ships first (it has to — the installer is the thing
-that resolves deps). This scope is the *second* numbered task, not a
+Task 35 ships first (it has to — the installer is the thing that
+resolves deps). This scope is the *second* numbered task, not a
 re-rewrite of the first:
 
-1. **Task N (= scope-app-install promoted)**: installer + loader,
-   single-app, no deps. `[dependencies]` table ignored if present.
+1. **Task 35**: installer + loader, single-app, no deps.
+   `[dependencies]` table ignored if present.
 2. **Task N+1 (= this scope, when promoted)**: dependency resolver in
    the installer; system-apps registry; Linker-time composition for
    same-Store deps; host-proxy generator for separate-Store deps;
@@ -267,10 +267,10 @@ the call.
 
 ## First action for a fresh session
 
-Don't start until scope-app-install is implemented + has shipped
-single-app installs. Then:
+Don't start until task 35 is implemented + has shipped single-app
+installs. Then:
 
-1. Read this scope + `scope-app-install.md` + `post-art-roadmap.md`
+1. Read this scope + `tasks/35-app-install.md` + `post-art-roadmap.md`
    §7 (revised) + §9.
 2. Promote into `tasks/36-cross-app-deps.md` (numbered task).
 3. Verify the wasmtime Linker composition assumptions still hold
@@ -283,6 +283,6 @@ single-app installs. Then:
 5. Implement the resolver + the same-Store composition path first.
    Separate-Store / host-proxy is a follow-up.
 
-Related: `tasks/scope-app-install.md` (must land first),
+Related: `tasks/35-app-install.md` (must land first),
 `post-art-roadmap.md` §7 (package shape) + §9 (Q5 link.wac authority,
 Q5b open signing), memory `project-app-lifecycle-and-packaging`.

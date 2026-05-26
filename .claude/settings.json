@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wasm-tools print *)",
+      "Bash(wasm-tools dump *)",
+      "Bash(adb devices)",
+      "Bash(wasmtime --version)",
+      "Bash(unzip -p *)",
+      "Bash(unzip -l *)"
+    ]
+  }
+}
