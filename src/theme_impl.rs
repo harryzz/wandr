@@ -25,11 +25,41 @@ impl Host for crate::HostState {
     }
 
     fn get_accent_color(&mut self) -> u32 {
-        // Material You accent — needs JNI to Resources or a binder
-        // call into theme service. Deferred; return 0 = "use fallback".
-        0
+        // v1 reads from `persist.sys.wart.accent` sysprop (ARGB u32, e.g.
+        // 0xFF34A853 for Google green). User-settable via
+        // `setprop persist.sys.wart.accent 0x...`. Returns 0 when unset
+        // → consumer falls back to its default scheme.
+        //
+        // Real Material You wallpaper-driven extraction isn't available
+        // on the Pixel 2 XL / LineageOS stack (`isColorExtracted=false`
+        // in dumpsys wallpaper). When a device that DOES have it shows
+        // up, swap this for an rsbinder call to IWallpaperManager.
+        read_accent_via_sysprop().unwrap_or(0)
     }
 }
+
+#[cfg(target_os = "android")]
+fn read_accent_via_sysprop() -> Option<u32> {
+    use android_system_properties::AndroidSystemProperties;
+    let raw = AndroidSystemProperties::new().get("persist.sys.wart.accent")?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() { return None; }
+    // Accept "0x..." / "0X..." hex or plain decimal.
+    let parsed = if let Some(hex) = trimmed.strip_prefix("0x").or_else(|| trimmed.strip_prefix("0X")) {
+        u32::from_str_radix(hex, 16).ok()
+    } else {
+        trimmed.parse::<u32>().ok()
+    };
+    if let Some(v) = parsed {
+        log::info!("theme: read accent-color=0x{v:08X} (raw={trimmed:?})");
+    } else {
+        log::warn!("theme: persist.sys.wart.accent unparseable: {trimmed:?}");
+    }
+    parsed
+}
+
+#[cfg(not(target_os = "android"))]
+fn read_accent_via_sysprop() -> Option<u32> { None }
 
 /// Parses output like:
 ///   Night mode: yes
