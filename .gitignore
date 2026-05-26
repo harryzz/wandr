@@ -3,6 +3,10 @@
 compose-*/
 skiko/
 wart-*/
+# System components (runtime-bundled .wasm packages — see
+# tasks/36-cross-app-deps.md). One repo per component; pattern follows
+# wart-*/.
+markdown-renderer/
 
 # Task 30 — external sources pulled in for the diagnosis chain. Heavy
 # (kotlin-src ~GBs, wasmtime-src ~MBs); kt-memalloc-repro has its own
