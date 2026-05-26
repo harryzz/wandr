@@ -159,18 +159,40 @@ private fun MaterialDemoApp() {
     androidx.compose.runtime.CompositionLocalProvider(
         androidx.compose.ui.platform.LocalSoftwareKeyboardController provides keyboardController,
     ) {
-    // Task: system theme — pick dark/light scheme from
-    // my:skiko-gfx/theme.get-night-mode at composition. Read once via
-    // remember; live re-theming would need a watcher (deferred). Auto
-    // → dark (the historical default for wart-app).
+    // Task: system theme + user-settable accent — pick dark/light scheme
+    // from my:skiko-gfx/theme.get-night-mode at composition, then
+    // optionally override `primary`/`primaryContainer`/`onPrimary` from
+    // `get-accent-color` (sysprop `persist.sys.wart.accent` — set via
+    // `setprop persist.sys.wart.accent 0xFF34A853`). Auto → dark
+    // (the historical default for wart-app). All reads via remember
+    // (once at composition; live updates would need a watcher).
     val nightMode = androidx.compose.runtime.remember { testapp.theme.getNightMode() }
-    val scheme = when (nightMode) {
+    val accentArgb = androidx.compose.runtime.remember { testapp.theme.getAccentColor() }
+    val base = when (nightMode) {
         testapp.theme.NightMode.OFF -> androidx.compose.material3.lightColorScheme()
         testapp.theme.NightMode.ON,
         testapp.theme.NightMode.AUTO -> darkColorScheme()
     }
+    val scheme = if (accentArgb != 0u) {
+        val accent = androidx.compose.ui.graphics.Color(accentArgb.toLong() and 0xFFFFFFFFL)
+        // For v1, only override the primary triplet. Material You-style
+        // tonal palette generation from a single seed isn't available
+        // on this Compose Multiplatform path — only `dynamic*ColorScheme`
+        // does it, and those need a real Android Context.
+        // Rec. 709 luminance for picking onPrimary contrast.
+        val lum = 0.2126f * accent.red + 0.7152f * accent.green + 0.0722f * accent.blue
+        base.copy(
+            primary = accent,
+            primaryContainer = accent.copy(alpha = 0.35f),
+            onPrimary = if (lum > 0.5f)
+                androidx.compose.ui.graphics.Color.Black
+            else androidx.compose.ui.graphics.Color.White,
+        )
+    } else {
+        base
+    }
     org.jetbrains.skiko.wasi.wit.Canvas.Import.logMessage(
-        "real-compose: system night-mode=${nightMode} → ${if (scheme == darkColorScheme()) "dark" else "scheme-applied"}"
+        "real-compose: night-mode=${nightMode}, accent=0x${accentArgb.toString(16).padStart(8, '0')}"
     )
     MaterialTheme(colorScheme = scheme) {
         Surface(
