@@ -1,10 +1,14 @@
-# Scope: cross-app dependencies + system components
+# Task 36 — cross-app dependencies + system components
 
-> Preparatory analysis, 2026-05-26. Follow-on to
-> `tasks/35-app-install.md` (single-app install). Covers what
-> happens when **App A imports an interface that some other component
-> exports** — i.e. cross-app composition, system components, and the
-> dependency graph the installer has to walk.
+> **Status:** 🔲 scoped — promoted from `scope-cross-app-deps.md` on
+> 2026-05-26 once task 35 (single-app install) shipped device-verified.
+> Follow-on to `tasks/35-app-install.md`. Covers what happens when
+> **App A imports an interface that some other component exports** —
+> i.e. cross-app composition, system components, and the dependency
+> graph the installer has to walk. Pre-implementation gate: Q6
+> (same-Store vs separate-Store default) needs a concrete second
+> component to drive the decision; see "First action for a fresh
+> session" at the bottom.
 
 ## Why this matters
 
@@ -229,60 +233,86 @@ proceed without it.
 
 ## How this layers on `tasks/35-app-install.md`
 
-Task 35 ships first (it has to — the installer is the thing that
-resolves deps). This scope is the *second* numbered task, not a
-re-rewrite of the first:
+Task 35 (single-app install) shipped 2026-05-26 — `WartInstaller` +
+`WartLoader` + on-device AOT cache + drift self-heal are all live and
+device-verified. Task 36 extends that surface incrementally:
 
-1. **Task 35**: installer + loader, single-app, no deps.
+1. **Task 35** (done): installer + loader, single-app, no deps.
    `[dependencies]` table ignored if present.
-2. **Task N+1 (= this scope, when promoted)**: dependency resolver in
-   the installer; system-apps registry; Linker-time composition for
-   same-Store deps; host-proxy generator for separate-Store deps;
-   cache-key extension.
+2. **Task 36** (this doc): dependency resolver in the installer;
+   system-apps registry; Linker-time composition for same-Store deps;
+   host-proxy generator for separate-Store deps; cache-key extension.
 
 System-component bundling (runtime-bundled `.wasm`s shipped with
 wart-host) is a separable third task — needs build-time tooling to
 package them into wart-host's installed asset set. Out of scope of
 this doc.
 
-## Composition strategy — decision to make
+## Composition strategy — Q6 resolved 2026-05-26
 
-The big choice this scope leaves open: **what defaults to same-Store
-vs separate-Store, and how does an app/system-component opt out?**
+**Decision:** explicit-required declaration. The producer's
+`package.toml` MUST contain `composition = "same-store"` or
+`composition = "separate-store"` in the `[package]` table; the
+installer rejects packages that omit it. No default — every component
+author is forced to think. Consumers cannot override.
 
-Two reasonable defaults:
+```toml
+# producer (markdown-renderer's package.toml):
+[package]
+name        = "war:markdown/renderer"
+version     = "0.1.0"
+world       = "war:markdown/renderer-world"
+composition = "same-store"   # required; "same-store" | "separate-store"
+```
 
-| Default | Rationale | Cost |
+**Driver for this call:** the markdown renderer (chosen 2026-05-26 as
+the concrete second component — library-like, naturally same-Store).
+Was at risk of being decided in the abstract; landing the rule
+alongside the first real use sidesteps that.
+
+## Implementation plan — markdown-renderer driver
+
+Now that Q6 is settled and the driver is the markdown renderer, the
+work breaks into seven steps. End-to-end goal: a tiny smoke consumer
+imports `war:markdown/renderer` and calls its `render` export at
+startup; output reaches WASI stderr via logcat.
+
+| # | What | New files / surface |
 |---|---|---|
-| **Same-Store unless declared otherwise** | Cheaper; works like a library. Most utility components want this. | One bad library can take down anyone using it. Shared GC stalls. |
-| **Separate-Store unless declared otherwise** | Isolation by default — matches Android's bound-service model. | Per-dep host-proxy boilerplate; cross-Store resource passing is more work. |
+| 1 | **WIT contract** — `wit/markdown.wit` defines `world renderer-world` with one export interface `markdown { render: func(source: string) -> document; ... }`. `document = record { blocks: list<block> }`, `block = variant { paragraph(list<inline>), heading(heading-block), code-block(code-block), list(...), quote, rule }`. Compose-friendly shape (drops into LazyColumn). | `wit/markdown.wit` |
+| 2 | **Renderer component** — Rust crate; `comrak` parser → WIT document; exports `markdown`. Builds to `markdown-renderer.wasm` (target `wasm32-wasip2`). Standalone-testable via `wasmtime run`. | `markdown-renderer/` (new Rust crate; sibling of `wart-host/`) |
+| 3 | **Manifest schema extension** — extend `app_installer`'s `parse_manifest` to read `[package].composition` (required for system components) and `[dependencies]` table (three flavours: host / system / app). Validation: reject if producer omits `composition`; reject if a dep uses a flavour the installer can't resolve. | `wart-host/src/app_installer.rs` |
+| 4 | **Installer resolver** — walk `[dependencies]`, for each dep locate `<root>/{system-apps,apps}/<id>/<resolved-version>/` (refuse install if missing), record dep's wasm sha256 + resolved-version in `cache-key.toml`'s new `[dependencies_resolved]` section. Add a `--root system\|user` CLI flag (or `kind = "system"` in package.toml) so the installer writes system bundles under `/data/wart/system-apps/`. | `wart-host/src/app_installer.rs`, `wart-host/src/main.rs` |
+| 5 | **Loader composition** — `WartLoader::load_installed` reads `[dependencies_resolved]`, looks up each dep's cwasm, loads them all into the same `Store`, wires dep exports → consumer imports via `Linker::instance(name)`. Single composition mode for this iteration: **same-Store** (which is what markdown declares). | `wart-host/src/app_loader.rs` |
+| 6 | **Smoke consumer** — `wart-app-md-smoke/`: tiny Kotlin/Wasm app that imports `markdown.render`, calls it once at startup with a hardcoded source, prints the document via WASI stderr. No Compose UI; just validates dep resolution + same-Store composition. | `wart-app-md-smoke/` (new; sibling of `wart-app/`) |
+| 7 | **Device smoke** — install markdown system-bundle, install smoke consumer (which declares `dependencies.markdown = { system = "war:markdown/renderer", … }`), run `wart-host --standalone --app com.example.md-smoke`, observe logcat for "loaded installed:…" + the rendered document printed. | `scripts/smoke-markdown.sh` |
 
-The runtime-bundled-component declaration in its own `package.toml`
-should be authoritative (declares `composition = "same-store"` or
-`"isolated"`). The user app cannot override.
-
-**Open question (Q6, to add to §9):** which default + what's the
-declaration syntax. Defer until a concrete second component drives
-the call.
+Out of scope this iteration (each could be a follow-up task):
+- **Separate-Store mode + host-proxy generator** — wait until a
+  service-shaped dep (e.g. notes store) actually exists.
+- **System-component bundling** (shipping `markdown-renderer.wasm` *with*
+  wart-host's APK / standalone install rather than via separate `--install`).
+- **Multi-version coexistence** in one consumer (A wants B@1 AND B@2).
+- **Reverse-dep tracking** for uninstall safety.
 
 ## First action for a fresh session
 
-Don't start until task 35 is implemented + has shipped single-app
-installs. Then:
+Pre-implementation gates closed 2026-05-26:
+- Scope promoted to numbered task ✓
+- Wasmtime Linker stability re-verified on 44.0.1: `Linker::instance` /
+  `substituted_component_type` / `resource` / `instantiate` all stable;
+  no `lazy.*instantiat` / `defer.*link` surface — §7.4 still accurate ✓
+- Q6 settled — explicit-required `[package].composition` declaration ✓
+- Driver chosen — markdown renderer (system-bundled, library-like,
+  same-Store) ✓
+- WIT return shape chosen — structured spans record ✓
+- Smoke-consumer shape — tiny new `wart-app-md-smoke/` (WASI-stderr only,
+  no Compose UI) ✓
 
-1. Read this scope + `tasks/35-app-install.md` + `post-art-roadmap.md`
-   §7 (revised) + §9.
-2. Promote into `tasks/36-cross-app-deps.md` (numbered task).
-3. Verify the wasmtime Linker composition assumptions still hold
-   against whatever wasmtime version is current then (lazy-link
-   stability may have shifted; if it has, revisit "out of scope:
-   true lazy linking").
-4. Pick a concrete second app or runtime-bundled system component to
-   drive the design (the choice between same-Store and separate-Store
-   defaults is fact-driven; pick a fact).
-5. Implement the resolver + the same-Store composition path first.
-   Separate-Store / host-proxy is a follow-up.
+**Next chunk:** step 1 in the implementation-plan table above — author
+`wit/markdown.wit` (document/block/inline records + the
+`renderer-world` export). Then step 2 — the Rust component crate.
 
-Related: `tasks/35-app-install.md` (must land first),
+Related: `tasks/35-app-install.md` (depended on; shipped 2026-05-26),
 `post-art-roadmap.md` §7 (package shape) + §9 (Q5 link.wac authority,
 Q5b open signing), memory `project-app-lifecycle-and-packaging`.

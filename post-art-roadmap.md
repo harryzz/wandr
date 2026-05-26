@@ -472,8 +472,8 @@ process layout stays cheap.
 Single-app install: `tasks/35-app-install.md` (in progress).
 
 **Cross-app deps + system components** (the second installable
-package the day there is one): scope at
-`tasks/scope-cross-app-deps.md`. Covers the `[dependencies]`
+package the day there is one): `tasks/36-cross-app-deps.md` (scoped,
+not started). Covers the `[dependencies]`
 manifest table, two flavours of "system component" (host-provided
 WIT vs runtime-bundled `.wasm`), the same-Store / separate-Store
 composition modes, install-time resolution, and how A's cache key
@@ -605,7 +605,8 @@ Park until installable-package work begins.
 
 ### Q6 — Cross-app composition default (same-Store vs separate-Store): **OPEN**
 
-Surfaced 2026-05-26 in `tasks/scope-cross-app-deps.md`. When App A
+Surfaced 2026-05-26 in `tasks/36-cross-app-deps.md` (formerly
+`scope-cross-app-deps.md`). When App A
 depends on App B (or a runtime-bundled system component), is B
 instantiated into A's `Store<HostState>` (cheap; shared GC; shared
 crash domain — "library-like") or its own `Store` reached via host
