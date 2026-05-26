@@ -14,7 +14,7 @@ use std::path::Path;
 use anyhow::Result;
 use wasmtime::component::ResourceTable;
 use wasmtime::Store;
-use wasmtime_wasi::WasiCtxBuilder;
+use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
 
 use crate::app_loader::{self, AppLoader, AppRef, LoadedApp};
 use crate::bindings;
@@ -105,6 +105,16 @@ fn run_cwasm_loop(
     let mut wasi_builder = WasiCtxBuilder::new();
     wasi_builder.inherit_stdin().inherit_stdout();
     wasi_builder.stderr(crate::wasi_stderr::LogcatStderr);
+    // Task 38 — installed apps with an `assets/` dir get it preopened
+    // read-only at `/assets` in the guest. Dev paths skip this (no
+    // install dir exists). Failure to preopen is non-fatal — log + run
+    // without filesystem; guest reads will return ENOENT.
+    if let Some(assets) = loaded.assets_dir() {
+        match wasi_builder.preopened_dir(&assets, "/assets", DirPerms::READ, FilePerms::READ) {
+            Ok(_)  => log::info!("standalone: preopened {} → /assets (read-only)", assets.display()),
+            Err(e) => log::warn!("standalone: preopen {} failed: {e:#}", assets.display()),
+        }
+    }
     let wasi = wasi_builder.build();
 
     let host = HostState {
@@ -117,6 +127,7 @@ fn run_cwasm_loop(
         clipboard: None,
         wasi,
         table: ResourceTable::new(),
+        assets_dir: loaded.assets_dir(),
         #[cfg(feature = "profile")]
         growth_log: crate::profiling::GrowthLog::new(),
         #[cfg(feature = "profile")]

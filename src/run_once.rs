@@ -21,7 +21,7 @@
 use anyhow::{anyhow, Result};
 use wasmtime::component::ResourceTable;
 use wasmtime::Store;
-use wasmtime_wasi::WasiCtxBuilder;
+use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
 
 use crate::app_loader::{self, AppLoader, AppRef};
 use crate::bindings;
@@ -77,6 +77,14 @@ pub fn run(app_id: &str) -> Result<()> {
     // Pass the app id as argv[0] so a curious consumer can see who it
     // thinks it is. Smoke consumer doesn't read argv.
     wasi_builder.args(&[app_id]);
+    // Task 38 — same preopen as `standalone::run`. Read-only `/assets`
+    // for installed apps that shipped an `assets/` dir.
+    if let Some(assets) = loaded.assets_dir() {
+        match wasi_builder.preopened_dir(&assets, "/assets", DirPerms::READ, FilePerms::READ) {
+            Ok(_)  => log::info!("run_once: preopened {} → /assets (read-only)", assets.display()),
+            Err(e) => log::warn!("run_once: preopen {} failed: {e:#}", assets.display()),
+        }
+    }
     let wasi = wasi_builder.build();
 
     let host = HostState {
@@ -89,6 +97,7 @@ pub fn run(app_id: &str) -> Result<()> {
         clipboard: None,
         wasi,
         table: ResourceTable::new(),
+        assets_dir: loaded.assets_dir(),
         #[cfg(feature = "profile")]
         growth_log: crate::profiling::GrowthLog::new(),
         #[cfg(feature = "profile")]

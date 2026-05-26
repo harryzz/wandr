@@ -59,6 +59,22 @@ pub struct LoadedApp {
     /// is deserialized but not yet instantiated; instantiation happens
     /// inside `instantiate()` against the caller's Store.
     deps: Vec<LoadedDep>,
+    /// Install directory for `AppRef::Installed` loads — `None` for
+    /// `DevCwasm` / `DevAsset` (no install dir exists). Callers use
+    /// this for asset preopens (task 38: `<install_dir>/assets/` →
+    /// `/assets` in WASI ctx) and similar install-local lookups.
+    install_dir: Option<PathBuf>,
+}
+
+impl LoadedApp {
+    /// Path to `<install_dir>/assets/` if the bundle shipped an `assets/`
+    /// directory and the load was from an installed app. `None` for dev
+    /// paths or when the bundle had no assets.
+    pub fn assets_dir(&self) -> Option<PathBuf> {
+        self.install_dir.as_ref()
+            .map(|d| d.join("assets"))
+            .filter(|p| p.is_dir())
+    }
 }
 
 /// One resolved + deserialized same-Store dep.
@@ -136,22 +152,22 @@ pub fn default_for_target() -> WartLoader {
 
 impl AppLoader for WartLoader {
     fn load(&self, engine: &Engine, r: AppRef<'_>) -> Result<LoadedApp> {
-        let (entry, source_label, deps) = match r {
+        let (entry, source_label, deps, install_dir) = match r {
             AppRef::Installed { app_id, version } => {
-                let (entry, label, deps) =
+                let (entry, label, deps, dir) =
                     load_installed(engine, &self.root, app_id, version)?;
-                (entry, label, deps)
+                (entry, label, deps, Some(dir))
             }
             AppRef::DevCwasm { candidates } => {
                 let (entry, label) = load_dev_path(engine, candidates)?;
-                (entry, label, Vec::new())
+                (entry, label, Vec::new(), None)
             }
             AppRef::DevAsset { bytes } => {
                 let (entry, label) = load_dev_asset(engine, bytes)?;
-                (entry, label, Vec::new())
+                (entry, label, Vec::new(), None)
             }
         };
-        Ok(LoadedApp { source_label, entry, engine: engine.clone(), deps })
+        Ok(LoadedApp { source_label, entry, engine: engine.clone(), deps, install_dir })
     }
 }
 
@@ -172,7 +188,7 @@ fn load_installed(
     root: &Path,
     app_id: &str,
     version: Option<&str>,
-) -> Result<(Component, String, Vec<LoadedDep>)> {
+) -> Result<(Component, String, Vec<LoadedDep>, PathBuf)> {
     let app_dir = root.join("apps").join(app_id);
     if !app_dir.is_dir() {
         bail!("installed: app dir not found: {}", app_dir.display());
@@ -269,7 +285,7 @@ fn load_installed(
     // `LoadedApp::instantiate` time.
     let deps = load_dep_components(engine, root, &key)?;
 
-    Ok((component, label, deps))
+    Ok((component, label, deps, install_dir))
 }
 
 fn load_dep_components(

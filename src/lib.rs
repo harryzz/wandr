@@ -20,6 +20,7 @@ mod binder_aidl;
 mod binder_shared_memory;
 mod display_impl;
 mod eventfd_signal;
+mod assets_impl;
 // Task 35 step 1: app loader skeleton (no callers wired yet).
 mod app_loader;
 // Task 35 step 4: app installer skeleton (no CLI wired yet — step 6).
@@ -81,6 +82,10 @@ pub struct HostState {
     pub clipboard: Option<String>,
     pub wasi:      WasiCtx,
     pub table:     ResourceTable,
+    /// Root of the install's `assets/` dir for the `my:skiko-gfx/assets.read`
+    /// host impl (task 38). `None` for dev paths / bundles with no
+    /// assets — guest `read()` calls then return `option::none`.
+    pub assets_dir: Option<PathBuf>,
     #[cfg(feature = "profile")]
     pub growth_log: profiling::GrowthLog,
     #[cfg(feature = "profile")]
@@ -221,6 +226,7 @@ impl ApplicationHandler for App {
                 clipboard: None,
                 wasi,
                 table: ResourceTable::new(),
+                assets_dir: loaded.assets_dir(),
                 #[cfg(feature = "profile")]
                 growth_log: profiling::GrowthLog::new(),
                 #[cfg(feature = "profile")]
