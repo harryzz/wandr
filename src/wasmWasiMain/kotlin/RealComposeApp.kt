@@ -46,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Density
@@ -74,6 +75,12 @@ val wasiFrameDispatcher: WasiFrameDispatcher = WasiFrameDispatcher()
 /// `KeyEvent` into the scene (same path the hardware-keyboard handler
 /// uses via `WasiInput.setKeyHandler`).
 var wasiSoftKeyboardKeyHandler: (androidx.compose.ui.input.key.KeyEvent) -> Unit = {}
+
+/// Bridge the OTHER direction: Main.kt's hardware-key handler calls this
+/// when it sees a key that should dismiss the soft keyboard (currently
+/// just ESC). Wired by MaterialDemoApp once it has its
+/// [WasiKeyboardController] — a no-op before that.
+var wasiHideKeyboardRequest: () -> Unit = {}
 
 fun buildRealComposeScene(widthPx: Int, heightPx: Int, density: Float): ComposeScene {
     // CanvasLayersComposeScene implements ComposeSceneContext itself —
@@ -141,16 +148,28 @@ private fun MaterialDemoApp() {
             "compose-lifecycle smoke: LifecycleEventEffect ON_PAUSE fired"
         )
     }
+    // In-canvas soft keyboard visibility — implements Compose's
+    // `SoftwareKeyboardController` so `BasicTextField.tap`/`Done`-action
+    // paths drive it. `TextFieldCard` also calls show/hide explicitly via
+    // `onFocusChanged`. ESC (hardware or soft) hides it.
+    val keyboardController = rememberWasiKeyboardController()
+    androidx.compose.runtime.LaunchedEffect(keyboardController) {
+        wasiHideKeyboardRequest = { keyboardController.hide() }
+    }
+    androidx.compose.runtime.CompositionLocalProvider(
+        androidx.compose.ui.platform.LocalSoftwareKeyboardController provides keyboardController,
+    ) {
     MaterialTheme(colorScheme = darkColorScheme()) {
         Surface(
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.background,
         ) {
-            // Bottom-overlaid soft keyboard. Scrollable content occupies
-            // the upper area; the keyboard floats above it pinned to
-            // bottom. Bottom padding on the scroll Column reserves space
-            // so the last card isn't permanently hidden by the keyboard.
-            val keyboardHeight = 300.dp
+            // Bottom-overlaid soft keyboard, shown only while focused.
+            // Scrollable content occupies the upper area; bottom padding
+            // reserves space iff the keyboard is up so the last card isn't
+            // hidden behind it.
+            val keyboardVisible = keyboardController.isVisible.value
+            val keyboardHeight = if (keyboardVisible) 300.dp else 0.dp
             // Hoisted so both the scroll Column (which trigers the
             // snackbar from inside SnackbarCard) AND the sibling
             // overlay Box (which renders the SnackbarHost) can see
@@ -252,15 +271,24 @@ private fun MaterialDemoApp() {
                     }
                 }
                 // Soft keyboard overlay — drawn last so it sits on top.
-                Box(modifier = Modifier.align(androidx.compose.ui.Alignment.BottomCenter)) {
-                    WasiSoftKeyboard(
-                        onKey = { ev -> wasiSoftKeyboardKeyHandler(ev) },
-                        height = keyboardHeight,
-                    )
+                // Only shown while `keyboardController.isVisible` is true,
+                // which we drive via TextFieldCard's `onFocusChanged`,
+                // any tap on an already-focused BasicTextField (Compose's
+                // built-in `requireKeyboardController().show()` path), and
+                // the keyboard's own ⌄ key to hide.
+                if (keyboardVisible) {
+                    Box(modifier = Modifier.align(androidx.compose.ui.Alignment.BottomCenter)) {
+                        WasiSoftKeyboard(
+                            onKey = { ev -> wasiSoftKeyboardKeyHandler(ev) },
+                            height = keyboardHeight,
+                            onHide = { keyboardController.hide() },
+                        )
+                    }
                 }
             }
         }
     }
+    }  // CompositionLocalProvider
 }
 
 @Composable
@@ -554,6 +582,10 @@ private fun ButtonRow() {
 @Composable
 private fun TextFieldCard() {
     val state = androidx.compose.foundation.text.input.rememberTextFieldState("hello world")
+    // Auto-show / -hide the in-canvas keyboard on focus change. Defaults
+    // to null in compose-jb-skiko's CompositionLocal; we override this
+    // with `WasiKeyboardController` in `MaterialDemoApp`.
+    val keyboardController = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     // EXPERIMENT: read state.selection at the COMPOSABLE level so that any
     // selection change forces a recomposition of TextFieldCard, which
     // re-emits the entire BasicTextField subtree. If the cursor visually
@@ -585,7 +617,12 @@ private fun TextFieldCard() {
             ) {
                 androidx.compose.foundation.text.BasicTextField(
                     state = state,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onFocusChanged { fs ->
+                            if (fs.isFocused) keyboardController?.show()
+                            else              keyboardController?.hide()
+                        },
                     textStyle = androidx.compose.ui.text.TextStyle(
                         fontSize = 16.sp,
                         color = MaterialTheme.colorScheme.onSurface,

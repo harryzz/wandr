@@ -146,6 +146,7 @@ object WasiSoftKeyboardDefaults {
     private val backspace = KeyDef("⌫", KeyAction.Send(Key(8), 0), width = 1.5f)
     private val space     = KeyDef(" ", KeyAction.Send(Key(32), 32), width = 4.0f)
     private val enter     = KeyDef("⏎", KeyAction.Send(Key(13), 13), width = 1.5f)
+    private val hide      = KeyDef("⌄", KeyAction.Hide,              width = 1f)
 
     /** Top digits row (1-9, 0) — shared across language layouts. */
     private val digitsRow: List<KeyDef> = listOf(
@@ -165,12 +166,13 @@ object WasiSoftKeyboardDefaults {
                 add(backspace)
             },
             listOf(
-                KeyDef("123",  KeyAction.SwitchLayout("Symbols"),  width = 1.5f),
+                KeyDef("123",  KeyAction.SwitchLayout("Symbols"),  width = 1.3f),
                 KeyDef("🌐",   KeyAction.CycleLanguage,            width = 1f),
                 KeyDef("😀",   KeyAction.SwitchLayout("Emoji"),    width = 1f),
-                space,
+                space.copy(width = 3.4f),
                 KeyDef(".",    KeyAction.Send(Key(46), 46),         width = 1f),
                 enter,
+                hide,
             ),
         ),
         shiftedRows = listOf(
@@ -183,12 +185,13 @@ object WasiSoftKeyboardDefaults {
                 add(backspace)
             },
             listOf(
-                KeyDef("123",  KeyAction.SwitchLayout("Symbols"),  width = 1.5f),
+                KeyDef("123",  KeyAction.SwitchLayout("Symbols"),  width = 1.3f),
                 KeyDef("🌐",   KeyAction.CycleLanguage,            width = 1f),
                 KeyDef("😀",   KeyAction.SwitchLayout("Emoji"),    width = 1f),
-                space,
+                space.copy(width = 3.4f),
                 KeyDef(",",    KeyAction.Send(Key(44), 44),         width = 1f),
                 enter,
+                hide,
             ),
         ),
     )
@@ -206,12 +209,13 @@ object WasiSoftKeyboardDefaults {
                 add(backspace)
             },
             listOf(
-                KeyDef("123",  KeyAction.SwitchLayout("Symbols"), width = 1.5f),
+                KeyDef("123",  KeyAction.SwitchLayout("Symbols"), width = 1.3f),
                 KeyDef("🌐",   KeyAction.CycleLanguage,           width = 1f),
                 KeyDef("😀",   KeyAction.SwitchLayout("Emoji"),   width = 1f),
-                space,
+                space.copy(width = 3.4f),
                 KeyDef(".",    KeyAction.Send(Key(46), 46),        width = 1f),
                 enter,
+                hide,
             ),
         ),
         shiftedRows = listOf(
@@ -224,12 +228,13 @@ object WasiSoftKeyboardDefaults {
                 add(backspace)
             },
             listOf(
-                KeyDef("123",  KeyAction.SwitchLayout("Symbols"), width = 1.5f),
+                KeyDef("123",  KeyAction.SwitchLayout("Symbols"), width = 1.3f),
                 KeyDef("🌐",   KeyAction.CycleLanguage,           width = 1f),
                 KeyDef("😀",   KeyAction.SwitchLayout("Emoji"),   width = 1f),
-                space,
+                space.copy(width = 3.4f),
                 KeyDef(",",    KeyAction.Send(Key(44), 44),        width = 1f),
                 enter,
+                hide,
             ),
         ),
     )
@@ -249,8 +254,9 @@ object WasiSoftKeyboardDefaults {
             listOf(
                 KeyDef("ABC", KeyAction.SwitchLayout("English"), width = 1.5f),
                 KeyDef("🌐",  KeyAction.CycleLanguage,           width = 1f),
-                space.copy(width = 4.5f),
+                space.copy(width = 4f),
                 enter,
+                hide,
             ),
         ),
     )
@@ -270,8 +276,9 @@ object WasiSoftKeyboardDefaults {
             listOf(
                 KeyDef("ABC", KeyAction.SwitchLayout("English"), width = 1.5f),
                 KeyDef("🌐",  KeyAction.CycleLanguage,           width = 1f),
-                space.copy(width = 4.5f),
+                space.copy(width = 4f),
                 enter,
+                hide,
             ),
         ),
     )
@@ -293,8 +300,9 @@ object WasiSoftKeyboardDefaults {
             listOf(
                 KeyDef("ABC", KeyAction.SwitchLayout("English"), width = 2f),
                 backspace.copy(width = 2f),
-                space.copy(width = 4f),
+                space.copy(width = 3f),
                 enter.copy(width = 2f),
+                hide,
             ),
         ),
     )

@@ -327,6 +327,13 @@ fun main() {
         } else {
             androidx.compose.ui.input.key.KeyEventType.KeyUp
         }
+        // ESC dismisses the in-canvas soft keyboard. We do this on KeyDown
+        // before forwarding so the dismiss happens once per press, and we
+        // still forward so any field-level handler / focus owner that
+        // wants to see the ESC also gets it.
+        if (keyId == 27u && type == androidx.compose.ui.input.key.KeyEventType.KeyDown) {
+            testapp.wasiHideKeyboardRequest()
+        }
         // Use the printable codePoint when present; otherwise the named-key id.
         val key = androidx.compose.ui.input.key.Key(
             if (keyId != 0u) keyId.toLong() else codePoint.toLong()
