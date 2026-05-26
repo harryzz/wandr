@@ -30,6 +30,8 @@ mod wasi_stderr;
 #[cfg(target_os = "android")]
 mod sf_surface;
 #[cfg(target_os = "android")]
+mod lifecycle_standalone;
+#[cfg(target_os = "android")]
 pub mod standalone;
 
 mod bindings {

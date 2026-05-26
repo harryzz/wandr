@@ -30,6 +30,11 @@ pub fn run() -> Result<()> {
     crate::wasi_stderr::redirect_stderr_to_logcat();
     log::info!("standalone: starting — no NativeActivity");
 
+    // Task 33 Step 5 — clean-shutdown signals, crash marker, screen-state.
+    crate::lifecycle_standalone::install_signal_handlers();
+    crate::lifecycle_standalone::install_panic_hook();
+    crate::lifecycle_standalone::drain_prior_crash_marker();
+
     // The shim's SurfaceComposerClient talks to SurfaceFlinger over binder.
     if let Err(e) = crate::binder::init() {
         log::warn!("standalone: binder init: {e}");
@@ -55,7 +60,7 @@ pub fn run() -> Result<()> {
     // Same Engine config as the NativeActivity path — the AOT cwasm contract
     // depends on it (gc / function-references / exceptions / stack sizes).
     let engine = App::make_engine();
-    match unsafe { Component::deserialize_file(&engine, CWASM_PATH) } {
+    let result = match unsafe { Component::deserialize_file(&engine, CWASM_PATH) } {
         Ok(component) => {
             log::info!("standalone: loaded cwasm {CWASM_PATH}");
             run_cwasm_loop(engine, component, renderer, sf)
@@ -67,7 +72,12 @@ pub fn run() -> Result<()> {
             );
             run_test_loop(renderer)
         }
+    };
+
+    if result.is_ok() {
+        crate::lifecycle_standalone::record_clean_exit();
     }
+    result
 }
 
 /// The real render loop: instantiate the component and drive `render_frame`.
@@ -131,10 +141,45 @@ fn run_cwasm_loop(
         log::warn!("standalone: on_resize({logical_w}x{logical_h}) failed: {e:#}");
     }
 
+    // Screen on/off → Paused / Resumed. None if the device doesn't surface
+    // the sysprop; the loop then just stays Resumed forever.
+    let screen_rx = crate::lifecycle_standalone::spawn_screen_state_watcher();
+
     // ── Render loop — mirrors WindowEvent::RedrawRequested, no winit ─────
     let frame_target = std::time::Duration::from_millis(16);
     let mut frame: u64 = 0;
     loop {
+        // Step 5 — SIGTERM / SIGINT / SIGHUP from launcher trap or operator.
+        if crate::lifecycle_standalone::should_shutdown() {
+            log::info!("standalone: shutdown signal — exiting render loop");
+            break;
+        }
+
+        // Drain any screen-state transitions accumulated since last frame.
+        // Last one wins — we only care about the final state per frame.
+        if let Some(rx) = screen_rx.as_ref() {
+            let mut latest = None;
+            while let Ok(s) = rx.try_recv() { latest = Some(s); }
+            if let Some(s) = latest {
+                let target = if s.is_live() {
+                    bindings::my::skiko_gfx::lifecycle::State::Resumed
+                } else {
+                    bindings::my::skiko_gfx::lifecycle::State::Paused
+                };
+                if store.data().lifecycle.current != target {
+                    store.data_mut().lifecycle.current = target;
+                    if let Err(e) = skiko
+                        .my_skiko_gfx_renderer()
+                        .call_on_lifecycle_changed(&mut store, target as u32)
+                    {
+                        log::warn!(
+                            "standalone: on_lifecycle_changed({target:?}) failed: {e:#}"
+                        );
+                    }
+                }
+            }
+        }
+
         let t0 = std::time::Instant::now();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -203,6 +248,36 @@ fn run_cwasm_loop(
             std::thread::sleep(frame_target - elapsed);
         }
     }
+
+    // ── Shutdown — fire Destroyed so the LifecycleRegistry walks
+    //              Resumed → Paused → Stopped → Created → Destroyed, giving
+    //              Compose observers a chance to flush state. Drain a few
+    //              frames after so the resulting recompositions render
+    //              before EGL/binder teardown via the SfSurface Drop chain.
+    log::info!("standalone: dispatching Destroyed → drain frames → exit");
+    let final_state = bindings::my::skiko_gfx::lifecycle::State::Destroyed;
+    store.data_mut().lifecycle.current = final_state;
+    if let Err(e) = skiko
+        .my_skiko_gfx_renderer()
+        .call_on_lifecycle_changed(&mut store, final_state as u32)
+    {
+        log::warn!("standalone: on_lifecycle_changed(Destroyed) failed: {e:#}");
+    }
+    let drain_nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+    for _ in 0..3 {
+        if let Err(e) = skiko
+            .my_skiko_gfx_renderer()
+            .call_render_frame(&mut store, drain_nanos)
+        {
+            log::warn!("standalone: drain render_frame failed: {e:#}");
+            break;
+        }
+    }
+    log::info!("standalone: clean exit");
+    Ok(())
 }
 
 /// Fallback when no cwasm is deployed — draws the built-in test frame.
@@ -210,6 +285,10 @@ fn run_test_loop(mut renderer: crate::canvas_impl::SkiaRenderer) -> Result<()> {
     log::info!("standalone: test-frame loop (no cwasm)");
     let mut frame: u64 = 0;
     loop {
+        if crate::lifecycle_standalone::should_shutdown() {
+            log::info!("standalone: shutdown signal — exiting test loop");
+            return Ok(());
+        }
         renderer.draw_test_frame();
         frame += 1;
         if frame <= 3 || frame % 300 == 0 {
