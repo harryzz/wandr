@@ -469,7 +469,17 @@ locked in — keep both modules behind interfaces that don't bake in
 in-process assumptions, so a future `fork()`-shared engine + per-app
 process layout stays cheap.
 
-Scope: `tasks/scope-app-install.md`.
+Single-app install: scope at `tasks/scope-app-install.md`.
+
+**Cross-app deps + system components** (the second installable
+package the day there is one): scope at
+`tasks/scope-cross-app-deps.md`. Covers the `[dependencies]`
+manifest table, two flavours of "system component" (host-provided
+WIT vs runtime-bundled `.wasm`), the same-Store / separate-Store
+composition modes, install-time resolution, and how A's cache key
+extends to include B's wasm hash. Lazy linking is NOT used (not
+stable in wasmtime); install-time / load-time Linker composition
+covers the user's "install B before A" case.
 
 ### 7.7 Dev workflow vs the install path
 
@@ -591,8 +601,22 @@ assumes a signing format that is not yet specified. Open items:
   set, or fetched at install time, or both. No decision.
 - **Revocation**: not specified.
 
-This is the one architectural question remaining after the 2026-05-26
-round of resolutions. Park until installable-package work begins.
+Park until installable-package work begins.
+
+### Q6 — Cross-app composition default (same-Store vs separate-Store): **OPEN**
+
+Surfaced 2026-05-26 in `tasks/scope-cross-app-deps.md`. When App A
+depends on App B (or a runtime-bundled system component), is B
+instantiated into A's `Store<HostState>` (cheap; shared GC; shared
+crash domain — "library-like") or its own `Store` reached via host
+proxy (isolated; independent GC; cross-Store boilerplate —
+"service-like")?
+
+Both modes are stable in wasmtime today; the choice is which one is
+the *default* and what the opt-out syntax is. Likely answer: the
+component's *own* `package.toml` declares its mode authoritatively
+(consumer apps cannot override). Defer the call until a concrete
+second component drives the decision; the scope doc has the matrix.
 
 ### 9.1 Reference — how Android/ART organises this (comparison baseline)
 
