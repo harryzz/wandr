@@ -9,11 +9,14 @@
 //! and the cold-start in `App::resumed`, minus winit. If no cwasm is present
 //! it falls back to drawing the renderer test frame.
 
+use std::path::Path;
+
 use anyhow::Result;
-use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
+use wasmtime::component::ResourceTable;
 use wasmtime::Store;
 use wasmtime_wasi::WasiCtxBuilder;
 
+use crate::app_loader::{self, AppLoader, AppRef, LoadedApp};
 use crate::bindings;
 use crate::{App, HostState};
 
@@ -22,7 +25,7 @@ const SHIM_SO: &str = "/data/local/tmp/libsf_surface.so";
 /// Where the deployable AOT component is deployed on the device.
 const CWASM_PATH: &str = "/data/local/tmp/skiko-component.cwasm";
 
-pub fn run() -> Result<()> {
+pub fn run(app_id: Option<&str>) -> Result<()> {
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
     );
@@ -60,15 +63,19 @@ pub fn run() -> Result<()> {
     // Same Engine config as the NativeActivity path — the AOT cwasm contract
     // depends on it (gc / function-references / exceptions / stack sizes).
     let engine = App::make_engine();
-    let result = match unsafe { Component::deserialize_file(&engine, CWASM_PATH) } {
-        Ok(component) => {
-            log::info!("standalone: loaded cwasm {CWASM_PATH}");
-            run_cwasm_loop(engine, component, renderer, sf)
+    let loader = app_loader::default_for_target();
+    let app_ref = match app_id {
+        Some(id) => AppRef::Installed { app_id: id, version: None },
+        None => AppRef::DevCwasm { candidates: &[Path::new(CWASM_PATH)] },
+    };
+    let result = match loader.load(&engine, app_ref) {
+        Ok(loaded) => {
+            log::info!("standalone: loaded {}", loaded.source_label);
+            run_cwasm_loop(engine, loaded, renderer, sf)
         }
         Err(e) => {
             log::warn!(
-                "standalone: no cwasm at {CWASM_PATH} ({e}) — falling back to \
-                 test-frame loop"
+                "standalone: load failed ({e:#}) — falling back to test-frame loop"
             );
             run_test_loop(renderer)
         }
@@ -83,7 +90,7 @@ pub fn run() -> Result<()> {
 /// The real render loop: instantiate the component and drive `render_frame`.
 fn run_cwasm_loop(
     engine: wasmtime::Engine,
-    component: Component,
+    loaded: LoadedApp,
     renderer: crate::canvas_impl::SkiaRenderer,
     sf: crate::sf_surface::SfSurface,
 ) -> Result<()> {
@@ -125,11 +132,7 @@ fn run_cwasm_loop(
         });
     }
 
-    let mut linker: Linker<HostState> = Linker::new(&engine);
-    wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
-    bindings::SkikoUi::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)?;
-
-    let skiko = bindings::SkikoUi::instantiate(&mut store, &component, &linker)?;
+    let skiko = loaded.instantiate(&mut store)?;
     log::info!("standalone: component instantiated — entering render loop");
 
     // Tell the guest the surface size before the first frame, so Compose lays

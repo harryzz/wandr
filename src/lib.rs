@@ -20,6 +20,10 @@ mod binder_aidl;
 mod binder_shared_memory;
 mod display_impl;
 mod eventfd_signal;
+// Task 35 step 1: app loader skeleton (no callers wired yet).
+mod app_loader;
+// Task 35 step 4: app installer skeleton (no CLI wired yet — step 6).
+mod app_installer;
 #[cfg(feature = "profile")]
 mod profiling;
 #[cfg(target_os = "android")]
@@ -48,10 +52,13 @@ use winit::{
     keyboard::{Key, NamedKey, PhysicalKey},
     window::{Window, WindowId},
 };
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use wasmtime::{Engine, Store};
-use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
+use wasmtime::component::ResourceTable;
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+
+use crate::app_loader::{AppLoader, AppRef, LoadedApp};
 
 pub struct HostState {
     pub renderer:  canvas_impl::SkiaRenderer,
@@ -75,7 +82,7 @@ impl WasiView for HostState {
 pub struct App {
     window:          Option<Arc<Window>>,
     engine:          Engine,
-    component:       Option<Component>,
+    loaded:          Option<LoadedApp>,
     store:           Option<Store<HostState>>,
     bindings:        Option<bindings::SkikoUi>,
     // Renderer owned directly when running without a WASM component.
@@ -110,43 +117,11 @@ impl App {
         Engine::new(&config).expect("wasmtime engine init")
     }
 
-    pub fn new() -> Self {
-        let engine = Self::make_engine();
-
-        let wasm_path = std::env::args().nth(1)
-            .unwrap_or_else(|| "skiko-component.cwasm".to_string());
-        log::info!("loading WASM from path: {wasm_path}");
-
-        let component = if wasm_path.ends_with(".cwasm") {
-            match unsafe { Component::deserialize_file(&engine, &wasm_path) } {
-                Ok(c) => { log::info!("loaded cwasm: {wasm_path}"); Some(c) }
-                Err(e) => { log::warn!("no cwasm at {wasm_path}: {e}"); None }
-            }
-        } else {
-            match Component::from_file(&engine, &wasm_path) {
-                Ok(c) => { log::info!("loaded wasm: {wasm_path}"); Some(c) }
-                Err(e) => { log::warn!("no wasm at {wasm_path}: {e}"); None }
-            }
-        };
-
-        Self::from_parts(engine, component)
-    }
-
-    #[cfg(target_os = "android")]
-    pub fn new_from_asset_bytes(bytes: Vec<u8>) -> Self {
-        let engine = Self::make_engine();
-        let component = match unsafe { Component::deserialize(&engine, &bytes) } {
-            Ok(c) => { log::info!("loaded cwasm from asset ({} bytes)", bytes.len()); Some(c) }
-            Err(e) => { log::warn!("failed to deserialize asset cwasm: {e}"); None }
-        };
-        Self::from_parts(engine, component)
-    }
-
-    fn from_parts(engine: Engine, component: Option<Component>) -> Self {
+    fn from_parts(engine: Engine, loaded: Option<LoadedApp>) -> Self {
         Self {
             window: None,
             engine,
-            component,
+            loaded,
             store: None,
             bindings: None,
             test_renderer: None,
@@ -210,7 +185,7 @@ impl ApplicationHandler for App {
         }
 
         log::info!("resumed (cold) — creating store and instantiating component");
-        if let Some(component) = &self.component {
+        if let Some(loaded) = &self.loaded {
             // Task 30 step 1: route guest stderr to logcat *synchronously*
             // — wasmtime-wasi 44's inherit_stderr otherwise enqueues bytes
             // on a worker task that won't drain before a SIGILL trap kills
@@ -256,15 +231,8 @@ impl ApplicationHandler for App {
                 // matched profile-build cwasm. See tasks/23-profiling-hooks.md.
             }
 
-            let mut linker: Linker<HostState> = Linker::new(&self.engine);
-            wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
-                .expect("add WASI to linker");
-            bindings::SkikoUi::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)
-                .expect("add SkikoUi canvas Host to linker");
-
-            let bindings = bindings::SkikoUi::instantiate(
-                &mut store, component, &linker,
-            ).expect("instantiate component");
+            let bindings = loaded.instantiate(&mut store)
+                .expect("instantiate component");
             log::info!("WASM component instantiated");
 
             self.store   = Some(store);
@@ -601,46 +569,26 @@ fn load_asset_bytes(app: &winit::platform::android::activity::AndroidApp, name: 
     Some(buf)
 }
 
-/// Search the filesystem for a .cwasm file.
-/// Priority: public Downloads (drop file via MTP/file-manager) →
-///           app-owned external dir (adb push, no permission needed) →
-///           APK asset fallback.
+/// Filesystem candidates the loader tries for a hot-reload `.cwasm`.
+/// Priority: public Downloads (drop via MTP / file manager) →
+///           app-owned external dir (`adb push`, no permission needed).
 ///
 /// Deploy via MTP or adb:
 ///   adb push skiko-component.cwasm /sdcard/Download/skiko-component.cwasm
 #[cfg(target_os = "android")]
-fn find_cwasm_on_filesystem(app: &winit::platform::android::activity::AndroidApp) -> Option<Vec<u8>> {
-    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
-
-    // 1. Public Downloads — accessible via MTP or any file manager, no special
-    //    permissions needed on API 29+ (scoped storage still allows reads from
-    //    Download/ when the app holds READ_EXTERNAL_STORAGE or targets API 33+).
+fn cwasm_filesystem_candidates(app: &winit::platform::android::activity::AndroidApp) -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
     for path in &[
         "/sdcard/Download/skiko-component.cwasm",
         "/sdcard/Downloads/skiko-component.cwasm",
         "/storage/emulated/0/Download/skiko-component.cwasm",
     ] {
-        candidates.push(std::path::PathBuf::from(path));
+        candidates.push(PathBuf::from(path));
     }
-
-    // 2. App-owned external files dir — never needs a permission grant.
-    //    adb push skiko-component.cwasm /sdcard/Android/data/com.example.wasmruntime/files/
     if let Some(ext) = app.external_data_path() {
         candidates.push(ext.join("skiko-component.cwasm"));
     }
-
-    for path in &candidates {
-        match std::fs::read(path) {
-            Ok(bytes) => {
-                log::info!("found cwasm on filesystem: {} ({} bytes)", path.display(), bytes.len());
-                return Some(bytes);
-            }
-            Err(e) => {
-                log::debug!("cwasm not at {}: {e}", path.display());
-            }
-        }
-    }
-    None
+    candidates
 }
 
 #[cfg(target_os = "android")]
@@ -657,18 +605,30 @@ pub fn android_main(app: winit::platform::android::activity::AndroidApp) {
     // the redirected fd 2.
     wasi_stderr::redirect_stderr_to_logcat();
 
-    // Priority: filesystem (hot-reload) → APK assets → file arg
-    let mut runner = if let Some(bytes) = find_cwasm_on_filesystem(&app) {
-        log::info!("using cwasm from filesystem ({} bytes)", bytes.len());
-        App::new_from_asset_bytes(bytes)
-    } else if let Some(bytes) = load_asset_bytes(&app, "skiko-component.cwasm") {
-        log::info!("loaded skiko-component.cwasm from APK assets ({} bytes)", bytes.len());
-        App::new_from_asset_bytes(bytes)
-    } else {
-        log::warn!("no cwasm found on filesystem or in assets — trying file arg");
-        App::new()
-    };
+    let engine = App::make_engine();
+    let loader = app_loader::default_for_target();
 
+    // Priority: filesystem cwasm (hot-reload) → APK asset bytes.
+    let fs_candidates = cwasm_filesystem_candidates(&app);
+    let fs_refs: Vec<&Path> = fs_candidates.iter().map(|p| p.as_path()).collect();
+    let loaded = match loader.load(&engine, AppRef::DevCwasm { candidates: &fs_refs }) {
+        Ok(l) => { log::info!("loaded: {}", l.source_label); Some(l) }
+        Err(e) => {
+            log::debug!("no filesystem cwasm ({e:#}) — trying APK asset");
+            load_asset_bytes(&app, "skiko-component.cwasm")
+                .and_then(|bytes| {
+                    match loader.load(&engine, AppRef::DevAsset { bytes: &bytes }) {
+                        Ok(l) => { log::info!("loaded: {}", l.source_label); Some(l) }
+                        Err(e) => { log::warn!("APK asset cwasm failed: {e:#}"); None }
+                    }
+                })
+        }
+    };
+    if loaded.is_none() {
+        log::warn!("no cwasm found on filesystem or in assets — running renderer-test mode");
+    }
+
+    let mut runner = App::from_parts(engine, loaded);
     let event_loop = EventLoop::builder()
         .with_android_app(app)
         .build()
@@ -680,6 +640,35 @@ pub fn android_main(app: winit::platform::android::activity::AndroidApp) {
 pub fn run() {
     env_logger::init();
     log::info!("desktop start");
+
+    let engine = App::make_engine();
+    let loader = app_loader::default_for_target();
+    let argv1 = std::env::args().nth(1)
+        .unwrap_or_else(|| "skiko-component.cwasm".to_string());
+    let argv_path = Path::new(&argv1);
+    let loaded = match loader.load(&engine, AppRef::DevCwasm { candidates: &[argv_path] }) {
+        Ok(l) => { log::info!("loaded: {}", l.source_label); Some(l) }
+        Err(e) => { log::warn!("no component at {argv1}: {e:#}"); None }
+    };
+
     let event_loop = EventLoop::new().unwrap();
-    event_loop.run_app(&mut App::new()).unwrap();
+    event_loop.run_app(&mut App::from_parts(engine, loaded)).unwrap();
+}
+
+/// CLI entry for `wart-host --install <warpkg-dir>`. Reads the bundle,
+/// AOT-precompiles each component on-device, writes the install dir,
+/// and stamps `cache-key.toml`. Honors `WART_APPS_ROOT` for sandboxed
+/// smoke testing.
+pub fn install_warpkg(warpkg_dir: &Path) -> anyhow::Result<app_installer::InstalledApp> {
+    use app_installer::{AppInstaller, PackageBundle};
+    let engine = App::make_engine();
+    let installer = app_installer::default_for_target();
+    let bundle = PackageBundle::from_dir(warpkg_dir);
+    log::info!("install: bundle={} root={}", warpkg_dir.display(), installer.root.display());
+    let installed = installer.install(&engine, bundle)?;
+    log::info!(
+        "install: {} v{} → {}",
+        installed.app_id, installed.version, installed.install_dir.display(),
+    );
+    Ok(installed)
 }

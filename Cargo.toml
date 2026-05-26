@@ -36,6 +36,10 @@ libc               = "0.2"
 # Bytes type used by wasmtime-wasi's OutputStream trait (wart-host
 # implements a custom synchronous logcat sink — see wasi_stderr.rs).
 bytes              = "1"
+# App installer (task 35): cache-key hashing + package.toml / cache-key.toml
+# I/O. `toml` used without serde derive (toml::Value table API).
+sha2               = "0.10"
+toml               = { version = "0.8", default-features = false, features = ["parse", "display"] }
 
 # skia-safe: GL backend only (no Vulkan needed — EGL gives us GLES)
 [dependencies.skia-safe]
