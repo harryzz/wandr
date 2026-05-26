@@ -1,0 +1,10 @@
+package wart:app@0.1.0;
+
+/// wart-app's world — adds the cross-app `war:markdown/renderer`
+/// import on top of the canonical skiko-ui interfaces. Including
+/// `skiko-ui` brings the full Compose render contract; we just add
+/// the markdown import on top.
+world wart-app {
+    include my:skiko-gfx/skiko-ui@0.1.0;
+    import war:markdown/renderer@0.1.0;
+}
