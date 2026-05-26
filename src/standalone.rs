@@ -145,6 +145,11 @@ fn run_cwasm_loop(
     // the sysprop; the loop then just stays Resumed forever.
     let screen_rx = crate::lifecycle_standalone::spawn_screen_state_watcher();
 
+    // Re-request input focus periodically — activity-backed windows AMS
+    // resumes (launcher, last app) steal focus despite wart owning the
+    // z-top SurfaceFlinger layer. Refresh roughly once per second.
+    let focus_refresh_interval: u64 = 60; // frames @ ~60fps target
+
     // ── Render loop — mirrors WindowEvent::RedrawRequested, no winit ─────
     let frame_target = std::time::Duration::from_millis(16);
     let mut frame: u64 = 0;
@@ -198,6 +203,15 @@ fn run_cwasm_loop(
                 ) {
                     log::warn!("standalone: dispatch_pointer_v2 failed: {e:#}");
                 }
+            } else if ev.kind == 10 || ev.kind == 11 {
+                // 10=key-down, 11=key-up. Action byte (0/1) matches the
+                // dispatch_*_v1/v2 contract.
+                let action = if ev.kind == 10 { 0u8 } else { 1u8 };
+                if let Err(e) = crate::input::dispatch_android_key(
+                    &skiko, &mut store, action, ev.key_code, ev.meta_state,
+                ) {
+                    log::warn!("standalone: dispatch_android_key failed: {e:#}");
+                }
             }
         }
 
@@ -241,6 +255,9 @@ fn run_cwasm_loop(
         frame += 1;
         if frame <= 3 || frame % 600 == 0 {
             log::info!("standalone: rendered frame {frame}");
+        }
+        if frame % focus_refresh_interval == 0 {
+            sf.request_focus();
         }
 
         let elapsed = t0.elapsed();

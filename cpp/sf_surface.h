@@ -22,18 +22,26 @@ struct ANativeWindow* sf_create_fullscreen_surface(int32_t* out_w,
 // POD input event drained by sf_input_poll(). Mirrored in sf_surface.cpp and
 // in the Rust side (src/sf_surface.rs) — keep all three in sync.
 struct SfInputEvent {
-    int32_t kind;        // 0=down 1=up 2=move 3=scroll
-    int32_t pointer_id;  // multi-touch pointer id (0..N)
+    int32_t kind;        // 0=down 1=up 2=move 3=scroll  10=key-down 11=key-up
+    int32_t pointer_id;  // multi-touch pointer id (0..N); 0 for key events
     float   x;
     float   y;
-    float   pressure;    // 0.0..1.0
-    int32_t key_code;    // reserved — key events not emitted in this cut
+    float   pressure;    // 0.0..1.0; 0 for key events
+    int32_t key_code;    // AKEYCODE_* for key events; 0 otherwise
+    int32_t meta_state;  // shift/alt/ctrl bits (AMETA_*) for key events; 0 otherwise
 };
 
 // Drain pending InputFlinger events into `out` (capacity `max`); returns the
 // count written. Non-blocking — call once per frame. Returns 0 if the input
 // channel was never set up (e.g. inputflinger unavailable).
 int32_t sf_input_poll(struct SfInputEvent* out, int32_t max);
+
+// Re-request input focus for the wart window. The standalone runtime has no
+// Activity, so any activity-backed window AMS resumes (com.android.launcher3,
+// Messaging, …) steals InputDispatcher focus even though wart owns the z-top
+// SurfaceFlinger layer. Call periodically from the host loop to keep key
+// events flowing. Returns 0 on success, -1 on failure.
+int32_t sf_request_focus(void);
 
 // Query the live Android producer transform hint (NATIVE_WINDOW_TRANSFORM_HINT,
 // a 0..7 bitmask: FLIP_H=1, FLIP_V=2, ROT_90=4). Call only AFTER the host's

@@ -69,6 +69,73 @@ pub fn dispatch_key_v2(
     Ok(())
 }
 
+/// Standalone-path key dispatch: takes raw Android `AKEYCODE_*` + meta-state
+/// from the InputFlinger `KeyEvent`, maps to (code_point, key_id) the way
+/// the NativeActivity path's winit branch does, and fires both v1 + v2.
+///
+/// Mapping covers the keys most NativeActivity testing exercised: letters,
+/// digits, space, common editing keys (Backspace, Enter, Tab, Esc, Arrow*,
+/// PageUp/Down, Home/End, Insert/Delete) and a handful of punctuation.
+/// Unmapped keys still fire as `code_point = 0, key_id = 0` so the guest
+/// at least sees a keystroke.
+pub fn dispatch_android_key(
+    bindings: &SkikoUi,
+    store: &mut Store<HostState>,
+    kind: u8, key_code: i32, meta_state: i32,
+) -> anyhow::Result<()> {
+    let shift = (meta_state & AMETA_SHIFT_ON) != 0;
+    let (code_point, key_id) = map_android_keycode(key_code, shift);
+    let r = bindings.my_skiko_gfx_renderer();
+    // v1 carries the raw AKEYCODE so callers that wired against it still work.
+    let kk = if kind == 0 { KeyKind::Down } else { KeyKind::Up };
+    r.call_on_key_event(&mut *store, kk, key_code.max(0) as u32)?;
+    r.call_on_key_event_v2(store, kk, code_point, key_id)?;
+    Ok(())
+}
+
+// AMETA_* bits from <android/input.h>.
+const AMETA_SHIFT_ON: i32 = 0x01;
+
+/// Translate Android `AKEYCODE_*` into (code-point, key-id) for the guest's
+/// `on-key-event-v2`. Mirrors the winit `KeyboardInput` branch in
+/// `lib.rs` so both code paths feed Compose the same numeric IDs.
+fn map_android_keycode(code: i32, shift: bool) -> (u32, u32) {
+    // Letters: AKEYCODE_A=29 .. AKEYCODE_Z=54
+    if (29..=54).contains(&code) {
+        let base = if shift { b'A' } else { b'a' };
+        return ((base + (code as u8 - 29)) as u32, 0);
+    }
+    // Digits: AKEYCODE_0=7 .. AKEYCODE_9=16
+    if (7..=16).contains(&code) {
+        return ((b'0' + (code as u8 - 7)) as u32, 0);
+    }
+    match code {
+        62  => (b' ' as u32, 32), // AKEYCODE_SPACE         → ' ' + Space key-id
+        67  => (0, 8),            // AKEYCODE_DEL           → Backspace
+        66  => (0, 13),           // AKEYCODE_ENTER         → Enter
+        61  => (0, 9),            // AKEYCODE_TAB           → Tab
+        111 => (0, 27),           // AKEYCODE_ESCAPE        → Escape
+        21  => (0, 37),           // AKEYCODE_DPAD_LEFT     → ArrowLeft
+        19  => (0, 38),           // AKEYCODE_DPAD_UP       → ArrowUp
+        22  => (0, 39),           // AKEYCODE_DPAD_RIGHT    → ArrowRight
+        20  => (0, 40),           // AKEYCODE_DPAD_DOWN     → ArrowDown
+        92  => (0, 33),           // AKEYCODE_PAGE_UP
+        93  => (0, 34),           // AKEYCODE_PAGE_DOWN
+        122 => (0, 36),           // AKEYCODE_MOVE_HOME
+        123 => (0, 35),           // AKEYCODE_MOVE_END
+        124 => (0, 45),           // AKEYCODE_INSERT
+        112 => (0, 46),           // AKEYCODE_FORWARD_DEL   → Delete
+        55  => (b',' as u32, 0),  // AKEYCODE_COMMA
+        56  => (b'.' as u32, 0),  // AKEYCODE_PERIOD
+        74  => (b';' as u32, 0),  // AKEYCODE_SEMICOLON
+        75  => (b'\'' as u32, 0), // AKEYCODE_APOSTROPHE
+        76  => (b'/' as u32, 0),  // AKEYCODE_SLASH
+        69  => (b'-' as u32, 0),  // AKEYCODE_MINUS
+        70  => (b'=' as u32, 0),  // AKEYCODE_EQUALS
+        _   => (0, 0),
+    }
+}
+
 pub fn dispatch_resize(
     bindings: &SkikoUi,
     store: &mut Store<HostState>,

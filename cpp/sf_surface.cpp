@@ -48,12 +48,13 @@ using namespace android;
 // POD input event handed back across the C ABI by sf_input_poll(). Mirrored
 // in sf_surface.h and in the Rust side (src/sf_surface.rs) — keep in sync.
 struct SfInputEvent {
-    int32_t kind;        // 0=down 1=up 2=move 3=scroll
-    int32_t pointer_id;  // multi-touch pointer id (0..N)
+    int32_t kind;        // 0=down 1=up 2=move 3=scroll  10=key-down 11=key-up
+    int32_t pointer_id;  // multi-touch pointer id (0..N); 0 for key events
     float   x;
     float   y;
-    float   pressure;    // 0.0..1.0
-    int32_t key_code;    // reserved — key events not emitted in this cut
+    float   pressure;    // 0.0..1.0; 0 for key events
+    int32_t key_code;    // AKEYCODE_* for key events; 0 otherwise
+    int32_t meta_state;  // AMETA_* shift/alt/ctrl bitmask for key events; 0 otherwise
 };
 
 namespace {
@@ -310,6 +311,23 @@ int32_t sf_input_poll(SfInputEvent* out, int32_t max) {
                 out[n].y          = m->getY(idx);
                 out[n].pressure   = m->getPressure(idx);
                 out[n].key_code   = 0;
+                out[n].meta_state = 0;
+            }
+        } else if (ev->getType() == InputEventType::KEY) {
+            KeyEvent* k = static_cast<KeyEvent*>(ev);
+            switch (k->getAction()) {
+                case AKEY_EVENT_ACTION_DOWN: out[n].kind = 10; emitted = true; break;
+                case AKEY_EVENT_ACTION_UP:   out[n].kind = 11; emitted = true; break;
+                // AKEY_EVENT_ACTION_MULTIPLE is deprecated; ignore.
+                default: break;
+            }
+            if (emitted) {
+                out[n].pointer_id = 0;
+                out[n].x          = 0.0f;
+                out[n].y          = 0.0f;
+                out[n].pressure   = 0.0f;
+                out[n].key_code   = k->getKeyCode();
+                out[n].meta_state = k->getMetaState();
             }
         }
         g_input_consumer->sendFinishedSignal(seq, /*handled=*/true);
@@ -318,6 +336,28 @@ int32_t sf_input_poll(SfInputEvent* out, int32_t max) {
         }
     }
     return n;
+}
+
+// Re-request input focus for the wart window. The standalone runtime has
+// no Activity, so any activity-backed window (com.android.launcher3,
+// Messaging, etc) that AMS resumes will steal focus from InputDispatcher's
+// point of view, even though wart owns the z-top SurfaceFlinger layer.
+// Call this periodically from the host render loop to keep key events
+// flowing to wart. Returns 0 on success, -1 on failure.
+int32_t sf_request_focus() {
+    if (g_window_info == nullptr) {
+        return -1;
+    }
+    gui::WindowInfo* wi = g_window_info->editInfo();
+    gui::FocusRequest fr;
+    fr.token      = wi->token;
+    fr.windowName = wi->name;
+    fr.timestamp  = systemTime(SYSTEM_TIME_MONOTONIC);
+    fr.displayId  = ui::LogicalDisplayId::DEFAULT.val();
+    SurfaceComposerClient::Transaction t;
+    t.setFocusedWindow(fr);
+    t.apply(/*synchronous=*/false);
+    return 0;
 }
 
 // Query the live Android producer transform hint

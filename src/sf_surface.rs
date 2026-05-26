@@ -16,22 +16,26 @@ type CreateFn = unsafe extern "C" fn(*mut i32, *mut i32, *mut u32) -> *mut c_voi
 type InputPollFn = unsafe extern "C" fn(*mut SfInputEvent, i32) -> i32;
 /// `uint32_t sf_query_transform_hint(void)`.
 type QueryHintFn = unsafe extern "C" fn() -> u32;
+/// `int32_t sf_request_focus(void)`.
+type RequestFocusFn = unsafe extern "C" fn() -> i32;
 
 /// POD input event drained from the shim's InputFlinger channel. Mirrors
 /// `struct SfInputEvent` in `cpp/sf_surface.{cpp,h}` — keep all three in sync.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SfInputEvent {
-    /// 0=down 1=up 2=move 3=scroll.
+    /// 0=down 1=up 2=move 3=scroll  10=key-down 11=key-up.
     pub kind: i32,
-    /// Multi-touch pointer id (0..N).
+    /// Multi-touch pointer id (0..N); 0 for key events.
     pub pointer_id: i32,
     pub x: f32,
     pub y: f32,
-    /// Normalized pressure 0.0..1.0.
+    /// Normalized pressure 0.0..1.0; 0 for key events.
     pub pressure: f32,
-    /// Reserved — key events are not emitted in this cut.
+    /// `AKEYCODE_*` for key events; 0 otherwise.
     pub key_code: i32,
+    /// `AMETA_*` shift/alt/ctrl bitmask for key events; 0 otherwise.
+    pub meta_state: i32,
 }
 
 /// A fullscreen surface allocated from SurfaceFlinger by `libsf_surface.so`.
@@ -51,6 +55,9 @@ pub struct SfSurface {
     /// `sf_query_transform_hint` — `None` if the shim predates the task-33
     /// orientation fix; query it only *after* EGL has connected the producer.
     query_hint: Option<QueryHintFn>,
+    /// `sf_request_focus` — `None` if the shim predates standalone key
+    /// support; the host calls this periodically to keep wart focused.
+    request_focus: Option<RequestFocusFn>,
 }
 
 impl SfSurface {
@@ -88,6 +95,14 @@ impl SfSurface {
                 Some(std::mem::transmute(hint_sym))
             };
 
+            let focus_name = CString::new("sf_request_focus").unwrap();
+            let focus_sym = libc::dlsym(handle, focus_name.as_ptr());
+            let request_focus: Option<RequestFocusFn> = if focus_sym.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute(focus_sym))
+            };
+
             let mut w: i32 = 0;
             let mut h: i32 = 0;
             let mut t: u32 = 0;
@@ -102,6 +117,7 @@ impl SfSurface {
                 transform: t,
                 input_poll,
                 query_hint,
+                request_focus,
             })
         }
     }
@@ -112,6 +128,16 @@ impl SfSurface {
     /// before that. Returns 0 if the shim predates this export.
     pub fn query_transform_hint(&self) -> u32 {
         self.query_hint.map(|f| unsafe { f() }).unwrap_or(0)
+    }
+
+    /// Re-request input focus for the wart window. Standalone has no Activity
+    /// so activity-backed windows (launcher, last-resumed app) keep stealing
+    /// focus from InputDispatcher's view — call this periodically (e.g. once
+    /// per second) to keep keys flowing.
+    pub fn request_focus(&self) {
+        if let Some(f) = self.request_focus {
+            unsafe { let _ = f(); }
+        }
     }
 
     /// Drain pending input events from the shim into `buf`; returns the slice
