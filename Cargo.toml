@@ -1,0 +1,21 @@
+[package]
+name    = "emoji-picker"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Second cross-app dep system component (task 40). Sibling pattern to
+# `markdown-renderer/` — Rust cdylib, wasm32-wasip2 target, no host
+# dependencies. Curated emoji table baked into the binary.
+#
+# Build:
+#   cargo build --target wasm32-wasip2 --release
+#
+# Install on device:
+#   bash scripts/smoke-emoji.sh    (or manual warpkg + wart-host --install)
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.46"
