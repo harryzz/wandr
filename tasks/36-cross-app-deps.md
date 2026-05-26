@@ -1,35 +1,79 @@
 # Task 36 — cross-app dependencies + system components
 
-> **Status:** 🟡 in progress — steps 1–6 landed 2026-05-26.
-> Library-level wiring is complete; device end-to-end run (step 7)
-> deferred to a follow-up session.
+> **Status:** ✅ complete — steps 1–7 device-verified 2026-05-26.
+> Full cross-app dep chain runtime-validated end-to-end: install both
+> packages → resolver → loader → `wire_markdown_dep` proxy →
+> `Command::instantiate` → `wasi:cli/run.run` → consumer calls
+> `render()` through proxy → dep returns Document → consumer exits 0.
 >
-> **What works:** Markdown system bundle installs at
-> `<root>/system-apps/war.markdown.renderer/0.1.0/`, declares
-> `composition = "same-store"` + `kind = "system"`. Consumer manifests
-> declare `[dependencies.x = { system = "..." | app = "..." | host = "..." }]`
-> + Q6's required `[package].composition`. Installer resolves each
-> dep (refuse install on missing; record kind + resolved-version +
-> wasm-sha256 in `cache-key.toml`'s new `[dependencies_resolved]`
-> section). Loader reads that section, deserializes each system dep's
-> cwasm into the consumer's Store, wires its exports into the
-> consumer's `Linker::instance(<interface>)` via the cloned
-> `Guest` accessor — first concrete dep wired by name
-> (`war:markdown/renderer@0.1.0`); refactor to a registry pattern
-> once N > 1. Smoke consumer (`wart-app-md-smoke/`) built; composed
-> component validates with the right import/export shape.
+> **Step 7 deliverables (this session, 2026-05-26):**
+> - `wart-host/src/run_once.rs` — new entry point that drives one-shot
+>   `wasi:cli/command` consumers via `Command::instantiate` +
+>   `call_run`. Sets up the same SF surface + HostState + WASI ctx as
+>   `standalone.rs` (renderer-Option refactor deferred — see below).
+> - `LoadedApp::instantiate_command` in `app_loader.rs` — parallel to
+>   `instantiate`, swaps `SkikoUi::instantiate` for
+>   `wasmtime_wasi::p2::bindings::sync::Command::instantiate`.
+>   Crucially, `wire_dep_into_linker` runs identically — the proxy
+>   registration is consumer-shape-agnostic.
+> - `wart-host --run-once <app-id>` CLI in `main.rs`, adjacent to
+>   `--install` / `--standalone`.
+> - `md-smoke-rust/` — new Rust-side smoke consumer. Built because the
+>   Kotlin smoke (`wart-app-md-smoke/`) hits a pre-existing Kotlin/Wasm
+>   + WASI-command-adapter throw at module init (confirmed on-device
+>   2026-05-26 — wart-host's `wasi_stderr` doesn't help). Rust on
+>   `wasm32-wasip2` produces a clean wasi:cli/command shape with no
+>   such bug.
+> - `scripts/smoke-markdown.sh` — full device pipeline (build → install
+>   both packages → `--run-once` → grep logcat).
+> - `docs/architecture-host-guest-boundary.md` — captures the
+>   host-driven cardinality-1 framing (one-shot CLI is the same
+>   primitive as `renderFrame`, just N=1 instead of N=60×/sec).
 >
-> **What's not yet validated:** End-to-end device round-trip. Two
-> blockers:
-> - Kotlin/Wasm + wasmtime CLI run throws "thrown Wasm exception" on
->   `println` or any meaningful body; structurally separate from the
->   dep wiring (the composition validates fine).
-> - wart-host has no mode that drives `wasi:cli/run.run()` — current
->   standalone path expects `bindings::SkikoUi`. Either a parallel
->   `--run-once` mode needs adding, or the consumer needs pre-composing
->   via `wac plug` into a single component.
+> **Device evidence (2026-05-26):**
+> ```
+> loader: cache fresh for com.example.md-smoke-rust 0.0.1
+> loader: loaded dep `markdown` (war:markdown/renderer@0.1.0) from
+>   .../system-apps/war.markdown.renderer/0.1.0/cache/renderer.cwasm
+> loader: dep `markdown` instantiated; wiring war:markdown/renderer@0.1.0
+>   → consumer linker
+> run_once: command instantiated — calling wasi:cli/run.run()
+> md-smoke-rust: render() returned [N block(s)]
+> run_once: call_run returned Ok — guest exited cleanly
+> ```
+> EXIT=0. The Kotlin smoke separately validates the install/load/linker
+> layer up to `Command::instantiate` (same logs minus the last two);
+> the Rust smoke proves the actual call-through-proxy path.
 >
-> Step 7 picks up both.
+> **Compose consumer also verified (visuals v1, 2026-05-26):** wart-app
+> installed via the installer path (new `wart-app/wit/` defines a world
+> `wart:app/wart-app` that `include`s `my:skiko-gfx/skiko-ui` and
+> imports `war:markdown/renderer@0.1.0`), new `MarkdownCard.kt` /
+> `MarkdownImports.kt` call `render()` once at composition time.
+> `wart-host --standalone --app com.example.wart-app` rendered:
+> ```
+> [wasm] markdown-card: render() → 5 blocks parsed by external component ✓
+> ```
+> Same `wire_markdown_dep` proxy as the CLI smoke; same install
+> machinery; just a different consumer shape. Cross-app deps now proven
+> for BOTH Compose (`SkikoUi::instantiate`) and CLI (`Command::instantiate`)
+> paths.
+>
+> **What's deferred:**
+> - **Rich document-tree rendering** in MarkdownCard — v1 only reads
+>   `blocks.len`; v2 walks each `block` variant (paragraph/heading/
+>   code-block/bullet-list/etc) + nested `run` styles, renders each as
+>   a real Compose element. ~200-300 LoC of canonical-ABI lifting.
+> - `HostState.renderer: Option<SkiaRenderer>` cleanup. `--run-once`
+>   builds a real SF surface to avoid a ~222-site refactor across
+>   `canvas_impl.rs` + `paragraph_impl.rs`. Costs a screen-flash for
+>   the ~1s smoke. Revisit if more CLI shapes appear.
+> - Kotlin/Wasm + WASI-command-adapter throw bug — scoped at
+>   `tasks/37-kotlin-wasm-command-adapter-throw.md`. Module-init level,
+>   unconditional; unrelated to dep wiring (Rust smoke + Compose smoke
+>   both prove the wiring without needing this fix).
+> - Separate-Store composition mode — markdown driver is same-Store;
+>   wait for a service-shaped dep before building this.
 
 ## Why this matters
 

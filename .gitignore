@@ -8,6 +8,10 @@ wart-*/
 # wart-*/.
 markdown-renderer/
 
+# Smoke consumers — task-36 step-7 follow-ups. Own repos for symmetry
+# with wart-app-md-smoke/.
+md-smoke-rust/
+
 # Task 30 — external sources pulled in for the diagnosis chain. Heavy
 # (kotlin-src ~GBs, wasmtime-src ~MBs); kt-memalloc-repro has its own
 # Codeberg origin.
