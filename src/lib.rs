@@ -45,6 +45,17 @@ mod bindings {
     });
 }
 
+/// Host-side bindings for the markdown system component (task 36
+/// step 5). Lets `app_loader` typed-call `render()` on an instantiated
+/// markdown dep. First concrete dep wired by name — refactor into a
+/// registry pattern once a second runtime-bundled component exists.
+pub(crate) mod markdown_bindings {
+    wasmtime::component::bindgen!({
+        path: "../wit/markdown.wit",
+        world: "renderer-world",
+    });
+}
+
 use winit::{
     application::ApplicationHandler,
     event::{ElementState, TouchPhase, WindowEvent},

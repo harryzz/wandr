@@ -18,7 +18,8 @@ use wasmtime::component::{Component, HasSelf, Linker};
 use wasmtime::{Engine, Store};
 
 use crate::app_installer::{
-    engine_compatibility_hash_hex, format_cache_key, sha256_hex, ComponentCacheEntry,
+    engine_compatibility_hash_hex, format_cache_key, parse_resolved_deps_from_key,
+    sha256_hex, ComponentCacheEntry,
 };
 use crate::bindings;
 use crate::HostState;
@@ -37,19 +38,54 @@ pub enum AppRef<'a> {
     DevAsset { bytes: &'a [u8] },
 }
 
-/// A loaded component ready to instantiate. The `linker` already carries
-/// `wasmtime_wasi::p2::add_to_linker_sync` (WASI imports) and
-/// `bindings::SkikoUi::add_to_linker` (skiko-gfx WIT host).
+/// A loaded component ready to instantiate.
+///
+/// The `linker` is built fresh in `instantiate()` rather than cached on
+/// the struct so the consumer's deps (loaded into the Store at
+/// instantiation time) can register their exports as proxy entries
+/// into the linker. wasmtime's `Linker::instantiate` takes `&self`, so
+/// any wiring that depends on a live Store must be done *during*
+/// `instantiate()`, not at `load()` time.
 pub struct LoadedApp {
     /// Human-readable origin for logs, e.g. `"cwasm:/data/local/tmp/skiko-component.cwasm"`.
     pub source_label: String,
     entry: Component,
-    linker: Linker<HostState>,
+    /// Cloned `Engine` (cheap — Arc-backed) so `instantiate()` can build
+    /// a fresh `Linker::new(engine)` without needing the caller to
+    /// re-pass it.
+    engine: Engine,
+    /// Same-Store deps resolved from `[dependencies_resolved]`. Empty
+    /// for `DevCwasm` / `DevAsset` (task-35-style) loads. Each entry
+    /// is deserialized but not yet instantiated; instantiation happens
+    /// inside `instantiate()` against the caller's Store.
+    deps: Vec<LoadedDep>,
+}
+
+/// One resolved + deserialized same-Store dep.
+struct LoadedDep {
+    /// Local alias from the consumer's manifest (LHS in `[dependencies]`).
+    /// Used for log lines + error messages.
+    name:      String,
+    /// WIT-qualified interface name (e.g. `"war:markdown/renderer@0.1.0"`).
+    /// Dispatched by `wire_dep_into_linker` to pick the right host-side
+    /// bindgen module.
+    interface: String,
+    component: Component,
 }
 
 impl LoadedApp {
     pub fn instantiate(&self, store: &mut Store<HostState>) -> Result<bindings::SkikoUi> {
-        bindings::SkikoUi::instantiate(store, &self.entry, &self.linker)
+        let mut linker: Linker<HostState> = Linker::new(&self.engine);
+        wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
+            .map_err(|e| anyhow!("wasmtime_wasi::p2::add_to_linker_sync: {e:#}"))?;
+        bindings::SkikoUi::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)
+            .map_err(|e| anyhow!("SkikoUi::add_to_linker: {e:#}"))?;
+
+        for dep in &self.deps {
+            wire_dep_into_linker(&mut linker, store, dep)?;
+        }
+
+        bindings::SkikoUi::instantiate(store, &self.entry, &linker)
             .map_err(|e| anyhow!("SkikoUi::instantiate failed: {e:#}"))
     }
 }
@@ -77,33 +113,44 @@ pub fn default_for_target() -> WartLoader {
 
 impl AppLoader for WartLoader {
     fn load(&self, engine: &Engine, r: AppRef<'_>) -> Result<LoadedApp> {
-        let (entry, source_label) = match r {
+        let (entry, source_label, deps) = match r {
             AppRef::Installed { app_id, version } => {
-                load_installed(engine, &self.root, app_id, version)?
+                let (entry, label, deps) =
+                    load_installed(engine, &self.root, app_id, version)?;
+                (entry, label, deps)
             }
-            AppRef::DevCwasm { candidates } => load_dev_path(engine, candidates)?,
-            AppRef::DevAsset { bytes } => load_dev_asset(engine, bytes)?,
+            AppRef::DevCwasm { candidates } => {
+                let (entry, label) = load_dev_path(engine, candidates)?;
+                (entry, label, Vec::new())
+            }
+            AppRef::DevAsset { bytes } => {
+                let (entry, label) = load_dev_asset(engine, bytes)?;
+                (entry, label, Vec::new())
+            }
         };
-        let linker = build_linker(engine)?;
-        Ok(LoadedApp { source_label, entry, linker })
+        Ok(LoadedApp { source_label, entry, engine: engine.clone(), deps })
     }
 }
 
-/// Load from `<root>/<app_id>/<version>/`. Reads `cache-key.toml`,
+/// Load from `<root>/apps/<app_id>/<version>/`. Reads `cache-key.toml`,
 /// recomputes the engine-compat + per-component wasm hashes; on any
 /// drift (host upgrade, manifest mutation, file corruption) re-calls
 /// `Engine::precompile_component`, rewrites `cache/<name>.cwasm`, and
 /// re-stamps `cache-key.toml`. Then `deserialize_file`s the cwasm.
 ///
 /// Single-component apps only — bails on multi-component (link.wac
-/// composition is deferred to `tasks/scope-cross-app-deps.md`).
+/// composition is deferred to `tasks/36-cross-app-deps.md` step 5).
+///
+/// Task 36 layout: `AppRef::Installed` always targets the `apps/`
+/// subtree; system components are reached via the consumer's resolved
+/// deps, not directly through `Installed`.
 fn load_installed(
     engine: &Engine,
     root: &Path,
     app_id: &str,
     version: Option<&str>,
-) -> Result<(Component, String)> {
-    let app_dir = root.join(app_id);
+) -> Result<(Component, String, Vec<LoadedDep>)> {
+    let app_dir = root.join("apps").join(app_id);
     if !app_dir.is_dir() {
         bail!("installed: app dir not found: {}", app_dir.display());
     }
@@ -164,13 +211,21 @@ fn load_installed(
         fs::write(&cwasm_path, &cwasm_bytes)
             .with_context(|| format!("write {}", cwasm_path.display()))?;
         let new_cwasm_sha = sha256_hex(&cwasm_bytes);
-        let new_key = format_cache_key(engine, &[(
-            component_name.clone(),
-            ComponentCacheEntry {
-                wasm_sha256: current_wasm_sha,
-                cwasm_sha256: new_cwasm_sha,
-            },
-        )]);
+        // Preserve the existing `[dependencies_resolved]` section
+        // verbatim — engine/wasm drift doesn't invalidate dep entries
+        // (those are checked separately in step 5).
+        let preserved_deps = parse_resolved_deps_from_key(&key);
+        let new_key = format_cache_key(
+            engine,
+            &[(
+                component_name.clone(),
+                ComponentCacheEntry {
+                    wasm_sha256: current_wasm_sha,
+                    cwasm_sha256: new_cwasm_sha,
+                },
+            )],
+            &preserved_deps,
+        );
         fs::write(&key_path, new_key)
             .with_context(|| format!("write {}", key_path.display()))?;
         log::info!("loader: re-stamped {}", key_path.display());
@@ -181,7 +236,114 @@ fn load_installed(
     let component = unsafe { Component::deserialize_file(engine, &cwasm_path) }
         .map_err(|e| anyhow!("Component::deserialize_file({}): {e:#}", cwasm_path.display()))?;
     let label = format!("installed:{app_id}:{version_str}:{component_name}");
-    Ok((component, label))
+
+    // Task 36 step 5 — load same-Store deps. Reads `[dependencies_resolved]`
+    // from cache-key.toml (parsed above as `key`), looks up each dep's
+    // cwasm under `<root>/<kind_dir>/<id>/<version>/cache/<entry>.cwasm`,
+    // verifies the dep's on-disk wasm sha256 still matches the stored
+    // value (warn-and-load on mismatch; full re-precompile-the-dep is a
+    // follow-up), and deserializes the dep's cwasm for instantiation at
+    // `LoadedApp::instantiate` time.
+    let deps = load_dep_components(engine, root, &key)?;
+
+    Ok((component, label, deps))
+}
+
+fn load_dep_components(
+    engine: &Engine,
+    root: &Path,
+    key: &toml::Value,
+) -> Result<Vec<LoadedDep>> {
+    let mut deps: Vec<LoadedDep> = Vec::new();
+    let Some(tbl) = key.get("dependencies_resolved").and_then(|v| v.as_table()) else {
+        return Ok(deps);
+    };
+    for (name, val) in tbl {
+        let Some(entry) = val.as_table() else { continue };
+        let kind = entry.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let version = entry.get("version").and_then(|v| v.as_str()).unwrap_or("");
+        let stored_sha = entry.get("wasm_sha256").and_then(|v| v.as_str());
+        let interface = entry.get("interface").and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!(
+                "dependency {name}: missing interface in cache-key.toml — \
+                 same-store composition requires the WIT-qualified interface name"
+            ))?
+            .to_string();
+
+        // Host deps are satisfied by `wasmtime_wasi::p2::add_to_linker_sync`
+        // + `bindings::SkikoUi::add_to_linker` already applied in
+        // `LoadedApp::instantiate`. No per-load wiring needed.
+        if kind == "host" {
+            log::debug!("loader: host dep `{name}` ({interface}) — already in linker");
+            continue;
+        }
+
+        let kind_dir = match kind {
+            "system" => "system-apps",
+            "app"    => "apps",
+            other    => bail!("dependency {name}: unknown kind {other:?}"),
+        };
+        let dep_dir = root.join(kind_dir).join(id).join(version);
+        if !dep_dir.is_dir() {
+            bail!(
+                "dependency {name}: missing install dir {} \
+                 (was the dep uninstalled after consumer install?)",
+                dep_dir.display(),
+            );
+        }
+
+        // Verify the dep's on-disk wasm hasn't drifted since consumer
+        // install. Full re-precompile (touching the DEP's own
+        // cache-key.toml) is a follow-up; for now, warn-and-load.
+        if let Some(expected) = stored_sha {
+            let (_dep_wasm_path, current) = hash_dep_wasm(&dep_dir).with_context(|| {
+                format!("dependency {name}: failed to hash wasm under {}", dep_dir.display())
+            })?;
+            if current != expected {
+                log::warn!(
+                    "loader: dependency `{name}` wasm sha256 drifted \
+                     (stored={expected}, current={current}) — loading anyway. \
+                     Re-install the consumer to refresh cache-key.toml."
+                );
+            }
+        }
+
+        let cwasm_path = first_cwasm(&dep_dir.join("cache")).with_context(|| {
+            format!("dependency {name}: no cwasm under {}/cache", dep_dir.display())
+        })?;
+        let component = unsafe { Component::deserialize_file(engine, &cwasm_path) }
+            .map_err(|e| anyhow!(
+                "dependency {name}: Component::deserialize_file({}): {e:#}", cwasm_path.display()
+            ))?;
+        log::info!("loader: loaded dep `{name}` ({interface}) from {}", cwasm_path.display());
+        deps.push(LoadedDep { name: name.clone(), interface, component });
+    }
+    Ok(deps)
+}
+
+fn hash_dep_wasm(dep_dir: &Path) -> Result<(PathBuf, String)> {
+    let components_dir = dep_dir.join("components");
+    for entry in fs::read_dir(&components_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("wasm") {
+            let bytes = fs::read(&path)?;
+            return Ok((path, sha256_hex(&bytes)));
+        }
+    }
+    bail!("no .wasm under {}", components_dir.display())
+}
+
+fn first_cwasm(cache_dir: &Path) -> Result<PathBuf> {
+    for entry in fs::read_dir(cache_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("cwasm") {
+            return Ok(path);
+        }
+    }
+    bail!("no .cwasm under {}", cache_dir.display())
 }
 
 /// Pick the lexicographically highest subdirectory of `app_dir`. Works
@@ -245,11 +407,69 @@ fn load_dev_asset(engine: &Engine, bytes: &[u8]) -> Result<(Component, String)> 
     Ok((entry, format!("asset:{}B", bytes.len())))
 }
 
-fn build_linker(engine: &Engine) -> Result<Linker<HostState>> {
-    let mut linker: Linker<HostState> = Linker::new(engine);
-    wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
-        .map_err(|e| anyhow!("wasmtime_wasi::p2::add_to_linker_sync: {e:#}"))?;
-    bindings::SkikoUi::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)
-        .map_err(|e| anyhow!("SkikoUi::add_to_linker: {e:#}"))?;
-    Ok(linker)
+/// Same-Store composition glue — task 36 step 5.
+///
+/// Instantiates the dep into the consumer's `Store`, then registers
+/// the dep's exports as proxy entries in the consumer's `Linker`. The
+/// consumer's subsequent `SkikoUi::instantiate` finds its
+/// `import war:markdown/renderer` satisfied by the proxy that
+/// delegates back to the dep instance.
+///
+/// First concrete dep wired by name. When a second runtime-bundled
+/// system component lands, refactor into a `(interface) → impl`
+/// registry pattern instead of this match.
+fn wire_dep_into_linker(
+    linker: &mut Linker<HostState>,
+    store: &mut Store<HostState>,
+    dep: &LoadedDep,
+) -> Result<()> {
+    match dep.interface.as_str() {
+        "war:markdown/renderer@0.1.0" => wire_markdown_dep(linker, store, dep),
+        other => bail!(
+            "dependency `{}`: interface {other:?} is not yet wired in wart-host. \
+             Supported interfaces this iteration: war:markdown/renderer@0.1.0. \
+             See tasks/36-cross-app-deps.md.",
+            dep.name,
+        ),
+    }
+}
+
+fn wire_markdown_dep(
+    linker: &mut Linker<HostState>,
+    store: &mut Store<HostState>,
+    dep: &LoadedDep,
+) -> Result<()> {
+    use crate::markdown_bindings::{exports::war::markdown::renderer as md_exports, RendererWorld};
+
+    // Build a dep-local linker — markdown only imports WASI, no skiko.
+    let mut dep_linker: Linker<HostState> = Linker::new(&store.engine().clone());
+    wasmtime_wasi::p2::add_to_linker_sync(&mut dep_linker)
+        .map_err(|e| anyhow!("dep linker wasi add: {e:#}"))?;
+
+    let world = RendererWorld::instantiate(&mut *store, &dep.component, &dep_linker)
+        .map_err(|e| anyhow!("instantiate dep `{}`: {e:#}", dep.name))?;
+    // `Guest` derives `Clone` and holds only `wasmtime::component::Func`
+    // handles (instance-indices, not borrows), so cloning the accessor
+    // lets us drop `world` while keeping the call site usable from a
+    // `'static` linker closure.
+    let renderer = world.war_markdown_renderer().clone();
+    log::info!(
+        "loader: dep `{}` instantiated; wiring war:markdown/renderer@0.1.0 \
+         → consumer linker",
+        dep.name,
+    );
+
+    // Stash the per-call entry point in the consumer's linker. Each
+    // call forwards `(source)` to the dep instance's `render` and
+    // returns the resulting `Document`.
+    let mut inst = linker.instance("war:markdown/renderer@0.1.0")
+        .map_err(|e| anyhow!("linker.instance(war:markdown/renderer@0.1.0): {e:#}"))?;
+    inst.func_wrap(
+        "render",
+        move |mut store, (source,): (String,)| -> wasmtime::Result<(md_exports::Document,)> {
+            let doc = renderer.call_render(&mut store, &source)?;
+            Ok((doc,))
+        },
+    ).map_err(|e| anyhow!("linker proxy `render`: {e:#}"))?;
+    Ok(())
 }

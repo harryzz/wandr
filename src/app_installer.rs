@@ -78,7 +78,14 @@ impl AppInstaller for WartInstaller {
         // Q5b: signing format not picked yet — placeholder always Ok.
         verify_signature(&bundle)?;
 
-        let install_dir = self.root.join(&manifest.app_id).join(&manifest.version);
+        // Resolve deps FIRST — fail fast on missing deps, before any
+        // expensive AOT compile or disk writes.
+        let resolved_deps = resolve_dependencies(&self.root, &manifest.dependencies)?;
+
+        let install_dir = self.root
+            .join(manifest.kind.root_subdir())
+            .join(&manifest.app_id)
+            .join(&manifest.version);
         if install_dir.exists() {
             log::warn!("installer: {} already exists — overwriting", install_dir.display());
         }
@@ -122,7 +129,7 @@ impl AppInstaller for WartInstaller {
             ));
         }
 
-        let key_doc = format_cache_key(engine, &cache_entries);
+        let key_doc = format_cache_key(engine, &cache_entries, &resolved_deps);
         fs::write(install_dir.join("cache-key.toml"), key_doc)
             .with_context(|| format!("write cache-key.toml at {}", install_dir.display()))?;
 
@@ -134,16 +141,300 @@ impl AppInstaller for WartInstaller {
     }
 }
 
-struct Manifest {
-    app_id: String,
-    version: String,
-    world: String,
-    components: Vec<(String, PathBuf)>,
+pub(crate) struct Manifest {
+    pub app_id: String,
+    pub version: String,
+    pub world: String,
+    /// Task 36: routes the install dir layout — `App` bundles land in
+    /// `<root>/apps/<app_id>/<version>/`, `System` bundles in
+    /// `<root>/system-apps/<app_id>/<version>/`. Default `App` when
+    /// `kind` is omitted in the manifest (matches task-35 fixtures).
+    pub kind: PackageKind,
+    /// Task 36 (Q6): every package must declare its composition mode.
+    /// Producer-authoritative; consumers cannot override.
+    pub composition: Composition,
+    pub components: Vec<(String, PathBuf)>,
+    /// Task 36: empty for task-35-style standalone apps. Each entry is
+    /// one dep edge to a host WIT / runtime-bundled system component /
+    /// installed user app.
+    pub dependencies: Vec<Dependency>,
+}
+
+/// Bundle role — distinguishes a user-installable app from a
+/// runtime-bundled system component. Defaults to `App`; system bundles
+/// must declare `kind = "system"` in their manifest.
+///
+/// Note on identifiers: a bundle's `app_id` is a *filesystem-safe*
+/// identifier (e.g. `war.markdown.renderer`, dot-separated). The
+/// WIT-package qualified name used inside `.wit` files (e.g.
+/// `war:markdown/renderer@0.1.0`) lives in the WIT layer; the install
+/// path uses `app_id`. Consumer `[dependencies]` entries reference the
+/// producer's `app_id` via `system = "..."` / `app = "..."`, and may
+/// disambiguate which interface via `interface = "..."`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PackageKind {
+    App,
+    System,
+}
+
+impl PackageKind {
+    fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "app"    => Some(Self::App),
+            "system" => Some(Self::System),
+            _ => None,
+        }
+    }
+    /// Top-level directory under the WartInstaller / WartLoader root.
+    pub(crate) fn root_subdir(self) -> &'static str {
+        match self { Self::App => "apps", Self::System => "system-apps" }
+    }
+}
+
+/// Same-Store = library-like (shared GC, shared crash domain;
+/// composed via `Linker::instance` at instantiation time).
+/// Separate-Store = service-like (its own `Store`, accessed through a
+/// host proxy that marshals between Stores). Task 36 step 5
+/// implements the same-store path; separate-store is a follow-up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Composition {
+    SameStore,
+    SeparateStore,
+}
+
+impl Composition {
+    fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "same-store"     => Some(Self::SameStore),
+            "separate-store" => Some(Self::SeparateStore),
+            _ => None,
+        }
+    }
+    pub(crate) fn as_str(self) -> &'static str {
+        match self { Self::SameStore => "same-store", Self::SeparateStore => "separate-store" }
+    }
+}
+
+pub(crate) struct Dependency {
+    /// Local alias the consumer uses for this dep (LHS in
+    /// `[dependencies] <alias> = { … }`). Carries no global meaning;
+    /// the actual resolution target is in `kind`.
+    pub name: String,
+    pub kind: DependencyKind,
+    /// Semver range, e.g. "^0.1", "1.0", "*". Range matching is the
+    /// installer resolver's job (step 4); parsing only validates
+    /// presence + non-empty.
+    pub version: String,
+    /// Qualified WIT interface name, e.g. "war:markdown/renderer@0.1.0".
+    /// Required for system / app deps so the consumer can pick one
+    /// interface out of a multi-interface producer; optional for host
+    /// deps where the host = "…" identifier already names a WIT.
+    pub interface: Option<String>,
+}
+
+/// Three resolution flavours. The discriminator key in the manifest
+/// (`host` / `system` / `app`) chooses the variant; exactly one must
+/// be set per dep entry.
+pub(crate) enum DependencyKind {
+    /// Host-provided WIT — implemented in the wart-host Rust binary
+    /// and bound into every Linker via `add_to_linker_sync`. The
+    /// string is the WIT identifier the runtime must satisfy.
+    Host(String),
+    /// Runtime-bundled component under `<root>/system-apps/<id>/`.
+    System(String),
+    /// User app under `<root>/apps/<id>/`. Reverse-deps tracked at
+    /// uninstall (step 4 scope).
+    App(String),
 }
 
 pub(crate) struct ComponentCacheEntry {
     pub wasm_sha256: String,
     pub cwasm_sha256: String,
+}
+
+/// One concrete `[dependencies]` entry after the resolver located it
+/// on disk (or, for host deps, in the runtime's compiled-in set).
+/// Recorded verbatim in the consumer's `cache-key.toml` so any dep
+/// update flips the consumer's hash → re-precompile on next launch.
+pub(crate) struct ResolvedDependency {
+    /// Local alias from the consumer's manifest LHS.
+    pub name: String,
+    pub kind: ResolvedKind,
+    /// Concrete version picked from the version range. Always pinned
+    /// — no `*` survives past the resolver.
+    pub resolved_version: String,
+    /// `some(...)` for system/app deps (sha256 of the dep's
+    /// `components/<entry>.wasm`); `none` for host deps (the host
+    /// implementation lives in the wart-host binary itself, so the
+    /// dep is invalidated by changes to the wart-host build —
+    /// captured by `engine_config_hash` indirectly).
+    pub wasm_sha256: Option<String>,
+    /// Optional WIT-qualified interface name from the dep entry.
+    pub interface: Option<String>,
+}
+
+pub(crate) enum ResolvedKind {
+    Host(String),
+    System(String),
+    App(String),
+}
+
+impl ResolvedKind {
+    pub(crate) fn label(&self) -> &'static str {
+        match self {
+            ResolvedKind::Host(_)   => "host",
+            ResolvedKind::System(_) => "system",
+            ResolvedKind::App(_)    => "app",
+        }
+    }
+    pub(crate) fn id(&self) -> &str {
+        match self {
+            ResolvedKind::Host(s) | ResolvedKind::System(s) | ResolvedKind::App(s) => s,
+        }
+    }
+}
+
+/// Inverse of `format_cache_key`'s `[dependencies_resolved]` emission
+/// — the loader uses this when it has to re-stamp on cache drift
+/// (engine or wasm change) so the existing dep list is preserved.
+pub(crate) fn parse_resolved_deps_from_key(doc: &toml::Value) -> Vec<ResolvedDependency> {
+    let mut out = Vec::new();
+    let Some(tbl) = doc.get("dependencies_resolved").and_then(|v| v.as_table()) else {
+        return out;
+    };
+    for (name, val) in tbl {
+        let Some(entry) = val.as_table() else { continue };
+        let id = entry.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let kind = match entry.get("kind").and_then(|v| v.as_str()) {
+            Some("host")   => ResolvedKind::Host(id),
+            Some("system") => ResolvedKind::System(id),
+            Some("app")    => ResolvedKind::App(id),
+            _ => continue,
+        };
+        out.push(ResolvedDependency {
+            name: name.clone(),
+            kind,
+            resolved_version: entry.get("version").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            wasm_sha256: entry.get("wasm_sha256").and_then(|v| v.as_str()).map(str::to_string),
+            interface: entry.get("interface").and_then(|v| v.as_str()).map(str::to_string),
+        });
+    }
+    out
+}
+
+/// Walk a manifest's `[dependencies]` list and locate each entry on
+/// disk (or, for host kind, accept verbatim). Aborts the install with
+/// a clear error on any unresolved entry — refuses before any AOT
+/// compile or disk write happens.
+///
+/// Version-range matching is *minimal* in this pass:
+///   - `"*"` → highest installed (lex sort).
+///   - Anything else → exact match.
+/// Full semver range matching (e.g. `^0.1`) is deferred. See
+/// `tasks/36-cross-app-deps.md` "What stays out of scope".
+fn resolve_dependencies(
+    root: &Path,
+    deps: &[Dependency],
+) -> Result<Vec<ResolvedDependency>> {
+    let mut resolved: Vec<ResolvedDependency> = Vec::new();
+    for dep in deps {
+        let r = match &dep.kind {
+            DependencyKind::Host(wit) => resolve_host(dep, wit)?,
+            DependencyKind::System(id) => {
+                resolve_filesystem(root, "system-apps", id, dep, ResolvedKind::System(id.clone()))?
+            }
+            DependencyKind::App(id) => {
+                resolve_filesystem(root, "apps", id, dep, ResolvedKind::App(id.clone()))?
+            }
+        };
+        resolved.push(r);
+    }
+    Ok(resolved)
+}
+
+/// Host deps pass through — we don't track a per-version manifest of
+/// what the runtime offers. Version pinning for host deps is captured
+/// by `engine_config_hash` (any wart-host rebuild flips it) rather
+/// than per-dep hashing.
+fn resolve_host(dep: &Dependency, wit: &str) -> Result<ResolvedDependency> {
+    Ok(ResolvedDependency {
+        name: dep.name.clone(),
+        kind: ResolvedKind::Host(wit.to_string()),
+        resolved_version: dep.version.clone(),
+        wasm_sha256: None,
+        interface: dep.interface.clone(),
+    })
+}
+
+fn resolve_filesystem(
+    root: &Path,
+    subdir: &str,
+    id: &str,
+    dep: &Dependency,
+    kind: ResolvedKind,
+) -> Result<ResolvedDependency> {
+    let id_dir = root.join(subdir).join(id);
+    if !id_dir.is_dir() {
+        bail!(
+            "missing dependency: {} (kind={}, id={id:?}) — expected at {}",
+            dep.name, kind.label(), id_dir.display(),
+        );
+    }
+    let resolved_version = pick_version(&id_dir, &dep.version)
+        .with_context(|| format!("dependency {}: no version matches {:?}", dep.name, dep.version))?;
+    let dep_dir = id_dir.join(&resolved_version);
+    if !dep_dir.is_dir() {
+        bail!("missing dependency: {} at {}", dep.name, dep_dir.display());
+    }
+    // Locate the dep's primary component. The dep's own manifest names
+    // its components; for this iteration we hash the first `.wasm`
+    // under `<dep_dir>/components/`. Multi-component deps require the
+    // consumer to name which interface in `interface = "..."`, but the
+    // resolver still hashes the whole dep for cache invalidation.
+    let wasm_sha = hash_first_component_wasm(&dep_dir).with_context(|| {
+        format!("dependency {}: failed to hash components under {}", dep.name, dep_dir.display())
+    })?;
+    Ok(ResolvedDependency {
+        name: dep.name.clone(),
+        kind,
+        resolved_version,
+        wasm_sha256: Some(wasm_sha),
+        interface: dep.interface.clone(),
+    })
+}
+
+fn pick_version(id_dir: &Path, range: &str) -> Result<String> {
+    let mut versions: Vec<String> = Vec::new();
+    for entry in fs::read_dir(id_dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            if let Some(n) = entry.file_name().to_str() { versions.push(n.to_string()); }
+        }
+    }
+    versions.sort();
+    if range == "*" {
+        versions.pop().ok_or_else(|| anyhow!("no versions installed under {}", id_dir.display()))
+    } else if versions.iter().any(|v| v == range) {
+        Ok(range.to_string())
+    } else {
+        bail!(
+            "no installed version matches {range:?} under {} (have: {:?})",
+            id_dir.display(), versions,
+        );
+    }
+}
+
+fn hash_first_component_wasm(dep_dir: &Path) -> Result<String> {
+    let components_dir = dep_dir.join("components");
+    for entry in fs::read_dir(&components_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("wasm") {
+            let bytes = fs::read(&path)?;
+            return Ok(sha256_hex(&bytes));
+        }
+    }
+    bail!("no .wasm under {}", components_dir.display())
 }
 
 fn parse_manifest(bundle_dir: &Path) -> Result<Manifest> {
@@ -152,6 +443,7 @@ fn parse_manifest(bundle_dir: &Path) -> Result<Manifest> {
         .with_context(|| format!("read {}", pkg_path.display()))?;
     let doc: toml::Value = src.parse()
         .with_context(|| format!("parse {}", pkg_path.display()))?;
+
     let app_id = doc.get("app_id").and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("package.toml: missing app_id"))?
         .to_string();
@@ -161,6 +453,26 @@ fn parse_manifest(bundle_dir: &Path) -> Result<Manifest> {
     let world = doc.get("world").and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("package.toml: missing world"))?
         .to_string();
+
+    // Task 36: optional kind discriminator — "app" (default) or "system".
+    // Routes the install dir layout — see `PackageKind` doc.
+    let kind = match doc.get("kind").and_then(|v| v.as_str()) {
+        None => PackageKind::App,
+        Some(s) => PackageKind::from_str(s).ok_or_else(|| anyhow!(
+            "package.toml: kind = \"{s}\" — must be \"app\" or \"system\""
+        ))?,
+    };
+
+    // Q6 (task 36): every package must declare its composition mode.
+    // Required field; no default. See tasks/36-cross-app-deps.md.
+    let composition_str = doc.get("composition").and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!(
+            "package.toml: missing composition (must be \"same-store\" or \"separate-store\")"
+        ))?;
+    let composition = Composition::from_str(composition_str).ok_or_else(|| anyhow!(
+        "package.toml: composition = \"{composition_str}\" — must be \"same-store\" or \"separate-store\""
+    ))?;
+
     let components_tbl = doc.get("components").and_then(|v| v.as_table())
         .ok_or_else(|| anyhow!("package.toml: missing [components] table"))?;
     if components_tbl.is_empty() {
@@ -173,10 +485,66 @@ fn parse_manifest(bundle_dir: &Path) -> Result<Manifest> {
         })?;
         components.push((name.clone(), PathBuf::from(rel)));
     }
-    Ok(Manifest { app_id, version, world, components })
+
+    let dependencies = parse_dependencies(doc.get("dependencies"))?;
+
+    Ok(Manifest { app_id, version, world, kind, composition, components, dependencies })
 }
 
-pub(crate) fn format_cache_key(engine: &Engine, entries: &[(String, ComponentCacheEntry)]) -> String {
+/// Parse `[dependencies]` table. Returns an empty Vec if the table is
+/// absent (task-35-style apps with no deps). Each entry must contain
+/// exactly one of `host` / `system` / `app` and a `version` string.
+fn parse_dependencies(node: Option<&toml::Value>) -> Result<Vec<Dependency>> {
+    let Some(tbl) = node.and_then(|v| v.as_table()) else {
+        return Ok(Vec::new());
+    };
+    let mut deps: Vec<Dependency> = Vec::new();
+    for (name, val) in tbl {
+        let entry = val.as_table().ok_or_else(|| anyhow!(
+            "package.toml: dependencies.{name} must be a table (e.g. \
+             {{ system = \"...\", version = \"...\" }})"
+        ))?;
+
+        let host_v = entry.get("host").and_then(|v| v.as_str());
+        let system_v = entry.get("system").and_then(|v| v.as_str());
+        let app_v = entry.get("app").and_then(|v| v.as_str());
+        let kinds_set = [host_v, system_v, app_v].iter().filter(|v| v.is_some()).count();
+        if kinds_set != 1 {
+            bail!(
+                "package.toml: dependencies.{name} must set exactly one of \
+                 `host` / `system` / `app` ({kinds_set} set)"
+            );
+        }
+        let kind = if let Some(s) = host_v {
+            DependencyKind::Host(s.to_string())
+        } else if let Some(s) = system_v {
+            DependencyKind::System(s.to_string())
+        } else {
+            DependencyKind::App(app_v.unwrap().to_string())
+        };
+
+        let version = entry.get("version").and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("package.toml: dependencies.{name} missing version"))?;
+        if version.is_empty() {
+            bail!("package.toml: dependencies.{name}.version is empty");
+        }
+        let interface = entry.get("interface").and_then(|v| v.as_str()).map(str::to_string);
+
+        deps.push(Dependency {
+            name: name.clone(),
+            kind,
+            version: version.to_string(),
+            interface,
+        });
+    }
+    Ok(deps)
+}
+
+pub(crate) fn format_cache_key(
+    engine: &Engine,
+    entries: &[(String, ComponentCacheEntry)],
+    resolved_deps: &[ResolvedDependency],
+) -> String {
     let cfg_hash = engine_compatibility_hash_hex(engine);
     let mut out = String::new();
     out.push_str(&format!("wasmtime_version = \"{WASMTIME_PINNED_VERSION}\"\n"));
@@ -185,6 +553,23 @@ pub(crate) fn format_cache_key(engine: &Engine, entries: &[(String, ComponentCac
         out.push_str(&format!("[components.{name}]\n"));
         out.push_str(&format!("wasm_sha256  = \"{}\"\n", entry.wasm_sha256));
         out.push_str(&format!("cwasm_sha256 = \"{}\"\n\n", entry.cwasm_sha256));
+    }
+    // Per scope (task 36 §"Cache key extension"): any dep update flips
+    // a hash → A's cache invalidates → re-precompile on next launch.
+    // Same mechanism as wasmtime upgrade. The loader (step 5) reads
+    // these entries to compose deps at instantiation time.
+    for dep in resolved_deps {
+        out.push_str(&format!("[dependencies_resolved.{}]\n", dep.name));
+        out.push_str(&format!("kind    = \"{}\"\n", dep.kind.label()));
+        out.push_str(&format!("id      = \"{}\"\n", dep.kind.id()));
+        out.push_str(&format!("version = \"{}\"\n", dep.resolved_version));
+        if let Some(sha) = &dep.wasm_sha256 {
+            out.push_str(&format!("wasm_sha256 = \"{sha}\"\n"));
+        }
+        if let Some(iface) = &dep.interface {
+            out.push_str(&format!("interface   = \"{iface}\"\n"));
+        }
+        out.push('\n');
     }
     out
 }
