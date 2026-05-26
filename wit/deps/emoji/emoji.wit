@@ -1,0 +1,41 @@
+package war:emoji@0.1.0;
+
+/// Second cross-app dep system component (task 40). Static curated
+/// emoji table — repeats the cross-app dep pattern with a non-markdown
+/// driver and forces the generic dep wiring refactor (task 39).
+///
+/// Producer: `emoji-picker/` Rust component, `composition = "same-store"`.
+/// Consumers (currently wart-app's `EmojiCard`) call `list-all` once at
+/// composition time and render the grid.
+///
+/// Curated subset (~60-80 emojis) — full Unicode emoji set is overkill
+/// for a first cut. Revisit if a real picker UI ever lands (search /
+/// category tabs / skin-tone variants — see task 40 "Out of scope").
+interface picker {
+    /// One emoji with display metadata. All-strings keeps the canonical
+    /// ABI lift trivial on the consumer side (24 bytes per record:
+    /// three list-style strings @ 8 bytes each, align 4).
+    record emoji {
+        /// The glyph itself, UTF-8, e.g. "😀". May be multi-codepoint
+        /// for sequences (flags, ZWJ-joined family emojis, etc.) —
+        /// callers should not assume one codepoint.
+        glyph: string,
+        /// CLDR short name, e.g. "grinning face". Lowercase, no
+        /// punctuation.
+        name: string,
+        /// Top-level Unicode emoji category, e.g. "Smileys & Emotion",
+        /// "People & Body", "Animals & Nature", "Food & Drink",
+        /// "Activities", "Objects", "Symbols", "Flags".
+        category: string,
+    }
+
+    /// Flat list of all curated emojis, in display order (grouped by
+    /// category, then by name). Callers can re-group by `category`
+    /// for category tabs.
+    list-all: func() -> list<emoji>;
+}
+
+/// World exported by the emoji-picker component.
+world picker-world {
+    export picker;
+}

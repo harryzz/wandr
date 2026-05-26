@@ -7,4 +7,5 @@ package wart:app@0.1.0;
 world wart-app {
     include my:skiko-gfx/skiko-ui@0.1.0;
     import war:markdown/renderer@0.1.0;
+    import war:emoji/picker@0.1.0;
 }
