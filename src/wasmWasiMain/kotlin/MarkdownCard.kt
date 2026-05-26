@@ -189,9 +189,14 @@ private fun RenderCodeBlock(language: String?, text: String) {
 private fun RenderBulletList(items: List<MdListItem>) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         items.forEach { item ->
-            Row(verticalAlignment = Alignment.Top) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Top,
+            ) {
                 Text(text = "•  ", fontSize = 13.sp)
-                Column { item.blocks.forEach { RenderSimpleBlock(it) } }
+                Column(modifier = Modifier.weight(1f)) {
+                    item.blocks.forEach { RenderSimpleBlock(it) }
+                }
             }
         }
     }
@@ -201,9 +206,14 @@ private fun RenderBulletList(items: List<MdListItem>) {
 private fun RenderOrderedList(start: Int, items: List<MdListItem>) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         items.forEachIndexed { idx, item ->
-            Row(verticalAlignment = Alignment.Top) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Top,
+            ) {
                 Text(text = "${start + idx}.  ", fontSize = 13.sp)
-                Column { item.blocks.forEach { RenderSimpleBlock(it) } }
+                Column(modifier = Modifier.weight(1f)) {
+                    item.blocks.forEach { RenderSimpleBlock(it) }
+                }
             }
         }
     }
@@ -211,7 +221,11 @@ private fun RenderOrderedList(start: Int, items: List<MdListItem>) {
 
 @Composable
 private fun RenderBlockQuote(blocks: List<SimpleBlock>) {
-    Row(modifier = Modifier.height(IntrinsicSize.Min)) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min),
+    ) {
         Box(
             modifier = Modifier
                 .width(3.dp)
@@ -221,7 +235,9 @@ private fun RenderBlockQuote(blocks: List<SimpleBlock>) {
         Spacer(modifier = Modifier.width(8.dp))
         Column(
             verticalArrangement = Arrangement.spacedBy(4.dp),
-            modifier = Modifier.padding(vertical = 2.dp),
+            modifier = Modifier
+                .weight(1f)
+                .padding(vertical = 2.dp),
         ) {
             blocks.forEach { RenderSimpleBlock(it) }
         }
