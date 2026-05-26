@@ -88,6 +88,29 @@ impl LoadedApp {
         bindings::SkikoUi::instantiate(store, &self.entry, &linker)
             .map_err(|e| anyhow!("SkikoUi::instantiate failed: {e:#}"))
     }
+
+    /// One-shot CLI consumers (`wasi:cli/command` world) — task 36 step 7.
+    /// Same linker setup as `instantiate`: WASI + skiko + dep proxies. Skiko
+    /// is added defensively (a CLI consumer that doesn't import it pays
+    /// nothing for the registration). The returned `Command` is invoked
+    /// from `run_once::run` via `command.wasi_cli_run().call_run(store)`.
+    pub fn instantiate_command(
+        &self,
+        store: &mut Store<HostState>,
+    ) -> Result<wasmtime_wasi::p2::bindings::sync::Command> {
+        let mut linker: Linker<HostState> = Linker::new(&self.engine);
+        wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
+            .map_err(|e| anyhow!("wasmtime_wasi::p2::add_to_linker_sync: {e:#}"))?;
+        bindings::SkikoUi::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)
+            .map_err(|e| anyhow!("SkikoUi::add_to_linker: {e:#}"))?;
+
+        for dep in &self.deps {
+            wire_dep_into_linker(&mut linker, store, dep)?;
+        }
+
+        wasmtime_wasi::p2::bindings::sync::Command::instantiate(store, &self.entry, &linker)
+            .map_err(|e| anyhow!("Command::instantiate failed: {e:#}"))
+    }
 }
 
 pub trait AppLoader {

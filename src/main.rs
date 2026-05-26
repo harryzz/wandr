@@ -5,7 +5,7 @@ fn main() {
     wasm_android_host::run();
 }
 
-// Android entry — three modes selected by argv:
+// Android entry — four modes selected by argv:
 //
 //   `wart-host`                                  → NativeActivity stub (this
 //                                                  bin is never executed by
@@ -21,6 +21,13 @@ fn main() {
 //                                                  /data/local/tmp by default;
 //                                                  with `--app`, loads via
 //                                                  AppRef::Installed.
+//   `wart-host --run-once <app-id>`              → task-36 step-7 one-shot:
+//                                                  load an installed
+//                                                  wasi:cli/command app,
+//                                                  call `wasi:cli/run.run()`
+//                                                  once, exit with its
+//                                                  status. Used for
+//                                                  CLI/smoke consumers.
 #[cfg(target_os = "android")]
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -44,6 +51,18 @@ fn main() {
                 eprintln!("wart-host --install: {e:#}");
                 std::process::exit(1);
             }
+        }
+        return;
+    }
+
+    if let Some(i) = args.iter().position(|a| a == "--run-once") {
+        let Some(app_id) = args.get(i + 1) else {
+            eprintln!("wart-host --run-once: requires <app-id>");
+            std::process::exit(2);
+        };
+        if let Err(e) = wasm_android_host::run_once::run(app_id) {
+            eprintln!("wart-host --run-once: {e:#}");
+            std::process::exit(1);
         }
         return;
     }

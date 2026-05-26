@@ -37,6 +37,9 @@ mod sf_surface;
 mod lifecycle_standalone;
 #[cfg(target_os = "android")]
 pub mod standalone;
+// Task 36 step 7: one-shot CLI launch path for wasi:cli/command consumers.
+#[cfg(target_os = "android")]
+pub mod run_once;
 
 mod bindings {
     wasmtime::component::bindgen!({
