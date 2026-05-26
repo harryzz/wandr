@@ -617,6 +617,12 @@ impl SkiaRenderer {
         if family.starts_with('/') {
             candidates.push(family.to_string());
         }
+        // Task 41 — recognize Compose Multiplatform's standard family
+        // aliases (Noto Serif / Noto Sans Mono / etc.) so
+        // FontFamily.Serif and FontFamily.Monospace actually pick up
+        // their proper /system/fonts/ files. Without these mappings,
+        // both fall through to font_candidate_paths's Roboto fallback.
+        candidates.extend(family_alias_paths(family, bold, italic).iter().map(|s| s.to_string()));
         // Match-family-style on Skia's default FontMgr gives zero-metrics
         // typefaces on this device, so we always load from a TTF file.
         candidates.extend(font_candidate_paths(bold, italic).iter().map(|s| s.to_string()));
@@ -692,6 +698,35 @@ impl SkiaRenderer {
         if let Some(p) = self.paragraphs.get(&id) {
             p.paint(self.surface.canvas(), (x, y));
         }
+    }
+}
+
+/// Task 41 — Compose Multiplatform's GenericFontFamiliesMapping for
+/// Linux (the platform the wasi stub reports as) lowers Serif/Monospace
+/// to these names. Map them to real Android /system/fonts/ paths
+/// before falling through to the default Roboto candidates.
+///
+/// Empty slice for unrecognized families — caller falls through.
+fn family_alias_paths(family: &str, bold: bool, italic: bool) -> &'static [&'static str] {
+    match family {
+        // Compose FontFamily.Serif → "Noto Serif" / "DejaVu Serif" / ...
+        "Noto Serif" | "NotoSerif" | "DejaVu Serif" | "Times New Roman" => {
+            match (bold, italic) {
+                (false, false) => &["/system/fonts/NotoSerif-Regular.ttf"],
+                (true,  false) => &["/system/fonts/NotoSerif-Bold.ttf"],
+                (false, true ) => &["/system/fonts/NotoSerif-Italic.ttf"],
+                (true,  true ) => &["/system/fonts/NotoSerif-BoldItalic.ttf"],
+            }
+        }
+        // Compose FontFamily.Monospace → "Noto Sans Mono" / "DejaVu Sans Mono" / ...
+        // No NotoSansMono on this build of Pixel 2 XL — fall back to
+        // DroidSansMono (the closest pre-installed monospace).
+        "Noto Sans Mono" | "NotoSansMono" | "DejaVu Sans Mono" | "Consolas"
+        | "Roboto Mono" | "RobotoMono" => &[
+            "/system/fonts/DroidSansMono.ttf",
+            "/system/fonts/CutiveMono.ttf",
+        ],
+        _ => &[],
     }
 }
 

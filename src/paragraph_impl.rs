@@ -12,8 +12,33 @@ impl Host for crate::HostState {
     }
 
     fn push_text_style(&mut self, id: u32, wit_style: WitTextStyle) {
+        // Build the base TextStyle.
+        let mut ts = wit_text_style_to_skia(&wit_style);
+
+        // Task 41 — for the family aliases the host knows how to load
+        // from /system/fonts/, fetch the SkTypeface directly via
+        // SkiaRenderer's typeface cache + set it on the style. Skia's
+        // FontCollection alone can't resolve these names on this
+        // device (FontMgr returns zero-metrics typefaces), so without
+        // this every FontFamily.Serif / .Monospace text falls back to
+        // the default sans-serif.
+        let family = String::from_utf8_lossy(&wit_style.font_family).into_owned();
+        if !family.is_empty()
+            && (family.starts_with('/')
+                || matches!(
+                    family.as_str(),
+                    "Noto Serif" | "NotoSerif" | "DejaVu Serif" | "Times New Roman"
+                    | "Noto Sans Mono" | "NotoSansMono" | "DejaVu Sans Mono"
+                    | "Consolas" | "Roboto Mono" | "RobotoMono"
+                ))
+        {
+            let bold = wit_style.font_weight >= 600;
+            let italic = wit_style.italic;
+            let tf = self.renderer.get_typeface(&family, bold, italic);
+            ts.set_typeface(Some(tf));
+        }
+
         let Some(builder) = self.renderer.para_builders.get_mut(&id) else { return };
-        let ts = wit_text_style_to_skia(&wit_style);
         builder.push_style(&ts);
     }
 

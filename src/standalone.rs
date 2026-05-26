@@ -115,6 +115,13 @@ fn run_cwasm_loop(
             Err(e) => log::warn!("standalone: preopen {} failed: {e:#}", assets.display()),
         }
     }
+    // Task 41 — /system/fonts/ preopen for the system-fonts dep.
+    // Always-on, read-only. Guests that don't need fonts pay nothing
+    // (just an unused preopen entry).
+    match wasi_builder.preopened_dir("/system/fonts", "/system-fonts", DirPerms::READ, FilePerms::READ) {
+        Ok(_)  => log::info!("standalone: preopened /system/fonts → /system-fonts (read-only)"),
+        Err(e) => log::warn!("standalone: preopen /system/fonts failed: {e:#}"),
+    }
     let wasi = wasi_builder.build();
 
     let host = HostState {

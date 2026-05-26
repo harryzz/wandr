@@ -85,6 +85,11 @@ pub fn run(app_id: &str) -> Result<()> {
             Err(e) => log::warn!("run_once: preopen {} failed: {e:#}", assets.display()),
         }
     }
+    // Task 41 — /system/fonts/ preopen for system-fonts dep (always on).
+    match wasi_builder.preopened_dir("/system/fonts", "/system-fonts", DirPerms::READ, FilePerms::READ) {
+        Ok(_)  => log::info!("run_once: preopened /system/fonts → /system-fonts (read-only)"),
+        Err(e) => log::warn!("run_once: preopen /system/fonts failed: {e:#}"),
+    }
     let wasi = wasi_builder.build();
 
     let host = HostState {
