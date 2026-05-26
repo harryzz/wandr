@@ -267,12 +267,47 @@ fn collect_items(list_node: &Node) -> Vec<ListItem> {
             continue;
         }
         let mut blocks: Vec<SimpleBlock> = Vec::new();
+        // Tight-list items emit inline children directly (no Paragraph
+        // wrapper) — e.g. `Text("The ")`, `Strong { Text("installer") }`,
+        // `Text(" copied ")`, … as siblings of Item. Coalesce consecutive
+        // inlines into ONE SimpleBlock::Paragraph; flush + recurse only
+        // when a real block child appears. Without this, each inline
+        // segment becomes its own paragraph and renders as a stack of
+        // one-word lines on the consumer side.
+        let mut pending: Vec<Run> = Vec::new();
         for child in &item.children {
-            collect_simple_block(child, &mut blocks);
+            if is_block_kind(&child.kind) {
+                if !pending.is_empty() {
+                    blocks.push(SimpleBlock::Paragraph(std::mem::take(&mut pending)));
+                }
+                collect_simple_block(child, &mut blocks);
+            } else {
+                walk_inline(child, &RunStyle::default(), &mut pending);
+            }
+        }
+        if !pending.is_empty() {
+            blocks.push(SimpleBlock::Paragraph(pending));
         }
         items.push(ListItem { blocks });
     }
     items
+}
+
+/// True for any pulldown-cmark node that should produce its own
+/// SimpleBlock (Paragraph/Heading/CodeBlock/etc.). False for inline
+/// nodes that should accumulate into the surrounding paragraph.
+fn is_block_kind(kind: &NodeKind) -> bool {
+    matches!(
+        kind,
+        NodeKind::Paragraph
+        | NodeKind::Heading(_)
+        | NodeKind::CodeBlock(_, _)
+        | NodeKind::ThematicBreak
+        | NodeKind::BulletList
+        | NodeKind::OrderedList(_)
+        | NodeKind::BlockQuote
+        | NodeKind::Item
+    )
 }
 
 #[derive(Default, Clone)]
