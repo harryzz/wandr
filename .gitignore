@@ -12,6 +12,10 @@ markdown-renderer/
 # with wart-app-md-smoke/.
 md-smoke-rust/
 
+# Second system component (task 40). Same sibling-repo pattern as
+# markdown-renderer/.
+emoji-picker/
+
 # Task 30 — external sources pulled in for the diagnosis chain. Heavy
 # (kotlin-src ~GBs, wasmtime-src ~MBs); kt-memalloc-repro has its own
 # Codeberg origin.
