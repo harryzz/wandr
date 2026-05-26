@@ -421,77 +421,101 @@ multi-component packages without committing to wac/Warg specifics.
 
 ---
 
-## 9. Open questions (still to decide)
+## 9. Decisions (resolved 2026-05-26)
 
-- **Runtime model — monolithic vs process-per-app.** Multi-app
-  arbitration is required; the question is *where* the wasmtime
-  instances live and *where* the arbiter runs.
+The five questions tracked here were resolved on 2026-05-26 after
+boot-model bring-up (task 33) and the hardware-key wiring landed. The
+table form (pros/cons + Android comparison baseline in §9.1) is kept
+for the reasoning behind each call.
 
-  | Option | Shape | Pros | Cons |
-  |--------|-------|------|------|
-  | **Monolithic** | One WAR process. One `wasmtime::Engine`, many `Component` instances. Arbiter is in-process Rust. | Lowest memory (shared wasmtime/skia/fonts/AOT cache). In-process arbitration is trivial. Fewer binder hops to shared services. | OS-level isolation is per-runtime, not per-app — one host bug brings them all down. Per-app memory accounting must be tracked in-runtime (OS can't see it). Cross-thread GPU/EGL sharing needs care. |
-  | **Process-per-app** | One WAR process per WASM app. Tiny **session-manager** process owns SurfaceFlinger composition policy, input routing, audio focus, vibrator/camera ownership. Arbitration over binder between session-mgr and app runtimes. | Strong OS isolation; oom-killer can target individual apps; per-app SELinux labels; mirrors Android's existing process model. | Per-app startup cost (wasmtime warmup, AOT load, skia init — seconds, not ms). Each runtime duplicates ~50+ MB of host code/data. Arbiter must use IPC for everything. |
-  | **Hybrid** | Session-manager forks per-app runtime processes but shares heavy assets via shm and a shared font/atlas server. Process boundary per app, shared caches. | Compromise on memory and isolation. | Most complex to build. May not be worth it if process-per-app's overhead turns out tolerable on target hardware. |
+### Q1 — Runtime model: **monolithic now, Hybrid (zygote-style) for production**
 
-  WASM linear memory is isolated *within* a single wasmtime by design,
-  so "monolithic" does not mean apps can read each other's memory. The
-  isolation argument for process-per-app is about host bugs, GPU/EGL
-  contexts, and OS-level resource accounting — not WASM sandbox
-  integrity.
+| Option | Verdict |
+|--------|---------|
+| **Monolithic** — one WAR process; one `wasmtime::Engine`, many `Component`s; in-process arbiter | ✅ **DECIDED** for PoC + boot-model. Already where the runtime is; in-process arbiter trivial. |
+| **Process-per-app** — one WAR process per app, binder-arbitrated by a session-manager | ❌ **REJECTED.** A 2nd `wasmtime+skia+AOT` ≈ ~95 MB cwasm + ~50 MB host code/data duplicated, far past the <20 MB/app viability threshold. No measurement needed — the cwasm alone disqualifies it on Pixel-class hardware. |
+| **Hybrid** (zygote-style) — preload `wasmtime::Engine` + shared AOT/skia/font caches once, `fork()` a process per app, COW-share read-only pages | 🎯 **PRODUCTION TARGET.** Recovers Android's three-tier failure domain (app / framework / kernel). Trigger to actually build: **≥2 concrete apps with a real user, AND wasmtime's DRC auto-scheduling fixed upstream** (without that, one app's GC stalls would still freeze its own process; with monolithic today they freeze everyone — see [[wasmtime-drc-no-autoschedule]]). |
 
-  *Decision blocker:* need real numbers — measure cold-start time of a
-  second wasmtime + skia + AOT load on the Pixel 2 XL, and per-app
-  steady-state memory. If second-instance startup is <500 ms and per-app
-  overhead is <20 MB, process-per-app is viable. Otherwise monolithic
-  or hybrid.
+WASM linear memory is isolated *within* a single wasmtime by design,
+so "monolithic" does not mean apps can read each other's memory. The
+isolation argument for the Hybrid migration is about host bugs,
+GPU/EGL contexts, and OS-level resource accounting — not WASM sandbox
+integrity.
 
-  *Current lean (2026-05-20):* **monolithic-first** for the PoC and
-  boot-model bring-up — it is where the runtime already is, the memory
-  math favours it (a 2nd wasmtime+skia+AOT instance ≈ ~95 MB AOT image
-  + ~50 MB host code/data duplicated — well past the viability
-  thresholds above), and the in-process arbiter is trivial.
+**Caveat that justifies the eventual Hybrid migration:** monolithic
+is a single point of failure. A host-side crash takes down the entire
+app + arbiter layer at once; only the kernel and native daemons
+(SurfaceFlinger, AudioFlinger, …) survive. That is strictly *worse*
+isolation than stock Android, where even a `system_server` crash is a
+recoverable soft-reboot. Hybrid is how to recover Android's
+failure-domain properties (see §9.1 baseline).
 
-  **Caveat — monolithic is a single point of failure.** A host-side
-  crash takes down the entire app + arbiter layer at once; only the
-  kernel and the native daemons (SurfaceFlinger, AudioFlinger, …)
-  survive. That is strictly *worse* isolation than stock Android,
-  where each app is its own OS-isolated process and even a
-  `system_server` crash is a recoverable soft-reboot, not a
-  kernel-level failure.
+**`fork()` constraint for the eventual Hybrid:** must fork *before*
+wasmtime worker threads or EGL/GPU init. Android's zygote forks before
+starting most threads for exactly this reason.
 
-  So the production target is most likely **Hybrid** — and Hybrid is
-  essentially *how Android already organises this*: `zygote` preloads
-  the ART runtime + core framework **once**, and every app process is
-  `fork()`-ed from zygote, sharing the preloaded runtime
-  copy-on-write while still being a separate OS-isolated process. The
-  WAR Hybrid = a "zygote-equivalent": preload `wasmtime::Engine` +
-  shared AOT / skia / font caches, `fork()` a process per app,
-  COW-share the heavy read-only pages. *Caveat:* `fork()` after
-  wasmtime worker threads or EGL/GPU init is unsafe — a WAR zygote
-  must fork *before* those, exactly as Android's zygote forks before
-  starting most threads.
+**Forward-compat rule** (locks in the migration path): keep the
+`app-loader.rs` and arbiter behind a boundary that does not bake in
+in-process assumptions. What changes for Hybrid is how `HostState`s
+and arbiter messages cross the process boundary — the engine API is
+shared.
 
-  **Therefore:** build monolithic now, but keep the arbiter and the
-  app-loader behind a boundary that does not bake in in-process
-  assumptions, so the Hybrid (zygote-style) migration stays cheap.
+### Q2 — Display server: **keep SurfaceFlinger** ✅ DECIDED
 
-- **Display server**: keep SurfaceFlinger and bind via `ISurfaceComposer`,
-  or replace SF entirely with a runtime-owned KMS/DRM compositor?
-  (Currently leaning: keep SF — it's already a native daemon, no Java
-  involvement, well-understood binder interface.)
+Stay on SF via `ISurfaceComposer` and the libgui shim. Task 22
+(round-trip) and task 33 (the full boot-model standalone path) both
+ship on SF. KMS/DRM rejected:
+- SF is C++/binder, not Java — removing it doesn't help the "remove
+  Java" goal.
+- Replacing SF means re-implementing vendor display-HAL glue, HWC
+  composition, sync-fence handling, multi-display, rotation, dimming,
+  brightness — months of work for no apparent win on an Android-OEM
+  phone target.
+- The only case for KMS/DRM is "running on a non-Android Linux board,"
+  which is out of scope.
 
-- **Input source**: read `/dev/input/event*` directly with `EVIOCGRAB`,
-  or consume from InputFlinger's input channel? (Leaning: InputFlinger
-  — it already handles touch processing, key remapping, gesture
-  detection. Reading raw is reinventing it.)
+### Q3 — Input source: **InputFlinger** ✅ CLOSED (already implemented)
 
-- **What we do with apps that wanted Java framework APIs**: only the
-  ones we explicitly port via WIT will work. There's no
-  bytecode-translation layer. Out-of-scope apps simply won't run.
+Already shipped: task 33 Step 3 (touch, 2026-05-22) and the
+hardware-key wiring (2026-05-26) both drain `InputFlinger`'s input
+channel via the libgui shim. Raw `/dev/input/event*` with `EVIOCGRAB`
+rejected — it would reinvent touch processing, key remapping, gesture
+detection that InputFlinger already does.
 
-- **Per-component capability gating**: how to express "this component
-  may not access haptics even though the package as a whole declares
-  it." Likely solved by per-component `link.wac` import restriction.
+### Q4 — Apps that wanted Java framework APIs: **out of scope** ✅ DECIDED
+
+No bytecode-translation layer. Existing APK ecosystem is intentionally
+not addressed. New apps target **Kotlin/WASM + Compose + WIT**.
+Consistent with the post-ART framing — we are *replacing* ART, not
+*running ART apps without ART*. Apps that need framework APIs we
+haven't ported via WIT simply won't run.
+
+### Q5 — Per-component capability gating: **link.wac authority** ✅ DECIDED
+
+Per §7.6: per-component import restriction via `link.wac`. Concretely:
+- The package's `link.wac` is the **authority** — it declares which
+  host-provided WIT each component sees.
+- Runtime grants a capability by *providing* the host impl when wiring
+  that component's imports per the script.
+- Runtime refuses by leaving the import unwired — component fails at
+  instantiate time. No additional ACL on top of what the component
+  model already enforces.
+- The host trusts `link.wac` because the package is signed (see Q5b).
+
+### Q5b — Package signing format + trust roots: **OPEN**
+
+Newly carved out (was implicit under Q5). Q5's "the package is signed"
+assumes a signing format that is not yet specified. Open items:
+- **Format**: ed25519 over a canonical hash of the package (likely
+  `package.toml` + each component's bytes + `link.wac` + assets
+  manifest), or piggy-back on Sigstore / Warg signatures if `wkg` /
+  Warg matures enough.
+- **Trust roots**: shipped with the runtime as a baked-in public key
+  set, or fetched at install time, or both. No decision.
+- **Revocation**: not specified.
+
+This is the one architectural question remaining after the 2026-05-26
+round of resolutions. Park until installable-package work begins.
 
 ### 9.1 Reference — how Android/ART organises this (comparison baseline)
 
