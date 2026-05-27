@@ -323,21 +323,11 @@ private fun MaterialDemoApp() {
                         }
                     }
                 }
-                // Soft keyboard overlay — drawn last so it sits on top.
-                // Only shown while `keyboardController.isVisible` is true,
-                // which we drive via TextFieldCard's `onFocusChanged`,
-                // any tap on an already-focused BasicTextField (Compose's
-                // built-in `requireKeyboardController().show()` path), and
-                // the keyboard's own ⌄ key to hide.
-                if (keyboardVisible) {
-                    Box(modifier = Modifier.align(androidx.compose.ui.Alignment.BottomCenter)) {
-                        WasiSoftKeyboard(
-                            onKey = { ev -> wasiSoftKeyboardKeyHandler(ev) },
-                            height = keyboardHeight,
-                            onHide = { keyboardController.hide() },
-                        )
-                    }
-                }
+                // In-canvas keyboard removed. The IME now lives in a
+                // separate process (war.ime.keyboard) with its own
+                // SurfaceFlinger overlay surface. `keyboardHeight` above
+                // still reserves the bottom inset so the last card
+                // isn't hidden by the IME panel.
             }
         }
     }
