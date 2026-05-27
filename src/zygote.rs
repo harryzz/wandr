@@ -161,6 +161,17 @@ pub fn serve(preload_app_id: Option<&str>) -> Result<()> {
     spawn_reaper();
     log::info!("wart-zygote: reaper thread spawned");
 
+    // Task 46 step 4 — install SIGUSR1/SIGUSR2 handlers in the parent
+    // so forked children inherit the action via the sigaction table.
+    // Without this, the arbiter's promote-to-foreground (SIGUSR2)
+    // landing in the race window between fork() and the child's own
+    // install_signal_handlers() would hit the kernel default action
+    // (terminate) and kill the child. The handler in the parent is
+    // harmless since the parent never goes background/foreground —
+    // it's just there to give children a non-fatal default.
+    crate::app_role::install_signal_handlers();
+    log::info!("wart-zygote: app-role signal handlers installed");
+
     // Task 46 step 2 — auto-preload every installed system bundle.
     // System apps (markdown, emoji, fonts, …) are imported by every
     // Compose app; preloading them in the parent makes the

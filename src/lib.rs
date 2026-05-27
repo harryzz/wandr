@@ -24,6 +24,8 @@ pub mod wms_impl;
 #[cfg(target_os = "android")]
 pub mod zygote;
 mod preload;
+#[cfg(target_os = "android")]
+mod app_role;
 mod eventfd_signal;
 mod assets_impl;
 mod theme_impl;

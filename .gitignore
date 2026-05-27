@@ -39,3 +39,4 @@ core.*
 /vendor/aosp-system-libbase/
 /vendor/aosp-system-logging/
 /vendor/generated-aidl/
+cpp/build/

@@ -49,6 +49,10 @@ pub fn run_with_engine(engine: &Engine, app_id: Option<&str>) -> Result<()> {
     crate::lifecycle_standalone::install_panic_hook();
     crate::lifecycle_standalone::drain_prior_crash_marker();
 
+    // Task 46 step 4 — arbiter-driven foreground/background role.
+    // Default is Foreground; SIGUSR1 demotes, SIGUSR2 promotes.
+    crate::app_role::install_signal_handlers();
+
     // The shim's SurfaceComposerClient talks to SurfaceFlinger over binder.
     if let Err(e) = crate::binder::init() {
         log::warn!("standalone: binder init: {e}");
@@ -179,6 +183,12 @@ fn run_cwasm_loop(
     // z-top SurfaceFlinger layer. Refresh roughly once per second.
     let focus_refresh_interval: u64 = 60; // frames @ ~60fps target
 
+    // Task 46 step 4 — track previous arbiter-driven role so we react
+    // exactly once per transition (not every frame). Newly forked
+    // children default to Foreground, so the first frame logs a
+    // promote-to-fg and ensures z-order + lifecycle.
+    let mut last_role: Option<crate::app_role::AppRole> = None;
+
     // ── Render loop — mirrors WindowEvent::RedrawRequested, no winit ─────
     let frame_target = std::time::Duration::from_millis(16);
     let mut frame: u64 = 0;
@@ -187,6 +197,52 @@ fn run_cwasm_loop(
         if crate::lifecycle_standalone::should_shutdown() {
             log::info!("standalone: shutdown signal — exiting render loop");
             break;
+        }
+
+        // Task 46 step 4 — arbiter role transition. SIGUSR1/SIGUSR2
+        // updates an atomic; we observe it once per frame. On change:
+        //   Foreground → Background: SF set_layer(0), set_visible(false),
+        //                            lifecycle Paused.
+        //   Background → Foreground: SF set_layer(MAX), set_visible(true),
+        //                            request_focus, lifecycle Resumed.
+        // Children unaware of the new role (older shim, no signals
+        // received) stay Foreground — same behavior as pre-step-4.
+        let cur_role = crate::app_role::role();
+        if last_role != Some(cur_role) {
+            use crate::app_role::AppRole;
+            log::info!("standalone: role transition {last_role:?} → {cur_role:?}");
+            match cur_role {
+                AppRole::Foreground => {
+                    sf.set_layer(i32::MAX);
+                    sf.set_visible(true);
+                    sf.request_focus();
+                    let target = bindings::my::skiko_gfx::lifecycle::State::Resumed;
+                    if store.data().lifecycle.current != target {
+                        store.data_mut().lifecycle.current = target;
+                        if let Err(e) = skiko
+                            .my_skiko_gfx_renderer()
+                            .call_on_lifecycle_changed(&mut store, target as u32)
+                        {
+                            log::warn!("standalone: on_lifecycle_changed(fg→Resumed) failed: {e:#}");
+                        }
+                    }
+                }
+                AppRole::Background => {
+                    sf.set_layer(0);
+                    sf.set_visible(false);
+                    let target = bindings::my::skiko_gfx::lifecycle::State::Paused;
+                    if store.data().lifecycle.current != target {
+                        store.data_mut().lifecycle.current = target;
+                        if let Err(e) = skiko
+                            .my_skiko_gfx_renderer()
+                            .call_on_lifecycle_changed(&mut store, target as u32)
+                        {
+                            log::warn!("standalone: on_lifecycle_changed(bg→Paused) failed: {e:#}");
+                        }
+                    }
+                }
+            }
+            last_role = Some(cur_role);
         }
 
         // Drain any screen-state transitions accumulated since last frame.
@@ -285,7 +341,11 @@ fn run_cwasm_loop(
         if frame <= 3 || frame % 600 == 0 {
             log::info!("standalone: rendered frame {frame}");
         }
-        if frame % focus_refresh_interval == 0 {
+        // Task 46 step 4 — only the foreground app fights for focus.
+        // Background apps that keep stealing focus would defeat the
+        // arbiter's policy + spam the launcher. Frequency unchanged
+        // (~1 s) when foreground.
+        if frame % focus_refresh_interval == 0 && crate::app_role::is_foreground() {
             sf.request_focus();
         }
 
