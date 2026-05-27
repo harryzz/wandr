@@ -20,7 +20,7 @@
 
 use anyhow::{anyhow, Result};
 use wasmtime::component::ResourceTable;
-use wasmtime::Store;
+use wasmtime::{Engine, Store};
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
 
 use crate::app_loader::{self, AppLoader, AppRef};
@@ -32,6 +32,15 @@ use crate::{App, HostState};
 const SHIM_SO: &str = "/data/local/tmp/libsf_surface.so";
 
 pub fn run(app_id: &str) -> Result<()> {
+    let engine = App::make_engine();
+    run_with_engine(&engine, app_id)
+}
+
+/// Same as `run` but uses a caller-supplied engine. The task-45 zygote
+/// child path goes through here so the wasmtime `Engine` allocated by
+/// the parent before `fork()` is reused (COW-shared with siblings),
+/// instead of each child re-allocating a fresh one.
+pub fn run_with_engine(engine: &Engine, app_id: &str) -> Result<()> {
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
     );
@@ -65,9 +74,8 @@ pub fn run(app_id: &str) -> Result<()> {
         || sf.query_transform_hint(),
     )?;
 
-    let engine = App::make_engine();
     let loader = app_loader::default_for_target();
-    let loaded = loader.load(&engine, AppRef::Installed { app_id, version: None })
+    let loaded = loader.load(engine, AppRef::Installed { app_id, version: None })
         .map_err(|e| anyhow!("run_once: load {app_id}: {e:#}"))?;
     log::info!("run_once: loaded {}", loaded.source_label);
 
@@ -108,7 +116,7 @@ pub fn run(app_id: &str) -> Result<()> {
         #[cfg(feature = "profile")]
         frame_snapshot: crate::profiling::FrameSnapshotState::new(),
     };
-    let mut store = Store::new(&engine, host);
+    let mut store = Store::new(engine, host);
 
     let command = loaded.instantiate_command(&mut store)?;
     log::info!("run_once: command instantiated — calling wasi:cli/run.run()");

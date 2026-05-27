@@ -86,6 +86,40 @@ fn main() {
         return;
     }
 
+    // Task 45 step 1 — zygote server mode. Long-lived parent process that
+    // preloads wasmtime::Engine and fork()s on each LAUNCH command from
+    // /data/local/tmp/wart-zygote.sock. See tasks/45-wart-zygote-spike.md.
+    if args.iter().any(|a| a == "--zygote") {
+        // Optional preload-hint app-id; documentary at MVP (only engine
+        // is preloaded today). `--zygote-preload <app-id>` keeps the CLI
+        // shape forward-compatible with per-app Component preload later.
+        let preload_hint = args.iter()
+            .position(|a| a == "--zygote-preload")
+            .and_then(|i| args.get(i + 1))
+            .map(|s| s.as_str());
+        if let Err(e) = wasm_android_host::zygote::serve(preload_hint) {
+            eprintln!("wart-host --zygote: {e:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    // Task 45 step 1 — zygote client mode. Connect to the zygote, write
+    // LAUNCH <app-id>, print the child pid (or the structured ERR).
+    if let Some(i) = args.iter().position(|a| a == "--zygote-launch") {
+        let Some(app_id) = args.get(i + 1) else {
+            eprintln!("wart-host --zygote-launch: requires <app-id>");
+            std::process::exit(2);
+        };
+        match wasm_android_host::zygote::launch_client(app_id) {
+            Ok(_pid) => return,
+            Err(e) => {
+                eprintln!("wart-host --zygote-launch: {e:#}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     if let Some(i) = args.iter().position(|a| a == "--install") {
         let Some(warpkg) = args.get(i + 1) else {
             eprintln!("wart-host --install: requires a <warpkg-dir> path");
