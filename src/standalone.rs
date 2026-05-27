@@ -13,7 +13,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use wasmtime::component::ResourceTable;
-use wasmtime::Store;
+use wasmtime::{Engine, Store};
 use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
 
 use crate::app_loader::{self, AppLoader, AppRef, LoadedApp};
@@ -26,6 +26,17 @@ const SHIM_SO: &str = "/data/local/tmp/libsf_surface.so";
 const CWASM_PATH: &str = "/data/local/tmp/skiko-component.cwasm";
 
 pub fn run(app_id: Option<&str>) -> Result<()> {
+    let engine = App::make_engine();
+    run_with_engine(&engine, app_id)
+}
+
+/// Same as `run` but uses a caller-supplied engine. The task-45 zygote
+/// child path (`LAUNCH_GUI <app-id>`) goes through here so the wasmtime
+/// `Engine` allocated by the parent before `fork()` is reused (COW-
+/// shared with siblings), instead of each child re-allocating a fresh
+/// one — see [[project-app-lifecycle-and-packaging]] (Hybrid zygote
+/// architecture lock).
+pub fn run_with_engine(engine: &Engine, app_id: Option<&str>) -> Result<()> {
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
     );
@@ -60,15 +71,12 @@ pub fn run(app_id: Option<&str>) -> Result<()> {
         renderer.width, renderer.height,
     );
 
-    // Same Engine config as the NativeActivity path — the AOT cwasm contract
-    // depends on it (gc / function-references / exceptions / stack sizes).
-    let engine = App::make_engine();
     let loader = app_loader::default_for_target();
     let app_ref = match app_id {
         Some(id) => AppRef::Installed { app_id: id, version: None },
         None => AppRef::DevCwasm { candidates: &[Path::new(CWASM_PATH)] },
     };
-    let result = match loader.load(&engine, app_ref) {
+    let result = match loader.load(engine, app_ref) {
         Ok(loaded) => {
             log::info!("standalone: loaded {}", loaded.source_label);
             run_cwasm_loop(engine, loaded, renderer, sf)
@@ -89,7 +97,7 @@ pub fn run(app_id: Option<&str>) -> Result<()> {
 
 /// The real render loop: instantiate the component and drive `render_frame`.
 fn run_cwasm_loop(
-    engine: wasmtime::Engine,
+    engine: &wasmtime::Engine,
     loaded: LoadedApp,
     renderer: crate::canvas_impl::SkiaRenderer,
     sf: crate::sf_surface::SfSurface,
@@ -140,7 +148,7 @@ fn run_cwasm_loop(
         #[cfg(feature = "profile")]
         frame_snapshot: crate::profiling::FrameSnapshotState::new(),
     };
-    let mut store = Store::new(&engine, host);
+    let mut store = Store::new(engine, host);
     #[cfg(feature = "profile")]
     {
         store.limiter(|h| &mut h.growth_log);

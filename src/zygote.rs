@@ -24,7 +24,21 @@ use std::sync::OnceLock;
 use anyhow::{anyhow, Context, Result};
 use wasmtime::Engine;
 
-use crate::{run_once, App};
+use crate::{run_once, standalone, App};
+
+/// What the forked child should do after fork().
+#[derive(Copy, Clone, Debug)]
+enum ChildAction {
+    /// CLI-shaped `wasi:cli/command` consumer (e.g. `md-smoke-rust`).
+    /// Goes through `run_once::run_with_engine`. One-shot, no SF surface
+    /// would be needed in principle, but `run_once` allocates one today
+    /// because `HostState.renderer` is non-Option (refactor deferred).
+    RunOnce,
+    /// Full Compose render loop (e.g. `wart-app`). Goes through
+    /// `standalone::run_with_engine`. Owns its own SurfaceFlinger
+    /// surface + EGL context + input channel for the duration.
+    Gui,
+}
 
 /// Where the zygote listens for `LAUNCH` requests.
 ///
@@ -115,12 +129,26 @@ fn handle_one(listener: &UnixListener, mut stream: UnixStream) -> Result<()> {
     let cmd = line.trim_end_matches('\n').trim_end_matches('\r');
     log::info!("wart-zygote: cmd={cmd:?}");
 
-    let Some(app_id) = cmd.strip_prefix("LAUNCH ") else {
+    // Two launch shapes — the client picks. MVP keeps this explicit
+    // rather than auto-detecting from package.toml; auto-detect is
+    // polish for a later step (read manifest, dispatch by `world`).
+    //
+    // GUI mode accepts an empty arg → falls back to the dev cwasm at
+    // /data/local/tmp/skiko-component.cwasm (same behavior as direct
+    // `--standalone` with no `--app`). Useful for the step-2 smoke
+    // before wart-app is properly packaged + installed as a .warpkg.
+    let (action, app_id) = if let Some(rest) = cmd.strip_prefix("LAUNCH_GUI") {
+        let rest = rest.trim();
+        (ChildAction::Gui, rest.to_string())
+    } else if let Some(rest) = cmd.strip_prefix("LAUNCH ") {
+        (ChildAction::RunOnce, rest.trim().to_string())
+    } else {
         let _ = writeln!(stream, "ERR unknown-command {cmd}");
         return Err(anyhow!("unknown command: {cmd}"));
     };
-    let app_id = app_id.trim().to_string();
-    if app_id.is_empty() {
+    // RunOnce always requires an app_id (no dev path defined for
+    // wasi:cli/command consumers). Gui can be empty → dev cwasm.
+    if app_id.is_empty() && !matches!(action, ChildAction::Gui) {
         let _ = writeln!(stream, "ERR empty-app-id");
         return Err(anyhow!("empty app-id"));
     }
@@ -166,18 +194,34 @@ fn handle_one(listener: &UnixListener, mut stream: UnixStream) -> Result<()> {
                 }
             }
 
-            // (3) Dispatch to the existing run_once path. This is what
-            //     `wart-host --run-once <app-id>` does, just with a
-            //     caller-supplied engine instead of a freshly built one.
+            // (3) Dispatch based on action. RunOnce → wasi:cli/command;
+            //     Gui → full Compose render loop (acquires SF surface,
+            //     initializes EGL/Skia, drives render_frame).
+            //     In either case the COW-inherited engine is used; the
+            //     child first-inits binder + EGL via the existing
+            //     run_once / standalone plumbing (D7 — parent must
+            //     never touch either).
             let engine = PRELOADED_ENGINE
                 .get()
                 .expect("PRELOADED_ENGINE not set in child");
-            let exit = match run_once::run_with_engine(engine, &app_id) {
-                Ok(()) => 0,
-                Err(e) => {
-                    log::error!("wart-zygote/child: run failed: {e:#}");
-                    1
-                }
+            let exit = match action {
+                ChildAction::RunOnce => match run_once::run_with_engine(engine, &app_id) {
+                    Ok(()) => 0,
+                    Err(e) => {
+                        log::error!("wart-zygote/child: run_once failed: {e:#}");
+                        1
+                    }
+                },
+                ChildAction::Gui => {
+                    let arg = if app_id.is_empty() { None } else { Some(app_id.as_str()) };
+                    match standalone::run_with_engine(engine, arg) {
+                        Ok(()) => 0,
+                        Err(e) => {
+                            log::error!("wart-zygote/child: standalone failed: {e:#}");
+                            1
+                        }
+                    }
+                },
             };
             // (4) Exit immediately. Do not let Rust's normal exit path
             //     run global destructors — those are COW pages we
@@ -200,16 +244,26 @@ fn handle_one(listener: &UnixListener, mut stream: UnixStream) -> Result<()> {
     }
 }
 
-/// Client-side: connect to the zygote, write `LAUNCH <app-id>\n`, read
+/// Client-side: connect to the zygote, write the launch command, read
 /// the response, return the child pid on success.
-pub fn launch_client(app_id: &str) -> Result<i32> {
+///
+/// `gui` selects between `LAUNCH_GUI <app-id>` (full Compose render
+/// loop, owns its own SF surface) and `LAUNCH <app-id>` (one-shot
+/// `wasi:cli/command` consumer).
+pub fn launch_client(app_id: &str, gui: bool) -> Result<i32> {
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
     );
 
     let mut stream = UnixStream::connect(ZYGOTE_SOCK_PATH)
         .with_context(|| format!("connect {ZYGOTE_SOCK_PATH} — is the zygote running?"))?;
-    write!(stream, "LAUNCH {app_id}\n")?;
+    let verb = if gui { "LAUNCH_GUI" } else { "LAUNCH" };
+    if app_id.is_empty() && gui {
+        // Dev mode: empty arg → child uses /data/local/tmp/skiko-component.cwasm.
+        writeln!(stream, "{verb}")?;
+    } else {
+        writeln!(stream, "{verb} {app_id}")?;
+    }
     stream.flush()?;
 
     let mut reader = BufReader::new(stream);

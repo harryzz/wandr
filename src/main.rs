@@ -105,16 +105,33 @@ fn main() {
     }
 
     // Task 45 step 1 — zygote client mode. Connect to the zygote, write
-    // LAUNCH <app-id>, print the child pid (or the structured ERR).
+    // LAUNCH <app-id> (headless / wasi:cli/command), print the child pid
+    // (or the structured ERR).
     if let Some(i) = args.iter().position(|a| a == "--zygote-launch") {
         let Some(app_id) = args.get(i + 1) else {
             eprintln!("wart-host --zygote-launch: requires <app-id>");
             std::process::exit(2);
         };
-        match wasm_android_host::zygote::launch_client(app_id) {
+        match wasm_android_host::zygote::launch_client(app_id, /*gui=*/ false) {
             Ok(_pid) => return,
             Err(e) => {
                 eprintln!("wart-host --zygote-launch: {e:#}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // Task 45 step 2 — same as above but for full Compose render loop.
+    // Forks via the zygote, child runs standalone::run_with_engine
+    // against the preloaded engine.
+    // Accepts an optional <app-id>; if omitted, the child falls back
+    // to the dev cwasm at /data/local/tmp/skiko-component.cwasm.
+    if let Some(i) = args.iter().position(|a| a == "--zygote-launch-gui") {
+        let app_id = args.get(i + 1).map(|s| s.as_str()).unwrap_or("");
+        match wasm_android_host::zygote::launch_client(app_id, /*gui=*/ true) {
+            Ok(_pid) => return,
+            Err(e) => {
+                eprintln!("wart-host --zygote-launch-gui: {e:#}");
                 std::process::exit(1);
             }
         }
