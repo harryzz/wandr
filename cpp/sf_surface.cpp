@@ -406,12 +406,12 @@ int32_t sf_input_poll(SfInputEvent* out, int32_t max) {
             if (emitted) {
                 out[n].pointer_id = m->getPointerId(idx);
                 out[n].x          = m->getX(idx);
-                // Task 47 step 3c — overlay surfaces are positioned
-                // at (0, PANEL_H - H), so InputDispatcher delivers
-                // display-coord Y in the range [Y, PANEL_H]. Subtract
-                // the offset to give the guest surface-local Y
-                // (range [0, H]). 0 for fullscreen surfaces.
-                out[n].y          = m->getY(idx) - static_cast<float>(g_overlay_y_offset);
+                // InputDispatcher delivers MotionEvent coordinates in
+                // WINDOW-LOCAL space — the layer's display→window
+                // transform (TRANSLATE 0,-Y for overlay layers) has
+                // already been applied. So we pass m->getY through
+                // verbatim; no offset subtraction needed.
+                out[n].y          = m->getY(idx);
                 out[n].pressure   = m->getPressure(idx);
                 out[n].key_code   = 0;
                 out[n].meta_state = 0;
@@ -658,11 +658,19 @@ ANativeWindow* sf_create_overlay_surface(int32_t height_px,
     }
 
     // Input window for the bottom strip only. Registered against the
-    // child (BBQ buffer) — InputDispatcher routes display-coord taps
-    // into that rect to our input channel; sf_input_poll subtracts
-    // g_overlay_y_offset to give the guest surface-local coords.
+    // child (BBQ buffer). The touchableRegion is in LAYER-LOCAL
+    // coords: SurfaceFlinger adds the layer's position to convert to
+    // display coords. With layer at (0, Y), passing Rect(0, 0, PW, H)
+    // yields display-coord touchable region (0, Y) → (PW, Y + H) =
+    // exactly the visible overlay strip.
+    //
+    // Bug found in initial smoke (task 49 step 2): passing
+    // Rect(0, Y, PW, PH) yielded display coords (0, 2Y) → (PW, Y+PH)
+    // = off-screen, so taps in the overlay area fell through to
+    // wart-app's fullscreen input window. The IME never saw any
+    // touches; wart-app's in-canvas keyboard got them.
     register_input_window_at(
-        Rect(0, Y, static_cast<int32_t>(PW), static_cast<int32_t>(PH)),
+        Rect(0, 0, static_cast<int32_t>(PW), static_cast<int32_t>(H)),
         "wart-ime");
 
     if (out_w) *out_w = static_cast<int32_t>(PW);
@@ -719,9 +727,12 @@ int32_t sf_resize_overlay(int32_t new_height_px) {
     // keeps producing PW×OldH buffers that SF clips/distorts.
     g_bbq->update(g_control, PW, H, PIXEL_FORMAT_RGBA_8888);
 
-    // Re-register the input window at the new bottom rect.
+    // Re-register the input window at the new bounds. Layer-local
+    // coords — SF adds the layer's position (which is now Y) to
+    // convert to display coords. See the create path's comment for
+    // the layer-local-vs-display bug history.
     update_input_window_bounds(
-        Rect(0, Y, static_cast<int32_t>(PW), static_cast<int32_t>(PH)));
+        Rect(0, 0, static_cast<int32_t>(PW), static_cast<int32_t>(H)));
 
     LOGI("[overlay] resized to %ux%u at (0,%d)", PW, H, Y);
     return 0;
