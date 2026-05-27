@@ -38,6 +38,17 @@ pub fn launch_gui(app_id: &str) -> Result<i32> {
     parse_pid(&reply)
 }
 
+/// Task 47 step 3c — send `LAUNCH_GUI_OVERLAY <app-id>`. The forked
+/// child acquires a bottom-strip overlay SurfaceControl instead of a
+/// fullscreen one. Used for IME apps such as `war.ime.keyboard`.
+pub fn launch_gui_overlay(app_id: &str) -> Result<i32> {
+    if app_id.is_empty() {
+        return Err(anyhow!("LAUNCH_GUI_OVERLAY requires an app-id"));
+    }
+    let reply = send(&format!("LAUNCH_GUI_OVERLAY {app_id}\n"))?;
+    parse_pid(&reply)
+}
+
 /// Send `LAUNCH <app-id>` (headless `wasi:cli/command` consumer).
 /// Returns the forked child's pid.
 pub fn launch(app_id: &str) -> Result<i32> {

@@ -113,6 +113,43 @@ pub fn set_editor_focus(new: Option<EditorFocus>) -> Option<EditorFocus> {
     prev
 }
 
+// ─── Overlay state (task 47 step 3c) ──────────────────────────────────
+//
+// Tracks the IME-overlay split: which IME pid is the foreground overlay,
+// and which app pid is the editor "behind" it (visible-but-demoted,
+// not Paused). Used by `cmd_overlay`/`cmd_overlay_clear` and the
+// auto-tie inside `cmd_attach_editor`/`cmd_detach_editor`.
+//
+// Distinct from `foreground()` — when overlay is active, fg points at
+// the IME (so SIGUSR2 routes to the IME), and `behind_pid` records the
+// editor process that received SIGRTMIN+1 (OverlayBehind). On overlay
+// clear, `behind_pid` is repromoted back to foreground.
+
+#[derive(Clone, Debug)]
+pub struct OverlayState {
+    /// The IME process that owns the bottom-strip overlay surface.
+    pub ime_pid: i32,
+    /// The app whose surface is behind the overlay (visible, layer 0,
+    /// lifecycle Resumed). Repromoted on overlay clear.
+    pub behind_pid: i32,
+}
+
+fn overlay_state() -> &'static Mutex<Option<OverlayState>> {
+    static OV: OnceLock<Mutex<Option<OverlayState>>> = OnceLock::new();
+    OV.get_or_init(|| Mutex::new(None))
+}
+
+pub fn current_overlay() -> Option<OverlayState> {
+    overlay_state().lock().ok().and_then(|m| m.clone())
+}
+
+pub fn set_overlay(new: Option<OverlayState>) -> Option<OverlayState> {
+    let mut m = overlay_state().lock().ok()?;
+    let prev = m.clone();
+    *m = new;
+    prev
+}
+
 pub fn current_foreground() -> Option<String> {
     foreground().lock().ok().and_then(|m| m.clone())
 }
@@ -176,6 +213,15 @@ pub fn remove(app_id: &str) -> Option<AppState> {
     if let Some(ref s) = removed {
         if current_editor_focus().map(|f| f.pid) == Some(s.pid) {
             let _ = set_editor_focus(None);
+        }
+        // Task 47 step 3c — if the removed app was either side of the
+        // overlay split, tear the split down. The surviving side stays
+        // running; the arbiter caller can repromote it to fg if it
+        // was the behind-app.
+        if let Some(ov) = current_overlay() {
+            if ov.ime_pid == s.pid || ov.behind_pid == s.pid {
+                let _ = set_overlay(None);
+            }
         }
     }
     removed

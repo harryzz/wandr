@@ -83,10 +83,15 @@ fn main() {
         Some("--daemon") => run_daemon(),
         Some("launch") => run_client("launch", args.get(1).cloned()),
         Some("launch-headless") => run_client("launch-headless", args.get(1).cloned()),
+        // Task 47 step 3c — overlay launch for IME apps.
+        Some("launch-overlay") => run_client("launch-overlay", args.get(1).cloned()),
         Some("list") => run_client("list", None),
         Some("kill") => run_client("kill", args.get(1).cloned()),
         Some("preload") => run_client("preload", args.get(1).cloned()),
         Some("foreground") => run_client("foreground", args.get(1).cloned()),
+        // Task 47 step 3c — manual overlay engage/clear.
+        Some("overlay") => run_client("overlay", args.get(1).cloned()),
+        Some("overlay-clear") => run_client("overlay-clear", None),
         // Task 47 step 1 — IME routing commands. The client side
         // passes the verb's tail through unchanged; the daemon
         // parses arg-shapes per command.
@@ -123,10 +128,13 @@ fn print_usage() {
          Client commands (require the daemon running):\n\
            wart-arbiter launch          <app-id>\n\
            wart-arbiter launch-headless <app-id>\n\
+           wart-arbiter launch-overlay  <app-id>          (IME-shaped surface, task 47 step 3c)\n\
            wart-arbiter list\n\
            wart-arbiter kill            <app-id>\n\
            wart-arbiter preload         <app-id>\n\
            wart-arbiter foreground      <app-id>\n\
+           wart-arbiter overlay         <app-id>          (engage IME overlay split, task 47 step 3c)\n\
+           wart-arbiter overlay-clear                     (tear it down)\n\
          \n\
          IME routing (task 47):\n\
            wart-arbiter set-ime         <app-id>\n\
@@ -147,7 +155,8 @@ fn run_client(verb: &str, arg: Option<String>) -> Result<()> {
     // the verb; arg-bearing commands send `<verb> <arg>`.
     let needs_arg = matches!(
         verb,
-        "launch" | "launch-headless" | "kill" | "preload" | "foreground"
+        "launch" | "launch-headless" | "launch-overlay"
+        | "kill" | "preload" | "foreground" | "overlay"
     );
     let line = match (needs_arg, arg) {
         (true, Some(a))  => format!("{verb} {a}\n"),
@@ -266,12 +275,21 @@ fn handle_client(mut stream: UnixStream) -> Result<()> {
     };
 
     let result = match verb {
-        "launch"          => cmd_launch(&mut stream, &rest, /*gui=*/ true),
-        "launch-headless" => cmd_launch(&mut stream, &rest, /*gui=*/ false),
+        "launch"          => cmd_launch(&mut stream, &rest, LaunchKind::Gui),
+        "launch-headless" => cmd_launch(&mut stream, &rest, LaunchKind::Headless),
+        // Task 47 step 3c — overlay launch (e.g. an IME app). Same
+        // shape as `launch` but the child gets a bottom-strip
+        // overlay SurfaceControl. Does NOT auto-promote to fg here
+        // — that's the `overlay` command's job, or the auto-tie in
+        // `attach-editor` when an editor focuses.
+        "launch-overlay"  => cmd_launch(&mut stream, &rest, LaunchKind::GuiOverlay),
         "kill"            => cmd_kill(&mut stream, &rest),
         "list"            => cmd_list(&mut stream),
         "preload"         => cmd_preload(&mut stream, &rest),
         "foreground"      => cmd_foreground(&mut stream, &rest),
+        // Task 47 step 3c — manual overlay handles.
+        "overlay"         => cmd_overlay(&mut stream, &rest),
+        "overlay-clear"   => cmd_overlay_clear(&mut stream),
         // Task 47 step 1 — IME routing. State maintenance + logging
         // only; cross-process delivery lands in step 2.
         "set-ime"                    => cmd_set_ime(&mut stream, &rest),
@@ -385,15 +403,39 @@ fn cmd_attach_editor(stream: &mut UnixStream, rest: &str) -> Result<()> {
         .map(|i| format!("{} (pid={})", i.app_id, i.pid))
         .unwrap_or_else(|| "(no active IME — set-ime first)".to_string());
 
+    // Task 47 step 3c — auto-tie. If there's an active IME and its
+    // pid differs from the focused editor's, engage the overlay
+    // split: IME → foreground, editor → OverlayBehind. The IME's SF
+    // surface flips visible at MAX-layer; the editor stays visible
+    // at layer 0 (lifecycle Resumed so the cursor keeps blinking).
+    // Skip if the IME pid IS the editor pid (same process owning
+    // both — implausible in practice but defensive).
+    let auto_overlay = match &ime {
+        Some(i) if i.pid != pid => {
+            let already = state::current_overlay()
+                .map(|ov| ov.ime_pid == i.pid && ov.behind_pid == pid)
+                .unwrap_or(false);
+            if !already {
+                promote_to_overlay(&i.app_id, i.pid, Some(pid));
+                true
+            } else {
+                false
+            }
+        }
+        _ => false,
+    };
+
     writeln!(
         stream,
         "OK attached editor pid={pid} app={} input-type={input_type} \
-         prev-pid={prev_pid} route→{ime_dest}",
+         prev-pid={prev_pid} route→{ime_dest} overlay={overlay}",
         owner.app_id,
+        overlay = if auto_overlay { "engaged" } else { "skipped" },
     )?;
     log::info!(
         "arbiter: attach-editor pid={pid} app={} input-type={input_type} hint={hint:?} \
-         initial-text-len={} → route to {ime_dest} (step 2 delivers on-editor-attached)",
+         initial-text-len={} → route to {ime_dest} auto-overlay={auto_overlay} \
+         (step 2 delivers on-editor-attached)",
         owner.app_id,
         initial_text.len(),
     );
@@ -419,9 +461,22 @@ fn cmd_detach_editor(stream: &mut UnixStream, rest: &str) -> Result<()> {
             .as_ref()
             .map(|i| format!("{} (pid={})", i.app_id, i.pid))
             .unwrap_or_else(|| "(no active IME)".to_string());
-        writeln!(stream, "OK detached pid={pid} route→{ime_dest}")?;
+        // Task 47 step 3c — auto-tie. If we engaged the overlay
+        // split for this editor on attach, tear it down now. The
+        // IME goes back to Background; the editor (this pid) gets
+        // repromoted to Foreground.
+        let cleared = match state::current_overlay() {
+            Some(ov) if ov.behind_pid == pid => demote_from_overlay().is_some(),
+            _ => false,
+        };
+        writeln!(
+            stream,
+            "OK detached pid={pid} route→{ime_dest} overlay={overlay}",
+            overlay = if cleared { "cleared" } else { "skipped" },
+        )?;
         log::info!(
-            "arbiter: detach-editor pid={pid} → route to {ime_dest} (step 2 delivers on-editor-detached)"
+            "arbiter: detach-editor pid={pid} → route to {ime_dest} auto-overlay-clear={cleared} \
+             (step 2 delivers on-editor-detached)"
         );
     } else {
         writeln!(stream, "OK no-op pid={pid} (not focused)")?;
@@ -570,6 +625,89 @@ fn send_role_signal(pid: i32, foreground: bool) {
     }
 }
 
+/// Task 47 step 3c — send `SIGRTMIN+1` to flip a child into the
+/// `OverlayBehind` role: visible, layered below the IME overlay,
+/// lifecycle stays `Resumed`. The receiving wart-host's
+/// `app_role::role_handler` stores the new role atomically; the next
+/// frame in its render loop reacts.
+fn send_overlay_behind_signal(pid: i32) {
+    let sig = libc::SIGRTMIN() + 1;
+    let r = unsafe { libc::kill(pid, sig) };
+    if r != 0 {
+        log::warn!(
+            "arbiter: kill({pid}, sig={sig}) (overlay-behind) failed: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+}
+
+/// Task 47 step 3c — promote `(ime_app_id, ime_pid)` to be the
+/// foreground overlay and demote the prior foreground app to
+/// `OverlayBehind` (visible, layer 0, `Resumed`). Returns the pid of
+/// the demoted app so callers can store it in `OverlayState.behind_pid`.
+///
+/// `behind_pid_hint` is a fallback when there's no current foreground
+/// (e.g. the editor process was launched headless or got cleared) —
+/// callers usually pass the focused editor's pid here.
+fn promote_to_overlay(ime_app_id: &str, ime_pid: i32, behind_pid_hint: Option<i32>) -> Option<i32> {
+    // Demote whoever is currently foreground. Use OverlayBehind, not
+    // Background — the editor needs to keep rendering text mutations.
+    let demoted = if let Some((prev_id, prev_pid)) = state::set_foreground(Some(ime_app_id)) {
+        log::info!(
+            "arbiter: overlay-demoting prior foreground app={prev_id} pid={prev_pid}"
+        );
+        send_overlay_behind_signal(prev_pid);
+        // OOM score: behind-app is still Resumed but visually demoted —
+        // keep it at fg priority so the IME isn't holding the OOM
+        // killer's attention longer than the editor.
+        write_oom_score(prev_pid, OOM_FG);
+        Some(prev_pid)
+    } else {
+        behind_pid_hint
+    };
+    log::info!("arbiter: overlay-promoting IME app={ime_app_id} pid={ime_pid}");
+    send_role_signal(ime_pid, /*foreground=*/ true);
+    write_oom_score(ime_pid, OOM_FG);
+    let behind_pid = demoted.unwrap_or(0);
+    let _ = state::set_overlay(Some(state::OverlayState {
+        ime_pid,
+        behind_pid,
+    }));
+    demoted
+}
+
+/// Task 47 step 3c — tear down the IME overlay split: demote the IME
+/// to `Background` and repromote the behind-app to `Foreground`. Used
+/// by `cmd_detach_editor` (auto-tied) and `cmd_overlay_clear` (manual).
+/// Returns the (ime_pid, behind_pid) pair that was active, if any.
+fn demote_from_overlay() -> Option<(i32, i32)> {
+    let prev = state::set_overlay(None)?;
+    log::info!(
+        "arbiter: overlay-clearing ime_pid={} behind_pid={}",
+        prev.ime_pid, prev.behind_pid
+    );
+    send_role_signal(prev.ime_pid, /*foreground=*/ false);
+    write_oom_score(prev.ime_pid, OOM_BG);
+    if prev.behind_pid > 0 {
+        // Find the app_id matching this pid so set_foreground points
+        // at the right app. If the behind app was killed in the
+        // meantime, this no-ops cleanly.
+        let app = state::snapshot().into_iter().find(|a| a.pid == prev.behind_pid);
+        if let Some(app) = app {
+            let _ = state::set_foreground(Some(&app.app_id));
+            send_role_signal(prev.behind_pid, /*foreground=*/ true);
+            write_oom_score(prev.behind_pid, OOM_FG);
+        } else {
+            log::warn!(
+                "arbiter: overlay clear — behind pid={} no longer tracked, fg left unset",
+                prev.behind_pid
+            );
+            let _ = state::set_foreground(None);
+        }
+    }
+    Some((prev.ime_pid, prev.behind_pid))
+}
+
 /// Demote whoever is currently foreground (if anyone) and promote the
 /// given (app_id, pid) to foreground. Idempotent if the target is
 /// already foreground.
@@ -589,15 +727,23 @@ fn promote_to_foreground(app_id: &str, pid: i32) {
     write_oom_score(pid, OOM_FG);
 }
 
-fn cmd_launch(stream: &mut UnixStream, app_id: &str, gui: bool) -> Result<()> {
-    if app_id.is_empty() && !gui {
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum LaunchKind {
+    Gui,
+    Headless,
+    /// Task 47 step 3c — overlay surface (e.g. IME apps).
+    GuiOverlay,
+}
+
+fn cmd_launch(stream: &mut UnixStream, app_id: &str, kind: LaunchKind) -> Result<()> {
+    if app_id.is_empty() && kind != LaunchKind::Gui {
         writeln!(stream, "ERR launch-empty-app-id")?;
         return Ok(());
     }
-    let result = if gui {
-        zygote_client::launch_gui(app_id)
-    } else {
-        zygote_client::launch(app_id)
+    let result = match kind {
+        LaunchKind::Gui         => zygote_client::launch_gui(app_id),
+        LaunchKind::GuiOverlay  => zygote_client::launch_gui_overlay(app_id),
+        LaunchKind::Headless    => zygote_client::launch(app_id),
     };
     match result {
         Ok(pid) => {
@@ -612,12 +758,16 @@ fn cmd_launch(stream: &mut UnixStream, app_id: &str, gui: bool) -> Result<()> {
             // foreground (matches Android's "new activity comes
             // forward" expectation). Headless launches don't have
             // an SF surface so the foreground concept doesn't
-            // apply; skip promotion for them.
-            if gui {
+            // apply; skip promotion for them. Overlay launches
+            // (task 47 step 3c) don't auto-promote either — the
+            // overlay is engaged explicitly via `overlay` /
+            // `attach-editor` so the IME stays hidden+layered-low
+            // until an editor focuses.
+            if kind == LaunchKind::Gui {
                 promote_to_foreground(&key, pid);
             }
             writeln!(stream, "OK pid={pid} app={key}")?;
-            log::info!("wart-arbiter: launched {key} → pid {pid}");
+            log::info!("wart-arbiter: launched {key} → pid {pid} kind={kind:?}");
             Ok(())
         }
         Err(e) => {
@@ -641,6 +791,58 @@ fn cmd_foreground(stream: &mut UnixStream, app_id: &str) -> Result<()> {
     promote_to_foreground(&s.app_id, s.pid);
     let prev_str = prev.unwrap_or_else(|| "(none)".to_string());
     writeln!(stream, "OK fg={app_id} prev={prev_str} pid={pid}", pid = s.pid)?;
+    Ok(())
+}
+
+/// Task 47 step 3c — manually engage the overlay split. Promotes
+/// `app_id` (typically an IME) as foreground overlay; demotes the
+/// prior foreground to `OverlayBehind`. The auto-tied path inside
+/// `cmd_attach_editor` fires the same flow when an editor focuses and
+/// an `ActiveIme` is set; this manual handle is for testing /
+/// arbiter-driven flows that don't go through attach-editor.
+fn cmd_overlay(stream: &mut UnixStream, app_id: &str) -> Result<()> {
+    if app_id.is_empty() {
+        writeln!(stream, "ERR overlay-empty-app-id")?;
+        return Ok(());
+    }
+    let Some(ime) = state::get(app_id) else {
+        writeln!(stream, "ERR overlay-not-tracked {app_id}")?;
+        return Ok(());
+    };
+    let prev_fg = state::current_foreground();
+    // Find the prior fg's pid (if any) for the behind_pid_hint. The
+    // promote_to_overlay helper handles the case where there is none.
+    let behind_hint = prev_fg
+        .as_ref()
+        .and_then(|id| state::get(id))
+        .map(|s| s.pid);
+    let demoted = promote_to_overlay(&ime.app_id, ime.pid, behind_hint);
+    let prev_str = prev_fg.unwrap_or_else(|| "(none)".to_string());
+    let demoted_str = demoted
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    writeln!(
+        stream,
+        "OK overlay={app_id} pid={ime_pid} prev-fg={prev_str} behind-pid={demoted_str}",
+        ime_pid = ime.pid,
+    )?;
+    Ok(())
+}
+
+/// Task 47 step 3c — tear down the overlay split. Demotes the IME
+/// (Background) and repromotes the behind-app (Foreground).
+fn cmd_overlay_clear(stream: &mut UnixStream) -> Result<()> {
+    match demote_from_overlay() {
+        Some((ime_pid, behind_pid)) => {
+            writeln!(
+                stream,
+                "OK overlay-cleared ime-pid={ime_pid} repromoted-behind-pid={behind_pid}"
+            )?;
+        }
+        None => {
+            writeln!(stream, "OK overlay-was-not-active")?;
+        }
+    }
     Ok(())
 }
 
