@@ -25,10 +25,12 @@
 #include <input/InputTransport.h>
 #include <ui/PixelFormat.h>
 #include <ui/DisplayId.h>
+#include <ui/DisplayMode.h>
 #include <ui/LogicalDisplayId.h>
 #include <ui/Rect.h>
 #include <ui/Region.h>
 #include <ui/Rotation.h>
+#include <ui/Size.h>
 #include <utils/String8.h>
 #include <utils/Timers.h>
 
@@ -37,6 +39,7 @@
 #include <android/log.h>
 #include <system/window.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
@@ -61,10 +64,45 @@ namespace {
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "sf_surface", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "sf_surface", __VA_ARGS__)
 
-// Pixel 2 XL ("taimen") panel constants — pinned for now;
-// TODO(task33): query the mode instead of hardcoding.
-constexpr uint32_t PANEL_W = 1440;
-constexpr uint32_t PANEL_H = 2880;
+// Panel dimensions in PORTRAIT orientation (width <= height). Populated
+// by `init_panel_dims()` from `SurfaceComposerClient::getActiveDisplayMode`
+// after the display token is resolved. Defaults to taimen (Pixel 2 XL)
+// so the legacy hardcoded behavior still works if the query somehow
+// fails — but every fresh process path passes through init_panel_dims
+// and overrides these. Task 48.
+uint32_t PANEL_W = 1440;
+uint32_t PANEL_H = 2880;
+
+// Query the active display mode and update PANEL_W / PANEL_H. The
+// resolution is normalized to portrait (`min(w,h)` → width,
+// `max(w,h)` → height) so the rest of the shim's portrait-coord
+// assumptions hold on any display the runtime targets. Falls back to
+// the taimen defaults on a failed query with a warning logged.
+void init_panel_dims(const sp<IBinder>& display) {
+    ui::DisplayMode mode;
+    status_t st = SurfaceComposerClient::getActiveDisplayMode(display, &mode);
+    if (st != OK) {
+        LOGE("init_panel_dims: getActiveDisplayMode failed (%d) — "
+             "keeping defaults %ux%u", st, PANEL_W, PANEL_H);
+        return;
+    }
+    int32_t w = mode.resolution.width;
+    int32_t h = mode.resolution.height;
+    if (w <= 0 || h <= 0 || w > 8192 || h > 8192) {
+        LOGE("init_panel_dims: implausible resolution %dx%d — "
+             "keeping defaults %ux%u", w, h, PANEL_W, PANEL_H);
+        return;
+    }
+    // Normalize to portrait. The shim's setDisplayProjection(ROTATION_0,
+    // Rect(PW, PH), ...) treats PW as the short side; landscape-native
+    // displays (taimen, some tablets) report (long, short) here.
+    uint32_t pw = static_cast<uint32_t>(std::min(w, h));
+    uint32_t ph = static_cast<uint32_t>(std::max(w, h));
+    PANEL_W = pw;
+    PANEL_H = ph;
+    LOGI("init_panel_dims: panel resolution %dx%d → portrait %ux%u",
+         w, h, PANEL_W, PANEL_H);
+}
 
 // Keep these alive for the process lifetime — dropping any of them
 // invalidates the ANativeWindow* handed back to the caller.
@@ -214,9 +252,11 @@ ANativeWindow* sf_create_fullscreen_surface(int32_t* out_w, int32_t* out_h,
         return nullptr;
     }
 
-    // Pixel 2 XL ("taimen") panel: 1440x2880 portrait physical display.
-    // TODO(task33): query the mode instead of hardcoding.
-    const uint32_t PW = 1440, PH = 2880;  // physical panel (portrait)
+    // Task 48 — populate PANEL_W/PANEL_H from the active display mode.
+    // Pre-task 48 this was hardcoded to taimen's 1440x2880 portrait;
+    // now any display the runtime targets works.
+    init_panel_dims(g_display);
+    const uint32_t PW = PANEL_W, PH = PANEL_H;  // local aliases for the rest of this fn
 
     // Step 1 — pin the display projection to portrait identity.
     //
@@ -529,6 +569,9 @@ ANativeWindow* sf_create_overlay_surface(int32_t height_px,
         return nullptr;
     }
 
+    // Task 48 — query active display mode (idempotent; safe to call
+    // even if sf_create_fullscreen_surface ran first).
+    init_panel_dims(g_display);
     const uint32_t PW = PANEL_W;
     const uint32_t PH = PANEL_H;
     const uint32_t H  = static_cast<uint32_t>(height_px);
