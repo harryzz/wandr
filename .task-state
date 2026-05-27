@@ -1,5 +1,5 @@
 TASK=44
-STEP=verify-done
-STATUS=complete
-LAST_SUCCESS=Task 44 session 7 verified OK — wart-host --probe-wms-opensession round-trips through WMS. openSession rejected with IllegalStateException: Unknown pid=N uid=0 (WMS's mPidMap doesn't track our non-ATMS-registered process). Transport ✅, parcels ✅; structured rejection identifies the next gate for session 8.
-NOTES=
+STEP=session-7-postponed
+STATUS=paused
+LAST_SUCCESS=Task 44 session 7 verified OK 2026-05-27 — wart-host --probe-wms-opensession lands at WMS; openSession rejected with IllegalStateException: Unknown pid=N uid=0. Gate located precisely: Session.java constructor calls ATMS.mProcessMap.getProcess(pid); empty → throw. Path to register pid (IActivityManager.attachApplication) gets the calling process killed by AMS's attachApplicationLocked when pid is not in mPidsSelfLocked/mPendingStarts (i.e. when we were spawned by su, not Zygote-via-AMS).
+NOTES=Task 44 POSTPONED — architecturally at odds with the locked §9 Hybrid-zygote runtime model. In Hybrid mode our arbiter spawns apps (no AMS / ATMS / WMS for app windows); WMS registration only matters for transitional "Gboard from standalone-via-su" which becomes moot post-ART. Resume task 44 only if a concrete short-term need arises before Hybrid ships. Pivoting to: build a 2nd concrete app to satisfy one half of the Hybrid trigger condition (≥2 apps + DRC fix). See project_app_lifecycle_and_packaging.

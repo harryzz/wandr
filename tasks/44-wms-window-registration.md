@@ -1,8 +1,64 @@
 # Task 44 — WMS window registration for non-Activity processes (path A)
 
-> **Status:** 🔲 scoped 2026-05-27, not started. Spun out of task 40
-> session 6's WMS-gate finding. Prerequisite for task 40 to make
-> Gboard actually appear; useful on its own for any future
+> **Status:** 🟡 session 7 done 2026-05-27, **POSTPONED 2026-05-27**
+> — architecturally at odds with the locked §9 Hybrid-zygote runtime
+> model. See "Postponement (2026-05-27)" section below for the
+> reasoning. Resume only if a concrete short-term need arises that
+> the in-canvas Compose keyboard can't cover.
+
+## Postponement (2026-05-27)
+
+Session 7 located the gate precisely (`Session.java`'s constructor
+calls `ATMS.mProcessMap.getProcess(pid)` and throws `IllegalStateException`
+on null). The natural session-8 follow-up — vendor `IActivityManager`,
+call `attachApplication` to register our pid — is a dead end:
+`attachApplicationLocked` calls `killProcessQuiet(pid)` when the pid
+is not in `mPidsSelfLocked`/`mPendingStarts` (i.e. not spawned by
+AMS-via-Zygote, which we never are when running standalone via `su`).
+See [Session.java in AOSP](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-15.0.0_r36/services/core/java/com/android/server/wm/Session.java).
+
+The deeper reason to stop here: task 44's whole goal — "register a
+non-Activity process with Android's WMS so Gboard can summon" — is
+at odds with the locked §9 Hybrid-zygote architectural decision
+(see [[project-app-lifecycle-and-packaging]]). In Hybrid mode:
+
+- OUR arbiter spawns apps; AMS doesn't exist in our story.
+- App windows go to SurfaceFlinger directly (task 33 already does
+  this); WMS doesn't exist in our story.
+- IME is either in-canvas Compose (current state, working) or a
+  WASM-based IME (the post-ART north star); Gboard doesn't exist
+  in our story.
+
+So even if we plow through the ATMS gate via some heroic workaround,
+the only paid-for benefit is "Gboard works in standalone mode for a
+few months before we delete WMS entirely." Not worth the multi-week
+investment.
+
+**What was banked from session 7** (kept committed for future
+reference + the slim chance task 44 is unparked):
+
+- All four WMS AIDLs are vendored via the build.rs self-healing
+  slot-stub pattern. Reusable if the WMS path ever becomes
+  necessary again.
+- `wart-host/src/wms_impl.rs` is a working binder probe template;
+  the openSession round-trip works at the transport layer.
+- The exact gate location is documented (this file + commit
+  `09782f5` in wart-host).
+
+**Conditions to resume task 44**: only if a concrete short-term
+need (before Hybrid ships) emerges that the in-canvas Compose
+keyboard can't cover — e.g. specific user pain around English-only
+typing, voice input, emoji picker, CJK languages. Even then,
+**Path B from task 40 session 6** (NativeActivity wrapper +
+JNI-extract activity windowToken) is a much cheaper alternative
+than continuing task 44, because the NativeActivity wart-app IS
+in `ATMS.mProcessMap` (AMS spawned it). Try Path B first.
+
+---
+
+> **Status (original):** 🔲 scoped 2026-05-27, not started. Spun out
+> of task 40 session 6's WMS-gate finding. Prerequisite for task 40
+> to make Gboard actually appear; useful on its own for any future
 > non-Activity feature that needs to be a first-class window
 > (proper focus, status-bar interactions, system-gesture handling,
 > activity-manager visibility, etc.).
