@@ -425,21 +425,58 @@ fn cmd_attach_editor(stream: &mut UnixStream, rest: &str) -> Result<()> {
         _ => false,
     };
 
+    // Task 49 step 1a — deliver editor-attached to the IME's wart-host
+    // via its per-host control socket. The IME's render-loop drain
+    // will call into the guest's exported `war:ime/ime.on-editor-attached`
+    // (step 1b). Fire-and-forget; failure to deliver doesn't roll back
+    // the attach-editor state on the arbiter side.
+    let delivered = match &ime {
+        Some(i) => {
+            let host_sock = format!("/data/local/tmp/wart-host-{}.sock", i.pid);
+            let line = format!(
+                "editor-attached {input_type} {hint_esc} {text_esc} {sel_start} {sel_end}\n",
+                hint_esc   = escape_underscores(&hint),
+                text_esc   = escape_underscores(&initial_text),
+                sel_start  = 0u32,
+                sel_end    = 0u32,
+            );
+            match deliver_to_host(&host_sock, &line) {
+                Ok(_) => true,
+                Err(e) => {
+                    log::warn!(
+                        "arbiter: editor-attached delivery to {host_sock} failed: {e:#}"
+                    );
+                    false
+                }
+            }
+        }
+        None => false,
+    };
+
     writeln!(
         stream,
         "OK attached editor pid={pid} app={} input-type={input_type} \
-         prev-pid={prev_pid} route→{ime_dest} overlay={overlay}",
+         prev-pid={prev_pid} route→{ime_dest} overlay={overlay} delivered={delivered}",
         owner.app_id,
         overlay = if auto_overlay { "engaged" } else { "skipped" },
     )?;
     log::info!(
         "arbiter: attach-editor pid={pid} app={} input-type={input_type} hint={hint:?} \
          initial-text-len={} → route to {ime_dest} auto-overlay={auto_overlay} \
-         (step 2 delivers on-editor-attached)",
+         delivered={delivered}",
         owner.app_id,
         initial_text.len(),
     );
     Ok(())
+}
+
+/// Symmetric with wart-host/src/ime_inbound.rs::unescape_underscores.
+/// Empty → "-"; otherwise spaces → "_". Task 49 step 1a wire format.
+fn escape_underscores(s: &str) -> String {
+    if s.is_empty() {
+        return "-".to_string();
+    }
+    s.replace(' ', "_")
 }
 
 fn cmd_detach_editor(stream: &mut UnixStream, rest: &str) -> Result<()> {
@@ -469,14 +506,32 @@ fn cmd_detach_editor(stream: &mut UnixStream, rest: &str) -> Result<()> {
             Some(ov) if ov.behind_pid == pid => demote_from_overlay().is_some(),
             _ => false,
         };
+        // Task 49 step 1a — deliver editor-detached to the IME's
+        // wart-host via its per-host control socket. Symmetric with
+        // cmd_attach_editor's delivery above. Fire-and-forget.
+        let delivered = match &ime {
+            Some(i) => {
+                let host_sock = format!("/data/local/tmp/wart-host-{}.sock", i.pid);
+                match deliver_to_host(&host_sock, "editor-detached\n") {
+                    Ok(_) => true,
+                    Err(e) => {
+                        log::warn!(
+                            "arbiter: editor-detached delivery to {host_sock} failed: {e:#}"
+                        );
+                        false
+                    }
+                }
+            }
+            None => false,
+        };
         writeln!(
             stream,
-            "OK detached pid={pid} route→{ime_dest} overlay={overlay}",
+            "OK detached pid={pid} route→{ime_dest} overlay={overlay} delivered={delivered}",
             overlay = if cleared { "cleared" } else { "skipped" },
         )?;
         log::info!(
             "arbiter: detach-editor pid={pid} → route to {ime_dest} auto-overlay-clear={cleared} \
-             (step 2 delivers on-editor-detached)"
+             delivered={delivered}"
         );
     } else {
         writeln!(stream, "OK no-op pid={pid} (not focused)")?;
