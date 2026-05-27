@@ -1,6 +1,6 @@
 # Task 40 — real IME via rsbinder → IMMS (multi-session arc)
 
-> **Status:** 🟡 in progress — session 2 (vendor + first call) done 2026-05-27.
+> **Status:** 🟡 in progress — session 3 (addClient client-registration) done 2026-05-27.
 > Multi-week, multi-session commitment. Standing decision overturned
 > 2026-05-27 — user explicitly opted for path (B) over the project
 > memory's "default A polish, B on roadmap not next" recommendation
@@ -279,6 +279,89 @@ Session 2 first-call milestone reached.
   must be empirically tested.
 - SELinux denial on `INTERACT_ACROSS_USERS_FULL`-gated calls —
   expected. `setenforce 0` for dev, production sepolicy deferred.
+
+## Session 3 results (2026-05-27)
+
+**Outcome: ✅ device-verified.** IMMS accepted our non-Activity client
+registration. Pixel 2 XL `dumpsys input_method` shows our process as
+a first-class `ClientState` entry alongside system_server + user apps:
+
+```
+ClientState{a425746 mUid=0 mPid=4404 mSelfReportedDisplayId=0}:
+  client=com.android.server.inputmethod.IInputMethodClientInvoker@afaad07
+  fallbackInputConnection=com.android.internal.inputmethod.IRemoteInputConnection$Stub$Proxy@7ddfe34
+  sessionRequested=false
+  ...
+  pid=4404
+```
+
+`pid=4404` is our wart-host probe process (`adb shell ps` correlation).
+`mUid=0` because the probe ran via `su`; production wart-host running
+as a normal app would show its app uid.
+
+### Deliverables
+
+1. **Stubbed `IInputMethodClient.aidl`** (12 oneway `slot_NN_<orig-name>()`
+   methods, no transitive imports) — auto-patched into the vendored
+   submodule on every build, same self-healing pattern as the
+   IInputMethodManager stub. Bn-side server (`ImeClient`) in
+   `wart-host/src/ime_impl.rs` logs each dispatch and returns Ok.
+   IMMS may fire `setActive` / `setInteractive` etc. asynchronously
+   after registration; oneway means our stubs swallow the calls
+   without breaking the protocol.
+2. **Stubbed `IRemoteInputConnection.aidl`** (1 oneway placeholder method)
+   — full ~36-method editor interface deferred to session 4. addClient
+   does NOT call methods on this binder synchronously; IMMS just
+   stores the reference for later use when an IME asks for editor
+   text.
+3. **Un-stubbed `addClient(client, inputConn, displayId)`** in the
+   IInputMethodManager AIDL stub. Real signature, transaction code
+   FIRST_CALL_TRANSACTION + 0 (matches IMMS's dispatch).
+4. **`probe_addclient()`** in `wart-host/src/ime_impl.rs` — wraps
+   both server impls in `BnInputMethodClient::new_async_binder` /
+   `BnRemoteInputConnection::new_async_binder` (with a tokio
+   current-thread runtime adapter copied from `sensors_impl.rs`),
+   calls `addClient(&client, &input_conn, 0)`, holds the binders
+   alive for 5 s so `dumpsys input_method` shows the entry.
+5. **`wart-host --probe-ime-addclient` CLI flag** in `main.rs`.
+
+### What we learned
+
+- **Non-Activity clients can register with IMMS without permission gating.**
+  `addClient` has no `@RequiresPermission` annotation in
+  `IInputMethodManager.aidl` (unlike most other methods, which gate on
+  `INTERACT_ACROSS_USERS_FULL`). Empirically confirmed: addClient
+  succeeded with no SELinux relaxation needed (device was already in
+  Permissive mode, but the dispatch shows no framework-level identity
+  check either).
+- **`displayId=0` works** for the primary display. No need for any
+  WMS/SF token registration ahead of time.
+- **The Bn-side server pattern from `sensors_impl.rs` ports cleanly.**
+  `BnFoo::new_async_binder(server, TokioRuntime) -> Strong<dyn Foo>`,
+  same recipe.
+- **rsbinder-aidl handles `oneway interface` cleanly.** The 12 oneway
+  stub methods on IInputMethodClient generate an
+  `IInputMethodClientAsyncService` trait with 12 `async fn ... ->
+  Result<()>` — same shape as a non-oneway interface from the trait's
+  perspective.
+
+### Open de-risks carried into session 4
+
+- **WindowToken validation against WMS** — still the biggest unknown.
+  `startInputOrWindowGainedFocus(...)` takes an `IBinder windowToken`
+  that IMMS treats as a focus key. The session-1 recon suggested IMMS
+  doesn't validate it against WMS, but we haven't called the method
+  yet. If WMS validation kicks in, we'd need to register a token via
+  SurfaceComposerClient (task 33's infrastructure) before the IMMS
+  call.
+- **`EditorInfo` and related parcelables** — `startInputOrWindowGainedFocus`
+  takes a complex `EditorInfo` describing the text field. Vendoring
+  the full hierarchy (EditorInfo, ExtractedTextRequest, …) is the
+  bulk of session 4's vendoring work.
+- **`InputBindResult` return type** — `startInputOrWindowGainedFocus`
+  returns `InputBindResult` containing the IME's
+  `IInputMethodSession` binder. Sessions 4-5 need to actually drive
+  that session to make the soft keyboard appear.
 
 ## Related
 
