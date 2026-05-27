@@ -626,6 +626,196 @@ I standalone[7443]: rendered frame 1200
   appear at >2 apps, what production needs that the MVP skipped.
 - Recommend task 46 scope based on findings.
 
+## What we learned (spike close-out, 2026-05-27)
+
+Synthesizing across steps 1-4. The spike achieved its goal of
+validating the technical path; the §9 Hybrid-zygote architecture
+is real and works on this device.
+
+### Fork survival — what did and didn't break
+
+The big question entering the spike was "does any of our stack
+have hidden fork-unsafe state?". The answer was a clean **no**:
+
+- **Adreno EGL** — the keystone unknown. Survives `fork()`
+  cleanly when the parent stays EGL-cold (D5). Child first-init
+  works exactly as in direct `--standalone`. No driver weirdness,
+  no GPU context aliasing.
+- **rsbinder / Bionic binder** — D7 held. Parent never touches
+  binder. Each child first-inits via `crate::binder::init`'s
+  OnceLock-guarded path; the OnceLock state from parent is
+  COW'd but unset, so the child's first call re-initializes
+  cleanly.
+- **wasmtime Engine** — pure functional data structure
+  post-construction. No worker threads, no FDs, no signal
+  handlers, no global state outside its own allocations. Safe
+  to share via COW with read-only access from any number of
+  children.
+- **tokio runtime** — never spawned in the parent (D6). Children
+  build their own if they need one (`run_once` uses
+  current-thread tokio inside binder operations).
+- **SF surface allocation** — works fine from multiple
+  concurrent children. Each calls `SurfaceComposerClient` fresh
+  post-fork and gets its own SurfaceControl.
+- **Lifecycle signal handlers** — child's
+  `lifecycle_standalone::install_signal_handlers` worked even
+  though parent installed none. SIGTERM behaves correctly
+  per-child.
+
+What did break:
+- **Nothing**, in the spike's scope. The known limitations
+  (zombies, no shutdown command, no z-order arbitration) are
+  all features-not-implemented, not bugs.
+
+### COW math — the surprise
+
+The scope doc stretched for ≥30 MB shared per child. We got
+~5.6 MB per child. The interesting discovery was *where* that
+sharing actually comes from:
+
+| Category | Shared with parent |
+|---|---|
+| Binary `.data/.bss` (wart-host + libs) | 4 656 kB |
+| wasmtime Engine heap (`scudo:primary`) | 208 kB |
+| linker_alloc (dynamic loader state) | 192 kB |
+| other anonymous | 472 kB |
+| `[stack]` + misc | 72 kB |
+| **Total** | **5 600 kB** |
+
+**The "engine preload" win is mostly the binary's already-
+initialized statics, not wasmtime's runtime state.** `Engine::new`
+is structurally lightweight — maybe 200 kB of heap. To grow
+the per-child savings significantly we'd need:
+
+1. **Component preload** — `Component::deserialize_file` lands
+   in `scudo:primary`. Each component should add several MB.
+   Multi-app preload requires a registry; CLI shape
+   `--zygote-preload <app-id>` is already in the design.
+2. **Skia preload** — `FontMgr::default()` + touch a default
+   typeface in the parent. Several MB of font caches that
+   COW-share with children.
+3. **Component instantiation state** — riskier. The
+   `LoadedApp` value (post-load, pre-instantiate) holds the
+   linker + dep wiring. If we instantiate in the parent and
+   the child uses `Store::new(engine, ...)` over the same
+   Component, more state shares. But this might be unsafe with
+   the wasm guest's linear memory (which is per-instance and
+   per-Store).
+
+Realistic ceiling for the engine-only path: ~5-10 MB per child.
+With component+Skia preload: ~25-40 MB per child. Beyond that
+you'd be paying memory-write overhead on the parent at
+preload time, with diminishing returns.
+
+### Per-app working set — the real binding constraint
+
+|                | What dominates |
+|----------------|----------------|
+| ~100 MB anonymous private | wasm linear memory (Compose snapshot + composer trees) |
+| ~50 MB private clean | mmap'd .cwasm + read-only data |
+| ~60 MB private dirty | Skia GPU buffer mirrors + canvas state |
+
+Per concurrent app: **~180 MB total** at the current Compose
+Material UI working set. On a 4 GB device ~20 apps is the
+memory ceiling; on a 2 GB device ~10 apps. **The zygote's COW
+savings are a rounding error against this** — ~5 MB shared vs
+180 MB private.
+
+This is the same lesson stock Android learned: Zygote saves
+~50-100 MB per app process (vs cold-starting an ART JVM), but
+each app still needs its own working set, and the working set
+dominates total memory usage.
+
+The conclusion is the same as the §9 monolithic-first decision:
+**at MVP scale, monolithic is fine; Hybrid's three-tier
+isolation win is the architectural reason to ship it, not the
+memory math.** Hybrid recovers per-app crash isolation, which
+monolithic can't.
+
+### Bottlenecks at scale
+
+The spike maxed out at two concurrent apps for the smoke. At
+N≥3 the limiters in order of likelihood:
+
+1. **wasm linear memory growth** (any one app's leak — see
+   `wasmtime-drc-no-autoschedule`) freezes that app but the
+   others should be unaffected. This is one of Hybrid's wins.
+2. **SF surface z-order** — only the latest-allocated is
+   visible. Without an arbiter, switching apps means killing
+   one. Task-46 work.
+3. **InputFlinger focus** — the existing "request_focus every
+   ~1s" hack from task 33 fights with the launcher; it would
+   need to coordinate across N children too. Task-46 work.
+4. **Zygote single-thread accept** — N concurrent LAUNCH_GUI
+   commands serialize through one socket. Negligible at the
+   1-Hz scale of app launches; would matter only if we were
+   spawning hundreds per second.
+5. **GPU memory** — each app's Skia GPU surface holds ~5-20 MB
+   of GPU memory. ~50 apps before GPU OOM on the Pixel 2 XL.
+   Per-app cap (task 46) needed for production.
+
+### What production needs that the MVP skipped
+
+In rough priority order:
+
+1. **wart-arbiter** — a separate process (or zygote-internal
+   thread) that owns the policy decisions: which app gets the
+   foreground SF z-order, who gets InputFlinger focus, what
+   happens on SIGCHLD, OOM kill priorities, app reuse (USAP
+   pool). Task 46 scope.
+2. **SIGCHLD reap loop** in the zygote — drain zombies,
+   propagate exit status to clients (current protocol fire-and-
+   forgets), log abnormal exits.
+3. **Component preload registry** — the `--zygote-preload`
+   path. Without this we're paying full deserialization cost
+   on every fork. Each component ~50 MB raw mmap'd; reading
+   it cold per child is the biggest single fork-time latency
+   item.
+4. **Shutdown protocol** — `KILL <app-id>` or `STOP <pid>`
+   command. Currently external-kill-only.
+5. **init.rc + sepolicy** — `/dev/socket/wart-zygote` UNIX
+   socket, `wart_zygote` SELinux domain, ProcessControl group.
+   Production-only; dev path stays at `/data/local/tmp`.
+6. **scripts/build-system-warpkgs.sh** — automate the one-shot
+   packaging step 4 did by hand. Three system bundles
+   (markdown / emoji / fonts) + wart-app itself.
+
+## Recommended task 46 scope (next milestone)
+
+Spinning out the production work into a sequel task. Rough
+estimate: 1-2 weeks for the MVP arbiter; longer for the full
+production polish.
+
+Suggested name: **task 46 — wart-arbiter MVP (Hybrid runtime
+production prep)**.
+
+5-step plan:
+
+1. **SIGCHLD reaper in zygote** (~0.5 day). Drain zombies via
+   a self-pipe + non-blocking `waitpid(WNOHANG)`. Log exit
+   status. No protocol change.
+2. **Shutdown command** (~0.5 day). Add `KILL <pid>` to the
+   zygote socket. Returns `OK` or `ERR not-our-child`.
+3. **Component preload registry** (~2 days). Extend the
+   zygote's startup args to take `--zygote-preload <app-id>`
+   (potentially multiple). Hold `Component`s in a OnceLock
+   keyed by app-id. Children consult the registry; cache miss
+   → child does its own `Component::deserialize_file` (graceful
+   degrade). Re-measure COW savings; target ≥20 MB per child.
+4. **wart-arbiter as a separate process** (~3-5 days). Owns
+   policy: foreground/background, z-order, input focus, OOM
+   priority. Talks to zygote via the existing socket plus a
+   new arbiter↔zygote channel for "spawn for me with these
+   capabilities."
+5. **Production deployment polish** (~1 week). init.rc
+   integration, sepolicy domain, build-system-warpkgs.sh,
+   ProcessControl group for OOM tuning.
+
+Step 3 is the highest-leverage; it's where the spike's "COW
+math doesn't quite add up" finding gets resolved into real
+savings. Step 4 is where the architectural model becomes
+testable end-to-end.
+
 ## Known unknowns
 
 - **fork() + the rsbinder OnceLock**: if any binder service was

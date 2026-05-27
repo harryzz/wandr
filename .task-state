@@ -1,6 +1,5 @@
 TASK=45
-STEP=step-4-complete
+STEP=spike-complete
 STATUS=complete
-LAS_SUCCESS=Task 45 step 4 verified OK 2026-05-27. Two concurrent app slots (com.example.wart-app installed + dev cwasm) rendering 60fps each via the same zygote parent. Shared_Clean scales with #procs (~25MB per child); Shared_Dirty stable at ~5.6MB per child (zygote-specific COW). Per-app footprint ~180MB (wasm linear memory dominates).
-LAST_SUCCESS=Task 45 step 4 verified OK 2026-05-27. Two concurrent app slots rendering 60fps via the same zygote.
-NOTES=Step 5 (spike close-out) next: update CLAUDE.md status row, write "what we learned" summary, recommend task-46 scope. Then the spike is shippable as a milestone.
+LAST_SUCCESS=Task 45 wart-zygote MVP spike COMPLETE 2026-05-27. All 5 steps device-verified on Pixel 2 XL: fork+headless cwasm (step 1), EGL re-init + render loop (step 2 — Adreno EGL fork-survives), COW measurement (step 3 — 5.6 MB/child), two distinct apps concurrent (step 4 — 60fps each), close-out + task-46 recommendation (step 5). All D1-D7 design decisions held empirically. Hybrid §9 architecture validated; production work (preload registry, wart-arbiter, init.rc/sepolicy) spun out to recommended task 46.
+NOTES=Spike shippable as milestone. Resume direction: task 46 (production polish) or pivot back to other open tasks. Memory updated: feedback_wart_zygote_fork_survival + project_app_lifecycle_and_packaging empirical update.
