@@ -873,6 +873,32 @@ interface ime {
     notify-editor-detached: func();
 }
 
+/// Task 47 step 3b — IME-side outbound. The mirror of `ime` for the
+/// other half of the IME protocol: where `ime` is used by EDITOR-
+/// bearing guests to report focus changes, `keyboard` is used by
+/// IME guests (e.g. `war.ime.keyboard`) to push keystrokes back to
+/// the focused editor. The wart-host impl forwards each call to
+/// the arbiter's `ime-send-key-event` socket cmd; the arbiter
+/// routes via the focused-pid's per-host socket (task 47 step 3a).
+///
+/// Step 3b ships `send-key-event` only (mirrors the
+/// virtual-hardware-keyboard MVP path proven in 3a). The richer
+/// `commit-text` / `set-composing-text` / `finish-composing-text` /
+/// `set-selection` verbs land later when editor-side WIT exports
+/// + Compose-side handling for them are in place.
+interface keyboard {
+    /// Push a synthetic key event to the focused editor via the
+    /// arbiter. `code-point` is the Unicode char if printable (0
+    /// for non-printable / meta keys). `key-id` is an
+    /// AKEYCODE_*-equivalent (e.g. 29 = AKEYCODE_A, 67 = backspace,
+    /// 66 = enter). `action` is 0 = down, 1 = up.
+    ///
+    /// Fire-and-forget — the arbiter delivers asynchronously to
+    /// the per-host control socket; this call returns as soon as
+    /// the arbiter has acknowledged the socket write.
+    send-key-event: func(code-point: u32, key-id: u32, action: u8);
+}
+
 world skiko-ui {
     import canvas;
     import paragraph;
@@ -892,5 +918,6 @@ world skiko-ui {
     import assets;
     import theme;
     import ime;
+    import keyboard;
     export renderer;
 }
