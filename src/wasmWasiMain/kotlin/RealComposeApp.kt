@@ -246,6 +246,21 @@ private fun MaterialDemoApp() {
                         CounterCard()
                         CheckboxRadioCard()
                         TextFieldCard()
+                        // Task 49 step 2 — Number/Phone fields drive
+                        // the IME's editor-type-override path. Tap to
+                        // focus; war.ime.keyboard switches to
+                        // Numeric/Phone layout via the host's
+                        // on-editor-attached call.
+                        TextFieldCard(
+                            label        = "BasicTextField (Number)",
+                            initialText  = "12345",
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
+                        )
+                        TextFieldCard(
+                            label        = "BasicTextField (Phone)",
+                            initialText  = "+1 555 0100",
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Phone,
+                        )
                         DropdownCard()
                         ProgressIndicatorsCard()
                         ListCard()
@@ -618,8 +633,13 @@ private fun ButtonRow() {
 // — may dodge the legacy `defaultTextFieldPointer` synchronous-onTap
 // freeze.
 @Composable
-private fun TextFieldCard() {
-    val state = androidx.compose.foundation.text.input.rememberTextFieldState("hello world")
+private fun TextFieldCard(
+    label: String = "BasicTextField (TextFieldState API)",
+    initialText: String = "hello world",
+    keyboardType: androidx.compose.ui.text.input.KeyboardType =
+        androidx.compose.ui.text.input.KeyboardType.Text,
+) {
+    val state = androidx.compose.foundation.text.input.rememberTextFieldState(initialText)
     // Auto-show / -hide the in-canvas keyboard on focus change. Defaults
     // to null in compose-jb-skiko's CompositionLocal; we override this
     // with `WasiKeyboardController` in `MaterialDemoApp`.
@@ -642,7 +662,7 @@ private fun TextFieldCard() {
     }
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
-            Text("BasicTextField (TextFieldState API)", fontSize = 16.sp)
+            Text(label, fontSize = 16.sp)
             Spacer(modifier = Modifier.height(8.dp))
             Box(
                 modifier = Modifier
@@ -658,12 +678,27 @@ private fun TextFieldCard() {
                     modifier = Modifier
                         .fillMaxWidth()
                         .onFocusChanged { fs ->
-                            if (fs.isFocused) keyboardController?.show()
-                            else              keyboardController?.hide()
+                            if (fs.isFocused) {
+                                // Task 49 step 2 — MVP hack per D7. Compose's
+                                // SoftwareKeyboardController.show() has no
+                                // args; thread the field's keyboardType
+                                // through a writable field on the
+                                // controller BEFORE calling show(). The
+                                // controller reads it and passes to
+                                // notifyEditorAttached(inputType=…).
+                                (keyboardController as? testapp.WasiKeyboardController)
+                                    ?.pendingKeyboardType = keyboardType
+                                keyboardController?.show()
+                            } else {
+                                keyboardController?.hide()
+                            }
                         },
                     textStyle = androidx.compose.ui.text.TextStyle(
                         fontSize = 16.sp,
                         color = MaterialTheme.colorScheme.onSurface,
+                    ),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = keyboardType,
                     ),
                     // Default cursor brush is SolidColor(Color.Black) which
                     // is invisible against the dark Material theme background.

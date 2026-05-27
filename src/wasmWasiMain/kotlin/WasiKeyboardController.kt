@@ -5,6 +5,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.SoftwareKeyboardController
+import androidx.compose.ui.text.input.KeyboardType
 
 /**
  * In-canvas Compose keyboard visibility controller for wasi.
@@ -31,22 +32,29 @@ class WasiKeyboardController : SoftwareKeyboardController {
     /** Drive your `if (controller.isVisible.value) WasiSoftKeyboard(...)`. */
     val isVisible: MutableState<Boolean> = mutableStateOf(false)
 
+    /**
+     * Task 49 step 2 — the focused field's `KeyboardOptions.keyboardType`.
+     * `SoftwareKeyboardController.show()` has no args, so we can't
+     * read the keyboardType inside `show()` from Compose's standard
+     * path. TextFieldCard writes here in `.onFocusChanged` BEFORE
+     * calling `controller.show()`; `show()` reads + threads it
+     * through to the WIT `notify-editor-attached` call. Defaults to
+     * Text so the external IME shows English QWERTY if no field
+     * explicitly sets it.
+     */
+    var pendingKeyboardType: KeyboardType = KeyboardType.Text
+
     override fun show() {
         isVisible.value = true
-        // Task 47 step 2 — also notify the arbiter via the new
-        // `my:skiko-gfx/ime` WIT verb. The arbiter routes
-        // `on-editor-attached` to the currently-active IME app.
-        //
-        // We co-exist with the in-canvas keyboard (it still renders
-        // based on `isVisible.value`); the WIT call is a separate
-        // outbound signal that lights up the protocol path without
-        // changing user-visible behavior. The "no UI swap yet"
-        // promise in the scope doc is honored — step 4 swaps the
-        // in-canvas surface for the real external IME.
+        // Task 47 step 2 + task 49 step 2 — notify the arbiter via the
+        // `my:skiko-gfx/ime` WIT verb so the external IME can pick a
+        // matching layout (Numeric for KeyboardType.Number, etc.).
+        // The arbiter routes `editor-attached <type>` to the
+        // currently-active IME app's per-host control socket; the
+        // IME calls into our exported `war:ime/ime.on-editor-attached`.
         try {
             org.jetbrains.skiko.wasi.wit.Ime.Import.notifyEditorAttached(
-                inputType = "text",   // future: thread BasicTextField's
-                                       //         KeyboardOptions.keyboardType through
+                inputType = keyboardTypeToWire(pendingKeyboardType),
                 hint = "",
                 initialText = "",
                 selectionStart = 0u,
@@ -66,6 +74,25 @@ class WasiKeyboardController : SoftwareKeyboardController {
         } catch (t: Throwable) {
             // Same defensive pattern as show().
         }
+    }
+
+    /**
+     * Map Compose's `KeyboardType` to the `war:ime/input-type` enum
+     * tag strings that `my:skiko-gfx/ime.notify-editor-attached`
+     * accepts. The wire uses stringly-typed values (see
+     * skiko-gfx.wit) to avoid a cross-package WIT import; the host
+     * matches on the string and converts to the typed enum before
+     * calling the IME guest.
+     */
+    private fun keyboardTypeToWire(kt: KeyboardType): String = when (kt) {
+        KeyboardType.Number,
+        KeyboardType.Decimal,
+        KeyboardType.NumberPassword -> "number"
+        KeyboardType.Phone          -> "phone"
+        KeyboardType.Email          -> "email"
+        KeyboardType.Uri            -> "url"
+        KeyboardType.Password       -> "password"
+        else                        -> "text"
     }
 }
 
