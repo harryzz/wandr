@@ -548,6 +548,18 @@ foreground between them via `wart-arbiter switch <app-id>`,
 shows visual swap on screen + lifecycle Paused/Resumed events
 in logcat, with InputFlinger focus following the foreground.
 
+#### Step 4 — DEFERRED behind step 5 (decision 2026-05-27)
+
+Step 4's real-z-order goal requires shim entry points
+(`SurfaceControl::setLayer` at runtime) that the current
+`libsf_surface.so` doesn't expose. Building the new shim
+needs the AOSP a-03 build host
+([[project-boot-model-libgui-build]]) which isn't available
+here. Rather than ship "step 4 minus visual z-order" (lifecycle
++ OOM only — half the user-visible value), this step pauses
+behind step 5's source-side prep work and resumes once the new
+`.so` is on-device.
+
 ### Step 5 — Production deployment polish (~1 week)
 
 The "make it real on the device" step. Some of this is
@@ -580,6 +592,85 @@ Success criterion: full launch+switch flow works from
 `scripts/run-hybrid-stack.sh` on the regular dev machine; the
 init.rc / sepolicy work blocks-on-host stays as a known
 deferred task.
+
+#### Step 5 partial — source-side ready (2026-05-27)
+
+Per the decision to land step 5 first (since step 4 needs shim
+entry points), this commit ships everything in step 5 that's
+buildable from a regular dev machine. The AOSP-a-03-host parts
+(init.rc, sepolicy, shim `.so` rebuild) remain as TODOs.
+
+**What landed (source-side, ready for rebuild + deploy):**
+
+- **`cpp/sf_surface.{cpp,h}` — two new entry points**:
+  ```c
+  int32_t sf_set_layer(int32_t z);     // Transaction::setLayer
+  int32_t sf_set_visible(int32_t visible); // Transaction::show/hide
+  ```
+  Both wrap `SurfaceComposerClient::Transaction` calls on
+  `g_control`, apply async, return 0 on success / -1 if the
+  surface is down. Hidden+shown layers keep their last BBQ
+  frame — cheaper than re-creating the surface for
+  background → foreground.
+
+- **`src/sf_surface.rs` — Rust bindings**:
+  - Two new `dlsym`-loaded function pointers stored in
+    `SfSurface` as `Option<SetLayerFn>` / `Option<SetVisibleFn>`.
+    `Option` because the field is `None` until the .so is
+    rebuilt on the a-03 host (graceful degrade: arbiter then
+    falls back to lifecycle + OOM with no visual z-order).
+  - Public methods `SfSurface::set_layer(z: i32) -> bool` and
+    `SfSurface::set_visible(visible: bool) -> bool` that return
+    `false` when the shim is too old.
+
+  Build verified clean on aarch64-android. Dead-code warnings
+  on `set_layer`/`set_visible` are expected — step 4 will
+  consume them.
+
+- **`scripts/build-system-warpkgs.sh` (new)** — automates the
+  task-45-step-4 manual packaging:
+  ```
+  $ scripts/build-system-warpkgs.sh
+  ```
+  Builds `markdown-renderer`, `emoji-picker`, `system-fonts`
+  for wasm32-wasip2; packages each as a `.warpkg`; packages
+  wart-app from `/tmp/skiko-component.wasm` (Kotlin pipeline
+  expected to have produced this); pushes all four; installs
+  via `wart-host --install` under `$APPS_ROOT`
+  (default `/data/local/tmp/wart-apps`).
+  Override `APPS_ROOT=/data/wart` for production layout.
+
+- **`scripts/run-hybrid-stack.sh`** — shipped in step 3, so
+  this step 5 item is already done.
+
+**What's still TODO (blocks-on-a-03-host):**
+
+- Rebuild `libsf_surface.so` against the AOSP a-03 tree so
+  the new `sf_set_layer` / `sf_set_visible` symbols are
+  actually present at dlsym time. Push to
+  `/data/local/tmp/libsf_surface.so`. Verify with
+  `nm -D libsf_surface.so | grep sf_set_`.
+- `init.rc` service definitions for `wart_zygote` +
+  `wart_arbiter` under `/system/etc/init/`.
+- SELinux policy: domains `wart_zygote` + `wart_arbiter`,
+  rules for `/data/wart/apps/...` read,
+  `/proc/<pid>/oom_score_adj` write, socket bind/accept,
+  fork/exec.
+- Crash-marker plumbing for the arbiter (carry over from
+  task 33 step 5 — currently arbiter is rebuilt-from-scratch
+  every restart with empty state; production wants
+  arbiter-side persistence of last-known-running apps for
+  crash-detection logging).
+
+When you next have the AOSP a-03 build host:
+
+1. Build `libsf_surface.so` from `wart-host/cpp/sf_surface.{cpp,bp}`
+   (the `.bp` is unchanged; just rebuild against the new `.cpp`).
+2. `adb push libsf_surface.so /data/local/tmp/libsf_surface.so`.
+3. Verify symbols: `adb shell 'nm -D /data/local/tmp/libsf_surface.so | grep sf_set_'`.
+4. Step 4 unblocks. Land the arbiter policy: signal-driven
+   role flips, `set_layer`/`set_visible` from the child render
+   loop, OOM priority writes from the arbiter, focus throttle.
 
 ## Known unknowns
 
