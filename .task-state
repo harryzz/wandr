@@ -1,5 +1,5 @@
-TASK=45
-STEP=spike-complete
-STATUS=complete
-LAST_SUCCESS=Task 45 wart-zygote MVP spike COMPLETE 2026-05-27. All 5 steps device-verified on Pixel 2 XL: fork+headless cwasm (step 1), EGL re-init + render loop (step 2 — Adreno EGL fork-survives), COW measurement (step 3 — 5.6 MB/child), two distinct apps concurrent (step 4 — 60fps each), close-out + task-46 recommendation (step 5). All D1-D7 design decisions held empirically. Hybrid §9 architecture validated; production work (preload registry, wart-arbiter, init.rc/sepolicy) spun out to recommended task 46.
-NOTES=Spike shippable as milestone. Resume direction: task 46 (production polish) or pivot back to other open tasks. Memory updated: feedback_wart_zygote_fork_survival + project_app_lifecycle_and_packaging empirical update.
+TASK=46
+STEP=scope-review
+STATUS=in-progress
+LAST_SUCCESS=Task 45 wart-zygote MVP spike complete 2026-05-27 (commit 6a13f839). Hybrid §9 technical path validated end-to-end on device.
+NOTES=Task 46 scope drafted at tasks/46-wart-arbiter-mvp.md. D1 LOCKED (two binaries: wart-host + wart-arbiter — fork+COW requires same-binary parent+child, arbiter is the natural sibling). 5 steps: SIGCHLD reap+KILL, Component preload registry (highest-leverage), wart-arbiter skeleton, arbiter policy (foreground/focus/OOM), production polish (init.rc/sepolicy gated on a-03 host). D2/D3/D4/D5 proposed not locked — await user pass.
