@@ -2693,9 +2693,9 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "rsbinder"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1dbb5b4d5c88d649d88657e22a5e36ee16bb37cff8983c1b132d267d855f33e"
+checksum = "0b0207f72798efb685a6ece16a5371a50b6c8d3d28910b5bd7822390d482cb71"
 dependencies = [
  "async-trait",
  "downcast-rs 2.0.2",
@@ -2709,9 +2709,9 @@ dependencies = [
 
 [[package]]
 name = "rsbinder-aidl"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c0d587834865d07141ae786448f9ee4ce195e6b798bc3336a0c572b924aaa35"
+checksum = "29e825dc38822f987756db83895ea43533846c0a027553bf81f61573fd479318"
 dependencies = [
  "convert_case",
  "miette",
