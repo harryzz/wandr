@@ -1,5 +1,5 @@
 TASK=47
-STEP=step-3a-complete
+STEP=step-3b-complete
 STATUS=complete
-LAST_SUCCESS=Task 47 step 3a verified OK 2026-05-27. Inbound IME delivery shipped: per-host /data/local/tmp/wart-host-<pid>.sock with accept thread + queue + render-loop drain; arbiter's ime-send-key-event delivers via the focused-pid's socket; shell-injected 'a'/'b'/'c' appeared in wart-app's BasicTextField tfstate. Architecture decision: send-key-event (virtual hardware keyboard) is the MVP delivery path; commit-text/composing-text need new WIT exports (step 3b).
-NOTES=Step 3b: war.ime.keyboard Compose warpkg. Calls Ime.Import.sendKeyEvent (need new WIT verb on the IME side too) → arbiter routes back to focused pid via the now-proven inbound path. Plus a single button is enough for end-to-end IME-roundtrip smoke.
+LAST_SUCCESS=Task 47 step 3b verified OK 2026-05-27. New my:skiko-gfx/keyboard WIT verb (IME-side outbound send-key-event). wart-host keyboard_host_impl forwards to arbiter. Skiko hand-added Keyboard bindings. New war.ime.keyboard sibling repo: minimal Compose Kotlin app, 13 keys × 3 bottom-anchored rows, taps fire WitKeyboard.Import.sendKeyEvent. Full two-process round-trip verified: IME tap → arbiter → focused-pid per-host socket → wart-app tfstate updates. tfstate=hello worldabcd lowa proves multi-key accumulation across the loop.
+NOTES=Step 3c deferred items: commit-text/composing primitives need new editor-side WIT exports; multi-surface visibility needs shim change to lift eLayerOpaque + arbiter "visible-but-not-foreground" state; full QWERTY layout; IME's editor-attached/detached subscription.

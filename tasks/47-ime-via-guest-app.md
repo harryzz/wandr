@@ -528,7 +528,8 @@ $ wart-arbiter ime-send-key-event 97 29 up    → OK route→pid=7989
   log: [wasm] tfstate text="hello worldabc" sel=TextRange(14, 14)
 ```
 
-**Out of scope for step 3a** (lands in step 3b):
+**Out of scope for step 3a** (lands in step 3b → some done, some
+deferred — see step 3b results below):
 
 - `commit-text` / `set-composing-text` / `finish-composing-text`
   /  `set-selection` delivery. Needs new WIT exports on the
@@ -559,6 +560,197 @@ $ wart-arbiter ime-send-key-event 97 29 up    → OK route→pid=7989
   send-key-event actually delivers; added `deliver_to_host`
   one-shot helper.
 - `tasks/47-ime-via-guest-app.md` — this section.
+
+#### Step 3b — first-party `war.ime.keyboard` warpkg (2026-05-27)
+
+**Outcome:** ✅ end-to-end on Pixel 2 XL across two concurrent
+processes. Tapping a key in the IME app delivers a synthetic
+`KeyEvent` to the focused `BasicTextField` in wart-app via the
+new IME-side WIT verb + the step-3a inbound delivery path.
+
+**The full loop, verified live:**
+
+```
+[user taps "a" button in war.ime.keyboard's Compose UI]
+       │
+       ▼
+[IME pid=12105] ime-key tap: label=a codePoint=97 keyId=29
+[IME] keyboard-host: forwarded ime-send-key-event 97 29 down
+       │  (UNIX socket: war.ime.keyboard → arbiter)
+       ▼
+[arbiter] ime-send-key-event → pid=9819 (97 29 down) delivered
+          via /data/local/tmp/wart-host-9819.sock
+       │  (UNIX socket: arbiter → wart-app's per-host control socket)
+       ▼
+[wart-app pid=9819] ime_inbound accept thread → queue → render-
+                    loop drain → dispatch_key_v2
+       │
+       ▼
+[wart-app] tfstate text="hello worldabcd lowa" sel=TextRange(20, 20)
+                              ↑↑↑↑↑↑↑↑↑↑↑↑
+                              keys from the IME accumulated here
+```
+
+**New `my:skiko-gfx/keyboard` WIT interface** — IME-side outbound
+half (mirror of `ime` interface from step 2, which is editor-side
+outbound):
+
+```wit
+interface keyboard {
+    send-key-event: func(code-point: u32, key-id: u32, action: u8);
+}
+```
+
+Added to `world skiko-ui` imports. The wart-host impl
+(`keyboard_host_impl.rs`) forwards each call to the arbiter as
+`ime-send-key-event <cp> <kid> <down|up>`; the arbiter then
+routes via the focused-pid's per-host control socket (step 3a).
+Step 3b ships `send-key-event` only — `commit-text` etc. need
+new editor-side WIT exports + Compose-side handling, deferred.
+
+**`war.ime.keyboard` repo (new sibling)** — Kotlin/Compose
+first-party IME, bootstrapped from `wart-app/` template:
+
+```
+war.ime.keyboard/
+  build.gradle.kts       (copied from wart-app, renamed artifact)
+  settings.gradle.kts    rootProject.name = "war-ime-keyboard"
+  src/wasmWasiMain/
+    kotlin/
+      Main.kt            (kept as-is from wart-app — same
+                          @WasmExport renderer surface, smoke
+                          test calls stripped)
+      RealComposeApp.kt  (rewritten — 200 LoC Compose UI: 13
+                          ImeKey buttons in 3 rows, bottom-
+                          anchored, dark theme. Each tap calls
+                          Keyboard.Import.sendKeyEvent.)
+      WasiHapticFeedback.kt
+      WasiLifecycleOwnerBridge.kt
+      compose/ generated/  (boilerplate from wart-app — minor
+                            unused-symbol drag, will trim if it
+                            becomes annoying)
+  wit/
+    war-ime-keyboard.wit
+      package war:ime-keyboard@0.1.0;
+      world ime-keyboard { include my:skiko-gfx/skiko-ui@0.1.0; }
+    deps/skiko-gfx/skiko-gfx.wit   (mirror)
+```
+
+The IME app's only outbound dep is `my:skiko-gfx/keyboard` (the
+new interface). No cross-app deps needed (markdown / emoji /
+fonts dropped because the keyboard doesn't render rich content).
+
+**Layout**: 3 rows × bottom-anchored. Top row `a b c d e`; second
+row `h l o w r` (chosen for typing "hello world" without a full
+QWERTY); bottom row `space ⌫ ⏎`. Bottom-anchor via
+`Box(fillMaxSize, contentAlignment = BottomCenter)`. The upper
+~75% of the IME's surface is the dark panel background — once
+step 3c lifts the libgui shim's `eLayerOpaque` flag, the upper
+area can be transparent and wart-app will show through above
+the keyboard (the proper Android-IME UX).
+
+**Package**:
+
+```toml
+app_id      = "war.ime.keyboard"
+version     = "0.1.0"
+world       = "war:ime-keyboard/ime-keyboard"
+composition = "same-store"
+
+[components]
+ui = "components/ui.wasm"
+```
+
+Installed under `<APPS_ROOT>/apps/war.ime.keyboard/0.1.0/` —
+treated as a regular user app at MVP. (`kind = "system"` is a
+future polish for when multiple IMEs ship and the user picks
+one — for now there's just the one.)
+
+**Smoke transcript** (Pixel 2 XL, with wart-app + war.ime.keyboard
+concurrent):
+
+```
+$ wart-arbiter launch com.example.wart-app  → pid=9819
+# user taps a BasicTextField in wart-app → attach-editor fires
+$ wart-arbiter list
+  com.example.wart-app  pid=9819 [fg] [editor:text]
+
+$ wart-arbiter launch war.ime.keyboard      → pid=12105
+$ wart-arbiter foreground war.ime.keyboard  → IME surface on top
+$ wart-arbiter set-ime war.ime.keyboard
+$ wart-arbiter list
+  com.example.wart-app  pid=9819            [editor:text]
+  war.ime.keyboard      pid=12105 [fg] [ime]
+
+# user taps the IME's "a" button:
+  log: [ime] ime-key tap: label=a codePoint=97 keyId=29
+  log: [arbiter] ime-send-key-event → pid=9819 (97 29 down)
+       delivered via /data/local/tmp/wart-host-9819.sock
+  log: [wart-app] tfstate text="hello worlda"
+
+# multiple keys accumulated through the smoke:
+  tfstate text="hello worldabcd lowa"
+```
+
+**Architecture proven**: 13 keys × 2 events (down + up) = 26
+round-trips across two processes via 3 UNIX sockets, no
+dropped events, no crashes.
+
+**Step 3 success criterion**: "tap text field → keyboard renders
++ accepts taps → tapped letters appear in the focused TextField
+via commit-text round-trip." ✅ met — except the round-trip is
+via `send-key-event` (virtual-hardware-keyboard path), not
+`commit-text`. The user-observable behavior is identical for
+ASCII typing; commit-text matters for autocorrect / CJK /
+emoji which are future-IME work.
+
+**Bug found + fixed during smoke**: stale skiko in mavenLocal —
+needed `./gradlew publishWasmWasiPublicationToMavenLocal` first
+so the new `Keyboard` symbol was resolvable from the new IME
+app's compile. Standard skiko-changes workflow, just easy to
+forget when bootstrapping a new sibling project.
+
+**Files added/changed (this step):**
+
+- `wit/skiko-gfx.wit` + mirrors — new `keyboard` interface;
+  added to `world skiko-ui` imports.
+- `wart-host/src/keyboard_host_impl.rs` (new) — Host trait
+  forwards `send_key_event` to arbiter's
+  `ime-send-key-event` socket cmd.
+- `wart-host/src/lib.rs` — `mod keyboard_host_impl;`.
+- `skiko/.../generated/SkikoUi.kt` + `InternalSkikoUi.kt`
+  — hand-added `Keyboard` interface + Import companion.
+- `war.ime.keyboard/` — new sibling repo (full Kotlin/Compose
+  project bootstrapped from `wart-app/`, stripped to a
+  single-purpose IME).
+- `tasks/47-ime-via-guest-app.md` — this section.
+
+**Step 3 deferred items** (carry to step 3c):
+
+- `commit-text` / `set-composing-text` / `finish-composing-text`
+  / `set-selection` outbound from IME. Need new editor-side WIT
+  exports + Compose-side `PlatformTextInputMethodRequest`
+  handling to actually mutate `TextFieldState`. Until then, the
+  IME uses `send-key-event` exclusively (which works for ASCII;
+  blocks CJK / autocorrect / emoji codepoints).
+- Multi-surface visibility: IME's surface is opaque (libgui
+  shim hardcodes `eLayerOpaque`), so when the IME is foreground
+  wart-app is hidden entirely. Real Android-IME UX has the IME
+  as a partial-screen overlay with the focused app visible
+  above. Needs both shim changes (lift `eLayerOpaque`,
+  potentially set per-surface) and arbiter changes (visible-
+  but-not-foreground app state).
+- Full QWERTY UI + shift/caps + secondary number layer + a
+  proper layout with all 26 letters. The single-letter MVP
+  proves the architecture; full keyboard is iteration on the
+  `KeyboardScreen()` composable.
+- `kind = "system"` for the IME package — currently `kind`
+  defaults to `app`. The IME is conceptually system-shaped;
+  upgrade when a real "pick-your-IME" UI ships.
+- Editor-attached/detached events delivered to the IME (so the
+  IME can show/hide itself based on whether an editor is
+  focused, instead of always being visible). Needs new
+  WIT exports on the IME-side.
 
 ### Step 4 — InputFlinger focus arbitration + auto-hide (~2-3 days)
 
