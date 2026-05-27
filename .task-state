@@ -1,5 +1,5 @@
-TASK=40
-STEP=session-6-wall-documented
-STATUS=paused
-LAST_SUCCESS=Task 40 binder protocol complete (sessions 2-5). Session 6 wall-documented; rsbinder 0.7.0 → 0.8.0 maintenance upgrade done 2026-05-27, all four IME probes pass identically. Ready for future Path A (vendor IWindowManager) with the better-hardened rsbinder.
-NOTES=0.8.0 brings real bug fixes (FD UB, deadlock, UAF, obituary correctness) that matter more with the larger WMS AIDL surface that Path A would entail. Breaking-change cost was 3 lines in binder.rs (ProcessState::init_default → Result). Nested-class parcelable / Status::code private / no IBinder fabrication API — all still pain points, no fix from 0.8.0. Task still paused per session 6 recommendation; the in-canvas Compose keyboard works for current user needs.
+TASK=44
+STEP=verify-done
+STATUS=complete
+LAST_SUCCESS=Task 44 session 7 verified OK — wart-host --probe-wms-opensession round-trips through WMS. openSession rejected with IllegalStateException: Unknown pid=N uid=0 (WMS's mPidMap doesn't track our non-ATMS-registered process). Transport ✅, parcels ✅; structured rejection identifies the next gate for session 8.
+NOTES=

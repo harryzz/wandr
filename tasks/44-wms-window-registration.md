@@ -157,6 +157,83 @@ Success criterion: a real `IWindowSession` binder arrives back from
 WMS. (Even if we have no permission for `addToDisplay`, openSession
 typically doesn't gate.)
 
+#### Session 7 results (2026-05-27)
+
+**Outcome:** 🟡 transport ✅, structured rejection ❌ on calling-pid
+gate. This is the "clean structured rejection" success path
+documented in the plan — proves the binder pipeline works end-to-end.
+
+**Probe output** (logcat, condensed):
+
+```
+I wms: calling openSession(callback=Bn) — watching for transport vs. permission/identity rejection
+E WindowManager: Window Manager Crash java.lang.IllegalStateException: Unknown pid=5553 uid=0
+W wms: openSession rejected — exception=TransactionFailed code=BadValue. Not UnexpectedNull
+I wms: exit
+```
+
+**What worked:**
+
+- AIDL stubbing applied cleanly. IWindowManager (154 methods,
+  source order verified — `openSession` is at pos 3 not pos 0 as
+  some scoping notes suggested), IWindowSession (42 methods),
+  IWindow (16 methods) all slot-stubbed via the build.rs
+  self-healing pattern. IWindowSessionCallback (1 method) used
+  as-is.
+- Build clean (1m 36s aarch64-android release; one minor
+  `descriptor()` ambiguity in wms_impl.rs surfaced + fixed —
+  too many candidate traits in scope, dropped the call since
+  the `Ok` return is itself the milestone).
+- rsbinder transport to `system_server`'s `window` service
+  works. WMS deserialized our `IWindowSessionCallback` Bn binder
+  and processed it far enough to run its calling-process
+  validation.
+- The `IllegalStateException: Unknown pid=5553 uid=0` is thrown
+  from `WindowManagerService` (tag `WindowManager`, "Window
+  Manager Crash" — alarming name, but a routine framework-level
+  defensive throw, not a real crash). It means WMS doesn't have
+  a tracked entry for our pid in its `mPidMap`. ActivityManager
+  registers pids in WMS via the `IApplicationThread` interface
+  during normal app startup; we never went through ATMS.
+
+**What this unblocks for session 8:**
+
+The IllegalStateException is fatal for the openSession call but
+informative — it pinpoints the next gate. Session 8 must either
+(a) register our process with ATMS first (probably via
+`ActivityManagerService.attachApplication` or similar), or
+(b) bypass via a privileged window type / system_server caller
+identity workaround, or (c) accept openSession failure and
+investigate whether a different WMS entry point lets non-Activity
+processes register (e.g. a directly-callable `addWindowToken` with
+the right window type).
+
+Recommendation for session 8: try (a) first — find the smallest
+ATMS call that registers our pid as a known process, then re-try
+openSession. If ATMS gates on its own (likely needs at least a
+package identity), pivot to (b)/(c). Track the gate that breaks
+next.
+
+**Files touched** (commit-ready):
+
+- `wart-host/build.rs` — added WMS AIDL stub block (~170 lines:
+  three programmatic-stub generators for IWindowManager/
+  IWindowSession/IWindow) + 4 `.source(...)` calls in the
+  rsbinder-aidl Builder chain. IWindowSessionCallback used
+  as-is (no patch).
+- `wart-host/src/wms_impl.rs` — new (~140 lines). Mirrors
+  `ime_impl.rs::session3` shape. `IWindowSessionCallback` Bn
+  server, tokio runtime, openSession call with
+  UnexpectedNull-as-success branching.
+- `wart-host/src/lib.rs` — `pub mod wms_impl;`.
+- `wart-host/src/main.rs` — `--probe-wms-opensession` CLI flag.
+- `.task-state` → TASK=44 STEP=verify-done STATUS=complete.
+
+**Time spent:** ~1h end-to-end (estimate said 4-6h — the
+self-healing build.rs pattern made vendoring quick because we
+didn't have to wrangle 30 transitive imports; slot-stubbing
+neutralizes them by emitting void no-arg signatures).
+
 ### Session 8 — add Bn IWindow + try addToDisplay with empty LayoutParams (~4-8h)
 
 - Stand up Bn server for `IWindow` (stub-all-methods).
