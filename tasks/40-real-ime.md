@@ -1,6 +1,6 @@
 # Task 40 — real IME via rsbinder → IMMS (multi-session arc)
 
-> **Status:** 🟡 in progress — session 3 (addClient client-registration) done 2026-05-27.
+> **Status:** 🟡 in progress — session 4 (startInputOrWindowGainedFocus) done 2026-05-27.
 > Multi-week, multi-session commitment. Standing decision overturned
 > 2026-05-27 — user explicitly opted for path (B) over the project
 > memory's "default A polish, B on roadmap not next" recommendation
@@ -362,6 +362,104 @@ as a normal app would show its app uid.
   returns `InputBindResult` containing the IME's
   `IInputMethodSession` binder. Sessions 4-5 need to actually drive
   that session to make the soft keyboard appear.
+
+## Session 4 results (2026-05-27)
+
+**Outcome: ✅ device-verified.** `startInputOrWindowGainedFocus(...)`
+landed cleanly at IMMS in both windowToken modes (None and
+fabricated-non-null). IMMS returned a null InputBindResult — the
+documented response for a client that isn't the focused window and
+hasn't passed an EditorInfo.
+
+```
+ime: attempt-A windowToken=None  OK — IMMS returned a null InputBindResult ...
+ime: attempt-B windowToken=Some  OK — IMMS returned a null InputBindResult ...
+```
+
+**Both biggest open unknowns are resolved in our favor:**
+
+1. **WindowToken validation against WMS does NOT block us.** A
+   fabricated IBinder (extracted from a fresh `BnRemoteInputConnection`
+   we never registered with WMS) is accepted by IMMS. Recon was right
+   — IMMS uses the IBinder as an opaque focus key, doesn't cross-check
+   with WindowManagerService.
+2. **The empty `ImeOnBackInvokedDispatcher` parcelable stub serializes
+   acceptably.** The wire bytes (non-null marker + 0 field bytes)
+   match what IMMS's readFromParcel tolerates — the Java side
+   apparently accepts a zero-field unmarshal as a default
+   ImeOnBackInvokedDispatcher.
+
+### Deliverables
+
+1. **Two more stubs** auto-patched into the vendored submodule by
+   `wart-host/build.rs`:
+   - `IRemoteAccessibilityInputConnection.aidl` — 1 placeholder oneway
+     method (we pass null for the corresponding @nullable parameter).
+   - The IMM AIDL `import` list grew to pick up `EditorInfo`,
+     `InputBindResult`, `ImeOnBackInvokedDispatcher` (all already
+     forward-declared `parcelable Foo;` upstream — rsbinder emits
+     zero-field Rust structs for them, which is what we need to serve
+     as opaque arguments).
+2. **Un-stubbed `slot_11_startInputOrWindowGainedFocus`** in the IMM
+   AIDL stub. Full 12-arg signature, transaction code
+   FIRST_CALL_TRANSACTION + 11.
+3. **`probe_startinput()`** in `wart-host/src/ime_impl.rs`:
+   - Calls `addClient` first (session-3 pre-req for `startInputOrWindowGainedFocus`).
+   - Constructs a windowToken carrier (`BnRemoteInputConnection` with a
+     stub server), extracts its IBinder via `as_binder()`. IMMS treats
+     this as the focus key.
+   - Constructs `ImeOnBackInvokedDispatcher::default()` (empty stub).
+   - Runs the call twice — once with windowToken=None, once with
+     windowToken=Some(carrier) — to isolate the windowToken question
+     from the parcel-marshaling question.
+   - Maps rsbinder's `UnexpectedNull` response status to "success —
+     IMMS returned null", since `impl_deserialize_for_parcelable`
+     returns `UnexpectedNull` whenever the wire data carries the
+     null-parcelable flag (which is exactly what IMMS sends for a
+     non-bind response).
+4. **`wart-host --probe-ime-startinput` CLI flag** in `main.rs`.
+
+### What we learned
+
+- **rsbinder's `Status::transaction_error()` only returns the
+  StatusCode for `TransactionFailed` exceptions** — for
+  `NullPointer / UnexpectedNull:` (which is what IMMS's null
+  InputBindResult deserializes to), you have to consume the Status
+  via `Into<StatusCode>` to get the actual code. Documented in our
+  probe with a comment for future sessions.
+- **Empty-struct forward-declared parcelables work as inputs to IMMS**
+  via rsbinder — the non-null marker + 0 field bytes is enough for the
+  Java side's readFromParcel default path.
+- **rsbinder logs a `dumpsys` warning** — `W dumpsys: Thread Pool max
+  thread count is 0. Cannot cache binder as linkToDeath cannot be
+  implemented. serviceName: input_method` — when shelling out to
+  `dumpsys input_method` during a probe. Cosmetic, no impact on our
+  call.
+
+### Open de-risks carried into session 5
+
+- **Actually triggering an IME bind.** Sessions 2-4 prove the
+  binder plumbing works end-to-end, but no IME (Gboard, LatinIME)
+  has appeared on screen yet. To trigger a real bind, we need:
+  (a) a non-null `EditorInfo` describing a text field with proper
+  field type / input type / IME options, AND (b) probably a
+  focused-window state that matches what IMMS expects (it may
+  require us to have called showSoftInput first, or to be the
+  current focused-window client per WMS state — which we are not).
+- **`EditorInfo` parcel layout.** It's a Java parcelable with ~20
+  fields (mInputType, mImeOptions, mPrivateImeOptions, mPackageName,
+  mFieldId, mFieldName, mInitialSelStart, mInitialSelEnd,
+  mInitialCapsMode, mExtras, mHintText, mLabel, mActionLabel, …).
+  Hand-rolling a writeToParcel sequence in Rust is the bulk of
+  session 5's vendoring work.
+- **The `InputBindResult` payload.** When IMMS DOES return a non-null
+  bind result, it contains the IME's `IInputMethodSession` binder and
+  surrounding metadata. Session 5 needs to parse this to actually
+  drive the IME (showSoftInput, sendKeyEvent etc).
+- **`IInputMethodSession` + `IRemoteInputConnection` real methods.**
+  Session 5 also un-stubs the actual editor-side methods that the
+  IME calls back to read/write text (commitText, getTextBeforeCursor,
+  …) — the ~36-method surface deferred from session 3.
 
 ## Related
 
