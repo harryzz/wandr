@@ -253,6 +253,110 @@ fire on this code path.**
 Success criterion: zygote-launched wart-app renders + accepts
 touch identical to direct standalone-launched wart-app.
 
+#### Step 2 results (2026-05-27)
+
+**Outcome:** ✅ keystone unknown resolved — **Adreno EGL survives
+`fork()` cleanly** on Pixel 2 XL. D5 ("don't init EGL in parent")
+held empirically: the parent stays EGL-cold, the child first-inits
+post-fork, no Adreno driver weirdness.
+
+**Refactor** (`src/standalone.rs`): `run(app_id)` now wraps
+`run_with_engine(engine, app_id)`. The zygote child calls
+`standalone::run_with_engine(&PRELOADED_ENGINE, app_id)` instead of
+building its own engine. Direct `--standalone` callers unchanged.
+`run_cwasm_loop` now takes `&Engine` instead of owning it (was
+constructing a `Store::new(&engine, …)` so the only-by-reference
+need was already there).
+
+**Protocol extension**: zygote socket now accepts `LAUNCH_GUI [app-id]`
+in addition to `LAUNCH <app-id>`. Empty arg on `LAUNCH_GUI` falls
+through to the dev cwasm at `/data/local/tmp/skiko-component.cwasm`
+— same behavior as direct `--standalone` with no `--app`. New
+`wart-host --zygote-launch-gui [app-id]` CLI flag. The CLI-vs-GUI
+choice is explicit at the client side at MVP; auto-detection from
+the app's package.toml is a polish step for later.
+
+**Run** (logcat condensed):
+
+```
+I wart-zygote: cmd="LAUNCH_GUI"
+I wart-zygote: forked pid=6507 for app_id=""
+I wart-zygote/client: response="OK 6507"
+I standalone: starting — no NativeActivity
+I sf_surface: input window registered (channel fd 10)
+I sf_surface: surface created: portrait 1440x2880 logical
+I AdrenoGLES-0: Driver Path : /vendor/lib64/egl/libGLESv2_adreno.so
+I EGL 1.5
+I EGL context made current
+I standalone: renderer up — EGL/Skia on the SurfaceFlinger window (1440x2880)
+I standalone: loaded cwasm:/data/local/tmp/skiko-component.cwasm
+I standalone: component instantiated — entering render loop
+I eglSwapBuffers first call
+I standalone: rendered frame 1
+I standalone: rendered frame 2
+I standalone: rendered frame 3
+```
+
+**COW analysis during a live render loop** (parent + child both
+in steady state, child rendering Compose UI):
+
+|                | Parent    | GUI Child |
+|----------------|-----------|-----------|
+| Rss            | 24276 kB  | 181256 kB |
+| Pss            | 17243     | 172770    |
+| Shared_Clean   |  5452     |   6948    |
+| Shared_Dirty   |  5592     |   5664    |
+| Private_Clean  | 12544     |  67964    |
+| Private_Dirty  |   688     | 100680    |
+| Anonymous      |  6052     | 103212    |
+
+What this shows:
+- **`Shared_Dirty=5664 kB` in the child matches the parent's
+  5592 kB.** The wasmtime engine state pre-loaded by the parent
+  stays COW-shared through the entire render lifecycle — neither
+  side dirties those pages.
+- **`Shared_Clean=6948 kB`** is the file-backed code pages
+  (wart-host binary + libc + libskia + libEGL + …) that the child
+  has paged in and the page cache shares with parent.
+- **Child's Private_Dirty (100 MB) is the wasm guest's linear
+  memory + Skia caches + GPU buffer mirrors + SkiaRenderer state.**
+  Expected; per-app working set.
+- **Net savings of ~12 MB per child** (engine state + clean code).
+  Modest at MVP because we don't preload Skia state or per-app
+  Components. Once those land (follow-up beyond step 5), savings
+  scale linearly with the preload set.
+
+**What broke / what we noted:**
+
+- Pre-existing: `pkill -f wart-host` from the host script doesn't
+  reliably reap a render-loop child (its SIGTERM handler in
+  `lifecycle_standalone` flips a flag and lets the loop drain a
+  few frames; pkill returns success but the child runs on briefly
+  reparented to init). Not new in step 2 — was always like this.
+  Workaround: explicit `kill -KILL <pid>` or wait the few seconds
+  for the drain to finish.
+- Child path acquires SF surface + EGL/Skia in each child; on this
+  device that's ~600 ms per launch (50 ms for SF surface, 550 ms
+  for first-frame EGL/Skia warm-up). The headless step 1 path was
+  ~25 ms (no SF/EGL). Future optimization: hand-roll the EGL pool
+  / share Skia compiled shader programs in the zygote parent
+  (Adreno EGL state is per-context so this is non-trivial; deferred).
+- The dev-cwasm fallback (`LAUNCH_GUI` with empty arg) is a smoke
+  shortcut. Production GUI launches go through
+  `LAUNCH_GUI <installed-app-id>` (validated in step 4 with the
+  second concurrent app).
+
+**Files touched (committed in this step):**
+
+- `wart-host/src/standalone.rs` — extracted `run_with_engine`;
+  `run_cwasm_loop` now takes `&Engine`.
+- `wart-host/src/zygote.rs` — `ChildAction` enum (`RunOnce` vs
+  `Gui`); `LAUNCH_GUI [app-id]` command parsing; `launch_client`
+  gains a `gui: bool` arg.
+- `wart-host/src/main.rs` — `--zygote-launch-gui [app-id]` CLI
+  flag.
+- `tasks/45-wart-zygote-spike.md` — this section.
+
 ### Step 3 — COW measurement (1 day)
 
 - `/proc/<pid>/smaps` analysis: walk shared private RSS for the
