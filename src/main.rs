@@ -34,6 +34,14 @@ fn main() {
 //                                                  (isImeTraceEnabled) to
 //                                                  verify rsbinder reaches
 //                                                  the input method service.
+//   `wart-host --probe-ime-addclient`            → task-40 session-3 probe:
+//                                                  stand up Bn-side servers
+//                                                  for IInputMethodClient +
+//                                                  IRemoteInputConnection,
+//                                                  call addClient on IMMS,
+//                                                  log the outcome (accept
+//                                                  vs permission/identity
+//                                                  rejection).
 #[cfg(target_os = "android")]
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -43,6 +51,14 @@ fn main() {
             android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
         );
         wasm_android_host::ime_impl::probe();
+        return;
+    }
+
+    if args.iter().any(|a| a == "--probe-ime-addclient") {
+        android_logger::init_once(
+            android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
+        );
+        wasm_android_host::ime_impl::probe_addclient();
         return;
     }
 

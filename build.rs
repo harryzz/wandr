@@ -132,7 +132,7 @@ interface IDirectReportChannel {}
         // ── AAudio AIDL (task 21) ────────────────────────────────────────
         // IAAudioService + supporting parcelables for PCM playback over the
         // `media.aaudio` binder service. The audio/common types
-        // (AudioFormatDescription, AudioFormatType, PcmType, …) live in a
+        // (AudioFormatDescription, AudioFormatType, PcmType, ...) live in a
         // separate AOSP repo (system/hardware/interfaces) — that vendor is
         // pinned to android-15.0.0_r36 alongside the others.
         let aaudio_av  = PathBuf::from("vendor/aosp-frameworks-av");
@@ -142,38 +142,49 @@ interface IDirectReportChannel {}
             "vendor/aosp-system-hardware-interfaces/media/aidl"
         );
 
-        // ── IInputMethodManager AIDL (task 40 session 2) ─────────────────
+        // ── IInputMethodManager AIDL (task 40 sessions 2-3) ──────────────
         // The IMMS proxy lives at the binder name `input_method`
         // exposing descriptor `com.android.internal.view.IInputMethodManager`
-        // (the AIDL file's `interface` name + `package` line). Session 2
-        // of task 40 only needs ONE method — `isImeTraceEnabled()` — to
-        // prove the rsbinder transport works against the input method
-        // service. We stub all preceding methods as `void slot_N()`
-        // placeholders so that `isImeTraceEnabled` lands at the correct
-        // transaction code (position 26 → FIRST_CALL_TRANSACTION + 25).
-        // No transitive AIDL imports needed.
+        // (the AIDL file's `interface` name + `package` line). The real
+        // interface has 37 methods + 15 transitive AIDL imports
+        // (InputBindResult, EditorInfo, ImeTracker.Token, ResultReceiver,
+        // ...) most of which live in com.android.internal.inputmethod and
+        // need their own parcelable vendoring.
+        //
+        // Methods we use are kept at their real signature so transaction
+        // codes match the IMMS dispatch table; everything else is
+        // replaced with `void slot_NN_<orig-name>()` placeholders to
+        // avoid pulling in transitive types we don't need yet:
+        //
+        //   - addClient (pos 0, session 3) — un-stubbed: needs
+        //     IInputMethodClient + IRemoteInputConnection (also stubbed
+        //     below to minimal interfaces; we serve them as Bn-side
+        //     binder receivers).
+        //   - isImeTraceEnabled (pos 25, session 2) — un-stubbed: read-
+        //     only, no args, no permission, returns bool.
         //
         // Self-heals on every build, survives `git submodule update`.
-        // Sessions 3-5 will replace this stub incrementally as new
-        // methods are needed (addClient, startInputOrWindowGainedFocus,
-        // showSoftInput …) and the supporting parcelables vendored.
+        // Sessions 4-5 will un-stub more methods incrementally
+        // (startInputOrWindowGainedFocus, showSoftInput, ...) and vendor
+        // the supporting parcelables.
         let imm_vendor = PathBuf::from("vendor/aosp-frameworks-base");
         let imm_aidl_dir = imm_vendor.join("core/java");
         let imm_aidl_path = imm_aidl_dir.join("com/android/internal/view/IInputMethodManager.aidl");
         let imm_aidl_stub = b"\
-// Auto-patched by wart-host/build.rs (task 40 session 2). Real interface
-// has 37 methods + 15 transitive AIDL imports (IInputMethodClient,
-// IRemoteInputConnection, InputBindResult, ImeTracker.Token, ResultReceiver,
-// EditorInfo, ...) most of which live in com.android.internal.inputmethod
-// and need their own parcelable vendoring. Session 2 only calls
-// isImeTraceEnabled (no args, returns boolean, @RequiresNoPermission),
-// so we keep the preceding 25 method positions as no-import stubs to
-// anchor the transaction code (FIRST_CALL_TRANSACTION + 25 = 26).
-// Re-vendor methods in later sessions as needed.
+// Auto-patched by wart-host/build.rs (task 40 sessions 2-3). See
+// build.rs comment block for the policy. Real methods kept at their
+// real signatures so transaction codes match IMMS's dispatch:
+//   - addClient (pos 0, session 3)
+//   - isImeTraceEnabled (pos 25, session 2)
+// Everything else is a no-import slot_NN_<orig-name>() placeholder.
 package com.android.internal.view;
 
+import com.android.internal.inputmethod.IInputMethodClient;
+import com.android.internal.inputmethod.IRemoteInputConnection;
+
 interface IInputMethodManager {
-    void slot_00_addClient();
+    void addClient(in IInputMethodClient client, in IRemoteInputConnection inputmethod,
+            int untrustedDisplayId);
     void slot_01_getCurrentInputMethodInfoAsUser();
     void slot_02_getInputMethodList();
     void slot_03_getEnabledInputMethodList();
@@ -204,11 +215,74 @@ interface IInputMethodManager {
         std::fs::write(&imm_aidl_path, imm_aidl_stub)
             .expect("patch IInputMethodManager.aidl");
 
+        // ── IInputMethodClient AIDL (task 40 session 3) ──────────────────
+        // We SERVE this — IMMS calls us back on the client binder we
+        // pass to addClient. The real interface has 12 oneway methods
+        // with transitive imports (InputBindResult, ImeTracker.Token).
+        // We don't need those during the addClient probe — IMMS may
+        // synchronously fire oneway state-set calls (setActive,
+        // setInteractive) but they're fire-and-forget. Stub the 12
+        // method positions as void no-arg slot_NN_<orig-name>() so the
+        // Bn-side server we generate logs the dispatch and returns Ok,
+        // and doesn't need real parcel layouts.
+        let imc_aidl_path = imm_aidl_dir.join("com/android/internal/inputmethod/IInputMethodClient.aidl");
+        let imc_aidl_stub = b"\
+// Auto-patched by wart-host/build.rs (task 40 session 3). Real interface
+// is `oneway` with 12 methods that take InputBindResult / ImeTracker.Token /
+// ints; we stub each as void no-arg to avoid vendoring transitive
+// parcelables. Method positions preserved so IMMS's transaction codes
+// dispatch correctly into our Bn server (which just logs and drops).
+package com.android.internal.inputmethod;
+
+oneway interface IInputMethodClient {
+    void slot_00_onBindMethod();
+    void slot_01_onStartInputResult();
+    void slot_02_onBindAccessibilityService();
+    void slot_03_onUnbindMethod();
+    void slot_04_onUnbindAccessibilityService();
+    void slot_05_setActive();
+    void slot_06_setInteractive();
+    void slot_07_setImeVisibility();
+    void slot_08_scheduleStartInputIfNecessary();
+    void slot_09_reportFullscreenMode();
+    void slot_10_setImeTraceEnabled();
+    void slot_11_throwExceptionFromSystem();
+}
+";
+        std::fs::write(&imc_aidl_path, imc_aidl_stub)
+            .expect("patch IInputMethodClient.aidl");
+
+        // ── IRemoteInputConnection AIDL (task 40 session 3) ──────────────
+        // Same story as IInputMethodClient — we SERVE this, IMMS holds
+        // the binder for later. During addClient, IMMS does NOT call any
+        // methods on this binder (it's used later when the IME asks for
+        // editor text). Real interface has ~36 oneway methods with a
+        // very heavy import surface (AndroidFuture, RectF, KeyEvent,
+        // ParcelableHandwritingGesture, ExtractedTextRequest, ...). For
+        // session 3 we keep it a one-method empty stub — sessions 4-5
+        // will need to un-stub real editor commands.
+        let ric_aidl_path = imm_aidl_dir.join("com/android/internal/inputmethod/IRemoteInputConnection.aidl");
+        let ric_aidl_stub = b"\
+// Auto-patched by wart-host/build.rs (task 40 session 3). Real interface
+// has ~36 oneway methods with very heavy transitive imports
+// (AndroidFuture, RectF, KeyEvent, ParcelableHandwritingGesture, ...).
+// addClient doesn't synchronously call any of them; we just need a
+// valid binder to register. Sessions 4+ will un-stub real editor
+// commands as needed.
+package com.android.internal.inputmethod;
+
+oneway interface IRemoteInputConnection {
+    void slot_00_placeholder();
+}
+";
+        std::fs::write(&ric_aidl_path, ric_aidl_stub)
+            .expect("patch IRemoteInputConnection.aidl");
+
         // ── ISurfaceComposer AIDL (task 22) ──────────────────────────────
         // SurfaceFlingerAIDL service ("android.gui.ISurfaceComposer").
         // Parcelables live in two sibling dirs: most under libs/gui/aidl/,
         // plus a handful (IWindowInfosListener/Publisher,
-        // StalledTransactionInfo, WindowInfo, FocusRequest, …) under
+        // StalledTransactionInfo, WindowInfo, FocusRequest, ...) under
         // libs/gui/android/gui/. Both share package `android.gui` so we
         // include both. Zero imports leave the package. We only call
         // getPhysicalDisplayIds (read-only, no permission) for the §5
