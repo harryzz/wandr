@@ -1,0 +1,27 @@
+[package]
+name    = "wart-arbiter"
+version = "0.0.1"
+edition = "2021"
+
+# wart-arbiter — Hybrid runtime policy daemon (task 46 step 3).
+#
+# Talks to wart-host's zygote over its UNIX socket
+# (/data/local/tmp/wart-zygote.sock) to launch / kill / preload apps.
+# Owns its own UNIX socket (/data/local/tmp/wart-arbiter.sock) for
+# client commands (`wart-arbiter launch <app-id>` etc.). Tracks
+# running apps in-memory. Holds policy decisions: who's foreground,
+# who has focus, what OOM scoring to apply (those come in step 4).
+#
+# Deliberately tiny: no wasmtime, no skia, no libgui. The arbiter
+# never forks an app itself — that's the zygote's job. The arbiter
+# just decides which app gets forked when.
+
+[[bin]]
+name = "wart-arbiter"
+path = "src/main.rs"
+
+[dependencies]
+anyhow         = "1"
+log            = "0.4"
+android_logger = "0.14"
+libc           = "0.2"
