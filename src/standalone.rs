@@ -195,7 +195,9 @@ fn run_cwasm_loop(
         });
     }
 
-    let skiko = loaded.instantiate(&mut store)?;
+    let inst = loaded.instantiate(&mut store)?;
+    let skiko = inst.skiko;
+    let ime_events = inst.ime_events;
     log::info!("standalone: component instantiated — entering render loop");
 
     // Tell the guest the surface size before the first frame, so Compose lays
@@ -392,6 +394,68 @@ fn run_cwasm_loop(
                         log::warn!("standalone: dispatch_key_v2 (ime-inbound) failed: {e:#}");
                     }
                 }
+                // Task 49 step 1a — IME-bound events. Only meaningful
+                // for hosts running in IME role (--standalone-overlay).
+                // Step 1a logs; step 1b adds the call into the guest's
+                // exported war:ime/ime.on-editor-attached(info).
+                crate::ime_inbound::InboundEvent::EditorAttached { info } => {
+                    let Some(ie) = ime_events.as_ref() else {
+                        log::warn!(
+                            "ime-inbound: editor-attached received but host has \
+                             no IME bindings (component doesn't export war:ime/ime)"
+                        );
+                        continue;
+                    };
+                    // Convert the wire string → typed WIT enum. Unknown
+                    // tags fall back to Text — defensive.
+                    let wit_input_type = match info.input_type.as_str() {
+                        "text"           => crate::ime_bindings::war::ime::types::InputType::Text,
+                        "number"         => crate::ime_bindings::war::ime::types::InputType::Number,
+                        "phone"          => crate::ime_bindings::war::ime::types::InputType::Phone,
+                        "email"          => crate::ime_bindings::war::ime::types::InputType::Email,
+                        "url"            => crate::ime_bindings::war::ime::types::InputType::Url,
+                        "password"       => crate::ime_bindings::war::ime::types::InputType::Password,
+                        "multiline-text" => crate::ime_bindings::war::ime::types::InputType::MultilineText,
+                        other => {
+                            log::warn!(
+                                "ime-inbound: unknown input-type {other:?} — defaulting to Text"
+                            );
+                            crate::ime_bindings::war::ime::types::InputType::Text
+                        }
+                    };
+                    if let Err(e) = ie.war_ime_ime()
+                        .call_on_editor_attached(&mut store, wit_input_type)
+                    {
+                        log::warn!(
+                            "ime-inbound: on-editor-attached failed: {e:#}"
+                        );
+                        if e.downcast_ref::<wasmtime::ThrownException>().is_some() {
+                            if let Some(exn_ref) = store.take_pending_exception() {
+                                let _ = log_kotlin_exception_msg(&mut store, &exn_ref);
+                            }
+                        }
+                    } else {
+                        log::info!(
+                            "ime-inbound: dispatched on-editor-attached input-type={:?} \
+                             (hint/text dropped on wire — see ime.wit)",
+                            info.input_type,
+                        );
+                    }
+                }
+                crate::ime_inbound::InboundEvent::EditorDetached => {
+                    let Some(ie) = ime_events.as_ref() else {
+                        log::warn!(
+                            "ime-inbound: editor-detached received but host has \
+                             no IME bindings"
+                        );
+                        continue;
+                    };
+                    if let Err(e) = ie.war_ime_ime().call_on_editor_detached(&mut store) {
+                        log::warn!("ime-inbound: on-editor-detached failed: {e:#}");
+                    } else {
+                        log::info!("ime-inbound: dispatched on-editor-detached");
+                    }
+                }
             }
         }
 
@@ -497,4 +561,54 @@ fn run_test_loop(mut renderer: crate::canvas_impl::SkiaRenderer) -> Result<()> {
         }
         std::thread::sleep(std::time::Duration::from_millis(16));
     }
+}
+
+/// Walk a Kotlin Throwable's anyref to extract `.message: String?` and
+/// log it. Mirrors the render_frame error path in lib.rs:392-440 —
+/// kept here as a private helper so the ime-inbound dispatch can use
+/// the same exception-payload format. Returns Ok(()) regardless;
+/// failures to walk the struct are logged via log::error.
+///
+/// Kotlin/Wasm Throwable struct layout (offsets):
+///   0=vtable 1=itable 2=rtti 3=_hashCode 4=message 5=cause 6=suppressed
+/// Kotlin/Wasm String struct layout:
+///   0=vtable 1=itable 2=rtti 3=_hashCode 4=leftIfInSum 5=length 6=_chars
+/// _chars is an Array<i16> of UTF-16 code units.
+fn log_kotlin_exception_msg(
+    store: &mut Store<HostState>,
+    exn_ref: &wasmtime::ExnRef,
+) -> anyhow::Result<()> {
+    use anyhow::anyhow;
+    use wasmtime::Val;
+    let throwable_val = exn_ref.field(&mut *store, 0)?;
+    let throwable_anyref = throwable_val.unwrap_anyref()
+        .ok_or_else(|| anyhow!("exn field 0 null/not anyref"))?
+        .clone();
+    let throwable_struct = throwable_anyref.unwrap_struct(&mut *store)?;
+    let msg_val = throwable_struct.field(&mut *store, 4)?;
+    let msg_anyref = match msg_val.unwrap_anyref() {
+        Some(a) => a.clone(),
+        None => {
+            log::error!("  exception message: <null>");
+            return Ok(());
+        }
+    };
+    let str_struct = msg_anyref.unwrap_struct(&mut *store)?;
+    let len_val = str_struct.field(&mut *store, 5)?;
+    let length = match len_val {
+        Val::I32(i) => i as usize,
+        other => return Err(anyhow!("length not i32: {:?}", other)),
+    };
+    let chars_val = str_struct.field(&mut *store, 6)?;
+    let chars_anyref = chars_val.unwrap_anyref()
+        .ok_or_else(|| anyhow!("_chars null/not anyref"))?
+        .clone();
+    let chars_array = chars_anyref.unwrap_array(&mut *store)?;
+    let mut out = Vec::<u16>::with_capacity(length);
+    for v in chars_array.elems(&mut *store)?.take(length) {
+        let c = match v { Val::I32(i) => i as u16, _ => 0 };
+        out.push(c);
+    }
+    log::error!("  exception message: {}", String::from_utf16_lossy(&out));
+    Ok(())
 }

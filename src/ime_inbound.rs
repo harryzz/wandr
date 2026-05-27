@@ -21,20 +21,32 @@
 //! call into the wasm guest. The accept thread JUST parses + queues;
 //! the render loop drains + dispatches.
 //!
-//! Step 3a wire format (one line per event, ASCII):
+//! Wire format (one line per event, ASCII):
 //!
 //!   key-event <code-point> <key-id> <down|up>
+//!     Synthesize a key event into the focused editor (step 3a). Sent
+//!     to whichever wart-host owns the focused-editor pid.
 //!
-//! Step 3b extensions (when the war.ime.keyboard warpkg ships):
+//!   editor-attached <input-type> <hint-underscored> <initial-text-underscored> <sel-start> <sel-end>
+//!     (task 49 step 1a). Sent to whichever wart-host owns the
+//!     ACTIVE IME's pid when an editor focuses. `hint-underscored` and
+//!     `initial-text-underscored` are space→`_` escaped (matches the
+//!     existing `attach-editor` CLI convention); use `-` for the empty
+//!     string. `input-type` is one of the bare enum tags
+//!     `text`/`number`/`phone`/`email`/`url`/`password`/`multiline-text`.
 //!
-//!   commit-text  <utf8-string-rest-of-line>       (needs new WIT export)
-//!   composing    <utf8-string-rest-of-line>       (needs new WIT export)
-//!   set-selection <start> <end>
+//!   editor-detached
+//!     (task 49 step 1a). Sent to the IME's host when the focused
+//!     editor loses focus.
+//!
+//! Future extensions (commit-text / composing / set-selection / etc.)
+//! land alongside as additional verbs.
 //!
 //! Per-host socket path is derived from getpid() — the arbiter knows
-//! the focused-app's pid (it's in `EditorFocus`), so it can address
-//! `/data/local/tmp/wart-host-<focus.pid>.sock` directly. No
-//! registration handshake needed.
+//! the focused-app's pid (it's in `EditorFocus`) and the IME pid
+//! (it's in `ActiveIme`), so it addresses
+//! `/data/local/tmp/wart-host-<pid>.sock` directly. No registration
+//! handshake needed.
 
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
@@ -44,13 +56,40 @@ use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context, Result};
 
+/// Editor metadata delivered to the IME on focus. Mirrors the WIT
+/// `war:ime/editor-info` record exactly. Task 49 step 1a.
+#[derive(Clone, Debug, Default)]
+pub struct EditorInfo {
+    /// One of the `war:ime/input-type` enum tags as a string:
+    /// `text`, `number`, `phone`, `email`, `url`, `password`,
+    /// `multiline-text`. The IME-side bindings convert to the WIT
+    /// enum value before calling the guest.
+    pub input_type: String,
+    pub hint: String,
+    pub initial_text: String,
+    pub initial_selection_start: u32,
+    pub initial_selection_end: u32,
+}
+
 /// One incoming event. Stored in the queue between the accept thread
 /// and the render-loop drain.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum InboundEvent {
     /// Synthesize a key event into the focused guest. `action` is
     /// 0=down, 1=up (matches `dispatch_key_v2`'s `kind` byte).
     KeyEvent { code_point: u32, key_id: u32, action: u8 },
+
+    /// Task 49 step 1a — IME-bound notification: an editor focused.
+    /// The render loop calls the IME guest's exported
+    /// `war:ime/ime.on-editor-attached(info)` via the host bindgen
+    /// added in step 1b. Hosts that aren't IMEs (i.e. running
+    /// without `--standalone-overlay`) log + drop this — see the
+    /// drain code in `standalone.rs`.
+    EditorAttached { info: EditorInfo },
+
+    /// Task 49 step 1a — paired with `EditorAttached`. Calls the
+    /// IME's `war:ime/ime.on-editor-detached()` export.
+    EditorDetached,
 }
 
 fn queue() -> &'static Mutex<VecDeque<InboundEvent>> {
@@ -141,9 +180,53 @@ fn parse_and_queue(line: &str) {
         if let Ok(mut q) = queue().lock() {
             q.push_back(InboundEvent::KeyEvent { code_point, key_id, action });
         }
+    } else if let Some(rest) = line.strip_prefix("editor-attached ") {
+        // <input-type> <hint-underscored> <initial-text-underscored> <sel-start> <sel-end>
+        // `-` decodes to empty string. Spaces in hint/text are
+        // `_`-escaped per the established attach-editor CLI convention.
+        let parts: Vec<&str> = rest.split_whitespace().collect();
+        if parts.len() != 5 {
+            log::warn!("ime-inbound: malformed editor-attached: {line:?}");
+            return;
+        }
+        let input_type = parts[0].to_string();
+        let hint         = unescape_underscores(parts[1]);
+        let initial_text = unescape_underscores(parts[2]);
+        let Ok(sel_start) = parts[3].parse::<u32>() else {
+            log::warn!("ime-inbound: bad sel-start in {line:?}");
+            return;
+        };
+        let Ok(sel_end) = parts[4].parse::<u32>() else {
+            log::warn!("ime-inbound: bad sel-end in {line:?}");
+            return;
+        };
+        let info = EditorInfo {
+            input_type,
+            hint,
+            initial_text,
+            initial_selection_start: sel_start,
+            initial_selection_end:   sel_end,
+        };
+        if let Ok(mut q) = queue().lock() {
+            q.push_back(InboundEvent::EditorAttached { info });
+        }
+    } else if line == "editor-detached" {
+        if let Ok(mut q) = queue().lock() {
+            q.push_back(InboundEvent::EditorDetached);
+        }
     } else if !line.is_empty() {
         // Unknown verb — log so we can spot a protocol-skew between
         // arbiter + host versions. Don't crash.
         log::warn!("ime-inbound: unknown verb in {line:?}");
     }
+}
+
+/// Reverse of the attach-editor CLI's space-escape: `-` → empty,
+/// other chars passthrough with `_` → space. Symmetric with the
+/// arbiter's `escape_underscores` in main.rs.
+fn unescape_underscores(s: &str) -> String {
+    if s == "-" {
+        return String::new();
+    }
+    s.replace('_', " ")
 }

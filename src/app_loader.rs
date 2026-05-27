@@ -89,8 +89,24 @@ struct LoadedDep {
     component: Component,
 }
 
+/// Result of a successful `LoadedApp::instantiate`. Task 49 step 1b
+/// grew the return from a single `bindings::SkikoUi` to a struct so
+/// IME apps can ALSO carry typed bindings for the
+/// `war:ime/ime-events` world export (`on-editor-attached(info)` /
+/// `on-editor-detached()`). Non-IME apps (wart-app, system-bundle
+/// helpers) get `ime_events: None` because their components don't
+/// satisfy the ime-events world's exports.
+pub struct InstantiatedApp {
+    /// The canonical skiko-ui bindings — what every guest gets.
+    pub skiko: bindings::SkikoUi,
+    /// `Some(...)` if the component exports `war:ime/ime`. The host's
+    /// `ime_inbound.rs` drain calls into these when an
+    /// `editor-attached`/`editor-detached` message arrives.
+    pub ime_events: Option<crate::ime_bindings::ImeEvents>,
+}
+
 impl LoadedApp {
-    pub fn instantiate(&self, store: &mut Store<HostState>) -> Result<bindings::SkikoUi> {
+    pub fn instantiate(&self, store: &mut Store<HostState>) -> Result<InstantiatedApp> {
         let mut linker: Linker<HostState> = Linker::new(&self.engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
             .map_err(|e| anyhow!("wasmtime_wasi::p2::add_to_linker_sync: {e:#}"))?;
@@ -101,8 +117,23 @@ impl LoadedApp {
             wire_dep_into_linker(&mut linker, store, dep)?;
         }
 
-        bindings::SkikoUi::instantiate(store, &self.entry, &linker)
-            .map_err(|e| anyhow!("SkikoUi::instantiate failed: {e:#}"))
+        // Manual instantiate-then-wrap so we can produce TWO typed
+        // wrappers (skiko + optional ime_events) over the same
+        // Instance. `bindings::SkikoUi::instantiate(...)` would combine
+        // both steps but only return SkikoUi.
+        let instance = linker
+            .instantiate(&mut *store, &self.entry)
+            .map_err(|e| anyhow!("linker.instantiate failed: {e:#}"))?;
+        let skiko = bindings::SkikoUi::new(&mut *store, &instance)
+            .map_err(|e| anyhow!("SkikoUi::new failed: {e:#}"))?;
+        // Optional — IME apps (whose world `include`s
+        // `war:ime/ime-events`) satisfy these exports; non-IME apps
+        // don't. `.ok()` swallows the bind-failure into None.
+        let ime_events = crate::ime_bindings::ImeEvents::new(&mut *store, &instance).ok();
+        if ime_events.is_some() {
+            log::info!("loader: app exports war:ime/ime — IME-events bindings enabled");
+        }
+        Ok(InstantiatedApp { skiko, ime_events })
     }
 
     /// One-shot CLI consumers (`wasi:cli/command` world) — task 36 step 7.

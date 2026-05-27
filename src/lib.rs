@@ -61,6 +61,25 @@ mod bindings {
     });
 }
 
+/// Task 49 step 1b — typed bindings for the IME-events export side of
+/// the IME-client contract (`war:ime/ime.on-editor-attached(info)` /
+/// `on-editor-detached()`). The host instantiates an IME component +
+/// uses these bindings to call into the guest's exported functions
+/// when the arbiter delivers an `editor-attached`/`editor-detached`
+/// message over the per-host control socket (see ime_inbound.rs).
+///
+/// Uses the `ime-events` world (stripped sibling of `ime-client-world`
+/// — no input-connection import) defined in wit/ime.wit. The IME's
+/// own world (e.g. `war:ime-keyboard/ime-keyboard`) `include`s
+/// ime-events, so any IME app's component satisfies these typed
+/// bindings.
+mod ime_bindings {
+    wasmtime::component::bindgen!({
+        path: "../wit/ime.wit",
+        world: "ime-events",
+    });
+}
+
 // markdown_bindings module deleted (task 39 — replaced by generic
 // dep wiring via wasmtime introspection in app_loader.rs). Per-dep
 // `bindgen!` modules are no longer needed; any cross-app dep wires
@@ -257,12 +276,15 @@ impl ApplicationHandler for App {
                 // matched profile-build cwasm. See tasks/23-profiling-hooks.md.
             }
 
-            let bindings = loaded.instantiate(&mut store)
+            // The winit/NativeActivity path doesn't host IME apps — only
+            // editor-bearing guests. `ime_events` from the refactored
+            // instantiate (task 49 step 1b) is unused here; discard it.
+            let inst = loaded.instantiate(&mut store)
                 .expect("instantiate component");
             log::info!("WASM component instantiated");
 
-            self.store   = Some(store);
-            self.bindings = Some(bindings);
+            self.store    = Some(store);
+            self.bindings = Some(inst.skiko);
         } else {
             log::info!("no WASM component — running in renderer-test mode");
             self.test_renderer = Some(renderer);
