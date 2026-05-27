@@ -1,7 +1,8 @@
 # Task 49 — IME content control: editor-driven layouts + language plugins
 
-> **Status:** 🔲 scoped 2026-05-27, not started. Two follow-ups to task 47
-> step 3c that share the same inbound-delivery infrastructure:
+> **Status:** 🔲 scoped 2026-05-27, revised 2026-05-27. Two follow-ups
+> to task 47 step 3c that share the same inbound-delivery
+> infrastructure:
 >
 >   1. The IME should adapt its layout to the focused editor's type
 >      (numeric pad for `KeyboardType.Number`, phone keypad for `Phone`,
@@ -12,8 +13,28 @@
 >
 > Folded into one task because both extend the same `layoutName` /
 > `layouts: List<KeyboardLayout>` mechanism in `ImeKeyboard.kt` and
-> both depend on a new arbiter → IME control socket (a mirror of the
-> existing editor-side `ime_inbound.rs`).
+> both depend on the same delivery path (arbiter → IME).
+>
+> **Revision (pre-implementation review):** the original v1 of this
+> doc proposed adding a new `interface ime-events` to
+> `wit/skiko-gfx.wit` and a new `wart-host/src/ime_outbound.rs`
+> socket file. Both were redundant:
+>
+>   - `wit/ime.wit` (shipped in task 47 step 1) ALREADY defines
+>     `interface ime { on-editor-attached(info), on-editor-detached() }`
+>     with a proper typed `input-type` enum and `editor-info` record.
+>     `war.ime.keyboard`'s WIT just needs to `export war:ime/ime`.
+>   - `wart-host/src/ime_inbound.rs` (shipped in step 3a) ALREADY has
+>     the per-host socket listener + queue + render-loop drain. It
+>     just needs new message types — `editor-attached` /
+>     `editor-detached` alongside the existing `key-event`. Same
+>     socket file (`/data/local/tmp/wart-host-<pid>.sock`), same
+>     listener thread, same queue, just additional `InboundEvent`
+>     variants and additional dispatch arms.
+>
+> Net: smaller diff than v1 promised. The genuinely new pieces are
+> (a) the host-side wasmtime bindings to CALL into the IME's
+> exported `war:ime/ime`, and (b) the keyboard-lang plugin contract.
 
 ## Why this task exists
 
@@ -71,72 +92,150 @@ which languages it supports). Stage 2 (the arbiter exposes
 without manifest changes) is queued for later — same architecture,
 just a discovery layer on top.
 
-**D6. Inbound IME control socket lives at
-`/data/local/tmp/wart-host-ime-<pid>.sock`** (or equivalent under
-the active IME's pid). The arbiter writes one-line text messages
-the same way it does to wart-host-<editor-pid>.sock today.
+**D6. One socket per host, multiple message types.** The existing
+`/data/local/tmp/wart-host-<pid>.sock` (opened by `ime_inbound.rs`
+in step 3a, currently carrying only `key-event` messages) is the
+delivery channel for ALL arbiter-→-host messages. New types
+`editor-attached <input-type> <hint> <initial-text-len>
+<selection-start> <selection-end>` and `editor-detached` get
+parsed alongside the existing `key-event`. The host process
+knows whether it's playing editor-role or IME-role based on its
+launch flag (`--standalone-overlay` = IME); messages of the
+"wrong" type for the current role are logged + dropped.
 
-**D7. wart-app's hardcoded `input-type="text"` becomes real.** The
-`WasiKeyboardController.show()` reads the focused field's actual
-`KeyboardOptions.keyboardType` and maps to the WIT enum. This is
-the only Compose-side change.
+**D7. Wart-app's hardcoded `input-type="text"` is NOT a one-line
+change.** The existing `WasiKeyboardController.show()` overrides
+`SoftwareKeyboardController.show(): Unit` which takes no
+arguments — there's no field context in scope. Two options:
+  - **MVP hack:** TextFieldCard reads its own
+    `KeyboardOptions.keyboardType` and writes it to a state
+    holder before calling `keyboardController.show()`. The
+    controller's `show()` reads from the state holder.
+    Not idiomatic Compose, but lightweight.
+  - **Proper:** wire through Compose's
+    `PlatformTextInputMethodRequest` — a multi-file refactor
+    that crosses Compose's text-input plumbing.
+
+This task picks the MVP hack; the proper refactor is a separate
+follow-up worth its own task if a real BasicTextField use case
+demands it.
 
 ## Steps
 
-### Step 1 — Inbound delivery infrastructure (~1.5 h)
+### Step 1 — Inbound delivery: socket layer + host→guest bindings (~2 h)
 
-The piece both features need. Mirrors the editor-side
-`ime_inbound.rs` shipped in step 3a but pointed at the IME process.
+The piece both features need. Two sub-layers:
 
-- **`wart-host/src/ime_outbound.rs`** (new) — per-IME-host control
-  socket listener.
-  - `spawn_listener()` opens `/data/local/tmp/wart-host-ime-<pid>.sock`
-    on the IME side, accepts one connection at a time, parses
-    one-line messages.
-  - Parsed wire format:
-    - `editor-attached <input-type> <hint> <initial-text-len> <selection-start> <selection-end>`
-    - `editor-detached`
-    - (Future: `request-hide`, `config-changed`, …)
-  - Queues `InboundImeEvent::EditorAttached { info }` /
-    `InboundImeEvent::EditorDetached`.
-  - `drain_queue() -> Vec<InboundImeEvent>` for the render loop.
+**1a. Socket-layer (extend `ime_inbound.rs`):**
 
-- **`wart-host/src/standalone.rs`** — when running as an overlay,
-  call `ime_outbound::spawn_listener()` after EGL setup. Per-frame
-  drain calls into the IME guest's new exported `ime-events`
-  interface.
+The file already opens `/data/local/tmp/wart-host-<pid>.sock` in
+step 3a and parses `key-event` messages. Extend with two new
+message types:
 
-- **`wit/skiko-gfx.wit`** — extend `keyboard` (or add new
-  `ime-events`) with EXPORTED functions the IME guest implements:
-  ```wit
-  interface ime-events {
-      record editor-info {
-          input-type: string,   // "text" / "number" / "phone" / ...
-          hint: string,
-          initial-text: string,
-          selection-start: u32,
-          selection-end: u32,
-      }
-      on-editor-attached: func(info: editor-info);
-      on-editor-detached: func();
+```
+editor-attached <input-type> <hint-quoted> <initial-text-len> <selection-start> <selection-end>
+editor-detached
+```
+
+- `input-type` is the bare enum-tag string (`text` / `number` /
+  `phone` / …) — same set as `war:ime/input-type`.
+- `hint-quoted` is space-escaped (spaces → `_`) per the existing
+  attach-editor CLI convention, OR newline-terminated and
+  read-to-EOL — pick whatever's simplest given the existing
+  parser shape. (`initial-text` is currently dropped at the wire
+  layer because the existing `attach-editor` CLI uses positional
+  args; the inbound socket is binary-safe so we can carry the
+  real string. Decide during implementation.)
+- `editor-detached` takes no args.
+
+In `ime_inbound.rs`:
+- Extend `enum InboundEvent` with `EditorAttached { info: EditorInfo }`
+  and `EditorDetached`.
+- Add parse arms in `parse_and_queue` for the two new prefixes.
+- `drain_queue()` already returns the polymorphic enum.
+
+In `wart-host/src/standalone.rs`:
+- The per-frame drain at the existing `match ev` site grows two
+  new arms — `EditorAttached { info }` → host calls IME guest's
+  exported `war:ime/ime.on-editor-attached(info)`; `EditorDetached`
+  → host calls `on-editor-detached()`.
+
+In `wart-arbiter/src/main.rs`:
+- `cmd_attach_editor` already validates + stores `EditorFocus`.
+  After successful auto-overlay-promote, also write
+  `editor-attached <type> <hint> <text-len> <selstart> <selend>`
+  to the active IME's per-host socket
+  (`/data/local/tmp/wart-host-<ime-pid>.sock`). Reuses the
+  `deliver_to_host` one-shot-connect helper already in main.rs.
+- `cmd_detach_editor` writes `editor-detached`.
+
+**1b. Host→guest bindings for `war:ime/ime`:**
+
+The `war:ime/ime` interface (`on-editor-attached(info)` /
+`on-editor-detached()`) is EXPORTED by the IME guest and called
+by the host. Today the host's bindgen only knows about
+`skiko-ui` (which exports only `renderer`). To call into the IME
+guest's `war:ime/ime`, two options:
+
+- **Option A — Second `bindgen!` macro.** Add:
+  ```rust
+  mod ime_bindings {
+      wasmtime::component::bindgen!({
+          path: "../wit/",
+          world: "war:ime/ime-client-world",
+      });
   }
   ```
-  Stringly-typed `input-type` to avoid a cross-package WIT import
-  (matches the pattern from step 2's `ime` interface). Mirror to
-  the usual 3 sites.
+  Generates typed `EditorInfo` struct + typed `call_on_editor_attached`.
+  Cleaner; matches the existing skiko-ui bindgen pattern. The
+  guest must be linked against that world, so `war.ime.keyboard`'s
+  `wit/war-ime-keyboard.wit` needs to `include` `ime-client-world`
+  (or restructure to use it as the base world).
 
-- **`wart-host/src/keyboard_host_impl.rs`** (or new
-  `ime_events_host_impl.rs`): no changes needed — the host doesn't
-  IMPLEMENT these, it CALLS them. The Host-side call happens from
-  `standalone.rs`'s drain via the wasmtime binding.
+- **Option B — Untyped `Val` calls.** Look up the export at
+  runtime via the wasmtime Component API:
+  ```rust
+  let ime_iface = instance.get_export_index(&mut store, None, "war:ime/ime@0.1.0").unwrap();
+  let on_attached = instance.get_export_index(&mut store, Some(&ime_iface), "on-editor-attached").unwrap();
+  let func = instance.get_func(&mut store, on_attached).unwrap();
+  // Build EditorInfo as wasmtime::component::Val::Record(...)
+  func.call(&mut store, &[Val::Record(...)], &mut [])?;
+  ```
+  Verbose but no bindgen plumbing. Matches the pattern task 39
+  uses for cross-app dep wiring.
 
-- **`wart-arbiter/src/main.rs`** — `cmd_attach_editor` now also
-  writes `editor-attached ...` to the active IME's per-host socket
-  if one exists. `cmd_detach_editor` writes `editor-detached`.
+Option A is cleaner architecturally; Option B has lower bind-time
+overhead and is closer to what task 39 already does. **Pick Option A
+unless the second bindgen! causes name collisions or build-time
+pain** — the typed `EditorInfo` makes the call site readable.
 
-**Success criterion:** `wart-arbiter attach-editor <pid> number` →
-`adb logcat` shows the IME's `on-editor-attached` Kotlin handler
-fired with `input-type="number"`.
+**Wart-app side: nothing changes.** wart-app already calls
+`Ime.Import.notifyEditorAttached(type, ...)` (outbound from the
+editor); that's the existing path. Step 2 fills in the real
+`type` instead of hardcoded `"text"`.
+
+**`war.ime.keyboard` side: export the interface.**
+
+- `war.ime.keyboard/wit/war-ime-keyboard.wit` — add
+  `export war:ime/ime;` (already has `include my:skiko-gfx/skiko-ui`).
+  May need to restructure to be `world ime-keyboard { include
+  my:skiko-gfx/skiko-ui; include war:ime/ime-client-world; }`
+  or split the export off — verify during impl.
+- `war.ime.keyboard/wit/deps/ime/ime.wit` — mirror of
+  `wit/ime.wit`.
+- `war.ime.keyboard/src/wasmWasiMain/kotlin/generated/SkikoUi.kt`
+  (or a new file): hand-add `@WasmExport` extern declarations
+  for `war:ime/ime.on-editor-attached` and `on-editor-detached`.
+  These are EXPORTS, not imports — the canonical-ABI lowering
+  is different (caller-allocated return area, etc.). The
+  `record editor-info { input-type, hint, initial-text,
+  initial-selection-start, initial-selection-end }` shape needs
+  hand-written lift code on the wasm side.
+
+**Success criterion:** `wart-arbiter attach-editor <wart-app-pid>
+number` → adb logcat shows the IME's exported
+`on-editor-attached` Kotlin function fired with
+`input-type="number"`.
 
 ### Step 2 — Editor-driven layout switching (~1 h)
 
@@ -180,24 +279,40 @@ layouts and the policy that picks based on input-type.
   French / …) and is disabled when editor-type forces a layout.
 
 - **`wart-app/src/wasmWasiMain/kotlin/WasiKeyboardController.kt`** —
-  the `show()` call passes the focused field's actual
-  `KeyboardOptions.keyboardType`:
+  passes the focused field's keyboardType through. The
+  `SoftwareKeyboardController.show()` signature has NO arguments,
+  so we can't read the keyboardType inside the controller from
+  Compose's standard path. **MVP hack** (per D7):
   ```kotlin
-  fun show(field: WasiTextField) {
-      val type = when (field.keyboardOptions.keyboardType) {
-          KeyboardType.Number     -> "number"
-          KeyboardType.Phone      -> "phone"
-          KeyboardType.Email      -> "email"
-          KeyboardType.Uri        -> "url"
-          KeyboardType.Password   -> "password"
-          KeyboardType.NumberPassword -> "password"
-          else -> "text"
+  class WasiKeyboardController : SoftwareKeyboardController {
+      val isVisible: MutableState<Boolean> = mutableStateOf(false)
+      // NEW: writable from outside; TextFieldCard sets this on focus.
+      var pendingKeyboardType: KeyboardType = KeyboardType.Text
+      override fun show() {
+          isVisible.value = true
+          val type = pendingKeyboardType.toImeWireString()  // see helper
+          Ime.Import.notifyEditorAttached(type, /* hint */ "", /* initial */ "", 0u, 0u)
       }
-      Ime.Import.notifyEditorAttached(type, hint, initialText, selStart, selEnd)
+      override fun hide() { … }
+  }
+
+  // In TextFieldCard, before calling controller.show():
+  .onFocusChanged { fs ->
+      if (fs.isFocused) {
+          keyboardController.pendingKeyboardType = KeyboardOptions(...).keyboardType
+          keyboardController.show()
+      } else {
+          keyboardController.hide()
+      }
   }
   ```
-  + add at least one Number TextField to wart-app's demo so the
-  path is exercised on the smoke.
+  Not idiomatic — Compose's proper path is
+  `PlatformTextInputMethodRequest`, but threading that through
+  is a multi-file refactor across `wart-app/.../wasmWasiMain/`
+  Compose actuals. The MVP hack covers the demo cases (TextField
+  Card has the type at the focus-changed callsite anyway).
+  + add at least one Number TextField and one Phone TextField to
+  wart-app's demo so the path is exercised on the smoke.
 
 **Success criterion:** tap a Number TextField in wart-app → IME
 displays the numeric keypad. Tap a normal TextField → IME goes back
@@ -338,28 +453,57 @@ generic dep wiring.
 
 | Repo | File(s) | Why |
 |---|---|---|
-| **wart** | `wit/keyboard-lang.wit` (new) | Plugin contract |
-| **wart** | `wit/skiko-gfx.wit` | New `ime-events` interface (EXPORT from IME) |
+| **wart** | `wit/keyboard-lang.wit` (new) | Plugin contract for lang plugins |
 | **wart** | `tasks/49-ime-content-control.md` | This file, with results section per step |
 | **wart** | `scripts/build-system-warpkgs.sh` | Build / package the new lang warpkgs |
-| **wart-host** | `src/ime_outbound.rs` (new) | Per-IME-host control socket |
-| **wart-host** | `src/standalone.rs` | spawn_listener + per-frame drain when overlay mode |
-| **wart-host** | `src/lib.rs` | `mod ime_outbound;` |
-| **wart-arbiter** | `src/main.rs` | `cmd_attach_editor` / `cmd_detach_editor` writes to IME socket |
-| **wart-app** | `src/wasmWasiMain/kotlin/WasiKeyboardController.kt` | Read real keyboardType |
-| **wart-app** | demo screens get a `Number` and `Phone` TextField | Smoke coverage |
-| **wart-app** | `wit/deps/skiko-gfx/skiko-gfx.wit` | Mirror |
-| **skiko** | `skiko/wit/skiko-gfx.wit` | Mirror |
-| **skiko** | `.../generated/{Internal,}SkikoUi.kt` | `ime-events` Kotlin bindings (hand-added) |
-| **war.ime.keyboard** | `src/wasmWasiMain/kotlin/ImeKeyboard.kt` | New built-in layouts + edit-type pickLayout |
-| **war.ime.keyboard** | `src/wasmWasiMain/kotlin/LangAdapter.kt` (new) | Hand-written WIT bindings + loader |
-| **war.ime.keyboard** | `src/wasmWasiMain/kotlin/RealComposeApp.kt` | Wire `on-editor-attached` export |
-| **war.ime.keyboard** | `package.toml` | `[dependencies]` for langs |
-| **war.ime.keyboard** | `wit/war-ime-keyboard.wit` | Add `import keyboard-lang;` and `export ime-events;` |
+| **wart-host** | `src/ime_inbound.rs` | Extend with `editor-attached` / `editor-detached` parsing + new `InboundEvent` variants |
+| **wart-host** | `src/standalone.rs` | New drain arms calling IME's `on-editor-attached` / `on-editor-detached` |
+| **wart-host** | `src/lib.rs` | Second `bindgen!` macro for `war:ime/ime-client-world` (Option A) OR untyped `Val` calls in standalone.rs (Option B) |
+| **wart-arbiter** | `src/main.rs` | `cmd_attach_editor` / `cmd_detach_editor` write to IME's per-host socket via existing `deliver_to_host` helper |
+| **wart-app** | `src/wasmWasiMain/kotlin/WasiKeyboardController.kt` | `pendingKeyboardType` field + `show()` reads it; per-D7 MVP hack |
+| **wart-app** | `src/wasmWasiMain/kotlin/RealComposeApp.kt` | TextFieldCard sets `pendingKeyboardType` in `.onFocusChanged` |
+| **wart-app** | demo screens add Number + Phone TextFields | Smoke coverage |
+| **war.ime.keyboard** | `src/wasmWasiMain/kotlin/ImeKeyboard.kt` | New built-in layouts (Numeric / Phone / Email / Url / Password) + pickLayout |
+| **war.ime.keyboard** | `src/wasmWasiMain/kotlin/LangAdapter.kt` (new) | Hand-written WIT bindings + loader for lang plugins |
+| **war.ime.keyboard** | `src/wasmWasiMain/kotlin/generated/SkikoUi.kt` (or new file) | `@WasmExport` declarations for `war:ime/ime.on-editor-*` (the EXPORT side — needs canonical-ABI lift for `editor-info` record) |
+| **war.ime.keyboard** | `src/wasmWasiMain/kotlin/RealComposeApp.kt` | Wire the new exported `on-editor-attached` → updates `currentEditorType` MutableState |
+| **war.ime.keyboard** | `package.toml` | `[dependencies]` for lang plugins |
+| **war.ime.keyboard** | `wit/war-ime-keyboard.wit` | `import keyboard-lang` + restructure world to export `war:ime/ime` |
+| **war.ime.keyboard** | `wit/deps/ime/ime.wit` (new mirror) | Mirror of `wart/wit/ime.wit` |
 | **war.ime.keyboard** | `wit/deps/keyboard-lang/keyboard-lang.wit` (new) | Mirror |
-| **war.ime.keyboard** | `wit/deps/skiko-gfx/skiko-gfx.wit` | Mirror |
 | **war.lang.bg** (new repo) | full Rust cdylib | Bulgarian, extracted from built-ins |
 | **war.lang.fr** (new repo) | full Rust cdylib | French AZERTY |
+
+**Not touched (corrections from v1):**
+
+- `wit/skiko-gfx.wit` + 3 mirrors — no changes. v1 proposed a new
+  `ime-events` interface; that's redundant with `war:ime/ime`.
+- `wart-host/src/ime_outbound.rs` — no new file. The existing
+  `ime_inbound.rs` covers it.
+- `skiko/.../generated/{Internal,}SkikoUi.kt` — no `ime-events`
+  Kotlin bindings needed (the IME-side exports go in
+  `war.ime.keyboard`'s own generated files, NOT in skiko's
+  shared bindings).
+
+## Boundary with task 47 step 4
+
+Step 4 of task 47 (InputFlinger focus arbitration + auto-hide)
+shares the same arbiter-→-host inbound channel. The split:
+
+- **Task 49 owns the wire format.** The `editor-attached` /
+  `editor-detached` messages and their parsing in
+  `ime_inbound.rs`. The host→guest bindings for `war:ime/ime`.
+- **Step 4 owns the policy.** When does the arbiter emit
+  `request-hide`? What does tap-outside-the-IME's-input-window
+  mean? Step 4 grows `ime_inbound.rs` with whatever ADDITIONAL
+  message types it needs (e.g. `request-hide`, future
+  `config-changed`) — task 49 doesn't pre-add them.
+
+If step 4 needs to dispatch an event INTO the IME guest (e.g.
+"please hide yourself" as a guest-callable WIT verb), it can
+piggy-back on the `war:ime/ime` interface — either by adding a
+new func there or by adding a NEW interface alongside. Task 49
+doesn't pre-decide; step 4 picks when it's actually implementing.
 
 ## Considerations / risks
 
@@ -377,14 +521,26 @@ generic dep wiring.
   the same shape (records with strings in lists) and the lift
   pattern carries over.
 
+- **The `war:ime/ime` EXPORT side is harder than typical IMPORTs.**
+  Per `feedback_canonical_abi_import_export_asymmetry`, the
+  canonical-ABI lowering of an EXPORT (host calls into guest)
+  differs from an IMPORT (guest calls into host). The IME's
+  `on-editor-attached(info: editor-info)` lift needs a
+  return-area-style hand-written stub on the wasm side. If
+  Option A's second `bindgen!` works cleanly, this is hidden
+  behind generated code; if Option B (untyped Val) is chosen,
+  the IME-side Kotlin still needs hand-rolled lift code for the
+  `editor-info` record. Plan extra time in step 1 for whichever
+  path is chosen.
+
 - **Layout-pick order matters when both fire.** If
   `attach-editor(number)` arrives BEFORE the IME's first frame
-  composition, the state needs to be set early. Use a top-level
-  `LaunchedEffect(Unit)` to install the inbound-event observer
-  before the first `pickLayout` call. Risk: race between first
-  frame and first event — accept "first frame might show English
-  briefly" as MVP; if jarring, gate first composition on a
-  Channel.receive.
+  composition, the state needs to be set early. The inbound
+  event lands in the wart-host's drain queue regardless of
+  composition state; once the IME guest is instantiated, the
+  next drain delivers it. Risk: race between first frame and
+  first event — accept "first frame might show English briefly"
+  as MVP.
 
 - **Password mode is mostly TODO.** This task just gives Password
   its own layout entry to make the IME show "no suggestions / no
@@ -392,15 +548,16 @@ generic dep wiring.
   swipe trails, etc.) is its own task — call it 49b if it grows.
 
 - **Wart-host needs to know which surface is the IME.** Today
-  `--standalone-overlay` is the signal. The new `ime_outbound`
-  socket should only spawn when running as an overlay child.
+  `--standalone-overlay` is the signal. The
+  `editor-attached`/`editor-detached` drain arms should only run
+  in IME-role hosts; in editor-role hosts they'd be a no-op
+  (logged + dropped). The host knows its role via the launch
+  flag.
 
-- **Two distinct per-host sockets per IME process.** wart-host
-  already opens `/data/local/tmp/wart-host-<pid>.sock` for the
-  editor-side inbound (step 3a). The new IME-side inbound is
-  `wart-host-ime-<pid>.sock`. Distinct names so an app that's
-  both an editor AND an IME (theoretical — no use case yet) can
-  open both.
+- **Wart-app's hardcoded `inputType="text"` is the MVP hack
+  (D7).** Proper plumbing through Compose's
+  `PlatformTextInputMethodRequest` is a separate refactor
+  worth its own task if a real use case needs it.
 
 ## Future expansion (out of scope for task 49)
 
@@ -448,18 +605,29 @@ generic dep wiring.
 
 ## Resume hints for fresh sessions
 
-1. **Inbound socket is the keystone.** Land step 1 first; both
-   features fail without it. Steps 2-5 can land in either order
-   afterward.
-2. **Hand-written Kotlin WIT bindings for `lang`** — model on
-   `wart-app/src/wasmWasiMain/kotlin/MarkdownImports.kt`. Same
-   shape (records with strings in lists).
-3. **The 🌐 cycle vs editor-type override** is the trickiest
+1. **Read the revision notes at the top.** v1 of this doc
+   proposed a new `interface ime-events` and new
+   `ime_outbound.rs` file — both redundant. Use existing
+   `war:ime/ime` (from `wit/ime.wit` shipped in task 47 step 1)
+   and extend `wart-host/src/ime_inbound.rs`.
+2. **Step 1 has two sub-layers.** Don't conflate them: 1a is
+   socket-level message parsing (~30 min); 1b is wasmtime
+   host→guest binding for `war:ime/ime` (~1.5 h). Pick Option A
+   (second `bindgen!`) unless it causes build pain.
+3. **Hand-written Kotlin canonical-ABI on the EXPORT side** is
+   the trickiest unfamiliar bit — see `feedback_canonical_abi_
+   import_export_asymmetry` and the markdown-renderer's EXPORT
+   pattern for guidance.
+4. **The 🌐 cycle vs editor-type override** is the trickiest
    policy bit. D2 above is the lock — write `pickLayout` per
    step 2's recipe and don't drift.
-4. **Don't move English out of built-ins.** It's the universal
+5. **Don't move English out of built-ins.** It's the universal
    fallback when no plugin loads. Bulgarian moving to a plugin is
    the proof-of-concept; English stays put.
-5. **wart-app's number TextField is the device smoke driver.** If
-   the demo doesn't have one, add it as part of step 2 — otherwise
-   there's nothing to focus that exercises the new path.
+6. **wart-app's Number/Phone TextFields are the device smoke
+   drivers.** If the demo doesn't have them, add them as part
+   of step 2 — otherwise there's nothing to focus that exercises
+   the new path. The MVP-hack KeyboardController plumbing (D7)
+   only works because TextFieldCard sets `pendingKeyboardType`
+   in `.onFocusChanged` before calling `controller.show()`;
+   don't reorder.
