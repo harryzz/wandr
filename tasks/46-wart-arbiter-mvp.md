@@ -807,6 +807,79 @@ nice-to-have for production resilience; init.rc + sepolicy
 proper (a-03 rebuild path) only matters when shipping a
 non-Magisk image.
 
+#### Arbiter crash-marker shipped (2026-05-27)
+
+Persists the running-apps map + foreground across arbiter
+restarts. Children of the zygote outlive the arbiter (they're
+parented to the zygote, not the arbiter), so the arbiter dying
++ restarting normally leaves them orphaned from the arbiter's
+view of the world. State persistence reattaches them.
+
+`wart-arbiter/src/state.rs`:
+
+- `save_to(path)` — writes a hand-rolled JSON (no serde dep —
+  keeps the arbiter binary at ~800 KB). Atomic `.tmp` → rename.
+  Schema:
+
+  ```json
+  { "version": 1,
+    "saved_at_unix": 1779890478,
+    "foreground": "com.example.wart-app",   // or null
+    "apps": [
+      {"app_id":"com.example.wart-app","pid":4750,"launched_at_unix":1779890478}
+    ] }
+  ```
+
+- `restore_from(path)` — reads the JSON via a tiny ad-hoc
+  walker. For each persisted pid runs `kill(pid, 0)` as a
+  signalless liveness probe (`0` → alive, `EPERM` → alive but
+  no permission, `ESRCH/other` → dead). Survivors re-inserted
+  with original `app_id`/`pid`/`launched_at`. Dead ones dropped
+  + logged. Foreground cleared if its pid didn't survive.
+
+`wart-arbiter/src/main.rs`:
+
+- `install_panic_hook()` mirrors `lifecycle_standalone`'s
+  shape — writes `/data/local/tmp/wart-arbiter-crash.json` on
+  the way out.
+- `drain_prior_crash_marker()` at daemon start logs +
+  removes a prior marker (so the next startup surfaces why).
+- `state::restore_from()` called once at daemon start, after
+  the panic hook + marker drain.
+- After EVERY socket command (mutating or not), call
+  `state::save_to(...)`. ~1 KB atomic write per command.
+  Cheap enough that uniform code-path beats per-command
+  branching.
+
+**Device-verified on Pixel 2 XL**:
+
+```
+$ wart-arbiter launch com.example.wart-app  → OK pid=4750 [fg]
+$ cat /data/local/tmp/wart-arbiter-state.json
+  { "version": 1, ..., "foreground": "com.example.wart-app",
+    "apps": [{"app_id": "...", "pid": 4750, ...}] }
+
+$ killall -9 wart-arbiter      (children survive)
+$ wart-arbiter --daemon &      (re-start)
+  log: state restore — 1 alive app(s) re-attached, 0 dropped
+$ wart-arbiter list
+  OK count=1
+    app=com.example.wart-app pid=4750 elapsed_ms=3189 [fg]
+                                    ↑ same pid as before crash
+
+$ kill -KILL 4750              (kill the child)
+$ killall -9 wart-arbiter ; wart-arbiter --daemon &
+  log: pid 4750 for app "..." is dead, dropping
+  log: foreground app "..." not alive, fg cleared
+  log: state restore — 0 alive app(s) re-attached, 1 dropped
+$ wart-arbiter list            → OK count=0
+```
+
+**Task 46 status: 5/5 steps + crash-marker shipped, all
+device-verified.** Remaining items are init.rc + sepolicy
+proper (only matters for non-Magisk shipping; the Magisk
+module replaces both reversibly on a rooted device).
+
 ### Step 5 — Production deployment polish (~1 week)
 
 The "make it real on the device" step. Some of this is

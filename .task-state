@@ -1,5 +1,5 @@
 TASK=46
-STEP=spike-complete
+STEP=fully-shipped
 STATUS=complete
-LAST_SUCCESS=Task 46 fully shipped 2026-05-27. All 5 steps device-verified on Pixel 2 XL: SIGCHLD reap + KILL (step 1), Component preload registry +57 MB/child COW (step 2), wart-arbiter sibling crate (step 3), fg/bg policy with set_layer + lifecycle + oom_score_adj (step 4), Magisk module auto-starts the stack at boot (step 5 finisher — replaced AOSP init.rc with reversible Magisk path). Arbiter crash-marker remains as nice-to-have polish.
-NOTES=task 46 done. Other open tasks: 25 (suspend leak), 37 (Kotlin/Wasm command-adapter throw), 43 (orientation), 42 (system clipboard). Or pivot to a fresh direction.
+LAST_SUCCESS=Task 46 fully shipped 2026-05-27. All 5 steps + crash-marker device-verified on Pixel 2 XL. Arbiter persists (app_id → pid) map + foreground to /data/local/tmp/wart-arbiter-state.json; restart re-attaches surviving children via kill(pid, 0). Panic hook drops crash.json on the way out, drained on next start.
+NOTES=Task 46 done. Other open tasks: 25 (suspend leak), 37 (Kotlin/Wasm command-adapter throw), 43 (orientation), 42 (system clipboard). Or pivot to fresh direction.
