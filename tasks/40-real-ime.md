@@ -1,6 +1,6 @@
 # Task 40 — real IME via rsbinder → IMMS (multi-session arc)
 
-> **Status:** 🟡 in progress — session 1 (recon + scope) started 2026-05-27.
+> **Status:** 🟡 in progress — session 2 (vendor + first call) done 2026-05-27.
 > Multi-week, multi-session commitment. Standing decision overturned
 > 2026-05-27 — user explicitly opted for path (B) over the project
 > memory's "default A polish, B on roadmap not next" recommendation
@@ -197,6 +197,88 @@ Remaining open de-risks (session 2 will hit them):
 
 Session 1 was honest recon + plan-of-record. Session 2 = "vendor +
 first call." See in-session task tracker.
+
+## Session 2 results (2026-05-27)
+
+**Outcome: ✅ device-verified.** Round-trip from rsbinder reaches IMMS
+and unmarshals a boolean response cleanly:
+
+```
+ime: IMMS round-trip OK — isImeTraceEnabled() = false.
+Transport validated against com.android.internal.view.IInputMethodManager.
+Session 2 first-call milestone reached.
+```
+
+### Deliverables
+
+1. **`vendor/aosp-frameworks-base` submodule** added at
+   `wart-host/vendor/aosp-frameworks-base`, pinned to
+   `android-15.0.0_r36` (same tag as the other AOSP submodules).
+   Sparse-checkout reduces the working tree from ~1.9 GB (full shallow
+   clone) to ~17 MB. The sparse-checkout config is per-clone (not in
+   the repo) — re-establish on a fresh checkout via:
+   ```bash
+   cd wart-host/vendor/aosp-frameworks-base
+   git sparse-checkout init --cone
+   git sparse-checkout set \
+     core/java/com/android/internal/inputmethod \
+     core/java/com/android/internal/view \
+     core/java/android/view/inputmethod \
+     core/java/android/os \
+     core/java/com/android/internal/os
+   ```
+
+2. **Stripped `IInputMethodManager.aidl` stub** in `wart-host/build.rs`
+   — matches the task-22 `ISurfaceComposer.aidl` self-healing pattern.
+   Drops all 15 transitive AIDL imports (IInputMethodClient, EditorInfo,
+   ResultReceiver, ImeTracker, …) by stubbing 25 preceding methods as
+   `void slot_NN_<orig-name>()` and keeping `isImeTraceEnabled` at its
+   real position (transaction code 26 = FIRST_CALL_TRANSACTION + 25).
+   Sessions 3-5 will re-vendor the methods + parcelables incrementally
+   as new IMMS calls are needed.
+
+3. **First read-only call:** `isImeTraceEnabled()` chosen over
+   `getCurrentInputMethodInfoAsUser` (the plan-doc default) after seeing
+   the full IInputMethodManager.aidl — `isImeTraceEnabled` is the only
+   inputmethod method that is (a) `@RequiresNoPermission` (no
+   `INTERACT_ACROSS_USERS_FULL` gate), (b) takes zero arguments, and
+   (c) returns a primitive (`bool`) so no parcelable shape needs to be
+   replicated client-side. Result: a clean unambiguous transport
+   validation rather than a "parse error proves transport" muddy
+   signal.
+
+4. **`wart-host/src/ime_impl.rs`** mirrors `display_impl.rs` (the
+   task-22 SurfaceFlinger probe): `rsbinder::hub::get_interface("input_method")`
+   → `Strong<dyn IInputMethodManager>` → `isImeTraceEnabled()` → log.
+   Wired behind a new `wart-host --probe-ime` CLI flag in `main.rs`
+   (one-shot, no display, no wasm component loaded).
+
+### What we learned
+
+- **Transport works.** `rsbinder::hub::get_interface("input_method")`
+  resolves correctly to IMMS, `.r#isImeTraceEnabled()` makes a real
+  binder transaction, and the boolean response unmarshals to a Rust
+  `bool` cleanly.
+- **No SELinux relaxation needed for this call.** `setenforce 0` was
+  NOT required — `@RequiresNoPermission` methods bypass the
+  framework-level permission gate AND fit within the existing
+  `untrusted_app → system_server` policy on the dev device. Session 3+
+  calls that need `addClient` / `startInputOrWindowGainedFocus` will
+  hit `INTERACT_ACROSS_USERS_FULL` and may need `setenforce 0`.
+- **The 25-slot stub pattern works without per-method import shims** —
+  rsbinder-aidl accepts `void slot_NN()` declarations as no-import
+  placeholders. This is cheaper than stubbing 15 transitive
+  parcelables upfront.
+
+### Open de-risks carried into session 3 (unchanged from session 1)
+
+- Does IMMS query WMS to validate the WindowToken passed to
+  `startInputOrWindowGainedFocus`? Still the biggest unknown.
+- Does the `addClient` call from a non-Activity client accept a
+  fabricated IBinder as the client identity? Recon suggested yes, but
+  must be empirically tested.
+- SELinux denial on `INTERACT_ACROSS_USERS_FULL`-gated calls —
+  expected. `setenforce 0` for dev, production sepolicy deferred.
 
 ## Related
 
