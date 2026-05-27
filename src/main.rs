@@ -17,12 +17,27 @@
 //!                         the previous fg if any).
 //!   launch-headless <id>— forward as LAUNCH (wasi:cli/command consumer)
 //!   list                — print running apps + pids; current fg is
-//!                         marked with [fg].
+//!                         marked with [fg]; current IME marked [ime].
 //!   kill <app-id>       — KILL the zygote-tracked pid for this app-id
 //!   preload <app-id>    — PRELOAD on the zygote (post-install refresh)
 //!   foreground <id>     — promote <id> to foreground; SIGUSR1 the
 //!                         previous fg, SIGUSR2 the new fg, write
 //!                         /proc/<pid>/oom_score_adj on both.
+//!   set-ime <app-id>    — designate <app-id> as the active IME. Must
+//!                         already be running (launch first). Future:
+//!                         auto-launch + set in one go.
+//!   attach-editor <pid> [input-type] [hint] [initial-text]
+//!                       — focused app's host reports editor focus.
+//!                         Records EditorFocus; logs the route to the
+//!                         active IME. Cross-process dispatch lands
+//!                         in step 2.
+//!   detach-editor <pid> — reverse of attach-editor.
+//!   ime-commit-text <text>          — IME → focused-app text commit.
+//!   ime-send-key-event <code-point> <key-id> <action>
+//!                                   — IME → focused-app key event.
+//!   ime-set-composing-text <text>   — IME → composing-state update.
+//!   ime-finish-composing-text       — IME → finalize composing region.
+//!   ime-set-selection <start> <end> — IME → editor cursor/selection.
 
 mod state;
 mod zygote_client;
@@ -72,6 +87,15 @@ fn main() {
         Some("kill") => run_client("kill", args.get(1).cloned()),
         Some("preload") => run_client("preload", args.get(1).cloned()),
         Some("foreground") => run_client("foreground", args.get(1).cloned()),
+        // Task 47 step 1 — IME routing commands. The client side
+        // passes the verb's tail through unchanged; the daemon
+        // parses arg-shapes per command.
+        Some(verb @ ("set-ime" | "attach-editor" | "detach-editor"
+                    | "ime-commit-text" | "ime-send-key-event"
+                    | "ime-set-composing-text" | "ime-finish-composing-text"
+                    | "ime-set-selection")) => {
+            run_client_multi(verb, &args[1..])
+        }
         Some(other) => {
             eprintln!("wart-arbiter: unknown command: {other}");
             print_usage();
@@ -102,7 +126,17 @@ fn print_usage() {
            wart-arbiter list\n\
            wart-arbiter kill            <app-id>\n\
            wart-arbiter preload         <app-id>\n\
-           wart-arbiter foreground      <app-id>\n",
+           wart-arbiter foreground      <app-id>\n\
+         \n\
+         IME routing (task 47):\n\
+           wart-arbiter set-ime         <app-id>\n\
+           wart-arbiter attach-editor   <pid> [input-type] [hint] [initial-text]\n\
+           wart-arbiter detach-editor   <pid>\n\
+           wart-arbiter ime-commit-text         <text>\n\
+           wart-arbiter ime-send-key-event      <code-point> <key-id> <down|up>\n\
+           wart-arbiter ime-set-composing-text  <text>\n\
+           wart-arbiter ime-finish-composing-text\n\
+           wart-arbiter ime-set-selection       <start> <end>\n",
     );
 }
 
@@ -122,7 +156,30 @@ fn run_client(verb: &str, arg: Option<String>) -> Result<()> {
         }
         (false, _)       => format!("{verb}\n"),
     };
+    send_and_print(&line)
+}
 
+/// Multi-arg client form used by the task-47 IME commands. Joins all
+/// CLI args after the verb into the wire command's single-line tail.
+/// `attach-editor <pid> [input-type] [hint] [initial-text]` becomes
+/// `attach-editor <pid> <input-type> <hint> <initial-text>\n`.
+///
+/// Per-arg spaces are NOT supported by this minimal serializer — IME
+/// commit-text strings with spaces work because everything after the
+/// verb is concatenated with single spaces and the daemon's parser
+/// splits on the first N spaces only (so trailing args containing
+/// spaces survive). See `parse_ime_tail_*` on the daemon side.
+fn run_client_multi(verb: &str, rest: &[String]) -> Result<()> {
+    let mut line = verb.to_string();
+    for arg in rest {
+        line.push(' ');
+        line.push_str(arg);
+    }
+    line.push('\n');
+    send_and_print(&line)
+}
+
+fn send_and_print(line: &str) -> Result<()> {
     let mut stream = UnixStream::connect(ARBITER_SOCK_PATH)
         .with_context(|| format!("connect {ARBITER_SOCK_PATH} — is the daemon running?"))?;
     stream.write_all(line.as_bytes())?;
@@ -215,6 +272,16 @@ fn handle_client(mut stream: UnixStream) -> Result<()> {
         "list"            => cmd_list(&mut stream),
         "preload"         => cmd_preload(&mut stream, &rest),
         "foreground"      => cmd_foreground(&mut stream, &rest),
+        // Task 47 step 1 — IME routing. State maintenance + logging
+        // only; cross-process delivery lands in step 2.
+        "set-ime"                    => cmd_set_ime(&mut stream, &rest),
+        "attach-editor"              => cmd_attach_editor(&mut stream, &rest),
+        "detach-editor"              => cmd_detach_editor(&mut stream, &rest),
+        "ime-commit-text"            => cmd_ime_route(&mut stream, "commit-text", &rest),
+        "ime-send-key-event"         => cmd_ime_route(&mut stream, "send-key-event", &rest),
+        "ime-set-composing-text"     => cmd_ime_route(&mut stream, "set-composing-text", &rest),
+        "ime-finish-composing-text"  => cmd_ime_route(&mut stream, "finish-composing-text", &rest),
+        "ime-set-selection"          => cmd_ime_route(&mut stream, "set-selection", &rest),
         other => {
             writeln!(stream, "ERR unknown-command {other}")?;
             Ok(())
@@ -231,6 +298,160 @@ fn handle_client(mut stream: UnixStream) -> Result<()> {
     }
 
     result
+}
+
+// ─── IME routing (task 47 step 1) ──────────────────────────────────────
+//
+// Step 1 scope: state maintenance + structured logging of routing
+// intent. Cross-process delivery (per-host control sockets, WIT-proxy
+// invocation) is step 2+. The commands here are how the focused-app's
+// host (via skiko's WasiInputMethod adapter, step 2) and the IME
+// app's host will eventually talk to the arbiter.
+
+fn cmd_set_ime(stream: &mut UnixStream, rest: &str) -> Result<()> {
+    let app_id = rest.trim();
+    if app_id.is_empty() {
+        writeln!(stream, "ERR set-ime-empty-app-id")?;
+        return Ok(());
+    }
+    // Special form: "set-ime -" clears the active IME without naming a
+    // replacement. Useful for tests + future "stop using any IME" flow.
+    if app_id == "-" {
+        let prev = state::set_active_ime(None);
+        let prev_id = prev.map(|p| p.app_id).unwrap_or_else(|| "(none)".to_string());
+        writeln!(stream, "OK cleared prev={prev_id}")?;
+        log::info!("arbiter: cleared active IME (prev={prev_id})");
+        return Ok(());
+    }
+    let Some(s) = state::get(app_id) else {
+        writeln!(stream, "ERR not-running {app_id} (launch first)")?;
+        return Ok(());
+    };
+    let prev = state::set_active_ime(Some(state::ActiveIme {
+        app_id: s.app_id.clone(),
+        pid: s.pid,
+    }));
+    let prev_id = prev.map(|p| p.app_id).unwrap_or_else(|| "(none)".to_string());
+    writeln!(stream, "OK ime={app_id} pid={} prev={prev_id}", s.pid)?;
+    log::info!(
+        "arbiter: set active IME app={app_id} pid={} (prev={prev_id})",
+        s.pid
+    );
+    Ok(())
+}
+
+fn cmd_attach_editor(stream: &mut UnixStream, rest: &str) -> Result<()> {
+    // Wire shape: `attach-editor <pid> [input-type] [hint] [initial-text]`.
+    // input-type defaults to `text`; hint + initial-text default to "".
+    // The CLI doesn't currently support spaces in hint / initial-text;
+    // that comes through skiko in step 2 over the per-host control
+    // socket where we control the serialization.
+    let mut parts = rest.splitn(4, ' ');
+    let Some(pid_s) = parts.next() else {
+        writeln!(stream, "ERR attach-editor-missing-pid")?;
+        return Ok(());
+    };
+    let Ok(pid) = pid_s.parse::<i32>() else {
+        writeln!(stream, "ERR attach-editor-bad-pid {pid_s}")?;
+        return Ok(());
+    };
+    // Validate the pid is one of our tracked apps.
+    let owner = state::snapshot().into_iter().find(|a| a.pid == pid);
+    let Some(owner) = owner else {
+        writeln!(stream, "ERR attach-editor-unknown-pid {pid}")?;
+        return Ok(());
+    };
+
+    let input_type = parts.next().unwrap_or("text").to_string();
+    let hint = parts.next().unwrap_or("").to_string();
+    let initial_text = parts.next().unwrap_or("").to_string();
+
+    let info = state::EditorInfo {
+        input_type: input_type.clone(),
+        hint: hint.clone(),
+        initial_text: initial_text.clone(),
+        initial_selection_start: 0,
+        initial_selection_end: 0,
+    };
+    let prev = state::set_editor_focus(Some(state::EditorFocus {
+        pid,
+        editor_info: info,
+    }));
+    let prev_pid = prev.map(|p| p.pid).map(|p| p.to_string()).unwrap_or_else(|| "-".to_string());
+
+    let ime = state::current_active_ime();
+    let ime_dest = ime
+        .as_ref()
+        .map(|i| format!("{} (pid={})", i.app_id, i.pid))
+        .unwrap_or_else(|| "(no active IME — set-ime first)".to_string());
+
+    writeln!(
+        stream,
+        "OK attached editor pid={pid} app={} input-type={input_type} \
+         prev-pid={prev_pid} route→{ime_dest}",
+        owner.app_id,
+    )?;
+    log::info!(
+        "arbiter: attach-editor pid={pid} app={} input-type={input_type} hint={hint:?} \
+         initial-text-len={} → route to {ime_dest} (step 2 delivers on-editor-attached)",
+        owner.app_id,
+        initial_text.len(),
+    );
+    Ok(())
+}
+
+fn cmd_detach_editor(stream: &mut UnixStream, rest: &str) -> Result<()> {
+    let pid_s = rest.trim();
+    if pid_s.is_empty() {
+        writeln!(stream, "ERR detach-editor-missing-pid")?;
+        return Ok(());
+    }
+    let Ok(pid) = pid_s.parse::<i32>() else {
+        writeln!(stream, "ERR detach-editor-bad-pid {pid_s}")?;
+        return Ok(());
+    };
+    let prev = state::current_editor_focus();
+    let was_focused = prev.as_ref().map(|p| p.pid) == Some(pid);
+    if was_focused {
+        let _ = state::set_editor_focus(None);
+        let ime = state::current_active_ime();
+        let ime_dest = ime
+            .as_ref()
+            .map(|i| format!("{} (pid={})", i.app_id, i.pid))
+            .unwrap_or_else(|| "(no active IME)".to_string());
+        writeln!(stream, "OK detached pid={pid} route→{ime_dest}")?;
+        log::info!(
+            "arbiter: detach-editor pid={pid} → route to {ime_dest} (step 2 delivers on-editor-detached)"
+        );
+    } else {
+        writeln!(stream, "OK no-op pid={pid} (not focused)")?;
+        log::info!("arbiter: detach-editor pid={pid} — was not focused, no-op");
+    }
+    Ok(())
+}
+
+/// Shared backend for the five `ime-*` commands: route IME-side input
+/// (commit-text / send-key-event / set-composing-text / etc.) to the
+/// currently-focused editor's app. Step 1 just logs the intent —
+/// actual delivery is step 2's per-host control socket.
+fn cmd_ime_route(stream: &mut UnixStream, verb: &str, rest: &str) -> Result<()> {
+    let Some(focus) = state::current_editor_focus() else {
+        writeln!(stream, "ERR no-focused-editor")?;
+        return Ok(());
+    };
+    writeln!(
+        stream,
+        "OK route→pid={} (input-type={}) {verb} args={:?}",
+        focus.pid, focus.editor_info.input_type, rest,
+    )?;
+    log::info!(
+        "arbiter: ime-{verb} → editor pid={} app-input-type={} args={:?} \
+         (step 2 delivers to the focused app's host)",
+        focus.pid,
+        focus.editor_info.input_type,
+        rest,
+    );
+    Ok(())
 }
 
 // ─── Crash marker (task 46 crash-marker) ──────────────────────────────
@@ -395,13 +616,20 @@ fn cmd_list(stream: &mut UnixStream) -> Result<()> {
     let mut apps = state::snapshot();
     apps.sort_by(|a, b| a.app_id.cmp(&b.app_id));
     let fg = state::current_foreground();
+    let ime = state::current_active_ime().map(|i| i.app_id);
+    let focus = state::current_editor_focus();
     writeln!(stream, "OK count={}", apps.len())?;
     for app in apps {
         let elapsed_ms = app.launched_mono.elapsed().as_millis();
-        let marker = if fg.as_deref() == Some(&app.app_id) { " [fg]" } else { "" };
+        let mut markers = String::new();
+        if fg.as_deref() == Some(&app.app_id) { markers.push_str(" [fg]"); }
+        if ime.as_deref() == Some(&app.app_id) { markers.push_str(" [ime]"); }
+        if focus.as_ref().map(|f| f.pid) == Some(app.pid) {
+            markers.push_str(&format!(" [editor:{}]", focus.as_ref().unwrap().editor_info.input_type));
+        }
         writeln!(
             stream,
-            "  app={} pid={} elapsed_ms={elapsed_ms}{marker}",
+            "  app={} pid={} elapsed_ms={elapsed_ms}{markers}",
             app.app_id, app.pid
         )?;
     }

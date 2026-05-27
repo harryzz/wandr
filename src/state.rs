@@ -24,6 +24,95 @@ fn foreground() -> &'static Mutex<Option<String>> {
     FG.get_or_init(|| Mutex::new(None))
 }
 
+// ─── IME state (task 47 step 1) ───────────────────────────────────────
+//
+// Two singletons:
+//   - active_ime: the IME app-id currently designated to receive
+//     editor-attached events. At most one. Set by `set-ime <app-id>`.
+//   - editor_focus: which foreground-app pid has a focused editor
+//     right now + its `EditorInfo`. Cleared on detach-editor.
+//
+// The arbiter routes calls from focused-app → IME (attach/detach) and
+// IME → focused-app (commit-text / send-key-event / composing) using
+// these two pointers. Cross-process delivery itself (per-host control
+// socket) lands in step 2; step 1 just maintains the state.
+
+/// IME app currently registered as the active receiver.
+#[derive(Clone, Debug)]
+pub struct ActiveIme {
+    pub app_id: String,
+    pub pid: i32,
+}
+
+fn active_ime() -> &'static Mutex<Option<ActiveIme>> {
+    static IME: OnceLock<Mutex<Option<ActiveIme>>> = OnceLock::new();
+    IME.get_or_init(|| Mutex::new(None))
+}
+
+pub fn current_active_ime() -> Option<ActiveIme> {
+    active_ime().lock().ok().and_then(|m| m.clone())
+}
+
+/// Set / unset the active IME. The caller must guarantee `app_id` (if
+/// `Some`) is currently in `registry()` — typically by calling
+/// `state::get(app_id)` first to look up the pid.
+pub fn set_active_ime(new: Option<ActiveIme>) -> Option<ActiveIme> {
+    let mut m = active_ime().lock().ok()?;
+    let prev = m.clone();
+    *m = new;
+    prev
+}
+
+/// Editor-info subset of the WIT `war:ime/editor-info` record. Mirrors
+/// the on-wire shape exactly. Stored alongside the focused-pid so
+/// future `on-editor-attached` re-dispatches (e.g. after an IME swap)
+/// can re-send the same metadata without re-querying the focused app.
+#[derive(Clone, Debug)]
+pub struct EditorInfo {
+    pub input_type: String, // one of: text, number, phone, email, url, password, multiline-text
+    pub hint: String,
+    pub initial_text: String,
+    pub initial_selection_start: u32,
+    pub initial_selection_end: u32,
+}
+
+impl EditorInfo {
+    pub fn text_default() -> Self {
+        Self {
+            input_type: "text".to_string(),
+            hint: String::new(),
+            initial_text: String::new(),
+            initial_selection_start: 0,
+            initial_selection_end: 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct EditorFocus {
+    pub pid: i32,
+    pub editor_info: EditorInfo,
+}
+
+fn editor_focus() -> &'static Mutex<Option<EditorFocus>> {
+    static EF: OnceLock<Mutex<Option<EditorFocus>>> = OnceLock::new();
+    EF.get_or_init(|| Mutex::new(None))
+}
+
+pub fn current_editor_focus() -> Option<EditorFocus> {
+    editor_focus().lock().ok().and_then(|m| m.clone())
+}
+
+/// Set the focused editor. Returns the prior focus (if any), so the
+/// caller can dispatch `on-editor-detached` to the previous focused
+/// app's IME before sending `on-editor-attached` to the new one.
+pub fn set_editor_focus(new: Option<EditorFocus>) -> Option<EditorFocus> {
+    let mut m = editor_focus().lock().ok()?;
+    let prev = m.clone();
+    *m = new;
+    prev
+}
+
 pub fn current_foreground() -> Option<String> {
     foreground().lock().ok().and_then(|m| m.clone())
 }
@@ -75,7 +164,21 @@ pub fn remove(app_id: &str) -> Option<AppState> {
     if current_foreground().as_deref() == Some(app_id) {
         let _ = set_foreground(None);
     }
-    registry().lock().ok().and_then(|mut m| m.remove(app_id))
+    // Task 47 step 1 — if the removed app was the active IME, clear
+    // that pointer too. The arbiter caller will fall back to "no IME"
+    // (or re-promote a different installed IME).
+    if current_active_ime().map(|i| i.app_id) == Some(app_id.to_string()) {
+        let _ = set_active_ime(None);
+    }
+    // If the removed app had a focused editor, clear it — the editor
+    // is dead with its host process.
+    let removed = registry().lock().ok().and_then(|mut m| m.remove(app_id));
+    if let Some(ref s) = removed {
+        if current_editor_focus().map(|f| f.pid) == Some(s.pid) {
+            let _ = set_editor_focus(None);
+        }
+    }
+    removed
 }
 
 pub fn get(app_id: &str) -> Option<AppState> {
