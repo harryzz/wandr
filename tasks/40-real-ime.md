@@ -656,6 +656,44 @@ If/when task 40 work resumes:
   windowToken back into the session-5 showSoftInput probe and verify
   Gboard appears.
 
+### Pre-Path-A maintenance (2026-05-27)
+
+**Upgraded rsbinder + rsbinder-aidl from 0.7.0 to 0.8.0** ahead of
+any future Path A work, for the bug fixes that matter more with a
+larger AIDL surface:
+
+- FD `flat_binder_object` writing 4 bytes of uninitialized memory
+  (Rust UB) — fixed (PR #118)
+- `handle_to_proxy` deadlock on re-entrant `BR_DEAD_BINDER` —
+  fixed (PR #118)
+- Native binder UAF in `flat_binder_object` encoding — fixed (PR #106)
+- Proxy obituary correctness (death-notification sync) — fixed
+  (PRs #104, #105)
+- AIDL codegen: `Builder::generate()` now auto-emits
+  `cargo:rerun-if-changed=` for transitively-resolved imports
+  (PR #132) — we kept the existing manual lines as defensive
+  duplication
+- AIDL codegen: enum defaults resolved by target type (PR #121),
+  non-nullable interface fields in parcelables → `Option`
+  (PR #121 dirty-fix) — could matter for WMS parcelables with
+  interface fields
+
+Breaking-change cost in our tree: 3 lines in `wart-host/src/binder.rs`
+(replaced `catch_unwind` shim with direct `Result` handling, since
+`ProcessState::init_default()` now returns
+`Result<&'static ProcessState, Box<dyn Error>>`).
+
+NOT fixed in 0.8.0 (our session-5 friction stays):
+- Nested-class parcelable syntax (`parcelable Foo.Bar;`) — our
+  `ImeTracker.Token` rename-stub workaround still needed
+- `Status::code()` still private — our `Into<StatusCode>` workaround
+  still needed
+- No new `IBinder` fabrication API — still need Bn-server tricks
+
+Device-smoke-verified: all four IME probes (`isImeTraceEnabled`,
+`addClient`, `startInputOrWindowGainedFocus` ×2 modes,
+`showSoftInput`) produce identical output to 0.7.0. No regression.
+
 ## Related
 
 - [[project-ime-options]] — the standing-decision memo (now overturned for path B).
