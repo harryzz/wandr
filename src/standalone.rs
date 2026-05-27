@@ -189,6 +189,16 @@ fn run_cwasm_loop(
     // promote-to-fg and ensures z-order + lifecycle.
     let mut last_role: Option<crate::app_role::AppRole> = None;
 
+    // Task 47 step 3a — per-host control socket for arbiter-pushed
+    // events. The accept thread listens on
+    // /data/local/tmp/wart-host-<pid>.sock; the queue drain below
+    // dispatches each event into the guest in the render-loop
+    // thread (where the Store lives — wasmtime Store is !Send).
+    match crate::ime_inbound::spawn_listener() {
+        Ok(path) => log::info!("standalone: ime-inbound listening on {path}"),
+        Err(e)   => log::warn!("standalone: ime-inbound spawn failed: {e:#}"),
+    }
+
     // ── Render loop — mirrors WindowEvent::RedrawRequested, no winit ─────
     let frame_target = std::time::Duration::from_millis(16);
     let mut frame: u64 = 0;
@@ -296,6 +306,21 @@ fn run_cwasm_loop(
                     &skiko, &mut store, action, ev.key_code, ev.meta_state,
                 ) {
                     log::warn!("standalone: dispatch_android_key failed: {e:#}");
+                }
+            }
+        }
+
+        // Task 47 step 3a — drain arbiter-pushed IME events (key
+        // synthesis from a virtual keyboard). Same per-frame
+        // pattern as the InputFlinger drain above.
+        for ev in crate::ime_inbound::drain_queue() {
+            match ev {
+                crate::ime_inbound::InboundEvent::KeyEvent { code_point, key_id, action } => {
+                    if let Err(e) = crate::input::dispatch_key_v2(
+                        &skiko, &mut store, action, code_point, key_id,
+                    ) {
+                        log::warn!("standalone: dispatch_key_v2 (ime-inbound) failed: {e:#}");
+                    }
                 }
             }
         }
