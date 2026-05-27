@@ -48,31 +48,32 @@ import androidx.compose.ui.unit.sp
 import org.jetbrains.skiko.wasi.wit.Canvas as WitCanvas
 import org.jetbrains.skiko.wasi.wit.Keyboard as WitKeyboard
 
-// ─── AKEYCODE_* constants ────────────────────────────────────────────
+// ─── Compose Key constants ───────────────────────────────────────────
 //
-// Mapped from frameworks/base/core/java/android/view/KeyEvent.java.
-// Used as the `key-id` arg to sendKeyEvent so wart-host's
-// dispatch_key_v2 sees the same keycode a hardware key press would
-// generate. Printable characters that don't have a clean AKEYCODE_*
-// equivalent fall back to keyId=0; codePoint carries the actual char.
+// Numeric IDs match upstream Compose's webMain hard-codes for
+// `Key.Backspace`, `Key.Enter`, etc. — the same values the host's
+// winit branch sends through `on-key-event-v2` (see wart-host
+// lib.rs:512-528) so a guest can pass `key-id` straight into
+// `Key(keyId.toLong())` without a translation table. NOT the same
+// as Android's AKEYCODE_* (Backspace=67, Enter=66 there) — the
+// dispatch_key_v2 path doesn't translate, so the IME must send
+// what the guest expects.
+//
+// For printable characters (letters / digits / punctuation), `key-id`
+// is 0 and `code-point` carries the char (matching the winit `_ => 0`
+// fallback). The guest's BasicTextField inserts based on code-point.
 
-private const val AKEYCODE_0:        Int = 7
-private const val AKEYCODE_A:        Int = 29
-private const val AKEYCODE_DEL:      Int = 67   // backspace
-private const val AKEYCODE_ENTER:    Int = 66
-private const val AKEYCODE_SPACE:    Int = 62
-private const val AKEYCODE_COMMA:    Int = 55
-private const val AKEYCODE_PERIOD:   Int = 56
+private const val KEY_BACKSPACE: Int = 8
+private const val KEY_TAB:       Int = 9
+private const val KEY_ENTER:     Int = 13
+private const val KEY_ESCAPE:    Int = 27
+private const val KEY_SPACE:     Int = 32
 
-/** Map a printable char to a sensible AKEYCODE; 0 for "no specific keycode". */
-private fun akeycodeFor(c: Char): Int = when (c) {
-    in 'a'..'z' -> AKEYCODE_A + (c - 'a')
-    in 'A'..'Z' -> AKEYCODE_A + (c - 'A')
-    in '0'..'9' -> AKEYCODE_0 + (c - '0')
-    ' '         -> AKEYCODE_SPACE
-    ','         -> AKEYCODE_COMMA
-    '.'         -> AKEYCODE_PERIOD
-    else        -> 0
+/** Map a printable char to a sensible key-id; 0 for "letters / digits /
+ *  punctuation" (the guest uses code-point for those). */
+private fun keyIdFor(c: Char): Int = when (c) {
+    ' ' -> KEY_SPACE
+    else -> 0
 }
 
 /** Fire-and-forget a down + up pair via the IME WIT verb. */
@@ -128,9 +129,10 @@ data class KeyboardLayout(
 
 object ImeKeyboardDefaults {
 
-    /** Character codepoint of `c` plus a sensible AKEYCODE_*. */
+    /** Character codepoint of `c` plus a Compose-compatible key-id
+     *  (0 for letters — the field uses code-point). */
     private fun letter(c: Char): KeyDef =
-        KeyDef(c.toString(), KeyAction.Send(c.code, akeycodeFor(c)))
+        KeyDef(c.toString(), KeyAction.Send(c.code, keyIdFor(c)))
 
     /** Codepoint of the first character (handles surrogate-pair emoji). */
     private fun firstCodePoint(s: String): Int {
@@ -146,13 +148,21 @@ object ImeKeyboardDefaults {
 
     /** Printable codepoint that isn't a standard letter — digits, punctuation, emoji. */
     private fun text(s: String, codePoint: Int = firstCodePoint(s)): KeyDef {
-        val keyId = if (s.length == 1) akeycodeFor(s[0]) else 0
+        val keyId = if (s.length == 1) keyIdFor(s[0]) else 0
         return KeyDef(s, KeyAction.Send(codePoint, keyId))
     }
 
-    private val backspace = KeyDef("⌫", KeyAction.Send(0, AKEYCODE_DEL),   width = 1.5f)
-    private val space     = KeyDef(" ", KeyAction.Send(32, AKEYCODE_SPACE), width = 4.0f)
-    private val enter     = KeyDef("⏎", KeyAction.Send(0, AKEYCODE_ENTER), width = 1.5f)
+    // For Enter, send code-point=10 ('\n') alongside KEY_ENTER so the
+    // focused field can insert a newline (multi-line BasicTextField) OR
+    // dispatch its IME action (single-line). Pure key-id=13 with
+    // code-point=0 leaves singleLine fields without text to insert and
+    // they trigger imeAction defaults — usually a focus reset / submit
+    // — which is what the user saw as "cursor jumps to the beginning,
+    // no newline". The '\n' codepoint gives multi-line fields the char
+    // they need.
+    private val backspace = KeyDef("⌫", KeyAction.Send(0,  KEY_BACKSPACE), width = 1.5f)
+    private val space     = KeyDef(" ", KeyAction.Send(32, KEY_SPACE),     width = 4.0f)
+    private val enter     = KeyDef("⏎", KeyAction.Send(10, KEY_ENTER),     width = 1.5f)
     private val hide      = KeyDef("⌄", KeyAction.Hide,                    width = 1f)
 
     /** Top digits row (1-9, 0) — shared across language layouts. */
