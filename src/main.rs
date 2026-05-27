@@ -38,6 +38,17 @@ use crate::state::AppState;
 
 const ARBITER_SOCK_PATH: &str = "/data/local/tmp/wart-arbiter.sock";
 
+/// Where the running-apps state is persisted between daemon restarts.
+/// Children of the zygote outlive arbiter restarts; this lets us
+/// reattach to them via `kill(pid, 0)` liveness checks rather than
+/// starting with an empty map every time.
+const ARBITER_STATE_PATH: &str = "/data/local/tmp/wart-arbiter-state.json";
+
+/// Panic-hook destination. The arbiter is small + mostly synchronous,
+/// but if a Mutex gets poisoned or some socket I/O panics, we want a
+/// trail visible on the next startup.
+const ARBITER_CRASH_PATH: &str = "/data/local/tmp/wart-arbiter-crash.json";
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     // Initialize logger up front — both daemon and client modes log
@@ -135,6 +146,25 @@ fn run_daemon() -> Result<()> {
     log::info!("wart-arbiter: starting daemon — sock={ARBITER_SOCK_PATH}");
     log::info!("wart-arbiter: zygote sock = {}", zygote_client::zygote_sock_path());
 
+    // Task 46 crash-marker — panic-hook drops a JSON file on the way
+    // out, drained + logged on next startup.
+    install_panic_hook();
+    drain_prior_crash_marker();
+
+    // Task 46 crash-marker — restore in-memory state from disk. Each
+    // persisted pid is liveness-checked via `kill(pid, 0)`; survivors
+    // are re-inserted, dead ones are dropped + logged.
+    match state::restore_from(Path::new(ARBITER_STATE_PATH)) {
+        Ok((alive, dead)) => {
+            log::info!(
+                "wart-arbiter: state restore — {alive} alive app(s) re-attached, {dead} dropped"
+            );
+        }
+        Err(e) => {
+            log::warn!("wart-arbiter: state restore failed: {e:#} (continuing with empty state)");
+        }
+    }
+
     let sock_path = Path::new(ARBITER_SOCK_PATH);
     if sock_path.exists() {
         std::fs::remove_file(sock_path)
@@ -178,7 +208,7 @@ fn handle_client(mut stream: UnixStream) -> Result<()> {
         None => (line, String::new()),
     };
 
-    match verb {
+    let result = match verb {
         "launch"          => cmd_launch(&mut stream, &rest, /*gui=*/ true),
         "launch-headless" => cmd_launch(&mut stream, &rest, /*gui=*/ false),
         "kill"            => cmd_kill(&mut stream, &rest),
@@ -189,7 +219,47 @@ fn handle_client(mut stream: UnixStream) -> Result<()> {
             writeln!(stream, "ERR unknown-command {other}")?;
             Ok(())
         }
+    };
+
+    // Task 46 crash-marker — persist state after every command. The
+    // mutating commands (launch / kill / foreground) need this so
+    // post-restart we see the right apps + fg; non-mutating (list /
+    // preload) save anyway because it's cheap (one ~1 KB write) and
+    // the simpler code path is worth the micro-cost.
+    if let Err(e) = state::save_to(Path::new(ARBITER_STATE_PATH)) {
+        log::warn!("wart-arbiter: state save failed: {e:#}");
     }
+
+    result
+}
+
+// ─── Crash marker (task 46 crash-marker) ──────────────────────────────
+
+fn install_panic_hook() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        prev(info);
+        let ts = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let msg = format!("{info}")
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n");
+        let body = format!("{{\"ts\":{ts},\"panic\":\"{msg}\"}}\n");
+        let _ = std::fs::write(ARBITER_CRASH_PATH, body);
+    }));
+}
+
+fn drain_prior_crash_marker() {
+    let p = Path::new(ARBITER_CRASH_PATH);
+    if !p.exists() { return; }
+    match std::fs::read_to_string(p) {
+        Ok(s) => log::error!("wart-arbiter: prior run crashed — {}", s.trim()),
+        Err(e) => log::warn!("wart-arbiter: prior crash marker unreadable: {e}"),
+    }
+    let _ = std::fs::remove_file(p);
 }
 
 // ─── Policy helpers (task 46 step 4) ─────────────────────────────────
