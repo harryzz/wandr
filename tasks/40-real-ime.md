@@ -696,6 +696,11 @@ Device-smoke-verified: all four IME probes (`isImeTraceEnabled`,
 
 ## Related
 
+- `tasks/44-wms-window-registration.md` — **prerequisite for
+  shipping real Gboard**. Spin-out of session 6's WMS-gate finding
+  (path A). Vendor IWindowManager + addToDisplay to become
+  WMS-tracked-focused. Task 40 resumes with session 7 once task 44
+  ships.
 - [[project-ime-options]] — the standing-decision memo (now overturned for path B).
 - [[feedback-ime-options]] — the older multi-path summary.
 - [[feedback-softkeyboard]] — current in-canvas keyboard state (the path B replaces).
