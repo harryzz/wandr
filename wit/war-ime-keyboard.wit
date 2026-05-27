@@ -1,0 +1,9 @@
+package war:ime-keyboard@0.1.0;
+
+/// war.ime.keyboard's world — uses just the canonical skiko-ui
+/// interfaces. The new `my:skiko-gfx/keyboard` interface (task 47
+/// step 3b) is part of skiko-ui's imports, so including skiko-ui
+/// brings it along automatically.
+world ime-keyboard {
+    include my:skiko-gfx/skiko-ui@0.1.0;
+}
