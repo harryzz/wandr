@@ -410,6 +410,224 @@ interface ISurfaceComposer {
         std::fs::write(&surface_composer_path, surface_composer_stub)
             .expect("patch ISurfaceComposer.aidl");
 
+        // ── WMS AIDLs (task 44 session 7) ────────────────────────────────
+        // We talk to system_server's `window` service to register a real
+        // WMS window from a non-Activity process (the prerequisite for
+        // task 40 to summon Gboard — IMMS gates showSoftInput on
+        // mCurFocusedWindowClient, which is fed by WMS, not by
+        // InputDispatcher's focus tracking).
+        //
+        // IWindowManager has 154 methods with ~30 transitive imports.
+        // Same self-healing pattern as IMM/ISurfaceComposer: rewrite
+        // the .aidl in-place with only the methods we need un-stubbed,
+        // keeping source order so transaction codes match WMS's
+        // dispatch. Session 7 needs ONE method: openSession (pos 3).
+        //
+        // IWindowSession (42 methods) — fully slot-stubbed; session 7
+        // only needs the Sp-side return value from openSession.
+        // addToDisplay/remove get un-stubbed in session 8.
+        //
+        // IWindow (16 oneway methods) — slot-stubbed; we serve this
+        // Bn-side starting session 8. Vendored now so IWindowSession's
+        // method imports (which reference IWindow) forward-resolve.
+        //
+        // IWindowSessionCallback (1 oneway method, no imports) —
+        // upstream is already minimal; passed through as-is. We serve
+        // its Bn-side server during the openSession probe.
+        //
+        // WindowManager.aidl carries WindowManager.LayoutParams as a
+        // Java nested-class parcelable (rsbinder-aidl can't handle the
+        // dot in the identifier — same issue as ImeTracker.Token).
+        // Session 7 doesn't construct LayoutParams; we just leave that
+        // file out of the Builder source list. Session 9 will patch
+        // it with a flat-name parcelable + hand-roll the wire format.
+        let iwm_methods: &[&str] = &[
+            "startViewServer", "stopViewServer", "isViewServerRunning",
+            "openSession", "getInitialDisplaySize", "getBaseDisplaySize",
+            "setForcedDisplaySize", "clearForcedDisplaySize",
+            "getInitialDisplayDensity", "getBaseDisplayDensity",
+            "getDisplayIdByUniqueId", "setForcedDisplayDensityForUser",
+            "clearForcedDisplayDensityForUser", "setForcedDisplayScalingMode",
+            "setEventDispatching", "isWindowToken", "addWindowToken",
+            "removeWindowToken", "setDisplayChangeWindowController",
+            "addShellRoot", "setShellRootAccessibilityWindow",
+            "overridePendingAppTransitionMultiThumbFuture",
+            "overridePendingAppTransitionRemote", "endProlongedAnimations",
+            "startFreezingScreen", "stopFreezingScreen", "disableKeyguard",
+            "reenableKeyguard", "exitKeyguardSecurely", "isKeyguardLocked",
+            "isKeyguardSecure", "dismissKeyguard",
+            "addKeyguardLockedStateListener",
+            "removeKeyguardLockedStateListener", "setSwitchingUser",
+            "closeSystemDialogs", "getAnimationScale", "getAnimationScales",
+            "setAnimationScale", "setAnimationScales",
+            "getCurrentAnimatorScale", "setInTouchMode",
+            "setInTouchModeOnAllDisplays", "isInTouchMode",
+            "showStrictModeViolation", "setStrictModeVisualIndicatorPreference",
+            "refreshScreenCaptureDisabled", "getDefaultDisplayRotation",
+            "getDisplayUserRotation", "watchRotation", "removeRotationWatcher",
+            "registerProposedRotationListener",
+            "getPreferredOptionsPanelGravity", "freezeRotation",
+            "thawRotation", "isRotationFrozen", "freezeDisplayRotation",
+            "thawDisplayRotation", "isDisplayRotationFrozen",
+            "setFixedToUserRotation", "setIgnoreOrientationRequest",
+            "screenshotWallpaper", "mirrorWallpaperSurface",
+            "registerWallpaperVisibilityListener",
+            "unregisterWallpaperVisibilityListener",
+            "registerSystemGestureExclusionListener",
+            "unregisterSystemGestureExclusionListener",
+            "requestAssistScreenshot", "hideTransientBars",
+            "setRecentsVisibility", "updateStaticPrivacyIndicatorBounds",
+            "setNavBarVirtualKeyHapticFeedbackEnabled", "hasNavigationBar",
+            "lockNow", "isSafeModeEnabled", "clearWindowContentFrameStats",
+            "getWindowContentFrameStats", "getDockedStackSide",
+            "registerPinnedTaskListener", "requestAppKeyboardShortcuts",
+            "requestImeKeyboardShortcuts", "getStableInsets",
+            "registerShortcutKey", "createInputConsumer",
+            "destroyInputConsumer", "getCurrentImeTouchRegion",
+            "registerDisplayFoldListener", "unregisterDisplayFoldListener",
+            "registerDisplayWindowListener", "unregisterDisplayWindowListener",
+            "startWindowTrace", "stopWindowTrace", "saveWindowTraceToFile",
+            "isWindowTraceEnabled", "startTransitionTrace",
+            "stopTransitionTrace", "isTransitionTraceEnabled",
+            "getWindowingMode", "setWindowingMode", "getRemoveContentMode",
+            "setRemoveContentMode", "shouldShowWithInsecureKeyguard",
+            "setShouldShowWithInsecureKeyguard", "shouldShowSystemDecors",
+            "setShouldShowSystemDecors", "getDisplayImePolicy",
+            "setDisplayImePolicy", "syncInputTransactions", "isLayerTracing",
+            "setLayerTracing", "mirrorDisplay",
+            "setDisplayWindowInsetsController",
+            "updateDisplayWindowRequestedVisibleTypes", "getWindowInsets",
+            "getPossibleDisplayInfo", "showGlobalActions",
+            "setLayerTracingFlags", "setActiveTransactionTracing",
+            "requestScrollCapture", "holdLock",
+            "getSupportedDisplayHashAlgorithms", "verifyDisplayHash",
+            "setDisplayHashThrottlingEnabled",
+            "attachWindowContextToDisplayArea",
+            "attachWindowContextToWindowToken",
+            "attachWindowContextToDisplayContent", "detachWindowContext",
+            "reparentWindowContextToDisplayArea",
+            "registerCrossWindowBlurEnabledListener",
+            "unregisterCrossWindowBlurEnabledListener",
+            "isTaskSnapshotSupported", "getImeDisplayId",
+            "setTaskSnapshotEnabled", "registerTaskFpsCallback",
+            "unregisterTaskFpsCallback", "snapshotTaskForRecents",
+            "setRecentsAppBehindSystemBars",
+            "getLetterboxBackgroundColorInArgb",
+            "isLetterboxBackgroundMultiColored", "captureDisplay",
+            "isGlobalKey", "addToSurfaceSyncGroup",
+            "markSurfaceSyncGroupReady", "notifyScreenshotListeners",
+            "replaceContentOnDisplay", "registerDecorViewGestureListener",
+            "unregisterDecorViewGestureListener",
+            "registerTrustedPresentationListener",
+            "unregisterTrustedPresentationListener",
+            "registerScreenRecordingCallback",
+            "unregisterScreenRecordingCallback", "setGlobalDragListener",
+            "transferTouchGesture",
+            "getApplicationLaunchKeyboardShortcuts",
+        ];
+        assert_eq!(iwm_methods.len(), 154, "IWindowManager method count drift");
+        assert_eq!(iwm_methods[3], "openSession", "openSession must be at pos 3");
+
+        let mut iwm_body = String::from(
+            "// Auto-patched by wart-host/build.rs (task 44 session 7).\n\
+             // Source order preserved -- WMS dispatches by transaction code.\n\
+             // Only openSession (pos 3) un-stubbed.\n\
+             package android.view;\n\
+             \n\
+             import android.view.IWindowSession;\n\
+             import android.view.IWindowSessionCallback;\n\
+             \n\
+             interface IWindowManager {\n",
+        );
+        for (i, name) in iwm_methods.iter().enumerate() {
+            if i == 3 {
+                iwm_body.push_str(
+                    "    IWindowSession openSession(in IWindowSessionCallback callback);\n",
+                );
+            } else {
+                iwm_body.push_str(&format!("    void slot_{:03}_{}();\n", i, name));
+            }
+        }
+        iwm_body.push_str("}\n");
+        let iwm_aidl_path = imm_aidl_dir.join("android/view/IWindowManager.aidl");
+        std::fs::write(&iwm_aidl_path, iwm_body)
+            .expect("patch IWindowManager.aidl");
+
+        // IWindowSession — 42 methods, all slot-stubbed for session 7.
+        // Session 8 un-stubs addToDisplay (pos 0) + remove (pos 3).
+        let iws_methods: &[&str] = &[
+            "addToDisplay", "addToDisplayAsUser",
+            "addToDisplayWithoutInputChannel", "remove", "relayout",
+            "relayoutAsync", "outOfMemory", "setInsets", "finishDrawing",
+            "performDrag", "dropForAccessibility", "reportDropResult",
+            "cancelDragAndDrop", "dragRecipientEntered",
+            "dragRecipientExited", "setWallpaperPosition",
+            "setWallpaperZoomOut", "setShouldZoomOutWallpaper",
+            "wallpaperOffsetsComplete", "setWallpaperDisplayOffset",
+            "sendWallpaperCommand", "wallpaperCommandComplete",
+            "onRectangleOnScreenRequested", "getWindowId", "pokeDrawLock",
+            "startMovingTask", "finishMovingTask", "updateTapExcludeRegion",
+            "updateRequestedVisibleTypes",
+            "reportSystemGestureExclusionChanged",
+            "reportDecorViewGestureInterceptionChanged",
+            "reportKeepClearAreasChanged", "grantInputChannel",
+            "updateInputChannel", "grantEmbeddedWindowFocus",
+            "generateDisplayHash", "setOnBackInvokedCallbackInfo",
+            "clearTouchableRegion", "cancelDraw",
+            "moveFocusToAdjacentWindow",
+            "notifyImeWindowVisibilityChangedFromClient",
+            "notifyInsetsAnimationRunningStateChanged",
+        ];
+        assert_eq!(iws_methods.len(), 42, "IWindowSession method count drift");
+        let mut iws_body = String::from(
+            "// Auto-patched by wart-host/build.rs (task 44 session 7).\n\
+             // Source order preserved. All methods slot-stubbed; session 8\n\
+             // un-stubs addToDisplay + remove.\n\
+             package android.view;\n\
+             \n\
+             interface IWindowSession {\n",
+        );
+        for (i, name) in iws_methods.iter().enumerate() {
+            iws_body.push_str(&format!("    void slot_{:03}_{}();\n", i, name));
+        }
+        iws_body.push_str("}\n");
+        let iws_aidl_path = imm_aidl_dir.join("android/view/IWindowSession.aidl");
+        std::fs::write(&iws_aidl_path, iws_body)
+            .expect("patch IWindowSession.aidl");
+
+        // IWindow — 16 oneway methods, all slot-stubbed. We serve this
+        // Bn-side starting session 8 (WMS calls back on resize/inset/
+        // focus changes); session 7 doesn't need it, but it's an
+        // import of WindowManager-adjacent AIDLs so we vendor it now.
+        let iw_methods: &[&str] = &[
+            "executeCommand", "resized", "insetsControlChanged",
+            "showInsets", "hideInsets", "moved", "dispatchAppVisibility",
+            "dispatchGetNewSurface", "closeSystemDialogs",
+            "dispatchWallpaperOffsets", "dispatchWallpaperCommand",
+            "dispatchDragEvent", "dispatchWindowShown",
+            "requestAppKeyboardShortcuts", "requestScrollCapture",
+            "dumpWindow",
+        ];
+        assert_eq!(iw_methods.len(), 16, "IWindow method count drift");
+        let mut iw_body = String::from(
+            "// Auto-patched by wart-host/build.rs (task 44 session 7).\n\
+             // Source order preserved. All methods slot-stubbed; session 8\n\
+             // un-stubs the ones WMS actually calls back on after addToDisplay.\n\
+             package android.view;\n\
+             \n\
+             oneway interface IWindow {\n",
+        );
+        for (i, name) in iw_methods.iter().enumerate() {
+            iw_body.push_str(&format!("    void slot_{:03}_{}();\n", i, name));
+        }
+        iw_body.push_str("}\n");
+        let iw_aidl_path = imm_aidl_dir.join("android/view/IWindow.aidl");
+        std::fs::write(&iw_aidl_path, iw_body)
+            .expect("patch IWindow.aidl");
+
+        // IWindowSessionCallback is already minimal upstream (1 oneway
+        // method, no imports). Used as-is — no patch needed.
+
         // Pass only the interface .aidl files; parcelables/enums in the same
         // package are resolved automatically via include_dir. Passing the full
         // dir causes the package modules to be re-emitted once per file (~3×).
@@ -424,6 +642,10 @@ interface ISurfaceComposer {
             .source(aaudio_aidl.join("aaudio/IAAudioService.aidl"))
             .source(aaudio_aidl.join("aaudio/IAAudioClient.aidl"))
             .source(surfaceflinger_aidl_main.join("android/gui/ISurfaceComposer.aidl"))
+            .source(imm_aidl_dir.join("android/view/IWindowManager.aidl"))
+            .source(imm_aidl_dir.join("android/view/IWindowSession.aidl"))
+            .source(imm_aidl_dir.join("android/view/IWindow.aidl"))
+            .source(imm_aidl_dir.join("android/view/IWindowSessionCallback.aidl"))
             .source(imm_aidl_path.clone())
             .include_dir(vibrator_aidl.clone())
             .include_dir(light_aidl.clone())

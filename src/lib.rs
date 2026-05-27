@@ -20,6 +20,7 @@ mod binder_aidl;
 mod binder_shared_memory;
 mod display_impl;
 pub mod ime_impl;
+pub mod wms_impl;
 mod eventfd_signal;
 mod assets_impl;
 mod theme_impl;
