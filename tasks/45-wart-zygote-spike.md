@@ -154,6 +154,91 @@ ever calls binder::init even for diagnostics).
 Success criterion: two concurrent `--zygote-launch md-smoke-rust`
 calls complete OK; `pmap` shows shared engine pages.
 
+#### Step 1 results (2026-05-27)
+
+**Outcome:** ✅ both criteria met. Device-verified on Pixel 2 XL.
+
+**Run** (after building and packaging `md-smoke-rust` as a `.warpkg`
+— the on-disk `/tmp/md-smoke.warpkg` from `smoke-markdown.sh` is the
+Kotlin variant which hits the orthogonal task-37 command-adapter
+throw):
+
+```
+$ adb shell "su -c '… --zygote-launch com.example.md-smoke-rust'"
+launched com.example.md-smoke-rust → pid 6128
+launched com.example.md-smoke-rust → pid 6148
+```
+
+Logcat showed both children loading the preloaded engine, walking the
+dep chain (markdown system bundle wired in), calling `wasi:cli/run.run`,
+and exiting cleanly. Total time per launch: ~25 ms from fork to
+`call_run returned Ok` (faster than `--run-once` direct because the
+Cranelift / type-registry state was already populated in the parent).
+
+**COW analysis** (with `WART_ZYGOTE_HOLD_SECS=30` to freeze children
+right after fork for `/proc/<pid>/smaps_rollup` sampling):
+
+|                | Parent    | Child #1  | Child #2  |
+|----------------|-----------|-----------|-----------|
+| Rss            | 24276 kB  | 6352 kB   | 6352 kB   |
+| Pss            | 16306     | 2130      | 2124      |
+| Shared_Clean   |  4796     |  280      |  280      |
+| Shared_Dirty   |  6200     | 5964      | 5976      |
+| Private_Clean  | 13184     |    0      |    0      |
+| Private_Dirty  |    96     |  108      |   96      |
+| Anonymous      |  6068     | 6068      | 6068      |
+
+What this shows:
+- **Anonymous heap pages are byte-identical across parent + both
+  children (6068 kB each).** This is the wasmtime engine's Rust-heap
+  allocations (Cranelift caches, type registry, etc.) — COW-shared
+  perfectly. This is the core win the zygote model exists for.
+- **`Shared_Dirty` ≈ 6 MB across both children** matches the parent's
+  pre-fork dirty pages, exactly as expected.
+- **The 18 MB Rss gap (parent's 24 vs child's 6) is unmapped
+  (lazy-paged) file-backed code** — children haven't faulted in
+  most of the wart-host binary / libc / libskia yet. When children
+  run real code they'll page in shared-clean pages from the page
+  cache (still cheap, no copy).
+- **`Private_Clean=0` in both children** confirms the kernel hasn't
+  yet attributed any "exclusively-owned" pages to the children;
+  everything they have is inherited or anonymous-COW.
+
+**At-MVP-scale savings are modest** because we only preload the
+engine, not the Component or Skia state. Once we add Component
+preload (a follow-up — moves the ~13 MB private engine+component
+state into shared) and Skia preload (another ~5-15 MB), the savings
+will be meaningful. The architectural validation is what step 1
+proves: **`fork()` + wasmtime engine survives cleanly on this
+device, COW works, no signal-handler / Adreno / binder landmines
+fire on this code path.**
+
+**What broke / what we noted:**
+
+- `/tmp/md-smoke.warpkg` from `smoke-markdown.sh` packages the
+  Kotlin variant, which hits the orthogonal task-37 command-adapter
+  throw. Used the Rust variant (`md-smoke-rust/`) instead by
+  hand-packaging it into `/tmp/md-smoke-rust.warpkg`. Suggestion
+  for `smoke-markdown.sh` to also package + install the Rust
+  variant as `com.example.md-smoke-rust` for forward smoke tests.
+- Zombie children pile up after exit because the zygote parent
+  doesn't `waitpid()` them. SIGCHLD-handler-driven reap should be
+  step 2 polish.
+- The smoke socket is `/data/local/tmp/wart-zygote.sock` (D2 dev
+  path); production move to `/dev/socket/wart-zygote` deferred to
+  task 46 (init.rc + sepolicy).
+
+**Files touched (committed in this step):**
+
+- `wart-host/src/zygote.rs` (new) — fork loop + UNIX socket +
+  child dispatch.
+- `wart-host/src/run_once.rs` — refactored `run` to wrap a new
+  `run_with_engine` that takes a caller-supplied `Engine`.
+- `wart-host/src/lib.rs` — `pub mod zygote;` (Android-only).
+- `wart-host/src/main.rs` — `--zygote` and `--zygote-launch
+  <app-id>` CLI flags.
+- `tasks/45-wart-zygote-spike.md` — this section.
+
 ### Step 2 — EGL re-init in child + SF surface (2-3 days)
 
 - Refactor the existing `standalone.rs` to factor out the

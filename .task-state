@@ -1,5 +1,5 @@
 TASK=45
-STEP=scope-review
-STATUS=in-progress
-LAST_SUCCESS=Task 44 postponed 2026-05-27 — at odds with locked §9 Hybrid-zygote model. Pivoted to task 45: spike wart-zygote MVP. Scope doc tasks/45-wart-zygote-spike.md drafted with 7 pre-spike design decisions (D1-D7) and 5 implementation steps.
-NOTES=Awaiting user review of scope doc + design decisions before starting step 1 (fork + headless cwasm).
+STEP=verify-done
+STATUS=complete
+LAST_SUCCESS=Task 45 step 1 verified OK 2026-05-27 — wart-host --zygote forks; two concurrent --zygote-launch com.example.md-smoke-rust calls complete with call_run returned Ok in ~25ms each; smaps_rollup confirms 6 MB wasmtime engine Anonymous-heap COW-shared between parent + both children; no signal/Adreno/binder landmines fire.
+NOTES=Ready for step 2 (EGL re-init in child + SF surface — full Compose render loop). md-smoke.warpkg packaged from smoke-markdown.sh is the Kotlin variant which hits task-37 throw; hand-packaged Rust variant as /tmp/md-smoke-rust.warpkg for step 1 smoke (suggestion to add to script).
