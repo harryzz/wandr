@@ -18,6 +18,10 @@ type InputPollFn = unsafe extern "C" fn(*mut SfInputEvent, i32) -> i32;
 type QueryHintFn = unsafe extern "C" fn() -> u32;
 /// `int32_t sf_request_focus(void)`.
 type RequestFocusFn = unsafe extern "C" fn() -> i32;
+/// `int32_t sf_set_layer(int32_t z)` — task 46 step 4/5.
+type SetLayerFn = unsafe extern "C" fn(i32) -> i32;
+/// `int32_t sf_set_visible(int32_t visible)` — task 46 step 4/5.
+type SetVisibleFn = unsafe extern "C" fn(i32) -> i32;
 
 /// POD input event drained from the shim's InputFlinger channel. Mirrors
 /// `struct SfInputEvent` in `cpp/sf_surface.{cpp,h}` — keep all three in sync.
@@ -58,6 +62,16 @@ pub struct SfSurface {
     /// `sf_request_focus` — `None` if the shim predates standalone key
     /// support; the host calls this periodically to keep wart focused.
     request_focus: Option<RequestFocusFn>,
+    /// `sf_set_layer` — `None` if the shim predates task 46. When the
+    /// arbiter (step 4) demotes an app to background it pushes z to 0;
+    /// promotion to foreground pulls z back to `i32::MAX`. Until the
+    /// .so is rebuilt on the AOSP a-03 host, this stays `None` and
+    /// callers fall back to "no z-order control" semantics.
+    set_layer: Option<SetLayerFn>,
+    /// `sf_set_visible` — `None` if the shim predates task 46. Backs
+    /// the cheap "hide while background / show on foreground" path
+    /// (the layer stays allocated, BBQ keeps the last frame).
+    set_visible: Option<SetVisibleFn>,
 }
 
 impl SfSurface {
@@ -103,6 +117,25 @@ impl SfSurface {
                 Some(std::mem::transmute(focus_sym))
             };
 
+            // Task 46 step 4/5 — z-order + visibility toggles. Optional
+            // (older shim builds lack them); the arbiter degrades to
+            // "no visual z-order, just lifecycle + OOM" when missing.
+            let layer_name = CString::new("sf_set_layer").unwrap();
+            let layer_sym = libc::dlsym(handle, layer_name.as_ptr());
+            let set_layer: Option<SetLayerFn> = if layer_sym.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute(layer_sym))
+            };
+
+            let visible_name = CString::new("sf_set_visible").unwrap();
+            let visible_sym = libc::dlsym(handle, visible_name.as_ptr());
+            let set_visible: Option<SetVisibleFn> = if visible_sym.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute(visible_sym))
+            };
+
             let mut w: i32 = 0;
             let mut h: i32 = 0;
             let mut t: u32 = 0;
@@ -118,7 +151,31 @@ impl SfSurface {
                 input_poll,
                 query_hint,
                 request_focus,
+                set_layer,
+                set_visible,
             })
+        }
+    }
+
+    /// Task 46 step 4/5 — reposition the wart layer on SurfaceFlinger's
+    /// z-axis. Higher z is on top; `i32::MAX` is the default. Backgrounded
+    /// apps should `set_layer(0)`. Returns `false` if the shim is too old
+    /// to expose this (the arbiter then falls back to lifecycle + OOM
+    /// without visual z-order).
+    pub fn set_layer(&self, z: i32) -> bool {
+        match self.set_layer {
+            Some(f) => unsafe { f(z) == 0 },
+            None    => false,
+        }
+    }
+
+    /// Task 46 step 4/5 — toggle wart-layer visibility. Cheaper than
+    /// re-allocating the surface for "background" — the layer stays
+    /// alive, BBQ keeps the last frame, re-showing is one round-trip.
+    pub fn set_visible(&self, visible: bool) -> bool {
+        match self.set_visible {
+            Some(f) => unsafe { f(if visible { 1 } else { 0 }) == 0 },
+            None    => false,
         }
     }
 

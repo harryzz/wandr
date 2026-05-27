@@ -49,6 +49,20 @@ int32_t sf_request_focus(void);
 // if the surface is down or the query fails.
 uint32_t sf_query_transform_hint(void);
 
+// Reposition the wart layer on the SurfaceFlinger z-axis (task 46 step 4/5).
+// `z` is an int32 — higher values are drawn on top. The default at creation
+// is INT32_MAX (top of everything except system overlays). Background apps
+// in the arbiter's policy should drop to 0; foreground returns to INT32_MAX.
+// Returns 0 on success, -1 if the surface is down.
+int32_t sf_set_layer(int32_t z);
+
+// Toggle wart-layer visibility (task 46 step 4/5). `visible` non-zero shows
+// the layer; zero hides it. Cheaper than re-creating the SF surface for
+// "background" semantics — the layer stays allocated, its BBQ keeps the
+// last frame, and re-showing is one Transaction round-trip. Returns 0 on
+// success, -1 if the surface is down.
+int32_t sf_set_visible(int32_t visible);
+
 // Release the surface/control/client and input plumbing.
 void sf_destroy_surface(void);
 

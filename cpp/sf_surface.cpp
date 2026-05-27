@@ -380,6 +380,38 @@ uint32_t sf_query_transform_hint() {
     return static_cast<uint32_t>(v);
 }
 
+// Reposition the wart layer on the SurfaceFlinger z-axis (task 46 step 4/5).
+// Higher z is drawn on top; default at creation is INT32_MAX. The arbiter
+// pushes backgrounded apps to z=0 and pulls foreground to z=INT32_MAX —
+// approximates AOSP's stacking with no shim source surface re-creation.
+int32_t sf_set_layer(int32_t z) {
+    if (g_control == nullptr) {
+        return -1;
+    }
+    SurfaceComposerClient::Transaction t;
+    t.setLayer(g_control, z);
+    t.apply(/*synchronous=*/false);
+    return 0;
+}
+
+// Toggle wart-layer visibility (task 46 step 4/5). Cheaper than re-creating
+// the surface: the layer stays allocated, its BBQ keeps the last frame, and
+// re-showing is one Transaction round-trip. The arbiter prefers this over
+// killing/relaunching the app for background transitions.
+int32_t sf_set_visible(int32_t visible) {
+    if (g_control == nullptr) {
+        return -1;
+    }
+    SurfaceComposerClient::Transaction t;
+    if (visible) {
+        t.show(g_control);
+    } else {
+        t.hide(g_control);
+    }
+    t.apply(/*synchronous=*/false);
+    return 0;
+}
+
 // Release the surface, control, client and input plumbing.
 void sf_destroy_surface() {
     g_input_consumer.reset();
