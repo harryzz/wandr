@@ -163,6 +163,25 @@ fn main() {
         }
     }
 
+    // Task 46 step 2 — PRELOAD socket command client. Used by the
+    // installer (after upgrades) and by the future wart-arbiter
+    // (predictive warm-up before launches). System bundles are
+    // auto-preloaded at zygote startup; this command handles user
+    // apps and post-upgrade refreshes.
+    if let Some(i) = args.iter().position(|a| a == "--zygote-preload") {
+        let Some(app_id) = args.get(i + 1) else {
+            eprintln!("wart-host --zygote-preload: requires <app-id>");
+            std::process::exit(2);
+        };
+        match wasm_android_host::zygote::preload_client(app_id) {
+            Ok(()) => return,
+            Err(e) => {
+                eprintln!("wart-host --zygote-preload: {e:#}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     if let Some(i) = args.iter().position(|a| a == "--install") {
         let Some(warpkg) = args.get(i + 1) else {
             eprintln!("wart-host --install: requires a <warpkg-dir> path");

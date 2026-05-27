@@ -161,6 +161,27 @@ pub fn serve(preload_app_id: Option<&str>) -> Result<()> {
     spawn_reaper();
     log::info!("wart-zygote: reaper thread spawned");
 
+    // Task 46 step 2 — auto-preload every installed system bundle.
+    // System apps (markdown, emoji, fonts, …) are imported by every
+    // Compose app; preloading them in the parent makes the
+    // deserialized `Component` values COW-shareable with every
+    // forked child. User apps under `apps/*` are NOT auto-preloaded
+    // here — they wait for an explicit `PRELOAD <app-id>` socket
+    // command from the arbiter / installer / tests (see
+    // `handle_one`).
+    let apps_root = std::env::var("WART_APPS_ROOT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("/data/wart/apps"));
+    let preloaded = crate::preload::preload_all_system_apps(
+        PRELOADED_ENGINE.get().expect("engine just set"),
+        &apps_root,
+    );
+    log::info!(
+        "wart-zygote: startup preload — {} system component(s) under {}",
+        preloaded,
+        apps_root.display(),
+    );
+
     // Bind the listen socket. Unlink any stale path first — the AF_UNIX
     // bind would otherwise fail with EADDRINUSE on a respawn.
     let sock_path = Path::new(ZYGOTE_SOCK_PATH);
@@ -219,6 +240,15 @@ fn handle_one(listener: &UnixListener, mut stream: UnixStream) -> Result<()> {
     }
     if let Some(rest) = cmd.strip_prefix("KILL ") {
         return handle_kill(&mut stream, rest, libc::SIGTERM, "KILL");
+    }
+
+    // PRELOAD — task 46 step 2. Pre-deserialize a user-app's `.cwasm`
+    // (or refresh a system-app's preload after an upgrade) so future
+    // forks COW-inherit the Component. Caller is the installer (after
+    // writing the new version) or the future arbiter (predictive
+    // warm-up before a launch).
+    if let Some(rest) = cmd.strip_prefix("PRELOAD ") {
+        return handle_preload(&mut stream, rest);
     }
 
     // Two launch shapes — the client picks. MVP keeps this explicit
@@ -381,6 +411,40 @@ fn handle_kill(
     Ok(())
 }
 
+/// Shared handler for `PRELOAD <app-id>` socket command.
+///
+/// Walks the install dir for the given app-id (tries `apps/` first,
+/// then `system-apps/`), `Component::deserialize_file`s every `.cwasm`
+/// under `<latest-version>/cache/`, and inserts them into the preload
+/// registry. Any prior preloads for the same app are dropped first
+/// (handles in-place upgrades).
+///
+/// Replies `OK <kind> <count>` on success, `ERR <reason>` on failure.
+fn handle_preload(stream: &mut UnixStream, rest: &str) -> Result<()> {
+    let app_id = rest.trim();
+    if app_id.is_empty() {
+        let _ = writeln!(stream, "ERR preload-empty-app-id");
+        return Err(anyhow!("PRELOAD: empty app-id"));
+    }
+    let apps_root = std::env::var("WART_APPS_ROOT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("/data/wart/apps"));
+    let engine = PRELOADED_ENGINE.get().expect("PRELOADED_ENGINE not set in PRELOAD handler");
+    match crate::preload::preload_either(engine, &apps_root, app_id) {
+        Ok((kind, n)) => {
+            writeln!(stream, "OK {kind} {n}")
+                .with_context(|| format!("PRELOAD ack {app_id}"))?;
+            log::info!("wart-zygote: PRELOAD {app_id} → {kind} ({n} component(s))");
+            Ok(())
+        }
+        Err(e) => {
+            let _ = writeln!(stream, "ERR preload-failed {e:#}");
+            log::warn!("wart-zygote: PRELOAD {app_id} failed: {e:#}");
+            Ok(())
+        }
+    }
+}
+
 /// Client-side: connect to the zygote, write the launch command, read
 /// the response, return the child pid on success.
 ///
@@ -420,6 +484,30 @@ pub fn launch_client(app_id: &str, gui: bool) -> Result<i32> {
         Err(anyhow!("zygote rejected: {rest}"))
     } else {
         Err(anyhow!("zygote returned malformed response: {response:?}"))
+    }
+}
+
+/// Client-side: connect to the zygote, send `PRELOAD <app-id>`,
+/// print the response.
+pub fn preload_client(app_id: &str) -> Result<()> {
+    android_logger::init_once(
+        android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
+    );
+    let mut stream = UnixStream::connect(ZYGOTE_SOCK_PATH)
+        .with_context(|| format!("connect {ZYGOTE_SOCK_PATH} — is the zygote running?"))?;
+    writeln!(stream, "PRELOAD {app_id}")?;
+    stream.flush()?;
+
+    let mut reader = BufReader::new(stream);
+    let mut response = String::new();
+    reader.read_line(&mut response)?;
+    let response = response.trim_end();
+    log::info!("wart-zygote/client: response={response:?}");
+    if response.starts_with("OK ") {
+        println!("PRELOAD {app_id} → {response}");
+        Ok(())
+    } else {
+        Err(anyhow!("zygote rejected: {response}"))
     }
 }
 

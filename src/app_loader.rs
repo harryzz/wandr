@@ -272,8 +272,18 @@ fn load_installed(
         log::debug!("loader: cache fresh for {app_id} {version_str}");
     }
 
-    let component = unsafe { Component::deserialize_file(engine, &cwasm_path) }
-        .map_err(|e| anyhow!("Component::deserialize_file({}): {e:#}", cwasm_path.display()))?;
+    // Task 46 step 2 — preload registry hit avoids the deserialize.
+    // The cwasm-on-disk path is canonicalized before lookup so the
+    // registry's keying (`preload::preload_app` uses the same
+    // canonicalization) matches.
+    let cwasm_canon = cwasm_path.canonicalize().unwrap_or(cwasm_path.clone());
+    let component = if let Some(c) = crate::preload::get(&cwasm_canon) {
+        log::debug!("loader: preload hit for {}", cwasm_canon.display());
+        c
+    } else {
+        unsafe { Component::deserialize_file(engine, &cwasm_path) }
+            .map_err(|e| anyhow!("Component::deserialize_file({}): {e:#}", cwasm_path.display()))?
+    };
     let label = format!("installed:{app_id}:{version_str}:{component_name}");
 
     // Task 36 step 5 — load same-Store deps. Reads `[dependencies_resolved]`
@@ -351,10 +361,17 @@ fn load_dep_components(
         let cwasm_path = first_cwasm(&dep_dir.join("cache")).with_context(|| {
             format!("dependency {name}: no cwasm under {}/cache", dep_dir.display())
         })?;
-        let component = unsafe { Component::deserialize_file(engine, &cwasm_path) }
-            .map_err(|e| anyhow!(
-                "dependency {name}: Component::deserialize_file({}): {e:#}", cwasm_path.display()
-            ))?;
+        let cwasm_canon = cwasm_path.canonicalize().unwrap_or(cwasm_path.clone());
+        let component = if let Some(c) = crate::preload::get(&cwasm_canon) {
+            log::debug!("loader: preload hit for dep `{name}` at {}", cwasm_canon.display());
+            c
+        } else {
+            unsafe { Component::deserialize_file(engine, &cwasm_path) }
+                .map_err(|e| anyhow!(
+                    "dependency {name}: Component::deserialize_file({}): {e:#}",
+                    cwasm_path.display()
+                ))?
+        };
         log::info!("loader: loaded dep `{name}` ({interface}) from {}", cwasm_path.display());
         deps.push(LoadedDep { name: name.clone(), interface, component });
     }
