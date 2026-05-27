@@ -31,9 +31,42 @@ class WasiKeyboardController : SoftwareKeyboardController {
     /** Drive your `if (controller.isVisible.value) WasiSoftKeyboard(...)`. */
     val isVisible: MutableState<Boolean> = mutableStateOf(false)
 
-    override fun show() { isVisible.value = true }
+    override fun show() {
+        isVisible.value = true
+        // Task 47 step 2 — also notify the arbiter via the new
+        // `my:skiko-gfx/ime` WIT verb. The arbiter routes
+        // `on-editor-attached` to the currently-active IME app.
+        //
+        // We co-exist with the in-canvas keyboard (it still renders
+        // based on `isVisible.value`); the WIT call is a separate
+        // outbound signal that lights up the protocol path without
+        // changing user-visible behavior. The "no UI swap yet"
+        // promise in the scope doc is honored — step 4 swaps the
+        // in-canvas surface for the real external IME.
+        try {
+            org.jetbrains.skiko.wasi.wit.Ime.Import.notifyEditorAttached(
+                inputType = "text",   // future: thread BasicTextField's
+                                       //         KeyboardOptions.keyboardType through
+                hint = "",
+                initialText = "",
+                selectionStart = 0u,
+                selectionEnd = 0u,
+            )
+        } catch (t: Throwable) {
+            // Defensive — if the host's ime_host_impl can't reach
+            // the arbiter (daemon down), don't fail the keyboard
+            // show. The in-canvas keyboard still works.
+        }
+    }
 
-    override fun hide() { isVisible.value = false }
+    override fun hide() {
+        isVisible.value = false
+        try {
+            org.jetbrains.skiko.wasi.wit.Ime.Import.notifyEditorDetached()
+        } catch (t: Throwable) {
+            // Same defensive pattern as show().
+        }
+    }
 }
 
 @Composable
