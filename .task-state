@@ -1,5 +1,5 @@
-TASK=46
-STEP=fully-shipped
-STATUS=complete
-LAST_SUCCESS=Task 46 fully shipped 2026-05-27. All 5 steps + crash-marker device-verified on Pixel 2 XL. Arbiter persists (app_id → pid) map + foreground to /data/local/tmp/wart-arbiter-state.json; restart re-attaches surviving children via kill(pid, 0). Panic hook drops crash.json on the way out, drained on next start.
-NOTES=Task 46 done. Other open tasks: 25 (suspend leak), 37 (Kotlin/Wasm command-adapter throw), 43 (orientation), 42 (system clipboard). Or pivot to fresh direction.
+TASK=47
+STEP=scope-committed
+STATUS=ready
+LAST_SUCCESS=Task 47 scope committed 2026-05-27. tasks/47-ime-via-guest-app.md drafted: 6 D-locked design decisions, 5-step plan, future-IMEs section (voice / emoji / CJK), file-touch map. CLAUDE.md status row added. Path B locked per user decision; Gboard-via-WMS rejected (3-6 months + reintroduces ART, breaks §9); in-canvas keyboard retired as long-term direction.
+NOTES=Ready to start step 1 when user is. Other open tasks while paused: 25 (suspend leak), 37 (Kotlin/Wasm command-adapter throw), 43 (orientation), 42 (system clipboard).

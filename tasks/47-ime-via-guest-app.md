@@ -1,0 +1,352 @@
+# Task 47 — IME via dedicated guest app (Path B)
+
+> **Status:** 🔲 scoped 2026-05-27, not started. Picked after a
+> design analysis comparing three paths (Gboard-via-our-WMS vs
+> first-party guest IME vs in-canvas). The in-canvas keyboard
+> (`feedback_softkeyboard`) was retired as a long-term direction by
+> user decision; Gboard-via-WMS rejected as 3-6 months of work that
+> reintroduces ART (breaks the §9 "no Java" lock). This is the
+> §9-aligned middle path.
+
+## Why this task exists
+
+Real IME functionality (multi-language input, voice, emoji
+picker, autocorrect, swipe typing) is the next user-facing gap
+after the Hybrid runtime stack landed in task 46. The Android-
+canonical answer (Gboard + IMMS + WMS) is structurally
+incompatible with the §9 model (see
+[[project-app-lifecycle-and-packaging]] and the discussion that
+led to this task).
+
+The architecture is one wart-native IME app per language /
+feature, all sharing one WIT contract, all switchable via the
+arbiter. First-party `war.ime.keyboard` ships first; voice and
+emoji and CJK come as separate `.warpkg`s sharing the same
+contract.
+
+Structurally close to Android — every Android IME component has
+a wart counterpart (see "Mapping to Android" below) — but uses
+our own arbiter + WIT instead of system_server + binder. No ART,
+no WMS, no IMMS.
+
+## Mapping to Android (for orientation)
+
+| Android | wart task-47 deliverable |
+|---|---|
+| IMMS (Java in system_server) | wart-arbiter gains an IME-routing module |
+| InputMethodService (Java base class) | `war.ime.keyboard` warpkg — a real wart guest, just another `.warpkg`. Same shape as any Compose app |
+| Gboard | First-party `war.ime.keyboard`. Architecture supports N IMEs as `.warpkg`s (voice, emoji, CJK each one) |
+| InputMethodManager (per-app Java facade) | `WasiInputMethod` in skiko-wasi — `imm.showSoftInput(...)` style API exposed to guests via the new WIT interface |
+| IInputMethodClient + IInputConnection (binder IPC) | WIT `war:ime/client` interface — `commit-text`, `send-key-event`, `set-selection`, `get-text-before-cursor`, etc. Arbiter routes via the generic dep-wiring proxy (task 39) |
+| EditorInfo (input type, hint metadata) | Same record passed through the WIT verb |
+| WMS focus gate | Arbiter foreground tracking (task 46 step 4) — already shipped |
+
+## Pre-task design decisions
+
+**D1. IME process model: own zygote-forked guest.** Same as wart-
+app. Forked from the wart-host zygote, COW-shares preloaded
+engine + skia + system bundles. Distinct process, distinct SF
+surface, distinct InputDispatcher focus slot.
+
+**D2. WIT, not binder.** The `war:ime/client` WIT interface
+replaces Android's `IInputMethodClient` + `IInputConnection`
+binders. Calls routed by the arbiter's generic dep-wiring
+proxy (task 39). Net win: capability gating becomes the
+component's WIT-imports list (Android's `<uses-permission>`
+XML drift is gone).
+
+**D3. IME app is a regular `.warpkg`.** No special install path,
+no special launch path. The arbiter picks which installed IME
+app is "active" via a `set-ime <app-id>` socket command;
+default is `war.ime.keyboard`. Switching is just an arbiter
+state change.
+
+**D4. First-party + extensible.** `war.ime.keyboard` is shipped
+in the wart project — same status as `war.markdown.renderer`
+and the other system bundles. Future IMEs (voice, emoji, CJK)
+are additional `.warpkg`s, NOT modifications to
+`war.ime.keyboard`. Multiple IMEs can be installed; the user
+picks the active one.
+
+**D5. Focus mechanic.** Arbiter tracks `(focused_app_pid,
+editor_info)` and `(active_ime_pid)`. When the focused app
+calls `attach-editor(EditorInfo)`, the arbiter:
+  1. Sends `set-visible(true)` + `set-layer(MAX-1)` to the IME's
+     SF surface (via the existing libsf_surface entry points).
+  2. Tells the IME via WIT that there's an editor attached, with
+     the editor's metadata.
+  3. Switches InputFlinger focus to the IME's window.
+  4. Routes keystrokes/text back to the focused app via WIT.
+
+When the focused app calls `detach-editor` (or loses
+foreground), the reverse runs: IME hidden, focus back to the
+foreground app's window.
+
+**D6. SF z-order layout.** Three layers from top to bottom:
+  - `i32::MAX`     — reserved for future system overlay
+  - `i32::MAX - 1` — IME surface
+  - `i32::MAX - 2` — foreground app surface
+  - `0`            — background app surfaces
+
+The arbiter sets these explicitly via `sf_set_layer` (task 46
+step 5 shipped). The IME app starts at MAX-1 + invisible; only
+`attach-editor` flips it to visible.
+
+## Steps
+
+### Step 1 — WIT interface + arbiter routing skeleton (~1-2 days)
+
+The protocol shape, no UI yet.
+
+- **`wit/ime-client.wit`** (new) — package `war:ime`, world
+  `ime-client-world` (exported by IME apps), world
+  `ime-host-world` (imported by editor-bearing apps).
+  - `record editor-info { input-type: input-type, hint: string,
+    initial-text: string, initial-selection: tuple<u32, u32> }`
+  - IME-side EXPORTS: `interface ime`:
+    - `on-editor-attached(editor-info)`
+    - `on-editor-detached()`
+    - `on-app-config-changed(...)` (font scale etc, future)
+  - Host-side EXPORTS (imported by IME):
+    - `interface input-connection`:
+      - `commit-text(text: string)`
+      - `send-key-event(code-point: u32, key-id: u32, action: u8)`
+      - `set-selection(start: u32, end: u32)`
+      - `get-text-before-cursor(max: u32) -> string`
+      - `get-text-after-cursor(max: u32) -> string`
+      - `finish-composing-text()`
+
+- **Arbiter routing module**: new state `EditorFocus { pid:
+  i32, editor_info: EditorInfo }` + `ActiveIme { app_id:
+  String, pid: i32 }`. New socket commands:
+  - `set-ime <app-id>` — change which IME app is active. Auto-
+    launches it if not running yet.
+  - `attach-editor <focused-pid> <editor-info-json>` — called
+    by the foreground app's host (skiko-wasi) when a text field
+    gains focus. Arbiter relays `on-editor-attached` to the IME
+    + flips visibility + focus.
+  - `detach-editor <focused-pid>` — reverse.
+  - `ime-commit-text <text>` — called by the IME app. Arbiter
+    relays to the focused app.
+
+- New module `wart-host/src/ime_impl.rs` (already exists for
+  task 40 IMMS probes — REPLACE with a new ime_router_impl.rs
+  or rename the old one to ime_imms_probe.rs to free the name).
+
+Success criterion: `wart-arbiter attach-editor <pid> '<json>'`
+from the shell triggers a logged route in the arbiter to a
+dummy IME-pid (no UI yet). Pure protocol smoke.
+
+### Step 2 — Skiko-wasi WasiInputMethod adapter (~2 days)
+
+Wires the focused-app side. When Compose's `BasicTextField`
+gains focus inside a guest, it triggers
+`PlatformTextInputMethodRequest.startInputMethod(...)`. The
+skiko-wasi actual for this calls the new WIT verb to
+`attach-editor` via the arbiter.
+
+- New `skiko/src/wasmWasiMain/kotlin/org/jetbrains/skiko/wasi/WasiInputMethod.kt`
+  — Compose `PlatformTextInputMethodRequest` actual.
+- New WIT imports on the wart-app side: the input-connection
+  interface (host-driven calls from the IME → guest's editor).
+- `compose-multiplatform-core/.../wasmWasiMain/...` actuals for
+  the `PlatformTextInputMethodRequest` extension points.
+- Replace `WasiSoftKeyboard` registration in wart-app with the
+  new external-IME path; the in-canvas keyboard's code stays in
+  tree as the fallback for when no IME app is installed.
+
+Success criterion: tapping a `BasicTextField` in wart-app logs
+`attach-editor` reaching the arbiter; tapping out logs
+`detach-editor`. No UI swap yet — keyboard is still in-canvas.
+
+### Step 3 — `war.ime.keyboard` first-party warpkg (~1 week)
+
+The actual keyboard UI. New repo `war.ime.keyboard/` (sibling
+to `wart-arbiter` / `markdown-renderer` / etc).
+
+- Compose Material3 UI, fullwidth at the bottom of the screen.
+- QWERTY layout, shift/caps lock, basic punctuation, numbers
+  via secondary layer, backspace, enter, space.
+- WIT imports: `war:ime/input-connection` (calls `commit-text`,
+  `send-key-event`, etc).
+- WIT exports: `war:ime/ime` (receives `on-editor-attached`,
+  shows the keyboard; `on-editor-detached`, hides).
+- Build pipeline: same as wart-app (Kotlin/Compose → wasm →
+  component embed → component new → .warpkg).
+- Package: `app_id = "war.ime.keyboard"`, `kind = "system"`
+  (it's the IME-ecosystem equivalent of the markdown/emoji/fonts
+  system bundles), `version = "0.1.0"`.
+
+Success criterion: tap text field → keyboard renders + accepts
+taps → tapped letters appear in the focused TextField via
+`commit-text` round-trip.
+
+### Step 4 — InputFlinger focus arbitration + auto-hide (~2-3 days)
+
+The arbiter coordinates input routing between focused app and
+IME. Touches in the keyboard surface dispatch to the IME's
+process; touches outside (in the app's surface) dispatch back
+to the app. Auto-hide when the user taps outside the keyboard.
+
+- Arbiter calls the IME child's signal-driven SF-focus-request
+  routine when `attach-editor`. Detach swaps focus back to the
+  focused app's window.
+- IME-side render-loop reads its own role (focused/unfocused)
+  via the same `app_role` signal mechanism task 46 step 4 uses
+  — IME is "foreground" while editor is attached.
+- The focused app stays in foreground (not paused) while the
+  IME is up — it needs to render the cursor moving as text
+  arrives.
+
+Success criterion: type text into wart-app via the new IME;
+tap outside the keyboard → keyboard hides + focus returns to
+wart-app; tap the text field again → keyboard back. No focus
+flapping.
+
+### Step 5 — Polish + future-IME framing (~2-3 days)
+
+- Done/Submit key handling (return key dispatches `keyDone`
+  callback to the focused field if the editor-info specifies
+  IME action).
+- Backspace / arrow keys via `send-key-event`.
+- Soft-hide on Compose `clearFocus()`.
+- Document the future-IME interface stability + `set-ime
+  <app-id>` mechanism in the task doc and a new memory
+  `feedback_ime_via_guest_app`.
+
+Success criterion: end-to-end typing experience indistinguishable
+from a stock Android device for English ASCII. CJK/voice/emoji
+are pluggable but not present yet.
+
+## Future IMEs — voice / emoji / CJK
+
+The `war:ime/client` WIT contract is the stability gate. Each
+future IME is:
+
+- **`war.ime.voice`** — Compose UI is a microphone button +
+  transcription preview. On press: starts an audio recording
+  via our audio HAL (task 21 IAAudioService); transcription is
+  *another* future system bundle (speech-recognition WIT
+  service). When transcription completes, `commit-text(result)`.
+  Implementation cost: low for the IME shell, high for the
+  recognition. Recognition could initially be a thin shim over
+  Android's `SpeechRecognizer` via rsbinder (uses the same
+  no-Java path as our other HAL access), or wasm-side via a
+  small whisper.cpp port. Multi-pass effort, but the IME UI
+  itself is ~200 lines of Compose.
+
+- **`war.ime.emoji`** — reuses `war.emoji.picker` (task 40,
+  already a system bundle). Compose UI is the emoji grid
+  itself (`EmojiCard.kt` already implemented in wart-app — the
+  rendering code carries straight over). Tap → `commit-text(emoji_codepoint)`.
+  Implementation cost: small. Could be ~1 week.
+
+- **`war.ime.zh`** / `war.ime.ja` / `war.ime.ko` / `war.ime.in.*` —
+  CJK / Indic IMEs. The WIT side is unchanged; the hard part
+  is the input-method dictionary + composition (pinyin →
+  candidates, kana → kanji conversion). Could ship as one
+  warpkg per language, or one multi-language warpkg with a
+  user-selected mode. Per-IME effort is months, but the
+  arbiter/protocol side doesn't change.
+
+The crucial property: **each future IME is a vendor-independent
+`.warpkg`**, installable via the existing warpkg installer (task
+35), discoverable via the arbiter's `list-imes` command (TBD,
+introspects `<APPS_ROOT>/apps/*` for app_ids starting with
+`war.ime.`), switchable at runtime. The Android-equivalent
+distinction between "default keyboard" (Settings → Languages
+& Input) and "active IME" carries directly.
+
+## Known unknowns
+
+- **Compose `PlatformTextInputMethodRequest` shape on wasi**.
+  The Android actual is heavily JNI-coupled to AndroidInputMethodManager;
+  we'd ship a different actual entirely. Investigation in step 2.
+- **`send-key-event` semantics for non-letter keys**. Backspace,
+  enter, arrows — Compose treats these differently from `commit-text`.
+  Probably want a richer enum than just code-point.
+- **IME composition state**. CJK input has a "composing region"
+  underline that updates as the user types pinyin. WIT `commit-text`
+  is too coarse; need a `set-composing-text(text, region)`
+  primitive. Step 1 of this task should bake this into the WIT
+  even though step 3's English-only keyboard doesn't exercise it.
+- **Focus arbitration race**. If the user taps app → IME → app
+  fast, do we end up in a consistent state? Need to think about
+  the signal ordering. Possibly the arbiter should batch
+  transitions through a state machine rather than firing them
+  immediately.
+- **What happens when the IME app crashes**. Should the foreground
+  app keep its editor "attached" and re-attach when a new IME
+  app spawns? Or detach? Probably detach + log + maybe
+  auto-relaunch the IME after a backoff. Use the crash-marker
+  state to track.
+
+## File-touch map
+
+- `wit/ime.wit` (new) — the protocol.
+- `wart-arbiter/src/main.rs` — new `cmd_attach_editor`,
+  `cmd_detach_editor`, `cmd_set_ime`, `cmd_ime_commit_text`.
+- `wart-arbiter/src/state.rs` — `EditorFocus`, `ActiveIme`
+  state.
+- `wart-host/src/ime_imms_probe.rs` (rename from `ime_impl.rs`)
+  — the task 40 probe code, kept for historical reference.
+- `wart-host/src/ime_router_impl.rs` (new) — host side of the
+  WIT plumbing for the focused-app's `attach-editor` outbound
+  + `commit-text` inbound.
+- `wart-host/src/lib.rs` — `pub mod ime_router_impl;`.
+- `skiko/src/wasmWasiMain/kotlin/org/jetbrains/skiko/wasi/WasiInputMethod.kt`
+  (new) — skiko-side actual.
+- `compose-multiplatform-core/.../wasmWasiMain/.../PlatformTextInputMethodRequest.wasi.kt`
+  (new or update) — Compose actual.
+- `war.ime.keyboard/` (new sibling repo) — the IME guest itself.
+- `scripts/build-system-warpkgs.sh` — packages `war.ime.keyboard`
+  alongside markdown/emoji/fonts.
+- `tasks/47-ime-via-guest-app.md` — this doc; update per-step.
+- `CLAUDE.md` — status table row.
+- `MEMORY.md` →
+  [[feedback_ime_via_guest_app]] — new memory capturing the
+  resolved design + the path-A/path-B comparison.
+
+## Resume hints for fresh sessions
+
+1. `cat .task-state` — TASK=47 STEP=N tells you where to pick
+   up.
+2. Read **D1-D6** above before doing anything else — most
+   early failures will be due to violating one (especially
+   D2: don't add binder).
+3. **Step order is load-bearing**: step 1's WIT shape constrains
+   everything else. Land it cleanly with composing-text +
+   set-composing-text + finish-composing-text primitives even
+   though step 3's English keyboard doesn't exercise them.
+4. The first-party `war.ime.keyboard` is the GROUND TRUTH for
+   the IME-side of the WIT contract. If a contract change
+   makes it impossible to write a sensible keyboard, the
+   contract is wrong; iterate on the WIT.
+5. Voice / emoji / CJK are explicit out-of-scope for this
+   task — they're future `.warpkg`s, not modifications to
+   `war.ime.keyboard`. The contract should support them
+   without changes.
+
+## Related
+
+- `tasks/40-real-ime.md` — the abandoned IMMS-via-rsbinder
+  path. Code (commit `09782f5` in wart-host, the AIDL probes
+  in `src/ime_impl.rs`) kept in tree for historical reference.
+- `tasks/44-wms-window-registration.md` — the abandoned
+  vendor-WMS path. Same reason.
+- `tasks/46-wart-arbiter-mvp.md` — the arbiter machinery this
+  task extends. Specifically step 4 (app_role signaling, SF
+  z-order via libsf_surface, oom_score_adj) and the crash-marker
+  state persistence are reused.
+- `MEMORY.md` → [[project-app-lifecycle-and-packaging]] — the
+  §9 lock this task aligns with.
+- `MEMORY.md` → [[project-ime-options]] — the original IME-path
+  analysis (A: rsbinder→IMMS, B: NativeActivity wrapper, C:
+  wasi-guest IME). Path C IS this task; the post-ART north
+  star turned out to be reachable directly without C being
+  literally last.
+- `MEMORY.md` → [[feedback_softkeyboard]] — the in-canvas
+  keyboard. Retired as long-term direction by user decision
+  2026-05-27; the code stays in tree as the no-installed-IME
+  fallback (a guest with no IME app installed still gets to
+  type via in-canvas; better than nothing).
