@@ -437,6 +437,89 @@ device shell triggers the zygote to fork a child running
 wart-app; `wart-arbiter list` shows the running app + pid;
 `wart-arbiter kill wart-app` cleans it up via `KILL <pid>`.
 
+#### Step 3 results (2026-05-27)
+
+**Outcome:** ✅ all five client commands (launch / launch-headless /
+list / kill / preload) work end-to-end on Pixel 2 XL. The two-binary
+D1 split is real and shippable.
+
+**Final shape**:
+
+```
+wart-arbiter/                       (new top-level crate)
+  Cargo.toml          deps: anyhow + log + android_logger + libc
+                      no wasmtime, no skia, no libgui
+  .cargo/config.toml  mirrors wart-host's NDK r27d + sysroot setup
+  src/main.rs         daemon mode + client dispatch
+  src/zygote_client.rs  text-protocol wrapper around wart-host's
+                        UNIX socket (LAUNCH/LAUNCH_GUI/KILL/PRELOAD)
+  src/state.rs        OnceLock<Mutex<HashMap<String, AppState>>>
+                      tracking app-id → pid + launched_at metadata
+```
+
+Binary size: **777 KB** (vs wart-host's 52 MB — 67× smaller). Clean
+crate boundary: no shared code; the arbiter knows the wart-host
+socket protocol but nothing about wasmtime or rendering.
+
+**Commands implemented** (arbiter ↔ client over
+`/data/local/tmp/wart-arbiter.sock`):
+
+| Verb            | Action |
+|-----------------|--------|
+| `launch <id>`   | Send LAUNCH_GUI to zygote; record in state map; reply `OK pid=N app=id` |
+| `launch-headless <id>` | Same but LAUNCH (wasi:cli/command consumer) |
+| `list`          | `OK count=N` + one line per app (`app=id pid=N elapsed_ms=…`) |
+| `kill <id>`    | Look up pid in state; send KILL to zygote; remove on success |
+| `preload <id>`  | Forward to zygote's PRELOAD command; relay reply |
+
+**Smoke run** (device-verified):
+
+```
+$ wart-arbiter list                          → OK count=0
+$ wart-arbiter launch com.example.wart-app   → OK pid=9117 app=com.example.wart-app
+                                              (wart-app renders at 60 fps via zygote
+                                               fork+COW; LD_LIBRARY_PATH inherited)
+$ wart-arbiter list                          → OK count=1
+                                                  app=com.example.wart-app pid=9117 elapsed_ms=4157
+$ wart-arbiter kill com.example.wart-app     → OK killed app=… pid=9117
+$ wart-arbiter list                          → OK count=0
+$ wart-arbiter kill com.bogus.app            → ERR not-tracked com.bogus.app
+$ wart-arbiter preload com.example.wart-app  → OK apps 1
+$ wart-arbiter preload com.bogus.app         → ERR preload-failed com.bogus.app: …
+```
+
+State map is authoritative for the arbiter — the zygote's own
+`child_pids` set (task 46 step 1) is the truth at the kernel level,
+but the arbiter's higher-level "which app-id maps to which pid"
+mapping lives here. KILL via the arbiter goes through state lookup,
+which is why `kill com.bogus.app` returns `ERR not-tracked` even
+though the zygote would also reject `ERR not-our-child` if asked
+directly.
+
+**Scripts**:
+
+- `scripts/build-host-android.sh` extended to also build
+  `wart-arbiter` (same NDK r27d toolchain, same sysroot config).
+- `scripts/run-hybrid-stack.sh` (new) — dev convenience that
+  launches `wart-host --zygote` and `wart-arbiter --daemon`
+  side-by-side, with SystemUI + launcher force-stopped and an
+  EXIT trap to restore. Mirrors `standalone-launch.sh` shape.
+
+**Out of scope (lands in step 4)**: foreground/background z-order,
+InputFlinger focus arbitration, `/proc/<pid>/oom_score_adj` writes.
+Step 3 is the wiring + state shape; step 4 puts policy on top.
+
+**Files added (committed in this step):**
+
+- `wart-arbiter/Cargo.toml` (new crate)
+- `wart-arbiter/.cargo/config.toml`
+- `wart-arbiter/src/main.rs`
+- `wart-arbiter/src/zygote_client.rs`
+- `wart-arbiter/src/state.rs`
+- `scripts/build-host-android.sh` — extended
+- `scripts/run-hybrid-stack.sh` — new
+- `tasks/46-wart-arbiter-mvp.md` — this section
+
 ### Step 4 — Arbiter policy: foreground/background + focus (~3-4 days)
 
 The arbiter starts being a real arbiter.
