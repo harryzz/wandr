@@ -716,6 +716,97 @@ closed.
 These don't block the dev workflow — they're production-only
 polish.
 
+#### Step 5 finisher — Magisk module (2026-05-27)
+
+User pointed out the AOSP-init.rc framing was overcautious: on
+a Magisk-rooted device both init.rc and SELinux concerns can be
+handled reversibly without an AOSP rebuild. Shipped a Magisk
+module that replaces the "init.rc service" need:
+
+```
+wart-stack-magisk/           ← module source (in-tree)
+  module.prop                ← Magisk metadata
+  service.sh                 ← runs in late_start_service stage
+  uninstall.sh               ← runs on module removal
+  README.md                  ← user-facing docs
+scripts/install-wart-stack-magisk.sh
+scripts/uninstall-wart-stack-magisk.sh
+```
+
+**`service.sh`**:
+
+- Sanity-checks `/data/local/tmp/{wart-host,wart-arbiter,libsf_surface.so}`.
+- (Commented-out placeholder) `magiskpolicy --live` for SELinux
+  rules; uncomment when denials show up. Task 46 step 4
+  smoke produced none.
+- Starts `wart-host --zygote` + waits for `/data/local/tmp/wart-zygote.sock`.
+- Starts `wart-arbiter --daemon` + waits for the arbiter socket.
+- Everything logged to `/data/local/tmp/wart-stack.log`.
+
+**Backup-to-restore mechanism (built into Magisk):**
+
+| Goal               | How                                                |
+|--------------------|----------------------------------------------------|
+| Skip on next boot  | `touch /data/adb/modules/wart-stack/disable`       |
+| Re-enable          | `rm /data/adb/modules/wart-stack/disable`          |
+| Remove on next boot | `touch /data/adb/modules/wart-stack/remove`       |
+| Stop daemons now   | `killall -9 wart-arbiter wart-host`                |
+
+No `/system` files modified — the module is self-contained under
+`/data/adb/modules/wart-stack/`. Live SELinux rules added by
+`magiskpolicy --live` are session-only and reset to baseline on
+reboot-without-this-module. There's nothing to back up because
+nothing was destructively changed.
+
+**Device-verified on Pixel 2 XL** — install + reboot + auto-start:
+
+```
+$ scripts/install-wart-stack-magisk.sh
+  pushed wart-stack to /data/adb/modules/wart-stack/
+$ adb reboot
+$ # ~30s later, on the rebooted device:
+$ cat /data/local/tmp/wart-stack.log
+  16:49:58 wart-stack: service.sh starting (module /data/adb/modules/wart-stack)
+  16:49:58 wart-stack: starting wart-host --zygote (APPS_ROOT=/data/local/tmp/wart-apps)
+  16:49:58 wart-stack: zygote up (pid=1501)
+  16:49:58 wart-stack: starting wart-arbiter --daemon
+  16:49:59 wart-stack: arbiter up (pid=1642)
+  16:49:59 wart-stack: ✓ stack up — zygote=1501 arbiter=1642
+$ su -c '/data/local/tmp/wart-arbiter list'
+  OK count=0
+$ su -c '/data/local/tmp/wart-arbiter launch com.example.wart-app'
+  OK pid=4293 app=com.example.wart-app
+  (wart-app renders at 60 fps via zygote-fork+COW)
+$ su -c '/data/local/tmp/wart-arbiter list'
+  OK count=1
+    app=com.example.wart-app pid=4293 elapsed_ms=5220 [fg]
+```
+
+**Caveat noted**: the arbiter socket is mode 666 but inherits
+Magisk's SELinux context — unprivileged shell connections get
+denied even with octal perms allowing it. Clients must `su` to
+connect, which is the existing dev flow anyway. To open the
+socket to non-root processes (a real "user app talks to the
+arbiter" story), a small `chcon` after socket creation in the
+daemons or a `magiskpolicy --live` rule would lift this.
+
+**What this resolves from step 5**:
+
+- ✅ init.rc service-definitions equivalent (Magisk
+  `late_start_service`).
+- ✅ SELinux rules (none needed today; placeholder in
+  `service.sh` for when denials show up).
+- 🟡 Arbiter crash-marker (still on the todo list; not Magisk-
+  specific — a few lines in `wart-arbiter/src/main.rs` to
+  persist last-known-running-apps to a JSON file the next
+  arbiter restart reads on startup).
+
+**Task 46 is now functionally complete for dev use** — every
+step shipped + device-verified. The arbiter crash-marker is a
+nice-to-have for production resilience; init.rc + sepolicy
+proper (a-03 rebuild path) only matters when shipping a
+non-Magisk image.
+
 ### Step 5 — Production deployment polish (~1 week)
 
 The "make it real on the device" step. Some of this is

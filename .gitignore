@@ -3,6 +3,9 @@
 compose-*/
 skiko/
 wart-*/
+# Exception: wart-stack-magisk/ is plain shell + manifest, not a sibling
+# crate — track it from the top-level repo (task 46 step 5 finisher).
+!wart-stack-magisk/
 # System components (runtime-bundled .wasm packages — see
 # tasks/36-cross-app-deps.md). One repo per component; pattern follows
 # wart-*/.
