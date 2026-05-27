@@ -146,6 +146,71 @@ Success criterion: `ps -A` after running and killing N apps
 shows no `[wart-host]` zombies; `KILL <pid>` works against an
 own child but `ERR`s on an unrelated pid.
 
+#### Step 1 results (2026-05-27)
+
+**Outcome:** ✅ both criteria met. Device-verified on Pixel 2 XL.
+
+**Reaper**: `spawn_reaper()` in `src/zygote.rs` runs
+`std::thread::spawn` of a loop that blocks on `libc::wait`,
+decodes status (WIFEXITED / WIFSIGNALED), and removes the
+reaped pid from a `OnceLock<Mutex<HashSet<i32>>>` shared with
+the accept-loop's fork handler. Holds the mutex only for the
+brief instant of `.remove(&pid)`; fork-time races would leave
+at most a slightly-stale entry, not a deadlock. Thread exists
+only in the parent — fork() only duplicates the calling
+thread, so each forked child runs reaperless (which is what
+it wants).
+
+**KILL / KILL_FORCE**: new socket commands parsed in
+`handle_one` before the LAUNCH dispatch. Both validate the
+pid is in `child_pids()` before signaling; unrelated pids get
+`ERR not-our-child <pid>` without any `kill(2)` syscall.
+KILL_FORCE sends SIGKILL, KILL sends SIGTERM. Audit log line
+for every accept + every reap.
+
+**CLI**: new `--zygote-kill <pid>` and `--zygote-kill-force <pid>`
+flags in `main.rs`, wrapping the new `zygote::kill_client`.
+
+**Smoke 1** — five rapid headless `--zygote-launch
+com.example.md-smoke-rust` forks. Logcat sequence:
+
+```
+forked pid=7908 → reaped (exit=0, tracked=true)   [260 ms]
+forked pid=7929 → reaped (exit=0, tracked=true)   [218 ms]
+forked pid=7949 → reaped (exit=0, tracked=true)   [242 ms]
+forked pid=7970 → reaped (exit=0, tracked=true)   [229 ms]
+forked pid=7991 → reaped (exit=0, tracked=true)   [227 ms]
+```
+
+`ps -A | grep -c 'Z.*wart-host'` returns 0. The MVP zombie
+piling-up limitation is closed.
+
+**Smoke 2** — GUI child + KILL validation:
+
+```
+$ --zygote-kill 1         → ERR not-our-child 1
+$ --zygote-kill 99999     → ERR not-our-child 99999
+$ --zygote-kill 8068      → OK 8068  (sig=15 sent)
+                          → reaper: pid 8068 reaped (exit=0, tracked=true)  [3.5 s later]
+```
+
+The 3.5 s delay between SIGTERM and reap is the wart-app
+standalone render loop's clean-shutdown drain (lifecycle
+Destroyed → 3 final frames → exit), inherited from task 33
+step 5. SIGTERM hits the handler that flips the shutdown
+flag; the render loop sees it and drains. Expected, not a
+bug.
+
+**Files touched (committed in this step):**
+
+- `wart-host/src/zygote.rs` — `child_pids()` tracking,
+  `spawn_reaper()` thread, `handle_kill()` shared logic,
+  `kill_client()` for the client side, KILL/KILL_FORCE
+  parsing in `handle_one`, child-pid insert at fork.
+- `wart-host/src/main.rs` — `--zygote-kill <pid>` and
+  `--zygote-kill-force <pid>` CLI flags.
+- `tasks/46-wart-arbiter-mvp.md` — this section.
+
 ### Step 2 — Component preload registry (~2 days)
 
 The highest-leverage step (closes the COW gap from 5.6 MB to

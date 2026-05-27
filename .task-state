@@ -1,5 +1,5 @@
 TASK=46
-STEP=scope-review
-STATUS=in-progress
-LAST_SUCCESS=Task 45 wart-zygote MVP spike complete 2026-05-27 (commit 6a13f839). Hybrid §9 technical path validated end-to-end on device.
-NOTES=Task 46 scope drafted at tasks/46-wart-arbiter-mvp.md. D1 LOCKED (two binaries: wart-host + wart-arbiter — fork+COW requires same-binary parent+child, arbiter is the natural sibling). 5 steps: SIGCHLD reap+KILL, Component preload registry (highest-leverage), wart-arbiter skeleton, arbiter policy (foreground/focus/OOM), production polish (init.rc/sepolicy gated on a-03 host). D2/D3/D4/D5 proposed not locked — await user pass.
+STEP=step-1-complete
+STATUS=complete
+LAST_SUCCESS=Task 46 step 1 verified OK 2026-05-27. SIGCHLD reaper thread + KILL/KILL_FORCE commands. Device-verified: 5 rapid headless forks reap cleanly (no zombies); KILL validates pid ownership (unrelated pids → ERR not-our-child); GUI child KILL → graceful 3.5s lifecycle drain → reaped exit=0.
+NOTES=Step 2 (Component preload registry) is next — highest-leverage piece. Closes the COW gap from ~5.6 MB to target ~25 MB per child via Component::deserialize_file in parent.
