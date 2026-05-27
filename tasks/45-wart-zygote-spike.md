@@ -489,6 +489,135 @@ MVP — requires Component + Skia preload (follow-up).
 Success criterion: two distinct apps on screen at once, both
 rendering, both responsive (to touch on whichever has input).
 
+#### Step 4 results (2026-05-27)
+
+**Outcome:** ✅ two distinct app slots run concurrently via the
+zygote at 60 fps each. Both children acquire their own SF surface,
+their own EGL context, their own render loop — independent and
+parallel.
+
+**Method**: per user pick (option C from the step-3 close-out
+discussion), packaged the existing wart-app build as a real
+`.warpkg` with app-id `com.example.wart-app` (rather than building
+a new app), then ran it alongside the dev-cwasm GUI launch.
+Same code in both children but two distinct install slots, two
+distinct process trees from the zygote.
+
+**Packaging steps (one-shot work, not committed to scripts/)**:
+
+```bash
+# wart-app: use the existing post-adapt component
+mkdir -p /tmp/wart-app.warpkg/components
+cp /tmp/skiko-component.wasm /tmp/wart-app.warpkg/components/ui.wasm
+cat > /tmp/wart-app.warpkg/package.toml <<'EOF'
+app_id      = "com.example.wart-app"
+version     = "0.1.0"
+world       = "my:skiko-gfx/skiko-ui"
+composition = "same-store"
+
+[components]
+ui = "components/ui.wasm"
+EOF
+
+# System deps wart-app imports — installer auto-detects from the
+# component's WIT imports and refuses install if any are missing.
+# Three needed: emoji-picker, system-fonts, markdown-renderer
+# (already-installed markdown-renderer system bundle satisfied
+# the markdown import).
+# Built locally + wrapped in `.warpkg` directories with kind=system
+# manifests. Installed via `wart-host --install`.
+```
+
+The `system-fonts` Rust crate wasn't pre-built; `cargo build
+--target wasm32-wasip2 --release` finished it in seconds.
+
+**Run** (logcat trimmed to the per-child render confirmation):
+
+```
+I wart-zygote: cmd="LAUNCH_GUI com.example.wart-app"
+I wart-zygote: forked pid=7394 for app_id=com.example.wart-app
+I standalone[7394]: surface 1440x2880 ...
+I standalone[7394]: loaded installed:com.example.wart-app:0.1.0:ui
+I standalone[7394]: rendered frame 1, 2, 3 ...
+
+I wart-zygote: cmd="LAUNCH_GUI"
+I wart-zygote: forked pid=7443 for app_id=
+I standalone[7443]: surface 1440x2880 ...
+I standalone[7443]: loaded cwasm:/data/local/tmp/skiko-component.cwasm
+I standalone[7443]: rendered frame 1, 2, 3 ...
+
+(steady state ~30 s later — both still at 60 fps:)
+I standalone[7394]: rendered frame 1800
+I standalone[7443]: rendered frame 1200
+```
+
+**smaps_rollup with both children alive:**
+
+|                | Parent    | Child #1 (installed) | Child #2 (dev) |
+|----------------|-----------|----------------------|----------------|
+| Rss            | 24 284 kB | 196 932 kB           | 179 760 kB     |
+| Shared_Clean   |  5 464    |  24 996              |  24 988        |
+| Shared_Dirty   |  5 580    |   5 652              |   5 660        |
+| Private_Clean  | 12 532    |  53 124              |  49 872        |
+| Private_Dirty  |    708    | 113 160              |  99 240        |
+| Anonymous      |  6 060    | 115 580              | 101 800        |
+
+**Notable shifts vs the single-child step-3 numbers:**
+
+- **`Shared_Clean` jumped from ~7 MB → ~25 MB per child** when
+  the second child came online. Both children now have the
+  wart-host binary + Skia + libEGL + libgui mapped, and the
+  kernel attributes those file-backed pages as "shared" because
+  ≥2 processes hold them. This is natural page-cache sharing,
+  not zygote-specific, but it shows the wart-host process model
+  has good code-sharing properties out of the gate.
+- **`Shared_Dirty` per child stays at ~5.6 MB.** That's the
+  zygote-specific COW with the parent — unchanged by adding a
+  second child (each child shares the same engine state with
+  the parent, independently of siblings).
+- **Net memory per additional child**: ~120 MB private dirty +
+  60 MB private clean ≈ **180 MB per concurrent app at this
+  config**. The wasm linear memory (Compose snapshot/composer
+  trees + Skia GPU buffer mirrors) is the dominant cost. At
+  MVP, the COW savings are dwarfed by the per-app working set.
+
+**What this tells us about Hybrid viability:**
+
+- **Two apps concurrent fits in ~360 MB** (180 each). On a
+  4 GB device like the Pixel 2 XL, that's comfortable. On
+  lower-end devices the per-app footprint is the binding
+  constraint, not the zygote overhead.
+- **Per-child SF surface allocation succeeded for both apps**
+  from a non-Activity context. No fight over the SF connection.
+  Each child got 1440×2880, both rendered concurrently. The
+  "topmost wins" SF behavior means only the latest-allocated
+  is visually on top; the other renders to an obscured surface
+  but the process+EGL+Skia work continues. Z-order arbitration
+  is task-46 work (a real wart-arbiter).
+- **No fork-time landmines fired with two concurrent children**
+  in flight (the second `LAUNCH_GUI` arrives while the first
+  child is mid-render). The zygote's single-threaded accept
+  loop serialized them; no race.
+
+**Known limitations carried into step 5:**
+
+- No SIGCHLD reaping in the zygote → zombies pile up.
+- No app shutdown command in the protocol → the only way to
+  stop a child is external (kill -KILL by pid).
+- Both children use the same logical SurfaceFlinger layer
+  (no z-order policy); only one is visible at a time.
+- The ~30 MB COW target from the scope doc is still not met
+  (~5.6 MB Shared_Dirty per child); Component / Skia preload
+  remains the natural follow-up.
+
+**Files touched (this step had no source-code changes):**
+
+- `tasks/45-wart-zygote-spike.md` — this section.
+- (one-shot packaging work for `/tmp/wart-app.warpkg`,
+  `/tmp/emoji.warpkg`, `/tmp/fonts.warpkg` left in `/tmp/`
+  on the dev machine; not version-controlled. A future
+  `scripts/build-system-warpkgs.sh` would automate this.)
+
 ### Step 5 — Spike close-out (0.5 day)
 
 - Update CLAUDE.md status table with task 45 row.

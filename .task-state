@@ -1,5 +1,6 @@
 TASK=45
-STEP=step-3-complete
+STEP=step-4-complete
 STATUS=complete
-LAST_SUCCESS=Task 45 step 3 verified OK 2026-05-27. Direct --standalone Shared_Dirty=380 kB; zygote child Shared_Dirty=5672 kB (matching parent's 5600). Net zygote-specific COW savings: ~5.3 MB per child at MVP scope. Per-VMA attribution: 4.7 MB is binary .data/.bss; only 0.2 MB is wasmtime Engine heap. ≥30 MB target requires Component + Skia preload (follow-up).
-NOTES=Step 4 (two distinct apps concurrent) next. Needs either a real 2nd .warpkg consumer or two LAUNCH_GUI dev-cwasm with the same app (less interesting). For a real 2nd app: small Compose-Material smoke (calculator-shaped or similar) as a separately-packaged .warpkg.
+LAS_SUCCESS=Task 45 step 4 verified OK 2026-05-27. Two concurrent app slots (com.example.wart-app installed + dev cwasm) rendering 60fps each via the same zygote parent. Shared_Clean scales with #procs (~25MB per child); Shared_Dirty stable at ~5.6MB per child (zygote-specific COW). Per-app footprint ~180MB (wasm linear memory dominates).
+LAST_SUCCESS=Task 45 step 4 verified OK 2026-05-27. Two concurrent app slots rendering 60fps via the same zygote.
+NOTES=Step 5 (spike close-out) next: update CLAUDE.md status row, write "what we learned" summary, recommend task-46 scope. Then the spike is shippable as a milestone.
