@@ -1,6 +1,6 @@
-//! IMMS round-trip probes (task 40 sessions 2-3).
+//! IMMS round-trip probes (task 40 sessions 2-4).
 //!
-//! Two entry points:
+//! Three entry points:
 //!
 //! - [`probe`] — session 2's read-only call: `isImeTraceEnabled()`.
 //!   Validates transport. No permission, no Bn-side server, no args.
@@ -12,11 +12,22 @@
 //!   them as a non-Activity client. Observes whether IMMS accepts the
 //!   registration or rejects it (permission gate, identity check, …).
 //!
-//! Both target the `input_method` binder service (descriptor
+//! - [`probe_startinput`] — session 4's start-input + window-focus
+//!   call: `startInputOrWindowGainedFocus(...)`. Re-registers as an
+//!   IMMS client (addClient first), then calls
+//!   startInputOrWindowGainedFocus with a fabricated `IBinder
+//!   windowToken` (extracted from one of our Bn servers' identity
+//!   binder), null EditorInfo, null IRemoteAccessibilityInputConnection,
+//!   default-constructed ImeOnBackInvokedDispatcher. Observes whether
+//!   IMMS validates the windowToken against WMS — the session-1
+//!   biggest-unknown question.
+//!
+//! All target the `input_method` binder service (descriptor
 //! `com.android.internal.view.IInputMethodManager`). The AIDL stubs in
 //! `build.rs` preserve the real transaction codes for the methods we
-//! call (`addClient` at slot 0, `isImeTraceEnabled` at slot 25) by
-//! padding the unused positions with no-import placeholders.
+//! call (`addClient` at slot 0, `startInputOrWindowGainedFocus` at
+//! slot 11, `isImeTraceEnabled` at slot 25) by padding the unused
+//! positions with no-import placeholders.
 
 #[cfg(target_os = "android")]
 pub fn probe() {
@@ -187,3 +198,220 @@ pub fn probe_addclient() {
 
 #[cfg(not(target_os = "android"))]
 pub fn probe_addclient() {}
+
+// ─── Session 4: startInputOrWindowGainedFocus + fabricated windowToken ───────
+
+#[cfg(target_os = "android")]
+mod session4 {
+    use std::sync::OnceLock;
+
+    use crate::binder_aidl::com::android::internal::view::IInputMethodManager::IInputMethodManager;
+    use crate::binder_aidl::com::android::internal::inputmethod::IInputMethodClient::{
+        BnInputMethodClient, IInputMethodClient, IInputMethodClientAsyncService,
+    };
+    use crate::binder_aidl::com::android::internal::inputmethod::IRemoteInputConnection::{
+        BnRemoteInputConnection, IRemoteInputConnection, IRemoteInputConnectionAsyncService,
+    };
+    use crate::binder_aidl::android::window::ImeOnBackInvokedDispatcher::ImeOnBackInvokedDispatcher;
+
+    /// Same Bn-side server as session 3 — IMMS may fire any of the 12
+    /// oneway slot_NN methods after registration (especially setActive
+    /// + setInteractive on focus). Stubs log + return Ok.
+    struct ImeClient;
+    impl rsbinder::Interface for ImeClient {}
+    #[async_trait::async_trait]
+    impl IInputMethodClientAsyncService for ImeClient {
+        async fn r#slot_00_onBindMethod(&self)                  -> rsbinder::status::Result<()> { log::info!("ime/client: onBindMethod fired"); Ok(()) }
+        async fn r#slot_01_onStartInputResult(&self)            -> rsbinder::status::Result<()> { log::info!("ime/client: onStartInputResult fired"); Ok(()) }
+        async fn r#slot_02_onBindAccessibilityService(&self)    -> rsbinder::status::Result<()> { log::info!("ime/client: onBindAccessibilityService fired"); Ok(()) }
+        async fn r#slot_03_onUnbindMethod(&self)                -> rsbinder::status::Result<()> { log::info!("ime/client: onUnbindMethod fired"); Ok(()) }
+        async fn r#slot_04_onUnbindAccessibilityService(&self)  -> rsbinder::status::Result<()> { log::info!("ime/client: onUnbindAccessibilityService fired"); Ok(()) }
+        async fn r#slot_05_setActive(&self)                     -> rsbinder::status::Result<()> { log::info!("ime/client: setActive fired"); Ok(()) }
+        async fn r#slot_06_setInteractive(&self)                -> rsbinder::status::Result<()> { log::info!("ime/client: setInteractive fired"); Ok(()) }
+        async fn r#slot_07_setImeVisibility(&self)              -> rsbinder::status::Result<()> { log::info!("ime/client: setImeVisibility fired"); Ok(()) }
+        async fn r#slot_08_scheduleStartInputIfNecessary(&self) -> rsbinder::status::Result<()> { log::info!("ime/client: scheduleStartInputIfNecessary fired"); Ok(()) }
+        async fn r#slot_09_reportFullscreenMode(&self)          -> rsbinder::status::Result<()> { log::info!("ime/client: reportFullscreenMode fired"); Ok(()) }
+        async fn r#slot_10_setImeTraceEnabled(&self)            -> rsbinder::status::Result<()> { log::info!("ime/client: setImeTraceEnabled fired"); Ok(()) }
+        async fn r#slot_11_throwExceptionFromSystem(&self)      -> rsbinder::status::Result<()> { log::info!("ime/client: throwExceptionFromSystem fired"); Ok(()) }
+    }
+
+    struct RemoteInputConn;
+    impl rsbinder::Interface for RemoteInputConn {}
+    #[async_trait::async_trait]
+    impl IRemoteInputConnectionAsyncService for RemoteInputConn {
+        async fn r#slot_00_placeholder(&self) -> rsbinder::status::Result<()> {
+            log::info!("ime/inputconn: placeholder fired");
+            Ok(())
+        }
+    }
+
+    /// Bn server for a free-standing IBinder we use as the windowToken.
+    /// IMMS treats windowToken as opaque (per session-1 recon — focused
+    /// windows in `dumpsys input_method` show as bare `BinderProxy`
+    /// objects with no descriptor type). We pick `IRemoteInputConnection`
+    /// as the carrier interface — IMMS never looks at the interface;
+    /// it just uses the raw binder identity as a focus key.
+    struct WindowTokenCarrier;
+    impl rsbinder::Interface for WindowTokenCarrier {}
+    #[async_trait::async_trait]
+    impl IRemoteInputConnectionAsyncService for WindowTokenCarrier {
+        async fn r#slot_00_placeholder(&self) -> rsbinder::status::Result<()> {
+            log::info!("ime/windowtoken: callback fired (unexpected — IMMS shouldn't invoke methods on the windowToken)");
+            Ok(())
+        }
+    }
+
+    struct TokioRuntime;
+    impl rsbinder::BinderAsyncRuntime for TokioRuntime {
+        fn block_on<F: std::future::Future>(&self, f: F) -> F::Output {
+            static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+            let rt = RT.get_or_init(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("tokio current-thread runtime")
+            });
+            rt.block_on(f)
+        }
+    }
+
+    /// `StartInputReason.UNSPECIFIED` — see
+    /// frameworks/base/core/java/com/android/internal/inputmethod/StartInputReason.java
+    /// Choosing UNSPECIFIED keeps IMMS from doing reason-conditional
+    /// extra work; it just records "a client started input".
+    const START_INPUT_REASON_UNSPECIFIED: i32 = 0;
+
+    pub fn run() {
+        if let Err(reason) = crate::binder::init() {
+            log::warn!("ime: binder init failed: {reason}");
+            return;
+        }
+
+        let svc: rsbinder::Strong<dyn IInputMethodManager> =
+            match rsbinder::hub::get_interface("input_method") {
+                Ok(s)  => s,
+                Err(e) => {
+                    log::warn!("ime: input_method service unavailable: {e:?}");
+                    return;
+                }
+            };
+
+        // Re-register as a client first — startInputOrWindowGainedFocus
+        // requires us to be a known client, otherwise IMMS rejects on
+        // ClientState lookup.
+        let client: rsbinder::Strong<dyn IInputMethodClient> =
+            BnInputMethodClient::new_async_binder(ImeClient, TokioRuntime);
+        let input_conn: rsbinder::Strong<dyn IRemoteInputConnection> =
+            BnRemoteInputConnection::new_async_binder(RemoteInputConn, TokioRuntime);
+
+        if let Err(e) = svc.r#addClient(&client, &input_conn, 0) {
+            log::warn!("ime: addClient failed before startInput: {e:?}");
+            return;
+        }
+        log::info!("ime: addClient OK (session-4 prelude) — proceeding to startInput");
+
+        // Fabricated windowToken. The carrier interface doesn't matter;
+        // IMMS extracts only the IBinder identity. We pull the IBinder
+        // out via Strong::as_binder() so the call signature's
+        // `Option<&SIBinder>` is satisfied.
+        let window_token_carrier: rsbinder::Strong<dyn IRemoteInputConnection> =
+            BnRemoteInputConnection::new_async_binder(WindowTokenCarrier, TokioRuntime);
+        let window_token_binder = window_token_carrier.as_binder();
+
+        // Empty default ImeOnBackInvokedDispatcher. The AIDL declares it
+        // as a forward-declared `parcelable` (the real fields live in
+        // the Java class); rsbinder gives us a zero-field Rust struct
+        // that serializes as the non-null marker followed by 0 bytes
+        // of payload. IMMS's readFromParcel for this parcelable may
+        // accept defaults or fail with EX_BAD_PARCELABLE — either
+        // outcome is acceptable session-4 signal.
+        let ime_dispatcher = ImeOnBackInvokedDispatcher::default();
+
+        // For root-running probe, primary user = userId 0.
+        const USER_ID: i32 = 0;
+        const TARGET_SDK: i32 = 35;  // Android 15
+
+        // Two attempts to isolate the windowToken question from the
+        // parcel-marshaling question:
+        //   - Attempt A: windowToken = None → tests "just do startInput
+        //     without focus event", same parcelable surface.
+        //   - Attempt B: windowToken = Some(fabricated) → adds the
+        //     WindowToken validation question.
+        // Same error in both ⇒ marshaling / parcelable shape; different
+        // errors ⇒ the differing arg is the cause.
+
+        for (label, window_token) in [
+            ("attempt-A windowToken=None ", None),
+            ("attempt-B windowToken=Some ", Some(&window_token_binder)),
+        ] {
+            log::info!(
+                "ime: {label} — calling startInputOrWindowGainedFocus(reason=UNSPECIFIED, \
+                 editorInfo=None, raic=None, imeDispatcher=Default)",
+            );
+
+            let result = svc.r#startInputOrWindowGainedFocus(
+                START_INPUT_REASON_UNSPECIFIED,
+                &client,
+                window_token,
+                /* startInputFlags = */ 0,
+                /* softInputMode   = */ 0,
+                /* windowFlags     = */ 0,
+                /* editorInfo      = */ None,
+                Some(&input_conn),
+                /* remoteAccessibilityInputConnection = */ None,
+                TARGET_SDK,
+                USER_ID,
+                &ime_dispatcher,
+            );
+
+            match result {
+                Ok(_bind_result) => log::info!(
+                    "ime: {label} OK — IMMS returned a non-null InputBindResult \
+                     (fields not inspected — empty stub). The call landed, IMMS \
+                     created a bind, the empty-stub ImeOnBackInvokedDispatcher \
+                     parcel marshalled cleanly. Session 4 milestone reached.",
+                ),
+                Err(e) => {
+                    // `Status::transaction_error()` only returns the StatusCode
+                    // when the exception is TransactionFailed; for our case
+                    // (`exception=NullPointer, code=UnexpectedNull`) we have to
+                    // consume the Status via `Into<StatusCode>` to get the code.
+                    let exc = e.exception_code();
+                    let code: rsbinder::StatusCode = e.into();
+                    if code == rsbinder::StatusCode::UnexpectedNull {
+                        log::info!(
+                            "ime: {label} OK — IMMS returned a null InputBindResult \
+                             (rsbinder maps this to UnexpectedNull on the response \
+                             deserializer). This is a documented IMMS response: when a \
+                             client isn't the focused window or there's no IME to bind, \
+                             IMMS returns null. The call landed cleanly through transport, \
+                             parcel marshaling, ImeOnBackInvokedDispatcher empty-stub \
+                             serialization, and IMMS's framework gates. Session 4 \
+                             milestone reached.",
+                        );
+                    } else {
+                        log::warn!(
+                            "ime: {label} rejected — exception={exc:?} code={code:?}. \
+                             Not UnexpectedNull — IMMS rejected with a structured Status. \
+                             Likely categories: EX_SECURITY (permission), \
+                             EX_BAD_PARCELABLE (ImeOnBackInvokedDispatcher shape), or \
+                             IllegalStateException (identity/uid check).",
+                        );
+                    }
+                }
+            }
+        }
+
+        log::info!("ime: holding client alive for 5s for dumpsys inspection — pid {}", std::process::id());
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        log::info!("ime: exit");
+    }
+}
+
+#[cfg(target_os = "android")]
+pub fn probe_startinput() {
+    session4::run();
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn probe_startinput() {}

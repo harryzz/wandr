@@ -171,15 +171,20 @@ interface IDirectReportChannel {}
         let imm_aidl_dir = imm_vendor.join("core/java");
         let imm_aidl_path = imm_aidl_dir.join("com/android/internal/view/IInputMethodManager.aidl");
         let imm_aidl_stub = b"\
-// Auto-patched by wart-host/build.rs (task 40 sessions 2-3). See
+// Auto-patched by wart-host/build.rs (task 40 sessions 2-4). See
 // build.rs comment block for the policy. Real methods kept at their
 // real signatures so transaction codes match IMMS's dispatch:
 //   - addClient (pos 0, session 3)
+//   - startInputOrWindowGainedFocus (pos 11, session 4)
 //   - isImeTraceEnabled (pos 25, session 2)
 // Everything else is a no-import slot_NN_<orig-name>() placeholder.
 package com.android.internal.view;
 
+import android.view.inputmethod.EditorInfo;
+import android.window.ImeOnBackInvokedDispatcher;
 import com.android.internal.inputmethod.IInputMethodClient;
+import com.android.internal.inputmethod.InputBindResult;
+import com.android.internal.inputmethod.IRemoteAccessibilityInputConnection;
 import com.android.internal.inputmethod.IRemoteInputConnection;
 
 interface IInputMethodManager {
@@ -195,7 +200,16 @@ interface IInputMethodManager {
     void slot_08_showSoftInput();
     void slot_09_hideSoftInput();
     void slot_10_hideSoftInputFromServerForTest();
-    void slot_11_startInputOrWindowGainedFocus();
+    InputBindResult startInputOrWindowGainedFocus(
+            int startInputReason,
+            in IInputMethodClient client, in @nullable IBinder windowToken,
+            int startInputFlags,
+            int softInputMode,
+            int windowFlags,
+            in @nullable EditorInfo editorInfo, in @nullable IRemoteInputConnection inputConnection,
+            in @nullable IRemoteAccessibilityInputConnection remoteAccessibilityInputConnection,
+            int unverifiedTargetSdkVersion, int userId,
+            in ImeOnBackInvokedDispatcher imeDispatcher);
     void slot_12_startInputOrWindowGainedFocusAsync();
     void slot_13_showInputMethodPickerFromClient();
     void slot_14_showInputMethodPickerFromSystem();
@@ -277,6 +291,38 @@ oneway interface IRemoteInputConnection {
 ";
         std::fs::write(&ric_aidl_path, ric_aidl_stub)
             .expect("patch IRemoteInputConnection.aidl");
+
+        // ── IRemoteAccessibilityInputConnection AIDL (task 40 session 4) ─
+        // Same story as IRemoteInputConnection — stubbed Bn-side server,
+        // passed as @nullable, only the binder identity matters during
+        // startInputOrWindowGainedFocus.
+        let raic_aidl_path = imm_aidl_dir.join("com/android/internal/inputmethod/IRemoteAccessibilityInputConnection.aidl");
+        let raic_aidl_stub = b"\
+// Auto-patched by wart-host/build.rs (task 40 session 4). Real interface
+// is oneway with ~10 methods importing KeyEvent / TextAttribute /
+// AndroidFuture. We pass @nullable IRemoteAccessibilityInputConnection
+// as null in startInputOrWindowGainedFocus -- stub is here only so
+// the IMM AIDL `import` resolves.
+package com.android.internal.inputmethod;
+
+oneway interface IRemoteAccessibilityInputConnection {
+    void slot_00_placeholder();
+}
+";
+        std::fs::write(&raic_aidl_path, raic_aidl_stub)
+            .expect("patch IRemoteAccessibilityInputConnection.aidl");
+
+        // EditorInfo, InputBindResult, ImeOnBackInvokedDispatcher are
+        // already forward-declared `parcelable Foo;` in upstream — no
+        // patch needed. rsbinder-aidl generates empty Rust structs for
+        // them. We pass null for EditorInfo (the call accepts @nullable),
+        // and the empty ImeOnBackInvokedDispatcher serializes to a
+        // non-null marker + 0 field bytes — IMMS's readFromParcel
+        // either accepts defaults or fails with a clean Status; either
+        // is acceptable session-4 signal. The InputBindResult return
+        // type either parses to an empty struct (with leftover wire
+        // bytes ignored) or fails with a parse error — both prove the
+        // call landed at IMMS.
 
         // ── ISurfaceComposer AIDL (task 22) ──────────────────────────────
         // SurfaceFlingerAIDL service ("android.gui.ISurfaceComposer").

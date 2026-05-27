@@ -62,6 +62,14 @@ fn main() {
         return;
     }
 
+    if args.iter().any(|a| a == "--probe-ime-startinput") {
+        android_logger::init_once(
+            android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
+        );
+        wasm_android_host::ime_impl::probe_startinput();
+        return;
+    }
+
     if let Some(i) = args.iter().position(|a| a == "--install") {
         let Some(warpkg) = args.get(i + 1) else {
             eprintln!("wart-host --install: requires a <warpkg-dir> path");
