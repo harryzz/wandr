@@ -1,12 +1,11 @@
 # Task 48 — Query panel dimensions instead of hardcoding
 
-> **Status:** 🔲 scoped 2026-05-27, not started. Spun out of task 47
-> step 3c as a follow-up — the step-3c work added
-> `constexpr PANEL_W=1440 / PANEL_H=2880` to `cpp/sf_surface.cpp` so
-> the new overlay path could compute `Y = PANEL_H - height_px` without
-> reaching into `sf_create_fullscreen_surface`'s locals. Same
-> taimen-specific hardcoding that's been in the shim since task 33;
-> the surface area just grew from one function to two.
+> **Status:** ✅ device-verified 2026-05-27. `PANEL_W` / `PANEL_H`
+> populated at runtime from
+> `SurfaceComposerClient::getActiveDisplayMode(g_display, &mode)`.
+> Both `sf_create_fullscreen_surface` and `sf_create_overlay_surface`
+> call the new `init_panel_dims()` helper after resolving the display
+> token. Taimen defaults retained as fallback for failed-query paths.
 
 ## Why this task exists
 
@@ -129,6 +128,80 @@ Total: ~2 hours focused work, all on the a-03 host.
   the local PW/PH into namespace `PANEL_W`/`PANEL_H` constants.
 - `MEMORY.md` → `project-boot-model-libgui-build` — describes how
   `libsf_surface.so` builds on the a-03 host.
+
+## Results (2026-05-27)
+
+**Outcome:** ✅ device-verified end-to-end on Pixel 2 XL.
+
+**API:** Step 1 confirmed `SurfaceComposerClient::getActiveDisplayMode(
+const sp<IBinder>& display, ui::DisplayMode*)` in
+`frameworks/native/libs/gui/include/gui/SurfaceComposerClient.h:170`.
+The `ui::DisplayMode` struct carries `ui::Size resolution { int32_t
+width, height }`. (There's a TODO in upstream AOSP to migrate
+callers to `getDynamicDisplayInfo` — out of scope here; the
+shorthand getActiveDisplayMode still works on android-15.)
+
+**Surprise:** taimen reports active resolution as 1440×2880
+(portrait), NOT 2880×1440 (landscape-native). The
+`SurfaceComposerClient::setDisplayProjection(ROTATION_0, …)` call
+appears to influence the reported active mode. Either way, the
+shim's portrait-coord assumption holds; the normalization
+(`min(w,h)→width, max(w,h)→height`) is a no-op on this device but
+defensive for any future landscape-native-reporting panel.
+
+**Files changed:**
+
+  cpp/sf_surface.cpp
+    + #include <ui/DisplayMode.h> + <ui/Size.h> + <algorithm>
+    - constexpr uint32_t PANEL_W = 1440;
+    - constexpr uint32_t PANEL_H = 2880;
+    + uint32_t PANEL_W = 1440;       // defaults retained as fallback
+    + uint32_t PANEL_H = 2880;
+    + void init_panel_dims(const sp<IBinder>& display) {
+        ui::DisplayMode mode;
+        if (getActiveDisplayMode(display, &mode) != OK) return;
+        // sanity bounds + min/max normalize to portrait
+        PANEL_W = std::min(w, h); PANEL_H = std::max(w, h);
+      }
+    - const uint32_t PW = 1440, PH = 2880;  // physical panel
+    + init_panel_dims(g_display);
+    + const uint32_t PW = PANEL_W, PH = PANEL_H;  // local aliases
+
+  Both create paths (sf_create_fullscreen_surface +
+  sf_create_overlay_surface) call init_panel_dims after the
+  display token is resolved.
+
+**Smoke transcript** on Pixel 2 XL:
+
+```
+sf_surface: init_panel_dims: panel resolution 1440x2880 → portrait 1440x2880
+sf_surface: surface created: portrait 1440x2880 logical (host reads ...)
+
+[overlay path:]
+sf_surface: init_panel_dims: panel resolution 1440x2880 → portrait 1440x2880
+sf_surface: [overlay] surface created: 1440x1200 logical at (0,1680), panel 1440x2880
+```
+
+Both paths fire `init_panel_dims` — idempotent and cheap. The
+fallback defaults are still the taimen 1440×2880; no smoke runs
+through the fallback path on a working device.
+
+**Commits:** wart-host commit (pending), wart top-level commit
+(pending — task doc + .task-state update).
+
+**Out of scope (not done):**
+
+- The TODO that pointed at task 33 is now resolved; the comment
+  is gone.
+- Multi-display: the shim still uses `ids[0]` (first physical
+  display). If multi-display ever becomes a target, the picker
+  becomes a separate concern. Not blocked by this task.
+- `getDynamicDisplayInfo` migration (the upstream AOSP TODO
+  inside SurfaceComposerClient.h). The shorthand
+  `getActiveDisplayMode` remains supported in android-15, and the
+  shim is consumer-only — no reason to chase a deprecation that
+  hasn't happened. Defer until upstream actually removes
+  `getActiveDisplayMode`.
 
 ## Resume hints for fresh sessions
 
