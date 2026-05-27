@@ -28,9 +28,23 @@ fn main() {
 //                                                  once, exit with its
 //                                                  status. Used for
 //                                                  CLI/smoke consumers.
+//   `wart-host --probe-ime`                      → task-40 session-2 probe:
+//                                                  one-shot read-only call
+//                                                  to IMMS
+//                                                  (isImeTraceEnabled) to
+//                                                  verify rsbinder reaches
+//                                                  the input method service.
 #[cfg(target_os = "android")]
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+
+    if args.iter().any(|a| a == "--probe-ime") {
+        android_logger::init_once(
+            android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
+        );
+        wasm_android_host::ime_impl::probe();
+        return;
+    }
 
     if let Some(i) = args.iter().position(|a| a == "--install") {
         let Some(warpkg) = args.get(i + 1) else {

@@ -142,6 +142,68 @@ interface IDirectReportChannel {}
             "vendor/aosp-system-hardware-interfaces/media/aidl"
         );
 
+        // ── IInputMethodManager AIDL (task 40 session 2) ─────────────────
+        // The IMMS proxy lives at the binder name `input_method`
+        // exposing descriptor `com.android.internal.view.IInputMethodManager`
+        // (the AIDL file's `interface` name + `package` line). Session 2
+        // of task 40 only needs ONE method — `isImeTraceEnabled()` — to
+        // prove the rsbinder transport works against the input method
+        // service. We stub all preceding methods as `void slot_N()`
+        // placeholders so that `isImeTraceEnabled` lands at the correct
+        // transaction code (position 26 → FIRST_CALL_TRANSACTION + 25).
+        // No transitive AIDL imports needed.
+        //
+        // Self-heals on every build, survives `git submodule update`.
+        // Sessions 3-5 will replace this stub incrementally as new
+        // methods are needed (addClient, startInputOrWindowGainedFocus,
+        // showSoftInput …) and the supporting parcelables vendored.
+        let imm_vendor = PathBuf::from("vendor/aosp-frameworks-base");
+        let imm_aidl_dir = imm_vendor.join("core/java");
+        let imm_aidl_path = imm_aidl_dir.join("com/android/internal/view/IInputMethodManager.aidl");
+        let imm_aidl_stub = b"\
+// Auto-patched by wart-host/build.rs (task 40 session 2). Real interface
+// has 37 methods + 15 transitive AIDL imports (IInputMethodClient,
+// IRemoteInputConnection, InputBindResult, ImeTracker.Token, ResultReceiver,
+// EditorInfo, ...) most of which live in com.android.internal.inputmethod
+// and need their own parcelable vendoring. Session 2 only calls
+// isImeTraceEnabled (no args, returns boolean, @RequiresNoPermission),
+// so we keep the preceding 25 method positions as no-import stubs to
+// anchor the transaction code (FIRST_CALL_TRANSACTION + 25 = 26).
+// Re-vendor methods in later sessions as needed.
+package com.android.internal.view;
+
+interface IInputMethodManager {
+    void slot_00_addClient();
+    void slot_01_getCurrentInputMethodInfoAsUser();
+    void slot_02_getInputMethodList();
+    void slot_03_getEnabledInputMethodList();
+    void slot_04_getInputMethodListLegacy();
+    void slot_05_getEnabledInputMethodListLegacy();
+    void slot_06_getEnabledInputMethodSubtypeList();
+    void slot_07_getLastInputMethodSubtype();
+    void slot_08_showSoftInput();
+    void slot_09_hideSoftInput();
+    void slot_10_hideSoftInputFromServerForTest();
+    void slot_11_startInputOrWindowGainedFocus();
+    void slot_12_startInputOrWindowGainedFocusAsync();
+    void slot_13_showInputMethodPickerFromClient();
+    void slot_14_showInputMethodPickerFromSystem();
+    void slot_15_isInputMethodPickerShownForTest();
+    void slot_16_onImeSwitchButtonClickFromSystem();
+    void slot_17_getCurrentInputMethodSubtype();
+    void slot_18_setAdditionalInputMethodSubtypes();
+    void slot_19_setExplicitlyEnabledInputMethodSubtypes();
+    void slot_20_getInputMethodWindowVisibleHeight();
+    void slot_21_reportPerceptibleAsync();
+    void slot_22_removeImeSurface();
+    void slot_23_removeImeSurfaceFromWindowAsync();
+    void slot_24_startProtoDump();
+    boolean isImeTraceEnabled();
+}
+";
+        std::fs::write(&imm_aidl_path, imm_aidl_stub)
+            .expect("patch IInputMethodManager.aidl");
+
         // ── ISurfaceComposer AIDL (task 22) ──────────────────────────────
         // SurfaceFlingerAIDL service ("android.gui.ISurfaceComposer").
         // Parcelables live in two sibling dirs: most under libs/gui/aidl/,
@@ -205,6 +267,7 @@ interface ISurfaceComposer {
             .source(aaudio_aidl.join("aaudio/IAAudioService.aidl"))
             .source(aaudio_aidl.join("aaudio/IAAudioClient.aidl"))
             .source(surfaceflinger_aidl_main.join("android/gui/ISurfaceComposer.aidl"))
+            .source(imm_aidl_path.clone())
             .include_dir(vibrator_aidl.clone())
             .include_dir(light_aidl.clone())
             .include_dir(power_aidl.clone())
@@ -218,6 +281,7 @@ interface ISurfaceComposer {
             .include_dir(audio_common_aidl.clone())
             .include_dir(surfaceflinger_aidl_main.clone())
             .include_dir(surfaceflinger_aidl_extras.clone())
+            .include_dir(imm_aidl_dir.clone())
             .include_dir(stubs.clone())
             .set_async_support(true)
             .output(PathBuf::from(&out_dir).join("aosp_hal_bindings.rs"))
@@ -237,6 +301,7 @@ interface ISurfaceComposer {
         println!("cargo:rerun-if-changed={}", audio_common_aidl.display());
         println!("cargo:rerun-if-changed={}", surfaceflinger_aidl_main.display());
         println!("cargo:rerun-if-changed={}", surfaceflinger_aidl_extras.display());
+        println!("cargo:rerun-if-changed={}", imm_aidl_dir.display());
         println!("cargo:rerun-if-changed={}", stubs.display());
     }
 

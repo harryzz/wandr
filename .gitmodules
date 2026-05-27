@@ -19,3 +19,7 @@
 [submodule "vendor/aosp-frameworks-native"]
 	path = vendor/aosp-frameworks-native
 	url = https://android.googlesource.com/platform/frameworks/native
+[submodule "vendor/aosp-frameworks-base"]
+	path = vendor/aosp-frameworks-base
+	url = https://android.googlesource.com/platform/frameworks/base
+	shallow = true
