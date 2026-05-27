@@ -431,26 +431,82 @@ fn cmd_detach_editor(stream: &mut UnixStream, rest: &str) -> Result<()> {
 }
 
 /// Shared backend for the five `ime-*` commands: route IME-side input
-/// (commit-text / send-key-event / set-composing-text / etc.) to the
-/// currently-focused editor's app. Step 1 just logs the intent —
-/// actual delivery is step 2's per-host control socket.
+/// to the currently-focused editor's app.
+///
+/// Task 47 step 3a — `send-key-event` actually delivers via the
+/// focused app's per-host control socket
+/// (`/data/local/tmp/wart-host-<focus.pid>.sock`). Other ime-* verbs
+/// (commit-text / set-composing-text / finish-composing-text /
+/// set-selection) still just log the intent; they need new WIT
+/// exports on the editor-bearing-app side, and that wiring is the
+/// step 3b work (alongside the first-party war.ime.keyboard).
 fn cmd_ime_route(stream: &mut UnixStream, verb: &str, rest: &str) -> Result<()> {
     let Some(focus) = state::current_editor_focus() else {
         writeln!(stream, "ERR no-focused-editor")?;
         return Ok(());
     };
+
+    if verb == "send-key-event" {
+        // Wire format from the IME's perspective:
+        //   ime-send-key-event <code-point> <key-id> <down|up>
+        // The arbiter forwards it to the per-host control socket as:
+        //   key-event <code-point> <key-id> <down|up>
+        let parts: Vec<&str> = rest.split_whitespace().collect();
+        if parts.len() != 3 {
+            writeln!(stream, "ERR send-key-event-bad-args: expected <code-point> <key-id> <down|up>")?;
+            return Ok(());
+        }
+        let host_sock = format!("/data/local/tmp/wart-host-{}.sock", focus.pid);
+        let line = format!("key-event {} {} {}\n", parts[0], parts[1], parts[2]);
+        match deliver_to_host(&host_sock, &line) {
+            Ok(()) => {
+                writeln!(stream, "OK route→pid={} (key-event {} {} {})",
+                         focus.pid, parts[0], parts[1], parts[2])?;
+                log::info!(
+                    "arbiter: ime-send-key-event → pid={} ({} {} {}) delivered via {host_sock}",
+                    focus.pid, parts[0], parts[1], parts[2]
+                );
+            }
+            Err(e) => {
+                writeln!(stream, "ERR deliver-failed {host_sock}: {e:#}")?;
+                log::warn!(
+                    "arbiter: ime-send-key-event → pid={} failed: {e:#} \
+                     (host socket missing? guest in fg but ime_inbound listener not spawned?)",
+                    focus.pid
+                );
+            }
+        }
+        return Ok(());
+    }
+
+    // commit-text / set-composing-text / finish-composing-text /
+    // set-selection — log only, await step 3b WIT exports.
     writeln!(
         stream,
-        "OK route→pid={} (input-type={}) {verb} args={:?}",
+        "OK route→pid={} (input-type={}) {verb} args={:?} [step 3b — log only]",
         focus.pid, focus.editor_info.input_type, rest,
     )?;
     log::info!(
         "arbiter: ime-{verb} → editor pid={} app-input-type={} args={:?} \
-         (step 2 delivers to the focused app's host)",
+         (step 3b delivers via new editor-side WIT exports)",
         focus.pid,
         focus.editor_info.input_type,
         rest,
     );
+    Ok(())
+}
+
+/// One-shot write to a wart-host child's control socket. Matches the
+/// one-shot pattern used elsewhere — open, write, drain reply, close.
+fn deliver_to_host(sock_path: &str, line: &str) -> std::io::Result<()> {
+    use std::io::{Read, Write};
+    let mut stream = UnixStream::connect(sock_path)?;
+    stream.write_all(line.as_bytes())?;
+    stream.flush()?;
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    // No reply expected; drain anyway in case the host echoes.
+    let mut buf = [0u8; 64];
+    let _ = stream.read(&mut buf);
     Ok(())
 }
 
