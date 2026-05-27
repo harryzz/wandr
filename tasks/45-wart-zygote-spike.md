@@ -374,6 +374,105 @@ Success criterion: zygote-launched children share substantially
 more pages with the parent than direct-launched processes share
 with each other (which is 0 by definition).
 
+#### Step 3 results (2026-05-27)
+
+**Outcome:** ✅ COW sharing confirmed and quantified, but
+**below the 30 MB scope-doc target** — that target requires
+Component / Skia preload (deferred follow-up). At the engine-
+only MVP scope, per-child savings are ~5 MB.
+
+**Method**: ran `wart-host --standalone` directly (no zygote) as
+the baseline; then `wart-host --zygote` + `--zygote-launch-gui`
+for the test condition. Captured `/proc/<pid>/smaps_rollup` for
+each, plus per-VMA categorization via `awk` over `/proc/<pid>/smaps`.
+
+**smaps_rollup (steady-state Compose render loop):**
+
+|                | Baseline    | Zygote parent | Zygote child |
+|----------------|-------------|---------------|--------------|
+| Rss            | 198 788 kB  |  24 284 kB    | 179 480 kB   |
+| Shared_Clean   |   9 128     |   5 452       |   6 904      |
+| Shared_Dirty   |     380     |   5 600       |   5 672      |
+| Private_Clean  |  81 244     |  12 544       |  67 956      |
+| Private_Dirty  | 108 036     |     688       |  98 948      |
+| Anonymous      | 105 076     |   6 060       | 101 656      |
+
+**The headline numbers:**
+
+- **Baseline `Shared_Dirty` ≈ 0** (only 380 kB — system stragglers).
+  A direct `--standalone` process shares essentially nothing dirty
+  with anyone because nothing forked it.
+- **Zygote child `Shared_Dirty` = 5 672 kB** ≈ parent's 5 600 kB.
+  All ~5.6 MB of the parent's dirty state survives into the child
+  as COW-shared.
+- **Net zygote-specific savings: ~5.3 MB per child** of dirty
+  state.
+
+`Shared_Clean` is similar (~7-9 MB) in all three — that's the
+kernel page cache deduplicating file-backed mmaps (libc, libEGL,
+libgui, libwart-host code). That's natural sharing the zygote
+doesn't change.
+
+**Per-VMA attribution of the parent's 5 600 kB Shared_Dirty:**
+
+| Category                     | Shared_Dirty |
+|------------------------------|--------------|
+| `file:/…` (wart-host + libs `.data/.bss`) |  4 656 kB |
+| `[anon:scudo:primary]` (heap) |    208 kB |
+| `[anon:linker]`              |    192 kB |
+| anon-other                   |    472 kB |
+| `[stack]`                    |      4 kB |
+| other                        |     68 kB |
+| **Total**                    |  **5 600 kB** |
+
+The headline insight: **most of the engine-preload "win" is
+binary `.data/.bss` state** — initialized globals, lazy-init'd
+statics, the Tokio-Reactor-Singleton-style stuff bionic + the
+linker touch on first load. The wasmtime `Engine` itself
+contributes only ~200 kB of `scudo:primary` heap. `Engine::new`
+is structurally light; the bulk lives in the binary image.
+
+**Implications for the 30 MB target:**
+
+To grow per-child savings past ~5 MB at this codebase scale,
+we'd need to preload state that's bigger than the engine + globals:
+
+- **`Component::deserialize_file` for the app's `.cwasm`** in the
+  parent. Wasmtime allocates internal structures (the parsed
+  module sections, type tables, etc.) — these land in
+  `scudo:primary`. Each component should add several MB.
+  ⚠ Caveat: the .cwasm mmap itself is already file-backed
+  (Shared_Clean via page cache) regardless of whether the parent
+  touches it; the dirty win is from the in-RAM wasmtime structures.
+- **Skia preload** — `FontMgr::default()` + a touch of any
+  default typeface to warm the font cache. Several MB.
+- **EGL preload** — out of scope per D5 (parent stays EGL-cold;
+  Adreno EGL context state isn't fork-safe in general).
+
+These are natural next steps and the scope doc already calls out
+the `--zygote-preload <app-id>` CLI shape for Component-level
+preload. Not done in this step because step 4 (two distinct apps
+concurrent) needs to come first to validate multi-app behavior
+before we sink work into preload optimization.
+
+**Success criterion as stated**: "zygote-launched children share
+substantially more pages with the parent than direct-launched
+processes share with each other (which is 0 by definition)" —
+✅ met. Direct processes share ~0 dirty pages; zygote children
+share ~5.3 MB. **The ≥30 MB target stretch goal**: ❌ not met at
+MVP — requires Component + Skia preload (follow-up).
+
+**What broke / what we noted:**
+
+- `pkill -KILL -f wart-host` followed by an `am force-stop`
+  restore-script was the only reliable way to clear the device.
+  Render-loop children with the lifecycle-standalone signal
+  handler installed don't die quickly on plain SIGTERM (they
+  drain frames first).
+- The numbers above are steady-state; pre-render numbers
+  (held by `WART_ZYGOTE_HOLD_SECS`) are ~6 MB Rss because the
+  child hasn't paged anything in yet (see step 1 results).
+
 ### Step 4 — Two apps concurrent (1-2 days)
 
 - Build a real second `.warpkg` for this purpose. Suggested: a

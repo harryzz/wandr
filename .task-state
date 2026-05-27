@@ -1,5 +1,5 @@
 TASK=45
-STEP=step-2-complete
+STEP=step-3-complete
 STATUS=complete
-LAST_SUCCESS=Task 45 step 2 verified OK 2026-05-27 — wart-zygote LAUNCH_GUI forks a child that acquires SF surface, initializes Adreno EGL post-fork, instantiates Compose component, renders frames. Adreno EGL survives fork() cleanly — keystone unknown resolved. ~12 MB net COW savings during live render (engine + clean code pages).
-NOTES=Ready for step 3 (formal COW measurement against no-zygote baseline) and step 4 (two apps concurrent — needs wart-app packaged as warpkg or a real 2nd .warpkg consumer).
+LAST_SUCCESS=Task 45 step 3 verified OK 2026-05-27. Direct --standalone Shared_Dirty=380 kB; zygote child Shared_Dirty=5672 kB (matching parent's 5600). Net zygote-specific COW savings: ~5.3 MB per child at MVP scope. Per-VMA attribution: 4.7 MB is binary .data/.bss; only 0.2 MB is wasmtime Engine heap. ≥30 MB target requires Component + Skia preload (follow-up).
+NOTES=Step 4 (two distinct apps concurrent) next. Needs either a real 2nd .warpkg consumer or two LAUNCH_GUI dev-cwasm with the same app (less interesting). For a real 2nd app: small Compose-Material smoke (calculator-shaped or similar) as a separately-packaged .warpkg.
