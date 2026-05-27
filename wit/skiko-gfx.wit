@@ -888,10 +888,20 @@ interface ime {
 /// + Compose-side handling for them are in place.
 interface keyboard {
     /// Push a synthetic key event to the focused editor via the
-    /// arbiter. `code-point` is the Unicode char if printable (0
-    /// for non-printable / meta keys). `key-id` is an
-    /// AKEYCODE_*-equivalent (e.g. 29 = AKEYCODE_A, 67 = backspace,
-    /// 66 = enter). `action` is 0 = down, 1 = up.
+    /// arbiter. `code-point` is the Unicode scalar of the char if
+    /// printable (0 for non-printable / meta keys); the focused
+    /// `BasicTextField` inserts based on this.
+    ///
+    /// `key-id` is a COMPOSE-Key-compatible numeric ID — NOT an
+    /// Android AKEYCODE_*. Specifically the same values the host's
+    /// winit branch sends (wart-host `lib.rs:512-528`):
+    ///   Backspace = 8, Tab = 9, Enter = 13, Escape = 27, Space = 32,
+    ///   PageUp = 33, PageDown = 34, End = 35, Home = 36,
+    ///   ArrowLeft/Up/Right/Down = 37/38/39/40, Insert = 45, Delete = 46.
+    /// For printable characters (letters / digits / punctuation),
+    /// `key-id = 0` and the field uses `code-point`.
+    ///
+    /// `action` is 0 = down, 1 = up.
     ///
     /// Fire-and-forget — the arbiter delivers asynchronously to
     /// the per-host control socket; this call returns as soon as
