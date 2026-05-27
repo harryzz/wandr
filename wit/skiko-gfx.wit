@@ -437,6 +437,33 @@ interface paragraph {
     get-word-boundary-start: func(id: u32, offset: u32) -> u32;
     get-word-boundary-end:   func(id: u32, offset: u32) -> u32;
 
+    /// Task 50 — per-line metrics. Required by Compose's
+    /// SkiaParagraph.getCursorRect to position the cursor blink at the
+    /// correct line in multi-line text. Without these, lineMetrics
+    /// returns an empty array and lineMetricsForOffset's binary search
+    /// degenerates to "always line 0" — so the cursor renders on line 1
+    /// regardless of where the selection offset actually sits.
+    ///
+    /// Two-stage protocol mirroring prepare-rects-for-range. Call
+    /// prepare-line-metrics once per layout; it caches the
+    /// skia_safe::textlayout::LineMetrics array on the host and returns
+    /// the line count. The per-field getters then read by line index.
+    /// Same field shape as upstream skiko's `LineMetrics` data class.
+    prepare-line-metrics:                       func(id: u32) -> u32;
+    get-cached-line-start-index:                func(idx: u32) -> u32;
+    get-cached-line-end-index:                  func(idx: u32) -> u32;
+    get-cached-line-end-excluding-whitespaces:  func(idx: u32) -> u32;
+    get-cached-line-end-including-newline:      func(idx: u32) -> u32;
+    get-cached-line-is-hard-break:              func(idx: u32) -> bool;
+    get-cached-line-ascent:                     func(idx: u32) -> f64;
+    get-cached-line-descent:                    func(idx: u32) -> f64;
+    get-cached-line-unscaled-ascent:            func(idx: u32) -> f64;
+    get-cached-line-height:                     func(idx: u32) -> f64;
+    get-cached-line-width:                      func(idx: u32) -> f64;
+    get-cached-line-left:                       func(idx: u32) -> f64;
+    get-cached-line-baseline:                   func(idx: u32) -> f64;
+    get-cached-line-number:                     func(idx: u32) -> u32;
+
     drop-paragraph:           func(id: u32);
 }
 

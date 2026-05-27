@@ -1,10 +1,11 @@
 # Task 50 — Visual cursor renders wrong position in multi-line BasicTextField
 
-> **Status:** 🔲 scoped 2026-05-27, not started. Surfaced by task 49's
-> Enter-fix smoke (war.ime.keyboard commit `8447290`): the IME now
-> correctly inserts `\n` into a multi-line `BasicTextField` and the
-> selection state advances to the right offset on line 2, but the
-> visual cursor blink keeps rendering on line 1.
+> **Status:** ✅ device-verified 2026-05-27. Bug was a stubbed
+> `Paragraph.lineMetrics get() = emptyArray()` on the skiko-wasi
+> side. Fix exposes per-line metrics from the host via 14 new
+> `paragraph` WIT verbs (`prepare-line-metrics` + 13 per-field
+> getters). Cursor now tracks selection across `\n` line breaks for
+> both hardware-keyboard Enter and IME Enter paths.
 
 ## Why this task exists
 
@@ -183,6 +184,85 @@ cursor positioning; the missing piece is now this task.
   work that fixed `getRectsForRange` / `getGlyphPositionAtCoordinate`
   / `getWordBoundary` routing. Multi-line cursor was outside that
   scope.
+
+## Results (2026-05-27)
+
+**Outcome:** ✅ device-verified on Pixel 2 XL across both input
+paths.
+
+**Diagnosis:** Step 1 confirmed the bug was NOT IME-specific —
+hardware-keyboard Enter (`adb shell input keyevent KEYCODE_ENTER`)
+into wart-app's `BasicTextField` produced the same symptom: text
+correctly multi-line in the model (`tfstate` log shows
+`"hello world\nhhhvbbhellohardware\nline2vb"` with selection
+TextRange at end of line 3), but cursor blink stuck on line 1.
+
+Step 2 located the bug at one specific line:
+`skiko/skiko/src/wasmWasiMain/kotlin/org/jetbrains/skia/paragraph/Paragraph.kt:71`
+
+```kotlin
+val lineMetrics: Array<LineMetrics> get() = emptyArray()
+```
+
+Compose's `SkiaParagraph.getCursorRect(offset)` calls
+`lineMetricsForOffset(offset)!!.baseline / ascent / descent` to
+compute the cursor Y; with an empty array, the binary-search
+helper degenerates to "always line 0" and the cursor renders on
+line 1 regardless of offset.
+
+**Fix:** 14 new WIT verbs on `my:skiko-gfx/paragraph` — one
+`prepare-line-metrics` + 13 per-field getters mirroring the
+existing `prepare-rects-for-range` two-stage cache pattern.
+Implemented host-side in `wart-host/src/paragraph_impl.rs`
+(reading `skia_safe::textlayout::Paragraph::get_line_metrics()`,
+which natively handles `\n`); wired through skiko-wasi's
+`Paragraph.kt` so `lineMetrics` now returns a real
+`Array<LineMetrics>` matching upstream skiko's data class
+field-for-field. The host caches the array in a
+`Vec<CachedLineMetrics>` (plain-data copy, no lifetime on the
+parent Paragraph).
+
+**Smoke transcript** on Pixel 2 XL (`tfstate` log):
+
+```
+text="hello world\njjjjjj\ntralalahi\nline2"  sel=TextRange(34, 34)
+```
+
+Screenshot confirms cursor blink at end of line 4 (`line2|`),
+matching offset 34 (= 11 + 1 + 6 + 1 + 9 + 1 + 5).
+
+**Files changed:**
+
+- `wit/skiko-gfx.wit` + 3 mirrors — 14 new paragraph verbs.
+- `wart-host/src/canvas_impl.rs` — `CachedLineMetrics` struct +
+  `para_line_metrics_cache: Vec<CachedLineMetrics>` field.
+- `wart-host/src/paragraph_impl.rs` — 14 new Host trait methods
+  (`prepare_line_metrics` + 13 `get_cached_line_*` getters).
+- `skiko/.../generated/{Internal,}SkikoUi.kt` — 14
+  `@WasmImport` extern fun declarations + Import companion
+  wrappers + interface method declarations.
+- `skiko/.../paragraph/Paragraph.kt:71` — replaced
+  `emptyArray()` stub with the real lookup.
+
+**Commits:** wart-host `8b16ab9`, skiko `09ab3d53`, wart-app
+`b3a73be`, war.ime.keyboard `4ccb590`, wart (top) (this).
+
+**Out of scope (lands later if observed):**
+
+- The companion `Paragraph::getGlyphPositionAtCoordinate`
+  (reverse direction — tap → offset) also potentially mishandles
+  multi-line. Existing host impl uses
+  `Paragraph::get_glyph_position_at_coordinate((x,y))` which
+  Skia handles correctly across lines; if a smoke shows
+  tap-on-line-2 placing the cursor on line 1, that's a separate
+  small fix.
+- Multi-line text selection (long-press + drag handles across
+  lines) was not exercised by this fix. The same `lineMetrics`
+  data unlocks correct selection-handle rendering on multi-line
+  — should fall out for free.
+- Compose's `Paragraph` callers that use `width` / `left`
+  fields for alignment (e.g. centered multi-line text) now
+  work too — same code path.
 
 ## Resume hints for fresh sessions
 
