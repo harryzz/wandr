@@ -29,6 +29,13 @@ fun __wasm_export_renderFrame(p0: Long): Unit {
     withScopedMemoryAllocator { _ ->
         RendererImpl.renderFrame(p0.toULong())
     }
+    // Task 49 step 1b — defensive freeAll on exit. The current
+    // on-editor-attached has primitive params (no record, no strings,
+    // no cabi_realloc) so this isn't strictly required, but any
+    // future host-initiated guest call that DOES use cabi_realloc
+    // will need the allocator clean between frames. Cheap and
+    // idempotent.
+    freeAllComponentModelReallocAllocatedMemory()
 }
 
 @WasmExport("my:skiko-gfx/renderer@0.1.0#on-pointer-event")

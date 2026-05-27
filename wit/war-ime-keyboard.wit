@@ -1,9 +1,15 @@
 package war:ime-keyboard@0.1.0;
 
-/// war.ime.keyboard's world — uses just the canonical skiko-ui
-/// interfaces. The new `my:skiko-gfx/keyboard` interface (task 47
-/// step 3b) is part of skiko-ui's imports, so including skiko-ui
-/// brings it along automatically.
+/// war.ime.keyboard's world. Includes the canonical skiko-ui imports
+/// (Canvas / Paragraph / Keyboard.sendKeyEvent / ...) plus the
+/// IME-events export (`war:ime/ime` — `on-editor-attached` /
+/// `on-editor-detached`) the host calls when focus changes.
+///
+/// `include war:ime/ime-events` (stripped sibling of `ime-client-world`
+/// that omits the input-connection import) — see wit/ime.wit. We don't
+/// use war:ime/input-connection; key events go through the existing
+/// my:skiko-gfx/keyboard outbound path (task 47 step 3b).
 world ime-keyboard {
     include my:skiko-gfx/skiko-ui@0.1.0;
+    include war:ime/ime-events@0.1.0;
 }

@@ -300,6 +300,158 @@ object ImeKeyboardDefaults {
         ),
     )
 
+    // ── Editor-driven layouts (task 49 step 2) ─────────────────────────
+    //
+    // Picked automatically by `pickLayout` when the focused editor's
+    // input-type matches. `isLanguage = false` so the 🌐 cycle skips
+    // them — they're not user-cyclable.
+
+    /** Numeric keypad. Picked for `input-type = number`. 4 rows × 3 keys
+     *  + ⌫/⏎/. modifiers on the right. */
+    val Numeric: KeyboardLayout = KeyboardLayout(
+        name = "Numeric",
+        isLanguage = false,
+        rows = listOf(
+            listOf(text("1"), text("2"), text("3"), backspace),
+            listOf(text("4"), text("5"), text("6"), enter),
+            listOf(text("7"), text("8"), text("9"), text(".")),
+            listOf(
+                text("-"),
+                text("0"),
+                text(","),
+                KeyDef("ABC", KeyAction.SwitchLayout("English"), width = 1f),
+            ),
+        ),
+    )
+
+    /** Phone keypad. Picked for `input-type = phone`. Adds `*` `#`
+     *  alongside digits — the standard ITU-T E.161 layout. `+` for
+     *  international prefix, `,` for pause (Android convention). */
+    val Phone: KeyboardLayout = KeyboardLayout(
+        name = "Phone",
+        isLanguage = false,
+        rows = listOf(
+            listOf(text("1"), text("2"), text("3"), backspace),
+            listOf(text("4"), text("5"), text("6"), enter),
+            listOf(text("7"), text("8"), text("9"), text("+")),
+            listOf(
+                text("*"),
+                text("0"),
+                text("#"),
+                KeyDef("ABC", KeyAction.SwitchLayout("English"), width = 1f),
+            ),
+        ),
+    )
+
+    /** Email layout — English QWERTY + dedicated `@` key + `.com`
+     *  suffix on the modifier row. Picked for `input-type = email`. */
+    val Email: KeyboardLayout = KeyboardLayout(
+        name = "Email",
+        isLanguage = false,
+        rows = listOf(
+            digitsRow,
+            listOf("q","w","e","r","t","y","u","i","o","p").map { letter(it[0]) },
+            listOf("a","s","d","f","g","h","j","k","l").map { letter(it[0]) },
+            buildList {
+                add(KeyDef("⇧", KeyAction.Shift, width = 1.5f))
+                addAll(listOf("z","x","c","v","b","n","m").map { letter(it[0]) })
+                add(backspace)
+            },
+            listOf(
+                KeyDef("123",  KeyAction.SwitchLayout("Symbols"),  width = 1.3f),
+                text("@"),
+                space.copy(width = 2.7f),
+                text("."),
+                KeyDef(".com", KeyAction.Send(46, 0),               width = 1.6f),
+                enter,
+            ),
+        ),
+        shiftedRows = listOf(
+            digitsRow,
+            listOf("Q","W","E","R","T","Y","U","I","O","P").map { letter(it[0]) },
+            listOf("A","S","D","F","G","H","J","K","L").map { letter(it[0]) },
+            buildList {
+                add(KeyDef("⇧", KeyAction.Shift, width = 1.5f))
+                addAll(listOf("Z","X","C","V","B","N","M").map { letter(it[0]) })
+                add(backspace)
+            },
+            listOf(
+                KeyDef("123",  KeyAction.SwitchLayout("Symbols"),  width = 1.3f),
+                text("@"),
+                space.copy(width = 2.7f),
+                text("."),
+                KeyDef(".com", KeyAction.Send(46, 0),               width = 1.6f),
+                enter,
+            ),
+        ),
+    )
+
+    /** URL layout — like Email but `/` instead of `@`. Picked for
+     *  `input-type = url`. */
+    val Url: KeyboardLayout = KeyboardLayout(
+        name = "Url",
+        isLanguage = false,
+        rows = listOf(
+            digitsRow,
+            listOf("q","w","e","r","t","y","u","i","o","p").map { letter(it[0]) },
+            listOf("a","s","d","f","g","h","j","k","l").map { letter(it[0]) },
+            buildList {
+                add(KeyDef("⇧", KeyAction.Shift, width = 1.5f))
+                addAll(listOf("z","x","c","v","b","n","m").map { letter(it[0]) })
+                add(backspace)
+            },
+            listOf(
+                KeyDef("123",  KeyAction.SwitchLayout("Symbols"),  width = 1.3f),
+                text("/"),
+                text("."),
+                space.copy(width = 2.7f),
+                KeyDef(".com", KeyAction.Send(46, 0),               width = 1.6f),
+                enter,
+            ),
+        ),
+        shiftedRows = null,
+    )
+
+    /** Password layout — English QWERTY shape, no autocorrect markers
+     *  (future), no `🌐`/`😀` to avoid leaking input via cycles. Picked
+     *  for `input-type = password`. */
+    val Password: KeyboardLayout = KeyboardLayout(
+        name = "Password",
+        isLanguage = false,
+        rows = listOf(
+            digitsRow,
+            listOf("q","w","e","r","t","y","u","i","o","p").map { letter(it[0]) },
+            listOf("a","s","d","f","g","h","j","k","l").map { letter(it[0]) },
+            buildList {
+                add(KeyDef("⇧", KeyAction.Shift, width = 1.5f))
+                addAll(listOf("z","x","c","v","b","n","m").map { letter(it[0]) })
+                add(backspace)
+            },
+            listOf(
+                KeyDef("123",  KeyAction.SwitchLayout("Symbols"),  width = 1.3f),
+                space.copy(width = 5.4f),
+                text("."),
+                enter,
+            ),
+        ),
+        shiftedRows = listOf(
+            digitsRow,
+            listOf("Q","W","E","R","T","Y","U","I","O","P").map { letter(it[0]) },
+            listOf("A","S","D","F","G","H","J","K","L").map { letter(it[0]) },
+            buildList {
+                add(KeyDef("⇧", KeyAction.Shift, width = 1.5f))
+                addAll(listOf("Z","X","C","V","B","N","M").map { letter(it[0]) })
+                add(backspace)
+            },
+            listOf(
+                KeyDef("123",  KeyAction.SwitchLayout("Symbols"),  width = 1.3f),
+                space.copy(width = 5.4f),
+                text(","),
+                enter,
+            ),
+        ),
+    )
+
     /** Starter emoji layout. Glyph rendering depends on skiko-wasm-wasi
      *  having a color emoji font loaded — current builds may render some
      *  as boxes; that's a separate skia COLR/CBDT gap. */
@@ -320,8 +472,58 @@ object ImeKeyboardDefaults {
         ),
     )
 
-    /** All built-in layouts in display order. */
-    fun layouts(): List<KeyboardLayout> = listOf(English, Bulgarian, Symbols, Symbols2, Emoji)
+    /** All built-in layouts in display order. The user-cyclable ones
+     *  (English / Bulgarian) come first; editor-driven layouts
+     *  (Numeric / Phone / Email / Url / Password) follow; auxiliary
+     *  (Symbols / Symbols2 / Emoji) last. Position doesn't affect the
+     *  🌐 cycle — that filters by `isLanguage = true`. */
+    fun layouts(): List<KeyboardLayout> = listOf(
+        English, Bulgarian,
+        Numeric, Phone, Email, Url, Password,
+        Symbols, Symbols2, Emoji,
+    )
+}
+
+// ─── Layout-pick policy (task 49 step 2) ──────────────────────────────
+//
+// Two concerns share one layout list:
+//   - editor-driven (override): the host calls `on-editor-attached(
+//     input-type)`; ImeEventsImpl stores the type; the IME picks a
+//     matching specialized layout (Numeric / Phone / Email / Url /
+//     Password). 🌐 cycle is disabled while editor-driven layout is
+//     active.
+//   - user-cycle (default): the user toggles via 🌐 between
+//     `isLanguage = true` layouts.
+//
+// `pickLayout` is the single decision point: given the current
+// editor-type (from ImeEventsImpl) AND the user's last cycle
+// position, return the layout name to display.
+
+internal fun pickLayout(
+    editorType: org.jetbrains.skiko.wasi.wit.ImeInputType,
+    userSelectedLang: String,
+    userRequestedLayout: String,
+): String = when (editorType) {
+    org.jetbrains.skiko.wasi.wit.ImeInputType.NUMBER   -> "Numeric"
+    org.jetbrains.skiko.wasi.wit.ImeInputType.PHONE    -> "Phone"
+    org.jetbrains.skiko.wasi.wit.ImeInputType.EMAIL    -> "Email"
+    org.jetbrains.skiko.wasi.wit.ImeInputType.URL      -> "Url"
+    org.jetbrains.skiko.wasi.wit.ImeInputType.PASSWORD -> "Password"
+    // TEXT and MULTILINE_TEXT honor the user's chosen layout (which
+    // is initialized to the cycled language).
+    else -> userRequestedLayout
+}
+
+/** True when the editor-type forces a layout — disables 🌐 cycle. */
+internal fun isEditorTypeOverride(
+    editorType: org.jetbrains.skiko.wasi.wit.ImeInputType,
+): Boolean = when (editorType) {
+    org.jetbrains.skiko.wasi.wit.ImeInputType.NUMBER,
+    org.jetbrains.skiko.wasi.wit.ImeInputType.PHONE,
+    org.jetbrains.skiko.wasi.wit.ImeInputType.EMAIL,
+    org.jetbrains.skiko.wasi.wit.ImeInputType.URL,
+    org.jetbrains.skiko.wasi.wit.ImeInputType.PASSWORD -> true
+    else -> false
 }
 
 // ─── Composable ──────────────────────────────────────────────────────
@@ -331,8 +533,26 @@ fun ImeKeyboard(
     layouts: List<KeyboardLayout> = ImeKeyboardDefaults.layouts(),
     initialLayoutName: String = "English",
 ) {
-    var layoutName by remember { mutableStateOf(initialLayoutName) }
+    // userRequestedLayout — what the user actively cycled / switched to.
+    // The 🌐 cycle and 123/😀/ABC switch buttons write here.
+    var userRequestedLayout by remember { mutableStateOf(initialLayoutName) }
     var shifted by remember { mutableStateOf(false) }
+
+    // Poll ImeEventsImpl for the host-delivered editor-type every
+    // recompose. WasiFrameDispatcher's per-frame nudge ensures
+    // re-composition happens; the focused-editor change drives the
+    // layout pick via pickLayout below. No reactive subscription
+    // needed because the rest of the keyboard already recomposes
+    // every frame.
+    val currentEditorType = testapp.ImeEventsImpl.currentInputType
+    val layoutName = pickLayout(
+        editorType = currentEditorType,
+        userSelectedLang = userRequestedLayout,  // unused for now;
+                                                  // step-3 plugin work
+                                                  // refines this.
+        userRequestedLayout = userRequestedLayout,
+    )
+    val editorTypeOverridden = isEditorTypeOverride(currentEditorType)
 
     val layout = layouts.firstOrNull { it.name == layoutName } ?: layouts.first()
     val rows = if (shifted && layout.shiftedRows != null) layout.shiftedRows else layout.rows
@@ -368,15 +588,32 @@ fun ImeKeyboard(
                             }
                             KeyAction.Shift -> shifted = !shifted
                             is KeyAction.SwitchLayout -> {
-                                layoutName = a.targetLayoutName
+                                // Task 49 step 2 — write to userRequestedLayout
+                                // rather than layoutName directly. The
+                                // computed layoutName reads from pickLayout
+                                // which considers editor-type override. If
+                                // currently overridden (e.g. Numeric for a
+                                // Number field), the user's switch lands
+                                // but the displayed layout stays Numeric
+                                // until the editor defocuses — defensive,
+                                // matches Android IME behavior.
+                                userRequestedLayout = a.targetLayoutName
                                 shifted = false
                             }
                             KeyAction.CycleLanguage -> {
-                                val curIdx = languageLayoutNames.indexOf(layoutName)
-                                if (languageLayoutNames.isNotEmpty()) {
-                                    val next = (curIdx + 1).coerceAtLeast(0) % languageLayoutNames.size
-                                    layoutName = languageLayoutNames[next]
-                                    shifted = false
+                                // Skip the cycle when an editor-type override
+                                // is active — the 🌐 key on Numeric / Phone
+                                // / Email / Url / Password layouts shouldn't
+                                // exist visually, but defensive guard here
+                                // in case a user-supplied layout list has
+                                // a 🌐 in an unexpected place.
+                                if (!editorTypeOverridden) {
+                                    val curIdx = languageLayoutNames.indexOf(userRequestedLayout)
+                                    if (languageLayoutNames.isNotEmpty()) {
+                                        val next = (curIdx + 1).coerceAtLeast(0) % languageLayoutNames.size
+                                        userRequestedLayout = languageLayoutNames[next]
+                                        shifted = false
+                                    }
                                 }
                             }
                             KeyAction.Hide -> {
