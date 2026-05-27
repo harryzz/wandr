@@ -1,5 +1,5 @@
 TASK=46
-STEP=step-1-complete
+STEP=step-2-complete
 STATUS=complete
-LAST_SUCCESS=Task 46 step 1 verified OK 2026-05-27. SIGCHLD reaper thread + KILL/KILL_FORCE commands. Device-verified: 5 rapid headless forks reap cleanly (no zombies); KILL validates pid ownership (unrelated pids → ERR not-our-child); GUI child KILL → graceful 3.5s lifecycle drain → reaped exit=0.
-NOTES=Step 2 (Component preload registry) is next — highest-leverage piece. Closes the COW gap from ~5.6 MB to target ~25 MB per child via Component::deserialize_file in parent.
+LAST_SUCCESS=Task 46 step 2 verified OK 2026-05-27. Preload registry shipped (mod preload + app_loader hooks + zygote startup walk of system-apps/* + PRELOAD <app-id> socket cmd). System bundles auto-preload at startup (3 components, 150 ms wall-clock); user apps preload via socket cmd from installer/arbiter/tests. Device measurement: child Shared_Dirty = 62.5 MB held / 57.6 MB rendering vs 5.6 MB step-1 baseline. Step-2 ≥20 MB target met by 3×. System-wide: N=2 saves ~100 MB, N=10 saves ~1 GB, lifts 4-GB device concurrent-app ceiling from ~22 to ~40.
+NOTES=Step 3 next: NEW wart-arbiter cargo crate + binary. ~2-3 day estimate.

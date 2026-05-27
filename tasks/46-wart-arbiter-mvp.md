@@ -236,6 +236,176 @@ catches it gracefully.
 Success criterion: per-child smaps_rollup shows Shared_Dirty
 ≥20 MB (vs 5.6 MB at engine-only preload).
 
+#### Step 2 results (2026-05-27)
+
+**Outcome:** ✅ target met by 3×. 57.6 MB Shared_Dirty per
+child in steady-state render (vs 5.6 MB at engine-only preload
+from task 45; vs ≥20 MB step-2 target). The COW math the spike
+fell short of in task 45 step 3 is now closed.
+
+**Design decisions taken** (in conversation, locked):
+
+- **Auto-preload at startup is system-only.** Zygote walks
+  `<APPS_ROOT>/system-apps/*` and preloads every component
+  found. Rationale: system bundles (markdown / emoji / fonts)
+  are imported by every Compose app, they're small, they
+  don't churn. User apps are explicit/dynamic.
+- **`PRELOAD <app-id>` socket command** for user apps and
+  refresh-after-upgrade. The installer calls it post-install
+  (instead of restarting the zygote, which would drop all
+  preloads). Drops any prior preloads for the same app (under
+  any version) so in-place upgrades replace stale entries.
+- **Registry keyed by absolute .cwasm path**, not by
+  (app-id, comp-name). Both `load_installed` and
+  `load_dep_components` in `app_loader.rs` already pass a
+  `.cwasm` path to `deserialize_file`, so one lookup site
+  covers app + dep components.
+
+**Architecture:**
+
+```
+new src/preload.rs:
+  registry(): &'static Mutex<HashMap<PathBuf, Component>>
+  get(path): Option<Component>          -- loader hook
+  insert(path, component)                -- preload helper
+  drop_prefix(prefix)                    -- per-app invalidation
+  preload_app(engine, root, kind_dir, app_id)  -> count
+  preload_all_system_apps(engine, root)        -> count   (called at startup)
+  preload_either(engine, root, app_id)         -> (kind, count)   (PRELOAD handler)
+
+src/app_loader.rs (load_installed + load_dep_components):
+  before deserialize_file: preload::get(canonical_path) -> hit
+  on hit: clone the preloaded Component (cheap, Arc-internal)
+  on miss: fall through to deserialize_file as before
+
+src/zygote.rs:
+  serve():
+    1. preload Engine (existing)
+    2. spawn reaper (existing)
+    3. preload_all_system_apps(engine, WART_APPS_ROOT)
+    4. bind listen socket
+  handle_one():
+    accept LAUNCH/LAUNCH_GUI/KILL/KILL_FORCE/PRELOAD <app-id>
+  handle_preload(): preload_either() + write OK/ERR
+
+src/main.rs:
+  --zygote-preload <app-id>  -> preload_client(app_id)
+```
+
+**Run + measurement** on Pixel 2 XL:
+
+```
+$ wart-host --zygote (with 3 system bundles installed)
+ ...
+ preload: + .../system-apps/war.emoji.picker/0.1.0/cache/picker.cwasm
+ preload: + .../system-apps/war.markdown.renderer/0.1.0/cache/renderer.cwasm
+ preload: + .../system-apps/war.fonts.loader/0.1.0/cache/loader.cwasm
+ startup preload — 3 system component(s)
+ listening on /data/local/tmp/wart-zygote.sock
+
+$ wart-host --zygote-preload com.example.wart-app
+ PRELOAD com.example.wart-app → OK apps 1
+
+$ wart-host --zygote-launch-gui com.example.wart-app  (WART_ZYGOTE_HOLD_SECS=30)
+ launched com.example.wart-app → pid 8493
+```
+
+**Held child (post-fork, pre-render)** — pure COW baseline:
+
+|                  | Parent   | Held child |
+|------------------|----------|------------|
+| Rss              | 133 MB   |  62.9 MB   |
+| Shared_Dirty     |  62.7 MB |  62.5 MB   |
+| Anonymous        |  62.6 MB |  62.6 MB   |
+
+Parent and held child have byte-identical Anonymous (62.6 MB
+each) — the preloaded Components' Cranelift/typetable heap is
+fully COW-shared at fork time.
+
+**Steady-state child (full Compose render loop)**:
+
+|                  | Parent   | Render child |
+|------------------|----------|--------------|
+| Rss              | 133 MB   | 167 MB       |
+| Shared_Clean     |  29.4 MB |  30.8 MB     |
+| Shared_Dirty     |  57.5 MB |  57.6 MB     |
+| Private_Clean    |  40.9 MB |  18.9 MB     |
+| Private_Dirty    |   5.3 MB |  60.0 MB     |
+| Anonymous        |  62.6 MB | 114.7 MB     |
+
+After 30 s of rendering, the child has dirtied ~5 MB of pages
+that were originally COW-shared (down from 62.5 → 57.6 MB
+shared) — most of the preloaded state stays COW through the
+active render loop. The 60 MB Private_Dirty is the child's
+own wasm-linear-memory + Skia state.
+
+**Comparison vs task 45 step 3 baseline:**
+
+| Per-child metric         | Task 45 step 1 | Task 46 step 2 | Δ |
+|--------------------------|----------------|----------------|---|
+| Shared_Dirty (held)      | 5.6 MB         | 62.5 MB        | **+57 MB** |
+| Shared_Dirty (rendering) | 5.6 MB         | 57.6 MB        | **+52 MB** |
+| Private_Dirty (rendering)| 99 MB          | 60 MB          | -39 MB |
+
+The render-loop Private_Dirty drop (99 → 60) is the win
+playing out: pages that the child used to dirty on its own
+now come pre-dirty from the parent and stay COW-shared
+through reads.
+
+**System-wide concurrency math** (rough, single-foreground
++ N backgrounded apps; numbers approximate within ±10%):
+
+| N apps | Step 1 (engine preload) | Step 2 (full preload) |
+|--------|------------------------|----------------------|
+| 1      | 198 MB                 | 212 MB               |
+| 2      | 388 MB                 | 291 MB               |
+| 5      | 990 MB                 | 528 MB               |
+| 10     | 1 980 MB               | 924 MB               |
+
+Below N=2 the parent's preload overhead (~109 MB more in the
+parent than engine-only) makes step 2 a slight loss. From
+N=2 onward, step 2 wins decisively — at N=10 it's ~2× the
+memory budget headroom. On a 4 GB device this lifts the
+concurrent-app ceiling from ~22 (step 1) to ~40+ (step 2).
+
+**What this doesn't change:**
+
+- Per-child working set is still dominated by wasm linear
+  memory + Skia. Components are now COW-shared; wasm linear
+  memory is intrinsically per-instance and stays private.
+- Adreno EGL fork-survival is unchanged (still works).
+- DRC GC scheduling issue [[wasmtime-drc-no-autoschedule]]
+  is unchanged; one app's GC stall is still per-process.
+
+**Known limitations carried forward:**
+
+- Preload happens in the parent on a single thread. With 3
+  system + 1 user app preloaded the wall-clock cost was
+  ~150 ms (well under the 600 ms first-render budget). For
+  large preload sets, parallelize via rayon.
+- No version pinning in the preload registry. The latest
+  installed version always wins. Rollback would need
+  explicit per-version `PRELOAD` support.
+- Engine-config drift is detected at deserialize time
+  (deserialize errors → skip + log). No proactive
+  re-precompile from the zygote; the loader's fall-through
+  handles it lazily on first launch.
+
+**Files touched (committed in this step):**
+
+- `wart-host/src/preload.rs` — new module with registry +
+  `preload_app` + `preload_all_system_apps` + `preload_either`.
+- `wart-host/src/app_loader.rs` — preload registry lookup at
+  both `Component::deserialize_file` sites
+  (`load_installed` and `load_dep_components`).
+- `wart-host/src/zygote.rs` — startup walk of `system-apps/`;
+  `PRELOAD <app-id>` socket command + `handle_preload`;
+  `preload_client` for the CLI.
+- `wart-host/src/lib.rs` — `mod preload;`.
+- `wart-host/src/main.rs` — `--zygote-preload <app-id>` CLI
+  flag.
+- `tasks/46-wart-arbiter-mvp.md` — this section.
+
 ### Step 3 — `wart-arbiter` skeleton crate + LAUNCH plumbing (~2-3 days)
 
 New `wart-arbiter/` Cargo crate. Workspace member alongside
