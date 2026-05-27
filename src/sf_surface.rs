@@ -136,6 +136,17 @@ impl SfSurface {
                 Some(std::mem::transmute(visible_sym))
             };
 
+            // Summarize which optional symbols were resolved — handy when
+            // the shim .so is older than the wart-host binary expects.
+            log::info!(
+                "sf_surface: dlsym summary — input_poll={} query_hint={} request_focus={} set_layer={} set_visible={}",
+                input_poll.is_some(),
+                query_hint.is_some(),
+                request_focus.is_some(),
+                set_layer.is_some(),
+                set_visible.is_some(),
+            );
+
             let mut w: i32 = 0;
             let mut h: i32 = 0;
             let mut t: u32 = 0;
