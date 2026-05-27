@@ -1,5 +1,5 @@
 TASK=47
-STEP=step-2-complete
+STEP=step-3a-complete
 STATUS=complete
-LAST_SUCCESS=Task 47 step 2 verified OK 2026-05-27. wit/skiko-gfx.wit gains `ime` interface; wart-host ime_host_impl.rs forwards to arbiter via UNIX socket; skiko-wasi Ime bindings hand-written into generated/SkikoUi.kt; WasiKeyboardController calls the new WIT verbs alongside isVisible toggling. End-to-end smoke on Pixel 2 XL: tapping BasicTextField logs attach-editor at the arbiter (with full pid + input-type + selection); tapping out logs detach-editor. In-canvas keyboard still draws (co-existence kept). Build-system-warpkgs.sh also fixed (wart-app package.toml dep declarations + build_system_wasm stderr).
-NOTES=Step 3 next: first-party war.ime.keyboard Compose warpkg (~1 week). Also requires the per-host control socket so the arbiter can push commit-text INTO running guests.
+LAST_SUCCESS=Task 47 step 3a verified OK 2026-05-27. Inbound IME delivery shipped: per-host /data/local/tmp/wart-host-<pid>.sock with accept thread + queue + render-loop drain; arbiter's ime-send-key-event delivers via the focused-pid's socket; shell-injected 'a'/'b'/'c' appeared in wart-app's BasicTextField tfstate. Architecture decision: send-key-event (virtual hardware keyboard) is the MVP delivery path; commit-text/composing-text need new WIT exports (step 3b).
+NOTES=Step 3b: war.ime.keyboard Compose warpkg. Calls Ime.Import.sendKeyEvent (need new WIT verb on the IME side too) → arbiter routes back to focused pid via the now-proven inbound path. Plus a single button is enough for end-to-end IME-roundtrip smoke.

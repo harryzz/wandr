@@ -439,6 +439,127 @@ Success criterion: tap text field → keyboard renders + accepts
 taps → tapped letters appear in the focused TextField via
 `commit-text` round-trip.
 
+#### Step 3a — inbound delivery infra (2026-05-27)
+
+Split step 3 into two sub-steps for tractable commits. **Step 3a
+ships the protocol path that delivers events from the arbiter
+INTO a running guest** — the missing inbound half of the IME
+loop. Step 3b is the actual `war.ime.keyboard` Compose UI, which
+sits on top of this infra and can iterate independently.
+
+**Architecture decision**: route IME taps through the existing
+**`send-key-event` virtual-hardware-keyboard path** (task 33
+step 3's `on-key-event-v2` + `dispatch_key_v2`) instead of
+building new WIT exports for `commit-text` /
+`set-composing-text`. The user's earlier-this-session intuition
+about a virtual-keyboard service was correct for ASCII typing —
+that's what step 3a uses. `commit-text` / `set-composing-text`
+become future work (needed for autocorrect, CJK, emoji); the
+keyboard MVP doesn't need them.
+
+**`wart-host/src/ime_inbound.rs` (new)**:
+
+```
+accept thread (background)         render loop (main thread)
+───────────────────────             ───────────────────────────
+UnixListener::accept()              ── per frame ──
+read lines                          drain_queue() → Vec<InboundEvent>
+parse `key-event <cp> <kid> <act>`  for each event:
+queue.push_back(KeyEvent {...})       dispatch_key_v2(skiko, store, …)
+                                    (re-uses task 33 step 3)
+```
+
+Per-host socket path: `/data/local/tmp/wart-host-<pid>.sock`.
+Bound by the forked child after EGL is up. Mode 666. The
+arbiter derives the path from `EditorFocus.pid` — no
+registration handshake needed.
+
+Why two threads: wasmtime's `Store` is `!Send`, so only the
+render-loop thread can call into the wasm guest. The accept
+thread just parses + queues; the render loop drains +
+dispatches. Same separation the InputFlinger drain uses.
+
+**`wart-host/src/standalone.rs`**:
+
+- After EGL setup: `crate::ime_inbound::spawn_listener()`.
+- Per-frame, alongside the InputFlinger drain:
+  `for ev in crate::ime_inbound::drain_queue() { ...
+  dispatch_key_v2(skiko, &mut store, action, code_point, key_id) ... }`
+
+**`wart-arbiter/src/main.rs`** — `cmd_ime_route` for the
+`send-key-event` verb now actually delivers:
+
+```rust
+let host_sock = format!("/data/local/tmp/wart-host-{}.sock", focus.pid);
+let line = format!("key-event {cp} {kid} {act}\n");
+deliver_to_host(&host_sock, &line)?;
+```
+
+`deliver_to_host` is a one-shot connect (open + write + shutdown
++ read-drain + close), matching the existing pattern. Other
+ime-* verbs (commit-text / set-composing-text /
+finish-composing-text / set-selection) still log only — they
+land in step 3b once we have the editor-side WIT exports.
+
+**Device-verified end-to-end** on Pixel 2 XL — full round-trip
+from shell-injected `ime-send-key-event` to BasicTextField
+state mutation:
+
+```
+$ wart-arbiter launch com.example.wart-app  → OK pid=7989
+  log: standalone: ime-inbound listening on
+       /data/local/tmp/wart-host-7989.sock
+
+# (user taps the TextField in TextFieldCard)
+  log: arbiter: attach-editor pid=7989 app=com.example.wart-app
+       input-type=text … → route to (no active IME — set-ime first)
+
+# inject 'a' (code-point 97 = 'a', key-id 29 = AKEYCODE_A)
+$ wart-arbiter ime-send-key-event 97 29 down  → OK route→pid=7989
+$ wart-arbiter ime-send-key-event 97 29 up    → OK route→pid=7989
+  log: arbiter: ime-send-key-event → pid=7989 (97 29 down)
+       delivered via /data/local/tmp/wart-host-7989.sock
+  log: [wasm] tfstate text="hello worlda" sel=TextRange(12, 12)
+                              ^^^^^^^^^^^^
+                              the 'a' arrived in the BasicTextField
+
+# inject 'b' then 'c'
+  log: [wasm] tfstate text="hello worldab" sel=TextRange(13, 13)
+  log: [wasm] tfstate text="hello worldabc" sel=TextRange(14, 14)
+```
+
+**Out of scope for step 3a** (lands in step 3b):
+
+- `commit-text` / `set-composing-text` / `finish-composing-text`
+  /  `set-selection` delivery. Needs new WIT exports on the
+  editor-bearing-app side (new `on-commit-text` etc. methods on
+  the renderer interface, or a new exported interface) +
+  Compose-side handling that mutates the focused TextFieldState.
+  Step 3a's send-key-event-only path is sufficient for ASCII
+  typing.
+- The `war.ime.keyboard` warpkg itself. Now unblocked — the
+  IME UI just needs to call `Ime.Import.notifyEditorAttached`
+  / `sendKeyEvent` style WIT verbs (which the IME-side adapter
+  routes back to the arbiter's `ime-send-key-event` socket
+  command).
+- Backspace: AKEYCODE_DEL (67) round-tripped at the wire layer
+  but didn't mutate the TextField in this smoke. Likely Compose's
+  BasicTextField handling of code-point=0 + key-id=67 vs how
+  hardware-keyboard backspace is currently delivered — out of
+  step-3a scope; will be debugged when the keyboard app needs it.
+
+**Files added/changed (this step):**
+
+- `wart-host/src/ime_inbound.rs` — new module: per-host socket
+  listener thread + queue + drain.
+- `wart-host/src/lib.rs` — `mod ime_inbound;` (android-only).
+- `wart-host/src/standalone.rs` — spawn_listener after EGL +
+  per-frame drain calling `dispatch_key_v2`.
+- `wart-arbiter/src/main.rs` — `cmd_ime_route` for
+  send-key-event actually delivers; added `deliver_to_host`
+  one-shot helper.
+- `tasks/47-ime-via-guest-app.md` — this section.
+
 ### Step 4 — InputFlinger focus arbitration + auto-hide (~2-3 days)
 
 The arbiter coordinates input routing between focused app and
