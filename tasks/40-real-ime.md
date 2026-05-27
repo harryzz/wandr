@@ -1,6 +1,6 @@
 # Task 40 — real IME via rsbinder → IMMS (multi-session arc)
 
-> **Status:** 🟡 in progress — session 4 (startInputOrWindowGainedFocus) done 2026-05-27.
+> **Status:** 🟡 in progress — session 5 (showSoftInput → WMS focus gate) done 2026-05-27.
 > Multi-week, multi-session commitment. Standing decision overturned
 > 2026-05-27 — user explicitly opted for path (B) over the project
 > memory's "default A polish, B on roadmap not next" recommendation
@@ -460,6 +460,96 @@ ime: attempt-B windowToken=Some  OK — IMMS returned a null InputBindResult ...
   Session 5 also un-stubs the actual editor-side methods that the
   IME calls back to read/write text (commitText, getTextBeforeCursor,
   …) — the ~36-method surface deferred from session 3.
+
+## Session 5 results (2026-05-27)
+
+**Outcome: ✅ device-verified (binder pipeline) + ❌ no Gboard on
+screen (WMS focus gate identified).**
+
+Three-step sequence (addClient → startInputOrWindowGainedFocus →
+showSoftInput) ran cleanly end-to-end. showSoftInput returned `false`
+because IMMS gated on WMS-tracked focused window, not on anything in
+our binder path.
+
+```
+ime: (1/3) addClient OK
+ime: (2/3) startInput OK — null InputBindResult (expected)
+ime: (3/3) calling showSoftInput(... flags=SHOW_FORCED ...)
+W InputMethodManagerService: Ignoring showSoftInput of uid 0 : com.android.internal.inputmethod.IInputMethodClient$Stub$Proxy@928d863
+I ImeTracker: null: setFinished on previously finished token at PHASE_SERVER_CLIENT_FOCUSED with STATUS_FAIL
+I ImeTracker: null: onFailed at PHASE_SERVER_CLIENT_FOCUSED
+ime: (3/3) showSoftInput returned false.
+```
+
+`dumpsys input_method` correlation: `mFocusedWindowClient=ClientState{mUid=10167 ...}`
+(the launcher) — not our pid. Hence `mImeWindowVis=0`, `mInputShown=false`.
+
+### Deliverables
+
+1. **Renamed `ImeTracker.aidl` to flat-name stub.** Upstream declares
+   `parcelable ImeTracker.Token;` (Java nested-class syntax) which
+   rsbinder-aidl 0.7.0 emits as invalid Rust (`pub mod ImeTracker.Token`,
+   dot in identifier). Auto-patched in `build.rs` to declare
+   `parcelable ImeTracker;` — same wire shape (IMMS's Java
+   readFromParcel doesn't care about the client-side type name).
+2. **Un-stubbed `slot_08_showSoftInput`** in the IMM AIDL stub with
+   the full 8-arg signature (transaction code FIRST_CALL_TRANSACTION + 8).
+3. **`probe_showsoftinput()`** in `wart-host/src/ime_impl.rs`:
+   - Runs the three-step `addClient → startInputOrWindowGainedFocus →
+     showSoftInput` sequence end-to-end in one probe.
+   - Uses `SHOW_FORCED` flag to override any "implicit" suppression
+     heuristics; explicit-user-action signal.
+   - Default-constructs `ImeTracker` (empty stub) for the
+     non-nullable stats-tracking token; IMMS receives non-null marker
+     + 0 field bytes and constructs a Token with null binder / null
+     tag, which is fine for the stats path (only affects metrics).
+   - Holds binders alive 8 s after the call for dumpsys / IME
+     observation.
+4. **`wart-host --probe-ime-showsoft` CLI flag** in `main.rs`.
+
+### What we learned
+
+- **The IMMS gate on Gboard is `PHASE_SERVER_CLIENT_FOCUSED`** —
+  IMMS asks "is the calling client's windowToken the WMS-currently-
+  focused window?" via internal state, and returns false otherwise.
+  `ImeTracker` (Android 14+ telemetry system) cleanly tells us
+  exactly which phase the rejection happened at, which is gold for
+  debugging.
+- **None of the binder pipeline is wrong.** transport, parcels,
+  identity, addClient, startInput, showSoftInput — all work. The
+  blocker is exclusively the WMS-side focus state.
+- **`SHOW_FORCED` does NOT bypass the focus check.** Even with the
+  strongest user-intent flag, IMMS still requires the calling client
+  to be the focused window per WMS. This is the IME-summon gate on
+  every Android release — even system apps respect it.
+
+### Open de-risks carried into session 6
+
+- **Registering with WMS as a focusable window.** This is the
+  remaining gap. Paths:
+  1. **Hijack task-33's standalone surface.** wart-host's standalone
+     mode (task 33) acquires a real `SurfaceControl` from
+     SurfaceFlinger via libgui. That surface IS registered with WMS
+     (otherwise input events wouldn't reach it). The surface's
+     associated IBinder windowToken — if we can extract it — is what
+     IMMS would accept. Investigate the wart-host standalone code
+     path for the window-token plumbing.
+  2. **Use the WMS `addWindow` AIDL directly.** Adds more vendoring
+     (IWindowManager, IWindowSession, LayoutParams, …) but gives us
+     a freshly-registered window token. Heavier but more flexible
+     than (1).
+  3. **Run wart-host AS the focused activity** via the
+     wart-app NativeActivity (the normal mode, not standalone).
+     The Activity already has a WMS-registered window — we could
+     wire `IInputMethodClient` into the NativeActivity's lifecycle
+     so wart's Compose UI gets the real IME via the existing
+     WMS-focused window.
+- **Hand-rolled `EditorInfo` parceling.** Even with WMS focus, we'd
+  still need a real EditorInfo to summon Gboard with a usable text
+  context. Session 6 work.
+- **Real `IRemoteInputConnection` editor methods (~36).** Same as
+  session 5 carryover. Needed to actually accept Gboard's
+  commitText/sendKeyEvent callbacks.
 
 ## Related
 
