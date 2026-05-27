@@ -835,6 +835,44 @@ interface assets {
     read: func(name: string) -> option<list<u8>>;
 }
 
+/// Task 47 step 2 — editor-focus reporting from the guest to the
+/// host (wart-host), which forwards to the arbiter's `attach-editor`
+/// / `detach-editor` socket commands. These are the outbound half
+/// of the IME protocol: any guest with a focused text field calls
+/// these so the runtime (and through it, the active IME app) can
+/// route input.
+///
+/// The inbound half — the IME calling `commit-text` / `send-key-event`
+/// etc. INTO the focused guest — lands in a later step via a new
+/// world export. Step 2 success is just "tapping a BasicTextField
+/// logs `attach-editor` at the arbiter."
+///
+/// `input-type` values must be one of the strings declared in
+/// `wit/ime.wit`'s `input-type` enum (`text`, `number`, `phone`,
+/// `email`, `url`, `password`, `multiline-text`). Passing them as
+/// strings rather than a typed enum here avoids a cross-WIT-package
+/// import while we keep things simple; if more IME-typed verbs land
+/// on this interface, promoting `war:ime/types` to its own package
+/// is the right move.
+interface ime {
+    /// A text field gained focus in this guest. The host forwards
+    /// to the arbiter (`attach-editor <pid> <input-type> <hint>
+    /// <initial-text>`). The arbiter relays `on-editor-attached`
+    /// to the currently-active IME app.
+    notify-editor-attached: func(
+        input-type: string,
+        hint: string,
+        initial-text: string,
+        selection-start: u32,
+        selection-end: u32,
+    );
+
+    /// The focused editor lost focus or was destroyed. Reverse of
+    /// `notify-editor-attached`. Forwarded as `detach-editor <pid>`
+    /// to the arbiter.
+    notify-editor-detached: func();
+}
+
 world skiko-ui {
     import canvas;
     import paragraph;
@@ -853,5 +891,6 @@ world skiko-ui {
     import audio;
     import assets;
     import theme;
+    import ime;
     export renderer;
 }

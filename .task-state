@@ -1,5 +1,5 @@
 TASK=47
-STEP=step-1-complete
+STEP=step-2-complete
 STATUS=complete
-LAST_SUCCESS=Task 47 step 1 verified OK 2026-05-27. wit/ime.wit defines the protocol (input-type + editor-info + key-action + input-connection + ime interface + ime-client-world). wart-arbiter gains ActiveIme + EditorFocus state, eight new socket commands (set-ime, attach-editor, detach-editor, ime-commit-text, ime-send-key-event, ime-set-composing-text, ime-finish-composing-text, ime-set-selection), list shows [fg]/[ime]/[editor:input-type] markers. All commands smoke-tested end-to-end; error cases return structured ERR. Cross-process delivery lands in step 2.
-NOTES=Step 2: skiko-wasi WasiInputMethod adapter — wire Compose PlatformTextInputMethodRequest into the new attach-editor/detach-editor + per-host control socket for inbound commit-text. ~2 days.
+LAST_SUCCESS=Task 47 step 2 verified OK 2026-05-27. wit/skiko-gfx.wit gains `ime` interface; wart-host ime_host_impl.rs forwards to arbiter via UNIX socket; skiko-wasi Ime bindings hand-written into generated/SkikoUi.kt; WasiKeyboardController calls the new WIT verbs alongside isVisible toggling. End-to-end smoke on Pixel 2 XL: tapping BasicTextField logs attach-editor at the arbiter (with full pid + input-type + selection); tapping out logs detach-editor. In-canvas keyboard still draws (co-existence kept). Build-system-warpkgs.sh also fixed (wart-app package.toml dep declarations + build_system_wasm stderr).
+NOTES=Step 3 next: first-party war.ime.keyboard Compose warpkg (~1 week). Also requires the per-host control socket so the arbiter can push commit-text INTO running guests.

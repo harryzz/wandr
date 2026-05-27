@@ -278,6 +278,145 @@ Success criterion: tapping a `BasicTextField` in wart-app logs
 `attach-editor` reaching the arbiter; tapping out logs
 `detach-editor`. No UI swap yet — keyboard is still in-canvas.
 
+#### Step 2 results (2026-05-27)
+
+**Outcome:** ✅ end-to-end on Pixel 2 XL. Tapping a `BasicTextField`
+forwards `attach-editor pid=N input-type=text ...` to the arbiter
+via a fresh UNIX socket connection per call; tapping out forwards
+`detach-editor pid=N`. In-canvas keyboard still draws (the
+co-existence promise from the scope doc was kept).
+
+**WIT extension** — added an `ime` interface to
+`wit/skiko-gfx.wit` (mirrored to `skiko/skiko/wit/skiko-gfx.wit`
+and `wart-app/wit/deps/skiko-gfx/skiko-gfx.wit`) and added it
+to the `skiko-ui` world's imports:
+
+```wit
+interface ime {
+    notify-editor-attached: func(
+        input-type: string, hint: string, initial-text: string,
+        selection-start: u32, selection-end: u32,
+    );
+    notify-editor-detached: func();
+}
+```
+
+`input-type` is stringly-typed at this layer (matches the values
+in `wit/ime.wit`'s enum) to avoid a cross-package import; if
+more typed IME verbs land on this interface, the right move is
+to promote `war:ime/types` to its own importable package.
+
+**Host impl** — new
+`wart-host/src/ime_host_impl.rs` implements
+`my::skiko_gfx::ime::Host for HostState`:
+
+- `notify_editor_attached` opens a one-shot UNIX socket to
+  `/data/local/tmp/wart-arbiter.sock`, writes
+  `attach-editor <getpid()> <input-type> <hint> <initial-text>\n`
+  (spaces in hint/initial-text replaced with `_` for the
+  positional CLI parser — step 4's per-host control socket can
+  use a richer wire format).
+- `notify_editor_detached` writes `detach-editor <pid>\n`.
+- Failures log + degrade gracefully — arbiter-down doesn't
+  break the guest's focus path.
+
+**Skiko-wasi bindings** — hand-added the `Ime` interface to
+`skiko/skiko/src/wasmWasiMain/kotlin/generated/{Internal,}SkikoUi.kt`
+following the `logMessage` / `Haptics.perform` pattern: two
+`@WasmImport` external declarations
+(`__wasm_import_ime_notifyEditorAttached`,
+`__wasm_import_ime_notifyEditorDetached`) plus a public
+`Ime.Import` companion. Three strings flatten to 6 ints
+(ptr, len each); 2 u32 selection bounds → 8 ints total in the
+attach signature.
+
+**Wart-app integration** — `WasiKeyboardController.show()` /
+`.hide()` now ALSO call `Ime.Import.notifyEditorAttached(...)`
+/ `notifyEditorDetached()` alongside flipping
+`isVisible.value` (which still drives the in-canvas keyboard).
+Try/catch defensive — if the arbiter is down, the in-canvas
+keyboard still works.
+
+**Build pipeline gotcha caught + fixed during smoke** —
+wart-app's `package.toml` (in `scripts/build-system-warpkgs.sh`)
+was missing `[dependencies]` declarations for the three system
+bundles (markdown/emoji/fonts). The installer auto-detects
+component imports for the "missing dep — refuse install" gate
+but DOES NOT populate `[dependencies_resolved]` in
+cache-key.toml without an explicit `[dependencies]` block — so
+the loader's `load_dep_components` walked an empty table and
+instantiation failed with "war:markdown/renderer.render has
+the wrong type: function implementation is missing". The fix is
+mechanical: declare the three deps in the script's manifest
+template (same shape as md-smoke-rust does it).
+
+Also fixed a stdout-pollution bug in the same script: the
+`build_system_wasm` function's `echo` lines were going to stdout
+and getting captured into `MD_WASM=$(build_system_wasm ...)`
+along with the path. Redirected the diagnostics to stderr.
+
+**Device-verified smoke transcript** (Pixel 2 XL, freshly-
+rebuilt + reinstalled stack):
+
+```
+$ wart-arbiter launch com.example.wart-app
+  OK pid=7265 app=com.example.wart-app
+  log: loader: loaded dep `fonts` (war:fonts/loader@0.1.0) from …
+  log: loader: loaded dep `markdown` (war:markdown/renderer@0.1.0) from …
+  log: loader: dep `emoji` instantiated; wired 1 fn(s) across 1 interface(s)
+  log: loader: dep `fonts` instantiated; wired 2 fn(s) across 1 interface(s)
+  log: loader: dep `markdown` instantiated; wired 1 fn(s) across 1 interface(s)
+  log: standalone: rendered frame 1, 2, 3, …
+
+# tap on the BasicTextField in TextFieldCard …
+  log: ime-host: forwarded attach-editor pid=7265 input-type="text" hint-len=0
+       text-len=0 selection=[0..0]
+  log: arbiter: attach-editor pid=7265 app=com.example.wart-app input-type=text
+       hint="" initial-text-len=0 → route to (no active IME — set-ime first)
+       (step 2 delivers on-editor-attached)
+
+# tap outside …
+  log: ime-host: forwarded detach-editor pid=7265
+  log: arbiter: detach-editor pid=7265 → route to (no active IME)
+       (step 2 delivers on-editor-detached)
+```
+
+Step 2 success criterion met by construction:
+"tapping a `BasicTextField` in wart-app logs `attach-editor`
+reaching the arbiter; tapping out logs `detach-editor`."
+
+**Out of scope** (lands in step 3 — the actual IME app):
+
+- Inbound delivery — IME app's `commit-text` / `send-key-event`
+  arriving in the focused guest's editor. Needs a per-host
+  control socket (wart-host child opens connection to the
+  arbiter at startup; arbiter pushes events down it). Will
+  land in step 3 alongside the first-party `war.ime.keyboard`
+  warpkg, since the two pieces are needed together to actually
+  type a character end-to-end.
+- Real `EditorInfo` fields. wart-app's `WasiKeyboardController`
+  hard-codes `input-type="text"`, `hint=""`, `initial-text=""`,
+  `selection=[0..0]`. Threading the BasicTextField's actual
+  `KeyboardOptions.keyboardType` + the textfield's current
+  text/selection through Compose's
+  `PlatformTextInputMethodRequest` is a separate refactor.
+
+**Files added/changed (this step):**
+
+- `wit/skiko-gfx.wit` + mirrors — new `ime` interface added
+  to skiko-ui imports.
+- `wart-host/src/ime_host_impl.rs` (new) — WIT impl that
+  forwards to the arbiter socket.
+- `wart-host/src/lib.rs` — `mod ime_host_impl;`.
+- `skiko/skiko/src/wasmWasiMain/kotlin/generated/{Internal,}SkikoUi.kt`
+  — hand-added `Ime` bindings.
+- `wart-app/src/wasmWasiMain/kotlin/WasiKeyboardController.kt`
+  — `show()` / `hide()` also call the new WIT verb.
+- `scripts/build-system-warpkgs.sh` — declares wart-app's
+  cross-app deps in its package.toml template + redirects
+  build_system_wasm's diagnostics to stderr.
+- `tasks/47-ime-via-guest-app.md` — this section.
+
 ### Step 3 — `war.ime.keyboard` first-party warpkg (~1 week)
 
 The actual keyboard UI. New repo `war.ime.keyboard/` (sibling

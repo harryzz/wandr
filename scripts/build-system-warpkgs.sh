@@ -39,11 +39,13 @@ fi
 
 build_system_wasm() {
     local crate_dir="$1" wasm_name="$2"
-    echo "▸ building system component: $crate_dir"
-    ( cd "$REPO_ROOT/$crate_dir" && cargo build --target wasm32-wasip2 --release )
+    # Diagnostics → stderr; only the path goes to stdout (so `$(...)`
+    # capture in the caller doesn't end up concatenating log lines).
+    echo "▸ building system component: $crate_dir" >&2
+    ( cd "$REPO_ROOT/$crate_dir" && cargo build --target wasm32-wasip2 --release ) >&2
     local out="$REPO_ROOT/$crate_dir/target/wasm32-wasip2/release/$wasm_name"
     [[ -f "$out" ]] || { echo "✗ build missed: $out" >&2; exit 1; }
-    echo "  $(du -h "$out" | cut -f1)  $out"
+    echo "  $(du -h "$out" | cut -f1)  $out" >&2
     printf '%s' "$out"
 }
 
@@ -128,6 +130,15 @@ composition = "same-store"
 
 [components]
 ui = "components/ui.wasm"
+
+# Cross-app deps wart-app actually imports — task 36 / 39 / 41. The
+# installer reads these to populate dependencies_resolved in the
+# cache-key, which load_dep_components walks at launch time to wire
+# each dep into the consumer's linker.
+[dependencies]
+markdown = { system = "war.markdown.renderer", version = "0.1.0", interface = "war:markdown/renderer@0.1.0" }
+emoji    = { system = "war.emoji.picker",      version = "0.1.0", interface = "war:emoji/picker@0.1.0" }
+fonts    = { system = "war.fonts.loader",      version = "0.1.0", interface = "war:fonts/loader@0.1.0" }
 EOF
 )"
 
