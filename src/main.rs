@@ -112,7 +112,7 @@ fn main() {
             eprintln!("wart-host --zygote-launch: requires <app-id>");
             std::process::exit(2);
         };
-        match wasm_android_host::zygote::launch_client(app_id, /*gui=*/ false) {
+        match wasm_android_host::zygote::launch_client(app_id, /*gui=*/ false, /*overlay=*/ false) {
             Ok(_pid) => return,
             Err(e) => {
                 eprintln!("wart-host --zygote-launch: {e:#}");
@@ -126,9 +126,13 @@ fn main() {
     // against the preloaded engine.
     // Accepts an optional <app-id>; if omitted, the child falls back
     // to the dev cwasm at /data/local/tmp/skiko-component.cwasm.
+    // `--overlay` (task 47 step 3c) acquires a bottom-strip overlay
+    // surface in the child instead of a fullscreen one — used for
+    // IME apps such as `war.ime.keyboard`.
     if let Some(i) = args.iter().position(|a| a == "--zygote-launch-gui") {
         let app_id = args.get(i + 1).map(|s| s.as_str()).unwrap_or("");
-        match wasm_android_host::zygote::launch_client(app_id, /*gui=*/ true) {
+        let overlay = args.iter().any(|a| a == "--overlay");
+        match wasm_android_host::zygote::launch_client(app_id, /*gui=*/ true, overlay) {
             Ok(_pid) => return,
             Err(e) => {
                 eprintln!("wart-host --zygote-launch-gui: {e:#}");
@@ -222,7 +226,12 @@ fn main() {
             .position(|a| a == "--app")
             .and_then(|i| args.get(i + 1))
             .map(String::as_str);
-        if let Err(e) = wasm_android_host::standalone::run(app_id) {
+        // Task 47 step 3c — `--standalone-overlay` acquires a
+        // bottom-strip overlay SurfaceControl. Used by IME apps such
+        // as `war.ime.keyboard`; pairs with the arbiter's `overlay`
+        // command (or the auto-tied promotion on `attach-editor`).
+        let overlay = args.iter().any(|a| a == "--standalone-overlay");
+        if let Err(e) = wasm_android_host::standalone::run(app_id, overlay) {
             eprintln!("wart-host --standalone: {e:#}");
             std::process::exit(1);
         }

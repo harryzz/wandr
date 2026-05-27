@@ -105,7 +105,9 @@ enum ChildAction {
     /// Full Compose render loop (e.g. `wart-app`). Goes through
     /// `standalone::run_with_engine`. Owns its own SurfaceFlinger
     /// surface + EGL context + input channel for the duration.
-    Gui,
+    /// `overlay=true` (task 47 step 3c) requests a bottom-strip
+    /// overlay surface instead of fullscreen — used for IME apps.
+    Gui { overlay: bool },
 }
 
 /// Where the zygote listens for `LAUNCH` requests.
@@ -270,9 +272,16 @@ fn handle_one(listener: &UnixListener, mut stream: UnixStream) -> Result<()> {
     // /data/local/tmp/skiko-component.cwasm (same behavior as direct
     // `--standalone` with no `--app`). Useful for the step-2 smoke
     // before wart-app is properly packaged + installed as a .warpkg.
-    let (action, app_id) = if let Some(rest) = cmd.strip_prefix("LAUNCH_GUI") {
+    // Task 47 step 3c — `LAUNCH_GUI_OVERLAY` requests a bottom-strip
+    // overlay SurfaceControl (used by IME apps such as
+    // `war.ime.keyboard`); plain `LAUNCH_GUI` keeps the fullscreen
+    // behavior. Order matters — match the longer prefix first.
+    let (action, app_id) = if let Some(rest) = cmd.strip_prefix("LAUNCH_GUI_OVERLAY") {
         let rest = rest.trim();
-        (ChildAction::Gui, rest.to_string())
+        (ChildAction::Gui { overlay: true }, rest.to_string())
+    } else if let Some(rest) = cmd.strip_prefix("LAUNCH_GUI") {
+        let rest = rest.trim();
+        (ChildAction::Gui { overlay: false }, rest.to_string())
     } else if let Some(rest) = cmd.strip_prefix("LAUNCH ") {
         (ChildAction::RunOnce, rest.trim().to_string())
     } else {
@@ -281,7 +290,7 @@ fn handle_one(listener: &UnixListener, mut stream: UnixStream) -> Result<()> {
     };
     // RunOnce always requires an app_id (no dev path defined for
     // wasi:cli/command consumers). Gui can be empty → dev cwasm.
-    if app_id.is_empty() && !matches!(action, ChildAction::Gui) {
+    if app_id.is_empty() && !matches!(action, ChildAction::Gui { .. }) {
         let _ = writeln!(stream, "ERR empty-app-id");
         return Err(anyhow!("empty app-id"));
     }
@@ -345,9 +354,9 @@ fn handle_one(listener: &UnixListener, mut stream: UnixStream) -> Result<()> {
                         1
                     }
                 },
-                ChildAction::Gui => {
+                ChildAction::Gui { overlay } => {
                     let arg = if app_id.is_empty() { None } else { Some(app_id.as_str()) };
-                    match standalone::run_with_engine(engine, arg) {
+                    match standalone::run_with_engine(engine, arg, overlay) {
                         Ok(()) => 0,
                         Err(e) => {
                             log::error!("wart-zygote/child: standalone failed: {e:#}");
@@ -461,15 +470,22 @@ fn handle_preload(stream: &mut UnixStream, rest: &str) -> Result<()> {
 ///
 /// `gui` selects between `LAUNCH_GUI <app-id>` (full Compose render
 /// loop, owns its own SF surface) and `LAUNCH <app-id>` (one-shot
-/// `wasi:cli/command` consumer).
-pub fn launch_client(app_id: &str, gui: bool) -> Result<i32> {
+/// `wasi:cli/command` consumer). `overlay` (task 47 step 3c, only
+/// meaningful when `gui=true`) upgrades the verb to
+/// `LAUNCH_GUI_OVERLAY` so the child acquires a bottom-strip overlay
+/// SurfaceControl instead of a fullscreen one.
+pub fn launch_client(app_id: &str, gui: bool, overlay: bool) -> Result<i32> {
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
     );
 
     let mut stream = UnixStream::connect(ZYGOTE_SOCK_PATH)
         .with_context(|| format!("connect {ZYGOTE_SOCK_PATH} — is the zygote running?"))?;
-    let verb = if gui { "LAUNCH_GUI" } else { "LAUNCH" };
+    let verb = if gui {
+        if overlay { "LAUNCH_GUI_OVERLAY" } else { "LAUNCH_GUI" }
+    } else {
+        "LAUNCH"
+    };
     if app_id.is_empty() && gui {
         // Dev mode: empty arg → child uses /data/local/tmp/skiko-component.cwasm.
         writeln!(stream, "{verb}")?;

@@ -61,6 +61,11 @@ namespace {
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "sf_surface", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "sf_surface", __VA_ARGS__)
 
+// Pixel 2 XL ("taimen") panel constants — pinned for now;
+// TODO(task33): query the mode instead of hardcoding.
+constexpr uint32_t PANEL_W = 1440;
+constexpr uint32_t PANEL_H = 2880;
+
 // Keep these alive for the process lifetime — dropping any of them
 // invalidates the ANativeWindow* handed back to the caller.
 sp<SurfaceComposerClient> g_client;
@@ -69,17 +74,41 @@ sp<BLASTBufferQueue>      g_bbq;
 sp<Surface>               g_surface;
 sp<IBinder>               g_display;
 
+// Task 47 step 3c — overlay parent container. Mirrors AOSP's
+// BlastInputSurface pattern (frameworks/native/libs/gui/tests/
+// EndToEndNativeInputTest.cpp): the buffer-state surface (g_control)
+// is parented to a container-only SurfaceControl, and positioning /
+// layering / cropping are applied to the PARENT. Setting position
+// directly on the BBQ-backed buffer-state child does not stick;
+// the parent inherits geometry, the child draws the buffer.
+sp<SurfaceControl>        g_overlay_parent;
+
 // Input plumbing (task 33 Step 3) — an InputFlinger input channel registered
 // for the wart layer so touches in our window are dispatched to us.
 std::shared_ptr<InputChannel>  g_input_channel;
 std::unique_ptr<InputConsumer> g_input_consumer;
 sp<gui::WindowInfoHandle>      g_window_info;
 
+// Task 47 step 3c — overlay surfaces are positioned at (0, PANEL_H - H)
+// on the panel, so InputDispatcher delivers display-coord events in
+// the range [Y, PANEL_H] in Y. The guest expects surface-local coords
+// (range [0, H]), so sf_input_poll subtracts this offset from motion
+// events. 0 = fullscreen surface (no subtraction).
+int32_t g_overlay_y_offset = 0;
+
 // Register an InputFlinger input window for g_control so InputDispatcher
-// routes touch events inside the panel to our input channel. Recipe from
+// routes touch events inside `rect` (in display coords) to our input
+// channel. Recipe from
 // frameworks/native/libs/gui/tests/EndToEndNativeInputTest.cpp. Non-fatal:
 // on any failure input is simply disabled (g_input_consumer stays null).
-void register_input_window(uint32_t PW, uint32_t PH) {
+//
+// `rect` is in DISPLAY coordinates. The fullscreen path passes
+// Rect(0,0,PW,PH); the overlay path (task 47 step 3c) passes
+// Rect(0,Y,PW,PH) for a bottom strip — that rect determines which
+// taps InputDispatcher routes to us; events arrive in display coords,
+// and sf_input_poll subtracts g_overlay_y_offset to give the guest
+// surface-local coords.
+void register_input_window_at(const Rect& rect, const char* name) {
     sp<IBinder> binder =
         defaultServiceManager()->waitForService(String16("inputflinger"));
     sp<os::IInputFlinger> inputFlinger = interface_cast<os::IInputFlinger>(binder);
@@ -102,15 +131,13 @@ void register_input_window(uint32_t PW, uint32_t PH) {
     g_window_info = sp<gui::WindowInfoHandle>::make();
     gui::WindowInfo* wi = g_window_info->editInfo();
     wi->token             = g_input_channel->getConnectionToken();
-    wi->name              = "wart";
+    wi->name              = name;
     wi->globalScaleFactor = 1.0f;
-    wi->frame             = Rect(0, 0, static_cast<int32_t>(PW),
-                                       static_cast<int32_t>(PH));
-    wi->touchableRegion.orSelf(Rect(0, 0, static_cast<int32_t>(PW),
-                                          static_cast<int32_t>(PH)));
+    wi->frame             = rect;
+    wi->touchableRegion.orSelf(rect);
     wi->displayId         = ui::LogicalDisplayId::DEFAULT;
     wi->applicationInfo.token = sp<BBinder>::make();
-    wi->applicationInfo.name  = "wart";
+    wi->applicationInfo.name  = name;
     wi->applicationInfo.dispatchingTimeoutMillis = 5000;
 
     SurfaceComposerClient::Transaction t;
@@ -122,7 +149,38 @@ void register_input_window(uint32_t PW, uint32_t PH) {
     fr.displayId  = ui::LogicalDisplayId::DEFAULT.val();
     t.setFocusedWindow(fr);
     t.apply(/*synchronous=*/true);
-    LOGI("input window registered (channel fd %d)", g_input_channel->getFd());
+    LOGI("input window '%s' registered at (%d,%d)-(%d,%d) (channel fd %d)",
+         name, rect.left, rect.top, rect.right, rect.bottom,
+         g_input_channel->getFd());
+}
+
+// Back-compat wrapper for the fullscreen path. Same behavior as the
+// original `register_input_window(PW, PH)` — registers a Rect(0,0,PW,PH)
+// input window named "wart". Kept so sf_create_fullscreen_surface's
+// body is unchanged.
+void register_input_window(uint32_t PW, uint32_t PH) {
+    register_input_window_at(
+        Rect(0, 0, static_cast<int32_t>(PW), static_cast<int32_t>(PH)),
+        "wart");
+}
+
+// Task 47 step 3c — update an EXISTING input window's bounds to
+// `rect` (display coords). Used by sf_resize_overlay after the
+// SurfaceControl is resized + repositioned. No-op if input wasn't
+// registered (e.g. inputflinger was unavailable at create time).
+void update_input_window_bounds(const Rect& rect) {
+    if (g_window_info == nullptr) {
+        return;
+    }
+    gui::WindowInfo* wi = g_window_info->editInfo();
+    wi->frame = rect;
+    wi->touchableRegion.clear();
+    wi->touchableRegion.orSelf(rect);
+    SurfaceComposerClient::Transaction t;
+    t.setInputWindowInfo(g_control, g_window_info);
+    t.apply(/*synchronous=*/true);
+    LOGI("input window bounds updated to (%d,%d)-(%d,%d)",
+         rect.left, rect.top, rect.right, rect.bottom);
 }
 }  // namespace
 
@@ -308,7 +366,12 @@ int32_t sf_input_poll(SfInputEvent* out, int32_t max) {
             if (emitted) {
                 out[n].pointer_id = m->getPointerId(idx);
                 out[n].x          = m->getX(idx);
-                out[n].y          = m->getY(idx);
+                // Task 47 step 3c — overlay surfaces are positioned
+                // at (0, PANEL_H - H), so InputDispatcher delivers
+                // display-coord Y in the range [Y, PANEL_H]. Subtract
+                // the offset to give the guest surface-local Y
+                // (range [0, H]). 0 for fullscreen surfaces.
+                out[n].y          = m->getY(idx) - static_cast<float>(g_overlay_y_offset);
                 out[n].pressure   = m->getPressure(idx);
                 out[n].key_code   = 0;
                 out[n].meta_state = 0;
@@ -384,12 +447,17 @@ uint32_t sf_query_transform_hint() {
 // Higher z is drawn on top; default at creation is INT32_MAX. The arbiter
 // pushes backgrounded apps to z=0 and pulls foreground to z=INT32_MAX —
 // approximates AOSP's stacking with no shim source surface re-creation.
+//
+// Task 47 step 3c — for overlay surfaces, the geometry (position +
+// layer + crop) lives on the PARENT container surface (BlastInputSurface
+// pattern). Route setLayer to the parent so z-changes apply.
 int32_t sf_set_layer(int32_t z) {
-    if (g_control == nullptr) {
+    sp<SurfaceControl> sc = g_overlay_parent != nullptr ? g_overlay_parent : g_control;
+    if (sc == nullptr) {
         return -1;
     }
     SurfaceComposerClient::Transaction t;
-    t.setLayer(g_control, z);
+    t.setLayer(sc, z);
     t.apply(/*synchronous=*/false);
     return 0;
 }
@@ -398,17 +466,221 @@ int32_t sf_set_layer(int32_t z) {
 // the surface: the layer stays allocated, its BBQ keeps the last frame, and
 // re-showing is one Transaction round-trip. The arbiter prefers this over
 // killing/relaunching the app for background transitions.
+//
+// Task 47 step 3c — for overlay surfaces, route show/hide to the
+// PARENT container (which carries geometry). The buffer-state child
+// remains shown — toggling visibility of the parent hides/shows the
+// whole subtree.
 int32_t sf_set_visible(int32_t visible) {
-    if (g_control == nullptr) {
+    sp<SurfaceControl> sc = g_overlay_parent != nullptr ? g_overlay_parent : g_control;
+    if (sc == nullptr) {
         return -1;
     }
     SurfaceComposerClient::Transaction t;
     if (visible) {
-        t.show(g_control);
+        t.show(sc);
     } else {
-        t.hide(g_control);
+        t.hide(sc);
     }
     t.apply(/*synchronous=*/false);
+    return 0;
+}
+
+// Task 47 step 3c — allocate a BOTTOM-STRIP overlay SurfaceControl of
+// height `height_px` pixels (panel-width × height_px), positioned at
+// `(0, PANEL_H - height_px)`. The input window is registered for that
+// same bottom rect; the rest of the panel keeps dispatching to whoever
+// owns those z-layers (typically wart-app's fullscreen surface).
+//
+// Starts INVISIBLE (`t.hide`) — the arbiter promotes to fg + flips
+// visible explicitly via `sf_set_visible(1)` only when an editor
+// focuses (cmd_overlay or auto-tied from cmd_attach_editor).
+//
+// Returns nullptr on bad height or any libgui error. `out_w` is set
+// to PANEL_W; `out_h` to height_px; `out_transform` to 0 (host queries
+// the live transform-hint via sf_query_transform_hint post-EGL-connect).
+ANativeWindow* sf_create_overlay_surface(int32_t height_px,
+                                          int32_t* out_w, int32_t* out_h,
+                                          uint32_t* out_transform) {
+    if (height_px <= 0 || height_px > static_cast<int32_t>(PANEL_H)) {
+        LOGE("[overlay] sf_create_overlay_surface: bad height_px=%d "
+             "(panel H=%u)", height_px, PANEL_H);
+        return nullptr;
+    }
+
+    ProcessState::self()->startThreadPool();
+
+    g_client = new SurfaceComposerClient();
+    status_t err = g_client->initCheck();
+    if (err != NO_ERROR) {
+        LOGE("[overlay] SurfaceComposerClient initCheck failed: %d", err);
+        return nullptr;
+    }
+
+    std::vector<PhysicalDisplayId> ids =
+        SurfaceComposerClient::getPhysicalDisplayIds();
+    if (ids.empty()) {
+        LOGE("[overlay] no physical displays");
+        return nullptr;
+    }
+    g_display = SurfaceComposerClient::getPhysicalDisplayToken(ids[0]);
+    if (g_display == nullptr) {
+        LOGE("[overlay] getPhysicalDisplayToken returned null");
+        return nullptr;
+    }
+
+    const uint32_t PW = PANEL_W;
+    const uint32_t PH = PANEL_H;
+    const uint32_t H  = static_cast<uint32_t>(height_px);
+    const int32_t  Y  = static_cast<int32_t>(PH - H);
+    g_overlay_y_offset = Y;
+
+    // Pin display projection to portrait identity — same reasoning as
+    // sf_create_fullscreen_surface (clears any prior skew).
+    {
+        SurfaceComposerClient::Transaction t;
+        t.setDisplayProjection(g_display, ui::ROTATION_0,
+                               Rect(PW, PH), Rect(PW, PH));
+        t.apply(/*synchronous=*/true);
+    }
+
+    // Parent container — AOSP BlastInputSurface pattern (test ref:
+    // frameworks/native/libs/gui/tests/EndToEndNativeInputTest.cpp).
+    // Position / layer / crop go on this PARENT; the BBQ-backed
+    // buffer-state child inherits geometry. Setting position on the
+    // buffer-state child directly was empirically a no-op on this
+    // device.
+    g_overlay_parent = g_client->createSurface(
+        String8("wart-ime-overlay-parent"),
+        /*w=*/0, /*h=*/0, PIXEL_FORMAT_RGBA_8888,
+        ISurfaceComposerClient::eFXSurfaceContainer);
+    if (g_overlay_parent == nullptr || !g_overlay_parent->isValid()) {
+        LOGE("[overlay] createSurface(parent container) failed");
+        return nullptr;
+    }
+
+    // Buffer-state child, parented to the container. PW × H buffer;
+    // the parent supplies position + crop.
+    g_control = g_client->createSurface(
+        String8("wart-ime-overlay"), PW, H, PIXEL_FORMAT_RGBA_8888,
+        ISurfaceComposerClient::eFXSurfaceBufferState,
+        g_overlay_parent->getHandle());
+    if (g_control == nullptr || !g_control->isValid()) {
+        LOGE("[overlay] createSurface(buffer child) failed");
+        return nullptr;
+    }
+
+    // Same WART_SF_HINT env-var handling as fullscreen. Default: SF's
+    // natural transform hint flows through to the producer.
+    const char* pin_env = getenv("WART_SF_HINT");
+    int pinned_hint = -1;
+    if (pin_env != nullptr && pin_env[0] != '\0') {
+        pinned_hint = atoi(pin_env);
+    }
+    {
+        SurfaceComposerClient::Transaction t;
+        // Parent: position + crop + layer (the geometry parts).
+        // Initial z: just below i32::MAX. The arbiter's promote-to-
+        // overlay calls sf_set_layer(i32::MAX) which we route to the
+        // parent now (see sf_set_layer below).
+        t.setLayer(g_overlay_parent, 0x7fffffff - 1);
+        t.setPosition(g_overlay_parent, 0.0f, static_cast<float>(Y));
+        t.setCrop(g_overlay_parent,
+                  Rect(0, 0, static_cast<int32_t>(PW), static_cast<int32_t>(H)));
+        // Start HIDDEN — arbiter shows on attach-editor.
+        t.hide(g_overlay_parent);
+
+        // Child: flags + crop + show (the buffer parts).
+        if (pinned_hint >= 0) {
+            t.setFixedTransformHint(g_control, pinned_hint);
+        }
+        t.setFlags(g_control, layer_state_t::eLayerOpaque,
+                   layer_state_t::eLayerOpaque);
+        t.setCrop(g_control,
+                  Rect(0, 0, static_cast<int32_t>(PW), static_cast<int32_t>(H)));
+        t.show(g_control);
+        t.apply(/*synchronous=*/true);
+    }
+    if (pinned_hint >= 0) {
+        g_control->setTransformHint(pinned_hint);
+        LOGI("[overlay] transform hint pinned to %d (WART_SF_HINT)", pinned_hint);
+    }
+
+    g_bbq = sp<BLASTBufferQueue>::make(
+        "wart-ime-overlay", g_control, PW, H, PIXEL_FORMAT_RGBA_8888);
+    g_surface = g_bbq->getSurface(/*includeSurfaceControlHandle=*/true);
+    if (g_surface == nullptr) {
+        LOGE("[overlay] BLASTBufferQueue getSurface returned null");
+        return nullptr;
+    }
+
+    // Input window for the bottom strip only. Registered against the
+    // child (BBQ buffer) — InputDispatcher routes display-coord taps
+    // into that rect to our input channel; sf_input_poll subtracts
+    // g_overlay_y_offset to give the guest surface-local coords.
+    register_input_window_at(
+        Rect(0, Y, static_cast<int32_t>(PW), static_cast<int32_t>(PH)),
+        "wart-ime");
+
+    if (out_w) *out_w = static_cast<int32_t>(PW);
+    if (out_h) *out_h = static_cast<int32_t>(H);
+    if (out_transform) *out_transform = 0;
+    LOGI("[overlay] surface created: %ux%u logical at (0,%d), panel %ux%u",
+         PW, H, Y, PW, PH);
+    return g_surface.get();
+}
+
+// Task 47 step 3c — resize the overlay SurfaceControl to `new_height_px`
+// pixels tall (panel-width unchanged). Re-positions to
+// `(0, PANEL_H - new_height_px)`, updates the BLASTBufferQueue's buffer
+// dimensions, re-registers the input window at the new rect, and
+// updates g_overlay_y_offset so subsequent sf_input_poll calls
+// translate motion-event Y values correctly. The Rust side calls
+// `ANativeWindow_setBuffersGeometry` after this returns to flush
+// EGL/Skia's view of the new dimensions.
+//
+// Returns 0 on success, -1 if the surface isn't an overlay (or
+// not yet created), -2 if `new_height_px` is out of range.
+int32_t sf_resize_overlay(int32_t new_height_px) {
+    if (g_control == nullptr || g_bbq == nullptr) {
+        return -1;
+    }
+    if (new_height_px <= 0 || new_height_px > static_cast<int32_t>(PANEL_H)) {
+        LOGE("[overlay] sf_resize_overlay: bad new_height_px=%d (panel H=%u)",
+             new_height_px, PANEL_H);
+        return -2;
+    }
+    const uint32_t PW = PANEL_W;
+    const uint32_t PH = PANEL_H;
+    const uint32_t H  = static_cast<uint32_t>(new_height_px);
+    const int32_t  Y  = static_cast<int32_t>(PH - H);
+    g_overlay_y_offset = Y;
+
+    {
+        SurfaceComposerClient::Transaction t;
+        // Position + crop go on the parent container. Crop is the
+        // sub-rect of the parent that's visible; we want the full
+        // PW × H bottom strip.
+        if (g_overlay_parent != nullptr) {
+            t.setPosition(g_overlay_parent, 0.0f, static_cast<float>(Y));
+            t.setCrop(g_overlay_parent,
+                      Rect(0, 0, static_cast<int32_t>(PW), static_cast<int32_t>(H)));
+        }
+        // Child crop also updates so the buffer-state surface knows
+        // its bounded region matches the new H.
+        t.setCrop(g_control,
+                  Rect(0, 0, static_cast<int32_t>(PW), static_cast<int32_t>(H)));
+        t.apply(/*synchronous=*/true);
+    }
+    // Refresh the BBQ's notion of buffer dimensions. Without this it
+    // keeps producing PW×OldH buffers that SF clips/distorts.
+    g_bbq->update(g_control, PW, H, PIXEL_FORMAT_RGBA_8888);
+
+    // Re-register the input window at the new bottom rect.
+    update_input_window_bounds(
+        Rect(0, Y, static_cast<int32_t>(PW), static_cast<int32_t>(PH)));
+
+    LOGI("[overlay] resized to %ux%u at (0,%d)", PW, H, Y);
     return 0;
 }
 
@@ -420,8 +692,10 @@ void sf_destroy_surface() {
     g_surface.clear();
     g_bbq.clear();
     g_control.clear();
+    g_overlay_parent.clear();
     g_display.clear();
     g_client.clear();
+    g_overlay_y_offset = 0;
 }
 
 }  // extern "C"

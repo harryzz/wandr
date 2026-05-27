@@ -46,6 +46,19 @@ impl Host for crate::HostState {
             "keyboard-host: forwarded ime-send-key-event {code_point} {key_id} {action_str}"
         );
     }
+
+    fn request_overlay_height(&mut self, height_px: u32) {
+        // Task 47 step 3c — the IME guest declares its preferred
+        // panel height. Queue the request for the standalone render
+        // loop to pick up next frame; the loop calls
+        // `SfSurface::resize_overlay`, which forwards to the libgui
+        // shim and flushes the ANativeWindow buffer geometry. No-op
+        // (logged inside SfSurface) if the surface isn't an overlay.
+        log::debug!(
+            "keyboard-host: request-overlay-height({height_px}) queued"
+        );
+        crate::sf_surface::request_overlay_resize(height_px as i32);
+    }
 }
 
 /// Same one-shot connect pattern as `ime_host_impl::send_oneshot`.

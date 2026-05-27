@@ -25,10 +25,15 @@ const SHIM_SO: &str = "/data/local/tmp/libsf_surface.so";
 /// Where the deployable AOT component is deployed on the device.
 const CWASM_PATH: &str = "/data/local/tmp/skiko-component.cwasm";
 
-pub fn run(app_id: Option<&str>) -> Result<()> {
+pub fn run(app_id: Option<&str>, overlay: bool) -> Result<()> {
     let engine = App::make_engine();
-    run_with_engine(&engine, app_id)
+    run_with_engine(&engine, app_id, overlay)
 }
+
+/// Initial overlay panel height in physical pixels when the surface
+/// is created. The IME guest may resize this on first composition via
+/// `my:skiko-gfx/keyboard.request-overlay-height` (task 47 step 3c).
+const INITIAL_OVERLAY_PX: i32 = 1200;
 
 /// Same as `run` but uses a caller-supplied engine. The task-45 zygote
 /// child path (`LAUNCH_GUI <app-id>`) goes through here so the wasmtime
@@ -36,7 +41,12 @@ pub fn run(app_id: Option<&str>) -> Result<()> {
 /// shared with siblings), instead of each child re-allocating a fresh
 /// one — see [[project-app-lifecycle-and-packaging]] (Hybrid zygote
 /// architecture lock).
-pub fn run_with_engine(engine: &Engine, app_id: Option<&str>) -> Result<()> {
+///
+/// `overlay=true` (task 47 step 3c) requests a bottom-strip overlay
+/// SurfaceControl from the shim. Falls back to fullscreen with a
+/// logged warning if the shim doesn't export `sf_create_overlay_surface`
+/// (e.g. an older `libsf_surface.so` predating step 3c).
+pub fn run_with_engine(engine: &Engine, app_id: Option<&str>, overlay: bool) -> Result<()> {
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
     );
@@ -58,11 +68,34 @@ pub fn run_with_engine(engine: &Engine, app_id: Option<&str>) -> Result<()> {
         log::warn!("standalone: binder init: {e}");
     }
 
-    let sf = crate::sf_surface::SfSurface::create(SHIM_SO)?;
-    log::info!(
-        "standalone: surface {}x{} transform 0x{:x} (ANativeWindow={:p})",
-        sf.width, sf.height, sf.transform, sf.native_window,
-    );
+    let sf = if overlay {
+        match crate::sf_surface::SfSurface::create_overlay(SHIM_SO, INITIAL_OVERLAY_PX) {
+            Ok(sf) => {
+                log::info!(
+                    "standalone: overlay surface {}x{} transform 0x{:x} \
+                     (initial height {} px, ANativeWindow={:p})",
+                    sf.width, sf.height, sf.transform, INITIAL_OVERLAY_PX,
+                    sf.native_window,
+                );
+                sf
+            }
+            Err(e) => {
+                log::warn!(
+                    "standalone: overlay surface unavailable ({e:#}) — \
+                     falling back to fullscreen. Rebuild libsf_surface.so \
+                     on the a-03 host to enable task 47 step 3c."
+                );
+                crate::sf_surface::SfSurface::create(SHIM_SO)?
+            }
+        }
+    } else {
+        let sf = crate::sf_surface::SfSurface::create(SHIM_SO)?;
+        log::info!(
+            "standalone: surface {}x{} transform 0x{:x} (ANativeWindow={:p})",
+            sf.width, sf.height, sf.transform, sf.native_window,
+        );
+        sf
+    };
 
     // The producer transform hint is only valid once EGL connects, so the
     // renderer queries it through this closure mid-`from_native_window`.
@@ -251,8 +284,45 @@ fn run_cwasm_loop(
                         }
                     }
                 }
+                AppRole::OverlayBehind => {
+                    // Task 47 step 3c. Stays visible (so the cursor in
+                    // the focused editor keeps blinking), demoted in z
+                    // (so the IME overlay panel composites on top), and
+                    // lifecycle stays Resumed (no Paused fire — the
+                    // editor needs to keep rendering text mutations
+                    // from the IME). Layer 0 is the same z as the
+                    // background pool; IME at i32::MAX or MAX-1 wins.
+                    sf.set_layer(0);
+                    sf.set_visible(true);
+                    let target = bindings::my::skiko_gfx::lifecycle::State::Resumed;
+                    if store.data().lifecycle.current != target {
+                        store.data_mut().lifecycle.current = target;
+                        if let Err(e) = skiko
+                            .my_skiko_gfx_renderer()
+                            .call_on_lifecycle_changed(&mut store, target as u32)
+                        {
+                            log::warn!("standalone: on_lifecycle_changed(overlay-behind→Resumed) failed: {e:#}");
+                        }
+                    }
+                }
             }
             last_role = Some(cur_role);
+        }
+
+        // Task 47 step 3c — drain any pending overlay-height request from
+        // the `my:skiko-gfx/keyboard.request-overlay-height` Host impl.
+        // No-op on fullscreen surfaces (the SfSurface gate inside
+        // `resize_overlay` warns); on overlay surfaces, this re-issues
+        // setSize/setPosition + ANativeWindow_setBuffersGeometry so the
+        // next frame draws at the new dimensions. EGL/Skia will pick up
+        // the new size via the producer-side geometry update.
+        if let Some(new_h) = crate::sf_surface::take_pending_overlay_resize() {
+            if sf.resize_overlay(new_h) {
+                log::info!(
+                    "standalone: overlay resize → {} px (was {})",
+                    new_h, sf.height
+                );
+            }
         }
 
         // Drain any screen-state transitions accumulated since last frame.

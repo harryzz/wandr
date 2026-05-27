@@ -63,6 +63,31 @@ int32_t sf_set_layer(int32_t z);
 // success, -1 if the surface is down.
 int32_t sf_set_visible(int32_t visible);
 
+// Task 47 step 3c — allocate a bottom-strip OVERLAY SurfaceControl of
+// `height_px` pixels (panel-width × height_px), positioned at
+// `(0, PANEL_H - height_px)`. The input window is registered for that
+// same bottom rect; sf_input_poll subtracts the Y offset so motion
+// events arrive in surface-local coords.
+//
+// Starts INVISIBLE — the arbiter promotes the IME to fg + flips
+// visible only when an editor focuses (cmd_overlay or auto-tied from
+// cmd_attach_editor). Returns NULL on bad height or any libgui error.
+struct ANativeWindow* sf_create_overlay_surface(int32_t height_px,
+                                                int32_t* out_w,
+                                                int32_t* out_h,
+                                                uint32_t* out_transform);
+
+// Task 47 step 3c — resize an existing overlay SurfaceControl to
+// `new_height_px` pixels tall. Re-positions to
+// `(0, PANEL_H - new_height_px)`, updates the BLASTBufferQueue's
+// buffer dimensions, re-registers the input window at the new rect,
+// and updates the overlay Y offset so subsequent sf_input_poll calls
+// translate motion-event Y values correctly. The Rust side calls
+// ANativeWindow_setBuffersGeometry after this returns to flush
+// EGL/Skia's view of the new dimensions. Returns 0 on success, -1 if
+// the surface is down, -2 if `new_height_px` is out of range.
+int32_t sf_resize_overlay(int32_t new_height_px);
+
 // Release the surface/control/client and input plumbing.
 void sf_destroy_surface(void);
 

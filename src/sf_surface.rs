@@ -9,9 +9,44 @@
 
 use anyhow::{ensure, Result};
 use std::ffi::{c_void, CString};
+use std::sync::atomic::{AtomicI32, Ordering};
+
+/// Task 47 step 3c — bridge between the `my:skiko-gfx/keyboard`
+/// `request-overlay-height` Host impl and the standalone render
+/// loop. The Host impl runs inside a wasm-import call (same thread
+/// as the render loop, but doesn't have a reference to the
+/// `SfSurface`). It writes the requested height here; the render
+/// loop drains it per-frame and applies via `sf.resize_overlay`.
+///
+/// `0` = no pending request. Last writer wins (height requests
+/// supersede earlier ones).
+static PENDING_OVERLAY_HEIGHT: AtomicI32 = AtomicI32::new(0);
+
+/// Called from the `request-overlay-height` Host impl. Stores the
+/// requested height for the render loop to pick up next frame.
+pub fn request_overlay_resize(height_px: i32) {
+    if height_px <= 0 {
+        return;
+    }
+    PENDING_OVERLAY_HEIGHT.store(height_px, Ordering::SeqCst);
+}
+
+/// Called from the standalone render loop per frame. Returns the
+/// most recent requested height (and clears it) if any; `None`
+/// otherwise. The caller is expected to call `SfSurface::resize_overlay`
+/// with the returned value.
+pub fn take_pending_overlay_resize() -> Option<i32> {
+    let h = PENDING_OVERLAY_HEIGHT.swap(0, Ordering::SeqCst);
+    if h > 0 { Some(h) } else { None }
+}
 
 /// `ANativeWindow* sf_create_fullscreen_surface(int32_t*, int32_t*, uint32_t*)`.
 type CreateFn = unsafe extern "C" fn(*mut i32, *mut i32, *mut u32) -> *mut c_void;
+/// `ANativeWindow* sf_create_overlay_surface(int32_t height_px, int32_t*, int32_t*, uint32_t*)` — task 47 step 3c.
+type CreateOverlayFn =
+    unsafe extern "C" fn(i32, *mut i32, *mut i32, *mut u32) -> *mut c_void;
+/// `int32_t sf_resize_overlay(int32_t new_height_px)` — task 47 step 3c.
+type ResizeOverlayFn = unsafe extern "C" fn(i32) -> i32;
 /// `int32_t sf_input_poll(SfInputEvent*, int32_t)`.
 type InputPollFn = unsafe extern "C" fn(*mut SfInputEvent, i32) -> i32;
 /// `uint32_t sf_query_transform_hint(void)`.
@@ -22,6 +57,23 @@ type RequestFocusFn = unsafe extern "C" fn() -> i32;
 type SetLayerFn = unsafe extern "C" fn(i32) -> i32;
 /// `int32_t sf_set_visible(int32_t visible)` — task 46 step 4/5.
 type SetVisibleFn = unsafe extern "C" fn(i32) -> i32;
+
+extern "C" {
+    /// NDK — flushes the ANativeWindow's notion of buffer geometry after the
+    /// SurfaceControl has been resized by SurfaceFlinger. Without this, EGL
+    /// keeps drawing at the old dimensions even though SF's layer is smaller.
+    /// `libandroid.so` is linked into the wart-host shared object.
+    fn ANativeWindow_setBuffersGeometry(
+        window: *mut c_void,
+        width: i32,
+        height: i32,
+        format: i32,
+    ) -> i32;
+}
+
+/// `AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM` — also the value of `PIXEL_FORMAT_RGBA_8888`
+/// used by the shim's `createSurface` call. Constant from `android/hardware_buffer.h`.
+const ANW_FORMAT_RGBA_8888: i32 = 1;
 
 /// POD input event drained from the shim's InputFlinger channel. Mirrors
 /// `struct SfInputEvent` in `cpp/sf_surface.{cpp,h}` — keep all three in sync.
@@ -72,6 +124,14 @@ pub struct SfSurface {
     /// the cheap "hide while background / show on foreground" path
     /// (the layer stays allocated, BBQ keeps the last frame).
     set_visible: Option<SetVisibleFn>,
+    /// `sf_resize_overlay` — `None` if the shim predates task 47 step 3c.
+    /// When present, lets the IME guest declare its preferred panel
+    /// height via the `request-overlay-height` WIT verb.
+    resize_overlay: Option<ResizeOverlayFn>,
+    /// True when this surface was created via `sf_create_overlay_surface`
+    /// rather than `sf_create_fullscreen_surface`. Used to gate the
+    /// overlay-only `resize_overlay` path.
+    is_overlay: bool,
 }
 
 impl SfSurface {
@@ -136,15 +196,24 @@ impl SfSurface {
                 Some(std::mem::transmute(visible_sym))
             };
 
+            let resize_name = CString::new("sf_resize_overlay").unwrap();
+            let resize_sym = libc::dlsym(handle, resize_name.as_ptr());
+            let resize_overlay: Option<ResizeOverlayFn> = if resize_sym.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute(resize_sym))
+            };
+
             // Summarize which optional symbols were resolved — handy when
             // the shim .so is older than the wart-host binary expects.
             log::info!(
-                "sf_surface: dlsym summary — input_poll={} query_hint={} request_focus={} set_layer={} set_visible={}",
+                "sf_surface: dlsym summary — input_poll={} query_hint={} request_focus={} set_layer={} set_visible={} resize_overlay={}",
                 input_poll.is_some(),
                 query_hint.is_some(),
                 request_focus.is_some(),
                 set_layer.is_some(),
                 set_visible.is_some(),
+                resize_overlay.is_some(),
             );
 
             let mut w: i32 = 0;
@@ -164,8 +233,175 @@ impl SfSurface {
                 request_focus,
                 set_layer,
                 set_visible,
+                resize_overlay,
+                is_overlay: false,
             })
         }
+    }
+
+    /// Task 47 step 3c — `dlopen` the shim at `so_path` and create a
+    /// bottom-strip overlay surface of `height_px` pixels (positioned at
+    /// `(0, PH - height_px)`). Same flags + BBQ attach + input-window
+    /// register as the fullscreen path, but at the smaller rect. The
+    /// IME guest can later resize via `request-overlay-height`.
+    ///
+    /// Errors if the shim predates task 47 step 3c (no
+    /// `sf_create_overlay_surface` export). Callers can fall back to
+    /// `create()` for a fullscreen surface in that case.
+    pub fn create_overlay(so_path: &str, height_px: i32) -> Result<Self> {
+        unsafe {
+            let path = CString::new(so_path)?;
+            let handle = libc::dlopen(path.as_ptr(), libc::RTLD_NOW);
+            ensure!(!handle.is_null(), "dlopen({so_path}) failed");
+
+            let name = CString::new("sf_create_overlay_surface").unwrap();
+            let sym = libc::dlsym(handle, name.as_ptr());
+            ensure!(
+                !sym.is_null(),
+                "dlsym sf_create_overlay_surface failed in {so_path} \
+                 — shim predates task 47 step 3c; rebuild libsf_surface.so on the a-03 host"
+            );
+            let create_overlay: CreateOverlayFn = std::mem::transmute(sym);
+
+            // Optional sym table — same as `create()`. The fullscreen
+            // path needs all of these too, so once the overlay export
+            // ships everything else is already present.
+            let poll_name = CString::new("sf_input_poll").unwrap();
+            let poll_sym = libc::dlsym(handle, poll_name.as_ptr());
+            let input_poll: Option<InputPollFn> = if poll_sym.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute(poll_sym))
+            };
+
+            let hint_name = CString::new("sf_query_transform_hint").unwrap();
+            let hint_sym = libc::dlsym(handle, hint_name.as_ptr());
+            let query_hint: Option<QueryHintFn> = if hint_sym.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute(hint_sym))
+            };
+
+            let focus_name = CString::new("sf_request_focus").unwrap();
+            let focus_sym = libc::dlsym(handle, focus_name.as_ptr());
+            let request_focus: Option<RequestFocusFn> = if focus_sym.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute(focus_sym))
+            };
+
+            let layer_name = CString::new("sf_set_layer").unwrap();
+            let layer_sym = libc::dlsym(handle, layer_name.as_ptr());
+            let set_layer: Option<SetLayerFn> = if layer_sym.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute(layer_sym))
+            };
+
+            let visible_name = CString::new("sf_set_visible").unwrap();
+            let visible_sym = libc::dlsym(handle, visible_name.as_ptr());
+            let set_visible: Option<SetVisibleFn> = if visible_sym.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute(visible_sym))
+            };
+
+            let resize_name = CString::new("sf_resize_overlay").unwrap();
+            let resize_sym = libc::dlsym(handle, resize_name.as_ptr());
+            let resize_overlay: Option<ResizeOverlayFn> = if resize_sym.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute(resize_sym))
+            };
+
+            log::info!(
+                "sf_surface: overlay dlsym summary — input_poll={} query_hint={} request_focus={} set_layer={} set_visible={} resize_overlay={}",
+                input_poll.is_some(),
+                query_hint.is_some(),
+                request_focus.is_some(),
+                set_layer.is_some(),
+                set_visible.is_some(),
+                resize_overlay.is_some(),
+            );
+
+            let mut w: i32 = 0;
+            let mut h: i32 = 0;
+            let mut t: u32 = 0;
+            let nw = create_overlay(height_px, &mut w, &mut h, &mut t);
+            ensure!(
+                !nw.is_null(),
+                "sf_create_overlay_surface({height_px}) returned null"
+            );
+
+            Ok(SfSurface {
+                _handle: handle,
+                native_window: nw,
+                width: w,
+                height: h,
+                transform: t,
+                input_poll,
+                query_hint,
+                request_focus,
+                set_layer,
+                set_visible,
+                resize_overlay,
+                is_overlay: true,
+            })
+        }
+    }
+
+    /// Task 47 step 3c — resize this overlay surface to `new_height_px`
+    /// pixels tall (panel width stays at the display width). Re-positions
+    /// to `(0, PH - new_height_px)` and flushes the ANativeWindow's
+    /// buffer geometry so EGL/Skia notice the new dimensions on the next
+    /// frame. No-op (+ warn) when called on a fullscreen surface or when
+    /// the shim is too old to expose `sf_resize_overlay`.
+    pub fn resize_overlay(&self, new_height_px: i32) -> bool {
+        if !self.is_overlay {
+            log::warn!(
+                "sf_surface: resize_overlay({new_height_px}) ignored — \
+                 surface is fullscreen, not overlay"
+            );
+            return false;
+        }
+        let Some(resize) = self.resize_overlay else {
+            log::warn!(
+                "sf_surface: resize_overlay({new_height_px}) ignored — \
+                 shim does not export sf_resize_overlay"
+            );
+            return false;
+        };
+        let rc = unsafe { resize(new_height_px) };
+        if rc != 0 {
+            log::warn!("sf_surface: sf_resize_overlay({new_height_px}) returned {rc}");
+            return false;
+        }
+        // Flush the producer-side notion of buffer geometry. Without
+        // this, EGL keeps presenting at the surface's previous size
+        // even though the SF layer has shrunk/grown.
+        let nw_rc = unsafe {
+            ANativeWindow_setBuffersGeometry(
+                self.native_window,
+                self.width,
+                new_height_px,
+                ANW_FORMAT_RGBA_8888,
+            )
+        };
+        if nw_rc != 0 {
+            log::warn!(
+                "sf_surface: ANativeWindow_setBuffersGeometry({}, {}) returned {nw_rc}",
+                self.width, new_height_px
+            );
+        }
+        true
+    }
+
+    /// True when this surface was created via `create_overlay` rather than
+    /// `create()`. Lets the render loop choose between the SIGUSR1/SIGUSR2
+    /// foreground/background lifecycle and the SIGRTMIN+1 overlay-behind
+    /// add-on.
+    pub fn is_overlay(&self) -> bool {
+        self.is_overlay
     }
 
     /// Task 46 step 4/5 — reposition the wart layer on SurfaceFlinger's
