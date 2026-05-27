@@ -179,6 +179,93 @@ impl Host for crate::HostState {
             .unwrap_or(offset)
     }
 
+    // ── Task 50 — per-line metrics ──────────────────────────────────────
+    //
+    // SkiaParagraph.getCursorRect uses `lineMetrics[lineForOffset(offset)]`
+    // for the cursor's vertical position. Without these calls, skiko-wasi's
+    // Paragraph.lineMetrics returns emptyArray() → binary search degenerates
+    // to "always line 0" → cursor renders on line 1 for any selection
+    // offset. See tasks/50-cursor-render-multiline.md.
+
+    fn prepare_line_metrics(&mut self, id: u32) -> u32 {
+        let Some(p) = self.renderer.paragraphs.get(&id) else {
+            self.renderer.para_line_metrics_cache.clear();
+            return 0;
+        };
+        let metrics = p.get_line_metrics();
+        self.renderer.para_line_metrics_cache = metrics.iter().map(|lm| {
+            crate::canvas_impl::CachedLineMetrics {
+                start_index:                lm.start_index as u32,
+                end_index:                  lm.end_index as u32,
+                end_excluding_whitespaces:  lm.end_excluding_whitespaces as u32,
+                end_including_newline:      lm.end_including_newline as u32,
+                hard_break:                 lm.hard_break,
+                ascent:                     lm.ascent,
+                descent:                    lm.descent,
+                unscaled_ascent:            lm.unscaled_ascent,
+                height:                     lm.height,
+                width:                      lm.width,
+                left:                       lm.left,
+                baseline:                   lm.baseline,
+                line_number:                lm.line_number as u32,
+            }
+        }).collect();
+        self.renderer.para_line_metrics_cache.len() as u32
+    }
+
+    fn get_cached_line_start_index(&mut self, idx: u32) -> u32 {
+        self.renderer.para_line_metrics_cache.get(idx as usize)
+            .map(|m| m.start_index).unwrap_or(0)
+    }
+    fn get_cached_line_end_index(&mut self, idx: u32) -> u32 {
+        self.renderer.para_line_metrics_cache.get(idx as usize)
+            .map(|m| m.end_index).unwrap_or(0)
+    }
+    fn get_cached_line_end_excluding_whitespaces(&mut self, idx: u32) -> u32 {
+        self.renderer.para_line_metrics_cache.get(idx as usize)
+            .map(|m| m.end_excluding_whitespaces).unwrap_or(0)
+    }
+    fn get_cached_line_end_including_newline(&mut self, idx: u32) -> u32 {
+        self.renderer.para_line_metrics_cache.get(idx as usize)
+            .map(|m| m.end_including_newline).unwrap_or(0)
+    }
+    fn get_cached_line_is_hard_break(&mut self, idx: u32) -> bool {
+        self.renderer.para_line_metrics_cache.get(idx as usize)
+            .map(|m| m.hard_break).unwrap_or(false)
+    }
+    fn get_cached_line_ascent(&mut self, idx: u32) -> f64 {
+        self.renderer.para_line_metrics_cache.get(idx as usize)
+            .map(|m| m.ascent).unwrap_or(0.0)
+    }
+    fn get_cached_line_descent(&mut self, idx: u32) -> f64 {
+        self.renderer.para_line_metrics_cache.get(idx as usize)
+            .map(|m| m.descent).unwrap_or(0.0)
+    }
+    fn get_cached_line_unscaled_ascent(&mut self, idx: u32) -> f64 {
+        self.renderer.para_line_metrics_cache.get(idx as usize)
+            .map(|m| m.unscaled_ascent).unwrap_or(0.0)
+    }
+    fn get_cached_line_height(&mut self, idx: u32) -> f64 {
+        self.renderer.para_line_metrics_cache.get(idx as usize)
+            .map(|m| m.height).unwrap_or(0.0)
+    }
+    fn get_cached_line_width(&mut self, idx: u32) -> f64 {
+        self.renderer.para_line_metrics_cache.get(idx as usize)
+            .map(|m| m.width).unwrap_or(0.0)
+    }
+    fn get_cached_line_left(&mut self, idx: u32) -> f64 {
+        self.renderer.para_line_metrics_cache.get(idx as usize)
+            .map(|m| m.left).unwrap_or(0.0)
+    }
+    fn get_cached_line_baseline(&mut self, idx: u32) -> f64 {
+        self.renderer.para_line_metrics_cache.get(idx as usize)
+            .map(|m| m.baseline).unwrap_or(0.0)
+    }
+    fn get_cached_line_number(&mut self, idx: u32) -> u32 {
+        self.renderer.para_line_metrics_cache.get(idx as usize)
+            .map(|m| m.line_number).unwrap_or(0)
+    }
+
     fn drop_paragraph(&mut self, id: u32) {
         self.renderer.paragraphs.remove(&id);
     }

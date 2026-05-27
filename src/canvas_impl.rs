@@ -159,6 +159,24 @@ struct TextBlobRun {
 
 // ─── Renderer state ──────────────────────────────────────────────────────────
 
+/// Plain-data copy of `skia_safe::textlayout::LineMetrics` numeric fields.
+/// Task 50 — see `SkiaRenderer::para_line_metrics_cache`.
+pub struct CachedLineMetrics {
+    pub start_index: u32,
+    pub end_index: u32,
+    pub end_excluding_whitespaces: u32,
+    pub end_including_newline: u32,
+    pub hard_break: bool,
+    pub ascent: f64,
+    pub descent: f64,
+    pub unscaled_ascent: f64,
+    pub height: f64,
+    pub width: f64,
+    pub left: f64,
+    pub baseline: f64,
+    pub line_number: u32,
+}
+
 pub struct SkiaRenderer {
     // Drop order matters: gr_context + surface must drop before egl so that
     // Skia's GL cleanup happens while the EGL context is still bound.
@@ -233,6 +251,16 @@ pub struct SkiaRenderer {
     /// renderer-wide slot is sufficient: the guest always reads the cache
     /// in the same WIT call burst, never interleaved with another prepare.
     pub para_rect_cache: Vec<skia_safe::textlayout::TextBox>,
+    /// Task 50 — per-line metrics cache. Populated by
+    /// `prepare_line_metrics`; read by the 13 `get_cached_line_*` getters.
+    /// Fixes the multi-line cursor-render bug: without this, skiko-wasi's
+    /// `Paragraph.lineMetrics` returns an empty array, and Compose's
+    /// `SkiaParagraph.getCursorRect` falls back to line 0 metrics for any
+    /// offset → cursor blinks on line 1 regardless of selection position.
+    ///
+    /// Copies the numeric fields out of `skia_safe::textlayout::LineMetrics`
+    /// so we don't have to thread the source paragraph's lifetime.
+    pub para_line_metrics_cache: Vec<CachedLineMetrics>,
 }
 
 // Skia's RCHandle uses non-atomic refcounts so its types aren't auto-Send.
@@ -298,6 +326,7 @@ impl SkiaRenderer {
                 font_collection:  Self::make_font_collection(),
                 next_para_id:     1,
                 para_rect_cache:  Vec::new(),
+                para_line_metrics_cache: Vec::new(),
                 bitmap_canvases:       HashMap::new(),
                 bitmap_canvas_lru:     std::collections::VecDeque::with_capacity(128),
                 next_bitmap_canvas_id: 1,
@@ -335,6 +364,7 @@ impl SkiaRenderer {
                 font_collection:  Self::make_font_collection(),
                 next_para_id:     1,
                 para_rect_cache:  Vec::new(),
+                para_line_metrics_cache: Vec::new(),
                 bitmap_canvases:       HashMap::new(),
                 bitmap_canvas_lru:     std::collections::VecDeque::with_capacity(128),
                 next_bitmap_canvas_id: 1,
@@ -469,6 +499,7 @@ impl SkiaRenderer {
             font_collection:  Self::make_font_collection(),
             next_para_id:     1,
             para_rect_cache:  Vec::new(),
+            para_line_metrics_cache: Vec::new(),
             bitmap_canvases:       HashMap::new(),
             bitmap_canvas_lru:     std::collections::VecDeque::with_capacity(128),
             next_bitmap_canvas_id: 1,
