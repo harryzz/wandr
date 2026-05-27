@@ -12,14 +12,17 @@
 //! newline-delimited, matching the AOSP-zygote precedent locked by
 //! D2 in task-45):
 //!
-//!   launch <app-id>     — forward to zygote as LAUNCH_GUI; record in state
+//!   launch <app-id>     — forward to zygote as LAUNCH_GUI; record in
+//!                         state; auto-promote to foreground (demoting
+//!                         the previous fg if any).
 //!   launch-headless <id>— forward as LAUNCH (wasi:cli/command consumer)
-//!   list                — print running apps + pids
+//!   list                — print running apps + pids; current fg is
+//!                         marked with [fg].
 //!   kill <app-id>       — KILL the zygote-tracked pid for this app-id
 //!   preload <app-id>    — PRELOAD on the zygote (post-install refresh)
-//!
-//! Out of scope at step 3 (lands in step 4): foreground/background
-//! z-order, InputFlinger focus, OOM priority writes.
+//!   foreground <id>     — promote <id> to foreground; SIGUSR1 the
+//!                         previous fg, SIGUSR2 the new fg, write
+//!                         /proc/<pid>/oom_score_adj on both.
 
 mod state;
 mod zygote_client;
@@ -57,6 +60,7 @@ fn main() {
         Some("list") => run_client("list", None),
         Some("kill") => run_client("kill", args.get(1).cloned()),
         Some("preload") => run_client("preload", args.get(1).cloned()),
+        Some("foreground") => run_client("foreground", args.get(1).cloned()),
         Some(other) => {
             eprintln!("wart-arbiter: unknown command: {other}");
             print_usage();
@@ -86,7 +90,8 @@ fn print_usage() {
            wart-arbiter launch-headless <app-id>\n\
            wart-arbiter list\n\
            wart-arbiter kill            <app-id>\n\
-           wart-arbiter preload         <app-id>\n",
+           wart-arbiter preload         <app-id>\n\
+           wart-arbiter foreground      <app-id>\n",
     );
 }
 
@@ -95,7 +100,10 @@ fn print_usage() {
 fn run_client(verb: &str, arg: Option<String>) -> Result<()> {
     // Build the wire command. Verb-only commands (`list`) send just
     // the verb; arg-bearing commands send `<verb> <arg>`.
-    let needs_arg = matches!(verb, "launch" | "launch-headless" | "kill" | "preload");
+    let needs_arg = matches!(
+        verb,
+        "launch" | "launch-headless" | "kill" | "preload" | "foreground"
+    );
     let line = match (needs_arg, arg) {
         (true, Some(a))  => format!("{verb} {a}\n"),
         (true, None)     => {
@@ -176,11 +184,62 @@ fn handle_client(mut stream: UnixStream) -> Result<()> {
         "kill"            => cmd_kill(&mut stream, &rest),
         "list"            => cmd_list(&mut stream),
         "preload"         => cmd_preload(&mut stream, &rest),
+        "foreground"      => cmd_foreground(&mut stream, &rest),
         other => {
             writeln!(stream, "ERR unknown-command {other}")?;
             Ok(())
         }
     }
+}
+
+// ─── Policy helpers (task 46 step 4) ─────────────────────────────────
+
+/// `/proc/<pid>/oom_score_adj` magic numbers. Foreground gets the
+/// gentlest "killable but not first." Background apps get pushed
+/// toward the front of the OOM kill queue so the system reclaims
+/// them under pressure before reaching the foreground.
+const OOM_FG: i32 = 0;
+const OOM_BG: i32 = 500;
+
+fn write_oom_score(pid: i32, value: i32) {
+    let path = format!("/proc/{pid}/oom_score_adj");
+    match std::fs::write(&path, format!("{value}\n")) {
+        Ok(()) => log::info!("arbiter: wrote {path} = {value}"),
+        Err(e) => log::warn!("arbiter: write {path} = {value} failed: {e}"),
+    }
+}
+
+/// Send SIGUSR1 (→Background) or SIGUSR2 (→Foreground) to one of our
+/// tracked child pids. The child's `app_role` handler stores the new
+/// role atomically; the next frame in its render loop reacts.
+fn send_role_signal(pid: i32, foreground: bool) {
+    let sig = if foreground { libc::SIGUSR2 } else { libc::SIGUSR1 };
+    let r = unsafe { libc::kill(pid, sig) };
+    if r != 0 {
+        log::warn!(
+            "arbiter: kill({pid}, sig={sig}) failed: {}",
+            std::io::Error::last_os_error()
+        );
+    }
+}
+
+/// Demote whoever is currently foreground (if anyone) and promote the
+/// given (app_id, pid) to foreground. Idempotent if the target is
+/// already foreground.
+fn promote_to_foreground(app_id: &str, pid: i32) {
+    // set_foreground returns the previously-foreground (id, pid)
+    // pair if there was one different from this app_id. The state
+    // module has updated the fg slot before returning.
+    if let Some((prev_id, prev_pid)) = state::set_foreground(Some(app_id)) {
+        log::info!(
+            "arbiter: demoting prior foreground app={prev_id} pid={prev_pid}"
+        );
+        send_role_signal(prev_pid, /*foreground=*/ false);
+        write_oom_score(prev_pid, OOM_BG);
+    }
+    log::info!("arbiter: promoting foreground app={app_id} pid={pid}");
+    send_role_signal(pid, /*foreground=*/ true);
+    write_oom_score(pid, OOM_FG);
 }
 
 fn cmd_launch(stream: &mut UnixStream, app_id: &str, gui: bool) -> Result<()> {
@@ -202,6 +261,14 @@ fn cmd_launch(stream: &mut UnixStream, app_id: &str, gui: bool) -> Result<()> {
                 launched_at: SystemTime::now(),
                 launched_mono: Instant::now(),
             });
+            // Task 46 step 4 — GUI launches auto-promote to
+            // foreground (matches Android's "new activity comes
+            // forward" expectation). Headless launches don't have
+            // an SF surface so the foreground concept doesn't
+            // apply; skip promotion for them.
+            if gui {
+                promote_to_foreground(&key, pid);
+            }
             writeln!(stream, "OK pid={pid} app={key}")?;
             log::info!("wart-arbiter: launched {key} → pid {pid}");
             Ok(())
@@ -212,6 +279,22 @@ fn cmd_launch(stream: &mut UnixStream, app_id: &str, gui: bool) -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn cmd_foreground(stream: &mut UnixStream, app_id: &str) -> Result<()> {
+    if app_id.is_empty() {
+        writeln!(stream, "ERR foreground-empty-app-id")?;
+        return Ok(());
+    }
+    let Some(s) = state::get(app_id) else {
+        writeln!(stream, "ERR not-tracked {app_id}")?;
+        return Ok(());
+    };
+    let prev = state::current_foreground();
+    promote_to_foreground(&s.app_id, s.pid);
+    let prev_str = prev.unwrap_or_else(|| "(none)".to_string());
+    writeln!(stream, "OK fg={app_id} prev={prev_str} pid={pid}", pid = s.pid)?;
+    Ok(())
 }
 
 fn cmd_kill(stream: &mut UnixStream, app_id: &str) -> Result<()> {
@@ -241,10 +324,16 @@ fn cmd_kill(stream: &mut UnixStream, app_id: &str) -> Result<()> {
 fn cmd_list(stream: &mut UnixStream) -> Result<()> {
     let mut apps = state::snapshot();
     apps.sort_by(|a, b| a.app_id.cmp(&b.app_id));
+    let fg = state::current_foreground();
     writeln!(stream, "OK count={}", apps.len())?;
     for app in apps {
         let elapsed_ms = app.launched_mono.elapsed().as_millis();
-        writeln!(stream, "  app={} pid={} elapsed_ms={elapsed_ms}", app.app_id, app.pid)?;
+        let marker = if fg.as_deref() == Some(&app.app_id) { " [fg]" } else { "" };
+        writeln!(
+            stream,
+            "  app={} pid={} elapsed_ms={elapsed_ms}{marker}",
+            app.app_id, app.pid
+        )?;
     }
     Ok(())
 }

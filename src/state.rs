@@ -13,6 +13,35 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Instant, SystemTime};
 
+/// Which app-id (if any) is currently foreground. The arbiter
+/// guarantees at most one. `None` = nothing in foreground (cold
+/// arbiter, or last launch was demoted without a successor).
+fn foreground() -> &'static Mutex<Option<String>> {
+    static FG: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    FG.get_or_init(|| Mutex::new(None))
+}
+
+pub fn current_foreground() -> Option<String> {
+    foreground().lock().ok().and_then(|m| m.clone())
+}
+
+/// Swap the foreground app. Returns the previously-foreground
+/// `(app_id, pid)` pair (if any) so the caller can SIGUSR1 it.
+pub fn set_foreground(new_app_id: Option<&str>) -> Option<(String, i32)> {
+    let prev_app_id = {
+        let mut fg = foreground().lock().ok()?;
+        let prev = fg.clone();
+        *fg = new_app_id.map(|s| s.to_string());
+        prev
+    };
+    let prev = prev_app_id?;
+    if Some(prev.as_str()) == new_app_id {
+        return None;
+    }
+    let pid = get(&prev)?.pid;
+    Some((prev, pid))
+}
+
 /// One running app instance.
 #[derive(Clone, Debug)]
 pub struct AppState {
@@ -38,6 +67,11 @@ pub fn insert(state: AppState) {
 }
 
 pub fn remove(app_id: &str) -> Option<AppState> {
+    // If the removed app was foreground, also clear the fg slot —
+    // arbiter callers will repromote another if there's a successor.
+    if current_foreground().as_deref() == Some(app_id) {
+        let _ = set_foreground(None);
+    }
     registry().lock().ok().and_then(|mut m| m.remove(app_id))
 }
 
