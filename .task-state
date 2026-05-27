@@ -1,5 +1,5 @@
 TASK=46
-STEP=step-5-source-only-ready
+STEP=step-5-shim-rebuilt
 STATUS=complete
-LAST_SUCCESS=Task 46 step 5 source-side ready 2026-05-27. Shim source: cpp/sf_surface.{cpp,h} now exposes sf_set_layer(int32_t) + sf_set_visible(int32_t). Rust bindings in src/sf_surface.rs with optional dlsym (graceful degrade if .so not rebuilt). New scripts/build-system-warpkgs.sh automates the 4-warpkg packaging (3 system bundles + wart-app). Step 4 deferred until libsf_surface.so rebuilt on AOSP a-03 host. Build clean on aarch64-android (only expected dead-code warnings for set_layer/set_visible since step 4 consumes them).
-NOTES=Paused at the AOSP-a-03-host boundary. Resume: rebuild libsf_surface.so on a-03 host, push, verify dlsym, then step 4 lands. Init.rc + sepolicy also block on a-03 host. Other tasks open while paused: 25 (suspend leak), 37 (Kotlin/Wasm throw), 43 (orientation).
+LAST_SUCCESS=Task 46 step 5 shim rebuild done 2026-05-27 (a-03 direct-ninja, 43s). New libsf_surface.so live on device with sf_set_layer + sf_set_visible exported. wart-host dlsym summary confirms all five optional symbols resolved at runtime. Existing render path unaffected.
+NOTES=Step 4 now unblocked. init.rc + sepolicy still on the a-03 host TODO list but separable from the shim. Stashed .so at wart-host/cpp/build/libsf_surface.so for scripts/run-hybrid-stack.sh.

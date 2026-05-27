@@ -672,6 +672,56 @@ When you next have the AOSP a-03 build host:
    role flips, `set_layer`/`set_visible` from the child render
    loop, OOM priority writes from the arbiter, focus throttle.
 
+#### Shim rebuild done (2026-05-27)
+
+Rebuilt `libsf_surface.so` on a-03 against the new `.cpp` using
+the direct ninja path (much faster than `m libsf_surface`):
+
+```
+$ ssh harry@a-03
+$ cd ~/android/lineage
+$ source build/envsetup.sh && lunch aosp_arm64-trunk_staging-userdebug
+$ prebuilts/build-tools/linux-x86/bin/ninja \
+    -f out/combined-aosp_arm64.ninja \
+    out/soong/.intermediates/external/sf_surface/libsf_surface/android_arm64_armv8-a_shared/libsf_surface.so
+real    0m43.123s
+```
+
+(`m libsf_surface` would have re-run soong + ninja from scratch
+— minutes. The direct-ninja path skips soong regeneration when
+nothing in the bp/manifest layer changed; only the .cpp diff
+matters.)
+
+llvm-readelf confirmed both new symbols exported:
+
+```
+sf_set_layer    (FUNC GLOBAL DEFAULT)
+sf_set_visible  (FUNC GLOBAL DEFAULT)
+```
+
+Pushed `.so` to device + rebuilt wart-host with a new dlsym
+diagnostic line (commit `8f9e8e9` in wart-host). LAUNCH_GUI a
+fresh wart-app, logcat now shows:
+
+```
+sf_surface: dlsym summary — input_poll=true query_hint=true
+            request_focus=true set_layer=true set_visible=true
+```
+
+All five optional symbols resolved. Existing render path
+unaffected — wart-app renders identically. The new entry points
+aren't called yet (step 4 consumes them) but they're live and
+ready.
+
+`.so` stashed at `wart-host/cpp/build/libsf_surface.so` (the
+path `scripts/standalone-launch.sh` / `scripts/run-hybrid-stack.sh`
+push from).
+
+**Step 4 now unblocked.** Remaining blockers for full step-5
+production-polish: init.rc service definitions + SELinux
+domains (both still need the a-03 host but are separable from
+shim work).
+
 ## Known unknowns
 
 - **Does `Component::deserialize_file` produce COW-safe state?**
