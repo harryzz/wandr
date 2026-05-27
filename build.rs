@@ -171,16 +171,19 @@ interface IDirectReportChannel {}
         let imm_aidl_dir = imm_vendor.join("core/java");
         let imm_aidl_path = imm_aidl_dir.join("com/android/internal/view/IInputMethodManager.aidl");
         let imm_aidl_stub = b"\
-// Auto-patched by wart-host/build.rs (task 40 sessions 2-4). See
+// Auto-patched by wart-host/build.rs (task 40 sessions 2-5). See
 // build.rs comment block for the policy. Real methods kept at their
 // real signatures so transaction codes match IMMS's dispatch:
 //   - addClient (pos 0, session 3)
+//   - showSoftInput (pos 8, session 5)
 //   - startInputOrWindowGainedFocus (pos 11, session 4)
 //   - isImeTraceEnabled (pos 25, session 2)
 // Everything else is a no-import slot_NN_<orig-name>() placeholder.
 package com.android.internal.view;
 
+import android.os.ResultReceiver;
 import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.ImeTracker;
 import android.window.ImeOnBackInvokedDispatcher;
 import com.android.internal.inputmethod.IInputMethodClient;
 import com.android.internal.inputmethod.InputBindResult;
@@ -197,7 +200,9 @@ interface IInputMethodManager {
     void slot_05_getEnabledInputMethodListLegacy();
     void slot_06_getEnabledInputMethodSubtypeList();
     void slot_07_getLastInputMethodSubtype();
-    void slot_08_showSoftInput();
+    boolean showSoftInput(in IInputMethodClient client, @nullable IBinder windowToken,
+            in ImeTracker statsToken, int flags, int lastClickToolType,
+            in @nullable ResultReceiver resultReceiver, int reason, boolean async);
     void slot_09_hideSoftInput();
     void slot_10_hideSoftInputFromServerForTest();
     InputBindResult startInputOrWindowGainedFocus(
@@ -323,6 +328,38 @@ oneway interface IRemoteAccessibilityInputConnection {
         // type either parses to an empty struct (with leftover wire
         // bytes ignored) or fails with a parse error — both prove the
         // call landed at IMMS.
+
+        // ── ImeTracker.aidl rename (task 40 session 5) ────────────────────
+        // The upstream file declares `parcelable ImeTracker.Token;` — the
+        // dot is Java nested-class syntax. rsbinder-aidl 0.7.0 emits the
+        // name verbatim (`pub mod ImeTracker.Token` etc.) which is invalid
+        // Rust. We sidestep by replacing the file with a flat-name stub
+        // and using `ImeTrackerToken` (no dot) in the IMM stub. The wire
+        // format is the same — IMMS deserializes from its own Java
+        // ImeTracker.Token class, which doesn't care what name we used
+        // client-side. (The stub also serializes as zero payload bytes;
+        // IMMS's readStrongBinder + readString8 see null/empty and
+        // construct a Token with null binder + null tag — acceptable
+        // for showSoftInput's stats path.)
+        let ime_tracker_path = imm_aidl_dir.join("android/view/inputmethod/ImeTracker.aidl");
+        let ime_tracker_stub = b"\
+// Auto-patched by wart-host/build.rs (task 40 session 5). Upstream is
+// `parcelable ImeTracker.Token;` (Java nested-class syntax) which
+// rsbinder-aidl 0.7.0 emits as invalid Rust (`pub mod ImeTracker.Token`,
+// dot in identifier). We re-declare the type without the nested-class
+// syntax (filename = parcelable name = `ImeTracker`); the IMM stub
+// refers to it as `ImeTracker`. Wire format identical -- IMMS
+// deserializes from its own Java ImeTracker.Token class, which doesn't
+// inspect the client-side type name. The empty-parcelable stub still
+// serializes as a non-null marker + 0 payload bytes; IMMS's
+// readStrongBinder + readString8 see null/empty and construct a Token
+// with null binder + null tag, which is acceptable for showSoftInput's
+// stats-tracking arg (it only affects metrics, not the bind path).
+package android.view.inputmethod;
+parcelable ImeTracker;
+";
+        std::fs::write(&ime_tracker_path, ime_tracker_stub)
+            .expect("patch ImeTracker.aidl");
 
         // ── ISurfaceComposer AIDL (task 22) ──────────────────────────────
         // SurfaceFlingerAIDL service ("android.gui.ISurfaceComposer").

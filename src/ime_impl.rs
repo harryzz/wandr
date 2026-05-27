@@ -415,3 +415,209 @@ pub fn probe_startinput() {
 
 #[cfg(not(target_os = "android"))]
 pub fn probe_startinput() {}
+
+// ─── Session 5: showSoftInput — try to summon Gboard ─────────────────────────
+
+#[cfg(target_os = "android")]
+mod session5 {
+    use std::sync::OnceLock;
+
+    use crate::binder_aidl::com::android::internal::view::IInputMethodManager::IInputMethodManager;
+    use crate::binder_aidl::com::android::internal::inputmethod::IInputMethodClient::{
+        BnInputMethodClient, IInputMethodClient, IInputMethodClientAsyncService,
+    };
+    use crate::binder_aidl::com::android::internal::inputmethod::IRemoteInputConnection::{
+        BnRemoteInputConnection, IRemoteInputConnection, IRemoteInputConnectionAsyncService,
+    };
+    use crate::binder_aidl::android::window::ImeOnBackInvokedDispatcher::ImeOnBackInvokedDispatcher;
+    use crate::binder_aidl::android::view::inputmethod::ImeTracker::ImeTracker;
+
+    /// Same Bn-side server pattern as sessions 3-4. IMMS may fire any
+    /// of the 12 oneway slot_NN methods after registration (especially
+    /// setActive / setInteractive when focus state changes).
+    struct ImeClient;
+    impl rsbinder::Interface for ImeClient {}
+    #[async_trait::async_trait]
+    impl IInputMethodClientAsyncService for ImeClient {
+        async fn r#slot_00_onBindMethod(&self)                  -> rsbinder::status::Result<()> { log::info!("ime/client: onBindMethod fired"); Ok(()) }
+        async fn r#slot_01_onStartInputResult(&self)            -> rsbinder::status::Result<()> { log::info!("ime/client: onStartInputResult fired"); Ok(()) }
+        async fn r#slot_02_onBindAccessibilityService(&self)    -> rsbinder::status::Result<()> { log::info!("ime/client: onBindAccessibilityService fired"); Ok(()) }
+        async fn r#slot_03_onUnbindMethod(&self)                -> rsbinder::status::Result<()> { log::info!("ime/client: onUnbindMethod fired"); Ok(()) }
+        async fn r#slot_04_onUnbindAccessibilityService(&self)  -> rsbinder::status::Result<()> { log::info!("ime/client: onUnbindAccessibilityService fired"); Ok(()) }
+        async fn r#slot_05_setActive(&self)                     -> rsbinder::status::Result<()> { log::info!("ime/client: setActive fired"); Ok(()) }
+        async fn r#slot_06_setInteractive(&self)                -> rsbinder::status::Result<()> { log::info!("ime/client: setInteractive fired"); Ok(()) }
+        async fn r#slot_07_setImeVisibility(&self)              -> rsbinder::status::Result<()> { log::info!("ime/client: setImeVisibility fired"); Ok(()) }
+        async fn r#slot_08_scheduleStartInputIfNecessary(&self) -> rsbinder::status::Result<()> { log::info!("ime/client: scheduleStartInputIfNecessary fired"); Ok(()) }
+        async fn r#slot_09_reportFullscreenMode(&self)          -> rsbinder::status::Result<()> { log::info!("ime/client: reportFullscreenMode fired"); Ok(()) }
+        async fn r#slot_10_setImeTraceEnabled(&self)            -> rsbinder::status::Result<()> { log::info!("ime/client: setImeTraceEnabled fired"); Ok(()) }
+        async fn r#slot_11_throwExceptionFromSystem(&self)      -> rsbinder::status::Result<()> { log::info!("ime/client: throwExceptionFromSystem fired"); Ok(()) }
+    }
+
+    struct RemoteInputConn;
+    impl rsbinder::Interface for RemoteInputConn {}
+    #[async_trait::async_trait]
+    impl IRemoteInputConnectionAsyncService for RemoteInputConn {
+        async fn r#slot_00_placeholder(&self) -> rsbinder::status::Result<()> {
+            log::info!("ime/inputconn: placeholder fired");
+            Ok(())
+        }
+    }
+
+    struct WindowTokenCarrier;
+    impl rsbinder::Interface for WindowTokenCarrier {}
+    #[async_trait::async_trait]
+    impl IRemoteInputConnectionAsyncService for WindowTokenCarrier {
+        async fn r#slot_00_placeholder(&self) -> rsbinder::status::Result<()> {
+            log::info!("ime/windowtoken: callback fired (unexpected)");
+            Ok(())
+        }
+    }
+
+    struct TokioRuntime;
+    impl rsbinder::BinderAsyncRuntime for TokioRuntime {
+        fn block_on<F: std::future::Future>(&self, f: F) -> F::Output {
+            static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+            let rt = RT.get_or_init(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("tokio current-thread runtime")
+            });
+            rt.block_on(f)
+        }
+    }
+
+    const START_INPUT_REASON_UNSPECIFIED: i32 = 0;
+    /// `InputMethodManager.SHOW_FORCED` — strongest hint that the user
+    /// wants the IME visible. Used to override IMMS heuristics that
+    /// might suppress the show on a non-focused client.
+    const SHOW_FORCED: i32 = 0x0002;
+    /// `SoftInputShowHideReason.SHOW_SOFT_INPUT` — the default reason
+    /// for a programmatic showSoftInput call.
+    const SOFT_INPUT_REASON_SHOW: i32 = 0;
+    /// `MotionEvent.TOOL_TYPE_UNKNOWN`.
+    const TOOL_TYPE_UNKNOWN: i32 = 0;
+
+    pub fn run() {
+        if let Err(reason) = crate::binder::init() {
+            log::warn!("ime: binder init failed: {reason}");
+            return;
+        }
+
+        let svc: rsbinder::Strong<dyn IInputMethodManager> =
+            match rsbinder::hub::get_interface("input_method") {
+                Ok(s)  => s,
+                Err(e) => {
+                    log::warn!("ime: input_method service unavailable: {e:?}");
+                    return;
+                }
+            };
+
+        let client: rsbinder::Strong<dyn IInputMethodClient> =
+            BnInputMethodClient::new_async_binder(ImeClient, TokioRuntime);
+        let input_conn: rsbinder::Strong<dyn IRemoteInputConnection> =
+            BnRemoteInputConnection::new_async_binder(RemoteInputConn, TokioRuntime);
+        let window_token_carrier: rsbinder::Strong<dyn IRemoteInputConnection> =
+            BnRemoteInputConnection::new_async_binder(WindowTokenCarrier, TokioRuntime);
+        let window_token_binder = window_token_carrier.as_binder();
+
+        // (1) Register as a client (session 3).
+        if let Err(e) = svc.r#addClient(&client, &input_conn, 0) {
+            log::warn!("ime: addClient failed before showSoftInput: {e:?}");
+            return;
+        }
+        log::info!("ime: (1/3) addClient OK");
+
+        // (2) Notify IMMS that our window has focus (session 4).
+        let ime_dispatcher = ImeOnBackInvokedDispatcher::default();
+        let start_result = svc.r#startInputOrWindowGainedFocus(
+            START_INPUT_REASON_UNSPECIFIED,
+            &client,
+            Some(&window_token_binder),
+            /* startInputFlags = */ 0,
+            /* softInputMode   = */ 0,
+            /* windowFlags     = */ 0,
+            /* editorInfo      = */ None,
+            Some(&input_conn),
+            /* remoteAccessibilityInputConnection = */ None,
+            /* targetSdk       = */ 35,
+            /* userId          = */ 0,
+            &ime_dispatcher,
+        );
+        // UnexpectedNull == null InputBindResult (documented IMMS response
+        // for clients without a focused editor). Other errors are real.
+        match start_result {
+            Ok(_) => log::info!("ime: (2/3) startInput OK — got non-null InputBindResult"),
+            Err(e) => {
+                let exc = e.exception_code();
+                let code: rsbinder::StatusCode = e.into();
+                if code == rsbinder::StatusCode::UnexpectedNull {
+                    log::info!("ime: (2/3) startInput OK — null InputBindResult (expected)");
+                } else {
+                    log::warn!("ime: (2/3) startInput failed — exception={exc:?} code={code:?}");
+                    return;
+                }
+            }
+        }
+
+        // (3) Ask IMMS to show the soft input keyboard.
+        let stats_token = ImeTracker::default();
+        log::info!(
+            "ime: (3/3) calling showSoftInput(client, windowToken, statsToken=Default, \
+             flags=SHOW_FORCED, lastClickToolType=UNKNOWN, resultReceiver=None, \
+             reason=SHOW_SOFT_INPUT, async=false)",
+        );
+        let show_result = svc.r#showSoftInput(
+            &client,
+            Some(&window_token_binder),
+            &stats_token,
+            /* flags             = */ SHOW_FORCED,
+            /* lastClickToolType = */ TOOL_TYPE_UNKNOWN,
+            /* resultReceiver    = */ None,
+            /* reason            = */ SOFT_INPUT_REASON_SHOW,
+            /* async             = */ false,
+        );
+        match show_result {
+            Ok(shown) => log::info!(
+                "ime: (3/3) showSoftInput returned {shown}. true = IMMS dispatched a \
+                 show request to the IME; false = IMMS declined (likely because we \
+                 are not the focused window per WMS). Watch the device screen + \
+                 logcat for InputMethodService activity. Session 5 milestone reached \
+                 if either: the call returned without exception (transport + AIDL OK), \
+                 OR Gboard actually pops up (the full path works).",
+            ),
+            Err(e) => {
+                let exc = e.exception_code();
+                let code: rsbinder::StatusCode = e.into();
+                if code == rsbinder::StatusCode::UnexpectedNull {
+                    log::info!(
+                        "ime: (3/3) showSoftInput — UnexpectedNull on response. \
+                         Treating as transport+dispatch OK (IMMS-returned-null path); \
+                         the show may or may not have actually fired.",
+                    );
+                } else {
+                    log::warn!(
+                        "ime: (3/3) showSoftInput rejected — exception={exc:?} code={code:?}. \
+                         If EX_SECURITY: permission issue (showSoftInput has no \
+                         explicit annotation but IMMS may check internally). \
+                         If EX_BAD_PARCELABLE: the empty ImeTracker stub didn't \
+                         survive IMMS's readFromParcel (probably needs real Token \
+                         shape with non-null binder field).",
+                    );
+                }
+            }
+        }
+
+        log::info!("ime: holding client alive 8s for dumpsys + IME observation — pid {}", std::process::id());
+        std::thread::sleep(std::time::Duration::from_secs(8));
+        log::info!("ime: exit");
+    }
+}
+
+#[cfg(target_os = "android")]
+pub fn probe_showsoftinput() {
+    session5::run();
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn probe_showsoftinput() {}
