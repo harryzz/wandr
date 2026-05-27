@@ -21,6 +21,7 @@ mod binder_shared_memory;
 mod display_impl;
 pub mod ime_impl;
 pub mod wms_impl;
+mod ime_host_impl;
 #[cfg(target_os = "android")]
 pub mod zygote;
 mod preload;
