@@ -1,6 +1,6 @@
 # Task 40 — real IME via rsbinder → IMMS (multi-session arc)
 
-> **Status:** 🟡 in progress — session 5 (showSoftInput → WMS focus gate) done 2026-05-27.
+> **Status:** 🟢 binder protocol complete (sessions 2-5) — paused 2026-05-27. Session 6 hit the WMS focus gate and confirmed empirically that no rsbinder-only path can get past it. Real Gboard requires a multi-week WMS-side integration project, spun out separately.
 > Multi-week, multi-session commitment. Standing decision overturned
 > 2026-05-27 — user explicitly opted for path (B) over the project
 > memory's "default A polish, B on roadmap not next" recommendation
@@ -550,6 +550,111 @@ ime: (3/3) showSoftInput returned false.
 - **Real `IRemoteInputConnection` editor methods (~36).** Same as
   session 5 carryover. Needed to actually accept Gboard's
   commitText/sendKeyEvent callbacks.
+
+## Session 6 results (2026-05-27)
+
+**Outcome: ⛔ wall.** The IME binder protocol via rsbinder is fully
+understood end-to-end (sessions 2-5 covered addClient + startInput +
+showSoftInput). The remaining gap to "Gboard actually appears on
+screen" is **exclusively WMS focus state** — IMMS uses WMS-tracked
+focus, not InputDispatcher-tracked focus. Path 1 from session 5's
+plan ("hijack task-33 standalone surface") is empirically dead. The
+only real fix is WMS window registration via IWindowManager / 
+IWindowSession AIDLs, which is a multi-week vendoring project that
+substantively differs from sessions 1-5 (it's a different system
+service with a much larger surface).
+
+Session 6 was a scoping + decision session — no new code shipped.
+
+### Empirical findings
+
+1. **`IWindowManager.aidl` has 146 methods**, importing ~30+
+   transitive AIDL types (`IApplicationThread`, `Bitmap`,
+   `Configuration`, `KeyboardShortcutGroup`, `RemoteAnimationAdapter`,
+   `IRemoteCallback`, `ICrossWindowBlurEnabledListener`, …). The
+   stub-with-slot_NN trick can shrink the surface we have to compile,
+   but the methods we'd actually need (`openSession` + the per-window
+   `IWindowSession.addToDisplay`) require real parcel layouts for
+   `WindowManager.LayoutParams` — ~30 Java fields with non-trivial
+   parceling.
+2. **`IWindowSession.aidl` has 16 methods**, with `addToDisplay`
+   alone requiring: `IWindow` (we serve as Bn, has its own callback
+   surface), `WindowManager.LayoutParams` (huge), `InputChannel`
+   (C++-side parcelable, extra complexity), `InsetsState`,
+   `InsetsSourceControl`, `MergedConfiguration`, `ClientWindowFrames`,
+   `InputTransferToken`, ...
+3. **Task-33's standalone window IS visible to InputDispatcher** —
+   `dumpsys input` shows `Window: wart - wart` with
+   `applicationInfo.token=...` and `token=...` (the input
+   channel's connection token). But it's registered via
+   `IInputFlinger.createInputChannel` + `gui::WindowInfoHandle` +
+   `SurfaceComposerClient::Transaction::setInputWindowInfo` —
+   **completely bypassing WindowManagerService**.
+4. **IMMS does NOT see InputDispatcher's focus** — empirically
+   verified by launching wart-host standalone (which gets
+   InputDispatcher focus via `gui::FocusRequest`) and running
+   `dumpsys input_method` concurrently. `mFocusedWindowClient`
+   stayed pinned to the launcher (`mUid=10167`) even while
+   InputDispatcher said `'wart'` was focused. IMMS gets focus
+   updates from WMS via JVM-internal calls (not AIDL); WMS doesn't
+   know about non-WMS-registered windows like task-33's.
+5. **No `SHOW_FORCED`, no permission, no spoofed token bypasses
+   this**. The IMMS-side check is structural: 
+   `mCurFocusedWindowClient != callingClient → reject`. The only way
+   `mCurFocusedWindowClient` becomes us is if WMS pushes a focus
+   update, which only happens for WMS-registered windows.
+
+### Forward paths (not in this session)
+
+**Path A: Vendor IWindowManager + addWindow (the "proper" answer).**
+- Multi-week. Estimated 2-4 weeks of careful, incremental work.
+- The `WindowManager.LayoutParams` parcel layout alone is several
+  days of hand-rolling + verification.
+- Returns a real WMS-issued windowToken that IMMS will recognize.
+- Spin out as a new task (e.g., `task 44 — WMS integration`) — it's
+  not naturally part of task 40's "IMMS via rsbinder" scope.
+
+**Path B: NativeActivity wrapper (the "cheating" answer).**
+- wart-app already runs as a NativeActivity. The Activity's
+  window IS WMS-registered + focused when the app is foreground.
+- From inside wart-host (running as the Activity's native process),
+  call our rsbinder IMMS pipeline using the Activity's windowToken.
+- Requires extracting the IBinder windowToken from the NativeActivity
+  without Java — possibly via `ANativeWindow` internals or a small
+  JNI helper.
+- Pragmatic for "wart Compose UI gets a real IME today", less
+  satisfying as a no-Java goal.
+
+**Path C: Park task 40 as-is.**
+- Binder protocol fully understood; sessions 2-5 documented
+  everything we'd need for either Path A or Path B.
+- Real Gboard is not currently a user-facing blocker — the in-canvas
+  Compose keyboard from `feedback_softkeyboard` already works.
+- Revisit when standalone-mode (task 33) becomes the primary path
+  and the in-canvas keyboard's limitations (no voice input, no
+  emoji picker, English-only practical) start mattering.
+
+**Recommended: Path C for now.** The in-canvas keyboard works for
+the current user-facing needs. Real Gboard via Path A is appropriate
+once task 33's standalone mode goes from "dev infrastructure" to
+"the primary path" and the in-canvas keyboard's English-only
+limitation becomes a real user problem. At that point session 7+ can
+pick up Path A as a dedicated multi-week project.
+
+### Sessions 7+ scope (if/when revived)
+
+If/when task 40 work resumes:
+- **Session 7 (Path A start)**: Vendor `IWindowManager.aidl` with
+  stubs for all but `openSession` + `getDefaultDisplayInfo`. Stub
+  `IWindowSession.aidl` with stubs for all but `addToDisplay` +
+  `relayout` + `remove`. Begin LayoutParams parcel layout (just the
+  fields needed for a basic input window).
+- **Session 8-10 (Path A continued)**: Complete LayoutParams,
+  vendor IWindow (Bn-side server we serve), call addToDisplay,
+  observe whether WMS issues a windowToken.
+- **Session 11+ (Path A integration)**: Wire the WMS-issued
+  windowToken back into the session-5 showSoftInput probe and verify
+  Gboard appears.
 
 ## Related
 
