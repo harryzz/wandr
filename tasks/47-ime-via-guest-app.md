@@ -137,6 +137,125 @@ Success criterion: `wart-arbiter attach-editor <pid> '<json>'`
 from the shell triggers a logged route in the arbiter to a
 dummy IME-pid (no UI yet). Pure protocol smoke.
 
+#### Step 1 results (2026-05-27)
+
+**Outcome:** ✅ all eight new socket commands work end-to-end
+on device, state is maintained, error cases return structured
+ERR responses. Cross-process delivery is the step-2 add-on; step
+1 nails the protocol shape + arbiter-side bookkeeping.
+
+**`wit/ime.wit`** (new) — `package war:ime@0.1.0`. Defines:
+
+- `enum input-type` (text / number / phone / email / url /
+  password / multiline-text)
+- `enum key-action` (down / up)
+- `record editor-info` — input-type + hint + initial-text +
+  selection start/end. utf-16 indices to match Android TextView.
+- `interface input-connection` — imported by IME apps. Calls:
+  `commit-text`, `send-key-event`, `set-composing-text`,
+  `finish-composing-text`, `set-selection`,
+  `get-text-before-cursor`, `get-text-after-cursor`. The two
+  delivery paths (virtual-keyboard scancode via `send-key-event`
+  + smart-IME text via `commit-text` / `set-composing-text`)
+  both baked in per the user-flagged design discussion — simple
+  English keyboards use mostly `send-key-event`, CJK / voice /
+  autocorrect IMEs lean on the composing primitives.
+- `interface ime` — exported by IME apps. Two methods:
+  `on-editor-attached(info)` + `on-editor-detached()`.
+- `world ime-client-world` — `import input-connection;
+  export ime;`. The shape every IME `.warpkg` implements.
+
+**`wart-arbiter/src/state.rs`** — two new globals:
+
+- `Mutex<Option<ActiveIme>>` (`ActiveIme { app_id, pid }`).
+- `Mutex<Option<EditorFocus>>` (`EditorFocus { pid, editor_info }`).
+
+Both accessed via `current_*` getters + `set_*` setters
+returning the prior value. `remove(app_id)` now also clears
+both if the removed app was the active IME or owned the
+focused editor.
+
+**`wart-arbiter/src/main.rs`** — eight new socket-command
+handlers + `run_client_multi` for multi-arg CLI passthrough:
+
+- `set-ime <app-id>` — validates the app is running, swaps the
+  ActiveIme pointer, returns `OK ime=… pid=… prev=…`. Special
+  form `set-ime -` clears.
+- `attach-editor <pid> [input-type] [hint] [initial-text]` —
+  validates pid is a tracked app, builds an `EditorInfo`,
+  swaps the EditorFocus pointer, logs the route intent toward
+  the active IME (or "(no active IME)" if unset).
+- `detach-editor <pid>` — clears the focus if it matched.
+- `ime-commit-text <text>` / `ime-send-key-event <cp> <key-id>
+  <action>` / `ime-set-composing-text <text>` /
+  `ime-finish-composing-text` / `ime-set-selection <s> <e>` —
+  all dispatched via `cmd_ime_route` which validates an editor
+  is focused, then logs the routing intent. Step 2 swaps the
+  log call for actual cross-process delivery via per-host
+  control sockets.
+- `cmd_list` extended to print markers: `[fg]` /  `[ime]` /
+  `[editor:<input-type>]` per app row.
+
+**Device-verified on Pixel 2 XL:**
+
+```
+$ wart-arbiter list                                → OK count=0
+
+$ wart-arbiter launch com.example.wart-app         → pid=5584
+$ wart-arbiter launch com.example.wart-app2        → pid=5667
+
+$ wart-arbiter set-ime com.example.wart-app2       → OK ime=… prev=(none)
+$ wart-arbiter set-ime com.bogus                   → ERR not-running
+
+$ wart-arbiter attach-editor 5584 text Type-here Hello
+  → OK attached editor pid=5584 app=com.example.wart-app input-type=text
+       prev-pid=- route→com.example.wart-app2 (pid=5667)
+$ wart-arbiter attach-editor 99999                 → ERR attach-editor-unknown-pid
+
+$ wart-arbiter ime-commit-text hello               → OK route→pid=5584 …
+$ wart-arbiter ime-send-key-event 0 67 down        → OK route→pid=5584 …
+$ wart-arbiter ime-set-composing-text ni           → OK route→pid=5584 …
+$ wart-arbiter ime-finish-composing-text           → OK route→pid=5584 …
+
+$ wart-arbiter list
+  OK count=2
+    app=com.example.wart-app   pid=5584 elapsed=…  [editor:text]
+    app=com.example.wart-app2  pid=5667 elapsed=…  [fg] [ime]
+
+$ wart-arbiter detach-editor 5584                  → OK detached …
+$ wart-arbiter ime-commit-text orphan              → ERR no-focused-editor
+$ wart-arbiter set-ime -                           → OK cleared prev=com.example.wart-app2
+```
+
+Logcat captures structured `arbiter: ime-<verb> → editor pid=X
+app-input-type=Y args=…` lines that step 2 replaces with actual
+delivery once per-host control sockets exist.
+
+**Files added/changed (this step):**
+
+- `wit/ime.wit` — new protocol definition
+- `wart-arbiter/src/state.rs` — `ActiveIme`, `EditorInfo`,
+  `EditorFocus` types + getters/setters; `remove` clears both
+  fields on app death
+- `wart-arbiter/src/main.rs` — eight new socket commands +
+  `run_client_multi` CLI passthrough + `cmd_list` markers
+- `tasks/47-ime-via-guest-app.md` — this section
+
+**Out of scope for step 1 (lands later):**
+
+- Cross-process delivery — per-host control sockets for the
+  zygote + arbiter to push commands INTO running children
+  (step 2). Today's "route intent" logging will become an
+  actual write to the focused-app's control socket.
+- `editor-info` JSON over the wire — current CLI uses
+  positional args (space-separated, no embedded spaces in
+  hint/text). Step 2's skiko-driven path doesn't go through
+  the CLI so it can use a richer serialization.
+- Persistence — `EditorFocus` is editor-lifecycle-scoped (gone
+  on app exit anyway); `ActiveIme` could survive an arbiter
+  restart via the existing crash-marker — left for a follow-up
+  once the IME app is real.
+
 ### Step 2 — Skiko-wasi WasiInputMethod adapter (~2 days)
 
 Wires the focused-app side. When Compose's `BasicTextField`

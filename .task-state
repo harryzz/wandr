@@ -1,5 +1,5 @@
 TASK=47
-STEP=scope-committed
-STATUS=ready
-LAST_SUCCESS=Task 47 scope committed 2026-05-27. tasks/47-ime-via-guest-app.md drafted: 6 D-locked design decisions, 5-step plan, future-IMEs section (voice / emoji / CJK), file-touch map. CLAUDE.md status row added. Path B locked per user decision; Gboard-via-WMS rejected (3-6 months + reintroduces ART, breaks §9); in-canvas keyboard retired as long-term direction.
-NOTES=Ready to start step 1 when user is. Other open tasks while paused: 25 (suspend leak), 37 (Kotlin/Wasm command-adapter throw), 43 (orientation), 42 (system clipboard).
+STEP=step-1-complete
+STATUS=complete
+LAST_SUCCESS=Task 47 step 1 verified OK 2026-05-27. wit/ime.wit defines the protocol (input-type + editor-info + key-action + input-connection + ime interface + ime-client-world). wart-arbiter gains ActiveIme + EditorFocus state, eight new socket commands (set-ime, attach-editor, detach-editor, ime-commit-text, ime-send-key-event, ime-set-composing-text, ime-finish-composing-text, ime-set-selection), list shows [fg]/[ime]/[editor:input-type] markers. All commands smoke-tested end-to-end; error cases return structured ERR. Cross-process delivery lands in step 2.
+NOTES=Step 2: skiko-wasi WasiInputMethod adapter — wire Compose PlatformTextInputMethodRequest into the new attach-editor/detach-editor + per-host control socket for inbound commit-text. ~2 days.
