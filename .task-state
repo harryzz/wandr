@@ -1,5 +1,6 @@
 TASK=46
-STEP=step-5-shim-rebuilt
+STEP=step-4-complete
 STATUS=complete
-LAST_SUCCESS=Task 46 step 5 shim rebuild done 2026-05-27 (a-03 direct-ninja, 43s). New libsf_surface.so live on device with sf_set_layer + sf_set_visible exported. wart-host dlsym summary confirms all five optional symbols resolved at runtime. Existing render path unaffected.
-NOTES=Step 4 now unblocked. init.rc + sepolicy still on the a-03 host TODO list but separable from the shim. Stashed .so at wart-host/cpp/build/libsf_surface.so for scripts/run-hybrid-stack.sh.
+LAS_SUCCESS=Task 46 step 4 verified OK 2026-05-27. End-to-end fg/bg switching on Pixel 2 XL: arbiter SIGUSR1/SIGUSR2 + /proc/<pid>/oom_score_adj writes; child reacts in render loop with sf.set_layer + set_visible + lifecycle Paused/Resumed + request_focus throttle. Smoke verified 3 transitions across 2 apps with oom scores swapping 500↔0. Bug found + fixed: SIGUSR2 race window between fork() and child handler-install → child SIGKILL'd; resolved by installing handlers in zygote parent so children inherit via sigaction table.
+LAST_SUCCESS=Task 46 step 4 verified OK 2026-05-27. Fg/bg switching via SIGUSR1/2 + oom + set_layer all working.
+NOTES=Task 46 status: 4/5 device-verified + 1/5 partial (step 5 source-side ready; init.rc + sepolicy + arbiter crash-marker remain on a-03 host TODO). Step 5 remainder ~production polish — can finish whenever.

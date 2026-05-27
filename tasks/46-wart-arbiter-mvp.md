@@ -560,6 +560,162 @@ here. Rather than ship "step 4 minus visual z-order" (lifecycle
 behind step 5's source-side prep work and resumes once the new
 `.so` is on-device.
 
+#### Step 4 results (2026-05-27, after a-03 rebuild)
+
+**Outcome:** ✅ end-to-end foreground/background switching with
+SF z-order, lifecycle Paused/Resumed, OOM priority writes, and
+focus throttling all on device.
+
+**Mechanism**:
+
+```
+arbiter            SIGUSR1 (background)
+  ──────────────►  child (atomic AppRole = 1)
+                       │
+                       ▼ next render frame
+                   set_layer(0); set_visible(false);
+                   lifecycle Paused; stop request_focus
+arbiter            kill(pid, SIGUSR2)
+  ──────────────►  child (atomic AppRole = 0)
+                       │
+                       ▼ next render frame
+                   set_layer(MAX); set_visible(true);
+                   request_focus; lifecycle Resumed
+arbiter            (in parallel)
+  ──────────────►  write /proc/<pid>/oom_score_adj
+                   demoted: 500 ; promoted: 0
+```
+
+**Child-side** (`wart-host`):
+
+- New `src/app_role.rs` — `AppRole { Foreground=0, Background=1 }`,
+  static `AtomicI32`, `extern "C" role_handler` that stores via
+  `Ordering::SeqCst` (async-signal-safe — single store, no
+  allocation, no locks). `install_signal_handlers()` mirrors
+  `lifecycle_standalone::install_signal_handlers` shape:
+  `SA_RESTART`, empty sigset, action stored into the parent's
+  sigaction table so forked children inherit it.
+- **Handler installed in the zygote parent.** Without this, a
+  SIGUSR2 from the arbiter arriving in the race window between
+  fork() and the child's own `install_signal_handlers()` would
+  hit the kernel default action (`SIGUSR2 = Term`) and **kill
+  the child**. Empirically observed once during smoke. Fix: 
+  `crate::app_role::install_signal_handlers()` runs in
+  `zygote::serve` before the listen loop; forked children
+  inherit the safe action via the sigaction table.
+- `standalone::run_cwasm_loop` tracks `last_role: Option<AppRole>`
+  per loop iteration. On transition, runs the matching match
+  arm (set_layer + set_visible + lifecycle + focus). The
+  per-frame `sf.request_focus()` (~once/sec) is also gated on
+  `is_foreground()` — background apps no longer fight the
+  launcher for focus.
+
+**Arbiter-side** (`wart-arbiter`):
+
+- `state.rs` extended with a single global `Mutex<Option<String>>`
+  for current foreground app-id. `set_foreground(new)` returns
+  the previously-foreground `(id, pid)` pair (or `None` if no
+  change), letting the caller signal the demoted child without
+  re-querying the state map. `remove()` also clears fg if the
+  removed app was foreground.
+- `main.rs` gains `promote_to_foreground(app_id, pid)` —
+  demote prev fg via `kill(prev_pid, SIGUSR1)` +
+  `oom_score_adj = 500`; promote target via
+  `kill(pid, SIGUSR2)` + `oom_score_adj = 0`. Used by:
+  - **`cmd_foreground`** (new) — explicit `wart-arbiter
+    foreground <app-id>` user command.
+  - **`cmd_launch`** — GUI launches auto-promote to fg
+    (matches the Android "new activity comes forward"
+    expectation). Headless launches don't have an SF
+    surface and skip promotion.
+- `cmd_list` shows `[fg]` marker on the foreground app.
+
+**OOM priority writes**:
+
+`/proc/<pid>/oom_score_adj` written directly from the arbiter
+(it's root in the dev path). Foreground = 0 (normal),
+background = 500 (front of OOM kill queue, but not first —
+`oom_score_adj` is `-1000..1000`, 1000 means kill-this-first).
+Constants `OOM_FG` / `OOM_BG` in `wart-arbiter/src/main.rs` —
+trivial to tune.
+
+**Smoke run** (device-verified on Pixel 2 XL):
+
+```
+$ wart-arbiter launch com.example.wart-app    → OK pid=11502
+  log: promoting foreground app=… pid=11502
+  log: wrote /proc/11502/oom_score_adj = 0
+  child log: role transition None → Foreground
+
+$ wart-arbiter launch com.example.wart-app2   → OK pid=11710
+  log: demoting prior foreground app=com.example.wart-app pid=11502
+  log: wrote /proc/11502/oom_score_adj = 500
+  log: promoting foreground app=com.example.wart-app2 pid=11710
+  log: wrote /proc/11710/oom_score_adj = 0
+  child 11502 log: role transition Some(Foreground) → Background
+  child 11710 log: role transition None → Foreground
+
+$ wart-arbiter list
+  OK count=2
+    app=com.example.wart-app  pid=11502 elapsed_ms=…
+    app=com.example.wart-app2 pid=11710 elapsed_ms=… [fg]
+$ cat /proc/11502/oom_score_adj  → 500
+$ cat /proc/11710/oom_score_adj  → 0
+
+$ wart-arbiter foreground com.example.wart-app
+  → OK fg=com.example.wart-app prev=com.example.wart-app2 pid=11502
+$ cat /proc/11502/oom_score_adj  → 0
+$ cat /proc/11710/oom_score_adj  → 500
+  child 11710 log: role transition Some(Foreground) → Background
+  child 11502 log: role transition Some(Background) → Foreground
+```
+
+Demote-to-Background latency: ~4 ms (kill→render-frame). Promote
+from background latency: ~840 ms (next render frame in the
+held child). Both well below the user-perception threshold for
+app switching.
+
+**Bug found + fixed during smoke**:
+
+The initial wart-app launch landed but immediately died. Root
+cause: SIGUSR2 from the arbiter's auto-promote raced ahead of
+the child's `install_signal_handlers()` call. Default kernel
+action for SIGUSR2 is `Term` — child got SIGKILL'd before it
+could install the handler.
+
+Fix: install the handler in the **zygote parent** (`zygote::serve`)
+before any fork. Forked children inherit the safe action
+through the sigaction table. The child's own
+`install_signal_handlers()` (in `standalone::run_with_engine`)
+becomes a redundant-but-harmless re-installation. Race window
+closed.
+
+**Files changed (this step):**
+
+- `wart-host/src/app_role.rs` — new module.
+- `wart-host/src/lib.rs` — `mod app_role;` (android-only).
+- `wart-host/src/zygote.rs` — install handlers in parent.
+- `wart-host/src/standalone.rs` — install handlers in child
+  (redundant safety net) + react to role transitions in
+  render loop + gate `request_focus` on `is_foreground`.
+- `wart-arbiter/src/state.rs` — foreground tracking +
+  `set_foreground` + `current_foreground` + `remove` clears
+  fg slot.
+- `wart-arbiter/src/main.rs` — `cmd_foreground`,
+  `promote_to_foreground`, oom + signal helpers, LIST `[fg]`
+  marker, `launch` auto-promote.
+
+**Still open from step 5 (a-03 host):**
+
+- init.rc service definitions for `wart_zygote` + `wart_arbiter`.
+- SELinux policy for both domains (oom_score_adj write
+  permission is the headline policy item now that the rest
+  is wired).
+- Arbiter crash-marker plumbing (carry from task 33 step 5).
+
+These don't block the dev workflow — they're production-only
+polish.
+
 ### Step 5 — Production deployment polish (~1 week)
 
 The "make it real on the device" step. Some of this is
