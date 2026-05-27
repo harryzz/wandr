@@ -29,6 +29,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -79,13 +80,30 @@ fun buildRealComposeScene(widthPx: Int, heightPx: Int, density: Float): ComposeS
     return scene
 }
 
+/// Task 47 step 3c — preferred panel height in physical pixels. The
+/// host's wart-host receives this via `Keyboard.Import.requestOverlayHeight`,
+/// forwards to `sf_resize_overlay`, and flushes the ANativeWindow's
+/// buffer geometry so the next frame draws to the new size. The IME
+/// is launched with an `INITIAL_OVERLAY_PX=1200` surface; this verb
+/// trims it to a sensible keyboard height (~38% of a 2880-px panel).
+private const val OVERLAY_HEIGHT_PX: UInt = 1100u
+
 @Composable
 private fun KeyboardScreen() {
+    // Task 47 step 3c — declare our preferred overlay height once at
+    // composition root. The host re-sizes the SurfaceControl to a
+    // bottom strip; the rest of the screen shows the focused editor
+    // (Compose layout continues to fill whatever surface we've been
+    // given via WindowInfo.containerSize). Fire-and-forget — failures
+    // log host-side but don't break the keyboard UI.
+    LaunchedEffect(Unit) {
+        WitKeyboard.Import.requestOverlayHeight(OVERLAY_HEIGHT_PX)
+    }
+
     // Anchor the keyboard to the bottom of the surface, where real
-    // IMEs sit. The full-screen outer Box keeps the surface's upper
-    // ~75% as a solid panel area; once step 3c lifts the
-    // SurfaceControl's eLayerOpaque flag, the upper area can be
-    // transparent and wart-app will show through above the keyboard.
+    // IMEs sit. With the overlay surface trimmed (step 3c above), the
+    // outer Box IS the keyboard panel — the `BottomCenter` anchor is
+    // redundant but harmless. The dark background fills the panel.
     Box(
         modifier = Modifier.fillMaxSize().background(Color(0xFF1F1F1F)),
         contentAlignment = Alignment.BottomCenter,
