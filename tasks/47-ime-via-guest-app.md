@@ -752,6 +752,144 @@ forget when bootstrapping a new sibling project.
   focused, instead of always being visible). Needs new
   WIT exports on the IME-side.
 
+#### Step 3c plan — multi-surface visibility (the eLayerOpaque fix)
+
+**Symptom** (verified post-rebuild 2026-05-27): when the IME is
+promoted to foreground, its SurfaceControl covers the screen
+opaquely and wart-app is invisible — even though wart-app's
+process is alive and rendering frames. Confirmed by screenshot
++ logcat: both `begin_frame: logical=1440x2880` lines present;
+arbiter promoted IME via SIGUSR2 (→ `set_layer(MAX)`,
+`set_visible(true)`) and demoted wart-app via SIGUSR1 (→
+`set_layer(0)`, **`set_visible(false)`**, lifecycle Paused).
+This is the user-visible "keyboard hides the real app" issue.
+
+**Root cause** — two pieces stacked:
+
+1. `cpp/sf_surface.cpp` hardcodes `t.setFlags(g_control,
+   eLayerOpaque, eLayerOpaque)` at lines 224-225. Even if both
+   surfaces were visible, the IME's would opaquely occlude
+   wart-app's because SF doesn't blend opaque layers.
+2. `standalone.rs:240-242` calls `sf.set_visible(false)` on
+   any process that receives SIGUSR1 (Background role). The
+   arbiter's `promote_to_foreground` SIGUSR1's the previous fg
+   whenever a new fg comes up — including when the new fg is
+   the IME (which conceptually should be an *overlay*, not a
+   replacement).
+
+**Decision — Approach A (partial-surface overlay, no alpha)**:
+the IME's SurfaceControl is sized to just the bottom strip of
+the screen (e.g. 1440×1100) and positioned at y=PH-1100.
+SurfaceFlinger composites IT and wart-app as two opaque
+non-overlapping rects. No transparency, no `eLayerOpaque`
+lift, no per-frame transparent-clear — both surfaces stay
+opaque, the IME just doesn't span the full screen. This
+parallels how real Android IMEs work (the IME window is
+sized to its content height).
+
+The chosen alternative (Approach B — full-screen surface with
+`eLayerOpaque` lifted + transparent-clear) was rejected
+because (a) it makes every frame more expensive (SF must
+alpha-blend) and (b) it requires Skia to clear to
+`Color::TRANSPARENT` and the IME's Compose layout to draw
+strict-only on the keyboard area — fragile under recompose.
+
+**Concrete API**:
+
+1. **Shim** (`cpp/sf_surface.cpp`, requires a-03 build):
+
+   ```c
+   // New entry point. Same shape as sf_create_fullscreen_surface
+   // but the SC is created at (PW, height_px), positioned at
+   // (0, PH - height_px). All other behavior identical
+   // (eLayerOpaque kept, transform hint per panel, BBQ
+   // attached directly to g_control, input window registered
+   // for the smaller rect).
+   ANativeWindow* sf_create_overlay_surface(
+       int32_t height_px,
+       int32_t* out_w,
+       int32_t* out_h,
+       uint32_t* out_transform);
+   ```
+
+   Implementation: parameterize the existing function's
+   `createSurface(name, W, H, ..., 0)` + `setSize` /
+   `setPosition` transaction. Keep `eLayerOpaque` (the IME
+   panel IS fully opaque within its bounds — wart-app shows
+   ABOVE the keyboard, not THROUGH it). Input window must
+   register at (0, PH-H) → (PW, PH) so InputFlinger routes
+   only taps inside the keyboard's rect to the IME process.
+
+2. **Wart-host** (`wart-host/src/sf_surface.rs` +
+   `standalone.rs`):
+
+   - `sf_surface::create_overlay(height_px) -> Result<...>`
+     dlsyms `sf_create_overlay_surface`.
+   - New CLI flag `--standalone-overlay <height_px>`. When
+     present, `standalone::run` calls `create_overlay` instead
+     of `create_fullscreen`.
+   - On SIGUSR1 (Background role) we should still call
+     `set_layer(0)` but **must NOT** `set_visible(false)` when
+     this child is the underlying-editor process and the new
+     fg is an overlay. Cleanest plumbing: introduce a third
+     `AppRole::OverlayBehind` and signal it via SIGRTMIN+1 (or
+     via the arbiter writing the previous fg's pid to a state
+     file the wart-host watches). Action under
+     `OverlayBehind`: keep visible, demote layer, lifecycle
+     stays `Resumed` (the editor must keep rendering so the
+     user sees the cursor blink).
+
+3. **Arbiter** (`wart-arbiter/src/main.rs`):
+
+   - New cmd `overlay <app-id>`: promotes `<app-id>` as an
+     OVERLAY foreground. Signals the IME with SIGUSR2 (normal
+     fg). Signals the previous fg with **SIGRTMIN+1**
+     (OverlayBehind) instead of SIGUSR1.
+   - When the overlay app exits / is killed / loses its IME
+     status, restore previous fg by SIGUSR2-promoting it
+     again. Track this via a new `overlay_pid` field next to
+     `foreground_pid` in `state`.
+   - Set-ime should be split from overlay — the IME being the
+     **routing target** for `ime-send-key-event` doesn't
+     necessarily mean it's the **visible overlay**. The
+     keyboard SHOULD only become visible when an editor is
+     attached. Tie overlay show/hide to `attach-editor` /
+     `detach-editor` in the IME's render loop (overlay = on
+     while editor focused).
+
+4. **Compose** (`war.ime.keyboard/.../RealComposeApp.kt`):
+
+   The current `Box(fillMaxSize)` keeps working as-is —
+   `fillMaxSize` adapts to whatever surface size we give the
+   guest at composition. The dark background continues to be
+   the IME panel; with the smaller surface it occupies the
+   bottom strip only, so wart-app shows above it naturally.
+   The `BottomCenter` anchor becomes redundant but is
+   harmless.
+
+   Size handoff: `WindowInfo.containerSize` reads from
+   `WitCanvas.Import.surfaceWidth/Height` which the host
+   already returns based on the SurfaceControl's logical
+   size — should plumb through correctly once the host opens
+   the smaller surface.
+
+**Build dependencies**:
+
+- The shim change (item 1) requires building `libsf_surface.so`
+  on the AOSP a-03 host (per `project_boot_model_libgui_build`)
+  — same machine task 33 / task 46 step 4 used.
+- Items 2-4 build on the regular dev machine. Items 3-4 can
+  land before item 1 and self-test by passing
+  `--standalone-overlay 1100` with the OLD shim — the call
+  will fail with `dlsym` returning null, and we'll log + bail.
+  Catches any plumbing typos early.
+
+**Smoke**: `wart-arbiter overlay war.ime.keyboard` while
+wart-app is fg → wart-app visible above the keyboard,
+keyboard visible at the bottom, taps in the keyboard area
+route to the IME process via InputFlinger (its input window
+registered for the bottom rect), taps above route to wart-app.
+
 ### Step 4 — InputFlinger focus arbitration + auto-hide (~2-3 days)
 
 The arbiter coordinates input routing between focused app and
