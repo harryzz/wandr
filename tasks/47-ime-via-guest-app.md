@@ -890,6 +890,128 @@ keyboard visible at the bottom, taps in the keyboard area
 route to the IME process via InputFlinger (its input window
 registered for the bottom rect), taps above route to wart-app.
 
+#### Step 3c results (2026-05-27)
+
+**Outcome:** ✅ device-verified end-to-end on Pixel 2 XL. wart-app
+renders fullscreen at the top half of the panel; the IME (war.ime.keyboard)
+renders as a 1100-px overlay at the bottom. Both surfaces opaque,
+SurfaceFlinger composes them as non-overlapping rects. Auto-tie via
+`attach-editor` / `detach-editor` works; manual `overlay` /
+`overlay-clear` socket cmds work; the IME's `LaunchedEffect` at
+composition root sets its own height via the new WIT verb.
+
+**Architectural surprise:** setting position directly on a single
+BBQ-backed `SurfaceControl` does NOT stick on this device — the
+layer kept ending up at `displayFrame=(0,0,1440,1100)` no matter
+what we tried (setPosition pre-BBQ-create, post-BBQ-create,
+setDestinationFrame, both X/Y orderings for landscape-native
+panel, defensive re-application on show + setLayer). The fix
+came from `frameworks/native/libs/gui/tests/EndToEndNativeInputTest.cpp`
+`BlastInputSurface` class (line 344): **BBQ-backed surfaces need a
+PARENT container surface that carries geometry**. The pattern:
+
+```cpp
+// Container parent (no buffer, just geometry holder)
+g_overlay_parent = createSurface(name, 0, 0, fmt, eFXSurfaceContainer);
+// Buffer-state child, parented to container
+g_control = createSurface(name, PW, H, fmt,
+                          eFXSurfaceBufferState,
+                          g_overlay_parent->getHandle());
+
+// Position/layer/crop on the PARENT.
+t.setPosition(g_overlay_parent, 0, Y);
+t.setLayer   (g_overlay_parent, MAX-1);
+t.setCrop    (g_overlay_parent, Rect(0, 0, PW, H));
+
+// Crop + show + flags on the CHILD; BBQ + input window also attach
+// to the child.
+t.setCrop(g_control, Rect(0, 0, PW, H));
+t.show   (g_control);
+t.setFlags(g_control, eLayerOpaque, eLayerOpaque);
+```
+
+The fullscreen path stays as-is (single-surface, no parent). Only
+the overlay path needs the indirection.
+
+**Eleven artifacts shipped (across 5 repos):**
+
+| Repo | File(s) |
+|---|---|
+| wart (top) | `wit/skiko-gfx.wit` — new `request-overlay-height` verb on `keyboard` interface |
+| wart-host | `cpp/sf_surface.{cpp,h}` (parent-container + `sf_create_overlay_surface` + `sf_resize_overlay`), `src/sf_surface.rs` (create_overlay + resize_overlay + `ANativeWindow_setBuffersGeometry` FFI), `src/app_role.rs` (`OverlayBehind=2` + SIGRTMIN+1 handler), `src/standalone.rs` (`--standalone-overlay` branch + OverlayBehind arm + per-frame overlay-resize drain), `src/keyboard_host_impl.rs` (`request_overlay_height` via static-atomic bridge), `src/zygote.rs` (`LAUNCH_GUI_OVERLAY` + `ChildAction::Gui{overlay}`), `src/main.rs` (`--standalone-overlay` CLI flag) |
+| wart-arbiter | `src/state.rs` (`OverlayState`), `src/main.rs` (`cmd_overlay` / `overlay-clear` / `launch-overlay` + `promote_to_overlay` / `demote_from_overlay` + auto-tie in `cmd_attach_editor` / `cmd_detach_editor`), `src/zygote_client.rs` (`launch_gui_overlay`) |
+| skiko | `skiko/wit/skiko-gfx.wit` (mirror), `skiko/src/wasmWasiMain/kotlin/generated/{Internal,}SkikoUi.kt` (hand-added `Keyboard.Import.requestOverlayHeight`) |
+| war.ime.keyboard | `src/wasmWasiMain/kotlin/RealComposeApp.kt` (`LaunchedEffect { requestOverlayHeight(1100u) }` at composition root) |
+| wart-app | `wit/deps/skiko-gfx/skiko-gfx.wit` (mirror) |
+
+**New socket commands** (`wart-arbiter`):
+- `launch-overlay <app-id>` — like `launch` but the child acquires a
+  bottom-strip overlay surface via the new `LAUNCH_GUI_OVERLAY`
+  zygote cmd.
+- `overlay <app-id>` — manually engage the overlay split: IME →
+  Foreground (`SIGUSR2`), prior fg → `OverlayBehind` (`SIGRTMIN+1`).
+- `overlay-clear` — tear down the split: IME → Background
+  (`SIGUSR1`), behind-app → Foreground (`SIGUSR2`).
+- `attach-editor` / `detach-editor` — now auto-fire
+  `promote_to_overlay` / `demote_from_overlay` when an `ActiveIme` is
+  set, so the IME visibility is driven by editor focus rather than
+  needing an explicit `overlay` command.
+
+**Device-verified smoke transcript:**
+
+```
+$ wart-arbiter launch com.example.wart-app           → pid=21228
+$ wart-arbiter launch-overlay war.ime.keyboard       → pid=21235
+                                                       (created at
+                                                        Disp Frame
+                                                        0 1780 1440 2880)
+$ wart-arbiter overlay war.ime.keyboard
+  OK overlay=war.ime.keyboard pid=21235 prev-fg=com.example.wart-app
+     behind-pid=21228
+  # SurfaceFlinger now shows two layers composed as non-overlapping
+  # rects:
+  #   wart#... at        Disp Frame=0    0 1440 1780
+  #   wart-ime-overlay#... at Disp Frame=0 1780 1440 2880
+  #   wart-ime-overlay-parent#... — child of which the buffer surface
+  #                                hangs (the BlastInputSurface pattern)
+$ wart-arbiter overlay-clear
+$ wart-arbiter set-ime war.ime.keyboard
+$ wart-arbiter attach-editor 21228 text
+  OK ... overlay=engaged    # ← auto-tie fires
+$ wart-arbiter detach-editor 21228
+  OK ... overlay=cleared    # ← auto-tie reverses
+```
+
+**Out of scope for step 3c, lands later:**
+
+- **Real focus arbitration between two surfaces** — step 4. Touches
+  in the bottom 1100 px route to the IME via InputFlinger's
+  per-window touchableRegion match (confirmed in dump:
+  `touchableRegion={0,1780,2880,1440}` for the IME's input window);
+  taps above route to wart-app's fullscreen window. Whether key events
+  go to the focused window vs the IME's input channel is step-4
+  business. Auto-hide on tap-outside is also step 4.
+
+- **Live resize without re-attaching EGL** — the host calls
+  `ANativeWindow_setBuffersGeometry` after `sf_resize_overlay` to
+  flush producer-side geometry. The IME's initial 1200→1100 resize
+  during first composition works visually but Skia caches buffers at
+  the old size; minor visual cost. Revisit if a real shift/secondary-
+  layer changes the IME's preferred height during a session.
+
+- **Dynamic panel dimensions** — `cpp/sf_surface.cpp` still has
+  `constexpr PANEL_W=1440 / PANEL_H=2880` (taimen-specific). Spun
+  out as `tasks/48-panel-dim-query.md`.
+
+**Files added/changed (this step):**
+
+- All listed in the "Eleven artifacts shipped" table above.
+- `tasks/47-ime-via-guest-app.md` — this section.
+- `tasks/48-panel-dim-query.md` — new (follow-up).
+- `MEMORY.md` → no new entry; the BlastInputSurface pattern is
+  documented here for now (revisit if a second overlay shape
+  ever appears).
+
 ### Step 4 — InputFlinger focus arbitration + auto-hide (~2-3 days)
 
 The arbiter coordinates input routing between focused app and
