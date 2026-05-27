@@ -137,6 +137,32 @@ fn main() {
         }
     }
 
+    // Task 46 step 1 — graceful + forceful KILL of a child via the
+    // zygote socket. Validates server-side that the pid is one of the
+    // zygote's own children before signaling.
+    for (flag, force) in [
+        ("--zygote-kill", false),
+        ("--zygote-kill-force", true),
+    ] {
+        if let Some(i) = args.iter().position(|a| a == flag) {
+            let Some(pid_s) = args.get(i + 1) else {
+                eprintln!("wart-host {flag}: requires <pid>");
+                std::process::exit(2);
+            };
+            let Ok(pid) = pid_s.parse::<i32>() else {
+                eprintln!("wart-host {flag}: <pid> must be an integer");
+                std::process::exit(2);
+            };
+            match wasm_android_host::zygote::kill_client(pid, force) {
+                Ok(()) => return,
+                Err(e) => {
+                    eprintln!("wart-host {flag}: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
     if let Some(i) = args.iter().position(|a| a == "--install") {
         let Some(warpkg) = args.get(i + 1) else {
             eprintln!("wart-host --install: requires a <warpkg-dir> path");

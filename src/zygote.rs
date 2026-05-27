@@ -16,15 +16,83 @@
 //! (refactored out of `standalone.rs`) and add multi-app concurrency
 //! verification.
 
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use anyhow::{anyhow, Context, Result};
 use wasmtime::Engine;
 
 use crate::{run_once, standalone, App};
+
+/// Track every pid we've fork()d. Populated by the parent's `handle_one`
+/// right after fork() returns the child pid. Drained by the reaper
+/// thread when the kernel reports the child exited.
+///
+/// Used by the `KILL <pid>` / `KILL_FORCE <pid>` socket commands to
+/// validate that the caller is asking us to signal ONE OF OUR OWN
+/// children — not some arbitrary system process whose pid happened to
+/// land in the request. After waitpid reaps a pid the kernel is free
+/// to recycle it for another (potentially unrelated) process, which is
+/// why removing dead pids from the set promptly matters.
+fn child_pids() -> &'static Mutex<HashSet<i32>> {
+    static SET: OnceLock<Mutex<HashSet<i32>>> = OnceLock::new();
+    SET.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Spawn the SIGCHLD reaper thread.
+///
+/// Why a thread (and not a SIGCHLD handler + self-pipe + poll
+/// multiplex on the accept loop): the thread's `libc::wait()` is the
+/// simplest portable primitive that wakes synchronously on any child
+/// exit, decodes the status, and removes the pid from `child_pids()`
+/// — no async-signal-safety constraints, no FD juggling. The cost
+/// (D6 from task 45's scope) is one extra thread in the parent; this
+/// thread exists only in the parent (fork() only duplicates the
+/// calling thread). Children inherit a process with no reaper, which
+/// is what they want.
+///
+/// The reaper holds the child_pids mutex only for the brief instant
+/// of `.remove(&pid)`, so even if fork() races with a reap the child
+/// won't inherit a long-held lock. The child never accesses
+/// `child_pids()` anyway — that's a parent-only concern.
+fn spawn_reaper() {
+    std::thread::Builder::new()
+        .name("wart-zygote-reaper".into())
+        .spawn(|| {
+            loop {
+                let mut status: i32 = 0;
+                let pid = unsafe { libc::wait(&mut status) };
+                if pid < 0 {
+                    let err = std::io::Error::last_os_error();
+                    if err.raw_os_error() == Some(libc::ECHILD) {
+                        // No children to wait on. Sleep briefly to
+                        // avoid busy-looping; the next fork() will
+                        // restart the cycle.
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                    } else {
+                        log::warn!("wart-zygote/reaper: wait failed: {err}");
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                    }
+                    continue;
+                }
+                let exit_summary = if libc::WIFEXITED(status) {
+                    format!("exit={}", libc::WEXITSTATUS(status))
+                } else if libc::WIFSIGNALED(status) {
+                    format!("signal={}", libc::WTERMSIG(status))
+                } else {
+                    format!("status=0x{status:x}")
+                };
+                let removed = child_pids().lock().map(|mut s| s.remove(&pid)).unwrap_or(false);
+                log::info!(
+                    "wart-zygote/reaper: pid {pid} reaped ({exit_summary}, tracked={removed})"
+                );
+            }
+        })
+        .expect("spawn reaper thread");
+}
 
 /// What the forked child should do after fork().
 #[derive(Copy, Clone, Debug)]
@@ -84,6 +152,15 @@ pub fn serve(preload_app_id: Option<&str>) -> Result<()> {
         .map_err(|_| anyhow!("PRELOADED_ENGINE set twice"))?;
     log::info!("wart-zygote: engine preloaded");
 
+    // Reaper before listen — by the time we accept the first client and
+    // possibly fork(), the reaper must be running so the resulting
+    // SIGCHLD doesn't pile up. Failing to spawn would mean zombies,
+    // not a functional break — but the panic-on-failure is fine here
+    // because if the kernel can't give us a thread we have bigger
+    // problems.
+    spawn_reaper();
+    log::info!("wart-zygote: reaper thread spawned");
+
     // Bind the listen socket. Unlink any stale path first — the AF_UNIX
     // bind would otherwise fail with EADDRINUSE on a respawn.
     let sock_path = Path::new(ZYGOTE_SOCK_PATH);
@@ -128,6 +205,21 @@ fn handle_one(listener: &UnixListener, mut stream: UnixStream) -> Result<()> {
     }
     let cmd = line.trim_end_matches('\n').trim_end_matches('\r');
     log::info!("wart-zygote: cmd={cmd:?}");
+
+    // KILL / KILL_FORCE — task 46 step 1. Validate the pid is ONE OF OUR
+    // OWN children (in child_pids()) before signaling. Without that
+    // check a malicious or buggy caller could send SIGKILL to any pid
+    // on the device — wart-host runs as root in the dev path.
+    //
+    // KILL_FORCE prefix is checked first because strip_prefix("KILL ")
+    // would otherwise match it (the space-vs-underscore distinction
+    // protects us, but keeping the order explicit is clearer).
+    if let Some(rest) = cmd.strip_prefix("KILL_FORCE ") {
+        return handle_kill(&mut stream, rest, libc::SIGKILL, "KILL_FORCE");
+    }
+    if let Some(rest) = cmd.strip_prefix("KILL ") {
+        return handle_kill(&mut stream, rest, libc::SIGTERM, "KILL");
+    }
 
     // Two launch shapes — the client picks. MVP keeps this explicit
     // rather than auto-detecting from package.toml; auto-detect is
@@ -229,19 +321,64 @@ fn handle_one(listener: &UnixListener, mut stream: UnixStream) -> Result<()> {
             unsafe { libc::_exit(exit) };
         }
         child_pid => {
-            // PARENT path. Acknowledge to the client and return.
+            // PARENT path. Track the pid for KILL command validation,
+            // ack the client, return to the accept loop.
             //
-            // We deliberately do NOT waitpid() the child here. The
-            // child is fully detached; if the caller wants to know
-            // when it exits they can poll its process or use a future
-            // socket protocol enhancement. For step 1 the smoke test
-            // just sleeps + checks logcat.
+            // The reaper thread (spawn_reaper) wakes on the eventual
+            // SIGCHLD and removes the pid from this set. KILL command
+            // checks the set before signaling.
+            if let Ok(mut set) = child_pids().lock() {
+                set.insert(child_pid);
+            }
             writeln!(stream, "OK {child_pid}")
                 .with_context(|| format!("ack {child_pid} to client"))?;
             log::info!("wart-zygote: forked pid={child_pid} for app_id={app_id}");
             Ok(())
         }
     }
+}
+
+/// Shared handler for `KILL` / `KILL_FORCE` socket commands.
+///
+/// Parses the pid out of the rest of the line, validates it's in
+/// `child_pids()`, and sends the requested signal. The pid stays in
+/// the set until the reaper thread sees its SIGCHLD — so a second
+/// KILL of the same pid will succeed at the socket layer even if
+/// the first SIGTERM has already done the job; the underlying
+/// `kill(2)` returns ESRCH and we surface that as `ERR kill-failed`.
+fn handle_kill(
+    stream: &mut UnixStream,
+    rest: &str,
+    sig: libc::c_int,
+    verb: &'static str,
+) -> Result<()> {
+    let pid: i32 = match rest.trim().parse() {
+        Ok(n) => n,
+        Err(_) => {
+            let _ = writeln!(stream, "ERR {verb}-bad-pid");
+            return Err(anyhow!("{verb}: bad pid '{}'", rest.trim()));
+        }
+    };
+    let owned = child_pids()
+        .lock()
+        .map(|s| s.contains(&pid))
+        .unwrap_or(false);
+    if !owned {
+        let _ = writeln!(stream, "ERR not-our-child {pid}");
+        log::warn!("wart-zygote: {verb} {pid} rejected — not one of our children");
+        return Ok(());
+    }
+    let r = unsafe { libc::kill(pid, sig) };
+    if r == 0 {
+        writeln!(stream, "OK {pid}")
+            .with_context(|| format!("{verb} ack {pid} to client"))?;
+        log::info!("wart-zygote: {verb} {pid} sent (sig={sig})");
+    } else {
+        let err = std::io::Error::last_os_error();
+        let _ = writeln!(stream, "ERR kill-failed {pid} {err}");
+        log::warn!("wart-zygote: {verb} {pid} failed: {err}");
+    }
+    Ok(())
 }
 
 /// Client-side: connect to the zygote, write the launch command, read
@@ -283,5 +420,30 @@ pub fn launch_client(app_id: &str, gui: bool) -> Result<i32> {
         Err(anyhow!("zygote rejected: {rest}"))
     } else {
         Err(anyhow!("zygote returned malformed response: {response:?}"))
+    }
+}
+
+/// Client-side: connect to the zygote, send `KILL <pid>` (or
+/// `KILL_FORCE` if `force`), print the response.
+pub fn kill_client(pid: i32, force: bool) -> Result<()> {
+    android_logger::init_once(
+        android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
+    );
+    let mut stream = UnixStream::connect(ZYGOTE_SOCK_PATH)
+        .with_context(|| format!("connect {ZYGOTE_SOCK_PATH} — is the zygote running?"))?;
+    let verb = if force { "KILL_FORCE" } else { "KILL" };
+    writeln!(stream, "{verb} {pid}")?;
+    stream.flush()?;
+
+    let mut reader = BufReader::new(stream);
+    let mut response = String::new();
+    reader.read_line(&mut response)?;
+    let response = response.trim_end();
+    log::info!("wart-zygote/client: response={response:?}");
+    if response.starts_with("OK ") {
+        println!("{verb} {pid} → {}", response);
+        Ok(())
+    } else {
+        Err(anyhow!("zygote rejected: {response}"))
     }
 }
