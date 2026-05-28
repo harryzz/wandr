@@ -1,0 +1,56 @@
+package war:keyboard-lang@0.1.0;
+
+/// Language plugin contract for war.ime.keyboard. Each language warpkg
+/// (war.lang.bg, war.lang.fr, …) is a `kind = "system"` cdylib that
+/// exports this `lang` interface. The IME enumerates declared lang
+/// dependencies at startup, calls `get-info` + `get-layout(false/true)`
+/// once each, and merges the returned KeyboardLayouts into the
+/// 🌐-cycle alongside the built-in English.
+///
+/// Step 3 of `tasks/49-ime-content-control.md`.
+
+interface lang {
+    /// Plugin metadata. `name` is the user-visible label shown by the
+    /// 🌐 indicator (e.g. "Български", "Français"); `locale` is the
+    /// BCP-47 tag for future locale-aware logic; `is-rtl` flips the
+    /// row reading order (Hebrew/Arabic etc).
+    record info {
+        name:   string,
+        locale: string,
+        is-rtl: bool,
+    }
+
+    /// One key in a row. Mirrors `war.ime.keyboard`'s `KeyDef` for the
+    /// text-emitting case (no `KeyAction` variants — the IME owns those).
+    /// `code-point` is the Unicode scalar to emit on tap; `key-id` is
+    /// the Compose `Key` constant (0 if not applicable); `width` is the
+    /// relative row width (1.0 == one standard key cell).
+    record key-def {
+        display:    string,
+        code-point: u32,
+        key-id:     u32,
+        width:      f32,
+    }
+
+    /// One row of keys, left to right.
+    type key-row = list<key-def>;
+
+    /// One layout variant — rows for either unshifted or shifted state.
+    /// The plugin doesn't ship Shift / Backspace / Space / Enter / 🌐
+    /// keys — the IME injects those uniformly across all languages.
+    /// The plugin only provides the language-specific character rows.
+    record layout-variant {
+        rows: list<key-row>,
+    }
+
+    /// Called once at IME startup.
+    get-info: func() -> info;
+
+    /// Called twice at IME startup (shifted=false, then true) to build
+    /// the lowercase and uppercase layouts.
+    get-layout: func(shifted: bool) -> layout-variant;
+}
+
+world lang-world {
+    export lang;
+}

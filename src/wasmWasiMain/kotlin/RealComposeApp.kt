@@ -1,7 +1,9 @@
 // war.ime.keyboard — first-party IME app for the wart runtime.
-// Renders a full keyboard (English QWERTY + Bulgarian Cyrillic +
-// Symbols + Symbols2 + Emoji, all with shift / layout-cycle / etc)
-// as a bottom-strip overlay surface. Pushes keystrokes to the
+// Renders a full keyboard (English QWERTY + Symbols + Symbols2 +
+// Emoji + editor-driven Numeric/Phone/Email/Url/Password, all with
+// shift / layout-cycle / etc) as a bottom-strip overlay surface.
+// Additional languages (Bulgarian, French, …) load at startup from
+// `war.lang.*` plugins via `war:keyboard-lang/lang` (task 49). Pushes keystrokes to the
 // currently-focused editor in another wart guest via the new IME
 // WIT contract:
 //   Keyboard.Import.sendKeyEvent(code-point, key-id, action)
@@ -81,7 +83,7 @@ fun buildRealComposeScene(widthPx: Int, heightPx: Int, density: Float): ComposeS
 /// is launched with an `INITIAL_OVERLAY_PX=1200` surface; this verb
 /// trims it to a sensible keyboard height (~38% of a 2880-px panel).
 ///
-/// Sized for the 5-row English / Bulgarian layouts (digits + 3
+/// Sized for the 5-row English / language-plugin layouts (digits + 3
 /// letter rows + modifier row). Symbols / Emoji are 4 rows so they
 /// just have a bit more whitespace at the top — harmless. If a
 /// future layout grows, this can be re-requested on layout change.

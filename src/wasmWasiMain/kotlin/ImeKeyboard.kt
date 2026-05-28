@@ -3,10 +3,12 @@
 // onKey(KeyEvent) callback for direct Keyboard.Import.sendKeyEvent
 // calls (the IME's outbound WIT path → arbiter → focused-pid).
 //
-// Five layouts: English QWERTY (+ Shifted), Bulgarian Cyrillic
-// (+ Shifted), Symbols, Symbols2, Emoji. Shift + layout-cycle +
-// switch-layout all work. Autorepeat omitted (parent file's
-// comment documents why the original disabled it).
+// Built-in layouts: English QWERTY (+ Shifted), Numeric, Phone,
+// Email, Url, Password, Symbols, Symbols2, Emoji. Additional
+// languages load at startup from `war.lang.*` plugins via the
+// `war:keyboard-lang/lang` WIT contract (task 49 step 5). Shift +
+// layout-cycle + switch-layout all work. Autorepeat omitted (parent
+// file's comment documents why the original disabled it).
 //
 // The "Hide" key is currently a logged no-op — step 4 will wire it
 // to a new "request-hide" WIT verb that forwards to the arbiter's
@@ -213,50 +215,11 @@ object ImeKeyboardDefaults {
         ),
     )
 
-    /** Bulgarian Cyrillic — example of how to add another language. */
-    val Bulgarian: KeyboardLayout = KeyboardLayout(
-        name = "Български",
-        rows = listOf(
-            digitsRow,
-            listOf("я","в","е","р","т","ъ","у","и","о","п").map { text(it) },
-            listOf("а","с","д","ф","г","х","й","к","л").map { text(it) },
-            buildList {
-                add(KeyDef("⇧", KeyAction.Shift, width = 1.5f))
-                addAll(listOf("з","ь","ц","ж","б","н","м").map { text(it) })
-                add(backspace)
-            },
-            listOf(
-                KeyDef("123",  KeyAction.SwitchLayout("Symbols"), width = 1.3f),
-                KeyDef("🌐",   KeyAction.CycleLanguage,           width = 1f),
-                KeyDef("😀",   KeyAction.SwitchLayout("Emoji"),   width = 1f),
-                space.copy(width = 3.4f),
-                text("."),
-                enter,
-                hide,
-            ),
-        ),
-        shiftedRows = listOf(
-            digitsRow,
-            listOf("Я","В","Е","Р","Т","Ъ","У","И","О","П").map { text(it) },
-            listOf("А","С","Д","Ф","Г","Х","Й","К","Л").map { text(it) },
-            buildList {
-                add(KeyDef("⇧", KeyAction.Shift, width = 1.5f))
-                addAll(listOf("З","Ь","Ц","Ж","Б","Н","М").map { text(it) })
-                add(backspace)
-            },
-            listOf(
-                KeyDef("123",  KeyAction.SwitchLayout("Symbols"), width = 1.3f),
-                KeyDef("🌐",   KeyAction.CycleLanguage,           width = 1f),
-                KeyDef("😀",   KeyAction.SwitchLayout("Emoji"),   width = 1f),
-                space.copy(width = 3.4f),
-                text(","),
-                enter,
-                hide,
-            ),
-        ),
-    )
+    // Bulgarian moved out to `war.lang.bg/` (task 49 step 3). It now
+    // loads at IME startup via the `war:keyboard-lang/lang` plugin
+    // contract (task 49 step 5).
 
-    /** Digits + common punctuation. */
+/** Digits + common punctuation. */
     val Symbols: KeyboardLayout = KeyboardLayout(
         name = "Symbols",
         isLanguage = false,
@@ -306,14 +269,16 @@ object ImeKeyboardDefaults {
     // input-type matches. `isLanguage = false` so the 🌐 cycle skips
     // them — they're not user-cyclable.
 
-    /** Numeric keypad. Picked for `input-type = number`. 4 rows × 3 keys
-     *  + ⌫/⏎/. modifiers on the right. */
+    /** Numeric keypad. Picked for `input-type = number`. 4 rows × 4 keys,
+     *  all width=1 so columns line up vertically — using backspace.copy
+     *  / enter.copy to override the default 1.5 width those carry in
+     *  the alphabetic layouts. */
     val Numeric: KeyboardLayout = KeyboardLayout(
         name = "Numeric",
         isLanguage = false,
         rows = listOf(
-            listOf(text("1"), text("2"), text("3"), backspace),
-            listOf(text("4"), text("5"), text("6"), enter),
+            listOf(text("1"), text("2"), text("3"), backspace.copy(width = 1f)),
+            listOf(text("4"), text("5"), text("6"), enter.copy(width = 1f)),
             listOf(text("7"), text("8"), text("9"), text(".")),
             listOf(
                 text("-"),
@@ -324,15 +289,15 @@ object ImeKeyboardDefaults {
         ),
     )
 
-    /** Phone keypad. Picked for `input-type = phone`. Adds `*` `#`
-     *  alongside digits — the standard ITU-T E.161 layout. `+` for
-     *  international prefix, `,` for pause (Android convention). */
+    /** Phone keypad. Picked for `input-type = phone`. ITU-T E.161
+     *  layout with `*` / `#` / `+`. Same uniform width=1 grid as
+     *  Numeric. */
     val Phone: KeyboardLayout = KeyboardLayout(
         name = "Phone",
         isLanguage = false,
         rows = listOf(
-            listOf(text("1"), text("2"), text("3"), backspace),
-            listOf(text("4"), text("5"), text("6"), enter),
+            listOf(text("1"), text("2"), text("3"), backspace.copy(width = 1f)),
+            listOf(text("4"), text("5"), text("6"), enter.copy(width = 1f)),
             listOf(text("7"), text("8"), text("9"), text("+")),
             listOf(
                 text("*"),
@@ -473,12 +438,13 @@ object ImeKeyboardDefaults {
     )
 
     /** All built-in layouts in display order. The user-cyclable ones
-     *  (English / Bulgarian) come first; editor-driven layouts
+     *  (English only — additional languages load from `war.lang.*`
+     *  plugins per task 49 step 5) come first; editor-driven layouts
      *  (Numeric / Phone / Email / Url / Password) follow; auxiliary
      *  (Symbols / Symbols2 / Emoji) last. Position doesn't affect the
      *  🌐 cycle — that filters by `isLanguage = true`. */
     fun layouts(): List<KeyboardLayout> = listOf(
-        English, Bulgarian,
+        English,
         Numeric, Phone, Email, Url, Password,
         Symbols, Symbols2, Emoji,
     )
@@ -538,21 +504,26 @@ fun ImeKeyboard(
     var userRequestedLayout by remember { mutableStateOf(initialLayoutName) }
     var shifted by remember { mutableStateOf(false) }
 
-    // Poll ImeEventsImpl for the host-delivered editor-type every
-    // recompose. WasiFrameDispatcher's per-frame nudge ensures
-    // re-composition happens; the focused-editor change drives the
-    // layout pick via pickLayout below. No reactive subscription
-    // needed because the rest of the keyboard already recomposes
-    // every frame.
+    // Poll ImeEventsImpl for the host-delivered editor-type. The
+    // backing state is `mutableStateOf` so this read tracks
+    // invalidation — when the host calls on-editor-attached the
+    // MutableState write triggers a recompose.
     val currentEditorType = testapp.ImeEventsImpl.currentInputType
     val layoutName = pickLayout(
         editorType = currentEditorType,
-        userSelectedLang = userRequestedLayout,  // unused for now;
-                                                  // step-3 plugin work
-                                                  // refines this.
+        userSelectedLang = userRequestedLayout,
         userRequestedLayout = userRequestedLayout,
     )
     val editorTypeOverridden = isEditorTypeOverride(currentEditorType)
+
+    // Diagnostic — log every layout-name change. If pickLayout returns
+    // "English" while the screenshot shows Numeric, the buttons drawn
+    // and the click handlers wired up diverged.
+    androidx.compose.runtime.LaunchedEffect(layoutName, currentEditorType) {
+        WitCanvas.Import.logMessage(
+            "ImeKeyboard: layoutName=$layoutName editorType=$currentEditorType userReq=$userRequestedLayout"
+        )
+    }
 
     val layout = layouts.firstOrNull { it.name == layoutName } ?: layouts.first()
     val rows = if (shifted && layout.shiftedRows != null) layout.shiftedRows else layout.rows
@@ -568,12 +539,28 @@ fun ImeKeyboard(
             .padding(4.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        for (row in rows) {
+        // Task 49 step 2 — Compose's slot table reuses KeyButton slots
+        // across layout changes (English row 1 col 0 → Numeric row 1
+        // col 0). The reused slot keeps its pointerInput gesture
+        // detector — even though rememberUpdatedState refreshes the
+        // onClick reference, there's a brief recompose window where a
+        // tap can land on the OLD layout's onClick. Empirically this
+        // produced "y q w h" letters when typing into a Phone field
+        // moments after the layout flipped from English to Phone.
+        //
+        // Wrap each row in `key(layoutName, rowIdx)` and each button in
+        // `key(layoutName, keyDef.display)` so layout changes force
+        // fresh KeyButton instances — Compose creates new gesture
+        // detectors with the right closures and the stale-tap window
+        // closes.
+        rows.forEachIndexed { rowIdx, row ->
+            androidx.compose.runtime.key(layoutName, rowIdx) {
             Row(
                 modifier = Modifier.fillMaxWidth().weight(1f),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 for (keyDef in row) {
+                    androidx.compose.runtime.key(layoutName, keyDef.display) {
                     KeyButton(
                         modifier = Modifier.weight(keyDef.width).fillMaxHeight(),
                         display = keyDef.display,
@@ -623,8 +610,10 @@ fun ImeKeyboard(
                             }
                         }
                     }
+                    }  // close inner key(layoutName, keyDef.display)
                 }
             }
+            }  // close outer key(layoutName, rowIdx)
         }
     }
 }
