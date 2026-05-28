@@ -1,0 +1,29 @@
+# Gradle
+.gradle/
+build/
+**/build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/**/build/
+
+# Kotlin daemon / incremental compile cache
+.kotlin/
+**/.kotlin/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local-only Gradle properties (keep gradle.properties tracked, but allow per-machine overrides)
+local.properties
+gradle-local.properties
+
+# Logs
+*.log
+hs_err_pid*.log
+replay_pid*.log

@@ -1,0 +1,49 @@
+package war:fonts@0.1.0;
+
+/// Third cross-app dep system component (task 41). Enumerates and reads
+/// fonts from the host's `/system/fonts/` directory, surfaced to the
+/// dep via a WASI preopen at `/system-fonts` (read-only).
+///
+/// Producer: `system-fonts/` Rust component, `composition = "same-store"`.
+/// Consumer: wart-app's MarkdownCard pairs the list with proper
+/// FontFamily.Serif / FontFamily.Monospace usage — host's get_typeface
+/// extended (canvas_impl.rs) to resolve the Compose-standard family
+/// names against real Android paths.
+///
+/// `list` returns lightweight metadata (~200 entries on a Pixel 2 XL).
+/// `load` is on the contract but not exercised by MarkdownCard today
+/// — the host loads typefaces directly via /system/fonts/ paths in
+/// its existing get_typeface path. `load` exists for future use where
+/// a consumer wants raw bytes (custom shaping, font fingerprinting,
+/// etc.).
+interface loader {
+    /// Lightweight metadata for one installed font.
+    record font-info {
+        /// Family root, e.g. "NotoSerif", "Roboto", "DroidSansMono".
+        /// Parsed from the filename via the first "-" split, or the
+        /// stem itself when no "-" is present.
+        family: string,
+        /// Style suffix, e.g. "Regular", "Bold", "Italic", "BoldItalic".
+        /// "Regular" when no style suffix was present.
+        style: string,
+        /// Host-side absolute path to the font file. Informational —
+        /// consumers should use `family` for FontFamily strings, not
+        /// this. Included for diagnostics.
+        path: string,
+    }
+
+    /// List every TTF/OTF file under `/system-fonts/` (the host's
+    /// `/system/fonts/` preopen). Cached after first call.
+    list-all: func() -> list<font-info>;
+
+    /// Read the entire TTF/OTF bytes for one (family, style). Returns
+    /// `none` if no matching file exists or the read failed.
+    /// Suited to small-to-medium fonts (~MB); a streaming variant
+    /// could come later if needed.
+    load: func(family: string, style: string) -> option<list<u8>>;
+}
+
+/// World exported by the system-fonts loader component.
+world loader-world {
+    export loader;
+}
