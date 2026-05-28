@@ -1,0 +1,25 @@
+[package]
+name    = "war-lang-bg"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Bulgarian Cyrillic language plugin for war.ime.keyboard. First lang
+# plugin — proves the migration pattern out of `ImeKeyboardDefaults.Bulgarian`
+# (which was deleted in task 49 step 3). Sibling pattern to
+# `emoji-picker/` / `markdown-renderer/`: Rust cdylib, wasm32-wasip2, no
+# host deps, baked-in static layout data.
+#
+# Contract: `wit/keyboard-lang.wit` (war:keyboard-lang/lang@0.1.0).
+#
+# Build:
+#   cargo build --target wasm32-wasip2 --release
+# Pack + install: scripts/build-system-warpkgs.sh (task 49 step 5).
+#
+# See `tasks/49-ime-content-control.md` step 3.
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.46"
