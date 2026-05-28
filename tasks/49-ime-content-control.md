@@ -415,6 +415,25 @@ New sibling repo `war.lang.fr/` (Rust cdylib). Static AZERTY data.
 succeeds; `<APPS_ROOT>/system-apps/war.lang.fr/0.1.0/` contains
 the precompiled cwasm.
 
+#### Step 4 results
+
+- `war.lang.fr/` Rust cdylib added — sibling of `war.lang.bg/`,
+  same shape (~60 LoC). `get-info` → `{ "Français", "fr-FR",
+  is-rtl=false }`. `get-layout(false)` returns standard AZERTY
+  letter rows (`azertyuiop / qsdfghjklmù / wxcvbnà`);
+  `get-layout(true)` returns uppercase variants (without ù/à —
+  Shift-AZERTY drops the trailing accent keys to match physical
+  French keyboard behavior). Lone accent dead-keys deferred (no
+  dead-key concept in `KeyDef`).
+- Build: `cargo build --target wasm32-wasip2 --release` → 26 s.
+  `wasm-tools component wit` shows
+  `export war:keyboard-lang/lang@0.1.0`.
+- `scripts/build-system-warpkgs.sh` extended with `FR_WASM` /
+  `FR_PKG` / `pack_warpkg` block / push + install loop entry —
+  pattern-identical to the war.lang.bg additions in step 3.
+- Step 5 declares both plugins as IME `[dependencies]`; the
+  device 🌐 cycle becomes English → Bulgarian → French.
+
 ### Step 5 — Dynamic loading in war.ime.keyboard (~1 h)
 
 The IME enumerates declared lang deps + loads them via the existing
