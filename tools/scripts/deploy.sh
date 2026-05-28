@@ -2,7 +2,7 @@
 # Push host binary + WASM component to device and run.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 DEVICE_DIR="/data/local/tmp/wasm-runtime"
 HOST_BIN="$REPO_ROOT/runtime/wart-host/target/aarch64-linux-android/release/wasm-android-host"
 WASM_FILE="${1:-$REPO_ROOT/compose-app.cwasm}"

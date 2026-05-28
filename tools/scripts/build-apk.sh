@@ -13,7 +13,7 @@
 # warning, not a failure.
 set -uo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # shellcheck source=./env-android.sh
 source "$REPO_ROOT/tools/scripts/env-android.sh"
 

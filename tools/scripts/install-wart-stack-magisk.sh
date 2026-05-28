@@ -8,7 +8,7 @@
 # "auto-start at boot," with built-in disable/remove for backout.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 MOD_SRC="$REPO_ROOT/runtime/magisk-module"
 MOD_DST="/data/adb/modules/wart-stack"
 

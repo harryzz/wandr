@@ -26,7 +26,7 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 LOG="/tmp/smoke-markdown-$(date +%Y%m%d-%H%M%S).log"
 echo "▸ Logging to $LOG"

@@ -9,7 +9,7 @@
 #   - scripts/build-system-warpkgs.sh already ran (lang plugins installed)
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 APPS_ROOT="${APPS_ROOT:-/data/local/tmp/wart-apps}"
 WAW="${WAW:-$REPO_ROOT/apps/user/wart-app/wasi_snapshot_preview1.wasm}"
 # Fall back to the wart wasmtime-src adapter (the one the wart-app

@@ -21,7 +21,7 @@
 #   APPS_ROOT=/data/wart scripts/build-system-warpkgs.sh   # production root
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 APPS_ROOT="${APPS_ROOT:-/data/local/tmp/wart-apps}"
 TMP_BASE="${TMP_BASE:-/tmp}"
 WART_APP_WASM="${WART_APP_WASM:-/tmp/skiko-component.wasm}"
@@ -49,11 +49,11 @@ build_system_wasm() {
     printf '%s' "$out"
 }
 
-MD_WASM=$(build_system_wasm "markdown-renderer" "markdown_renderer.wasm")
-EM_WASM=$(build_system_wasm "emoji-picker"      "emoji_picker.wasm")
-FT_WASM=$(build_system_wasm "system-fonts"      "system_fonts.wasm")
-BG_WASM=$(build_system_wasm "war.lang.bg"       "war_lang_bg.wasm")
-FR_WASM=$(build_system_wasm "war.lang.fr"       "war_lang_fr.wasm")
+MD_WASM=$(build_system_wasm "apps/system/war.markdown.renderer" "markdown_renderer.wasm")
+EM_WASM=$(build_system_wasm "apps/system/war.emoji.picker"      "emoji_picker.wasm")
+FT_WASM=$(build_system_wasm "apps/system/war.fonts.loader"      "system_fonts.wasm")
+BG_WASM=$(build_system_wasm "apps/system/lang/war.lang.bg"       "war_lang_bg.wasm")
+FR_WASM=$(build_system_wasm "apps/system/lang/war.lang.fr"       "war_lang_fr.wasm")
 
 # ── 2. Package each warpkg directory ────────────────────────────────────
 

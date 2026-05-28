@@ -3,7 +3,7 @@
 # The .cwasm can be loaded on Android without W^X / JIT privileges.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 INPUT="${1:-$REPO_ROOT/compose-app.wasm}"
 OUTPUT="${INPUT%.wasm}.cwasm"
 
