@@ -305,6 +305,97 @@ row. Memory `feedback_repo_layout.md` captures the convention.
 - `tasks/` history. Old task docs reference old paths. Leave
   as-is; they're frozen snapshots.
 
+## Repository organization (single repo + submodules)
+
+Task 52 covers the **directory** reorganization. The **git
+organization** — should everything be one repo, separate repos,
+or hybrid — is bundled in here because the answer drives a
+companion task (53) that has to land before / alongside 52.
+
+### Decision: hybrid
+
+- **First-party = single monorepo.** Everything in
+  `apps/`, `runtime/`, `wit/`, `tools/`, `repros/`, `docs/`,
+  `tasks/` lives in **one** git repo (the wart repo itself).
+- **External forks = submodules.** Everything in `external/`
+  is a git submodule pointing at our fork (or upstream).
+
+Why hybrid:
+- Layer-1 code co-evolves at WIT boundaries. A change to
+  `wit/skiko-gfx.wit` requires touching the host impl + every
+  guest binding + every smoke. **One commit beats N.** Today's
+  N-repo arrangement made the task-49-step-5 plugin shipment
+  take 4 separate commits across 4 repos that couldn't be
+  bisected together.
+- Shared `Cargo.lock` dedups Rust deps across host, arbiter,
+  and every system warpkg.
+- Discoverability — `git clone` gets all first-party code.
+- External forks are slow-moving + huge — submodules amortize
+  the size cost and make upstream-rebase a single explicit
+  operation (`git submodule update --remote`).
+- Submodule fatigue is real with many small modules — not real
+  with a handful of large rare-update ones.
+
+### Repos to merge (subtree import, history preserved)
+
+| Sibling repo (codeberg.org/harryzz/…)   | Target prefix in monorepo            |
+|----------------------------------------|--------------------------------------|
+| `wart-host.git`                        | `runtime/wart-host/`                 |
+| `wart-arbiter.git`                     | `runtime/wart-arbiter/`              |
+| `wart-app.git`                         | `apps/user/wart-app/`                |
+| `war.ime.keyboard.git`                 | `apps/system/war.ime.keyboard/`      |
+| `war.lang.bg.git`                      | `apps/system/lang/war.lang.bg/`      |
+| `war.lang.fr.git`                      | `apps/system/lang/war.lang.fr/`      |
+| `markdown-renderer.git`                | `apps/system/war.markdown.renderer/` |
+| `emoji-picker.git`                     | `apps/system/war.emoji.picker/`      |
+| `system-fonts.git`                     | `apps/system/war.fonts.loader/`      |
+| `md-smoke-rust.git`                    | `repros/md-smoke-rust/`              |
+| `wart-app-md-smoke.git`                | `repros/wart-app-md-smoke/`          |
+| `wart-leak-repro.git`                  | `repros/wart-leak-repro/`            |
+| `kt-memalloc-repro.git`                | `repros/kt-memalloc-repro/`          |
+
+Subtree-import preserves each repo's full history under the
+target prefix. After merge, the codeberg repos are **archived**
+(read-only, marker note in their README pointing at the
+monorepo). No data loss.
+
+### Repos to keep as submodules
+
+| Upstream / fork                                        | Submodule target              |
+|--------------------------------------------------------|-------------------------------|
+| `codeberg.org/harryzz/skiko.git`                       | `external/skiko/`             |
+| `codeberg.org/harryzz/wasmtime-src.git` *(needs push)* | `external/wasmtime-src/`      |
+| `codeberg.org/harryzz/compose-multiplatform-core.git`  | `external/compose-multiplatform-core/` |
+| `codeberg.org/harryzz/kotlin.git` *(needs push)*       | `external/kotlin/`            |
+
+The wasmtime-src + kotlin-src trees currently track upstream
+`github.com/bytecodealliance/wasmtime` and `github.com/JetBrains/kotlin`
+but carry local commits (e.g. wasmtime carries the KT-86415
+adapter fix `058822330`). Before the submodule wiring, those
+trees need their own fork URL on codeberg so the local commits
+survive — that's step 0 of task 53.
+
+### What stays multi-repo (the parent + submodules)
+
+Just two layers of git tracking:
+1. `~/wart/.git` — the parent monorepo (Layer 1 + submodule
+   pointers).
+2. `~/wart/external/<fork>/.git` — each submodule's working
+   tree, points at its own remote.
+
+No git in `apps/`, `runtime/`, `repros/`, etc. — those are
+just directories in the parent monorepo now.
+
+### Migration carried out by **task 53** (separate task)
+
+The mechanical subtree-merge + archive flow is split into its
+own task because it touches every codeberg repo and benefits
+from being landed in one focused session. Task 52 (this doc)
+covers the directory shape + naming; task 53 covers the git
+history shuffle.
+
+See `tasks/53-monorepo-merge.md`.
+
 ## Effort estimate
 
 ~5 hours focused work, mostly mechanical. Risk: scripts that

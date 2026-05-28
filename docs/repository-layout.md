@@ -8,9 +8,12 @@ underlying rationale + research are in
 > **NOTE — current state, 2026-05-28**: the layout described
 > below is the **target**, not yet executed. The repo is mid-
 > reorganization. Existing dirs at the top level (`wart-host/`,
-> `markdown-renderer/`, `wart-app/`, etc.) move to the new paths
-> as part of task 52 step 3. Use this doc as the source-of-truth
-> for where things *should* go going forward.
+> `markdown-renderer/`, `wart-app/`, etc.) are still **separate
+> git repos** sharing the wart working directory; task 52
+> reshapes the directory tree, task 53 collapses the sibling
+> repos into a single monorepo via `git subtree` and adds
+> submodules for the four vendored forks. Use this doc as the
+> source-of-truth for where things *should* go going forward.
 
 ## Top-level categories
 
@@ -85,19 +88,39 @@ Each warpkg holds a mirror under its own `wit/deps/<pkg>/` (this
 is a copy today; could become a symlink in a follow-up). When a
 contract changes, edit it here, then sync mirrors.
 
-### `external/` — vendored upstreams
+### `external/` — vendored upstreams (git submodules)
 
 ```
 external/
-├── skiko/                          # ~/skiko fork (symlink or in-tree)
-├── wasmtime-src/                   # wasmtime fork (own engine)
-├── compose-multiplatform-core/     # Compose Multiplatform port
-└── kotlin/                         # Kotlin build override (was `kotlin-src/`)
+├── skiko/                          # codeberg.org/harryzz/skiko (fork)
+├── wasmtime-src/                   # codeberg.org/harryzz/wasmtime-src (fork)
+├── compose-multiplatform-core/     # codeberg.org/harryzz/compose-multiplatform-core (fork)
+└── kotlin/                         # codeberg.org/harryzz/kotlin (build override)
 ```
 
-These are upstream-shaped and *kept* upstream-shaped — diffs
-against the upstream tree should remain minimal so we can rebase.
-This is the AOSP `external/` parallel.
+Each is a **git submodule** pointing at our codeberg fork. The
+fork tracks upstream + carries any local patches (e.g.
+`external/wasmtime-src/` carries the KT-86415 adapter-State
+fix). Bumping a fork is one explicit operation:
+
+```
+cd external/wasmtime-src
+git pull origin main       # or rebase against upstream + push
+cd ../..
+git add external/wasmtime-src
+git commit -m "external/wasmtime-src: bump to <sha>"
+```
+
+Cloning the monorepo:
+
+```
+git clone --recurse-submodules https://codeberg.org/harryzz/wart.git
+# or, after a non-recursive clone:
+git submodule update --init --recursive
+```
+
+This is the AOSP `external/` parallel: upstream-shaped and *kept*
+upstream-shaped so rebases are clean.
 
 ### `tools/` — build + dev infrastructure
 
@@ -162,13 +185,33 @@ participate in `cargo build --workspace` etc.
 | Vendoring a new upstream repo                          | `external/<upstream-name>/`                          | Keep upstream's tree shape                                 |
 | A build/dev script                                     | `tools/scripts/<name>.sh`                            | dash-separated kebab-case                                  |
 
+## Git organization
+
+**Hybrid model**: single monorepo for everything in
+`apps/`, `runtime/`, `wit/`, `tools/`, `repros/`, `docs/`,
+`tasks/`. Submodules for the four upstream forks under
+`external/`.
+
+Why hybrid:
+- First-party code co-evolves at WIT boundaries. One commit
+  beats N. The current N-repo arrangement made the
+  task-49-step-5 plugin shipment take 4 separate commits across
+  4 repos that couldn't be bisected together.
+- Shared `Cargo.lock` dedups Rust deps across host, arbiter,
+  and every system warpkg.
+- External forks are slow-moving + huge — submodules amortize
+  the size cost; bumping a fork is one explicit operation.
+
 ## Cross-references
 
 - [`tasks/52-monorepo-reorg.md`](../tasks/52-monorepo-reorg.md)
-  — the full migration plan + research bibliography.
+  — directory shape + naming conventions (the *why*).
+- [`tasks/53-monorepo-merge.md`](../tasks/53-monorepo-merge.md)
+  — the git-side merge plan: subtree-import 13 sibling repos,
+  wire 4 submodules, archive the obsolete codeberg repos.
 - [`docs/architecture-runtime.md`](architecture-runtime.md) —
   where the native binaries fit + their socket protocol.
 - [`docs/architecture-ime.md`](architecture-ime.md) — where the
   IME + lang plugins fit + their plugin contract.
 - [CLAUDE.md](../CLAUDE.md) "Repository layout" section — the
-  legacy flat-layout view, retired once task 52 executes.
+  legacy flat-layout view, retired once task 52 + 53 execute.
