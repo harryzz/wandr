@@ -1,0 +1,12 @@
+[submodule "external/skiko"]
+	path = external/skiko
+	url = https://codeberg.org/harryzz/skiko.git
+[submodule "external/wasmtime"]
+	path = external/wasmtime
+	url = https://codeberg.org/harryzz/wasmtime.git
+[submodule "external/compose-multiplatform-core"]
+	path = external/compose-multiplatform-core
+	url = https://codeberg.org/harryzz/compose-multiplatform-core.git
+[submodule "external/kotlin"]
+	path = external/kotlin
+	url = https://github.com/JetBrains/kotlin.git
