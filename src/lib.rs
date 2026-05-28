@@ -15,10 +15,10 @@
 
 wit_bindgen::generate!({
     world: "lang-world",
-    path:  "../wit/keyboard-lang.wit",
+    path:  "wit/keyboard-lang-fr.wit",
 });
 
-use exports::war::keyboard_lang::lang::{Guest, Info, KeyDef, LayoutVariant};
+use exports::war::keyboard_lang_fr::lang::{Guest, Info, KeyDef, LayoutVariant};
 
 struct WarLangFr;
 
