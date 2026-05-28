@@ -1,0 +1,26 @@
+[package]
+name    = "md-smoke-rust"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Rust-side smoke consumer for task 36 step 7. Equivalent to
+# `wart-app-md-smoke/` (Kotlin) but built against `wasm32-wasip2`, which
+# sidesteps the Kotlin/Wasm + command-adapter throw bug (see
+# `feedback_kotlin_wasm_println_throws_wasmtime`). Validates the actual
+# call-through-proxy path that the Kotlin smoke can't reach.
+#
+# Build:
+#   cargo build --target wasm32-wasip2 --release
+#
+# Produces a `wasi:cli/command`-shaped component (implicit from `fn main`
+# on the wasip2 target) that imports `war:markdown/renderer@0.1.0`.
+# wart-host's installer resolves the import to the system bundle; the
+# loader composes via `wire_markdown_dep`; `--run-once` invokes it.
+
+[[bin]]
+name = "md_smoke_rust"
+path = "src/main.rs"
+
+[dependencies]
+wit-bindgen = "0.46"

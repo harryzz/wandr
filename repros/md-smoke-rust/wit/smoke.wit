@@ -1,0 +1,9 @@
+package war:md-smoke-rust@0.1.0;
+
+/// Consumer world for the Rust-side smoke (task 36 step 7). Imports
+/// `war:markdown/renderer@0.1.0` from the system bundle; the wasi:cli/
+/// command shape (export wasi:cli/run.run) is implicit on the
+/// `wasm32-wasip2` target via `fn main()`.
+world consumer {
+    import war:markdown/renderer@0.1.0;
+}
