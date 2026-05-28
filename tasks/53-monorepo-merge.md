@@ -1,6 +1,8 @@
 # Task 53 — Monorepo merge: subtree-import 13 sibling repos + 4 submodules
 
-> Status: 🔲 scoped, not started — 2026-05-28
+> Status: ✅ complete 2026-05-28 — single-day execution, device-
+> verified end-to-end. See "Results" section at the bottom for
+> per-step outcomes + lessons learned.
 >
 > Companion to [task 52](52-monorepo-reorg.md). Task 52 decides
 > the target directory layout; task 53 carries out the git-side
@@ -381,3 +383,91 @@ patch) follow the existing per-fork `BUILD.md`.
   canonical reference once both tasks land.
 - [Monorepo vs Polyrepo vs Submodule vs Subtree (Mammadzada)](https://raminmammadzada.medium.com/monorepo-vs-multirepo-vs-git-submodule-vs-git-subtree-3fde1af15b76) — option comparison the decision is based on.
 - [GitHub Well-Architected: repository architecture strategy](https://wellarchitected.github.com/library/architecture/recommendations/scaling-git-repositories/repository-architecture-strategy/) — official-feeling justification for the hybrid approach.
+
+## Results — 2026-05-28
+
+Single-day execution. All 11 steps ran cleanly with three
+mid-execution surprises (recorded below). Device smoke verifies
+the IME 🌐 cycle still rotates English → Български → Français
+post-reorg.
+
+### Per-step outcomes
+
+| Step | Outcome | Commit / notes |
+|---|---|---|
+| 0 | Wasmtime fork pushed to `codeberg.org/harryzz/wasmtime` tip `058822330a`. Kotlin fork **deferred** (zero local commits + partial clone). | wart `db98be9c` |
+| 1 | 13 sibling repos tagged `pre-monorepo-merge` + pushed. Caught 1 unpushed commit in `kt-memalloc-repro` mid-flight. | wart `a1cda1f7` |
+| 1.5 | Pre-step: fast-forwarded `main` to dev-tip in 4 repos that were on `task-33-boot-model` (wart-host, wart-arbiter, markdown-renderer, wart-app-md-smoke). All 13 sibling repos + parent wart now have remote `main` = dev tip. | wart `a2b229fb` |
+| 2 | 13 sibling repos + 4 fork clones moved to `~/wart-premerge-backup/`. | (no commit — gitignored) |
+| 3 | New tree (`apps/`, `runtime/`, `external/`, `tools/`, `repros/`) created; `scripts/` → `tools/scripts/`, `patches/` → `tools/patches/`, `wart-stack-magisk/` → `runtime/magisk-module/`, `wasmtime-issue-artifacts/` → `tools/triage/wasmtime-issues/`. | wart `9d923311` |
+| 4 | 13 `git subtree add` commits (history preserved). Stashed pre-existing WIP first (subtree-add refuses dirty tree). | wart `f768e144` (last subtree add) |
+| 5 | 4 submodules wired under `external/`. Manual `update-index --add --cacheinfo 160000,…` to avoid re-cloning ~5 GB; `submodule absorbgitdirs` + `init` to register .git/ properly. | wart `ca853d08` |
+| 5-fix | 7 nested gitlinks from wart-host's `vendor/` (the abandoned out-of-tree compile) — folded into the top-level `.gitmodules`; nested `runtime/wart-host/.gitmodules` removed. | wart `f649821f` |
+| 6 | Old sibling-repo `.gitignore` rules removed; collapsed to `**/build/`, `**/target/`, `**/.gradle/`. | wart `6499ce18` |
+| 7 | ~30 path-reference edits across `tools/scripts/*.sh`, Rust `wit_bindgen!` paths, gradle skiko/compose paths. | wart `637ea071` |
+| 8 | No-op — `app_id` strings unchanged across reorg; on-device install paths reuse the same identifiers. | (folded into step 7) |
+| 9 | All 11 builds green (`cargo check` for 6 cdylibs + wart-host + wart-arbiter; gradle `compileProductionExecutableKotlinWasmWasi` for wart-app + IME). Device smoke: IME 🌐 cycle rotates English → Български → Français → English cleanly. Hit 3 mid-flight bugs (see "Lessons" below). | wart `24c3c0c1`, `f321fa15` |
+| 10 | 13 obsolete sibling repos now show an "Archived 2026-05-28 — moved to wart monorepo at `<prefix>/`" README on their `main` branch (orphan force-push). `pre-monorepo-merge` tag still points at the pre-merge tip. | per-repo force-push (not in wart history) |
+| 11 | `~/wart-premerge-backup/` (~28 GB) deleted after clone-from-scratch + `cargo check` verification on a fresh `/tmp/clone-test/wart` checkout. | (cleanup) |
+
+### Lessons / mid-flight bugs
+
+1. **wasmtime push 504'd twice.** Cause: codeberg gateway
+   timeout on the 167 MB push. **Fix**: `git fetch --unshallow`
+   (the local was a 2-commit shallow clone), then chunked push
+   by milestone tag (`v1.0.0`, `v10`, `v20`, `v30`, `v40`,
+   `v44`, then HEAD). The same recipe applied later for the
+   *monorepo* push but the monorepo's 42 MB pack went through
+   in one shot — the threshold seems to be around 100 MB.
+2. **`git submodule absorbgitdirs` emptied the wart-host vendor
+   working trees.** Cause: the AOSP sub-vendor dirs (skia-src,
+   aosp-frameworks-*) were moved in from backup with their .git
+   intact; absorbgitdirs migrated the .git but didn't preserve
+   the working tree because the index gitlink SHA didn't match
+   the dir state. **Fix**: `git submodule update --init --depth=1`
+   per-vendor (~5 min). Lost 28 GB of backup material but
+   recovered from upstream URLs. Lesson: don't run
+   absorbgitdirs on hand-positioned submodules; either let
+   `submodule add` create them OR skip absorb entirely and live
+   with legacy in-place .git layout.
+3. **Script REPO_ROOT off by one level.** Cause: scripts moved
+   from `scripts/` to `tools/scripts/`; the
+   `$(dirname "$0")/..` idiom still resolved to one level up,
+   landing in `tools/` instead of the repo root. Symptom:
+   `cd: /home/harry/wart/tools/runtime/wart-host/…: No such
+   file or directory`. **Fix**: bulk-edit all REPO_ROOT
+   computations to `…/../..`.
+4. **IME's `.gitignore` blocked the gradle wrapper.** Cause:
+   The IME (formerly `war.ime.keyboard/` standalone repo)
+   gitignored `/gradlew*` and `/gradle/` — fine when the
+   wrapper was shared via filesystem proximity with wart-app,
+   broken in the monorepo where each project needs its own.
+   **Fix**: copy wart-app's wrapper into the IME + narrow the
+   ignore rules.
+5. **Subtree-add refuses dirty trees.** Caught early via
+   `git stash push -u` before the 13-step subtree loop.
+
+### Empirical metrics
+
+- Total task time: ~6 hours focused work (no surprises ≈ 4 h,
+  with the three bugs above ≈ 6 h).
+- Monorepo .git size: 1.4 GB total (42 MB parent objects +
+  1.3 GB in `.git/modules/external/`).
+- Push size: 42 MB single transaction (no chunking needed for
+  this size).
+- Fresh clone from scratch: ~30 s for parent, ~2 min for
+  `git submodule update --init external/skiko` (other forks
+  similar).
+- All 13 sibling repos retain full history accessible via
+  `pre-monorepo-merge` tag indefinitely.
+
+### Post-merge open items
+
+- Codeberg "Archived" flag still needs to be set per-repo via
+  web UI (cosmetic; the README redirect is the load-bearing
+  signal). 13 repos to mark.
+- `.task-state` file at repo root is stale (refers to
+  pre-reorg paths). Refresh when next task starts.
+- `~/wart` working tree was switched from `task-33-boot-model`
+  to `main` during the migration. Future tasks should start
+  branches from `main`.
