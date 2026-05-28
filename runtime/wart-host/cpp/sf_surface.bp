@@ -1,0 +1,20 @@
+// libsf_surface — task 33 Step 1 integration: libgui surface shim as a
+// shared library. Built in-tree on the AOSP source host (soong resolves the
+// libgui/AIDL/HIDL header graph). wart-host dlopen()s the resulting .so.
+//
+// Deploy to ~/android/lineage/external/sf_surface/Android.bp on the build
+// host (alongside sf_surface.cpp), then: m libsf_surface.
+cc_library_shared {
+    name: "libsf_surface",
+    srcs: ["sf_surface.cpp"],
+    shared_libs: [
+        "libgui",
+        "libui",
+        "libutils",
+        "libbinder",
+        "liblog",
+        "libnativewindow",
+        "libinput",
+    ],
+    cflags: ["-Wall", "-Wextra"],
+}

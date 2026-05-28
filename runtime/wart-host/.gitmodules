@@ -1,0 +1,25 @@
+[submodule "vendor/skia-src"]
+	path = vendor/skia-src
+	url = https://github.com/rust-skia/skia.git
+	shallow = true
+[submodule "vendor/aosp-hardware-interfaces"]
+	path = vendor/aosp-hardware-interfaces
+	url = https://android.googlesource.com/platform/hardware/interfaces
+	shallow = true
+[submodule "vendor/aosp-frameworks-hardware-interfaces"]
+	path = vendor/aosp-frameworks-hardware-interfaces
+	url = https://android.googlesource.com/platform/frameworks/hardware/interfaces
+	shallow = true
+[submodule "vendor/aosp-frameworks-av"]
+	path = vendor/aosp-frameworks-av
+	url = https://android.googlesource.com/platform/frameworks/av
+[submodule "vendor/aosp-system-hardware-interfaces"]
+	path = vendor/aosp-system-hardware-interfaces
+	url = https://android.googlesource.com/platform/system/hardware/interfaces
+[submodule "vendor/aosp-frameworks-native"]
+	path = vendor/aosp-frameworks-native
+	url = https://android.googlesource.com/platform/frameworks/native
+[submodule "vendor/aosp-frameworks-base"]
+	path = vendor/aosp-frameworks-base
+	url = https://android.googlesource.com/platform/frameworks/base
+	shallow = true
