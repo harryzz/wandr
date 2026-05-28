@@ -1,0 +1,23 @@
+package war:md-smoke@0.1.0;
+
+/// Task 36 step 6 smoke world: imports `war:markdown/renderer` (the
+/// system component installed under `<root>/system-apps/`); has no
+/// exports of its own — runs as a `wasi:cli` command, so Kotlin's
+/// `main()` (auto-called by the command-variant preview1 adapter) is
+/// the entire program.
+///
+/// Build pipeline:
+///   1. gradle compileProductionExecutableKotlinWasmWasi → wart-app-md-smoke.wasm
+///   2. wasm-tools component embed --world md-smoke wit/ <wasm> → embedded.wasm
+///   3. wasm-tools component new --adapt wasi_snapshot_preview1.command.wasm
+///      embedded.wasm → md-smoke-component.wasm
+///   4. wasmtime compile … → cwasm (only when targeting device — task 36 step 7)
+///
+/// On the dev box, the round-trip can be validated by composing this
+/// with markdown_renderer.wasm via wac before `wasmtime run`.
+world md-smoke {
+    import war:markdown/renderer@0.1.0;
+    // wasi:cli/run + the rest of the command world get added by the
+    // wasi_snapshot_preview1.command adapter at `component new --adapt`
+    // time — no need to `include` them here.
+}

@@ -1,0 +1,108 @@
+package war:markdown@0.1.0;
+
+/// Compose-friendly structured markdown — `render` parses CommonMark
+/// source into a flat tree the consumer drops into a LazyColumn /
+/// AnnotatedString without an intermediate HTML→UI adapter.
+///
+/// Producer: `markdown-renderer/` Rust component (comrak-backed),
+/// declared `composition = "same-store"` so its single export composes
+/// directly into a consumer app's Store via `Linker::instance`.
+/// Task 36 driver — see `tasks/36-cross-app-deps.md`.
+///
+/// **WIT 0.2 recursion note:** the component-model spec as shipped in
+/// wasmtime 44 does not allow recursive type definitions. The model is
+/// deliberately flat:
+///
+///   - Inline runs are `record run { text; styles; link-url }` — no
+///     nesting; nested emphasis collapses into a multi-element `styles`
+///     list on the same run. This matches Compose `AnnotatedString`
+///     (flat sequence of styled spans) directly.
+///   - Block nesting is one level deep — top-level `block` can host
+///     lists + block-quotes; the `simple-block` subset inside those
+///     cannot recurse further. The parser flattens nested-lists /
+///     nested-quotes into the outer tier.
+///
+///   Revisit when WIT gains recursive variants.
+interface renderer {
+    /// Top-level document — flat sequence of blocks (= one entry per
+    /// LazyColumn row). Block ordering is source order.
+    record document {
+        blocks: list<block>,
+    }
+
+    /// Block-level container.
+    variant block {
+        paragraph(list<run>),
+        heading(heading-block),
+        code-block(code-block),
+        bullet-list(list<list-item>),
+        ordered-list(ordered-list-block),
+        block-quote(list<simple-block>),
+        thematic-break,
+    }
+
+    /// Non-recursive block subset — what appears *inside* a list item
+    /// or a block-quote. `block` minus the nesting cases.
+    variant simple-block {
+        paragraph(list<run>),
+        heading(heading-block),
+        code-block(code-block),
+        thematic-break,
+    }
+
+    record heading-block {
+        /// 1..=6 (CommonMark ATX + setext headings).
+        level: u8,
+        runs:  list<run>,
+    }
+
+    record code-block {
+        /// CommonMark "info string" — the language tag after the opening
+        /// fence. `none` for indented code blocks or fences with no tag.
+        language: option<string>,
+        text:     string,
+    }
+
+    record list-item {
+        blocks: list<simple-block>,
+    }
+
+    record ordered-list-block {
+        /// Starting number per CommonMark (e.g. `5.` → start=5).
+        start: u32,
+        items: list<list-item>,
+    }
+
+    /// A flat run of text with stacked styles + optional link target.
+    /// `AnnotatedString`-shaped — Compose consumes this verbatim.
+    /// Nested markdown emphasis (e.g. `**_bold-italic_**`) yields a
+    /// single run with `styles = [strong, emphasis]`.
+    record run {
+        text:     string,
+        styles:   list<inline-style>,
+        /// `some(url)` if this run is the text of a link; the URL is
+        /// the link target. Adjacent runs in the same link share the
+        /// same `link-url` value.
+        link-url: option<string>,
+    }
+
+    enum inline-style {
+        /// Italic — `_..._` or `*...*` in source.
+        emphasis,
+        /// Bold — `**...**` or `__...__` in source.
+        strong,
+        /// Inline `code` — backtick spans.
+        code,
+    }
+
+    /// Parse CommonMark `source` into a structured document. Pure;
+    /// the renderer holds no per-call state. Best-effort on malformed
+    /// input (comrak never fails — produces a best-fit tree).
+    render: func(source: string) -> document;
+}
+
+/// World exported by the markdown-renderer component. Consumers import
+/// `war:markdown/renderer@0.1.0` to call `render`.
+world renderer-world {
+    export renderer;
+}
