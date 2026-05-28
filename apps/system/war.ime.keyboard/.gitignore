@@ -1,5 +1,3 @@
 /build/
 /.gradle/
 .kotlin/
-/gradle/
-/gradlew*
