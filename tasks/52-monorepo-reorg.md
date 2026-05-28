@@ -366,14 +366,19 @@ monorepo). No data loss.
 | `codeberg.org/harryzz/skiko.git`                       | `external/skiko/`             |
 | `codeberg.org/harryzz/wasmtime.git` *(needs push)*     | `external/wasmtime/`          |
 | `codeberg.org/harryzz/compose-multiplatform-core.git`  | `external/compose-multiplatform-core/` |
-| `codeberg.org/harryzz/kotlin.git` *(needs push)*       | `external/kotlin/`            |
+| `github.com/JetBrains/kotlin.git` *(upstream — fork deferred until we have local patches)* | `external/kotlin/` |
 
-The `wasmtime-src/` + `kotlin-src/` trees currently track upstream
-`github.com/bytecodealliance/wasmtime` and `github.com/JetBrains/kotlin`
-but carry local commits (e.g. wasmtime carries the KT-86415
-adapter fix `058822330`). Before the submodule wiring, those
-trees need their own fork URL on codeberg so the local commits
-survive — that's step 0 of task 53.
+The `wasmtime-src/` tree currently tracks upstream
+`github.com/bytecodealliance/wasmtime` but carries a local
+commit (KT-86415 adapter fix `058822330`). It needs its own
+fork URL on codeberg first — that's step 0 of task 53.
+
+`kotlin-src/` has zero local commits beyond upstream + is a
+partial clone (`blob:none`), so pushing it would re-upload
+several GB of upstream blobs for no current gain. Submodule
+against upstream `github.com/JetBrains/kotlin` directly; swap
+to the codeberg fork (already created, kept empty) when local
+patches arrive.
 
 ### What stays multi-repo (the parent + submodules)
 

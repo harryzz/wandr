@@ -20,37 +20,51 @@
 - A backup tag pushed on each sibling repo before the merge
   (`pre-monorepo-merge`).
 
-## Step 0 — Push wasmtime + kotlin forks to codeberg
+## Step 0 — Push wasmtime fork to codeberg
 
-These two upstream trees carry local commits that need their
-own remote before they can be submoduled. The codeberg fork
-names drop the `-src` suffix to match the
-`skiko`/`compose-multiplatform-core` convention — the dir at
-`~/wart/wasmtime-src/` becomes `external/wasmtime/`, and
-`~/wart/kotlin-src/` becomes `external/kotlin/`.
+`~/wart/wasmtime-src/` carries a local commit beyond upstream
+(`058822330 wasi-preview1 adapter: pin State at a fixed linear-
+memory address (KT-86415)` — the partition trick from task 34).
+That commit needs to live on a codeberg fork before we can
+submodule it.
 
-- `~/wart/wasmtime-src`: local commit `058822330 wasi-preview1
-  adapter: pin State at a fixed linear-memory address (KT-86415)`
-  — the partition trick from task 34.
-- `~/wart/kotlin-src`: any local builds / patches.
-
-Action (per repo):
+Action:
 ```
 cd ~/wart/wasmtime-src
 git remote add codeberg https://codeberg.org/harryzz/wasmtime.git
-git push -u codeberg HEAD:main
 
-cd ~/wart/kotlin-src
-git remote add codeberg https://codeberg.org/harryzz/kotlin.git
-git push -u codeberg HEAD:main
+# wasmtime-src may be a shallow clone — unshallow first, codeberg
+# rejects shallow updates ("shallow update not allowed").
+git fetch --unshallow origin
+git config http.postBuffer 524288000           # 500 MB
+git config http.lowSpeedLimit 0
+git config http.lowSpeedTime 999999
+
+# Codeberg 504s on the full 167 MB pack push in one shot; chunk it.
+# Push older milestones first so each transaction is small enough.
+for ref in v1.0.0 v10.0.0 v20.0.0 v30.0.0 v40.0.0 v44.0.0; do
+    git push codeberg "$ref:refs/heads/main" --force
+done
+git push codeberg HEAD:main
 ```
 
-User has to create the **empty** codeberg repos first:
-- `https://codeberg.org/harryzz/wasmtime`
-- `https://codeberg.org/harryzz/kotlin`
+User has to create the **empty** codeberg repo first at
+`https://codeberg.org/harryzz/wasmtime` (Web UI → "+ Create
+new" → "New Repository" — leave all "Initialize…" boxes
+unchecked).
 
-(Web UI → "+ Create new" → "New Repository" — leave all
-"Initialize…" boxes unchecked.)
+**Done 2026-05-28** — verified pushed; tip `058822330a` on
+`codeberg.org/harryzz/wasmtime/main`.
+
+**Note (decision 2026-05-28)**: `~/wart/kotlin-src/` is
+**deferred**. It's a partial clone (`blob:none`) and has
+**zero local commits** beyond upstream — pushing it would
+backfill several GB of blobs from JetBrains and re-upload to
+codeberg for no current benefit. Instead, step 5 submodules
+kotlin against the upstream JetBrains URL directly. The empty
+`codeberg.org/harryzz/kotlin` repo stays reserved for the
+future moment when we land local patches; at that point, push
+the local tree + swap the submodule URL in one commit.
 
 ## Step 1 — Backup tag on every sibling repo
 
@@ -186,7 +200,9 @@ cd ~/wart
 git submodule add https://codeberg.org/harryzz/skiko.git                        external/skiko
 git submodule add https://codeberg.org/harryzz/wasmtime.git                     external/wasmtime
 git submodule add https://codeberg.org/harryzz/compose-multiplatform-core.git   external/compose-multiplatform-core
-git submodule add https://codeberg.org/harryzz/kotlin.git                       external/kotlin
+# Kotlin tracks upstream directly — no local patches today; codeberg
+# fork repo reserved for future use. Swap URL when patches land.
+git submodule add https://github.com/JetBrains/kotlin.git                       external/kotlin
 
 git commit -m "task 53: wire upstream forks as submodules"
 ```
@@ -204,7 +220,7 @@ git commit -m "task 53: wire upstream forks as submodules"
     url = https://codeberg.org/harryzz/compose-multiplatform-core.git
 [submodule "external/kotlin"]
     path = external/kotlin
-    url = https://codeberg.org/harryzz/kotlin.git
+    url = https://github.com/JetBrains/kotlin.git
 ```
 
 ## Step 6 — Update `.gitignore`
