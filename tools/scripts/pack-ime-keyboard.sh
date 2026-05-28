@@ -11,12 +11,12 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APPS_ROOT="${APPS_ROOT:-/data/local/tmp/wart-apps}"
-WAW="${WAW:-$REPO_ROOT/wart-app/wasi_snapshot_preview1.wasm}"
+WAW="${WAW:-$REPO_ROOT/apps/user/wart-app/wasi_snapshot_preview1.wasm}"
 # Fall back to the wart wasmtime-src adapter (the one the wart-app
 # pipeline uses — see CLAUDE.md "Build pipeline" section).
-[[ -f "$WAW" ]] || WAW="$REPO_ROOT/wasmtime-src/target/wasm32-unknown-unknown/release/wasi_snapshot_preview1.wasm"
+[[ -f "$WAW" ]] || WAW="$REPO_ROOT/external/wasmtime/target/wasm32-unknown-unknown/release/wasi_snapshot_preview1.wasm"
 
-IME_WASM="$REPO_ROOT/war.ime.keyboard/build/compileSync/wasmWasi/main/productionExecutable/kotlin/war-ime-keyboard.wasm"
+IME_WASM="$REPO_ROOT/apps/system/war.ime.keyboard/build/compileSync/wasmWasi/main/productionExecutable/kotlin/war-ime-keyboard.wasm"
 if [[ ! -f "$IME_WASM" ]]; then
     echo "✗ $IME_WASM missing — run gradle compile first." >&2
     exit 1
@@ -29,7 +29,7 @@ fi
 echo "▸ embed + adapt war.ime.keyboard"
 wasm-tools component embed \
     --world war:ime-keyboard/ime-keyboard \
-    "$REPO_ROOT/war.ime.keyboard/wit" \
+    "$REPO_ROOT/apps/system/war.ime.keyboard/wit" \
     "$IME_WASM" \
     -o /tmp/ime-keyboard-embedded.wasm
 wasm-tools component new /tmp/ime-keyboard-embedded.wasm \

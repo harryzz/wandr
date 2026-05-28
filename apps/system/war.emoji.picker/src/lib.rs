@@ -10,7 +10,7 @@
 
 wit_bindgen::generate!({
     world: "picker-world",
-    path: "../wit/emoji.wit",
+    path: "../../../wit/emoji.wit",
 });
 
 use exports::war::emoji::picker::{Emoji, Guest};

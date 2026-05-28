@@ -32,7 +32,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-HOST_BIN="$REPO_ROOT/wart-host/target/aarch64-linux-android/release/wasm-android-host"
+HOST_BIN="$REPO_ROOT/runtime/wart-host/target/aarch64-linux-android/release/wasm-android-host"
 
 # ── pre-flight ───────────────────────────────────────────────────────
 
@@ -50,7 +50,7 @@ fi
 
 if [[ ! -f "$HOST_BIN" ]]; then
     echo "host binary missing — building …"
-    bash "$REPO_ROOT/scripts/build-host-android.sh"
+    bash "$REPO_ROOT/tools/scripts/build-host-android.sh"
 fi
 
 if [[ ! -f "$SHIM" ]]; then
@@ -73,7 +73,7 @@ if [[ ! -f "$CWASM" ]]; then
 ✗ skiko-component.cwasm missing at: $CWASM
 
 Build per CLAUDE.md "Build pipeline" (Kotlin → wasm → component → cwasm):
-  cd $REPO_ROOT/wart-app
+  cd $REPO_ROOT/apps/user/wart-app
   ./gradlew compileProductionExecutableKotlinWasmWasi --console=plain --no-daemon
 
   wasm-tools component embed \\
@@ -83,7 +83,7 @@ Build per CLAUDE.md "Build pipeline" (Kotlin → wasm → component → cwasm):
       -o /tmp/embedded.wasm
 
   wasm-tools component new /tmp/embedded.wasm \\
-      --adapt $REPO_ROOT/wasmtime-src/target/wasm32-unknown-unknown/release/wasi_snapshot_preview1.wasm \\
+      --adapt $REPO_ROOT/external/wasmtime/target/wasm32-unknown-unknown/release/wasi_snapshot_preview1.wasm \\
       -o /tmp/skiko-component.wasm
 
   wasmtime compile --target aarch64-linux-android \\

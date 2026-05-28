@@ -21,9 +21,9 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-HOST_BIN="$REPO_ROOT/wart-host/target/aarch64-linux-android/release/wasm-android-host"
-ARB_BIN="$REPO_ROOT/wart-arbiter/target/aarch64-linux-android/release/wart-arbiter"
-SHIM="$REPO_ROOT/wart-host/cpp/build/libsf_surface.so"
+HOST_BIN="$REPO_ROOT/runtime/wart-host/target/aarch64-linux-android/release/wasm-android-host"
+ARB_BIN="$REPO_ROOT/runtime/wart-arbiter/target/aarch64-linux-android/release/wart-arbiter"
+SHIM="$REPO_ROOT/runtime/wart-host/cpp/build/libsf_surface.so"
 APPS_ROOT="/data/local/tmp/wart-apps"
 
 for bin in "$HOST_BIN" "$ARB_BIN" "$SHIM"; do

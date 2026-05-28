@@ -56,7 +56,7 @@ pub mod run_once;
 
 mod bindings {
     wasmtime::component::bindgen!({
-        path: "../wit/skiko-gfx.wit",
+        path: "../../wit/skiko-gfx.wit",
         world: "skiko-ui",
     });
 }
@@ -75,7 +75,7 @@ mod bindings {
 /// bindings.
 mod ime_bindings {
     wasmtime::component::bindgen!({
-        path: "../wit/ime.wit",
+        path: "../../wit/ime.wit",
         world: "ime-events",
     });
 }

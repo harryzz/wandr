@@ -27,9 +27,9 @@ TMP_BASE="${TMP_BASE:-/tmp}"
 WART_APP_WASM="${WART_APP_WASM:-/tmp/skiko-component.wasm}"
 
 echo "▸ APPS_ROOT (device): $APPS_ROOT"
-echo "▸ wart-host binary: $REPO_ROOT/wart-host/target/aarch64-linux-android/release/wasm-android-host"
+echo "▸ wart-host binary: $REPO_ROOT/runtime/wart-host/target/aarch64-linux-android/release/wasm-android-host"
 
-WART_HOST="$REPO_ROOT/wart-host/target/aarch64-linux-android/release/wasm-android-host"
+WART_HOST="$REPO_ROOT/runtime/wart-host/target/aarch64-linux-android/release/wasm-android-host"
 if [[ ! -x "$WART_HOST" ]]; then
     echo "✗ wart-host binary missing — run scripts/build-host-android.sh first" >&2
     exit 1

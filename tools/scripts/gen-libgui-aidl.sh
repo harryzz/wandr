@@ -11,7 +11,7 @@
 # Part of task 33 Step 1.0 (libgui ABI de-risking). Re-runnable.
 set -euo pipefail
 
-VENDOR="$(cd "$(dirname "$0")/../wart-host/vendor" && pwd)"
+VENDOR="$(cd "$(dirname "$0")/../../runtime/wart-host/vendor" && pwd)"
 FN="$VENDOR/aosp-frameworks-native"
 HW="$VENDOR/aosp-hardware-interfaces"
 OUT="$VENDOR/generated-aidl"

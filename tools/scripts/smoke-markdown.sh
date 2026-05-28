@@ -34,9 +34,9 @@ exec > >(tee -a "$LOG") 2>&1
 
 # ── 1. markdown-renderer wasm ────────────────────────────────────────────
 echo "▸ [1/10] Building markdown-renderer for wasm32-wasip2 …"
-( cd "$REPO_ROOT/markdown-renderer" \
+( cd "$REPO_ROOT/apps/system/war.markdown.renderer" \
   && cargo build --target wasm32-wasip2 --release --quiet )
-MD_WASM="$REPO_ROOT/markdown-renderer/target/wasm32-wasip2/release/markdown_renderer.wasm"
+MD_WASM="$REPO_ROOT/apps/system/war.markdown.renderer/target/wasm32-wasip2/release/markdown_renderer.wasm"
 ls -la "$MD_WASM"
 
 # ── 2. markdown-renderer cwasm (aarch64-android) ─────────────────────────
@@ -50,27 +50,27 @@ ls -la "$MD_CWASM"
 
 # ── 3. smoke consumer Kotlin/Wasm ────────────────────────────────────────
 echo "▸ [3/10] Building wart-app-md-smoke (Kotlin/Wasm) …"
-( cd "$REPO_ROOT/wart-app-md-smoke" \
+( cd "$REPO_ROOT/repros/wart-app-md-smoke" \
   && ./gradlew compileProductionExecutableKotlinWasmWasi \
        --console=plain --no-daemon )
-SMOKE_KOTLIN_WASM="$REPO_ROOT/wart-app-md-smoke/build/compileSync/wasmWasi/main/productionExecutable/kotlin/wart-app-md-smoke.wasm"
+SMOKE_KOTLIN_WASM="$REPO_ROOT/repros/wart-app-md-smoke/build/compileSync/wasmWasi/main/productionExecutable/kotlin/wart-app-md-smoke.wasm"
 ls -la "$SMOKE_KOTLIN_WASM"
 
 # ── 4. embed + adapt → component ─────────────────────────────────────────
 echo "▸ [4/10] Embedding WIT + adapting with command adapter …"
 SMOKE_EMBED="/tmp/md-smoke-embedded.wasm"
 SMOKE_COMPONENT="/tmp/md-smoke-component.wasm"
-ADAPTER="$REPO_ROOT/wasmtime-src/target/wasm32-unknown-unknown/release/wasi_snapshot_preview1.command.wasm"
+ADAPTER="$REPO_ROOT/external/wasmtime/target/wasm32-unknown-unknown/release/wasi_snapshot_preview1.command.wasm"
 
 if [[ ! -f "$ADAPTER" ]]; then
     echo "✗ command adapter missing: $ADAPTER"
-    echo "  Build with: cd $REPO_ROOT/wasmtime-src && cargo build -p wasi-preview1-component-adapter --target wasm32-unknown-unknown --release --no-default-features --features command"
+    echo "  Build with: cd $REPO_ROOT/external/wasmtime && cargo build -p wasi-preview1-component-adapter --target wasm32-unknown-unknown --release --no-default-features --features command"
     exit 1
 fi
 
 wasm-tools component embed \
     --world md-smoke \
-    "$REPO_ROOT/wart-app-md-smoke/wit" \
+    "$REPO_ROOT/repros/wart-app-md-smoke/wit" \
     "$SMOKE_KOTLIN_WASM" \
     -o "$SMOKE_EMBED"
 wasm-tools component new "$SMOKE_EMBED" \
@@ -89,7 +89,7 @@ ls -la "$SMOKE_CWASM"
 
 # ── 6. push host binary if newer (wart-host already deployed from task 33) ─
 echo "▸ [6/10] Pushing wart-host binary …"
-HOST_BIN="$REPO_ROOT/wart-host/target/aarch64-linux-android/release/wasm-android-host"
+HOST_BIN="$REPO_ROOT/runtime/wart-host/target/aarch64-linux-android/release/wasm-android-host"
 adb push "$HOST_BIN" /data/local/tmp/wart-host >/dev/null
 adb shell "chmod 0755 /data/local/tmp/wart-host"
 

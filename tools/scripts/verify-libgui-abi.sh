@@ -16,7 +16,7 @@ set -euo pipefail
 ELF="${1:?usage: verify-libgui-abi.sh <aarch64-elf>}"
 NDK="${ANDROID_NDK_HOME:-/home/harry/android-ndk-r27d}"
 NM="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
-LIBS="$(cd "$(dirname "$0")/../wart-host/vendor/device-libs" && pwd)"
+LIBS="$(cd "$(dirname "$0")/../../runtime/wart-host/vendor/device-libs" && pwd)"
 
 [ -f "$ELF" ] || { echo "no such ELF: $ELF" >&2; exit 2; }
 ls "$LIBS"/*.so >/dev/null 2>&1 || { echo "no device-libs in $LIBS" >&2; exit 2; }

@@ -15,11 +15,11 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=./env-android.sh
-source "$REPO_ROOT/scripts/env-android.sh"
+source "$REPO_ROOT/tools/scripts/env-android.sh"
 
-cd "$REPO_ROOT/wart-host"
+cd "$REPO_ROOT/runtime/wart-host"
 
-APK_PATH="$REPO_ROOT/wart-host/target/release/apk/wasm_android_host.apk"
+APK_PATH="$REPO_ROOT/runtime/wart-host/target/release/apk/wasm_android_host.apk"
 APK_BEFORE_MTIME=0
 if [[ -f "$APK_PATH" ]]; then
     APK_BEFORE_MTIME=$(stat -c '%Y' "$APK_PATH" 2>/dev/null || stat -f '%m' "$APK_PATH")
