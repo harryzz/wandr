@@ -136,28 +136,20 @@ commit (bigger, full bisect across repos). Default: **omit
 `--squash`** — full history wins for the project's debugging
 patterns.
 
-Branch caveat: the 13 sibling repos use a mix of `main` and
-`task-33-boot-model` for their dev-tip. Subtree-add the
-correct ref per repo:
-
-| Repo                | Branch                  |
-|---------------------|-------------------------|
-| wart-host           | `task-33-boot-model`    |
-| wart-arbiter        | `task-33-boot-model`    |
-| markdown-renderer   | `task-33-boot-model`    |
-| wart-app-md-smoke   | `task-33-boot-model`    |
-| (everything else)   | `main`                  |
+All 13 sibling repos plus the parent wart repo have been
+fast-forwarded so `main` is the dev tip (2026-05-28). Subtree-
+add uses `main` uniformly.
 
 ```
 cd ~/wart
 
-# Native runtime — both on task-33-boot-model
+# Native runtime
 git remote add -f tmp-host    https://codeberg.org/harryzz/wart-host.git
-git subtree add --prefix=runtime/wart-host    tmp-host    task-33-boot-model
+git subtree add --prefix=runtime/wart-host    tmp-host    main
 git remote remove tmp-host
 
 git remote add -f tmp-arb     https://codeberg.org/harryzz/wart-arbiter.git
-git subtree add --prefix=runtime/wart-arbiter tmp-arb     task-33-boot-model
+git subtree add --prefix=runtime/wart-arbiter tmp-arb     main
 git remote remove tmp-arb
 
 # User apps
@@ -171,7 +163,7 @@ git subtree add --prefix=apps/system/war.ime.keyboard tmp-ime main
 git remote remove tmp-ime
 
 git remote add -f tmp-md      https://codeberg.org/harryzz/markdown-renderer.git
-git subtree add --prefix=apps/system/war.markdown.renderer tmp-md task-33-boot-model
+git subtree add --prefix=apps/system/war.markdown.renderer tmp-md main
 git remote remove tmp-md
 
 git remote add -f tmp-em      https://codeberg.org/harryzz/emoji-picker.git
@@ -205,7 +197,7 @@ git subtree add --prefix=repros/md-smoke-rust tmp-mdr main
 git remote remove tmp-mdr
 
 git remote add -f tmp-mdk     https://codeberg.org/harryzz/wart-app-md-smoke.git
-git subtree add --prefix=repros/wart-app-md-smoke tmp-mdk task-33-boot-model
+git subtree add --prefix=repros/wart-app-md-smoke tmp-mdk main
 git remote remove tmp-mdk
 ```
 
