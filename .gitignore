@@ -1,30 +1,18 @@
-# Each of these subdirs is a separate git repo (or vendored sibling project)
-# and is NOT tracked from this top-level. They have their own .gitignore files.
-compose-*/
-skiko/
-wart-*/
-# Exception: wart-stack-magisk/ is plain shell + manifest, not a sibling
-# crate — track it from the top-level repo (task 46 step 5 finisher).
-!wart-stack-magisk/
-# System components (runtime-bundled .wasm packages — see
-# tasks/36-cross-app-deps.md). One repo per component; pattern follows
-# wart-*/.
-markdown-renderer/
+# wart monorepo .gitignore.
+#
+# Post task-52/53 reorg: the previous flat .gitignore of sibling repo
+# names (`wart-*/`, `compose-*/`, `skiko/`, `markdown-renderer/`, ...)
+# is obsolete — those siblings are now either subtree-merged into
+# apps/, runtime/, repros/ (tracked here) or registered as submodules
+# under external/ (tracked at the parent level by gitlink).
+#
+# Each submodule has its own .gitignore inside its own working tree.
+# This .gitignore is for the parent monorepo only.
 
-# Smoke consumers — task-36 step-7 follow-ups. Own repos for symmetry
-# with wart-app-md-smoke/.
-md-smoke-rust/
+# Build artifacts
+**/build/
+**/target/
+**/.gradle/
 
-# Second system component (task 40). Same sibling-repo pattern as
-# markdown-renderer/.
-emoji-picker/
-
-# Third system component (task 41) — /system/fonts/ enumerator.
-system-fonts/
-
-# Task 30 — external sources pulled in for the diagnosis chain. Heavy
-# (kotlin-src ~GBs, wasmtime-src ~MBs); kt-memalloc-repro has its own
-# Codeberg origin.
-kotlin-src/
-wasmtime-src/
-kt-memalloc-repro/
+# Rust
+**/Cargo.lock.bak
