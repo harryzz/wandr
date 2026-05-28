@@ -489,8 +489,8 @@ generic dep wiring.
   shape reference; per-plugin WITs are mechanical copies with renamed
   packages. Trade-off: the IME hard-codes its known plugins
   (LangAdapter's `plugins` registry). Adding a new lang requires
-  re-shipping the IME — acceptable for MVP; host-mediated dynamic
-  loading is a future polish.
+  re-shipping the IME — acceptable for MVP. **TODO: host-mediated
+  dynamic loading** spun out as `tasks/51-dynamic-lang-plugins.md`.
 - **LangAdapter.kt** — hand-written Kotlin/Wasm @WasmImport pairs
   per plugin (`__bg_get_info`/`__bg_get_layout` + the fr versions).
   Canonical-ABI lift helpers `liftInfoVia` + `liftLayoutVia`. Each
