@@ -81,6 +81,13 @@ for repo in wart-host wart-arbiter wart-app war.ime.keyboard \
 done
 ```
 
+**Done 2026-05-28** — all 13 tags pushed.
+
+(Aside: before the tag pass, push any unpushed branch commits so
+the tag's snapshot stays useful. This session caught one
+unpushed commit in `kt-memalloc-repro` (`4946435..eee981e` on
+main) — pushed before tagging proceeded.)
+
 ## Step 2 — Move existing sibling repos out of ~/wart
 
 Subtree-merge **adds** the sibling repo's content under a
@@ -129,16 +136,28 @@ commit (bigger, full bisect across repos). Default: **omit
 `--squash`** — full history wins for the project's debugging
 patterns.
 
+Branch caveat: the 13 sibling repos use a mix of `main` and
+`task-33-boot-model` for their dev-tip. Subtree-add the
+correct ref per repo:
+
+| Repo                | Branch                  |
+|---------------------|-------------------------|
+| wart-host           | `task-33-boot-model`    |
+| wart-arbiter        | `task-33-boot-model`    |
+| markdown-renderer   | `task-33-boot-model`    |
+| wart-app-md-smoke   | `task-33-boot-model`    |
+| (everything else)   | `main`                  |
+
 ```
 cd ~/wart
 
-# Native runtime
+# Native runtime — both on task-33-boot-model
 git remote add -f tmp-host    https://codeberg.org/harryzz/wart-host.git
-git subtree add --prefix=runtime/wart-host    tmp-host    main
+git subtree add --prefix=runtime/wart-host    tmp-host    task-33-boot-model
 git remote remove tmp-host
 
 git remote add -f tmp-arb     https://codeberg.org/harryzz/wart-arbiter.git
-git subtree add --prefix=runtime/wart-arbiter tmp-arb     main
+git subtree add --prefix=runtime/wart-arbiter tmp-arb     task-33-boot-model
 git remote remove tmp-arb
 
 # User apps
@@ -152,7 +171,7 @@ git subtree add --prefix=apps/system/war.ime.keyboard tmp-ime main
 git remote remove tmp-ime
 
 git remote add -f tmp-md      https://codeberg.org/harryzz/markdown-renderer.git
-git subtree add --prefix=apps/system/war.markdown.renderer tmp-md main
+git subtree add --prefix=apps/system/war.markdown.renderer tmp-md task-33-boot-model
 git remote remove tmp-md
 
 git remote add -f tmp-em      https://codeberg.org/harryzz/emoji-picker.git
@@ -186,7 +205,7 @@ git subtree add --prefix=repros/md-smoke-rust tmp-mdr main
 git remote remove tmp-mdr
 
 git remote add -f tmp-mdk     https://codeberg.org/harryzz/wart-app-md-smoke.git
-git subtree add --prefix=repros/wart-app-md-smoke tmp-mdk main
+git subtree add --prefix=repros/wart-app-md-smoke tmp-mdk task-33-boot-model
 git remote remove tmp-mdk
 ```
 
