@@ -476,6 +476,52 @@ generic dep wiring.
 **Success criterion:** tap 🌐 in the IME → cycles
 `English → Bulgarian → French`. Each language renders correctly.
 
+#### Step 5 results
+
+- **Per-plugin WIT packages.** Two deps cannot share the same
+  `linker.instance(name)` entry — `wire_dep_into_linker` would
+  collide on the second `linker.instance(...)` call. The task
+  doc's literal `interface = "war:keyboard-lang/lang@0.1.0"`
+  collision is resolved by giving each plugin its own WIT package:
+  `war:keyboard-lang-bg/lang@0.1.0` (in `war.lang.bg/wit/keyboard-lang-bg.wit`),
+  `war:keyboard-lang-fr/lang@0.1.0` (in `war.lang.fr/wit/keyboard-lang-fr.wit`).
+  The canonical schema stays in `wart/wit/keyboard-lang.wit` as a
+  shape reference; per-plugin WITs are mechanical copies with renamed
+  packages. Trade-off: the IME hard-codes its known plugins
+  (LangAdapter's `plugins` registry). Adding a new lang requires
+  re-shipping the IME — acceptable for MVP; host-mediated dynamic
+  loading is a future polish.
+- **LangAdapter.kt** — hand-written Kotlin/Wasm @WasmImport pairs
+  per plugin (`__bg_get_info`/`__bg_get_layout` + the fr versions).
+  Canonical-ABI lift helpers `liftInfoVia` + `liftLayoutVia`. Each
+  helper opens with `freeAllComponentModelReallocAllocatedMemory()`
+  to avoid the `wasi-realloc-allocator-pollution` trap; without it
+  the second `withScopedMemoryAllocator` in a frame throws
+  `Can't create new allocators while realloc-allocated memory is
+  not freed`.
+- **ImeKeyboardDefaults.wrapLanguageLayout** — pure Kotlin helper
+  wraps a plugin's N letter rows with the IME's uniform digit row /
+  ⇧/⌫ row / utility row.
+- **`loadAllLayouts()`** replaces `layouts()` — merges builtins with
+  `LangAdapter.loadAllLangPlugins()`, placing plugin layouts
+  immediately after English so the 🌐-cycle is `English → bg → fr → …`.
+- **`scripts/pack-ime-keyboard.sh`** — new dedicated packing script
+  for war.ime.keyboard. The IME's `package.toml` declares both
+  langs as `[dependencies]`.
+- **Device verification (2026-05-28)** —
+  ```
+  loader: loaded dep `bg` (war:keyboard-lang-bg/lang@0.1.0) from …
+  loader: loaded dep `fr` (war:keyboard-lang-fr/lang@0.1.0) from …
+  loader: dep `bg` instantiated; wired 2 fn(s) across 1 interface(s)
+  loader: dep `fr` instantiated; wired 2 fn(s) across 1 interface(s)
+  LangAdapter: loaded 2 plugin(s): Български, Français
+  ImeKeyboard: layoutName=English   editorType=TEXT  userReq=English
+  → user taps 🌐 →
+  ImeKeyboard: layoutName=Български  editorType=TEXT  userReq=Български
+  ImeKeyboard: layoutName=Français   editorType=TEXT  userReq=Français
+  ImeKeyboard: layoutName=English    editorType=TEXT  userReq=English
+  ```
+
 ### Step 6 — Smoke + memory + close-out (~30 min)
 
 - Device smoke covering the four pivots:

@@ -112,7 +112,7 @@ EOF
 pack_warpkg "$BG_PKG" "$BG_WASM" "lang" "$(cat <<'EOF'
 app_id      = "war.lang.bg"
 version     = "0.1.0"
-world       = "war:keyboard-lang/lang-world"
+world       = "war:keyboard-lang-bg/lang-world"
 kind        = "system"
 composition = "same-store"
 
@@ -124,7 +124,7 @@ EOF
 pack_warpkg "$FR_PKG" "$FR_WASM" "lang" "$(cat <<'EOF'
 app_id      = "war.lang.fr"
 version     = "0.1.0"
-world       = "war:keyboard-lang/lang-world"
+world       = "war:keyboard-lang-fr/lang-world"
 kind        = "system"
 composition = "same-store"
 
