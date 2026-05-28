@@ -540,6 +540,28 @@ generic dep wiring.
   reference: "task 49 supplies the inbound socket; step 4 reuses
   it for tap-outside-to-hide / `request-hide` / focus changes."
 
+#### Step 6 results
+
+- **Pivot 3 (🌐 cycle)** device-verified live 2026-05-28:
+  English → Български → Français → English. See step 5 results
+  for the logcat trace.
+- **Pivots 1 (regular → English), 2 (Number → Numeric, 🌐 hidden),
+  and 4 (Phone → phone keypad)** verified-by-construction. The
+  `pickLayout` logic that maps `editor-type → built-in layout`
+  was added in step 2 and is unchanged here. `adb shell input
+  tap` injection didn't reach wart-app's BasicTextField cleanly
+  on this device today (unrelated to task 49 — likely focus
+  routing on the launcher-vs-wart-app boundary; the in-app
+  `attach-editor` path is empirically OK from real-finger taps
+  per the 07:37:08 log entry).
+- New memory `feedback_ime_layout_arbitration.md` captures the
+  editor-type-override vs user-cycle dichotomy plus the
+  built-in / plugin source split.
+- `tasks/47-ime-via-guest-app.md` Step 4 prefaced with a forward
+  reference: the per-host inbound socket task 49 added is the
+  channel step 4 will reuse for `request-hide` / tap-outside.
+- `CLAUDE.md` status table extended with the new row.
+
 ## File-touch map
 
 | Repo | File(s) | Why |

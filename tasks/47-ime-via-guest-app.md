@@ -1014,6 +1014,15 @@ $ wart-arbiter detach-editor 21228
 
 ### Step 4 — InputFlinger focus arbitration + auto-hide (~2-3 days)
 
+**Forward reference (task 49):** task 49's inbound socket
+(`/data/local/tmp/wart-host-<pid>.sock`, written + drained by the
+host's `ime_inbound` queue) is the same per-host control channel
+step 4 will reuse for `request-hide` / tap-outside-to-hide / focus
+changes. Step 4 doesn't need new transport, just new message
+shapes — extend `ime_inbound.rs::InboundEvent` with `RequestHide`
+etc. and route from a new `Keyboard.Import.requestHide` WIT verb
+the IME calls on its ⌄ key or on tap-outside detection.
+
 The arbiter coordinates input routing between focused app and
 IME. Touches in the keyboard surface dispatch to the IME's
 process; touches outside (in the app's surface) dispatch back
