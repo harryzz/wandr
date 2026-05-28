@@ -16,6 +16,7 @@ build instructions see `~/wart/CLAUDE.md` and each subproject's
 | [`architecture-host-guest-boundary.md`](architecture-host-guest-boundary.md) | Anyone touching a WIT contract or `wart-host/src/*_impl.rs` | What is `renderFrame(nanos)` — is it inlined? What does "host-driven" mean? How does a single frame flow across the WASM Component-Model boundary? |
 | [`architecture-runtime.md`](architecture-runtime.md) | Anyone touching `wart-host` / `wart-arbiter`, or debugging app launch / focus / lifecycle | What are the three processes (zygote, arbiter, host child) and how do they talk? Full transport tables for the three UNIX sockets + the three signals. End-to-end trace of `wart-arbiter launch <app>`. |
 | [`architecture-ime.md`](architecture-ime.md) | Anyone touching `war.ime.keyboard`, the lang plugins, or `ime_inbound` / `keyboard_host_impl` | How does a soft-keyboard tap become a Compose `KeyEvent` in the focused TextField? How are lang plugins (`war.lang.bg` / `.fr`) loaded, and what's TODO (task 51) to make plugin loading dynamic? |
+| [`repository-layout.md`](repository-layout.md) | Anyone adding a new app, system component, native binary, or vendored upstream | Where does it live? What do I name it? Canonical top-level categories (`apps/`, `runtime/`, `wit/`, `external/`, `tools/`, `repros/`) and the `wart-*` vs `war.*` naming rule. Mid-migration as of 2026-05-28 — see task 52. |
 
 ## Conventions
 
