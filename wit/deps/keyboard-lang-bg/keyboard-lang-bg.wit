@@ -1,0 +1,33 @@
+// Per-plugin WIT for the Bulgarian language plugin. Shape identical
+// to `wart/wit/keyboard-lang.wit` (the canonical reference); only the
+// package name is per-plugin so two plugins can coexist in the IME's
+// linker without colliding on `LinkerInstance::instance(name)`.
+//
+// Convention: war:keyboard-lang-<lang-id>@0.1.0 — `<lang-id>` matches
+// the BCP-47 short tag and the `war.lang.<id>/` directory name.
+
+package war:keyboard-lang-bg@0.1.0;
+
+interface lang {
+    record info {
+        name:   string,
+        locale: string,
+        is-rtl: bool,
+    }
+    record key-def {
+        display:    string,
+        code-point: u32,
+        key-id:     u32,
+        width:      f32,
+    }
+    type key-row = list<key-def>;
+    record layout-variant {
+        rows: list<key-row>,
+    }
+    get-info:   func() -> info;
+    get-layout: func(shifted: bool) -> layout-variant;
+}
+
+world lang-world {
+    export lang;
+}

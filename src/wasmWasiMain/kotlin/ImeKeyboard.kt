@@ -215,9 +215,49 @@ object ImeKeyboardDefaults {
         ),
     )
 
-    // Bulgarian moved out to `war.lang.bg/` (task 49 step 3). It now
-    // loads at IME startup via the `war:keyboard-lang/lang` plugin
-    // contract (task 49 step 5).
+    // Bulgarian + French moved out to `war.lang.bg/` + `war.lang.fr/`.
+    // They load at IME startup via the `war:keyboard-lang-*/lang`
+    // plugin contracts (task 49 step 5, `LangAdapter.kt`).
+
+    /** Wrap a plugin's 3 rows of letter keys with the IME-uniform
+     *  digits / shift / utility rows. Plugin contract: returns N rows
+     *  of letters; this code prepends the shared digit row, flanks
+     *  the LAST plugin row with ⇧ + ⌫, and appends the standard
+     *  utility row (123 / 🌐 / 😀 / space / `.` / ⏎ / ⌄). Behavior
+     *  identical to the original inline Bulgarian / English layouts. */
+    fun wrapLanguageLayout(
+        name:              String,
+        letterRows:        List<List<KeyDef>>,
+        shiftedLetterRows: List<List<KeyDef>>,
+    ): KeyboardLayout {
+        fun wrap(rows: List<List<KeyDef>>, bottomPunct: KeyDef): List<List<KeyDef>> {
+            val letterTopRows = rows.dropLast(1).ifEmpty { listOf(emptyList()) }
+            val lastRow       = rows.lastOrNull().orEmpty()
+            return buildList {
+                add(digitsRow)
+                addAll(letterTopRows)
+                add(buildList {
+                    add(KeyDef("⇧", KeyAction.Shift, width = 1.5f))
+                    addAll(lastRow)
+                    add(backspace)
+                })
+                add(listOf(
+                    KeyDef("123", KeyAction.SwitchLayout("Symbols"), width = 1.3f),
+                    KeyDef("🌐",  KeyAction.CycleLanguage,            width = 1f),
+                    KeyDef("😀",  KeyAction.SwitchLayout("Emoji"),    width = 1f),
+                    space.copy(width = 3.4f),
+                    bottomPunct,
+                    enter,
+                    hide,
+                ))
+            }
+        }
+        return KeyboardLayout(
+            name        = name,
+            rows        = wrap(letterRows,        text(".")),
+            shiftedRows = wrap(shiftedLetterRows, text(",")),
+        )
+    }
 
 /** Digits + common punctuation. */
     val Symbols: KeyboardLayout = KeyboardLayout(
@@ -443,11 +483,29 @@ object ImeKeyboardDefaults {
      *  (Numeric / Phone / Email / Url / Password) follow; auxiliary
      *  (Symbols / Symbols2 / Emoji) last. Position doesn't affect the
      *  🌐 cycle — that filters by `isLanguage = true`. */
-    fun layouts(): List<KeyboardLayout> = listOf(
+    private fun builtins(): List<KeyboardLayout> = listOf(
         English,
         Numeric, Phone, Email, Url, Password,
         Symbols, Symbols2, Emoji,
     )
+
+    /** Built-in layouts merged with plugin-loaded language layouts.
+     *  Called once at composition root. The plugin layouts are
+     *  appended AFTER the built-in English so the 🌐-cycle order is
+     *  `English → bg → fr → …`. Failures during plugin lift are
+     *  swallowed in `LangAdapter` so a broken plugin doesn't break
+     *  the IME. */
+    fun loadAllLayouts(): List<KeyboardLayout> {
+        val bins    = builtins()
+        val plugins = LangAdapter.loadAllLangPlugins()
+        // Insert plugin layouts right after English (index 0), so
+        // editor-driven + symbols still tail at fixed positions.
+        return buildList {
+            add(bins[0])              // English first
+            addAll(plugins)           // bg, fr, …
+            addAll(bins.drop(1))      // editor-driven + auxiliary
+        }
+    }
 }
 
 // ─── Layout-pick policy (task 49 step 2) ──────────────────────────────
@@ -496,7 +554,7 @@ internal fun isEditorTypeOverride(
 
 @Composable
 fun ImeKeyboard(
-    layouts: List<KeyboardLayout> = ImeKeyboardDefaults.layouts(),
+    layouts: List<KeyboardLayout> = ImeKeyboardDefaults.loadAllLayouts(),
     initialLayoutName: String = "English",
 ) {
     // userRequestedLayout — what the user actively cycled / switched to.

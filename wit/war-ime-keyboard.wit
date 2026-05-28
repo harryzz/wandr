@@ -12,4 +12,10 @@ package war:ime-keyboard@0.1.0;
 world ime-keyboard {
     include my:skiko-gfx/skiko-ui@0.1.0;
     include war:ime/ime-events@0.1.0;
+    // Step 5 — declared language plugins. One import per plugin
+    // (each plugin uses its own WIT package because two deps cannot
+    // share the same `linker.instance(name)` entry); adding a new
+    // language requires an entry here + an @WasmImport in LangAdapter.
+    import war:keyboard-lang-bg/lang@0.1.0;
+    import war:keyboard-lang-fr/lang@0.1.0;
 }
