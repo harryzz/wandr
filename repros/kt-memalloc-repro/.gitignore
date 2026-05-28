@@ -1,0 +1,7 @@
+build/
+.gradle/
+.kotlin/
+*.iml
+.idea/
+local.properties
+YOUTRACK_ISSUE.md
