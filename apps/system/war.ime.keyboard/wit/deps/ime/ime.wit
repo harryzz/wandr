@@ -1,0 +1,190 @@
+// Task 47 — IME via dedicated guest app (Path B).
+//
+// Protocol contract between the runtime + IME apps + editor-bearing
+// guests. The IME app (e.g. `war.ime.keyboard`, future `war.ime.voice`,
+// `war.ime.emoji`, `war.ime.zh`) IMPORTS `input-connection` to deliver
+// text + keys, and EXPORTS `ime` to receive lifecycle events.
+//
+// The arbiter is the routing layer (analogous to Android's IMMS): it
+// holds the active-IME + focused-editor state and relays calls between
+// IME and focused-app processes. Editor-bearing guests don't import
+// from `war:ime` directly — their skiko-wasi adapter reaches the
+// arbiter through the existing host bindings.
+//
+// Future IMEs (voice, emoji, CJK / Indic) plug in via the SAME
+// contract — no protocol changes. See tasks/47-ime-via-guest-app.md
+// "Future IMEs" section.
+
+package war:ime@0.1.0;
+
+
+/// Shared type definitions — moved into a dedicated interface (task 49
+/// step 1b) because WIT's strict parser rejects bare `enum` / `record`
+/// at the top level of a package. Both `input-connection` and `ime`
+/// pull these in via `use types.{…}`.
+interface types {
+    /// Coarse classification of the editor's input type. Mirrors a subset
+    /// of Android's `InputType.TYPE_CLASS_*` family. The IME uses this to
+    /// pick a layout — QWERTY for `text`, numeric pad for `number`, etc.
+    enum input-type {
+        text,
+        number,
+        phone,
+        email,
+        url,
+        password,
+        multiline-text,
+    }
+
+    /// Distinguishes a key-down from a key-up event in `send-key-event`.
+    enum key-action {
+        down,
+        up,
+    }
+
+    /// Metadata about the editor that has just gained focus. Passed once
+    /// per attach via `ime.on-editor-attached`. The IME uses `input-type`
+    /// to choose its layout; `hint` to show a placeholder; `initial-text`
+    /// + `initial-selection-{start,end}` to populate its prediction
+    /// context.
+    ///
+    /// Indices are utf-16 code units to match Android's `TextView` API
+    /// (Compose's `TextFieldState` also uses utf-16-ish positions —
+    /// composing-text spans are reported in the same units).
+    record editor-info {
+        input-type: input-type,
+        hint: string,
+        initial-text: string,
+        initial-selection-start: u32,
+        initial-selection-end: u32,
+    }
+}
+
+
+/// Imported by the IME app. The runtime (via the arbiter) routes
+/// these calls to the currently-focused app's editor. The IME calls
+/// these when the user taps a key, picks a CJK candidate, accepts an
+/// autocorrect suggestion, etc.
+///
+/// Two delivery paths coexist (matching Android's `InputConnection`):
+///
+///   • `send-key-event` — the "virtual hardware keyboard" path. The
+///     IME synthesizes a key event with a code-point + key-id; the
+///     focused app dispatches it the same way as a physical
+///     keyboard press. Used by simple IMEs for non-printable keys
+///     (backspace, arrows, enter), and by purely-ASCII keyboards
+///     that don't need autocorrect.
+///
+///   • `commit-text` / `set-composing-text` / `finish-composing-text`
+///     — the "smart IME" path. The IME hands the focused field a
+///     string directly. `set-composing-text` marks the text as
+///     in-progress (rendered with an underline by the editor) so the
+///     IME can revise it mid-stream — essential for CJK candidate
+///     selection, autocorrect, and "still typing" indicators.
+///     `finish-composing-text` finalizes the composing region into
+///     committed text. `commit-text` skips the composing intermediate
+///     and commits immediately, replacing any active composing region.
+interface input-connection {
+    use types.{key-action};
+
+    /// Commit text to the editor at the cursor, replacing any active
+    /// composing region. Used by autocorrect-style IMEs and as the
+    /// "just type this string" primitive.
+    commit-text: func(text: string);
+
+    /// Synthesize a key event. `code-point` is the Unicode char if
+    /// printable (0 for non-printable / meta keys). `key-id` is a
+    /// Compose-Key-compatible numeric ID (e.g. 8 = backspace, 13 =
+    /// enter, 37..40 = arrows). `action` distinguishes down vs up.
+    ///
+    /// The focused app's render loop dispatches this through the same
+    /// path as `dispatch_android_key` (task 33 step 3) — Compose sees
+    /// a `KeyEvent` indistinguishable from a hardware keyboard press.
+    send-key-event: func(code-point: u32, key-id: u32, action: key-action);
+
+    /// Mark text as in-progress composition. Replaces any prior
+    /// composing region with this new text. Used by CJK / candidate-
+    /// based IMEs to show the "still typing" underlined region, and
+    /// by autocorrect IMEs to revise the most-recent word before
+    /// committing.
+    set-composing-text: func(text: string);
+
+    /// Finalize the current composing region into committed text. Any
+    /// subsequent `commit-text` / `set-composing-text` starts a fresh
+    /// composing session.
+    finish-composing-text: func();
+
+    /// Set the editor's text selection. Indices are utf-16 code units
+    /// to match Android's TextView API.
+    set-selection: func(start: u32, end: u32);
+
+    /// Read up to `max` utf-16 code units of text before the cursor —
+    /// context for the IME's autocorrect / prediction / candidate
+    /// generation. Returns empty if the cursor is at position 0.
+    get-text-before-cursor: func(max: u32) -> string;
+
+    /// Read up to `max` utf-16 code units of text after the cursor.
+    /// Same use case as `get-text-before-cursor`; some IMEs need both
+    /// sides for full bidirectional context.
+    get-text-after-cursor: func(max: u32) -> string;
+}
+
+
+/// Exported by the IME app. The runtime (via the arbiter) calls these
+/// when global state changes — a focused editor appears, the user
+/// switches focus to a different app, etc. The IME reacts by showing
+/// or hiding its keyboard surface.
+///
+/// Task 49 step 1b note: the params are primitive types (no strings,
+/// no records) on purpose. Wasmtime's typed export lowering for a
+/// record-with-strings param invokes the guest's `cabi_realloc`, which
+/// in Kotlin/Wasm requires `freeAllComponentModelReallocAllocatedMemory()`
+/// to be called before the lowering opens a fresh allocator scope —
+/// not something the host-side wasmtime call can arrange. Passing
+/// the only datum the IME needs for layout pick (`input-type`) as a
+/// bare enum sidesteps `cabi_realloc` entirely. The hint /
+/// initial-text / selection-bounds were nice-to-have for the IME's
+/// internal state; they can come over the `input-connection` later
+/// or as a separate `set-editor-text(text)` verb if/when needed.
+interface ime {
+    use types.{input-type};
+
+    /// A focused editor is now active in the foreground app. The IME
+    /// should reveal its surface (the arbiter has already flipped the
+    /// SF layer's visibility) and configure its layout for the given
+    /// `input-type`.
+    on-editor-attached: func(input-type: input-type);
+
+    /// The editor lost focus or was destroyed. The IME should hide its
+    /// surface and reset any in-progress composing state.
+    on-editor-detached: func();
+}
+
+
+/// World implemented by every IME app. Imports the input-connection
+/// surface (what the IME calls into the focused app via the arbiter),
+/// exports the ime surface (what the runtime calls into the IME app).
+///
+/// IME apps are regular wart `.warpkg`s installed under
+/// `<APPS_ROOT>/apps/`. The arbiter's `set-ime <app-id>` command picks
+/// which installed app is the currently-active IME; the user can
+/// install many (war.ime.keyboard / war.ime.voice / war.ime.zh / ...)
+/// and switch between them at runtime.
+world ime-client-world {
+    import input-connection;
+    export ime;
+}
+
+/// Stripped sibling world for IMEs that don't use war:ime/input-connection
+/// directly (e.g. war.ime.keyboard, which routes key events through
+/// the existing my:skiko-gfx/keyboard interface introduced in
+/// task 47 step 3b). Same `ime` export so the host can call into
+/// `on-editor-attached` / `on-editor-detached` uniformly; no
+/// `input-connection` import to satisfy.
+///
+/// Used by task 49 step 1b — wart-host bindgen's against this world
+/// to get a typed `EditorInfo` + `call_on_editor_attached` without
+/// needing to provide Host impls for the 7 input-connection verbs.
+world ime-events {
+    export ime;
+}
