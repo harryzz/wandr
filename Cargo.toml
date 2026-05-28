@@ -1,0 +1,23 @@
+[package]
+name    = "war-lang-fr"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# French AZERTY language plugin for war.ime.keyboard (task 49 step 4).
+# Second lang plugin — proves the contract works for a non-Cyrillic
+# script with French-specific keys (accent dead-key positions, ù, etc).
+# Sibling pattern to `war.lang.bg/`: Rust cdylib, wasm32-wasip2, no
+# host deps, baked-in static layout data.
+#
+# Contract: `wit/keyboard-lang.wit` (war:keyboard-lang/lang@0.1.0).
+#
+# Build:
+#   cargo build --target wasm32-wasip2 --release
+# Pack + install: scripts/build-system-warpkgs.sh.
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.46"
