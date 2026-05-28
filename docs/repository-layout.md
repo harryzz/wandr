@@ -92,10 +92,6 @@ external/
 ├── skiko/                          # ~/skiko fork (symlink or in-tree)
 ├── wasmtime-src/                   # wasmtime fork (own engine)
 ├── compose-multiplatform-core/     # Compose Multiplatform port
-├── compose-bundles-wasi/           # the 11 fat-klib bundler dirs
-│   ├── compose-foundation-layout-wasi/
-│   ├── compose-ui-wasi/
-│   └── ... (9 more)
 └── kotlin/                         # Kotlin build override (was `kotlin-src/`)
 ```
 

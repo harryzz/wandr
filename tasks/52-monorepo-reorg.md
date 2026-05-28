@@ -114,9 +114,6 @@ one directory; be explicit about ownership boundaries.
 │   ├── skiko/                      # symlink → ~/skiko (or moved in-tree)
 │   ├── wasmtime-src/
 │   ├── compose-multiplatform-core/
-│   ├── compose-bundles-wasi/       # the 11 fat-klib bundlers
-│   │   ├── compose-foundation-layout-wasi/
-│   │   └── … (10 more)
 │   └── kotlin/                     # kotlin-src/, renamed
 │
 ├── tools/                          # build helpers + diagnostic harnesses
@@ -203,7 +200,6 @@ codeberg origin. Specifically:
 | `skiko/`                      | `external/skiko/` (still a symlink) |
 | `wasmtime-src/`               | `external/wasmtime-src/`            |
 | `compose-multiplatform-core/` | `external/compose-multiplatform-core/`|
-| `compose-*-wasi/` (×11)       | `external/compose-bundles-wasi/*`   |
 | `kotlin-src/`                 | `external/kotlin/`                  |
 | `scripts/`                    | `tools/scripts/`                    |
 | `patches/`                    | `tools/patches/`                    |
@@ -240,7 +236,7 @@ Files most affected:
 - `runtime/wart-host/Cargo.toml` (any `path = "../wasmtime-src/…"`)
 - `runtime/wart-host/build.rs` (vendor paths)
 - `apps/system/war.markdown.renderer/src/lib.rs` (`wit_bindgen::generate!({ path: "../wit/markdown.wit", … })` → `path: "../../../wit/markdown.wit"`)
-- `apps/*/build.gradle.kts` (skiko + compose-*-wasi paths)
+- `apps/*/build.gradle.kts` (skiko + compose-multiplatform-core paths)
 - Every `wit/deps/` symlink or copy of the canonical WIT
 - `CLAUDE.md` (the Repository layout section)
 
@@ -306,10 +302,6 @@ row. Memory `feedback_repo_layout.md` captures the convention.
 - WIT mirroring. Each warpkg copies the canonical WIT into
   `wit/deps/`. Could replace with symlinks (task 53 candidate)
   but not in scope here.
-- The 11 compose-*-wasi dirs (now folded under
-  `external/compose-bundles-wasi/`). Whether to consolidate them
-  further is a separate task — these are upstream-compatible
-  bundle dirs and need to stay shaped that way.
 - `tasks/` history. Old task docs reference old paths. Leave
   as-is; they're frozen snapshots.
 
