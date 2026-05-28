@@ -52,6 +52,7 @@ build_system_wasm() {
 MD_WASM=$(build_system_wasm "markdown-renderer" "markdown_renderer.wasm")
 EM_WASM=$(build_system_wasm "emoji-picker"      "emoji_picker.wasm")
 FT_WASM=$(build_system_wasm "system-fonts"      "system_fonts.wasm")
+BG_WASM=$(build_system_wasm "war.lang.bg"       "war_lang_bg.wasm")
 
 # ── 2. Package each warpkg directory ────────────────────────────────────
 
@@ -67,6 +68,7 @@ pack_warpkg() {
 MD_PKG="$TMP_BASE/markdown.warpkg"
 EM_PKG="$TMP_BASE/emoji.warpkg"
 FT_PKG="$TMP_BASE/fonts.warpkg"
+BG_PKG="$TMP_BASE/lang-bg.warpkg"
 APP_PKG="$TMP_BASE/wart-app.warpkg"
 
 pack_warpkg "$MD_PKG" "$MD_WASM" "renderer" "$(cat <<'EOF'
@@ -102,6 +104,18 @@ composition = "same-store"
 
 [components]
 loader = "components/loader.wasm"
+EOF
+)"
+
+pack_warpkg "$BG_PKG" "$BG_WASM" "lang" "$(cat <<'EOF'
+app_id      = "war.lang.bg"
+version     = "0.1.0"
+world       = "war:keyboard-lang/lang-world"
+kind        = "system"
+composition = "same-store"
+
+[components]
+lang = "components/lang.wasm"
 EOF
 )"
 
@@ -147,7 +161,7 @@ EOF
 echo ""
 echo "▸ pushing warpkg dirs to device …"
 # adb push of dir-onto-dir nests; rm the device-side copy first.
-for pkg in "$MD_PKG" "$EM_PKG" "$FT_PKG" "$APP_PKG"; do
+for pkg in "$MD_PKG" "$EM_PKG" "$FT_PKG" "$BG_PKG" "$APP_PKG"; do
     name="$(basename "$pkg")"
     adb shell "rm -rf /data/local/tmp/$name"
     adb push "$pkg" "/data/local/tmp/$name" >/dev/null
@@ -159,7 +173,7 @@ echo "  import-resolution check passes) …"
 adb shell "su -c 'rm -rf $APPS_ROOT && mkdir -p $APPS_ROOT'"
 
 WART_ENV="LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT"
-for pkg in markdown emoji fonts wart-app; do
+for pkg in markdown emoji fonts lang-bg wart-app; do
     echo "  install $pkg.warpkg"
     adb shell "su -c '$WART_ENV /data/local/tmp/wart-host --install /data/local/tmp/$pkg.warpkg'"
 done

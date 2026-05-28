@@ -361,6 +361,32 @@ war.lang.bg/components/lang.wasm` validates against
 `wit/keyboard-lang.wit`. The IME's English QWERTY still works after
 Bulgarian is removed (because it's loaded as a plugin now).
 
+#### Step 3 results
+
+- `wit/keyboard-lang.wit` written, validated with `wasm-tools component
+  wit`. Mirrored to `war.ime.keyboard/wit/deps/keyboard-lang/`. Not
+  mirrored to `wart-app/wit/deps/` — wart-app doesn't import the
+  contract.
+- `war.lang.bg/` Rust cdylib added: `Cargo.toml` + `src/lib.rs`
+  (~60 LoC). Exports `war:keyboard-lang/lang@0.1.0` with `get-info` →
+  `{ name = "Български", locale = "bg-BG", is-rtl = false }` and
+  `get-layout(shifted)` returning the 3-row БДС-style ЯВЕРТЫ data
+  (uppercase + lowercase variants) verbatim from the Kotlin source
+  that lived in `ImeKeyboardDefaults.Bulgarian`. Build:
+  `cargo build --target wasm32-wasip2 --release` succeeds (~44 s cold);
+  `wasm-tools component wit target/.../war_lang_bg.wasm` shows
+  `export war:keyboard-lang/lang@0.1.0`.
+- `war.ime.keyboard` updated:
+  - `ImeKeyboard.kt`: `Bulgarian` KeyboardLayout deleted; `layouts()`
+    list no longer references it; file-top comment + `RealComposeApp`
+    comment updated to point at task 49 step 5 for plugin loading.
+- IME re-built via `compileProductionExecutableKotlinWasmWasi` — passes,
+  English QWERTY still drives the 🌐 cycle (now a 1-element cycle until
+  step 5 wires plugins in).
+- The `scripts/build-system-warpkgs.sh` integration is deferred to step
+  5 (alongside the IME's `[dependencies]` declaration and the Kotlin
+  `LangAdapter`). Step 3's scope was just the contract + first plugin.
+
 ### Step 4 — Sample language plugin: war.lang.fr (~1 h)
 
 New sibling repo `war.lang.fr/` (Rust cdylib). Static AZERTY data.
