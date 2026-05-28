@@ -93,22 +93,22 @@ contract changes, edit it here, then sync mirrors.
 ```
 external/
 ├── skiko/                          # codeberg.org/harryzz/skiko (fork)
-├── wasmtime-src/                   # codeberg.org/harryzz/wasmtime-src (fork)
+├── wasmtime/                       # codeberg.org/harryzz/wasmtime (fork — was wasmtime-src/)
 ├── compose-multiplatform-core/     # codeberg.org/harryzz/compose-multiplatform-core (fork)
 └── kotlin/                         # codeberg.org/harryzz/kotlin (build override)
 ```
 
 Each is a **git submodule** pointing at our codeberg fork. The
 fork tracks upstream + carries any local patches (e.g.
-`external/wasmtime-src/` carries the KT-86415 adapter-State
-fix). Bumping a fork is one explicit operation:
+`external/wasmtime/` carries the KT-86415 adapter-State fix).
+Bumping a fork is one explicit operation:
 
 ```
-cd external/wasmtime-src
+cd external/wasmtime
 git pull origin main       # or rebase against upstream + push
 cd ../..
-git add external/wasmtime-src
-git commit -m "external/wasmtime-src: bump to <sha>"
+git add external/wasmtime
+git commit -m "external/wasmtime: bump to <sha>"
 ```
 
 Cloning the monorepo:
@@ -152,7 +152,7 @@ participate in `cargo build --workspace` etc.
 |------------------------------------------------------|---------------------|------------------------------------------------|
 | Native binary (Rust, ships in /data/local/tmp)       | `wart-<kebab>`      | `wart-host`, `wart-arbiter`                    |
 | Warpkg / app (anything that ends up as a `.warpkg`)  | `war.<dot-id>`      | `war.ime.keyboard`, `war.lang.bg`, `war.markdown.renderer` |
-| Vendored fork / external                             | upstream name as-is | `skiko`, `wasmtime-src`, `compose-multiplatform-core` |
+| Vendored fork / external                             | upstream name, no `-src` suffix | `skiko`, `wasmtime`, `compose-multiplatform-core`, `kotlin` |
 | Reproducer                                           | `<thing>-repro`     | `wart-leak-repro`, `kt-memalloc-repro`         |
 | Smoke artifact                                       | `<thing>-smoke`     | `md-smoke-rust`, `wart-app-md-smoke`           |
 | Tooling subdir                                       | descriptive lowercase | `scripts`, `patches`, `triage`               |

@@ -111,10 +111,10 @@ one directory; be explicit about ownership boundaries.
 │   └── system-fonts.wit
 │
 ├── external/                       # vendored / forked upstreams (huge)
-│   ├── skiko/                      # symlink → ~/skiko (or moved in-tree)
-│   ├── wasmtime-src/
+│   ├── skiko/                      # was ~/wart/skiko/
+│   ├── wasmtime/                   # was ~/wart/wasmtime-src/, suffix dropped
 │   ├── compose-multiplatform-core/
-│   └── kotlin/                     # kotlin-src/, renamed
+│   └── kotlin/                     # was ~/wart/kotlin-src/, suffix dropped
 │
 ├── tools/                          # build helpers + diagnostic harnesses
 │   ├── scripts/                    # existing scripts/
@@ -142,7 +142,7 @@ one directory; be explicit about ownership boundaries.
 |------------------------------------------|---------------------|------------------------|
 | Native binary (Rust, ship in /data/local/tmp) | `wart-<kebab>` | `wart-host`, `wart-arbiter` |
 | Warpkg / app (Compose or cdylib, ships as `.warpkg`) | `war.<dot-id>` | `war.ime.keyboard`, `war.lang.bg`, `war.markdown.renderer` |
-| Vendored fork / external                 | upstream name as-is | `skiko`, `wasmtime-src`, `compose-multiplatform-core` |
+| Vendored fork / external                 | upstream name, no `-src` suffix | `skiko`, `wasmtime`, `compose-multiplatform-core`, `kotlin` |
 | Repro / dev artifact                     | `<thing>-repro` or `<thing>-smoke` | `wart-leak-repro`, `md-smoke-rust` |
 | Tooling subdir                           | descriptive         | `scripts`, `patches`, `triage` |
 
@@ -198,7 +198,7 @@ codeberg origin. Specifically:
 | `war.lang.bg/`                | `apps/system/lang/war.lang.bg/`     |
 | `war.lang.fr/`                | `apps/system/lang/war.lang.fr/`     |
 | `skiko/`                      | `external/skiko/` (still a symlink) |
-| `wasmtime-src/`               | `external/wasmtime-src/`            |
+| `wasmtime-src/`               | `external/wasmtime/`                |
 | `compose-multiplatform-core/` | `external/compose-multiplatform-core/`|
 | `kotlin-src/`                 | `external/kotlin/`                  |
 | `scripts/`                    | `tools/scripts/`                    |
@@ -233,7 +233,7 @@ grep -rEn '(wart-host|wart-arbiter|wart-app|war\.ime\.keyboard|war\.lang\.bg|war
 Files most affected:
 - `tools/scripts/*.sh` (every script that references the old
   paths)
-- `runtime/wart-host/Cargo.toml` (any `path = "../wasmtime-src/…"`)
+- `runtime/wart-host/Cargo.toml` (any `path = "../wasmtime-src/…"` → `path = "../../external/wasmtime/…"`)
 - `runtime/wart-host/build.rs` (vendor paths)
 - `apps/system/war.markdown.renderer/src/lib.rs` (`wit_bindgen::generate!({ path: "../wit/markdown.wit", … })` → `path: "../../../wit/markdown.wit"`)
 - `apps/*/build.gradle.kts` (skiko + compose-multiplatform-core paths)
@@ -364,11 +364,11 @@ monorepo). No data loss.
 | Upstream / fork                                        | Submodule target              |
 |--------------------------------------------------------|-------------------------------|
 | `codeberg.org/harryzz/skiko.git`                       | `external/skiko/`             |
-| `codeberg.org/harryzz/wasmtime-src.git` *(needs push)* | `external/wasmtime-src/`      |
+| `codeberg.org/harryzz/wasmtime.git` *(needs push)*     | `external/wasmtime/`          |
 | `codeberg.org/harryzz/compose-multiplatform-core.git`  | `external/compose-multiplatform-core/` |
 | `codeberg.org/harryzz/kotlin.git` *(needs push)*       | `external/kotlin/`            |
 
-The wasmtime-src + kotlin-src trees currently track upstream
+The `wasmtime-src/` + `kotlin-src/` trees currently track upstream
 `github.com/bytecodealliance/wasmtime` and `github.com/JetBrains/kotlin`
 but carry local commits (e.g. wasmtime carries the KT-86415
 adapter fix `058822330`). Before the submodule wiring, those

@@ -20,25 +20,37 @@
 - A backup tag pushed on each sibling repo before the merge
   (`pre-monorepo-merge`).
 
-## Step 0 — Push wasmtime-src + kotlin-src forks to codeberg
+## Step 0 — Push wasmtime + kotlin forks to codeberg
 
 These two upstream trees carry local commits that need their
-own remote before they can be submoduled:
+own remote before they can be submoduled. The codeberg fork
+names drop the `-src` suffix to match the
+`skiko`/`compose-multiplatform-core` convention — the dir at
+`~/wart/wasmtime-src/` becomes `external/wasmtime/`, and
+`~/wart/kotlin-src/` becomes `external/kotlin/`.
 
-- `wasmtime-src`: local commit `058822330 wasi-preview1 adapter:
-  pin State at a fixed linear-memory address (KT-86415)` —
-  the partition trick from task 34.
-- `kotlin-src`: any local builds / patches.
+- `~/wart/wasmtime-src`: local commit `058822330 wasi-preview1
+  adapter: pin State at a fixed linear-memory address (KT-86415)`
+  — the partition trick from task 34.
+- `~/wart/kotlin-src`: any local builds / patches.
 
 Action (per repo):
 ```
 cd ~/wart/wasmtime-src
-git remote add codeberg https://codeberg.org/harryzz/wasmtime-src.git
+git remote add codeberg https://codeberg.org/harryzz/wasmtime.git
 git push -u codeberg HEAD:main
-# (similarly for kotlin-src — fork URL: codeberg.org/harryzz/kotlin.git)
+
+cd ~/wart/kotlin-src
+git remote add codeberg https://codeberg.org/harryzz/kotlin.git
+git push -u codeberg HEAD:main
 ```
 
-User has to create the codeberg repos first (web UI).
+User has to create the **empty** codeberg repos first:
+- `https://codeberg.org/harryzz/wasmtime`
+- `https://codeberg.org/harryzz/kotlin`
+
+(Web UI → "+ Create new" → "New Repository" — leave all
+"Initialize…" boxes unchecked.)
 
 ## Step 1 — Backup tag on every sibling repo
 
@@ -73,9 +85,9 @@ done
 
 # Forks too — about to become submodules
 mv ~/wart/skiko                       ~/wart-premerge-backup/
-mv ~/wart/wasmtime-src                ~/wart-premerge-backup/
+mv ~/wart/wasmtime-src                ~/wart-premerge-backup/  # → external/wasmtime
+mv ~/wart/kotlin-src                  ~/wart-premerge-backup/  # → external/kotlin
 mv ~/wart/compose-multiplatform-core  ~/wart-premerge-backup/
-mv ~/wart/kotlin-src                  ~/wart-premerge-backup/
 ```
 
 ## Step 3 — Create the new directory shape
@@ -172,7 +184,7 @@ and `ls apps/system/`.
 ```
 cd ~/wart
 git submodule add https://codeberg.org/harryzz/skiko.git                        external/skiko
-git submodule add https://codeberg.org/harryzz/wasmtime-src.git                 external/wasmtime-src
+git submodule add https://codeberg.org/harryzz/wasmtime.git                     external/wasmtime
 git submodule add https://codeberg.org/harryzz/compose-multiplatform-core.git   external/compose-multiplatform-core
 git submodule add https://codeberg.org/harryzz/kotlin.git                       external/kotlin
 
@@ -184,9 +196,9 @@ git commit -m "task 53: wire upstream forks as submodules"
 [submodule "external/skiko"]
     path = external/skiko
     url = https://codeberg.org/harryzz/skiko.git
-[submodule "external/wasmtime-src"]
-    path = external/wasmtime-src
-    url = https://codeberg.org/harryzz/wasmtime-src.git
+[submodule "external/wasmtime"]
+    path = external/wasmtime
+    url = https://codeberg.org/harryzz/wasmtime.git
 [submodule "external/compose-multiplatform-core"]
     path = external/compose-multiplatform-core
     url = https://codeberg.org/harryzz/compose-multiplatform-core.git
