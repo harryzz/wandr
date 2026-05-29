@@ -1,0 +1,40 @@
+# dioxus-canvas — a "tiny Blitz" renderer that drives the wart canvas WIT from a
+# dioxus VirtualDom (task 59). WIT-agnostic: the renderer talks to the host only
+# through the `CanvasSink` trait, so a guest warpkg owns its own trimmed
+# `my:skiko-gfx` WIT + `wit_bindgen::generate!`/`export!` (matching war.launcher)
+# and wires the generated `canvas::*` bindings to `CanvasSink`. This keeps the
+# renderer host-testable (mock sink) and free of wit-bindgen macro hygiene.
+#
+# Builds into each guest cdylib; the guest is the wasm32-wasip2 component.
+[package]
+name    = "dioxus-canvas"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# Renderer talks to dioxus-core (VirtualDom / WriteMutations / Template) and
+# dioxus-html (the event-converter machinery + MouseData). default-features off
+# drops serde/serialize — smaller binary; the guest's `dioxus` facade re-enables
+# what `rsx!` needs and cargo unifies to one crate version (same types).
+#
+# dioxus 0.7 builds for wasm32-wasip2 ONLY with the vendored+patched `subsecond`
+# (see the [patch.crates-io] below + external/subsecond/README.md + task 60).
+# Without it, dioxus-core 0.7's non-optional `subsecond` dep pulls wasm-bindgen
+# for any wasm32 target and the guest won't link under wasm-component-ld.
+dioxus-core = { version = "0.7", default-features = false }
+dioxus-html = { version = "0.7", default-features = false }
+taffy       = "0.7"
+
+[dev-dependencies]
+# The `dioxus` facade (for `rsx!`/`use_signal`) drives the host-side unit
+# tests against a mock CanvasSink. Cargo unifies dioxus-core/dioxus-html with
+# the lib deps, so the `Element`/`VirtualDom` types match.
+dioxus = { version = "0.7", default-features = false, features = ["macro", "html", "signals", "hooks"] }
+
+# Required for the wasm32-wasip2 build (task 60). `[patch]` is per build-root, so
+# this is repeated in each dioxus guest; here it covers `cargo build/test -p
+# dioxus-canvas` builds of this crate on its own. Drop once the cfg fix lands
+# in a released dioxus.
+[patch.crates-io]
+subsecond = { path = "../../external/subsecond" }

@@ -61,6 +61,9 @@ TB_WASM=$(build_system_wasm "apps/system/war.taskbar"           "war_taskbar.was
 FT_WASM=$(build_system_wasm "apps/system/war.fonts.loader"      "system_fonts.wasm")
 BG_WASM=$(build_system_wasm "apps/system/lang/war.lang.bg"       "war_lang_bg.wasm")
 FR_WASM=$(build_system_wasm "apps/system/lang/war.lang.fr"       "war_lang_fr.wasm")
+# Task 59 — the dioxus demo: a reactive Rust guest rendered via the
+# dioxus-canvas "tiny Blitz" over the canvas WIT (~516 KB; user app).
+DX_WASM=$(build_system_wasm "apps/user/war.dioxus.demo"          "war_dioxus_demo.wasm")
 
 # ── 2. Package each warpkg directory ────────────────────────────────────
 
@@ -82,6 +85,7 @@ APP_PKG="$TMP_BASE/wart-app.warpkg"
 LN_PKG="$TMP_BASE/launcher.warpkg"
 SB_PKG="$TMP_BASE/statusbar.warpkg"
 TB_PKG="$TMP_BASE/taskbar.warpkg"
+DX_PKG="$TMP_BASE/dioxus-demo.warpkg"
 
 pack_warpkg "$MD_PKG" "$MD_WASM" "renderer" "$(cat <<'EOF'
 app_id      = "war.markdown.renderer"
@@ -170,6 +174,20 @@ ui = "components/ui.wasm"
 EOF
 )"
 
+# Task 59 — dioxus demo (user app: no `kind` → installs under apps/, listed
+# by the launcher as a tile). Self-contained — no [dependencies].
+pack_warpkg "$DX_PKG" "$DX_WASM" "ui" "$(cat <<'EOF'
+app_id      = "war.dioxus.demo"
+version     = "0.1.0"
+world       = "my:skiko-gfx/skiko-ui"
+composition = "same-store"
+label       = "Dioxus Demo"
+
+[components]
+ui = "components/ui.wasm"
+EOF
+)"
+
 pack_warpkg "$BG_PKG" "$BG_WASM" "lang" "$(cat <<'EOF'
 app_id      = "war.lang.bg"
 version     = "0.1.0"
@@ -238,7 +256,7 @@ EOF
 echo ""
 echo "▸ pushing warpkg dirs to device …"
 # adb push of dir-onto-dir nests; rm the device-side copy first.
-for pkg in "$MD_PKG" "$EM_PKG" "$FT_PKG" "$BG_PKG" "$FR_PKG" "$LN_PKG" "$SB_PKG" "$TB_PKG" "$APP_PKG"; do
+for pkg in "$MD_PKG" "$EM_PKG" "$FT_PKG" "$BG_PKG" "$FR_PKG" "$LN_PKG" "$SB_PKG" "$TB_PKG" "$DX_PKG" "$APP_PKG"; do
     name="$(basename "$pkg")"
     adb shell "rm -rf /data/local/tmp/$name"
     adb push "$pkg" "/data/local/tmp/$name" >/dev/null
@@ -250,7 +268,7 @@ echo "  import-resolution check passes) …"
 adb shell "su -c 'rm -rf $APPS_ROOT && mkdir -p $APPS_ROOT'"
 
 WART_ENV="LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT"
-for pkg in markdown emoji fonts lang-bg lang-fr launcher statusbar taskbar wart-app; do
+for pkg in markdown emoji fonts lang-bg lang-fr launcher statusbar taskbar dioxus-demo wart-app; do
     echo "  install $pkg.warpkg"
     adb shell "su -c '$WART_ENV /data/local/tmp/wart-host --install /data/local/tmp/$pkg.warpkg'"
 done

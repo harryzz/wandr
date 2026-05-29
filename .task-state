@@ -1,5 +1,5 @@
-TASK=55
-STEP=verify-done
+TASK=60
+STEP=complete
 STATUS=complete
-LAST_SUCCESS=Task 55 status bar device-verified — top-overlay Rust guest shows wart·clock·battery over the launcher. Geometry-param overlay shim (sf_create_overlay_surface(x,y,w,h)) per design discussion; my:skiko-gfx/status host verbs (date+sysfs); war.statusbar ~48KB. libsf_surface.so rebuilt on a-03.
-NOTES=v1 follow-ups: content insets (on-insets-changed), war.statusbar→system-apps/, arbiter launch-overlay-top + boot integration, notification area, chrome z-layer reservation.
+LAST_SUCCESS=Tasks 59+60 complete. 59: dioxus-canvas renderer + war.dioxus.demo on dioxus 0.7, device-verified. measure-text WIT verb DROPPED — text now measured via existing host paragraph interface (build→layout→get-max-intrinsic-width+get-height→drop, cached); host rebuilt measure-text-free + redeployed; demo re-verified against it (renders, bigger fonts). 60: dioxus 0.7 unblocked via vendored+patched subsecond (external/subsecond/) + [patch.crates-io]; upstream PR DioxusLabs/dioxus#5602.
+NOTES=WITs synced (canonical + skiko + wart-app + ime mirrors all md5 641fb68; demo has own trimmed subset w/ paragraph, no measure-text). wart repo task-59+60 work UNCOMMITTED in working tree — user cautious re actions; ask before committing. Open: task 58 (chrome overlays don't rotate in landscape). On-device dioxus taps confirmed by user ("counter increases"); this-session taps blocked by QuickstepLauncher focus steal (known standalone issue).

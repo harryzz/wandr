@@ -17,14 +17,15 @@ underlying rationale + research are in
 
 ## Top-level categories
 
-Five buckets at the root, plus meta dirs (docs, tasks,
-CLAUDE.md). The bucket a thing belongs to is determined by what
-it ships as, not what language it's written in.
+Buckets at the root, plus meta dirs (docs, tasks, CLAUDE.md). The
+bucket a thing belongs to is determined by what it ships as, not
+what language it's written in.
 
 ```
 ~/wart/
 ├── apps/          # warpkgs — anything that lands on the device as a .warpkg
 ├── runtime/       # native Rust binaries — the host stack
+├── crates/        # shared guest-side Rust libraries (compiled INTO warpkgs)
 ├── wit/           # canonical WIT contracts (single source of truth)
 ├── external/      # vendored / forked upstream code
 ├── tools/         # build scripts, patches, dev diagnostics
@@ -44,7 +45,8 @@ apps/
 │       ├── war.lang.bg/
 │       └── war.lang.fr/
 └── user/          # first-party user-facing apps
-    └── wart-app/                # the Compose demo
+    ├── wart-app/                # the Compose demo
+    └── war.dioxus.demo/         # reactive dioxus guest (task 59)
 ```
 
 A warpkg is anything that:
@@ -70,6 +72,21 @@ runtime/
 
 The "native" stack: nothing here is a Wasm component. These are
 the ARM64 binaries that actually run as Linux processes.
+
+### `crates/` — shared guest-side Rust libraries
+
+```
+crates/
+└── dioxus-canvas/    # "tiny Blitz": dioxus VirtualDom → taffy → canvas WIT
+```
+
+Library crates (not `cdylib`s themselves) that compile **into** guest
+warpkgs as a normal path dependency. Unlike `runtime/` (host binaries) or
+`apps/` (shippable warpkgs), a `crates/` lib never ships on its own — it's
+reusable guest framework code. `dioxus-canvas` is the reactive-UI renderer
+that drives the canvas WIT from a dioxus app; `war.dioxus.demo` (and future
+rich Rust guests) path-depend on it. Kept WIT-agnostic via a `CanvasSink`
+trait so it stays host-testable; the consuming warpkg owns the trimmed WIT.
 
 ### `wit/` — canonical WIT
 

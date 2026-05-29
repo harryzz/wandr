@@ -90,12 +90,12 @@ launcher's "layout once, replay" discipline).
   (except popups later), animations, or CSS cascade/specificity. Inline
   styles / a tiny style map, not a stylesheet engine.
 - **Text via host fonts** — never bundle a font or measure text in-guest
-  (Skia owns metrics; see [[feedback_android_fonts]]). The measure-text
-  verb is the one new host capability this needs.
+  (Skia owns metrics; see [[feedback_android_fonts]]). Measurement reuses the
+  existing host `paragraph` interface (NOT a new verb — see "Dependency notes").
 - **No DOM/WebView/GPU** — canvas WIT only ([[feedback_no_art_layer_dependencies]]).
 - Single component, `same-store`, leak-immune (no Kotlin) — installs +
-  launches with zero wart-host changes (task 39 generic loader), except
-  the one new `measure-text` WIT verb.
+  launches with **zero wart-host WIT additions** (task 39 generic loader; text
+  measured via the pre-existing `paragraph` interface).
 
 ## Steps
 
@@ -130,6 +130,99 @@ launcher's "layout once, replay" discipline).
    investment to make BEFORE the first genuinely complex Rust guest
    (settings, notification shade, file picker). Prioritize when such a
    guest is actually scoped, or to retire a Compose guest that leaks.
+
+## Results — device-verified 2026-05-29 ✅
+
+All 8 steps landed; the demo renders + reacts on the Pixel 2 XL.
+
+**Shipped:**
+- `crates/dioxus-canvas/` — the reusable renderer (new top-level `crates/` bucket
+  for shared guest-side libs; documented in `docs/repository-layout.md`).
+  - `sink.rs` — `CanvasSink` trait: the WIT-agnostic host boundary (the guest
+    forwards it to its own generated `canvas::*`). Keeps the renderer
+    host-testable + free of wit-bindgen macro hygiene.
+  - `dom.rs` — the dioxus **`WriteMutations` stack machine** over compile-time
+    `Template`s. **Key learning:** `rebuild_to_vec()` drops the `Template`
+    payload ("for testing"); a real renderer MUST implement `WriteMutations` to
+    receive `load_template(template, …)` and instantiate the static skeleton.
+    The interpreter mirrors dioxus-web/tui: `load_template` pushes the
+    instantiated root; `assign_node_id`/`replace_placeholder` navigate paths
+    **relative to the template root**, not `stack.last()` — so
+    `replace_placeholder_with_nodes` must pop its `m` nodes *first*, then the new
+    top-of-stack is the template root (this was the one bug found in testing).
+  - `style.rs` — minimal CSS subset (`style="…"` decl list) → `taffy::Style` +
+    paint props (background/color/font/radius), with inheritance for text.
+  - `events.rs` — installs the global `HtmlEventConverter` dioxus-html requires
+    (else the first event panics) + a hand-rolled `HasMouseData` for clicks
+    (the `Serialized*` types are `serialize`-feature-gated, which we keep off).
+  - `lib.rs` — `DomRenderer`: VirtualDom → arena → taffy `compute_layout_with_measure`
+    (text leaves measured through `CanvasSink::measure_text`, cached) → draw-op
+    list + hit rects → replay each frame (launcher-style "layout once, replay";
+    re-diff only on dirty). `tests/render.rs` validates the whole chain on host
+    (render + click → count 0→1).
+- Text measurement (for taffy text leaves): **no new host verb** — reuses the
+  host's existing `paragraph` interface (task 14). The demo's `CanvasSink::measure_text`
+  builds a single-run paragraph, `layout`s it unconstrained, and reads
+  `get-max-intrinsic-width` + `get-height`, then drops it (cached in-guest). An
+  earlier `measure-text` verb was added then **removed** in favour of this — see
+  the dependency note below.
+- `apps/user/war.dioxus.demo/` — the demo guest cdylib (trimmed WIT like
+  war.launcher; `HostSink` wires `canvas::*` → `CanvasSink`; thread-local
+  `DomRenderer`; counter + button + 4-item list). **516 KB** (< 600 KB target).
+- `tools/scripts/build-system-warpkgs.sh` — builds/packs/pushes/installs it
+  under `apps/` (user app; launcher lists it).
+
+**On device:** flexbox column (bold title + count line + blue rounded button +
+four rounded list cards) renders with host fonts (SourceSansPro-Bold + Roboto
+via paragraph-measured layout; no clipping/overlap); tapping the button
+increments the signal and the UI repaints the new count; stable 68 s, no
+leak/SIGILL; ~1440×2880 fullscreen.
+
+**Follow-ups (not blocking):**
+- Input had no debounce — the count advanced by more than the tap count
+  (phantom / multi-`Down` per `adb input tap`). Add tap debounce / track
+  press-release pairing if exactness matters.
+- Scrolling/overflow, popups/portals, keyboard events (the `events.rs`
+  converters for non-mouse types are `unimplemented!`) — deferred per scope
+  guards; add with the first text-input / long-list dioxus guest.
+
+## Dependency / version notes (researched 2026-05-29)
+
+- **Text measurement reuses the host `paragraph` interface — no new WIT verb.**
+  The first cut added a `measure-text: func(...) -> tuple<f32,f32>` to the canvas
+  interface; it was **removed** to avoid expanding the host WIT surface, since the
+  existing `paragraph` interface (task 14) already measures: the guest builds a
+  single-run paragraph, `layout`s it unconstrained, reads `get-max-intrinsic-width`
+  (natural width) + `get-height`, and drops it (cached per unique text/font in the
+  guest). The demo's trimmed WIT imports a small `paragraph` subset; the host
+  provides the full interface. Device-verified against a `measure-text`-free host.
+
+- **Now on dioxus 0.7** (since task 60, 2026-05-29). It was initially pinned to
+  0.6 because 0.7 is a wasm32-wasip2 wall: `dioxus-core
+  0.7` has a *non-optional* dep on `subsecond` (the hot-patch engine), which
+  pulls `wasm-bindgen`/`js-sys`/`web-sys` for any `cfg(target_arch = "wasm32")`
+  (wasip2 included). Those `__wbindgen_*` imports don't link under
+  `wasm-component-ld`, and no feature disables subsecond. 0.7's renderer core
+  (`WriteMutations`/`Template`/`Mutation`) is otherwise compatible — the only
+  source changes were a new `convert_cancel_data` converter method + a
+  `Modifiers` import path — but the subsecond→wasm-bindgen chain blocks the
+  guest build entirely. See the pin comment in `crates/dioxus-canvas/Cargo.toml`.
+- **Why we depend on `dioxus-html` (and can't swap it for `native`/`native-dom`).**
+  `dioxus-html` is the *vocabulary* layer, not a renderer: `rsx!` hardcodes
+  resolution through a module named `dioxus_elements` (`dioxus_elements::div::<attr>`
+  tuples + `dioxus_elements::events::onclick(handler)`), and the `dioxus` facade
+  aliases `dioxus_html as dioxus_elements`. So our tags/attrs + the `onclick`
+  event-data type (`MouseData`) + the global `HtmlEventConverter` all come from
+  it. `dioxus-native`/`blitz-dom` ("native"/"native-dom") do NOT offer a lighter
+  vocabulary — Blitz *depends on* dioxus-html and renders the HTML/CSS namespace
+  via stylo + vello/wgpu (the heavy path the spike rejected). The only way to
+  drop dioxus-html is a **custom `dioxus_elements` namespace** (dioxus's
+  documented custom-elements path): our own element modules + an `events` module
+  with `Event<OurData>` types — which would also delete the event-converter hack
+  and shed `keyboard-types`/`euclid`/`enumset`. Deferred: most of dioxus-html's
+  bulk (66 KB `elements.rs` + 94 KB `attribute_groups.rs`) is zero-sized/`const`
+  and LTO-stripped already, so the binary win is uncertain (mainly the event
+  subsystem). Revisit as a cleanliness/size pass if it matters.
 
 ## Related
 
