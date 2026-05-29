@@ -215,6 +215,20 @@ Locked by `keyboard_avoidance_scrolls_focused_field_then_blurs` (host test).
    (`enable_rotation` gated to `OverlayMode::None` in `standalone.rs:352`), so in
    landscape the IME keyboard (and status bar / taskbar) stay portrait. Scoped as
    a follow-up (`tasks/62-overlay-orientation.md`).
+3. **Single-pointer only — no multi-touch / multi-finger gestures.** The WIT
+   boundary is multi-touch-shaped (`on-pointer-event-v2` carries `pointer-id` +
+   `pressure`), but the renderer collapses to one pointer (single `captured` /
+   `down` / `focused`, dispatches `MouseData`; `convert_pointer_data` /
+   `convert_touch_data` are `unimplemented!`), the demo drops `_pid`/`_pressure`
+   (`lib.rs:148`), and the shim only emits `ACTION_MOVE` for pointer `idx=0`
+   (`cpp/sf_surface.cpp:399`). Single-finger tap/drag/scroll work (hand-rolled in
+   the renderer's `Down` state machine); richer single-finger gestures
+   (long-press, swipe, double-tap, fling) are a renderer-only addition (timing via
+   the `render_frame(nanos)` clock). Multi-finger (pinch/rotate/two-finger pan)
+   needs all three layers: shim `0..getPointerCount()` loop on MOVE (a-03
+   rebuild), a per-`pointer-id` map in the renderer + `pointer*`/`touch*` dioxus
+   events, and the demo passing `_pid` through. Not blocked; just unimplemented
+   above the WIT line. Note only — not scoped to a task yet.
 
 ## Related
 
