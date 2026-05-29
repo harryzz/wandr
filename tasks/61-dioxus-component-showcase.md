@@ -122,7 +122,21 @@ gallery needs three expansions:
   frame (avoids re-entering the borrowed renderer from a button handler).
   Default **1.5×** (the panel is hi-dpi). Device-verified: `+` took it
   1.50×→1.75×→2.00× live, whole UI scaling. 6 host tests total.
-- **Task complete** — all 3 phases + scale shipped + committed.
+- **Vertical scrolling (follow-up, 2026-05-29).** Long pages / large scales now
+  scroll. Content lays out at **natural height** (root height `Auto`, so the flex
+  column can exceed the surface); `scroll_y` is applied at paint-replay
+  (`y - scroll_y`) and hit-test (`y + scroll_y`) time — **scrolling needs no
+  relayout**, just a repaint. Reworked the touch model into tap/scroll/slider:
+  a press on a draggable element (slider/HSV) captures it as before; otherwise
+  the press starts a gesture that becomes a **scroll** once it moves past
+  `SCROLL_THRESHOLD` (16px), or a **tap → click on release** if it doesn't move
+  (click moved from down→up; existing buttons unaffected). Found+fixed a latent
+  bug: the slider-down path wasn't marking the renderer dirty, so a slider value
+  change didn't repaint. Device-verified: at 2.25× a swipe scrolled the Slider
+  card (below the fold) into view. Limitation: root-level scroll moves the whole
+  page incl. the tab bar (scroll back up to reach tabs) — a sticky header /
+  per-region scroll would need a clip-rect canvas verb (future).
+- **Task complete** — all 3 phases + scale + scrolling shipped + committed.
 
 ## Related
 

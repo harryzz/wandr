@@ -60,6 +60,20 @@ struct HitRect {
     flags: u8,
 }
 
+/// In-progress non-slider gesture (tap vs. scroll). A press that isn't on a
+/// draggable element starts here; on move past a threshold it becomes a scroll,
+/// otherwise on release it's a tap → `click`.
+struct Down {
+    start_y: f32,
+    last_y: f32,
+    content_y: f32,
+    click_eid: Option<u32>,
+    scrolling: bool,
+}
+
+/// Movement (px) past which a press becomes a scroll instead of a tap.
+const SCROLL_THRESHOLD: f32 = 16.0;
+
 /// The renderer. Construct with the guest's root component, then drive it from
 /// the `renderer` WIT export (`render_frame` / `on_pointer_down` / `on_resize`).
 pub struct DomRenderer {
@@ -82,6 +96,13 @@ pub struct DomRenderer {
     /// paint multiply lengths/fonts by this, and input element-relative coords
     /// are divided by it (so guest coordinate math stays in logical px).
     scale: f32,
+    /// Vertical scroll offset (physical px) + total laid-out content height.
+    /// Content is laid out at natural height; the viewport scrolls. Applied at
+    /// paint-replay + hit-test time — scrolling needs no relayout.
+    scroll_y: f32,
+    content_h: f32,
+    /// In-progress tap/scroll gesture (non-slider press).
+    down: Option<Down>,
     blobs: Vec<u32>,
     /// `(text, family, size-bits, weight, italic)` → `(w, h)`. Avoids a host
     /// round-trip per text leaf per layout (taffy measures repeatedly).
@@ -101,6 +122,9 @@ impl DomRenderer {
             captured: None,
             focused: None,
             scale: 1.0,
+            scroll_y: 0.0,
+            content_h: 0.0,
+            down: None,
             blobs: Vec::new(),
             measure_cache: HashMap::new(),
         }
@@ -141,15 +165,18 @@ impl DomRenderer {
             self.dirty = false;
         }
 
+        // Draw ops are in content space; the viewport scrolls by subtracting
+        // scroll_y. Off-viewport content is clipped by the surface bounds.
+        let sy = self.scroll_y;
         sink.begin_frame();
         sink.clear(0xFF12121A);
         for op in &self.draw_ops {
             match *op {
                 DrawOp::Rrect { x, y, w, h, r, color } => {
-                    sink.fill_rrect(x, y, w, h, r, r, Fill { color });
+                    sink.fill_rrect(x, y - sy, w, h, r, r, Fill { color });
                 }
                 DrawOp::Text { blob, x, y, color } => {
-                    sink.draw_text_blob(blob, x, y, Fill { color });
+                    sink.draw_text_blob(blob, x, y - sy, Fill { color });
                 }
             }
         }
@@ -170,30 +197,48 @@ impl DomRenderer {
             .handle_event(name, events::mouse_event(x, y, ex, ey), ElementId(eid as usize), true);
     }
 
-    pub fn on_pointer_down(&mut self, x: f32, y: f32) {
-        // Topmost pointer target under the point.
-        let hit = self
-            .hits
+    /// Hit-test in content space (incoming `y` is viewport; add `scroll_y`).
+    fn hit_at(&self, x: f32, content_y: f32) -> Option<(u32, u8, f32, f32, f32, f32)> {
+        self.hits
             .iter()
             .rev()
-            .find(|h| x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h)
-            .map(|h| (h.eid, h.flags, h.x, h.y, h.w, h.h));
-        if let Some((eid, flags, hx, hy, hw, hh)) = hit {
-            let (ex, ey) = (x - hx, y - hy);
-            if flags & F_DOWN != 0 {
-                self.dispatch("mousedown", eid, x, y, ex, ey);
-            }
-            if flags & F_CLICK != 0 {
-                self.dispatch("click", eid, x, y, ex, ey);
-            }
-            // A draggable element (listens for move) captures the pointer.
-            if flags & F_MOVE != 0 {
+            .find(|h| x >= h.x && x <= h.x + h.w && content_y >= h.y && content_y <= h.y + h.h)
+            .map(|h| (h.eid, h.flags, h.x, h.y, h.w, h.h))
+    }
+
+    fn max_scroll(&self) -> f32 {
+        (self.content_h - self.surface.1).max(0.0)
+    }
+
+    pub fn on_pointer_down(&mut self, x: f32, y: f32) {
+        let cy = y + self.scroll_y; // content-space y
+        let hit = self.hit_at(x, cy);
+        match hit {
+            // A draggable element (slider/picker) captures the pointer — no
+            // scroll/tap gesture; drag goes straight to it.
+            Some((eid, flags, hx, hy, hw, hh)) if flags & F_MOVE != 0 => {
                 self.captured = Some((eid, hx, hy, hw, hh));
+                if flags & F_DOWN != 0 {
+                    self.dispatch("mousedown", eid, x, y, x - hx, cy - hy);
+                }
+                self.focused = None;
+                self.dirty = true;
             }
-            // Tapping a text input focuses it (for key routing); tapping a
-            // non-input clears focus.
-            self.focused = if flags & F_KEY != 0 { Some(eid) } else { None };
-            self.dirty = true;
+            // Otherwise begin a tap/scroll gesture; defer click to release.
+            _ => {
+                let (click_eid, focus) = match hit {
+                    Some((eid, flags, ..)) => (
+                        if flags & F_CLICK != 0 { Some(eid) } else { None },
+                        if flags & F_KEY != 0 { Some(eid) } else { None },
+                    ),
+                    None => (None, None),
+                };
+                self.focused = focus;
+                self.down = Some(Down { start_y: y, last_y: y, content_y: cy, click_eid, scrolling: false });
+                if focus.is_some() {
+                    self.dirty = true;
+                }
+            }
         }
     }
 
@@ -222,21 +267,44 @@ impl DomRenderer {
 
     pub fn on_pointer_move(&mut self, x: f32, y: f32) {
         if let Some((eid, hx, hy, hw, hh)) = self.captured {
-            // Clamp the element-relative point to the element's box so a drag
-            // past the edge still reports a sensible value.
+            // Slider/picker drag (content-space, clamped to the element box).
             let ex = (x - hx).clamp(0.0, hw);
-            let ey = (y - hy).clamp(0.0, hh);
+            let ey = ((y + self.scroll_y) - hy).clamp(0.0, hh);
             self.dispatch("mousemove", eid, x, y, ex, ey);
             self.dirty = true;
+            return;
+        }
+        // Otherwise: tap → scroll once the press moves past the threshold.
+        let max = self.max_scroll();
+        if let Some(d) = self.down.as_mut() {
+            if !d.scrolling && (y - d.start_y).abs() > SCROLL_THRESHOLD {
+                d.scrolling = true;
+            }
+            if d.scrolling {
+                let dy = y - d.last_y;
+                d.last_y = y;
+                self.scroll_y = (self.scroll_y - dy).clamp(0.0, max);
+                self.dirty = true;
+            }
         }
     }
 
     pub fn on_pointer_up(&mut self, x: f32, y: f32) {
         if let Some((eid, hx, hy, hw, hh)) = self.captured.take() {
             let ex = (x - hx).clamp(0.0, hw);
-            let ey = (y - hy).clamp(0.0, hh);
+            let ey = ((y + self.scroll_y) - hy).clamp(0.0, hh);
             self.dispatch("mouseup", eid, x, y, ex, ey);
             self.dirty = true;
+            return;
+        }
+        // A press that didn't become a scroll is a tap → click on release.
+        if let Some(d) = self.down.take() {
+            if !d.scrolling {
+                if let Some(eid) = d.click_eid {
+                    self.dispatch("click", eid, x, d.content_y, 0.0, 0.0);
+                    self.dirty = true;
+                }
+            }
         }
     }
 
@@ -268,12 +336,15 @@ impl DomRenderer {
             .iter()
             .map(|&n| self.build_taffy(&mut taffy, &mut map, n, &PaintProps::default(), sink))
             .collect();
+        // Root: full surface width, NATURAL height (content may exceed the
+        // surface → it scrolls). Height left auto so the column takes its
+        // content height; available height is MaxContent (unbounded).
         let root_style = Style {
             display: Display::Flex,
             flex_direction: FlexDirection::Column,
             size: Size {
                 width: Dimension::Length(self.surface.0),
-                height: Dimension::Length(self.surface.1),
+                height: Dimension::Auto,
             },
             ..Default::default()
         };
@@ -303,6 +374,10 @@ impl DomRenderer {
                 )
                 .unwrap();
         }
+
+        // Record total content height + re-clamp the scroll offset to it.
+        self.content_h = taffy.layout(root).map(|l| l.size.height).unwrap_or(self.surface.1);
+        self.scroll_y = self.scroll_y.clamp(0.0, self.max_scroll());
 
         // Walk the laid-out tree (absolute coords) → draw ops + hit rects.
         for &n in &self.dom.root_children().to_vec() {

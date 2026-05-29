@@ -79,9 +79,10 @@ fn renders_and_reacts_to_click() {
     // There should be exactly one clickable rect (the button).
     let (cx, cy) = r.first_hit_center().expect("button is hit-testable");
 
-    // Click it, then render the next frame: the signal increments and the
-    // count text must update via the incremental diff path.
+    // Tap it (down+up, no movement → click on release), then render: the signal
+    // increments and the count text updates via the incremental diff path.
     r.on_pointer_down(cx, cy);
+    r.on_pointer_up(cx, cy);
     let rec2 = Rc::new(RefCell::new(Recorder::default()));
     let mut sink2 = MockSink { rec: rec2.clone() };
     r.render_frame(&mut sink2);
@@ -193,6 +194,7 @@ fn drag_reports_element_relative_coords() {
     let rec = Rc::new(RefCell::new(Recorder::default()));
     let mut r = DomRenderer::new(slider_app);
     r.render_frame(&mut MockSink { rec: rec.clone() });
+    assert!(rec.borrow().drawn_text.iter().any(|t| t == "val: 0"), "FIRST render: {:?}", rec.borrow().drawn_text);
 
     // Down at surface x=50 (track is at origin, 200 wide) → element x=50.
     r.on_pointer_down(50.0, 20.0);
@@ -227,6 +229,7 @@ fn conditional_rendering_toggles() {
 
     // Toggle on → CHECK appears, empty gone.
     r.on_pointer_down(cx, cy);
+    r.on_pointer_up(cx, cy);
     let rec2 = Rc::new(RefCell::new(Recorder::default()));
     r.render_frame(&mut MockSink { rec: rec2.clone() });
     assert!(rec2.borrow().drawn_text.iter().any(|t| t == "CHECK"), "checked after 1st click: {:?}", rec2.borrow().drawn_text);
@@ -234,6 +237,7 @@ fn conditional_rendering_toggles() {
 
     // Toggle off → back to empty (remove + recreate path).
     r.on_pointer_down(cx, cy);
+    r.on_pointer_up(cx, cy);
     let rec3 = Rc::new(RefCell::new(Recorder::default()));
     r.render_frame(&mut MockSink { rec: rec3.clone() });
     assert!(rec3.borrow().drawn_text.iter().any(|t| t == "empty"), "unchecked after 2nd click: {:?}", rec3.borrow().drawn_text);
