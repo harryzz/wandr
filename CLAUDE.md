@@ -176,56 +176,109 @@ device-side HAL is wanted from Compose `performHapticFeedback()`.
 
 ## Repository layout
 
+Post-monorepo-merge (tasks 52 + 53, 2026-05-29). The canonical
+deeper reference is [`docs/repository-layout.md`](docs/repository-layout.md).
+Brief shape:
+
 ```
-wart/
-  .task-state                          ← checkpoint — never delete
-  CLAUDE.md                            ← this file
-  .claude/agents/                      ← cargo-triage, gradle-triage, wit-triage, wasm-component-build, skiko-kt-impl
-  wart-host/                           ← Rust host binary (wasmtime + skia + winit) + APK [README.md + BUILD.md]
-    Cargo.toml
-    build.rs
-    .cargo/config.toml                 ← Android cross-compile linker (keep API level == Cargo.toml min_sdk_version)
-    src/
-      lib.rs, main.rs
-      canvas_impl.rs                   ← WIT canvas trait → skia-safe
-      paragraph_impl.rs                ← host-side Skia paragraph layout
-      window_impl.rs, scheduler_impl.rs
-      input.rs                         ← winit events → WIT exports
-      lifecycle_impl.rs, clipboard_impl.rs, haptics_impl.rs
-      locale_impl.rs, pointer_icon_impl.rs, text_segmentation_impl.rs
-      egl.rs                           ← EGL context for Android GPU
-      bionic_compat.rs                 ← NDK linker shims (Android only)
-    cpp/wasi_drawable.cpp              ← SkDrawable subclass with mutable sk_sp<SkPicture>
-    assets/skiko-component.cwasm       ← default WASM component, embedded in APK
-  wart-app/                            ← Kotlin/Compose guest application [README.md + BUILD.md]
-    src/wasmWasiMain/kotlin/           ← Main.kt + per-feature smoke-test files
-  wit/
-    skiko-gfx.wit                      ← WIT interface — SOURCE OF TRUTH
-  skiko/                               ← symlink → ~/skiko (skiko fork) [README-wasmWasi.md + BUILD-wasmWasi.md]
-    skiko/src/wasmWasiMain/kotlin/     ← Skia / Skiko stubs + WIT bindings
-      generated/                       ← WIT-bindgen output (hand-edited as needed)
-      org/jetbrains/skia/              ← SkiaTypes.wasi.kt, paragraph/, icu/, ...
-      org/jetbrains/skiko/             ← WasiCanvas.kt, SkiaLayerWasi.kt, wasi/RendererImpl.kt
-    skiko/wit/skiko-gfx.wit            ← MIRROR — must stay byte-identical to ../wit/skiko-gfx.wit
-  compose-multiplatform-core/          ← in-tree port: 32 wasm-wasi klibs [README-wasmWasi.md + BUILD-wasmWasi.md]
-  wart-leak-repro/                     ← minimal Kotlin/Wasm + skiko-wasm-wasi-only repro for task 24 — confirms the WasmGC-heap leak is in `suspendCoroutine` codegen (~9 MB/s, OOM in 6:37 on Pixel 2 XL)
-  compose-runtime-wasi/                ← sibling fat klibs (11 dirs) — bundle compose-multiplatform-core
-  compose-ui-base-wasi/                  source dirs via srcDirs, package into one klib per dir.
-  compose-ui-graphics-wasi/              Used for fast linking (5 min vs 2 h on 32 granular klibs).
-  compose-ui-text-wasi/
-  compose-ui-wasi/
-  compose-foundation-layout-wasi/
-  compose-foundation-wasi/
-  compose-animation-core-wasi/
-  compose-animation-wasi/
-  compose-material-ripple-wasi/
-  compose-material3-wasi/
-  scripts/
-    build-aot.sh                       ← AOT-compile .wasm → .cwasm for Android
-    build-host-android.sh              ← cargo build wrapper for the rust host
-    deploy.sh                          ← push + run on device via ADB
-  tasks/                               ← 08–14 task notes (all complete)
+wart/                                   ← single git repo, https://codeberg.org/harryzz/wart
+  .task-state                           ← checkpoint — never delete
+  CLAUDE.md                             ← this file
+  .gitmodules                           ← 4 submodules under external/ + 7 vendor under runtime/wart-host
+  .claude/agents/                       ← cargo-triage, gradle-triage, libgui-shim-build, wasm-component-build, etc.
+
+  apps/                                 ← warpkgs that ship as .warpkg
+    system/                             ← bundled by the runtime
+      war.ime.keyboard/                 ← first-party IME (task 47, 49)
+      war.markdown.renderer/            ← markdown → Compose tree (task 36)
+      war.emoji.picker/                 ← emoji-picker (task 40)
+      war.fonts.loader/                 ← /system/fonts/ enumerator (task 41)
+      lang/                             ← keyboard language plugins (task 49)
+        war.lang.bg/                    ← Bulgarian Cyrillic
+        war.lang.fr/                    ← French AZERTY
+    user/
+      wart-app/                         ← Kotlin/Compose reference guest [README.md + BUILD.md]
+        src/wasmWasiMain/kotlin/        ← Main.kt + per-feature smoke-test files
+
+  runtime/                              ← native Rust binaries — the host stack
+    wart-host/                          ← wasmtime + skia + EGL (task 01–14, 33, 45)
+      Cargo.toml, build.rs
+      .cargo/config.toml                ← Android cross-compile linker
+      src/
+        lib.rs, main.rs                 ← --zygote, --standalone, --run-once, --install
+        canvas_impl.rs                  ← WIT canvas trait → skia-safe
+        paragraph_impl.rs               ← host-side Skia paragraph layout
+        ime_inbound.rs                  ← per-host control socket (task 47, 49)
+        keyboard_host_impl.rs           ← Keyboard.Import → arbiter routing
+        app_role.rs                     ← SIGUSR1/SIGUSR2/SIGRTMIN+1 transitions
+        sf_surface.rs                   ← dlsym wrapper for libsf_surface.so
+        … (plus zygote.rs, standalone.rs, run_once.rs, app_loader.rs, …)
+      cpp/
+        sf_surface.{cpp,h}              ← C++ shim for SF / InputFlinger — built on a-03
+        wasi_drawable.cpp               ← SkDrawable subclass with mutable sk_sp<SkPicture>
+      vendor/                           ← submoduled AOSP headers + skia-src (build.rs codegen)
+    wart-arbiter/                       ← policy daemon (task 46) — fg/bg signal mux
+    magisk-module/                      ← Magisk-installed init script for the Hybrid stack
+
+  wit/                                  ← canonical WIT — single source of truth
+    skiko-gfx.wit                       ← runtime contract (Canvas, Paragraph, …)
+    ime.wit                             ← war:ime/ime — editor focus events
+    keyboard-lang.wit                   ← war:keyboard-lang — plugin contract
+    markdown.wit, emoji.wit, system-fonts.wit
+
+  external/                             ← submodules: vendored / forked upstreams
+    skiko/                              ← codeberg.org/harryzz/skiko — wasi fork
+    wasmtime/                           ← codeberg.org/harryzz/wasmtime — KT-86415 patch
+    compose-multiplatform-core/         ← codeberg.org/harryzz/compose-multiplatform-core — wasi port
+    kotlin/                             ← github.com/JetBrains/kotlin (upstream; fork deferred)
+
+  repros/                               ← focused reproducers
+    wart-leak-repro/                    ← Kotlin/Wasm suspendCoroutine leak (task 24/25)
+    kt-memalloc-repro/                  ← KT-86415 ScopedMemoryAllocator UAF (task 30, 34)
+    md-smoke-rust/                      ← Rust CLI consumer of war:markdown (task 36)
+    wart-app-md-smoke/                  ← Kotlin CLI consumer (task 36)
+
+  tools/                                ← build + dev infrastructure
+    scripts/
+      build-host-android.sh             ← cross-compile wart-host + wart-arbiter
+      build-system-warpkgs.sh           ← Rust cdylibs → .warpkg → install on device
+      pack-ime-keyboard.sh              ← Kotlin/Wasm IME → .warpkg → install
+      run-hybrid-stack.sh               ← launch wart-host --zygote + wart-arbiter
+      standalone-launch.sh              ← legacy single-process launch
+      env-android.sh, deploy.sh, gen-libgui-aidl.sh, verify-libgui-abi.sh, etc.
+    patches/                            ← upstream patches (KT-86415, etc.)
+    triage/                             ← diagnostic captures (wasmtime-issues/, …)
+
+  docs/                                 ← architecture docs
+    README.md                           ← index
+    architecture-host-guest-boundary.md ← what crosses a WIT call
+    architecture-runtime.md             ← zygote / arbiter / host
+    architecture-ime.md                 ← IME + lang plugins
+    repository-layout.md                ← canonical "where does a new thing live"
+
+  tasks/                                ← task narrative (01–53, append-only)
+  memory/                               ← lightweight project memory (gitignored)
 ```
+
+**Naming rule** (locked in by task 52): native binaries use
+`wart-<kebab>` (wart-host, wart-arbiter). Warpkgs use
+`war.<dot-id>` matching their `app_id` (war.ime.keyboard,
+war.lang.bg, war.markdown.renderer, …). External forks keep
+their upstream name, no `-src` suffix (wasmtime, kotlin, skiko,
+compose-multiplatform-core). See `docs/repository-layout.md` for
+the full how-to-add-a-new-thing table.
+
+**Fresh clone**:
+
+```
+git clone --recurse-submodules https://codeberg.org/harryzz/wart.git
+cd wart
+```
+
+Without `--recurse-submodules`, run `git submodule update --init
+external/skiko external/wasmtime external/compose-multiplatform-core`
+after clone (skip `external/kotlin` unless you actually need to
+rebuild the stdlib — it's huge).
 
 ---
 
@@ -286,7 +339,7 @@ Kotlin wart-app (wasmWasiMain)
   └─ calls: org.jetbrains.skia.Canvas / Paint / Path / Shader / ...
        └─ WasiCanvas.kt delegates to → WIT imports (generated/SkikoUi.kt)
             └─ WIT interface: wit/skiko-gfx.wit
-                 └─ Rust host: wart-host/src/canvas_impl.rs implements WIT trait
+                 └─ Rust host: runtime/wart-host/src/canvas_impl.rs implements WIT trait
                       └─ calls: skia_safe::Canvas / Paint / Path / Shader / ...
 ```
 
@@ -343,31 +396,27 @@ Kotlin wart-app (wasmWasiMain)
   Use the app-specific external dir above (no permission needed).
 
 - **Build pipeline** (Kotlin → cwasm). Full step-by-step in
-  `~/wart/wart-app/BUILD.md`; minimal form:
+  `~/wart/apps/user/wart-app/BUILD.md`; minimal form:
   ```bash
   # 1. (only if you changed Skiko itself) republish skiko-wasm-wasi.klib (~1m 40s)
-  cd ~/wart/skiko/skiko
+  cd ~/wart/external/skiko/skiko
   ./gradlew publishWasmWasiPublicationToMavenLocal \
       -Pskiko.wasmWasi.enabled=true \
       -Dorg.gradle.configureondemand=false \
       --console=plain --no-daemon
-  # 1b. (after step 1) republish every compose-*-wasi module that consumes
-  #     skiko — symptoms of skipping are subtle behavioral drift, not link
-  #     errors. Use the helper script (~15-30 min):
-  bash ~/wart/scripts/rebuild-compose-wasi-skiko-depend.sh
 
-  # 2. compile the app to .wasm (links against the 11 sibling fat klibs — ~2 min)
-  cd ~/wart/wart-app
+  # 2. compile the app to .wasm (links against the Compose wasi port — ~2 min)
+  cd ~/wart/apps/user/wart-app
   ./gradlew compileProductionExecutableKotlinWasmWasi --console=plain --no-daemon
 
-  # 3. embed WIT + adapt P1→P2 + AOT-compile for aarch64-android
+  # 3. embed WIT + adapt P1→P2
   wasm-tools component embed \
-      --world my:skiko-gfx/skiko-ui \
-      ~/wart/wit/skiko-gfx.wit \
+      --world wart:app/wart-app \
+      ~/wart/apps/user/wart-app/wit \
       build/compileSync/wasmWasi/main/productionExecutable/kotlin/wart-app.wasm \
       -o /tmp/embedded.wasm
   # ⚠ Use the wart-tree fork of the wasi preview1 reactor adapter, NOT
-  # ~/wart/skiko/wasi_snapshot_preview1.reactor.wasm. The wart fork
+  # ~/wart/external/skiko/wasi_snapshot_preview1.reactor.wasm. The wart fork
   # patches `State::new` to place the adapter's 64 KB `State` at the
   # fixed address [0x10000,0x20000) instead of via `cabi_realloc` — the
   # KT-86415 Option B fix (task 34). It must be paired with the
@@ -375,36 +424,37 @@ Kotlin wart-app (wasmWasiMain)
   # at RESERVED_BASE=0x20000), wired via the init.d override. Mismatched
   # halves = State corruption / SIGILL. See [[kotlin-wasm-scopedmemory-destroy-bug]].
   # Build once (release profile, ~54 KB stripped):
-  #   cd ~/wart/wasmtime-src && cargo build \
+  #   cd ~/wart/external/wasmtime && cargo build \
   #     -p wasi-preview1-component-adapter \
   #     --target wasm32-unknown-unknown --release
   wasm-tools component new /tmp/embedded.wasm \
-      --adapt ~/wart/wasmtime-src/target/wasm32-unknown-unknown/release/wasi_snapshot_preview1.wasm \
+      --adapt ~/wart/external/wasmtime/target/wasm32-unknown-unknown/release/wasi_snapshot_preview1.wasm \
       -o /tmp/skiko-component.wasm
-  wasmtime compile --target aarch64-linux-android \
-      --wasm component-model --wasm gc --wasm function-references --wasm exceptions \
-      -o /tmp/skiko-component.cwasm /tmp/skiko-component.wasm
 
-  # 4. hot-reload onto device (no APK rebuild)
-  adb shell am force-stop com.example.wasmruntime
-  adb push /tmp/skiko-component.cwasm \
-      "/sdcard/Android/data/com.example.wasmruntime/files/skiko-component.cwasm"
-  adb shell am start -n com.example.wasmruntime/android.app.NativeActivity
+  # 4. pack + install + run via the Hybrid stack (replaces the old
+  #    APK + NativeActivity path — task 35 + 46)
+  bash ~/wart/tools/scripts/build-system-warpkgs.sh   # all system warpkgs + wart-app
+  bash ~/wart/tools/scripts/run-hybrid-stack.sh       # wart-host --zygote + wart-arbiter
+  adb shell "su -c '/data/local/tmp/wart-arbiter launch com.example.wart-app'"
   ```
 
 ---
 
 ## WIT sync rule
 
-**Whenever `wit/skiko-gfx.wit` changes, sync to skiko repo:**
+**Whenever `wit/skiko-gfx.wit` changes, sync to the skiko submodule
+and any consumer warpkg's `wit/deps/skiko-gfx/`:**
 
 ```bash
 cp ~/wart/wit/skiko-gfx.wit \
-   ~/wart/skiko/skiko/wit/skiko-gfx.wit
+   ~/wart/external/skiko/skiko/wit/skiko-gfx.wit
+# Plus mirror to each warpkg that imports skiko-ui:
+cp ~/wart/wit/skiko-gfx.wit ~/wart/apps/user/wart-app/wit/deps/skiko-gfx/skiko-gfx.wit
+cp ~/wart/wit/skiko-gfx.wit ~/wart/apps/system/war.ime.keyboard/wit/deps/skiko-gfx/skiko-gfx.wit
 ```
 
 Then regenerate or hand-edit the Kotlin bindings in
-`skiko/src/wasmWasiMain/kotlin/generated/`.
+`external/skiko/skiko/src/wasmWasiMain/kotlin/generated/`.
 
 ---
 
@@ -415,8 +465,8 @@ Then regenerate or hand-edit the Kotlin bindings in
 - `adb` connected to rooted Android device (API 29+, arm64)
 - `wasmtime` CLI on dev machine
 - `wasm-tools` at `~/.cargo/bin/wasm-tools`
-- WASI adapter at `~/wart/skiko/wasi_snapshot_preview1.reactor.wasm`
-- Kotlin/Gradle at `~/wart/skiko/` (wasmWasi-capable compiler in mavenLocal)
+- WASI adapter at `~/wart/external/wasmtime/target/wasm32-unknown-unknown/release/wasi_snapshot_preview1.wasm` (wart fork — KT-86415 Option B patch)
+- Kotlin/Gradle: build skiko + Compose port from `~/wart/external/skiko/` and `~/wart/external/compose-multiplatform-core/` (wasmWasi-capable compiler in mavenLocal)
 - Java 17+, Gradle 8+
 
 ---
