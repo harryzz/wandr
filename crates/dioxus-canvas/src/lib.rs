@@ -78,6 +78,10 @@ pub struct DomRenderer {
     /// The focused text-input element (listens for keydown); `on_key` routes
     /// host key events here.
     focused: Option<u32>,
+    /// UI scale factor. Guest styles are authored in logical px; the layout +
+    /// paint multiply lengths/fonts by this, and input element-relative coords
+    /// are divided by it (so guest coordinate math stays in logical px).
+    scale: f32,
     blobs: Vec<u32>,
     /// `(text, family, size-bits, weight, italic)` → `(w, h)`. Avoids a host
     /// round-trip per text leaf per layout (taffy measures repeatedly).
@@ -96,6 +100,7 @@ impl DomRenderer {
             hits: Vec::new(),
             captured: None,
             focused: None,
+            scale: 1.0,
             blobs: Vec::new(),
             measure_cache: HashMap::new(),
         }
@@ -104,6 +109,17 @@ impl DomRenderer {
     pub fn on_resize(&mut self, w: f32, h: f32) {
         self.surface = (w, h);
         self.dirty = true;
+    }
+
+    /// Set the UI scale factor (1.0 = author px). Triggers a relayout if changed.
+    /// The guest can drive this at runtime (e.g. +/- buttons) by calling it each
+    /// frame from `render_frame` with a value it owns.
+    pub fn set_scale(&mut self, scale: f32) {
+        let scale = scale.clamp(0.5, 4.0);
+        if (scale - self.scale).abs() > f32::EPSILON {
+            self.scale = scale;
+            self.dirty = true;
+        }
     }
 
     /// Paint a frame. Re-diffs + relayouts only when dirty, then replays the
@@ -146,6 +162,9 @@ impl DomRenderer {
     /// `(ex,ey)` are relative to the element's rect (what sliders/pickers read
     /// via `event.element_coordinates()`).
     fn dispatch(&self, name: &str, eid: u32, x: f32, y: f32, ex: f32, ey: f32) {
+        // Element-relative coords go back to the guest in LOGICAL px (the guest
+        // authors + does its slider/picker math in logical units).
+        let (ex, ey) = (ex / self.scale, ey / self.scale);
         #[allow(deprecated)]
         self.vdom
             .handle_event(name, events::mouse_event(x, y, ex, ey), ElementId(eid as usize), true);
@@ -305,7 +324,7 @@ impl DomRenderer {
         let tid = match &n.kind {
             NodeKind::Element { style, .. } => {
                 let paint = style::to_paint(style, inherited);
-                let tstyle = style::to_taffy(style);
+                let tstyle = style::to_taffy(style, self.scale);
                 let kids: Vec<taffy::NodeId> = n
                     .children
                     .iter()
@@ -319,7 +338,7 @@ impl DomRenderer {
                     TextCtx {
                         text: text.clone(),
                         family: "sans-serif".to_string(),
-                        size: inherited.font_size,
+                        size: inherited.font_size * self.scale,
                         weight: inherited.font_weight,
                         italic: inherited.italic,
                     },
@@ -374,7 +393,7 @@ impl DomRenderer {
         if !kind_is_text {
             if paint.background != 0 {
                 // Negative radius = percent-of-min-dimension (e.g. 50% → circle/pill).
-                let r = if paint.radius < 0.0 { w.min(h) * -paint.radius } else { paint.radius };
+                let r = if paint.radius < 0.0 { w.min(h) * -paint.radius } else { paint.radius * self.scale };
                 self.draw_ops.push(DrawOp::Rrect { x, y, w, h, r, color: paint.background });
             }
             if let Some((eid, flags)) = eid {
@@ -382,11 +401,12 @@ impl DomRenderer {
             }
         } else if let Some(t) = text {
             if !t.trim().is_empty() {
-                let blob = sink.create_text_blob(&t, "sans-serif", paint.font_size, paint.font_weight, paint.italic);
+                let fs = paint.font_size * self.scale;
+                let blob = sink.create_text_blob(&t, "sans-serif", fs, paint.font_weight, paint.italic);
                 self.blobs.push(blob);
                 // Baseline ≈ top + cap height. taffy gave the leaf its measured
                 // box; sit the baseline near the bottom of that box.
-                let baseline = y + paint.font_size;
+                let baseline = y + fs;
                 self.draw_ops.push(DrawOp::Text { blob, x, y: baseline, color: paint.color });
             }
         }

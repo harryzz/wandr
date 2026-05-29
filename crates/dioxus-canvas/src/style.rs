@@ -64,6 +64,13 @@ enum Len {
 }
 
 impl Len {
+    /// Scale a length px value (UI scale factor). Percent/auto are unaffected.
+    fn scaled(self, scale: f32) -> Len {
+        match self {
+            Len::Length(n) => Len::Length(n * scale),
+            other => other,
+        }
+    }
     fn dim(&self) -> Dimension {
         match self {
             Len::Length(n) => Dimension::Length(*n),
@@ -121,8 +128,10 @@ fn dup(s: &str) -> u32 {
     (n << 4) | n
 }
 
-/// Build a `taffy::Style` from the element's style map.
-pub fn to_taffy(map: &StyleMap) -> Style {
+/// Build a `taffy::Style` from the element's style map. `scale` is the UI scale
+/// factor — all absolute px lengths are multiplied by it (percent/auto/flex are
+/// not), so the layout comes out in scaled physical pixels.
+pub fn to_taffy(map: &StyleMap, scale: f32) -> Style {
     let mut s = Style::DEFAULT;
 
     s.display = match map.get("display").map(String::as_str) {
@@ -139,35 +148,36 @@ pub fn to_taffy(map: &StyleMap) -> Style {
     };
 
     if let Some(l) = map.get("width").and_then(|v| parse_len(v)) {
-        s.size.width = l.dim();
+        s.size.width = l.scaled(scale).dim();
     }
     if let Some(l) = map.get("height").and_then(|v| parse_len(v)) {
-        s.size.height = l.dim();
+        s.size.height = l.scaled(scale).dim();
     }
 
     if let Some(p) = px(map, "padding") {
-        let lp = LengthPercentage::Length(p);
+        let lp = LengthPercentage::Length(p * scale);
         s.padding = Rect { left: lp, right: lp, top: lp, bottom: lp };
     }
     if let Some(l) = map.get("padding-left").and_then(|v| parse_len(v)) {
-        s.padding.left = l.lp();
+        s.padding.left = l.scaled(scale).lp();
     }
     if let Some(l) = map.get("padding-right").and_then(|v| parse_len(v)) {
-        s.padding.right = l.lp();
+        s.padding.right = l.scaled(scale).lp();
     }
     if let Some(l) = map.get("padding-top").and_then(|v| parse_len(v)) {
-        s.padding.top = l.lp();
+        s.padding.top = l.scaled(scale).lp();
     }
     if let Some(l) = map.get("padding-bottom").and_then(|v| parse_len(v)) {
-        s.padding.bottom = l.lp();
+        s.padding.bottom = l.scaled(scale).lp();
     }
 
     if let Some(l) = map.get("margin").and_then(|v| parse_len(v)) {
-        let m = l.lpa();
+        let m = l.scaled(scale).lpa();
         s.margin = Rect { left: m, right: m, top: m, bottom: m };
     }
 
     if let Some(g) = px(map, "gap") {
+        let g = g * scale;
         s.gap = Size { width: LengthPercentage::Length(g), height: LengthPercentage::Length(g) };
     }
 

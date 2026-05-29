@@ -91,6 +91,21 @@ fn renders_and_reacts_to_click() {
     assert!(!rd.drawn_text.iter().any(|t| t == "count: 0"), "old count gone");
 }
 
+#[test]
+fn drag_coords_stay_logical_under_scale() {
+    // At scale 2.0 the 200-logical-px track lays out 400 physical px wide; a tap
+    // at physical x=100 must report a LOGICAL element x of 50 (guest math is in
+    // logical px), i.e. the renderer divides element-relative coords by scale.
+    let rec = Rc::new(RefCell::new(Recorder::default()));
+    let mut r = DomRenderer::new(slider_app);
+    r.set_scale(2.0);
+    r.render_frame(&mut MockSink { rec: rec.clone() });
+    r.on_pointer_down(100.0, 40.0);
+    let rec2 = Rc::new(RefCell::new(Recorder::default()));
+    r.render_frame(&mut MockSink { rec: rec2.clone() });
+    assert!(rec2.borrow().drawn_text.iter().any(|t| t == "val: 50"), "logical x under 2x scale: {:?}", rec2.borrow().drawn_text);
+}
+
 /// A text-input component: focusable (listens for keydown), edits a String on
 /// Character/Backspace. Exercises focus-on-tap + on_key → keydown routing.
 fn input_app() -> Element {

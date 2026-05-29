@@ -13,6 +13,7 @@ wit_bindgen::generate!({
 });
 
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use dioxus::prelude::*;
 use dioxus_canvas::{CanvasSink, DomRenderer, Fill};
@@ -106,6 +107,12 @@ thread_local! {
     static RENDERER: RefCell<Option<DomRenderer>> = RefCell::new(None);
 }
 
+/// UI scale factor (f32 bits), driven by the in-app +/- buttons. Read each
+/// frame and pushed to the renderer via `set_scale` — a global (not a renderer
+/// call from the button) so the button's event handler doesn't re-enter the
+/// already-borrowed renderer. Init 1.5 (the panel is hi-dpi). 0x3FC00000 = 1.5f32.
+static UI_SCALE: AtomicU32 = AtomicU32::new(0x3FC0_0000);
+
 fn with_renderer<F: FnOnce(&mut DomRenderer)>(f: F) {
     RENDERER.with(|r| {
         let mut b = r.borrow_mut();
@@ -120,7 +127,11 @@ struct App;
 
 impl Guest for App {
     fn render_frame(_nanos: u64) {
-        with_renderer(|r| r.render_frame(&mut HostSink));
+        let scale = f32::from_bits(UI_SCALE.load(Ordering::Relaxed));
+        with_renderer(|r| {
+            r.set_scale(scale);
+            r.render_frame(&mut HostSink);
+        });
     }
     fn on_resize(w: u32, h: u32) {
         with_renderer(|r| r.on_resize(w as f32, h as f32));
@@ -187,10 +198,38 @@ fn hex(rgb: u32) -> String {
 
 fn app() -> Element {
     let tab = use_signal(|| 0usize);
+    let mut scale = use_signal(|| f32::from_bits(UI_SCALE.load(Ordering::Relaxed)));
+    let scale_label = format!("{:.2}×", scale());
     rsx! {
         div {
             style: "display:flex; flex-direction:column; padding:40px; gap:32px; background:{BG};",
-            div { style: "color:{TEXT}; font-size:60px; font-weight:700;", "Dioxus Gallery" }
+            // Title + runtime UI-scale control.
+            div {
+                style: "display:flex; flex-direction:row; align-items:center; justify-content:space-between;",
+                div { style: "color:{TEXT}; font-size:60px; font-weight:700;", "Dioxus Gallery" }
+                div {
+                    style: "display:flex; flex-direction:row; align-items:center; gap:16px;",
+                    button {
+                        style: "display:flex; justify-content:center; width:64px; height:64px; border-radius:50%; background:{SUBTLE};",
+                        onclick: move |_| {
+                            let s = (scale() - 0.25).clamp(0.75, 3.0);
+                            scale.set(s);
+                            UI_SCALE.store(s.to_bits(), Ordering::Relaxed);
+                        },
+                        div { style: "color:{TEXT}; font-size:40px; font-weight:700;", "−" }
+                    }
+                    div { style: "display:flex; justify-content:center; width:120px; color:{TEXT}; font-size:34px;", "{scale_label}" }
+                    button {
+                        style: "display:flex; justify-content:center; width:64px; height:64px; border-radius:50%; background:{SUBTLE};",
+                        onclick: move |_| {
+                            let s = (scale() + 0.25).clamp(0.75, 3.0);
+                            scale.set(s);
+                            UI_SCALE.store(s.to_bits(), Ordering::Relaxed);
+                        },
+                        div { style: "color:{TEXT}; font-size:40px; font-weight:700;", "+" }
+                    }
+                }
+            }
             TabBar { tab }
             {match tab() {
                 0 => rsx! { InputsPanel {} },

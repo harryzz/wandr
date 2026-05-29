@@ -112,7 +112,17 @@ gallery needs three expansions:
   path) does NOT reach the arbiter-launched guest — it needs InputDispatcher key
   focus / periodic `sf_request_focus` — but the IME→arbiter→socket path is
   independent of that and works.
-- **Task complete** — all 3 phases shipped + committed.
+- **UI scale factor (follow-up, 2026-05-29).** Added a renderer `set_scale(f32)`:
+  guest styles are authored in **logical px**, and the renderer multiplies all
+  taffy lengths + font sizes + px radii by the scale (layout/paint in scaled
+  physical px) while **dividing element-relative input coords by the scale**
+  (so slider/HSV math stays logical — host test `drag_coords_stay_logical_under_scale`).
+  The demo drives it at runtime: a header `−`/`+` control writes a global
+  `UI_SCALE` atomic that `render_frame` reads and pushes via `set_scale` each
+  frame (avoids re-entering the borrowed renderer from a button handler).
+  Default **1.5×** (the panel is hi-dpi). Device-verified: `+` took it
+  1.50×→1.75×→2.00× live, whole UI scaling. 6 host tests total.
+- **Task complete** — all 3 phases + scale shipped + committed.
 
 ## Related
 
