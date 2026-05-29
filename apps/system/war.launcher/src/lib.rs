@@ -20,6 +20,7 @@ use crate::my::skiko_gfx::canvas::{
     self, BlendMode, ColorFilterKind, PaintAttrs, PaintStyle, StrokeCap, StrokeJoin,
 };
 use crate::my::skiko_gfx::launcher;
+use crate::my::skiko_gfx::status;
 
 // ── State ───────────────────────────────────────────────────────────────
 
@@ -49,9 +50,6 @@ thread_local! {
 }
 
 const BG: u32 = 0xFF1A1A2E;
-/// Top strip reserved for the status bar (task 55) — matches
-/// war.statusbar's height so the launcher's content isn't occluded.
-const STATUS_BAR_INSET: f32 = 88.0;
 const TILE_PALETTE: [u32; 8] = [
     0xFF4285F4, 0xFFEA4335, 0xFFFBBC05, 0xFF34A853,
     0xFFAB47BC, 0xFF00ACC1, 0xFFFF7043, 0xFF5C6BC0,
@@ -112,11 +110,10 @@ fn relayout(s: &mut State) {
     s.hits.clear();
 
     let margin = 48.0_f32;
-    // Reserve the top strip for the status bar (task 55). It floats over
-    // the top STATUS_BAR_PX; inset our content below it so the title +
-    // grid aren't occluded. (v1 constant matching war.statusbar's height;
-    // a host-provided `on-insets-changed` would make this dynamic.)
-    let top_inset = STATUS_BAR_INSET;
+    // Reserve the top strip for the status bar (task 55) — query the
+    // host's single source of truth so the inset always matches the
+    // actual bar height (no hardcoded constant to desync).
+    let top_inset = status::bar_height() as f32;
     // Title.
     let title = new_blob("Apps", 44.0, 600);
     s.blobs.push(title);

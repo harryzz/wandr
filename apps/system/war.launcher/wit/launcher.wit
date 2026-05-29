@@ -58,6 +58,12 @@ interface launcher {
     launch-app: func(app-id: string);
 }
 
+interface status {
+    // Subset of the host's status interface — the launcher only needs
+    // the reserved top-strip height for its content inset (task 55).
+    bar-height: func() -> u32;
+}
+
 interface renderer {
     enum pointer-kind { down, up, move, scroll }
     enum key-kind     { down, up }
@@ -74,5 +80,6 @@ interface renderer {
 world launcher-app {
     import canvas;
     import launcher;
+    import status;
     export renderer;
 }

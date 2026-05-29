@@ -46,8 +46,6 @@ pub fn run(app_id: Option<&str>, mode: OverlayMode) -> Result<()> {
 /// guest may resize via `my:skiko-gfx/keyboard.request-overlay-height`.
 const INITIAL_OVERLAY_PX: i32 = 1200;
 
-/// Top-overlay (status bar) strip height in physical pixels.
-const STATUS_BAR_PX: i32 = 88;
 
 /// Same as `run` but uses a caller-supplied engine. The task-45 zygote
 /// child path (`LAUNCH_GUI <app-id>`) goes through here so the wasmtime
@@ -90,7 +88,10 @@ pub fn run_with_engine(engine: &Engine, app_id: Option<&str>, mode: OverlayMode)
             // shim is geometry-generic (per the surface-abstraction
             // discussion — task 55).
             let (y, h, label) = match mode {
-                OverlayMode::Top => (0, STATUS_BAR_PX, "top"),
+                // Status-bar height is a single host parameter
+                // (WART_STATUSBAR_PX); the status.bar-height() verb +
+                // the launcher's inset derive from the same source.
+                OverlayMode::Top => (0, crate::status_impl::status_bar_height_px() as i32, "top"),
                 _ => (-1, INITIAL_OVERLAY_PX, "bottom"),
             };
             match crate::sf_surface::SfSurface::create_overlay(SHIM_SO, 0, y, 0, h) {

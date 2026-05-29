@@ -9,7 +9,25 @@ use std::process::Command;
 
 use crate::bindings::my::skiko_gfx::status::Host;
 
+/// Status-bar strip height in physical pixels — the single source of
+/// truth (task 55). The host creates the top-overlay surface at this
+/// height, the `status.bar-height()` verb exposes it, and the launcher
+/// queries it for its top inset so the two never desync. Tunable at
+/// runtime via `WART_STATUSBAR_PX` (default 132). Set it uniformly across
+/// the stack (zygote env) so every process agrees.
+pub fn status_bar_height_px() -> u32 {
+    std::env::var("WART_STATUSBAR_PX")
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .filter(|&h| h > 0)
+        .unwrap_or(132)
+}
+
 impl Host for crate::HostState {
+    fn bar_height(&mut self) -> u32 {
+        status_bar_height_px()
+    }
+
     fn clock_text(&mut self) -> String {
         // Local wall-clock. Rust std has no localtime; `date` is a native
         // toolbox/coreutils binary (not ART), so shelling out is ART-free.

@@ -976,6 +976,10 @@ interface status {
     clock-text: func() -> string;
     /// Battery as "NN%" (e.g. "100%"), or "" if unavailable.
     battery-text: func() -> string;
+    /// Status-bar strip height in physical px — the single source of
+    /// truth for both the overlay surface and any consumer's top inset
+    /// (task 55). Tunable via WART_STATUSBAR_PX.
+    bar-height: func() -> u32;
 }
 
 world skiko-ui {
