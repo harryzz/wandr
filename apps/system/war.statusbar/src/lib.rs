@@ -75,22 +75,23 @@ impl Guest for Bar {
                 s.w = canvas::surface_width() as f32;
                 s.h = canvas::surface_height() as f32;
             }
-            // One-time static label.
+            // One-time static label. Font sizes are proportional to the
+            // bar height (WART_STATUSBAR_PX) so they scale with it.
             if s.label_blob.is_none() {
-                s.label_blob = Some(blob("wart", 30.0, 600));
+                s.label_blob = Some(blob("wart", s.h * 0.32, 600));
             }
             // ~1 Hz: refresh clock + battery; rebuild blobs only on change.
             if s.frame % POLL_FRAMES == 0 {
                 let clock = status::clock_text();
                 if clock != s.clock || s.clock_blob.is_none() {
                     if let Some(b) = s.clock_blob.take() { canvas::drop_text_blob(b); }
-                    s.clock_blob = Some(blob(&clock, 34.0, 600));
+                    s.clock_blob = Some(blob(&clock, s.h * 0.42, 600));
                     s.clock = clock;
                 }
                 let battery = status::battery_text();
                 if battery != s.battery || s.batt_blob.is_none() {
                     if let Some(b) = s.batt_blob.take() { canvas::drop_text_blob(b); }
-                    s.batt_blob = Some(blob(&battery, 30.0, 400));
+                    s.batt_blob = Some(blob(&battery, s.h * 0.32, 400));
                     s.battery = battery;
                 }
             }
@@ -98,7 +99,8 @@ impl Guest for Bar {
 
             let w = s.w;
             let h = s.h;
-            let baseline = h * 0.5 + 12.0;
+            // ~vertically centered for the proportional font sizes.
+            let baseline = h * 0.64;
             canvas::begin_frame();
             canvas::clear(BG);
             canvas::draw_rect(0.0, 0.0, w, h, paint(BG));
