@@ -138,7 +138,7 @@ pub fn run_with_engine(engine: &Engine, app_id: Option<&str>, mode: OverlayMode)
 
     // The producer transform hint is only valid once EGL connects, so the
     // renderer queries it through this closure mid-`from_native_window`.
-    let renderer = crate::canvas_impl::SkiaRenderer::from_native_window(
+    let mut renderer = crate::canvas_impl::SkiaRenderer::from_native_window(
         sf.native_window, sf.width as u32, sf.height as u32,
         || sf.query_transform_hint(),
     )?;
@@ -146,6 +146,23 @@ pub fn run_with_engine(engine: &Engine, app_id: Option<&str>, mode: OverlayMode)
         "standalone: renderer up — EGL/Skia on the SurfaceFlinger window ({}x{})",
         renderer.width, renderer.height,
     );
+
+    // Task 56 — chrome content insets for a fullscreen app: reserve the
+    // status-bar (top) + taskbar (bottom) strips so the app never draws
+    // under the chrome, in any orientation. Driven by env (the shell sets
+    // WART_INSET_TOP/BOTTOM to the chrome heights when launching the
+    // zygote); unset → 0 → the app gets the full native display size (a
+    // true immersive fullscreen app with no chrome). Only fullscreen
+    // (None) mode insets — the chrome overlays themselves render full.
+    if mode == OverlayMode::None {
+        let env_px = |k: &str| {
+            std::env::var(k).ok().and_then(|s| s.trim().parse::<u32>().ok()).unwrap_or(0)
+        };
+        let (top, bottom) = (env_px("WART_INSET_TOP"), env_px("WART_INSET_BOTTOM"));
+        if top > 0 || bottom > 0 {
+            renderer.set_insets(top, bottom);
+        }
+    }
 
     let loader = app_loader::default_for_target();
     let app_ref = match app_id {

@@ -73,8 +73,14 @@ if pgrep -f 'wart-host --zygote' >/dev/null 2>&1; then
     log "wart-stack: wart-host --zygote already running, skipping start"
 else
     rm -f /data/local/tmp/wart-zygote.sock
-    log "wart-stack: starting wart-host --zygote (APPS_ROOT=$APPS_ROOT)"
+    # Task 56 — chrome content insets for fullscreen apps. Forked GUI
+    # children inherit these; the host reserves the status-bar (top) +
+    # taskbar (bottom) strips so apps don't draw under the chrome.
+    INSET_TOP="${WART_STATUSBAR_PX:-132}"
+    INSET_BOTTOM="${WART_TASKBAR_PX:-150}"
+    log "wart-stack: starting wart-host --zygote (APPS_ROOT=$APPS_ROOT insets=$INSET_TOP/$INSET_BOTTOM)"
     nohup env LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT="$APPS_ROOT" \
+        WART_INSET_TOP="$INSET_TOP" WART_INSET_BOTTOM="$INSET_BOTTOM" \
         "$WART_HOST" --zygote </dev/null >>"$LOG" 2>&1 &
 fi
 

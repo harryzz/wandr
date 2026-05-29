@@ -20,7 +20,6 @@ use crate::my::skiko_gfx::canvas::{
     self, BlendMode, ColorFilterKind, PaintAttrs, PaintStyle, StrokeCap, StrokeJoin,
 };
 use crate::my::skiko_gfx::launcher;
-use crate::my::skiko_gfx::status;
 
 // ── State ───────────────────────────────────────────────────────────────
 
@@ -110,10 +109,11 @@ fn relayout(s: &mut State) {
     s.hits.clear();
 
     let margin = 48.0_f32;
-    // Reserve the top strip for the status bar (task 55) — query the
-    // host's single source of truth so the inset always matches the
-    // actual bar height (no hardcoded constant to desync).
-    let top_inset = status::bar_height() as f32;
+    // Status-bar / taskbar insets are now applied uniformly by the host
+    // (task 56 — it shrinks the logical size + translates content into the
+    // chrome gap), so the launcher lays out from its own logical (0,0); no
+    // manual top inset here (would double-count with the host's).
+    let top_inset = 0.0_f32;
     // Title.
     let title = new_blob("Apps", 44.0, 600);
     s.blobs.push(title);

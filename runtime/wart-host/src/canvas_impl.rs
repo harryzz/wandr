@@ -192,6 +192,14 @@ pub struct SkiaRenderer {
     /// where the guest authors a portrait UI into a landscape GL surface.
     pub logical_width:  u32,
     pub logical_height: u32,
+    /// Chrome content insets in PHYSICAL px (task 56): the status-bar strip
+    /// at the physical top + the taskbar strip at the physical bottom. The
+    /// fullscreen app's logical frame is shrunk to the gap between them and
+    /// its content is translated down by `inset_top`, so it never draws
+    /// under the chrome — in any orientation (the rotation is applied to the
+    /// already-inset available rect). Overlays leave these 0.
+    pub inset_top:    u32,
+    pub inset_bottom: u32,
     /// Base canvas transform re-applied at every begin_frame — identity
     /// normally, a 90° rotation in the standalone rotated mode so the
     /// guest's portrait drawing maps into the landscape GL surface.
@@ -359,6 +367,7 @@ impl SkiaRenderer {
                 egl, gr_context, surface,
                 width: size.width, height: size.height,
                 logical_width: size.width, logical_height: size.height,
+                inset_top: 0, inset_bottom: 0,
                 base_matrix: skia_safe::Matrix::new_identity(),
                 current_orient: 0,
                 text_blobs:       HashMap::new(),
@@ -398,6 +407,7 @@ impl SkiaRenderer {
             Ok(Self {
                 surface, width: size.width, height: size.height,
                 logical_width: size.width, logical_height: size.height,
+                inset_top: 0, inset_bottom: 0,
                 base_matrix: skia_safe::Matrix::new_identity(),
                 current_orient: 0,
                 text_blobs:       HashMap::new(),
@@ -504,6 +514,7 @@ impl SkiaRenderer {
         Ok(Self {
             egl, gr_context, surface, width, height,
             logical_width, logical_height, base_matrix,
+            inset_top: 0, inset_bottom: 0,
             current_orient: orient,
             text_blobs:       HashMap::new(),
             multi_blob_cache: HashMap::new(),
@@ -547,17 +558,49 @@ impl SkiaRenderer {
         if orient == self.current_orient {
             return false;
         }
-        let (m, lw, lh) = dihedral_transform(orient, self.width, self.height);
-        self.base_matrix = m;
-        self.logical_width = lw;
-        self.logical_height = lh;
         self.current_orient = orient;
+        self.recompute_transform();
         log::info!(
-            "renderer: orientation → orient {orient}, logical {lw}x{lh} \
+            "renderer: orientation → orient {orient}, logical {}x{} \
              (physical {}x{} unchanged)",
-            self.width, self.height,
+            self.logical_width, self.logical_height, self.width, self.height,
         );
         true
+    }
+
+    /// Task 56 — set the chrome content insets (physical px) for a
+    /// fullscreen app and recompute the transform. `top`/`bottom` are the
+    /// status-bar / taskbar strip heights; 0/0 (the default) means a true
+    /// fullscreen / immersive app with no chrome, whose logical size equals
+    /// the native display size. Safe to call with 0/0 to clear.
+    pub fn set_insets(&mut self, top: u32, bottom: u32) {
+        self.inset_top = top;
+        self.inset_bottom = bottom;
+        self.recompute_transform();
+        log::info!(
+            "renderer: content insets top={top} bottom={bottom} → logical {}x{} \
+             (physical {}x{})",
+            self.logical_width, self.logical_height, self.width, self.height,
+        );
+    }
+
+    /// Recompute `base_matrix` + `logical_width/height` from the current
+    /// orientation + insets. The available physical rect is the panel minus
+    /// the top/bottom chrome strips; the dihedral rotation is applied to
+    /// that rect, then the whole mapping is translated down by `inset_top`
+    /// so logical (0,0) lands just below the status bar. With 0 insets this
+    /// is exactly `dihedral_transform(orient, width, height)` (native size).
+    fn recompute_transform(&mut self) {
+        let avail_h = self
+            .height
+            .saturating_sub(self.inset_top + self.inset_bottom)
+            .max(1);
+        let (m, lw, lh) = dihedral_transform(self.current_orient, self.width, avail_h);
+        let mut base = skia_safe::Matrix::translate((0.0, self.inset_top as f32));
+        base.pre_concat(&m);
+        self.base_matrix = base;
+        self.logical_width = lw;
+        self.logical_height = lh;
     }
 
     /// Move CPU-side caches from `old` into `self` so warm-resume preserves

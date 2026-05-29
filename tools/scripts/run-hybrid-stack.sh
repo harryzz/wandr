@@ -94,8 +94,16 @@ echo "▸ stopping SystemUI + launcher ($HOME_PKG) …"
 adb shell "su -c 'am force-stop com.android.systemui'"
 adb shell "su -c 'am force-stop $HOME_PKG'"
 
-echo "▸ starting wart-host --zygote in background …"
-adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-host --zygote' &" >/dev/null
+# Task 56 — chrome content insets for fullscreen apps. The zygote forks
+# every GUI app, so setting these in its env makes fullscreen children
+# reserve the status-bar (top) + taskbar (bottom) strips. Match the chrome
+# heights (defaults 132 / 150; override with WART_STATUSBAR_PX / WART_TASKBAR_PX).
+# A future immersive app launched without these gets the native size.
+INSET_TOP="${WART_STATUSBAR_PX:-132}"
+INSET_BOTTOM="${WART_TASKBAR_PX:-150}"
+
+echo "▸ starting wart-host --zygote in background (insets top=$INSET_TOP bottom=$INSET_BOTTOM) …"
+adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT WART_INSET_TOP=$INSET_TOP WART_INSET_BOTTOM=$INSET_BOTTOM /data/local/tmp/wart-host --zygote' &" >/dev/null
 sleep 3
 ZPID="$(adb shell 'pgrep -f "wart-host --zygote" | head -1' | tr -d '\r')"
 echo "  zygote pid: $ZPID"
