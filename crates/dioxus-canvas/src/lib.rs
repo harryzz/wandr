@@ -39,10 +39,17 @@ struct TextCtx {
     italic: bool,
 }
 
-/// One cached paint command, in absolute device pixels.
+/// One cached paint command, in content (layout) space. The replay applies the
+/// scroll offset; `PushClip`/`PopClip` bracket a scroll region's ops (their
+/// `y` is offset by the active scroll, and they're clipped to the region box).
 enum DrawOp {
     Rrect { x: f32, y: f32, w: f32, h: f32, r: f32, color: u32 },
     Text { blob: u32, x: f32, y: f32, color: u32 },
+    /// Enter a scroll region: save + clip to `[x,y,w,h]`; ops until `PopClip`
+    /// are offset by `scroll_y`.
+    PushClip { x: f32, y: f32, w: f32, h: f32 },
+    /// Leave the scroll region: restore.
+    PopClip,
 }
 
 // Pointer/key-listener flags (which dioxus events an element subscribes to).
@@ -58,6 +65,9 @@ struct HitRect {
     h: f32,
     eid: u32,
     flags: u8,
+    /// Inside the scroll region → its visible y is `y - scroll_y`, clipped to
+    /// the region viewport.
+    scrolled: bool,
 }
 
 /// In-progress non-slider gesture (tap vs. scroll). A press that isn't on a
@@ -68,6 +78,8 @@ struct Down {
     last_y: f32,
     content_y: f32,
     click_eid: Option<u32>,
+    /// The press began inside the scroll region → movement scrolls it.
+    can_scroll: bool,
     scrolling: bool,
 }
 
@@ -86,9 +98,9 @@ pub struct DomRenderer {
     draw_ops: Vec<DrawOp>,
     hits: Vec<HitRect>,
     /// Host blob ids from the current layout, dropped on relayout.
-    /// Element capturing an in-progress drag: `(eid, rect x, y, w, h)`. Set on
-    /// pointer-down over a draggable element; routes moves/ups to it.
-    captured: Option<(u32, f32, f32, f32, f32)>,
+    /// Element capturing an in-progress drag: `(eid, rect x, y, w, h, scrolled)`.
+    /// Set on pointer-down over a draggable element; routes moves/ups to it.
+    captured: Option<(u32, f32, f32, f32, f32, bool)>,
     /// The focused text-input element (listens for keydown); `on_key` routes
     /// host key events here.
     focused: Option<u32>,
@@ -96,11 +108,16 @@ pub struct DomRenderer {
     /// paint multiply lengths/fonts by this, and input element-relative coords
     /// are divided by it (so guest coordinate math stays in logical px).
     scale: f32,
-    /// Vertical scroll offset (physical px) + total laid-out content height.
-    /// Content is laid out at natural height; the viewport scrolls. Applied at
-    /// paint-replay + hit-test time — scrolling needs no relayout.
+    /// The single `overflow:scroll` region (one supported for now). When laid
+    /// out: its viewport box `(x,y,w,h)` + content height; `scroll_y` is the
+    /// offset, applied at paint-replay + hit-test time (no relayout on scroll).
+    scroll_active: bool,
+    scroll_vp: (f32, f32, f32, f32),
+    scroll_content_h: f32,
+    /// Max bottom-edge y of scroll-region content, accumulated during paint_walk
+    /// (taffy's `content_size` is unreliable for our nested flex structure).
+    scroll_bottom: f32,
     scroll_y: f32,
-    content_h: f32,
     /// In-progress tap/scroll gesture (non-slider press).
     down: Option<Down>,
     blobs: Vec<u32>,
@@ -122,8 +139,11 @@ impl DomRenderer {
             captured: None,
             focused: None,
             scale: 1.0,
+            scroll_active: false,
+            scroll_vp: (0.0, 0.0, 0.0, 0.0),
+            scroll_content_h: 0.0,
+            scroll_bottom: 0.0,
             scroll_y: 0.0,
-            content_h: 0.0,
             down: None,
             blobs: Vec::new(),
             measure_cache: HashMap::new(),
@@ -165,20 +185,42 @@ impl DomRenderer {
             self.dirty = false;
         }
 
-        // Draw ops are in content space; the viewport scrolls by subtracting
-        // scroll_y. Off-viewport content is clipped by the surface bounds.
+        // Ops are in content space. Outside a scroll region the active offset is
+        // 0; between PushClip/PopClip it's scroll_y (and a clip is applied), so
+        // the region's content scrolls under a sticky header. Scrolling is a
+        // pure replay change — no relayout.
         let sy = self.scroll_y;
+        let mut active = 0.0f32;
         sink.begin_frame();
         sink.clear(0xFF12121A);
         for op in &self.draw_ops {
             match *op {
                 DrawOp::Rrect { x, y, w, h, r, color } => {
-                    sink.fill_rrect(x, y - sy, w, h, r, r, Fill { color });
+                    sink.fill_rrect(x, y - active, w, h, r, r, Fill { color });
                 }
                 DrawOp::Text { blob, x, y, color } => {
-                    sink.draw_text_blob(blob, x, y - sy, Fill { color });
+                    sink.draw_text_blob(blob, x, y - active, Fill { color });
+                }
+                DrawOp::PushClip { x, y, w, h } => {
+                    sink.save();
+                    sink.clip_rect(x, y, w, h);
+                    active = sy;
+                }
+                DrawOp::PopClip => {
+                    sink.restore();
+                    active = 0.0;
                 }
             }
+        }
+        // Scrollbar indicator for the scroll region.
+        let max = self.max_scroll();
+        if self.scroll_active {
+            let (vx, vy, vw, vh) = self.scroll_vp;
+            let ch = self.scroll_content_h.max(vh);
+            let thumb_h = (vh * vh / ch).clamp(48.0, vh);
+            let thumb_y = if max > 0.0 { vy + (sy / max) * (vh - thumb_h) } else { vy };
+            let bw = 10.0;
+            sink.fill_rrect(vx + vw - bw - 6.0, thumb_y, bw, thumb_h, bw / 2.0, bw / 2.0, Fill { color: 0x70FF_FFFF });
         }
         sink.end_frame();
     }
@@ -197,27 +239,41 @@ impl DomRenderer {
             .handle_event(name, events::mouse_event(x, y, ex, ey), ElementId(eid as usize), true);
     }
 
-    /// Hit-test in content space (incoming `y` is viewport; add `scroll_y`).
-    fn hit_at(&self, x: f32, content_y: f32) -> Option<(u32, u8, f32, f32, f32, f32)> {
-        self.hits
-            .iter()
-            .rev()
-            .find(|h| x >= h.x && x <= h.x + h.w && content_y >= h.y && content_y <= h.y + h.h)
-            .map(|h| (h.eid, h.flags, h.x, h.y, h.w, h.h))
+    /// Hit-test at SCREEN point `(x,y)`. Scrolled hits use their visible rect
+    /// (`y - scroll_y`) and must fall within the scroll viewport. Returns the
+    /// element + whether it's scrolled (the caller derives content-y).
+    fn hit_at(&self, x: f32, y: f32) -> Option<(u32, u8, f32, f32, f32, f32, bool)> {
+        let (vx, vy, vw, vh) = self.scroll_vp;
+        self.hits.iter().rev().find_map(|h| {
+            if h.scrolled && !(x >= vx && x <= vx + vw && y >= vy && y <= vy + vh) {
+                return None; // scrolled content is clipped to the viewport
+            }
+            let cy = if h.scrolled { y + self.scroll_y } else { y };
+            if x >= h.x && x <= h.x + h.w && cy >= h.y && cy <= h.y + h.h {
+                Some((h.eid, h.flags, h.x, h.y, h.w, h.h, h.scrolled))
+            } else {
+                None
+            }
+        })
     }
 
     fn max_scroll(&self) -> f32 {
-        (self.content_h - self.surface.1).max(0.0)
+        (self.scroll_content_h - self.scroll_vp.3).max(0.0)
+    }
+
+    fn in_scroll_viewport(&self, x: f32, y: f32) -> bool {
+        let (vx, vy, vw, vh) = self.scroll_vp;
+        self.scroll_active && x >= vx && x <= vx + vw && y >= vy && y <= vy + vh
     }
 
     pub fn on_pointer_down(&mut self, x: f32, y: f32) {
-        let cy = y + self.scroll_y; // content-space y
-        let hit = self.hit_at(x, cy);
+        let hit = self.hit_at(x, y);
         match hit {
             // A draggable element (slider/picker) captures the pointer — no
             // scroll/tap gesture; drag goes straight to it.
-            Some((eid, flags, hx, hy, hw, hh)) if flags & F_MOVE != 0 => {
-                self.captured = Some((eid, hx, hy, hw, hh));
+            Some((eid, flags, hx, hy, hw, hh, scrolled)) if flags & F_MOVE != 0 => {
+                let cy = if scrolled { y + self.scroll_y } else { y };
+                self.captured = Some((eid, hx, hy, hw, hh, scrolled));
                 if flags & F_DOWN != 0 {
                     self.dispatch("mousedown", eid, x, y, x - hx, cy - hy);
                 }
@@ -233,8 +289,17 @@ impl DomRenderer {
                     ),
                     None => (None, None),
                 };
+                let scrolled = hit.map(|h| h.6).unwrap_or(false);
+                let content_y = if scrolled { y + self.scroll_y } else { y };
                 self.focused = focus;
-                self.down = Some(Down { start_y: y, last_y: y, content_y: cy, click_eid, scrolling: false });
+                self.down = Some(Down {
+                    start_y: y,
+                    last_y: y,
+                    content_y,
+                    click_eid,
+                    can_scroll: self.in_scroll_viewport(x, y),
+                    scrolling: false,
+                });
                 if focus.is_some() {
                     self.dirty = true;
                 }
@@ -266,18 +331,20 @@ impl DomRenderer {
     }
 
     pub fn on_pointer_move(&mut self, x: f32, y: f32) {
-        if let Some((eid, hx, hy, hw, hh)) = self.captured {
+        if let Some((eid, hx, hy, hw, hh, scrolled)) = self.captured {
             // Slider/picker drag (content-space, clamped to the element box).
+            let cy = if scrolled { y + self.scroll_y } else { y };
             let ex = (x - hx).clamp(0.0, hw);
-            let ey = ((y + self.scroll_y) - hy).clamp(0.0, hh);
+            let ey = (cy - hy).clamp(0.0, hh);
             self.dispatch("mousemove", eid, x, y, ex, ey);
             self.dirty = true;
             return;
         }
-        // Otherwise: tap → scroll once the press moves past the threshold.
+        // Otherwise: a press inside the scroll region scrolls it once it moves
+        // past the threshold.
         let max = self.max_scroll();
         if let Some(d) = self.down.as_mut() {
-            if !d.scrolling && (y - d.start_y).abs() > SCROLL_THRESHOLD {
+            if d.can_scroll && !d.scrolling && (y - d.start_y).abs() > SCROLL_THRESHOLD {
                 d.scrolling = true;
             }
             if d.scrolling {
@@ -290,9 +357,10 @@ impl DomRenderer {
     }
 
     pub fn on_pointer_up(&mut self, x: f32, y: f32) {
-        if let Some((eid, hx, hy, hw, hh)) = self.captured.take() {
+        if let Some((eid, hx, hy, hw, hh, scrolled)) = self.captured.take() {
+            let cy = if scrolled { y + self.scroll_y } else { y };
             let ex = (x - hx).clamp(0.0, hw);
-            let ey = ((y + self.scroll_y) - hy).clamp(0.0, hh);
+            let ey = (cy - hy).clamp(0.0, hh);
             self.dispatch("mouseup", eid, x, y, ex, ey);
             self.dirty = true;
             return;
@@ -313,6 +381,12 @@ impl DomRenderer {
     #[doc(hidden)]
     pub fn first_hit_center(&self) -> Option<(f32, f32)> {
         self.hits.first().map(|h| (h.x + h.w / 2.0, h.y + h.h / 2.0))
+    }
+
+    /// Test/debug accessor: `(scroll_y, max_scroll, has_scroll_region)`.
+    #[doc(hidden)]
+    pub fn scroll_state(&self) -> (f32, f32, bool) {
+        (self.scroll_y, self.max_scroll(), self.scroll_active)
     }
 
     // ── Layout + paint ────────────────────────────────────────────────────
@@ -336,15 +410,15 @@ impl DomRenderer {
             .iter()
             .map(|&n| self.build_taffy(&mut taffy, &mut map, n, &PaintProps::default(), sink))
             .collect();
-        // Root: full surface width, NATURAL height (content may exceed the
-        // surface → it scrolls). Height left auto so the column takes its
-        // content height; available height is MaxContent (unbounded).
+        // Root fills the surface (fixed); overflow is handled by inner
+        // `overflow:scroll` regions, not the root. The app's root child should
+        // `flex-grow:1` to fill it.
         let root_style = Style {
             display: Display::Flex,
             flex_direction: FlexDirection::Column,
             size: Size {
                 width: Dimension::Length(self.surface.0),
-                height: Dimension::Auto,
+                height: Dimension::Length(self.surface.1),
             },
             ..Default::default()
         };
@@ -375,14 +449,16 @@ impl DomRenderer {
                 .unwrap();
         }
 
-        // Record total content height + re-clamp the scroll offset to it.
-        self.content_h = taffy.layout(root).map(|l| l.size.height).unwrap_or(self.surface.1);
-        self.scroll_y = self.scroll_y.clamp(0.0, self.max_scroll());
+        // The scroll region (if any) is discovered during paint_walk; reset first.
+        self.scroll_active = false;
 
         // Walk the laid-out tree (absolute coords) → draw ops + hit rects.
         for &n in &self.dom.root_children().to_vec() {
-            self.paint_walk(&taffy, &map, n, 0.0, 0.0, &PaintProps::default(), sink);
+            self.paint_walk(&taffy, &map, n, 0.0, 0.0, &PaintProps::default(), false, sink);
         }
+
+        // Re-clamp the scroll offset to the (possibly changed) content height.
+        self.scroll_y = self.scroll_y.clamp(0.0, self.max_scroll());
     }
 
     /// Recursively build the taffy tree mirroring the dom arena, carrying
@@ -434,6 +510,7 @@ impl DomRenderer {
         parent_x: f32,
         parent_y: f32,
         inherited: &PaintProps,
+        in_scroll: bool,
         sink: &mut S,
     ) {
         let Some(&tid) = map.get(&node) else { return };
@@ -441,11 +518,16 @@ impl DomRenderer {
         let x = parent_x + layout.location.x;
         let y = parent_y + layout.location.y;
         let (w, h) = (layout.size.width, layout.size.height);
+        // Track the content extent of the active scroll region (robust vs taffy's
+        // content_size for nested flex).
+        if in_scroll {
+            self.scroll_bottom = self.scroll_bottom.max(y + h);
+        }
 
         // Clone what we need before borrowing self mutably for draw ops.
         let n = self.dom.node(node);
         let kind_is_text = matches!(n.kind, NodeKind::Text(_));
-        let (paint, children, eid, text) = match &n.kind {
+        let (paint, children, eid, text, is_scroll) = match &n.kind {
             NodeKind::Element { style, listeners, .. } => {
                 let p = style::to_paint(style, inherited);
                 let mut flags = 0u8;
@@ -459,10 +541,10 @@ impl DomRenderer {
                     }
                 }
                 let eid = if flags != 0 { n.element_id } else { None };
-                (p, n.children.clone(), eid.map(|e| (e, flags)), None)
+                (p, n.children.clone(), eid.map(|e| (e, flags)), None, style::is_scroll(style))
             }
-            NodeKind::Text(t) => (*inherited, Vec::new(), None, Some(t.clone())),
-            NodeKind::Placeholder => (*inherited, Vec::new(), None, None),
+            NodeKind::Text(t) => (*inherited, Vec::new(), None, Some(t.clone()), false),
+            NodeKind::Placeholder => (*inherited, Vec::new(), None, None, false),
         };
 
         if !kind_is_text {
@@ -472,7 +554,7 @@ impl DomRenderer {
                 self.draw_ops.push(DrawOp::Rrect { x, y, w, h, r, color: paint.background });
             }
             if let Some((eid, flags)) = eid {
-                self.hits.push(HitRect { x, y, w, h, eid, flags });
+                self.hits.push(HitRect { x, y, w, h, eid, flags, scrolled: in_scroll });
             }
         } else if let Some(t) = text {
             if !t.trim().is_empty() {
@@ -486,8 +568,23 @@ impl DomRenderer {
             }
         }
 
-        for c in children {
-            self.paint_walk(taffy, map, c, x, y, &paint, sink);
+        // A scroll region: its children are clipped to its box + scrolled. (One
+        // region supported; the element's own bg above is drawn unscrolled.)
+        if is_scroll {
+            self.scroll_active = true;
+            self.scroll_vp = (x, y, w, h);
+            self.scroll_bottom = y;
+            self.draw_ops.push(DrawOp::PushClip { x, y, w, h });
+            for c in &children {
+                self.paint_walk(taffy, map, *c, x, y, &paint, true, sink);
+            }
+            self.draw_ops.push(DrawOp::PopClip);
+            // Content height = furthest child bottom below the viewport top.
+            self.scroll_content_h = (self.scroll_bottom - y).max(h);
+        } else {
+            for c in children {
+                self.paint_walk(taffy, map, c, x, y, &paint, in_scroll, sink);
+            }
         }
     }
 }

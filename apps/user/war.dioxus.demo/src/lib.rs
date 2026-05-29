@@ -59,6 +59,15 @@ impl CanvasSink for HostSink {
     fn clear(&mut self, argb: u32) {
         canvas::clear(argb);
     }
+    fn save(&mut self) {
+        canvas::save();
+    }
+    fn restore(&mut self) {
+        canvas::restore();
+    }
+    fn clip_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        canvas::clip_rect(x, y, w, h, true);
+    }
     fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32, f: Fill) {
         canvas::draw_rect(x, y, w, h, paint(f.color));
     }
@@ -202,7 +211,7 @@ fn app() -> Element {
     let scale_label = format!("{:.2}×", scale());
     rsx! {
         div {
-            style: "display:flex; flex-direction:column; padding:40px; gap:32px; background:{BG};",
+            style: "display:flex; flex-direction:column; padding:40px; gap:32px; background:{BG}; height:100%;",
             // Title + runtime UI-scale control.
             div {
                 style: "display:flex; flex-direction:row; align-items:center; justify-content:space-between;",
@@ -231,13 +240,22 @@ fn app() -> Element {
                 }
             }
             TabBar { tab }
-            {match tab() {
-                0 => rsx! { InputsPanel {} },
-                1 => rsx! { PickersPanel {} },
-                2 => rsx! { CalendarPanel {} },
-                3 => rsx! { ColorPanel {} },
-                _ => rsx! { TextPanel {} },
-            }}
+            // Sticky header above; the panel scrolls inside this region. The
+            // inner wrapper is flex-shrink:0 so it keeps its natural (tall)
+            // height and overflows → scrolls.
+            div {
+                style: "display:flex; flex-direction:column; overflow:scroll; flex-grow:1;",
+                div {
+                    style: "display:flex; flex-direction:column; flex-shrink:0;",
+                    {match tab() {
+                        0 => rsx! { InputsPanel {} },
+                        1 => rsx! { PickersPanel {} },
+                        2 => rsx! { CalendarPanel {} },
+                        3 => rsx! { ColorPanel {} },
+                        _ => rsx! { TextPanel {} },
+                    }}
+                }
+            }
         }
     }
 }

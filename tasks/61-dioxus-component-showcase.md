@@ -133,10 +133,26 @@ gallery needs three expansions:
   (click moved from down→up; existing buttons unaffected). Found+fixed a latent
   bug: the slider-down path wasn't marking the renderer dirty, so a slider value
   change didn't repaint. Device-verified: at 2.25× a swipe scrolled the Slider
-  card (below the fold) into view. Limitation: root-level scroll moves the whole
-  page incl. the tab bar (scroll back up to reach tabs) — a sticky header /
-  per-region scroll would need a clip-rect canvas verb (future).
-- **Task complete** — all 3 phases + scale + scrolling shipped + committed.
+  card (below the fold) into view.
+- **Sticky-header scroll regions via a clip-rect verb (follow-up, 2026-05-29).**
+  Upgraded root-scroll → a proper `overflow:scroll` **region** so the tab bar
+  stays sticky. Added `save`/`restore`/`clip-rect` to `CanvasSink` + the demo's
+  trimmed WIT (forwarding to the host canvas verbs). `style.rs` maps
+  `overflow:scroll` → `taffy Overflow::Scroll` (+ `flex-shrink`). The painter
+  brackets the region's ops in `PushClip`/`PopClip` (replay = save + clip-rect +
+  offset by `scroll_y`); hit-testing maps scrolled hits to their visible rect and
+  clips to the viewport; a press inside the region scrolls *it* (header presses
+  don't); a scrollbar thumb is drawn. **Three layout gotchas fixed** (host tests
+  `scroll_region_scrolls`, `nested_scroll_region_overflows`, `gallery_exact_scrolls`):
+  (a) scroll content must not shrink — laid out at natural height (the demo wraps
+  the panel in a `flex-shrink:0` content wrapper); (b) taffy's `content_size` is
+  unreliable for the nested flex, so content height is computed from laid-out
+  child bottoms during paint_walk; (c) **the scroll-region ancestor needs a FIXED
+  height** (the gallery root uses `height:100%`, not `flex-grow:1`) — else it
+  grows to content and the viewport never caps. Device-verified: at 2.25× a swipe
+  over a card background scrolled the panel (Slider card came in, Checkbox
+  scrolled off) **while the title + tabs stayed fixed**.
+- **Task complete** — all 3 phases + scale + sticky-header scrolling shipped.
 
 ## Related
 

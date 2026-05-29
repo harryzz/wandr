@@ -26,6 +26,9 @@ impl CanvasSink for MockSink {
     fn begin_frame(&mut self) {}
     fn end_frame(&mut self) {}
     fn clear(&mut self, _argb: u32) {}
+    fn save(&mut self) {}
+    fn restore(&mut self) {}
+    fn clip_rect(&mut self, _x: f32, _y: f32, _w: f32, _h: f32) {}
     fn fill_rect(&mut self, _x: f32, _y: f32, _w: f32, _h: f32, _f: Fill) {}
     fn fill_rrect(&mut self, _x: f32, _y: f32, _w: f32, _h: f32, _rx: f32, _ry: f32, _f: Fill) {
         self.rec.borrow_mut().rrects += 1;
@@ -105,6 +108,110 @@ fn drag_coords_stay_logical_under_scale() {
     let rec2 = Rc::new(RefCell::new(Recorder::default()));
     r.render_frame(&mut MockSink { rec: rec2.clone() });
     assert!(rec2.borrow().drawn_text.iter().any(|t| t == "val: 50"), "logical x under 2x scale: {:?}", rec2.borrow().drawn_text);
+}
+
+/// A fixed header + an `overflow:scroll` region with content taller than the
+/// viewport. Exercises scroll-region detection + drag-to-scroll.
+fn scroll_app() -> Element {
+    rsx! {
+        div {
+            style: "display:flex; flex-direction:column; height:2000px;",
+            // Sticky header (outside the scroll region).
+            button { style: "height:200px;", onclick: move |_| {}, div { "header" } }
+            // Scroll region: 10 × 400px = 4000px content in an ~1800px viewport.
+            div {
+                style: "display:flex; flex-direction:column; overflow:scroll; flex-grow:1;",
+                for i in 0..10 {
+                    div { style: "height:400px; flex-shrink:0;", div { "item {i}" } }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn scroll_region_scrolls() {
+    let rec = Rc::new(RefCell::new(Recorder::default()));
+    let mut r = DomRenderer::new(scroll_app);
+    r.render_frame(&mut MockSink { rec: rec.clone() });
+
+    let (sy0, max, active) = r.scroll_state();
+    assert!(active, "scroll region detected");
+    assert!(max > 0.0, "content overflows the viewport (max_scroll>0): {max}");
+    assert_eq!(sy0, 0.0, "starts unscrolled");
+
+    // Drag up inside the viewport (below the 200px header) past the threshold.
+    r.on_pointer_down(500.0, 1000.0);
+    r.on_pointer_move(500.0, 850.0);
+    r.on_pointer_move(500.0, 700.0);
+    let (sy1, _, _) = r.scroll_state();
+    assert!(sy1 > 0.0, "dragging up scrolls the region down: {sy1}");
+}
+
+/// Mirrors the gallery's NESTED scroll structure: an `overflow:scroll` region
+/// whose child is a `flex-shrink:0` content wrapper holding *shrinkable* cards
+/// (default flex-shrink). Verifies the wrapper keeps natural height so the
+/// cards overflow (the gallery relies on this, not on per-card flex-shrink:0).
+fn nested_scroll_app() -> Element {
+    rsx! {
+        div {
+            style: "display:flex; flex-direction:column; height:2000px;",
+            button { style: "height:200px;", onclick: move |_| {}, div { "header" } }
+            div {
+                style: "display:flex; flex-direction:column; overflow:scroll; flex-grow:1;",
+                div {
+                    style: "display:flex; flex-direction:column; flex-shrink:0;",
+                    for i in 0..10 {
+                        div { style: "height:400px;", div { "card {i}" } }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Exactly the gallery's chain: flex-grow outer (no explicit height, relies on
+/// the synthetic root) → header → scroll div → flex-shrink:0 wrapper → a
+/// default-shrink inner column → tall children.
+fn gallery_exact_app() -> Element {
+    rsx! {
+        div {
+            style: "display:flex; flex-direction:column; height:100%;",
+            button { style: "height:200px;", onclick: move |_| {}, div { "h" } }
+            div {
+                style: "display:flex; flex-direction:column; overflow:scroll; flex-grow:1;",
+                div {
+                    style: "display:flex; flex-direction:column; flex-shrink:0;",
+                    div {
+                        style: "display:flex; flex-direction:column;",
+                        for i in 0..10 {
+                            div { style: "height:400px;", div { "c{i}" } }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn gallery_exact_scrolls() {
+    let rec = Rc::new(RefCell::new(Recorder::default()));
+    let mut r = DomRenderer::new(gallery_exact_app);
+    r.render_frame(&mut MockSink { rec: rec.clone() });
+    let (_, max, active) = r.scroll_state();
+    assert!(active, "scroll region detected");
+    assert!(max > 0.0, "gallery-exact chain overflows (max={max})");
+}
+
+#[test]
+fn nested_scroll_region_overflows() {
+    let rec = Rc::new(RefCell::new(Recorder::default()));
+    let mut r = DomRenderer::new(nested_scroll_app);
+    r.render_frame(&mut MockSink { rec: rec.clone() });
+    let (_, max, active) = r.scroll_state();
+    assert!(active, "scroll region detected");
+    assert!(max > 0.0, "flex-shrink:0 wrapper keeps natural height → overflows (max={max})");
 }
 
 /// A text-input component: focusable (listens for keydown), edits a String on

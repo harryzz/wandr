@@ -40,6 +40,11 @@ interface canvas {
     end-frame:   func();
     clear:       func(argb: u32);
 
+    // Save/restore + rectangular clip — for scroll regions (sticky header).
+    save:       func();
+    restore:    func();
+    clip-rect:  func(x: f32, y: f32, w: f32, h: f32, anti-alias: bool);
+
     draw-rect:   func(x: f32, y: f32, w: f32, h: f32, paint: paint-attrs);
     draw-rrect:  func(x: f32, y: f32, w: f32, h: f32, rx: f32, ry: f32, paint: paint-attrs);
 

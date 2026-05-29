@@ -9,8 +9,13 @@ use std::collections::BTreeMap;
 
 use taffy::{
     AlignItems, Dimension, Display, FlexDirection, JustifyContent, LengthPercentage,
-    LengthPercentageAuto, Rect, Size, Style,
+    LengthPercentageAuto, Overflow, Point, Rect, Size, Style,
 };
+
+/// Does this element scroll its overflow? (`overflow: scroll`.)
+pub fn is_scroll(map: &StyleMap) -> bool {
+    matches!(map.get("overflow").map(String::as_str), Some("scroll"))
+}
 
 pub type StyleMap = BTreeMap<String, String>;
 
@@ -183,6 +188,15 @@ pub fn to_taffy(map: &StyleMap, scale: f32) -> Style {
 
     if let Some(v) = map.get("flex-grow").and_then(|v| v.trim().parse::<f32>().ok()) {
         s.flex_grow = v;
+    }
+    if let Some(v) = map.get("flex-shrink").and_then(|v| v.trim().parse::<f32>().ok()) {
+        s.flex_shrink = v;
+    }
+
+    // overflow:scroll → the node keeps its (flex) box; content overflows +
+    // `content_size` reports the extent. scrollbar_width stays 0 (no gutter).
+    if is_scroll(map) {
+        s.overflow = Point { x: Overflow::Scroll, y: Overflow::Scroll };
     }
 
     s.align_items = match map.get("align-items").map(String::as_str) {

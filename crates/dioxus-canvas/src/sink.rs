@@ -29,6 +29,13 @@ pub trait CanvasSink {
     /// Clear the whole surface to an ARGB colour.
     fn clear(&mut self, argb: u32);
 
+    /// Canvas save/restore + rectangular clip — used to make scroll regions
+    /// clip their (scrolled) content so siblings (e.g. a sticky header) aren't
+    /// overdrawn. Map 1:1 to the canvas WIT `save`/`restore`/`clip-rect`.
+    fn save(&mut self);
+    fn restore(&mut self);
+    fn clip_rect(&mut self, x: f32, y: f32, w: f32, h: f32);
+
     /// Filled rectangle.
     fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32, fill: Fill);
     /// Filled rounded rectangle (`rx`/`ry` corner radii).
