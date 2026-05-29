@@ -140,28 +140,261 @@ impl Guest for App {
 
 export!(App);
 
-// ── The reactive UI ────────────────────────────────────────────────────────
+// ── The component gallery ────────────────────────────────────────────────
+//
+// A tabbed gallery (tabs avoid scrolling — each page fits a screen). Phase 1:
+// click-only components. Drag inputs (slider, HSV picker) + the text edit box
+// land in later phases (task 61).
 
-const ITEMS: [&str; 4] = ["Reactive", "Flexbox", "Host fonts", "No Kotlin"];
+const BG: &str = "#12121A";
+const CARD: &str = "#1F1F33";
+const SUBTLE: &str = "#2A2A44";
+const ACCENT: &str = "#4285F4";
+const GREEN: &str = "#34A853";
+const TEXT: &str = "#FFFFFF";
+const MUTED: &str = "#C7C7D9";
+
+const TAB_NAMES: [&str; 3] = ["Inputs", "Pickers", "Calendar"];
 
 fn app() -> Element {
-    let mut count = use_signal(|| 0);
+    let tab = use_signal(|| 0usize);
     rsx! {
         div {
-            style: "display:flex; flex-direction:column; padding:72px; gap:44px; background:#12121A;",
-            div { style: "color:#FFFFFF; font-size:80px; font-weight:700;", "Dioxus on wart" }
-            div { style: "color:#9AA0FF; font-size:52px;", "count: {count}" }
-            button {
-                style: "display:flex; background:#4285F4; padding:52px; border-radius:36px; justify-content:center;",
-                onclick: move |_| count += 1,
-                div { style: "color:#FFFFFF; font-size:56px; font-weight:600;", "Tap to increment" }
+            style: "display:flex; flex-direction:column; padding:40px; gap:32px; background:{BG};",
+            div { style: "color:{TEXT}; font-size:60px; font-weight:700;", "Dioxus Gallery" }
+            TabBar { tab }
+            {match tab() {
+                0 => rsx! { InputsPanel {} },
+                1 => rsx! { PickersPanel {} },
+                _ => rsx! { CalendarPanel {} },
+            }}
+        }
+    }
+}
+
+#[component]
+fn TabBar(tab: Signal<usize>) -> Element {
+    rsx! {
+        div {
+            style: "display:flex; flex-direction:row; gap:16px;",
+            for (i, name) in TAB_NAMES.iter().enumerate() {
+                button {
+                    style: format!(
+                        "display:flex; justify-content:center; padding:24px; border-radius:20px; flex-grow:1; background:{};",
+                        if tab() == i { ACCENT } else { CARD }
+                    ),
+                    onclick: move |_| tab.set(i),
+                    div { style: "color:{TEXT}; font-size:34px; font-weight:600;", "{name}" }
+                }
+            }
+        }
+    }
+}
+
+/// A titled card wrapping a control.
+#[component]
+fn Card(title: String, children: Element) -> Element {
+    rsx! {
+        div {
+            style: "display:flex; flex-direction:column; gap:20px; background:{CARD}; padding:32px; border-radius:24px;",
+            div { style: "color:{MUTED}; font-size:30px; font-weight:600;", "{title}" }
+            {children}
+        }
+    }
+}
+
+#[component]
+fn InputsPanel() -> Element {
+    let mut checked = use_signal(|| true);
+    let mut switch_on = use_signal(|| false);
+    let mut radio = use_signal(|| 0usize);
+    let mut steps = use_signal(|| 4i32);
+    let radios = ["Small", "Medium", "Large"];
+    rsx! {
+        div {
+            style: "display:flex; flex-direction:column; gap:24px;",
+
+            Card { title: "Checkbox",
+                button {
+                    style: "display:flex; flex-direction:row; align-items:center; gap:24px;",
+                    onclick: move |_| checked.toggle(),
+                    div {
+                        style: format!(
+                            "display:flex; justify-content:center; width:56px; height:56px; border-radius:14px; background:{};",
+                            if checked() { GREEN } else { SUBTLE }
+                        ),
+                        if checked() { div { style: "color:{TEXT}; font-size:40px; font-weight:700;", "✓" } }
+                    }
+                    div { style: "color:{TEXT}; font-size:34px;", "Enable feature" }
+                }
+            }
+
+            Card { title: "Switch",
+                button {
+                    style: format!(
+                        "display:flex; flex-direction:row; align-items:center; width:120px; height:60px; border-radius:50%; padding:6px; background:{}; justify-content:{};",
+                        if switch_on() { ACCENT } else { SUBTLE },
+                        if switch_on() { "flex-end" } else { "flex-start" }
+                    ),
+                    onclick: move |_| switch_on.toggle(),
+                    div { style: "width:48px; height:48px; border-radius:50%; background:{TEXT};" }
+                }
+            }
+
+            Card { title: "Radio group",
+                div {
+                    style: "display:flex; flex-direction:column; gap:18px;",
+                    for (i, label) in radios.iter().enumerate() {
+                        button {
+                            style: "display:flex; flex-direction:row; align-items:center; gap:20px;",
+                            onclick: move |_| radio.set(i),
+                            div {
+                                style: format!(
+                                    "display:flex; justify-content:center; align-items:center; width:48px; height:48px; border-radius:50%; background:{};",
+                                    if radio() == i { ACCENT } else { SUBTLE }
+                                ),
+                                if radio() == i { div { style: "width:20px; height:20px; border-radius:50%; background:{TEXT};" } }
+                            }
+                            div { style: "color:{TEXT}; font-size:32px;", "{label}" }
+                        }
+                    }
+                }
+            }
+
+            Card { title: "Stepper + progress",
+                div {
+                    style: "display:flex; flex-direction:row; align-items:center; gap:28px;",
+                    button {
+                        style: "display:flex; justify-content:center; width:72px; height:72px; border-radius:50%; background:{SUBTLE};",
+                        onclick: move |_| { if steps() > 0 { steps -= 1; } },
+                        div { style: "color:{TEXT}; font-size:48px; font-weight:700;", "−" }
+                    }
+                    div { style: "display:flex; justify-content:center; width:60px; color:{TEXT}; font-size:40px;", "{steps}" }
+                    button {
+                        style: "display:flex; justify-content:center; width:72px; height:72px; border-radius:50%; background:{SUBTLE};",
+                        onclick: move |_| { if steps() < 10 { steps += 1; } },
+                        div { style: "color:{TEXT}; font-size:48px; font-weight:700;", "+" }
+                    }
+                }
+                div {
+                    style: "display:flex; flex-direction:row; height:24px; border-radius:12px; background:{SUBTLE};",
+                    div { style: format!("height:24px; border-radius:12px; background:{}; width:{}%;", ACCENT, steps() * 10) }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn PickersPanel() -> Element {
+    let mut open = use_signal(|| false);
+    let mut choice = use_signal(|| 0usize);
+    let mut color = use_signal(|| 3usize);
+    let options = ["Apple", "Banana", "Cherry", "Date"];
+    let swatches = ["#EA4335", "#FBBC05", "#34A853", "#4285F4", "#AB47BC", "#00ACC1", "#FF7043", "#5C6BC0"];
+    rsx! {
+        div {
+            style: "display:flex; flex-direction:column; gap:24px;",
+
+            Card { title: "Dropdown",
+                button {
+                    style: "display:flex; flex-direction:row; align-items:center; justify-content:space-between; background:{SUBTLE}; padding:26px; border-radius:16px;",
+                    onclick: move |_| open.toggle(),
+                    div { style: "color:{TEXT}; font-size:34px;", "{options[choice()]}" }
+                    div { style: "color:{MUTED}; font-size:34px;", if open() { "^" } else { "v" } }
+                }
+                if open() {
+                    div {
+                        style: "display:flex; flex-direction:column; gap:8px;",
+                        for (i, opt) in options.iter().enumerate() {
+                            button {
+                                style: "display:flex; padding:22px; border-radius:12px; background:{CARD};",
+                                onclick: move |_| { choice.set(i); open.set(false); },
+                                div { style: "color:{MUTED}; font-size:30px;", "{opt}" }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Card { title: "Color picker",
+                div {
+                    style: "display:flex; flex-direction:row; gap:18px; align-items:center;",
+                    div { style: format!("width:96px; height:96px; border-radius:24px; background:{};", swatches[color()]) }
+                    div { style: "color:{MUTED}; font-size:30px;", "{swatches[color()]}" }
+                }
+                div {
+                    style: "display:flex; flex-direction:row; gap:18px;",
+                    for (i, sw) in swatches.iter().enumerate() {
+                        button {
+                            style: format!(
+                                "display:flex; justify-content:center; align-items:center; width:84px; height:84px; border-radius:50%; background:{};",
+                                if color() == i { TEXT } else { sw }
+                            ),
+                            onclick: move |_| color.set(i),
+                            div {
+                                style: format!(
+                                    "width:{}; height:{}; border-radius:50%; background:{};",
+                                    if color() == i { "60px" } else { "84px" },
+                                    if color() == i { "60px" } else { "84px" }, sw
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn CalendarPanel() -> Element {
+    let mut month = use_signal(|| 4usize); // 0=Jan … 4=May
+    let mut day = use_signal(|| 15i32);
+    let names = ["January", "February", "March", "April", "May", "June",
+                 "July", "August", "September", "October", "November", "December"];
+    let dim: [i32; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let days = dim[month()];
+    rsx! {
+        Card { title: "Calendar",
+            div {
+                style: "display:flex; flex-direction:row; align-items:center; justify-content:space-between;",
+                button {
+                    style: "display:flex; justify-content:center; width:64px; height:64px; border-radius:50%; background:{SUBTLE};",
+                    onclick: move |_| { let m = month(); month.set(if m == 0 { 11 } else { m - 1 }); },
+                    div { style: "color:{TEXT}; font-size:38px;", "<" }
+                }
+                div { style: "color:{TEXT}; font-size:38px; font-weight:600;", "{names[month()]}" }
+                button {
+                    style: "display:flex; justify-content:center; width:64px; height:64px; border-radius:50%; background:{SUBTLE};",
+                    onclick: move |_| { let m = month(); month.set(if m == 11 { 0 } else { m + 1 }); },
+                    div { style: "color:{TEXT}; font-size:38px;", ">" }
+                }
             }
             div {
-                style: "display:flex; flex-direction:column; gap:24px;",
-                for item in ITEMS.iter() {
+                style: "display:flex; flex-direction:column; gap:12px;",
+                for row in 0..((days + 6) / 7) {
                     div {
-                        style: "display:flex; background:#1F1F33; padding:40px; border-radius:24px;",
-                        div { style: "color:#E0E0E0; font-size:46px;", "• {item}" }
+                        style: "display:flex; flex-direction:row; gap:12px;",
+                        for col in 0..7 {
+                            {
+                                let d = row * 7 + col + 1;
+                                if d <= days {
+                                    rsx! {
+                                        button {
+                                            style: format!(
+                                                "display:flex; justify-content:center; align-items:center; width:80px; height:80px; border-radius:16px; background:{};",
+                                                if day() == d { ACCENT } else { SUBTLE }
+                                            ),
+                                            onclick: move |_| day.set(d),
+                                            div { style: "color:{TEXT}; font-size:30px;", "{d}" }
+                                        }
+                                    }
+                                } else {
+                                    rsx! { div { style: "width:80px; height:80px;" } }
+                                }
+                            }
+                        }
                     }
                 }
             }

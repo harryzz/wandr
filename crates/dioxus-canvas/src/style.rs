@@ -204,8 +204,17 @@ pub fn to_paint(map: &StyleMap, inherited: &PaintProps) -> PaintProps {
     if let Some(bg) = map.get("background").or_else(|| map.get("background-color")) {
         p.background = parse_color(bg);
     }
-    if let Some(r) = px(map, "border-radius") {
-        p.radius = r;
+    if let Some(v) = map.get("border-radius") {
+        // A percent radius (e.g. "50%") is stored as a NEGATIVE fraction and
+        // resolved against the laid-out min(w,h) at paint time — Skia clamps an
+        // rrect radius ≥ half-size to a circle, so 50% gives circles/pills.
+        if let Some(pct) = v.trim().strip_suffix('%') {
+            if let Ok(n) = pct.trim().parse::<f32>() {
+                p.radius = -(n / 100.0);
+            }
+        } else if let Some(r) = px(map, "border-radius") {
+            p.radius = r;
+        }
     }
     if let Some(c) = map.get("color") {
         p.color = parse_color(c);

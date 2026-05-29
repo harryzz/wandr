@@ -1,5 +1,5 @@
-TASK=60
-STEP=complete
-STATUS=complete
-LAST_SUCCESS=Tasks 59+60 complete. 59: dioxus-canvas renderer + war.dioxus.demo on dioxus 0.7, device-verified. measure-text WIT verb DROPPED — text now measured via existing host paragraph interface (build→layout→get-max-intrinsic-width+get-height→drop, cached); host rebuilt measure-text-free + redeployed; demo re-verified against it (renders, bigger fonts). 60: dioxus 0.7 unblocked via vendored+patched subsecond (external/subsecond/) + [patch.crates-io]; upstream PR DioxusLabs/dioxus#5602.
-NOTES=WITs synced (canonical + skiko + wart-app + ime mirrors all md5 641fb68; demo has own trimmed subset w/ paragraph, no measure-text). wart repo task-59+60 work UNCOMMITTED in working tree — user cautious re actions; ask before committing. Open: task 58 (chrome overlays don't rotate in landscape). On-device dioxus taps confirmed by user ("counter increases"); this-session taps blocked by QuickstepLauncher focus steal (known standalone issue).
+TASK=61
+STEP=phase1-done
+STATUS=in-progress
+LAST_SUCCESS=Task 61 Phase 1 device-verified 2026-05-29 — dioxus component gallery (tabbed: Inputs/Pickers/Calendar) with checkbox, switch, radio, stepper, progress, dropdown (inline-expand), color swatches, calendar. All render on Pixel 2 XL. Renderer: percent border-radius -> circles. Host tests green (3).
+NOTES=Phase 2 (drag: slider + HSV picker -> needs pointer move/up + capture + gradients) and Phase 3 (text edit box + soft IME -> convert_keyboard_data + focus + war:ime editor-attached) PENDING. Glyph note: Roboto lacks ▼◀ triangles (used ASCII v/^/</>); host glyph-fallback to NotoSansSymbols is future polish. Tasks 59+60 already committed+pushed (477290f1). Open: task 58 (overlay rotation).

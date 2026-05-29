@@ -287,7 +287,9 @@ impl DomRenderer {
 
         if !kind_is_text {
             if paint.background != 0 {
-                self.draw_ops.push(DrawOp::Rrect { x, y, w, h, r: paint.radius, color: paint.background });
+                // Negative radius = percent-of-min-dimension (e.g. 50% → circle/pill).
+                let r = if paint.radius < 0.0 { w.min(h) * -paint.radius } else { paint.radius };
+                self.draw_ops.push(DrawOp::Rrect { x, y, w, h, r, color: paint.background });
             }
             if let Some(eid) = eid {
                 self.hits.push(HitRect { x, y, w, h, eid });

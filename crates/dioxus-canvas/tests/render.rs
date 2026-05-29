@@ -90,3 +90,49 @@ fn renders_and_reacts_to_click() {
     assert!(rd.drawn_text.iter().any(|t| t == "count: 1"), "count updated after click: {:?}", rd.drawn_text);
     assert!(!rd.drawn_text.iter().any(|t| t == "count: 0"), "old count gone");
 }
+
+/// A checkbox-style component: a clickable row that conditionally renders a
+/// checkmark child when `on`. Exercises the add/remove mutation path
+/// (`render_immediate` create/replace-placeholder/remove) that toggling
+/// components (checkbox, dropdown, tabs) all depend on — which the counter
+/// (SetText only) never hits.
+fn toggle_app() -> Element {
+    let mut on = use_signal(|| false);
+    rsx! {
+        div {
+            style: "display:flex; background:#222;",
+            onclick: move |_| on.toggle(),
+            if on() {
+                div { "CHECK" }
+            } else {
+                div { "empty" }
+            }
+        }
+    }
+}
+
+#[test]
+fn conditional_rendering_toggles() {
+    let rec = Rc::new(RefCell::new(Recorder::default()));
+    let mut r = DomRenderer::new(toggle_app);
+    let mut sink = MockSink { rec: rec.clone() };
+    r.render_frame(&mut sink);
+    assert!(rec.borrow().drawn_text.iter().any(|t| t == "empty"), "starts unchecked: {:?}", rec.borrow().drawn_text);
+    assert!(!rec.borrow().drawn_text.iter().any(|t| t == "CHECK"), "no check yet");
+
+    let (cx, cy) = r.first_hit_center().expect("row is clickable");
+
+    // Toggle on → CHECK appears, empty gone.
+    r.on_pointer_down(cx, cy);
+    let rec2 = Rc::new(RefCell::new(Recorder::default()));
+    r.render_frame(&mut MockSink { rec: rec2.clone() });
+    assert!(rec2.borrow().drawn_text.iter().any(|t| t == "CHECK"), "checked after 1st click: {:?}", rec2.borrow().drawn_text);
+    assert!(!rec2.borrow().drawn_text.iter().any(|t| t == "empty"), "empty replaced");
+
+    // Toggle off → back to empty (remove + recreate path).
+    r.on_pointer_down(cx, cy);
+    let rec3 = Rc::new(RefCell::new(Recorder::default()));
+    r.render_frame(&mut MockSink { rec: rec3.clone() });
+    assert!(rec3.borrow().drawn_text.iter().any(|t| t == "empty"), "unchecked after 2nd click: {:?}", rec3.borrow().drawn_text);
+    assert!(!rec3.borrow().drawn_text.iter().any(|t| t == "CHECK"), "check removed");
+}
