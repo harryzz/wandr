@@ -33,6 +33,7 @@ mod app_role;
 mod eventfd_signal;
 mod assets_impl;
 mod theme_impl;
+mod launcher_impl;
 // Task 35 step 1: app loader skeleton (no callers wired yet).
 mod app_loader;
 // Task 35 step 4: app installer skeleton (no CLI wired yet — step 6).

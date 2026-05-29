@@ -952,6 +952,22 @@ interface keyboard {
     request-overlay-height: func(height-px: u32);
 }
 
+/// Launcher / home support (task 57). Lets a launcher guest enumerate
+/// installed apps and ask the arbiter to launch them. Flat-string
+/// returns keep the Kotlin canonical-ABI bindings simple (no list<record>
+/// lift).
+interface launcher {
+    /// Installed user-launchable apps, newline-delimited, one per line as
+    /// `app-id` + TAB + `label`. Empty string if none / unavailable.
+    /// Sourced from the host's install-dir scan (no PackageManager).
+    list-apps: func() -> string;
+
+    /// Ask the arbiter to launch (or foreground, if already running) the
+    /// app with this id. Fire-and-forget — the arbiter foregrounds it,
+    /// demoting the launcher to the background.
+    launch-app: func(app-id: string);
+}
+
 world skiko-ui {
     import canvas;
     import paragraph;
@@ -970,6 +986,7 @@ world skiko-ui {
     import audio;
     import assets;
     import theme;
+    import launcher;
     import ime;
     import keyboard;
     export renderer;

@@ -155,6 +155,8 @@ app_id      = "com.example.wart-app"
 version     = "0.1.0"
 world       = "my:skiko-gfx/skiko-ui"
 composition = "same-store"
+# Task 57 — human-readable label shown by the launcher (`list-apps`).
+label       = "Demo"
 
 [components]
 ui = "components/ui.wasm"

@@ -1,7 +1,52 @@
 # Task 57 — system launcher / home (proposal)
 
-> **Status:** 🔲 proposal 2026-05-29, not started. Design options below;
-> pick a proposal + scope before implementing.
+> **Status:** 🟢 device-verified 2026-05-29 (Proposal A, proven in
+> wart-app). Steps 1–5 done; Step 6 (boot-script auto-`set-home`) + a
+> dedicated `war.launcher` warpkg are the remaining follow-ups.
+>
+> ## Results (2026-05-29)
+>
+> Built Proposal A. Per [[feedback_prefer_wart_app_edits]] the launcher
+> UI was proven inside wart-app (a `LauncherCard` at the top of the
+> showcase) rather than spinning up a brand-new Kotlin module first.
+>
+> - **Step 1 — arbiter home-app concept** (committed `7d6575f3`):
+>   `home_app_id` state + persistence; `set-home`/`go-home` commands;
+>   `ensure_home_foreground()`; boot-foreground; and the
+>   fall-back-to-home hook in `handle_child_exit` (task 54). Verified:
+>   set-home launches+foregrounds; killing the fg app auto-relaunches
+>   home (instant, via the death-notification subscriber); arbiter
+>   restart restores home from `state.json` + foregrounds the survivor.
+> - **Steps 2–4 — host data/plumbing:** new `my:skiko-gfx/launcher` WIT
+>   (`list-apps -> string` newline/TAB-delimited; `launch-app(app-id)`);
+>   `wart-host/src/launcher_impl.rs` scans `<APPS_ROOT>/apps/*` for the
+>   id + top-level `label` from each `package.toml` (the manifest is
+>   **flat**, not `[package]`-nested — note vs the proposal text), and
+>   forwards `launch-app` to the arbiter socket (one-shot, mirrors
+>   `ime_host_impl`). No installer change (package.toml copied verbatim;
+>   serde ignores the unknown `label`).
+> - **Step 5 — launcher UI in wart-app:** hand-written canonical-ABI
+>   bindings `LauncherImports.kt` (modeled on `AssetsImports.kt` — string
+>   param + caller-allocated 8-byte return area for the string return);
+>   `LauncherCard.kt` renders a `FlowRow` of letter-tile icons (first
+>   label char on a hash-derived color) over a theme-gradient backdrop,
+>   tap → `launchApp`. wart-app's `package.toml` gains `label = "Demo"`.
+> - **Device-verified:** `set-home com.example.wart-app` → boots to the
+>   launcher card; tile renders **"D" / "Demo"** (label resolved); tapping
+>   it logs the full chain guest `tap → launch` → host `forwarded launch`
+>   → arbiter `launched → pid … / promoting foreground`.
+>
+> **Remaining (small follow-ups):** Step 6 — `run-hybrid-stack.sh` /
+> Magisk auto-`set-home` at boot (the home concept + persistence already
+> make boot-to-home work once set). And a dedicated full-screen
+> `war.launcher` warpkg (the wart-app card proves the path; a real
+> launcher app is the clean spin-out — its richer demo value is gated on
+> having ≥2 GUI apps to launch anyway). Letter-tile icons + theme
+> gradient shipped as the v1 choices.
+
+---
+
+> **Original proposal (kept for history):** 🔲 proposal 2026-05-29.
 
 ## Why this matters
 
