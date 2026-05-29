@@ -45,7 +45,8 @@ mod zygote_client;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
-use std::time::{Instant, SystemTime};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{anyhow, Context, Result};
 
@@ -245,6 +246,11 @@ fn run_daemon() -> Result<()> {
     );
     log::info!("wart-arbiter: listening");
 
+    // Task 54 — start the death watchers. The subscriber thread is the
+    // primary (event-driven) path; the poller is the ≤5 s backstop that
+    // also covers a dropped subscriber connection or a crashed zygote.
+    spawn_death_watchers();
+
     loop {
         let (stream, _addr) = match listener.accept() {
             Ok(p) => p,
@@ -273,6 +279,14 @@ fn handle_client(mut stream: UnixStream) -> Result<()> {
         Some((v, r)) => (v, r.trim().to_string()),
         None => (line, String::new()),
     };
+
+    // Task 54 — serialize command handling against the death-notification
+    // / polling watcher threads. The accept loop is single-threaded so
+    // commands were implicitly serialized before; the new background
+    // threads (subscriber + poller) also mutate state + send signals, so
+    // one coarse process-wide lock keeps the two paths from interleaving
+    // a state mutation with a signal cascade. Low frequency — fine.
+    let _guard = arbiter_lock().lock().unwrap_or_else(|e| e.into_inner());
 
     let result = match verb {
         "launch"          => cmd_launch(&mut stream, &rest, LaunchKind::Gui),
@@ -647,6 +661,145 @@ fn drain_prior_crash_marker() {
         Err(e) => log::warn!("wart-arbiter: prior crash marker unreadable: {e}"),
     }
     let _ = std::fs::remove_file(p);
+}
+
+// ─── Death notification + socket cleanup (task 54) ────────────────────
+
+/// Process-wide serialization lock. Held by `handle_client` for the
+/// duration of a command's state mutation + signal cascade + persist,
+/// and by `handle_child_exit` for the same. Keeps the accept-loop
+/// thread and the two death-watcher threads from interleaving.
+fn arbiter_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+/// Per-host control socket path for a given child pid. Symmetric with
+/// `wart-host/src/ime_inbound.rs::spawn_listener`.
+fn host_sock_path(pid: i32) -> String {
+    format!("/data/local/tmp/wart-host-{pid}.sock")
+}
+
+/// Unlink a dead child's per-host control socket (RC2). Ignore
+/// not-found — the child may have unlinked it itself on a graceful
+/// exit, or it may never have bound one (headless consumer).
+fn remove_host_socket(pid: i32) {
+    let path = host_sock_path(pid);
+    match std::fs::remove_file(&path) {
+        Ok(()) => log::info!("arbiter: removed orphaned host socket {path}"),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => log::warn!("arbiter: remove host socket {path} failed: {e}"),
+    }
+}
+
+/// Single cleanup entry for a dead child pid. Invoked by BOTH the
+/// event-driven subscriber thread and the polling backstop. Takes the
+/// coarse `arbiter_lock` so it never races a command handler.
+///
+/// Steps:
+///   1. Look the app up by pid (under the lock). Untracked → just sweep
+///      its socket + return (covers a race where a command already
+///      removed it, or a non-app pid the zygote reaped).
+///   2. If the pid is part of an active IME overlay split, run the
+///      `cmd_overlay_clear` path (`demote_from_overlay`) to hide the
+///      IME + repromote the surviving side. In the editor-died case the
+///      stray SIGUSR2 to the dead behind-pid is harmless (ESRCH).
+///   3. `state::remove` cascades the remaining state teardown
+///      (foreground / active-IME / editor-focus / overlay pointers).
+///   4. Unlink the orphaned per-host control socket.
+///   5. Persist + log.
+fn handle_child_exit(pid: i32, detail: &str) {
+    let _guard = arbiter_lock().lock().unwrap_or_else(|e| e.into_inner());
+
+    let Some(app) = state::snapshot().into_iter().find(|a| a.pid == pid) else {
+        // Untracked or already cleaned. Still sweep a possibly-orphaned
+        // socket for this pid in case it bound one before dying.
+        remove_host_socket(pid);
+        log::debug!("arbiter: on_child_exit pid={pid} ({detail}) — not tracked, socket swept");
+        return;
+    };
+
+    log::info!("arbiter: on_child_exit pid={pid} app={} ({detail})", app.app_id);
+
+    // Overlay teardown with signal semantics (the `cmd_overlay_clear`
+    // path). Only fires when this pid was either side of an active split.
+    if let Some(ov) = state::current_overlay() {
+        if ov.ime_pid == pid || ov.behind_pid == pid {
+            let cleared = demote_from_overlay();
+            log::info!(
+                "arbiter: on_child_exit pid={pid} tore down overlay split (cleared={:?})",
+                cleared.is_some(),
+            );
+        }
+    }
+
+    // State teardown (fg / active-IME / editor-focus / overlay pointers).
+    state::remove(&app.app_id);
+
+    // Socket cleanup (RC2).
+    remove_host_socket(pid);
+
+    if let Err(e) = state::save_to(Path::new(ARBITER_STATE_PATH)) {
+        log::warn!("arbiter: on_child_exit state save failed: {e:#}");
+    }
+    log::info!("arbiter: on_child_exit pid={pid} app={} — cleaned up", app.app_id);
+}
+
+/// Spawn the two death-watcher threads (task 54).
+///
+/// - **Subscriber** (primary): opens a long-lived `SUBSCRIBE_EXITS`
+///   connection to the zygote and reads `EXITED <pid> <detail>` push
+///   lines. Reconnects with a short backoff if the connection drops
+///   (e.g. the zygote restarted).
+/// - **Poller** (backstop): every 5 s, liveness-probes every tracked
+///   pid and cleans up any that died. Covers a dropped subscriber link
+///   and the zygote-crashed-mid-session case.
+fn spawn_death_watchers() {
+    // Subscriber thread.
+    std::thread::Builder::new()
+        .name("arbiter-exit-subscriber".into())
+        .spawn(|| loop {
+            match zygote_client::subscribe_exits() {
+                Ok(stream) => {
+                    log::info!("arbiter: subscribed to zygote exit notifications");
+                    let reader = BufReader::new(stream);
+                    for line in reader.lines() {
+                        let Ok(line) = line else { break };
+                        let line = line.trim();
+                        if let Some(rest) = line.strip_prefix("EXITED ") {
+                            let mut it = rest.splitn(2, ' ');
+                            let pid = it.next().and_then(|s| s.parse::<i32>().ok());
+                            let detail = it.next().unwrap_or("").to_string();
+                            match pid {
+                                Some(pid) => handle_child_exit(pid, &detail),
+                                None => log::warn!("arbiter: malformed EXITED line: {line:?}"),
+                            }
+                        } else if !line.is_empty() {
+                            log::warn!("arbiter: unexpected zygote push: {line:?}");
+                        }
+                    }
+                    log::warn!("arbiter: exit-subscriber connection closed; reconnecting");
+                }
+                Err(e) => {
+                    log::warn!("arbiter: exit-subscribe failed: {e:#}; retrying");
+                }
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        })
+        .expect("spawn arbiter-exit-subscriber thread");
+
+    // Polling backstop thread.
+    std::thread::Builder::new()
+        .name("arbiter-exit-poller".into())
+        .spawn(|| loop {
+            std::thread::sleep(Duration::from_secs(5));
+            for app in state::snapshot() {
+                if !state::pid_alive(app.pid) {
+                    handle_child_exit(app.pid, "poll-detected-dead");
+                }
+            }
+        })
+        .expect("spawn arbiter-exit-poller thread");
 }
 
 // ─── Policy helpers (task 46 step 4) ─────────────────────────────────

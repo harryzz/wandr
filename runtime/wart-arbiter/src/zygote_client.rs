@@ -80,6 +80,62 @@ pub fn preload(app_id: &str) -> Result<String> {
     }
 }
 
+/// Task 54 part A — open a long-lived `SUBSCRIBE_EXITS` connection.
+///
+/// Unlike `send()`, this does NOT close the stream: it writes the
+/// subscribe request, reads the one-line `OK subscribed` ack, and hands
+/// the still-open stream back so the caller can read `EXITED <pid>
+/// <detail>` push lines off it for the lifetime of the connection. The
+/// zygote holds the peer end and broadcasts down it from its SIGCHLD
+/// reaper.
+pub fn subscribe_exits() -> Result<UnixStream> {
+    let path = zygote_sock_path();
+    let mut stream = UnixStream::connect(&path)
+        .with_context(|| format!("connect {path} — is wart-host --zygote running?"))?;
+    stream.write_all(b"SUBSCRIBE_EXITS\n")
+        .with_context(|| format!("write SUBSCRIBE_EXITS to {path}"))?;
+    stream.flush().ok();
+
+    // Read just the ack line, then return the stream still open. We use
+    // a one-byte-at-a-time read up to '\n' so we don't buffer-steal any
+    // EXITED lines that may already be queued behind the ack.
+    let ack = read_line_unbuffered(&mut stream)
+        .with_context(|| format!("read SUBSCRIBE_EXITS ack from {path}"))?;
+    let ack = ack.trim_end_matches('\n').trim_end_matches('\r');
+    if ack != "OK subscribed" {
+        return Err(anyhow!("zygote did not ack SUBSCRIBE_EXITS: {ack:?}"));
+    }
+    Ok(stream)
+}
+
+/// Read one '\n'-terminated line directly off the stream without a
+/// `BufReader` (which would consume bytes past the newline into its
+/// internal buffer — fatal here because we hand the raw stream back to
+/// the caller for subsequent reads). Returns the line including the
+/// trailing newline, or an error on EOF before any byte.
+fn read_line_unbuffered(stream: &mut UnixStream) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut out = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        let n = stream.read(&mut byte)?;
+        if n == 0 {
+            if out.is_empty() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "EOF before any byte",
+                ));
+            }
+            break;
+        }
+        out.push(byte[0]);
+        if byte[0] == b'\n' {
+            break;
+        }
+    }
+    Ok(String::from_utf8_lossy(&out).into_owned())
+}
+
 /// Single-command round-trip. Opens a connection, writes one line,
 /// reads one line back, closes. Returns the response without the
 /// trailing newline.

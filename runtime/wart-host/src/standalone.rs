@@ -229,10 +229,20 @@ fn run_cwasm_loop(
     // /data/local/tmp/wart-host-<pid>.sock; the queue drain below
     // dispatches each event into the guest in the render-loop
     // thread (where the Store lives — wasmtime Store is !Send).
-    match crate::ime_inbound::spawn_listener() {
-        Ok(path) => log::info!("standalone: ime-inbound listening on {path}"),
-        Err(e)   => log::warn!("standalone: ime-inbound spawn failed: {e:#}"),
-    }
+    // Hold the bound socket path so the graceful-shutdown break below
+    // can unlink it (task 54 part B). SIGKILL (the LMK case) skips this
+    // — covered instead by the arbiter's death-driven unlink + the
+    // zygote's startup sweep.
+    let ime_inbound_sock: Option<String> = match crate::ime_inbound::spawn_listener() {
+        Ok(path) => {
+            log::info!("standalone: ime-inbound listening on {path}");
+            Some(path)
+        }
+        Err(e) => {
+            log::warn!("standalone: ime-inbound spawn failed: {e:#}");
+            None
+        }
+    };
 
     // ── Render loop — mirrors WindowEvent::RedrawRequested, no winit ─────
     let frame_target = std::time::Duration::from_millis(16);
@@ -241,6 +251,12 @@ fn run_cwasm_loop(
         // Step 5 — SIGTERM / SIGINT / SIGHUP from launcher trap or operator.
         if crate::lifecycle_standalone::should_shutdown() {
             log::info!("standalone: shutdown signal — exiting render loop");
+            // Task 54 part B — graceful-path unlink of our control
+            // socket so it doesn't linger after a clean exit.
+            if let Some(ref p) = ime_inbound_sock {
+                let _ = std::fs::remove_file(p);
+                log::info!("standalone: removed ime-inbound socket {p}");
+            }
             break;
         }
 

@@ -368,7 +368,8 @@ pub fn restore_from(path: &Path) -> Result<(usize, usize)> {
 
 /// kill(pid, 0) probes for liveness without delivering a signal.
 /// 0 → alive (and we have permission); -1 + ESRCH → dead.
-fn pid_alive(pid: i32) -> bool {
+/// `pub` so the task-54 polling backstop in `main.rs` can reuse it.
+pub fn pid_alive(pid: i32) -> bool {
     if pid <= 0 { return false; }
     let r = unsafe { libc::kill(pid, 0) };
     if r == 0 { return true; }

@@ -106,6 +106,7 @@ to completion (`run_once::run`).
 | `LAUNCH_GUI_OVERLAY <app-id>`        | `OK <child-pid>`           | Task 47 step 3c — fork an IME-shaped overlay-surface child              |
 | `PRELOAD <app-id>`                   | `OK preloaded` / `OK cached`| Add `.cwasm` to the zygote's deserialized registry (task 46 step 2)     |
 | `KILL <pid>`                         | `OK killed` / `ERR …`      | Reap a known child (refuses non-children)                               |
+| `SUBSCRIBE_EXITS`                    | `OK subscribed` (then push)| Task 54 — long-lived connection; zygote pushes `EXITED <pid> <summary>` from the reaper for every child death |
 
 On `LAUNCH*`:
 1. Zygote parent `fork()`s.
@@ -205,7 +206,49 @@ Children also install three lifecycle signals (`SIGTERM`,
 render loop breaks, fires `Destroyed`, drains 3 frames, exits
 cleanly. See `wart-host/src/lifecycle_standalone.rs`.
 
-The arbiter installs `SIGCHLD` for child reaping (task 46 step 1).
+The **zygote** installs `SIGCHLD` for child reaping (task 46 step 1)
+— it is the `fork()` parent of every app, so it is the only process
+the kernel notifies of an app death. The arbiter is a *sibling*, not
+the parent, so it never receives those `SIGCHLD`s directly — see
+**Death notification** below for how it learns of deaths.
+
+## Death notification (task 54)
+
+Because the zygote — not the arbiter — is the parent of every app
+child, an app dying (LMK, OOM, SIGSEGV, clean exit) only wakes the
+zygote's reaper. Without a bridge, the arbiter's running-apps map
+goes stale forever (observed: a 36-hour soak still listed an
+LMK-killed app as `[fg]`), and the dead app's per-host control
+socket lingers so the IME's `ime-send-key-event` writes vanish into
+a refused connection (ghost keyboard).
+
+Two coordinated mechanisms close this:
+
+1. **Event-driven push (primary).** The arbiter opens a long-lived
+   `SUBSCRIBE_EXITS` connection to the zygote socket on daemon
+   startup; the zygote moves that stream into an `exit_subscribers`
+   list. Each time the reaper reaps a child it broadcasts
+   `EXITED <pid> <exit-summary>` to every subscriber. The arbiter's
+   subscriber thread parses each line and calls
+   `handle_child_exit(pid, detail)`. Disconnected subscribers are
+   dropped on the next failed write; the arbiter reconnects with a
+   1 s backoff (so it survives a zygote restart).
+2. **Polling backstop.** A second arbiter thread `kill(pid, 0)`-probes
+   every tracked pid every 5 s and calls the same `handle_child_exit`
+   for any that died. Covers a dropped subscriber link and the
+   zygote-crashed-mid-session case.
+
+`handle_child_exit` (under a coarse `arbiter_lock` shared with the
+command path) reuses the existing teardown: if the dead pid was
+either side of an IME overlay split it runs `demote_from_overlay`
+(hides the IME, repromotes the survivor), then `state::remove`
+(clears foreground / active-IME / editor-focus / overlay pointers),
+then unlinks `/data/local/tmp/wart-host-<pid>.sock`, then persists.
+
+Per-host control sockets are also unlinked on the graceful-shutdown
+path (`standalone.rs`), and the zygote sweeps any stale
+`wart-host-*.sock` whose pid is no longer alive at startup (the
+SIGKILL/LMK case, where Drop never runs).
 
 ## Component preload registry
 
@@ -290,8 +333,7 @@ component preloaded.
 
 | Trigger                          | What happens                                                                                                       |
 |----------------------------------|--------------------------------------------------------------------------------------------------------------------|
-| Child exits normally             | Arbiter's SIGCHLD reaper notices; running-apps map updated; foreground re-elected (next-most-recent fg if any).    |
-| Child crashes                    | Same SIGCHLD path; the next-launch path logs the crash marker from `/data/local/tmp/wart-host-crash.json` if any.  |
+| Child exits normally / crashes / LMK-killed | Zygote reaper reaps it and broadcasts `EXITED <pid>` to the arbiter (task 54); arbiter `handle_child_exit` removes it from the map, tears down any IME overlay split, unlinks the orphaned control socket, persists. A 5 s `kill(pid,0)` poller is the backstop. Crashes additionally drop `/data/local/tmp/wart-host-crash.json`, logged on next launch. |
 | User: `wart-arbiter kill <id>`   | Arbiter sends SIGTERM, waits 1 s, escalates to SIGKILL; entry removed from map.                                    |
 | Arbiter exits                    | Children survive (each is its own process); on next arbiter start, `kill(pid, 0)` liveness probe re-attaches them. |
 | Zygote exits                     | Same — children survive but new launches fail until zygote restarts.                                               |

@@ -42,6 +42,42 @@ fn child_pids() -> &'static Mutex<HashSet<i32>> {
     SET.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
+/// Long-lived `SUBSCRIBE_EXITS` connections (task 54 part A). The
+/// arbiter opens one of these on daemon startup; the reaper thread
+/// broadcasts `EXITED <pid> <detail>\n` down every entry whenever a
+/// forked child is reaped. We hold the `UnixStream`s here (moved out of
+/// `handle_one`) so they aren't closed when the command handler returns.
+///
+/// Why the zygote is the only process that can do this: it's the
+/// `fork()` parent, so it's the only one the kernel delivers SIGCHLD
+/// to. The arbiter is a sibling and never sees the deaths directly —
+/// hence this push channel.
+fn exit_subscribers() -> &'static Mutex<Vec<UnixStream>> {
+    static SUBS: OnceLock<Mutex<Vec<UnixStream>>> = OnceLock::new();
+    SUBS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Broadcast a single `EXITED <pid> <detail>\n` line to every active
+/// subscriber, dropping any whose write fails (disconnected arbiter).
+/// Called by the reaper thread right after it reaps a child.
+fn broadcast_exit(pid: i32, detail: &str) {
+    let line = format!("EXITED {pid} {detail}\n");
+    if let Ok(mut subs) = exit_subscribers().lock() {
+        let before = subs.len();
+        subs.retain_mut(|s| s.write_all(line.as_bytes()).and_then(|_| s.flush()).is_ok());
+        let after = subs.len();
+        if before != after {
+            log::info!(
+                "wart-zygote: dropped {} disconnected exit-subscriber(s) (now {after})",
+                before - after,
+            );
+        }
+        if after > 0 {
+            log::info!("wart-zygote: broadcast EXITED {pid} {detail} to {after} subscriber(s)");
+        }
+    }
+}
+
 /// Spawn the SIGCHLD reaper thread.
 ///
 /// Why a thread (and not a SIGCHLD handler + self-pipe + poll
@@ -89,9 +125,73 @@ fn spawn_reaper() {
                 log::info!(
                     "wart-zygote/reaper: pid {pid} reaped ({exit_summary}, tracked={removed})"
                 );
+                // Task 54 part A — push the death to any subscribed
+                // arbiter so it can drop the app from its registry +
+                // clean up the orphaned per-host control socket. We
+                // broadcast for every reaped pid (tracked or not); the
+                // arbiter ignores pids it doesn't know.
+                broadcast_exit(pid, &exit_summary);
             }
         })
         .expect("spawn reaper thread");
+}
+
+/// Remove `/data/local/tmp/wart-host-<pid>.sock` files whose `<pid>` is
+/// no longer a live process. Returns the count removed. Task 54 part B.
+///
+/// A live wart-host child still owns its socket — we leave those alone
+/// (their `<pid>` passes the `kill(pid, 0)` liveness probe). Anything
+/// else is a leftover from a child that died without unlinking (SIGKILL
+/// skips Drop). Best-effort: parse failures + IO errors are logged at
+/// debug and skipped, never fatal.
+fn sweep_stale_host_sockets() -> usize {
+    let dir = "/data/local/tmp";
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) => {
+            log::debug!("wart-zygote: sweep — read_dir {dir} failed: {e}");
+            return 0;
+        }
+    };
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        // Match `wart-host-<digits>.sock`.
+        let Some(pid_str) = name
+            .strip_prefix("wart-host-")
+            .and_then(|s| s.strip_suffix(".sock"))
+        else {
+            continue;
+        };
+        let Ok(pid) = pid_str.parse::<i32>() else { continue };
+        if pid_alive(pid) {
+            continue;
+        }
+        let path = entry.path();
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                log::info!("wart-zygote: sweep — removed stale {}", path.display());
+                removed += 1;
+            }
+            Err(e) => log::debug!("wart-zygote: sweep — remove {} failed: {e}", path.display()),
+        }
+    }
+    removed
+}
+
+/// `kill(pid, 0)` liveness probe — 0 → alive; ESRCH → dead; EPERM →
+/// alive but unsignalable (still alive). Mirrors the arbiter's
+/// `state::pid_alive`.
+fn pid_alive(pid: i32) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    let r = unsafe { libc::kill(pid, 0) };
+    if r == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 /// What the forked child should do after fork().
@@ -195,6 +295,14 @@ pub fn serve(preload_app_id: Option<&str>) -> Result<()> {
         apps_root.display(),
     );
 
+    // Task 54 part B — sweep accumulated stale per-host control sockets
+    // from prior sessions. Each `wart-host` child binds
+    // `/data/local/tmp/wart-host-<pid>.sock`; SIGKILL (LMK, OOM) leaves
+    // the path behind with no live owner. Do this once at startup so the
+    // dir doesn't accrue dozens of dead `.sock` files across reboots.
+    let swept = sweep_stale_host_sockets();
+    log::info!("wart-zygote: startup sweep removed {swept} stale wart-host-*.sock file(s)");
+
     // Bind the listen socket. Unlink any stale path first — the AF_UNIX
     // bind would otherwise fail with EADDRINUSE on a respawn.
     let sock_path = Path::new(ZYGOTE_SOCK_PATH);
@@ -253,6 +361,33 @@ fn handle_one(listener: &UnixListener, mut stream: UnixStream) -> Result<()> {
     }
     if let Some(rest) = cmd.strip_prefix("KILL ") {
         return handle_kill(&mut stream, rest, libc::SIGTERM, "KILL");
+    }
+
+    // SUBSCRIBE_EXITS — task 54 part A. The caller (arbiter) wants a
+    // long-lived connection on which we push `EXITED <pid> <detail>`
+    // lines from the reaper. Ack, then MOVE the stream into the
+    // subscribers list so it stays open after this handler returns
+    // (a plain return would drop+close it). The accept loop continues
+    // immediately — we do not block on the subscriber.
+    if cmd == "SUBSCRIBE_EXITS" {
+        if let Err(e) = writeln!(stream, "OK subscribed") {
+            return Err(anyhow!("ack SUBSCRIBE_EXITS: {e}"));
+        }
+        let _ = stream.flush();
+        // Drop our reader clone (the subscriber connection only carries
+        // server→client pushes; we never read from it again).
+        drop(reader);
+        match exit_subscribers().lock() {
+            Ok(mut subs) => {
+                subs.push(stream);
+                log::info!(
+                    "wart-zygote: new exit-subscriber ({} total)",
+                    subs.len(),
+                );
+            }
+            Err(_) => return Err(anyhow!("exit_subscribers mutex poisoned")),
+        }
+        return Ok(());
     }
 
     // PRELOAD — task 46 step 2. Pre-deserialize a user-app's `.cwasm`

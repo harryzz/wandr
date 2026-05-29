@@ -1,6 +1,7 @@
 # Task 54 — Arbiter death notification + socket cleanup
 
-> Status: 🔲 scoped 2026-05-29, not started — ~3-4 hours.
+> Status: ✅ device-verified 2026-05-29. Parts A + B + socket
+> cleanup all shipped and exercised on the Pixel 2 XL.
 >
 > Closes the steady-state lifecycle gap discovered on device
 > 2026-05-29: Android's lowmemorykiller killed wart-app at
@@ -9,6 +10,46 @@
 > control socket left the IME visually present but useless for
 > character keys (taps reach the IME, internal cycling works,
 > but `ime-send-key-event` writes vanish into a dead-pid socket).
+>
+> ## Results (2026-05-29)
+>
+> Implemented exactly the "A primary + B backstop + socket cleanup"
+> shape below. Five touch points:
+> - `runtime/wart-host/src/zygote.rs` — `exit_subscribers()` registry +
+>   `SUBSCRIBE_EXITS` command (moves the stream out of `handle_one` so
+>   it stays open) + `broadcast_exit()` from the SIGCHLD reaper +
+>   `sweep_stale_host_sockets()` at startup.
+> - `runtime/wart-arbiter/src/zygote_client.rs` — `subscribe_exits()`
+>   (long-lived; unbuffered ack read so no `EXITED` line is buffer-stolen).
+> - `runtime/wart-arbiter/src/main.rs` — `arbiter_lock()` coarse mutex
+>   (held by `handle_client` + `handle_child_exit`), `handle_child_exit()`
+>   (reuses `demote_from_overlay()` for the overlay-teardown signal
+>   cascade + `state::remove()` for state teardown + `remove_host_socket()`),
+>   subscriber thread + 5 s polling-backstop thread.
+> - `runtime/wart-arbiter/src/state.rs` — `pid_alive()` made `pub`.
+> - `runtime/wart-host/src/standalone.rs` — graceful-exit unlink of the
+>   per-host control socket on the shutdown-signal break.
+>
+> **Device verification** (full LMK repro): launched
+> `com.example.wart-app` (pid 15077, fg) + `war.ime.keyboard`
+> (pid 15157, overlay) + `set-ime` + `attach-editor` to engage the
+> split (list showed IME `[fg] [ime]`, app `[editor:text]`). Then
+> `kill -9 15077`. Logcat (all within the same millisecond, on the
+> subscriber thread — NOT the 5 s poller):
+> ```
+> wart-zygote/reaper: pid 15077 reaped (signal=9, tracked=true)
+> wart-zygote: broadcast EXITED 15077 signal=9 to 1 subscriber(s)
+> arbiter: on_child_exit pid=15077 app=com.example.wart-app (signal=9)
+> arbiter: overlay-clearing ime_pid=15157 behind_pid=15077
+> arbiter: on_child_exit pid=15077 tore down overlay split (cleared=true)
+> arbiter: removed orphaned host socket /data/local/tmp/wart-host-15077.sock
+> arbiter: on_child_exit pid=15077 app=com.example.wart-app — cleaned up
+> ```
+> Post-kill `list` dropped wart-app and the IME lost its `[fg]` marker
+> (overlay torn down → ghost-keyboard scenario resolved); the app's
+> `.sock` was gone. Startup sweep separately removed **59** accumulated
+> stale `wart-host-*.sock` files (the literal cruft from the buggy soak).
+> Subscription established at daemon start (`new exit-subscriber (1 total)`).
 
 ## Why now
 
