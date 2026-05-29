@@ -166,7 +166,9 @@ object ImeKeyboardDefaults {
     private val backspace = KeyDef("⌫", KeyAction.Send(0,  KEY_BACKSPACE), width = 1.5f)
     private val space     = KeyDef(" ", KeyAction.Send(32, KEY_SPACE),     width = 4.0f)
     private val enter     = KeyDef("⏎", KeyAction.Send(10, KEY_ENTER),     width = 1.5f)
-    private val hide      = KeyDef("⌄", KeyAction.Hide,                    width = 1f)
+    // Wider tap target (the right-edge Hide key was easy to miss / hit
+    // Enter instead — it was only weight 1 next to Enter's 1.5).
+    private val hide      = KeyDef("⌄", KeyAction.Hide,                    width = 1.9f)
 
     /** Top digits row (1-9, 0) — shared across language layouts. */
     private val digitsRow: List<KeyDef> = listOf(
