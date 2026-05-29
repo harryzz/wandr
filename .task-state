@@ -1,5 +1,5 @@
-TASK=57
+TASK=55
 STEP=verify-done
 STATUS=complete
-LAST_SUCCESS=Task 57 fully complete + pushed (aa701460). Dedicated war.launcher = light Rust canvas guest.
-NOTES=Side spike (exploratory, not a task): evaluate dioxus-core + taffy on wasm32-wasip2 as a future light reactive Rust UI framework (Compose alternative). Checking compile + binary size + integration shape. Under repos/dioxus-spike/.
+LAST_SUCCESS=Task 55 status bar device-verified — top-overlay Rust guest shows wart·clock·battery over the launcher. Geometry-param overlay shim (sf_create_overlay_surface(x,y,w,h)) per design discussion; my:skiko-gfx/status host verbs (date+sysfs); war.statusbar ~48KB. libsf_surface.so rebuilt on a-03.
+NOTES=v1 follow-ups: content insets (on-insets-changed), war.statusbar→system-apps/, arbiter launch-overlay-top + boot integration, notification area, chrome z-layer reservation.

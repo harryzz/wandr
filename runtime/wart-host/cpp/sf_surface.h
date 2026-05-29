@@ -72,7 +72,11 @@ int32_t sf_set_visible(int32_t visible);
 // Starts INVISIBLE — the arbiter promotes the IME to fg + flips
 // visible only when an editor focuses (cmd_overlay or auto-tied from
 // cmd_attach_editor). Returns NULL on bad height or any libgui error.
-struct ANativeWindow* sf_create_overlay_surface(int32_t height_px,
+// Geometry-parameterized overlay surface (task 47 IME + task 55 status
+// bar + future bars). Conventions: w<=0/h<=0 → full panel width/height;
+// y<0 → bottom-anchored. Status bar = (0,0,0,88); IME = (0,-1,0,1200).
+struct ANativeWindow* sf_create_overlay_surface(int32_t x, int32_t y,
+                                                int32_t w, int32_t h,
                                                 int32_t* out_w,
                                                 int32_t* out_h,
                                                 uint32_t* out_transform);

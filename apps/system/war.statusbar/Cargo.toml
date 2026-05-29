@@ -1,0 +1,21 @@
+[package]
+name    = "war-statusbar"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Task 55 — status bar as a LIGHT Rust canvas guest on a top-anchored
+# overlay surface (no Kotlin/Compose → leak-immune, tiny). Exports
+# my:skiko-gfx/renderer; draws a top strip with the clock + battery via
+# the canvas WIT + the my:skiko-gfx/status host verbs.
+#   cargo build --target wasm32-wasip2 --release
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

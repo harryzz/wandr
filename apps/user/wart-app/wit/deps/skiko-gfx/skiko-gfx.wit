@@ -968,6 +968,16 @@ interface launcher {
     launch-app: func(app-id: string);
 }
 
+/// System-shell status data (task 55 status bar). Flat-string returns
+/// keep the guest canonical-ABI binding simple. ART-free: clock from the
+/// device local time, battery from sysfs — no system_server.
+interface status {
+    /// Local wall-clock as "HH:MM" (24h). Empty on error.
+    clock-text: func() -> string;
+    /// Battery as "NN%" (e.g. "100%"), or "" if unavailable.
+    battery-text: func() -> string;
+}
+
 world skiko-ui {
     import canvas;
     import paragraph;
@@ -987,6 +997,7 @@ world skiko-ui {
     import assets;
     import theme;
     import launcher;
+    import status;
     import ime;
     import keyboard;
     export renderer;

@@ -205,9 +205,9 @@ enum ChildAction {
     /// Full Compose render loop (e.g. `wart-app`). Goes through
     /// `standalone::run_with_engine`. Owns its own SurfaceFlinger
     /// surface + EGL context + input channel for the duration.
-    /// `overlay=true` (task 47 step 3c) requests a bottom-strip
-    /// overlay surface instead of fullscreen — used for IME apps.
-    Gui { overlay: bool },
+    /// `mode` selects fullscreen / bottom-overlay (IME, task 47) /
+    /// top-overlay (status bar, task 55).
+    Gui { mode: crate::standalone::OverlayMode },
 }
 
 /// Where the zygote listens for `LAUNCH` requests.
@@ -411,12 +411,13 @@ fn handle_one(listener: &UnixListener, mut stream: UnixStream) -> Result<()> {
     // overlay SurfaceControl (used by IME apps such as
     // `war.ime.keyboard`); plain `LAUNCH_GUI` keeps the fullscreen
     // behavior. Order matters — match the longer prefix first.
-    let (action, app_id) = if let Some(rest) = cmd.strip_prefix("LAUNCH_GUI_OVERLAY") {
-        let rest = rest.trim();
-        (ChildAction::Gui { overlay: true }, rest.to_string())
+    use crate::standalone::OverlayMode;
+    let (action, app_id) = if let Some(rest) = cmd.strip_prefix("LAUNCH_GUI_OVERLAY_TOP") {
+        (ChildAction::Gui { mode: OverlayMode::Top }, rest.trim().to_string())
+    } else if let Some(rest) = cmd.strip_prefix("LAUNCH_GUI_OVERLAY") {
+        (ChildAction::Gui { mode: OverlayMode::Bottom }, rest.trim().to_string())
     } else if let Some(rest) = cmd.strip_prefix("LAUNCH_GUI") {
-        let rest = rest.trim();
-        (ChildAction::Gui { overlay: false }, rest.to_string())
+        (ChildAction::Gui { mode: OverlayMode::None }, rest.trim().to_string())
     } else if let Some(rest) = cmd.strip_prefix("LAUNCH ") {
         (ChildAction::RunOnce, rest.trim().to_string())
     } else {
@@ -489,9 +490,9 @@ fn handle_one(listener: &UnixListener, mut stream: UnixStream) -> Result<()> {
                         1
                     }
                 },
-                ChildAction::Gui { overlay } => {
+                ChildAction::Gui { mode } => {
                     let arg = if app_id.is_empty() { None } else { Some(app_id.as_str()) };
-                    match standalone::run_with_engine(engine, arg, overlay) {
+                    match standalone::run_with_engine(engine, arg, mode) {
                         Ok(()) => 0,
                         Err(e) => {
                             log::error!("wart-zygote/child: standalone failed: {e:#}");

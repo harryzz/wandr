@@ -539,12 +539,19 @@ int32_t sf_set_visible(int32_t visible) {
 // Returns nullptr on bad height or any libgui error. `out_w` is set
 // to PANEL_W; `out_h` to height_px; `out_transform` to 0 (host queries
 // the live transform-hint via sf_query_transform_hint post-EGL-connect).
-ANativeWindow* sf_create_overlay_surface(int32_t height_px,
+// Geometry-parameterized overlay surface. The shim is purpose-agnostic:
+// the RUNTIME decides what each overlay is (status bar / IME / future
+// bars) and passes a rectangle. Conventions (so callers needn't know the
+// panel size): `w<=0` / `h<=0` → full panel width / height; `y<0` →
+// bottom-anchored (shim computes PANEL_H - h). So the status bar passes
+// (0,0,0,88), the IME passes (0,-1,0,1200). New bars are just new args —
+// no new shim symbol, no new a-03 build.
+ANativeWindow* sf_create_overlay_surface(int32_t x, int32_t y, int32_t w, int32_t h,
                                           int32_t* out_w, int32_t* out_h,
                                           uint32_t* out_transform) {
-    if (height_px <= 0 || height_px > static_cast<int32_t>(PANEL_H)) {
-        LOGE("[overlay] sf_create_overlay_surface: bad height_px=%d "
-             "(panel H=%u)", height_px, PANEL_H);
+    if (h > static_cast<int32_t>(PANEL_H) || w > static_cast<int32_t>(PANEL_W)) {
+        LOGE("[overlay] sf_create_overlay_surface: rect too big w=%d h=%d "
+             "(panel %ux%u)", w, h, PANEL_W, PANEL_H);
         return nullptr;
     }
 
@@ -574,8 +581,14 @@ ANativeWindow* sf_create_overlay_surface(int32_t height_px,
     init_panel_dims(g_display);
     const uint32_t PW = PANEL_W;
     const uint32_t PH = PANEL_H;
-    const uint32_t H  = static_cast<uint32_t>(height_px);
-    const int32_t  Y  = static_cast<int32_t>(PH - H);
+    // Resolve the rect: w/h<=0 → full panel dimension; y<0 → bottom-anchored.
+    const uint32_t W  = (w > 0) ? static_cast<uint32_t>(w) : PW;
+    const uint32_t H  = (h > 0) ? static_cast<uint32_t>(h) : PH;
+    const int32_t  X  = (x > 0) ? x : 0;
+    const int32_t  Y  = (y >= 0) ? y : static_cast<int32_t>(PH - H);
+    // Input translation: sf_input_poll subtracts this so the guest gets
+    // surface-local Y. (X is 0 for the full-width horizontal strips we
+    // support today; add an x-offset here if vertical/side bars land.)
     g_overlay_y_offset = Y;
 
     // Pin display projection to portrait identity — same reasoning as
@@ -594,7 +607,7 @@ ANativeWindow* sf_create_overlay_surface(int32_t height_px,
     // buffer-state child directly was empirically a no-op on this
     // device.
     g_overlay_parent = g_client->createSurface(
-        String8("wart-ime-overlay-parent"),
+        String8("wart-overlay-parent"),
         /*w=*/0, /*h=*/0, PIXEL_FORMAT_RGBA_8888,
         ISurfaceComposerClient::eFXSurfaceContainer);
     if (g_overlay_parent == nullptr || !g_overlay_parent->isValid()) {
@@ -605,7 +618,7 @@ ANativeWindow* sf_create_overlay_surface(int32_t height_px,
     // Buffer-state child, parented to the container. PW × H buffer;
     // the parent supplies position + crop.
     g_control = g_client->createSurface(
-        String8("wart-ime-overlay"), PW, H, PIXEL_FORMAT_RGBA_8888,
+        String8("wart-overlay"), W, H, PIXEL_FORMAT_RGBA_8888,
         ISurfaceComposerClient::eFXSurfaceBufferState,
         g_overlay_parent->getHandle());
     if (g_control == nullptr || !g_control->isValid()) {
@@ -627,9 +640,9 @@ ANativeWindow* sf_create_overlay_surface(int32_t height_px,
         // overlay calls sf_set_layer(i32::MAX) which we route to the
         // parent now (see sf_set_layer below).
         t.setLayer(g_overlay_parent, 0x7fffffff - 1);
-        t.setPosition(g_overlay_parent, 0.0f, static_cast<float>(Y));
+        t.setPosition(g_overlay_parent, static_cast<float>(X), static_cast<float>(Y));
         t.setCrop(g_overlay_parent,
-                  Rect(0, 0, static_cast<int32_t>(PW), static_cast<int32_t>(H)));
+                  Rect(0, 0, static_cast<int32_t>(W), static_cast<int32_t>(H)));
         // Start HIDDEN — arbiter shows on attach-editor.
         t.hide(g_overlay_parent);
 
@@ -640,7 +653,7 @@ ANativeWindow* sf_create_overlay_surface(int32_t height_px,
         t.setFlags(g_control, layer_state_t::eLayerOpaque,
                    layer_state_t::eLayerOpaque);
         t.setCrop(g_control,
-                  Rect(0, 0, static_cast<int32_t>(PW), static_cast<int32_t>(H)));
+                  Rect(0, 0, static_cast<int32_t>(W), static_cast<int32_t>(H)));
         t.show(g_control);
         t.apply(/*synchronous=*/true);
     }
@@ -650,7 +663,7 @@ ANativeWindow* sf_create_overlay_surface(int32_t height_px,
     }
 
     g_bbq = sp<BLASTBufferQueue>::make(
-        "wart-ime-overlay", g_control, PW, H, PIXEL_FORMAT_RGBA_8888);
+        "wart-overlay", g_control, W, H, PIXEL_FORMAT_RGBA_8888);
     g_surface = g_bbq->getSurface(/*includeSurfaceControlHandle=*/true);
     if (g_surface == nullptr) {
         LOGE("[overlay] BLASTBufferQueue getSurface returned null");
@@ -670,14 +683,14 @@ ANativeWindow* sf_create_overlay_surface(int32_t height_px,
     // wart-app's fullscreen input window. The IME never saw any
     // touches; wart-app's in-canvas keyboard got them.
     register_input_window_at(
-        Rect(0, 0, static_cast<int32_t>(PW), static_cast<int32_t>(H)),
-        "wart-ime");
+        Rect(0, 0, static_cast<int32_t>(W), static_cast<int32_t>(H)),
+        "wart-overlay");
 
-    if (out_w) *out_w = static_cast<int32_t>(PW);
+    if (out_w) *out_w = static_cast<int32_t>(W);
     if (out_h) *out_h = static_cast<int32_t>(H);
     if (out_transform) *out_transform = 0;
-    LOGI("[overlay] surface created: %ux%u logical at (0,%d), panel %ux%u",
-         PW, H, Y, PW, PH);
+    LOGI("[overlay] surface created: %ux%u at (%d,%d), panel %ux%u",
+         W, H, X, Y, PW, PH);
     return g_surface.get();
 }
 

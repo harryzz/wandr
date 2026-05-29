@@ -221,17 +221,23 @@ fn main() {
         return;
     }
 
-    if args.iter().any(|a| a == "--standalone") {
+    if args.iter().any(|a| a.starts_with("--standalone")) {
         let app_id = args.iter()
             .position(|a| a == "--app")
             .and_then(|i| args.get(i + 1))
             .map(String::as_str);
-        // Task 47 step 3c — `--standalone-overlay` acquires a
-        // bottom-strip overlay SurfaceControl. Used by IME apps such
-        // as `war.ime.keyboard`; pairs with the arbiter's `overlay`
-        // command (or the auto-tied promotion on `attach-editor`).
-        let overlay = args.iter().any(|a| a == "--standalone-overlay");
-        if let Err(e) = wasm_android_host::standalone::run(app_id, overlay) {
+        // Overlay mode: `--standalone-overlay` = bottom strip (IME,
+        // task 47); `--standalone-overlay-top` = top strip (status bar,
+        // task 55); neither = fullscreen.
+        use wasm_android_host::standalone::OverlayMode;
+        let mode = if args.iter().any(|a| a == "--standalone-overlay-top") {
+            OverlayMode::Top
+        } else if args.iter().any(|a| a == "--standalone-overlay") {
+            OverlayMode::Bottom
+        } else {
+            OverlayMode::None
+        };
+        if let Err(e) = wasm_android_host::standalone::run(app_id, mode) {
             eprintln!("wart-host --standalone: {e:#}");
             std::process::exit(1);
         }

@@ -1,7 +1,51 @@
-# Task 55 — system status bar (proposal)
+# Task 55 — system status bar
 
-> **Status:** 🔲 proposal 2026-05-29, not started. Design options below;
-> pick a proposal + scope before implementing.
+> **Status:** 🟢 device-verified 2026-05-29 (Proposal A — top-overlay
+> guest). v1 ships clock + battery. Known v1 limitations: no content
+> insets (the strip floats over the top ~88 px of apps), and
+> `war.statusbar` currently installs under `apps/` so the launcher lists
+> it (move to `system-apps/` + an installed-load path for it).
+>
+> ## Results (2026-05-29)
+>
+> Built as a **light Rust canvas guest** on a **top-anchored overlay
+> surface** — same shape as `war.launcher`/the IME, no Kotlin/Compose.
+>
+> **Surface abstraction (per an on-device design discussion):** instead
+> of per-anchor shim functions, the libgui shim's overlay create is now
+> **geometry-parameterized** — `sf_create_overlay_surface(x, y, w, h)`
+> with conventions `w/h<=0` → full panel dim, `y<0` → bottom-anchored.
+> The status bar passes `(0,0,0,88)`, the IME `(0,-1,0,1200)`. New bars
+> need no new shim symbol / no new a-03 build. The **runtime owns the
+> semantics** (`standalone::OverlayMode {None,Bottom,Top}` → rect; the
+> arbiter is the per-process surface-role manager); the shim is purpose-
+> agnostic. Rebuilt `libsf_surface.so` on a-03 via the direct-ninja path.
+>
+> **Data (ART-free):** `my:skiko-gfx/status` host interface —
+> `clock-text()` (local time via the native `date` binary, not
+> `system_server`) + `battery-text()` (sysfs
+> `/sys/class/power_supply/battery/capacity`). `status_impl.rs`.
+>
+> **Guest:** `apps/system/war.statusbar/` (~48 KB Rust `wasm32-wasip2`,
+> trimmed `my:skiko-gfx` WIT). Draws `wart` (left) · clock (center) ·
+> battery (right) on an 88 px strip; polls the status verbs ~1 Hz and
+> rebuilds text blobs only on change (no animation loop).
+>
+> **Plumbing:** `sf_surface.rs` `create_overlay(x,y,w,h)`; `standalone`
+> `OverlayMode` + `STATUS_BAR_PX`; `zygote` `LAUNCH_GUI_OVERLAY_TOP`;
+> `main` `--standalone-overlay-top`. Launched directly as a top-overlay
+> daemon for v1 (`wart-host --standalone-overlay-top --app war.statusbar`)
+> alongside the launcher stack; composites above the fullscreen app
+> (equal `i32::MAX` layer, created later → on top).
+>
+> **Device-verified:** top strip shows `wart · 11:58 · 100%` over the
+> launcher. Follow-ups: content insets (`on-insets-changed` → guests lay
+> out below the bar), `system-apps/` placement, arbiter `launch-overlay-top`
+> + boot integration, notification area, explicit chrome z-layer reservation.
+
+---
+
+> **Original proposal (kept for history):**
 
 ## Why this matters
 

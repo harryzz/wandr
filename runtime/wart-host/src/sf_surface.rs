@@ -42,9 +42,11 @@ pub fn take_pending_overlay_resize() -> Option<i32> {
 
 /// `ANativeWindow* sf_create_fullscreen_surface(int32_t*, int32_t*, uint32_t*)`.
 type CreateFn = unsafe extern "C" fn(*mut i32, *mut i32, *mut u32) -> *mut c_void;
-/// `ANativeWindow* sf_create_overlay_surface(int32_t height_px, int32_t*, int32_t*, uint32_t*)` — task 47 step 3c.
+/// `ANativeWindow* sf_create_overlay_surface(int32_t x, int32_t y, int32_t w,
+/// int32_t h, int32_t*, int32_t*, uint32_t*)` — geometry-parameterized
+/// (task 55). w/h<=0 → full panel dim; y<0 → bottom-anchored.
 type CreateOverlayFn =
-    unsafe extern "C" fn(i32, *mut i32, *mut i32, *mut u32) -> *mut c_void;
+    unsafe extern "C" fn(i32, i32, i32, i32, *mut i32, *mut i32, *mut u32) -> *mut c_void;
 /// `int32_t sf_resize_overlay(int32_t new_height_px)` — task 47 step 3c.
 type ResizeOverlayFn = unsafe extern "C" fn(i32) -> i32;
 /// `int32_t sf_input_poll(SfInputEvent*, int32_t)`.
@@ -248,7 +250,11 @@ impl SfSurface {
     /// Errors if the shim predates task 47 step 3c (no
     /// `sf_create_overlay_surface` export). Callers can fall back to
     /// `create()` for a fullscreen surface in that case.
-    pub fn create_overlay(so_path: &str, height_px: i32) -> Result<Self> {
+    /// Geometry-parameterized overlay (task 55). `(x, y, w, h)` in display
+    /// pixels: `w<=0`/`h<=0` → full panel dim; `y<0` → bottom-anchored.
+    /// Status bar = `(0, 0, 0, 88)`; IME = `(0, -1, 0, 1200)`. The runtime
+    /// owns what each overlay *is*; the shim is geometry-generic.
+    pub fn create_overlay(so_path: &str, x: i32, y: i32, w: i32, h: i32) -> Result<Self> {
         unsafe {
             let path = CString::new(so_path)?;
             let handle = libc::dlopen(path.as_ptr(), libc::RTLD_NOW);
@@ -259,7 +265,7 @@ impl SfSurface {
             ensure!(
                 !sym.is_null(),
                 "dlsym sf_create_overlay_surface failed in {so_path} \
-                 — shim predates task 47 step 3c; rebuild libsf_surface.so on the a-03 host"
+                 — rebuild libsf_surface.so on the a-03 host"
             );
             let create_overlay: CreateOverlayFn = std::mem::transmute(sym);
 
@@ -324,20 +330,20 @@ impl SfSurface {
                 resize_overlay.is_some(),
             );
 
-            let mut w: i32 = 0;
-            let mut h: i32 = 0;
+            let mut out_w: i32 = 0;
+            let mut out_h: i32 = 0;
             let mut t: u32 = 0;
-            let nw = create_overlay(height_px, &mut w, &mut h, &mut t);
+            let nw = create_overlay(x, y, w, h, &mut out_w, &mut out_h, &mut t);
             ensure!(
                 !nw.is_null(),
-                "sf_create_overlay_surface({height_px}) returned null"
+                "sf_create_overlay_surface(x={x},y={y},w={w},h={h}) returned null"
             );
 
             Ok(SfSurface {
                 _handle: handle,
                 native_window: nw,
-                width: w,
-                height: h,
+                width: out_w,
+                height: out_h,
                 transform: t,
                 input_poll,
                 query_hint,

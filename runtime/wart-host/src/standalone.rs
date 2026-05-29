@@ -25,15 +25,29 @@ const SHIM_SO: &str = "/data/local/tmp/libsf_surface.so";
 /// Where the deployable AOT component is deployed on the device.
 const CWASM_PATH: &str = "/data/local/tmp/skiko-component.cwasm";
 
-pub fn run(app_id: Option<&str>, overlay: bool) -> Result<()> {
-    let engine = App::make_engine();
-    run_with_engine(&engine, app_id, overlay)
+/// Where + whether this standalone process takes an overlay strip vs a
+/// fullscreen surface.
+///   - `None`   → fullscreen app (launcher, regular apps).
+///   - `Bottom` → bottom-strip overlay (IME keyboard, task 47).
+///   - `Top`    → top-strip overlay (status bar, task 55).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum OverlayMode {
+    None,
+    Bottom,
+    Top,
 }
 
-/// Initial overlay panel height in physical pixels when the surface
-/// is created. The IME guest may resize this on first composition via
-/// `my:skiko-gfx/keyboard.request-overlay-height` (task 47 step 3c).
+pub fn run(app_id: Option<&str>, mode: OverlayMode) -> Result<()> {
+    let engine = App::make_engine();
+    run_with_engine(&engine, app_id, mode)
+}
+
+/// Initial bottom-overlay (IME) panel height in physical pixels. The IME
+/// guest may resize via `my:skiko-gfx/keyboard.request-overlay-height`.
 const INITIAL_OVERLAY_PX: i32 = 1200;
+
+/// Top-overlay (status bar) strip height in physical pixels.
+const STATUS_BAR_PX: i32 = 88;
 
 /// Same as `run` but uses a caller-supplied engine. The task-45 zygote
 /// child path (`LAUNCH_GUI <app-id>`) goes through here so the wasmtime
@@ -46,7 +60,7 @@ const INITIAL_OVERLAY_PX: i32 = 1200;
 /// SurfaceControl from the shim. Falls back to fullscreen with a
 /// logged warning if the shim doesn't export `sf_create_overlay_surface`
 /// (e.g. an older `libsf_surface.so` predating step 3c).
-pub fn run_with_engine(engine: &Engine, app_id: Option<&str>, overlay: bool) -> Result<()> {
+pub fn run_with_engine(engine: &Engine, app_id: Option<&str>, mode: OverlayMode) -> Result<()> {
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
     );
@@ -68,33 +82,43 @@ pub fn run_with_engine(engine: &Engine, app_id: Option<&str>, overlay: bool) -> 
         log::warn!("standalone: binder init: {e}");
     }
 
-    let sf = if overlay {
-        match crate::sf_surface::SfSurface::create_overlay(SHIM_SO, INITIAL_OVERLAY_PX) {
-            Ok(sf) => {
-                log::info!(
-                    "standalone: overlay surface {}x{} transform 0x{:x} \
-                     (initial height {} px, ANativeWindow={:p})",
-                    sf.width, sf.height, sf.transform, INITIAL_OVERLAY_PX,
-                    sf.native_window,
-                );
-                sf
-            }
-            Err(e) => {
-                log::warn!(
-                    "standalone: overlay surface unavailable ({e:#}) — \
-                     falling back to fullscreen. Rebuild libsf_surface.so \
-                     on the a-03 host to enable task 47 step 3c."
-                );
-                crate::sf_surface::SfSurface::create(SHIM_SO)?
+    let sf = match mode {
+        OverlayMode::Bottom | OverlayMode::Top => {
+            // Geometry: full panel width (w=0). Top status bar at y=0,
+            // height STATUS_BAR_PX; bottom IME anchored (y=-1), height
+            // INITIAL_OVERLAY_PX. The runtime owns the semantics; the
+            // shim is geometry-generic (per the surface-abstraction
+            // discussion — task 55).
+            let (y, h, label) = match mode {
+                OverlayMode::Top => (0, STATUS_BAR_PX, "top"),
+                _ => (-1, INITIAL_OVERLAY_PX, "bottom"),
+            };
+            match crate::sf_surface::SfSurface::create_overlay(SHIM_SO, 0, y, 0, h) {
+                Ok(sf) => {
+                    log::info!(
+                        "standalone: {label} overlay surface {}x{} transform 0x{:x} \
+                         (h={} px, ANativeWindow={:p})",
+                        sf.width, sf.height, sf.transform, h, sf.native_window,
+                    );
+                    sf
+                }
+                Err(e) => {
+                    log::warn!(
+                        "standalone: overlay surface unavailable ({e:#}) — \
+                         falling back to fullscreen. Rebuild libsf_surface.so on a-03."
+                    );
+                    crate::sf_surface::SfSurface::create(SHIM_SO)?
+                }
             }
         }
-    } else {
-        let sf = crate::sf_surface::SfSurface::create(SHIM_SO)?;
-        log::info!(
-            "standalone: surface {}x{} transform 0x{:x} (ANativeWindow={:p})",
-            sf.width, sf.height, sf.transform, sf.native_window,
-        );
-        sf
+        OverlayMode::None => {
+            let sf = crate::sf_surface::SfSurface::create(SHIM_SO)?;
+            log::info!(
+                "standalone: surface {}x{} transform 0x{:x} (ANativeWindow={:p})",
+                sf.width, sf.height, sf.transform, sf.native_window,
+            );
+            sf
+        }
     };
 
     // The producer transform hint is only valid once EGL connects, so the
@@ -116,7 +140,7 @@ pub fn run_with_engine(engine: &Engine, app_id: Option<&str>, overlay: bool) -> 
     let result = match loader.load(engine, app_ref) {
         Ok(loaded) => {
             log::info!("standalone: loaded {}", loaded.source_label);
-            run_cwasm_loop(engine, loaded, renderer, sf, !overlay)
+            run_cwasm_loop(engine, loaded, renderer, sf, mode == OverlayMode::None)
         }
         Err(e) => {
             log::warn!(
