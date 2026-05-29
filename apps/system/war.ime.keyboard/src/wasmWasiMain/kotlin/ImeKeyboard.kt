@@ -10,10 +10,10 @@
 // layout-cycle + switch-layout all work. Autorepeat omitted (parent
 // file's comment documents why the original disabled it).
 //
-// The "Hide" key is currently a logged no-op — step 4 will wire it
-// to a new "request-hide" WIT verb that forwards to the arbiter's
-// overlay-clear. For now the IME stays up until the focused editor
-// loses focus (auto-tied via detach-editor in step 3c).
+// The "Hide" key sends ESC to the focused editor, reusing its
+// lose-focus dismiss path (→ notify-editor-detached → the arbiter hides
+// the overlay). Same effect as tapping outside a text field. No bespoke
+// "request-hide" WIT verb / arbiter overlay-clear command needed.
 
 @file:OptIn(androidx.compose.ui.InternalComposeUiApi::class)
 
@@ -106,8 +106,9 @@ sealed interface KeyAction {
     /** Cycle through the "language" layouts in declaration order (🌐). */
     data object CycleLanguage : KeyAction
 
-    /** Hide the keyboard. Currently logged + no-op; step 4 wires to
-     *  a request-hide WIT verb forwarding to arbiter overlay-clear. */
+    /** Hide the keyboard — sends ESC to the focused editor, reusing its
+     *  lose-focus dismiss path (→ notify-editor-detached → arbiter hides
+     *  the overlay). No bespoke hide verb needed. */
     data object Hide : KeyAction
 }
 
@@ -662,9 +663,17 @@ fun ImeKeyboard(
                                 }
                             }
                             KeyAction.Hide -> {
-                                WitCanvas.Import.logMessage(
-                                    "ime: Hide tapped — step 4 will wire request-hide WIT verb"
-                                )
+                                // Reuse the lose-focus path instead of a
+                                // bespoke hide-overlay verb: send ESC to
+                                // the focused editor. The editor's ESC
+                                // handler dismisses the IME (its
+                                // SoftwareKeyboardController.hide() fires
+                                // notify-editor-detached → arbiter hides
+                                // the overlay), and tapping the field
+                                // again re-shows the keyboard. No new WIT
+                                // surface, no arbiter changes.
+                                WitCanvas.Import.logMessage("ime: Hide tapped → sending ESC")
+                                sendKey(0, KEY_ESCAPE)
                             }
                         }
                     }
