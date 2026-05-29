@@ -108,16 +108,16 @@ fn relayout(s: &mut State) {
     s.items.clear();
     s.hits.clear();
 
-    let margin = 40.0_f32;
+    let margin = 48.0_f32;
     // Title.
     let title = new_blob("Apps", 44.0, 600);
     s.blobs.push(title);
-    s.items.push(DrawItem::Text { id: title, x: margin, y: 90.0, color: 0xFFFFFFFF });
+    s.items.push(DrawItem::Text { id: title, x: margin, y: 100.0, color: 0xFFFFFFFF });
 
-    // Grid.
-    let tile = 132.0_f32;
-    let gap = 36.0_f32;
-    let label_h = 40.0_f32;
+    // Grid. Tiles are 2× the original size (task 57 follow-up).
+    let tile = 264.0_f32;
+    let gap = 56.0_f32;
+    let label_h = 56.0_f32;
     let cell_w = tile + gap;
     let cell_h = tile + label_h + gap;
     let usable = (s.w - margin * 2.0).max(cell_w);
@@ -131,20 +131,20 @@ fn relayout(s: &mut State) {
         let y = top + row as f32 * cell_h;
         s.items.push(DrawItem::Tile { x, y, w: tile, h: tile, color: tile_color(id) });
 
-        // Letter, centered-ish on the tile (baseline approx).
+        // Letter, centered-ish on the tile (baseline approx, scaled 2×).
         let letter = label.chars().next().unwrap_or('?').to_uppercase().to_string();
-        let lblob = new_blob(&letter, 60.0, 600);
+        let lblob = new_blob(&letter, 120.0, 600);
         s.blobs.push(lblob);
-        s.items.push(DrawItem::Text { id: lblob, x: x + tile * 0.5 - 18.0, y: y + tile * 0.5 + 22.0, color: 0xFFFFFFFF });
+        s.items.push(DrawItem::Text { id: lblob, x: x + tile * 0.5 - 36.0, y: y + tile * 0.5 + 44.0, color: 0xFFFFFFFF });
 
         // Label under the tile (truncated).
         let mut disp = label.clone();
-        if disp.chars().count() > 12 {
-            disp = disp.chars().take(11).collect::<String>() + "…";
+        if disp.chars().count() > 14 {
+            disp = disp.chars().take(13).collect::<String>() + "…";
         }
-        let tblob = new_blob(&disp, 24.0, 400);
+        let tblob = new_blob(&disp, 28.0, 400);
         s.blobs.push(tblob);
-        s.items.push(DrawItem::Text { id: tblob, x, y: y + tile + 28.0, color: 0xFFE0E0E0 });
+        s.items.push(DrawItem::Text { id: tblob, x, y: y + tile + 36.0, color: 0xFFE0E0E0 });
 
         s.hits.push(HitRect { x, y, w: tile, h: tile + label_h, app_id: id.clone() });
     }
@@ -176,7 +176,7 @@ impl Guest for Launcher {
             for it in &items {
                 match *it {
                     DrawItem::Tile { x, y, w, h, color } => {
-                        canvas::draw_rrect(x, y, w, h, 28.0, 28.0, paint(color));
+                        canvas::draw_rrect(x, y, w, h, 52.0, 52.0, paint(color));
                     }
                     DrawItem::Text { id, x, y, color } => {
                         canvas::draw_text_blob(id, x, y, paint(color));
