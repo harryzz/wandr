@@ -342,8 +342,24 @@ fun main() {
         wasiFrameDispatcher.flush()
     }
 
-    layer.renderDelegate = SkikoRenderDelegate { canvas, _, _, nanos ->
+    layer.renderDelegate = SkikoRenderDelegate { canvas, w, h, nanos ->
         androidx.compose.ui.updateCachedNanoTime(nanos.toLong())
+        // Task 62 — overlay rotation. When the device rotates the host
+        // flips the IME's anchored rect (bottom strip → side strip) and
+        // swaps the logical width/height; `doFrame` feeds the new values
+        // here every frame. Re-size the scene + window info so the keyboard
+        // re-lays-out to the new geometry (its rows use weight(1f), so they
+        // fill whatever height is given). Without this the scene keeps its
+        // startup (portrait 1200-px) size and overflows / clips the rotated
+        // surface. Mirrors wart-app's task-43 fix; only acts on a change.
+        if (w > 0 && h > 0) {
+            val cur = realScene.size
+            if (cur == null || cur.width != w || cur.height != h) {
+                val sz = androidx.compose.ui.unit.IntSize(w, h)
+                realScene.size = sz
+                realSceneWindowInfo?.containerSize = sz
+            }
+        }
         canvas.clear(0xFF1A1A2E.toInt())
         realScene.render(canvas.asComposeCanvas(), nanos.toLong())
         // Drain any continuations that were queued during scene.render()

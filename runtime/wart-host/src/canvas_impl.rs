@@ -702,6 +702,14 @@ impl SkiaRenderer {
     pub fn resize(&mut self, w: u32, h: u32) {
         self.width  = w;
         self.height = h;
+        // Task 62 — keep logical dims (what the guest lays out to, via
+        // surface_width/height) in sync with the new buffer. The overlay
+        // rotation path resizes the buffer when the device turns; without
+        // this, logical_width/height would lag a buffer change that isn't
+        // accompanied by an orientation change (e.g. a portrait
+        // request-overlay-height re-anchor above the taskbar). For the
+        // rotation path itself, set_orientation recomputes again — cheap.
+        self.recompute_transform();
         #[cfg(target_os = "android")]
         {
             if let Ok(s) = Self::make_gl_surface(

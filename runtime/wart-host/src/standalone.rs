@@ -181,7 +181,12 @@ pub fn run_with_engine(engine: &Engine, app_id: Option<&str>, mode: OverlayMode)
                 OverlayMode::BottomBar => 0x6000_0000,
                 OverlayMode::Bottom | OverlayMode::Top => i32::MAX,
             };
-            run_cwasm_loop(engine, loaded, renderer, sf, mode == OverlayMode::None, fg_layer)
+            // Task 62 — auto-rotate when the app opts in via its manifest
+            // (`orientation = "auto"`), OR unconditionally for fullscreen
+            // (preserves task-43 behavior; fullscreen apps have no manifest
+            // field today). Overlays rotate only on explicit opt-in.
+            let rotates = loaded.rotation_policy() || mode == OverlayMode::None;
+            run_cwasm_loop(engine, loaded, renderer, sf, mode, rotates, fg_layer)
         }
         Err(e) => {
             log::warn!(
@@ -218,14 +223,92 @@ fn device_rotation_to_orient(rot: u32) -> u32 {
     }
 }
 
+/// Physical compass edge of the portrait panel buffer.
+#[derive(Clone, Copy)]
+enum Edge { North, South, East, West }
+
+/// Task 62 — the panel-buffer-space rect `(x, y, w, h)` an anchored chrome
+/// overlay must occupy for a given content-rotation `orient` (0/4/3/7 from
+/// [`device_rotation_to_orient`]), so it stays on the *user's* anchored
+/// edge after the device rotates. Unified anchor-aware model so the status
+/// bar, taskbar and IME all rotate coherently (no longer assumes the bars
+/// stay at the physical top/bottom):
+///
+/// - status bar (`Top`)      → the USER's TOP edge, thickness `sb`.
+/// - taskbar (`BottomBar`)   → the USER's BOTTOM edge, thickness `tb`.
+/// - IME (`Bottom`)          → the USER's BOTTOM edge, thickness = the
+///                             keyboard depth, offset `tb` inward so it sits
+///                             just above the taskbar.
+///
+/// The panel buffer is fixed portrait `pw × ph`. Which physical edge is the
+/// user's bottom depends on `orient` (device-verified handedness): 0→South,
+/// 3→North, 4→West, 7→East; the user's top is the opposite edge. A strip is
+/// `th` thick along the edge normal, full-span along the edge, pushed `off`
+/// px inward. For 90°/270° the strip is vertical (`w = th, h = ph`); after
+/// the host resizes the GL buffer to that, the renderer's dihedral transform
+/// swaps logical dims so the guest re-lays-out landscape-wide.
+///
+/// `None` (fullscreen) never rotates its rect (gated by `is_overlay`).
+///
+/// Handedness: if a strip lands on the wrong physical side in landscape on a
+/// given panel, swap the `4`/`7` arms in `user_bottom_edge` (mirrors the
+/// caveat on [`device_rotation_to_orient`]). Host-side only — no shim rebuild.
+fn overlay_rect(mode: OverlayMode, orient: u32, pw: i32, ph: i32, t: i32, sb: i32, tb: i32) -> (i32, i32, i32, i32) {
+    // Landscape keyboard depth: scale `t` (sized as a fraction of the long
+    // edge, ~42%) by pw/ph so it stays the same fraction of the user's
+    // screen height (~600 px) rather than an 83%-of-screen slab. Bars keep
+    // their fixed thickness (sb/tb) in any orientation.
+    let landscape = matches!(orient, 4 | 7);
+    let ime_depth = if landscape {
+        (((t as i64) * (pw as i64)) / (ph as i64).max(1)).max(1) as i32
+    } else {
+        t
+    };
+    // (at the user's bottom edge?, thickness, inward offset)
+    let (at_bottom, th, off) = match mode {
+        OverlayMode::Top       => (false, sb, 0),         // status bar — user top
+        OverlayMode::BottomBar => (true,  tb, 0),         // taskbar — user bottom
+        OverlayMode::Bottom    => (true,  ime_depth, tb), // IME — above the taskbar
+        OverlayMode::None      => return (0, 0, pw, ph),  // fullscreen — no flip
+    };
+    let user_bottom_edge = match orient {
+        0 => Edge::South, // portrait — physical bottom
+        3 => Edge::North, // 180°
+        4 => Edge::West,  // 90°  — physical left
+        7 => Edge::East,  // 270° — physical right
+        _ => Edge::South,
+    };
+    let edge = if at_bottom {
+        user_bottom_edge
+    } else {
+        match user_bottom_edge { // user top = opposite edge
+            Edge::South => Edge::North,
+            Edge::North => Edge::South,
+            Edge::West  => Edge::East,
+            Edge::East  => Edge::West,
+        }
+    };
+    // Place a `th`-thick, full-span strip `off` px inward from `edge`.
+    match edge {
+        Edge::South => (0, ph - off - th, pw, th),
+        Edge::North => (0, off, pw, th),
+        Edge::West  => (off, 0, th, ph),
+        Edge::East  => (pw - off - th, 0, th, ph),
+    }
+}
+
 /// The real render loop: instantiate the component and drive `render_frame`.
 fn run_cwasm_loop(
     engine: &wasmtime::Engine,
     loaded: LoadedApp,
     renderer: crate::canvas_impl::SkiaRenderer,
     sf: crate::sf_surface::SfSurface,
-    // Task 43 — auto-follow device screen rotation. True for the
-    // fullscreen app; false for IME overlay surfaces (fixed geometry).
+    // Task 62 — the surface's anchor (fullscreen vs which overlay edge).
+    // Drives the rotated-rect geometry flip for overlays.
+    mode: OverlayMode,
+    // Task 43/62 — auto-follow device screen rotation. True for the
+    // fullscreen app (always) and for overlays whose manifest opts in
+    // (`orientation = "auto"`); false otherwise.
     enable_rotation: bool,
     // Task 55 — SurfaceFlinger layer for the Foreground role. System
     // chrome (status bar / IME overlays) uses i32::MAX; fullscreen apps
@@ -344,12 +427,16 @@ fn run_cwasm_loop(
     // on-change) — the SAME source WMS's WindowOrientationListener uses,
     // but consumed ART-free via the rsbinder sensorservice path. On a
     // rotation change we recompute the renderer's content-pre-rotation
-    // matrix + swapped logical dims and re-issue on_resize; the physical
-    // SurfaceFlinger buffer is never touched (no shim, no EGL resize).
+    // matrix + swapped logical dims and re-issue on_resize. For the
+    // fullscreen app the physical SurfaceFlinger buffer is never touched
+    // (no shim, no EGL resize); for an overlay (task 62) we additionally
+    // flip the overlay's anchored rect via the shim so a bottom strip
+    // becomes a side strip in landscape (see the rotation block below).
     //
     // A manual `WART_ORIENT` override (read once in the renderer ctor)
     // disables auto-follow — useful for forcing a fixed orientation in a
-    // stationary test. Overlay (IME) surfaces don't auto-rotate (v1).
+    // stationary test. Overlays rotate only when their manifest declares
+    // `orientation = "auto"` (task 62); otherwise they stay portrait.
     let orient_sensor: Option<u32> =
         if enable_rotation && std::env::var("WART_ORIENT").is_err() {
             match crate::sensors_impl::device_orientation_handle() {
@@ -371,6 +458,11 @@ fn run_cwasm_loop(
     // ── Render loop — mirrors WindowEvent::RedrawRequested, no winit ─────
     let frame_target = std::time::Duration::from_millis(16);
     let mut frame: u64 = 0;
+    // Task 62 — the overlay's strip thickness (its portrait height). Seeded
+    // from the created surface; updated whenever the guest requests a new
+    // overlay height. Feeds `overlay_rect` so a rotation re-derives the
+    // side-strip geometry at the current thickness. Unused for fullscreen.
+    let mut strip_t: i32 = sf.height;
     loop {
         // Step 5 — SIGTERM / SIGINT / SIGHUP from launcher trap or operator.
         if crate::lifecycle_standalone::should_shutdown() {
@@ -459,11 +551,35 @@ fn run_cwasm_loop(
         // next frame draws at the new dimensions. EGL/Skia will pick up
         // the new size via the producer-side geometry update.
         if let Some(new_h) = crate::sf_surface::take_pending_overlay_resize() {
-            if sf.resize_overlay(new_h) {
-                log::info!(
-                    "standalone: overlay resize → {} px (was {})",
-                    new_h, sf.height
-                );
+            // Task 62 — the guest's requested thickness. Route it through
+            // `overlay_rect` (not the raw bottom-anchored `resize_overlay`)
+            // so the keyboard lands in the SAFE AREA above the taskbar /
+            // below the status bar at the CURRENT orientation — both in
+            // portrait (re-anchor above the taskbar) and while rotated
+            // (re-derive the side strip at the new depth).
+            strip_t = new_h;
+            if sf.is_overlay() {
+                let orient = store.data().renderer.current_orient;
+                let sb = crate::status_impl::status_bar_height_px() as i32;
+                let tb = taskbar_height_px() as i32;
+                let (rx, ry, rw, rh) =
+                    overlay_rect(mode, orient, sf.panel_w, sf.panel_h, new_h, sb, tb);
+                if sf.set_overlay_geometry(rx, ry, rw, rh, rw, rh) {
+                    store.data_mut().renderer.resize(rw as u32, rh as u32);
+                    let (lw, lh) = {
+                        let r = &store.data().renderer;
+                        (r.logical_width, r.logical_height)
+                    };
+                    if let Err(e) = skiko
+                        .my_skiko_gfx_renderer()
+                        .call_on_resize(&mut store, lw, lh)
+                    {
+                        log::warn!("standalone: overlay-resize on_resize({lw}x{lh}) failed: {e:#}");
+                    }
+                    log::info!(
+                        "standalone: overlay resize → rect ({rx},{ry},{rw},{rh}) logical {lw}x{lh}"
+                    );
+                }
             }
         }
 
@@ -501,6 +617,25 @@ fn run_cwasm_loop(
         if let Some(h) = orient_sensor {
             if let Some(rot) = crate::sensors_impl::poll_device_rotation(h) {
                 let orient = device_rotation_to_orient(rot);
+                // Task 62 — for an overlay, the anchored rect itself must
+                // flip (a portrait bottom strip becomes a vertical side
+                // strip in landscape). Do the SF move/resize + GL-buffer
+                // resize BEFORE set_orientation, because recompute_transform
+                // reads the buffer dims to derive logical dims. Fullscreen
+                // (is_overlay == false) leaves the buffer alone — task 43's
+                // content-only rotation, unchanged.
+                if sf.is_overlay() && orient != store.data().renderer.current_orient {
+                    let sb = crate::status_impl::status_bar_height_px() as i32;
+                    let tb = taskbar_height_px() as i32;
+                    let (rx, ry, rw, rh) =
+                        overlay_rect(mode, orient, sf.panel_w, sf.panel_h, strip_t, sb, tb);
+                    if sf.set_overlay_geometry(rx, ry, rw, rh, rw, rh) {
+                        store.data_mut().renderer.resize(rw as u32, rh as u32);
+                        log::info!(
+                            "standalone: overlay rect flip → orient {orient} rect ({rx},{ry},{rw},{rh})"
+                        );
+                    }
+                }
                 if store.data_mut().renderer.set_orientation(orient) {
                     let (lw, lh) = {
                         let r = &store.data().renderer;

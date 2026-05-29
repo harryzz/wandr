@@ -694,61 +694,94 @@ ANativeWindow* sf_create_overlay_surface(int32_t x, int32_t y, int32_t w, int32_
     return g_surface.get();
 }
 
-// Task 47 step 3c — resize the overlay SurfaceControl to `new_height_px`
-// pixels tall (panel-width unchanged). Re-positions to
-// `(0, PANEL_H - new_height_px)`, updates the BLASTBufferQueue's buffer
-// dimensions, re-registers the input window at the new rect, and
-// updates g_overlay_y_offset so subsequent sf_input_poll calls
-// translate motion-event Y values correctly. The Rust side calls
-// `ANativeWindow_setBuffersGeometry` after this returns to flush
-// EGL/Skia's view of the new dimensions.
+// Task 62 — general overlay move+resize. A strict superset of
+// sf_resize_overlay: repositions the overlay to (X,Y) AND resizes it to
+// W×H, using the SAME rect-resolution conventions as
+// sf_create_overlay_surface (w<=0/h<=0 → full panel dim; y<0 →
+// bottom-anchored; x<=0 → 0). Updates the parent's position + crop, the
+// child's crop, the BLASTBufferQueue buffer dimensions, and the input
+// window bounds. The Rust side calls `ANativeWindow_setBuffersGeometry`
+// after this returns to flush EGL/Skia's view of the new buffer.
 //
-// Returns 0 on success, -1 if the surface isn't an overlay (or
-// not yet created), -2 if `new_height_px` is out of range.
-int32_t sf_resize_overlay(int32_t new_height_px) {
+// This is what the overlay-rotation path (task 62) calls to flip a
+// bottom strip into a vertical side strip on landscape: e.g.
+// sf_set_overlay_geometry(PANEL_W - T, 0, T, PANEL_H) puts a T-wide
+// keyboard down the physical right edge. Input still works verbatim —
+// touchableRegion is layer-local Rect(0,0,W,H), SF adds the parent's
+// position (incl. X), and InputDispatcher delivers window-local coords
+// (so no g_overlay_y_offset / x-offset subtraction is needed; the host
+// inverse-maps content rotation via base_matrix.invert()).
+//
+// Returns 0 on success, -1 if the surface isn't an overlay (or not yet
+// created), -2 if the resolved rect is out of range.
+int32_t sf_set_overlay_geometry(int32_t x, int32_t y, int32_t w, int32_t h) {
     if (g_control == nullptr || g_bbq == nullptr) {
         return -1;
     }
+    const uint32_t PW = PANEL_W;
+    const uint32_t PH = PANEL_H;
+    const uint32_t W  = (w > 0) ? static_cast<uint32_t>(w) : PW;
+    const uint32_t H  = (h > 0) ? static_cast<uint32_t>(h) : PH;
+    if (W > PW || H > PH) {
+        LOGE("[overlay] sf_set_overlay_geometry: rect too big w=%u h=%u "
+             "(panel %ux%u)", W, H, PW, PH);
+        return -2;
+    }
+    const int32_t  X  = (x > 0) ? x : 0;
+    const int32_t  Y  = (y >= 0) ? y : static_cast<int32_t>(PH - H);
+    g_overlay_y_offset = Y;  // parity only; sf_input_poll uses window-local coords
+
+    {
+        SurfaceComposerClient::Transaction t;
+        // Position + crop go on the parent container.
+        if (g_overlay_parent != nullptr) {
+            t.setPosition(g_overlay_parent, static_cast<float>(X), static_cast<float>(Y));
+            t.setCrop(g_overlay_parent,
+                      Rect(0, 0, static_cast<int32_t>(W), static_cast<int32_t>(H)));
+        }
+        // Child crop also updates so the buffer-state surface knows its
+        // bounded region matches the new W×H.
+        t.setCrop(g_control,
+                  Rect(0, 0, static_cast<int32_t>(W), static_cast<int32_t>(H)));
+        t.apply(/*synchronous=*/true);
+    }
+    // Refresh the BBQ's notion of buffer dimensions. Without this it
+    // keeps producing old-sized buffers that SF clips/distorts.
+    g_bbq->update(g_control, W, H, PIXEL_FORMAT_RGBA_8888);
+
+    // Re-register the input window at the new bounds. Layer-local coords —
+    // SF adds the layer's position (X,Y) to convert to display coords.
+    update_input_window_bounds(
+        Rect(0, 0, static_cast<int32_t>(W), static_cast<int32_t>(H)));
+
+    LOGI("[overlay] geometry set to %ux%u at (%d,%d)", W, H, X, Y);
+    return 0;
+}
+
+// Task 62 — report the panel's native (portrait) dimensions. The host
+// needs PANEL_H to build a rotated vertical side-strip rect (its buffer
+// is only the strip-thickness tall, so the Rust side can't otherwise
+// know the long edge). Populated by init_panel_dims at create time.
+void sf_panel_dims(int32_t* out_w, int32_t* out_h) {
+    if (out_w) *out_w = static_cast<int32_t>(PANEL_W);
+    if (out_h) *out_h = static_cast<int32_t>(PANEL_H);
+}
+
+// Task 47 step 3c — resize the overlay SurfaceControl to `new_height_px`
+// pixels tall (bottom-anchored, panel-width unchanged). Thin wrapper over
+// sf_set_overlay_geometry so the IME `request-overlay-height` WIT path
+// rides a single geometry codepath.
+//
+// Returns 0 on success, -1 if the surface isn't an overlay (or not yet
+// created), -2 if `new_height_px` is out of range.
+int32_t sf_resize_overlay(int32_t new_height_px) {
     if (new_height_px <= 0 || new_height_px > static_cast<int32_t>(PANEL_H)) {
         LOGE("[overlay] sf_resize_overlay: bad new_height_px=%d (panel H=%u)",
              new_height_px, PANEL_H);
         return -2;
     }
-    const uint32_t PW = PANEL_W;
-    const uint32_t PH = PANEL_H;
-    const uint32_t H  = static_cast<uint32_t>(new_height_px);
-    const int32_t  Y  = static_cast<int32_t>(PH - H);
-    g_overlay_y_offset = Y;
-
-    {
-        SurfaceComposerClient::Transaction t;
-        // Position + crop go on the parent container. Crop is the
-        // sub-rect of the parent that's visible; we want the full
-        // PW × H bottom strip.
-        if (g_overlay_parent != nullptr) {
-            t.setPosition(g_overlay_parent, 0.0f, static_cast<float>(Y));
-            t.setCrop(g_overlay_parent,
-                      Rect(0, 0, static_cast<int32_t>(PW), static_cast<int32_t>(H)));
-        }
-        // Child crop also updates so the buffer-state surface knows
-        // its bounded region matches the new H.
-        t.setCrop(g_control,
-                  Rect(0, 0, static_cast<int32_t>(PW), static_cast<int32_t>(H)));
-        t.apply(/*synchronous=*/true);
-    }
-    // Refresh the BBQ's notion of buffer dimensions. Without this it
-    // keeps producing PW×OldH buffers that SF clips/distorts.
-    g_bbq->update(g_control, PW, H, PIXEL_FORMAT_RGBA_8888);
-
-    // Re-register the input window at the new bounds. Layer-local
-    // coords — SF adds the layer's position (which is now Y) to
-    // convert to display coords. See the create path's comment for
-    // the layer-local-vs-display bug history.
-    update_input_window_bounds(
-        Rect(0, 0, static_cast<int32_t>(PW), static_cast<int32_t>(H)));
-
-    LOGI("[overlay] resized to %ux%u at (0,%d)", PW, H, Y);
-    return 0;
+    // x=0, y=-1 (bottom-anchored), w=0 (full panel width), h=new_height_px.
+    return sf_set_overlay_geometry(0, -1, 0, new_height_px);
 }
 
 // Release the surface, control, client and input plumbing.

@@ -49,6 +49,11 @@ type CreateOverlayFn =
     unsafe extern "C" fn(i32, i32, i32, i32, *mut i32, *mut i32, *mut u32) -> *mut c_void;
 /// `int32_t sf_resize_overlay(int32_t new_height_px)` — task 47 step 3c.
 type ResizeOverlayFn = unsafe extern "C" fn(i32) -> i32;
+/// `int32_t sf_set_overlay_geometry(int32_t x, int32_t y, int32_t w, int32_t h)` —
+/// task 62. Generic overlay move+resize (superset of `sf_resize_overlay`).
+type SetOverlayGeometryFn = unsafe extern "C" fn(i32, i32, i32, i32) -> i32;
+/// `void sf_panel_dims(int32_t* out_w, int32_t* out_h)` — task 62.
+type PanelDimsFn = unsafe extern "C" fn(*mut i32, *mut i32);
 /// `int32_t sf_input_poll(SfInputEvent*, int32_t)`.
 type InputPollFn = unsafe extern "C" fn(*mut SfInputEvent, i32) -> i32;
 /// `uint32_t sf_query_transform_hint(void)`.
@@ -76,6 +81,41 @@ extern "C" {
 /// `AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM` — also the value of `PIXEL_FORMAT_RGBA_8888`
 /// used by the shim's `createSurface` call. Constant from `android/hardware_buffer.h`.
 const ANW_FORMAT_RGBA_8888: i32 = 1;
+
+/// Task 62 — resolve the two new optional geometry symbols
+/// (`sf_set_overlay_geometry`, `sf_panel_dims`) from an already-`dlopen`'d
+/// shim handle. Both are `None` on a pre-task-62 shim, degrading the
+/// overlay-rotation path to a no-op (it's gated on `set_overlay_geometry`).
+unsafe fn resolve_geometry_syms(
+    handle: *mut c_void,
+) -> (Option<SetOverlayGeometryFn>, Option<PanelDimsFn>) {
+    let geom_name = CString::new("sf_set_overlay_geometry").unwrap();
+    let geom_sym = libc::dlsym(handle, geom_name.as_ptr());
+    let set_overlay_geometry: Option<SetOverlayGeometryFn> =
+        if geom_sym.is_null() { None } else { Some(std::mem::transmute(geom_sym)) };
+
+    let pd_name = CString::new("sf_panel_dims").unwrap();
+    let pd_sym = libc::dlsym(handle, pd_name.as_ptr());
+    let panel_dims: Option<PanelDimsFn> =
+        if pd_sym.is_null() { None } else { Some(std::mem::transmute(pd_sym)) };
+
+    (set_overlay_geometry, panel_dims)
+}
+
+/// Task 62 — read the panel's native dimensions via `sf_panel_dims`,
+/// falling back to `(fallback_w, fallback_h)` when the shim predates it
+/// or returns nonsense.
+fn query_panel_dims(panel_dims: Option<PanelDimsFn>, fallback_w: i32, fallback_h: i32) -> (i32, i32) {
+    if let Some(f) = panel_dims {
+        let mut pw: i32 = 0;
+        let mut ph: i32 = 0;
+        unsafe { f(&mut pw, &mut ph) };
+        if pw > 0 && ph > 0 {
+            return (pw, ph);
+        }
+    }
+    (fallback_w, fallback_h)
+}
 
 /// POD input event drained from the shim's InputFlinger channel. Mirrors
 /// `struct SfInputEvent` in `cpp/sf_surface.{cpp,h}` — keep all three in sync.
@@ -130,6 +170,16 @@ pub struct SfSurface {
     /// When present, lets the IME guest declare its preferred panel
     /// height via the `request-overlay-height` WIT verb.
     resize_overlay: Option<ResizeOverlayFn>,
+    /// `sf_set_overlay_geometry` — `None` if the shim predates task 62.
+    /// Generic move+resize used by the overlay-rotation path to flip a
+    /// bottom strip into a vertical side strip on landscape.
+    set_overlay_geometry: Option<SetOverlayGeometryFn>,
+    /// Panel's native (portrait) dimensions, read once via `sf_panel_dims`
+    /// at create time (falls back to the surface dims when the shim
+    /// predates task 62). The overlay-rotation path needs `panel_h` to
+    /// size a full-height vertical side strip.
+    pub panel_w: i32,
+    pub panel_h: i32,
     /// True when this surface was created via `sf_create_overlay_surface`
     /// rather than `sf_create_fullscreen_surface`. Used to gate the
     /// overlay-only `resize_overlay` path.
@@ -206,16 +256,20 @@ impl SfSurface {
                 Some(std::mem::transmute(resize_sym))
             };
 
+            let (set_overlay_geometry, panel_dims) = resolve_geometry_syms(handle);
+
             // Summarize which optional symbols were resolved — handy when
             // the shim .so is older than the wart-host binary expects.
             log::info!(
-                "sf_surface: dlsym summary — input_poll={} query_hint={} request_focus={} set_layer={} set_visible={} resize_overlay={}",
+                "sf_surface: dlsym summary — input_poll={} query_hint={} request_focus={} set_layer={} set_visible={} resize_overlay={} set_overlay_geometry={} panel_dims={}",
                 input_poll.is_some(),
                 query_hint.is_some(),
                 request_focus.is_some(),
                 set_layer.is_some(),
                 set_visible.is_some(),
                 resize_overlay.is_some(),
+                set_overlay_geometry.is_some(),
+                panel_dims.is_some(),
             );
 
             let mut w: i32 = 0;
@@ -223,6 +277,10 @@ impl SfSurface {
             let mut t: u32 = 0;
             let nw = create(&mut w, &mut h, &mut t);
             ensure!(!nw.is_null(), "sf_create_fullscreen_surface returned null");
+
+            // Fullscreen surface dims ARE the panel dims; sf_panel_dims (if
+            // present) is authoritative either way.
+            let (panel_w, panel_h) = query_panel_dims(panel_dims, w, h);
 
             Ok(SfSurface {
                 _handle: handle,
@@ -236,6 +294,9 @@ impl SfSurface {
                 set_layer,
                 set_visible,
                 resize_overlay,
+                set_overlay_geometry,
+                panel_w,
+                panel_h,
                 is_overlay: false,
             })
         }
@@ -320,14 +381,18 @@ impl SfSurface {
                 Some(std::mem::transmute(resize_sym))
             };
 
+            let (set_overlay_geometry, panel_dims) = resolve_geometry_syms(handle);
+
             log::info!(
-                "sf_surface: overlay dlsym summary — input_poll={} query_hint={} request_focus={} set_layer={} set_visible={} resize_overlay={}",
+                "sf_surface: overlay dlsym summary — input_poll={} query_hint={} request_focus={} set_layer={} set_visible={} resize_overlay={} set_overlay_geometry={} panel_dims={}",
                 input_poll.is_some(),
                 query_hint.is_some(),
                 request_focus.is_some(),
                 set_layer.is_some(),
                 set_visible.is_some(),
                 resize_overlay.is_some(),
+                set_overlay_geometry.is_some(),
+                panel_dims.is_some(),
             );
 
             let mut out_w: i32 = 0;
@@ -338,6 +403,12 @@ impl SfSurface {
                 !nw.is_null(),
                 "sf_create_overlay_surface(x={x},y={y},w={w},h={h}) returned null"
             );
+
+            // out_w/out_h are the STRIP dims (e.g. full width × keyboard
+            // height), NOT the panel — so the (out_w, out_h) fallback is
+            // only a degraded last resort for a pre-task-62 shim, which
+            // also lacks set_overlay_geometry so rotation is off anyway.
+            let (panel_w, panel_h) = query_panel_dims(panel_dims, out_w, out_h);
 
             Ok(SfSurface {
                 _handle: handle,
@@ -351,6 +422,9 @@ impl SfSurface {
                 set_layer,
                 set_visible,
                 resize_overlay,
+                set_overlay_geometry,
+                panel_w,
+                panel_h,
                 is_overlay: true,
             })
         }
@@ -397,6 +471,43 @@ impl SfSurface {
             log::warn!(
                 "sf_surface: ANativeWindow_setBuffersGeometry({}, {}) returned {nw_rc}",
                 self.width, new_height_px
+            );
+        }
+        true
+    }
+
+    /// Task 62 — move + resize this overlay to a panel-space rect, then
+    /// flush the ANativeWindow buffer geometry. `(x, y, w, h)` carries the
+    /// shim's resolution sentinels (`w<=0/h<=0` → full panel dim; `y<0` →
+    /// bottom-anchored; `x<=0` → 0); `(buf_w, buf_h)` are the CONCRETE
+    /// resolved buffer dims the caller computed (never sentinels) — the
+    /// host resolves the rect itself so `setBuffersGeometry` and the shim
+    /// agree. Used by the overlay-rotation path to flip a bottom strip
+    /// into a vertical side strip. No-op (+ warn) on a fullscreen surface
+    /// or a shim too old to export `sf_set_overlay_geometry`.
+    pub fn set_overlay_geometry(&self, x: i32, y: i32, w: i32, h: i32, buf_w: i32, buf_h: i32) -> bool {
+        if !self.is_overlay {
+            log::warn!("sf_surface: set_overlay_geometry ignored — surface is fullscreen");
+            return false;
+        }
+        let Some(set_geom) = self.set_overlay_geometry else {
+            log::warn!(
+                "sf_surface: set_overlay_geometry ignored — shim does not export \
+                 sf_set_overlay_geometry (rebuild libsf_surface.so on a-03)"
+            );
+            return false;
+        };
+        let rc = unsafe { set_geom(x, y, w, h) };
+        if rc != 0 {
+            log::warn!("sf_surface: sf_set_overlay_geometry({x},{y},{w},{h}) returned {rc}");
+            return false;
+        }
+        let nw_rc = unsafe {
+            ANativeWindow_setBuffersGeometry(self.native_window, buf_w, buf_h, ANW_FORMAT_RGBA_8888)
+        };
+        if nw_rc != 0 {
+            log::warn!(
+                "sf_surface: ANativeWindow_setBuffersGeometry({buf_w}, {buf_h}) returned {nw_rc}"
             );
         }
         true

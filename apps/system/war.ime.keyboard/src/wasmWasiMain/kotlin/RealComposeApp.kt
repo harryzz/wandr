@@ -52,13 +52,25 @@ val wasiFrameDispatcher: WasiFrameDispatcher = WasiFrameDispatcher()
 var wasiSoftKeyboardKeyHandler: (androidx.compose.ui.input.key.KeyEvent) -> Unit = {}
 var wasiHideKeyboardRequest: () -> Unit = {}
 
+/// Mutable [WindowInfo] so the renderer (Main.kt) can update
+/// `containerSize` on a runtime surface-size change — task 62 overlay
+/// rotation (the IME's bottom strip flips to a side strip in landscape,
+/// swapping logical dims). Mirrors wart-app's MutableSceneWindowInfo.
+class MutableSceneWindowInfo(initial: IntSize) : WindowInfo {
+    override var isWindowFocused: Boolean = true
+    override var keyboardModifiers: androidx.compose.ui.input.pointer.PointerKeyboardModifiers =
+        androidx.compose.ui.input.pointer.PointerKeyboardModifiers(0)
+    override var containerSize: IntSize = initial
+}
+
+/// The live scene's WindowInfo, set by `buildRealComposeScene`, so the
+/// render delegate can update `containerSize` when the host swaps logical
+/// dimensions on rotation.
+var realSceneWindowInfo: MutableSceneWindowInfo? = null
+
 fun buildRealComposeScene(widthPx: Int, heightPx: Int, density: Float): ComposeScene {
-    val sceneWindowInfo = object : WindowInfo {
-        override var isWindowFocused: Boolean = true
-        override var keyboardModifiers: androidx.compose.ui.input.pointer.PointerKeyboardModifiers =
-            androidx.compose.ui.input.pointer.PointerKeyboardModifiers(0)
-        override var containerSize: IntSize = IntSize(widthPx, heightPx)
-    }
+    val sceneWindowInfo = MutableSceneWindowInfo(IntSize(widthPx, heightPx))
+    realSceneWindowInfo = sceneWindowInfo
     val platformContext = object : PlatformContext by PlatformContext.Empty() {
         override val windowInfo: WindowInfo = sceneWindowInfo
     }

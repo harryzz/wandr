@@ -150,6 +150,7 @@ version     = "0.1.0"
 world       = "my:skiko-gfx/skiko-ui"
 kind        = "system"
 composition = "same-store"
+orientation = "auto"
 label       = "Status Bar"
 
 [components]
@@ -167,6 +168,7 @@ version     = "0.1.0"
 world       = "my:skiko-gfx/skiko-ui"
 kind        = "system"
 composition = "same-store"
+orientation = "auto"
 label       = "Taskbar"
 
 [components]

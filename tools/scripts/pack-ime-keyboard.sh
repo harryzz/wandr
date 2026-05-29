@@ -47,6 +47,7 @@ version     = "0.1.0"
 world       = "war:ime-keyboard/ime-keyboard"
 kind        = "system"
 composition = "same-store"
+orientation = "auto"
 
 [components]
 ui = "components/ui.wasm"

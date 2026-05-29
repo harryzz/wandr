@@ -75,6 +75,20 @@ impl LoadedApp {
             .map(|d| d.join("assets"))
             .filter(|p| p.is_dir())
     }
+
+    /// Task 62: whether this app's surface should follow device
+    /// orientation. Reads the `orientation` field from the installed
+    /// `<install_dir>/package.toml` (`"auto"` ⇒ rotate, anything else /
+    /// absent ⇒ locked). `false` for dev `.cwasm`/asset loads
+    /// (`install_dir == None`) — they have no manifest, so the safe
+    /// default is "no rotation". `standalone.rs` ORs this with the
+    /// fullscreen default so fullscreen apps keep task-43 behavior.
+    pub fn rotation_policy(&self) -> bool {
+        let Some(dir) = self.install_dir.as_ref() else { return false };
+        let Ok(src) = fs::read_to_string(dir.join("package.toml")) else { return false };
+        let Ok(doc) = src.parse::<toml::Value>() else { return false };
+        doc.get("orientation").and_then(|v| v.as_str()) == Some("auto")
+    }
 }
 
 /// One resolved + deserialized same-Store dep.

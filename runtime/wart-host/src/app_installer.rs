@@ -153,6 +153,11 @@ pub(crate) struct Manifest {
     /// Task 36 (Q6): every package must declare its composition mode.
     /// Producer-authoritative; consumers cannot override.
     pub composition: Composition,
+    /// Task 62: whether this app's surface follows device orientation.
+    /// `Auto` = rotate with the device; `Locked` (default) = stay portrait.
+    /// Drives the overlay-rotation gate in `standalone.rs`. Pure policy
+    /// hint — NOT part of the AOT cache key.
+    pub orientation: Orientation,
     pub components: Vec<(String, PathBuf)>,
     /// Task 36: empty for task-35-style standalone apps. Each entry is
     /// one dep edge to a host WIT / runtime-bundled system component /
@@ -212,6 +217,30 @@ impl Composition {
     }
     pub(crate) fn as_str(self) -> &'static str {
         match self { Self::SameStore => "same-store", Self::SeparateStore => "separate-store" }
+    }
+}
+
+/// Task 62: orientation policy for a package's surface. `Auto` follows the
+/// device's Device-Orientation HAL sensor; `Locked` (default) stays in the
+/// panel's native portrait. Used by `standalone.rs` to gate the overlay /
+/// fullscreen auto-rotate path. Same string-enum shape as `Composition`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Orientation {
+    Auto,
+    Locked,
+}
+
+impl Orientation {
+    fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "auto"   => Some(Self::Auto),
+            "locked" => Some(Self::Locked),
+            _ => None,
+        }
+    }
+    #[allow(dead_code)]
+    pub(crate) fn as_str(self) -> &'static str {
+        match self { Self::Auto => "auto", Self::Locked => "locked" }
     }
 }
 
@@ -473,6 +502,15 @@ fn parse_manifest(bundle_dir: &Path) -> Result<Manifest> {
         "package.toml: composition = \"{composition_str}\" — must be \"same-store\" or \"separate-store\""
     ))?;
 
+    // Task 62: optional orientation policy — "auto" or "locked" (default).
+    // Omitted ⇒ Locked, preserving every existing manifest's behavior.
+    let orientation = match doc.get("orientation").and_then(|v| v.as_str()) {
+        None => Orientation::Locked,
+        Some(s) => Orientation::from_str(s).ok_or_else(|| anyhow!(
+            "package.toml: orientation = \"{s}\" — must be \"auto\" or \"locked\""
+        ))?,
+    };
+
     let components_tbl = doc.get("components").and_then(|v| v.as_table())
         .ok_or_else(|| anyhow!("package.toml: missing [components] table"))?;
     if components_tbl.is_empty() {
@@ -488,7 +526,7 @@ fn parse_manifest(bundle_dir: &Path) -> Result<Manifest> {
 
     let dependencies = parse_dependencies(doc.get("dependencies"))?;
 
-    Ok(Manifest { app_id, version, world, kind, composition, components, dependencies })
+    Ok(Manifest { app_id, version, world, kind, composition, orientation, components, dependencies })
 }
 
 /// Parse `[dependencies]` table. Returns an empty Vec if the table is

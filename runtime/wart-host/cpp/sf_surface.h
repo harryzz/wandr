@@ -92,6 +92,20 @@ struct ANativeWindow* sf_create_overlay_surface(int32_t x, int32_t y,
 // the surface is down, -2 if `new_height_px` is out of range.
 int32_t sf_resize_overlay(int32_t new_height_px);
 
+// Task 62 — general overlay move+resize. Superset of sf_resize_overlay:
+// repositions to (x,y) AND resizes to w×h, with the same conventions as
+// sf_create_overlay_surface (w<=0/h<=0 → full panel dim; y<0 →
+// bottom-anchored; x<=0 → 0). Used by the overlay-rotation path to flip
+// a bottom strip into a vertical side strip on landscape. The Rust side
+// calls ANativeWindow_setBuffersGeometry after this returns. Returns 0
+// on success, -1 if the surface is down, -2 if the rect is out of range.
+int32_t sf_set_overlay_geometry(int32_t x, int32_t y, int32_t w, int32_t h);
+
+// Task 62 — report the panel's native (portrait) dimensions in pixels.
+// The host needs PANEL_H to build a rotated side-strip rect. Either
+// out-pointer may be NULL.
+void sf_panel_dims(int32_t* out_w, int32_t* out_h);
+
 // Release the surface/control/client and input plumbing.
 void sf_destroy_surface(void);
 
