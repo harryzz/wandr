@@ -256,10 +256,9 @@ private fun MaterialDemoApp() {
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     HapticScope(enabled = hapticEnabled) {
-                        // Task 57 — launcher grid. When wart-app is the
-                        // arbiter's designated home (`set-home`), this is
-                        // the home experience: tap a tile to launch.
-                        LauncherCard()
+                        // (The launcher is its own warpkg now — war.launcher,
+                        // task 57. wart-app is a plain demo app again; no
+                        // launcher card here.)
                         CounterCard()
                         CheckboxRadioCard()
                         TextFieldCard()

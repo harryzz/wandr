@@ -116,13 +116,15 @@ loader = "components/loader.wasm"
 EOF
 )"
 
-# Task 57 — the launcher installs as a (launchable) app under apps/ so
-# the arbiter's set-home/launch path finds it; it filters its own id out
-# of its grid. `ui` component name matches the GUI-app convention.
+# Task 57 — the launcher is system chrome → system-apps/ (kind=system),
+# so apps/ holds only genuine user apps and the launcher's own
+# apps/-scan never lists it. The arbiter's set-home/launch path finds it
+# via the loader's system-apps/ fallback (task 55).
 pack_warpkg "$LN_PKG" "$LN_WASM" "ui" "$(cat <<'EOF'
 app_id      = "war.launcher"
 version     = "0.1.0"
 world       = "my:skiko-gfx/skiko-ui"
+kind        = "system"
 composition = "same-store"
 label       = "Launcher"
 

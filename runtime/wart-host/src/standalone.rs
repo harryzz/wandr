@@ -140,7 +140,10 @@ pub fn run_with_engine(engine: &Engine, app_id: Option<&str>, mode: OverlayMode)
     let result = match loader.load(engine, app_ref) {
         Ok(loaded) => {
             log::info!("standalone: loaded {}", loaded.source_label);
-            run_cwasm_loop(engine, loaded, renderer, sf, mode == OverlayMode::None)
+            // Chrome overlays (status bar / IME) sit at the top of the
+            // z-stack; fullscreen apps below them.
+            let fg_layer = if mode == OverlayMode::None { 0x4000_0000 } else { i32::MAX };
+            run_cwasm_loop(engine, loaded, renderer, sf, mode == OverlayMode::None, fg_layer)
         }
         Err(e) => {
             log::warn!(
@@ -186,6 +189,12 @@ fn run_cwasm_loop(
     // Task 43 — auto-follow device screen rotation. True for the
     // fullscreen app; false for IME overlay surfaces (fixed geometry).
     enable_rotation: bool,
+    // Task 55 — SurfaceFlinger layer for the Foreground role. System
+    // chrome (status bar / IME overlays) uses i32::MAX; fullscreen apps
+    // use a lower band so chrome always composites above them (otherwise
+    // a newly-launched app, created after the status bar, wins the
+    // equal-layer tie-break and covers it).
+    fg_layer: i32,
 ) -> Result<()> {
     use bindings::my::skiko_gfx::lifecycle::State;
 
@@ -351,7 +360,7 @@ fn run_cwasm_loop(
             log::info!("standalone: role transition {last_role:?} → {cur_role:?}");
             match cur_role {
                 AppRole::Foreground => {
-                    sf.set_layer(i32::MAX);
+                    sf.set_layer(fg_layer);
                     sf.set_visible(true);
                     sf.request_focus();
                     let target = bindings::my::skiko_gfx::lifecycle::State::Resumed;
