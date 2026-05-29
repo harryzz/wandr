@@ -51,6 +51,9 @@ build_system_wasm() {
 
 MD_WASM=$(build_system_wasm "apps/system/war.markdown.renderer" "markdown_renderer.wasm")
 EM_WASM=$(build_system_wasm "apps/system/war.emoji.picker"      "emoji_picker.wasm")
+# Task 57 — the dedicated launcher: a light Rust canvas guest (exports
+# my:skiko-gfx/renderer; ~70 KB; no Kotlin/Compose → leak-immune).
+LN_WASM=$(build_system_wasm "apps/system/war.launcher"          "war_launcher.wasm")
 FT_WASM=$(build_system_wasm "apps/system/war.fonts.loader"      "system_fonts.wasm")
 BG_WASM=$(build_system_wasm "apps/system/lang/war.lang.bg"       "war_lang_bg.wasm")
 FR_WASM=$(build_system_wasm "apps/system/lang/war.lang.fr"       "war_lang_fr.wasm")
@@ -72,6 +75,7 @@ FT_PKG="$TMP_BASE/fonts.warpkg"
 BG_PKG="$TMP_BASE/lang-bg.warpkg"
 FR_PKG="$TMP_BASE/lang-fr.warpkg"
 APP_PKG="$TMP_BASE/wart-app.warpkg"
+LN_PKG="$TMP_BASE/launcher.warpkg"
 
 pack_warpkg "$MD_PKG" "$MD_WASM" "renderer" "$(cat <<'EOF'
 app_id      = "war.markdown.renderer"
@@ -106,6 +110,21 @@ composition = "same-store"
 
 [components]
 loader = "components/loader.wasm"
+EOF
+)"
+
+# Task 57 — the launcher installs as a (launchable) app under apps/ so
+# the arbiter's set-home/launch path finds it; it filters its own id out
+# of its grid. `ui` component name matches the GUI-app convention.
+pack_warpkg "$LN_PKG" "$LN_WASM" "ui" "$(cat <<'EOF'
+app_id      = "war.launcher"
+version     = "0.1.0"
+world       = "my:skiko-gfx/skiko-ui"
+composition = "same-store"
+label       = "Launcher"
+
+[components]
+ui = "components/ui.wasm"
 EOF
 )"
 
@@ -177,7 +196,7 @@ EOF
 echo ""
 echo "▸ pushing warpkg dirs to device …"
 # adb push of dir-onto-dir nests; rm the device-side copy first.
-for pkg in "$MD_PKG" "$EM_PKG" "$FT_PKG" "$BG_PKG" "$FR_PKG" "$APP_PKG"; do
+for pkg in "$MD_PKG" "$EM_PKG" "$FT_PKG" "$BG_PKG" "$FR_PKG" "$LN_PKG" "$APP_PKG"; do
     name="$(basename "$pkg")"
     adb shell "rm -rf /data/local/tmp/$name"
     adb push "$pkg" "/data/local/tmp/$name" >/dev/null
@@ -189,7 +208,7 @@ echo "  import-resolution check passes) …"
 adb shell "su -c 'rm -rf $APPS_ROOT && mkdir -p $APPS_ROOT'"
 
 WART_ENV="LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT"
-for pkg in markdown emoji fonts lang-bg lang-fr wart-app; do
+for pkg in markdown emoji fonts lang-bg lang-fr launcher wart-app; do
     echo "  install $pkg.warpkg"
     adb shell "su -c '$WART_ENV /data/local/tmp/wart-host --install /data/local/tmp/$pkg.warpkg'"
 done

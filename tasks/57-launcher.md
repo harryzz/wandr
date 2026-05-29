@@ -1,8 +1,46 @@
 # Task 57 — system launcher / home (proposal)
 
-> **Status:** 🟢 device-verified 2026-05-29 (Proposal A, proven in
-> wart-app). Steps 1–6 done; a dedicated `war.launcher` warpkg is the
-> remaining follow-up.
+> **Status:** ✅ device-verified 2026-05-29 (Proposal A). Steps 1–6 done
+> AND the dedicated `war.launcher` warpkg shipped — as a **light Rust
+> canvas guest**, not Kotlin/Compose.
+>
+> ## Dedicated launcher (2026-05-29) — the light Rust canvas guest
+>
+> Built `apps/system/war.launcher/` as a Rust `wasm32-wasip2` component
+> (~70 KB) that **exports `my:skiko-gfx/renderer`** and draws the app
+> grid directly via the canvas WIT — **no Kotlin/Wasm runtime, no
+> Compose**, so it's immune to the continuation leak
+> ([[feedback_indeterminate_progress_leak]]) and has a tiny working set,
+> which is what a persistent home process needs. egui was evaluated and
+> rejected: it renders by tessellating to GL/wgpu *meshes*, but our guest
+> has no GL — only the high-level host-Skia canvas WIT — so egui's output
+> doesn't map (and it'd add weight for a trivial UI).
+>
+> **Key constraints solved:**
+> - Guest wit-bindgen 0.46 rejects the canonical `skiko-gfx.wit` (the
+>   `matrix-3x3` identifier — a WIT word can't start with a digit; the
+>   *host* parser is lenient). → hand-authored a **trimmed `my:skiko-gfx`
+>   WIT** (`wit/launcher.wit`) with just the verbs used + `paint-attrs`
+>   and its enums copied **verbatim** (field/variant order matters for
+>   structural type-matching). The component imports a *subset* of the
+>   host's full canvas; instantiation links cleanly (verified — this is
+>   the first non-Kotlin renderer guest).
+> - Layout is built **once** (on app-list load + on resize) into a flat
+>   draw list + tile hit-rects; `render_frame` just replays it — no
+>   per-frame allocation, no animation loop.
+>
+> **Device-verified:** keystone (clear-screen) instantiated + painted
+> (center px exactly `0x1A1A2E`); the grid renders the "Apps" title +
+> letter tiles + labels via host fonts; tapping the "Demo" tile chained
+> Rust `on-pointer-event-v2` hit-test → `launch-app` → host
+> `forwarded launch` → arbiter `launched → pid / promoting foreground`.
+> Wired into `build-system-warpkgs.sh` (builds/packs/installs it) and set
+> as the **default boot home** (`WART_HOME_APP`, default `war.launcher`)
+> in `run-hybrid-stack.sh` + the Magisk module — the device now boots
+> straight to the Rust launcher.
+>
+> wart-app keeps its `LauncherCard` as a Kotlin-side demo of the same WIT
+> (harmless; the Rust `war.launcher` is the actual home).
 >
 > **Step 6 — boot to the launcher** (device-verified): both the dev
 > entry point (`run-hybrid-stack.sh`) and the Magisk module

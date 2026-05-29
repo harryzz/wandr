@@ -28,7 +28,7 @@ APPS_ROOT="/data/local/tmp/wart-apps"
 # Task 57 — the app the arbiter designates as "home": foregrounded at
 # boot, on `go-home`, and as the fall-back when the foreground app dies.
 # Set WART_HOME_APP="" to disable boot-to-launcher.
-HOME_APP="${WART_HOME_APP-com.example.wart-app}"
+HOME_APP="${WART_HOME_APP-war.launcher}"
 
 for bin in "$HOST_BIN" "$ARB_BIN" "$SHIM"; do
     if [[ ! -f "$bin" ]]; then

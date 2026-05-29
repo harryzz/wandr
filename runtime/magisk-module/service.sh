@@ -45,7 +45,7 @@ SHIM=/data/local/tmp/libsf_surface.so
 APPS_ROOT=${WART_APPS_ROOT:-/data/local/tmp/wart-apps}
 # Task 57 — home/launcher app foregrounded at boot. Set WART_HOME_APP=""
 # to disable boot-to-launcher.
-HOME_APP=${WART_HOME_APP-com.example.wart-app}
+HOME_APP=${WART_HOME_APP-war.launcher}
 
 for bin in "$WART_HOST" "$WART_ARB" "$SHIM"; do
     if [ ! -x "$bin" ] && [ ! -f "$bin" ]; then

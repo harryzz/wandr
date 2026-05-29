@@ -1,5 +1,5 @@
 TASK=57
-STEP=6-boot-to-launcher-done
-STATUS=in-progress
-LAST_SUCCESS=Task 57 Steps 1-6 device-verified. Step 6: run-hybrid-stack.sh (bg waiter) + magisk service.sh now set-home the launcher at startup; verified fresh-state boot lands on the launcher grid with no manual launch.
-NOTES=Only remaining follow-up: dedicated full-screen war.launcher warpkg (wart-app LauncherCard proves the path; value gated on >=2 GUI apps). Steps 1 (7d6575f3), 2-5 (cbae738c) committed; Step 6 pending commit.
+STEP=verify-done
+STATUS=complete
+LAST_SUCCESS=Task 57 fully complete — launcher (Steps 1-6) + dedicated war.launcher warpkg as a light Rust canvas guest (~70KB, exports my:skiko-gfx/renderer, draws grid via canvas WIT, no Kotlin/Compose → leak-immune). Device-verified: grid renders + tap→launch chain; boots to war.launcher as default home.
+NOTES=
