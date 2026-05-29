@@ -25,6 +25,10 @@ HOST_BIN="$REPO_ROOT/runtime/wart-host/target/aarch64-linux-android/release/wasm
 ARB_BIN="$REPO_ROOT/runtime/wart-arbiter/target/aarch64-linux-android/release/wart-arbiter"
 SHIM="$REPO_ROOT/runtime/wart-host/cpp/build/libsf_surface.so"
 APPS_ROOT="/data/local/tmp/wart-apps"
+# Task 57 — the app the arbiter designates as "home": foregrounded at
+# boot, on `go-home`, and as the fall-back when the foreground app dies.
+# Set WART_HOME_APP="" to disable boot-to-launcher.
+HOME_APP="${WART_HOME_APP-com.example.wart-app}"
 
 for bin in "$HOST_BIN" "$ARB_BIN" "$SHIM"; do
     if [[ ! -f "$bin" ]]; then
@@ -95,6 +99,24 @@ adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT /dat
 sleep 3
 ZPID="$(adb shell 'pgrep -f "wart-host --zygote" | head -1' | tr -d '\r')"
 echo "  zygote pid: $ZPID"
+
+# Task 57 — boot straight to the launcher. The arbiter below runs in the
+# foreground (this terminal), so we can't set-home after it. Instead a
+# background waiter polls for the arbiter socket and, once it's up, sends
+# `set-home $HOME_APP` — which designates the home app AND foregrounds it
+# (launching it if needed). No manual `wart-arbiter launch` required.
+if [[ -n "$HOME_APP" ]]; then
+    (
+        for _ in $(seq 1 30); do
+            if adb shell "su -c '[ -S /data/local/tmp/wart-arbiter.sock ] && echo up'" 2>/dev/null | grep -q up; then
+                echo "▸ boot-to-home: set-home $HOME_APP"
+                adb shell "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter set-home $HOME_APP'" 2>&1 | tr -d '\r'
+                break
+            fi
+            sleep 0.5
+        done
+    ) &
+fi
 
 echo "▸ starting wart-arbiter --daemon in foreground (Ctrl-C to stop) …"
 adb shell -t "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter --daemon'"

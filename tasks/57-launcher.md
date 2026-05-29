@@ -1,8 +1,18 @@
 # Task 57 — system launcher / home (proposal)
 
 > **Status:** 🟢 device-verified 2026-05-29 (Proposal A, proven in
-> wart-app). Steps 1–5 done; Step 6 (boot-script auto-`set-home`) + a
-> dedicated `war.launcher` warpkg are the remaining follow-ups.
+> wart-app). Steps 1–6 done; a dedicated `war.launcher` warpkg is the
+> remaining follow-up.
+>
+> **Step 6 — boot to the launcher** (device-verified): both the dev
+> entry point (`run-hybrid-stack.sh`) and the Magisk module
+> (`service.sh`) now `set-home $HOME_APP` (default
+> `com.example.wart-app`, `WART_HOME_APP=""` to disable) once the arbiter
+> socket is up — the dev script does it from a background waiter since
+> the arbiter runs foreground; the Magisk module does it inline after its
+> socket-wait. Verified by replaying the startup flow with fresh state
+> (no persisted home, **no manual `launch`**): the device came up with
+> the launcher grid foreground (pid …, `[fg]`).
 >
 > ## Results (2026-05-29)
 >

@@ -43,6 +43,9 @@ WART_HOST=/data/local/tmp/wart-host
 WART_ARB=/data/local/tmp/wart-arbiter
 SHIM=/data/local/tmp/libsf_surface.so
 APPS_ROOT=${WART_APPS_ROOT:-/data/local/tmp/wart-apps}
+# Task 57 — home/launcher app foregrounded at boot. Set WART_HOME_APP=""
+# to disable boot-to-launcher.
+HOME_APP=${WART_HOME_APP-com.example.wart-app}
 
 for bin in "$WART_HOST" "$WART_ARB" "$SHIM"; do
     if [ ! -x "$bin" ] && [ ! -f "$bin" ]; then
@@ -109,4 +112,15 @@ if [ ! -S /data/local/tmp/wart-arbiter.sock ]; then
 fi
 APID=$(pgrep -f 'wart-arbiter' | head -1)
 log "wart-stack: arbiter up (pid=$APID)"
-log "wart-stack: ✓ stack up — zygote=$ZPID arbiter=$APID"
+
+# ── 5. Boot to the launcher (task 57) ───────────────────────────────────
+# Designate + foreground the home app so the device comes up to a usable
+# launcher with no adb. The arbiter persists this, re-foregrounds home on
+# subsequent boots, and falls back to it when the foreground app dies.
+if [ -n "$HOME_APP" ]; then
+    log "wart-stack: set-home $HOME_APP"
+    env WART_APPS_ROOT="$APPS_ROOT" "$WART_ARB" set-home "$HOME_APP" >>"$LOG" 2>&1 \
+        || log "wart-stack: set-home failed (continuing)"
+fi
+
+log "wart-stack: ✓ stack up — zygote=$ZPID arbiter=$APID home=${HOME_APP:-<none>}"

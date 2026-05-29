@@ -1,5 +1,5 @@
 TASK=57
-STEP=5-launcher-verified
+STEP=6-boot-to-launcher-done
 STATUS=in-progress
-LAST_SUCCESS=Task 57 Steps 1-5 device-verified — launcher works end-to-end (set-home boots to launcher grid; tile shows D/Demo; tap forwards launch→arbiter→foreground). Step 1 committed 7d6575f3; Steps 2-5 pending commit.
-NOTES=Remaining follow-ups (small, optional): Step 6 run-hybrid-stack.sh auto-set-home at boot; dedicated full-screen war.launcher warpkg (wart-app LauncherCard proves the path). Manifest label is FLAT top-level (not [package]). Letter-tile icons + theme gradient shipped.
+LAST_SUCCESS=Task 57 Steps 1-6 device-verified. Step 6: run-hybrid-stack.sh (bg waiter) + magisk service.sh now set-home the launcher at startup; verified fresh-state boot lands on the launcher grid with no manual launch.
+NOTES=Only remaining follow-up: dedicated full-screen war.launcher warpkg (wart-app LauncherCard proves the path; value gated on >=2 GUI apps). Steps 1 (7d6575f3), 2-5 (cbae738c) committed; Step 6 pending commit.
