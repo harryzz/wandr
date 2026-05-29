@@ -407,7 +407,7 @@ post-reorg.
 | 7 | ~30 path-reference edits across `tools/scripts/*.sh`, Rust `wit_bindgen!` paths, gradle skiko/compose paths. | wart `637ea071` |
 | 8 | No-op — `app_id` strings unchanged across reorg; on-device install paths reuse the same identifiers. | (folded into step 7) |
 | 9 | All 11 builds green (`cargo check` for 6 cdylibs + wart-host + wart-arbiter; gradle `compileProductionExecutableKotlinWasmWasi` for wart-app + IME). Device smoke: IME 🌐 cycle rotates English → Български → Français → English cleanly. Hit 3 mid-flight bugs (see "Lessons" below). | wart `24c3c0c1`, `f321fa15` |
-| 10 | 13 obsolete sibling repos now show an "Archived 2026-05-28 — moved to wart monorepo at `<prefix>/`" README on their `main` branch (orphan force-push). `pre-monorepo-merge` tag still points at the pre-merge tip. | per-repo force-push (not in wart history) |
+| 10 | 13 obsolete sibling repos now show an "Archived 2026-05-28 — moved to wart monorepo at `<prefix>/`" README on their `main` branch (orphan force-push). `pre-monorepo-merge` tag still points at the pre-merge tip. **Codeberg "Archived" flag set on all 13 via web UI.** | per-repo force-push (not in wart history) |
 | 11 | `~/wart-premerge-backup/` (~28 GB) deleted after clone-from-scratch + `cargo check` verification on a fresh `/tmp/clone-test/wart` checkout. | (cleanup) |
 
 ### Lessons / mid-flight bugs
@@ -463,9 +463,8 @@ post-reorg.
 
 ### Post-merge open items
 
-- Codeberg "Archived" flag still needs to be set per-repo via
-  web UI (cosmetic; the README redirect is the load-bearing
-  signal). 13 repos to mark.
+- ~~Codeberg "Archived" flag~~ — done 2026-05-29 (all 13 marked
+  via web UI).
 - `.task-state` file at repo root is stale (refers to
   pre-reorg paths). Refresh when next task starts.
 - `~/wart` working tree was switched from `task-33-boot-model`
