@@ -24,7 +24,7 @@
 >   this at the wasmtime level today; upstream fix is months out.
 > - [[drc-first-fit-alone-backfires]] (memory) — why we already
 >   ruled out an allocator-side fix as a shortcut.
-> - `wasmtime-issue-draft.md` (repo root) — final body posted as #13403.
+> - `tools/triage/wasmtime-issues/issue-draft.md` — final body posted as #13403.
 > - `wasmtime-issue-artifacts/` (repo root) — diff patches, logcat, reproducer attached to the upstream issue.
 > - `tasks/25-diagnose-suspend-leak.md` — original leak diagnosis.
 
