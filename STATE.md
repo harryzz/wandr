@@ -6,10 +6,12 @@
 > mid-port. For current state, see:
 >
 > - `CLAUDE.md` — overall guide + task table (all ✅)
-> - `wart-host/README.md` + `BUILD.md` — Rust host
-> - `wart-app/README.md` + `BUILD.md` — Kotlin/Compose guest
-> - `skiko/README-wasmWasi.md` + `BUILD-wasmWasi.md` — skiko fork
-> - `compose-multiplatform-core/README-wasmWasi.md` + `BUILD-wasmWasi.md` — the port itself
+> - `docs/repository-layout.md` — canonical "where does X live" reference (post-monorepo-merge, task 52 + 53)
+> - `docs/architecture-runtime.md`, `architecture-ime.md`, `architecture-host-guest-boundary.md` — design docs
+> - `runtime/wart-host/README.md` + `BUILD.md` — Rust host
+> - `apps/user/wart-app/README.md` + `BUILD.md` — Kotlin/Compose guest
+> - `external/skiko/README-wasmWasi.md` + `BUILD-wasmWasi.md` — skiko fork (submodule)
+> - `external/compose-multiplatform-core/README-wasmWasi.md` + `BUILD-wasmWasi.md` — the port itself (submodule)
 > - `.task-state` — last checkpoint
 > - project memory `project_wasm_runtime.md`
 
