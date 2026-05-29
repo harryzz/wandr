@@ -154,6 +154,26 @@ gallery needs three expansions:
   scrolled off) **while the title + tabs stayed fixed**.
 - **Task complete** — all 3 phases + scale + sticky-header scrolling shipped.
 
+## Known limitations / follow-ups (text input, observed on device 2026-05-29)
+
+The phase-3 edit box is a minimal first cut. Outstanding:
+
+1. **No text selection** in the edit box — there's no caret-drag / long-press
+   selection or highlighted range; input is append + backspace at the end only.
+   Needs a selection model in the renderer's text-input handling (and richer
+   `war:ime` `commit-text`/`set-selection` verbs, currently stubbed — see
+   `wit/ime.wit` "step 3b ships send-key-event only").
+2. **The IME "hide keyboard" (⌄) key doesn't dismiss the keyboard** for the
+   dioxus editor. Only the demo's own **Done** button / **Enter** detaches (via
+   `ime::notify_editor_detached`). The keyboard's hide key needs to route a
+   detach/hide back to the focused guest (arbiter → editor) — that path isn't
+   wired for the dioxus guest yet.
+3. **Editor input-type variants untested** — the demo declares only
+   `input-type = "text"`. The IME's per-type layouts (numeric / phone / email /
+   url / password / multiline, task 49 step 2) are NOT exercised by this guest;
+   `notify_editor_attached` would need to pass the right `input-type` per field
+   and the demo would need fields of each kind.
+
 ## Related
 
 - `tasks/59-dioxus-canvas-renderer.md` (the renderer), `crates/dioxus-canvas/`,
