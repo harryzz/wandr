@@ -5,7 +5,9 @@ package testapp
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
@@ -235,7 +237,20 @@ private fun MaterialDemoApp() {
             // the snackbar never visibly renders. Hand-rolled
             // boolean + delay works around the whole mechanism.
             var snackbarVisible by remember { mutableStateOf(false) }
-            Box(modifier = Modifier.fillMaxSize()) {
+            // Tap on empty space dismisses the keyboard: clearing focus
+            // fires the text field's onFocusChanged(false) → the same
+            // notifyEditorDetached path a button/checkbox tap uses, which
+            // tells the arbiter to hide the IME overlay. detectTapGestures
+            // only fires for taps NOT consumed by a child (cards/buttons),
+            // and ignores drags, so scrolling + widget taps are unaffected.
+            val dismissFocusManager = androidx.compose.ui.platform.LocalFocusManager.current
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures(onTap = { dismissFocusManager.clearFocus() })
+                    }
+            ) {
                 val scrollState = rememberScrollState()
                 Column(
                     modifier = Modifier
