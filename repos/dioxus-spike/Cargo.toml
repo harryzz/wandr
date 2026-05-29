@@ -1,0 +1,23 @@
+# Spike (task 57 follow-up): does dioxus-core + taffy compile to
+# wasm32-wasip2, and how big is it? Evaluating the "dioxus-core + taffy +
+# custom canvas-WIT painter" path as a light reactive Rust UI framework
+# for wart (a Compose alternative). NOT shipped — a feasibility probe.
+#
+#   cargo build --target wasm32-wasip2 --release
+[package]
+name    = "dioxus-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# default-features = false to avoid pulling the web/desktop renderers
+# (and, critically, wasm-bindgen via dioxus-web — which doesn't compile
+# to wasm32-wasip2).
+dioxus = { version = "0.6", default-features = false, features = ["macro", "html", "signals", "hooks"] }
+taffy  = "0.7"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
