@@ -18,10 +18,11 @@ use dioxus_html::point_interaction::{
     InteractionElementOffset, InteractionLocation, ModifiersInteraction, PointerInteraction,
 };
 use dioxus_html::{
-    set_event_converter, AnimationData, CancelData, ClipboardData, CompositionData, DragData,
-    FocusData, FormData, HasMouseData, HtmlEventConverter, ImageData, KeyboardData, MediaData,
-    Modifiers, MountedData, MouseData, PlatformEventData, PointerData, ResizeData, ScrollData,
-    SelectionData, ToggleData, TouchData, TransitionData, VisibleData, WheelData,
+    set_event_converter, AnimationData, CancelData, ClipboardData, Code, CompositionData, DragData,
+    FocusData, FormData, HasKeyboardData, HasMouseData, HtmlEventConverter, ImageData, Key,
+    KeyboardData, Location, MediaData, Modifiers, MountedData, MouseData, PlatformEventData,
+    PointerData, ResizeData, ScrollData, SelectionData, ToggleData, TouchData, TransitionData,
+    VisibleData, WheelData,
 };
 
 /// A pointer event. `x,y` are surface-absolute (client/screen/page); `ex,ey`
@@ -80,6 +81,65 @@ pub fn mouse_event(x: f32, y: f32, ex: f32, ey: f32) -> Rc<dyn Any> {
     })))
 }
 
+/// A keyboard event built from the host's `on-key-event-v2(code-point, key-id)`.
+/// `key-id` is a Compose-Key-compatible id (Backspace=8, Tab=9, Enter=13,
+/// Escape=27, arrows 37-40, Delete=46; printables use `key-id=0` + the Unicode
+/// `code-point`). `key()` is what text fields read.
+struct KeyData {
+    key: Key,
+}
+
+impl ModifiersInteraction for KeyData {
+    fn modifiers(&self) -> Modifiers {
+        Modifiers::empty()
+    }
+}
+impl HasKeyboardData for KeyData {
+    fn key(&self) -> Key {
+        self.key.clone()
+    }
+    fn code(&self) -> Code {
+        Code::Unidentified
+    }
+    fn location(&self) -> Location {
+        Location::Standard
+    }
+    fn is_auto_repeating(&self) -> bool {
+        false
+    }
+    fn is_composing(&self) -> bool {
+        false
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+fn key_from_ids(code_point: u32, key_id: u32) -> Key {
+    match key_id {
+        8 => Key::Backspace,
+        9 => Key::Tab,
+        13 => Key::Enter,
+        27 => Key::Escape,
+        37 => Key::ArrowLeft,
+        38 => Key::ArrowUp,
+        39 => Key::ArrowRight,
+        40 => Key::ArrowDown,
+        46 => Key::Delete,
+        _ => match char::from_u32(code_point) {
+            Some(c) if !c.is_control() => Key::Character(c.to_string()),
+            _ => Key::Unidentified,
+        },
+    }
+}
+
+/// Build the `Rc<dyn Any>` payload for a `keydown`/`keyup`.
+pub fn key_event(code_point: u32, key_id: u32) -> Rc<dyn Any> {
+    Rc::new(PlatformEventData::new(Box::new(KeyData {
+        key: key_from_ids(code_point, key_id),
+    })))
+}
+
 struct WartEventConverter;
 
 impl HtmlEventConverter for WartEventConverter {
@@ -114,8 +174,11 @@ impl HtmlEventConverter for WartEventConverter {
     fn convert_image_data(&self, _: &PlatformEventData) -> ImageData {
         unimplemented!("dioxus-canvas: image events unsupported")
     }
-    fn convert_keyboard_data(&self, _: &PlatformEventData) -> KeyboardData {
-        unimplemented!("dioxus-canvas: keyboard events unsupported (no text-input guest yet)")
+    fn convert_keyboard_data(&self, event: &PlatformEventData) -> KeyboardData {
+        match event.downcast::<KeyData>() {
+            Some(k) => KeyboardData::new(KeyData { key: k.key.clone() }),
+            None => KeyboardData::new(KeyData { key: Key::Unidentified }),
+        }
     }
     fn convert_media_data(&self, _: &PlatformEventData) -> MediaData {
         unimplemented!("dioxus-canvas: media events unsupported")

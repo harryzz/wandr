@@ -72,6 +72,20 @@ interface paragraph {
     drop-paragraph:           func(id: u32);
 }
 
+// Subset of the host `ime` interface — the editable text field calls
+// notify-editor-attached on focus so the host shows the soft keyboard
+// (war.ime.keyboard); keys come back via renderer.on-key-event-v2.
+interface ime {
+    notify-editor-attached: func(
+        input-type: string,
+        hint: string,
+        initial-text: string,
+        selection-start: u32,
+        selection-end: u32,
+    );
+    notify-editor-detached: func();
+}
+
 interface renderer {
     enum pointer-kind { down, up, move, scroll }
     enum key-kind     { down, up }
@@ -88,5 +102,6 @@ interface renderer {
 world dioxus-app {
     import canvas;
     import paragraph;
+    import ime;
     export renderer;
 }

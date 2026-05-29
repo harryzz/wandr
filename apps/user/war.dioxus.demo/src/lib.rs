@@ -22,6 +22,7 @@ use crate::my::skiko_gfx::canvas::{
     self, BlendMode, ColorFilterKind, PaintAttrs, PaintStyle, StrokeCap, StrokeJoin,
 };
 use crate::my::skiko_gfx::paragraph::{self, TextStyle};
+use crate::my::skiko_gfx::ime;
 
 /// Build a flat-fill `paint-attrs` from a colour (copied from war.launcher).
 fn paint(color: u32) -> PaintAttrs {
@@ -133,11 +134,14 @@ impl Guest for App {
         });
     }
 
+    fn on_key_event_v2(kind: KeyKind, code_point: u32, key_id: u32) {
+        with_renderer(|r| r.on_key(matches!(kind, KeyKind::Down), code_point, key_id));
+    }
+
     // Unused inputs.
     fn on_pointer_event(_kind: PointerKind, _x: f32, _y: f32) {}
     fn on_key_event(_kind: KeyKind, _key_code: u32) {}
     fn on_scheduled_callback(_callback_id: u32) {}
-    fn on_key_event_v2(_kind: KeyKind, _code_point: u32, _key_id: u32) {}
     fn on_lifecycle_changed(_state: u32) {}
 }
 
@@ -157,7 +161,7 @@ const GREEN: &str = "#34A853";
 const TEXT: &str = "#FFFFFF";
 const MUTED: &str = "#C7C7D9";
 
-const TAB_NAMES: [&str; 4] = ["Inputs", "Pickers", "Calendar", "Color"];
+const TAB_NAMES: [&str; 5] = ["Inputs", "Pickers", "Calendar", "Color", "Text"];
 
 /// HSV (h in degrees, s/v in 0..1) → 0xFFRRGGBB.
 fn hsv_to_rgb(h: f32, s: f32, v: f32) -> u32 {
@@ -192,7 +196,8 @@ fn app() -> Element {
                 0 => rsx! { InputsPanel {} },
                 1 => rsx! { PickersPanel {} },
                 2 => rsx! { CalendarPanel {} },
-                _ => rsx! { ColorPanel {} },
+                3 => rsx! { ColorPanel {} },
+                _ => rsx! { TextPanel {} },
             }}
         }
     }
@@ -538,6 +543,66 @@ fn ColorPanel() -> Element {
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+// Text input with the soft keyboard (task 61 phase 3). Tapping the field
+// focuses it (the renderer routes keys here) AND calls ime::notify_editor_attached
+// so the host shows the war.ime.keyboard overlay; the IME's keystrokes come back
+// via renderer.on-key-event-v2 → on_key → this field's onkeydown.
+#[component]
+fn TextPanel() -> Element {
+    let mut text = use_signal(|| String::from("edit me"));
+    let mut focused = use_signal(|| false);
+    let display = text();
+    rsx! {
+        Card { title: "Text field (soft keyboard)",
+            div {
+                style: format!(
+                    "display:flex; flex-direction:row; align-items:center; min-height:96px; padding:28px; border-radius:18px; background:{};",
+                    if focused() { "#222A4D" } else { SUBTLE }
+                ),
+                onclick: move |_| {
+                    focused.set(true);
+                    let t = text();
+                    let n = t.chars().count() as u32;
+                    ime::notify_editor_attached("text", "Type here", &t, n, n);
+                },
+                onkeydown: move |e| {
+                    let k = e.key().to_string();
+                    if k == "Backspace" {
+                        let mut t = text();
+                        t.pop();
+                        text.set(t);
+                    } else if k == "Enter" {
+                        focused.set(false);
+                        ime::notify_editor_detached();
+                    } else if k.chars().count() == 1 {
+                        let mut t = text();
+                        t.push_str(&k);
+                        text.set(t);
+                    }
+                },
+                div { style: "color:{TEXT}; font-size:40px;", "{display}" }
+                if focused() {
+                    div { style: "width:4px; height:48px; background:{ACCENT};" }
+                }
+            }
+            div {
+                style: "color:{MUTED}; font-size:28px;",
+                if focused() { "Keyboard active — type; Enter or Done to dismiss" } else { "Tap the field to type" }
+            }
+            if focused() {
+                button {
+                    style: "display:flex; justify-content:center; padding:26px; border-radius:16px; background:{ACCENT};",
+                    onclick: move |_| {
+                        focused.set(false);
+                        ime::notify_editor_detached();
+                    },
+                    div { style: "color:{TEXT}; font-size:32px; font-weight:600;", "Done" }
                 }
             }
         }

@@ -1,9 +1,13 @@
 # Task 61 — dioxus-canvas component showcase + renderer capability expansion
 
-> **Status:** 🟢 in progress 2026-05-29. Extends task 59's `war.dioxus.demo`
-> from a counter into a Compose-style component gallery, and grows the
-> `dioxus-canvas` renderer with the input/paint capabilities the richer
-> components need. Built in phases, each device-verified.
+> **Status:** ✅ all 3 phases device-verified 2026-05-29. `war.dioxus.demo` is
+> now a 5-tab Compose-style gallery (Inputs / Pickers / Calendar / Color / Text)
+> covering checkbox, switch, radio, stepper, progress, dropdown, color swatches,
+> calendar, **slider (drag)**, **HSV color picker (drag)**, and a **text edit box
+> with the real soft keyboard (IME)**. The `dioxus-canvas` renderer grew drag
+> (pointer move/up + capture + element-relative coords) and keyboard/focus +
+> IME-attach. No new host WIT verbs — reuses the existing `paragraph`, `ime`,
+> and `renderer.on-key-event-v2` interfaces.
 
 ## Goal
 
@@ -90,7 +94,25 @@ gallery needs three expansions:
   wart even when WMS `mCurrentFocus` shows the launcher, so injected pointer
   events reach the guest.) Renderer change: `border-radius:50%` percent handling
   (phase 1) covers the round thumbs/dots. 592 KB.
-- Phase 3 (text edit box + soft IME): pending.
+- **Phase 3 ✅ device-verified 2026-05-29.** Text edit box + soft keyboard.
+  Renderer: `convert_keyboard_data` (maps the host's `(code-point, key-id)` —
+  Compose-Key ids: 8=Backspace, 13=Enter, … — to a dioxus `Key`); focus tracking
+  (`F_KEY` flag → tap a keydown-listening element focuses it); `on_key(down,
+  code_point, key_id)` dispatches dioxus `keydown`/`keyup` to the focused field.
+  New host test `keyboard_types_into_focused_field` (focus → type → backspace).
+  Guest: a `TextPanel` whose field tap calls `ime::notify_editor_attached` (the
+  guest imports the host `ime` interface — same one the Kotlin app uses; the host
+  forwards to the arbiter which shows `war.ime.keyboard`) and whose `onkeydown`
+  edits the String (Character/Backspace/Enter); a Done button calls
+  `notify_editor_detached`. **Full loop device-verified**: tap the dioxus field →
+  arbiter logs `attach-editor … → route to war.ime.keyboard delivered=true` →
+  the QWERTY overlay appears → tapping keys routes `ime-send-key-event <cp> 0` →
+  the demo's per-host socket → `on_key_event_v2` → `on_key` → field updated
+  ("edit me" → "edit mewart"). 624 KB. Note: raw `adb input text` (hardware-key
+  path) does NOT reach the arbiter-launched guest — it needs InputDispatcher key
+  focus / periodic `sf_request_focus` — but the IME→arbiter→socket path is
+  independent of that and works.
+- **Task complete** — all 3 phases shipped + committed.
 
 ## Related
 

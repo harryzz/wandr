@@ -91,6 +91,53 @@ fn renders_and_reacts_to_click() {
     assert!(!rd.drawn_text.iter().any(|t| t == "count: 0"), "old count gone");
 }
 
+/// A text-input component: focusable (listens for keydown), edits a String on
+/// Character/Backspace. Exercises focus-on-tap + on_key → keydown routing.
+fn input_app() -> Element {
+    let mut text = use_signal(String::new);
+    rsx! {
+        div {
+            style: "width:400px; height:60px; background:#333333;",
+            onkeydown: move |e| {
+                let k = e.key().to_string();
+                if k == "Backspace" {
+                    let mut t = text();
+                    t.pop();
+                    text.set(t);
+                } else if k.chars().count() == 1 {
+                    let mut t = text();
+                    t.push_str(&k);
+                    text.set(t);
+                }
+            },
+            div { "txt:{text}" }
+        }
+    }
+}
+
+#[test]
+fn keyboard_types_into_focused_field() {
+    let rec = Rc::new(RefCell::new(Recorder::default()));
+    let mut r = DomRenderer::new(input_app);
+    r.render_frame(&mut MockSink { rec: rec.clone() });
+
+    // Tap to focus, then type "Hi".
+    let (cx, cy) = r.first_hit_center().expect("field is focusable");
+    r.on_pointer_down(cx, cy);
+    assert!(r.has_focus(), "field focused after tap");
+    r.on_key(true, 'H' as u32, 0);
+    r.on_key(true, 'i' as u32, 0);
+    let rec2 = Rc::new(RefCell::new(Recorder::default()));
+    r.render_frame(&mut MockSink { rec: rec2.clone() });
+    assert!(rec2.borrow().drawn_text.iter().any(|t| t == "txt:Hi"), "typed Hi: {:?}", rec2.borrow().drawn_text);
+
+    // Backspace (key_id=8) deletes the last char.
+    r.on_key(true, 0, 8);
+    let rec3 = Rc::new(RefCell::new(Recorder::default()));
+    r.render_frame(&mut MockSink { rec: rec3.clone() });
+    assert!(rec3.borrow().drawn_text.iter().any(|t| t == "txt:H"), "backspace: {:?}", rec3.borrow().drawn_text);
+}
+
 /// A checkbox-style component: a clickable row that conditionally renders a
 /// checkmark child when `on`. Exercises the add/remove mutation path
 /// (`render_immediate` create/replace-placeholder/remove) that toggling

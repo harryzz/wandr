@@ -45,10 +45,11 @@ enum DrawOp {
     Text { blob: u32, x: f32, y: f32, color: u32 },
 }
 
-// Pointer-listener flags (which dioxus events an element subscribes to).
+// Pointer/key-listener flags (which dioxus events an element subscribes to).
 const F_CLICK: u8 = 1;
 const F_DOWN: u8 = 2;
 const F_MOVE: u8 = 4;
+const F_KEY: u8 = 8; // listens for keydown → focusable text input
 
 struct HitRect {
     x: f32,
@@ -74,6 +75,9 @@ pub struct DomRenderer {
     /// Element capturing an in-progress drag: `(eid, rect x, y, w, h)`. Set on
     /// pointer-down over a draggable element; routes moves/ups to it.
     captured: Option<(u32, f32, f32, f32, f32)>,
+    /// The focused text-input element (listens for keydown); `on_key` routes
+    /// host key events here.
+    focused: Option<u32>,
     blobs: Vec<u32>,
     /// `(text, family, size-bits, weight, italic)` → `(w, h)`. Avoids a host
     /// round-trip per text leaf per layout (taffy measures repeatedly).
@@ -91,6 +95,7 @@ impl DomRenderer {
             draw_ops: Vec::new(),
             hits: Vec::new(),
             captured: None,
+            focused: None,
             blobs: Vec::new(),
             measure_cache: HashMap::new(),
         }
@@ -166,8 +171,34 @@ impl DomRenderer {
             if flags & F_MOVE != 0 {
                 self.captured = Some((eid, hx, hy, hw, hh));
             }
+            // Tapping a text input focuses it (for key routing); tapping a
+            // non-input clears focus.
+            self.focused = if flags & F_KEY != 0 { Some(eid) } else { None };
             self.dirty = true;
         }
+    }
+
+    /// Route a host key event (`on-key-event-v2`) to the focused text input as a
+    /// dioxus `keydown`/`keyup`. `code_point` is the Unicode scalar (0 for
+    /// non-printable); `key_id` is a Compose-Key id (8=Backspace, 13=Enter, …).
+    pub fn on_key(&mut self, down: bool, code_point: u32, key_id: u32) {
+        if let Some(eid) = self.focused {
+            let name = if down { "keydown" } else { "keyup" };
+            #[allow(deprecated)]
+            self.vdom.handle_event(
+                name,
+                events::key_event(code_point, key_id),
+                ElementId(eid as usize),
+                true,
+            );
+            self.dirty = true;
+        }
+    }
+
+    /// Whether a text input currently has focus (the guest uses this to decide
+    /// whether to keep the soft keyboard attached).
+    pub fn has_focus(&self) -> bool {
+        self.focused.is_some()
     }
 
     pub fn on_pointer_move(&mut self, x: f32, y: f32) {
@@ -329,6 +360,7 @@ impl DomRenderer {
                         "click" => flags |= F_CLICK,
                         "mousedown" => flags |= F_DOWN,
                         "mousemove" => flags |= F_MOVE,
+                        "keydown" => flags |= F_KEY,
                         _ => {}
                     }
                 }

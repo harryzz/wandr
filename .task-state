@@ -1,5 +1,5 @@
 TASK=61
-STEP=phase2-done
-STATUS=in-progress
-LAST_SUCCESS=Task 61 Phase 2 device-verified 2026-05-29 — drag inputs. Renderer: pointer move/up + capture + element-relative coords (on_pointer_down/move/up -> dioxus mousedown/move/up). Slider (Inputs tab) + HSV color picker (new Color tab; discretized hue strip + SV grid, no gradient primitive). On-device swipe across hue strip changed blue->magenta. Host tests: 4 green (incl drag_reports_element_relative_coords).
-NOTES=Phase 3 (text edit box + soft IME: convert_keyboard_data + focus + on_key_event_v2 routing + war:ime editor-attached) PENDING. Demo defaults to Inputs tab. InputDispatcher focus is on wart even when WMS mCurrentFocus shows launcher -> adb input reaches the guest. Tasks 59+60 + 61-phase1 committed (b7187f78). Open: task 58 (overlay rotation).
+STEP=complete
+STATUS=complete
+LAST_SUCCESS=Task 61 ALL 3 phases device-verified 2026-05-29. war.dioxus.demo = 5-tab dioxus gallery (Inputs/Pickers/Calendar/Color/Text): checkbox, switch, radio, stepper, progress, dropdown, color swatches, calendar, slider(drag), HSV picker(drag), text edit box + soft keyboard (IME). Renderer gained drag (pointer move/up + capture + element-relative coords) + keyboard/focus + ime-attach. No new host WIT (reuses paragraph, ime, on-key-event-v2). Full IME loop verified: field tap -> notify_editor_attached -> arbiter -> war.ime.keyboard overlay -> key taps -> socket -> on_key_event_v2 -> field updated. Host tests: 5 green.
+NOTES=Phases 1+2 committed (b7187f78, 21bf878c). Phase 3 ready to commit. Drag + IME work via InputDispatcher/arbiter-socket (NOT adb input text — that needs sf_request_focus). Open: task 58 (overlay rotation). dioxus pinned 0.6->0.7 via external/subsecond patch (task 60); upstream PR #5602.
