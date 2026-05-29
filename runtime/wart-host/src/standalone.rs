@@ -27,13 +27,15 @@ const CWASM_PATH: &str = "/data/local/tmp/skiko-component.cwasm";
 
 /// Where + whether this standalone process takes an overlay strip vs a
 /// fullscreen surface.
-///   - `None`   → fullscreen app (launcher, regular apps).
-///   - `Bottom` → bottom-strip overlay (IME keyboard, task 47).
-///   - `Top`    → top-strip overlay (status bar, task 55).
+///   - `None`      → fullscreen app (launcher, regular apps).
+///   - `Bottom`    → bottom-strip overlay, tall + resizable (IME keyboard, task 47).
+///   - `BottomBar` → thin bottom nav strip, always-visible (taskbar, task 56).
+///   - `Top`       → top-strip overlay (status bar, task 55).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum OverlayMode {
     None,
     Bottom,
+    BottomBar,
     Top,
 }
 
@@ -45,6 +47,16 @@ pub fn run(app_id: Option<&str>, mode: OverlayMode) -> Result<()> {
 /// Initial bottom-overlay (IME) panel height in physical pixels. The IME
 /// guest may resize via `my:skiko-gfx/keyboard.request-overlay-height`.
 const INITIAL_OVERLAY_PX: i32 = 1200;
+
+/// Taskbar (BottomBar) strip height in physical pixels — the Android-style
+/// Back/Home/Recents nav bar (task 56). Env-tunable via `WART_TASKBAR_PX`.
+pub fn taskbar_height_px() -> u32 {
+    std::env::var("WART_TASKBAR_PX")
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(150)
+}
 
 
 /// Same as `run` but uses a caller-supplied engine. The task-45 zygote
@@ -81,7 +93,7 @@ pub fn run_with_engine(engine: &Engine, app_id: Option<&str>, mode: OverlayMode)
     }
 
     let sf = match mode {
-        OverlayMode::Bottom | OverlayMode::Top => {
+        OverlayMode::Bottom | OverlayMode::BottomBar | OverlayMode::Top => {
             // Geometry: full panel width (w=0). Top status bar at y=0,
             // height STATUS_BAR_PX; bottom IME anchored (y=-1), height
             // INITIAL_OVERLAY_PX. The runtime owns the semantics; the
@@ -92,6 +104,8 @@ pub fn run_with_engine(engine: &Engine, app_id: Option<&str>, mode: OverlayMode)
                 // (WART_STATUSBAR_PX); the status.bar-height() verb +
                 // the launcher's inset derive from the same source.
                 OverlayMode::Top => (0, crate::status_impl::status_bar_height_px() as i32, "top"),
+                // Taskbar — bottom-anchored, thin fixed height (task 56).
+                OverlayMode::BottomBar => (-1, taskbar_height_px() as i32, "bottom-bar"),
                 _ => (-1, INITIAL_OVERLAY_PX, "bottom"),
             };
             match crate::sf_surface::SfSurface::create_overlay(SHIM_SO, 0, y, 0, h) {
@@ -141,9 +155,15 @@ pub fn run_with_engine(engine: &Engine, app_id: Option<&str>, mode: OverlayMode)
     let result = match loader.load(engine, app_ref) {
         Ok(loaded) => {
             log::info!("standalone: loaded {}", loaded.source_label);
-            // Chrome overlays (status bar / IME) sit at the top of the
-            // z-stack; fullscreen apps below them.
-            let fg_layer = if mode == OverlayMode::None { 0x4000_0000 } else { i32::MAX };
+            // Z-stack (task 56): fullscreen apps at the bottom; the
+            // taskbar nav strip above apps but below the IME/status-bar
+            // chrome, so the keyboard (and status bar) draw over it; the
+            // IME + status bar at the top.
+            let fg_layer = match mode {
+                OverlayMode::None      => 0x4000_0000,
+                OverlayMode::BottomBar => 0x6000_0000,
+                OverlayMode::Bottom | OverlayMode::Top => i32::MAX,
+            };
             run_cwasm_loop(engine, loaded, renderer, sf, mode == OverlayMode::None, fg_layer)
         }
         Err(e) => {

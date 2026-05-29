@@ -56,6 +56,8 @@ EM_WASM=$(build_system_wasm "apps/system/war.emoji.picker"      "emoji_picker.wa
 LN_WASM=$(build_system_wasm "apps/system/war.launcher"          "war_launcher.wasm")
 # Task 55 — the status bar: light Rust top-overlay canvas guest (~48 KB).
 SB_WASM=$(build_system_wasm "apps/system/war.statusbar"         "war_statusbar.wasm")
+# Task 56 — the taskbar: light Rust bottom-nav canvas guest (Back/Home/Recents).
+TB_WASM=$(build_system_wasm "apps/system/war.taskbar"           "war_taskbar.wasm")
 FT_WASM=$(build_system_wasm "apps/system/war.fonts.loader"      "system_fonts.wasm")
 BG_WASM=$(build_system_wasm "apps/system/lang/war.lang.bg"       "war_lang_bg.wasm")
 FR_WASM=$(build_system_wasm "apps/system/lang/war.lang.fr"       "war_lang_fr.wasm")
@@ -79,6 +81,7 @@ FR_PKG="$TMP_BASE/lang-fr.warpkg"
 APP_PKG="$TMP_BASE/wart-app.warpkg"
 LN_PKG="$TMP_BASE/launcher.warpkg"
 SB_PKG="$TMP_BASE/statusbar.warpkg"
+TB_PKG="$TMP_BASE/taskbar.warpkg"
 
 pack_warpkg "$MD_PKG" "$MD_WASM" "renderer" "$(cat <<'EOF'
 app_id      = "war.markdown.renderer"
@@ -144,6 +147,23 @@ world       = "my:skiko-gfx/skiko-ui"
 kind        = "system"
 composition = "same-store"
 label       = "Status Bar"
+
+[components]
+ui = "components/ui.wasm"
+EOF
+)"
+
+# Task 56 — the taskbar installs under system-apps/ (kind=system), same
+# as the status bar: launched directly as a thin always-visible bottom-nav
+# overlay (`--standalone-overlay-bottom-bar`), so the launcher's apps/-only
+# scan never lists it.
+pack_warpkg "$TB_PKG" "$TB_WASM" "ui" "$(cat <<'EOF'
+app_id      = "war.taskbar"
+version     = "0.1.0"
+world       = "my:skiko-gfx/skiko-ui"
+kind        = "system"
+composition = "same-store"
+label       = "Taskbar"
 
 [components]
 ui = "components/ui.wasm"
@@ -218,7 +238,7 @@ EOF
 echo ""
 echo "▸ pushing warpkg dirs to device …"
 # adb push of dir-onto-dir nests; rm the device-side copy first.
-for pkg in "$MD_PKG" "$EM_PKG" "$FT_PKG" "$BG_PKG" "$FR_PKG" "$LN_PKG" "$SB_PKG" "$APP_PKG"; do
+for pkg in "$MD_PKG" "$EM_PKG" "$FT_PKG" "$BG_PKG" "$FR_PKG" "$LN_PKG" "$SB_PKG" "$TB_PKG" "$APP_PKG"; do
     name="$(basename "$pkg")"
     adb shell "rm -rf /data/local/tmp/$name"
     adb push "$pkg" "/data/local/tmp/$name" >/dev/null
@@ -230,7 +250,7 @@ echo "  import-resolution check passes) …"
 adb shell "su -c 'rm -rf $APPS_ROOT && mkdir -p $APPS_ROOT'"
 
 WART_ENV="LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT"
-for pkg in markdown emoji fonts lang-bg lang-fr launcher statusbar wart-app; do
+for pkg in markdown emoji fonts lang-bg lang-fr launcher statusbar taskbar wart-app; do
     echo "  install $pkg.warpkg"
     adb shell "su -c '$WART_ENV /data/local/tmp/wart-host --install /data/local/tmp/$pkg.warpkg'"
 done

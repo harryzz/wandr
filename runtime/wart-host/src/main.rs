@@ -227,11 +227,14 @@ fn main() {
             .and_then(|i| args.get(i + 1))
             .map(String::as_str);
         // Overlay mode: `--standalone-overlay` = bottom strip (IME,
-        // task 47); `--standalone-overlay-top` = top strip (status bar,
-        // task 55); neither = fullscreen.
+        // task 47); `--standalone-overlay-bottom-bar` = thin bottom nav
+        // strip (taskbar, task 56); `--standalone-overlay-top` = top
+        // strip (status bar, task 55); none = fullscreen.
         use wasm_android_host::standalone::OverlayMode;
         let mode = if args.iter().any(|a| a == "--standalone-overlay-top") {
             OverlayMode::Top
+        } else if args.iter().any(|a| a == "--standalone-overlay-bottom-bar") {
+            OverlayMode::BottomBar
         } else if args.iter().any(|a| a == "--standalone-overlay") {
             OverlayMode::Bottom
         } else {

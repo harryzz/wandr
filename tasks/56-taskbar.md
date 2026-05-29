@@ -1,7 +1,79 @@
-# Task 56 — system taskbar / navigation (proposal)
+# Task 56 — system taskbar / navigation
 
-> **Status:** 🔲 proposal 2026-05-29, not started. Design options below;
-> pick a proposal + scope before implementing.
+> **Status:** ✅ device-verified 2026-05-29 — see **Results** below. The
+> original proposal (full Compose dock + app switcher) was descoped: the
+> dock/launcher role is already filled by the separate `war.launcher`
+> (task 57), so task 56 shipped as the **navigation half** only — a
+> minimal Android-style Back/Home/Recents nav bar as a LIGHT Rust canvas
+> guest (the user's "3 icons only, rust app, like android" directive).
+> The original design options are preserved below for reference.
+
+## Results (v1 — device-verified 2026-05-29)
+
+Shipped a three-button nav bar — **Back (◀) · Home (●) · Recents (■)** —
+as `apps/system/war.taskbar/`, a ~68 KB Rust `wasm32-wasip2` canvas guest
+(no Kotlin/Compose → leak-immune + tiny, mirroring `war.launcher` /
+`war.statusbar`). It runs on a thin always-visible **bottom-strip overlay**
+and forwards taps to the arbiter.
+
+**Architecture (reused the status-bar pattern):**
+- New `OverlayMode::BottomBar` in `standalone.rs` — bottom-anchored, fixed
+  height `WART_TASKBAR_PX` (default 150 px, env-tunable), launched as a
+  **direct standalone process** (`wart-host --standalone-overlay-bottom-bar
+  --app war.taskbar`), exactly like the status bar's top overlay. No zygote
+  command needed.
+- **Z-stack reservation:** fullscreen apps at `0x40000000`, the taskbar at
+  `0x60000000` (above apps, below chrome), the IME + status bar at
+  `i32::MAX` — so the keyboard draws over the taskbar when typing, and the
+  taskbar draws over the foreground app.
+- **Nav routing:** extended the existing `my:skiko-gfx/launcher` host
+  interface with `go-home` / `go-back` / `recents`; `launcher_impl.rs`
+  forwards each to the arbiter socket. Two new arbiter commands:
+  - `cycle-task` — foreground the next running user app (chrome overlays
+    `war.statusbar` / `war.taskbar` / `war.ime.keyboard` excluded from the
+    ring; the launcher participates so cycling wraps through home).
+  - `back` — route an ESC key (Compose key-id 27) to the foreground app's
+    control socket (apps treat it as dismiss/escape; full Android
+    `OnBackPressedDispatcher` driving is deferred — ESC is the honest v1
+    stand-in). `go-home` already existed (task 57).
+- **Icons drawn as shapes, not glyphs:** the device sans-serif lacks the
+  geometric-shapes Unicode block (◁○□ → tofu), so the icons are drawn via
+  `draw-path` (left triangle) / `draw-oval` (circle) / `draw-rect` (square)
+  added to the guest's trimmed WIT. A tapped button flashes a translucent
+  pill for ~8 frames.
+
+**Device-verified:** all three buttons work end-to-end via real
+`input tap` on the bottom strip → taskbar guest `on_pointer_event_v2`
+hit-test → `launcher::{go_back,go_home,recents}` → host forwarder →
+arbiter action. Logs confirm `cycle-task → fg=war.launcher (ring of 2)`,
+`back → ESC delivered to fg`, and `go-home`. The complete wart shell now
+runs with no ART SystemUI/launcher: status bar (top) + launcher + taskbar
+(bottom) + IME, all light Rust canvas guests plus the Compose demo app.
+
+**Files:** `apps/system/war.taskbar/{Cargo.toml,wit/taskbar.wit,src/lib.rs}`;
+`runtime/wart-host/src/standalone.rs` (`BottomBar` mode + `taskbar_height_px`
++ z-layer), `runtime/wart-host/src/main.rs` (`--standalone-overlay-bottom-bar`),
+`runtime/wart-host/src/launcher_impl.rs` (nav verbs → arbiter),
+`runtime/wart-arbiter/src/main.rs` (`back` + `cycle-task` cmds),
+`wit/skiko-gfx.wit` (launcher nav verbs), `tools/scripts/{build-system-warpkgs,
+run-hybrid-stack}.sh`.
+
+**Deferred (v1 follow-ups):**
+- Full Android Back via the guest `OnBackPressedDispatcher` (currently ESC).
+- A proper recents UI (thumbnail switcher) — v1 just cycles the fg ring.
+- Bottom content-inset for the foreground app (launcher tiles are
+  top-aligned so nothing is hidden today; add `on-insets-changed` when an
+  app's content reaches the bottom 150 px).
+- IME/taskbar coexistence is z-order only (keyboard covers the taskbar
+  when up); no explicit hide/sequence.
+- Edge-gesture navigation (proposal C).
+
+---
+
+## Original proposal (2026-05-29 — preserved for reference)
+
+> Design options below; the implementation above descoped to the nav-bar
+> half (Rust, 3 icons) per the build directive.
 
 ## Why this matters
 

@@ -966,6 +966,16 @@ interface launcher {
     /// app with this id. Fire-and-forget — the arbiter foregrounds it,
     /// demoting the launcher to the background.
     launch-app: func(app-id: string);
+
+    // ── Shell navigation (task 56 taskbar) ────────────────────────────
+    /// Foreground the home/launcher app (arbiter `go-home`).
+    go-home: func();
+    /// Route an Android-style Back key to the foreground app (arbiter
+    /// `back`). Apps opt in via a back handler; unhandled = no-op.
+    go-back: func();
+    /// Switch to the next running user app (arbiter `cycle-task`) — a
+    /// minimal recents/task-switch.
+    recents: func();
 }
 
 /// System-shell status data (task 55 status bar). Flat-string returns

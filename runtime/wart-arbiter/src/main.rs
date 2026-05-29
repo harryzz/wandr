@@ -93,6 +93,9 @@ fn main() {
         // Task 57 — launcher / home app.
         Some("set-home") => run_client("set-home", args.get(1).cloned()),
         Some("go-home")  => run_client("go-home", None),
+        // Task 56 — taskbar nav (CLI handles for testing).
+        Some("back")        => run_client("back", None),
+        Some("cycle-task")  => run_client("cycle-task", None),
         // Task 47 step 3c — manual overlay engage/clear.
         Some("overlay") => run_client("overlay", args.get(1).cloned()),
         Some("overlay-clear") => run_client("overlay-clear", None),
@@ -139,6 +142,8 @@ fn print_usage() {
            wart-arbiter foreground      <app-id>\n\
            wart-arbiter set-home        <app-id>          (designate the home/launcher app; '-' clears)\n\
            wart-arbiter go-home                           (foreground the home app)\n\
+           wart-arbiter back                              (task 56 — route ESC to fg app)\n\
+           wart-arbiter cycle-task                        (task 56 — switch to next user app)\n\
            wart-arbiter overlay         <app-id>          (engage IME overlay split, task 47 step 3c)\n\
            wart-arbiter overlay-clear                     (tear it down)\n\
          \n\
@@ -326,6 +331,9 @@ fn handle_client(mut stream: UnixStream) -> Result<()> {
         // Task 57 — launcher / home app.
         "set-home"        => cmd_set_home(&mut stream, &rest),
         "go-home"         => cmd_go_home(&mut stream),
+        // Task 56 — taskbar nav (Back / Recents; Home reuses go-home).
+        "back"            => cmd_back(&mut stream),
+        "cycle-task"      => cmd_cycle_task(&mut stream),
         // Task 47 step 3c — manual overlay handles.
         "overlay"         => cmd_overlay(&mut stream, &rest),
         "overlay-clear"   => cmd_overlay_clear(&mut stream),
@@ -1118,6 +1126,64 @@ fn cmd_go_home(stream: &mut UnixStream) -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Chrome app-ids that are overlays/system surfaces, not switchable
+/// user apps — excluded from the recents/cycle ring (task 56).
+const CHROME_APP_IDS: [&str; 3] = ["war.statusbar", "war.taskbar", "war.ime.keyboard"];
+
+/// Task 56 — Back. v1 semantics: route an Escape key (Compose key-id 27)
+/// to the foreground app's control socket, so apps treat it as
+/// dismiss/escape (e.g. wart-app hides the soft keyboard). Full Android
+/// Back (driving `OnBackPressedDispatcher`/`BackHandler`) needs the
+/// guest back-dispatcher wired — deferred; ESC is the honest v1 stand-in.
+fn cmd_back(stream: &mut UnixStream) -> Result<()> {
+    let Some(fg) = state::current_foreground() else {
+        writeln!(stream, "OK back noop (no foreground app)")?;
+        return Ok(());
+    };
+    let Some(s) = state::get(&fg) else {
+        writeln!(stream, "OK back noop (fg {fg} not tracked)")?;
+        return Ok(());
+    };
+    let host_sock = format!("/data/local/tmp/wart-host-{}.sock", s.pid);
+    // ESC: code-point 0, key-id 27. Send down+up so either edge handler fires.
+    let ok = deliver_to_host(&host_sock, "key-event 0 27 down\n").is_ok()
+        & deliver_to_host(&host_sock, "key-event 0 27 up\n").is_ok();
+    if ok {
+        writeln!(stream, "OK back → pid={} (esc)", s.pid)?;
+        log::info!("arbiter: back → ESC delivered to fg={fg} pid={}", s.pid);
+    } else {
+        writeln!(stream, "ERR back deliver-failed (host socket missing for pid={})", s.pid)?;
+        log::warn!("arbiter: back → fg={fg} pid={} deliver failed (host socket missing?)", s.pid);
+    }
+    Ok(())
+}
+
+/// Task 56 — Recents/Tasks. Minimal task-switch: foreground the next
+/// running user app after the current foreground, skipping chrome
+/// overlays. The launcher/home app participates in the ring, so cycling
+/// wraps through home. No-op with fewer than two switchable apps.
+fn cmd_cycle_task(stream: &mut UnixStream) -> Result<()> {
+    let mut apps: Vec<AppState> = state::snapshot()
+        .into_iter()
+        .filter(|s| !CHROME_APP_IDS.contains(&s.app_id.as_str()))
+        .collect();
+    apps.sort_by(|a, b| a.app_id.cmp(&b.app_id));
+    if apps.len() < 2 {
+        writeln!(stream, "OK cycle-task noop ({} switchable app(s))", apps.len())?;
+        return Ok(());
+    }
+    let cur = state::current_foreground();
+    let idx = cur
+        .as_ref()
+        .and_then(|c| apps.iter().position(|s| &s.app_id == c))
+        .unwrap_or(usize::MAX); // not found → start so (idx+1)%n == 0
+    let next = &apps[idx.wrapping_add(1) % apps.len()];
+    promote_to_foreground(&next.app_id, next.pid);
+    writeln!(stream, "OK cycle-task → {} pid={}", next.app_id, next.pid)?;
+    log::info!("arbiter: cycle-task → fg={} pid={} (ring of {})", next.app_id, next.pid, apps.len());
+    Ok(())
 }
 
 /// Task 47 step 3c — manually engage the overlay split. Promotes

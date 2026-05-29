@@ -118,6 +118,8 @@ echo "  zygote pid: $ZPID"
             fi
             echo "▸ status bar (top overlay)"
             adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT nohup /data/local/tmp/wart-host --standalone-overlay-top --app war.statusbar >/dev/null 2>&1 &'" 2>/dev/null
+            echo "▸ taskbar (bottom nav overlay)"
+            adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT nohup /data/local/tmp/wart-host --standalone-overlay-bottom-bar --app war.taskbar >/dev/null 2>&1 &'" 2>/dev/null
             echo "▸ IME keyboard (bottom overlay) + set-ime"
             adb shell "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter launch-overlay war.ime.keyboard'" 2>&1 | tr -d '\r'
             sleep 1

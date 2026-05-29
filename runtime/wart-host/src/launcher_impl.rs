@@ -28,12 +28,32 @@ impl Host for crate::HostState {
             log::warn!("launcher: launch-app with empty id — ignored");
             return;
         }
-        match send_oneshot(&format!("launch {app_id}\n")) {
-            Ok(()) => log::info!("launcher: forwarded launch {app_id} to arbiter"),
-            Err(e) => log::warn!(
-                "launcher: launch {app_id} forward failed: {e:#} (arbiter down / socket missing?)"
-            ),
-        }
+        forward("launch", app_id);
+    }
+
+    // ── Shell navigation (task 56 taskbar) ────────────────────────────
+    fn go_home(&mut self) {
+        forward("go-home", "");
+    }
+    fn go_back(&mut self) {
+        forward("back", "");
+    }
+    fn recents(&mut self) {
+        forward("cycle-task", "");
+    }
+}
+
+/// Forward a bare/`<verb> <arg>` command to the arbiter socket
+/// (fire-and-forget). Shared by launch + the nav verbs.
+fn forward(verb: &str, arg: &str) {
+    let line = if arg.is_empty() {
+        format!("{verb}\n")
+    } else {
+        format!("{verb} {arg}\n")
+    };
+    match send_oneshot(&line) {
+        Ok(()) => log::info!("launcher: forwarded `{}` to arbiter", line.trim()),
+        Err(e) => log::warn!("launcher: forward `{}` failed: {e:#} (arbiter down?)", line.trim()),
     }
 }
 
