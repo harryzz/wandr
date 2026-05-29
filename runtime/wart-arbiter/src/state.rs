@@ -150,6 +150,31 @@ pub fn set_overlay(new: Option<OverlayState>) -> Option<OverlayState> {
     prev
 }
 
+// ─── Home app (task 57 launcher) ──────────────────────────────────────
+//
+// The app-id the arbiter treats as "home": foregrounded at boot, by the
+// `go-home` command, and as the fall-back when the foreground app exits
+// or is killed (so the screen never goes black). Persisted across
+// arbiter restarts. `None` = no home designated (current pre-launcher
+// behavior — empty fg).
+
+fn home_app() -> &'static Mutex<Option<String>> {
+    static HOME: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    HOME.get_or_init(|| Mutex::new(None))
+}
+
+pub fn current_home() -> Option<String> {
+    home_app().lock().ok().and_then(|m| m.clone())
+}
+
+/// Set / clear the designated home app-id. Returns the previous value.
+pub fn set_home(new: Option<&str>) -> Option<String> {
+    let mut m = home_app().lock().ok()?;
+    let prev = m.clone();
+    *m = new.map(|s| s.to_string());
+    prev
+}
+
 pub fn current_foreground() -> Option<String> {
     foreground().lock().ok().and_then(|m| m.clone())
 }
@@ -268,6 +293,7 @@ pub fn snapshot() -> Vec<AppState> {
 pub fn save_to(path: &Path) -> Result<()> {
     let apps = snapshot();
     let fg = current_foreground();
+    let home = current_home();
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -284,6 +310,10 @@ pub fn save_to(path: &Path) -> Result<()> {
     match &fg {
         Some(f) => json.push_str(&format!("  \"foreground\": \"{}\",\n", json_escape(f))),
         None    => json.push_str("  \"foreground\": null,\n"),
+    }
+    match &home {
+        Some(h) => json.push_str(&format!("  \"home\": \"{}\",\n", json_escape(h))),
+        None    => json.push_str("  \"home\": null,\n"),
     }
     json.push_str("  \"apps\": [");
     for (i, app) in apps.iter().enumerate() {
@@ -332,6 +362,7 @@ pub fn restore_from(path: &Path) -> Result<(usize, usize)> {
     // the schema grows we should pull in serde-json then.
     let entries = parse_apps(&body)?;
     let fg = parse_foreground(&body);
+    let home = parse_top_string(&body, "home");
 
     let mut alive = 0usize;
     let mut dead = 0usize;
@@ -361,6 +392,13 @@ pub fn restore_from(path: &Path) -> Result<(usize, usize)> {
         } else {
             log::info!("arbiter: state restore — foreground app {fg_id:?} not alive, fg cleared");
         }
+    }
+
+    // Home app-id persists regardless of whether it's currently running
+    // (task 57) — the arbiter re-launches it on boot / fall-back.
+    if let Some(home_id) = home {
+        let _ = set_home(Some(&home_id));
+        log::info!("arbiter: state restore — home app = {home_id:?}");
     }
 
     Ok((alive, dead))
@@ -403,8 +441,14 @@ fn parse_apps(body: &str) -> Result<Vec<(String, i32, u64)>> {
 }
 
 fn parse_foreground(body: &str) -> Option<String> {
-    // Look for `"foreground": "...",` (string) or `"foreground": null,`
-    let idx = body.find("\"foreground\"")?;
+    parse_top_string(body, "foreground")
+}
+
+/// Parse a top-level `"<key>": "..."` string field (or `null`) from the
+/// hand-rolled state JSON. Used for `foreground` + `home` (task 57).
+fn parse_top_string(body: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\"");
+    let idx = body.find(&needle)?;
     let after = &body[idx..];
     let colon = after.find(':')?;
     let rest = after[colon + 1..].trim_start();

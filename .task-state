@@ -1,5 +1,5 @@
-TASK=43
-STEP=verify-done
-STATUS=complete
-LAST_SUCCESS=Task 43 verified OK — standalone screen auto-rotation device-verified on Pixel 2 XL (both landscape directions, full-screen, taps correct). Native Device Orientation HAL sensor (type 27) drives host content pre-rotation; no a-03/SF-transform/EGL-resize needed. Fix incl. wart-app renderDelegate applying per-frame w/h to scene.size.
-NOTES=
+TASK=57
+STEP=1-arbiter-home-done
+STATUS=in-progress
+LAST_SUCCESS=Task 57 Step 1 (arbiter home-app concept) device-verified — set-home launches+foregrounds; fg-app death falls back to home (relaunch via task-54 hook); boot restores home from state.json + foregrounds surviving app.
+NOTES=Step 1 done + committed. Remaining: Step 2 package.toml label/icon manifest + installed-app enumeration; Step 3 war:shell/launcher WIT + host impl forwarding to arbiter; Step 4 arbiter list-apps merge; Step 5 war.launcher Compose warpkg (app grid + clock + wallpaper); Step 6 boot integration in run-hybrid-stack.sh. Decisions held: fullscreen home, boot-to-launcher, always fall back to home, theme/solid wallpaper, letter-tile icon fallback.

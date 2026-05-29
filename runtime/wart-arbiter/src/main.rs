@@ -90,6 +90,9 @@ fn main() {
         Some("kill") => run_client("kill", args.get(1).cloned()),
         Some("preload") => run_client("preload", args.get(1).cloned()),
         Some("foreground") => run_client("foreground", args.get(1).cloned()),
+        // Task 57 — launcher / home app.
+        Some("set-home") => run_client("set-home", args.get(1).cloned()),
+        Some("go-home")  => run_client("go-home", None),
         // Task 47 step 3c — manual overlay engage/clear.
         Some("overlay") => run_client("overlay", args.get(1).cloned()),
         Some("overlay-clear") => run_client("overlay-clear", None),
@@ -134,6 +137,8 @@ fn print_usage() {
            wart-arbiter kill            <app-id>\n\
            wart-arbiter preload         <app-id>\n\
            wart-arbiter foreground      <app-id>\n\
+           wart-arbiter set-home        <app-id>          (designate the home/launcher app; '-' clears)\n\
+           wart-arbiter go-home                           (foreground the home app)\n\
            wart-arbiter overlay         <app-id>          (engage IME overlay split, task 47 step 3c)\n\
            wart-arbiter overlay-clear                     (tear it down)\n\
          \n\
@@ -157,7 +162,7 @@ fn run_client(verb: &str, arg: Option<String>) -> Result<()> {
     let needs_arg = matches!(
         verb,
         "launch" | "launch-headless" | "launch-overlay"
-        | "kill" | "preload" | "foreground" | "overlay"
+        | "kill" | "preload" | "foreground" | "overlay" | "set-home"
     );
     let line = match (needs_arg, arg) {
         (true, Some(a))  => format!("{verb} {a}\n"),
@@ -251,6 +256,23 @@ fn run_daemon() -> Result<()> {
     // also covers a dropped subscriber connection or a crashed zygote.
     spawn_death_watchers();
 
+    // Task 57 — boot to home. If a home app was designated in a previous
+    // session (restored above), foreground it now (launching it if it
+    // didn't survive the restart) so the device comes up to a usable
+    // home screen with no adb command needed. No-op if no home is set
+    // (the pre-launcher default). The zygote is started before the
+    // arbiter by run-hybrid-stack.sh, so `launch_gui` can reach it.
+    {
+        let _g = arbiter_lock().lock().unwrap_or_else(|e| e.into_inner());
+        if state::current_home().is_some() {
+            log::info!("wart-arbiter: boot — foregrounding home app");
+            ensure_home_foreground();
+            if let Err(e) = state::save_to(Path::new(ARBITER_STATE_PATH)) {
+                log::warn!("wart-arbiter: boot home-foreground state save failed: {e:#}");
+            }
+        }
+    }
+
     loop {
         let (stream, _addr) = match listener.accept() {
             Ok(p) => p,
@@ -301,6 +323,9 @@ fn handle_client(mut stream: UnixStream) -> Result<()> {
         "list"            => cmd_list(&mut stream),
         "preload"         => cmd_preload(&mut stream, &rest),
         "foreground"      => cmd_foreground(&mut stream, &rest),
+        // Task 57 — launcher / home app.
+        "set-home"        => cmd_set_home(&mut stream, &rest),
+        "go-home"         => cmd_go_home(&mut stream),
         // Task 47 step 3c — manual overlay handles.
         "overlay"         => cmd_overlay(&mut stream, &rest),
         "overlay-clear"   => cmd_overlay_clear(&mut stream),
@@ -739,6 +764,18 @@ fn handle_child_exit(pid: i32, detail: &str) {
     // Socket cleanup (RC2).
     remove_host_socket(pid);
 
+    // Task 57 — never leave the screen empty. If the dead app was the
+    // foreground (the overlay teardown + `state::remove` above left fg
+    // cleared) and a home app is designated, bring home forward —
+    // foregrounding the still-alive backgrounded launcher, or relaunching
+    // it if the launcher itself was what died. If a behind-app was
+    // repromoted by `demote_from_overlay`, fg is non-empty and this is a
+    // no-op.
+    if state::current_foreground().is_none() && state::current_home().is_some() {
+        log::info!("arbiter: foreground empty after pid {pid} exit — falling back to home");
+        ensure_home_foreground();
+    }
+
     if let Err(e) = state::save_to(Path::new(ARBITER_STATE_PATH)) {
         log::warn!("arbiter: on_child_exit state save failed: {e:#}");
     }
@@ -935,6 +972,40 @@ fn promote_to_foreground(app_id: &str, pid: i32) {
     write_oom_score(pid, OOM_FG);
 }
 
+/// Task 57 — bring the designated home app to the foreground, launching
+/// it first if it isn't running. No-op if no home is set or home is
+/// already foreground.
+///
+/// **The caller must already hold `arbiter_lock`** (this mutates state +
+/// sends signals + may launch). Called from boot, `set-home`, `go-home`,
+/// and the fall-back in `handle_child_exit` — all of which hold the lock.
+fn ensure_home_foreground() {
+    let Some(home) = state::current_home() else { return };
+    if state::current_foreground().as_deref() == Some(home.as_str()) {
+        return;
+    }
+    // Already running (survived as a backgrounded process) → just promote.
+    if let Some(s) = state::get(&home) {
+        log::info!("arbiter: home {home} already running (pid {}) — foregrounding", s.pid);
+        promote_to_foreground(&home, s.pid);
+        return;
+    }
+    // Not running — launch it as a fullscreen GUI app, then promote.
+    match zygote_client::launch_gui(&home) {
+        Ok(pid) => {
+            state::insert(AppState {
+                app_id: home.clone(),
+                pid,
+                launched_at: SystemTime::now(),
+                launched_mono: Instant::now(),
+            });
+            promote_to_foreground(&home, pid);
+            log::info!("arbiter: launched home app {home} → pid {pid}");
+        }
+        Err(e) => log::warn!("arbiter: launch home app {home} failed: {e:#}"),
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum LaunchKind {
     Gui,
@@ -1000,6 +1071,46 @@ fn cmd_foreground(stream: &mut UnixStream, app_id: &str) -> Result<()> {
     let prev_str = prev.unwrap_or_else(|| "(none)".to_string());
     writeln!(stream, "OK fg={app_id} prev={prev_str} pid={pid}", pid = s.pid)?;
     Ok(())
+}
+
+/// Task 57 — designate the home/launcher app. `'-'` clears it. Takes
+/// effect immediately: the home app is brought to the foreground (and
+/// launched if not running), so `set-home <id>` from the boot script
+/// both records the designation and shows the launcher.
+fn cmd_set_home(stream: &mut UnixStream, rest: &str) -> Result<()> {
+    let app_id = rest.trim();
+    if app_id.is_empty() {
+        writeln!(stream, "ERR set-home-empty-app-id")?;
+        return Ok(());
+    }
+    if app_id == "-" {
+        let prev = state::set_home(None);
+        let prev_s = prev.unwrap_or_else(|| "(none)".to_string());
+        writeln!(stream, "OK home cleared prev={prev_s}")?;
+        log::info!("arbiter: home app cleared (prev={prev_s})");
+        return Ok(());
+    }
+    let prev = state::set_home(Some(app_id));
+    let prev_s = prev.unwrap_or_else(|| "(none)".to_string());
+    ensure_home_foreground();
+    writeln!(stream, "OK home={app_id} prev={prev_s}")?;
+    log::info!("arbiter: home app = {app_id} (prev={prev_s})");
+    Ok(())
+}
+
+/// Task 57 — foreground the designated home app (launching it if needed).
+fn cmd_go_home(stream: &mut UnixStream) -> Result<()> {
+    match state::current_home() {
+        Some(home) => {
+            ensure_home_foreground();
+            writeln!(stream, "OK go-home={home}")?;
+            Ok(())
+        }
+        None => {
+            writeln!(stream, "ERR no-home-set (use: set-home <app-id>)")?;
+            Ok(())
+        }
+    }
 }
 
 /// Task 47 step 3c — manually engage the overlay split. Promotes
