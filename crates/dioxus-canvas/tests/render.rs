@@ -111,6 +111,47 @@ fn toggle_app() -> Element {
     }
 }
 
+/// A slider-style component reading element-relative drag coordinates.
+/// Exercises pointer capture + mousedown/mousemove dispatch + the
+/// element_coordinates() offset that sliders/HSV pickers depend on.
+fn slider_app() -> Element {
+    let mut val = use_signal(|| 0i32);
+    rsx! {
+        div {
+            style: "width:200px; height:40px; background:#333333;",
+            onmousedown: move |e| val.set(e.element_coordinates().x as i32),
+            onmousemove: move |e| val.set(e.element_coordinates().x as i32),
+            div { "val: {val}" }
+        }
+    }
+}
+
+#[test]
+fn drag_reports_element_relative_coords() {
+    let rec = Rc::new(RefCell::new(Recorder::default()));
+    let mut r = DomRenderer::new(slider_app);
+    r.render_frame(&mut MockSink { rec: rec.clone() });
+
+    // Down at surface x=50 (track is at origin, 200 wide) → element x=50.
+    r.on_pointer_down(50.0, 20.0);
+    let rec2 = Rc::new(RefCell::new(Recorder::default()));
+    r.render_frame(&mut MockSink { rec: rec2.clone() });
+    assert!(rec2.borrow().drawn_text.iter().any(|t| t == "val: 50"), "down sets val=50: {:?}", rec2.borrow().drawn_text);
+
+    // Drag to x=150 (captured) → element x=150.
+    r.on_pointer_move(150.0, 20.0);
+    let rec3 = Rc::new(RefCell::new(Recorder::default()));
+    r.render_frame(&mut MockSink { rec: rec3.clone() });
+    assert!(rec3.borrow().drawn_text.iter().any(|t| t == "val: 150"), "drag sets val=150: {:?}", rec3.borrow().drawn_text);
+
+    // Release → moves after up no longer update.
+    r.on_pointer_up(150.0, 20.0);
+    r.on_pointer_move(80.0, 20.0);
+    let rec4 = Rc::new(RefCell::new(Recorder::default()));
+    r.render_frame(&mut MockSink { rec: rec4.clone() });
+    assert!(rec4.borrow().drawn_text.iter().any(|t| t == "val: 150"), "no update after release: {:?}", rec4.borrow().drawn_text);
+}
+
 #[test]
 fn conditional_rendering_toggles() {
     let rec = Rc::new(RefCell::new(Recorder::default()));

@@ -125,9 +125,12 @@ impl Guest for App {
         with_renderer(|r| r.on_resize(w as f32, h as f32));
     }
     fn on_pointer_event_v2(_pid: u32, kind: PointerKind, x: f32, y: f32, _pressure: f32) {
-        if matches!(kind, PointerKind::Down) {
-            with_renderer(|r| r.on_pointer_down(x, y));
-        }
+        with_renderer(|r| match kind {
+            PointerKind::Down => r.on_pointer_down(x, y),
+            PointerKind::Move => r.on_pointer_move(x, y),
+            PointerKind::Up => r.on_pointer_up(x, y),
+            PointerKind::Scroll => {}
+        });
     }
 
     // Unused inputs.
@@ -154,7 +157,29 @@ const GREEN: &str = "#34A853";
 const TEXT: &str = "#FFFFFF";
 const MUTED: &str = "#C7C7D9";
 
-const TAB_NAMES: [&str; 3] = ["Inputs", "Pickers", "Calendar"];
+const TAB_NAMES: [&str; 4] = ["Inputs", "Pickers", "Calendar", "Color"];
+
+/// HSV (h in degrees, s/v in 0..1) → 0xFFRRGGBB.
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> u32 {
+    let c = v * s;
+    let h6 = (h / 60.0).rem_euclid(6.0);
+    let x = c * (1.0 - (h6 % 2.0 - 1.0).abs());
+    let (r, g, b) = match h6 as i32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    let to = |f: f32| (((f + m) * 255.0).round() as u32).min(255);
+    0xFF00_0000 | (to(r) << 16) | (to(g) << 8) | to(b)
+}
+
+fn hex(rgb: u32) -> String {
+    format!("#{:06X}", rgb & 0xFFFFFF)
+}
 
 fn app() -> Element {
     let tab = use_signal(|| 0usize);
@@ -166,7 +191,8 @@ fn app() -> Element {
             {match tab() {
                 0 => rsx! { InputsPanel {} },
                 1 => rsx! { PickersPanel {} },
-                _ => rsx! { CalendarPanel {} },
+                2 => rsx! { CalendarPanel {} },
+                _ => rsx! { ColorPanel {} },
             }}
         }
     }
@@ -209,7 +235,9 @@ fn InputsPanel() -> Element {
     let mut switch_on = use_signal(|| false);
     let mut radio = use_signal(|| 0usize);
     let mut steps = use_signal(|| 4i32);
+    let mut slider = use_signal(|| 50.0f32);
     let radios = ["Small", "Medium", "Large"];
+    let pct = format!("{:.0}%", slider());
     rsx! {
         div {
             style: "display:flex; flex-direction:column; gap:24px;",
@@ -281,9 +309,21 @@ fn InputsPanel() -> Element {
                     div { style: format!("height:24px; border-radius:12px; background:{}; width:{}%;", ACCENT, steps() * 10) }
                 }
             }
+
+            Card { title: "Slider (drag)",
+                div {
+                    style: "display:flex; flex-direction:row; align-items:center; width:600px; height:48px; border-radius:24px; background:{SUBTLE};",
+                    onmousedown: move |e| slider.set((e.element_coordinates().x as f32 / SLIDER_W * 100.0).clamp(0.0, 100.0)),
+                    onmousemove: move |e| slider.set((e.element_coordinates().x as f32 / SLIDER_W * 100.0).clamp(0.0, 100.0)),
+                    div { style: format!("height:48px; border-radius:24px; background:{}; width:{}px;", ACCENT, slider() / 100.0 * SLIDER_W) }
+                }
+                div { style: "color:{TEXT}; font-size:32px;", "{pct}" }
+            }
         }
     }
 }
+
+const SLIDER_W: f32 = 600.0;
 
 #[component]
 fn PickersPanel() -> Element {
@@ -393,6 +433,108 @@ fn CalendarPanel() -> Element {
                                 } else {
                                     rsx! { div { style: "width:80px; height:80px;" } }
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// HSV color picker — gradients are discretized into solid cells (hue strip +
+// saturation/value grid), so it needs only solid fills + drag, no gradient
+// primitive. Drag updates the selected segment/cell indices; the picked colour
+// is computed from them and previewed.
+const HUE_SEGS: usize = 24;
+const SV_COLS: usize = 12;
+const SV_ROWS: usize = 8;
+const SQ_W: f32 = 648.0;
+const SQ_H: f32 = 352.0;
+const STRIP_W: f32 = 648.0;
+
+#[component]
+fn ColorPanel() -> Element {
+    let mut hue_seg = use_signal(|| 16usize);
+    let mut sv_col = use_signal(|| 11usize);
+    let mut sv_row = use_signal(|| 0usize);
+
+    let hue = hue_seg() as f32 / HUE_SEGS as f32 * 360.0;
+    let sat = sv_col() as f32 / (SV_COLS - 1) as f32;
+    let val = 1.0 - sv_row() as f32 / (SV_ROWS - 1) as f32;
+    let picked = hsv_to_rgb(hue, sat, val);
+    let picked_hex = hex(picked);
+    let preview_bg = hex(picked);
+
+    rsx! {
+        Card { title: "HSV color picker (drag)",
+            div {
+                style: "display:flex; flex-direction:row; align-items:center; gap:20px;",
+                div { style: format!("width:96px; height:96px; border-radius:24px; background:{};", preview_bg) }
+                div { style: "color:{MUTED}; font-size:32px;", "{picked_hex}" }
+            }
+
+            // Saturation (x) × value (y) grid.
+            div {
+                style: format!("display:flex; flex-direction:column; width:{}px; height:{}px;", SQ_W, SQ_H),
+                onmousedown: move |e| {
+                    let ex = e.element_coordinates().x as f32;
+                    let ey = e.element_coordinates().y as f32;
+                    sv_col.set(((ex / SQ_W * SV_COLS as f32) as usize).min(SV_COLS - 1));
+                    sv_row.set(((ey / SQ_H * SV_ROWS as f32) as usize).min(SV_ROWS - 1));
+                },
+                onmousemove: move |e| {
+                    let ex = e.element_coordinates().x as f32;
+                    let ey = e.element_coordinates().y as f32;
+                    sv_col.set(((ex / SQ_W * SV_COLS as f32) as usize).min(SV_COLS - 1));
+                    sv_row.set(((ey / SQ_H * SV_ROWS as f32) as usize).min(SV_ROWS - 1));
+                },
+                for row in 0..SV_ROWS {
+                    div {
+                        style: "display:flex; flex-direction:row;",
+                        for col in 0..SV_COLS {
+                            {
+                                let cs = col as f32 / (SV_COLS - 1) as f32;
+                                let cv = 1.0 - row as f32 / (SV_ROWS - 1) as f32;
+                                let cc = hex(hsv_to_rgb(hue, cs, cv));
+                                let selected = sv_col() == col && sv_row() == row;
+                                rsx! {
+                                    div {
+                                        style: format!(
+                                            "display:flex; justify-content:center; align-items:center; width:54px; height:44px; background:{};",
+                                            if selected { TEXT } else { cc.as_str() }
+                                        ),
+                                        if selected { div { style: format!("width:38px; height:28px; background:{};", cc) } }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Hue strip.
+            div {
+                style: format!("display:flex; flex-direction:row; width:{}px; height:56px;", STRIP_W),
+                onmousedown: move |e| {
+                    let ex = e.element_coordinates().x as f32;
+                    hue_seg.set(((ex / STRIP_W * HUE_SEGS as f32) as usize).min(HUE_SEGS - 1));
+                },
+                onmousemove: move |e| {
+                    let ex = e.element_coordinates().x as f32;
+                    hue_seg.set(((ex / STRIP_W * HUE_SEGS as f32) as usize).min(HUE_SEGS - 1));
+                },
+                for seg in 0..HUE_SEGS {
+                    {
+                        let hc = hex(hsv_to_rgb(seg as f32 / HUE_SEGS as f32 * 360.0, 1.0, 1.0));
+                        let selected = hue_seg() == seg;
+                        rsx! {
+                            div {
+                                style: format!(
+                                    "display:flex; justify-content:center; align-items:center; width:27px; height:56px; background:{};",
+                                    if selected { TEXT } else { hc.as_str() }
+                                ),
+                                if selected { div { style: format!("width:19px; height:42px; background:{};", hc) } }
                             }
                         }
                     }

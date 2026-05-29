@@ -73,7 +73,24 @@ gallery needs three expansions:
   Roboto font lacks the geometric triangles (▼▲◀▶ → tofu); used ASCII (`v`/`^`,
   `<`/`>`) — a host glyph-fallback to NotoSansSymbols would let us use the nice
   arrows (future polish). 564 KB. Demo defaults to the Inputs tab.
-- Phase 2 (drag: slider, HSV picker) + Phase 3 (text edit box + IME): pending.
+- **Phase 2 ✅ device-verified 2026-05-29.** Drag inputs: a **slider** (Inputs
+  tab) and a **HSV color picker** (new Color tab). Renderer grew pointer
+  **move/up + capture + element-relative coords**: `on_pointer_{down,move,up}`
+  dispatch dioxus `mousedown`/`mousemove`/`mouseup` (a down on an element
+  listening for move captures the pointer; moves/ups route to it, clamped to its
+  box); the dispatched `MouseData` carries element-relative `element_coordinates()`
+  (what sliders/pickers read). New host test `drag_reports_element_relative_coords`
+  (capture + relative coords + release). **No gradient primitive** — the HSV
+  hue strip (24 segments) + saturation/value grid (12×8) are discretized into
+  solid cells; drag updates the selected indices, picked colour computed +
+  previewed. **On-device drag verified**: an `adb input swipe` across the hue
+  strip moved the selection blue→magenta (preview + hex + grid recolor all
+  updated) — confirming the full InputFlinger → `on_pointer_event_v2` →
+  capture → element-relative → re-render path. (InputDispatcher focus is on
+  wart even when WMS `mCurrentFocus` shows the launcher, so injected pointer
+  events reach the guest.) Renderer change: `border-radius:50%` percent handling
+  (phase 1) covers the round thumbs/dots. 592 KB.
+- Phase 3 (text edit box + soft IME): pending.
 
 ## Related
 

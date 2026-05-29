@@ -1,5 +1,5 @@
 TASK=61
-STEP=phase1-done
+STEP=phase2-done
 STATUS=in-progress
-LAST_SUCCESS=Task 61 Phase 1 device-verified 2026-05-29 — dioxus component gallery (tabbed: Inputs/Pickers/Calendar) with checkbox, switch, radio, stepper, progress, dropdown (inline-expand), color swatches, calendar. All render on Pixel 2 XL. Renderer: percent border-radius -> circles. Host tests green (3).
-NOTES=Phase 2 (drag: slider + HSV picker -> needs pointer move/up + capture + gradients) and Phase 3 (text edit box + soft IME -> convert_keyboard_data + focus + war:ime editor-attached) PENDING. Glyph note: Roboto lacks ▼◀ triangles (used ASCII v/^/</>); host glyph-fallback to NotoSansSymbols is future polish. Tasks 59+60 already committed+pushed (477290f1). Open: task 58 (overlay rotation).
+LAST_SUCCESS=Task 61 Phase 2 device-verified 2026-05-29 — drag inputs. Renderer: pointer move/up + capture + element-relative coords (on_pointer_down/move/up -> dioxus mousedown/move/up). Slider (Inputs tab) + HSV color picker (new Color tab; discretized hue strip + SV grid, no gradient primitive). On-device swipe across hue strip changed blue->magenta. Host tests: 4 green (incl drag_reports_element_relative_coords).
+NOTES=Phase 3 (text edit box + soft IME: convert_keyboard_data + focus + on_key_event_v2 routing + war:ime editor-attached) PENDING. Demo defaults to Inputs tab. InputDispatcher focus is on wart even when WMS mCurrentFocus shows launcher -> adb input reaches the guest. Tasks 59+60 + 61-phase1 committed (b7187f78). Open: task 58 (overlay rotation).

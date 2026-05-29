@@ -45,12 +45,18 @@ enum DrawOp {
     Text { blob: u32, x: f32, y: f32, color: u32 },
 }
 
+// Pointer-listener flags (which dioxus events an element subscribes to).
+const F_CLICK: u8 = 1;
+const F_DOWN: u8 = 2;
+const F_MOVE: u8 = 4;
+
 struct HitRect {
     x: f32,
     y: f32,
     w: f32,
     h: f32,
     eid: u32,
+    flags: u8,
 }
 
 /// The renderer. Construct with the guest's root component, then drive it from
@@ -65,6 +71,9 @@ pub struct DomRenderer {
     draw_ops: Vec<DrawOp>,
     hits: Vec<HitRect>,
     /// Host blob ids from the current layout, dropped on relayout.
+    /// Element capturing an in-progress drag: `(eid, rect x, y, w, h)`. Set on
+    /// pointer-down over a draggable element; routes moves/ups to it.
+    captured: Option<(u32, f32, f32, f32, f32)>,
     blobs: Vec<u32>,
     /// `(text, family, size-bits, weight, italic)` → `(w, h)`. Avoids a host
     /// round-trip per text leaf per layout (taffy measures repeatedly).
@@ -81,6 +90,7 @@ impl DomRenderer {
             surface: (0.0, 0.0),
             draw_ops: Vec::new(),
             hits: Vec::new(),
+            captured: None,
             blobs: Vec::new(),
             measure_cache: HashMap::new(),
         }
@@ -127,19 +137,55 @@ impl DomRenderer {
 
     /// Pointer down → hit-test the cached layout (top-most clickable rect under
     /// the point) → dispatch a dioxus `click` → mark dirty for re-render.
+    /// Dispatch a dioxus event to an element. `(x,y)` are surface-absolute;
+    /// `(ex,ey)` are relative to the element's rect (what sliders/pickers read
+    /// via `event.element_coordinates()`).
+    fn dispatch(&self, name: &str, eid: u32, x: f32, y: f32, ex: f32, ey: f32) {
+        #[allow(deprecated)]
+        self.vdom
+            .handle_event(name, events::mouse_event(x, y, ex, ey), ElementId(eid as usize), true);
+    }
+
     pub fn on_pointer_down(&mut self, x: f32, y: f32) {
-        let target = self
+        // Topmost pointer target under the point.
+        let hit = self
             .hits
             .iter()
             .rev()
             .find(|h| x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h)
-            .map(|h| h.eid);
-        if let Some(eid) = target {
-            // The non-deprecated path requires hand-building an `Event<dyn Any>`;
-            // the deprecated shim does exactly that internally. Keep it simple.
-            #[allow(deprecated)]
-            self.vdom
-                .handle_event("click", events::click_event(x, y), ElementId(eid as usize), true);
+            .map(|h| (h.eid, h.flags, h.x, h.y, h.w, h.h));
+        if let Some((eid, flags, hx, hy, hw, hh)) = hit {
+            let (ex, ey) = (x - hx, y - hy);
+            if flags & F_DOWN != 0 {
+                self.dispatch("mousedown", eid, x, y, ex, ey);
+            }
+            if flags & F_CLICK != 0 {
+                self.dispatch("click", eid, x, y, ex, ey);
+            }
+            // A draggable element (listens for move) captures the pointer.
+            if flags & F_MOVE != 0 {
+                self.captured = Some((eid, hx, hy, hw, hh));
+            }
+            self.dirty = true;
+        }
+    }
+
+    pub fn on_pointer_move(&mut self, x: f32, y: f32) {
+        if let Some((eid, hx, hy, hw, hh)) = self.captured {
+            // Clamp the element-relative point to the element's box so a drag
+            // past the edge still reports a sensible value.
+            let ex = (x - hx).clamp(0.0, hw);
+            let ey = (y - hy).clamp(0.0, hh);
+            self.dispatch("mousemove", eid, x, y, ex, ey);
+            self.dirty = true;
+        }
+    }
+
+    pub fn on_pointer_up(&mut self, x: f32, y: f32) {
+        if let Some((eid, hx, hy, hw, hh)) = self.captured.take() {
+            let ex = (x - hx).clamp(0.0, hw);
+            let ey = (y - hy).clamp(0.0, hh);
+            self.dispatch("mouseup", eid, x, y, ex, ey);
             self.dirty = true;
         }
     }
@@ -277,9 +323,17 @@ impl DomRenderer {
         let (paint, children, eid, text) = match &n.kind {
             NodeKind::Element { style, listeners, .. } => {
                 let p = style::to_paint(style, inherited);
-                let has_click = listeners.iter().any(|l| l == "click");
-                let eid = if has_click { n.element_id } else { None };
-                (p, n.children.clone(), eid, None)
+                let mut flags = 0u8;
+                for l in listeners {
+                    match l.as_str() {
+                        "click" => flags |= F_CLICK,
+                        "mousedown" => flags |= F_DOWN,
+                        "mousemove" => flags |= F_MOVE,
+                        _ => {}
+                    }
+                }
+                let eid = if flags != 0 { n.element_id } else { None };
+                (p, n.children.clone(), eid.map(|e| (e, flags)), None)
             }
             NodeKind::Text(t) => (*inherited, Vec::new(), None, Some(t.clone())),
             NodeKind::Placeholder => (*inherited, Vec::new(), None, None),
@@ -291,8 +345,8 @@ impl DomRenderer {
                 let r = if paint.radius < 0.0 { w.min(h) * -paint.radius } else { paint.radius };
                 self.draw_ops.push(DrawOp::Rrect { x, y, w, h, r, color: paint.background });
             }
-            if let Some(eid) = eid {
-                self.hits.push(HitRect { x, y, w, h, eid });
+            if let Some((eid, flags)) = eid {
+                self.hits.push(HitRect { x, y, w, h, eid, flags });
             }
         } else if let Some(t) = text {
             if !t.trim().is_empty() {

@@ -24,11 +24,14 @@ use dioxus_html::{
     SelectionData, ToggleData, TouchData, TransitionData, VisibleData, WheelData,
 };
 
-/// A click at logical surface coordinates. Implements the `HasMouseData`
-/// supertrait stack with zeros except the click position.
+/// A pointer event. `x,y` are surface-absolute (client/screen/page); `ex,ey`
+/// are relative to the target element's box (`element_coordinates`) — sliders
+/// and the HSV picker read the element-relative offset to derive their value.
 struct ClickData {
     x: f64,
     y: f64,
+    ex: f64,
+    ey: f64,
 }
 
 impl InteractionLocation for ClickData {
@@ -44,7 +47,7 @@ impl InteractionLocation for ClickData {
 }
 impl InteractionElementOffset for ClickData {
     fn element_coordinates(&self) -> ElementPoint {
-        ElementPoint::new(self.x, self.y)
+        ElementPoint::new(self.ex, self.ey)
     }
 }
 impl ModifiersInteraction for ClickData {
@@ -66,11 +69,14 @@ impl HasMouseData for ClickData {
     }
 }
 
-/// Build the `Rc<dyn Any>` payload for a `click` at `(x, y)`.
-pub fn click_event(x: f32, y: f32) -> Rc<dyn Any> {
+/// Build the `Rc<dyn Any>` payload for a pointer event: `(x,y)` surface-absolute,
+/// `(ex,ey)` element-relative.
+pub fn mouse_event(x: f32, y: f32, ex: f32, ey: f32) -> Rc<dyn Any> {
     Rc::new(PlatformEventData::new(Box::new(ClickData {
         x: x as f64,
         y: y as f64,
+        ex: ex as f64,
+        ey: ey as f64,
     })))
 }
 
@@ -79,8 +85,8 @@ struct WartEventConverter;
 impl HtmlEventConverter for WartEventConverter {
     fn convert_mouse_data(&self, event: &PlatformEventData) -> MouseData {
         match event.downcast::<ClickData>() {
-            Some(c) => MouseData::new(ClickData { x: c.x, y: c.y }),
-            None => MouseData::new(ClickData { x: 0.0, y: 0.0 }),
+            Some(c) => MouseData::new(ClickData { x: c.x, y: c.y, ex: c.ex, ey: c.ey }),
+            None => MouseData::new(ClickData { x: 0.0, y: 0.0, ex: 0.0, ey: 0.0 }),
         }
     }
 
