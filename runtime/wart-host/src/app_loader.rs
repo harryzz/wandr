@@ -220,10 +220,26 @@ fn load_installed(
     app_id: &str,
     version: Option<&str>,
 ) -> Result<(Component, String, Vec<LoadedDep>, PathBuf)> {
-    let app_dir = root.join("apps").join(app_id);
-    if !app_dir.is_dir() {
-        bail!("installed: app dir not found: {}", app_dir.display());
-    }
+    // Search apps/ first, then system-apps/ — so GUI system chrome
+    // (status bar, future taskbar) can live under system-apps/ (where the
+    // launcher's apps/-only scan won't list it) yet still load via
+    // AppRef::Installed (task 55).
+    let app_dir = {
+        let user = root.join("apps").join(app_id);
+        if user.is_dir() {
+            user
+        } else {
+            let sys = root.join("system-apps").join(app_id);
+            if sys.is_dir() {
+                sys
+            } else {
+                bail!(
+                    "installed: app dir not found in apps/ or system-apps/: {}",
+                    user.display()
+                );
+            }
+        }
+    };
     let version_str = match version {
         Some(v) => v.to_string(),
         None => pick_latest_version(&app_dir)?,

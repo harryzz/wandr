@@ -49,6 +49,9 @@ thread_local! {
 }
 
 const BG: u32 = 0xFF1A1A2E;
+/// Top strip reserved for the status bar (task 55) — matches
+/// war.statusbar's height so the launcher's content isn't occluded.
+const STATUS_BAR_INSET: f32 = 88.0;
 const TILE_PALETTE: [u32; 8] = [
     0xFF4285F4, 0xFFEA4335, 0xFFFBBC05, 0xFF34A853,
     0xFFAB47BC, 0xFF00ACC1, 0xFFFF7043, 0xFF5C6BC0,
@@ -109,10 +112,15 @@ fn relayout(s: &mut State) {
     s.hits.clear();
 
     let margin = 48.0_f32;
+    // Reserve the top strip for the status bar (task 55). It floats over
+    // the top STATUS_BAR_PX; inset our content below it so the title +
+    // grid aren't occluded. (v1 constant matching war.statusbar's height;
+    // a host-provided `on-insets-changed` would make this dynamic.)
+    let top_inset = STATUS_BAR_INSET;
     // Title.
     let title = new_blob("Apps", 44.0, 600);
     s.blobs.push(title);
-    s.items.push(DrawItem::Text { id: title, x: margin, y: 100.0, color: 0xFFFFFFFF });
+    s.items.push(DrawItem::Text { id: title, x: margin, y: top_inset + 56.0, color: 0xFFFFFFFF });
 
     // Grid. Tiles are 2× the original size (task 57 follow-up).
     let tile = 264.0_f32;
@@ -122,7 +130,7 @@ fn relayout(s: &mut State) {
     let cell_h = tile + label_h + gap;
     let usable = (s.w - margin * 2.0).max(cell_w);
     let cols = ((usable + gap) / cell_w).floor().max(1.0) as usize;
-    let top = 140.0_f32;
+    let top = top_inset + 116.0_f32;
 
     for (i, (id, label)) in s.apps.iter().enumerate() {
         let col = i % cols;
