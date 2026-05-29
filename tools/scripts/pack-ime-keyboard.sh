@@ -45,6 +45,7 @@ cat > "$PKG/package.toml" <<'EOF'
 app_id      = "war.ime.keyboard"
 version     = "0.1.0"
 world       = "war:ime-keyboard/ime-keyboard"
+kind        = "system"
 composition = "same-store"
 
 [components]

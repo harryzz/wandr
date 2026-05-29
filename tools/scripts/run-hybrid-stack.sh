@@ -105,18 +105,28 @@ echo "  zygote pid: $ZPID"
 # background waiter polls for the arbiter socket and, once it's up, sends
 # `set-home $HOME_APP` — which designates the home app AND foregrounds it
 # (launching it if needed). No manual `wart-arbiter launch` required.
-if [[ -n "$HOME_APP" ]]; then
-    (
-        for _ in $(seq 1 30); do
-            if adb shell "su -c '[ -S /data/local/tmp/wart-arbiter.sock ] && echo up'" 2>/dev/null | grep -q up; then
+# Once the arbiter socket is up, bring up the full shell: home/launcher
+# (set-home), the top status bar (a direct top-overlay daemon), and the
+# IME keyboard (bottom overlay + set-ime, so tapping an editor pops the
+# keyboard). Each piece is best-effort — only fires if installed.
+(
+    for _ in $(seq 1 30); do
+        if adb shell "su -c '[ -S /data/local/tmp/wart-arbiter.sock ] && echo up'" 2>/dev/null | grep -q up; then
+            if [[ -n "$HOME_APP" ]]; then
                 echo "▸ boot-to-home: set-home $HOME_APP"
                 adb shell "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter set-home $HOME_APP'" 2>&1 | tr -d '\r'
-                break
             fi
-            sleep 0.5
-        done
-    ) &
-fi
+            echo "▸ status bar (top overlay)"
+            adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT nohup /data/local/tmp/wart-host --standalone-overlay-top --app war.statusbar >/dev/null 2>&1 &'" 2>/dev/null
+            echo "▸ IME keyboard (bottom overlay) + set-ime"
+            adb shell "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter launch-overlay war.ime.keyboard'" 2>&1 | tr -d '\r'
+            sleep 1
+            adb shell "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter set-ime war.ime.keyboard'" 2>&1 | tr -d '\r'
+            break
+        fi
+        sleep 0.5
+    done
+) &
 
 echo "▸ starting wart-arbiter --daemon in foreground (Ctrl-C to stop) …"
 adb shell -t "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter --daemon'"

@@ -1044,6 +1044,13 @@ fn cmd_launch(stream: &mut UnixStream, app_id: &str, kind: LaunchKind) -> Result
             // until an editor focuses.
             if kind == LaunchKind::Gui {
                 promote_to_foreground(&key, pid);
+            } else if kind == LaunchKind::GuiOverlay {
+                // Start the overlay HIDDEN — its default Foreground role
+                // would otherwise show it immediately (e.g. the IME
+                // keyboard visible on the home screen). The auto-tie in
+                // cmd_attach_editor (promote_to_overlay) shows it when an
+                // editor actually focuses; detach hides it again.
+                send_role_signal(pid, /*foreground=*/ false);
             }
             writeln!(stream, "OK pid={pid} app={key}")?;
             log::info!("wart-arbiter: launched {key} → pid {pid} kind={kind:?}");

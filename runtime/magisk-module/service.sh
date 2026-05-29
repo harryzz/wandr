@@ -113,14 +113,22 @@ fi
 APID=$(pgrep -f 'wart-arbiter' | head -1)
 log "wart-stack: arbiter up (pid=$APID)"
 
-# ── 5. Boot to the launcher (task 57) ───────────────────────────────────
-# Designate + foreground the home app so the device comes up to a usable
-# launcher with no adb. The arbiter persists this, re-foregrounds home on
-# subsequent boots, and falls back to it when the foreground app dies.
+# ── 5. Bring up the shell (task 55/57) ──────────────────────────────────
+# Home/launcher (set-home), the top status bar (a direct top-overlay
+# daemon), and the IME keyboard (bottom overlay + set-ime). All
+# best-effort — only fire if installed.
 if [ -n "$HOME_APP" ]; then
     log "wart-stack: set-home $HOME_APP"
     env WART_APPS_ROOT="$APPS_ROOT" "$WART_ARB" set-home "$HOME_APP" >>"$LOG" 2>&1 \
         || log "wart-stack: set-home failed (continuing)"
 fi
+log "wart-stack: status bar (top overlay)"
+nohup env LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT="$APPS_ROOT" \
+    "$WART_HOST" --standalone-overlay-top --app war.statusbar </dev/null >>"$LOG" 2>&1 &
+log "wart-stack: IME keyboard (bottom overlay) + set-ime"
+env WART_APPS_ROOT="$APPS_ROOT" "$WART_ARB" launch-overlay war.ime.keyboard >>"$LOG" 2>&1 \
+    || log "wart-stack: IME launch failed (continuing)"
+sleep 1
+env WART_APPS_ROOT="$APPS_ROOT" "$WART_ARB" set-ime war.ime.keyboard >>"$LOG" 2>&1 || true
 
 log "wart-stack: ✓ stack up — zygote=$ZPID arbiter=$APID home=${HOME_APP:-<none>}"
