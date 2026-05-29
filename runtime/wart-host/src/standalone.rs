@@ -116,7 +116,7 @@ pub fn run_with_engine(engine: &Engine, app_id: Option<&str>, overlay: bool) -> 
     let result = match loader.load(engine, app_ref) {
         Ok(loaded) => {
             log::info!("standalone: loaded {}", loaded.source_label);
-            run_cwasm_loop(engine, loaded, renderer, sf)
+            run_cwasm_loop(engine, loaded, renderer, sf, !overlay)
         }
         Err(e) => {
             log::warn!(
@@ -132,12 +132,36 @@ pub fn run_with_engine(engine: &Engine, app_id: Option<&str>, overlay: bool) -> 
     result
 }
 
+/// Map the Device Orientation HAL value to the renderer's dihedral
+/// `orient` code (task 43).
+///
+/// The HAL reports the rotation the *display* should adopt as a
+/// `Surface.ROTATION_*` index: 0=0°, 1=90° CCW, 2=180°, 3=90° CW. To keep
+/// the UI upright we pre-rotate the *content* by the inverse, which in
+/// the renderer's bitmask is: 0→0 (identity), 1→4 (ROT_90 CW), 2→3
+/// (ROT_180), 3→7 (ROT_270 CCW).
+///
+/// If a given panel turns out to rotate the wrong way (content tilts
+/// opposite the device), swap the `1 => 4` and `3 => 7` arms — that's the
+/// only handedness assumption here, and it's panel-specific.
+fn device_rotation_to_orient(rot: u32) -> u32 {
+    match rot & 3 {
+        0 => 0, // portrait — identity
+        1 => 4, // ROT_90
+        2 => 3, // ROT_180
+        _ => 7, // ROT_270
+    }
+}
+
 /// The real render loop: instantiate the component and drive `render_frame`.
 fn run_cwasm_loop(
     engine: &wasmtime::Engine,
     loaded: LoadedApp,
     renderer: crate::canvas_impl::SkiaRenderer,
     sf: crate::sf_surface::SfSurface,
+    // Task 43 — auto-follow device screen rotation. True for the
+    // fullscreen app; false for IME overlay surfaces (fixed geometry).
+    enable_rotation: bool,
 ) -> Result<()> {
     use bindings::my::skiko_gfx::lifecycle::State;
 
@@ -243,6 +267,35 @@ fn run_cwasm_loop(
             None
         }
     };
+
+    // Task 43 — runtime screen orientation. Read the native Device
+    // Orientation HAL sensor (android.sensor.device_orientation, type 27,
+    // on-change) — the SAME source WMS's WindowOrientationListener uses,
+    // but consumed ART-free via the rsbinder sensorservice path. On a
+    // rotation change we recompute the renderer's content-pre-rotation
+    // matrix + swapped logical dims and re-issue on_resize; the physical
+    // SurfaceFlinger buffer is never touched (no shim, no EGL resize).
+    //
+    // A manual `WART_ORIENT` override (read once in the renderer ctor)
+    // disables auto-follow — useful for forcing a fixed orientation in a
+    // stationary test. Overlay (IME) surfaces don't auto-rotate (v1).
+    let orient_sensor: Option<u32> =
+        if enable_rotation && std::env::var("WART_ORIENT").is_err() {
+            match crate::sensors_impl::device_orientation_handle() {
+                Some(h) => {
+                    let ok = crate::sensors_impl::enable_sensor(h, 5);
+                    log::info!("standalone: Device Orientation sensor handle={h} enabled={ok} — auto-rotate on");
+                    if ok { Some(h) } else { None }
+                }
+                None => {
+                    log::info!("standalone: no Device Orientation sensor — auto-rotate off");
+                    None
+                }
+            }
+        } else {
+            log::info!("standalone: auto-rotate disabled (overlay or WART_ORIENT set)");
+            None
+        };
 
     // ── Render loop — mirrors WindowEvent::RedrawRequested, no winit ─────
     let frame_target = std::time::Duration::from_millis(16);
@@ -368,6 +421,33 @@ fn run_cwasm_loop(
             }
         }
 
+        // Task 43 — apply any screen-rotation change. The HAL sensor is
+        // on-change, so `poll_device_rotation` returns Some only right
+        // after the device physically rotates; most frames are a cheap
+        // no-op. `set_orientation` recomputes the content-rotation matrix
+        // + logical dims and returns true only on an actual change, in
+        // which case we re-lay-out Compose via on_resize.
+        if let Some(h) = orient_sensor {
+            if let Some(rot) = crate::sensors_impl::poll_device_rotation(h) {
+                let orient = device_rotation_to_orient(rot);
+                if store.data_mut().renderer.set_orientation(orient) {
+                    let (lw, lh) = {
+                        let r = &store.data().renderer;
+                        (r.logical_width, r.logical_height)
+                    };
+                    log::info!(
+                        "standalone: screen rotation → device-rot {rot} orient {orient} logical {lw}x{lh}"
+                    );
+                    if let Err(e) = skiko
+                        .my_skiko_gfx_renderer()
+                        .call_on_resize(&mut store, lw, lh)
+                    {
+                        log::warn!("standalone: rotation on_resize({lw}x{lh}) failed: {e:#}");
+                    }
+                }
+            }
+        }
+
         let t0 = std::time::Instant::now();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -380,9 +460,25 @@ fn run_cwasm_loop(
         let mut input_buf = [crate::sf_surface::SfInputEvent::default(); 32];
         for ev in sf.poll_input(&mut input_buf) {
             if ev.kind <= 3 {
+                // Task 43 — touch coords arrive in physical-buffer space.
+                // When the content is rotated, map them back into logical
+                // space via the inverse of the renderer's base_matrix so
+                // taps land where the (rotated) UI actually drew. Identity
+                // matrix (orient 0) ⇒ inverse is identity ⇒ no-op, so the
+                // common unrotated path is unchanged.
+                let (lx, ly) = {
+                    let base = store.data().renderer.base_matrix;
+                    match base.invert() {
+                        Some(inv) => {
+                            let p = inv.map_point((ev.x, ev.y));
+                            (p.x, p.y)
+                        }
+                        None => (ev.x, ev.y),
+                    }
+                };
                 if let Err(e) = crate::input::dispatch_pointer_v2(
                     &skiko, &mut store, ev.kind as u8,
-                    ev.pointer_id as u32, ev.x, ev.y, ev.pressure,
+                    ev.pointer_id as u32, lx, ly, ev.pressure,
                 ) {
                     log::warn!("standalone: dispatch_pointer_v2 failed: {e:#}");
                 }

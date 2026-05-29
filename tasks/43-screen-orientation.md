@@ -1,8 +1,56 @@
 # Task 43 — screen orientation handling in standalone mode
 
-> **Status:** 🔲 scoped 2026-05-26, not started. Deferred mid-session
-> because the libgui shim change requires the AOSP a-03 build host
-> (`project-boot-model-libgui-build`), not the regular dev machine.
+> **Status:** ✅ device-verified 2026-05-29. Auto-follow works both
+> landscape directions, full-screen, taps land correctly.
+>
+> **The "needs a-03" premise was wrong.** The task was scoped assuming
+> visible rotation requires a SurfaceFlinger buffer-transform shim
+> (`Surface::setTransform`, needing the a-03 build host). It does not:
+> the host-side `WART_ORIENT` machinery in `canvas_impl.rs` already does
+> **content pre-rotation** into a fixed portrait buffer via a Skia
+> `base_matrix` (the full 8-orientation dihedral group). Runtime rotation
+> = make that dynamic. No a-03, no SF buffer transform, no EGL resize.
+>
+> **Rotation source (ART-free, per [[feedback_no_art_layer_dependencies]]):**
+> the native **Device Orientation HAL sensor**
+> (`android.sensor.device_orientation`, type 27, on-change) reports
+> screen rotation 0/1/2/3 directly — the SAME sensor WMS's
+> `WindowOrientationListener` reads, consumed here via the rsbinder
+> sensorservice path. No accel→rotation fusion math, no `system_server`.
+>
+> **What landed:**
+> - `canvas_impl.rs` — factored the orient→matrix math into
+>   `dihedral_transform()`; added `current_orient` + `set_orientation()`
+>   (recomputes `base_matrix` + swapped logical dims live; physical GL
+>   buffer untouched).
+> - `sensors_impl.rs` — `find_handle_by_type(27)` + cross-platform host
+>   wrappers `device_orientation_handle()` / `enable_sensor()` /
+>   `poll_device_rotation()`.
+> - `standalone.rs` — enable the sensor once, poll per frame (on-change →
+>   cheap), apply via `set_orientation` + re-issue `on_resize`;
+>   inverse-transform pointer coords by `base_matrix.invert()` so taps
+>   land when rotated; `device_rotation_to_orient` mapping
+>   (0→0, 1→4, 2→3, 3→7 — handedness device-confirmed correct);
+>   gated to the fullscreen app (not IME overlay); `WART_ORIENT` env
+>   forces a fixed orient (disables auto-follow).
+> - **wart-app** (`Main.kt` + `RealComposeApp.kt`) — the render delegate
+>   was discarding the per-frame `w/h` from `doFrame`, so the
+>   `CanvasLayersComposeScene` stayed sized at the startup (portrait)
+>   geometry and `base_matrix` rotated portrait content into the
+>   landscape buffer → only a corner visible. Fix: the delegate now sets
+>   `realScene.size` + the popup `containerSize` (`MutableSceneWindowInfo`,
+>   exposed via `realSceneWindowInfo`) on a size change. **This was the
+>   actual half-render bug** — pre-existing, latent (orient 0 never
+>   exercised it). No skiko rebuild needed; `doFrame` already fed fresh
+>   `surfaceWidth/Height` every frame.
+>
+> **Orientation lock** stays out of v1 (see "Out of scope"). When wanted
+> it's a declarative `package.toml` field (e.g. `orientation = "auto" |
+> "portrait" | "landscape"`) the host reads to gate `set_orientation` —
+> NOT a runtime WIT export (host owns the rotation, so an app can't lock
+> it purely app-side; but it's a static manifest declaration, not a verb).
+
+## Original scope (kept for history; the a-03 framing below is superseded)
 
 ## Why this matters
 

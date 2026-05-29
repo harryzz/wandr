@@ -82,6 +82,23 @@ var wasiSoftKeyboardKeyHandler: (androidx.compose.ui.input.key.KeyEvent) -> Unit
 /// [WasiKeyboardController] — a no-op before that.
 var wasiHideKeyboardRequest: () -> Unit = {}
 
+/// Mutable [WindowInfo] so the renderer (Main.kt) can update
+/// `containerSize` on a runtime surface-size change — task 43 screen
+/// rotation. Popups read `LocalWindowInfo.current.containerSize` to
+/// clip/position, so it must track the live (possibly rotated) geometry,
+/// not just the startup size.
+class MutableSceneWindowInfo(initial: IntSize) : WindowInfo {
+    override var isWindowFocused: Boolean = true
+    override var keyboardModifiers: androidx.compose.ui.input.pointer.PointerKeyboardModifiers =
+        androidx.compose.ui.input.pointer.PointerKeyboardModifiers(0)
+    override var containerSize: IntSize = initial
+}
+
+/// The live scene's WindowInfo, exposed so the renderer can update
+/// `containerSize` when the host swaps logical dimensions on rotation.
+/// Set by `buildRealComposeScene`.
+var realSceneWindowInfo: MutableSceneWindowInfo? = null
+
 fun buildRealComposeScene(widthPx: Int, heightPx: Int, density: Float): ComposeScene {
     // CanvasLayersComposeScene implements ComposeSceneContext itself —
     // popup composables (DropdownMenu, AlertDialog, ExposedDropdownMenu,
@@ -97,12 +114,8 @@ fun buildRealComposeScene(widthPx: Int, heightPx: Int, density: Float): ComposeS
     // with the default PlatformContext.Empty(), containerSize stays at
     // IntSize.Zero and the popup's measure policy decides it has no
     // room → popup never lays out → not visible.
-    val sceneWindowInfo = object : WindowInfo {
-        override var isWindowFocused: Boolean = true
-        override var keyboardModifiers: androidx.compose.ui.input.pointer.PointerKeyboardModifiers =
-            androidx.compose.ui.input.pointer.PointerKeyboardModifiers(0)
-        override var containerSize: IntSize = IntSize(widthPx, heightPx)
-    }
+    val sceneWindowInfo = MutableSceneWindowInfo(IntSize(widthPx, heightPx))
+    realSceneWindowInfo = sceneWindowInfo
     val platformContext = object : PlatformContext by PlatformContext.Empty() {
         override val windowInfo: WindowInfo = sceneWindowInfo
     }

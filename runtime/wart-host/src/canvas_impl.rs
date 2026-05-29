@@ -196,6 +196,11 @@ pub struct SkiaRenderer {
     /// normally, a 90° rotation in the standalone rotated mode so the
     /// guest's portrait drawing maps into the landscape GL surface.
     pub base_matrix: skia_safe::Matrix,
+    /// The dihedral orientation code (0..7) currently applied. 0 =
+    /// identity. Recomputed live by `set_orientation` (task 43 runtime
+    /// rotation). Used to skip no-op updates and to inverse-map pointer
+    /// coordinates from physical-buffer space back to logical space.
+    pub current_orient: u32,
 
     #[cfg(target_os = "android")]
     egl:        crate::egl::android::EglContext,
@@ -269,6 +274,57 @@ pub struct SkiaRenderer {
 // the entire host runs on the winit event-loop thread — so this is sound.
 unsafe impl Send for SkiaRenderer {}
 
+/// Map a dihedral orientation code (0..7) to the
+/// `(base_matrix, logical_width, logical_height)` triple.
+///
+/// Factored out of the renderer constructor (task 33 standalone
+/// orientation) so the task-43 runtime-rotation path can recompute it
+/// live without duplicating the matrix math. `width`/`height` are the
+/// PHYSICAL GL buffer dimensions; the returned matrix maps a logical
+/// point into that buffer. Bitmask: FLIP_H=1, FLIP_V=2, ROT_90=4 — the
+/// ROT_90/270 codes swap the logical axes (a portrait UI authored into a
+/// landscape buffer), so they return swapped `(height, width)` logical
+/// dims.
+pub(crate) fn dihedral_transform(orient: u32, width: u32, height: u32)
+    -> (skia_safe::Matrix, u32, u32)
+{
+    let w = width as f32;
+    let h = height as f32;
+    match orient & 7 {
+        // ── ROT_90 clear — logical == buffer (w × h) ──
+        0 => (skia_safe::Matrix::new_identity(), width, height),
+        // FLIP_H: (lx,ly) -> (w - lx, ly)
+        1 => (skia_safe::Matrix::new_all(-1.0, 0.0, w,
+                                          0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+              width, height),
+        // FLIP_V: (lx,ly) -> (lx, h - ly)
+        2 => (skia_safe::Matrix::new_all(1.0, 0.0, 0.0,
+                                          0.0, -1.0, h, 0.0, 0.0, 1.0),
+              width, height),
+        // ROT_180 (FLIP_H|FLIP_V): (lx,ly) -> (w - lx, h - ly)
+        3 => (skia_safe::Matrix::new_all(-1.0, 0.0, w,
+                                          0.0, -1.0, h, 0.0, 0.0, 1.0),
+              width, height),
+        // ── ROT_90 set — logical axes swapped (h × w) ──
+        // ROT_90 — 90° CW: (lx,ly) -> (w - ly, lx)
+        4 => (skia_safe::Matrix::new_all(0.0, -1.0, w,
+                                          1.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+              height, width),
+        // ROT_90|FLIP_H — transpose: (lx,ly) -> (ly, lx)
+        5 => (skia_safe::Matrix::new_all(0.0, 1.0, 0.0,
+                                          1.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+              height, width),
+        // ROT_90|FLIP_V — anti-transpose: (lx,ly) -> (w - ly, h - lx)
+        6 => (skia_safe::Matrix::new_all(0.0, -1.0, w,
+                                          -1.0, 0.0, h, 0.0, 0.0, 1.0),
+              height, width),
+        // ROT_270 (ROT_90|FLIP_H|FLIP_V) — 90° CCW: (lx,ly) -> (ly, h - lx)
+        _ => (skia_safe::Matrix::new_all(0.0, 1.0, 0.0,
+                                          -1.0, 0.0, h, 0.0, 0.0, 1.0),
+              height, width),
+    }
+}
+
 impl SkiaRenderer {
     pub fn new(window: Arc<Window>) -> Result<Self> {
         let size = window.inner_size();
@@ -304,6 +360,7 @@ impl SkiaRenderer {
                 width: size.width, height: size.height,
                 logical_width: size.width, logical_height: size.height,
                 base_matrix: skia_safe::Matrix::new_identity(),
+                current_orient: 0,
                 text_blobs:       HashMap::new(),
                 multi_blob_cache: HashMap::new(),
                 text_blob_runs:   Vec::new(),
@@ -342,6 +399,7 @@ impl SkiaRenderer {
                 surface, width: size.width, height: size.height,
                 logical_width: size.width, logical_height: size.height,
                 base_matrix: skia_safe::Matrix::new_identity(),
+                current_orient: 0,
                 text_blobs:       HashMap::new(),
                 multi_blob_cache: HashMap::new(),
                 text_blob_runs:   Vec::new(),
@@ -417,8 +475,6 @@ impl SkiaRenderer {
         // ROT_270=7) selecting any of the 8 dihedral placements, for a device
         // whose panel genuinely needs a rotation. Unset + a correctly-sized
         // buffer ⇒ orient 0 (identity), the normal path.
-        let w = width as f32;
-        let h = height as f32;
         let dims_swapped = intended_w != 0 && intended_h != 0
             && (intended_w < intended_h) != (width < height);
         // Effective transform: WART_ORIENT override, else the queried hint;
@@ -434,40 +490,11 @@ impl SkiaRenderer {
         // new_all(scaleX, skewX, transX, skewY, scaleY, transY, 0,0,1).
         // The ROT_90 bit swaps the logical axes (portrait UI into a landscape
         // buffer); the FLIP bits select the mirrored variants.
-        let (base_matrix, logical_width, logical_height) = match orient {
-            // ── ROT_90 clear — logical == buffer (w × h) ──
-            // identity
-            0 => (skia_safe::Matrix::new_identity(), width, height),
-            // FLIP_H: (lx,ly) -> (w - lx, ly)
-            1 => (skia_safe::Matrix::new_all(-1.0, 0.0, w,
-                                             0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
-                  width, height),
-            // FLIP_V: (lx,ly) -> (lx, h - ly)
-            2 => (skia_safe::Matrix::new_all(1.0, 0.0, 0.0,
-                                             0.0, -1.0, h, 0.0, 0.0, 1.0),
-                  width, height),
-            // ROT_180 (FLIP_H|FLIP_V): (lx,ly) -> (w - lx, h - ly)
-            3 => (skia_safe::Matrix::new_all(-1.0, 0.0, w,
-                                             0.0, -1.0, h, 0.0, 0.0, 1.0),
-                  width, height),
-            // ── ROT_90 set — logical axes swapped (h × w) ──
-            // ROT_90 — 90° CW: (lx,ly) -> (w - ly, lx)
-            4 => (skia_safe::Matrix::new_all(0.0, -1.0, w,
-                                             1.0, 0.0, 0.0, 0.0, 0.0, 1.0),
-                  height, width),
-            // ROT_90|FLIP_H — transpose: (lx,ly) -> (ly, lx)
-            5 => (skia_safe::Matrix::new_all(0.0, 1.0, 0.0,
-                                             1.0, 0.0, 0.0, 0.0, 0.0, 1.0),
-                  height, width),
-            // ROT_90|FLIP_V — anti-transpose: (lx,ly) -> (w - ly, h - lx)
-            6 => (skia_safe::Matrix::new_all(0.0, -1.0, w,
-                                             -1.0, 0.0, h, 0.0, 0.0, 1.0),
-                  height, width),
-            // ROT_270 (ROT_90|FLIP_H|FLIP_V) — 90° CCW: (lx,ly) -> (ly, h - lx)
-            _ => (skia_safe::Matrix::new_all(0.0, 1.0, 0.0,
-                                             -1.0, 0.0, h, 0.0, 0.0, 1.0),
-                  height, width),
-        };
+        // Factored into `dihedral_transform` (below the impl) so the
+        // task-43 runtime rotation path can recompute it live via
+        // `set_orientation`.
+        let (base_matrix, logical_width, logical_height) =
+            dihedral_transform(orient, width, height);
         log::info!(
             "renderer: orientation — transform hint {hint}, effective \
              orient {orient} — logical {logical_width}x{logical_height}, \
@@ -477,6 +504,7 @@ impl SkiaRenderer {
         Ok(Self {
             egl, gr_context, surface, width, height,
             logical_width, logical_height, base_matrix,
+            current_orient: orient,
             text_blobs:       HashMap::new(),
             multi_blob_cache: HashMap::new(),
             text_blob_runs:   Vec::new(),
@@ -504,6 +532,32 @@ impl SkiaRenderer {
             bitmap_canvas_lru:     std::collections::VecDeque::with_capacity(128),
             next_bitmap_canvas_id: 1,
         })
+    }
+
+    /// Task 43 — apply a new dihedral orientation at runtime. Recomputes
+    /// `base_matrix` + `logical_width/height` from the physical buffer
+    /// dims (which never change — the content is pre-rotated into the
+    /// fixed portrait GL buffer, so there is no EGL resize and no
+    /// SurfaceFlinger buffer-transform call). Returns `true` if the
+    /// orientation actually changed, in which case the caller must
+    /// re-issue `on_resize(logical_width, logical_height)` to the guest
+    /// so Compose re-lays out to the (possibly swapped) logical size.
+    pub fn set_orientation(&mut self, orient: u32) -> bool {
+        let orient = orient & 7;
+        if orient == self.current_orient {
+            return false;
+        }
+        let (m, lw, lh) = dihedral_transform(orient, self.width, self.height);
+        self.base_matrix = m;
+        self.logical_width = lw;
+        self.logical_height = lh;
+        self.current_orient = orient;
+        log::info!(
+            "renderer: orientation → orient {orient}, logical {lw}x{lh} \
+             (physical {}x{} unchanged)",
+            self.width, self.height,
+        );
+        true
     }
 
     /// Move CPU-side caches from `old` into `self` so warm-resume preserves

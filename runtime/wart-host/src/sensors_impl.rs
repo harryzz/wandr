@@ -162,6 +162,19 @@ mod binder_path {
             .collect()
     }
 
+    /// Find the handle of the first sensor whose raw AIDL type equals
+    /// `aidl_type` (task 43 — the Device Orientation sensor, type 27,
+    /// isn't in our WIT `Kind` enum so `list_sensors` reports it as
+    /// `Unknown`; the host needs the handle by raw type). Returns the
+    /// first match, or None if absent / service unavailable.
+    pub fn find_handle_by_type(aidl_type: i32) -> Option<u32> {
+        let svc = service()?;
+        let list = svc.r#getSensorList().ok()?;
+        list.into_iter()
+            .find(|s| s.r#type.0 == aidl_type)
+            .map(|s| s.r#sensorHandle as u32)
+    }
+
     pub fn enable(handle: u32, rate_hz: u32) -> bool {
         let Some(q) = queue() else { return false };
         let period_us = if rate_hz == 0 { 1_000_000 } else { (1_000_000 / rate_hz).max(1) };
@@ -185,6 +198,56 @@ mod binder_path {
         // Sentinel
         super::SensorSample { timestamp_ns: 0, x: 0.0, y: 0.0, z: 0.0 }
     }
+}
+
+// ── Host-internal orientation API (task 43) ───────────────────────────
+//
+// The Device Orientation HAL sensor (android.sensor.device_orientation,
+// type 27, on-change mode) reports screen rotation directly as 0/1/2/3
+// — the SAME native sensor that WMS's WindowOrientationListener reads,
+// but consumed here ART-free via the rsbinder sensorservice path. The
+// standalone render loop (task 43) enables it once and polls it per
+// frame. Cross-platform stubs return None / false off-android so the
+// caller needs no cfg gates.
+
+/// `android.sensor.device_orientation` raw AIDL sensor type.
+pub const SENSOR_TYPE_DEVICE_ORIENTATION: i32 = 27;
+
+/// Handle of the Device Orientation sensor, or None if the device lacks
+/// it (fall back to no rotation) or we're off-android.
+pub fn device_orientation_handle() -> Option<u32> {
+    #[cfg(target_os = "android")]
+    { binder_path::find_handle_by_type(SENSOR_TYPE_DEVICE_ORIENTATION) }
+    #[cfg(not(target_os = "android"))]
+    { None }
+}
+
+/// Enable a sensor by handle at `rate_hz` (on-change sensors ignore the
+/// rate but still need a non-zero period). Returns false off-android.
+pub fn enable_sensor(handle: u32, rate_hz: u32) -> bool {
+    #[cfg(target_os = "android")]
+    { binder_path::enable(handle, rate_hz) }
+    #[cfg(not(target_os = "android"))]
+    { let _ = (handle, rate_hz); false }
+}
+
+/// Poll the latest screen rotation (0/1/2/3) from the Device Orientation
+/// sensor. `None` = "no fresh on-change event since the last poll" (or
+/// off-android) — callers keep their last known rotation. The HAL
+/// delivers the rotation as value[0], routed to `SensorSample.x` by
+/// `extract_sample`; the no-sample sentinel has `timestamp_ns == 0`
+/// (a real HAL event carries a non-zero elapsed-realtime timestamp).
+pub fn poll_device_rotation(handle: u32) -> Option<u32> {
+    #[cfg(target_os = "android")]
+    {
+        let s = binder_path::poll_latest(handle);
+        if s.timestamp_ns == 0 {
+            return None;
+        }
+        Some((s.x.round() as i64).clamp(0, 3) as u32)
+    }
+    #[cfg(not(target_os = "android"))]
+    { let _ = handle; None }
 }
 
 impl Host for crate::HostState {

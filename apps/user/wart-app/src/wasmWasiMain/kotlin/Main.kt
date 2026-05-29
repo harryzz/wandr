@@ -348,8 +348,23 @@ fun main() {
         wasiFrameDispatcher.flush()
     }
 
-    layer.renderDelegate = SkikoRenderDelegate { canvas, _, _, nanos ->
+    layer.renderDelegate = SkikoRenderDelegate { canvas, w, h, nanos ->
         androidx.compose.ui.updateCachedNanoTime(nanos.toLong())
+        // Task 43 — runtime surface-size change (screen rotation). The
+        // host swaps the logical width/height when the device rotates;
+        // `doFrame` feeds the new values here every frame. Re-size the
+        // scene + window info so Compose re-lays-out to the new geometry
+        // (otherwise the old portrait layout is drawn into the rotated
+        // buffer and only a corner is visible). Only acts on an actual
+        // change, so the steady state is a cheap comparison.
+        if (w > 0 && h > 0) {
+            val cur = realScene.size
+            if (cur == null || cur.width != w || cur.height != h) {
+                val sz = androidx.compose.ui.unit.IntSize(w, h)
+                realScene.size = sz
+                realSceneWindowInfo?.containerSize = sz
+            }
+        }
         canvas.clear(0xFF1A1A2E.toInt())
         realScene.render(canvas.asComposeCanvas(), nanos.toLong())
         // Drain any continuations that were queued during scene.render()
