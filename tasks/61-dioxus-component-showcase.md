@@ -176,13 +176,45 @@ The phase-3 edit box gained a real selection model + a working hide-key
   collapsing the selection. Device-verified: tapping ⌄ closes the keyboard and the
   field reverts to the "Tap the field to type" hint.
 
+## Input-type variants + keyboard-avoidance + tap-blur (device-verified 2026-05-29)
+
+The single text field became the `EditField` component (per-field value/caret/
+anchor + a shared `active: Signal<i32>` so only one field is focused at a time),
+and the Text tab now hosts four fields — `text` / `number` / `phone` / `email`:
+
+- **Per-type IME layouts.** Each field passes its `input-type` string to
+  `ime::notify_editor_attached`; the host maps it to the `war:ime` enum and the
+  IME swaps layout. Device-verified: Number → numeric keypad (`. , -`), Phone →
+  ITU-T dial pad (`+ * #`), Email → QWERTY with the `@` / `.com` row. Typing
+  routes into the field for all of them (`"42"` → `"4256"`).
+- **Keyboard-avoidance (renderer).** The IME runs on a bottom overlay surface
+  (~`INITIAL_OVERLAY_PX`=1200) and the focused app gets no inset signal, so a low
+  field used to sit *behind* the keyboard. The renderer now applies a keyboard
+  inset while an input is focused (`kb_inset_px`, default 0.45 × surface height,
+  overridable via `set_keyboard_inset`): `max_scroll` gains that much bottom
+  padding and, on focus, `ensure_focused_visible` scrolls the field above the
+  keyboard line. Device-verified: tapping the Email field (below the keyboard)
+  scrolls it up into view.
+- **Tap-outside blurs + hides the keyboard.** Focus is reconciled from a DOM
+  `focused` attr on `data-input` elements (so detach is authoritative), and
+  `on_pointer_down` dispatches `onfocusout` (a new data-less focus event in
+  `events.rs`) to the focused field when a tap lands on a non-field (empty space,
+  a button, a tab, a slider). The demo's `onfocusout` calls
+  `ime::notify_editor_detached()`. Device-verified: tapping the title hides the
+  keyboard, unfocuses the field, and the content scrolls back.
+
+Locked by `keyboard_avoidance_scrolls_focused_field_then_blurs` (host test).
+
 ## Known limitations / follow-ups (text input)
 
-1. **Editor input-type variants untested** — the demo declares only
-   `input-type = "text"`. The IME's per-type layouts (numeric / phone / email /
-   url / password / multiline, task 49 step 2) are NOT exercised by this guest;
-   `notify_editor_attached` would need to pass the right `input-type` per field
-   and the demo would need fields of each kind.
+1. **No text selection of the IME's own composing region / autocorrect** — input
+   is direct key insertion; there's no composing-text / suggestion-bar path. Fine
+   for the English/dial-pad layouts here.
+2. **Overlay surfaces don't rotate with device orientation** — a *general* wart
+   limitation, not dioxus-specific: task 43 rotates only the fullscreen app
+   (`enable_rotation` gated to `OverlayMode::None` in `standalone.rs:352`), so in
+   landscape the IME keyboard (and status bar / taskbar) stay portrait. Scoped as
+   a follow-up (`tasks/62-overlay-orientation.md`).
 
 ## Related
 

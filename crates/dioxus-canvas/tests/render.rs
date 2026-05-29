@@ -204,6 +204,62 @@ fn gallery_exact_scrolls() {
     assert!(max > 0.0, "gallery-exact chain overflows (max={max})");
 }
 
+/// A scroll region whose focusable input sits low enough that the soft keyboard
+/// would cover it. The `focused` attr (driven by a signal) + `onfocusout` let the
+/// renderer reconcile focus authoritatively and blur on tap-outside.
+fn kbd_field_app() -> Element {
+    let mut focused = use_signal(|| false);
+    rsx! {
+        div {
+            style: "display:flex; flex-direction:column; height:100%;",
+            button { style: "height:100px;", onclick: move |_| {}, div { "hdr" } }
+            div {
+                style: "display:flex; flex-direction:column; overflow:scroll; flex-grow:1;",
+                div {
+                    style: "display:flex; flex-direction:column; flex-shrink:0;",
+                    div { style: "height:1400px;", div { "spacer" } }
+                    div {
+                        "data-input": "1",
+                        "value": "x",
+                        "caret": "1",
+                        "sel": "1:1",
+                        "focused": if focused() { "1" } else { "0" },
+                        style: "height:80px; background:#333333;",
+                        onmousedown: move |_| focused.set(true),
+                        onmousemove: move |_| {},
+                        onfocusout: move |_| focused.set(false),
+                        onkeydown: move |_| {},
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn keyboard_avoidance_scrolls_focused_field_then_blurs() {
+    let rec = Rc::new(RefCell::new(Recorder::default()));
+    let mut r = DomRenderer::new(kbd_field_app);
+    r.render_frame(&mut MockSink { rec: rec.clone() });
+    let (sy0, _, active) = r.scroll_state();
+    assert!(active, "scroll region detected");
+    assert_eq!(sy0, 0.0, "starts unscrolled");
+
+    // Tap the input (header 100 + spacer 1400 → input at screen ~1540, which is
+    // below the keyboard line on a 2000px surface). It should focus + the layout
+    // should scroll it up above the keyboard inset.
+    r.on_pointer_down(500.0, 1540.0);
+    assert!(r.has_focus(), "input focused after tap");
+    r.render_frame(&mut MockSink { rec: rec.clone() });
+    let (sy1, _, _) = r.scroll_state();
+    assert!(sy1 > 100.0, "focused field scrolled above the keyboard (scroll_y={sy1})");
+
+    // Tap the header (a non-field) → blur → the guest's onfocusout clears focus.
+    r.on_pointer_down(500.0, 50.0);
+    r.render_frame(&mut MockSink { rec: rec.clone() });
+    assert!(!r.has_focus(), "tap-outside blurred the field (keyboard would hide)");
+}
+
 #[test]
 fn nested_scroll_region_overflows() {
     let rec = Rc::new(RefCell::new(Recorder::default()));

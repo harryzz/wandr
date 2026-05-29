@@ -19,8 +19,8 @@ use dioxus_html::point_interaction::{
 };
 use dioxus_html::{
     set_event_converter, AnimationData, CancelData, ClipboardData, Code, CompositionData, DragData,
-    FocusData, FormData, HasKeyboardData, HasMouseData, HtmlEventConverter, ImageData, Key,
-    KeyboardData, Location, MediaData, Modifiers, MountedData, MouseData, PlatformEventData,
+    FocusData, FormData, HasFocusData, HasKeyboardData, HasMouseData, HtmlEventConverter, ImageData,
+    Key, KeyboardData, Location, MediaData, Modifiers, MountedData, MouseData, PlatformEventData,
     PointerData, ResizeData, ScrollData, SelectionData, ToggleData, TouchData, TransitionData,
     VisibleData, WheelData,
 };
@@ -140,6 +140,21 @@ pub fn key_event(code_point: u32, key_id: u32) -> Rc<dyn Any> {
     })))
 }
 
+/// A focus event (`onfocusout`). Carries no data — the renderer dispatches it to
+/// the previously-focused text input when a tap lands outside it, so the guest
+/// can blur the field + hide the soft keyboard.
+struct FocusEvt;
+impl HasFocusData for FocusEvt {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+/// Build the `Rc<dyn Any>` payload for a `focusout`/`blur`.
+pub fn focus_event() -> Rc<dyn Any> {
+    Rc::new(PlatformEventData::new(Box::new(FocusEvt)))
+}
+
 struct WartEventConverter;
 
 impl HtmlEventConverter for WartEventConverter {
@@ -166,7 +181,7 @@ impl HtmlEventConverter for WartEventConverter {
         unimplemented!("dioxus-canvas: drag events unsupported")
     }
     fn convert_focus_data(&self, _: &PlatformEventData) -> FocusData {
-        unimplemented!("dioxus-canvas: focus events unsupported")
+        FocusData::new(FocusEvt)
     }
     fn convert_form_data(&self, _: &PlatformEventData) -> FormData {
         unimplemented!("dioxus-canvas: form events unsupported")

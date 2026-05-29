@@ -653,41 +653,63 @@ fn char_at(value: &str, x: f32) -> usize {
     best
 }
 
-// Text input with selection + the soft keyboard (task 61 phase 3). Tap places
-// the caret; drag selects a range; keys edit at the caret/selection. The
-// renderer draws the value + caret + selection (the `data-input` element);
-// this component owns the (value, caret, anchor) state. Tapping attaches the
-// IME (war.ime.keyboard); Escape/Enter/Done detach it (the ⌄ "hide" key sends
-// Escape).
+// One editable field with selection + the soft keyboard (task 61 phase 3). Tap
+// places the caret; drag selects a range; keys edit at the caret/selection. The
+// renderer draws the value + caret + selection (the `data-input` element); this
+// component owns its own (value, caret, anchor) state. `active`/`idx` give the
+// panel single-field focus (tapping one field unfocuses the others — only one
+// keyboard). `input-type` drives the IME layout (text / number / phone / email /
+// …). Tapping attaches the IME (war.ime.keyboard); Escape/Enter/Done detach it
+// (the ⌄ "hide" key sends Escape).
 #[component]
-fn TextPanel() -> Element {
-    let mut value = use_signal(|| String::from("edit me"));
-    let mut caret = use_signal(|| 7usize);
-    let mut anchor = use_signal(|| 7usize);
-    let mut focused = use_signal(|| false);
+fn EditField(
+    idx: usize,
+    active: Signal<i32>,
+    input_type: String,
+    hint: String,
+    label: String,
+    initial: String,
+) -> Element {
+    let init_len = initial.chars().count();
+    let mut value = use_signal(|| initial.clone());
+    let mut caret = use_signal(|| init_len);
+    let mut anchor = use_signal(|| init_len);
 
+    let focused = active() == idx as i32;
     let v = value();
     let sel = format!("{}:{}", anchor(), caret());
+    // Cloned for the move-closure (the prop strings are read by `{hint}` below).
+    let it = input_type.clone();
+    let ht = hint.clone();
     rsx! {
-        Card { title: "Text field (selection + soft keyboard)",
+        Card { title: "{label}",
             div {
                 "data-input": "1",
                 "value": "{v}",
                 "caret": "{caret}",
                 "sel": "{sel}",
+                "focused": if focused { "1" } else { "0" },
+                onfocusout: move |_| {
+                    // Tap outside the field (renderer-dispatched) → blur + hide kbd.
+                    if active() == idx as i32 {
+                        active.set(-1);
+                        anchor.set(caret());
+                        ime::notify_editor_detached();
+                    }
+                },
                 style: format!(
                     "display:flex; height:104px; border-radius:18px; font-size:{}px; color:{}; background:{};",
-                    FIELD_FS as i32, TEXT, if focused() { "#222A4D" } else { SUBTLE }
+                    FIELD_FS as i32, TEXT, if focused { "#222A4D" } else { SUBTLE }
                 ),
                 onmousedown: move |e| {
                     let i = char_at(&value(), e.element_coordinates().x as f32);
                     anchor.set(i);
                     caret.set(i);
-                    if !focused() {
-                        focused.set(true);
+                    if active() != idx as i32 {
+                        active.set(idx as i32);
                         let t = value();
                         let m = t.chars().count() as u32;
-                        ime::notify_editor_attached("text", "Type here", &t, m, m);
+                        ime::notify_editor_attached(&it, &ht, &t, m, m);
                     }
                 },
                 onmousemove: move |e| {
@@ -701,7 +723,7 @@ fn TextPanel() -> Element {
                     let hi = anchor().max(caret());
                     match k.as_str() {
                         "Escape" | "Enter" => {
-                            focused.set(false);
+                            active.set(-1);
                             anchor.set(caret()); // collapse selection so the highlight clears
                             ime::notify_editor_detached();
                         }
@@ -744,20 +766,38 @@ fn TextPanel() -> Element {
                 },
             }
             div {
-                style: "color:{MUTED}; font-size:28px;",
-                if focused() { "Tap = caret · drag = select · type · Enter/Esc/Done dismiss" } else { "Tap the field to type" }
+                style: "color:{MUTED}; font-size:26px;",
+                if focused { "Tap=caret · drag=select · type · Esc/Done dismiss" } else { "{hint}" }
             }
-            if focused() {
+            if focused {
                 button {
-                    style: "display:flex; justify-content:center; padding:26px; border-radius:16px; background:{ACCENT};",
+                    style: "display:flex; justify-content:center; padding:22px; border-radius:16px; background:{ACCENT};",
                     onclick: move |_| {
-                        focused.set(false);
+                        active.set(-1);
                         anchor.set(caret()); // collapse selection so the highlight clears
                         ime::notify_editor_detached();
                     },
-                    div { style: "color:{TEXT}; font-size:32px; font-weight:600;", "Done" }
+                    div { style: "color:{TEXT}; font-size:30px; font-weight:600;", "Done" }
                 }
             }
         }
+    }
+}
+
+// Four fields, one per IME layout to exercise (text / number / phone / email).
+// A single `active` signal enforces one focused field at a time, so each tap
+// re-attaches the IME with that field's `input-type` (the keyboard swaps layout).
+#[component]
+fn TextPanel() -> Element {
+    let active = use_signal(|| -1i32);
+    rsx! {
+        EditField { idx: 0, active, input_type: "text".to_string(),
+            hint: "Text — full QWERTY".to_string(), label: "Text".to_string(), initial: "edit me".to_string() }
+        EditField { idx: 1, active, input_type: "number".to_string(),
+            hint: "Number — numeric keypad".to_string(), label: "Number".to_string(), initial: "42".to_string() }
+        EditField { idx: 2, active, input_type: "phone".to_string(),
+            hint: "Phone — dial pad".to_string(), label: "Phone".to_string(), initial: String::new() }
+        EditField { idx: 3, active, input_type: "email".to_string(),
+            hint: "Email — @ and .com row".to_string(), label: "Email".to_string(), initial: String::new() }
     }
 }
