@@ -255,6 +255,23 @@ for pkg in markdown emoji fonts lang-bg lang-fr launcher statusbar taskbar wart-
     adb shell "su -c '$WART_ENV /data/local/tmp/wart-host --install /data/local/tmp/$pkg.warpkg'"
 done
 
+# The IME (war.ime.keyboard) is packaged by the separate pack-ime-keyboard.sh
+# (Kotlin pipeline), so the `rm -rf $APPS_ROOT` clean-install above would
+# orphan it — leaving the soft keyboard "missing" until manually reinstalled.
+# Reinstall it here if its build output exists (lang plugins are already
+# installed just above, which pack-ime-keyboard.sh needs).
+IME_WASM="$REPO_ROOT/apps/system/war.ime.keyboard/build/compileSync/wasmWasi/main/productionExecutable/kotlin/war-ime-keyboard.wasm"
+if [[ -f "$IME_WASM" ]]; then
+    echo ""
+    echo "▸ reinstalling IME (war.ime.keyboard) so the wipe didn't orphan it …"
+    bash "$REPO_ROOT/tools/scripts/pack-ime-keyboard.sh" >&2 \
+        || echo "⚠ IME repack failed — run pack-ime-keyboard.sh manually." >&2
+else
+    echo ""
+    echo "⚠ IME not built ($IME_WASM missing) — the soft keyboard is NOT installed." >&2
+    echo "  Build it (wart-app/BUILD.md Kotlin pipeline) + run pack-ime-keyboard.sh." >&2
+fi
+
 echo ""
 echo "▸ on-device layout:"
 adb shell "ls -1 $APPS_ROOT/system-apps/ 2>/dev/null"
