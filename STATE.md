@@ -129,13 +129,23 @@ compose-multiplatform-core/
 
 (Other files edited then reverted: `collection/collection/build.gradle`, `settings.gradle`. Probe/debug code in `AndroidXMultiplatformExtension.kt` and `collection/collection/build.gradle` was reverted.)
 
-## Cumulative state from previous sessions (still applicable)
+## ~~Cumulative state from previous sessions (still applicable)~~ — superseded 2026-05-29
 
-### Skiko fork
-- Builds + publishes `org.jetbrains.skiko:skiko-wasm-wasi:<version>` to ~/.m2/ ✅
+The points below were "still applicable" at 2026-05-14 mid-port.
+They are no longer current. Documented post-hoc:
 
-### Sibling wasi modules (Option B fallback) — UNCHANGED
-- 11 sibling `compose-*-wasi/` modules in `/home/harry/wart/` still reference `/home/harry/compose-multiplatform-core/` paths (broken). If Option A doesn't pan out in next sessions, fix these `srcDirs` to point at `/home/harry/wart/compose-multiplatform-core/`.
-
-### Host, WIT, scripts, test-app
-- Untouched. Should work once Option A modules publish wasmWasi klibs (or revert to siblings).
+- **Skiko fork.** Still publishes `org.jetbrains.skiko:skiko-wasm-wasi`
+  to `~/.m2/`. Now lives as a submodule at `external/skiko/`
+  (was `~/wart/skiko/`, then a clone of
+  `codeberg.org/harryzz/skiko`).
+- **Sibling wasi modules (Option B fallback).** Abandoned. The
+  11 `compose-*-wasi/` bundler dirs are not used anymore — the
+  Option A port (the topic of this STATE.md) shipped via
+  Compose's in-fork `wasmWasi()` targets pulled in through the
+  `external/compose-multiplatform-core/` submodule. The
+  bundlers have been gone since the monorepo reorg (task 52 +
+  53, 2026-05-28).
+- **Host, WIT, scripts, test-app.** All since touched many times.
+  Current locations: `runtime/wart-host/`, `wit/`,
+  `tools/scripts/`, `apps/user/wart-app/`. See
+  `docs/repository-layout.md`.
