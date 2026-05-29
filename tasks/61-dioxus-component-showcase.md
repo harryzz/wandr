@@ -154,21 +154,31 @@ gallery needs three expansions:
   scrolled off) **while the title + tabs stayed fixed**.
 - **Task complete** — all 3 phases + scale + sticky-header scrolling shipped.
 
-## Known limitations / follow-ups (text input, observed on device 2026-05-29)
+## Text-input editing — selection + hide-key (device-verified 2026-05-29)
 
-The phase-3 edit box is a minimal first cut. Outstanding:
+The phase-3 edit box gained a real selection model + a working hide-key
+(resolving the first two known limitations from the initial cut):
 
-1. **No text selection** in the edit box — there's no caret-drag / long-press
-   selection or highlighted range; input is append + backspace at the end only.
-   Needs a selection model in the renderer's text-input handling (and richer
-   `war:ime` `commit-text`/`set-selection` verbs, currently stubbed — see
-   `wit/ime.wit` "step 3b ships send-key-event only").
-2. **The IME "hide keyboard" (⌄) key doesn't dismiss the keyboard** for the
-   dioxus editor. Only the demo's own **Done** button / **Enter** detaches (via
-   `ime::notify_editor_detached`). The keyboard's hide key needs to route a
-   detach/hide back to the focused guest (arbiter → editor) — that path isn't
-   wired for the dioxus guest yet.
-3. **Editor input-type variants untested** — the demo declares only
+- **Caret + selection.** The renderer now treats any `data-input` element as an
+  editable field: `paint_input` draws the value text-blob, a selection-highlight
+  rect (`0x8042_85F4`, behind the text) for the `[anchor..caret]` range, and a
+  caret bar (`0xFF42_85F4`) when the field is focused. A new `measure_w` (via the
+  host paragraph interface, cached) maps tap/drag x → caret index in the demo's
+  `char_at`. **Tap = caret**, **drag = select** (the field dispatches `mousemove`
+  during a press because the renderer focuses `F_KEY` elements on pointer-down and
+  routes drag to them), **type = replace selection / insert at caret**, plus
+  Backspace (delete selection or char) and ArrowLeft/Right (move/collapse).
+  Device-verified: `"edit me"` → tap-start put the caret at index 0 → typed `h` →
+  `"hedit me"`; drag selected `[1..7]` (highlight) → typed `z` → `"hze"`.
+- **Hide key (⌄) dismisses the keyboard.** The IME's hide key already emits
+  Escape (key_id=27) via `send-key-event`; the demo now handles `"Escape"` (and
+  `"Enter"`) in `onkeydown` by calling `ime::notify_editor_detached()` +
+  collapsing the selection. Device-verified: tapping ⌄ closes the keyboard and the
+  field reverts to the "Tap the field to type" hint.
+
+## Known limitations / follow-ups (text input)
+
+1. **Editor input-type variants untested** — the demo declares only
    `input-type = "text"`. The IME's per-type layouts (numeric / phone / email /
    url / password / multiline, task 49 step 2) are NOT exercised by this guest;
    `notify_editor_attached` would need to pass the right `input-type` per field

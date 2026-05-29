@@ -277,7 +277,9 @@ impl DomRenderer {
                 if flags & F_DOWN != 0 {
                     self.dispatch("mousedown", eid, x, y, x - hx, cy - hy);
                 }
-                self.focused = None;
+                // A draggable that also listens for keys is a text field (drag
+                // selects, keys type) → focus it; otherwise blur.
+                self.focused = if flags & F_KEY != 0 { Some(eid) } else { None };
                 self.dirty = true;
             }
             // Otherwise begin a tap/scroll gesture; defer click to release.
@@ -527,7 +529,7 @@ impl DomRenderer {
         // Clone what we need before borrowing self mutably for draw ops.
         let n = self.dom.node(node);
         let kind_is_text = matches!(n.kind, NodeKind::Text(_));
-        let (paint, children, eid, text, is_scroll) = match &n.kind {
+        let (paint, children, eid, text, is_scroll, input) = match &n.kind {
             NodeKind::Element { style, listeners, .. } => {
                 let p = style::to_paint(style, inherited);
                 let mut flags = 0u8;
@@ -541,11 +543,26 @@ impl DomRenderer {
                     }
                 }
                 let eid = if flags != 0 { n.element_id } else { None };
-                (p, n.children.clone(), eid.map(|e| (e, flags)), None, style::is_scroll(style))
+                // Text-input element: `data-input` marker + value/caret/sel attrs
+                // (the renderer draws the value + caret + selection itself).
+                let input = if style.contains_key("data-input") {
+                    let value = style.get("value").cloned().unwrap_or_default();
+                    let caret = style.get("caret").and_then(|s| s.parse().ok()).unwrap_or(0usize);
+                    let (a, b) = style
+                        .get("sel")
+                        .and_then(|s| s.split_once(':'))
+                        .and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?)))
+                        .unwrap_or((caret, caret));
+                    Some((value, caret, a, b))
+                } else {
+                    None
+                };
+                (p, n.children.clone(), eid.map(|e| (e, flags)), None, style::is_scroll(style), input)
             }
-            NodeKind::Text(t) => (*inherited, Vec::new(), None, Some(t.clone()), false),
-            NodeKind::Placeholder => (*inherited, Vec::new(), None, None, false),
+            NodeKind::Text(t) => (*inherited, Vec::new(), None, Some(t.clone()), false, None),
+            NodeKind::Placeholder => (*inherited, Vec::new(), None, None, false, None),
         };
+        let input_eid = eid.map(|(e, _)| e);
 
         if !kind_is_text {
             if paint.background != 0 {
@@ -555,6 +572,9 @@ impl DomRenderer {
             }
             if let Some((eid, flags)) = eid {
                 self.hits.push(HitRect { x, y, w, h, eid, flags, scrolled: in_scroll });
+            }
+            if let Some((value, caret, sa, sb)) = input {
+                self.paint_input(sink, &value, caret, sa, sb, input_eid, x, y, h, &paint);
             }
         } else if let Some(t) = text {
             if !t.trim().is_empty() {
@@ -585,6 +605,61 @@ impl DomRenderer {
             for c in children {
                 self.paint_walk(taffy, map, c, x, y, &paint, in_scroll, sink);
             }
+        }
+    }
+
+    /// Width (physical px) of a text run at the given font (cached).
+    fn measure_w<S: CanvasSink>(&mut self, sink: &mut S, text: &str, fs: f32, weight: u32, italic: bool) -> f32 {
+        if text.is_empty() {
+            return 0.0;
+        }
+        let ctx = TextCtx { text: text.to_string(), family: "sans-serif".to_string(), size: fs, weight, italic };
+        measure_cached(&mut self.measure_cache, sink, &ctx).0
+    }
+
+    /// Render a text input's value + selection highlight + caret. The element's
+    /// background is already drawn; this adds (behind→front) the selection rect,
+    /// the value text, and the caret (when the element is focused). Pixel
+    /// positions come from measuring substrings.
+    #[allow(clippy::too_many_arguments)]
+    fn paint_input<S: CanvasSink>(
+        &mut self,
+        sink: &mut S,
+        value: &str,
+        caret: usize,
+        sa: usize,
+        sb: usize,
+        eid: Option<u32>,
+        x: f32,
+        y: f32,
+        h: f32,
+        paint: &PaintProps,
+    ) {
+        let fs = paint.font_size * self.scale;
+        let tx = x + 24.0 * self.scale; // left inset for the value
+        let baseline = y + h * 0.5 + fs * 0.35;
+        let n = value.chars().count();
+        let (lo, hi) = (sa.min(sb).min(n), sa.max(sb).min(n));
+        if lo < hi {
+            let p0: String = value.chars().take(lo).collect();
+            let p1: String = value.chars().take(hi).collect();
+            let x0 = tx + self.measure_w(sink, &p0, fs, paint.font_weight, paint.italic);
+            let x1 = tx + self.measure_w(sink, &p1, fs, paint.font_weight, paint.italic);
+            self.draw_ops.push(DrawOp::Rrect {
+                x: x0, y: y + h * 0.18, w: (x1 - x0).max(2.0), h: h * 0.64, r: 4.0 * self.scale, color: 0x8042_85F4,
+            });
+        }
+        if !value.is_empty() {
+            let blob = sink.create_text_blob(value, "sans-serif", fs, paint.font_weight, paint.italic);
+            self.blobs.push(blob);
+            self.draw_ops.push(DrawOp::Text { blob, x: tx, y: baseline, color: paint.color });
+        }
+        if eid.is_some() && self.focused == eid {
+            let cp: String = value.chars().take(caret.min(n)).collect();
+            let cx = tx + self.measure_w(sink, &cp, fs, paint.font_weight, paint.italic);
+            self.draw_ops.push(DrawOp::Rrect {
+                x: cx, y: y + h * 0.18, w: 3.0 * self.scale, h: h * 0.64, r: 0.0, color: 0xFF42_85F4,
+            });
         }
     }
 }

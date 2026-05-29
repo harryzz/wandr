@@ -606,57 +606,153 @@ fn ColorPanel() -> Element {
     }
 }
 
-// Text input with the soft keyboard (task 61 phase 3). Tapping the field
-// focuses it (the renderer routes keys here) AND calls ime::notify_editor_attached
-// so the host shows the war.ime.keyboard overlay; the IME's keystrokes come back
-// via renderer.on-key-event-v2 → on_key → this field's onkeydown.
+/// Editable field font size (logical px) — used both by the renderer (which
+/// draws the value + caret + selection) and by char_at below (which measures the
+/// same font to map a tap x → caret index). Must match the field's `font-size`.
+const FIELD_FS: f32 = 44.0;
+/// Left inset of the value inside the input box (matches the renderer's
+/// `paint_input` inset). Logical px.
+const FIELD_PAD: f32 = 24.0;
+
+/// Measure a text run's width at the field font (logical px) via the host
+/// paragraph layout — used to map a tap x to a caret index.
+fn text_width(s: &str) -> f32 {
+    if s.is_empty() {
+        return 0.0;
+    }
+    const BIG: f32 = 1.0e6;
+    let b = paragraph::create_paragraph_builder(BIG);
+    paragraph::push_text_style(
+        b,
+        &TextStyle { font_size: FIELD_FS, font_weight: 400, italic: false, color: 0xFFFF_FFFF, font_family: b"sans-serif".to_vec() },
+    );
+    paragraph::add_text(b, s.as_bytes());
+    paragraph::pop_text_style(b);
+    let p = paragraph::build_paragraph(b);
+    paragraph::drop_paragraph_builder(b);
+    paragraph::layout(p, BIG);
+    let w = paragraph::get_max_intrinsic_width(p);
+    paragraph::drop_paragraph(p);
+    w
+}
+
+/// Map an element-relative x (logical px) to the nearest caret index in `value`.
+fn char_at(value: &str, x: f32) -> usize {
+    let x = (x - FIELD_PAD).max(0.0);
+    let chars: Vec<char> = value.chars().collect();
+    let mut best = 0usize;
+    let mut best_d = f32::MAX;
+    for i in 0..=chars.len() {
+        let prefix: String = chars[..i].iter().collect();
+        let d = (text_width(&prefix) - x).abs();
+        if d < best_d {
+            best_d = d;
+            best = i;
+        }
+    }
+    best
+}
+
+// Text input with selection + the soft keyboard (task 61 phase 3). Tap places
+// the caret; drag selects a range; keys edit at the caret/selection. The
+// renderer draws the value + caret + selection (the `data-input` element);
+// this component owns the (value, caret, anchor) state. Tapping attaches the
+// IME (war.ime.keyboard); Escape/Enter/Done detach it (the ⌄ "hide" key sends
+// Escape).
 #[component]
 fn TextPanel() -> Element {
-    let mut text = use_signal(|| String::from("edit me"));
+    let mut value = use_signal(|| String::from("edit me"));
+    let mut caret = use_signal(|| 7usize);
+    let mut anchor = use_signal(|| 7usize);
     let mut focused = use_signal(|| false);
-    let display = text();
+
+    let v = value();
+    let sel = format!("{}:{}", anchor(), caret());
     rsx! {
-        Card { title: "Text field (soft keyboard)",
+        Card { title: "Text field (selection + soft keyboard)",
             div {
+                "data-input": "1",
+                "value": "{v}",
+                "caret": "{caret}",
+                "sel": "{sel}",
                 style: format!(
-                    "display:flex; flex-direction:row; align-items:center; min-height:96px; padding:28px; border-radius:18px; background:{};",
-                    if focused() { "#222A4D" } else { SUBTLE }
+                    "display:flex; height:104px; border-radius:18px; font-size:{}px; color:{}; background:{};",
+                    FIELD_FS as i32, TEXT, if focused() { "#222A4D" } else { SUBTLE }
                 ),
-                onclick: move |_| {
-                    focused.set(true);
-                    let t = text();
-                    let n = t.chars().count() as u32;
-                    ime::notify_editor_attached("text", "Type here", &t, n, n);
+                onmousedown: move |e| {
+                    let i = char_at(&value(), e.element_coordinates().x as f32);
+                    anchor.set(i);
+                    caret.set(i);
+                    if !focused() {
+                        focused.set(true);
+                        let t = value();
+                        let m = t.chars().count() as u32;
+                        ime::notify_editor_attached("text", "Type here", &t, m, m);
+                    }
+                },
+                onmousemove: move |e| {
+                    // Drag extends the selection from the anchor.
+                    caret.set(char_at(&value(), e.element_coordinates().x as f32));
                 },
                 onkeydown: move |e| {
                     let k = e.key().to_string();
-                    if k == "Backspace" {
-                        let mut t = text();
-                        t.pop();
-                        text.set(t);
-                    } else if k == "Enter" {
-                        focused.set(false);
-                        ime::notify_editor_detached();
-                    } else if k.chars().count() == 1 {
-                        let mut t = text();
-                        t.push_str(&k);
-                        text.set(t);
+                    let chars: Vec<char> = value().chars().collect();
+                    let lo = anchor().min(caret());
+                    let hi = anchor().max(caret());
+                    match k.as_str() {
+                        "Escape" | "Enter" => {
+                            focused.set(false);
+                            anchor.set(caret()); // collapse selection so the highlight clears
+                            ime::notify_editor_detached();
+                        }
+                        "Backspace" => {
+                            if lo != hi {
+                                let mut s: String = chars[..lo].iter().collect();
+                                s.extend(&chars[hi..]);
+                                value.set(s);
+                                anchor.set(lo);
+                                caret.set(lo);
+                            } else if lo > 0 {
+                                let mut s: String = chars[..lo - 1].iter().collect();
+                                s.extend(&chars[lo..]);
+                                value.set(s);
+                                anchor.set(lo - 1);
+                                caret.set(lo - 1);
+                            }
+                        }
+                        "ArrowLeft" => {
+                            let p = if lo != hi { lo } else { lo.saturating_sub(1) };
+                            anchor.set(p);
+                            caret.set(p);
+                        }
+                        "ArrowRight" => {
+                            let p = if lo != hi { hi } else { (hi + 1).min(chars.len()) };
+                            anchor.set(p);
+                            caret.set(p);
+                        }
+                        _ if k.chars().count() == 1 => {
+                            // Replace the selection (or insert at caret) with the char.
+                            let mut s: String = chars[..lo].iter().collect();
+                            s.push_str(&k);
+                            s.extend(&chars[hi..]);
+                            value.set(s);
+                            anchor.set(lo + 1);
+                            caret.set(lo + 1);
+                        }
+                        _ => {}
                     }
                 },
-                div { style: "color:{TEXT}; font-size:40px;", "{display}" }
-                if focused() {
-                    div { style: "width:4px; height:48px; background:{ACCENT};" }
-                }
             }
             div {
                 style: "color:{MUTED}; font-size:28px;",
-                if focused() { "Keyboard active — type; Enter or Done to dismiss" } else { "Tap the field to type" }
+                if focused() { "Tap = caret · drag = select · type · Enter/Esc/Done dismiss" } else { "Tap the field to type" }
             }
             if focused() {
                 button {
                     style: "display:flex; justify-content:center; padding:26px; border-radius:16px; background:{ACCENT};",
                     onclick: move |_| {
                         focused.set(false);
+                        anchor.set(caret()); // collapse selection so the highlight clears
                         ime::notify_editor_detached();
                     },
                     div { style: "color:{TEXT}; font-size:32px; font-weight:600;", "Done" }
