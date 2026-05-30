@@ -30,7 +30,7 @@ The libsignal fork's three wstd touchpoints were rebound onto it (off wstd):
 (background ws-process `spawn().detach()`), `src/websocket/mod.rs` (keepalive
 `sleep`); `wstd` dep replaced in both shim Cargo.tomls + the fork's wasm32 deps.
 
-Engine pattern (`repros/signal-engine`): `init` spawns+**detaches** one root task
+Engine pattern (`apps/user/war.signal/engine`, promoted out of repros 2026-05-31): `init` spawns+**detaches** one root task
 (spawn returns `async_task::Task` which **cancels on drop** — must `.detach()`);
 `poll-events` = `step()` then drain a shared `Rc<RefCell<VecDeque<event>>>`. Driven
 by `repros/signal-engine-smoke` (Rust CLI importing chat) `wac plug`'d onto the

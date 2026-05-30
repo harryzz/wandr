@@ -16,7 +16,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 dioxus        = { version = "0.7", default-features = false, features = ["macro", "html", "signals", "hooks"] }
-dioxus-canvas = { path = "../../crates/dioxus-canvas" }
+dioxus-canvas = { path = "../../../../crates/dioxus-canvas" }
 # QR for the device-link code, drawn in-canvas (no image primitive needed —
 # each row is run-length-merged into a few solid divs). default-features off:
 # just the matrix, no image output.
@@ -31,4 +31,4 @@ strip = true
 
 # dioxus 0.7 + wasm32-wasip2 needs the vendored+patched subsecond (task 60).
 [patch.crates-io]
-subsecond = { path = "../../external/subsecond" }
+subsecond = { path = "../../../../external/subsecond" }

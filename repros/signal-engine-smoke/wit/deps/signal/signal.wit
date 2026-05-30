@@ -1,4 +1,4 @@
-// The engine contract this consumer imports (mirror of repros/signal-engine/wit).
+// The engine contract this consumer imports (mirror of apps/user/war.signal/engine/wit).
 package wart:signal@0.1.0;
 
 interface chat {

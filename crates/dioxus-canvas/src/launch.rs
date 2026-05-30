@@ -27,7 +27,7 @@
 //! world *plus* its extra import, in one `generate!`, with
 //! `export_macro_name: "__dioxus_canvas_export"` + `runtime_path:
 //! "::dioxus_canvas::__wit_bindgen::rt"`) and then calls `dioxus_canvas::wire!(app)`.
-//! See `repros/signal-ui` for an example.
+//! See `apps/user/war.signal/ui` for an example.
 
 /// The `my:skiko-gfx` `generate!` (imports `canvas`/`paragraph`/`ime`, exports
 /// `renderer`/`frame-pacing`). Pairs with [`wire!`]; together they are [`launch!`].
@@ -339,7 +339,7 @@ macro_rules! wire {
 /// // dioxus_canvas::launch!(app, pre_frame: |r| r.set_scale(scale()));
 /// ```
 /// For a guest that also imports an engine contract, do your own combined
-/// `generate!` then call [`wire!`] — see the module docs and `repros/signal-ui`.
+/// `generate!` then call [`wire!`] — see the module docs and `apps/user/war.signal/ui`.
 #[macro_export]
 macro_rules! launch {
     ($root:path $(,)?) => {

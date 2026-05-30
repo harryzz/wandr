@@ -67,7 +67,7 @@ dir, the extra package under `deps/`, with `generate_all` + `pub_export_macro` +
 `export_macro_name: "__dioxus_canvas_export"` + `runtime_path:
 "::dioxus_canvas::__wit_bindgen::rt"` — then calls `dioxus_canvas::wire!(app)`.
 Inline multi-package (`package a { } package b { }`) is REJECTED by the inline
-parser → use the `path:"wit"` + `deps/` layout. Example: `repros/signal-ui`
+parser → use the `path:"wit"` + `deps/` layout. Example: `apps/user/war.signal/ui`
 (imports chat, exports renderer/frame-pacing; `wac plug`s onto signal-engine).
 **Polling an external source** (engine `poll-events`, which only advances when
 called): `DomRenderer::set_min_frame_delay(ms)` lowers the on-demand idle floor so

@@ -1,5 +1,5 @@
 TASK=70
 STEP=verify-done
 STATUS=complete
-LAST_SUCCESS=Task 70 verified OK — per-conversation threading on device (tap-to-open, Chats list by name, routed send, Note-to-Self label)
-NOTES=Committed locally; awaiting push authorization for main.
+LAST_SUCCESS=Task 70 done + Signal app promoted to apps/user/war.signal/ (engine/ui/build.sh); device-verified
+NOTES=
