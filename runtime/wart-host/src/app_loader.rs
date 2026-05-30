@@ -76,6 +76,23 @@ impl LoadedApp {
             .filter(|p| p.is_dir())
     }
 
+    /// Writable per-app state dir `<install_dir>/state/`, created on demand and
+    /// preopened as `/state` in the WASI ctx (task 67). Lets a Rust guest (e.g.
+    /// the Signal engine) persist account + protocol snapshot + message history
+    /// across runs via `std::fs`. Distinct from the read-only `assets/` bundle.
+    /// `None` for dev `.cwasm`/asset loads (no install dir) or if the dir can't
+    /// be created.
+    pub fn state_dir(&self) -> Option<PathBuf> {
+        let dir = self.install_dir.as_ref()?.join("state");
+        match fs::create_dir_all(&dir) {
+            Ok(_) => Some(dir),
+            Err(e) => {
+                log::warn!("state_dir: create {} failed: {e}", dir.display());
+                None
+            }
+        }
+    }
+
     /// Task 62: whether this app's surface should follow device
     /// orientation. Reads the `orientation` field from the installed
     /// `<install_dir>/package.toml` (`"auto"` ⇒ rotate, anything else /

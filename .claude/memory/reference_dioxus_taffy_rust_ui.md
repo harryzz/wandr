@@ -54,6 +54,54 @@ declaring the package. Reference generated modules as `crate::my::skiko_gfx::*`
 / `crate::exports::*` (absolute — bare paths fail macro hygiene). See
 [[feedback_clean_library_usage]].
 
+**Engine-backed guest (extra host import) — `launch!` split (2026-05-30, task 67
+item 2).** A guest that needs an EXTRA host import (e.g. `wart:signal/chat`)
+**can't** use `launch!`: a second `generate!` for the extra import conflicts on
+`_rt` / `cabi_realloc` / `__WIT_BINDGEN_COMPONENT_TYPE` / the component-type
+section. So `launch!` is now split into composable halves (backward-compat —
+`launch!` = both; demo + 9 render tests pass): `skiko_world!()` (the `my:skiko-gfx`
+`generate!`) + `wire!(app, pre_frame: …)` (the CanvasSink/IME/renderer wiring,
+which only assumes the skiko bindings exist). The engine-backed guest does ONE
+**combined** `generate!` itself — skiko world + the extra import in one `wit/`
+dir, the extra package under `deps/`, with `generate_all` + `pub_export_macro` +
+`export_macro_name: "__dioxus_canvas_export"` + `runtime_path:
+"::dioxus_canvas::__wit_bindgen::rt"` — then calls `dioxus_canvas::wire!(app)`.
+Inline multi-package (`package a { } package b { }`) is REJECTED by the inline
+parser → use the `path:"wit"` + `deps/` layout. Example: `repros/signal-ui`
+(imports chat, exports renderer/frame-pacing; `wac plug`s onto signal-engine).
+**Polling an external source** (engine `poll-events`, which only advances when
+called): `DomRenderer::set_min_frame_delay(ms)` lowers the on-demand idle floor so
+the host keeps calling `render_frame`; `mark_dirty()` forces a re-diff on change;
+the guest root calls `dioxus::core::needs_update()` (NOT in the `dioxus` facade
+prelude — `dioxus::core` is the `dioxus_core` re-export) to stay armed, and reads
+a `thread_local` model that the `pre_frame` hook updates. See
+[[project_wart_step_executor]], [[project_signal_client_architecture]].
+
+**Edit-field gotcha — IME won't attach without an `onmousemove` (2026-05-30).**
+dioxus-canvas only dispatches `onmousedown`/`onmouseup` for **draggable** elements
+— ones that registered an `onmousemove` listener (`F_MOVE` in `DomRenderer`). A
+text field with only `onmousedown` (+ `onkeydown`) **focuses** on tap (the renderer
+sets focus from the `data-input` `focused` attr → caret shows) but its
+`onmousedown` is NEVER fired, so a handler that calls `editor_attach` there never
+runs and the soft keyboard never appears (symptom: "tap field → caret shows but
+frozen, no keyboard"). Fix: every composer/edit field needs an `onmousemove`
+(the demo's `EditField` has one for drag-select; reuse `caret_at`-style tap→caret
+positioning via the `measure_text` helper). Confirmed via logcat:
+`arbiter: attach-editor … → route to war.ime.keyboard … delivered=true` only
+appears once the field is draggable.
+
+**`display:none` now actually hides (2026-05-30 fix).** It WAS a no-op visually:
+taffy gave the node a zero layout but `paint_walk` still drew it + its subtree at
+(0,0) (symptom: a hidden element's text bled into the top-left corner). Fixed —
+`paint_walk` early-returns on `display:none`. Useful pattern: to keep a focused
+`data-input` alive for key routing while hiding it (e.g. hide a composer when the
+soft keyboard is up), wrap it in a `display:none` bar — the element stays in the
+DOM (ElementId stable, pointer-set focus + key dispatch survive) but paints
+nothing. Per-frame UI scale: `DomRenderer::set_scale(2.0)` from `pre_frame` for a
+hi-dpi panel (1× author px are tiny); remember anything sized in px (e.g. an
+in-canvas QR module width) is multiplied by it — keep logical sizes small enough
+that `size × scale` fits the panel.
+
 Spike result (2026-05-29, `repos/dioxus-spike/`): **`dioxus-core` +
 `taffy` is a viable light reactive Rust UI framework for wart guests** —
 the leading Compose alternative for when a *complex* Rust guest UI is

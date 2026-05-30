@@ -142,6 +142,11 @@ pub struct DomRenderer {
     /// `(text, family, size-bits, weight, italic)` → `(w, h)`. Avoids a host
     /// round-trip per text leaf per layout (taffy measures repeatedly).
     measure_cache: HashMap<(String, String, u32, u32, bool), (f32, f32)>,
+    /// Idle frame-delay floor (ms) the guest can lower so the host keeps calling
+    /// `render_frame` on a cadence — needed by guests that poll an external data
+    /// source (e.g. an engine's `poll-events`) rather than being purely
+    /// input-driven. Default 60_000 (fully on-demand, like the launcher).
+    min_frame_delay: u32,
 }
 
 impl DomRenderer {
@@ -169,6 +174,7 @@ impl DomRenderer {
             down: None,
             blobs: Vec::new(),
             measure_cache: HashMap::new(),
+            min_frame_delay: 60_000,
         }
     }
 
@@ -197,8 +203,24 @@ impl DomRenderer {
         if self.dirty {
             0
         } else {
-            60_000
+            self.min_frame_delay
         }
+    }
+
+    /// Lower the idle frame-delay floor (ms) so the host keeps calling
+    /// `render_frame` on a cadence even when nothing is dirty — for a guest that
+    /// must poll an external source (e.g. an engine's `poll-events`) every frame.
+    /// Pass `60_000` to return to fully on-demand. Call from the `pre_frame` hook.
+    pub fn set_min_frame_delay(&mut self, ms: u32) {
+        self.min_frame_delay = ms;
+    }
+
+    /// Force a re-diff + relayout on the next `render_frame` (e.g. after external
+    /// data — engine events — changed the model the components read). The guest's
+    /// root must also re-run (call `dioxus::prelude::needs_update()` in it) for
+    /// new model data to reach the tree.
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
     }
 
     /// Paint a frame. Re-diffs + relayouts only when dirty, then replays the
@@ -412,6 +434,14 @@ impl DomRenderer {
     /// whether to keep the soft keyboard attached).
     pub fn has_focus(&self) -> bool {
         self.focused.is_some()
+    }
+
+    /// Surface size in the guest's authoring (logical) units — physical px ÷ the
+    /// UI scale. Lets a guest size layout against the panel (e.g. reserve a
+    /// bottom strip for the soft keyboard so a fixed bottom bar rides above it).
+    pub fn surface_size_logical(&self) -> (f32, f32) {
+        let s = self.scale.max(0.001);
+        (self.surface.0 / s, self.surface.1 / s)
     }
 
     pub fn on_pointer_move(&mut self, x: f32, y: f32) {
@@ -646,6 +676,14 @@ impl DomRenderer {
         sink: &mut S,
     ) {
         let Some(&tid) = map.get(&node) else { return };
+        // `display:none` → not painted (taffy gives it a zero layout at (0,0),
+        // but the painter must skip it + its subtree too, or its text/children
+        // bleed into the top-left corner).
+        if let NodeKind::Element { style, .. } = &self.dom.node(node).kind {
+            if style.get("display").map(String::as_str) == Some("none") {
+                return;
+            }
+        }
         let layout = taffy.layout(tid).unwrap();
         let x = parent_x + layout.location.x;
         let y = parent_y + layout.location.y;

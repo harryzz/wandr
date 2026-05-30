@@ -114,7 +114,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use wasmtime::{Engine, Store};
 use wasmtime::component::ResourceTable;
-use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+use wasmtime_wasi::{DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 use crate::app_loader::{AppLoader, AppRef, LoadedApp};
 
@@ -268,6 +268,14 @@ impl ApplicationHandler for App {
             #[cfg(not(target_os = "android"))]
             { wasi_builder.inherit_stderr(); }
             signal_tls::grant_network(&mut wasi_builder); // task 66
+            // Task 67 — writable /state for guest persistence (Signal engine
+            // account + protocol snapshot + history). Created on demand.
+            if let Some(state) = loaded.state_dir() {
+                match wasi_builder.preopened_dir(&state, "/state", DirPerms::all(), FilePerms::all()) {
+                    Ok(_)  => log::info!("preopened {} → /state (read-write)", state.display()),
+                    Err(e) => log::warn!("preopen {} failed: {e:#}", state.display()),
+                }
+            }
             let wasi = wasi_builder.build();
             let host = HostState {
                 renderer,

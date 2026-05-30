@@ -379,6 +379,14 @@ fn run_cwasm_loop(
         Ok(_)  => log::info!("standalone: preopened /system/fonts → /system-fonts (read-only)"),
         Err(e) => log::warn!("standalone: preopen /system/fonts failed: {e:#}"),
     }
+    // Task 67 — writable /state for guest persistence (e.g. the Signal engine's
+    // account + protocol snapshot + history). Read-write; created on demand.
+    if let Some(state) = loaded.state_dir() {
+        match wasi_builder.preopened_dir(&state, "/state", DirPerms::all(), FilePerms::all()) {
+            Ok(_)  => log::info!("standalone: preopened {} → /state (read-write)", state.display()),
+            Err(e) => log::warn!("standalone: preopen {} failed: {e:#}", state.display()),
+        }
+    }
     crate::signal_tls::grant_network(&mut wasi_builder); // task 66
     let wasi = wasi_builder.build();
 

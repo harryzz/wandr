@@ -1,0 +1,55 @@
+package wart:signal@0.1.0;
+
+/// The toolkit-agnostic contract between the Signal engine (this component, which
+/// owns the network/protocol/persistence) and any UI that drives it. The UI calls
+/// `init` once, then `poll-events` each frame to pump the network and drain what
+/// happened; `send` to queue an outgoing text; `history`/`state` for snapshots.
+interface chat {
+  /// One stored conversation message. `id` is engine-assigned and stable.
+  record message {
+    id: u64,
+    sender: string,
+    text: string,
+    ts: u64,
+    outgoing: bool,
+  }
+
+  /// Something the engine produced since the last `poll-events`.
+  variant event {
+    /// A new message (incoming, or the local echo of an outgoing send).
+    message(message),
+    /// Device-link QR payload — render this as a QR for the user to scan.
+    link-url(string),
+    /// Linking finished; carries the linked phone number.
+    linked(string),
+    /// The authenticated message socket is open.
+    connected,
+    /// The socket closed or setup failed (see `state` for detail).
+    disconnected,
+  }
+
+  /// Start the engine: load saved account + history, then link (first run) or
+  /// resume in the background. Idempotent. Returns immediately — progress is
+  /// surfaced through later `poll-events`.
+  init: func();
+
+  /// Pump the network without blocking and return everything that happened since
+  /// the previous call. Call once per UI frame.
+  poll-events: func() -> list<event>;
+
+  /// Queue an outgoing text (echoed locally right away; sent over the wire within
+  /// a couple hundred ms). Returns `Ok` once queued.
+  send: func(text: string) -> result<_, string>;
+
+  /// The full conversation so far.
+  history: func() -> list<message>;
+
+  /// A short human-readable status: "linking" | "linked" | "connected" |
+  /// "error: …".
+  state: func() -> string;
+}
+
+/// The engine half of the Signal app. wasi imports (sockets/tls/io/fs/random/
+/// clocks) are supplied by the wasm32-wasip2 target; only the chat export is
+/// declared here. (The engine world lives in signal-engine's own copy; this dep
+/// only needs the `chat` interface for the driver to import.)

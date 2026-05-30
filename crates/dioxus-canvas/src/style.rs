@@ -158,6 +158,16 @@ pub fn to_taffy(map: &StyleMap, scale: f32) -> Style {
     if let Some(l) = map.get("height").and_then(|v| parse_len(v)) {
         s.size.height = l.scaled(scale).dim();
     }
+    // min-width / min-height. The crucial one is `min-height:0` on a
+    // `flex-grow:1; overflow:scroll` child — without it taffy sizes the child to
+    // its content (flex's default `min-height:auto`), so it never shrinks and its
+    // siblings (a bottom bar) overflow off the container.
+    if let Some(l) = map.get("min-width").and_then(|v| parse_len(v)) {
+        s.min_size.width = l.scaled(scale).dim();
+    }
+    if let Some(l) = map.get("min-height").and_then(|v| parse_len(v)) {
+        s.min_size.height = l.scaled(scale).dim();
+    }
 
     if let Some(p) = px(map, "padding") {
         let lp = LengthPercentage::Length(p * scale);

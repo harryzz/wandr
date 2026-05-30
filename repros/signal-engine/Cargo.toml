@@ -1,26 +1,27 @@
 [package]
-name = "signal-link"
+name = "signal-engine"
 version = "0.1.0"
 edition = "2021"
 publish = false
 
-# Task-67 increment 3a: a wasm32-wasip2 guest that opens Signal's provisioning
-# websocket (over our wasi:tls transport in the libsignal-service-rs fork) and
-# prints the secondary-device link QR. Proves the transport end-to-end against
-# real Signal servers + yields a scannable code.
+# Task-67 Phase 2 item (1): the Signal engine as a wasm32-wasip2 reactor
+# component exporting `wart:signal/chat`. Refactors the proven signal-link CLI
+# (link + receive + send + persist) onto the persistent wart-step-executor so the
+# background tasks survive across `chat.poll-events` calls. Reuses signal-link's
+# store.rs / persist.rs verbatim.
 
-[[bin]]
-name = "signal-link"
-path = "src/main.rs"
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
 
 [dependencies]
 libsignal-service = { path = "../../external/libsignal-service-rs", default-features = false }
 wart-step-executor = { path = "../../external/libsignal-service-rs/wart-wasi-shims/wart-step-executor" }
+wit-bindgen = "0.53"
 futures = "0.3"
 rand = "0.9"
 rand_chacha = "0.9"
 getrandom = "0.3"
-qrcode = { version = "0.14", default-features = false }
 async-trait = "0.1"
 chrono = { version = "0.4", default-features = false }
 base64 = "0.22"

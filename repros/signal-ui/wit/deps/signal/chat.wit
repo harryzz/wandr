@@ -1,0 +1,12 @@
+// The engine contract this UI imports (mirror of repros/signal-engine/wit).
+package wart:signal@0.1.0;
+
+interface chat {
+  record message { id: u64, sender: string, text: string, ts: u64, outgoing: bool }
+  variant event { message(message), link-url(string), linked(string), connected, disconnected }
+  init: func();
+  poll-events: func() -> list<event>;
+  send: func(text: string) -> result<_, string>;
+  history: func() -> list<message>;
+  state: func() -> string;
+}

@@ -328,12 +328,143 @@ roll a minimal executor (futures + task queue + a non-blocking `wasi:io/poll` wi
 0-timeout pollable). Contained in the engine; UI/contract unaffected.
 
 ## Next action (Phase 2 build order)
-1. `repros/signal-engine/` — refactor `signal-link` into a component exporting
-   `wart:signal/chat` (init/poll-events/send/history/state) over a persistent
-   step-executor; reuse `store.rs`/`persist.rs`/the shims.
-2. `repros/signal-ui/` — dioxus-canvas guest importing `chat`; render history +
-   live events from `poll-events`; input → `send`; QR from `link-url`.
-3. Compose via `link.wac`; run on device.
+1. ✅ **DONE 2026-05-30** — `repros/signal-engine/` exports `wart:signal/chat`
+   over a persistent step-executor. See "Phase 2 item (1) result" below.
+2. ✅ **DONE 2026-05-30** — `repros/signal-ui/` dioxus-canvas guest importing
+   `chat`; conversation + composer + send. See "Phase 2 item (2) result" below.
+3. ✅ **DONE 2026-05-30** — composed via `wac plug`, packaged as `war.signal`,
+   running **fully on the Pixel**: in-canvas QR → link → connect → live receive.
+   See "Phase 2 item (3) result" below.
+
+### Phase 2 item (3) result (2026-05-30) — Signal live on device
+`apps/user/war.signal/package.toml` (`world = my:skiko-gfx/skiko-ui`) bundles the
+`wac plug`'d `app.wasm` (signal-ui + signal-engine fused) as a single `ui`
+component. Installed (`wart-host --install`, AOT-precompiled on device) and
+launched via the hybrid stack (`wart-arbiter launch war.signal`). **Verified
+visually on the Pixel 2 XL:** the engine fetched a live provisioning URL from
+Signal, the UI drew it as an **in-canvas QR** (run-length-merged divs, no image
+primitive), the user scanned it off the panel → `LINKED` → `connected` → a phone
+message rendered **live** in the conversation. The whole thing — dioxus UI +
+Signal protocol + `wasi:tls` + persistence — runs through the host on aarch64.
+
+**Host change (writable `/state`):** the engine persists via `std::fs` to
+`/state`; added `LoadedApp::state_dir()` (`<install_dir>/state/`, created on
+demand) + a read-write `/state` preopen in all three WASI-ctx paths
+(`standalone.rs`, `lib.rs` cold path, `run_once.rs`). Task 38 had wired only
+read-only `/assets`. Network + Signal CA were already host-side (task 66), granted
+to every app.
+
+**In-canvas QR (`signal-ui` `QrView`):** provisioning codes are too dense to draw
+as one-cell-per-module, so each row is run-length-merged into a few solid divs and
+laid out **once** (the engine emits `link-url` a single time → no per-frame
+relayout). Reused the `qrcode` crate (matrix only).
+
+**Send direction verified (2026-05-30):** typed a message on the on-device IME
+(war.ime.keyboard) → Enter → `chat::send` → engine → **arrived on the phone's
+Signal (Note to Self)**. Full bidirectional loop proven on-device (phone→device
+receive *and* device→phone send).
+
+**Polish (2026-05-30):** removed the temporary `link-url` stderr log; the UI now
+runs at `set_scale(2.0)` (the hi-dpi panel made 1× text unreadable); and the
+composer bar is `display:none` while the soft keyboard is up (it would otherwise
+sit behind the keyboard) — the `data-input` stays in the tree so focus/keys still
+route, type on the keyboard + Enter to send. That surfaced a **dioxus-canvas
+painter bug**: `display:none` nodes were given a zero taffy layout but still
+*painted* (their text bled to the top-left at (0,0)); fixed `paint_walk` to skip
+`display:none` subtrees (9 render tests still pass).
+
+**Keyboard gotcha:** the composer first showed a caret on tap but **no keyboard**
+— dioxus-canvas only dispatches `onmousedown` (which calls `editor_attach`) for
+**draggable** elements, i.e. ones with an `onmousemove` listener (`F_MOVE`). A
+text field with only `onmousedown`/`onkeydown` focuses (the renderer sets focus
+from the `focused` attr) but never fires `onmousedown`, so the IME never attaches.
+Fix: give any composer/edit field an `onmousemove` (the demo's `EditField` has one
+for drag-select; mine had dropped it). See [[reference_dioxus_taffy_rust_ui]].
+
+**Other gotchas hit:** `adb push <dir> <existing-dir>` **nests** (`signal.warpkg/
+signal.warpkg/…`) so the installer kept reading the first-pushed warpkg — `rm -rf`
+the device dir before each push (see [[feedback_adb_push_dir_nesting]]). The host
+*is* AOT-cache-correct (loader self-heals on `wasm_sha256` drift); the staleness
+was purely the push nesting. Install needs `LD_LIBRARY_PATH=/data/local/tmp`
+(libc++_shared.so).
+
+### Phase 2 item (2) result (2026-05-30)
+`repros/signal-ui` is a dioxus-canvas guest that drives the engine purely through
+`wart:signal/chat`: title bar + connection `state`, a scrollable conversation
+(history backfill + live `poll-events`, outgoing right / incoming left, senders as
+raw ACIs per the v1 decision), and a `data-input` composer whose Send/Enter calls
+`chat::send`. `LinkPanel` shows the `link-url` as **text** (an in-canvas QR needs
+an image primitive — provisioning codes are too dense to draw as flex cells;
+deferred).
+
+**Two enablers in dioxus-canvas** (generic, backward-compatible — demo + 9 render
+tests still pass):
+- `launch!` split into composable `skiko_world!()` (the `my:skiko-gfx`
+  `generate!`) + `wire!(app)` (renderer/sink/IME wiring); `launch!` = both. An
+  engine-backed guest can't use `launch!` directly (a second `generate!` for the
+  extra import conflicts on `_rt`/`cabi_realloc`/the component-type section), so
+  signal-ui does ONE combined `generate!` (skiko + chat, via `wit/` with chat as a
+  `deps/` package + `generate_all`) then `dioxus_canvas::wire!(app)`.
+- `DomRenderer::set_min_frame_delay(ms)` + `mark_dirty()` — the engine only
+  advances during `poll-events`, so the UI can't be purely on-demand. `pre_frame`
+  lowers the frame-delay floor (~8 polls/s), `pump()`s the engine, and
+  `mark_dirty`s on change; `app` calls `dioxus::core::needs_update()` to stay
+  armed. Idle cost is a cheap poll/tick (no relayout unless something arrived).
+
+**Verified (build + shape):** signal-ui imports `my:skiko-gfx/{canvas,paragraph,
+ime}` + `wart:signal/chat`, exports `renderer`/`frame-pacing`. `wac plug
+signal-ui.wasm --plug signal_engine.wasm -o app.wasm` → a deployable app importing
+`my:skiko-gfx/{canvas,paragraph,ime}` + `wasi:tls/sockets` and exporting
+`renderer`/`frame-pacing` (chat satisfied internally). Full **visual** run is
+item (3) — needs wart-host (skiko/EGL canvas host) + network/Signal-CA (task 66,
+wired) + a **writable** `/state` preopen (still pending — task 38 wired only
+`/assets` read).
+
+### Phase 2 item (1) result (2026-05-30)
+**The gate — `wstd::block_on` builds/destroys its reactor per call, so spawned
+tasks die between export calls — is cleared.** New crate
+`external/libsignal-service-rs/wart-wasi-shims/wart-step-executor`: a persistent
+thread-local reactor (installed at `init`, never torn down) advanced by a
+**non-blocking `step()`** (the `wasi:io/poll` 0-duration-timer trick, à la wstd's
+`nonblock_check_pollables`). Bookkeeping mirrors wstd 0.6.6's reactor; only the
+lifecycle + stepping differ. The three transport touchpoints in the libsignal
+fork are rebound off wstd onto it: `wart-wasi-shims/reqwest/src/tls.rs`
+(`AsyncPollable`), `src/push_service/mod.rs` (background ws task `spawn`),
+`src/websocket/mod.rs` (keepalive `sleep`); the `wstd` dep is replaced in both
+shim Cargo.tomls + the fork's wasm32 deps.
+
+`repros/signal-engine` (cdylib) reuses `store.rs`/`persist.rs` verbatim;
+`engine.rs` holds the shared state (`Rc`/`RefCell`) + one background task
+(`run` → `link`/`resume` → `receive_and_send`, the last a `futures::select!`
+over the receive stream and a 200 ms outbox-drain timer reusing `pipe.ws()`).
+`init` spawns + detaches the task; `poll-events` calls `step()` then drains the
+event queue; `send` echoes locally + queues, returns `Ok`.
+
+**Verified end-to-end (desktop, human-in-loop, 2026-05-30):**
+`repros/signal-engine-smoke` (Rust `wasi:cli/command` importing `chat`) `wac
+plug`'d onto the engine → `composed.wasm`, run under `repros/wasi-tls-runner`.
+Full flow observed: `init` → `linking` → **`link-url` QR** (rendered to PNG with
+`qrencode -r url.txt -o qr.png`, scanned on a real Signal phone) → **`LINKED
++359888102000`** → **`CONNECTED`** → **`MSG #1` decrypted** (a note-to-self sync
+message). The entire flow ran across *hundreds of separate `poll-events` calls*
+(each = one non-blocking `step()`); the background link/receive tasks survived
+the export-call boundaries — the exact thing `block_on` can't do. Decryption,
+persistence, and the Signal-CA TLS path all intact after the executor swap.
+
+Re-run:
+`wac plug repros/signal-engine-smoke/target/wasm32-wasip2/release/signal-engine-smoke.wasm --plug repros/signal-engine/target/wasm32-wasip2/release/signal_engine.wasm -o repros/signal-engine-smoke/composed.wasm`
+then `wasi-tls-runner composed.wasm <state-dir>`. Gotchas: the Signal
+provisioning link expires ~89 s (scan promptly + tap Approve); kill the runner
+with `pkill -x wasi-tls-runner` (`-f …composed` also matches your own shell).
+**Identity / display names (decided 2026-05-30, user):** Signal addresses by
+`ServiceId` = ACI | PNI (UUIDs); phone number is only the registration anchor,
+and usernames are an optional handle resolving to an ACI (fork has
+`look_up_username*` in `src/websocket/usernames.rs`). **v1 shows the raw ACI**
+(`message.sender` = `{:?}` of `content.metadata.sender`) — stable but not
+human-readable. Display-name resolution (profile-name via profile key, or
+username) is a deferred follow-up: keep ACI as the stable id, just populate
+`sender` with a resolved name later. No engine change needed now.
+
 Also pending: on-device **writable** `/state` preopen in wart-host (task 38 wired
 only `/assets` read).
 - **Sending:** wire `MessageSender` (outgoing 1:1 text).

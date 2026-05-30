@@ -1,0 +1,91 @@
+//! Pure-Rust file persistence over WASI fs (guest preopen `/state`). Simple by
+//! design (testing, not production): rewrite the whole account/store snapshot on
+//! change, append message history as JSON lines. Lets the device link once and
+//! reconnect on restart instead of re-linking.
+
+use serde::{Deserialize, Serialize};
+
+const DIR: &str = "/state";
+const ACCOUNT: &str = "/state/account.json";
+const SNAPSHOT: &str = "/state/store.json";
+const MESSAGES: &str = "/state/messages.jsonl";
+
+/// Everything needed to re-authenticate without re-linking.
+#[derive(Serialize, Deserialize)]
+pub struct Account {
+    pub aci: uuid::Uuid,
+    pub pni: uuid::Uuid,
+    pub number: String,
+    pub password: String,
+    pub device_id: u32,
+    pub registration_id: u32,
+    /// base64 of `IdentityKeyPair::serialize()` (the provisioned ACI identity).
+    pub identity_b64: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct StoredMessage {
+    pub from: String,
+    pub text: String,
+    pub ts: u64,
+    pub outgoing: bool,
+}
+
+fn ensure_dir() {
+    let _ = std::fs::create_dir_all(DIR);
+}
+
+pub fn load_account() -> Option<Account> {
+    let bytes = std::fs::read(ACCOUNT).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+pub fn save_account(account: &Account) -> std::io::Result<()> {
+    ensure_dir();
+    std::fs::write(ACCOUNT, serde_json::to_vec_pretty(account).unwrap())
+}
+
+pub fn load_snapshot() -> Option<Vec<u8>> {
+    std::fs::read(SNAPSHOT).ok()
+}
+
+pub fn save_snapshot(bytes: &[u8]) -> std::io::Result<()> {
+    ensure_dir();
+    std::fs::write(SNAPSHOT, bytes)
+}
+
+pub fn append_message(msg: &StoredMessage) -> std::io::Result<()> {
+    use std::io::Write;
+    ensure_dir();
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(MESSAGES)?;
+    writeln!(f, "{}", serde_json::to_string(msg).unwrap())
+}
+
+const OUTBOX: &str = "/state/outbox.txt";
+
+/// Drain the outbox: each non-empty line is a note-to-self to send. Deletes the
+/// file so messages aren't resent on the next run.
+pub fn take_outbox() -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(OUTBOX) else {
+        return Vec::new();
+    };
+    let _ = std::fs::remove_file(OUTBOX);
+    text.lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .map(|l| l.to_string())
+        .collect()
+}
+
+pub fn load_messages() -> Vec<StoredMessage> {
+    std::fs::read_to_string(MESSAGES)
+        .map(|s| {
+            s.lines()
+                .filter_map(|l| serde_json::from_str(l).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}

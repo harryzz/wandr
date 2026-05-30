@@ -98,6 +98,13 @@ pub fn run_with_engine(engine: &Engine, app_id: &str) -> Result<()> {
         Ok(_)  => log::info!("run_once: preopened /system/fonts → /system-fonts (read-only)"),
         Err(e) => log::warn!("run_once: preopen /system/fonts failed: {e:#}"),
     }
+    // Task 67 — writable /state (read-write) for guest persistence.
+    if let Some(state) = loaded.state_dir() {
+        match wasi_builder.preopened_dir(&state, "/state", DirPerms::all(), FilePerms::all()) {
+            Ok(_)  => log::info!("run_once: preopened {} → /state (read-write)", state.display()),
+            Err(e) => log::warn!("run_once: preopen {} failed: {e:#}", state.display()),
+        }
+    }
     crate::signal_tls::grant_network(&mut wasi_builder); // task 66
     let wasi = wasi_builder.build();
 

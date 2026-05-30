@@ -81,7 +81,7 @@ async fn do_link(
     let push =
         PushService::new(SignalServers::Production, None, "wart-signal-link");
     let (tx, mut rx) = futures::channel::mpsc::channel(1);
-    let task = wstd::runtime::spawn(async move {
+    let task = wart_step_executor::spawn(async move {
         let mut csprng = seed_rng();
         link_device(
             &mut aci, &mut pni, &mut csprng, push, &password, "wart", tx,
@@ -343,8 +343,26 @@ async fn do_receive(
     Ok(())
 }
 
-#[wstd::main]
-async fn main() {
+// The libsignal transport now runs on the persistent `wart-step-executor` (the
+// engine in `repros/signal-engine` needs it to survive across `chat.poll-events`;
+// the shared fork binds to it). This CLI drives it the simple way: spawn the app
+// future, then `step()` to completion. See [[project_wart_step_executor]].
+fn main() {
+    wart_step_executor::init();
+    let done = std::rc::Rc::new(std::cell::Cell::new(false));
+    let d = done.clone();
+    wart_step_executor::spawn(async move {
+        run_app().await;
+        d.set(true);
+    })
+    .detach();
+    while !done.get() {
+        wart_step_executor::step();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+async fn run_app() {
     let history = persist::load_messages();
     eprintln!("[signal-link] {} message(s) in history", history.len());
     for m in history.iter().rev().take(5).rev() {

@@ -1,44 +1,43 @@
-//! The `launch!` macro — makes a wart guest from a dioxus app with one line.
+//! The `launch!` macro — makes a wart guest from a dioxus app with one line —
+//! plus its two composable halves, `skiko_world!` and `wire!`.
 //!
 //! `dioxus-canvas` stays WIT-agnostic (talks to the host only through
-//! [`CanvasSink`](crate::CanvasSink)); this macro is what bridges it to the
-//! concrete `my:skiko-gfx` host contract. It **expands in the guest crate**
+//! [`CanvasSink`](crate::CanvasSink)); these macros are what bridge it to the
+//! concrete `my:skiko-gfx` host contract. They **expand in the guest crate**
 //! because a wasm component's exported symbols must be compiled into the final
 //! cdylib — so the backend is *generated*, never hand-written. The guest's own
-//! source stays pure dioxus: components + this one call.
+//! source stays pure dioxus: components + one call.
 //!
-//! What it emits, all in the guest crate (a single `wit_bindgen::generate!` over
-//! the full `my:skiko-gfx` world — imports + exports — so there's no
-//! split-package conflict):
-//!   * the WIT bindings (`crate::my::skiko_gfx::*` imports, `crate::exports::*`),
-//!   * a [`CanvasSink`](crate::CanvasSink) over the host `canvas` interface,
-//!   * `crate::measure_text` / `crate::editor_attach` / `crate::editor_detach`
-//!     — backend host helpers the components call (instead of raw WIT),
-//!   * the thread-local [`DomRenderer`](crate::DomRenderer) + the `renderer` /
-//!     `frame-pacing` `Guest` impls + the component export.
+//! Two halves so a guest can add **extra host imports** (e.g. an engine contract
+//! like `wart:signal/chat`) without a second `generate!` (which would conflict on
+//! `_rt` / `cabi_realloc` / the component-type section):
+//!   * [`skiko_world!`] — the single `wit_bindgen::generate!` over the
+//!     `my:skiko-gfx` world (imports + exports), emitting `crate::my::skiko_gfx::*`
+//!     + `crate::exports::*` + the `__dioxus_canvas_export!` wiring macro.
+//!   * [`wire!`] — everything else: a [`CanvasSink`](crate::CanvasSink) over the
+//!     host `canvas` interface, the `crate::measure_text` / `editor_attach` /
+//!     `editor_detach` helpers, and the thread-local [`DomRenderer`] +
+//!     `renderer`/`frame-pacing` `Guest` impls + the component export. It assumes
+//!     the `my:skiko-gfx` bindings already exist in the crate, so it works whether
+//!     they came from `skiko_world!` or a guest's own combined `generate!`.
+//!   * [`launch!`] = `skiko_world!()` + `wire!(app)` — the one-liner for guests
+//!     with no extra imports.
 //!
-//! Requires `wit-bindgen` in the guest crate (the export `generate!` runs
-//! there). The component source never names it; a different backend would be a
-//! different `launch!`-shaped macro, with no change to the components.
+//! An engine-backed guest does its own combined `generate!` (the `my:skiko-gfx`
+//! world *plus* its extra import, in one `generate!`, with
+//! `export_macro_name: "__dioxus_canvas_export"` + `runtime_path:
+//! "::dioxus_canvas::__wit_bindgen::rt"`) and then calls `dioxus_canvas::wire!(app)`.
+//! See `repros/signal-ui` for an example.
 
-/// See the module docs. Usage:
-/// ```ignore
-/// fn app() -> Element { rsx! { /* ... */ } }
-/// dioxus_canvas::launch!(app);
-/// // optional per-frame hook (e.g. push a runtime UI scale):
-/// // dioxus_canvas::launch!(app, pre_frame: |r| r.set_scale(scale()));
-/// ```
+/// The `my:skiko-gfx` `generate!` (imports `canvas`/`paragraph`/`ime`, exports
+/// `renderer`/`frame-pacing`). Pairs with [`wire!`]; together they are [`launch!`].
 #[macro_export]
-macro_rules! launch {
-    ($root:path $(,)?) => {
-        $crate::launch!($root, pre_frame: |_r| {});
-    };
-    ($root:path, pre_frame: $pre:expr $(,)?) => {
-        // The full `my:skiko-gfx` world (imports + exports) in one generate!.
+macro_rules! skiko_world {
+    () => {
         // Trimmed package (the canonical WIT's `matrix-3x3` is rejected by the
         // guest wit-parser); records/enums verbatim for structural matching
         // against the host's full interface. `pub_export_macro` makes the
-        // export-wiring macro `#[macro_export]` so this macro can invoke it.
+        // export-wiring macro `#[macro_export]` so `wire!` can invoke it.
         $crate::__wit_bindgen::generate!({
             inline: r#"
 package my:skiko-gfx@0.1.0;
@@ -145,7 +144,18 @@ world dioxus-app {
             // so the guest crate needs no wit-bindgen dependency of its own.
             runtime_path: "::dioxus_canvas::__wit_bindgen::rt",
         });
+    };
+}
 
+/// The renderer/sink/IME wiring. Assumes the `my:skiko-gfx` bindings already
+/// exist in the crate (from [`skiko_world!`] or a guest's own combined
+/// `generate!`). Pairs with that; together they are [`launch!`].
+#[macro_export]
+macro_rules! wire {
+    ($root:path $(,)?) => {
+        $crate::wire!($root, pre_frame: |_r| {});
+    };
+    ($root:path, pre_frame: $pre:expr $(,)?) => {
         // ── host canvas adapter (CanvasSink → my:skiko-gfx/canvas) ───────────
         #[doc(hidden)]
         fn __dioxus_canvas_paint(color: u32) -> crate::my::skiko_gfx::canvas::PaintAttrs {
@@ -297,5 +307,25 @@ world dioxus-app {
         }
 
         __dioxus_canvas_export!(__DioxusCanvasGuest);
+    };
+}
+
+/// One-liner for a guest with no extra host imports. Usage:
+/// ```ignore
+/// fn app() -> Element { rsx! { /* ... */ } }
+/// dioxus_canvas::launch!(app);
+/// // optional per-frame hook (e.g. push a runtime UI scale):
+/// // dioxus_canvas::launch!(app, pre_frame: |r| r.set_scale(scale()));
+/// ```
+/// For a guest that also imports an engine contract, do your own combined
+/// `generate!` then call [`wire!`] — see the module docs and `repros/signal-ui`.
+#[macro_export]
+macro_rules! launch {
+    ($root:path $(,)?) => {
+        $crate::launch!($root, pre_frame: |_r| {});
+    };
+    ($root:path, pre_frame: $pre:expr $(,)?) => {
+        $crate::skiko_world!();
+        $crate::wire!($root, pre_frame: $pre);
     };
 }

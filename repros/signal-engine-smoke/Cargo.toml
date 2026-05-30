@@ -1,0 +1,20 @@
+[package]
+name = "signal-engine-smoke"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Verification driver for task-67 Phase 2 item (1): a wasi:cli/command that
+# imports `wart:signal/chat` and drives signal-engine through the contract.
+# WAC-plugged onto the engine, run under repros/wasi-tls-runner. See src/main.rs.
+
+[[bin]]
+name = "signal-engine-smoke"
+path = "src/main.rs"
+
+[dependencies]
+wit-bindgen = "0.53"
+qrcode = { version = "0.14", default-features = false }
+
+[profile.release]
+opt-level = "s"
