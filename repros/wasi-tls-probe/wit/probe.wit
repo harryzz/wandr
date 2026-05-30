@@ -1,0 +1,11 @@
+// Reachability probe world — pulls in the standard wasi:cli imports (for a
+// command `main` + stdio), wasi:sockets (DNS + TCP), and the Phase-1
+// wasi:tls@0.2.0-draft client API. `generate_all` emits bindings for every
+// interface in wit/deps regardless of world membership, so sockets/io/clocks
+// come through even though only cli + tls are explicitly included here.
+package wart:wasi-tls-probe;
+
+world probe {
+    include wasi:cli/imports@0.2.6;
+    include wasi:tls/imports@0.2.0-draft;
+}

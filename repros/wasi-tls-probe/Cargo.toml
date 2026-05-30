@@ -1,0 +1,20 @@
+[package]
+name = "wasi-tls-probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# wasi-tls reachability probe (task: Signal transport de-risk).
+# Builds to a wasm32-wasip2 *component* (the wasip2 target emits components
+# directly — no `wasm-tools component new` needed). Run with:
+#   wasmtime run -S inherit-network -S allow-ip-name-lookup -S tls <wasm>
+
+[[bin]]
+name = "wasi-tls-probe"
+path = "src/main.rs"
+
+[dependencies]
+wit-bindgen = "0.53"
+
+[profile.release]
+opt-level = "s"
