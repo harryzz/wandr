@@ -280,7 +280,7 @@ fn app() -> Element {
                 if let Some(url) = link_url {
                     LinkPanel { url }
                 }
-                Conversation { messages }
+                Conversation { messages, contacts: contacts.clone() }
                 Composer {}
             } else {
                 Contacts { contacts }
@@ -358,7 +358,7 @@ fn row_runs(colors: &[qrcode::Color], w: usize, y: usize, module: i32) -> Vec<(i
 }
 
 #[component]
-fn Conversation(messages: Vec<UiMsg>) -> Element {
+fn Conversation(messages: Vec<UiMsg>, contacts: Vec<UiContact>) -> Element {
     rsx! {
         div {
             style: "display:flex; flex-direction:column; overflow:scroll; flex-grow:1; min-height:0; padding:24px; gap:14px;",
@@ -366,27 +366,44 @@ fn Conversation(messages: Vec<UiMsg>) -> Element {
                 div { style: "color:{MUTED}; font-size:28px; padding:24px;", "No messages yet." }
             }
             for m in messages {
-                div {
-                    key: "{m.id}",
-                    // Row: align outgoing right, incoming left.
-                    style: format!(
-                        "display:flex; flex-direction:row; justify-content:{};",
-                        if m.outgoing { "flex-end" } else { "flex-start" }
-                    ),
-                    div {
-                        style: format!(
-                            "display:flex; flex-direction:column; gap:6px; padding:18px; border-radius:18px; background:{};",
-                            if m.outgoing { OUT_BUBBLE } else { IN_BUBBLE }
-                        ),
-                        if !m.outgoing {
-                            div { style: "color:{SENDER}; font-size:22px; font-weight:600;", "{short_sender(&m.sender)}" }
+                {
+                    // Resolve the sender ACI → contact name (fallback: short ACI).
+                    let label = sender_label(&m.sender, &contacts);
+                    rsx! {
+                        div {
+                            key: "{m.id}",
+                            // Row: align outgoing right, incoming left.
+                            style: format!(
+                                "display:flex; flex-direction:row; justify-content:{};",
+                                if m.outgoing { "flex-end" } else { "flex-start" }
+                            ),
+                            div {
+                                style: format!(
+                                    "display:flex; flex-direction:column; gap:6px; padding:18px; border-radius:18px; background:{};",
+                                    if m.outgoing { OUT_BUBBLE } else { IN_BUBBLE }
+                                ),
+                                if !m.outgoing {
+                                    div { style: "color:{SENDER}; font-size:22px; font-weight:600;", "{label}" }
+                                }
+                                div { style: "color:{TEXT}; font-size:30px;", "{m.text}" }
+                            }
                         }
-                        div { style: "color:{TEXT}; font-size:30px;", "{m.text}" }
                     }
                 }
             }
         }
     }
+}
+
+/// `<ACI:uuid>` → the matching contact's name, else the short ACI.
+fn sender_label(sender: &str, contacts: &[UiContact]) -> String {
+    let inner = sender.trim_start_matches('<').trim_end_matches('>');
+    let uuid = inner.split_once(':').map(|(_, u)| u).unwrap_or(inner);
+    contacts
+        .iter()
+        .find(|c| c.id == uuid)
+        .map(|c| c.name.clone())
+        .unwrap_or_else(|| short_sender(sender))
 }
 
 /// First letter of a name, uppercased — the avatar placeholder when a contact
