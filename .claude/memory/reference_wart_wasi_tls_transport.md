@@ -29,7 +29,11 @@ Key facts (verified in `external/wasmtime/crates/wasi-tls` + `wasmtime-wasi-45`)
   (`providers/rustls.rs:34`). `wasi:tls` gives the guest **no** way to pass a CA.
   Fix is host-side + small: `TlsProvider` is a public trait (`lib.rs:174`) — wart
   supplies a provider whose RootCertStore = public roots + Signal's CA (the PEMs
-  presage/libsignal-service-rs already bundle).
+  presage/libsignal-service-rs already bundle). **PROVEN 2026-05-30** via
+  `repros/wasi-tls-runner/` — a host runner with a custom `TlsProvider`
+  (webpki roots + Signal's self-signed `O=Signal Messenger, LLC` CA) ran the same
+  probe component and `chat.signal.org` handshook + returned `HTTP/1.1 404`
+  (trusted; 404 = wrong path, irrelevant to transport).
 
 Bindgen gotcha: the multi-package wasi `wit/deps` tree needs **wit-bindgen 0.53**
 (0.46's macro errors `failed to resolve directory while parsing WIT`).

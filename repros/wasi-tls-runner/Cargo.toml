@@ -1,0 +1,26 @@
+[package]
+name = "wasi-tls-runner"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Desktop host runner that instantiates the wasi-tls-probe component with a
+# custom `wasmtime_wasi_tls::TlsProvider` whose root store = webpki public roots
+# + Signal's pinned CA. Proves the Signal handshake succeeds once the host trusts
+# Signal's CA — exactly the small host-side change wart-host would make.
+#
+#   cargo run --release -- ../wasi-tls-probe/target/wasm32-wasip2/release/wasi-tls-probe.wasm
+#
+# Versions mirror wasmtime/crates/wasi-tls's own (rustls 0.23 / tokio-rustls
+# 0.26 / webpki-roots 0.26) so there's a single copy of each at the trait edge.
+
+[dependencies]
+wasmtime          = { version = "45", features = ["component-model", "async"] }
+wasmtime-wasi     = "45"
+wasmtime-wasi-tls = "45"
+tokio             = { version = "1.51", features = ["rt-multi-thread", "macros"] }
+rustls            = { version = "0.23", default-features = false, features = ["ring", "tls12", "logging"] }
+tokio-rustls      = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+webpki-roots      = "0.26"
+rustls-pemfile    = "2"
+anyhow            = "1"
