@@ -102,6 +102,22 @@ hi-dpi panel (1× author px are tiny); remember anything sized in px (e.g. an
 in-canvas QR module width) is multiplied by it — keep logical sizes small enough
 that `size × scale` fits the panel.
 
+**`<img>` support (2026-05-31, task 67 Phase 3).** A guest just writes
+`img { src: … }`; the renderer resolves it (content-cached by `src`), decodes,
+and blits scaled into the element box via the host image verbs
+(`create-image-from-encoded` + `draw-image-rect`; `CanvasSink::create_image` +
+`draw_image_rect`). Supported `src`: `data:…;base64,…` (bytes the guest already
+has — e.g. an engine-provided avatar) and a **file path** like `/assets/icon.png`
+(the warpkg bundle, mounted read-only at `/assets` by the host — task 38; the
+renderer `std::fs::read`s it). NOT supported: `http(s)://…` URLs — the canvas
+guest has no network (only the engine has `wasi:tls`), so remote images must be
+fetched by the engine and passed as bytes. The dioxus `asset!`/manganis macro
+also doesn't apply (no dioxus bundler) — use the `/assets/…` path form instead.
+dioxus-canvas's trimmed WIT must include the image verbs (added to `skiko_world!`
++ any guest's combined `generate!`); base64 decode lives in dioxus-canvas.
+Avatars draw square (rounded corners only affect the element bg, not the blit) —
+a rounded clip would be a follow-up.
+
 Spike result (2026-05-29, `repos/dioxus-spike/`): **`dioxus-core` +
 `taffy` is a viable light reactive Rust UI framework for wart guests** —
 the leading Compose alternative for when a *complex* Rust guest UI is

@@ -57,9 +57,9 @@ fn main() {
                     eprintln!("[smoke] LINKED ✓ {number}");
                 },
                 Event::Connected => {
-                    eprintln!("[smoke] CONNECTED ✓ — send a message to watch it arrive");
+                    eprintln!("[smoke] CONNECTED ✓ — fetching contacts; send a message to watch it arrive");
                     connected = true;
-                    // After connecting, run another 60 s to catch live messages.
+                    // After connecting, run another 60 s to catch contacts + live messages.
                     drain_until = Some(Instant::now() + Duration::from_secs(60));
                 },
                 Event::Disconnected => {
@@ -73,6 +73,18 @@ fn main() {
                         m.sender,
                         m.text
                     );
+                },
+                Event::ContactsUpdated(n) => {
+                    eprintln!("[smoke] CONTACTS ✓ {n} fetched + persisted to /state:");
+                    for c in chat::contacts() {
+                        eprintln!(
+                            "  {} | {} | {} | pos {}",
+                            c.id,
+                            c.name,
+                            c.phone.as_deref().unwrap_or("-"),
+                            c.inbox_position
+                        );
+                    }
                 },
             }
         }

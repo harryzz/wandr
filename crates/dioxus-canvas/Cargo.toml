@@ -30,6 +30,9 @@ taffy       = "0.7"
 # itself — a guest then depends ONLY on dioxus-canvas (+ dioxus for rsx!).
 # Latest as of 2026-05-30.
 wit-bindgen = "0.57.1"
+# Decode `<img src="data:…;base64,…">` payloads before handing the bytes to the
+# host image decoder. default-features off (no std needed) keeps the guest small.
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 # The `dioxus` facade (for `rsx!`/`use_signal`) drives the host-side unit

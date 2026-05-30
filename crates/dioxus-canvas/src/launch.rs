@@ -79,6 +79,14 @@ interface canvas {
     create-text-blob: func(text: list<u8>, font-family: list<u8>, size: f32, weight: u32, italic: bool) -> u32;
     draw-text-blob:   func(id: u32, x: f32, y: f32, paint: paint-attrs);
     drop-text-blob:   func(id: u32);
+    create-image-from-encoded: func(bytes: list<u8>) -> u32;
+    get-image-width:  func(image-id: u32) -> u32;
+    get-image-height: func(image-id: u32) -> u32;
+    draw-image-rect:  func(image-id: u32,
+                           src-x: f32, src-y: f32, src-w: f32, src-h: f32,
+                           dst-x: f32, dst-y: f32, dst-w: f32, dst-h: f32,
+                           paint: paint-attrs);
+    drop-image:       func(image-id: u32);
 }
 
 interface paragraph {
@@ -207,6 +215,16 @@ macro_rules! wire {
             fn measure_text(&mut self, text: &str, family: &str, size: f32, weight: u32, italic: bool) -> (f32, f32) {
                 crate::measure_text(text, family, size, weight, italic)
             }
+            fn create_image(&mut self, bytes: &[u8]) -> u32 {
+                crate::my::skiko_gfx::canvas::create_image_from_encoded(bytes)
+            }
+            fn draw_image_rect(&mut self, id: u32, x: f32, y: f32, w: f32, h: f32) {
+                use crate::my::skiko_gfx::canvas as c;
+                // Full source → dst box (the renderer scales the image to fit).
+                let (iw, ih) = (c::get_image_width(id) as f32, c::get_image_height(id) as f32);
+                if iw <= 0.0 || ih <= 0.0 { return; }
+                c::draw_image_rect(id, 0.0, 0.0, iw, ih, x, y, w, h, __dioxus_canvas_paint(0xFFFF_FFFF));
+            }
         }
 
         // ── backend host helpers the app's components call ───────────────────
@@ -242,6 +260,9 @@ macro_rules! wire {
         pub fn editor_detach() {
             crate::my::skiko_gfx::ime::notify_editor_detached();
         }
+        // Images: a guest just renders `img { src: "data:…;base64,…" }` or
+        // `img { src: "/assets/…" }`; the renderer (DomRenderer) decodes/reads,
+        // caches, and blits via the CanvasSink. No guest-side image API needed.
 
         // ── renderer + frame-pacing exports → DomRenderer ────────────────────
         ::std::thread_local! {

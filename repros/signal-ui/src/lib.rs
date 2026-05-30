@@ -71,11 +71,43 @@ struct UiMsg {
     outgoing: bool,
 }
 
+#[derive(Clone, PartialEq, Default)]
+struct UiContact {
+    id: String,
+    name: String,
+    phone: Option<String>,
+    /// `data:…;base64,…` URI for `img { src }`, encoded once when contacts load.
+    avatar_uri: Option<String>,
+}
+
 #[derive(Default)]
 struct Model {
     state: String,
     link_url: Option<String>,
     messages: Vec<UiMsg>,
+    contacts: Vec<UiContact>,
+}
+
+/// Fetch the engine's contacts, encode avatars into data URIs (once), sort by
+/// name. Built off the dioxus runtime (called from `pump`).
+fn load_contacts() -> Vec<UiContact> {
+    use base64::Engine as _;
+    let mut v: Vec<UiContact> = chat::contacts()
+        .into_iter()
+        .map(|c| UiContact {
+            avatar_uri: c.avatar.map(|b| {
+                format!(
+                    "data:image/jpeg;base64,{}",
+                    base64::engine::general_purpose::STANDARD.encode(b)
+                )
+            }),
+            id: c.id,
+            name: c.name,
+            phone: c.phone,
+        })
+        .collect();
+    v.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    v
 }
 
 thread_local! {
@@ -94,8 +126,10 @@ fn pump() -> bool {
             // Backfill persisted history (messages from before this UI started;
             // live ones arrive as events below).
             let hist = chat::history();
+            let contacts = load_contacts();
             MODEL.with(|m| {
                 let mut m = m.borrow_mut();
+                m.contacts = contacts;
                 for msg in hist {
                     m.messages.push(UiMsg {
                         id: msg.id,
@@ -109,6 +143,7 @@ fn pump() -> bool {
     });
 
     let mut changed = false;
+    let mut refresh = false;
     let events = chat::poll_events();
     if !events.is_empty() {
         MODEL.with(|m| {
@@ -131,10 +166,17 @@ fn pump() -> bool {
                         m.link_url = None;
                     }
                     chat::Event::Disconnected => {}
+                    // Re-fetched below (load_contacts needs no &mut m borrow).
+                    chat::Event::ContactsUpdated(_) => refresh = true,
                 }
             }
         });
         changed = true;
+    }
+
+    if refresh {
+        let contacts = load_contacts();
+        MODEL.with(|m| m.borrow_mut().contacts = contacts);
     }
 
     let state = chat::state();
@@ -148,10 +190,10 @@ fn pump() -> bool {
     changed
 }
 
-fn snapshot() -> (String, Option<String>, Vec<UiMsg>) {
+fn snapshot() -> (String, Option<String>, Vec<UiMsg>, Vec<UiContact>) {
     MODEL.with(|m| {
         let m = m.borrow();
-        (m.state.clone(), m.link_url.clone(), m.messages.clone())
+        (m.state.clone(), m.link_url.clone(), m.messages.clone(), m.contacts.clone())
     })
 }
 
@@ -205,21 +247,44 @@ fn app() -> Element {
     // the tree.
     dioxus::core::needs_update();
 
-    let (state, link_url, messages) = snapshot();
+    // 0 = chat, 1 = contacts.
+    let mut tab = use_signal(|| 0u8);
+
+    let (state, link_url, messages, contacts) = snapshot();
+    let n = contacts.len();
+    let chat_bg = if tab() == 0 { ACCENT } else { BAR };
+    let people_bg = if tab() == 1 { ACCENT } else { BAR };
     rsx! {
         div {
             style: "display:flex; flex-direction:column; height:100%; background:{BG};",
-            // Title bar.
+            // Title bar + tabs.
             div {
                 style: "display:flex; flex-direction:row; align-items:center; justify-content:space-between; padding:28px; background:{BAR};",
                 div { style: "color:{TEXT}; font-size:44px; font-weight:700;", "Signal" }
                 div { style: "color:{MUTED}; font-size:26px;", "{state}" }
             }
-            if let Some(url) = link_url {
-                LinkPanel { url }
+            div {
+                style: "display:flex; flex-direction:row; gap:12px; padding:14px 24px; background:{BAR};",
+                button {
+                    style: format!("display:flex; justify-content:center; flex-grow:1; padding:14px; border-radius:14px; background:{};", chat_bg),
+                    onclick: move |_| tab.set(0),
+                    div { style: "color:{TEXT}; font-size:28px;", "Chat" }
+                }
+                button {
+                    style: format!("display:flex; justify-content:center; flex-grow:1; padding:14px; border-radius:14px; background:{};", people_bg),
+                    onclick: move |_| tab.set(1),
+                    div { style: "color:{TEXT}; font-size:28px;", "Contacts ({n})" }
+                }
             }
-            Conversation { messages }
-            Composer {}
+            if tab() == 0 {
+                if let Some(url) = link_url {
+                    LinkPanel { url }
+                }
+                Conversation { messages }
+                Composer {}
+            } else {
+                Contacts { contacts }
+            }
         }
     }
 }
@@ -317,6 +382,47 @@ fn Conversation(messages: Vec<UiMsg>) -> Element {
                             div { style: "color:{SENDER}; font-size:22px; font-weight:600;", "{short_sender(&m.sender)}" }
                         }
                         div { style: "color:{TEXT}; font-size:30px;", "{m.text}" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// First letter of a name, uppercased — the avatar placeholder when a contact
+/// has no image.
+fn initial(name: &str) -> String {
+    name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default()
+}
+
+/// The contact list: each row is an avatar (`img { src: data-uri }`, drawn by the
+/// renderer's image support) or an initial placeholder, plus name + phone.
+#[component]
+fn Contacts(contacts: Vec<UiContact>) -> Element {
+    rsx! {
+        div {
+            style: "display:flex; flex-direction:column; overflow:scroll; flex-grow:1; min-height:0; padding:16px; gap:10px;",
+            if contacts.is_empty() {
+                div { style: "color:{MUTED}; font-size:28px; padding:24px;", "No contacts yet." }
+            }
+            for c in contacts {
+                div {
+                    key: "{c.id}",
+                    style: "display:flex; flex-direction:row; align-items:center; gap:20px; padding:14px; border-radius:16px; background:{IN_BUBBLE};",
+                    if let Some(uri) = c.avatar_uri {
+                        img { src: "{uri}", style: "width:84px; height:84px; border-radius:14px;" }
+                    } else {
+                        div {
+                            style: "display:flex; justify-content:center; align-items:center; width:84px; height:84px; border-radius:14px; background:{OUT_BUBBLE};",
+                            div { style: "color:{TEXT}; font-size:38px; font-weight:700;", "{initial(&c.name)}" }
+                        }
+                    }
+                    div {
+                        style: "display:flex; flex-direction:column; gap:4px;",
+                        div { style: "color:{TEXT}; font-size:32px;", "{c.name}" }
+                        if let Some(phone) = c.phone {
+                            div { style: "color:{MUTED}; font-size:24px;", "{phone}" }
+                        }
                     }
                 }
             }

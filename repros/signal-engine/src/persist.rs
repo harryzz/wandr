@@ -89,3 +89,30 @@ pub fn load_messages() -> Vec<StoredMessage> {
         })
         .unwrap_or_default()
 }
+
+const CONTACTS: &str = "/state/contacts.json";
+
+/// A user from the primary device's contact list (Signal contacts-sync).
+#[derive(Serialize, Deserialize, Clone)]
+pub struct StoredContact {
+    pub id: String, // ACI (account UUID)
+    pub name: String,
+    pub phone: Option<String>,
+    pub inbox_position: u32,
+    /// base64 of the encoded avatar image, if any. `default` so older
+    /// contacts.json (no avatars) still loads.
+    #[serde(default)]
+    pub avatar_b64: Option<String>,
+}
+
+pub fn load_contacts() -> Vec<StoredContact> {
+    std::fs::read(CONTACTS)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_contacts(contacts: &[StoredContact]) -> std::io::Result<()> {
+    ensure_dir();
+    std::fs::write(CONTACTS, serde_json::to_vec_pretty(contacts).unwrap())
+}

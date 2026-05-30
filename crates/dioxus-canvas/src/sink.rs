@@ -54,4 +54,14 @@ pub trait CanvasSink {
     /// fonts, so the guest must never measure in-process — see
     /// `feedback_android_fonts`).
     fn measure_text(&mut self, text: &str, family: &str, size: f32, weight: u32, italic: bool) -> (f32, f32);
+
+    /// Decode encoded image bytes (PNG/JPEG/WebP/…) into a host image, returning
+    /// its id (`0` on decode failure). Mirrors `canvas::create-image-from-encoded`.
+    /// The renderer calls this for an `<img src="data:…;base64,…">` and caches the
+    /// result by content (see `DomRenderer`).
+    fn create_image(&mut self, bytes: &[u8]) -> u32;
+
+    /// Draw host image `id` scaled to fill the dst rect (full source → dst box).
+    /// Mirrors `canvas::draw-image-rect`.
+    fn draw_image_rect(&mut self, id: u32, x: f32, y: f32, w: f32, h: f32);
 }

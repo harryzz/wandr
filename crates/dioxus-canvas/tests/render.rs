@@ -49,6 +49,9 @@ impl CanvasSink for MockSink {
         // Deterministic stand-in for Skia metrics.
         (text.chars().count() as f32 * size * 0.5, size * 1.2)
     }
+
+    fn create_image(&mut self, _bytes: &[u8]) -> u32 { 1 }
+    fn draw_image_rect(&mut self, _id: u32, _x: f32, _y: f32, _w: f32, _h: f32) {}
 }
 
 fn counter_app() -> Element {

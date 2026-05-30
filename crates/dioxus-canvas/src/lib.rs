@@ -51,6 +51,8 @@ struct TextCtx {
 enum DrawOp {
     Rrect { x: f32, y: f32, w: f32, h: f32, r: f32, color: u32 },
     Text { blob: u32, x: f32, y: f32, color: u32 },
+    /// A host image (id from a guest `create_image`) scaled into `[x,y,w,h]`.
+    Image { id: u32, x: f32, y: f32, w: f32, h: f32 },
     /// Enter a scroll region: save + clip to `[x,y,w,h]`; ops until `PopClip`
     /// are offset by `scroll_y`.
     PushClip { x: f32, y: f32, w: f32, h: f32 },
@@ -142,6 +144,9 @@ pub struct DomRenderer {
     /// `(text, family, size-bits, weight, italic)` → `(w, h)`. Avoids a host
     /// round-trip per text leaf per layout (taffy measures repeatedly).
     measure_cache: HashMap<(String, String, u32, u32, bool), (f32, f32)>,
+    /// `<img src>` (data URI / path) → host image id, so the bytes are decoded
+    /// once rather than per layout. `0` caches a decode/read failure (skip).
+    image_cache: HashMap<String, u32>,
     /// Idle frame-delay floor (ms) the guest can lower so the host keeps calling
     /// `render_frame` on a cadence — needed by guests that poll an external data
     /// source (e.g. an engine's `poll-events`) rather than being purely
@@ -174,6 +179,7 @@ impl DomRenderer {
             down: None,
             blobs: Vec::new(),
             measure_cache: HashMap::new(),
+            image_cache: HashMap::new(),
             min_frame_delay: 60_000,
         }
     }
@@ -257,6 +263,9 @@ impl DomRenderer {
                 }
                 DrawOp::Text { blob, x, y, color } => {
                     sink.draw_text_blob(blob, x, y - active, Fill { color });
+                }
+                DrawOp::Image { id, x, y, w, h } => {
+                    sink.draw_image_rect(id, x, y - active, w, h);
                 }
                 DrawOp::PushClip { x, y, w, h } => {
                     sink.save();
@@ -697,7 +706,7 @@ impl DomRenderer {
         // Clone what we need before borrowing self mutably for draw ops.
         let n = self.dom.node(node);
         let kind_is_text = matches!(n.kind, NodeKind::Text(_));
-        let (paint, children, eid, text, is_scroll, input, focus_attr) = match &n.kind {
+        let (paint, children, eid, text, is_scroll, input, focus_attr, image_src) = match &n.kind {
             NodeKind::Element { style, listeners, .. } => {
                 let p = style::to_paint(style, inherited);
                 let mut flags = 0u8;
@@ -727,10 +736,14 @@ impl DomRenderer {
                 } else {
                     (None, None)
                 };
-                (p, n.children.clone(), eid.map(|e| (e, flags)), None, style::is_scroll(style), input, focus_attr)
+                // An `<img src=…>`: the renderer resolves + blits it scaled into
+                // this box (data URI, /assets path, …). Resolved below where the
+                // sink is available.
+                let image_src = style.get("src").filter(|s| !s.is_empty()).cloned();
+                (p, n.children.clone(), eid.map(|e| (e, flags)), None, style::is_scroll(style), input, focus_attr, image_src)
             }
-            NodeKind::Text(t) => (*inherited, Vec::new(), None, Some(t.clone()), false, None, None),
-            NodeKind::Placeholder => (*inherited, Vec::new(), None, None, false, None, None),
+            NodeKind::Text(t) => (*inherited, Vec::new(), None, Some(t.clone()), false, None, None, None),
+            NodeKind::Placeholder => (*inherited, Vec::new(), None, None, false, None, None, None),
         };
         let input_eid = eid.map(|(e, _)| e);
         // Apply DOM-declared focus (the `n` borrow of self.dom has ended).
@@ -752,6 +765,13 @@ impl DomRenderer {
             }
             if let Some((value, caret, sa, sb)) = input {
                 self.paint_input(sink, &value, caret, sa, sb, input_eid, x, y, h, &paint);
+            }
+            if let Some(src) = image_src {
+                // Resolve + cache the image, then blit it scaled into this box.
+                let id = self.get_or_create_image(sink, &src);
+                if id != 0 {
+                    self.draw_ops.push(DrawOp::Image { id, x, y, w, h });
+                }
             }
         } else if let Some(t) = text {
             if !t.trim().is_empty() {
@@ -792,6 +812,35 @@ impl DomRenderer {
         }
         let ctx = TextCtx { text: text.to_string(), family: "sans-serif".to_string(), size: fs, weight, italic };
         measure_cached(&mut self.measure_cache, sink, &ctx).0
+    }
+
+    /// Resolve an `<img src>` to a host image id, cached by `src` so the bytes are
+    /// decoded once (not per layout). `data:…;base64,…` decodes the payload;
+    /// `http(s)://…` is unsupported (the canvas guest has no network); anything
+    /// else is read as a file path (e.g. `/assets/icon.png` from the warpkg
+    /// bundle, mounted read-only by the host — task 38). Returns `0` on failure.
+    fn get_or_create_image<S: CanvasSink>(&mut self, sink: &mut S, src: &str) -> u32 {
+        if let Some(&id) = self.image_cache.get(src) {
+            return id;
+        }
+        let bytes: Option<Vec<u8>> = if let Some(rest) = src.strip_prefix("data:") {
+            // data:[<mime>][;base64],<payload>
+            rest.split_once(',').and_then(|(meta, payload)| {
+                if meta.contains("base64") {
+                    use base64::Engine;
+                    base64::engine::general_purpose::STANDARD.decode(payload).ok()
+                } else {
+                    Some(payload.as_bytes().to_vec())
+                }
+            })
+        } else if src.starts_with("http://") || src.starts_with("https://") {
+            None // no network in the canvas guest — see the img/src docs
+        } else {
+            std::fs::read(src).ok() // bundle path, e.g. /assets/icon.png
+        };
+        let id = bytes.map(|b| sink.create_image(&b)).unwrap_or(0);
+        self.image_cache.insert(src.to_string(), id);
+        id
     }
 
     /// Render a text input's value + selection highlight + caret. The element's

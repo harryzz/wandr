@@ -336,6 +336,32 @@ roll a minimal executor (futures + task queue + a non-blocking `wasi:io/poll` wi
    running **fully on the Pixel**: in-canvas QR → link → connect → live receive.
    See "Phase 2 item (3) result" below.
 
+### Phase 3 — contacts (2026-05-31, device-verified)
+The engine fetches the user list via Signal **contacts-sync** (the linked-device
+mechanism): on connect it sends `MessageSender::send_sync_message_request(
+Type::Contacts)` to the primary; the primary replies with a `SyncMessage` whose
+`contacts` is an encrypted attachment blob; `MessageReceiver::retrieve_contacts`
+downloads + decrypts it into `Contact { uuid, name, phone_number(E164),
+inbox_position }`; the engine persists them to **`/state/contacts.json`**
+(`persist::StoredContact`) and emits a `contacts-updated(count)` event. New on the
+`wart:signal/chat` contract: `record contact { id, name, phone: option<string>,
+inbox-position }`, `event contacts-updated(u32)`, `contacts() -> list<contact>`,
+`sync-contacts()` (auto on connect; re-fetch on demand via a `resync` flag drained
+in the send-tick). **Avatars too:** `contact.avatar: option<list<u8>>` (the bytes
+are inline in the contacts blob — `Contact.avatar.reader`), persisted as base64.
+**On device: 25 real contacts fetched + persisted** with id/name/phone/avatar; a
+signal-ui **Contacts tab** lists them with avatar + name + phone.
+
+This added **`<img>` support to dioxus-canvas** (the canvas guest has no network,
+and Signal avatars are encrypted bytes, not URLs — so `img { src: "https://…" }`
+can't work; the dioxus `asset!` macro also doesn't apply, no dioxus bundler). The
+renderer resolves `img { src }` for `data:…;base64,…` (engine bytes) and a file
+path like `/assets/icon.png` (the warpkg bundle, read via the task-38 `/assets`
+preopen); content-cached, decoded + blitted scaled via the host's
+`create-image-from-encoded` + `draw-image-rect` (CanvasSink `create_image` +
+`draw_image_rect`). See [[reference_dioxus_taffy_rust_ui]]. Follow-on: use contact
+names to replace raw ACIs in the conversation (deferred display-name resolution).
+
 ### Phase 2 item (3) result (2026-05-30) — Signal live on device
 `apps/user/war.signal/package.toml` (`world = my:skiko-gfx/skiko-ui`) bundles the
 `wac plug`'d `app.wasm` (signal-ui + signal-engine fused) as a single `ui`

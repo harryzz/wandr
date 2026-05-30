@@ -21,6 +21,8 @@ dioxus-canvas = { path = "../../crates/dioxus-canvas" }
 # each row is run-length-merged into a few solid divs). default-features off:
 # just the matrix, no image output.
 qrcode        = { version = "0.14", default-features = false }
+# Encode contact avatar bytes into an `img { src: "data:…;base64,…" }` URI.
+base64        = "0.22"
 
 [profile.release]
 opt-level = "s"

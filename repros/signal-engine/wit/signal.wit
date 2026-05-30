@@ -14,6 +14,19 @@ interface chat {
     outgoing: bool,
   }
 
+  /// A user from the primary device's contact list (Signal contacts-sync).
+  record contact {
+    /// ACI (account UUID) string — the stable identity, matches `message.sender`.
+    id: string,
+    name: string,
+    /// E.164 phone number, if the contact has one shared.
+    phone: option<string>,
+    /// Ordering hint from the primary's address book.
+    inbox-position: u32,
+    /// Encoded avatar image (JPEG/PNG bytes), if the contact has one.
+    avatar: option<list<u8>>,
+  }
+
   /// Something the engine produced since the last `poll-events`.
   variant event {
     /// A new message (incoming, or the local echo of an outgoing send).
@@ -26,6 +39,8 @@ interface chat {
     connected,
     /// The socket closed or setup failed (see `state` for detail).
     disconnected,
+    /// The contact list was fetched/updated (read it via `contacts`).
+    contacts-updated(u32),
   }
 
   /// Start the engine: load saved account + history, then link (first run) or
@@ -43,6 +58,14 @@ interface chat {
 
   /// The full conversation so far.
   history: func() -> list<message>;
+
+  /// The contact list fetched from the primary device (persisted to /state).
+  contacts: func() -> list<contact>;
+
+  /// Ask the primary device for a fresh contacts sync. Also done automatically
+  /// once on connect; call this to refresh on demand. Non-blocking — results
+  /// arrive later via a `contacts-updated` event + `contacts`.
+  sync-contacts: func();
 
   /// A short human-readable status: "linking" | "linked" | "connected" |
   /// "error: …".

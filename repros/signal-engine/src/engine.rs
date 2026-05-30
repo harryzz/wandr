@@ -5,7 +5,7 @@
 //! export functions and the background task lives in a thread-local `Shared`
 //! (single-threaded guest ⇒ `Rc`/`RefCell`).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Duration;
@@ -21,7 +21,7 @@ use libsignal_service::configuration::{
 };
 use libsignal_service::content::ContentBody;
 use libsignal_service::messagepipe::Incoming;
-use libsignal_service::proto::DataMessage;
+use libsignal_service::proto::{sync_message, DataMessage};
 use libsignal_service::protocol::{
     DeviceId, IdentityKeyPair, ProtocolAddress, ServiceId,
 };
@@ -34,7 +34,7 @@ use libsignal_service::sender::MessageSender;
 use libsignal_service::websocket::Unidentified;
 use uuid::Uuid;
 
-use crate::exports::wart::signal::chat::{Event, Message};
+use crate::exports::wart::signal::chat::{Contact, Event, Message};
 use crate::persist;
 use crate::store::MemStore;
 
@@ -46,6 +46,12 @@ struct Shared {
     outbox: RefCell<VecDeque<String>>,
     state: RefCell<String>,
     next_id: RefCell<u64>,
+    /// Contact list from the primary device's address book (contacts-sync).
+    contacts: RefCell<Vec<Contact>>,
+    /// Set once the initial contacts request has been sent on this connection.
+    contacts_requested: Cell<bool>,
+    /// Set by `sync_contacts()` → the receive loop re-requests on the next tick.
+    resync_contacts: Cell<bool>,
 }
 
 impl Shared {
@@ -100,12 +106,27 @@ pub fn init() {
         });
     }
 
+    // Preload persisted contacts (avatar base64 → bytes).
+    let contacts: Vec<Contact> = persist::load_contacts()
+        .into_iter()
+        .map(|c| Contact {
+            id: c.id,
+            name: c.name,
+            phone: c.phone,
+            inbox_position: c.inbox_position,
+            avatar: c.avatar_b64.and_then(|b| b64().decode(b).ok()),
+        })
+        .collect();
+
     let s = Rc::new(Shared {
         events: RefCell::new(VecDeque::new()),
         history: RefCell::new(history),
         outbox: RefCell::new(VecDeque::new()),
         state: RefCell::new("starting".to_string()),
         next_id: RefCell::new(id),
+        contacts: RefCell::new(contacts),
+        contacts_requested: Cell::new(false),
+        resync_contacts: Cell::new(false),
     });
     SHARED.with(|slot| *slot.borrow_mut() = Some(s));
 
@@ -148,6 +169,18 @@ pub fn history() -> Vec<Message> {
     shared()
         .map(|s| s.history.borrow().clone())
         .unwrap_or_default()
+}
+
+pub fn contacts() -> Vec<Contact> {
+    shared()
+        .map(|s| s.contacts.borrow().clone())
+        .unwrap_or_default()
+}
+
+pub fn sync_contacts() {
+    if let Some(s) = shared() {
+        s.resync_contacts.set(true);
+    }
 }
 
 pub fn state() -> String {
@@ -362,6 +395,18 @@ async fn receive_and_send(
     shared.set_state("connected");
     shared.push_event(Event::Connected);
 
+    // Ask the primary device for its contact list — the response arrives later as
+    // a SyncMessage on the stream (handled below) and is persisted to /state.
+    if let Some(s) = sender.as_mut() {
+        match s
+            .send_sync_message_request(&self_id, sync_message::request::Type::Contacts)
+            .await
+        {
+            Ok(_) => shared.contacts_requested.set(true),
+            Err(e) => shared.set_state(format!("contacts request failed: {e}")),
+        }
+    }
+
     let mut stream = Box::pin(pipe.stream());
     loop {
         let tick = wart_step_executor::sleep(Duration::from_millis(200));
@@ -378,6 +423,17 @@ async fn receive_and_send(
                     // The ratchet may have advanced — persist after every envelope.
                     let _ = persist::save_snapshot(&store.snapshot_bytes());
                     if let Some(content) = content {
+                        // Contacts-sync response: download + decrypt the blob,
+                        // store the users in /state, emit `contacts-updated`.
+                        if let ContentBody::SynchronizeMessage(sm) = &content.body {
+                            if let Some(blob) = &sm.contacts {
+                                if let Err(e) =
+                                    apply_contacts(&shared, &mut receiver, blob).await
+                                {
+                                    shared.set_state(format!("contacts fetch: {e}"));
+                                }
+                            }
+                        }
                         if let (Some(text), outgoing) = extract(&content.body) {
                             let msg = Message {
                                 id: shared.next_id(),
@@ -421,6 +477,15 @@ async fn receive_and_send(
                             Err(e) => shared.set_state(format!("send error: {e}")),
                         }
                     }
+                    // On-demand contacts refresh (sync_contacts()).
+                    if shared.resync_contacts.replace(false) {
+                        let _ = sender
+                            .send_sync_message_request(
+                                &self_id,
+                                sync_message::request::Type::Contacts,
+                            )
+                            .await;
+                    }
                 }
             },
         }
@@ -428,6 +493,52 @@ async fn receive_and_send(
 }
 
 // ---- helpers ---------------------------------------------------------------
+
+/// Download + decrypt the contacts-sync blob into the in-memory list + /state,
+/// and emit a `contacts-updated` event. The sync is the full list, so it
+/// replaces what we had.
+async fn apply_contacts(
+    shared: &Rc<Shared>,
+    receiver: &mut MessageReceiver,
+    blob: &sync_message::Contacts,
+) -> Result<(), String> {
+    let iter = receiver
+        .retrieve_contacts(blob)
+        .await
+        .map_err(|e| format!("retrieve: {e}"))?;
+
+    let mut list = Vec::new();
+    let mut stored = Vec::new();
+    for r in iter {
+        let c = match r {
+            Ok(c) => c,
+            Err(_) => continue, // skip a malformed entry, keep the rest
+        };
+        let id = c.uuid.to_string();
+        let phone = c.phone_number.as_ref().map(|p| p.to_string());
+        let avatar = c.avatar.map(|a| a.reader.to_vec());
+        list.push(Contact {
+            id: id.clone(),
+            name: c.name.clone(),
+            phone: phone.clone(),
+            inbox_position: c.inbox_position,
+            avatar: avatar.clone(),
+        });
+        stored.push(persist::StoredContact {
+            id,
+            name: c.name,
+            phone,
+            inbox_position: c.inbox_position,
+            avatar_b64: avatar.map(|b| b64().encode(b)),
+        });
+    }
+
+    let n = list.len() as u32;
+    *shared.contacts.borrow_mut() = list;
+    let _ = persist::save_contacts(&stored);
+    shared.push_event(Event::ContactsUpdated(n));
+    Ok(())
+}
 
 fn extract(body: &ContentBody) -> (Option<String>, bool) {
     match body {
