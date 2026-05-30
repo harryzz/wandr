@@ -43,7 +43,40 @@ a custom CA; the trust store lives entirely in the host provider. Fix is
 = public roots **+ Signal's pinned CA** (the same PEMs presage/libsignal-service-rs
 bundle). TLS stays host-delegated; no crypto in the guest.
 
-**To fully close the loop:** a ~40-line host runner using
-`wasmtime` + `wasmtime-wasi` + `wasmtime-wasi-tls` with a custom provider that
-adds Signal's CA, then re-run this same component and expect Signal → `200`/`4xx`
-(any HTTP status line = handshake trusted).
+**Loop closed** by [`../wasi-tls-runner`](../wasi-tls-runner) (desktop, custom
+provider) and by **wart-host itself** (task 66 — Signal's CA wired into the
+production host).
+
+## Running it through wart-host on-device (warpkg)
+
+`package.toml` packages this as a `wasi:cli/command` system warpkg. Build →
+install → launch headless via the zygote:
+
+```bash
+cargo build --target wasm32-wasip2 --release
+PKG=/tmp/probe.warpkg; rm -rf "$PKG"; mkdir -p "$PKG/components"
+cp package.toml "$PKG/package.toml"
+cp target/wasm32-wasip2/release/wasi-tls-probe.wasm "$PKG/components/probe.wasm"
+adb push "$PKG" /data/local/tmp/probe.warpkg
+adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=/data/local/tmp/wart-apps \
+    /data/local/tmp/wart-host --install /data/local/tmp/probe.warpkg'"
+adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=/data/local/tmp/wart-apps \
+    /data/local/tmp/wart-host --zygote-launch war.probe.wasitls'"
+adb logcat -d | grep wasi-tls-probe
+```
+
+Device result (2026-05-30, through the production host):
+
+```
+signal_tls: trust store = 119 public roots + 1 Signal CA
+[wasi-tls-probe] [OK]   example.com     - ... | HTTP/1.1 200 OK
+[wasi-tls-probe] [OK]   chat.signal.org - ... | HTTP/1.1 404 Not Found
+[wasi-tls-probe] TRANSPORT PROVEN ...
+```
+
+`chat.signal.org` handshakes through wart-host's Signal-aware trust store; the
+404 is the wrong path (`GET /`), irrelevant — the trusted handshake is the proof.
+
+Note: the probe writes results to **stderr** as one `write()` per line — wart's
+LogcatStderr sink only surfaces the first `write()` of a multi-write line, so
+`eprintln!` with `{}` args truncates after the literal prefix.

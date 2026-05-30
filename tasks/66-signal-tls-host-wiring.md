@@ -57,6 +57,24 @@ instead of blanket `inherit_network`.
   parsed, rustls config built); component instantiated (wasi-tls linker OK);
   rendered frames 0/1/2; wart launcher renders; **no trap, no regression**.
 
-Remaining (separate task): the actual on-device *network* proof needs a
-networked guest (package `repros/wasi-tls-probe` as a warpkg, or build the Signal
-client) — transport itself is already proven in `repros/wasi-tls-{probe,runner}`.
+**On-device network proof — done 2026-05-30.** Packaged `repros/wasi-tls-probe`
+as a `wasi:cli/command` warpkg (`war.probe.wasitls`, `package.toml` beside the
+probe), installed it (`wart-host --install` → precompiled to cwasm), and launched
+it headless via the zygote (`--zygote-launch`). Through the production host the
+forked child logged the Signal-aware trust store and reached the network over
+host-delegated wasi:sockets + wasi:tls — **no crypto in the guest**:
+
+```
+signal_tls: trust store = 119 public roots + 1 Signal CA
+[wasi-tls-probe] [OK]   example.com     - ... | HTTP/1.1 200 OK
+[wasi-tls-probe] [OK]   chat.signal.org - ... | HTTP/1.1 404 Not Found
+TRANSPORT PROVEN ...   (call_run returned Ok, exit=0)
+```
+
+`chat.signal.org` handshakes only because the host trusts Signal's CA — the full
+chain works in production. (Also fixed a real wart bug found here: the
+LogcatStderr sink only surfaces the first `write()` of a multi-write line.)
+
+Remaining for an actual Signal client is guest-side: async/tokio→wasi-poll
+refactor of presage's I/O, websocket/HTTP framing, and libsignal crypto wasm
+compat — see `[[reference-signal-on-wart-feasibility]]`.

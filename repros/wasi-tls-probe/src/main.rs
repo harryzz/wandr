@@ -173,9 +173,11 @@ fn probe(domain: &str) -> Result<String, String> {
     let _ = socket.shutdown(ShutdownType::Both);
 
     let text = String::from_utf8_lossy(&response);
-    let status = text.lines().next().unwrap_or("<no status line>").to_string();
+    // ASCII-only + trim the trailing CR off the HTTP status line so the
+    // on-device logcat sink renders the whole message cleanly.
+    let status = text.lines().next().unwrap_or("<no status line>").trim();
     Ok(format!(
-        "resolved {ip:?} · {} bytes · status: {status}",
+        "resolved {ip:?} | {} bytes | status: {status}",
         response.len()
     ))
 }
@@ -186,18 +188,25 @@ fn main() {
     let targets = ["example.com", "chat.signal.org"];
     let mut all_ok = true;
     for domain in targets {
-        match probe(domain) {
-            Ok(info) => println!("[OK]   {domain} — {info}"),
+        // Build the whole line (incl '\n') and emit it as a SINGLE write: when
+        // this runs headless inside wart-host, output goes to the host's
+        // logcat stderr sink which emits one log line per newline-terminated
+        // write — but `eprintln!("{x}")` splits into multiple writes (prefix,
+        // arg, '\n') and the sink only surfaces the first. One write = one
+        // clean line. (stderr, not stdout: the host routes only stderr.)
+        let line = match probe(domain) {
+            Ok(info) => format!("[wasi-tls-probe] [OK]   {domain} - {info}\n"),
             Err(e) => {
                 all_ok = false;
-                println!("[FAIL] {domain} — {e}");
+                format!("[wasi-tls-probe] [FAIL] {domain} - {e}\n")
             }
-        }
+        };
+        eprint!("{line}");
     }
     if all_ok {
-        println!("\nTRANSPORT PROVEN: wasi-sockets + wasi-tls handshake + HTTP exchange OK");
+        eprintln!("[wasi-tls-probe] TRANSPORT PROVEN: wasi-sockets + wasi-tls handshake + HTTP exchange OK");
     } else {
-        println!("\nTRANSPORT INCOMPLETE — see [FAIL] lines above");
+        eprintln!("[wasi-tls-probe] TRANSPORT INCOMPLETE — see [FAIL] lines above");
         std::process::exit(1);
     }
 }

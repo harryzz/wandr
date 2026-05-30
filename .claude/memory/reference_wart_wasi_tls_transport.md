@@ -33,7 +33,15 @@ Key facts (verified in `external/wasmtime/crates/wasi-tls` + `wasmtime-wasi-45`)
   `repros/wasi-tls-runner/` — a host runner with a custom `TlsProvider`
   (webpki roots + Signal's self-signed `O=Signal Messenger, LLC` CA) ran the same
   probe component and `chat.signal.org` handshook + returned `HTTP/1.1 404`
-  (trusted; 404 = wrong path, irrelevant to transport).
+  (trusted; 404 = wrong path, irrelevant to transport). **WIRED INTO wart-host
+  (task 66) + on-device-PROVEN 2026-05-30:** the probe packaged as a warpkg
+  (`war.probe.wasitls`) + `--zygote-launch`ed through the production host reached
+  chat.signal.org (HTTP/1.1 404) over host-delegated wasi:sockets+wasi:tls, no
+  guest crypto. Host wiring lives in `runtime/wart-host/src/signal_tls.rs`
+  (`grant_network` opens outbound to ALL addresses — per-app allowlist is the
+  follow-up). Gotcha found: wart's LogcatStderr sink only surfaces the FIRST
+  `write()` of a multi-write line, so guest `eprintln!("{}",x)` truncates —
+  build the whole line + emit one write.
 
 Bindgen gotcha: the multi-package wasi `wit/deps` tree needs **wit-bindgen 0.53**
 (0.46's macro errors `failed to resolve directory while parsing WIT`).
