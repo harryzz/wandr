@@ -18,4 +18,7 @@ world ime-keyboard {
     // language requires an entry here + an @WasmImport in LangAdapter.
     import war:keyboard-lang-bg/lang@0.1.0;
     import war:keyboard-lang-fr/lang@0.1.0;
+    // Task 64 — optional on-demand-render hint; a hidden/idle keyboard returns
+    // IDLE so the host stops rendering it 60 fps. See RendererExports.kt.
+    export my:skiko-gfx/frame-pacing@0.1.0;
 }

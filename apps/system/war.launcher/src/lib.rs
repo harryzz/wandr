@@ -15,6 +15,7 @@ wit_bindgen::generate!({
 
 use std::cell::RefCell;
 
+use crate::exports::my::skiko_gfx::frame_pacing::Guest as FramePacingGuest;
 use crate::exports::my::skiko_gfx::renderer::{Guest, KeyKind, PointerKind};
 use crate::my::skiko_gfx::canvas::{
     self, BlendMode, ColorFilterKind, PaintAttrs, PaintStyle, StrokeCap, StrokeJoin,
@@ -225,6 +226,17 @@ impl Guest for Launcher {
     fn on_scheduled_callback(_callback_id: u32) {}
     fn on_key_event_v2(_kind: KeyKind, _code_point: u32, _key_id: u32) {}
     fn on_lifecycle_changed(_state: u32) {}
+}
+
+/// Task 64 — the home screen is fully static (layout built once, no
+/// animation). Always idle; the host wakes us on input via its own
+/// dirty-tracking, and clamps this to ~1 s so a stale frame can't persist.
+const IDLE: u32 = 60_000;
+
+impl FramePacingGuest for Launcher {
+    fn next_frame_delay() -> u32 {
+        IDLE
+    }
 }
 
 export!(Launcher);

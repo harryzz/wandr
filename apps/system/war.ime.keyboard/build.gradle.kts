@@ -138,41 +138,28 @@ kotlin {
 
     sourceSets {
         wasmWasiMain.dependencies {
-            // Sibling-published "fat" wasi klibs at /home/harry/wart/compose-*-wasi/.
-            // Each bundles multiple upstream modules' srcDirs from
-            // /home/harry/wart/compose-multiplatform-core/ — i.e. in-tree
-            // sources, but baked into 11 klibs instead of 32, so WASM
-            // whole-world lowering is ~24× faster (~5 min vs ~2 h).
+            // In-tree compose wasi klibs (BUILD-wasmWasi.md Step 3/4) — the
+            // canonical `org.jetbrains.compose.*:*-wasm-wasi:9999.0.0-SNAPSHOT`
+            // modules built from external/compose-multiplatform-core. NOT the
+            // old discarded out-of-tree `compose-*-wasi:0.0.0-wasi-local` fat
+            // bundles. Republish a module after editing via Step 5, e.g.
+            //   :compose:ui:ui:publishWasmWasiPublicationToMavenLocal
             implementation("org.jetbrains.skiko:skiko-wasm-wasi:0.0.0-SNAPSHOT")
-            implementation("androidx.compose.runtime:compose-runtime-wasi:0.0.0-wasi-local")
-            implementation("androidx.compose.ui:compose-ui-base-wasi:0.0.0-wasi-local")
-            implementation("androidx.compose.ui:compose-ui-graphics-wasi:0.0.0-wasi-local") {
-                exclude(group = "org.jetbrains.skiko", module = "skiko-wasm-wasi")
-            }
-            implementation("androidx.compose.ui:compose-ui-text-wasi:0.0.0-wasi-local") {
-                exclude(group = "org.jetbrains.skiko", module = "skiko-wasm-wasi")
-            }
-            implementation("androidx.compose.ui:compose-ui-wasi:0.0.0-wasi-local") {
-                exclude(group = "org.jetbrains.skiko", module = "skiko-wasm-wasi")
-            }
-            implementation("androidx.compose.foundation:compose-foundation-layout-wasi:0.0.0-wasi-local") {
-                exclude(group = "org.jetbrains.skiko", module = "skiko-wasm-wasi")
-            }
-            implementation("androidx.compose.animation:compose-animation-core-wasi:0.0.0-wasi-local") {
-                exclude(group = "org.jetbrains.skiko", module = "skiko-wasm-wasi")
-            }
-            implementation("androidx.compose.animation:compose-animation-wasi:0.0.0-wasi-local") {
-                exclude(group = "org.jetbrains.skiko", module = "skiko-wasm-wasi")
-            }
-            implementation("androidx.compose.foundation:compose-foundation-wasi:0.0.0-wasi-local") {
-                exclude(group = "org.jetbrains.skiko", module = "skiko-wasm-wasi")
-            }
-            implementation("androidx.compose.material:compose-material-ripple-wasi:0.0.0-wasi-local") {
-                exclude(group = "org.jetbrains.skiko", module = "skiko-wasm-wasi")
-            }
-            implementation("androidx.compose.material3:compose-material3-wasi:0.0.0-wasi-local") {
-                exclude(group = "org.jetbrains.skiko", module = "skiko-wasm-wasi")
-            }
+            implementation("org.jetbrains.compose.runtime:runtime-wasm-wasi:9999.0.0-SNAPSHOT")
+            implementation("org.jetbrains.compose.runtime:runtime-saveable-wasm-wasi:9999.0.0-SNAPSHOT")
+            implementation("org.jetbrains.compose.ui:ui-util-wasm-wasi:9999.0.0-SNAPSHOT")
+            implementation("org.jetbrains.compose.ui:ui-geometry-wasm-wasi:9999.0.0-SNAPSHOT")
+            implementation("org.jetbrains.compose.ui:ui-unit-wasm-wasi:9999.0.0-SNAPSHOT")
+            implementation("org.jetbrains.compose.ui:ui-graphics-wasm-wasi:9999.0.0-SNAPSHOT")
+            implementation("org.jetbrains.compose.ui:ui-text-wasm-wasi:9999.0.0-SNAPSHOT")
+            implementation("org.jetbrains.compose.ui:ui-backhandler-wasm-wasi:9999.0.0-SNAPSHOT")
+            implementation("org.jetbrains.compose.ui:ui-wasm-wasi:9999.0.0-SNAPSHOT")
+            implementation("org.jetbrains.compose.foundation:foundation-layout-wasm-wasi:9999.0.0-SNAPSHOT")
+            implementation("org.jetbrains.compose.foundation:foundation-wasm-wasi:9999.0.0-SNAPSHOT")
+            implementation("org.jetbrains.compose.animation:animation-core-wasm-wasi:9999.0.0-SNAPSHOT")
+            implementation("org.jetbrains.compose.animation:animation-wasm-wasi:9999.0.0-SNAPSHOT")
+            implementation("org.jetbrains.compose.material:material-ripple-wasm-wasi:9999.0.0-SNAPSHOT")
+            implementation("org.jetbrains.compose.material3:material3-wasm-wasi:9999.0.0-SNAPSHOT")
         }
     }
 }

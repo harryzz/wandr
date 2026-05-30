@@ -46,6 +46,29 @@ import org.jetbrains.skiko.wasi.wit.Keyboard as WitKeyboard
 
 val wasiFrameDispatcher: WasiFrameDispatcher = WasiFrameDispatcher()
 
+/// Task 64 — the live scene, exposed so the `frame-pacing` export
+/// (`RendererExports.kt`) can read `hasInvalidations()`. Set by
+/// `buildRealComposeScene`.
+var realScenePacing: ComposeScene? = null
+
+/// Task 64 — milliseconds until the next frame Compose wants, for the host's
+/// on-demand render gate. 0 if the scene has pending recomposition / draws /
+/// frame-clock awaiters; else the nearest `WasiFrameDispatcher` deadline (a
+/// pending `delay()` / cursor blink — `flush()` is their only heartbeat, so
+/// they must be included); else a large idle value (host clamps to its cap).
+fun nextFrameDelayMillis(): Int {
+    val scene = realScenePacing ?: return 0
+    if (scene.hasInvalidations()) return 0
+    val now = androidx.compose.ui.cachedNanoTime() / 1_000_000L
+    val d = wasiFrameDispatcher.nextDeadlineMillis(now)
+    val idle = 100_000
+    return when {
+        d >= idle -> idle
+        d < 0L -> 0
+        else -> d.toInt()
+    }
+}
+
 // Kept as no-op stubs so Main.kt's setup mirrors wart-app verbatim
 // (both apps share Main.kt). The IME doesn't need a soft-keyboard
 // bridge — IT IS the soft keyboard.
@@ -85,6 +108,7 @@ fun buildRealComposeScene(widthPx: Int, heightPx: Int, density: Float): ComposeS
             KeyboardScreen()
         }
     }
+    realScenePacing = scene // task 64 — frame-pacing export reads hasInvalidations()
     return scene
 }
 

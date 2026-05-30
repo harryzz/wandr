@@ -17,6 +17,7 @@
 
 mod dom;
 mod events;
+mod launch; // defines the exported `launch!` macro
 mod sink;
 mod style;
 
@@ -29,6 +30,11 @@ use dom::{Dom, NodeId, NodeKind};
 use style::PaintProps;
 
 pub use sink::{CanvasSink, Fill};
+
+/// Re-exported wit-bindgen so a guest needs no direct dependency on it — the
+/// [`launch!`] macro invokes `generate!` through this path. Not a stable API.
+#[doc(hidden)]
+pub use wit_bindgen as __wit_bindgen;
 
 /// Per-text-leaf measurement context handed to taffy.
 struct TextCtx {
@@ -179,6 +185,19 @@ impl DomRenderer {
         if (scale - self.scale).abs() > f32::EPSILON {
             self.scale = scale;
             self.dirty = true;
+        }
+    }
+
+    /// Task 64 — ms until the next frame this UI wants, for the host's
+    /// on-demand-render gate. `0` while there's pending VirtualDom work to
+    /// flush (an event was injected since the last render); otherwise idle
+    /// — clamped by the host. The renderer is purely event-driven (no async
+    /// runtime / timers), so `dirty` fully captures "needs another frame".
+    pub fn next_frame_delay(&self) -> u32 {
+        if self.dirty {
+            0
+        } else {
+            60_000
         }
     }
 

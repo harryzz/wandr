@@ -82,6 +82,20 @@ mod ime_bindings {
     });
 }
 
+/// Task 64 — typed bindings for the OPTIONAL `my:skiko-gfx/frame-pacing`
+/// export (`next-frame-delay() -> u32`). Guests that want on-demand
+/// rendering export `frame-pacing-world` (a probe-only world) alongside
+/// `renderer`. The host instantiates the component, then tries to bind
+/// these via `FramePacingWorld::new(...).ok()` (same pattern as
+/// `ime_bindings`); `Some` ⇒ the standalone loop gates render-frame on the
+/// returned delay, `None` ⇒ legacy unconditional 60 fps. See task 64.
+mod frame_pacing_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../wit/skiko-gfx.wit",
+        world: "frame-pacing-world",
+    });
+}
+
 // markdown_bindings module deleted (task 39 — replaced by generic
 // dep wiring via wasmtime introspection in app_loader.rs). Per-dep
 // `bindgen!` modules are no longer needed; any cross-app dep wires

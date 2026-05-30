@@ -101,3 +101,12 @@ fun __wasm_export_onLifecycleChanged(p0: Int): Unit {
         RendererImpl.onLifecycleChanged(p0.toUInt())
     }
 }
+
+// Task 64 — on-demand rendering: the host asks how long it may sleep before the
+// next wanted frame (0 = animating, N ms = timed wake, large = idle). A hidden
+// IME with a static keyboard returns IDLE → it stops the ~30% idle render burn.
+@WasmExport("my:skiko-gfx/frame-pacing@0.1.0#next-frame-delay")
+fun __wasm_export_nextFrameDelay(): Int {
+    freeAllComponentModelReallocAllocatedMemory()
+    return testapp.nextFrameDelayMillis()
+}

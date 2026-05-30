@@ -1,171 +1,26 @@
-//! war.dioxus.demo — a reactive dioxus guest (task 59) rendered via the
-//! `dioxus-canvas` "tiny Blitz" over the canvas WIT.
+//! war.dioxus.demo — a reactive dioxus guest (task 59).
 //!
-//! This file is the thin guest shell (mirrors `war.launcher`): it wires the
-//! `wit_bindgen`-generated `canvas::*` imports to `dioxus_canvas::CanvasSink`,
-//! holds the renderer in a thread-local, and forwards the `renderer` export
-//! callbacks. All the actual UI logic is the dioxus `app()` component + the
-//! reusable renderer.
+//! Pure dioxus: this file is just the UI (`app()` + components) plus the single
+//! `dioxus_canvas::launch!` line that selects the wart backend. No `.wit` file,
+//! no `wit_bindgen::generate!`, no `HostSink`, no `export!` — all of that is the
+//! library's job (the `wart` feature). The same component source would compile
+//! for a different backend by changing only the feature, not this file.
 
-wit_bindgen::generate!({
-    world: "dioxus-app",
-    path: "wit/skiko-gfx.wit",
-});
-
-use std::cell::RefCell;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use dioxus::prelude::*;
-use dioxus_canvas::{CanvasSink, DomRenderer, Fill};
 
-use crate::exports::my::skiko_gfx::renderer::{Guest, KeyKind, PointerKind};
-use crate::my::skiko_gfx::canvas::{
-    self, BlendMode, ColorFilterKind, PaintAttrs, PaintStyle, StrokeCap, StrokeJoin,
-};
-use crate::my::skiko_gfx::paragraph::{self, TextStyle};
-use crate::my::skiko_gfx::ime;
-
-/// Build a flat-fill `paint-attrs` from a colour (copied from war.launcher).
-fn paint(color: u32) -> PaintAttrs {
-    PaintAttrs {
-        color,
-        style: PaintStyle::Fill,
-        stroke_width: 0.0,
-        stroke_miter: 4.0,
-        stroke_cap: StrokeCap::Butt,
-        stroke_join: StrokeJoin::Miter,
-        anti_alias: true,
-        alpha: 255,
-        blend_mode: BlendMode::SrcOver,
-        shader_id: 0,
-        color_filter_kind: ColorFilterKind::None,
-        color_filter_color: 0,
-    }
-}
-
-/// Forwards the renderer's `CanvasSink` calls to the host canvas WIT imports.
-struct HostSink;
-
-impl CanvasSink for HostSink {
-    fn surface_size(&mut self) -> (f32, f32) {
-        (canvas::surface_width() as f32, canvas::surface_height() as f32)
-    }
-    fn begin_frame(&mut self) {
-        canvas::begin_frame();
-    }
-    fn end_frame(&mut self) {
-        canvas::end_frame();
-    }
-    fn clear(&mut self, argb: u32) {
-        canvas::clear(argb);
-    }
-    fn save(&mut self) {
-        canvas::save();
-    }
-    fn restore(&mut self) {
-        canvas::restore();
-    }
-    fn clip_rect(&mut self, x: f32, y: f32, w: f32, h: f32) {
-        canvas::clip_rect(x, y, w, h, true);
-    }
-    fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32, f: Fill) {
-        canvas::draw_rect(x, y, w, h, paint(f.color));
-    }
-    fn fill_rrect(&mut self, x: f32, y: f32, w: f32, h: f32, rx: f32, ry: f32, f: Fill) {
-        canvas::draw_rrect(x, y, w, h, rx, ry, paint(f.color));
-    }
-    fn create_text_blob(&mut self, text: &str, family: &str, size: f32, weight: u32, italic: bool) -> u32 {
-        canvas::create_text_blob(text.as_bytes(), family.as_bytes(), size, weight, italic)
-    }
-    fn draw_text_blob(&mut self, id: u32, x: f32, y: f32, f: Fill) {
-        canvas::draw_text_blob(id, x, y, paint(f.color));
-    }
-    fn drop_text_blob(&mut self, id: u32) {
-        canvas::drop_text_blob(id);
-    }
-    fn measure_text(&mut self, text: &str, family: &str, size: f32, weight: u32, italic: bool) -> (f32, f32) {
-        // Measure via the host's existing Skia paragraph layout (no bespoke
-        // WIT verb): build a single-run paragraph, lay it out unconstrained,
-        // and read its natural width + height. The renderer caches results, so
-        // this builder/paragraph churn happens once per unique (text,font).
-        const UNCONSTRAINED: f32 = 1.0e6;
-        let b = paragraph::create_paragraph_builder(UNCONSTRAINED);
-        paragraph::push_text_style(
-            b,
-            &TextStyle {
-                font_size: size,
-                font_weight: weight,
-                italic,
-                color: 0xFFFF_FFFF,
-                font_family: family.as_bytes().to_vec(),
-            },
-        );
-        paragraph::add_text(b, text.as_bytes());
-        paragraph::pop_text_style(b);
-        let p = paragraph::build_paragraph(b);
-        paragraph::drop_paragraph_builder(b);
-        paragraph::layout(p, UNCONSTRAINED);
-        let w = paragraph::get_max_intrinsic_width(p);
-        let h = paragraph::get_height(p);
-        paragraph::drop_paragraph(p);
-        (w, h)
-    }
-}
-
-thread_local! {
-    static RENDERER: RefCell<Option<DomRenderer>> = RefCell::new(None);
-}
-
-/// UI scale factor (f32 bits), driven by the in-app +/- buttons. Read each
-/// frame and pushed to the renderer via `set_scale` — a global (not a renderer
-/// call from the button) so the button's event handler doesn't re-enter the
+/// UI scale factor (f32 bits), driven by the in-app +/- buttons. Read each frame
+/// and pushed to the renderer via the `launch!` `pre_frame` hook — a global, not
+/// a renderer call from the button, so the button's handler doesn't re-enter the
 /// already-borrowed renderer. Init 1.5 (the panel is hi-dpi). 0x3FC00000 = 1.5f32.
 static UI_SCALE: AtomicU32 = AtomicU32::new(0x3FC0_0000);
 
-fn with_renderer<F: FnOnce(&mut DomRenderer)>(f: F) {
-    RENDERER.with(|r| {
-        let mut b = r.borrow_mut();
-        if b.is_none() {
-            *b = Some(DomRenderer::new(app));
-        }
-        f(b.as_mut().unwrap());
-    });
-}
-
-struct App;
-
-impl Guest for App {
-    fn render_frame(_nanos: u64) {
-        let scale = f32::from_bits(UI_SCALE.load(Ordering::Relaxed));
-        with_renderer(|r| {
-            r.set_scale(scale);
-            r.render_frame(&mut HostSink);
-        });
-    }
-    fn on_resize(w: u32, h: u32) {
-        with_renderer(|r| r.on_resize(w as f32, h as f32));
-    }
-    fn on_pointer_event_v2(_pid: u32, kind: PointerKind, x: f32, y: f32, _pressure: f32) {
-        with_renderer(|r| match kind {
-            PointerKind::Down => r.on_pointer_down(x, y),
-            PointerKind::Move => r.on_pointer_move(x, y),
-            PointerKind::Up => r.on_pointer_up(x, y),
-            PointerKind::Scroll => {}
-        });
-    }
-
-    fn on_key_event_v2(kind: KeyKind, code_point: u32, key_id: u32) {
-        with_renderer(|r| r.on_key(matches!(kind, KeyKind::Down), code_point, key_id));
-    }
-
-    // Unused inputs.
-    fn on_pointer_event(_kind: PointerKind, _x: f32, _y: f32) {}
-    fn on_key_event(_kind: KeyKind, _key_code: u32) {}
-    fn on_scheduled_callback(_callback_id: u32) {}
-    fn on_lifecycle_changed(_state: u32) {}
-}
-
-export!(App);
+// The entire wart backend (WIT imports + exports, sink, IME bridge, renderer
+// wiring) comes from the library. The only app-specific render-time behaviour is
+// pushing the runtime UI scale each frame.
+dioxus_canvas::launch!(app,
+    pre_frame: |r| r.set_scale(f32::from_bits(UI_SCALE.load(Ordering::Relaxed))));
 
 // ── The component gallery ────────────────────────────────────────────────
 //
@@ -614,26 +469,13 @@ const FIELD_FS: f32 = 44.0;
 /// `paint_input` inset). Logical px.
 const FIELD_PAD: f32 = 24.0;
 
-/// Measure a text run's width at the field font (logical px) via the host
-/// paragraph layout — used to map a tap x to a caret index.
+/// Measure a text run's width at the field font (logical px) — used to map a
+/// tap x to a caret index. Backend-neutral: the library routes it to the host.
 fn text_width(s: &str) -> f32 {
     if s.is_empty() {
         return 0.0;
     }
-    const BIG: f32 = 1.0e6;
-    let b = paragraph::create_paragraph_builder(BIG);
-    paragraph::push_text_style(
-        b,
-        &TextStyle { font_size: FIELD_FS, font_weight: 400, italic: false, color: 0xFFFF_FFFF, font_family: b"sans-serif".to_vec() },
-    );
-    paragraph::add_text(b, s.as_bytes());
-    paragraph::pop_text_style(b);
-    let p = paragraph::build_paragraph(b);
-    paragraph::drop_paragraph_builder(b);
-    paragraph::layout(p, BIG);
-    let w = paragraph::get_max_intrinsic_width(p);
-    paragraph::drop_paragraph(p);
-    w
+    measure_text(s, "sans-serif", FIELD_FS, 400, false).0
 }
 
 /// Map an element-relative x (logical px) to the nearest caret index in `value`.
@@ -694,7 +536,7 @@ fn EditField(
                     if active() == idx as i32 {
                         active.set(-1);
                         anchor.set(caret());
-                        ime::notify_editor_detached();
+                        editor_detach();
                     }
                 },
                 style: format!(
@@ -709,7 +551,7 @@ fn EditField(
                         active.set(idx as i32);
                         let t = value();
                         let m = t.chars().count() as u32;
-                        ime::notify_editor_attached(&it, &ht, &t, m, m);
+                        editor_attach(&it, &ht, &t, m, m);
                     }
                 },
                 onmousemove: move |e| {
@@ -725,7 +567,7 @@ fn EditField(
                         "Escape" | "Enter" => {
                             active.set(-1);
                             anchor.set(caret()); // collapse selection so the highlight clears
-                            ime::notify_editor_detached();
+                            editor_detach();
                         }
                         "Backspace" => {
                             if lo != hi {
@@ -775,7 +617,7 @@ fn EditField(
                     onclick: move |_| {
                         active.set(-1);
                         anchor.set(caret()); // collapse selection so the highlight clears
-                        ime::notify_editor_detached();
+                        editor_detach();
                     },
                     div { style: "color:{TEXT}; font-size:30px; font-weight:600;", "Done" }
                 }

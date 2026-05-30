@@ -25,6 +25,11 @@ publish = false
 dioxus-core = { version = "0.7", default-features = false }
 dioxus-html = { version = "0.7", default-features = false }
 taffy       = "0.7"
+# Re-exported (as `dioxus_canvas::__wit_bindgen`) so the `launch!` macro's
+# `generate!` runs without the guest crate having to depend on wit-bindgen
+# itself — a guest then depends ONLY on dioxus-canvas (+ dioxus for rsx!).
+# Latest as of 2026-05-30.
+wit-bindgen = "0.57.1"
 
 [dev-dependencies]
 # The `dioxus` facade (for `rsx!`/`use_signal`) drives the host-side unit

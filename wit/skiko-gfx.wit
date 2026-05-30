@@ -992,6 +992,27 @@ interface status {
     bar-height: func() -> u32;
 }
 
+/// Task 64 — optional on-demand-render hint. A guest that exports this
+/// tells the host how long it may sleep before the next wanted frame, so
+/// the host can gate the expensive render-frame + buffer swap instead of
+/// running an unconditional 60 fps game-loop. It is NOT part of `world
+/// skiko-ui` — guests opt in by exporting `frame-pacing-world` alongside
+/// `renderer`. The host probes for it after instantiation; a guest that
+/// doesn't export it keeps the legacy 60 fps path (no breaking change).
+interface frame-pacing {
+    /// Called by the host right after render-frame. Returns ms until the
+    /// next frame the guest wants: 0 = animating / more work this frame;
+    /// a finite N = a timed wake (delay() / cursor blink); large = idle.
+    /// The host clamps the value to its IDLE_CAP (~1000 ms) so a fully
+    /// static guest still re-renders ~1/sec.
+    next-frame-delay: func() -> u32;
+}
+
+/// Probe-only world for the host's optional `frame-pacing` bindings.
+world frame-pacing-world {
+    export frame-pacing;
+}
+
 world skiko-ui {
     import canvas;
     import paragraph;

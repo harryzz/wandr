@@ -61,8 +61,15 @@ interface renderer {
     on-lifecycle-changed:  func(state: u32);
 }
 
+// Task 64 — optional on-demand-render hint (copied verbatim from the
+// canonical skiko-gfx.wit).
+interface frame-pacing {
+    next-frame-delay: func() -> u32;
+}
+
 world statusbar-app {
     import canvas;
     import status;
     export renderer;
+    export frame-pacing;
 }

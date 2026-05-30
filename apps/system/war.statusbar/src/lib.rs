@@ -16,6 +16,7 @@ wit_bindgen::generate!({
 
 use std::cell::RefCell;
 
+use crate::exports::my::skiko_gfx::frame_pacing::Guest as FramePacingGuest;
 use crate::exports::my::skiko_gfx::renderer::{Guest, KeyKind, PointerKind};
 use crate::my::skiko_gfx::canvas::{
     self, BlendMode, ColorFilterKind, PaintAttrs, PaintStyle, StrokeCap, StrokeJoin,
@@ -24,13 +25,16 @@ use crate::my::skiko_gfx::status;
 
 const BG: u32 = 0xFF12121C; // opaque dark strip
 const FG: u32 = 0xFFECECEC;
-const POLL_FRAMES: u64 = 60; // ~1 Hz at 60 fps
+// Task 64 — ms between status-bar frames. With on-demand rendering the
+// host gates render-frame, so frame-count no longer maps to wall-clock;
+// we ask for ~1 Hz and refresh the clock/battery on EVERY render instead
+// of the old `frame % 60` gate (which would now fire once a minute).
+const REFRESH_MS: u32 = 1000;
 
 #[derive(Default)]
 struct State {
     w: f32,
     h: f32,
-    frame: u64,
     clock: String,
     battery: String,
     clock_blob: Option<u32>,
@@ -80,22 +84,21 @@ impl Guest for Bar {
             if s.label_blob.is_none() {
                 s.label_blob = Some(blob("wart", s.h * 0.32, 600));
             }
-            // ~1 Hz: refresh clock + battery; rebuild blobs only on change.
-            if s.frame % POLL_FRAMES == 0 {
-                let clock = status::clock_text();
-                if clock != s.clock || s.clock_blob.is_none() {
-                    if let Some(b) = s.clock_blob.take() { canvas::drop_text_blob(b); }
-                    s.clock_blob = Some(blob(&clock, s.h * 0.42, 600));
-                    s.clock = clock;
-                }
-                let battery = status::battery_text();
-                if battery != s.battery || s.batt_blob.is_none() {
-                    if let Some(b) = s.batt_blob.take() { canvas::drop_text_blob(b); }
-                    s.batt_blob = Some(blob(&battery, s.h * 0.32, 400));
-                    s.battery = battery;
-                }
+            // Refresh clock + battery every render (the host paces us at
+            // ~1 Hz via frame-pacing); rebuild blobs only when the text
+            // actually changes, so a no-change render stays a pure replay.
+            let clock = status::clock_text();
+            if clock != s.clock || s.clock_blob.is_none() {
+                if let Some(b) = s.clock_blob.take() { canvas::drop_text_blob(b); }
+                s.clock_blob = Some(blob(&clock, s.h * 0.42, 600));
+                s.clock = clock;
             }
-            s.frame = s.frame.wrapping_add(1);
+            let battery = status::battery_text();
+            if battery != s.battery || s.batt_blob.is_none() {
+                if let Some(b) = s.batt_blob.take() { canvas::drop_text_blob(b); }
+                s.batt_blob = Some(blob(&battery, s.h * 0.32, 400));
+                s.battery = battery;
+            }
 
             let w = s.w;
             let h = s.h;
@@ -127,6 +130,13 @@ impl Guest for Bar {
     fn on_pointer_event_v2(_pid: u32, _kind: PointerKind, _x: f32, _y: f32, _pressure: f32) {}
     fn on_key_event_v2(_kind: KeyKind, _code_point: u32, _key_id: u32) {}
     fn on_lifecycle_changed(_state: u32) {}
+}
+
+impl FramePacingGuest for Bar {
+    fn next_frame_delay() -> u32 {
+        // ~1 Hz so the clock stays current; the host clamps to its IDLE_CAP.
+        REFRESH_MS
+    }
 }
 
 export!(Bar);

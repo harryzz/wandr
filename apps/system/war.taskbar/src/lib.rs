@@ -20,6 +20,7 @@ wit_bindgen::generate!({
 
 use std::cell::RefCell;
 
+use crate::exports::my::skiko_gfx::frame_pacing::Guest as FramePacingGuest;
 use crate::exports::my::skiko_gfx::renderer::{Guest, KeyKind, PointerKind};
 use crate::my::skiko_gfx::canvas::{
     self, BlendMode, ColorFilterKind, PaintAttrs, PaintStyle, StrokeCap, StrokeJoin,
@@ -168,6 +169,18 @@ impl Guest for Taskbar {
     fn on_scheduled_callback(_callback_id: u32) {}
     fn on_key_event_v2(_kind: KeyKind, _code_point: u32, _key_id: u32) {}
     fn on_lifecycle_changed(_state: u32) {}
+}
+
+/// Task 64 — the nav bar is static except for the brief tap-flash pill.
+/// Idle otherwise; the host wakes us on input. The flash is frame-counted
+/// (FLASH_FRAMES) so while a press is live we ask for the next frame
+/// immediately (0) — `end-frame`'s vsync-blocking swap paces it to ~60 fps.
+const IDLE: u32 = 60_000;
+
+impl FramePacingGuest for Taskbar {
+    fn next_frame_delay() -> u32 {
+        STATE.with(|st| if st.borrow().pressed.is_some() { 0 } else { IDLE })
+    }
 }
 
 export!(Taskbar);

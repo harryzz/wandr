@@ -69,6 +69,32 @@ import kotlinx.coroutines.launch
 /// `scene.render(...)`. See `WasiFrameDispatcher.kt` for rationale.
 val wasiFrameDispatcher: WasiFrameDispatcher = WasiFrameDispatcher()
 
+/// Task 64 — the live scene, exposed so the `frame-pacing` export
+/// (`RendererExports.kt`) can read `hasInvalidations()`. Set by
+/// `buildRealComposeScene`.
+var realScenePacing: ComposeScene? = null
+
+/// Task 64 — milliseconds until the next frame Compose wants, for the host's
+/// on-demand render gate (the `my:skiko-gfx/frame-pacing` export). Returns:
+///   - 0 if the scene has pending recomposition / draws / frame-clock awaiters
+///     (i.e. an animation wants the next frame),
+///   - else the nearest `WasiFrameDispatcher` deadline — a pending `delay()` /
+///     cursor blink / `withTimeout`; `flush()` is the only heartbeat for those,
+///     so they MUST be included or they'd freeze once the scene is idle,
+///   - else a large idle value (the host clamps to its IDLE cap).
+fun nextFrameDelayMillis(): Int {
+    val scene = realScenePacing ?: return 0
+    if (scene.hasInvalidations()) return 0
+    val now = androidx.compose.ui.cachedNanoTime() / 1_000_000L
+    val d = wasiFrameDispatcher.nextDeadlineMillis(now)
+    val idle = 100_000
+    return when {
+        d >= idle -> idle
+        d < 0L -> 0
+        else -> d.toInt()
+    }
+}
+
 /// Bridge from the in-canvas soft keyboard (`WasiSoftKeyboard`, drawn
 /// inside the Compose composition) back to the host's `realScene`,
 /// which lives in Main.kt and isn't directly reachable from composables.
@@ -137,6 +163,7 @@ fun buildRealComposeScene(widthPx: Int, heightPx: Int, density: Float): ComposeS
             MaterialDemoApp()
         }
     }
+    realScenePacing = scene // task 64 — frame-pacing export reads hasInvalidations()
     return scene
 }
 

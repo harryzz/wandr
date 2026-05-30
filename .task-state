@@ -1,5 +1,5 @@
-TASK=63
-STEP=deployed
-STATUS=in-progress
-LAST_SUCCESS=Task 63 app orientation lock deployed. Launcher=locked (publishes lock=1, home stays portrait), apps=auto. Host-verified: locked app gate disables rotation + publishes lock; launcher fg → lock file=1. Pending user physical-rotation verify that chrome stays portrait under the lock.
-NOTES=Files: app_loader.rs (orientation_locked), standalone.rs (gate + lock helpers + lock-aware poll), build-system-warpkgs.sh (launcher locked + apps auto), tasks/63. Installed manifests on-device updated to match.
+TASK=64
+STEP=verify-done
+STATUS=complete
+LAST_SUCCESS=Task 64 ALL STEPS done + device-verified 2026-05-30. On-demand rendering (frame-pacing) for every guest: Rust canvas (launcher/statusbar/taskbar) + dioxus + Compose (wart-app + IME). Idle CPU all guests ~7-11% (cheap-poll residual), down from 23/30/45%. Plus: per-app fps cap, dioxus launch! macro (pure-dioxus apps dep only on lib), cap-latency fix.
+NOTES=Step 4 Compose: WasiFrameDispatcher.nextDeadlineMillis + RealComposeApp.nextFrameDelayMillis (hasInvalidations + dispatcher deadline) + @WasmExport frame-pacing + wit world export, BOTH wart-app+IME. Migrated both guests off discarded compose-*-wasi:0.0.0-wasi-local bundles to in-tree 9999.0.0-SNAPSHOT modules (BUILD-wasmWasi.md). VISUAL CHECK OWED TO USER: animations/cursor-blink/IME typing still work. Open follow-ups: (1) backgrounded Compose w/ focused editor still blinks (~11%) — needs visibility gate; (2) reinstalling a preheated system-app crashes host until stack restart (preload-registry staleness). NOT committed.

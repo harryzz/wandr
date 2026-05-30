@@ -9,4 +9,8 @@ world wart-app {
     import war:markdown/renderer@0.1.0;
     import war:emoji/picker@0.1.0;
     import war:fonts/loader@0.1.0;
+    // Task 64 — optional on-demand-render hint. Opt-in export (not part of
+    // skiko-ui) so the host can gate render-frame; see frame-pacing in the
+    // skiko-gfx deps + RendererExports.kt's @WasmExport.
+    export my:skiko-gfx/frame-pacing@0.1.0;
 }

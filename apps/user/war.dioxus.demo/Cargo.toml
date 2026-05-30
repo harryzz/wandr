@@ -18,9 +18,12 @@ crate-type = ["cdylib"]
 [dependencies]
 # Facade for rsx!/use_signal.
 dioxus        = { version = "0.7", default-features = false, features = ["macro", "html", "signals", "hooks"] }
-# The renderer (path dep — compiles into this cdylib).
+# The renderer + the `launch!` macro. The macro generates the whole wart backend
+# (WIT bindings, host-canvas sink, IME/text bridge, renderer wiring) into this
+# cdylib, so this guest needs no `.wit` file, no `HostSink`, and — via the
+# library's re-exported wit-bindgen — no wit-bindgen dependency. Just dioxus (for
+# rsx!) + dioxus-canvas, then `dioxus_canvas::launch!(app)`.
 dioxus-canvas = { path = "../../../crates/dioxus-canvas" }
-wit-bindgen   = "0.46"
 
 [profile.release]
 opt-level = "s"

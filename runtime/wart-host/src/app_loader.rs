@@ -106,6 +106,24 @@ impl LoadedApp {
             .and_then(|v| v.as_str())
             .map(str::to_string)
     }
+
+    /// Task 64 follow-up: per-app render-rate cap. Reads `max_fps` from the
+    /// installed `package.toml` (top-level key, NOT in the AOT cache-key —
+    /// same as `orientation`). Returns 60 when absent / out of range / for
+    /// dev loads (no manifest). The host throttles the standalone render
+    /// loop to this rate; capping a non-game app to 30 roughly halves its
+    /// render CPU. It is enforced HOST-SIDE and applies to every app
+    /// (Compose / dioxus / canvas) with no app- or library-side code — a
+    /// `WART_MAX_FPS` env var overrides it globally (for testing).
+    pub fn max_fps(&self) -> u32 {
+        self.install_dir.as_ref()
+            .and_then(|dir| fs::read_to_string(dir.join("package.toml")).ok())
+            .and_then(|src| src.parse::<toml::Value>().ok())
+            .and_then(|doc| doc.get("max_fps").and_then(|v| v.as_integer()))
+            .filter(|n| *n >= 1 && *n <= 240)
+            .map(|n| n as u32)
+            .unwrap_or(60)
+    }
 }
 
 /// One resolved + deserialized same-Store dep.
@@ -134,6 +152,11 @@ pub struct InstantiatedApp {
     /// `ime_inbound.rs` drain calls into these when an
     /// `editor-attached`/`editor-detached` message arrives.
     pub ime_events: Option<crate::ime_bindings::ImeEvents>,
+    /// Task 64 — `Some(...)` if the component exports the optional
+    /// `my:skiko-gfx/frame-pacing` interface. The standalone render loop
+    /// calls `next-frame-delay` after each frame to gate on-demand
+    /// rendering; `None` keeps the legacy unconditional 60 fps path.
+    pub frame_pacing: Option<crate::frame_pacing_bindings::FramePacingWorld>,
 }
 
 impl LoadedApp {
@@ -164,7 +187,15 @@ impl LoadedApp {
         if ime_events.is_some() {
             log::info!("loader: app exports war:ime/ime — IME-events bindings enabled");
         }
-        Ok(InstantiatedApp { skiko, ime_events })
+        // Task 64 — optional on-demand-render hint. Same .ok() probe: a
+        // guest that exports `frame-pacing-world` binds, one that doesn't
+        // yields None (legacy 60 fps).
+        let frame_pacing =
+            crate::frame_pacing_bindings::FramePacingWorld::new(&mut *store, &instance).ok();
+        if frame_pacing.is_some() {
+            log::info!("loader: app exports my:skiko-gfx/frame-pacing — on-demand rendering enabled");
+        }
+        Ok(InstantiatedApp { skiko, ime_events, frame_pacing })
     }
 
     /// One-shot CLI consumers (`wasi:cli/command` world) — task 36 step 7.

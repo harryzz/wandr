@@ -410,6 +410,23 @@ fn run_cwasm_loop(
     let inst = loaded.instantiate(&mut store)?;
     let skiko = inst.skiko;
     let ime_events = inst.ime_events;
+    // Task 64 — Some(...) only if the guest exports my:skiko-gfx/frame-pacing.
+    let frame_pacing = inst.frame_pacing;
+    // Task 64 follow-up — per-app render-rate cap. Resolution order:
+    // WART_MAX_FPS env (global, for testing) > package.toml `max_fps` > 60.
+    // Enforced host-side as a floor on the render interval, so it caps every
+    // app (Compose / dioxus / canvas) with no guest code. Input is still
+    // polled at POLL_MS regardless, so touch latency is unchanged.
+    let target_fps: u32 = std::env::var("WART_MAX_FPS")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .filter(|n| *n >= 1 && *n <= 240)
+        .unwrap_or_else(|| loaded.max_fps());
+    let frame_interval = std::time::Duration::from_millis((1000 / target_fps.max(1)) as u64);
+    log::info!(
+        "standalone: render cap {target_fps} fps (min interval {} ms)",
+        frame_interval.as_millis()
+    );
     log::info!("standalone: component instantiated — entering render loop");
 
     // Tell the guest the surface size before the first frame, so Compose lays
@@ -490,7 +507,7 @@ fn run_cwasm_loop(
         };
 
     // ── Render loop — mirrors WindowEvent::RedrawRequested, no winit ─────
-    let frame_target = std::time::Duration::from_millis(16);
+    // (Frame pacing is task 64's `next_render_at` gate, set up below.)
     let mut frame: u64 = 0;
     // Task 62 — the overlay's strip thickness (its portrait height). Seeded
     // from the created surface; updated whenever the guest requests a new
@@ -501,7 +518,21 @@ fn run_cwasm_loop(
     // Tracked so the target orient can be re-derived when the system lock
     // toggles (overlays), not only when the device physically turns.
     let mut last_dev_orient: u32 = 0;
+    // Task 64 — on-demand rendering. The cheap input/IME/scheduler poll
+    // still runs every iteration (≤POLL_MS latency), but the expensive
+    // render-frame + buffer swap is gated: it fires only when something
+    // changed this iteration (`dirty`) or the guest's requested deadline
+    // (`next_render_at`) has arrived. A guest that exports `frame-pacing`
+    // drives `next_render_at`; one that doesn't falls back to POLL_MS (the
+    // legacy unconditional 60 fps). IDLE_CAP bounds how long a fully static
+    // guest can sleep, so e.g. the status-bar clock still ticks ~1/sec.
+    const IDLE_CAP_MS: u64 = 1000;
+    const POLL_MS: u64 = 16;
+    let mut next_render_at = std::time::Instant::now();
     loop {
+        // Task 64 — set true by any event source below that did real work
+        // this iteration; forces a render regardless of the pacing deadline.
+        let mut dirty = false;
         // Step 5 — SIGTERM / SIGINT / SIGHUP from launcher trap or operator.
         if crate::lifecycle_standalone::should_shutdown() {
             log::info!("standalone: shutdown signal — exiting render loop");
@@ -526,6 +557,7 @@ fn run_cwasm_loop(
         if last_role != Some(cur_role) {
             use crate::app_role::AppRole;
             log::info!("standalone: role transition {last_role:?} → {cur_role:?}");
+            dirty = true; // task 64 — z-order/lifecycle change needs a frame
             match cur_role {
                 AppRole::Foreground => {
                     sf.set_layer(fg_layer);
@@ -609,6 +641,7 @@ fn run_cwasm_loop(
                 let (rx, ry, rw, rh) =
                     overlay_rect(mode, orient, sf.panel_w, sf.panel_h, new_h, sb, tb);
                 if sf.set_overlay_geometry(rx, ry, rw, rh, rw, rh) {
+                    dirty = true; // task 64 — geometry change needs a frame
                     store.data_mut().renderer.resize(rw as u32, rh as u32);
                     let (lw, lh) = {
                         let r = &store.data().renderer;
@@ -639,6 +672,7 @@ fn run_cwasm_loop(
                     bindings::my::skiko_gfx::lifecycle::State::Paused
                 };
                 if store.data().lifecycle.current != target {
+                    dirty = true; // task 64 — screen on/off lifecycle change
                     store.data_mut().lifecycle.current = target;
                     if let Err(e) = skiko
                         .my_skiko_gfx_renderer()
@@ -668,6 +702,7 @@ fn run_cwasm_loop(
             let locked = sf.is_overlay() && orientation_lock_active();
             let orient = if locked { 0 } else { last_dev_orient };
             if orient != store.data().renderer.current_orient {
+                dirty = true; // task 64 — rotation needs a frame
                 // Task 62 — for an overlay, the anchored rect itself must
                 // flip (bottom strip ⇄ side strip). Do the SF move/resize +
                 // GL-buffer resize BEFORE set_orientation, which reads the
@@ -704,7 +739,6 @@ fn run_cwasm_loop(
             }
         }
 
-        let t0 = std::time::Instant::now();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -715,6 +749,7 @@ fn run_cwasm_loop(
         // equivalent of winit's touch/key events (task 33 Step 3).
         let mut input_buf = [crate::sf_surface::SfInputEvent::default(); 32];
         for ev in sf.poll_input(&mut input_buf) {
+            dirty = true; // task 64 — any input (touch/key) wants a frame
             if ev.kind <= 3 {
                 // Task 43 — touch coords arrive in physical-buffer space.
                 // When the content is rotated, map them back into logical
@@ -754,6 +789,7 @@ fn run_cwasm_loop(
         // synthesis from a virtual keyboard). Same per-frame
         // pattern as the InputFlinger drain above.
         for ev in crate::ime_inbound::drain_queue() {
+            dirty = true; // task 64 — IME key/editor event wants a frame
             match ev {
                 crate::ime_inbound::InboundEvent::KeyEvent { code_point, key_id, action } => {
                     if let Err(e) = crate::input::dispatch_key_v2(
@@ -829,6 +865,9 @@ fn run_cwasm_loop(
 
         // Drain scheduler callbacks whose deadline has passed.
         let due = store.data_mut().scheduler.drain_due(std::time::Instant::now());
+        if !due.is_empty() {
+            dirty = true; // task 64 — a timer came due (delay()/animation tick)
+        }
         for cb in due {
             if let Err(e) = skiko
                 .my_skiko_gfx_renderer()
@@ -838,36 +877,64 @@ fn run_cwasm_loop(
             }
         }
 
-        let result = skiko
-            .my_skiko_gfx_renderer()
-            .call_render_frame(&mut store, nanos);
+        // Task 64 — gate the expensive render-frame + buffer swap. Render
+        // when something changed this iteration (`dirty`), the guest's pacing
+        // deadline arrived, or during the first few warm-up frames. `dirty`
+        // (input / IME / lifecycle) always renders promptly — the fps cap must
+        // NOT add latency to a discrete tap (a down-then-up within one frame
+        // interval would otherwise defer the click to the idle deadline). The
+        // cap instead floors the TIMED/animation cadence via `next_render_at`
+        // below, so unconditional/animating guests stay at `target_fps`.
+        if frame < 3 || std::time::Instant::now() >= next_render_at || dirty {
+            let result = skiko
+                .my_skiko_gfx_renderer()
+                .call_render_frame(&mut store, nanos);
 
-        // Fire the pending lifecycle transition after the first successful
-        // frame (gives appMain a chance to register its observer first).
-        if result.is_ok() {
-            if let Some(state) = store.data_mut().lifecycle.pending.take() {
-                if let Err(e) = skiko
-                    .my_skiko_gfx_renderer()
-                    .call_on_lifecycle_changed(&mut store, state as u32)
-                {
-                    log::warn!("standalone: on_lifecycle_changed failed: {e:#}");
+            // Fire the pending lifecycle transition after the first successful
+            // frame (gives appMain a chance to register its observer first).
+            if result.is_ok() {
+                if let Some(state) = store.data_mut().lifecycle.pending.take() {
+                    if let Err(e) = skiko
+                        .my_skiko_gfx_renderer()
+                        .call_on_lifecycle_changed(&mut store, state as u32)
+                    {
+                        log::warn!("standalone: on_lifecycle_changed failed: {e:#}");
+                    }
                 }
             }
-        }
 
-        if let Err(e) = result {
-            let msg = format!("{e:?}");
-            if msg.contains("cannot enter component instance") {
-                log::error!("standalone: component instance poisoned — exiting");
-                return Err(anyhow::anyhow!("render_frame fatal: {msg}"));
+            if let Err(e) = result {
+                let msg = format!("{e:?}");
+                if msg.contains("cannot enter component instance") {
+                    log::error!("standalone: component instance poisoned — exiting");
+                    return Err(anyhow::anyhow!("render_frame fatal: {msg}"));
+                }
+                log::error!("standalone: render_frame #{frame} error: {e:#}");
             }
-            log::error!("standalone: render_frame #{frame} error: {e:#}");
+
+            // Ask the guest how long it may sleep before the next frame.
+            // No frame-pacing export ⇒ 0 (render every interval — the legacy
+            // unconditional path, now rate-limited by the fps cap below).
+            let guest_delay = match frame_pacing.as_ref() {
+                Some(fp) => fp
+                    .my_skiko_gfx_frame_pacing()
+                    .call_next_frame_delay(&mut store)
+                    .unwrap_or(0)
+                    .min(IDLE_CAP_MS as u32) as u64,
+                None => 0,
+            };
+            // Floor the next-frame delay by the fps cap so an animating /
+            // unconditional guest never renders faster than `target_fps`.
+            let delay_ms = guest_delay.max(frame_interval.as_millis() as u64);
+            next_render_at =
+                std::time::Instant::now() + std::time::Duration::from_millis(delay_ms);
+
+            if frame <= 3 || frame % 600 == 0 {
+                log::info!("standalone: rendered frame {frame}");
+            }
         }
 
         frame += 1;
-        if frame <= 3 || frame % 600 == 0 {
-            log::info!("standalone: rendered frame {frame}");
-        }
         // Task 46 step 4 — only the foreground app fights for focus.
         // Background apps that keep stealing focus would defeat the
         // arbiter's policy + spam the launcher. Frequency unchanged
@@ -876,9 +943,14 @@ fn run_cwasm_loop(
             sf.request_focus();
         }
 
-        let elapsed = t0.elapsed();
-        if elapsed < frame_target {
-            std::thread::sleep(frame_target - elapsed);
+        // Task 64 — cheap poll cadence. Sleep until the next render is due,
+        // but never longer than POLL_MS so idle input latency stays ≤16 ms
+        // while the expensive render is skipped.
+        let nap = next_render_at
+            .saturating_duration_since(std::time::Instant::now())
+            .min(std::time::Duration::from_millis(POLL_MS));
+        if !nap.is_zero() {
+            std::thread::sleep(nap);
         }
     }
 

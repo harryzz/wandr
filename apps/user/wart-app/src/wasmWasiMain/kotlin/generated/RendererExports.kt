@@ -94,3 +94,13 @@ fun __wasm_export_onLifecycleChanged(p0: Int): Unit {
         RendererImpl.onLifecycleChanged(p0.toUInt())
     }
 }
+
+// Task 64 — on-demand rendering. The host calls this right after render-frame
+// to learn how long it may sleep before the next wanted frame (0 = animating,
+// N ms = a timed wake / cursor blink, large = idle). No params/returns through
+// linear memory, so no scoped allocator — just the standard freeAll.
+@WasmExport("my:skiko-gfx/frame-pacing@0.1.0#next-frame-delay")
+fun __wasm_export_nextFrameDelay(): Int {
+    freeAllComponentModelReallocAllocatedMemory()
+    return testapp.nextFrameDelayMillis()
+}
