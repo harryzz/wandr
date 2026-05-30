@@ -139,6 +139,9 @@ version     = "0.1.0"
 world       = "my:skiko-gfx/skiko-ui"
 kind        = "system"
 composition = "same-store"
+# Task 63 — the home screen stays portrait; while it's foreground the
+# system chrome locks portrait too.
+orientation = "locked"
 label       = "Launcher"
 
 [components]
@@ -189,6 +192,7 @@ app_id      = "war.dioxus.demo"
 version     = "0.1.0"
 world       = "my:skiko-gfx/skiko-ui"
 composition = "same-store"
+orientation = "auto"
 label       = "Dioxus Demo"
 
 [components]
@@ -242,6 +246,7 @@ app_id      = "com.example.wart-app"
 version     = "0.1.0"
 world       = "my:skiko-gfx/skiko-ui"
 composition = "same-store"
+orientation = "auto"
 # Task 57 — human-readable label shown by the launcher (`list-apps`).
 label       = "Demo"
 

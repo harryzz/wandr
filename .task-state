@@ -1,5 +1,5 @@
-TASK=62
-STEP=verify-done
-STATUS=complete
-LAST_SUCCESS=Task 62 verified OK — IME + status bar + taskbar rotate coherently with the device (folded in task 58). Generic orientation=auto manifest flag, anchor-aware overlay_rect, a-03 shim sf_set_overlay_geometry+sf_panel_dims, IME guest resize fix. Device-verified 2026-05-30.
-NOTES=Follow-up: app-driven orientation LOCK should propagate fg-app→chrome via arbiter (scoped in tasks/62 + memory). Uncommitted working tree.
+TASK=63
+STEP=deployed
+STATUS=in-progress
+LAST_SUCCESS=Task 63 app orientation lock deployed. Launcher=locked (publishes lock=1, home stays portrait), apps=auto. Host-verified: locked app gate disables rotation + publishes lock; launcher fg → lock file=1. Pending user physical-rotation verify that chrome stays portrait under the lock.
+NOTES=Files: app_loader.rs (orientation_locked), standalone.rs (gate + lock helpers + lock-aware poll), build-system-warpkgs.sh (launcher locked + apps auto), tasks/63. Installed manifests on-device updated to match.

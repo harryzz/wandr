@@ -84,10 +84,27 @@ impl LoadedApp {
     /// default is "no rotation". `standalone.rs` ORs this with the
     /// fullscreen default so fullscreen apps keep task-43 behavior.
     pub fn rotation_policy(&self) -> bool {
-        let Some(dir) = self.install_dir.as_ref() else { return false };
-        let Ok(src) = fs::read_to_string(dir.join("package.toml")) else { return false };
-        let Ok(doc) = src.parse::<toml::Value>() else { return false };
-        doc.get("orientation").and_then(|v| v.as_str()) == Some("auto")
+        self.orientation_field().as_deref() == Some("auto")
+    }
+
+    /// Task 63: whether this app EXPLICITLY declares `orientation = "locked"`
+    /// (portrait-locked). Distinct from "field absent" — a fullscreen app
+    /// with no field still rotates (task 43 default), but an explicitly
+    /// locked one stays portrait AND the arbiter-published lock makes the
+    /// system chrome (status bar / taskbar / IME) stay portrait too while
+    /// it is foreground. See `standalone.rs` orientation-lock handling.
+    pub fn orientation_locked(&self) -> bool {
+        self.orientation_field().as_deref() == Some("locked")
+    }
+
+    /// The raw `orientation` string from the installed manifest, if any.
+    fn orientation_field(&self) -> Option<String> {
+        let dir = self.install_dir.as_ref()?;
+        let src = fs::read_to_string(dir.join("package.toml")).ok()?;
+        let doc = src.parse::<toml::Value>().ok()?;
+        doc.get("orientation")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
     }
 }
 

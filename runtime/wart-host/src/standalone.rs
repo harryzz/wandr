@@ -181,12 +181,18 @@ pub fn run_with_engine(engine: &Engine, app_id: Option<&str>, mode: OverlayMode)
                 OverlayMode::BottomBar => 0x6000_0000,
                 OverlayMode::Bottom | OverlayMode::Top => i32::MAX,
             };
-            // Task 62 — auto-rotate when the app opts in via its manifest
-            // (`orientation = "auto"`), OR unconditionally for fullscreen
-            // (preserves task-43 behavior; fullscreen apps have no manifest
-            // field today). Overlays rotate only on explicit opt-in.
-            let rotates = loaded.rotation_policy() || mode == OverlayMode::None;
-            run_cwasm_loop(engine, loaded, renderer, sf, mode, rotates, fg_layer)
+            // Task 62/63 — rotation gate. Fullscreen apps rotate UNLESS they
+            // explicitly declare `orientation = "locked"` (absent ⇒ rotates,
+            // preserving task-43); overlays rotate only on explicit
+            // `orientation = "auto"`. A locked fullscreen app additionally
+            // publishes a system lock (below) so the chrome stays portrait.
+            let is_locked = loaded.orientation_locked();
+            let rotates = if mode == OverlayMode::None {
+                !is_locked
+            } else {
+                loaded.rotation_policy()
+            };
+            run_cwasm_loop(engine, loaded, renderer, sf, mode, rotates, is_locked, fg_layer)
         }
         Err(e) => {
             log::warn!(
@@ -221,6 +227,30 @@ fn device_rotation_to_orient(rot: u32) -> u32 {
         2 => 3, // ROT_180
         _ => 7, // ROT_270
     }
+}
+
+/// Task 63 — global system orientation lock (cross-process IPC). The
+/// foreground fullscreen app writes `1` here when it declares
+/// `orientation = "locked"`, `0` otherwise; the system chrome overlays
+/// (status bar / taskbar / IME) read it each frame and stay portrait while
+/// it's set, regardless of the device sensor. A plain file (alongside the
+/// zygote/arbiter sockets) — the status bar / taskbar are launched directly,
+/// not arbiter-tracked, so a per-socket push can't reach them; a global file
+/// they all poll is the simplest reliable channel.
+const ORIENT_LOCK_PATH: &str = "/data/local/tmp/wart-orient-lock";
+
+/// Publish the system orientation lock (foreground fullscreen app only).
+fn publish_orientation_lock(locked: bool) {
+    if let Err(e) = std::fs::write(ORIENT_LOCK_PATH, if locked { "1" } else { "0" }) {
+        log::warn!("standalone: could not publish orientation lock: {e:#}");
+    }
+}
+
+/// Read the system orientation lock. Absent / unreadable ⇒ unlocked.
+fn orientation_lock_active() -> bool {
+    std::fs::read_to_string(ORIENT_LOCK_PATH)
+        .map(|s| s.trim() == "1")
+        .unwrap_or(false)
 }
 
 /// Physical compass edge of the portrait panel buffer.
@@ -307,9 +337,13 @@ fn run_cwasm_loop(
     // Drives the rotated-rect geometry flip for overlays.
     mode: OverlayMode,
     // Task 43/62 — auto-follow device screen rotation. True for the
-    // fullscreen app (always) and for overlays whose manifest opts in
-    // (`orientation = "auto"`); false otherwise.
+    // fullscreen app (unless locked) and for overlays whose manifest opts
+    // in (`orientation = "auto"`); false otherwise.
     enable_rotation: bool,
+    // Task 63 — this app explicitly declared `orientation = "locked"`. When
+    // it's a foreground fullscreen app it publishes the system orientation
+    // lock so the chrome (overlays) stays portrait too.
+    orientation_locked: bool,
     // Task 55 — SurfaceFlinger layer for the Foreground role. System
     // chrome (status bar / IME overlays) uses i32::MAX; fullscreen apps
     // use a lower band so chrome always composites above them (otherwise
@@ -463,6 +497,10 @@ fn run_cwasm_loop(
     // overlay height. Feeds `overlay_rect` so a rotation re-derives the
     // side-strip geometry at the current thickness. Unused for fullscreen.
     let mut strip_t: i32 = sf.height;
+    // Task 63 — the device's latest orientation from the on-change sensor.
+    // Tracked so the target orient can be re-derived when the system lock
+    // toggles (overlays), not only when the device physically turns.
+    let mut last_dev_orient: u32 = 0;
     loop {
         // Step 5 — SIGTERM / SIGINT / SIGHUP from launcher trap or operator.
         if crate::lifecycle_standalone::should_shutdown() {
@@ -493,6 +531,12 @@ fn run_cwasm_loop(
                     sf.set_layer(fg_layer);
                     sf.set_visible(true);
                     sf.request_focus();
+                    // Task 63 — the foreground fullscreen app owns the system
+                    // orientation lock: publish ours so the chrome overlays
+                    // honor it. (Overlays never write it — they only read.)
+                    if mode == OverlayMode::None {
+                        publish_orientation_lock(orientation_locked);
+                    }
                     let target = bindings::my::skiko_gfx::lifecycle::State::Resumed;
                     if store.data().lifecycle.current != target {
                         store.data_mut().lifecycle.current = target;
@@ -608,23 +652,27 @@ fn run_cwasm_loop(
             }
         }
 
-        // Task 43 — apply any screen-rotation change. The HAL sensor is
-        // on-change, so `poll_device_rotation` returns Some only right
-        // after the device physically rotates; most frames are a cheap
-        // no-op. `set_orientation` recomputes the content-rotation matrix
-        // + logical dims and returns true only on an actual change, in
-        // which case we re-lay-out Compose via on_resize.
+        // Task 43/62/63 — apply any screen-rotation change. The HAL sensor
+        // is on-change, so `poll_device_rotation` returns Some only right
+        // after the device physically rotates; we cache it in
+        // `last_dev_orient`. The TARGET orient is the device orient, except
+        // an overlay honors the system orientation lock (task 63) and stays
+        // portrait while a locked fullscreen app is foreground. Driven by
+        // target-vs-current so it also re-applies when the lock toggles
+        // without the device moving. Fullscreen apps don't read the lock —
+        // they ARE the locker (a locked one has no sensor, stays portrait).
         if let Some(h) = orient_sensor {
             if let Some(rot) = crate::sensors_impl::poll_device_rotation(h) {
-                let orient = device_rotation_to_orient(rot);
+                last_dev_orient = device_rotation_to_orient(rot);
+            }
+            let locked = sf.is_overlay() && orientation_lock_active();
+            let orient = if locked { 0 } else { last_dev_orient };
+            if orient != store.data().renderer.current_orient {
                 // Task 62 — for an overlay, the anchored rect itself must
-                // flip (a portrait bottom strip becomes a vertical side
-                // strip in landscape). Do the SF move/resize + GL-buffer
-                // resize BEFORE set_orientation, because recompute_transform
-                // reads the buffer dims to derive logical dims. Fullscreen
-                // (is_overlay == false) leaves the buffer alone — task 43's
-                // content-only rotation, unchanged.
-                if sf.is_overlay() && orient != store.data().renderer.current_orient {
+                // flip (bottom strip ⇄ side strip). Do the SF move/resize +
+                // GL-buffer resize BEFORE set_orientation, which reads the
+                // buffer dims. Fullscreen leaves the buffer alone (task 43).
+                if sf.is_overlay() {
                     let sb = crate::status_impl::status_bar_height_px() as i32;
                     let tb = taskbar_height_px() as i32;
                     let (rx, ry, rw, rh) =
@@ -632,7 +680,8 @@ fn run_cwasm_loop(
                     if sf.set_overlay_geometry(rx, ry, rw, rh, rw, rh) {
                         store.data_mut().renderer.resize(rw as u32, rh as u32);
                         log::info!(
-                            "standalone: overlay rect flip → orient {orient} rect ({rx},{ry},{rw},{rh})"
+                            "standalone: overlay rect flip → orient {orient}{} rect ({rx},{ry},{rw},{rh})",
+                            if locked { " (locked)" } else { "" }
                         );
                     }
                 }
@@ -642,7 +691,8 @@ fn run_cwasm_loop(
                         (r.logical_width, r.logical_height)
                     };
                     log::info!(
-                        "standalone: screen rotation → device-rot {rot} orient {orient} logical {lw}x{lh}"
+                        "standalone: orient change → {orient}{} logical {lw}x{lh}",
+                        if locked { " (system lock)" } else { "" }
                     );
                     if let Err(e) = skiko
                         .my_skiko_gfx_renderer()
