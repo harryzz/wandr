@@ -463,10 +463,10 @@ fn initial(name: &str) -> String {
 fn Avatar(uri: Option<String>, letter: String) -> Element {
     rsx! {
         if let Some(uri) = uri {
-            img { src: "{uri}", style: "width:84px; height:84px; border-radius:14px;" }
+            img { src: "{uri}", style: "width:84px; height:84px; flex-shrink:0; border-radius:14px;" }
         } else {
             div {
-                style: "display:flex; justify-content:center; align-items:center; width:84px; height:84px; border-radius:14px; background:{OUT_BUBBLE};",
+                style: "display:flex; justify-content:center; align-items:center; width:84px; height:84px; flex-shrink:0; border-radius:14px; background:{OUT_BUBBLE};",
                 div { style: "color:{TEXT}; font-size:38px; font-weight:700;", "{letter}" }
             }
         }
