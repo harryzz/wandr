@@ -68,11 +68,17 @@ DX_WASM=$(build_system_wasm "apps/user/war.dioxus.demo"          "war_dioxus_dem
 # ── 2. Package each warpkg directory ────────────────────────────────────
 
 pack_warpkg() {
-    local pkg_dir="$1" wasm_src="$2" comp_name="$3" toml_body="$4"
+    local pkg_dir="$1" wasm_src="$2" comp_name="$3" toml_body="$4" assets_src="${5:-}"
     rm -rf "$pkg_dir"
     mkdir -p "$pkg_dir/components"
     cp "$wasm_src" "$pkg_dir/components/$comp_name.wasm"
     printf '%s\n' "$toml_body" > "$pkg_dir/package.toml"
+    # Task 38 — bundle an optional assets/ dir; the installer copies it
+    # verbatim to <install_dir>/assets/ for the assets.read host verb.
+    if [[ -n "$assets_src" && -d "$assets_src" ]]; then
+        cp -r "$assets_src" "$pkg_dir/assets"
+        echo "  + assets: $assets_src → $pkg_dir/assets"
+    fi
     echo "  packaged: $pkg_dir"
 }
 
@@ -251,7 +257,7 @@ markdown = { system = "war.markdown.renderer", version = "0.1.0", interface = "w
 emoji    = { system = "war.emoji.picker",      version = "0.1.0", interface = "war:emoji/picker@0.1.0" }
 fonts    = { system = "war.fonts.loader",      version = "0.1.0", interface = "war:fonts/loader@0.1.0" }
 EOF
-)"
+)" "$REPO_ROOT/apps/user/wart-app/assets"
 
 # ── 3. Push warpkg dirs to device + install ─────────────────────────────
 
