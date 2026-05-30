@@ -56,8 +56,16 @@ mitigation to remove** — the deferred-gc trigger was always `#[cfg(feature =
 - **Upgrading the runtime re-AOTs every cwasm.** The installer/loader cache-key
   includes `wasmtime_version`, so apps self-heal on first load — now including
   deps. (Before this fix: reinstall all apps after a bump.)
-- **Adapter fork not rebased.** `external/wasmtime` stays at 44.0.1 + the KT-86415
-  State-pin; the WASI-P1 adapter's canonical ABI is version-independent and the
-  44-adapter runs fine under host 45 (verified). Rebasing the State-pin onto the
-  45.0 tag is a maintenance clean-up, not functionally required.
+- **Adapter fork rebased onto 45.0.0** (`external/wasmtime`, branch
+  `kt-86415-option-b`): the single KT-86415 State-pin commit replayed cleanly onto
+  the upstream `v45.0.0` tag (no conflict — it only touches the adapter `lib.rs`),
+  giving `377cd917af Release Wasmtime 45.0.0` + `1b99ec60e2 …pin State…`. The
+  **State-pin is still required** — it fixes a guest-side use-after-free between
+  the WASI-P1 adapter `State` and Kotlin's `freeAllComponentModelReallocAllocatedMemory`
+  (KT-86415), orthogonal to wasmtime's host-runtime GC; stays until KT-86415 lands
+  in the Kotlin stdlib. Adapter rebuilt + a re-adapted wart-app validates. The
+  rebase **rewrote the fork's history**, so publishing it needs a force-push to
+  `codeberg/harryzz/wasmtime` (held for explicit go-ahead). Device guests keep
+  their existing 44-built adapter (ABI version-independent, runs under host 45);
+  the 45-based adapter applies to future guest builds.
 - CLAUDE.md's task-24 row still reads "reverted to 44" — update when convenient.
