@@ -6,7 +6,7 @@
 //! (single-threaded guest ⇒ `Rc`/`RefCell`).
 
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -24,9 +24,12 @@ use libsignal_service::groups_v2::{
     decrypt_group, GroupsManager, InMemoryCredentialsCache,
 };
 use libsignal_service::master_key::{MasterKey, StorageServiceKey};
+use libsignal_service::unidentified_access::UnidentifiedAccess;
 use libsignal_service::zkgroup::groups::{GroupMasterKey, GroupSecretParams};
 use libsignal_service::messagepipe::Incoming;
-use libsignal_service::proto::{manifest_record, storage_record, sync_message, DataMessage};
+use libsignal_service::proto::{
+    manifest_record, storage_record, sync_message, DataMessage, GroupContextV2,
+};
 use libsignal_service::protocol::{
     DeviceId, IdentityKeyPair, ProtocolAddress, ServiceId,
 };
@@ -46,10 +49,20 @@ use crate::store::MemStore;
 
 // ---- shared state ----------------------------------------------------------
 
+/// Routing metadata for a group send: the member ServiceIds and the group's
+/// current revision. The group master key is `b64::decode(thread)`. Kept in
+/// `Shared` (re-populated on every group fetch) + persisted on `StoredGroup`.
+#[derive(Clone)]
+struct GroupRoute {
+    members: Vec<Uuid>,
+    revision: u32,
+}
+
 struct Shared {
     events: RefCell<VecDeque<Event>>,
     history: RefCell<Vec<Message>>,
-    outbox: RefCell<VecDeque<String>>,
+    /// Outgoing queue: `(thread, text)` — thread routes the wire send.
+    outbox: RefCell<VecDeque<(String, String)>>,
     state: RefCell<String>,
     next_id: RefCell<u64>,
     /// Contact list from the primary device's address book (contacts-sync).
@@ -65,6 +78,12 @@ struct Shared {
     master_key: RefCell<Option<Vec<u8>>>,
     /// Set by `sync_groups()` → the receive loop re-fetches groups on the tick.
     resync_groups: Cell<bool>,
+    /// Per-group routing (member ACIs + revision), keyed by group id (master key
+    /// b64). Used to address `send_message_to_group`.
+    group_routes: RefCell<HashMap<String, GroupRoute>>,
+    /// This account's own ACI (lowercase uuid), once linked/resumed — lets the UI
+    /// label the self thread "Note to Self". Empty until known.
+    account_id: RefCell<String>,
 }
 
 impl Shared {
@@ -116,6 +135,7 @@ pub fn init() {
             text: m.text,
             ts: m.ts,
             outgoing: m.outgoing,
+            thread: m.thread,
         });
     }
 
@@ -131,6 +151,28 @@ pub fn init() {
         })
         .collect();
 
+    // Persisted groups → WIT records (for display) + routing table (for sends).
+    let stored_groups = persist::load_groups();
+    let mut group_routes: HashMap<String, GroupRoute> = HashMap::new();
+    for g in &stored_groups {
+        group_routes.insert(
+            g.id.clone(),
+            GroupRoute {
+                members: g.member_ids.iter().filter_map(|s| Uuid::parse_str(s).ok()).collect(),
+                revision: g.revision,
+            },
+        );
+    }
+    let groups: Vec<Group> = stored_groups
+        .into_iter()
+        .map(|g| Group {
+            id: g.id,
+            title: g.title,
+            members: g.members,
+            avatar: g.avatar_b64.as_ref().and_then(|b| b64().decode(b).ok()),
+        })
+        .collect();
+
     let s = Rc::new(Shared {
         events: RefCell::new(VecDeque::new()),
         history: RefCell::new(history),
@@ -140,14 +182,11 @@ pub fn init() {
         contacts: RefCell::new(contacts),
         contacts_requested: Cell::new(false),
         resync_contacts: Cell::new(false),
-        groups: RefCell::new(persist::load_groups().into_iter().map(|g| Group {
-            id: g.id,
-            title: g.title,
-            members: g.members,
-            avatar: g.avatar_b64.as_ref().and_then(|b| b64().decode(b).ok()),
-        }).collect()),
+        groups: RefCell::new(groups),
         master_key: RefCell::new(None),
         resync_groups: Cell::new(false),
+        group_routes: RefCell::new(group_routes),
+        account_id: RefCell::new(String::new()),
     });
     SHARED.with(|slot| *slot.borrow_mut() = Some(s));
 
@@ -166,23 +205,30 @@ pub fn poll_events() -> Vec<Event> {
         .unwrap_or_default()
 }
 
-pub fn send(text: String) -> Result<(), String> {
+/// This account's own ACI (lowercase uuid), or "" if not yet linked. Lets the UI
+/// recognise the Note-to-Self thread.
+pub fn account_id() -> String {
+    shared().map(|s| s.account_id.borrow().clone()).unwrap_or_default()
+}
+
+pub fn send(thread: String, text: String) -> Result<(), String> {
     let shared = shared().ok_or("engine not initialized")?;
     if text.trim().is_empty() {
         return Err("empty message".to_string());
     }
     // Local echo into history + live feed; the actual wire send happens in the
-    // background task within ~200 ms (see `receive_and_send`).
+    // background task within ~200 ms (see `receive_and_send`), routed by `thread`.
     let msg = Message {
         id: shared.next_id(),
         sender: "me".to_string(),
         text: text.clone(),
         ts: now_ms(),
         outgoing: true,
+        thread: thread.clone(),
     };
     let _ = persist::append_message(&to_stored(&msg));
     shared.add_message(msg);
-    shared.outbox.borrow_mut().push_back(text);
+    shared.outbox.borrow_mut().push_back((thread, text));
     Ok(())
 }
 
@@ -240,6 +286,7 @@ async fn run() {
             return;
         },
     };
+    *shared.account_id.borrow_mut() = aci.to_string();
 
     if let Err(e) =
         receive_and_send(&shared, store, credentials, aci, device_id).await
@@ -486,13 +533,26 @@ async fn receive_and_send(
                                 }
                             }
                         }
-                        if let (Some(text), outgoing) = extract(&content.body) {
+                        let (body, outgoing, thread_override) =
+                            extract(&content.body);
+                        if let Some(text) = body {
+                            // Sender: my own messages (synced from another device)
+                            // show as "me"; otherwise the peer's ACI (UI → name).
+                            let peer = content.metadata.sender.raw_uuid().to_string();
+                            let sender = if outgoing {
+                                "me".to_string()
+                            } else {
+                                peer.clone()
+                            };
+                            // Thread: group (from the message) or the 1:1 peer.
+                            let thread = thread_override.unwrap_or(peer);
                             let msg = Message {
                                 id: shared.next_id(),
-                                sender: format!("{:?}", content.metadata.sender),
+                                sender,
                                 text,
                                 ts: now_ms(),
                                 outgoing,
+                                thread,
                             };
                             let _ = persist::append_message(&to_stored(&msg));
                             shared.add_message(msg);
@@ -508,25 +568,56 @@ async fn receive_and_send(
             },
             _ = tick.fuse() => {
                 if let Some(sender) = sender.as_mut() {
-                    let pending: Vec<String> =
+                    let pending: Vec<(String, String)> =
                         shared.outbox.borrow_mut().drain(..).collect();
-                    for text in pending {
+                    for (thread, text) in pending {
                         let now = now_ms();
-                        let dm = DataMessage {
-                            body: Some(text),
-                            timestamp: Some(now),
-                            ..Default::default()
-                        };
-                        match sender
-                            .send_message(&self_id, None, dm, now, false, false)
-                            .await
-                        {
-                            Ok(_) => {
-                                let _ = persist::save_snapshot(
-                                    &store.snapshot_bytes(),
-                                );
-                            },
-                            Err(e) => shared.set_state(format!("send error: {e}")),
+                        // Group thread? Address every member with a GroupContextV2.
+                        let route = shared.group_routes.borrow().get(&thread).cloned();
+                        if let Some(route) = route {
+                            let master_key = b64().decode(&thread).unwrap_or_default();
+                            let dm = DataMessage {
+                                body: Some(text),
+                                timestamp: Some(now),
+                                group_v2: Some(GroupContextV2 {
+                                    master_key: Some(master_key),
+                                    revision: Some(route.revision),
+                                    ..Default::default()
+                                }),
+                                ..Default::default()
+                            };
+                            let recipients: Vec<(ServiceId, Option<UnidentifiedAccess>, bool)> =
+                                route
+                                    .members
+                                    .iter()
+                                    .filter(|u| **u != aci)
+                                    .map(|u| (ServiceId::Aci((*u).into()), None, false))
+                                    .collect();
+                            let _ = sender
+                                .send_message_to_group(&recipients, dm, now, false)
+                                .await;
+                            let _ = persist::save_snapshot(&store.snapshot_bytes());
+                        } else {
+                            // 1:1 thread = peer ACI (empty/unparseable → self).
+                            let recipient = Uuid::parse_str(&thread)
+                                .map(|u| ServiceId::Aci(u.into()))
+                                .unwrap_or(self_id);
+                            let dm = DataMessage {
+                                body: Some(text),
+                                timestamp: Some(now),
+                                ..Default::default()
+                            };
+                            match sender
+                                .send_message(&recipient, None, dm, now, false, false)
+                                .await
+                            {
+                                Ok(_) => {
+                                    let _ = persist::save_snapshot(
+                                        &store.snapshot_bytes(),
+                                    );
+                                },
+                                Err(e) => shared.set_state(format!("send error: {e}")),
+                            }
                         }
                     }
                     // On-demand contacts refresh (sync_contacts()).
@@ -643,24 +734,33 @@ async fn fetch_groups(
         .map(|id| id.raw.clone())
         .collect();
 
-    let store_and_emit = |shared: &Rc<Shared>, out: Vec<Group>| {
-        let n = out.len() as u32;
-        let stored: Vec<persist::StoredGroup> = out
-            .iter()
-            .map(|g| persist::StoredGroup {
-                id: g.id.clone(),
-                title: g.title.clone(),
-                members: g.members.clone(),
-                avatar_b64: g.avatar.as_ref().map(|b| b64().encode(b)),
-            })
-            .collect();
-        *shared.groups.borrow_mut() = out;
-        let _ = persist::save_groups(&stored);
-        shared.push_event(Event::GroupsUpdated(n));
-    };
+    let store_and_emit =
+        |shared: &Rc<Shared>, out: Vec<Group>, routes: HashMap<String, GroupRoute>| {
+            let n = out.len() as u32;
+            let stored: Vec<persist::StoredGroup> = out
+                .iter()
+                .map(|g| {
+                    let route = routes.get(&g.id);
+                    persist::StoredGroup {
+                        id: g.id.clone(),
+                        title: g.title.clone(),
+                        members: g.members.clone(),
+                        avatar_b64: g.avatar.as_ref().map(|b| b64().encode(b)),
+                        member_ids: route
+                            .map(|r| r.members.iter().map(|u| u.to_string()).collect())
+                            .unwrap_or_default(),
+                        revision: route.map(|r| r.revision).unwrap_or(0),
+                    }
+                })
+                .collect();
+            *shared.groups.borrow_mut() = out;
+            *shared.group_routes.borrow_mut() = routes;
+            let _ = persist::save_groups(&stored);
+            shared.push_event(Event::GroupsUpdated(n));
+        };
 
     if group_keys.is_empty() {
-        store_and_emit(shared, Vec::new());
+        store_and_emit(shared, Vec::new(), HashMap::new());
         return Ok(());
     }
 
@@ -689,6 +789,7 @@ async fn fetch_groups(
     let mut csprng = seed_rng();
 
     let mut out: Vec<Group> = Vec::new();
+    let mut routes: HashMap<String, GroupRoute> = HashMap::new();
     for rec in records {
         let Some(storage_record::Record::GroupV2(gv2)) = rec.record else {
             continue;
@@ -736,30 +837,60 @@ async fn fetch_groups(
                 Err(_) => None,
             }
         };
+        let id = b64().encode(&gmk);
+        // Routing table for sends: raw member ACIs + the group's revision.
+        routes.insert(
+            id.clone(),
+            GroupRoute {
+                members: group.members.iter().map(|m| Uuid::from(m.aci)).collect(),
+                revision: group.version,
+            },
+        );
         out.push(Group {
-            id: b64().encode(&gmk),
+            id,
             title: group.title,
             members,
             avatar,
         });
     }
 
-    store_and_emit(shared, out);
+    store_and_emit(shared, out, routes);
     Ok(())
 }
 
-fn extract(body: &ContentBody) -> (Option<String>, bool) {
+/// Pull `(body, outgoing, thread_override)` out of an incoming content body.
+/// `thread_override` is `Some` when the message itself names its conversation:
+/// a group (master key b64) for group messages, or the destination for a
+/// sync-sent (my own message from another device). `None` ⇒ the caller defaults
+/// the thread to the 1:1 peer (the envelope sender).
+fn extract(body: &ContentBody) -> (Option<String>, bool, Option<String>) {
     match body {
-        ContentBody::DataMessage(dm) => (dm.body.clone(), false),
-        ContentBody::SynchronizeMessage(sm) => (
-            sm.sent
-                .as_ref()
-                .and_then(|s| s.message.as_ref())
-                .and_then(|m| m.body.clone()),
-            true,
-        ),
-        _ => (None, false),
+        ContentBody::DataMessage(dm) => (dm.body.clone(), false, group_thread(dm)),
+        ContentBody::SynchronizeMessage(sm) => {
+            let sent = sm.sent.as_ref();
+            let msg = sent.and_then(|s| s.message.as_ref());
+            let thread = msg.and_then(group_thread).or_else(|| {
+                sent.and_then(|s| s.destination_service_id.clone())
+                    .map(|d| normalize_service_id(&d))
+            });
+            (msg.and_then(|m| m.body.clone()), true, thread)
+        },
+        _ => (None, false, None),
     }
+}
+
+/// A group thread id (master key b64) if this DataMessage targets a group.
+fn group_thread(dm: &DataMessage) -> Option<String> {
+    dm.group_v2
+        .as_ref()?
+        .master_key
+        .as_ref()
+        .map(|mk| b64().encode(mk))
+}
+
+/// `"PNI:uuid"` / `"uuid"` → the bare lowercase uuid (matches contact ids).
+fn normalize_service_id(s: &str) -> String {
+    s.rsplit(':').next().unwrap_or(s).to_lowercase()
 }
 
 fn to_stored(m: &Message) -> persist::StoredMessage {
@@ -768,6 +899,7 @@ fn to_stored(m: &Message) -> persist::StoredMessage {
         text: m.text.clone(),
         ts: m.ts,
         outgoing: m.outgoing,
+        thread: m.thread.clone(),
     }
 }
 

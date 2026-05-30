@@ -2,7 +2,7 @@
 package wart:signal@0.1.0;
 
 interface chat {
-  record message { id: u64, sender: string, text: string, ts: u64, outgoing: bool }
+  record message { id: u64, sender: string, text: string, ts: u64, outgoing: bool, thread: string }
   record contact { id: string, name: string, phone: option<string>, inbox-position: u32, avatar: option<list<u8>> }
   record group { id: string, title: string, members: list<string>, avatar: option<list<u8>> }
   variant event {
@@ -16,11 +16,12 @@ interface chat {
   }
   init: func();
   poll-events: func() -> list<event>;
-  send: func(text: string) -> result<_, string>;
+  send: func(thread: string, text: string) -> result<_, string>;
   history: func() -> list<message>;
   contacts: func() -> list<contact>;
   sync-contacts: func();
   groups: func() -> list<group>;
   sync-groups: func();
   state: func() -> string;
+  account-id: func() -> string;
 }

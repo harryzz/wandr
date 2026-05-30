@@ -34,6 +34,10 @@ pub struct StoredMessage {
     pub text: String,
     pub ts: u64,
     pub outgoing: bool,
+    /// Conversation key (peer ACI / group master key b64). `default` so older
+    /// messages.jsonl lines (pre-task-70) still load — they fall into thread "".
+    #[serde(default)]
+    pub thread: String,
 }
 
 fn ensure_dir() {
@@ -136,6 +140,12 @@ pub struct StoredGroup {
     /// groups.json (no avatars) still loads.
     #[serde(default)]
     pub avatar_b64: Option<String>,
+    /// Raw member ACI uuids — needed to address `send_message_to_group`.
+    #[serde(default)]
+    pub member_ids: Vec<String>,
+    /// The group's current revision (for the outgoing `GroupContextV2`).
+    #[serde(default)]
+    pub revision: u32,
 }
 
 pub fn load_groups() -> Vec<StoredGroup> {

@@ -32,8 +32,8 @@ impl Guest for Component {
         engine::poll_events()
     }
 
-    fn send(text: String) -> Result<(), String> {
-        engine::send(text)
+    fn send(thread: String, text: String) -> Result<(), String> {
+        engine::send(thread, text)
     }
 
     fn history() -> Vec<Message> {
@@ -58,6 +58,10 @@ impl Guest for Component {
 
     fn state() -> String {
         engine::state()
+    }
+
+    fn account_id() -> String {
+        engine::account_id()
     }
 }
 

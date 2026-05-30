@@ -12,6 +12,8 @@ interface chat {
     text: string,
     ts: u64,
     outgoing: bool,
+    /// Conversation key: the peer ACI (1:1) or the group master key b64 (group).
+    thread: string,
   }
 
   /// A user from the primary device's contact list (Signal contacts-sync).
@@ -65,9 +67,10 @@ interface chat {
   /// the previous call. Call once per UI frame.
   poll-events: func() -> list<event>;
 
-  /// Queue an outgoing text (echoed locally right away; sent over the wire within
-  /// a couple hundred ms). Returns `Ok` once queued.
-  send: func(text: string) -> result<_, string>;
+  /// Queue an outgoing text to `thread` (a peer ACI for 1:1, or a group master
+  /// key b64 for a group; empty → Note-to-Self). Echoed locally right away; sent
+  /// over the wire within a couple hundred ms. Returns `Ok` once queued.
+  send: func(thread: string, text: string) -> result<_, string>;
 
   /// The full conversation so far.
   history: func() -> list<message>;
@@ -91,6 +94,10 @@ interface chat {
   /// A short human-readable status: "linking" | "linked" | "connected" |
   /// "error: …".
   state: func() -> string;
+
+  /// This account's own ACI (lowercase uuid), or "" until linked. Lets a UI
+  /// label the Note-to-Self thread (whose id is this account's own ACI).
+  account-id: func() -> string;
 }
 
 /// The engine half of the Signal app. wasi imports (sockets/tls/io/fs/random/

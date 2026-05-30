@@ -1,5 +1,5 @@
-TASK=69
+TASK=70
 STEP=verify-done
 STATUS=complete
-LAST_SUCCESS=Task 69 verified OK — Groups v2 + avatars folded into Contacts tab on device; submodule pushed
-NOTES=
+LAST_SUCCESS=Task 70 verified OK — per-conversation threading on device (tap-to-open, Chats list by name, routed send, Note-to-Self label)
+NOTES=Committed locally; awaiting push authorization for main.

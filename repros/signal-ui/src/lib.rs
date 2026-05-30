@@ -69,6 +69,16 @@ struct UiMsg {
     sender: String,
     text: String,
     outgoing: bool,
+    /// Conversation key (peer ACI / group master key b64).
+    thread: String,
+}
+
+/// An open conversation: which thread the user tapped into.
+#[derive(Clone, PartialEq)]
+struct Thread {
+    id: String,
+    title: String,
+    is_group: bool,
 }
 
 #[derive(Clone, PartialEq, Default)]
@@ -96,6 +106,8 @@ struct Model {
     messages: Vec<UiMsg>,
     contacts: Vec<UiContact>,
     groups: Vec<UiGroup>,
+    /// This account's own ACI — the Note-to-Self thread id.
+    account_id: String,
 }
 
 /// Fetch the engine's groups, sorted by title. Built off the dioxus runtime.
@@ -169,6 +181,7 @@ fn pump() -> bool {
                         sender: msg.sender,
                         text: msg.text,
                         outgoing: msg.outgoing,
+                        thread: msg.thread,
                     });
                 }
             });
@@ -192,6 +205,7 @@ fn pump() -> bool {
                                 sender: msg.sender,
                                 text: msg.text,
                                 outgoing: msg.outgoing,
+                                thread: msg.thread,
                             });
                         }
                     }
@@ -219,17 +233,24 @@ fn pump() -> bool {
     }
 
     let state = chat::state();
+    let aid = chat::account_id();
     MODEL.with(|m| {
         let mut m = m.borrow_mut();
         if m.state != state {
             m.state = state;
             changed = true;
         }
+        // Becomes known after resume/connect; latch it once.
+        if !aid.is_empty() && m.account_id != aid {
+            m.account_id = aid;
+            changed = true;
+        }
     });
     changed
 }
 
-type Snapshot = (String, Option<String>, Vec<UiMsg>, Vec<UiContact>, Vec<UiGroup>);
+type Snapshot =
+    (String, Option<String>, Vec<UiMsg>, Vec<UiContact>, Vec<UiGroup>, String);
 fn snapshot() -> Snapshot {
     MODEL.with(|m| {
         let m = m.borrow();
@@ -239,6 +260,7 @@ fn snapshot() -> Snapshot {
             m.messages.clone(),
             m.contacts.clone(),
             m.groups.clone(),
+            m.account_id.clone(),
         )
     })
 }
@@ -246,10 +268,10 @@ fn snapshot() -> Snapshot {
 /// Send the composer's current text through the engine, then clear it. Signals
 /// are `Copy`, passed by value. The engine echoes the message back as an outgoing
 /// event, so we don't append it locally.
-fn submit(mut value: Signal<String>, mut caret: Signal<usize>) {
+fn submit(thread: String, mut value: Signal<String>, mut caret: Signal<usize>) {
     let t = value().trim().to_string();
     if !t.is_empty() {
-        let _ = chat::send(&t);
+        let _ = chat::send(&thread, &t);
         value.set(String::new());
         caret.set(0);
     }
@@ -286,6 +308,40 @@ fn short_sender(s: &str) -> String {
     inner.chars().take(8).collect()
 }
 
+/// Resolve a thread id → (display title, is_group). Group ids match `group.id`;
+/// 1:1 ids are a peer ACI resolved against contacts (else a short uuid).
+fn resolve_thread(
+    id: &str,
+    self_id: &str,
+    contacts: &[UiContact],
+    groups: &[UiGroup],
+) -> (String, bool) {
+    if let Some(g) = groups.iter().find(|g| g.id == id) {
+        return (g.title.clone(), true);
+    }
+    if id.is_empty() || (!self_id.is_empty() && id == self_id) {
+        return ("Note to Self".to_string(), false);
+    }
+    let title = contacts
+        .iter()
+        .find(|c| c.id == id)
+        .map(|c| c.name.clone())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| short_sender(id));
+    (title, false)
+}
+
+/// Avatar data-uri for a thread id (the matching contact's / group's image).
+fn thread_avatar(id: &str, contacts: &[UiContact], groups: &[UiGroup]) -> Option<String> {
+    groups
+        .iter()
+        .find(|g| g.id == id)
+        .and_then(|g| g.avatar_uri.clone())
+        .or_else(|| {
+            contacts.iter().find(|c| c.id == id).and_then(|c| c.avatar_uri.clone())
+        })
+}
+
 // ── components ────────────────────────────────────────────────────────────────
 fn app() -> Element {
     // Stay armed: re-schedule this scope every render so engine updates (pushed
@@ -293,27 +349,50 @@ fn app() -> Element {
     // the tree.
     dioxus::core::needs_update();
 
-    // 0 = chat, 1 = contacts (groups folded in at the top).
+    // 0 = conversations, 1 = contacts (groups folded in at the top).
     let mut tab = use_signal(|| 0u8);
+    // None = list view; Some = an open conversation (full-screen thread view).
+    let current = use_signal(|| None::<Thread>);
 
-    let (state, link_url, messages, contacts, groups) = snapshot();
+    let (state, link_url, messages, contacts, groups, self_id) = snapshot();
+
+    // Not linked yet → just the QR.
+    if let Some(url) = link_url {
+        return rsx! {
+            div {
+                style: "display:flex; flex-direction:column; height:100%; background:{BG};",
+                TitleBar { state }
+                LinkPanel { url }
+            }
+        };
+    }
+
+    // An open conversation → header + that thread's messages + composer.
+    if let Some(thread) = current() {
+        let thread_msgs: Vec<UiMsg> =
+            messages.iter().filter(|m| m.thread == thread.id).cloned().collect();
+        return rsx! {
+            div {
+                style: "display:flex; flex-direction:column; height:100%; background:{BG};",
+                ThreadHeader { title: thread.title.clone(), current }
+                Conversation { messages: thread_msgs, contacts: contacts.clone() }
+                Composer { thread: thread.id.clone() }
+            }
+        };
+    }
+
     let nc = contacts.len() + groups.len();
     let tab_bg = |i: u8| if tab() == i { ACCENT } else { BAR };
     rsx! {
         div {
             style: "display:flex; flex-direction:column; height:100%; background:{BG};",
-            // Title bar + tabs.
-            div {
-                style: "display:flex; flex-direction:row; align-items:center; justify-content:space-between; padding:28px; background:{BAR};",
-                div { style: "color:{TEXT}; font-size:44px; font-weight:700;", "Signal" }
-                div { style: "color:{MUTED}; font-size:26px;", "{state}" }
-            }
+            TitleBar { state }
             div {
                 style: "display:flex; flex-direction:row; gap:12px; padding:14px 24px; background:{BAR};",
                 button {
                     style: format!("display:flex; justify-content:center; flex-grow:1; padding:14px; border-radius:14px; background:{};", tab_bg(0)),
                     onclick: move |_| tab.set(0),
-                    div { style: "color:{TEXT}; font-size:28px;", "Chat" }
+                    div { style: "color:{TEXT}; font-size:28px;", "Chats" }
                 }
                 button {
                     style: format!("display:flex; justify-content:center; flex-grow:1; padding:14px; border-radius:14px; background:{};", tab_bg(1)),
@@ -322,13 +401,94 @@ fn app() -> Element {
                 }
             }
             if tab() == 0 {
-                if let Some(url) = link_url {
-                    LinkPanel { url }
-                }
-                Conversation { messages, contacts: contacts.clone() }
-                Composer {}
+                Conversations { messages, contacts: contacts.clone(), groups: groups.clone(), self_id: self_id.clone(), current }
             } else {
-                Contacts { contacts, groups }
+                Contacts { contacts, groups, self_id: self_id.clone(), current }
+            }
+        }
+    }
+}
+
+/// The app title bar (name + connection state).
+#[component]
+fn TitleBar(state: String) -> Element {
+    rsx! {
+        div {
+            style: "display:flex; flex-direction:row; align-items:center; justify-content:space-between; padding:28px; background:{BAR};",
+            div { style: "color:{TEXT}; font-size:44px; font-weight:700;", "Signal" }
+            div { style: "color:{MUTED}; font-size:26px;", "{state}" }
+        }
+    }
+}
+
+/// Header for an open conversation: a back arrow (clears `current`) + the title.
+#[component]
+fn ThreadHeader(title: String, current: Signal<Option<Thread>>) -> Element {
+    let mut current = current;
+    rsx! {
+        div {
+            style: "display:flex; flex-direction:row; align-items:center; gap:20px; padding:22px 24px; background:{BAR};",
+            button {
+                style: format!("display:flex; justify-content:center; align-items:center; width:64px; height:64px; border-radius:14px; background:{};", FIELD),
+                onclick: move |_| current.set(None),
+                div { style: "color:{TEXT}; font-size:36px;", "‹" }
+            }
+            div { style: "color:{TEXT}; font-size:36px; font-weight:700;", "{title}" }
+        }
+    }
+}
+
+/// The conversation list: one row per thread that has messages, newest first,
+/// showing avatar + title + the last message preview. Tap → open that thread.
+#[component]
+fn Conversations(
+    messages: Vec<UiMsg>,
+    contacts: Vec<UiContact>,
+    groups: Vec<UiGroup>,
+    self_id: String,
+    current: Signal<Option<Thread>>,
+) -> Element {
+    // Last message per thread, in arrival order (history is chronological).
+    let mut order: Vec<String> = Vec::new();
+    let mut last: std::collections::HashMap<String, UiMsg> = std::collections::HashMap::new();
+    for m in &messages {
+        if !last.contains_key(&m.thread) {
+            order.push(m.thread.clone());
+        }
+        last.insert(m.thread.clone(), m.clone());
+    }
+    order.reverse(); // newest-active threads first
+
+    rsx! {
+        div {
+            style: "display:flex; flex-direction:column; overflow:scroll; flex-grow:1; min-height:0; padding:16px; gap:10px;",
+            if order.is_empty() {
+                div { style: "color:{MUTED}; font-size:28px; padding:24px;", "No conversations yet. Open a contact to start one." }
+            }
+            for tid in order {
+                {
+                    let mut current = current;
+                    let (title, is_group) = resolve_thread(&tid, &self_id, &contacts, &groups);
+                    let avatar = thread_avatar(&tid, &contacts, &groups);
+                    let preview = last.get(&tid).map(|m| {
+                        let body: String = m.text.chars().take(48).collect();
+                        if m.outgoing { format!("You: {body}") } else { body }
+                    }).unwrap_or_default();
+                    let t = Thread { id: tid.clone(), title: title.clone(), is_group };
+                    rsx! {
+                        button {
+                            key: "{tid}",
+                            style: "display:flex; flex-direction:row; align-items:center; gap:20px; padding:14px; border-radius:16px; background:{IN_BUBBLE};",
+                            onclick: move |_| current.set(Some(t.clone())),
+                            Avatar { uri: avatar, letter: initial(&title) }
+                            div {
+                                style: "display:flex; flex-direction:column; gap:4px; flex-grow:1; min-width:0;",
+                                div { style: "color:{TEXT}; font-size:32px;", "{title}" }
+                                div { style: "color:{MUTED}; font-size:24px;", "{preview}" }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -477,7 +637,12 @@ fn Avatar(uri: Option<String>, letter: String) -> Element {
 /// contacts (avatar + name + phone). Both share one scroll container so the
 /// "Contacts" tab is the single place to see everyone.
 #[component]
-fn Contacts(contacts: Vec<UiContact>, groups: Vec<UiGroup>) -> Element {
+fn Contacts(
+    contacts: Vec<UiContact>,
+    groups: Vec<UiGroup>,
+    self_id: String,
+    current: Signal<Option<Thread>>,
+) -> Element {
     rsx! {
         div {
             style: "display:flex; flex-direction:column; overflow:scroll; flex-grow:1; min-height:0; padding:16px; gap:10px;",
@@ -486,14 +651,17 @@ fn Contacts(contacts: Vec<UiContact>, groups: Vec<UiGroup>) -> Element {
             }
             for g in groups {
                 {
+                    let mut current = current;
                     let preview = g.members.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+                    let t = Thread { id: g.id.clone(), title: g.title.clone(), is_group: true };
                     rsx! {
-                        div {
+                        button {
                             key: "{g.id}",
                             style: "display:flex; flex-direction:row; align-items:center; gap:20px; padding:14px; border-radius:16px; background:{IN_BUBBLE};",
+                            onclick: move |_| current.set(Some(t.clone())),
                             Avatar { uri: g.avatar_uri, letter: initial(&g.title) }
                             div {
-                                style: "display:flex; flex-direction:column; gap:4px;",
+                                style: "display:flex; flex-direction:column; gap:4px; flex-grow:1; min-width:0;",
                                 div { style: "color:{TEXT}; font-size:32px;", "{g.title}" }
                                 div { style: "color:{MUTED}; font-size:24px;", "{g.members.len()} members · {preview}" }
                             }
@@ -502,15 +670,30 @@ fn Contacts(contacts: Vec<UiContact>, groups: Vec<UiGroup>) -> Element {
                 }
             }
             for c in contacts {
-                div {
-                    key: "{c.id}",
-                    style: "display:flex; flex-direction:row; align-items:center; gap:20px; padding:14px; border-radius:16px; background:{IN_BUBBLE};",
-                    Avatar { uri: c.avatar_uri, letter: initial(&c.name) }
-                    div {
-                        style: "display:flex; flex-direction:column; gap:4px;",
-                        div { style: "color:{TEXT}; font-size:32px;", "{c.name}" }
-                        if let Some(phone) = c.phone {
-                            div { style: "color:{MUTED}; font-size:24px;", "{phone}" }
+                {
+                    let mut current = current;
+                    // The self contact (id == own ACI, usually no profile name) reads
+                    // "Note to Self".
+                    let is_self = !self_id.is_empty() && c.id == self_id;
+                    let name = if is_self {
+                        "Note to Self".to_string()
+                    } else {
+                        c.name.clone()
+                    };
+                    let t = Thread { id: c.id.clone(), title: name.clone(), is_group: false };
+                    rsx! {
+                        button {
+                            key: "{c.id}",
+                            style: "display:flex; flex-direction:row; align-items:center; gap:20px; padding:14px; border-radius:16px; background:{IN_BUBBLE};",
+                            onclick: move |_| current.set(Some(t.clone())),
+                            Avatar { uri: c.avatar_uri, letter: initial(&name) }
+                            div {
+                                style: "display:flex; flex-direction:column; gap:4px; flex-grow:1; min-width:0;",
+                                div { style: "color:{TEXT}; font-size:32px;", "{name}" }
+                                if let Some(phone) = c.phone {
+                                    div { style: "color:{MUTED}; font-size:24px;", "{phone}" }
+                                }
+                            }
                         }
                     }
                 }
@@ -523,10 +706,15 @@ fn Contacts(contacts: Vec<UiContact>, groups: Vec<UiGroup>) -> Element {
 /// a Send button. Enter or Send calls `chat::send`; the engine echoes it back as
 /// an outgoing message event, so we don't add it locally.
 #[component]
-fn Composer() -> Element {
+fn Composer(thread: String) -> Element {
     let mut value = use_signal(String::new);
     let mut caret = use_signal(|| 0usize);
     let mut focused = use_signal(|| false);
+
+    // Clones for the two send paths (Enter key + Send button); both handlers are
+    // `move` so each needs its own copy of the thread id.
+    let thread_key = thread.clone();
+    let thread_btn = thread;
 
     let v = value();
     rsx! {
@@ -568,7 +756,7 @@ fn Composer() -> Element {
                     let chars: Vec<char> = value().chars().collect();
                     let c = caret().min(chars.len());
                     match k.as_str() {
-                        "Enter" => submit(value, caret),
+                        "Enter" => submit(thread_key.clone(), value, caret),
                         "Escape" => { focused.set(false); editor_detach(); }
                         "Backspace" => {
                             if c > 0 {
@@ -596,7 +784,7 @@ fn Composer() -> Element {
                     "display:flex; justify-content:center; align-items:center; width:140px; height:96px; border-radius:20px; background:{};",
                     ACCENT
                 ),
-                onclick: move |_| submit(value, caret),
+                onclick: move |_| submit(thread_btn.clone(), value, caret),
                 div { style: "color:{TEXT}; font-size:32px; font-weight:600;", "Send" }
             }
         }
