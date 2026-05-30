@@ -15,8 +15,8 @@ name = "wasm-android-host"
 path = "src/main.rs"
 
 [dependencies]
-wasmtime           = { version = "44", features = ["component-model"] }
-wasmtime-wasi      = { version = "44" }
+wasmtime           = { version = "45", features = ["component-model"] }
+wasmtime-wasi      = { version = "45" }
 anyhow             = "1"
 log                = "0.4"
 android_logger     = { version = "0.14", optional = true }

@@ -475,16 +475,53 @@ fn load_dep_components(
             log::debug!("loader: preload hit for dep `{name}` at {}", cwasm_canon.display());
             c
         } else {
-            unsafe { Component::deserialize_file(engine, &cwasm_path) }
-                .map_err(|e| anyhow!(
-                    "dependency {name}: Component::deserialize_file({}): {e:#}",
-                    cwasm_path.display()
-                ))?
+            deserialize_dep_or_reprecompile(engine, &cwasm_path, &dep_dir, name)?
         };
         log::info!("loader: loaded dep `{name}` ({interface}) from {}", cwasm_path.display());
         deps.push(LoadedDep { name: name.clone(), interface, component });
     }
     Ok(deps)
+}
+
+/// Deserialize a dependency's AOT cwasm, self-healing on engine drift. The
+/// top-level app component recomputes its engine hash and re-precompiles in
+/// `load_installed`, but a dep's cwasm is `deserialize_file`d directly — so a
+/// host `wasmtime` upgrade (e.g. 44→45) leaves dep cwasms AOT'd by an
+/// incompatible engine, and `deserialize_file` fails with "Module was compiled
+/// with incompatible version". Recover the same way the app does: re-precompile
+/// from the dep's source `.wasm`, overwrite the cwasm, and retry. Without this,
+/// a runtime bump silently drops the consumer to the test-frame fallback
+/// (blank screen) until every dep is manually reinstalled.
+fn deserialize_dep_or_reprecompile(
+    engine: &Engine,
+    cwasm_path: &Path,
+    dep_dir: &Path,
+    name: &str,
+) -> Result<Component> {
+    match unsafe { Component::deserialize_file(engine, cwasm_path) } {
+        Ok(c) => Ok(c),
+        Err(first) => {
+            log::warn!(
+                "loader: dependency `{name}` cwasm load failed ({first:#}) — \
+                 re-precompiling from source wasm (likely a wasmtime-version bump)"
+            );
+            let (wasm_path, _) = hash_dep_wasm(dep_dir).with_context(|| {
+                format!("dependency {name}: no source wasm to re-precompile under {}", dep_dir.display())
+            })?;
+            let wasm_bytes = fs::read(&wasm_path)
+                .with_context(|| format!("dependency {name}: read {}", wasm_path.display()))?;
+            let cwasm_bytes = engine.precompile_component(&wasm_bytes)
+                .map_err(|e| anyhow!("dependency {name}: precompile_component: {e:#}"))?;
+            fs::write(cwasm_path, &cwasm_bytes)
+                .map_err(|e| anyhow!("dependency {name}: write cwasm {}: {e:#}", cwasm_path.display()))?;
+            log::info!("loader: dependency `{name}` re-precompiled → {}", cwasm_path.display());
+            unsafe { Component::deserialize_file(engine, cwasm_path) }
+                .map_err(|e| anyhow!(
+                    "dependency {name}: deserialize after re-precompile ({}): {e:#}",
+                    cwasm_path.display()
+                ))
+        }
+    }
 }
 
 fn hash_dep_wasm(dep_dir: &Path) -> Result<(PathBuf, String)> {
