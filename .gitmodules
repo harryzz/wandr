@@ -42,3 +42,7 @@
 	path = runtime/wart-host/vendor/aosp-frameworks-base
 	url = https://android.googlesource.com/platform/frameworks/base
 	shallow = true
+[submodule "external/libsignal-service-rs"]
+	path = external/libsignal-service-rs
+	url = https://codeberg.org/harryzz/libsignal-service-rs.git
+	branch = wart-wasi-transport
