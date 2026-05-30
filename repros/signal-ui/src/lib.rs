@@ -80,12 +80,43 @@ struct UiContact {
     avatar_uri: Option<String>,
 }
 
+#[derive(Clone, PartialEq, Default)]
+struct UiGroup {
+    id: String,
+    title: String,
+    members: Vec<String>,
+    /// `data:…;base64,…` URI for `img { src }`, encoded once when groups load.
+    avatar_uri: Option<String>,
+}
+
 #[derive(Default)]
 struct Model {
     state: String,
     link_url: Option<String>,
     messages: Vec<UiMsg>,
     contacts: Vec<UiContact>,
+    groups: Vec<UiGroup>,
+}
+
+/// Fetch the engine's groups, sorted by title. Built off the dioxus runtime.
+fn load_groups() -> Vec<UiGroup> {
+    use base64::Engine as _;
+    let mut v: Vec<UiGroup> = chat::groups()
+        .into_iter()
+        .map(|g| UiGroup {
+            avatar_uri: g.avatar.map(|b| {
+                format!(
+                    "data:image/jpeg;base64,{}",
+                    base64::engine::general_purpose::STANDARD.encode(b)
+                )
+            }),
+            id: g.id,
+            title: g.title,
+            members: g.members,
+        })
+        .collect();
+    v.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+    v
 }
 
 /// Fetch the engine's contacts, encode avatars into data URIs (once), sort by
@@ -127,9 +158,11 @@ fn pump() -> bool {
             // live ones arrive as events below).
             let hist = chat::history();
             let contacts = load_contacts();
+            let groups = load_groups();
             MODEL.with(|m| {
                 let mut m = m.borrow_mut();
                 m.contacts = contacts;
+                m.groups = groups;
                 for msg in hist {
                     m.messages.push(UiMsg {
                         id: msg.id,
@@ -144,6 +177,7 @@ fn pump() -> bool {
 
     let mut changed = false;
     let mut refresh = false;
+    let mut refresh_groups = false;
     let events = chat::poll_events();
     if !events.is_empty() {
         MODEL.with(|m| {
@@ -166,8 +200,9 @@ fn pump() -> bool {
                         m.link_url = None;
                     }
                     chat::Event::Disconnected => {}
-                    // Re-fetched below (load_contacts needs no &mut m borrow).
+                    // Re-fetched below (load_* needs no &mut m borrow).
                     chat::Event::ContactsUpdated(_) => refresh = true,
+                    chat::Event::GroupsUpdated(_) => refresh_groups = true,
                 }
             }
         });
@@ -177,6 +212,10 @@ fn pump() -> bool {
     if refresh {
         let contacts = load_contacts();
         MODEL.with(|m| m.borrow_mut().contacts = contacts);
+    }
+    if refresh_groups {
+        let groups = load_groups();
+        MODEL.with(|m| m.borrow_mut().groups = groups);
     }
 
     let state = chat::state();
@@ -190,10 +229,17 @@ fn pump() -> bool {
     changed
 }
 
-fn snapshot() -> (String, Option<String>, Vec<UiMsg>, Vec<UiContact>) {
+type Snapshot = (String, Option<String>, Vec<UiMsg>, Vec<UiContact>, Vec<UiGroup>);
+fn snapshot() -> Snapshot {
     MODEL.with(|m| {
         let m = m.borrow();
-        (m.state.clone(), m.link_url.clone(), m.messages.clone(), m.contacts.clone())
+        (
+            m.state.clone(),
+            m.link_url.clone(),
+            m.messages.clone(),
+            m.contacts.clone(),
+            m.groups.clone(),
+        )
     })
 }
 
@@ -247,13 +293,12 @@ fn app() -> Element {
     // the tree.
     dioxus::core::needs_update();
 
-    // 0 = chat, 1 = contacts.
+    // 0 = chat, 1 = contacts (groups folded in at the top).
     let mut tab = use_signal(|| 0u8);
 
-    let (state, link_url, messages, contacts) = snapshot();
-    let n = contacts.len();
-    let chat_bg = if tab() == 0 { ACCENT } else { BAR };
-    let people_bg = if tab() == 1 { ACCENT } else { BAR };
+    let (state, link_url, messages, contacts, groups) = snapshot();
+    let nc = contacts.len() + groups.len();
+    let tab_bg = |i: u8| if tab() == i { ACCENT } else { BAR };
     rsx! {
         div {
             style: "display:flex; flex-direction:column; height:100%; background:{BG};",
@@ -266,14 +311,14 @@ fn app() -> Element {
             div {
                 style: "display:flex; flex-direction:row; gap:12px; padding:14px 24px; background:{BAR};",
                 button {
-                    style: format!("display:flex; justify-content:center; flex-grow:1; padding:14px; border-radius:14px; background:{};", chat_bg),
+                    style: format!("display:flex; justify-content:center; flex-grow:1; padding:14px; border-radius:14px; background:{};", tab_bg(0)),
                     onclick: move |_| tab.set(0),
                     div { style: "color:{TEXT}; font-size:28px;", "Chat" }
                 }
                 button {
-                    style: format!("display:flex; justify-content:center; flex-grow:1; padding:14px; border-radius:14px; background:{};", people_bg),
+                    style: format!("display:flex; justify-content:center; flex-grow:1; padding:14px; border-radius:14px; background:{};", tab_bg(1)),
                     onclick: move |_| tab.set(1),
-                    div { style: "color:{TEXT}; font-size:28px;", "Contacts ({n})" }
+                    div { style: "color:{TEXT}; font-size:28px;", "Contacts ({nc})" }
                 }
             }
             if tab() == 0 {
@@ -283,7 +328,7 @@ fn app() -> Element {
                 Conversation { messages, contacts: contacts.clone() }
                 Composer {}
             } else {
-                Contacts { contacts }
+                Contacts { contacts, groups }
             }
         }
     }
@@ -412,28 +457,55 @@ fn initial(name: &str) -> String {
     name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default()
 }
 
-/// The contact list: each row is an avatar (`img { src: data-uri }`, drawn by the
-/// renderer's image support) or an initial placeholder, plus name + phone.
+/// A circular/rounded avatar slot: the decrypted image (`img { src: data-uri }`,
+/// drawn by the renderer's image support) or an initial-letter placeholder.
 #[component]
-fn Contacts(contacts: Vec<UiContact>) -> Element {
+fn Avatar(uri: Option<String>, letter: String) -> Element {
+    rsx! {
+        if let Some(uri) = uri {
+            img { src: "{uri}", style: "width:84px; height:84px; border-radius:14px;" }
+        } else {
+            div {
+                style: "display:flex; justify-content:center; align-items:center; width:84px; height:84px; border-radius:14px; background:{OUT_BUBBLE};",
+                div { style: "color:{TEXT}; font-size:38px; font-weight:700;", "{letter}" }
+            }
+        }
+    }
+}
+
+/// The people list: groups first (avatar + member preview), then individual
+/// contacts (avatar + name + phone). Both share one scroll container so the
+/// "Contacts" tab is the single place to see everyone.
+#[component]
+fn Contacts(contacts: Vec<UiContact>, groups: Vec<UiGroup>) -> Element {
     rsx! {
         div {
             style: "display:flex; flex-direction:column; overflow:scroll; flex-grow:1; min-height:0; padding:16px; gap:10px;",
-            if contacts.is_empty() {
+            if contacts.is_empty() && groups.is_empty() {
                 div { style: "color:{MUTED}; font-size:28px; padding:24px;", "No contacts yet." }
+            }
+            for g in groups {
+                {
+                    let preview = g.members.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+                    rsx! {
+                        div {
+                            key: "{g.id}",
+                            style: "display:flex; flex-direction:row; align-items:center; gap:20px; padding:14px; border-radius:16px; background:{IN_BUBBLE};",
+                            Avatar { uri: g.avatar_uri, letter: initial(&g.title) }
+                            div {
+                                style: "display:flex; flex-direction:column; gap:4px;",
+                                div { style: "color:{TEXT}; font-size:32px;", "{g.title}" }
+                                div { style: "color:{MUTED}; font-size:24px;", "{g.members.len()} members · {preview}" }
+                            }
+                        }
+                    }
+                }
             }
             for c in contacts {
                 div {
                     key: "{c.id}",
                     style: "display:flex; flex-direction:row; align-items:center; gap:20px; padding:14px; border-radius:16px; background:{IN_BUBBLE};",
-                    if let Some(uri) = c.avatar_uri {
-                        img { src: "{uri}", style: "width:84px; height:84px; border-radius:14px;" }
-                    } else {
-                        div {
-                            style: "display:flex; justify-content:center; align-items:center; width:84px; height:84px; border-radius:14px; background:{OUT_BUBBLE};",
-                            div { style: "color:{TEXT}; font-size:38px; font-weight:700;", "{initial(&c.name)}" }
-                        }
-                    }
+                    Avatar { uri: c.avatar_uri, letter: initial(&c.name) }
                     div {
                         style: "display:flex; flex-direction:column; gap:4px;",
                         div { style: "color:{TEXT}; font-size:32px;", "{c.name}" }

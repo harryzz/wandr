@@ -86,6 +86,12 @@ fn main() {
                         );
                     }
                 },
+                Event::GroupsUpdated(n) => {
+                    eprintln!("[smoke] GROUPS ✓ {n} fetched + persisted to /state:");
+                    for g in chat::groups() {
+                        eprintln!("  {} | {} members", g.title, g.members.len());
+                    }
+                },
             }
         }
 

@@ -1,5 +1,36 @@
 # Task 69 — Signal groups (Groups v2)
 
+**Status:** DONE 2026-05-31 — device-verified on the Pixel 2 XL. 2 groups fetched
+from the storage service, decrypted, members resolved to contact names (self →
+"You"), group avatars downloaded + decrypted, persisted to `/state/groups.json`,
+and rendered **folded into the Contacts tab** (no separate Groups tab).
+
+## What shipped
+
+- **Master key**: a linked device no longer receives the deprecated `master_key`
+  field — the modern primary sends an **Account Entropy Pool**. The engine derives
+  the master key from it via `AccountEntropyPool::derive_svr_key()` (HKDF info
+  `20240801_SIGNAL_SVR_MASTER_KEY`) at link time and persists `master_key_b64` in
+  `account.json`. (Answers the open question below: provisioning carries the AEP,
+  no keys-sync needed; but it's **only** available at link — pre-fix accounts must
+  re-link once.)
+- **Fetch**: `StorageServiceKey::from_master_key` → `StorageService::manifest()` →
+  filter `Groupv2` identifiers → `read_items` → each `GroupV2` record's group
+  master key → `GroupsManager::fetch_encrypted_group` → `decrypt_group` (zkgroup,
+  compiles for wasm32-wasip2 as expected).
+- **Avatars**: `GroupOperations`/`GroupsManager::retrieve_avatar(path, gsp)` with
+  `gsp = GroupSecretParams::derive_from_master_key(group_master_key)` → decrypted
+  JPEG bytes, carried inline on the `group` WIT record (`avatar: option<list<u8>>`)
+  and rendered as an `<img>` data URI, same path as contact avatars.
+- **WIT/UI**: `record group { id, title, members, avatar }`, `groups()`,
+  `sync-groups()`, `groups-updated(u32)`. signal-ui drops the Groups tab and
+  renders groups at the top of the Contacts list (shared `Avatar` component).
+- **Submodule**: `external/libsignal-service-rs` `mod storage_service` → `pub`.
+
+---
+
+(original plan below, kept for history)
+
 **Status:** OPEN (filed 2026-05-31, spun out of task 67 Phase 3 contacts).
 
 ## Problem

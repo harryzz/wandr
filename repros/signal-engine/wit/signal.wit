@@ -27,6 +27,17 @@ interface chat {
     avatar: option<list<u8>>,
   }
 
+  /// A Signal group (Groups v2), fetched via the storage service.
+  record group {
+    /// hex of the group master key — the stable group identity.
+    id: string,
+    title: string,
+    /// Member display names (contact name where known, else ACI).
+    members: list<string>,
+    /// Decrypted group avatar (JPEG bytes from the group CDN), if set.
+    avatar: option<list<u8>>,
+  }
+
   /// Something the engine produced since the last `poll-events`.
   variant event {
     /// A new message (incoming, or the local echo of an outgoing send).
@@ -41,6 +52,8 @@ interface chat {
     disconnected,
     /// The contact list was fetched/updated (read it via `contacts`).
     contacts-updated(u32),
+    /// The group list was fetched/updated (read it via `groups`).
+    groups-updated(u32),
   }
 
   /// Start the engine: load saved account + history, then link (first run) or
@@ -66,6 +79,14 @@ interface chat {
   /// once on connect; call this to refresh on demand. Non-blocking — results
   /// arrive later via a `contacts-updated` event + `contacts`.
   sync-contacts: func();
+
+  /// The group list (Groups v2) fetched via the storage service (persisted to
+  /// /state). Empty until a `groups-updated` event fires.
+  groups: func() -> list<group>;
+
+  /// Re-fetch groups from the storage service. Also done once on connect (if the
+  /// account has a master key — needs a link captured post-task-69). Non-blocking.
+  sync-groups: func();
 
   /// A short human-readable status: "linking" | "linked" | "connected" |
   /// "error: …".

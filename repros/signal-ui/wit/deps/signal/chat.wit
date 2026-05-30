@@ -1,9 +1,10 @@
-// The engine contract this UI imports (mirror of repros/signal-engine/wit).
+// The engine contract this consumer imports (mirror of repros/signal-engine/wit).
 package wart:signal@0.1.0;
 
 interface chat {
   record message { id: u64, sender: string, text: string, ts: u64, outgoing: bool }
   record contact { id: string, name: string, phone: option<string>, inbox-position: u32, avatar: option<list<u8>> }
+  record group { id: string, title: string, members: list<string>, avatar: option<list<u8>> }
   variant event {
     message(message),
     link-url(string),
@@ -11,6 +12,7 @@ interface chat {
     connected,
     disconnected,
     contacts-updated(u32),
+    groups-updated(u32),
   }
   init: func();
   poll-events: func() -> list<event>;
@@ -18,5 +20,7 @@ interface chat {
   history: func() -> list<message>;
   contacts: func() -> list<contact>;
   sync-contacts: func();
+  groups: func() -> list<group>;
+  sync-groups: func();
   state: func() -> string;
 }

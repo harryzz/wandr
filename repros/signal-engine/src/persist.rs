@@ -21,6 +21,11 @@ pub struct Account {
     pub registration_id: u32,
     /// base64 of `IdentityKeyPair::serialize()` (the provisioned ACI identity).
     pub identity_b64: String,
+    /// base64 of the account master key (from provisioning) — needed for the
+    /// storage service + Groups v2 (task 69). `default` so older account.json
+    /// (pre-groups) still loads; absence means a re-link is needed for groups.
+    #[serde(default)]
+    pub master_key_b64: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -115,4 +120,32 @@ pub fn load_contacts() -> Vec<StoredContact> {
 pub fn save_contacts(contacts: &[StoredContact]) -> std::io::Result<()> {
     ensure_dir();
     std::fs::write(CONTACTS, serde_json::to_vec_pretty(contacts).unwrap())
+}
+
+const GROUPS: &str = "/state/groups.json";
+
+/// A Signal group (Groups v2) fetched via the storage service.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct StoredGroup {
+    /// hex of the group master key — the stable group identity.
+    pub id: String,
+    pub title: String,
+    /// Member display names (resolved against contacts where possible, else ACI).
+    pub members: Vec<String>,
+    /// base64 of the decrypted group avatar (JPEG), if any. `default` so older
+    /// groups.json (no avatars) still loads.
+    #[serde(default)]
+    pub avatar_b64: Option<String>,
+}
+
+pub fn load_groups() -> Vec<StoredGroup> {
+    std::fs::read(GROUPS)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_groups(groups: &[StoredGroup]) -> std::io::Result<()> {
+    ensure_dir();
+    std::fs::write(GROUPS, serde_json::to_vec_pretty(groups).unwrap())
 }

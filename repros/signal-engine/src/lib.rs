@@ -19,7 +19,7 @@ mod engine;
 mod persist;
 mod store;
 
-use exports::wart::signal::chat::{Contact, Event, Guest, Message};
+use exports::wart::signal::chat::{Contact, Event, Group, Guest, Message};
 
 struct Component;
 
@@ -46,6 +46,14 @@ impl Guest for Component {
 
     fn sync_contacts() {
         engine::sync_contacts();
+    }
+
+    fn groups() -> Vec<Group> {
+        engine::groups()
+    }
+
+    fn sync_groups() {
+        engine::sync_groups();
     }
 
     fn state() -> String {
