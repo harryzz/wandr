@@ -1,0 +1,25 @@
+[package]
+name = "signal-phase0"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Task-67 Phase-0 compile probe: does the Signal Rust stack build for
+# wasm32-wasip2? See SIGNAL-REVS.txt for pinned revisions. We drop
+# default features to avoid `cdsi` (libsignal-net / BoringSSL) for the
+# first pass — Phase-0 (link + receive) doesn't need contact discovery.
+
+[[bin]]
+name = "signal-phase0"
+path = "src/main.rs"
+
+[dependencies]
+libsignal-service = { path = "../../external/libsignal-service-rs", default-features = false }
+
+# libsignal forces all curve25519-dalek to its constant-time fork via this patch;
+# external consumers must replicate it or zkgroup sees two incompatible copies.
+[patch.crates-io]
+curve25519-dalek = { git = "https://github.com/signalapp/curve25519-dalek", tag = "signal-curve25519-4.1.3" }
+
+[profile.release]
+opt-level = "s"

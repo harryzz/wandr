@@ -1,0 +1,12 @@
+// Spike world: imports only (wasi:tls draft + its sockets/io/clocks deps).
+// NO exports — `#[wstd::main]` provides the wasi:cli/run export; this world only
+// needs to pull in the import bindings. `generate_all` emits sockets/io/clocks
+// regardless of explicit world membership.
+package wart:wstd-wasitls-spike;
+
+world spike {
+    // cli/imports is imports-only (no `run` export -> no clash with wstd's), and
+    // pulls wasi:sockets/io/clocks into scope so generate_all emits them.
+    include wasi:cli/imports@0.2.6;
+    include wasi:tls/imports@0.2.0-draft;
+}

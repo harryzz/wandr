@@ -1,0 +1,6 @@
+# Pinned revisions for the task-67 Phase-0 wasm32-wasip2 compile probe.
+# Recorded 2026-05-30 (latest main at probe time).
+libsignal-service-rs  main  f93ec5a703f122b8094cc240ddbde02f1e7aad7c  (2026-05-23)
+  -> depends on signalapp/libsignal crates at tag v0.91.0
+  transport (current main): reqwest 0.12 + reqwest-websocket 0.4.2 + tokio 1.0
+  default feature = "cdsi" (pulls libsignal-net + libsignal-net-infra / BoringSSL) -> disabled in probe

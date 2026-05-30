@@ -19,7 +19,9 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::p2::bindings::Command;
-use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+use wasmtime_wasi::{
+    DirPerms, FilePerms, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView,
+};
 use wasmtime_wasi_tls::{
     Error as TlsError, TlsProvider, TlsStream, TlsTransport, WasiTlsCtx, WasiTlsCtxBuilder,
     WasiTlsCtxView, WasiTlsView,
@@ -145,6 +147,11 @@ async fn main() -> Result<()> {
     config.async_support(true);
     let engine = Engine::new(&config)?;
 
+    // Persistence: preopen a host dir as guest `/state` (arg 2, default ./signal-state).
+    let state_dir = std::env::args().nth(2).unwrap_or_else(|| "signal-state".into());
+    std::fs::create_dir_all(&state_dir)?;
+    eprintln!("[runner] state dir: {state_dir} -> guest /state");
+
     let ctx = Ctx {
         table: ResourceTable::new(),
         wasi: WasiCtxBuilder::new()
@@ -152,6 +159,7 @@ async fn main() -> Result<()> {
             .inherit_stderr()
             .inherit_network() // grant outbound network (default deny-all)
             .allow_ip_name_lookup(true) // grant DNS
+            .preopened_dir(&state_dir, "/state", DirPerms::all(), FilePerms::all())?
             .build(),
         tls: WasiTlsCtxBuilder::new()
             .provider(Box::new(SignalTlsProvider::new()?))

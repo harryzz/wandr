@@ -16,3 +16,6 @@
 
 # Rust
 **/Cargo.lock.bak
+
+# task 67: local fork of libsignal-service-rs (own git; branch wart-wasi-transport). Submodule-ize later.
+external/libsignal-service-rs/

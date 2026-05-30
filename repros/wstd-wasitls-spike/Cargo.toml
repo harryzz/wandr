@@ -1,0 +1,25 @@
+[package]
+name = "wstd-wasitls-spike"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Task-67 transport-foundation spike: prove that wstd's wasi:io/poll async
+# executor can drive an async HTTP/1.1 GET over task-66 wasi:tls. This is the
+# one genuinely-unproven piece before swapping libsignal-service-rs's reqwest
+# transport onto wasi:tls (the websocket loop there needs futures::select! +
+# spawn + timers, i.e. a real reactor). See tasks/67-signal-client.md.
+
+[[bin]]
+name = "wstd-wasitls-spike"
+path = "src/main.rs"
+
+[dependencies]
+wstd = "0.6.6"
+wasip2 = "1"
+# tls is a draft not in the wasip2 crate, so generate it (+ its sockets/io/clocks
+# deps) ourselves, matching the proven repros/wasi-tls-probe bindings.
+wit-bindgen = "0.53"
+
+[profile.release]
+opt-level = "s"
