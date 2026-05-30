@@ -68,11 +68,14 @@ DX_WASM=$(build_system_wasm "apps/user/war.dioxus.demo"          "war_dioxus_dem
 # ── 2. Package each warpkg directory ────────────────────────────────────
 
 pack_warpkg() {
-    local pkg_dir="$1" wasm_src="$2" comp_name="$3" toml_body="$4" assets_src="${5:-}"
+    local pkg_dir="$1" wasm_src="$2" comp_name="$3" toml_src="$4" assets_src="${5:-}"
     rm -rf "$pkg_dir"
     mkdir -p "$pkg_dir/components"
     cp "$wasm_src" "$pkg_dir/components/$comp_name.wasm"
-    printf '%s\n' "$toml_body" > "$pkg_dir/package.toml"
+    # The manifest lives in the app's source dir (apps/.../package.toml) —
+    # single source of truth, edited like any file instead of regenerated
+    # from a heredoc here.
+    cp "$toml_src" "$pkg_dir/package.toml"
     # Task 38 — bundle an optional assets/ dir; the installer copies it
     # verbatim to <install_dir>/assets/ for the assets.read host verb.
     if [[ -n "$assets_src" && -d "$assets_src" ]]; then
@@ -93,136 +96,18 @@ SB_PKG="$TMP_BASE/statusbar.warpkg"
 TB_PKG="$TMP_BASE/taskbar.warpkg"
 DX_PKG="$TMP_BASE/dioxus-demo.warpkg"
 
-pack_warpkg "$MD_PKG" "$MD_WASM" "renderer" "$(cat <<'EOF'
-app_id      = "war.markdown.renderer"
-version     = "0.1.0"
-world       = "war:markdown/renderer-world"
-kind        = "system"
-composition = "same-store"
-
-[components]
-renderer = "components/renderer.wasm"
-EOF
-)"
-
-pack_warpkg "$EM_PKG" "$EM_WASM" "picker" "$(cat <<'EOF'
-app_id      = "war.emoji.picker"
-version     = "0.1.0"
-world       = "war:emoji/picker-world"
-kind        = "system"
-composition = "same-store"
-
-[components]
-picker = "components/picker.wasm"
-EOF
-)"
-
-pack_warpkg "$FT_PKG" "$FT_WASM" "loader" "$(cat <<'EOF'
-app_id      = "war.fonts.loader"
-version     = "0.1.0"
-world       = "war:fonts/loader-world"
-kind        = "system"
-composition = "same-store"
-
-[components]
-loader = "components/loader.wasm"
-EOF
-)"
-
-# Task 57 — the launcher is system chrome → system-apps/ (kind=system),
-# so apps/ holds only genuine user apps and the launcher's own
-# apps/-scan never lists it. The arbiter's set-home/launch path finds it
-# via the loader's system-apps/ fallback (task 55).
-pack_warpkg "$LN_PKG" "$LN_WASM" "ui" "$(cat <<'EOF'
-app_id      = "war.launcher"
-version     = "0.1.0"
-world       = "my:skiko-gfx/skiko-ui"
-kind        = "system"
-composition = "same-store"
-# Task 63 — the home screen stays portrait; while it's foreground the
-# system chrome locks portrait too.
-orientation = "locked"
-label       = "Launcher"
-
-[components]
-ui = "components/ui.wasm"
-EOF
-)"
-
-# Task 55 — the status bar installs under system-apps/ (kind=system) so
-# the launcher's apps/-only scan doesn't list it as a tile; the loader's
-# AppRef::Installed search falls back to system-apps/ for the
-# --standalone-overlay-top load.
-pack_warpkg "$SB_PKG" "$SB_WASM" "ui" "$(cat <<'EOF'
-app_id      = "war.statusbar"
-version     = "0.1.0"
-world       = "my:skiko-gfx/skiko-ui"
-kind        = "system"
-composition = "same-store"
-orientation = "auto"
-label       = "Status Bar"
-
-[components]
-ui = "components/ui.wasm"
-EOF
-)"
-
-# Task 56 — the taskbar installs under system-apps/ (kind=system), same
-# as the status bar: launched directly as a thin always-visible bottom-nav
-# overlay (`--standalone-overlay-bottom-bar`), so the launcher's apps/-only
-# scan never lists it.
-pack_warpkg "$TB_PKG" "$TB_WASM" "ui" "$(cat <<'EOF'
-app_id      = "war.taskbar"
-version     = "0.1.0"
-world       = "my:skiko-gfx/skiko-ui"
-kind        = "system"
-composition = "same-store"
-orientation = "auto"
-label       = "Taskbar"
-
-[components]
-ui = "components/ui.wasm"
-EOF
-)"
-
-# Task 59 — dioxus demo (user app: no `kind` → installs under apps/, listed
-# by the launcher as a tile). Self-contained — no [dependencies].
-pack_warpkg "$DX_PKG" "$DX_WASM" "ui" "$(cat <<'EOF'
-app_id      = "war.dioxus.demo"
-version     = "0.1.0"
-world       = "my:skiko-gfx/skiko-ui"
-composition = "same-store"
-orientation = "auto"
-label       = "Dioxus Demo"
-
-[components]
-ui = "components/ui.wasm"
-EOF
-)"
-
-pack_warpkg "$BG_PKG" "$BG_WASM" "lang" "$(cat <<'EOF'
-app_id      = "war.lang.bg"
-version     = "0.1.0"
-world       = "war:keyboard-lang-bg/lang-world"
-kind        = "system"
-composition = "same-store"
-
-[components]
-lang = "components/lang.wasm"
-EOF
-)"
-
-pack_warpkg "$FR_PKG" "$FR_WASM" "lang" "$(cat <<'EOF'
-app_id      = "war.lang.fr"
-version     = "0.1.0"
-world       = "war:keyboard-lang-fr/lang-world"
-kind        = "system"
-composition = "same-store"
-
-[components]
-lang = "components/lang.wasm"
-EOF
-)"
+# Each manifest is the app's own apps/.../package.toml (single source of
+# truth). pack_warpkg copies it into the warpkg; the 3rd arg is the
+# component name and must match the toml's [components] entry.
+pack_warpkg "$MD_PKG" "$MD_WASM" "renderer" "$REPO_ROOT/apps/system/war.markdown.renderer/package.toml"
+pack_warpkg "$EM_PKG" "$EM_WASM" "picker"   "$REPO_ROOT/apps/system/war.emoji.picker/package.toml"
+pack_warpkg "$FT_PKG" "$FT_WASM" "loader"   "$REPO_ROOT/apps/system/war.fonts.loader/package.toml"
+pack_warpkg "$LN_PKG" "$LN_WASM" "ui"       "$REPO_ROOT/apps/system/war.launcher/package.toml"
+pack_warpkg "$SB_PKG" "$SB_WASM" "ui"       "$REPO_ROOT/apps/system/war.statusbar/package.toml"
+pack_warpkg "$TB_PKG" "$TB_WASM" "ui"       "$REPO_ROOT/apps/system/war.taskbar/package.toml"
+pack_warpkg "$DX_PKG" "$DX_WASM" "ui"       "$REPO_ROOT/apps/user/war.dioxus.demo/package.toml"
+pack_warpkg "$BG_PKG" "$BG_WASM" "lang"     "$REPO_ROOT/apps/system/lang/war.lang.bg/package.toml"
+pack_warpkg "$FR_PKG" "$FR_WASM" "lang"     "$REPO_ROOT/apps/system/lang/war.lang.fr/package.toml"
 
 # wart-app: use the existing post-adapt .wasm. If missing, the user needs
 # to run the Kotlin pipeline (see scripts/standalone-launch.sh fallback
@@ -241,28 +126,9 @@ if [[ ! -f "$WART_APP_WASM" ]]; then
     exit 1
 fi
 
-pack_warpkg "$APP_PKG" "$WART_APP_WASM" "ui" "$(cat <<'EOF'
-app_id      = "com.example.wart-app"
-version     = "0.1.0"
-world       = "my:skiko-gfx/skiko-ui"
-composition = "same-store"
-orientation = "auto"
-# Task 57 — human-readable label shown by the launcher (`list-apps`).
-label       = "Demo"
-
-[components]
-ui = "components/ui.wasm"
-
-# Cross-app deps wart-app actually imports — task 36 / 39 / 41. The
-# installer reads these to populate dependencies_resolved in the
-# cache-key, which load_dep_components walks at launch time to wire
-# each dep into the consumer's linker.
-[dependencies]
-markdown = { system = "war.markdown.renderer", version = "0.1.0", interface = "war:markdown/renderer@0.1.0" }
-emoji    = { system = "war.emoji.picker",      version = "0.1.0", interface = "war:emoji/picker@0.1.0" }
-fonts    = { system = "war.fonts.loader",      version = "0.1.0", interface = "war:fonts/loader@0.1.0" }
-EOF
-)" "$REPO_ROOT/apps/user/wart-app/assets"
+pack_warpkg "$APP_PKG" "$WART_APP_WASM" "ui" \
+    "$REPO_ROOT/apps/user/wart-app/package.toml" \
+    "$REPO_ROOT/apps/user/wart-app/assets"
 
 # ── 3. Push warpkg dirs to device + install ─────────────────────────────
 

@@ -55,6 +55,20 @@ A warpkg is anything that:
 - Gets packaged into a `.warpkg` directory by
   `tools/scripts/build-system-warpkgs.sh` or a sibling script.
 
+**Manifest**: every app dir owns a **`package.toml`** at its root — the
+single source of truth for its `app_id` / `version` / `world` / `kind`
+(app vs system) / `composition` / `orientation` / `label` / `[components]`
+/ `[dependencies]`. The pack scripts (`build-system-warpkgs.sh`,
+`pack-ime-keyboard.sh`) **copy** this file into the `.warpkg` verbatim —
+they do not generate it. Edit the app's `package.toml` like any file; the
+3rd arg to `pack_warpkg` is the component name and must match the toml's
+`[components]` entry. (Before, these were heredocs inside the pack script —
+moved into the app dirs so they're not regenerated on every pack.) The
+`orientation` field (`"auto" | "locked"`, default locked) drives task-62/63
+rotation: e.g. `war.launcher` is `locked` (home stays portrait + locks the
+chrome), the bars + IME + user apps are `auto`. It is NOT part of the AOT
+cache-key, so editing it doesn't invalidate the precompiled `.cwasm`.
+
 **System vs user**: a system warpkg is owned by the runtime and
 installed automatically by the launcher (Magisk module). A user
 warpkg is something the user explicitly installs. The
@@ -192,6 +206,7 @@ participate in `cargo build --workspace` etc.
 |--------------------------------------------------------|------------------------------------------------------|------------------------------------------------------------|
 | A new lang plugin (e.g. German)                        | `apps/system/lang/war.lang.de/`                      | Mirror `war.lang.bg/` exactly                              |
 | A new system component (e.g. icon-set provider)        | `apps/system/war.icons.provider/`                    | Pick an `app_id` matching the dir name                     |
+| A warpkg's manifest                                    | `apps/.../<app>/package.toml`                        | One per app dir; pack scripts copy it (don't add a heredoc)|
 | A new IME (e.g. voice)                                 | `apps/system/war.ime.voice/`                         | Sibling of `war.ime.keyboard/`                             |
 | A new first-party demo app                             | `apps/user/<demo-name>/`                             | dash-separated kebab-case OR `war.<id>` if "first-party but distributed" |
 | A new native daemon (e.g. crash reporter)              | `runtime/wart-<name>/`                               | `wart-crash`, `wart-trace`, …                              |

@@ -1,0 +1,19 @@
+app_id      = "com.example.wart-app"
+version     = "0.1.0"
+world       = "my:skiko-gfx/skiko-ui"
+composition = "same-store"
+orientation = "auto"
+# Task 57 — human-readable label shown by the launcher (`list-apps`).
+label       = "Demo"
+
+[components]
+ui = "components/ui.wasm"
+
+# Cross-app deps wart-app actually imports — task 36 / 39 / 41. The
+# installer reads these to populate dependencies_resolved in the
+# cache-key, which load_dep_components walks at launch time to wire
+# each dep into the consumer's linker.
+[dependencies]
+markdown = { system = "war.markdown.renderer", version = "0.1.0", interface = "war:markdown/renderer@0.1.0" }
+emoji    = { system = "war.emoji.picker",      version = "0.1.0", interface = "war:emoji/picker@0.1.0" }
+fonts    = { system = "war.fonts.loader",      version = "0.1.0", interface = "war:fonts/loader@0.1.0" }

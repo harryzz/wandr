@@ -41,25 +41,8 @@ PKG=/tmp/ime-keyboard.warpkg
 rm -rf "$PKG"
 mkdir -p "$PKG/components"
 cp /tmp/ime-keyboard.wasm "$PKG/components/ui.wasm"
-cat > "$PKG/package.toml" <<'EOF'
-app_id      = "war.ime.keyboard"
-version     = "0.1.0"
-world       = "war:ime-keyboard/ime-keyboard"
-kind        = "system"
-composition = "same-store"
-orientation = "auto"
-
-[components]
-ui = "components/ui.wasm"
-
-# Task 49 step 5 — language plugins. Each uses its own WIT package
-# because two deps cannot share a `linker.instance(name)` entry.
-# Adding a new language → install war.lang.<id>.warpkg, append an
-# entry here, append matching @WasmImport in LangAdapter.kt.
-[dependencies]
-bg = { system = "war.lang.bg", version = "0.1.0", interface = "war:keyboard-lang-bg/lang@0.1.0" }
-fr = { system = "war.lang.fr", version = "0.1.0", interface = "war:keyboard-lang-fr/lang@0.1.0" }
-EOF
+# Manifest is the app's own apps/system/war.ime.keyboard/package.toml.
+cp "$REPO_ROOT/apps/system/war.ime.keyboard/package.toml" "$PKG/package.toml"
 
 echo "▸ push + install"
 adb shell "rm -rf /data/local/tmp/ime-keyboard.warpkg"
