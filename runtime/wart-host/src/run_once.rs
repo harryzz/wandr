@@ -98,6 +98,7 @@ pub fn run_with_engine(engine: &Engine, app_id: &str) -> Result<()> {
         Ok(_)  => log::info!("run_once: preopened /system/fonts → /system-fonts (read-only)"),
         Err(e) => log::warn!("run_once: preopen /system/fonts failed: {e:#}"),
     }
+    crate::signal_tls::grant_network(&mut wasi_builder); // task 66
     let wasi = wasi_builder.build();
 
     let host = HostState {
@@ -110,6 +111,7 @@ pub fn run_with_engine(engine: &Engine, app_id: &str) -> Result<()> {
         clipboard: None,
         wasi,
         table: ResourceTable::new(),
+        wasi_tls: crate::signal_tls::wasi_tls_ctx(),
         assets_dir: loaded.assets_dir(),
         #[cfg(feature = "profile")]
         growth_log: crate::profiling::GrowthLog::new(),

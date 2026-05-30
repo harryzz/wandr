@@ -1,5 +1,5 @@
-TASK=65
+TASK=66
 STEP=verify-done
 STATUS=complete
-LAST_SUCCESS=wasmtime 45.0.0 ADOPTED + device-verified 2026-05-30. DRC auto-GC (#13422+#13450) bounds the Kotlin/Wasm continuation leak AND no ANR (desktop 39MB flat; device 60fps+scroll 3min RSS flat ~220MB, smooth). Zero host API breaks. Added dep-cwasm self-heal (app_loader.rs) — the blocker; verified (corrupt dep cwasm -> re-precompile -> recover). No Store::gc mitigation to drop (profile-gated only).
-NOTES=On branch wasmtime-45-test: Cargo 44->45 + Cargo.lock + app_loader.rs dep self-heal + tasks/65 doc. Adapter fork NOT rebased to 45 (not required — ABI version-independent; clean-up follow-up). CLAUDE.md task-24 row still says "reverted to 44" — update follow-up. Next: commit on branch + merge to main; HOLD push for explicit user go-ahead (no-auto-push rule).
+LAST_SUCCESS=Task 66 verified OK — Signal-CA wasi-tls TlsProvider wired into wart-host. Cross-compiles aarch64-android (ring + wasi-tls); on-device the launcher child logged "signal_tls: trust store = 119 public roots + 1 Signal CA", component instantiated + rendered frames 0/1/2, wart launcher renders (screenshot), no trap/regression.
+NOTES=signal_tls.rs (provider+grant_network+wasi_tls_ctx+add_to_linker); HostState.wasi_tls + WasiTlsView (lib.rs); grant+ctx at 3 builders (lib/standalone/run_once); wasi-tls linker at app_loader instantiate+instantiate_command; Cargo.toml deps. Network grant is GLOBAL (inherit_network) — follow-up: per-app package.toml allowlist. Device left with launcher-only chrome (smoke); rerun run-hybrid-stack.sh for full chrome. NOT committed yet.

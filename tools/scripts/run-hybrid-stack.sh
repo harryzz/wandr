@@ -16,8 +16,26 @@
 #   adb shell '/data/local/tmp/wart-arbiter list'
 #   adb shell '/data/local/tmp/wart-arbiter kill com.example.wart-app'
 #
-# Stop the stack: Ctrl-C in this script's terminal.
+# Stop the stack: Ctrl-C in this script's terminal (interactive), or — when run
+# detached / backgrounded / from CI (no TTY) — `run-hybrid-stack.sh --stop`.
+#
+# TTY handling: with a controlling terminal the arbiter runs in the foreground so
+# Ctrl-C tears the stack down. Without one (`nohup … &`, background, CI), `adb
+# shell -t` can't allocate a PTY, so the arbiter is started detached and the
+# stack is left running; stop it later with `--stop`.
 set -euo pipefail
+
+# Detached stop path: tear the stack down and restore SystemUI, then exit.
+if [[ "${1:-}" == "--stop" ]]; then
+    echo "▸ stopping wart-arbiter + wart-host …"
+    adb shell "su -c 'pkill -9 -f wart-arbiter'" >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f wart-host'"    >/dev/null 2>&1 || true
+    adb shell "su -c 'rm -f /data/local/tmp/wart-zygote.sock /data/local/tmp/wart-arbiter.sock'" >/dev/null 2>&1 || true
+    adb shell "su -c 'am start -n com.android.systemui/.SystemUIService'" >/dev/null 2>&1 || true
+    adb shell "input keyevent KEYCODE_HOME" >/dev/null 2>&1 || true
+    echo "▸ stack stopped, SystemUI restored."
+    exit 0
+fi
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
@@ -138,5 +156,19 @@ echo "  zygote pid: $ZPID"
     done
 ) &
 
-echo "▸ starting wart-arbiter --daemon in foreground (Ctrl-C to stop) …"
-adb shell -t "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter --daemon'"
+if [[ -t 1 ]]; then
+    # Interactive terminal: run the arbiter in the foreground so this script
+    # blocks here and Ctrl-C tears the whole stack down via the EXIT/INT trap.
+    echo "▸ starting wart-arbiter --daemon in foreground (Ctrl-C to stop) …"
+    adb shell -t "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter --daemon'"
+else
+    # No controlling TTY (backgrounded / nohup / CI): `adb shell -t` can't
+    # allocate a PTY. Start the arbiter detached, wait for the chrome-bring-up
+    # waiter to finish, then exit WITHOUT firing the teardown trap so the stack
+    # keeps running. Stop later with: run-hybrid-stack.sh --stop
+    echo "▸ no TTY — starting wart-arbiter --daemon detached (stack left running) …"
+    adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT nohup /data/local/tmp/wart-arbiter --daemon >/data/local/tmp/wart-arbiter.log 2>&1 &'" >/dev/null 2>&1
+    wait                       # let the background chrome waiter bring up the shell
+    trap - EXIT INT TERM       # don't tear the stack down on this script's exit
+    echo "▸ stack up (detached). Stop with: $0 --stop"
+fi

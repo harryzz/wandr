@@ -379,6 +379,7 @@ fn run_cwasm_loop(
         Ok(_)  => log::info!("standalone: preopened /system/fonts → /system-fonts (read-only)"),
         Err(e) => log::warn!("standalone: preopen /system/fonts failed: {e:#}"),
     }
+    crate::signal_tls::grant_network(&mut wasi_builder); // task 66
     let wasi = wasi_builder.build();
 
     let host = HostState {
@@ -391,6 +392,7 @@ fn run_cwasm_loop(
         clipboard: None,
         wasi,
         table: ResourceTable::new(),
+        wasi_tls: crate::signal_tls::wasi_tls_ctx(),
         assets_dir: loaded.assets_dir(),
         #[cfg(feature = "profile")]
         growth_log: crate::profiling::GrowthLog::new(),

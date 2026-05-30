@@ -164,6 +164,8 @@ impl LoadedApp {
         let mut linker: Linker<HostState> = Linker::new(&self.engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
             .map_err(|e| anyhow!("wasmtime_wasi::p2::add_to_linker_sync: {e:#}"))?;
+        crate::signal_tls::add_to_linker(&mut linker) // task 66 — wasi:tls (Signal CA)
+            .map_err(|e| anyhow!("signal_tls::add_to_linker: {e:#}"))?;
         bindings::SkikoUi::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)
             .map_err(|e| anyhow!("SkikoUi::add_to_linker: {e:#}"))?;
 
@@ -210,6 +212,8 @@ impl LoadedApp {
         let mut linker: Linker<HostState> = Linker::new(&self.engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
             .map_err(|e| anyhow!("wasmtime_wasi::p2::add_to_linker_sync: {e:#}"))?;
+        crate::signal_tls::add_to_linker(&mut linker) // task 66 — wasi:tls (Signal CA)
+            .map_err(|e| anyhow!("signal_tls::add_to_linker: {e:#}"))?;
         bindings::SkikoUi::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)
             .map_err(|e| anyhow!("SkikoUi::add_to_linker: {e:#}"))?;
 

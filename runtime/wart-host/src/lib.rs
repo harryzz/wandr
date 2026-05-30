@@ -43,6 +43,8 @@ mod app_installer;
 mod profiling;
 #[cfg(target_os = "android")]
 mod bionic_compat;
+// Task 66 — host-delegated TLS for guests with Signal's pinned CA trusted.
+mod signal_tls;
 #[cfg(target_os = "android")]
 mod wasi_stderr;
 // Task 33 boot-model: standalone (no-NativeActivity) launch path.
@@ -123,6 +125,9 @@ pub struct HostState {
     pub clipboard: Option<String>,
     pub wasi:      WasiCtx,
     pub table:     ResourceTable,
+    /// Task 66 — `wasi:tls` host context (Signal-aware trust store). Shared
+    /// `wasi:io` resources live in `table`. See `signal_tls`.
+    pub wasi_tls:  wasmtime_wasi_tls::WasiTlsCtx,
     /// Root of the install's `assets/` dir for the `my:skiko-gfx/assets.read`
     /// host impl (task 38). `None` for dev paths / bundles with no
     /// assets — guest `read()` calls then return `option::none`.
@@ -136,6 +141,12 @@ pub struct HostState {
 impl WasiView for HostState {
     fn ctx(&mut self) -> WasiCtxView<'_> {
         WasiCtxView { ctx: &mut self.wasi, table: &mut self.table }
+    }
+}
+
+impl wasmtime_wasi_tls::WasiTlsView for HostState {
+    fn tls(&mut self) -> wasmtime_wasi_tls::WasiTlsCtxView<'_> {
+        wasmtime_wasi_tls::WasiTlsCtxView { ctx: &mut self.wasi_tls, table: &mut self.table }
     }
 }
 
@@ -256,6 +267,7 @@ impl ApplicationHandler for App {
             { wasi_builder.stderr(wasi_stderr::LogcatStderr); }
             #[cfg(not(target_os = "android"))]
             { wasi_builder.inherit_stderr(); }
+            signal_tls::grant_network(&mut wasi_builder); // task 66
             let wasi = wasi_builder.build();
             let host = HostState {
                 renderer,
@@ -267,6 +279,7 @@ impl ApplicationHandler for App {
                 clipboard: None,
                 wasi,
                 table: ResourceTable::new(),
+                wasi_tls: signal_tls::wasi_tls_ctx(),
                 assets_dir: loaded.assets_dir(),
                 #[cfg(feature = "profile")]
                 growth_log: profiling::GrowthLog::new(),
