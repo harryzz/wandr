@@ -22,6 +22,7 @@ interface chat {
   init: func();
   poll-events: func() -> list<event>;
   send: func(thread: string, text: string) -> result<_, string>;
+  mark-read: func(thread: string);
   history: func() -> list<message>;
   contacts: func() -> list<contact>;
   sync-contacts: func();

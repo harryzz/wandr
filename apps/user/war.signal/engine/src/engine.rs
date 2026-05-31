@@ -6,7 +6,7 @@
 //! (single-threaded guest ⇒ `Rc`/`RefCell`).
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -29,7 +29,7 @@ use libsignal_service::zkgroup::groups::{GroupMasterKey, GroupSecretParams};
 use libsignal_service::messagepipe::Incoming;
 use libsignal_service::proto::{
     data_message, manifest_record, receipt_message, storage_record, sync_message,
-    DataMessage, GroupContextV2,
+    DataMessage, GroupContextV2, ReceiptMessage,
 };
 use libsignal_service::protocol::{
     DeviceId, IdentityKeyPair, ProtocolAddress, ServiceId,
@@ -59,6 +59,14 @@ use crate::store::MemStore;
 struct GroupRoute {
     members: Vec<Uuid>,
     revision: u32,
+}
+
+/// A pending receipt to send back to a message's sender: the recipient ACI, the
+/// kind (delivery vs read), and the wire timestamps of the messages it covers.
+struct ReceiptJob {
+    recipient: Uuid,
+    read: bool,
+    timestamps: Vec<u64>,
 }
 
 struct Shared {
@@ -93,6 +101,13 @@ struct Shared {
     /// ACI → emoji). Re-derived into the target `message.reactions` string on
     /// change; persisted to reactions.json so they survive a restart.
     reactions: RefCell<HashMap<u64, HashMap<String, String>>>,
+    /// Receipts to send back (delivery on receive, read on `mark_read`), drained
+    /// over the connection in the send tick.
+    receipt_outbox: RefCell<Vec<ReceiptJob>>,
+    /// Wire timestamps we've already sent a READ receipt for (so re-opening a
+    /// thread doesn't re-ack everything). In-memory — resending on restart is
+    /// harmless (idempotent on the peer).
+    read_acked: RefCell<HashSet<u64>>,
 }
 
 impl Shared {
@@ -315,6 +330,8 @@ pub fn init() {
         group_routes: RefCell::new(group_routes),
         account_id: RefCell::new(String::new()),
         reactions: RefCell::new(reactions),
+        receipt_outbox: RefCell::new(Vec::new()),
+        read_acked: RefCell::new(HashSet::new()),
     });
     SHARED.with(|slot| *slot.borrow_mut() = Some(s));
 
@@ -363,6 +380,33 @@ pub fn send(thread: String, text: String) -> Result<(), String> {
     // reference this exact ts and match back via `set_status`.
     shared.outbox.borrow_mut().push_back((thread, text, ts));
     Ok(())
+}
+
+/// Mark `thread` read: enqueue a read receipt for every received (incoming)
+/// message in it we haven't acked yet, grouped by sender (so group messages ack
+/// to each member). Sent over the connection on the next tick.
+pub fn mark_read(thread: String) {
+    let Some(shared) = shared() else { return };
+    let mut by_sender: HashMap<Uuid, Vec<u64>> = HashMap::new();
+    {
+        let hist = shared.history.borrow();
+        let mut acked = shared.read_acked.borrow_mut();
+        for m in hist.iter() {
+            if m.thread == thread && !m.outgoing && !acked.contains(&m.ts) {
+                if let Ok(uuid) = Uuid::parse_str(&m.sender) {
+                    by_sender.entry(uuid).or_default().push(m.ts);
+                    acked.insert(m.ts);
+                }
+            }
+        }
+    }
+    if by_sender.is_empty() {
+        return;
+    }
+    let mut ob = shared.receipt_outbox.borrow_mut();
+    for (recipient, timestamps) in by_sender {
+        ob.push(ReceiptJob { recipient, read: true, timestamps });
+    }
 }
 
 pub fn history() -> Vec<Message> {
@@ -714,6 +758,15 @@ async fn receive_and_send(
                             let ts = wire_ts.unwrap_or_else(now_ms);
                             // Reactions that arrived before this message did.
                             let reactions = shared.reactions_string(ts);
+                            // Ack delivery back to the sender (not for our own
+                            // synced-sent messages) — the peer sees one checkmark.
+                            if !outgoing {
+                                shared.receipt_outbox.borrow_mut().push(ReceiptJob {
+                                    recipient: content.metadata.sender.raw_uuid(),
+                                    read: false,
+                                    timestamps: vec![ts],
+                                });
+                            }
                             let msg = Message {
                                 id: shared.next_id(),
                                 sender,
@@ -793,6 +846,26 @@ async fn receive_and_send(
                                 Err(e) => shared.set_state(format!("send error: {e}")),
                             }
                         }
+                    }
+                    // Drain pending receipts (delivery on receive, read on open):
+                    // one ReceiptMessage per recipient, echoing the message ts so
+                    // the peer's client matches it back to its sent message.
+                    let receipts: Vec<ReceiptJob> =
+                        shared.receipt_outbox.borrow_mut().drain(..).collect();
+                    for job in receipts {
+                        let kind = if job.read {
+                            receipt_message::Type::Read
+                        } else {
+                            receipt_message::Type::Delivery
+                        };
+                        let rm = ReceiptMessage {
+                            r#type: Some(kind as i32),
+                            timestamp: job.timestamps,
+                        };
+                        let recipient = ServiceId::Aci(job.recipient.into());
+                        let _ = sender
+                            .send_message(&recipient, None, rm, now_ms(), false, false)
+                            .await;
                     }
                     // On-demand contacts refresh (sync_contacts()).
                     if shared.resync_contacts.replace(false) {

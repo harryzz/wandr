@@ -240,12 +240,14 @@ thread_local! {
     static VIEWING: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
-/// Open a conversation: mark it the viewed thread and clear its unread badge.
+/// Open a conversation: mark it the viewed thread, clear its unread badge, and
+/// send read receipts for its received messages (the peer sees "read").
 fn open_thread(id: &str) {
     VIEWING.with(|v| *v.borrow_mut() = Some(id.to_string()));
     MODEL.with(|m| {
         m.borrow_mut().unread.remove(id);
     });
+    chat::mark_read(id);
 }
 
 /// Leave the open conversation (back to the list).
@@ -351,6 +353,9 @@ fn pump() -> bool {
                                 let viewing = VIEWING.with(|v| v.borrow().clone());
                                 if viewing.as_deref() != Some(msg.thread.as_str()) {
                                     *m.unread.entry(msg.thread.clone()).or_insert(0) += 1;
+                                } else {
+                                    // Arrived in the open thread → it's read now.
+                                    chat::mark_read(&msg.thread);
                                 }
                             }
                             m.messages.push(UiMsg {

@@ -98,6 +98,12 @@ interface chat {
   /// the previous call. Call once per UI frame.
   poll-events: func() -> list<event>;
 
+  /// Mark a conversation as read: send a read receipt for every message we've
+  /// received in `thread` (to each sender), so the other side sees "read". Also
+  /// sends to the senders of group messages. Idempotent — already-acked messages
+  /// are skipped. Call when the user opens/views the thread.
+  mark-read: func(thread: string);
+
   /// Queue an outgoing text to `thread` (a peer ACI for 1:1, or a group master
   /// key b64 for a group; empty → Note-to-Self). Echoed locally right away; sent
   /// over the wire within a couple hundred ms. Returns `Ok` once queued.

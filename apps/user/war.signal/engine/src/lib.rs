@@ -36,6 +36,10 @@ impl Guest for Component {
         engine::send(thread, text)
     }
 
+    fn mark_read(thread: String) {
+        engine::mark_read(thread);
+    }
+
     fn history() -> Vec<Message> {
         engine::history()
     }
