@@ -226,6 +226,29 @@ struct Model {
     groups: Vec<UiGroup>,
     /// This account's own ACI — the Note-to-Self thread id.
     account_id: String,
+    /// Per-thread unread count (incoming messages arrived while not viewing that
+    /// thread). Keyed by thread id; cleared when the thread is opened.
+    unread: std::collections::HashMap<String, u32>,
+}
+
+thread_local! {
+    /// The thread currently open (so `pump`, which runs outside the dioxus
+    /// runtime, knows not to count incoming messages there as unread). Set when a
+    /// thread is opened, cleared on back.
+    static VIEWING: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Open a conversation: mark it the viewed thread and clear its unread badge.
+fn open_thread(id: &str) {
+    VIEWING.with(|v| *v.borrow_mut() = Some(id.to_string()));
+    MODEL.with(|m| {
+        m.borrow_mut().unread.remove(id);
+    });
+}
+
+/// Leave the open conversation (back to the list).
+fn close_thread() {
+    VIEWING.with(|v| *v.borrow_mut() = None);
 }
 
 /// Fetch the engine's groups, sorted by title. Built off the dioxus runtime.
@@ -320,6 +343,13 @@ fn pump() -> bool {
                     chat::Event::Message(msg) => {
                         // Dedup by id (a live message is also in history()).
                         if !m.messages.iter().any(|x| x.id == msg.id) {
+                            // Incoming message in a thread we're not viewing → unread.
+                            if !msg.outgoing {
+                                let viewing = VIEWING.with(|v| v.borrow().clone());
+                                if viewing.as_deref() != Some(msg.thread.as_str()) {
+                                    *m.unread.entry(msg.thread.clone()).or_insert(0) += 1;
+                                }
+                            }
                             m.messages.push(UiMsg {
                                 id: msg.id,
                                 sender: msg.sender,
@@ -377,8 +407,15 @@ fn pump() -> bool {
     changed
 }
 
-type Snapshot =
-    (String, Option<String>, Vec<UiMsg>, Vec<UiContact>, Vec<UiGroup>, String);
+type Snapshot = (
+    String,
+    Option<String>,
+    Vec<UiMsg>,
+    Vec<UiContact>,
+    Vec<UiGroup>,
+    String,
+    std::collections::HashMap<String, u32>,
+);
 fn snapshot() -> Snapshot {
     MODEL.with(|m| {
         let m = m.borrow();
@@ -389,6 +426,7 @@ fn snapshot() -> Snapshot {
             m.contacts.clone(),
             m.groups.clone(),
             m.account_id.clone(),
+            m.unread.clone(),
         )
     })
 }
@@ -482,7 +520,7 @@ fn app() -> Element {
     // None = list view; Some = an open conversation (full-screen thread view).
     let current = use_signal(|| None::<Thread>);
 
-    let (state, link_url, messages, contacts, groups, self_id) = snapshot();
+    let (state, link_url, messages, contacts, groups, self_id, unread) = snapshot();
 
     // Not linked yet → just the QR.
     if let Some(url) = link_url {
@@ -529,9 +567,9 @@ fn app() -> Element {
                 }
             }
             if tab() == 0 {
-                Conversations { messages, contacts: contacts.clone(), groups: groups.clone(), self_id: self_id.clone(), current }
+                Conversations { messages, contacts: contacts.clone(), groups: groups.clone(), self_id: self_id.clone(), unread: unread.clone(), current }
             } else {
-                Contacts { contacts, groups, self_id: self_id.clone(), current }
+                Contacts { contacts, groups, self_id: self_id.clone(), unread: unread.clone(), current }
             }
         }
     }
@@ -558,7 +596,7 @@ fn ThreadHeader(title: String, current: Signal<Option<Thread>>) -> Element {
             style: "display:flex; flex-direction:row; align-items:center; gap:20px; padding:22px 24px; background:{BAR};",
             button {
                 style: format!("display:flex; justify-content:center; align-items:center; width:64px; height:64px; border-radius:14px; background:{};", FIELD),
-                onclick: move |_| current.set(None),
+                onclick: move |_| { close_thread(); current.set(None); },
                 div { style: "color:{TEXT}; font-size:36px;", "‹" }
             }
             div { style: "color:{TEXT}; font-size:36px; font-weight:700;", "{title}" }
@@ -574,6 +612,7 @@ fn Conversations(
     contacts: Vec<UiContact>,
     groups: Vec<UiGroup>,
     self_id: String,
+    unread: std::collections::HashMap<String, u32>,
     current: Signal<Option<Thread>>,
 ) -> Element {
     // Last message per thread, in arrival order (history is chronological).
@@ -603,17 +642,20 @@ fn Conversations(
                         if m.outgoing { format!("You: {body}") } else { body }
                     }).unwrap_or_default();
                     let t = Thread { id: tid.clone(), title: title.clone(), is_group };
+                    let n = unread.get(&tid).copied().unwrap_or(0);
+                    let oid = tid.clone();
                     rsx! {
                         button {
                             key: "{tid}",
                             style: "display:flex; flex-direction:row; align-items:center; gap:20px; padding:14px; border-radius:16px; background:{IN_BUBBLE};",
-                            onclick: move |_| current.set(Some(t.clone())),
+                            onclick: move |_| { open_thread(&oid); current.set(Some(t.clone())); },
                             Avatar { uri: avatar, letter: initial(&title) }
                             div {
                                 style: "display:flex; flex-direction:column; gap:4px; flex-grow:1; min-width:0;",
                                 div { style: "color:{TEXT}; font-size:32px;", "{title}" }
                                 div { style: "color:{MUTED}; font-size:24px;", "{preview}" }
                             }
+                            UnreadBadge { count: n }
                         }
                     }
                 }
@@ -791,6 +833,19 @@ fn Avatar(uri: Option<String>, letter: String) -> Element {
     }
 }
 
+/// A small accent badge with the unread count; renders nothing when `count` is 0.
+#[component]
+fn UnreadBadge(count: u32) -> Element {
+    rsx! {
+        if count > 0 {
+            div {
+                style: "display:flex; justify-content:center; align-items:center; min-width:44px; height:44px; padding:0 12px; border-radius:22px; background:{ACCENT}; flex-shrink:0;",
+                div { style: "color:{TEXT}; font-size:26px; font-weight:700;", "{count}" }
+            }
+        }
+    }
+}
+
 /// The people list: groups first (avatar + member preview), then individual
 /// contacts (avatar + name + phone). Both share one scroll container so the
 /// "Contacts" tab is the single place to see everyone.
@@ -799,6 +854,7 @@ fn Contacts(
     contacts: Vec<UiContact>,
     groups: Vec<UiGroup>,
     self_id: String,
+    unread: std::collections::HashMap<String, u32>,
     current: Signal<Option<Thread>>,
 ) -> Element {
     rsx! {
@@ -812,17 +868,20 @@ fn Contacts(
                     let mut current = current;
                     let preview = g.members.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
                     let t = Thread { id: g.id.clone(), title: g.title.clone(), is_group: true };
+                    let n = unread.get(&g.id).copied().unwrap_or(0);
+                    let oid = g.id.clone();
                     rsx! {
                         button {
                             key: "{g.id}",
                             style: "display:flex; flex-direction:row; align-items:center; gap:20px; padding:14px; border-radius:16px; background:{IN_BUBBLE};",
-                            onclick: move |_| current.set(Some(t.clone())),
+                            onclick: move |_| { open_thread(&oid); current.set(Some(t.clone())); },
                             Avatar { uri: g.avatar_uri, letter: initial(&g.title) }
                             div {
                                 style: "display:flex; flex-direction:column; gap:4px; flex-grow:1; min-width:0;",
                                 div { style: "color:{TEXT}; font-size:32px;", "{g.title}" }
                                 div { style: "color:{MUTED}; font-size:24px;", "{g.members.len()} members · {preview}" }
                             }
+                            UnreadBadge { count: n }
                         }
                     }
                 }
@@ -839,11 +898,13 @@ fn Contacts(
                         c.name.clone()
                     };
                     let t = Thread { id: c.id.clone(), title: name.clone(), is_group: false };
+                    let n = unread.get(&c.id).copied().unwrap_or(0);
+                    let oid = c.id.clone();
                     rsx! {
                         button {
                             key: "{c.id}",
                             style: "display:flex; flex-direction:row; align-items:center; gap:20px; padding:14px; border-radius:16px; background:{IN_BUBBLE};",
-                            onclick: move |_| current.set(Some(t.clone())),
+                            onclick: move |_| { open_thread(&oid); current.set(Some(t.clone())); },
                             Avatar { uri: c.avatar_uri, letter: initial(&name) }
                             div {
                                 style: "display:flex; flex-direction:column; gap:4px; flex-grow:1; min-width:0;",
@@ -852,6 +913,7 @@ fn Contacts(
                                     div { style: "color:{MUTED}; font-size:24px;", "{phone}" }
                                 }
                             }
+                            UnreadBadge { count: n }
                         }
                     }
                 }
