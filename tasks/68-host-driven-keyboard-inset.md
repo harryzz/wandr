@@ -52,8 +52,16 @@ auto-recomputes on rotation, so rotating with the keyboard up self-corrects.
 ### Not done (deferred follow-ups)
 - ⌄ **Hide key → detach** (M3): dismissing the keyboard from its own button should
   also clear the inset (today it clears on focus-blur/back). Surface-only today.
+  (Likely already works via Hide→ESC→editor-detach→arbiter `keyboard-inset 0`;
+  unverified.)
+- **Landscape keyboard sizing → task 71.** The IME now requests a fixed 864px
+  (30% portrait); the host scales it `×pw/ph` to ~432px in landscape, which is too
+  small to read. The clean fix is the percent-of-content model in
+  `tasks/71-display-geometry-namespace.md` (IME sends 30/42% per orientation, host
+  applies to `content-size().height`, drop the px-scaling). Until then landscape is
+  undersized.
 - IME computing its height as a **fraction of the panel** (resolution-independent)
-  instead of the fixed 1200 — needs a `keyboard.panel-height()` + a Kotlin change.
+  — folded into task 71.
 
 ---
 (original problem statement below)

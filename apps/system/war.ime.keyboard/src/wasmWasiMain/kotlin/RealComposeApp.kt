@@ -117,13 +117,15 @@ fun buildRealComposeScene(widthPx: Int, heightPx: Int, density: Float): ComposeS
 /// forwards to `sf_resize_overlay`, and flushes the ANativeWindow's
 /// buffer geometry so the next frame draws to the new size. The IME
 /// is launched with an `INITIAL_OVERLAY_PX=1200` surface; this verb
-/// trims it to a sensible keyboard height (~38% of a 2880-px panel).
+/// trims it to a sensible keyboard height (30% of a 2880-px panel).
 ///
 /// Sized for the 5-row English / language-plugin layouts (digits + 3
 /// letter rows + modifier row). Symbols / Emoji are 4 rows so they
 /// just have a bit more whitespace at the top — harmless. If a
 /// future layout grows, this can be re-requested on layout change.
-private const val OVERLAY_HEIGHT_PX: UInt = 1200u
+/// The host reserves this same height as the foreground app's bottom
+/// inset (task 68), so keeping it modest also keeps more app visible.
+private const val OVERLAY_HEIGHT_PX: UInt = 864u // 30% of 2880
 
 @Composable
 private fun KeyboardScreen() {
