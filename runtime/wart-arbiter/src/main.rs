@@ -1070,6 +1070,23 @@ fn cmd_launch(stream: &mut UnixStream, app_id: &str, kind: LaunchKind) -> Result
         writeln!(stream, "ERR launch-empty-app-id")?;
         return Ok(());
     }
+    // Idempotent for GUI apps: if this app is already running, bring it to the
+    // FRONT instead of spawning a second instance — tapping a running app's icon
+    // in the launcher should resume it (Android's singleTask-ish "open"), not
+    // fork a duplicate. (A stale/dead entry falls through to a fresh launch.)
+    if kind == LaunchKind::Gui && !app_id.is_empty() {
+        if let Some(s) = state::get(app_id) {
+            if state::pid_alive(s.pid) {
+                promote_to_foreground(&s.app_id, s.pid);
+                writeln!(stream, "OK pid={} app={app_id} foregrounded", s.pid)?;
+                log::info!(
+                    "wart-arbiter: {app_id} already running (pid {}) — foregrounding instead of relaunch",
+                    s.pid
+                );
+                return Ok(());
+            }
+        }
+    }
     let result = match kind {
         LaunchKind::Gui         => zygote_client::launch_gui(app_id),
         LaunchKind::GuiOverlay  => zygote_client::launch_gui_overlay(app_id),
