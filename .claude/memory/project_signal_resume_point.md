@@ -24,6 +24,19 @@ points. Code lives at `apps/user/war.signal/` (`engine/` + `ui/`); build/deploy 
   (✓/✓✓/✓✓-blue, matched by wire ts → `statuses.json`), unread badges (in-memory).
 - Emoji: host fix — `canvas_impl.rs` shapes blobs via SkShaper w/ FontMgr fallback
   (dioxus-canvas path lacked it; Compose's Paragraph path always had it). Host-wide.
+- Chat-render polish (2026-05-31, commits be923f7f/ed9cd4f7): long message lines
+  WRAP (bubble `max-width:78%` + `white-space:normal`); conversation opens scrolled
+  to the newest msg + sticks to bottom (`data-stick-key={thread.id}`); typed spaces
+  render + caret advances. All three are dioxus-canvas renderer capabilities — see
+  [[reference_dioxus_taffy_rust_ui]] (wrapping is opt-in; min-content + Skia
+  trailing-whitespace gotchas).
+- Emoji reactions (2026-05-31, commit 06d92f70): incoming `DataMessage.reaction`
+  (+ sync-sent) matched to its target by wire SEND ts → `message.reactions` string
+  + `reaction-changed` event; persisted reactions.json. Group = per-reactor map so
+  multiple reactions show, repeats counted ("❤️3 👍"). REQUIRED changing incoming
+  msg `ts` from receive-time to `dm.timestamp` (send time) so reactions match —
+  so only msgs received post-this-build can be reaction-matched (old history rows
+  stored receive-time ts). Reactions on OUR outgoing msgs always matched (ts=wire).
 
 ## NOT done / next (in rough order of tractability)
 - **Send delivery/read receipts for messages WE receive** — we only consume incoming
