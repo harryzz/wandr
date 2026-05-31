@@ -122,6 +122,50 @@ fn check_marks(status: u8) -> (&'static str, &'static str) {
     }
 }
 
+const MONTHS: [&str; 12] =
+    ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Local day index (days since the epoch in the device's timezone) — the key for
+/// grouping messages under a date divider.
+fn local_day(ts: u64) -> i64 {
+    (ts as i64 + local_offset_min() * 60_000).div_euclid(86_400_000)
+}
+
+/// Civil (year, month, day) from a days-since-epoch index (Hinnant's algorithm).
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719_468;
+    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    (y + if m <= 2 { 1 } else { 0 }, m, d)
+}
+
+/// A date-divider label: "Today" / "Yesterday" / "D Mon YYYY".
+fn date_label(day: i64) -> String {
+    let today = local_day(now_ms());
+    if day == today {
+        return "Today".to_string();
+    }
+    if day == today - 1 {
+        return "Yesterday".to_string();
+    }
+    let (y, m, d) = civil_from_days(day);
+    let mon = MONTHS.get((m - 1) as usize).copied().unwrap_or("");
+    format!("{d} {mon} {y}")
+}
+
 // ── the model the components read, updated by `pump` from the engine ──────────
 #[derive(Clone, PartialEq, Default)]
 struct UiMsg {
@@ -648,19 +692,39 @@ fn row_runs(colors: &[qrcode::Color], w: usize, y: usize, module: i32) -> Vec<(i
 
 #[component]
 fn Conversation(messages: Vec<UiMsg>, contacts: Vec<UiContact>) -> Element {
+    // Tag each message with the date label to show above it (once per day, when
+    // the local day changes from the previous message).
+    let mut rows: Vec<(Option<String>, UiMsg)> = Vec::with_capacity(messages.len());
+    let mut prev_day: Option<i64> = None;
+    for m in &messages {
+        let day = local_day(m.ts);
+        let divider = (prev_day != Some(day)).then(|| date_label(day));
+        prev_day = Some(day);
+        rows.push((divider, m.clone()));
+    }
+
     rsx! {
         div {
             style: "display:flex; flex-direction:column; overflow:scroll; flex-grow:1; min-height:0; padding:24px; gap:14px;",
-            if messages.is_empty() {
+            if rows.is_empty() {
                 div { style: "color:{MUTED}; font-size:28px; padding:24px;", "No messages yet." }
             }
-            for m in messages {
+            for (divider , m) in rows {
                 {
                     // Resolve the sender ACI → contact name (fallback: short ACI).
                     let label = sender_label(&m.sender, &contacts);
                     let time = fmt_time(m.ts);
                     let (check, check_col) = check_marks(m.status);
                     rsx! {
+                        if let Some(d) = divider {
+                            div {
+                                style: "display:flex; flex-direction:row; justify-content:center; padding:6px;",
+                                div {
+                                    style: "padding:8px 22px; border-radius:16px; background:{BAR}; color:{MUTED}; font-size:22px;",
+                                    "{d}"
+                                }
+                            }
+                        }
                         div {
                             key: "{m.id}",
                             // Row: align outgoing right, incoming left.
