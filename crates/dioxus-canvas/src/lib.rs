@@ -164,6 +164,10 @@ pub struct DomRenderer {
     /// source (e.g. an engine's `poll-events`) rather than being purely
     /// input-driven. Default 60_000 (fully on-demand, like the launcher).
     min_frame_delay: u32,
+    /// Backgrounded (host lifecycle `paused`/`stopped`): the surface is hidden,
+    /// so anything drawn is wasted. A polling guest can read this in `pre_frame`
+    /// to slow its cadence while still ticking. Set from `on-lifecycle-changed`.
+    lifecycle_paused: bool,
 }
 
 impl DomRenderer {
@@ -196,6 +200,7 @@ impl DomRenderer {
             measure_cache: HashMap::new(),
             image_cache: HashMap::new(),
             min_frame_delay: 60_000,
+            lifecycle_paused: false,
         }
     }
 
@@ -236,6 +241,20 @@ impl DomRenderer {
         self.min_frame_delay = ms;
     }
 
+    /// Update lifecycle state from the renderer's `on-lifecycle-changed` (state
+    /// codes mirror the host `lifecycle::state` enum: …resumed=3, paused=4,
+    /// stopped=5…). `paused`/`stopped` mean the surface is hidden.
+    pub fn set_lifecycle(&mut self, state: u32) {
+        self.lifecycle_paused = matches!(state, 4 | 5);
+    }
+
+    /// Whether the app is backgrounded (paused/stopped) — its surface is hidden,
+    /// so a polling guest can throttle its `pre_frame` cadence to cut wasted
+    /// off-screen repaints while still receiving.
+    pub fn is_paused(&self) -> bool {
+        self.lifecycle_paused
+    }
+
     /// Force a re-diff + relayout on the next `render_frame` (e.g. after external
     /// data — engine events — changed the model the components read). The guest's
     /// root must also re-run (call `dioxus::prelude::needs_update()` in it) for
@@ -250,6 +269,15 @@ impl DomRenderer {
         if self.surface.0 == 0.0 {
             let (w, h) = sink.surface_size();
             self.surface = (w, h);
+        }
+        // Backgrounded (paused/stopped): the surface is hidden, so skip the paint
+        // entirely — no relayout, no draw-op replay, no buffer swap. The guest's
+        // `pre_frame` already ran before this call, so a polling guest still ticks
+        // (engine keeps receiving); we just don't repaint an off-screen buffer.
+        // Pending VirtualDom mutations stay queued under `dirty` and are flushed
+        // on the first resumed frame (the host marks it dirty on resume).
+        if self.lifecycle_paused {
+            return;
         }
         if self.dirty {
             // Apply the initial build the first time, incremental diffs after.

@@ -318,7 +318,9 @@ macro_rules! wire {
             fn on_pointer_event(_kind: crate::exports::my::skiko_gfx::renderer::PointerKind, _x: f32, _y: f32) {}
             fn on_key_event(_kind: crate::exports::my::skiko_gfx::renderer::KeyKind, _key_code: u32) {}
             fn on_scheduled_callback(_callback_id: u32) {}
-            fn on_lifecycle_changed(_state: u32) {}
+            fn on_lifecycle_changed(state: u32) {
+                __dioxus_canvas_with(|r| r.set_lifecycle(state));
+            }
         }
 
         impl crate::exports::my::skiko_gfx::frame_pacing::Guest for __DioxusCanvasGuest {
