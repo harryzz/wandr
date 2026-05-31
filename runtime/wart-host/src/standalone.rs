@@ -976,12 +976,24 @@ fn run_cwasm_loop(
             sf.request_focus();
         }
 
-        // Task 64 — cheap poll cadence. Sleep until the next render is due,
-        // but never longer than POLL_MS so idle input latency stays ≤16 ms
-        // while the expensive render is skipped.
+        // Task 64 — cheap poll cadence. Sleep until the next render is due, but
+        // never longer than the input-poll cap so idle input latency stays low
+        // while the expensive render is skipped. Task 72 — a BACKGROUND-role app's
+        // surface is hidden and receives no input, yet `sf.poll_input()` (a native
+        // libgui InputConsumer::consume) at 60 Hz was the dominant background cost
+        // (~4% measured, app-agnostic). So poll input slowly when backgrounded;
+        // re-foregrounding is still detected within `BG_POLL_MS` (role() is read
+        // every iteration). Overlays (taskbar/statusbar) are never Background, so
+        // their tap latency is unchanged.
+        const BG_POLL_MS: u64 = 200;
+        let poll_cap = if matches!(cur_role, crate::app_role::AppRole::Background) {
+            BG_POLL_MS
+        } else {
+            POLL_MS
+        };
         let nap = next_render_at
             .saturating_duration_since(std::time::Instant::now())
-            .min(std::time::Duration::from_millis(POLL_MS));
+            .min(std::time::Duration::from_millis(poll_cap));
         if !nap.is_zero() {
             std::thread::sleep(nap);
         }

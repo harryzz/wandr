@@ -1,21 +1,34 @@
-# Task 72 — Background CPU floor: the live Signal connection (DESIGN/BACKLOG)
+# Task 72 — Background CPU floor (DESIGN/BACKLOG)
 
-**Status:** DESIGN / BACKLOG (filed 2026-05-31, spun out of the Signal CPU work).
-No code yet — captures the finding, what's already done, and the candidate
-approaches. The lever here is the **connection**, not rendering.
+**Status:** DESIGN / BACKLOG (filed 2026-05-31). PROFILED 2026-05-31 — the
+original premise (below) was **wrong**, see "Profiling result".
 
-## Problem
+## Profiling result (2026-05-31) — it's NOT the TLS connection
 
-A backgrounded `war.signal` app sits at a steady **~5.5% CPU** on the Pixel 2 XL
-even with its surface hidden and nothing drawn. That's the floor left after the
-render-side optimizations below; it does not grow (not a leak), but it's a
-constant battery cost for an app the user isn't looking at.
+A backgrounded fullscreen app sits at ~4–5.5% CPU with its surface hidden. The
+attribution (proc `utime+stime` deltas over 12 s):
 
-Root cause (measured, see Evidence): it's the **engine maintaining the live TLS
-websocket** to receive messages — `wart-step-executor` stepping the
-`wasi:io/poll` reactor + the `wasi:tls` socket each poll, plus keepalive. There's
-no push/FCM wake channel in this stack, so the connection must stay live to
-receive — the app can't just disconnect and sleep.
+- **The launcher backgrounded — same host loop, NO engine — costs ~4.0%.** So the
+  floor is the **host render loop**, app-agnostic, not the Signal connection.
+- **The Signal engine (live TLS websocket) adds only ~1.6%** (`signal-bg 5.6% −
+  launcher-bg 4.0%`). Real but not the floor.
+- Within the host loop, the **60 Hz input poll** (`sf.poll_input` →
+  native libgui `InputConsumer::consume`, `POLL_MS=16`) was a suspect; gating it
+  to `BG_POLL_MS=200` when backgrounded (shipped, see below) cut launcher-bg
+  4.0% → ~3.3% — so the input poll is only **~0.7%**, NOT the whole 4%.
+- **~3.3% remains unattributed.** Leading suspect: the loop still RENDERS at the
+  guest's idle cadence while backgrounded (the render gate isn't visibility-aware
+  — `standalone.rs` `frame < 3 || now >= next_render_at || dirty`), and a
+  hand-rolled renderer (the launcher) repaints + swaps even though hidden. A
+  dioxus guest now skips its paint when paused (`commit e1dbed11`), but the
+  launcher's own renderer does not. **Next:** instrument the loop stages
+  (poll_input / render_frame / sf swap) with timing logs, or per-thread sample,
+  to attribute the rest — then likely slow the background RENDER cadence for all
+  renderers (a host-side `BG_RENDER_MS` floor on `next_render_at` when the role
+  is Background), which the `BG_POLL_MS` input gate alone can't do because
+  `next_render_at` (idle ~1/s) currently dominates the `nap`.
+
+(original premise, now disproven — kept for context):
 
 ## Evidence (device-measured this session, proc `utime+stime` delta)
 
