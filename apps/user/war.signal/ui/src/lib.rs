@@ -66,13 +66,21 @@ dioxus_canvas::wire!(app, pre_frame: |r| {
     // truly idle (incoming still lands within ~0.5s; keepalive is serviced far
     // more often than it needs). Input (scroll/type) drives its own immediate
     // frames, so interactivity is unaffected by the idle floor.
-    let idle = IDLE_FRAMES.with(|c| c.get());
-    let delay = if idle < 8 {
-        120 // ~8/s, first ~1s after activity
-    } else if idle < 24 {
-        250 // ~4/s, cooling down
+    let delay = if r.is_paused() {
+        // Backgrounded: the surface is hidden, so every frame's repaint is wasted.
+        // Ask for a slow cadence (the host clamps to its ~1/s idle floor) — still
+        // ticks the engine so messages arrive in the background, just no longer
+        // repaints off-screen at the foreground rate.
+        2000
     } else {
-        500 // ~2/s, fully idle
+        let idle = IDLE_FRAMES.with(|c| c.get());
+        if idle < 8 {
+            120 // ~8/s, first ~1s after activity
+        } else if idle < 24 {
+            250 // ~4/s, cooling down
+        } else {
+            500 // ~2/s, fully idle
+        }
     };
     r.set_min_frame_delay(delay);
 });
