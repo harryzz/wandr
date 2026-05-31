@@ -19,7 +19,7 @@ mod engine;
 mod persist;
 mod store;
 
-use exports::wart::signal::chat::{Contact, Event, Group, Guest, Message};
+use exports::wart::signal::chat::{Contact, Event, Group, Guest, Message, Profile};
 
 struct Component;
 
@@ -66,6 +66,14 @@ impl Guest for Component {
 
     fn account_id() -> String {
         engine::account_id()
+    }
+
+    fn my_profile() -> Profile {
+        engine::my_profile()
+    }
+
+    fn sync_profile() {
+        engine::sync_profile();
     }
 }
 

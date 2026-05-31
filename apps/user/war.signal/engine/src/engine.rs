@@ -25,6 +25,9 @@ use libsignal_service::groups_v2::{
     decrypt_group, GroupsManager, InMemoryCredentialsCache,
 };
 use libsignal_service::master_key::{MasterKey, StorageServiceKey};
+use libsignal_service::profile_cipher::ProfileCipher;
+use libsignal_service::protocol::Aci;
+use libsignal_service::zkgroup::profiles::ProfileKey;
 use libsignal_service::unidentified_access::UnidentifiedAccess;
 use libsignal_service::zkgroup::groups::{GroupMasterKey, GroupSecretParams};
 use libsignal_service::messagepipe::Incoming;
@@ -46,7 +49,7 @@ use libsignal_service::websocket::Unidentified;
 use uuid::Uuid;
 
 use crate::exports::wart::signal::chat::{
-    Attachment, Contact, Delivery, DeliveryStatus, Event, Group, Message, ReactionUpdate,
+    Attachment, Contact, Delivery, DeliveryStatus, Event, Group, Message, Profile, ReactionUpdate,
 };
 use crate::persist;
 use crate::store::MemStore;
@@ -102,6 +105,16 @@ struct Shared {
     /// ACI → emoji). Re-derived into the target `message.reactions` string on
     /// change; persisted to reactions.json so they survive a restart.
     reactions: RefCell<HashMap<u64, HashMap<String, String>>>,
+    /// Our OWN profile key (32 bytes) from provisioning — fetches+decrypts our
+    /// profile. `None` for accounts linked before this was captured (re-link).
+    profile_key: RefCell<Option<Vec<u8>>>,
+    /// Our own Signal profile (name/avatar/about/phone), once fetched. The UI
+    /// shows name+avatar+phone; the rest is carried for future use.
+    profile: RefCell<Option<Profile>>,
+    /// Set once we've fetched the profile on this connection (fetch once/connect).
+    profile_fetched: Cell<bool>,
+    /// Set by `sync_profile()` → the receive loop re-fetches on the next tick.
+    resync_profile: Cell<bool>,
     /// Receipts to send back (delivery on receive, read on `mark_read`), drained
     /// over the connection in the send tick.
     receipt_outbox: RefCell<Vec<ReceiptJob>>,
@@ -330,6 +343,9 @@ pub fn init() {
         })
         .collect();
 
+    // Preload our own profile (if fetched on a prior run).
+    let profile: Option<Profile> = persist::load_profile().map(to_wit_profile);
+
     let s = Rc::new(Shared {
         events: RefCell::new(VecDeque::new()),
         history: RefCell::new(history),
@@ -345,6 +361,10 @@ pub fn init() {
         group_routes: RefCell::new(group_routes),
         account_id: RefCell::new(String::new()),
         reactions: RefCell::new(reactions),
+        profile_key: RefCell::new(None),
+        profile: RefCell::new(profile),
+        profile_fetched: Cell::new(false),
+        resync_profile: Cell::new(false),
         receipt_outbox: RefCell::new(Vec::new()),
         read_acked: RefCell::new(HashSet::new()),
     });
@@ -369,6 +389,28 @@ pub fn poll_events() -> Vec<Event> {
 /// recognise the Note-to-Self thread.
 pub fn account_id() -> String {
     shared().map(|s| s.account_id.borrow().clone()).unwrap_or_default()
+}
+
+/// Our own Signal profile (name/avatar/about/phone), or an all-empty record until
+/// it's been fetched (a `profile-updated` event fires when it arrives).
+pub fn my_profile() -> Profile {
+    shared()
+        .and_then(|s| s.profile.borrow().clone())
+        .unwrap_or_else(|| Profile {
+            given_name: String::new(),
+            family_name: String::new(),
+            about: String::new(),
+            about_emoji: String::new(),
+            phone: String::new(),
+            avatar: None,
+        })
+}
+
+/// Request a fresh fetch of our own profile (also done once on connect).
+pub fn sync_profile() {
+    if let Some(s) = shared() {
+        s.resync_profile.set(true);
+    }
 }
 
 pub fn send(thread: String, text: String) -> Result<(), String> {
@@ -553,6 +595,12 @@ async fn link(
             .map(|aep| aep.derive_svr_key().to_vec())
     });
     *shared.master_key.borrow_mut() = master_key_bytes.clone();
+    // Capture our OWN profile key — only available here, at link, in the
+    // provisioning message. Needed to fetch + decrypt our own profile (and the
+    // basis for any future "fetch contacts' profiles", though those keys come
+    // from the storage service, not here).
+    let profile_key_bytes = reg.profile_key.get_bytes().to_vec();
+    *shared.profile_key.borrow_mut() = Some(profile_key_bytes.clone());
     let account = persist::Account {
         aci: reg.service_ids.aci,
         pni: reg.service_ids.pni,
@@ -562,6 +610,7 @@ async fn link(
         registration_id: reg.registration_id,
         identity_b64: b64().encode(identity.serialize()),
         master_key_b64: master_key_bytes.as_ref().map(|mk| b64().encode(mk)),
+        profile_key_b64: Some(b64().encode(&profile_key_bytes)),
     };
     persist::save_account(&account)
         .map_err(|e| format!("save account: {e}"))?;
@@ -589,6 +638,9 @@ fn resume(
     // Restore the master key (for groups) if this account was linked post-task-69.
     *shared.master_key.borrow_mut() =
         account.master_key_b64.as_ref().and_then(|b| b64().decode(b).ok());
+    // Restore our own profile key (for the profile fetch) if captured at link.
+    *shared.profile_key.borrow_mut() =
+        account.profile_key_b64.as_ref().and_then(|b| b64().decode(b).ok());
 
     let identity = IdentityKeyPair::try_from(
         b64()
@@ -629,6 +681,9 @@ async fn receive_and_send(
     device_id: u32,
 ) -> Result<(), String> {
     let pni = credentials.pni.unwrap_or(aci);
+    // Our phone number (for the profile, which carries no phone) — captured
+    // before `credentials` is consumed by the message pipe.
+    let phone = credentials.phonenumber.to_string();
     let push = PushService::new(
         SignalServers::Production,
         Some(credentials.clone()),
@@ -699,6 +754,9 @@ async fn receive_and_send(
     // only a post-task-69 link captured — else it's skipped (state notes it).
     spawn_group_fetch(shared, &push, aci, pni);
 
+    // Grab a profile-fetch websocket handle BEFORE `pipe.stream()` consumes the
+    // pipe (the profile fetch in the tick below uses it).
+    let mut profile_ws = pipe.ws();
     let mut stream = Box::pin(pipe.stream());
     loop {
         let tick = wart_step_executor::sleep(Duration::from_millis(200));
@@ -907,6 +965,22 @@ async fn receive_and_send(
                                 sync_message::request::Type::Contacts,
                             )
                             .await;
+                    }
+                    // Fetch our own profile once per connection (or on
+                    // sync_profile()). Needs the profile key (captured at link).
+                    let want_profile = !shared.profile_fetched.replace(true)
+                        || shared.resync_profile.replace(false);
+                    if want_profile {
+                        let pk = shared.profile_key.borrow().clone();
+                        if let Some(pk) = pk {
+                            if let Some(p) =
+                                fetch_own_profile(&mut profile_ws, &push, aci, &pk, &phone).await
+                            {
+                                let _ = persist::save_profile(&to_stored_profile(&p));
+                                *shared.profile.borrow_mut() = Some(p);
+                                shared.push_event(Event::ProfileUpdated);
+                            }
+                        }
                     }
                 }
                 // On-demand groups refresh (sync_groups()).
@@ -1256,6 +1330,88 @@ fn to_stored(m: &Message) -> persist::StoredMessage {
         thread: m.thread.clone(),
         attachments,
     }
+}
+
+/// Persisted profile → WIT record (avatar b64 → bytes).
+fn to_wit_profile(p: persist::StoredProfile) -> Profile {
+    Profile {
+        given_name: p.given_name,
+        family_name: p.family_name,
+        about: p.about,
+        about_emoji: p.about_emoji,
+        phone: p.phone,
+        avatar: p.avatar_b64.and_then(|b| b64().decode(b).ok()),
+    }
+}
+
+/// WIT profile → persisted form (avatar bytes → b64).
+fn to_stored_profile(p: &Profile) -> persist::StoredProfile {
+    persist::StoredProfile {
+        given_name: p.given_name.clone(),
+        family_name: p.family_name.clone(),
+        about: p.about.clone(),
+        about_emoji: p.about_emoji.clone(),
+        phone: p.phone.clone(),
+        avatar_b64: p.avatar.as_ref().map(|b| b64().encode(b)),
+    }
+}
+
+/// Fetch + decrypt our own Signal profile (name/about/avatar) over the identified
+/// websocket, using our profile key. `None` on any failure (non-fatal — the UI
+/// keeps whatever it had). The phone comes from the account, not the profile.
+async fn fetch_own_profile(
+    id_ws: &mut libsignal_service::websocket::SignalWebSocket<
+        libsignal_service::websocket::Identified,
+    >,
+    push: &PushService,
+    aci: Uuid,
+    profile_key_bytes: &[u8],
+    phone: &str,
+) -> Option<Profile> {
+    use futures::io::AsyncReadExt;
+    let pk: [u8; 32] = profile_key_bytes.try_into().ok()?;
+    let address = Aci::from(aci);
+    let encrypted = id_ws
+        .retrieve_profile_by_id(address, Some(ProfileKey::create(pk)))
+        .await
+        .ok()?;
+    let avatar_path = encrypted.avatar.clone();
+    let cipher = ProfileCipher::new(ProfileKey::create(pk));
+    let decrypted = cipher.decrypt(encrypted).ok()?;
+    // Avatar: a CDN path, fetched over an UNIDENTIFIED ws (plain CDN GET) and
+    // decrypted with the same profile key.
+    let avatar = match avatar_path {
+        Some(path) if !path.is_empty() => {
+            match push
+                .clone()
+                .ws::<Unidentified>("/v1/websocket/", "/v1/keepalive", &[], None)
+                .await
+            {
+                Ok(mut un_ws) => match un_ws.retrieve_profile_avatar(&path).await {
+                    Ok(mut stream) => {
+                        let mut buf = Vec::new();
+                        stream.read_to_end(&mut buf).await.ok()?;
+                        cipher.decrypt_avatar(&buf).ok()
+                    },
+                    Err(_) => None,
+                },
+                Err(_) => None,
+            }
+        },
+        _ => None,
+    };
+    let (given_name, family_name) = decrypted
+        .name
+        .map(|n| (n.given_name, n.family_name.unwrap_or_default()))
+        .unwrap_or_default();
+    Some(Profile {
+        given_name,
+        family_name,
+        about: decrypted.about.unwrap_or_default(),
+        about_emoji: decrypted.about_emoji.unwrap_or_default(),
+        phone: phone.to_string(),
+        avatar,
+    })
 }
 
 fn now_ms() -> u64 {

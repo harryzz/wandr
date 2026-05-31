@@ -26,6 +26,38 @@ pub struct Account {
     /// (pre-groups) still loads; absence means a re-link is needed for groups.
     #[serde(default)]
     pub master_key_b64: Option<String>,
+    /// base64 of our OWN profile key (32 bytes), captured from the provisioning
+    /// message at link — it is ONLY available then, so missing it means a
+    /// re-link. Needed to fetch + decrypt our own Signal profile (name/avatar/
+    /// about). `default` so older account.json still loads.
+    #[serde(default)]
+    pub profile_key_b64: Option<String>,
+}
+
+const PROFILE: &str = "/state/profile.json";
+
+/// Our own Signal profile (fetched via the profile service + decrypted with our
+/// profile key). The full record is persisted for future use; the UI currently
+/// shows name + avatar + phone.
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct StoredProfile {
+    pub given_name: String,
+    pub family_name: String,
+    pub about: String,
+    pub about_emoji: String,
+    /// E.164 phone number (from the account, not the profile).
+    pub phone: String,
+    /// base64 of the decrypted avatar image bytes, if the profile has one.
+    pub avatar_b64: Option<String>,
+}
+
+pub fn load_profile() -> Option<StoredProfile> {
+    std::fs::read(PROFILE).ok().and_then(|b| serde_json::from_slice(&b).ok())
+}
+
+pub fn save_profile(p: &StoredProfile) -> std::io::Result<()> {
+    ensure_dir();
+    std::fs::write(PROFILE, serde_json::to_vec_pretty(p).unwrap())
 }
 
 #[derive(Serialize, Deserialize)]

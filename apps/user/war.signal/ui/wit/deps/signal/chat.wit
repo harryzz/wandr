@@ -7,6 +7,7 @@ interface chat {
   record message { id: u64, sender: string, text: string, ts: u64, outgoing: bool, thread: string, status: delivery, reactions: string, attachments: list<attachment> }
   record contact { id: string, name: string, phone: option<string>, inbox-position: u32, avatar: option<list<u8>> }
   record group { id: string, title: string, members: list<string>, avatar: option<list<u8>> }
+  record profile { given-name: string, family-name: string, about: string, about-emoji: string, phone: string, avatar: option<list<u8>> }
   record delivery-status { id: u64, status: delivery }
   record reaction-update { id: u64, reactions: string }
   variant event {
@@ -19,6 +20,7 @@ interface chat {
     groups-updated(u32),
     status-changed(delivery-status),
     reaction-changed(reaction-update),
+    profile-updated,
   }
   init: func();
   poll-events: func() -> list<event>;
@@ -31,4 +33,6 @@ interface chat {
   sync-groups: func();
   state: func() -> string;
   account-id: func() -> string;
+  my-profile: func() -> profile;
+  sync-profile: func();
 }

@@ -291,6 +291,39 @@ struct UiGroup {
     avatar_uri: Option<String>,
 }
 
+/// Our own profile for display (name + phone + avatar data-uri). `Rc` avatar so
+/// the per-frame snapshot clone is cheap.
+#[derive(Clone, PartialEq, Default)]
+struct UiProfile {
+    name: String,
+    phone: String,
+    /// Profile bio/status text + its emoji (both optional).
+    about: String,
+    about_emoji: String,
+    avatar: Option<Rc<String>>,
+}
+
+/// Build a `UiProfile` from the engine's profile record; `None` until anything is
+/// known (still connecting / not yet fetched).
+fn ui_profile(p: chat::Profile) -> Option<UiProfile> {
+    let name = format!("{} {}", p.given_name, p.family_name).trim().to_string();
+    if name.is_empty() && p.phone.is_empty() && p.avatar.is_none() {
+        return None;
+    }
+    let avatar = p.avatar.filter(|a| !a.is_empty()).map(|bytes| {
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        Rc::new(format!("data:image/jpeg;base64,{}", b64))
+    });
+    Some(UiProfile {
+        name,
+        phone: p.phone,
+        about: p.about,
+        about_emoji: p.about_emoji,
+        avatar,
+    })
+}
+
 #[derive(Default)]
 struct Model {
     state: String,
@@ -298,6 +331,8 @@ struct Model {
     messages: Vec<UiMsg>,
     contacts: Vec<UiContact>,
     groups: Vec<UiGroup>,
+    /// Our own Signal profile (name/phone/avatar), once fetched.
+    my_profile: Option<UiProfile>,
     /// This account's own ACI — the Note-to-Self thread id.
     account_id: String,
     /// Per-thread unread count (incoming messages arrived while not viewing that
@@ -388,10 +423,12 @@ fn pump() -> bool {
             let hist = chat::history();
             let contacts = load_contacts();
             let groups = load_groups();
+            let my_profile = ui_profile(chat::my_profile());
             MODEL.with(|m| {
                 let mut m = m.borrow_mut();
                 m.contacts = contacts;
                 m.groups = groups;
+                m.my_profile = my_profile;
                 for msg in hist {
                     let images = ui_images(&msg.attachments);
                     m.messages.push(UiMsg {
@@ -462,6 +499,10 @@ fn pump() -> bool {
                     chat::Event::Linked(_) | chat::Event::Connected => {
                         m.link_url = None;
                     }
+                    // Our own profile was fetched/updated.
+                    chat::Event::ProfileUpdated => {
+                        m.my_profile = ui_profile(chat::my_profile());
+                    }
                     chat::Event::Disconnected => {}
                     // Re-fetched below (load_* needs no &mut m borrow).
                     chat::Event::ContactsUpdated(_) => refresh = true,
@@ -506,6 +547,7 @@ type Snapshot = (
     Vec<UiGroup>,
     String,
     std::collections::HashMap<String, u32>,
+    Option<UiProfile>,
 );
 fn snapshot() -> Snapshot {
     MODEL.with(|m| {
@@ -518,6 +560,7 @@ fn snapshot() -> Snapshot {
             m.groups.clone(),
             m.account_id.clone(),
             m.unread.clone(),
+            m.my_profile.clone(),
         )
     })
 }
@@ -610,18 +653,27 @@ fn app() -> Element {
     let mut tab = use_signal(|| 0u8);
     // None = list view; Some = an open conversation (full-screen thread view).
     let current = use_signal(|| None::<Thread>);
+    // My-profile screen overlay.
+    let show_profile = use_signal(|| false);
 
-    let (state, link_url, messages, contacts, groups, self_id, unread) = snapshot();
+    let (state, link_url, messages, contacts, groups, self_id, unread, my_profile) = snapshot();
 
     // Not linked yet → just the QR.
     if let Some(url) = link_url {
         return rsx! {
             div {
                 style: "display:flex; flex-direction:column; height:100%; background:{BG};",
-                TitleBar { state }
+                TitleBar { state, my_profile: None, show_profile }
                 LinkPanel { url }
             }
         };
+    }
+
+    // My Profile screen (full-screen).
+    if show_profile() {
+        if let Some(p) = my_profile.clone() {
+            return rsx! { ProfileScreen { profile: p, show_profile } };
+        }
     }
 
     // An open conversation → header + that thread's messages + composer.
@@ -643,7 +695,7 @@ fn app() -> Element {
     rsx! {
         div {
             style: "display:flex; flex-direction:column; height:100%; background:{BG};",
-            TitleBar { state }
+            TitleBar { state, my_profile: my_profile.clone(), show_profile }
             div {
                 style: "display:flex; flex-direction:row; gap:12px; padding:14px 24px; background:{BAR};",
                 button {
@@ -666,14 +718,79 @@ fn app() -> Element {
     }
 }
 
-/// The app title bar (name + connection state).
+/// The app title bar (name + connection state + a tappable own-profile avatar).
 #[component]
-fn TitleBar(state: String) -> Element {
+fn TitleBar(state: String, my_profile: Option<UiProfile>, show_profile: Signal<bool>) -> Element {
+    let mut show_profile = show_profile;
     rsx! {
         div {
-            style: "display:flex; flex-direction:row; align-items:center; justify-content:space-between; padding:28px; background:{BAR};",
-            div { style: "color:{TEXT}; font-size:44px; font-weight:700;", "Signal" }
+            style: "display:flex; flex-direction:row; align-items:center; gap:16px; padding:28px; background:{BAR};",
+            div { style: "color:{TEXT}; font-size:44px; font-weight:700; flex-grow:1;", "Signal" }
             div { style: "color:{MUTED}; font-size:26px;", "{state}" }
+            // Own-profile avatar → opens the My Profile screen.
+            if let Some(p) = my_profile {
+                button {
+                    style: "display:flex; align-items:center; justify-content:center; width:72px; height:72px; border-radius:50%; background:{OUT_BUBBLE};",
+                    onmousedown: move |_| {},
+                    onclick: move |_| show_profile.set(true),
+                    if let Some(uri) = p.avatar.clone() {
+                        img { src: "{uri}", style: "width:72px; height:72px; border-radius:50%;" }
+                    } else {
+                        div { style: "color:{TEXT}; font-size:34px; font-weight:700;", "{initial(&p.name)}" }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The My Profile screen: large avatar, name, phone, and a back button.
+#[component]
+fn ProfileScreen(profile: UiProfile, show_profile: Signal<bool>) -> Element {
+    let mut show_profile = show_profile;
+    let name = if profile.name.is_empty() { "(no name)".to_string() } else { profile.name.clone() };
+    rsx! {
+        div {
+            style: "display:flex; flex-direction:column; height:100%; background:{BG};",
+            // Header: back arrow + title.
+            div {
+                style: "display:flex; flex-direction:row; align-items:center; gap:20px; padding:22px 24px; background:{BAR};",
+                button {
+                    style: format!("display:flex; justify-content:center; align-items:center; width:64px; height:64px; border-radius:14px; background:{};", FIELD),
+                    onmousedown: move |_| {},
+                    onclick: move |_| show_profile.set(false),
+                    div { style: "color:{TEXT}; font-size:36px;", "‹" }
+                }
+                div { style: "color:{TEXT}; font-size:36px; font-weight:700;", "My Profile" }
+            }
+            // Body: avatar, name, phone — centered.
+            div {
+                style: "display:flex; flex-direction:column; align-items:center; gap:24px; padding:48px 24px;",
+                if let Some(uri) = profile.avatar.clone() {
+                    img { src: "{uri}", style: "width:320px; height:320px; border-radius:50%;" }
+                } else {
+                    div {
+                        style: "display:flex; align-items:center; justify-content:center; width:320px; height:320px; border-radius:50%; background:{OUT_BUBBLE};",
+                        div { style: "color:{TEXT}; font-size:140px; font-weight:700;", "{initial(&name)}" }
+                    }
+                }
+                div { style: "color:{TEXT}; font-size:44px; font-weight:700;", "{name}" }
+                // About: bio text with its emoji (skip when both empty).
+                if !profile.about.is_empty() || !profile.about_emoji.is_empty() {
+                    div {
+                        style: "display:flex; flex-direction:row; align-items:center; gap:10px; max-width:90%;",
+                        if !profile.about_emoji.is_empty() {
+                            div { style: "font-size:32px;", "{profile.about_emoji}" }
+                        }
+                        if !profile.about.is_empty() {
+                            div { style: "color:{TEXT}; font-size:30px; white-space:normal;", "{profile.about}" }
+                        }
+                    }
+                }
+                if !profile.phone.is_empty() {
+                    div { style: "color:{MUTED}; font-size:30px;", "{profile.phone}" }
+                }
+            }
         }
     }
 }

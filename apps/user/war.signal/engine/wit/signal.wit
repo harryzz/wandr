@@ -69,6 +69,20 @@ interface chat {
     avatar: option<list<u8>>,
   }
 
+  /// Our own Signal profile (fetched from the profile service + decrypted with
+  /// our profile key). All fields are carried for future use; the UI currently
+  /// shows the name, avatar, and phone.
+  record profile {
+    given-name: string,
+    family-name: string,
+    about: string,
+    about-emoji: string,
+    /// E.164 phone number (from the account, not the profile).
+    phone: string,
+    /// Decrypted avatar image bytes, if the profile has one.
+    avatar: option<list<u8>>,
+  }
+
   /// A Signal group (Groups v2), fetched via the storage service.
   record group {
     /// hex of the group master key — the stable group identity.
@@ -100,6 +114,8 @@ interface chat {
     status-changed(delivery-status),
     /// A message's emoji reactions changed.
     reaction-changed(reaction-update),
+    /// Our own profile was fetched/updated (read it via `my-profile`).
+    profile-updated,
   }
 
   /// Start the engine: load saved account + history, then link (first run) or
@@ -148,6 +164,14 @@ interface chat {
   /// This account's own ACI (lowercase uuid), or "" until linked. Lets a UI
   /// label the Note-to-Self thread (whose id is this account's own ACI).
   account-id: func() -> string;
+
+  /// Our own Signal profile (name/avatar/about/phone). All-empty until fetched
+  /// (a `profile-updated` event fires when it arrives). Persisted across runs.
+  my-profile: func() -> profile;
+
+  /// Re-fetch our own profile from the profile service. Also done once on
+  /// connect. Non-blocking — the result arrives via `profile-updated`.
+  sync-profile: func();
 }
 
 /// The engine half of the Signal app. wasi imports (sockets/tls/io/fs/random/
