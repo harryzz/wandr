@@ -38,6 +38,33 @@ pub struct StoredMessage {
     /// messages.jsonl lines (pre-task-70) still load — they fall into thread "".
     #[serde(default)]
     pub thread: String,
+    /// Media attachments — the bytes live in files under `/state/att/` (CDN
+    /// blobs expire, so we keep them); this records each one's type/dims/file.
+    #[serde(default)]
+    pub attachments: Vec<StoredAttachment>,
+}
+
+/// A persisted attachment: metadata in the message log, bytes in `/state/att/`.
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct StoredAttachment {
+    pub content_type: String,
+    pub width: u32,
+    pub height: u32,
+    /// File name under `/state/att/` holding the decrypted bytes.
+    pub file: String,
+}
+
+const ATT_DIR: &str = "/state/att";
+
+/// Write one attachment's decrypted bytes to `/state/att/<name>`.
+pub fn save_attachment(name: &str, bytes: &[u8]) {
+    let _ = std::fs::create_dir_all(ATT_DIR);
+    let _ = std::fs::write(format!("{ATT_DIR}/{name}"), bytes);
+}
+
+/// Read an attachment's bytes back (e.g. on history preload).
+pub fn load_attachment(name: &str) -> Option<Vec<u8>> {
+    std::fs::read(format!("{ATT_DIR}/{name}")).ok()
 }
 
 fn ensure_dir() {

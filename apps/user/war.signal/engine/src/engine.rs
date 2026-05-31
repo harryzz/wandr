@@ -19,6 +19,7 @@ use libsignal_service::cipher::ServiceCipher;
 use libsignal_service::configuration::{
     ServiceConfiguration, ServiceCredentials, SignalServers,
 };
+use libsignal_service::attachment_cipher::decrypt_in_place;
 use libsignal_service::content::ContentBody;
 use libsignal_service::groups_v2::{
     decrypt_group, GroupsManager, InMemoryCredentialsCache,
@@ -29,7 +30,7 @@ use libsignal_service::zkgroup::groups::{GroupMasterKey, GroupSecretParams};
 use libsignal_service::messagepipe::Incoming;
 use libsignal_service::proto::{
     data_message, manifest_record, receipt_message, storage_record, sync_message,
-    DataMessage, GroupContextV2, ReceiptMessage,
+    AttachmentPointer, DataMessage, GroupContextV2, ReceiptMessage,
 };
 use libsignal_service::protocol::{
     DeviceId, IdentityKeyPair, ProtocolAddress, ServiceId,
@@ -45,7 +46,7 @@ use libsignal_service::websocket::Unidentified;
 use uuid::Uuid;
 
 use crate::exports::wart::signal::chat::{
-    Contact, Delivery, DeliveryStatus, Event, Group, Message, ReactionUpdate,
+    Attachment, Contact, Delivery, DeliveryStatus, Event, Group, Message, ReactionUpdate,
 };
 use crate::persist;
 use crate::store::MemStore;
@@ -269,6 +270,19 @@ pub fn init() {
             .unwrap_or(Delivery::Sent);
         // Overlay any persisted reactions on this message.
         let reaction_str = reactions.get(&m.ts).map(reactions_to_string).unwrap_or_default();
+        // Reload persisted attachment bytes from /state/att/ (skip any missing).
+        let attachments = m
+            .attachments
+            .iter()
+            .filter_map(|a| {
+                persist::load_attachment(&a.file).map(|data| Attachment {
+                    content_type: a.content_type.clone(),
+                    data,
+                    width: a.width,
+                    height: a.height,
+                })
+            })
+            .collect();
         history.push(Message {
             id,
             sender: m.from,
@@ -278,6 +292,7 @@ pub fn init() {
             thread: m.thread,
             status,
             reactions: reaction_str,
+            attachments,
         });
     }
 
@@ -373,6 +388,7 @@ pub fn send(thread: String, text: String) -> Result<(), String> {
         thread: thread.clone(),
         status: Delivery::Sending,
         reactions: String::new(),
+        attachments: Vec::new(),
     };
     let _ = persist::append_message(&to_stored(&msg));
     shared.add_message(msg);
@@ -741,7 +757,22 @@ async fn receive_and_send(
                         }
                         let (body, outgoing, thread_override, wire_ts) =
                             extract(&content.body);
-                        if let Some(text) = body {
+                        // Download + decrypt image attachments (v1: images only,
+                        // so we don't pull large video/files). Cloned out of the
+                        // borrow so we can await without holding `content`.
+                        let ptrs: Vec<AttachmentPointer> = attachments_of(&content.body)
+                            .iter()
+                            .filter(|p| p.content_type.as_deref().is_some_and(|c| c.starts_with("image/")))
+                            .cloned()
+                            .collect();
+                        let mut attachments = Vec::new();
+                        for ptr in &ptrs {
+                            if let Some(a) = fetch_attachment(&push, ptr).await {
+                                attachments.push(a);
+                            }
+                        }
+                        if body.is_some() || !attachments.is_empty() {
+                            let text = body.unwrap_or_default();
                             // Sender: my own messages (synced from another device)
                             // show as "me"; otherwise the peer's ACI (UI → name).
                             let peer = content.metadata.sender.raw_uuid().to_string();
@@ -776,6 +807,7 @@ async fn receive_and_send(
                                 thread,
                                 status: Delivery::Sent,
                                 reactions,
+                                attachments,
                             };
                             let _ = persist::append_message(&to_stored(&msg));
                             shared.add_message(msg);
@@ -1129,6 +1161,47 @@ fn extract(body: &ContentBody) -> (Option<String>, bool, Option<String>, Option<
     }
 }
 
+/// The attachment pointers on an incoming content body (direct or sync-sent).
+fn attachments_of(body: &ContentBody) -> &[AttachmentPointer] {
+    match body {
+        ContentBody::DataMessage(dm) => &dm.attachments,
+        ContentBody::SynchronizeMessage(sm) => sm
+            .sent
+            .as_ref()
+            .and_then(|s| s.message.as_ref())
+            .map(|m| m.attachments.as_slice())
+            .unwrap_or(&[]),
+        _ => &[],
+    }
+}
+
+/// Download + decrypt one attachment from the CDN into its plaintext bytes (the
+/// key material decrypts AES-CBC + strips the MAC; truncate to the real `size`).
+/// Returns `None` on any failure — a missing media is non-fatal.
+async fn fetch_attachment(push: &PushService, ptr: &AttachmentPointer) -> Option<Attachment> {
+    use futures::io::AsyncReadExt;
+    let mut push = push.clone();
+    let mut stream = push.get_attachment(ptr).await.ok()?;
+    let mut ciphertext = Vec::new();
+    stream.read_to_end(&mut ciphertext).await.ok()?;
+    let key_material = ptr.key();
+    if key_material.len() != 64 {
+        return None;
+    }
+    let mut key = [0u8; 64];
+    key.copy_from_slice(key_material);
+    decrypt_in_place(key, &mut ciphertext).ok()?;
+    if let Some(sz) = ptr.size {
+        ciphertext.truncate(sz as usize);
+    }
+    Some(Attachment {
+        content_type: ptr.content_type.clone().unwrap_or_default(),
+        data: ciphertext,
+        width: ptr.width.unwrap_or(0),
+        height: ptr.height.unwrap_or(0),
+    })
+}
+
 /// The emoji reaction carried by an incoming content body, if any — either a
 /// direct `DataMessage` reaction (a peer reacted to us) or a sync-sent one (we
 /// reacted from another device).
@@ -1157,12 +1230,31 @@ fn normalize_service_id(s: &str) -> String {
 }
 
 fn to_stored(m: &Message) -> persist::StoredMessage {
+    // Persist each attachment's bytes to a file and record its metadata; the
+    // message log stays small (just references).
+    let attachments = m
+        .attachments
+        .iter()
+        .enumerate()
+        .map(|(i, a)| {
+            let ext = a.content_type.rsplit('/').next().filter(|e| !e.is_empty()).unwrap_or("bin");
+            let file = format!("{}_{}.{ext}", m.ts, i);
+            persist::save_attachment(&file, &a.data);
+            persist::StoredAttachment {
+                content_type: a.content_type.clone(),
+                width: a.width,
+                height: a.height,
+                file,
+            }
+        })
+        .collect();
     persist::StoredMessage {
         from: m.sender.clone(),
         text: m.text.clone(),
         ts: m.ts,
         outgoing: m.outgoing,
         thread: m.thread.clone(),
+        attachments,
     }
 }
 

@@ -15,6 +15,16 @@ interface chat {
     read,
   }
 
+  /// A media attachment on a message (v1: images). `data` is the decrypted
+  /// bytes (the engine downloaded + decrypted from the CDN); `width`/`height`
+  /// are the source pixel dimensions (0 = unknown) so the UI can keep aspect.
+  record attachment {
+    content-type: string,
+    data: list<u8>,
+    width: u32,
+    height: u32,
+  }
+
   /// One stored conversation message. `id` is engine-assigned and stable.
   record message {
     id: u64,
@@ -29,6 +39,9 @@ interface chat {
     /// Emoji reactions on this message — the distinct emojis concatenated
     /// (e.g. "❤️👍"). Empty when no one has reacted.
     reactions: string,
+    /// Media attachments (v1: images), decrypted and ready to render. Empty for
+    /// a text-only message.
+    attachments: list<attachment>,
   }
 
   /// An outgoing message's delivery state advanced (delivery/read receipt).

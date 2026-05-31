@@ -16,6 +16,7 @@
 //! relayout unless something arrived).
 
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 use dioxus::prelude::*;
 
@@ -181,6 +182,44 @@ struct UiMsg {
     status: u8,
     /// Emoji reactions on this message (distinct emojis concatenated); empty = none.
     reactions: String,
+    /// Image attachments, ready to render (`data:` URI + display box in logical px).
+    images: Vec<UiImage>,
+}
+
+/// A renderable image attachment: a `data:` URI plus the display box (logical px,
+/// derived from the source dims, capped to fit the bubble while keeping aspect).
+/// The URI is `Rc`-shared so the per-frame `snapshot()` clone is a refcount bump,
+/// not a memcpy of the (large) base64 payload.
+#[derive(Clone, PartialEq, Default)]
+struct UiImage {
+    uri: Rc<String>,
+    w: u32,
+    h: u32,
+}
+
+/// Build renderable images from a message's attachments: keep `image/*`, encode
+/// the bytes as a base64 `data:` URI, and fit each into a max-width box (logical
+/// px) preserving aspect (falling back to a default box when dims are unknown).
+fn ui_images(attachments: &[chat::Attachment]) -> Vec<UiImage> {
+    use base64::Engine as _;
+    const MAX_W: u32 = 460;
+    const DEFAULT_W: u32 = 440;
+    const DEFAULT_H: u32 = 330;
+    attachments
+        .iter()
+        .filter(|a| a.content_type.starts_with("image/"))
+        .map(|a| {
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&a.data);
+            let uri = Rc::new(format!("data:{};base64,{}", a.content_type, b64));
+            let (w, h) = if a.width > 0 && a.height > 0 {
+                let w = a.width.min(MAX_W);
+                (w, (w as u64 * a.height as u64 / a.width as u64) as u32)
+            } else {
+                (DEFAULT_W, DEFAULT_H)
+            };
+            UiImage { uri, w, h }
+        })
+        .collect()
 }
 
 /// chat::Delivery → rank (0 sending … 3 read).
@@ -321,6 +360,7 @@ fn pump() -> bool {
                 m.contacts = contacts;
                 m.groups = groups;
                 for msg in hist {
+                    let images = ui_images(&msg.attachments);
                     m.messages.push(UiMsg {
                         id: msg.id,
                         sender: msg.sender,
@@ -330,6 +370,7 @@ fn pump() -> bool {
                         ts: msg.ts,
                         status: status_rank(msg.status),
                         reactions: msg.reactions,
+                        images,
                     });
                 }
             });
@@ -358,6 +399,7 @@ fn pump() -> bool {
                                     chat::mark_read(&msg.thread);
                                 }
                             }
+                            let images = ui_images(&msg.attachments);
                             m.messages.push(UiMsg {
                                 id: msg.id,
                                 sender: msg.sender,
@@ -367,6 +409,7 @@ fn pump() -> bool {
                                 ts: msg.ts,
                                 status: status_rank(msg.status),
                                 reactions: msg.reactions,
+                                images,
                             });
                         }
                     }
@@ -653,7 +696,11 @@ fn Conversations(
                     let (title, is_group) = resolve_thread(&tid, &self_id, &contacts, &groups);
                     let avatar = thread_avatar(&tid, &contacts, &groups);
                     let preview = last.get(&tid).map(|m| {
-                        let body: String = m.text.chars().take(48).collect();
+                        let body: String = if m.text.is_empty() && !m.images.is_empty() {
+                            "📷 Photo".to_string()
+                        } else {
+                            m.text.chars().take(48).collect()
+                        };
                         if m.outgoing { format!("You: {body}") } else { body }
                     }).unwrap_or_default();
                     let t = Thread { id: tid.clone(), title: title.clone(), is_group };
@@ -801,7 +848,17 @@ fn Conversation(messages: Vec<UiMsg>, contacts: Vec<UiContact>, stick_key: Strin
                                 if !m.outgoing {
                                     div { style: "color:{SENDER}; font-size:22px; font-weight:600;", "{label}" }
                                 }
-                                div { style: "color:{TEXT}; font-size:30px; white-space:normal;", "{m.text}" }
+                                // Image attachments (decrypted by the engine), each
+                                // sized to its aspect-fit box.
+                                for img in m.images.iter() {
+                                    img {
+                                        src: "{img.uri}",
+                                        style: "width:{img.w}px; height:{img.h}px; border-radius:12px;",
+                                    }
+                                }
+                                if !m.text.is_empty() {
+                                    div { style: "color:{TEXT}; font-size:30px; white-space:normal;", "{m.text}" }
+                                }
                                 // Meta row: local time + (outgoing) delivery checks.
                                 div {
                                     style: "display:flex; flex-direction:row; align-items:center; justify-content:flex-end; gap:8px;",
