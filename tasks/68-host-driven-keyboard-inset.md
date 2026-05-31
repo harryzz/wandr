@@ -1,6 +1,63 @@
 # Task 68 — Host-driven soft-keyboard inset
 
-**Status:** OPEN (filed 2026-05-31, spun out of task 67 Phase 2 polish).
+**Status:** IN PROGRESS (started 2026-05-31). Design agreed with user:
+- **Keyboard height = computed from the panel** (resolution-independent), the IME
+  is the source of truth (reads panel height, requests a fraction). Not a magic px.
+- **Lift scope = bottom composers only** — host shrinks the foreground app's bottom
+  inset → `on-resize` → bottom-anchored bars rise automatically. No guest
+  scroll-to-field work this task.
+
+## Confirmed integration points (code read 2026-05-31)
+- Inset already shrinks the guest area: `surface_height()` returns `logical_height`,
+  and `recompute_transform()` = `physical − inset_top − inset_bottom`
+  (`canvas_impl.rs:629`). So `set_insets(top, base_bottom + kb)` + re-issue
+  `on_resize(lw,lh)` makes a bottom composer rise — zero app constant.
+- Base insets seeded from `WART_INSET_TOP/BOTTOM` at startup (`standalone.rs:163`);
+  the keyboard adds ON TOP of the base bottom → must track base (top,bottom).
+- Per-host control socket `ime_inbound.rs` (`InboundEvent` enum + queue, drained in
+  `standalone.rs:801`) is the arbiter→host channel. Add `KeyboardInset{px}` + a
+  `keyboard-inset <px>` wire line, mirroring `KeyEvent`.
+- IME already sets its own overlay height: `requestOverlayHeight(1200)`
+  (`war.ime.keyboard RealComposeApp.kt:126,132`) → `keyboard_host_impl.rs:50` →
+  `sf_surface::request_overlay_resize` (sizes the IME's OWN surface only — not
+  propagated to the foreground app; that's the gap).
+
+## Shipped (2026-05-31) — host + arbiter only, no Kotlin rebuild
+
+**Flow:** editor focuses → app's `notify-editor-attached` → arbiter `attach-editor`.
+The arbiter now ALSO pushes `keyboard-inset <H>` down the focused-editor host's
+per-host socket (`ime_inbound.rs`, new `InboundEvent::KeyboardInset`); `0` on
+detach. H is the IME's live overlay height — the IME's `request_overlay_height`
+host impl reports it to the arbiter via the new `ime-overlay-height` cmd
+(`state::ime_overlay_height`, default 1200), so the keyboard is the source of truth.
+
+**The key fix — one clean rule in `canvas_impl::recompute_transform`:** rotate the
+FULL panel, then reserve ALL insets in USER space — status bar at user-top,
+taskbar + soft-keyboard at user-bottom (`logical_height = rotated_h − top − bottom
+− keyboard`; translate content down by the top inset). The keyboard depth is the
+portrait-reference height, scaled `×width/height` in landscape (mirrors
+overlay_rect's `ime_depth`). `keyboard_base_px` is set via `set_keyboard_base`
+from the drain loop, which re-issues `on_resize` so any guest re-lays-out.
+
+Subtlety that bit us: the OLD code subtracted chrome insets from the PHYSICAL
+height *before* the rotation, so in landscape they ate logical WIDTH, not the user
+top/bottom — apps drew under the taskbar sideways (Signal showed it; Compose
+masked it with its own content margins). The user-space model fixes it for all
+guests; **verified Compose is not broken** in landscape.
+
+Device-verified: Signal composer rides above the keyboard in portrait AND
+landscape, and clears the taskbar when the keyboard is down. `recompute_transform`
+auto-recomputes on rotation, so rotating with the keyboard up self-corrects.
+
+### Not done (deferred follow-ups)
+- ⌄ **Hide key → detach** (M3): dismissing the keyboard from its own button should
+  also clear the inset (today it clears on focus-blur/back). Surface-only today.
+- IME computing its height as a **fraction of the panel** (resolution-independent)
+  instead of the fixed 1200 — needs a `keyboard.panel-height()` + a Kotlin change.
+
+---
+(original problem statement below)
+
 
 ## Problem
 

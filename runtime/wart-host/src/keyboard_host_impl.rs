@@ -58,6 +58,13 @@ impl Host for crate::HostState {
             "keyboard-host: request-overlay-height({height_px}) queued"
         );
         crate::sf_surface::request_overlay_resize(height_px as i32);
+        // Task 68 — make the IME the source of truth for the keyboard inset: tell
+        // the arbiter our portrait-reference height so it pushes the matching
+        // `keyboard-inset` to focused editors (the editor host scales it per
+        // orientation). Fire-and-forget; the arbiter defaults if we never report.
+        if let Err(e) = send_oneshot(&format!("ime-overlay-height {height_px}\n")) {
+            log::debug!("keyboard-host: ime-overlay-height report failed: {e:#}");
+        }
     }
 }
 

@@ -150,6 +150,30 @@ pub fn set_overlay(new: Option<OverlayState>) -> Option<OverlayState> {
     prev
 }
 
+// ─── IME overlay height (task 68) ─────────────────────────────────────
+//
+// How many physical px the soft keyboard occludes. The IME guest is the
+// source of truth: its `request-overlay-height` host impl reports the value
+// here. The arbiter pushes it as a `keyboard-inset` to the focused editor's
+// host on attach so the foreground app reserves room. Default = the IME's
+// historical fixed height until it reports (lets the inset work pre-M2).
+
+const DEFAULT_IME_HEIGHT_PX: u32 = 1200;
+
+fn ime_height() -> &'static std::sync::atomic::AtomicU32 {
+    static H: std::sync::atomic::AtomicU32 =
+        std::sync::atomic::AtomicU32::new(DEFAULT_IME_HEIGHT_PX);
+    &H
+}
+
+pub fn ime_overlay_height() -> u32 {
+    ime_height().load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn set_ime_overlay_height(px: u32) {
+    ime_height().store(px, std::sync::atomic::Ordering::Relaxed);
+}
+
 // ─── Home app (task 57 launcher) ──────────────────────────────────────
 //
 // The app-id the arbiter treats as "home": foregrounded at boot, by the

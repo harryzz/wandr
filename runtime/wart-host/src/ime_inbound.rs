@@ -90,6 +90,13 @@ pub enum InboundEvent {
     /// Task 49 step 1a — paired with `EditorAttached`. Calls the
     /// IME's `war:ime/ime.on-editor-detached()` export.
     EditorDetached,
+
+    /// Task 68 — the arbiter tells THIS (foreground/editor) host how much of
+    /// its surface the soft keyboard now occludes, in physical px. The render
+    /// loop adds it to the base bottom inset (set_insets + on_resize) so the
+    /// guest re-lays-out its bottom content above the keyboard. `0` = keyboard
+    /// hidden → restore the base inset.
+    KeyboardInset { px: u32 },
 }
 
 fn queue() -> &'static Mutex<VecDeque<InboundEvent>> {
@@ -213,6 +220,16 @@ fn parse_and_queue(line: &str) {
     } else if line == "editor-detached" {
         if let Ok(mut q) = queue().lock() {
             q.push_back(InboundEvent::EditorDetached);
+        }
+    } else if let Some(rest) = line.strip_prefix("keyboard-inset ") {
+        // <px> — physical px the soft keyboard occludes (0 = hidden). Task 68.
+        match rest.trim().parse::<u32>() {
+            Ok(px) => {
+                if let Ok(mut q) = queue().lock() {
+                    q.push_back(InboundEvent::KeyboardInset { px });
+                }
+            },
+            Err(_) => log::warn!("ime-inbound: bad keyboard-inset px in {line:?}"),
         }
     } else if !line.is_empty() {
         // Unknown verb — log so we can spot a protocol-skew between

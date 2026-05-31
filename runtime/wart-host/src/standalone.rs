@@ -870,6 +870,29 @@ fn run_cwasm_loop(
                         log::info!("ime-inbound: dispatched on-editor-detached");
                     }
                 }
+                // Task 68 — the soft keyboard occludes `px` of our surface. Add
+                // it to the base bottom inset → the guest's logical height shrinks
+                // → re-issue on_resize so bottom-anchored content rises above the
+                // keyboard. px=0 restores the base (keyboard hidden).
+                crate::ime_inbound::InboundEvent::KeyboardInset { px } => {
+                    // `px` is the portrait-reference keyboard height; the renderer
+                    // scales it per-orientation and reduces the USER-bottom of the
+                    // logical area (auto-recomputed on rotation too).
+                    store.data_mut().renderer.set_keyboard_base(px);
+                    let (lw, lh) = {
+                        let r = &store.data().renderer;
+                        (r.logical_width, r.logical_height)
+                    };
+                    if let Err(e) = skiko
+                        .my_skiko_gfx_renderer()
+                        .call_on_resize(&mut store, lw, lh)
+                    {
+                        log::warn!("standalone: keyboard-inset on_resize({lw}x{lh}) failed: {e:#}");
+                    }
+                    log::info!(
+                        "standalone: keyboard-inset base={px}px → logical {lw}x{lh}"
+                    );
+                }
             }
         }
 

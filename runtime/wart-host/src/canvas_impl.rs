@@ -236,6 +236,12 @@ pub struct SkiaRenderer {
     /// already-inset available rect). Overlays leave these 0.
     pub inset_top:    u32,
     pub inset_bottom: u32,
+    /// Task 68 — soft-keyboard reservation as a PORTRAIT-reference height (px).
+    /// Unlike the chrome insets (physical), this is subtracted from
+    /// `logical_height` AFTER the dihedral rotation so it always eats the USER
+    /// bottom; in landscape it's scaled by `width/height` to match the keyboard's
+    /// landscape depth (mirrors `overlay_rect`'s `ime_depth`). 0 = keyboard hidden.
+    pub keyboard_base_px: u32,
     /// Base canvas transform re-applied at every begin_frame — identity
     /// normally, a 90° rotation in the standalone rotated mode so the
     /// guest's portrait drawing maps into the landscape GL surface.
@@ -403,7 +409,7 @@ impl SkiaRenderer {
                 egl, gr_context, surface,
                 width: size.width, height: size.height,
                 logical_width: size.width, logical_height: size.height,
-                inset_top: 0, inset_bottom: 0,
+                inset_top: 0, inset_bottom: 0, keyboard_base_px: 0,
                 base_matrix: skia_safe::Matrix::new_identity(),
                 current_orient: 0,
                 text_blobs:       HashMap::new(),
@@ -443,7 +449,7 @@ impl SkiaRenderer {
             Ok(Self {
                 surface, width: size.width, height: size.height,
                 logical_width: size.width, logical_height: size.height,
-                inset_top: 0, inset_bottom: 0,
+                inset_top: 0, inset_bottom: 0, keyboard_base_px: 0,
                 base_matrix: skia_safe::Matrix::new_identity(),
                 current_orient: 0,
                 text_blobs:       HashMap::new(),
@@ -550,7 +556,7 @@ impl SkiaRenderer {
         Ok(Self {
             egl, gr_context, surface, width, height,
             logical_width, logical_height, base_matrix,
-            inset_top: 0, inset_bottom: 0,
+            inset_top: 0, inset_bottom: 0, keyboard_base_px: 0,
             current_orient: orient,
             text_blobs:       HashMap::new(),
             multi_blob_cache: HashMap::new(),
@@ -609,6 +615,14 @@ impl SkiaRenderer {
     /// status-bar / taskbar strip heights; 0/0 (the default) means a true
     /// fullscreen / immersive app with no chrome, whose logical size equals
     /// the native display size. Safe to call with 0/0 to clear.
+    /// Task 68 — set the soft-keyboard reservation as a portrait-reference height
+    /// (px); 0 clears it. Re-derives the logical area (the keyboard eats the user
+    /// bottom, orientation-scaled). The caller re-issues `on_resize`.
+    pub fn set_keyboard_base(&mut self, px: u32) {
+        self.keyboard_base_px = px;
+        self.recompute_transform();
+    }
+
     pub fn set_insets(&mut self, top: u32, bottom: u32) {
         self.inset_top = top;
         self.inset_bottom = bottom;
@@ -621,22 +635,33 @@ impl SkiaRenderer {
     }
 
     /// Recompute `base_matrix` + `logical_width/height` from the current
-    /// orientation + insets. The available physical rect is the panel minus
-    /// the top/bottom chrome strips; the dihedral rotation is applied to
-    /// that rect, then the whole mapping is translated down by `inset_top`
-    /// so logical (0,0) lands just below the status bar. With 0 insets this
-    /// is exactly `dihedral_transform(orient, width, height)` (native size).
+    /// orientation + insets.
+    ///
+    /// Model: rotate the FULL panel, then reserve insets in USER space — the
+    /// status bar at the user-top, the taskbar + soft-keyboard at the user-bottom.
+    /// Doing it post-rotation means each inset always lands on the user's
+    /// top/bottom in any orientation (subtracting from the physical height
+    /// *before* the rotation would eat logical WIDTH in landscape). With 0 insets
+    /// this is exactly `dihedral_transform(orient, width, height)` (native size).
     fn recompute_transform(&mut self) {
-        let avail_h = self
-            .height
-            .saturating_sub(self.inset_top + self.inset_bottom)
-            .max(1);
-        let (m, lw, lh) = dihedral_transform(self.current_orient, self.width, avail_h);
-        let mut base = skia_safe::Matrix::translate((0.0, self.inset_top as f32));
-        base.pre_concat(&m);
-        self.base_matrix = base;
+        // Soft-keyboard depth, scaled to the current orientation (mirrors
+        // overlay_rect's `ime_depth`: same fraction of the user's screen height).
+        let kb = match self.current_orient {
+            _ if self.keyboard_base_px == 0 => 0,
+            4 | 7 => ((self.keyboard_base_px as u64 * self.width as u64)
+                / (self.height as u64).max(1)) as u32,
+            _ => self.keyboard_base_px,
+        };
+        let user_top = self.inset_top; // status bar
+        let user_bottom = self.inset_bottom + kb; // taskbar + keyboard
+
+        let (m, lw, lh) = dihedral_transform(self.current_orient, self.width, self.height);
         self.logical_width = lw;
-        self.logical_height = lh;
+        self.logical_height = lh.saturating_sub(user_top + user_bottom).max(1);
+        // Shift content down past the user-top inset, in USER space (pre-rotation).
+        let mut base = m;
+        base.pre_concat(&skia_safe::Matrix::translate((0.0, user_top as f32)));
+        self.base_matrix = base;
     }
 
     /// Move CPU-side caches from `old` into `self` so warm-resume preserves

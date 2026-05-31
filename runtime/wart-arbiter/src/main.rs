@@ -105,7 +105,7 @@ fn main() {
         Some(verb @ ("set-ime" | "attach-editor" | "detach-editor"
                     | "ime-commit-text" | "ime-send-key-event"
                     | "ime-set-composing-text" | "ime-finish-composing-text"
-                    | "ime-set-selection")) => {
+                    | "ime-set-selection" | "ime-overlay-height")) => {
             run_client_multi(verb, &args[1..])
         }
         Some(other) => {
@@ -347,6 +347,9 @@ fn handle_client(mut stream: UnixStream) -> Result<()> {
         "ime-set-composing-text"     => cmd_ime_route(&mut stream, "set-composing-text", &rest),
         "ime-finish-composing-text"  => cmd_ime_route(&mut stream, "finish-composing-text", &rest),
         "ime-set-selection"          => cmd_ime_route(&mut stream, "set-selection", &rest),
+        // Task 68 — IME reports its live overlay height (source of truth for the
+        // keyboard-inset the arbiter pushes to focused editors).
+        "ime-overlay-height"         => cmd_ime_overlay_height(&mut stream, &rest),
         other => {
             writeln!(stream, "ERR unknown-command {other}")?;
             Ok(())
@@ -402,6 +405,28 @@ fn cmd_set_ime(stream: &mut UnixStream, rest: &str) -> Result<()> {
         "arbiter: set active IME app={app_id} pid={} (prev={prev_id})",
         s.pid
     );
+    Ok(())
+}
+
+/// Task 68 — `ime-overlay-height <px>`. The IME guest reports its live overlay
+/// height; the arbiter records it as the source of truth for the keyboard-inset
+/// it pushes to focused editors. If an editor is currently focused, re-push the
+/// new height so a runtime keyboard resize reflects immediately.
+fn cmd_ime_overlay_height(stream: &mut UnixStream, rest: &str) -> Result<()> {
+    let Ok(px) = rest.trim().parse::<u32>() else {
+        writeln!(stream, "ERR ime-overlay-height-bad-px {rest:?}")?;
+        return Ok(());
+    };
+    state::set_ime_overlay_height(px);
+    // Live re-push to a focused editor (keyboard resized while shown).
+    if let (Some(ef), Some(i)) = (state::current_editor_focus(), state::current_active_ime()) {
+        if i.pid != ef.pid {
+            let editor_sock = format!("/data/local/tmp/wart-host-{}.sock", ef.pid);
+            let _ = deliver_to_host(&editor_sock, &format!("keyboard-inset {px}\n"));
+        }
+    }
+    writeln!(stream, "OK ime-overlay-height {px}")?;
+    log::info!("arbiter: ime-overlay-height {px}");
     Ok(())
 }
 
@@ -500,6 +525,19 @@ fn cmd_attach_editor(stream: &mut UnixStream, rest: &str) -> Result<()> {
         None => false,
     };
 
+    // Task 68 — tell the EDITOR's host how much the keyboard will occlude, so it
+    // grows its bottom inset and bottom-anchored content rises above the keyboard.
+    // Only when there's an active IME on a different pid (it's actually showing).
+    if let Some(i) = &ime {
+        if i.pid != pid {
+            let h = state::ime_overlay_height();
+            let editor_sock = format!("/data/local/tmp/wart-host-{}.sock", pid);
+            if let Err(e) = deliver_to_host(&editor_sock, &format!("keyboard-inset {h}\n")) {
+                log::warn!("arbiter: keyboard-inset({h}) → {editor_sock} failed: {e:#}");
+            }
+        }
+    }
+
     writeln!(
         stream,
         "OK attached editor pid={pid} app={} input-type={input_type} \
@@ -571,6 +609,11 @@ fn cmd_detach_editor(stream: &mut UnixStream, rest: &str) -> Result<()> {
             }
             None => false,
         };
+        // Task 68 — keyboard gone: restore the editor host's base inset.
+        let editor_sock = format!("/data/local/tmp/wart-host-{}.sock", pid);
+        if let Err(e) = deliver_to_host(&editor_sock, "keyboard-inset 0\n") {
+            log::warn!("arbiter: keyboard-inset(0) → {editor_sock} failed: {e:#}");
+        }
         writeln!(
             stream,
             "OK detached pid={pid} route→{ime_dest} overlay={overlay} delivered={delivered}",
