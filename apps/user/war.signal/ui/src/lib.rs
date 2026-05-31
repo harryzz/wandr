@@ -541,7 +541,7 @@ fn app() -> Element {
             div {
                 style: "display:flex; flex-direction:column; height:100%; background:{BG};",
                 ThreadHeader { title: thread.title.clone(), current }
-                Conversation { messages: thread_msgs, contacts: contacts.clone() }
+                Conversation { messages: thread_msgs, contacts: contacts.clone(), stick_key: thread.id.clone() }
                 Composer { thread: thread.id.clone() }
             }
         };
@@ -733,7 +733,7 @@ fn row_runs(colors: &[qrcode::Color], w: usize, y: usize, module: i32) -> Vec<(i
 }
 
 #[component]
-fn Conversation(messages: Vec<UiMsg>, contacts: Vec<UiContact>) -> Element {
+fn Conversation(messages: Vec<UiMsg>, contacts: Vec<UiContact>, stick_key: String) -> Element {
     // Tag each message with the date label to show above it (once per day, when
     // the local day changes from the previous message).
     let mut rows: Vec<(Option<String>, UiMsg)> = Vec::with_capacity(messages.len());
@@ -748,6 +748,10 @@ fn Conversation(messages: Vec<UiMsg>, contacts: Vec<UiContact>) -> Element {
     rsx! {
         div {
             style: "display:flex; flex-direction:column; overflow:scroll; flex-grow:1; min-height:0; padding:24px; gap:14px;",
+            // Stick this scroll region to the newest message: opening a thread
+            // jumps to the end, and new arrivals keep it pinned while at the
+            // bottom. Keyed by thread id so switching conversations re-jumps.
+            "data-stick-key": "{stick_key}",
             if rows.is_empty() {
                 div { style: "color:{MUTED}; font-size:28px; padding:24px;", "No messages yet." }
             }
@@ -776,13 +780,13 @@ fn Conversation(messages: Vec<UiMsg>, contacts: Vec<UiContact>) -> Element {
                             ),
                             div {
                                 style: format!(
-                                    "display:flex; flex-direction:column; gap:6px; padding:18px; border-radius:18px; background:{};",
+                                    "display:flex; flex-direction:column; gap:6px; max-width:78%; padding:18px; border-radius:18px; background:{};",
                                     if m.outgoing { OUT_BUBBLE } else { IN_BUBBLE }
                                 ),
                                 if !m.outgoing {
                                     div { style: "color:{SENDER}; font-size:22px; font-weight:600;", "{label}" }
                                 }
-                                div { style: "color:{TEXT}; font-size:30px;", "{m.text}" }
+                                div { style: "color:{TEXT}; font-size:30px; white-space:normal;", "{m.text}" }
                                 // Meta row: local time + (outgoing) delivery checks.
                                 div {
                                     style: "display:flex; flex-direction:row; align-items:center; justify-content:flex-end; gap:8px;",
