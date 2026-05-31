@@ -121,6 +121,33 @@ pub fn set_status(ts: u64, code: u8) {
     }
 }
 
+const REACTIONS: &str = "/state/reactions.json";
+
+/// Persisted emoji reactions, keyed by the target message's wire ts → (reactor
+/// ACI → emoji). Like statuses, kept out of the append-only log so one reaction
+/// updates without rewriting history.
+pub fn load_reactions() -> std::collections::HashMap<u64, std::collections::HashMap<String, String>> {
+    std::fs::read(REACTIONS)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+/// Record one message's reactor→emoji map (read-modify-write). An empty map
+/// removes the entry (all reactions cleared).
+pub fn set_reactions(ts: u64, reactors: &std::collections::HashMap<String, String>) {
+    let mut map = load_reactions();
+    if reactors.is_empty() {
+        map.remove(&ts);
+    } else {
+        map.insert(ts, reactors.clone());
+    }
+    ensure_dir();
+    if let Ok(bytes) = serde_json::to_vec(&map) {
+        let _ = std::fs::write(REACTIONS, bytes);
+    }
+}
+
 const CONTACTS: &str = "/state/contacts.json";
 
 /// A user from the primary device's contact list (Signal contacts-sync).

@@ -179,6 +179,8 @@ struct UiMsg {
     ts: u64,
     /// Delivery rank: 0 sending, 1 sent, 2 delivered, 3 read.
     status: u8,
+    /// Emoji reactions on this message (distinct emojis concatenated); empty = none.
+    reactions: String,
 }
 
 /// chat::Delivery → rank (0 sending … 3 read).
@@ -325,6 +327,7 @@ fn pump() -> bool {
                         thread: msg.thread,
                         ts: msg.ts,
                         status: status_rank(msg.status),
+                        reactions: msg.reactions,
                     });
                 }
             });
@@ -358,6 +361,7 @@ fn pump() -> bool {
                                 thread: msg.thread,
                                 ts: msg.ts,
                                 status: status_rank(msg.status),
+                                reactions: msg.reactions,
                             });
                         }
                     }
@@ -365,6 +369,12 @@ fn pump() -> bool {
                     chat::Event::StatusChanged(ds) => {
                         if let Some(x) = m.messages.iter_mut().find(|x| x.id == ds.id) {
                             x.status = status_rank(ds.status);
+                        }
+                    }
+                    // Someone added/removed an emoji reaction on a message.
+                    chat::Event::ReactionChanged(ru) => {
+                        if let Some(x) = m.messages.iter_mut().find(|x| x.id == ru.id) {
+                            x.reactions = ru.reactions;
                         }
                     }
                     chat::Event::LinkUrl(url) => m.link_url = Some(url),
@@ -793,6 +803,17 @@ fn Conversation(messages: Vec<UiMsg>, contacts: Vec<UiContact>, stick_key: Strin
                                     div { style: "color:{META}; font-size:20px;", "{time}" }
                                     if m.outgoing {
                                         div { style: "color:{check_col}; font-size:20px;", "{check}" }
+                                    }
+                                }
+                                // Reaction pill (emoji + count for group repeats),
+                                // hugging the start edge via a flex-start wrapper.
+                                if !m.reactions.is_empty() {
+                                    div {
+                                        style: "display:flex; flex-direction:row; justify-content:flex-start;",
+                                        div {
+                                            style: "padding:4px 14px; border-radius:18px; background:{BAR}; color:{TEXT}; font-size:26px;",
+                                            "{m.reactions}"
+                                        }
                                     }
                                 }
                             }

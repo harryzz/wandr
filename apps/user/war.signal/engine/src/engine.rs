@@ -28,8 +28,8 @@ use libsignal_service::unidentified_access::UnidentifiedAccess;
 use libsignal_service::zkgroup::groups::{GroupMasterKey, GroupSecretParams};
 use libsignal_service::messagepipe::Incoming;
 use libsignal_service::proto::{
-    manifest_record, receipt_message, storage_record, sync_message, DataMessage,
-    GroupContextV2,
+    data_message, manifest_record, receipt_message, storage_record, sync_message,
+    DataMessage, GroupContextV2,
 };
 use libsignal_service::protocol::{
     DeviceId, IdentityKeyPair, ProtocolAddress, ServiceId,
@@ -45,7 +45,7 @@ use libsignal_service::websocket::Unidentified;
 use uuid::Uuid;
 
 use crate::exports::wart::signal::chat::{
-    Contact, Delivery, DeliveryStatus, Event, Group, Message,
+    Contact, Delivery, DeliveryStatus, Event, Group, Message, ReactionUpdate,
 };
 use crate::persist;
 use crate::store::MemStore;
@@ -89,6 +89,10 @@ struct Shared {
     /// This account's own ACI (lowercase uuid), once linked/resumed — lets the UI
     /// label the self thread "Note to Self". Empty until known.
     account_id: RefCell<String>,
+    /// Emoji reactions, keyed by the target message's wire timestamp → (reactor
+    /// ACI → emoji). Re-derived into the target `message.reactions` string on
+    /// change; persisted to reactions.json so they survive a restart.
+    reactions: RefCell<HashMap<u64, HashMap<String, String>>>,
 }
 
 impl Shared {
@@ -132,6 +136,67 @@ impl Shared {
             self.push_event(Event::StatusChanged(DeliveryStatus { id, status: new }));
         }
     }
+
+    /// Apply an emoji reaction (add, or `remove`) by one reactor to the message
+    /// with wire timestamp `target_ts`. Updates the reactor→emoji map, re-derives
+    /// the target's `reactions` string, persists, and emits `reaction-changed` so
+    /// the UI re-renders. No-op (but still persisted) if the target isn't in
+    /// history yet — the overlay on the next `init` will pick it up.
+    fn apply_reaction(&self, target_ts: u64, reactor: String, emoji: String, remove: bool) {
+        {
+            let mut all = self.reactions.borrow_mut();
+            let per = all.entry(target_ts).or_default();
+            if remove {
+                per.remove(&reactor);
+            } else {
+                per.insert(reactor, emoji);
+            }
+            if per.is_empty() {
+                all.remove(&target_ts);
+            }
+        }
+        let joined = self.reactions_string(target_ts);
+        let authors = self.reactions.borrow().get(&target_ts).cloned().unwrap_or_default();
+        persist::set_reactions(target_ts, &authors);
+        let id = {
+            let mut hist = self.history.borrow_mut();
+            hist.iter_mut().find(|m| m.ts == target_ts).map(|m| {
+                m.reactions = joined.clone();
+                m.id
+            })
+        };
+        if let Some(id) = id {
+            self.push_event(Event::ReactionChanged(ReactionUpdate { id, reactions: joined }));
+        }
+    }
+
+    /// The reactions on `target_ts` rendered for display (see
+    /// [`reactions_to_string`]). Empty = none.
+    fn reactions_string(&self, target_ts: u64) -> String {
+        self.reactions
+            .borrow()
+            .get(&target_ts)
+            .map(reactions_to_string)
+            .unwrap_or_default()
+    }
+}
+
+/// Render a reactor→emoji map for display: each distinct emoji once, with a
+/// trailing count when more than one reactor used it (so a group's multiple
+/// reactions all show — e.g. "❤️3 👍"). Space-joined.
+fn reactions_to_string(per: &HashMap<String, String>) -> String {
+    let mut counts: Vec<(String, u32)> = Vec::new();
+    for emoji in per.values() {
+        match counts.iter_mut().find(|(e, _)| e == emoji) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((emoji.clone(), 1)),
+        }
+    }
+    counts
+        .into_iter()
+        .map(|(e, n)| if n > 1 { format!("{e}{n}") } else { e })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Monotonic ordering of delivery states (higher = further along).
@@ -177,6 +242,8 @@ pub fn init() {
     // `sent` (a persisted message was at least sent/received), overlaid by the
     // delivered/read states saved in statuses.json (keyed by wire ts).
     let statuses = persist::load_statuses();
+    // Persisted reactions, keyed by the target message's wire ts (reactor→emoji).
+    let reactions = persist::load_reactions();
     let mut history = Vec::new();
     let mut id = 0u64;
     for m in persist::load_messages() {
@@ -185,6 +252,8 @@ pub fn init() {
             .get(&m.ts)
             .map(|c| status_from_code(*c))
             .unwrap_or(Delivery::Sent);
+        // Overlay any persisted reactions on this message.
+        let reaction_str = reactions.get(&m.ts).map(reactions_to_string).unwrap_or_default();
         history.push(Message {
             id,
             sender: m.from,
@@ -193,6 +262,7 @@ pub fn init() {
             outgoing: m.outgoing,
             thread: m.thread,
             status,
+            reactions: reaction_str,
         });
     }
 
@@ -244,6 +314,7 @@ pub fn init() {
         resync_groups: Cell::new(false),
         group_routes: RefCell::new(group_routes),
         account_id: RefCell::new(String::new()),
+        reactions: RefCell::new(reactions),
     });
     SHARED.with(|slot| *slot.borrow_mut() = Some(s));
 
@@ -284,6 +355,7 @@ pub fn send(thread: String, text: String) -> Result<(), String> {
         outgoing: true,
         thread: thread.clone(),
         status: Delivery::Sending,
+        reactions: String::new(),
     };
     let _ = persist::append_message(&to_stored(&msg));
     shared.add_message(msg);
@@ -610,7 +682,20 @@ async fn receive_and_send(
                                 }
                             }
                         }
-                        let (body, outgoing, thread_override) =
+                        // Emoji reaction (someone liked/reacted to a message):
+                        // attach it to its target (matched by the target's wire
+                        // sent timestamp) and emit `reaction-changed`.
+                        if let Some(r) = reaction_of(&content.body) {
+                            if let Some(target_ts) = r.target_sent_timestamp {
+                                let emoji = r.emoji.clone().unwrap_or_default();
+                                let remove = r.remove.unwrap_or(false);
+                                let reactor = content.metadata.sender.raw_uuid().to_string();
+                                if remove || !emoji.is_empty() {
+                                    shared.apply_reaction(target_ts, reactor, emoji, remove);
+                                }
+                            }
+                        }
+                        let (body, outgoing, thread_override, wire_ts) =
                             extract(&content.body);
                         if let Some(text) = body {
                             // Sender: my own messages (synced from another device)
@@ -623,14 +708,21 @@ async fn receive_and_send(
                             };
                             // Thread: group (from the message) or the 1:1 peer.
                             let thread = thread_override.unwrap_or(peer);
+                            // Use the message's own send timestamp (so reactions —
+                            // which reference it — match, and the time shown is when
+                            // it was SENT, not received). Fall back to local now.
+                            let ts = wire_ts.unwrap_or_else(now_ms);
+                            // Reactions that arrived before this message did.
+                            let reactions = shared.reactions_string(ts);
                             let msg = Message {
                                 id: shared.next_id(),
                                 sender,
                                 text,
-                                ts: now_ms(),
+                                ts,
                                 outgoing,
                                 thread,
                                 status: Delivery::Sent,
+                                reactions,
                             };
                             let _ = persist::append_message(&to_stored(&msg));
                             shared.add_message(msg);
@@ -945,9 +1037,9 @@ async fn fetch_groups(
 /// a group (master key b64) for group messages, or the destination for a
 /// sync-sent (my own message from another device). `None` ⇒ the caller defaults
 /// the thread to the 1:1 peer (the envelope sender).
-fn extract(body: &ContentBody) -> (Option<String>, bool, Option<String>) {
+fn extract(body: &ContentBody) -> (Option<String>, bool, Option<String>, Option<u64>) {
     match body {
-        ContentBody::DataMessage(dm) => (dm.body.clone(), false, group_thread(dm)),
+        ContentBody::DataMessage(dm) => (dm.body.clone(), false, group_thread(dm), dm.timestamp),
         ContentBody::SynchronizeMessage(sm) => {
             let sent = sm.sent.as_ref();
             let msg = sent.and_then(|s| s.message.as_ref());
@@ -955,9 +1047,25 @@ fn extract(body: &ContentBody) -> (Option<String>, bool, Option<String>) {
                 sent.and_then(|s| s.destination_service_id.clone())
                     .map(|d| normalize_service_id(&d))
             });
-            (msg.and_then(|m| m.body.clone()), true, thread)
+            // The original send timestamp (so reactions match + time is the send
+            // time), from the inner message or the sync-sent envelope.
+            let wire_ts = msg.and_then(|m| m.timestamp).or_else(|| sent.and_then(|s| s.timestamp));
+            (msg.and_then(|m| m.body.clone()), true, thread, wire_ts)
         },
-        _ => (None, false, None),
+        _ => (None, false, None, None),
+    }
+}
+
+/// The emoji reaction carried by an incoming content body, if any — either a
+/// direct `DataMessage` reaction (a peer reacted to us) or a sync-sent one (we
+/// reacted from another device).
+fn reaction_of(body: &ContentBody) -> Option<&data_message::Reaction> {
+    match body {
+        ContentBody::DataMessage(dm) => dm.reaction.as_ref(),
+        ContentBody::SynchronizeMessage(sm) => {
+            sm.sent.as_ref()?.message.as_ref()?.reaction.as_ref()
+        },
+        _ => None,
     }
 }
 

@@ -26,12 +26,21 @@ interface chat {
     thread: string,
     /// Delivery state (meaningful for outgoing; `sent` for incoming).
     status: delivery,
+    /// Emoji reactions on this message — the distinct emojis concatenated
+    /// (e.g. "❤️👍"). Empty when no one has reacted.
+    reactions: string,
   }
 
   /// An outgoing message's delivery state advanced (delivery/read receipt).
   record delivery-status {
     id: u64,
     status: delivery,
+  }
+
+  /// A message's emoji reactions changed (someone added/removed a reaction).
+  record reaction-update {
+    id: u64,
+    reactions: string,
   }
 
   /// A user from the primary device's contact list (Signal contacts-sync).
@@ -76,6 +85,8 @@ interface chat {
     groups-updated(u32),
     /// An outgoing message's delivery state advanced (sent/delivered/read).
     status-changed(delivery-status),
+    /// A message's emoji reactions changed.
+    reaction-changed(reaction-update),
   }
 
   /// Start the engine: load saved account + history, then link (first run) or
