@@ -118,6 +118,34 @@ dioxus-canvas's trimmed WIT must include the image verbs (added to `skiko_world!
 Avatars draw square (rounded corners only affect the element bg, not the blit) —
 a rounded clip would be a follow-up.
 
+**Text wrapping, stick-to-bottom scroll, text-input whitespace (2026-05-31,
+signal-ui chat polish; commit be923f7f, +4 render tests).** Three renderer fixes:
+- **Wrapping is OPT-IN via `white-space: normal`** (default stays single-line +
+  clipped, so existing guests/list-rows/labels don't reflow). A wrapping leaf
+  must report a real **min-content width** (longest word) from the taffy measure
+  fn or flex never shrinks it below max-content → it overflows + clips instead of
+  wrapping (the bug that bit the first cut). Needs a width bound to wrap into:
+  added `max-width`/`max-height` (e.g. a chat bubble `max-width:78%`). Measure +
+  paint both word-wrap on the **same box width** (paint draws one host text-blob
+  per line) — re-wrapping at the widest produced line reproduces identical breaks,
+  so they stay in lockstep. Default-on (global) wrapping was WRONG: it wrapped
+  flex-grow list-row names, which then overlapped their preview line (measure said
+  1 line, paint drew 2).
+- **Chat stick-to-bottom: an `overflow:scroll` region with `data-stick-key="…"`.**
+  A changed key (new conversation opened) jumps `scroll_y` to `max_scroll`; while
+  the user is pinned at the bottom, appended content + a shrinking viewport
+  (keyboard up, task 68) keep it pinned; dragging up un-pins, dragging back
+  re-pins. scroll_y is adjusted POST-paint (draw ops are content-space, offset at
+  replay) so it's free to change after layout. signal-ui keys it by `thread.id`.
+- **Text-input trailing spaces (the "typed space doesn't show, caret frozen"
+  bug).** TWO causes, both fixed: (1) `dom.rs merge_attr` trimmed EVERY attr value
+  → the `value` content lost trailing spaces before being drawn; now `value` is
+  kept verbatim (layout attrs still trimmed). (2) Skia's `getMaxIntrinsicWidth`
+  (our `measure_text`) STRIPS trailing whitespace, so the caret/selection prefix
+  width didn't advance past a space; `measure_prefix_w` appends a sentinel glyph,
+  measures, subtracts the sentinel — counting the trailing space. Any future
+  text-metric caret math must use the sentinel trick, not raw intrinsic width.
+
 Spike result (2026-05-29, `repos/dioxus-spike/`): **`dioxus-core` +
 `taffy` is a viable light reactive Rust UI framework for wart guests** —
 the leading Compose alternative for when a *complex* Rust guest UI is
