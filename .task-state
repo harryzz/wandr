@@ -1,5 +1,5 @@
 TASK=70
 STEP=verify-done
 STATUS=complete
-LAST_SUCCESS=Task 70 done + Signal app promoted to apps/user/war.signal/ (engine/ui/build.sh); device-verified
-NOTES=
+LAST_SUCCESS=Signal polish — message timestamps (local time) + delivery/read receipts (checkmarks); emoji fallback; device-verified
+NOTES=delivered/read checks advance as receipts arrive on new sends.

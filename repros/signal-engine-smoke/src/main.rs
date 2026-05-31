@@ -92,6 +92,9 @@ fn main() {
                         eprintln!("  {} | {} members", g.title, g.members.len());
                     }
                 },
+                Event::StatusChanged(ds) => {
+                    eprintln!("[smoke] STATUS msg #{} → {:?}", ds.id, ds.status);
+                },
             }
         }
 

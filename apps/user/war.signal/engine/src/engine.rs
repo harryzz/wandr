@@ -28,7 +28,8 @@ use libsignal_service::unidentified_access::UnidentifiedAccess;
 use libsignal_service::zkgroup::groups::{GroupMasterKey, GroupSecretParams};
 use libsignal_service::messagepipe::Incoming;
 use libsignal_service::proto::{
-    manifest_record, storage_record, sync_message, DataMessage, GroupContextV2,
+    manifest_record, receipt_message, storage_record, sync_message, DataMessage,
+    GroupContextV2,
 };
 use libsignal_service::protocol::{
     DeviceId, IdentityKeyPair, ProtocolAddress, ServiceId,
@@ -43,7 +44,9 @@ use libsignal_service::storage_service::StorageService;
 use libsignal_service::websocket::Unidentified;
 use uuid::Uuid;
 
-use crate::exports::wart::signal::chat::{Contact, Event, Group, Message};
+use crate::exports::wart::signal::chat::{
+    Contact, Delivery, DeliveryStatus, Event, Group, Message,
+};
 use crate::persist;
 use crate::store::MemStore;
 
@@ -61,8 +64,10 @@ struct GroupRoute {
 struct Shared {
     events: RefCell<VecDeque<Event>>,
     history: RefCell<Vec<Message>>,
-    /// Outgoing queue: `(thread, text)` — thread routes the wire send.
-    outbox: RefCell<VecDeque<(String, String)>>,
+    /// Outgoing queue: `(thread, text, ts)` — thread routes the wire send; ts is
+    /// the message's timestamp, reused as the wire timestamp so delivery/read
+    /// receipts (which reference it) match back to this message.
+    outbox: RefCell<VecDeque<(String, String, u64)>>,
     state: RefCell<String>,
     next_id: RefCell<u64>,
     /// Contact list from the primary device's address book (contacts-sync).
@@ -106,6 +111,50 @@ impl Shared {
         self.history.borrow_mut().push(m.clone());
         self.push_event(Event::Message(m));
     }
+
+    /// Advance an outgoing message's delivery state (matched by wire timestamp),
+    /// monotonically. Persists the new state + emits a `status-changed` event so
+    /// the UI updates its checkmark. No-op if the message is unknown or the new
+    /// state isn't an advance.
+    fn set_status(&self, ts: u64, new: Delivery) {
+        let updated = {
+            let mut hist = self.history.borrow_mut();
+            match hist.iter_mut().find(|m| m.ts == ts && m.outgoing) {
+                Some(m) if rank(new) > rank(m.status) => {
+                    m.status = new;
+                    Some(m.id)
+                },
+                _ => None,
+            }
+        };
+        if let Some(id) = updated {
+            persist::set_status(ts, status_code(new));
+            self.push_event(Event::StatusChanged(DeliveryStatus { id, status: new }));
+        }
+    }
+}
+
+/// Monotonic ordering of delivery states (higher = further along).
+fn rank(d: Delivery) -> u8 {
+    match d {
+        Delivery::Sending => 0,
+        Delivery::Sent => 1,
+        Delivery::Delivered => 2,
+        Delivery::Read => 3,
+    }
+}
+
+fn status_code(d: Delivery) -> u8 {
+    rank(d)
+}
+
+fn status_from_code(c: u8) -> Delivery {
+    match c {
+        0 => Delivery::Sending,
+        2 => Delivery::Delivered,
+        3 => Delivery::Read,
+        _ => Delivery::Sent,
+    }
 }
 
 thread_local! {
@@ -124,11 +173,18 @@ pub fn init() {
     }
     wart_step_executor::init();
 
-    // Preload persisted history, assigning stable ids.
+    // Preload persisted history, assigning stable ids. Delivery state defaults to
+    // `sent` (a persisted message was at least sent/received), overlaid by the
+    // delivered/read states saved in statuses.json (keyed by wire ts).
+    let statuses = persist::load_statuses();
     let mut history = Vec::new();
     let mut id = 0u64;
     for m in persist::load_messages() {
         id += 1;
+        let status = statuses
+            .get(&m.ts)
+            .map(|c| status_from_code(*c))
+            .unwrap_or(Delivery::Sent);
         history.push(Message {
             id,
             sender: m.from,
@@ -136,6 +192,7 @@ pub fn init() {
             ts: m.ts,
             outgoing: m.outgoing,
             thread: m.thread,
+            status,
         });
     }
 
@@ -218,17 +275,21 @@ pub fn send(thread: String, text: String) -> Result<(), String> {
     }
     // Local echo into history + live feed; the actual wire send happens in the
     // background task within ~200 ms (see `receive_and_send`), routed by `thread`.
+    let ts = now_ms();
     let msg = Message {
         id: shared.next_id(),
         sender: "me".to_string(),
         text: text.clone(),
-        ts: now_ms(),
+        ts,
         outgoing: true,
         thread: thread.clone(),
+        status: Delivery::Sending,
     };
     let _ = persist::append_message(&to_stored(&msg));
     shared.add_message(msg);
-    shared.outbox.borrow_mut().push_back((thread, text));
+    // Carry `ts` so the wire send stamps the DataMessage with it — receipts then
+    // reference this exact ts and match back via `set_status`.
+    shared.outbox.borrow_mut().push_back((thread, text, ts));
     Ok(())
 }
 
@@ -533,6 +594,22 @@ async fn receive_and_send(
                                 }
                             }
                         }
+                        // Delivery/read receipt from a recipient: advance the
+                        // matching outgoing message(s) by their wire timestamp.
+                        if let ContentBody::ReceiptMessage(r) = &content.body {
+                            let new = if r.r#type == Some(receipt_message::Type::Delivery as i32) {
+                                Some(Delivery::Delivered)
+                            } else if r.r#type == Some(receipt_message::Type::Read as i32) {
+                                Some(Delivery::Read)
+                            } else {
+                                None // viewed (stories) — ignore
+                            };
+                            if let Some(new) = new {
+                                for &ts in &r.timestamp {
+                                    shared.set_status(ts, new);
+                                }
+                            }
+                        }
                         let (body, outgoing, thread_override) =
                             extract(&content.body);
                         if let Some(text) = body {
@@ -553,6 +630,7 @@ async fn receive_and_send(
                                 ts: now_ms(),
                                 outgoing,
                                 thread,
+                                status: Delivery::Sent,
                             };
                             let _ = persist::append_message(&to_stored(&msg));
                             shared.add_message(msg);
@@ -568,17 +646,17 @@ async fn receive_and_send(
             },
             _ = tick.fuse() => {
                 if let Some(sender) = sender.as_mut() {
-                    let pending: Vec<(String, String)> =
+                    let pending: Vec<(String, String, u64)> =
                         shared.outbox.borrow_mut().drain(..).collect();
-                    for (thread, text) in pending {
-                        let now = now_ms();
-                        // Group thread? Address every member with a GroupContextV2.
+                    for (thread, text, ts) in pending {
+                        // Stamp the wire message with the message's own `ts` so
+                        // delivery/read receipts (which echo it) match back.
                         let route = shared.group_routes.borrow().get(&thread).cloned();
                         if let Some(route) = route {
                             let master_key = b64().decode(&thread).unwrap_or_default();
                             let dm = DataMessage {
                                 body: Some(text),
-                                timestamp: Some(now),
+                                timestamp: Some(ts),
                                 group_v2: Some(GroupContextV2 {
                                     master_key: Some(master_key),
                                     revision: Some(route.revision),
@@ -593,9 +671,12 @@ async fn receive_and_send(
                                     .filter(|u| **u != aci)
                                     .map(|u| (ServiceId::Aci((*u).into()), None, false))
                                     .collect();
-                            let _ = sender
-                                .send_message_to_group(&recipients, dm, now, false)
+                            let results = sender
+                                .send_message_to_group(&recipients, dm, ts, false)
                                 .await;
+                            if results.iter().any(|r| r.is_ok()) {
+                                shared.set_status(ts, Delivery::Sent);
+                            }
                             let _ = persist::save_snapshot(&store.snapshot_bytes());
                         } else {
                             // 1:1 thread = peer ACI (empty/unparseable → self).
@@ -604,14 +685,15 @@ async fn receive_and_send(
                                 .unwrap_or(self_id);
                             let dm = DataMessage {
                                 body: Some(text),
-                                timestamp: Some(now),
+                                timestamp: Some(ts),
                                 ..Default::default()
                             };
                             match sender
-                                .send_message(&recipient, None, dm, now, false, false)
+                                .send_message(&recipient, None, dm, ts, false, false)
                                 .await
                             {
                                 Ok(_) => {
+                                    shared.set_status(ts, Delivery::Sent);
                                     let _ = persist::save_snapshot(
                                         &store.snapshot_bytes(),
                                     );

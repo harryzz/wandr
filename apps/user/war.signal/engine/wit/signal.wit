@@ -5,6 +5,16 @@ package wart:signal@0.1.0;
 /// `init` once, then `poll-events` each frame to pump the network and drain what
 /// happened; `send` to queue an outgoing text; `history`/`state` for snapshots.
 interface chat {
+  /// Delivery state of an outgoing message (incoming messages are always `sent`).
+  /// Monotonic: sending → sent (server accepted) → delivered (recipient device
+  /// got it) → read (recipient opened it; only if they share read receipts).
+  enum delivery {
+    sending,
+    sent,
+    delivered,
+    read,
+  }
+
   /// One stored conversation message. `id` is engine-assigned and stable.
   record message {
     id: u64,
@@ -14,6 +24,14 @@ interface chat {
     outgoing: bool,
     /// Conversation key: the peer ACI (1:1) or the group master key b64 (group).
     thread: string,
+    /// Delivery state (meaningful for outgoing; `sent` for incoming).
+    status: delivery,
+  }
+
+  /// An outgoing message's delivery state advanced (delivery/read receipt).
+  record delivery-status {
+    id: u64,
+    status: delivery,
   }
 
   /// A user from the primary device's contact list (Signal contacts-sync).
@@ -56,6 +74,8 @@ interface chat {
     contacts-updated(u32),
     /// The group list was fetched/updated (read it via `groups`).
     groups-updated(u32),
+    /// An outgoing message's delivery state advanced (sent/delivered/read).
+    status-changed(delivery-status),
   }
 
   /// Start the engine: load saved account + history, then link (first run) or

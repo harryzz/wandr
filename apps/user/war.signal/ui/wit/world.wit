@@ -100,10 +100,18 @@ interface frame-pacing {
     next-frame-delay: func() -> u32;
 }
 
+// Subset of the canonical `status` interface — just the host's local wall-clock,
+// used to derive the device timezone offset so message timestamps render in local
+// time. The host links the full skiko-ui world, so importing this subset resolves.
+interface status {
+    clock-text: func() -> string;
+}
+
 world signal-ui-app {
     import canvas;
     import paragraph;
     import ime;
+    import status;
     import wart:signal/chat@0.1.0;
     export renderer;
     export frame-pacing;

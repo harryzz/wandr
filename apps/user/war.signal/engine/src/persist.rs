@@ -99,6 +99,28 @@ pub fn load_messages() -> Vec<StoredMessage> {
         .unwrap_or_default()
 }
 
+const STATUSES: &str = "/state/statuses.json";
+
+/// Persisted delivery state for outgoing messages, keyed by wire ts → code
+/// (0 sending, 1 sent, 2 delivered, 3 read). Kept out of the append-only message
+/// log so a receipt can update one message without rewriting history.
+pub fn load_statuses() -> std::collections::HashMap<u64, u8> {
+    std::fs::read(STATUSES)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+/// Record one message's delivery state (read-modify-write the small map).
+pub fn set_status(ts: u64, code: u8) {
+    let mut map = load_statuses();
+    map.insert(ts, code);
+    ensure_dir();
+    if let Ok(bytes) = serde_json::to_vec(&map) {
+        let _ = std::fs::write(STATUSES, bytes);
+    }
+}
+
 const CONTACTS: &str = "/state/contacts.json";
 
 /// A user from the primary device's contact list (Signal contacts-sync).

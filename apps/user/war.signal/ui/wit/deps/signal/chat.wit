@@ -2,9 +2,11 @@
 package wart:signal@0.1.0;
 
 interface chat {
-  record message { id: u64, sender: string, text: string, ts: u64, outgoing: bool, thread: string }
+  enum delivery { sending, sent, delivered, read }
+  record message { id: u64, sender: string, text: string, ts: u64, outgoing: bool, thread: string, status: delivery }
   record contact { id: string, name: string, phone: option<string>, inbox-position: u32, avatar: option<list<u8>> }
   record group { id: string, title: string, members: list<string>, avatar: option<list<u8>> }
+  record delivery-status { id: u64, status: delivery }
   variant event {
     message(message),
     link-url(string),
@@ -13,6 +15,7 @@ interface chat {
     disconnected,
     contacts-updated(u32),
     groups-updated(u32),
+    status-changed(delivery-status),
   }
   init: func();
   poll-events: func() -> list<event>;

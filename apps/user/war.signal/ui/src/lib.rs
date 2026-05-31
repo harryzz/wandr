@@ -61,6 +61,66 @@ const ACCENT: &str = "#4285F4";
 const TEXT: &str = "#FFFFFF";
 const MUTED: &str = "#9AA0B4";
 const SENDER: &str = "#7FA8E0";
+const META: &str = "#AEB6C8"; // bubble timestamp + sent/delivered checks
+const READ_CHECK: &str = "#8FD0FF"; // read receipt (bright, reads on the blue bubble)
+
+// ── time + delivery rendering ────────────────────────────────────────────────
+thread_local! {
+    // Device timezone offset (minutes) vs UTC, derived once from the host clock.
+    static TZ_OFFSET_MIN: Cell<Option<i64>> = const { Cell::new(None) };
+}
+
+fn parse_hhmm(s: &str) -> Option<i64> {
+    let (h, m) = s.trim().split_once(':')?;
+    Some(h.trim().parse::<i64>().ok()? * 60 + m.trim().parse::<i64>().ok()?)
+}
+
+/// Local UTC offset in minutes, derived by comparing the host's local clock
+/// (`status::clock-text`) to the guest's UTC wall-clock. Cached once known; 0
+/// (UTC) until the host clock is available.
+fn local_offset_min() -> i64 {
+    TZ_OFFSET_MIN.with(|c| {
+        if let Some(o) = c.get() {
+            return o;
+        }
+        let clock = crate::my::skiko_gfx::status::clock_text();
+        let utc_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        match parse_hhmm(&clock) {
+            Some(local_min) if utc_ms > 0 => {
+                let utc_min = ((utc_ms / 60000) % 1440) as i64;
+                let mut off = local_min - utc_min;
+                if off > 720 {
+                    off -= 1440;
+                } else if off <= -720 {
+                    off += 1440;
+                }
+                c.set(Some(off));
+                off
+            },
+            _ => 0, // host clock not ready yet — retry next call
+        }
+    })
+}
+
+/// Epoch-ms → local "HH:MM".
+fn fmt_time(ts: u64) -> String {
+    let local_ms = ts as i64 + local_offset_min() * 60_000;
+    let mins = (((local_ms / 60_000) % 1440) + 1440) % 1440;
+    format!("{:02}:{:02}", mins / 60, mins % 60)
+}
+
+/// Delivery rank → (glyph, color) for an outgoing bubble's receipt indicator.
+fn check_marks(status: u8) -> (&'static str, &'static str) {
+    match status {
+        0 => ("·", META),          // sending
+        1 => ("✓", META),          // sent (server accepted)
+        2 => ("✓✓", META),         // delivered to the recipient's device
+        _ => ("✓✓", READ_CHECK),   // read
+    }
+}
 
 // ── the model the components read, updated by `pump` from the engine ──────────
 #[derive(Clone, PartialEq, Default)]
@@ -71,6 +131,20 @@ struct UiMsg {
     outgoing: bool,
     /// Conversation key (peer ACI / group master key b64).
     thread: String,
+    /// Wire timestamp (epoch ms) — formatted to local HH:MM for display.
+    ts: u64,
+    /// Delivery rank: 0 sending, 1 sent, 2 delivered, 3 read.
+    status: u8,
+}
+
+/// chat::Delivery → rank (0 sending … 3 read).
+fn status_rank(d: chat::Delivery) -> u8 {
+    match d {
+        chat::Delivery::Sending => 0,
+        chat::Delivery::Sent => 1,
+        chat::Delivery::Delivered => 2,
+        chat::Delivery::Read => 3,
+    }
 }
 
 /// An open conversation: which thread the user tapped into.
@@ -182,6 +256,8 @@ fn pump() -> bool {
                         text: msg.text,
                         outgoing: msg.outgoing,
                         thread: msg.thread,
+                        ts: msg.ts,
+                        status: status_rank(msg.status),
                     });
                 }
             });
@@ -206,7 +282,15 @@ fn pump() -> bool {
                                 text: msg.text,
                                 outgoing: msg.outgoing,
                                 thread: msg.thread,
+                                ts: msg.ts,
+                                status: status_rank(msg.status),
                             });
+                        }
+                    }
+                    // A delivery/read receipt advanced an outgoing message.
+                    chat::Event::StatusChanged(ds) => {
+                        if let Some(x) = m.messages.iter_mut().find(|x| x.id == ds.id) {
+                            x.status = status_rank(ds.status);
                         }
                     }
                     chat::Event::LinkUrl(url) => m.link_url = Some(url),
@@ -574,6 +658,8 @@ fn Conversation(messages: Vec<UiMsg>, contacts: Vec<UiContact>) -> Element {
                 {
                     // Resolve the sender ACI → contact name (fallback: short ACI).
                     let label = sender_label(&m.sender, &contacts);
+                    let time = fmt_time(m.ts);
+                    let (check, check_col) = check_marks(m.status);
                     rsx! {
                         div {
                             key: "{m.id}",
@@ -591,6 +677,14 @@ fn Conversation(messages: Vec<UiMsg>, contacts: Vec<UiContact>) -> Element {
                                     div { style: "color:{SENDER}; font-size:22px; font-weight:600;", "{label}" }
                                 }
                                 div { style: "color:{TEXT}; font-size:30px;", "{m.text}" }
+                                // Meta row: local time + (outgoing) delivery checks.
+                                div {
+                                    style: "display:flex; flex-direction:row; align-items:center; justify-content:flex-end; gap:8px;",
+                                    div { style: "color:{META}; font-size:20px;", "{time}" }
+                                    if m.outgoing {
+                                        div { style: "color:{check_col}; font-size:20px;", "{check}" }
+                                    }
+                                }
                             }
                         }
                     }
