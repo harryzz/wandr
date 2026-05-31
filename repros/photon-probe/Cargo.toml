@@ -1,0 +1,23 @@
+[package]
+name = "photon-probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# De-risk probe: does photon-rs run on our wasm32-wasip2 component model?
+# default-features=false drops `enable_wasm` (wasm-bindgen/web-sys/js-sys) so no
+# browser/JS runtime is pulled onto target_arch=wasm32 (wasip2).
+[[bin]]
+name = "photon-probe"
+path = "src/main.rs"
+
+[dependencies]
+photon-rs = { version = "0.3.3", default-features = false }
+
+[profile.release]
+opt-level = "s"
+
+[dependencies.image]
+version = "0.24"
+default-features = false
+features = ["png"]
