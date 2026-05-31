@@ -44,12 +44,37 @@ use wart::signal::chat;
 // (host-driven keyboard inset) — the app must NOT hard-code the overlay height
 // (it's 1200px today but resizable via request-overlay-height). For now the
 // composer is a plain bottom bar; while typing it sits behind the keyboard.
+// Frames the engine has produced nothing — drives the adaptive idle cadence below.
+thread_local! {
+    static IDLE_FRAMES: Cell<u32> = const { Cell::new(0) };
+}
+
 dioxus_canvas::wire!(app, pre_frame: |r| {
     r.set_scale(2.0); // hi-dpi panel — author px are small; 2× for readability
-    r.set_min_frame_delay(120); // ~8 polls/sec so the engine keeps making progress
-    if pump() {
+    // Pump the engine; a change resets the idle counter (and re-renders).
+    let changed = pump();
+    if changed {
         r.mark_dirty();
+        IDLE_FRAMES.with(|c| c.set(0));
+    } else {
+        IDLE_FRAMES.with(|c| c.set(c.get().saturating_add(1)));
     }
+    // Adaptive poll/repaint cadence: this loop's only job when idle is to keep the
+    // live Signal socket serviced + receive promptly, but a fixed 8 fps repaints
+    // the whole screen for nothing (~14% CPU). So poll FAST (~8/s) for ~1s after
+    // any activity — snappy send/receive bursts — then ramp DOWN to ~2/s when
+    // truly idle (incoming still lands within ~0.5s; keepalive is serviced far
+    // more often than it needs). Input (scroll/type) drives its own immediate
+    // frames, so interactivity is unaffected by the idle floor.
+    let idle = IDLE_FRAMES.with(|c| c.get());
+    let delay = if idle < 8 {
+        120 // ~8/s, first ~1s after activity
+    } else if idle < 24 {
+        250 // ~4/s, cooling down
+    } else {
+        500 // ~2/s, fully idle
+    };
+    r.set_min_frame_delay(delay);
 });
 
 // ── palette ─────────────────────────────────────────────────────────────────
