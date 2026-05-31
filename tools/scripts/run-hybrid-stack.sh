@@ -108,6 +108,26 @@ push_if_newer "$HOST_BIN" "/data/local/tmp/wart-host"
 push_if_newer "$ARB_BIN"  "/data/local/tmp/wart-arbiter"
 adb shell 'chmod 755 /data/local/tmp/wart-host /data/local/tmp/wart-arbiter'
 
+# Robustly start a long-lived device process, fully detached from this adb
+# session: `setsid` (new session, no controlling tty) + stdin from /dev/null so
+# the adb shell closing can't SIGHUP it. The recurring "zygote up but arbiter
+# never came → stock Android reclaims the screen" wedge was a bare `nohup … &`
+# that died when adb disconnected.
+spawn_detached() {
+    local logfile="$1" cmd="$2"
+    adb shell "su -c 'setsid sh -c \"$cmd\" </dev/null >$logfile 2>&1 &'" >/dev/null 2>&1
+}
+
+# Poll up to tries×0.5 s for a device unix socket to appear. 0 = it showed up.
+wait_for_sock() {
+    local sock="$1" tries="${2:-40}"
+    for _ in $(seq 1 "$tries"); do
+        adb shell "su -c '[ -S $sock ] && echo up'" 2>/dev/null | grep -q up && return 0
+        sleep 0.5
+    done
+    return 1
+}
+
 echo "▸ stopping SystemUI + launcher ($HOME_PKG) …"
 adb shell "su -c 'am force-stop com.android.systemui'"
 adb shell "su -c 'am force-stop $HOME_PKG'"
@@ -120,55 +140,65 @@ adb shell "su -c 'am force-stop $HOME_PKG'"
 INSET_TOP="${WART_STATUSBAR_PX:-132}"
 INSET_BOTTOM="${WART_TASKBAR_PX:-150}"
 
-echo "▸ starting wart-host --zygote in background (insets top=$INSET_TOP bottom=$INSET_BOTTOM) …"
-adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT WART_INSET_TOP=$INSET_TOP WART_INSET_BOTTOM=$INSET_BOTTOM /data/local/tmp/wart-host --zygote' &" >/dev/null
-sleep 3
+echo "▸ starting wart-host --zygote (detached, insets top=$INSET_TOP bottom=$INSET_BOTTOM) …"
+spawn_detached /data/local/tmp/wart-zygote.log \
+    "LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT WART_INSET_TOP=$INSET_TOP WART_INSET_BOTTOM=$INSET_BOTTOM /data/local/tmp/wart-host --zygote"
+if ! wait_for_sock /data/local/tmp/wart-zygote.sock 30; then
+    echo "✗ zygote socket never appeared — see /data/local/tmp/wart-zygote.log:" >&2
+    adb shell "su -c 'tail -20 /data/local/tmp/wart-zygote.log'" 2>&1 | tr -d '\r' >&2
+    exit 1
+fi
 ZPID="$(adb shell 'pgrep -f "wart-host --zygote" | head -1' | tr -d '\r')"
-echo "  zygote pid: $ZPID"
+echo "  zygote up (pid $ZPID, socket present)"
 
-# Task 57 — boot straight to the launcher. The arbiter below runs in the
-# foreground (this terminal), so we can't set-home after it. Instead a
-# background waiter polls for the arbiter socket and, once it's up, sends
-# `set-home $HOME_APP` — which designates the home app AND foregrounds it
-# (launching it if needed). No manual `wart-arbiter launch` required.
-# Once the arbiter socket is up, bring up the full shell: home/launcher
-# (set-home), the top status bar (a direct top-overlay daemon), and the
-# IME keyboard (bottom overlay + set-ime, so tapping an editor pops the
-# keyboard). Each piece is best-effort — only fires if installed.
-(
-    for _ in $(seq 1 30); do
-        if adb shell "su -c '[ -S /data/local/tmp/wart-arbiter.sock ] && echo up'" 2>/dev/null | grep -q up; then
-            if [[ -n "$HOME_APP" ]]; then
-                echo "▸ boot-to-home: set-home $HOME_APP"
-                adb shell "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter set-home $HOME_APP'" 2>&1 | tr -d '\r'
-            fi
-            echo "▸ status bar (top overlay)"
-            adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT nohup /data/local/tmp/wart-host --standalone-overlay-top --app war.statusbar >/dev/null 2>&1 &'" 2>/dev/null
-            echo "▸ taskbar (bottom nav overlay)"
-            adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT nohup /data/local/tmp/wart-host --standalone-overlay-bottom-bar --app war.taskbar >/dev/null 2>&1 &'" 2>/dev/null
-            echo "▸ IME keyboard (bottom overlay) + set-ime"
-            adb shell "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter launch-overlay war.ime.keyboard'" 2>&1 | tr -d '\r'
-            sleep 1
-            adb shell "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter set-ime war.ime.keyboard'" 2>&1 | tr -d '\r'
-            break
-        fi
-        sleep 0.5
-    done
-) &
+# Task 57 — boot straight to the launcher: `set-home $HOME_APP` designates the
+# home app AND foregrounds it. Then the status bar (top overlay), taskbar (bottom
+# overlay), and IME keyboard (bottom overlay + set-ime). Each piece is
+# best-effort — only fires if installed. Runs once the arbiter socket exists.
+bring_up_chrome() {
+    if [[ -n "$HOME_APP" ]]; then
+        echo "▸ boot-to-home: set-home $HOME_APP"
+        adb shell "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter set-home $HOME_APP'" 2>&1 | tr -d '\r'
+    fi
+    echo "▸ status bar (top overlay)"
+    spawn_detached /dev/null "LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-host --standalone-overlay-top --app war.statusbar"
+    echo "▸ taskbar (bottom nav overlay)"
+    spawn_detached /dev/null "LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-host --standalone-overlay-bottom-bar --app war.taskbar"
+    echo "▸ IME keyboard (bottom overlay) + set-ime"
+    adb shell "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter launch-overlay war.ime.keyboard'" 2>&1 | tr -d '\r'
+    sleep 1
+    adb shell "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter set-ime war.ime.keyboard'" 2>&1 | tr -d '\r'
+}
 
 if [[ -t 1 ]]; then
-    # Interactive terminal: run the arbiter in the foreground so this script
-    # blocks here and Ctrl-C tears the whole stack down via the EXIT/INT trap.
+    # Interactive terminal: bring chrome up in the background once the arbiter
+    # socket exists, then run the arbiter in the FOREGROUND so this script blocks
+    # and Ctrl-C tears the whole stack down via the EXIT/INT trap.
+    ( wait_for_sock /data/local/tmp/wart-arbiter.sock 40 && bring_up_chrome ) &
     echo "▸ starting wart-arbiter --daemon in foreground (Ctrl-C to stop) …"
     adb shell -t "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter --daemon'"
 else
-    # No controlling TTY (backgrounded / nohup / CI): `adb shell -t` can't
-    # allocate a PTY. Start the arbiter detached, wait for the chrome-bring-up
-    # waiter to finish, then exit WITHOUT firing the teardown trap so the stack
-    # keeps running. Stop later with: run-hybrid-stack.sh --stop
-    echo "▸ no TTY — starting wart-arbiter --daemon detached (stack left running) …"
-    adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT nohup /data/local/tmp/wart-arbiter --daemon >/data/local/tmp/wart-arbiter.log 2>&1 &'" >/dev/null 2>&1
-    wait                       # let the background chrome waiter bring up the shell
+    # No controlling TTY (backgrounded / nohup / CI): start the arbiter detached
+    # and VERIFY its socket appears, retrying the start if it doesn't — that
+    # silent miss was the "wedges after zygote, stock Android reclaims the
+    # screen" bug. Then bring chrome up INLINE (no background-waiter race), and
+    # exit WITHOUT firing the teardown trap so the stack keeps running.
+    echo "▸ starting wart-arbiter --daemon (detached) …"
+    arbiter_up=
+    for attempt in 1 2 3; do
+        spawn_detached /data/local/tmp/wart-arbiter.log \
+            "LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter --daemon"
+        if wait_for_sock /data/local/tmp/wart-arbiter.sock 20; then arbiter_up=1; break; fi
+        echo "  arbiter socket not up after 10 s (attempt $attempt/3) — retrying …"
+        adb shell "su -c 'pkill -9 -f wart-arbiter'" >/dev/null 2>&1
+    done
+    if [[ -z "$arbiter_up" ]]; then
+        echo "✗ wart-arbiter failed to come up after 3 attempts — see log:" >&2
+        adb shell "su -c 'tail -20 /data/local/tmp/wart-arbiter.log'" 2>&1 | tr -d '\r' >&2
+        exit 1   # trap restores SystemUI; a clear failure beats a silent wedge
+    fi
+    echo "  arbiter up (socket present)"
+    bring_up_chrome
     trap - EXIT INT TERM       # don't tear the stack down on this script's exit
     echo "▸ stack up (detached). Stop with: $0 --stop"
 fi
