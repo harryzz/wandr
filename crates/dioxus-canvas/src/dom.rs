@@ -218,6 +218,11 @@ fn merge_attr(style: &mut BTreeMap<String, String>, name: &str, value: &str) {
                 style.insert(k.trim().to_string(), v.trim().to_string());
             }
         }
+    } else if name == "value" {
+        // A text-input's value is user content — trailing/leading spaces are
+        // meaningful (a typed space must render + advance the caret), so keep it
+        // verbatim. Layout attrs (width, color, …) are still trimmed below.
+        style.insert(name.to_string(), value.to_string());
     } else {
         style.insert(name.to_string(), value.trim().to_string());
     }

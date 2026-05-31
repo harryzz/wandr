@@ -33,6 +33,10 @@ pub struct PaintProps {
     pub font_size: f32,
     pub font_weight: u32,
     pub italic: bool,
+    /// `white-space: normal` (vs the default `nowrap`): text leaves under this
+    /// node word-wrap to their box width instead of being drawn as one
+    /// (over-wide, clipped) line. Inherits, like the font props.
+    pub wrap: bool,
 }
 
 impl Default for PaintProps {
@@ -44,6 +48,7 @@ impl Default for PaintProps {
             font_size: 16.0,
             font_weight: 400,
             italic: false,
+            wrap: false,
         }
     }
 }
@@ -168,6 +173,15 @@ pub fn to_taffy(map: &StyleMap, scale: f32) -> Style {
     if let Some(l) = map.get("min-height").and_then(|v| parse_len(v)) {
         s.min_size.height = l.scaled(scale).dim();
     }
+    // max-width is the constraint that turns a long single-line text leaf into a
+    // wrapped multi-line one: it caps the bubble width, so the text leaf's
+    // available width becomes finite and the measure pass wraps (see lib.rs).
+    if let Some(l) = map.get("max-width").and_then(|v| parse_len(v)) {
+        s.max_size.width = l.scaled(scale).dim();
+    }
+    if let Some(l) = map.get("max-height").and_then(|v| parse_len(v)) {
+        s.max_size.height = l.scaled(scale).dim();
+    }
 
     if let Some(p) = px(map, "padding") {
         let lp = LengthPercentage::Length(p * scale);
@@ -265,6 +279,10 @@ pub fn to_paint(map: &StyleMap, inherited: &PaintProps) -> PaintProps {
     }
     if let Some(fst) = map.get("font-style") {
         p.italic = fst == "italic";
+    }
+    if let Some(ws) = map.get("white-space") {
+        // `nowrap` (default) keeps single-line; `normal`/`wrap`/`pre-wrap` opt in.
+        p.wrap = matches!(ws.as_str(), "normal" | "wrap" | "pre-wrap");
     }
     p
 }

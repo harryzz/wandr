@@ -43,6 +43,9 @@ struct TextCtx {
     size: f32,
     weight: u32,
     italic: bool,
+    /// Word-wrap this leaf to its box width (`white-space: normal`), vs the
+    /// default single (over-wide, clipped) line.
+    wrap: bool,
 }
 
 /// One cached paint command, in content (layout) space. The replay applies the
@@ -138,6 +141,15 @@ pub struct DomRenderer {
     /// (taffy's `content_size` is unreliable for our nested flex structure).
     scroll_bottom: f32,
     scroll_y: f32,
+    /// Chat-style "stick to bottom" for the scroll region (driven by a
+    /// `data-stick-key` style attr on the `overflow:scroll` element). When the
+    /// key changes (a new conversation opened) the next layout jumps to the
+    /// bottom; while the user is pinned at the bottom, appended content + a
+    /// shrinking viewport (keyboard up) keep it pinned there. Set during
+    /// paint_walk, consumed after layout. `None` = the region opted out.
+    stick_region_key: Option<String>,
+    stick_key: Option<String>,
+    stick_pinned: bool,
     /// In-progress tap/scroll gesture (non-slider press).
     down: Option<Down>,
     blobs: Vec<u32>,
@@ -176,6 +188,9 @@ impl DomRenderer {
             scroll_content_h: 0.0,
             scroll_bottom: 0.0,
             scroll_y: 0.0,
+            stick_region_key: None,
+            stick_key: None,
+            stick_pinned: true,
             down: None,
             blobs: Vec::new(),
             measure_cache: HashMap::new(),
@@ -474,6 +489,9 @@ impl DomRenderer {
                 let dy = y - d.last_y;
                 d.last_y = y;
                 self.scroll_y = (self.scroll_y - dy).clamp(0.0, max);
+                // Re-evaluate the stick-to-bottom pin: dragging up un-pins, and
+                // dragging back to the end re-pins (within a small threshold).
+                self.stick_pinned = self.scroll_y >= max - SCROLL_THRESHOLD;
                 self.dirty = true;
             }
         }
@@ -558,7 +576,39 @@ impl DomRenderer {
                         width: AvailableSpace::Definite(self.surface.0),
                         height: AvailableSpace::Definite(self.surface.1),
                     },
-                    |known, _avail, _id, ctx, _style| match ctx {
+                    |known, avail, _id, ctx, _style| match ctx {
+                        Some(t) if t.wrap => {
+                            let (w, h) = measure_cached(cache, sink, t);
+                            // The width to wrap at. A leaf with a measure fn reports
+                            // its own min/max-content, which is how flex learns it
+                            // CAN shrink: MinContent ⇒ longest word (the narrowest
+                            // it goes), MaxContent ⇒ the full single line (no cap),
+                            // a Definite/known width ⇒ wrap there. `fixed` keeps the
+                            // box at an explicitly-assigned width; otherwise the box
+                            // shrinks to the widest wrapped line.
+                            let (target, fixed) = match (known.width, avail.width) {
+                                (Some(kw), _) => (Some(kw), true),
+                                (None, AvailableSpace::Definite(aw)) => (Some(aw), false),
+                                (None, AvailableSpace::MinContent) => {
+                                    (Some(longest_word_w(cache, sink, t)), false)
+                                }
+                                (None, AvailableSpace::MaxContent) => (None, false),
+                            };
+                            if let Some(maxw) = target {
+                                if w > maxw && maxw > 0.0 {
+                                    let (lines, line_w) = wrap_metrics(cache, sink, t, maxw);
+                                    return Size {
+                                        width: if fixed { maxw } else { line_w },
+                                        height: known.height.unwrap_or(lines as f32 * h),
+                                    };
+                                }
+                            }
+                            Size {
+                                width: known.width.unwrap_or(w),
+                                height: known.height.unwrap_or(h),
+                            }
+                        }
+                        // Default (non-wrapping) text leaf: a single line.
                         Some(t) => {
                             let (w, h) = measure_cached(cache, sink, t);
                             Size {
@@ -574,6 +624,7 @@ impl DomRenderer {
 
         // The scroll region (if any) is discovered during paint_walk; reset first.
         self.scroll_active = false;
+        self.stick_region_key = None;
         // DOM focus reconciliation accumulators (see paint_walk + the struct doc).
         self.saw_focus_attr = false;
         self.dom_focus = None;
@@ -588,6 +639,21 @@ impl DomRenderer {
         // even when no pointer event re-targeted the renderer.
         if self.saw_focus_attr {
             self.focused = self.dom_focus;
+        }
+
+        // Chat-style stick-to-bottom (a scroll region carrying `data-stick-key`):
+        // a changed key (new conversation) jumps to the bottom; while pinned at
+        // the bottom, newly appended messages and a shrinking viewport (keyboard
+        // up) keep it pinned. Drawing uses content-space y with scroll_y applied
+        // at replay, so adjusting scroll_y here (post-paint) is correct.
+        if let Some(key) = self.stick_region_key.take() {
+            if self.stick_key.as_deref() != Some(key.as_str()) {
+                self.stick_key = Some(key);
+                self.stick_pinned = true; // a freshly-opened thread opens at the end
+            }
+            if self.stick_pinned {
+                self.scroll_y = self.max_scroll();
+            }
         }
 
         // Re-clamp the scroll offset to the (possibly changed) content height.
@@ -663,6 +729,7 @@ impl DomRenderer {
                         size: inherited.font_size * self.scale,
                         weight: inherited.font_weight,
                         italic: inherited.italic,
+                        wrap: inherited.wrap,
                     },
                 )
                 .unwrap(),
@@ -706,7 +773,7 @@ impl DomRenderer {
         // Clone what we need before borrowing self mutably for draw ops.
         let n = self.dom.node(node);
         let kind_is_text = matches!(n.kind, NodeKind::Text(_));
-        let (paint, children, eid, text, is_scroll, input, focus_attr, image_src) = match &n.kind {
+        let (paint, children, eid, text, is_scroll, input, focus_attr, image_src, stick_key) = match &n.kind {
             NodeKind::Element { style, listeners, .. } => {
                 let p = style::to_paint(style, inherited);
                 let mut flags = 0u8;
@@ -740,10 +807,11 @@ impl DomRenderer {
                 // this box (data URI, /assets path, …). Resolved below where the
                 // sink is available.
                 let image_src = style.get("src").filter(|s| !s.is_empty()).cloned();
-                (p, n.children.clone(), eid.map(|e| (e, flags)), None, style::is_scroll(style), input, focus_attr, image_src)
+                let stick_key = style.get("data-stick-key").cloned();
+                (p, n.children.clone(), eid.map(|e| (e, flags)), None, style::is_scroll(style), input, focus_attr, image_src, stick_key)
             }
-            NodeKind::Text(t) => (*inherited, Vec::new(), None, Some(t.clone()), false, None, None, None),
-            NodeKind::Placeholder => (*inherited, Vec::new(), None, None, false, None, None, None),
+            NodeKind::Text(t) => (*inherited, Vec::new(), None, Some(t.clone()), false, None, None, None, None),
+            NodeKind::Placeholder => (*inherited, Vec::new(), None, None, false, None, None, None, None),
         };
         let input_eid = eid.map(|(e, _)| e);
         // Apply DOM-declared focus (the `n` borrow of self.dom has ended).
@@ -776,12 +844,32 @@ impl DomRenderer {
         } else if let Some(t) = text {
             if !t.trim().is_empty() {
                 let fs = paint.font_size * self.scale;
-                let blob = sink.create_text_blob(&t, "sans-serif", fs, paint.font_weight, paint.italic);
-                self.blobs.push(blob);
-                // Baseline ≈ top + cap height. taffy gave the leaf its measured
-                // box; sit the baseline near the bottom of that box.
-                let baseline = y + fs;
-                self.draw_ops.push(DrawOp::Text { blob, x, y: baseline, color: paint.color });
+                if paint.wrap {
+                    let ctx = TextCtx {
+                        text: t.clone(), family: "sans-serif".to_string(),
+                        size: fs, weight: paint.font_weight, italic: paint.italic, wrap: true,
+                    };
+                    // Wrap to the laid-out box width — taffy measured this same
+                    // leaf at this width, so the line breaks match. One blob/line.
+                    let line_h = measure_cached(&mut self.measure_cache, sink, &ctx).1;
+                    let lines = wrap_lines(&mut self.measure_cache, sink, &ctx, w);
+                    for (i, line) in lines.iter().enumerate() {
+                        if line.is_empty() {
+                            continue;
+                        }
+                        let blob = sink.create_text_blob(line, "sans-serif", fs, paint.font_weight, paint.italic);
+                        self.blobs.push(blob);
+                        // Baseline ≈ line top + cap height; stack by line height.
+                        let baseline = y + fs + i as f32 * line_h;
+                        self.draw_ops.push(DrawOp::Text { blob, x, y: baseline, color: paint.color });
+                    }
+                } else {
+                    let blob = sink.create_text_blob(&t, "sans-serif", fs, paint.font_weight, paint.italic);
+                    self.blobs.push(blob);
+                    // Baseline ≈ top + cap height; one line (clipped if over-wide).
+                    let baseline = y + fs;
+                    self.draw_ops.push(DrawOp::Text { blob, x, y: baseline, color: paint.color });
+                }
             }
         }
 
@@ -791,6 +879,7 @@ impl DomRenderer {
             self.scroll_active = true;
             self.scroll_vp = (x, y, w, h);
             self.scroll_bottom = y;
+            self.stick_region_key = stick_key;
             self.draw_ops.push(DrawOp::PushClip { x, y, w, h });
             for c in &children {
                 self.paint_walk(taffy, map, *c, x, y, &paint, true, sink);
@@ -810,8 +899,27 @@ impl DomRenderer {
         if text.is_empty() {
             return 0.0;
         }
-        let ctx = TextCtx { text: text.to_string(), family: "sans-serif".to_string(), size: fs, weight, italic };
+        let ctx = TextCtx { text: text.to_string(), family: "sans-serif".to_string(), size: fs, weight, italic, wrap: false };
         measure_cached(&mut self.measure_cache, sink, &ctx).0
+    }
+
+    /// Width of a value PREFIX up to a caret/selection boundary — like `measure_w`
+    /// but it counts TRAILING spaces. Skia's intrinsic width strips trailing
+    /// whitespace, so a freshly typed space would leave the caret frozen on the
+    /// last glyph; we append a sentinel, measure, and subtract the sentinel's own
+    /// width so the trailing spaces' advances are included.
+    fn measure_prefix_w<S: CanvasSink>(&mut self, sink: &mut S, prefix: &str, fs: f32, weight: u32, italic: bool) -> f32 {
+        if prefix.is_empty() {
+            return 0.0;
+        }
+        if prefix.ends_with(char::is_whitespace) {
+            let probe = format!("{prefix}.");
+            let wp = self.measure_w(sink, &probe, fs, weight, italic);
+            let wd = self.measure_w(sink, ".", fs, weight, italic);
+            (wp - wd).max(0.0)
+        } else {
+            self.measure_w(sink, prefix, fs, weight, italic)
+        }
     }
 
     /// Resolve an `<img src>` to a host image id, cached by `src` so the bytes are
@@ -869,8 +977,8 @@ impl DomRenderer {
         if lo < hi {
             let p0: String = value.chars().take(lo).collect();
             let p1: String = value.chars().take(hi).collect();
-            let x0 = tx + self.measure_w(sink, &p0, fs, paint.font_weight, paint.italic);
-            let x1 = tx + self.measure_w(sink, &p1, fs, paint.font_weight, paint.italic);
+            let x0 = tx + self.measure_prefix_w(sink, &p0, fs, paint.font_weight, paint.italic);
+            let x1 = tx + self.measure_prefix_w(sink, &p1, fs, paint.font_weight, paint.italic);
             self.draw_ops.push(DrawOp::Rrect {
                 x: x0, y: y + h * 0.18, w: (x1 - x0).max(2.0), h: h * 0.64, r: 4.0 * self.scale, color: 0x8042_85F4,
             });
@@ -882,7 +990,7 @@ impl DomRenderer {
         }
         if eid.is_some() && self.focused == eid {
             let cp: String = value.chars().take(caret.min(n)).collect();
-            let cx = tx + self.measure_w(sink, &cp, fs, paint.font_weight, paint.italic);
+            let cx = tx + self.measure_prefix_w(sink, &cp, fs, paint.font_weight, paint.italic);
             self.draw_ops.push(DrawOp::Rrect {
                 x: cx, y: y + h * 0.18, w: 3.0 * self.scale, h: h * 0.64, r: 0.0, color: 0xFF42_85F4,
             });
@@ -904,4 +1012,75 @@ fn measure_cached<S: CanvasSink>(
     let v = sink.measure_text(&t.text, &t.family, t.size, t.weight, t.italic);
     cache.insert(key, v);
     v
+}
+
+/// Greedy word-wrap `t.text` to `max_w` physical px at its font, using the host
+/// single-line measurer (cached). Explicit `\n` force a break; a word longer than
+/// `max_w` gets its own (overflowing) line — no mid-word splitting. Returns each
+/// laid-out line. Measure + paint both call this on the same box width, so the
+/// line breaks they compute agree.
+fn wrap_lines<S: CanvasSink>(
+    cache: &mut HashMap<(String, String, u32, u32, bool), (f32, f32)>,
+    sink: &mut S,
+    t: &TextCtx,
+    max_w: f32,
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for para in t.text.split('\n') {
+        let mut line = String::new();
+        for word in para.split_whitespace() {
+            let cand = if line.is_empty() {
+                word.to_string()
+            } else {
+                format!("{line} {word}")
+            };
+            let probe = TextCtx { text: cand.clone(), family: t.family.clone(), size: t.size, weight: t.weight, italic: t.italic, wrap: false };
+            let cw = measure_cached(cache, sink, &probe).0;
+            if cw > max_w && !line.is_empty() {
+                out.push(std::mem::take(&mut line));
+                line = word.to_string();
+            } else {
+                line = cand;
+            }
+        }
+        out.push(line);
+    }
+    out
+}
+
+/// `(line count, widest line width)` of [`wrap_lines`] — the measure pass needs
+/// the count (→ height) and the widest line (→ the box width when it's free to
+/// shrink). Re-wrapping at that widest-line width reproduces the same breaks, so
+/// the paint pass agrees.
+fn wrap_metrics<S: CanvasSink>(
+    cache: &mut HashMap<(String, String, u32, u32, bool), (f32, f32)>,
+    sink: &mut S,
+    t: &TextCtx,
+    max_w: f32,
+) -> (usize, f32) {
+    let lines = wrap_lines(cache, sink, t, max_w);
+    let mut widest = 0.0f32;
+    for line in &lines {
+        if line.is_empty() {
+            continue;
+        }
+        let probe = TextCtx { text: line.clone(), family: t.family.clone(), size: t.size, weight: t.weight, italic: t.italic, wrap: false };
+        widest = widest.max(measure_cached(cache, sink, &probe).0);
+    }
+    (lines.len().max(1), widest)
+}
+
+/// Width of the longest single word in `t` — a text leaf's min-content width (it
+/// can't wrap narrower than its longest unbreakable word).
+fn longest_word_w<S: CanvasSink>(
+    cache: &mut HashMap<(String, String, u32, u32, bool), (f32, f32)>,
+    sink: &mut S,
+    t: &TextCtx,
+) -> f32 {
+    let mut widest = 0.0f32;
+    for word in t.text.split_whitespace() {
+        let probe = TextCtx { text: word.to_string(), family: t.family.clone(), size: t.size, weight: t.weight, italic: t.italic, wrap: false };
+        widest = widest.max(measure_cached(cache, sink, &probe).0);
+    }
+    widest
 }
