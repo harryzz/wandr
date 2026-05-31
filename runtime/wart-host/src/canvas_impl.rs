@@ -58,6 +58,42 @@ fn text_content_hash(text: &str, family: &str, size: f32, weight: u32, italic: b
     h.finish()
 }
 
+// ─── Emoji-capable text shaping ──────────────────────────────────────────────
+//
+// `TextBlob::from_str` lays out with a SINGLE typeface and no font fallback, so
+// any codepoint the primary face lacks (emoji, CJK) is dropped — that's why
+// emoji vanished in dioxus-canvas guests while the Compose path (which goes
+// through the textlayout FontCollection, with fallback) rendered them fine.
+// Shape through SkShaper (harfbuzz + ICU, embedded) with the system FontMgr as
+// the fallback chain so missing glyphs land on NotoColorEmoji etc. The N32
+// raster surface in `rasterize_text_blob` preserves color-emoji bitmaps.
+// Cached thread-local: shaping is stateless and the renderer runs on one thread.
+thread_local! {
+    static FALLBACK_SHAPER: skia_safe::shaper::Shaper =
+        skia_safe::shaper::Shaper::new(skia_safe::FontMgr::new());
+}
+
+/// Shape `text` at `font` into a single-line blob with system-font fallback for
+/// glyphs the primary face lacks. Falls back to `from_str` if shaping yields
+/// nothing, so plain text never regresses.
+///
+/// Baseline alignment: `SkShaper`'s run handler puts the first line's TOP at the
+/// offset, so the baseline lands at `offset.y - ascent` (ascent is negative).
+/// `TextBlob::from_str` puts the baseline at y=0, and all guest draw points are
+/// baseline-relative — so we pass `offset.y = ascent` to land the baseline back
+/// at 0 and keep text where the guest expects it.
+fn shape_text_fallback(text: &str, font: &Font) -> Option<skia_safe::TextBlob> {
+    if text.is_empty() {
+        return None;
+    }
+    let (_, metrics) = font.metrics();
+    let offset_y = metrics.ascent; // negative → shifts the blob up to baseline 0
+    FALLBACK_SHAPER
+        .with(|sh| sh.shape_text_blob(text, font, true, 1.0e6, (0.0, offset_y)))
+        .map(|(blob, _)| blob)
+        .or_else(|| skia_safe::TextBlob::from_str(text, font))
+}
+
 // ─── WasiDrawable FFI ────────────────────────────────────────────────────────
 //
 // C++ shim in host/cpp/wasi_drawable.{h,cpp} subclasses SkDrawable with a
@@ -1095,7 +1131,7 @@ impl crate::bindings::my::skiko_gfx::canvas::Host for crate::HostState {
         let mut font   = Font::new(tf, size);
         font.set_edging(skia_safe::font::Edging::AntiAlias);
         font.set_subpixel(false);
-        let blob = skia_safe::TextBlob::from_str(&text_str, &font);
+        let blob = shape_text_fallback(&text_str, &font);
         let content_hash = text_content_hash(&text_str, &family_str, size, weight, italic);
         static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         if !ONCE.swap(true, std::sync::atomic::Ordering::Relaxed) {
@@ -1154,7 +1190,7 @@ impl crate::bindings::my::skiko_gfx::canvas::Host for crate::HostState {
             font.set_edging(skia_safe::font::Edging::AntiAlias);
             font.set_subpixel(false);
             let h = text_content_hash(&r.text, &r.family, r.size, r.weight, r.italic);
-            skia_safe::TextBlob::from_str(&r.text, &font).map(|b| (b, r.x, r.y, h))
+            shape_text_fallback(&r.text, &font).map(|b| (b, r.x, r.y, h))
         }).collect();
         self.renderer.multi_blob_cache.insert(id, blobs);
         id
