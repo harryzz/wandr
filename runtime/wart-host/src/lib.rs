@@ -10,7 +10,7 @@ mod lights_impl;
 mod power_impl;
 mod thermal_impl;
 mod sensors_impl;
-mod audio_impl;
+pub mod audio_impl;
 mod locale_impl;
 mod clipboard_impl;
 mod pointer_icon_impl;

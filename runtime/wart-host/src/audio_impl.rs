@@ -55,6 +55,9 @@ mod binder_path {
     // AudioFlinger fallback, so an unsupported format/channel pair fails
     // outright with -889 (UNAVAILABLE) instead of silently converting.
     const AAUDIO_DIRECTION_OUTPUT:    i32 = 0;
+    const AAUDIO_DIRECTION_INPUT:     i32 = 1; // capture (mic)
+    // Input source preset — VOICE_RECOGNITION = raw-ish mic, no AGC/NS, low latency.
+    const AAUDIO_INPUT_PRESET_VOICE_RECOGNITION: i32 = 6;
     const AAUDIO_SHARING_MODE_SHARED: i32 = 1;
     const AAUDIO_USAGE_MEDIA:         i32 = 1;
     const AAUDIO_CONTENT_TYPE_MUSIC:  i32 = 2;
@@ -162,6 +165,67 @@ mod binder_path {
         let m = track_map().lock().ok()?;
         let st = m.1.get(&handle)?;
         Some(f(st))
+    }
+
+    /// De-risk probe (mic input): open an AAUDIO_DIRECTION_INPUT stream and log
+    /// whether the (root/su) caller is granted capture — the open question before
+    /// building the full read path. Opens, reports the endpoint, and closes.
+    /// Invoked via `wart-host --probe-audio-capture`.
+    pub fn probe_capture() {
+        // The probe runs standalone (no render loop), so init the binder
+        // ProcessState ourselves (the standalone path does this on startup).
+        if let Err(e) = crate::binder::init() {
+            log::warn!("probe-capture: binder init failed: {e}");
+            return;
+        }
+        let Some(svc) = service() else {
+            log::warn!("probe-capture: media.aaudio unavailable");
+            return;
+        };
+        let params = StreamParameters {
+            r#channelMask:  AAUDIO_CHANNEL_MONO,
+            r#sampleRate:   48000,
+            r#sharingMode:  AAUDIO_SHARING_MODE_SHARED,
+            r#audioFormat:  AudioFormatDescription {
+                r#type:     AudioFormatType::PCM,
+                r#pcm:      PcmType::FLOAT_32_BIT,
+                r#encoding: String::new(),
+            },
+            r#direction:    AAUDIO_DIRECTION_INPUT,
+            r#inputPreset:  AAUDIO_INPUT_PRESET_VOICE_RECOGNITION,
+            ..Default::default()
+        };
+        let req = StreamRequest {
+            r#params: params,
+            r#attributionSource: Default::default(),
+            r#sharingModeMatchRequired: false,
+            r#inService: false,
+        };
+        let mut params_out = StreamParameters::default();
+        match svc.r#openStream(&req, &mut params_out) {
+            Ok(h) if h > 0 => {
+                log::info!(
+                    "probe-capture: openStream(INPUT) OK — handle={h} rate={} cap_frames={} \
+                     — MIC CAPTURE GRANTED to this caller",
+                    params_out.r#sampleRate, params_out.r#bufferCapacity,
+                );
+                let mut ep = Endpoint::default();
+                match svc.r#getStreamDescription(h, &mut ep) {
+                    Ok(0) => log::info!(
+                        "probe-capture: endpoint OK — {} shared region(s) (upDataQueue carries capture PCM)",
+                        ep.r#sharedMemories.len(),
+                    ),
+                    other => log::warn!("probe-capture: getStreamDescription failed: {other:?}"),
+                }
+                let _ = svc.r#closeStream(h);
+            }
+            Ok(neg) => log::warn!(
+                "probe-capture: openStream(INPUT) returned {neg} — likely permission/policy denial"
+            ),
+            Err(e) => log::warn!(
+                "probe-capture: openStream(INPUT) binder error: {e:?} — SELinux AVC / RECORD_AUDIO?"
+            ),
+        }
     }
 
     pub fn create_track(cfg: super::TrackConfig) -> u32 {
@@ -459,6 +523,17 @@ impl Host for crate::HostState {
         #[cfg(not(target_os = "android"))]
         { let _ = track; 0 }
     }
+}
+
+/// Mic-capture de-risk entry (`wart-host --probe-audio-capture`): does
+/// openStream(INPUT) succeed for our (root/su) caller? See `binder_path::probe_capture`.
+#[cfg(target_os = "android")]
+pub fn probe_capture() {
+    binder_path::probe_capture();
+}
+#[cfg(not(target_os = "android"))]
+pub fn probe_capture() {
+    log::warn!("probe-capture: android-only build");
 }
 
 // Silence "unused" warnings when targeting desktop where binder_path is gone.

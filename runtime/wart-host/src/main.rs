@@ -70,6 +70,15 @@ fn main() {
         return;
     }
 
+    // Audio mic-capture de-risk (does openStream(INPUT) succeed for our caller?).
+    if args.iter().any(|a| a == "--probe-audio-capture") {
+        android_logger::init_once(
+            android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
+        );
+        wasm_android_host::audio_impl::probe_capture();
+        return;
+    }
+
     if args.iter().any(|a| a == "--probe-ime-showsoft") {
         android_logger::init_once(
             android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
