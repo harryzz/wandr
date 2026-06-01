@@ -68,7 +68,13 @@ we drop ([[feedback_no_art_layer_dependencies]]); `IPower` (HAL, survives) is
 perf-hints not screen-state; SurfaceFlinger (survives) knows powerMode but doesn't
 cleanly expose it over binder for READ — it surfaces it as the SF-sourced sysprop
 we already read.** The policy consumes a screen on/off bool, so the source is
-swappable in boot-model (task 33) without touching it. A `wart-arbiter-power`
+swappable in boot-model (task 33) without touching it. **Device fact (Pixel 2 XL /
+LineageOS): on power-press/timeout it goes to AOD/Doze (`screen_state`=3, SF
+`powerMode=Doze`, dim — NOT fully black), and the sysprop transition LAGS ~2-5s.
+`is_live()` (On|Vr only) treats Doze as not-live, so doze engages correctly —
+verified end-to-end with a REAL power-key screen-off (not just a faked setprop):
+doze ENTER ~65s after power-off, EXIT on wake.** The user's "screen never goes
+off" was a 30-min `screen_off_timeout` + AOD-not-black, not a doze bug. A `wart-arbiter-power`
 module is deferred until richer policy (wakelocks, idle stages, SoC-wakelock deep
 doze) needs it (same discipline as audio-focus).
 
