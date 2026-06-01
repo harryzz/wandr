@@ -236,11 +236,12 @@ pub struct SkiaRenderer {
     /// already-inset available rect). Overlays leave these 0.
     pub inset_top:    u32,
     pub inset_bottom: u32,
-    /// Task 68 — soft-keyboard reservation as a PORTRAIT-reference height (px).
-    /// Unlike the chrome insets (physical), this is subtracted from
-    /// `logical_height` AFTER the dihedral rotation so it always eats the USER
-    /// bottom; in landscape it's scaled by `width/height` to match the keyboard's
-    /// landscape depth (mirrors `overlay_rect`'s `ime_depth`). 0 = keyboard hidden.
+    /// Task 68/71 — soft-keyboard reservation in physical px for the CURRENT
+    /// orientation. The IME is the source of truth: it reports the actual px it
+    /// wants per orientation (re-reporting on rotation), so the host applies this
+    /// value verbatim (subtracted from `logical_height` AFTER the dihedral
+    /// rotation so it eats the USER bottom). No host-side orientation scaling.
+    /// 0 = keyboard hidden.
     pub keyboard_base_px: u32,
     /// Base canvas transform re-applied at every begin_frame — identity
     /// normally, a 90° rotation in the standalone rotated mode so the
@@ -335,6 +336,24 @@ unsafe impl Send for SkiaRenderer {}
 /// ROT_90/270 codes swap the logical axes (a portrait UI authored into a
 /// landscape buffer), so they return swapped `(height, width)` logical
 /// dims.
+/// Task 71 step 3 — the real panel's native (portrait) dimensions for THIS
+/// process, so an overlay guest can learn the actual screen size via
+/// `display.display-size` (its own surface is just a strip and can't tell it).
+/// 0 = unset → callers fall back to the renderer's own surface size (correct for
+/// fullscreen apps, where the surface *is* the panel). Per-process global: each
+/// app/overlay is its own zygote child, so there's exactly one panel here. Set
+/// once at loop start from `SfSurface::panel_w/panel_h` (the `sf_panel_dims`
+/// shim read). No literal — the value is the measured panel.
+static PANEL_W: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static PANEL_H: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Record the measured native panel size for this process (see `PANEL_W/H`).
+pub fn set_panel_dims(w: u32, h: u32) {
+    use std::sync::atomic::Ordering;
+    PANEL_W.store(w, Ordering::Relaxed);
+    PANEL_H.store(h, Ordering::Relaxed);
+}
+
 pub(crate) fn dihedral_transform(orient: u32, width: u32, height: u32)
     -> (skia_safe::Matrix, u32, u32)
 {
@@ -644,24 +663,65 @@ impl SkiaRenderer {
     /// *before* the rotation would eat logical WIDTH in landscape). With 0 insets
     /// this is exactly `dihedral_transform(orient, width, height)` (native size).
     fn recompute_transform(&mut self) {
-        // Soft-keyboard depth, scaled to the current orientation (mirrors
-        // overlay_rect's `ime_depth`: same fraction of the user's screen height).
-        let kb = match self.current_orient {
-            _ if self.keyboard_base_px == 0 => 0,
-            4 | 7 => ((self.keyboard_base_px as u64 * self.width as u64)
-                / (self.height as u64).max(1)) as u32,
-            _ => self.keyboard_base_px,
-        };
+        let (m, lw, lh) = dihedral_transform(self.current_orient, self.width, self.height);
         let user_top = self.inset_top; // status bar
+
+        // Task 71 — the host is a pure applier: reserve EXACTLY the keyboard px
+        // the IME reported (it owns its size; no host-side scaling, no magic
+        // floor). Guarding against a collapsed content area is the GUEST's job
+        // (its own clamp/min must not invert) — not a fabricated host minimum.
+        let kb = self.keyboard_base_px;
         let user_bottom = self.inset_bottom + kb; // taskbar + keyboard
 
-        let (m, lw, lh) = dihedral_transform(self.current_orient, self.width, self.height);
         self.logical_width = lw;
         self.logical_height = lh.saturating_sub(user_top + user_bottom).max(1);
         // Shift content down past the user-top inset, in USER space (pre-rotation).
         let mut base = m;
         base.pre_concat(&skia_safe::Matrix::translate((0.0, user_top as f32)));
         self.base_matrix = base;
+    }
+
+    // ── Task 71 — unified display geometry (read-only) ────────────────────
+    // The three nested rectangles, in user/logical space at the current
+    // orientation. `recompute_transform` already owns the inputs (orientation,
+    // chrome insets, keyboard reservation); these just re-project them without
+    // mutating any state. See `my:skiko-gfx/display`.
+
+    /// The whole panel at the current orientation, no insets. Uses the real
+    /// measured panel size (task 71 step 3) so an OVERLAY guest gets the true
+    /// screen, not its own strip surface; falls back to the surface size when
+    /// the panel isn't known (fullscreen apps, where they're equal).
+    pub fn display_size(&self) -> (u32, u32) {
+        use std::sync::atomic::Ordering;
+        let pw = PANEL_W.load(Ordering::Relaxed);
+        let ph = PANEL_H.load(Ordering::Relaxed);
+        let (w, h) = if pw > 0 && ph > 0 { (pw, ph) } else { (self.width, self.height) };
+        let (_, lw, lh) = dihedral_transform(self.current_orient, w, h);
+        (lw, lh)
+    }
+
+    /// `display` minus the chrome strips (status bar + task bar). The soft
+    /// keyboard is NOT removed here — that's `safe_size`.
+    pub fn content_size(&self) -> (u32, u32) {
+        let (_, lw, lh) = dihedral_transform(self.current_orient, self.width, self.height);
+        let chrome = self.inset_top + self.inset_bottom;
+        (lw, lh.saturating_sub(chrome).max(1))
+    }
+
+    /// `content` minus the soft keyboard — equals the live logical (surface)
+    /// size `recompute_transform` already maintains (what `canvas.surface-*`
+    /// reports). `safe == content` when the keyboard is down.
+    pub fn safe_size(&self) -> (u32, u32) {
+        (self.logical_width, self.logical_height)
+    }
+
+    /// 0 = portrait, 1 = landscape. Landscape is exactly the set of dihedral
+    /// codes that swap the logical axes (4..=7), matching `dihedral_transform`.
+    pub fn orientation_code(&self) -> u32 {
+        match self.current_orient & 7 {
+            4..=7 => 1,
+            _ => 0,
+        }
     }
 
     /// Move CPU-side caches from `old` into `self` so warm-resume preserves

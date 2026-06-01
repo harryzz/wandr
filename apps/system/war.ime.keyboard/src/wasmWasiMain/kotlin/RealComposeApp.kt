@@ -32,6 +32,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -43,6 +48,8 @@ import androidx.compose.ui.scene.ComposeScene
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntSize
 import org.jetbrains.skiko.wasi.wit.Keyboard as WitKeyboard
+import org.jetbrains.skiko.wasi.wit.Display as WitDisplay
+import org.jetbrains.skiko.wasi.wit.Window as WitWindow
 
 val wasiFrameDispatcher: WasiFrameDispatcher = WasiFrameDispatcher()
 
@@ -83,7 +90,10 @@ class MutableSceneWindowInfo(initial: IntSize) : WindowInfo {
     override var isWindowFocused: Boolean = true
     override var keyboardModifiers: androidx.compose.ui.input.pointer.PointerKeyboardModifiers =
         androidx.compose.ui.input.pointer.PointerKeyboardModifiers(0)
-    override var containerSize: IntSize = initial
+    // Backed by snapshot state so a composable that reads it (KeyboardScreen)
+    // recomposes when the host swaps logical dims on rotation — that's the
+    // signal the IME uses to re-request its per-orientation overlay height.
+    override var containerSize: IntSize by mutableStateOf(initial)
 }
 
 /// The live scene's WindowInfo, set by `buildRealComposeScene`, so the
@@ -112,26 +122,51 @@ fun buildRealComposeScene(widthPx: Int, heightPx: Int, density: Float): ComposeS
     return scene
 }
 
-/// Task 47 step 3c — preferred panel height in physical pixels. The
-/// host's wart-host receives this via `Keyboard.Import.requestOverlayHeight`,
-/// forwards to `sf_resize_overlay`, and flushes the ANativeWindow's
-/// buffer geometry so the next frame draws to the new size. The IME
-/// is launched with an `INITIAL_OVERLAY_PX=1200` surface; this verb
-/// trims it to a sensible keyboard height (30% of a 2880-px panel).
-///
-/// Sized for the 5-row English / language-plugin layouts (digits + 3
-/// letter rows + modifier row). Symbols / Emoji are 4 rows so they
-/// just have a bit more whitespace at the top — harmless. If a
-/// future layout grows, this can be re-requested on layout change.
-/// The host reserves this same height as the foreground app's bottom
-/// inset (task 68), so keeping it modest also keeps more app visible.
-private const val OVERLAY_HEIGHT_PX: UInt = 864u // 30% of 2880
+// ── Keyboard-height policy (task 71 step 1 — intrinsic dp sizing) ──────────
+// The IME OWNS its size and derives it — NO hardcoded pixels, NO per-orientation
+// constants, resolution/density-independent. Height = (rows of the tallest
+// layout) × a comfortable row height, in dp, converted to px via the reported
+// density, capped to a fraction of the REAL screen so it never starves content.
+// The host applies the result verbatim (dumb applier). These three are the only
+// tunables — each a justified single source of truth, in the layer (the IME)
+// that owns keyboard-size policy.
+//
+/** Comfortable key-row height. Material's minimum touch target is 48 dp. */
+private const val ROW_HEIGHT_DP: Float = 48f
+/** Gap around + between rows — mirrors `ImeKeyboard`'s Column padding + spacing
+ *  (4 dp), so the requested surface matches what the layout actually draws. */
+private const val ROW_GAP_DP: Float = 4f
+/** Ceiling: the keyboard never occludes more than this fraction of the screen's
+ *  current-orientation height (protects the focused content). Only bites in
+ *  landscape, where the short edge makes the intrinsic dp height too tall:
+ *  portrait intrinsic (~32% of the long edge) stays under it; landscape caps to
+ *  this fraction of the short edge (~45%). */
+private const val MAX_SCREEN_FRACTION: Float = 0.45f
 
 @Composable
 private fun KeyboardScreen() {
-    // Declare our preferred overlay height once at composition root.
-    LaunchedEffect(Unit) {
-        WitKeyboard.Import.requestOverlayHeight(OVERLAY_HEIGHT_PX)
+    // The tallest layout's row count drives the surface size, so the surface is
+    // stable across layout switches (a 4-row symbol layout just has whitespace —
+    // no per-keystroke SF resize). Derived from the loaded layouts, not a literal.
+    val maxRows = remember { ImeKeyboardDefaults.loadAllLayouts().maxOf { it.rows.size } }
+
+    // Re-request our overlay height whenever the surface geometry changes
+    // (startup + every rotation). `containerSize` is snapshot-backed, so this
+    // recomposes on rotation; we read the REAL panel size from the `display`
+    // namespace (an overlay's own surface is just a strip — it can't tell us)
+    // and the density from `window`, then derive the height. No orientation
+    // branch: the same formula on the rotated `display-size` gives the right
+    // result for free.
+    val containerSize = LocalWindowInfo.current.containerSize
+    LaunchedEffect(containerSize) {
+        val density = WitWindow.Import.getDensity()                 // px per dp
+        val rows = maxRows.toFloat()
+        val intrinsicDp = rows * ROW_HEIGHT_DP + (rows + 1f) * ROW_GAP_DP
+        val intrinsicPx = (intrinsicDp * density).toInt()
+        val screenH = WitDisplay.Import.displaySize().height.toFloat() // real panel, current orient
+        val capPx = (screenH * MAX_SCREEN_FRACTION).toInt()
+        val heightPx = minOf(intrinsicPx, capPx).coerceAtLeast(1)
+        WitKeyboard.Import.requestOverlayHeight(heightPx.toUInt())
     }
 
     // The overlay surface IS the keyboard panel — fillMaxSize uses

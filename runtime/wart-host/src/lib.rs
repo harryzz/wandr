@@ -23,6 +23,7 @@ pub mod ime_impl;
 pub mod wms_impl;
 mod ime_host_impl;
 mod keyboard_host_impl;
+mod display_geometry_impl;
 #[cfg(target_os = "android")]
 mod ime_inbound;
 #[cfg(target_os = "android")]

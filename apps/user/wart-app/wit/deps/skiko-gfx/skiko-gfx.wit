@@ -952,6 +952,37 @@ interface keyboard {
     request-overlay-height: func(height-px: u32);
 }
 
+/// Task 71 — unified read-only display/surface geometry. One namespace for
+/// the three nested rectangles every guest cares about, exposed consistently
+/// to fullscreen apps AND overlays (the IME). All values are physical px at
+/// the CURRENT device orientation; on rotation the host recomputes them and
+/// fires `renderer.on-resize`, so a guest should re-read after a resize.
+///
+/// Geometry only — input routing (`keyboard.send-key-event`) and overlay
+/// sizing (`keyboard.request-overlay-height`) stay in `keyboard`.
+interface display {
+    /// Width/height in physical px.
+    record size { width: u32, height: u32 }
+    /// Coarse device orientation, derived from the dihedral rotation the
+    /// host applies. The IME reads it to pick its per-orientation layout.
+    enum orientation { portrait, landscape }
+
+    /// The whole panel at the current orientation, no insets — for full-bleed
+    /// needs (wallpaper, splash).
+    display-size: func() -> size;
+    /// `display` minus the chrome strips (status bar + task bar). What a normal
+    /// app lays out to; equals `display` for immersive / no-chrome apps.
+    content-size: func() -> size;
+    /// `content` minus the soft keyboard — the region a focused editor must
+    /// stay within. Transient (shrinks when the keyboard shows); equals
+    /// `content` when the keyboard is hidden. Same value as the legacy
+    /// `canvas.surface-width/height` a fullscreen guest already lays out to.
+    safe-size: func() -> size;
+    /// Portrait vs landscape at the current orientation. (Named distinctly
+    /// from the `orientation` enum — WIT items share one name namespace.)
+    current-orientation: func() -> orientation;
+}
+
 /// Launcher / home support (task 57). Lets a launcher guest enumerate
 /// installed apps and ask the arbiter to launch them. Flat-string
 /// returns keep the Kotlin canonical-ABI bindings simple (no list<record>
@@ -1035,5 +1066,6 @@ world skiko-ui {
     import status;
     import ime;
     import keyboard;
+    import display;
     export renderer;
 }
