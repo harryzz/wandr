@@ -59,7 +59,24 @@ const KEEPALIVE_MS: u64 = 300_000; // 5 min
 // Frames the engine has produced nothing — drives the adaptive idle cadence below.
 thread_local! {
     static IDLE_FRAMES: Cell<u32> = const { Cell::new(0) };
+    /// M4 — consecutive `bg-tick`s the engine produced nothing on; drives the
+    /// background idle-ramp (battery) the same way `IDLE_FRAMES` drives the
+    /// foreground one. Reset to 0 whenever a backgrounded pump sees activity.
+    static BG_IDLE: Cell<u32> = const { Cell::new(0) };
 }
+
+// M4 — background-pump idle-ramp (battery). When backgrounded the host calls
+// `bg-tick` (no rendering); we pump FAST right after activity so a message lands
+// quickly, then ramp DOWN when the socket is quiet so a truly-idle Signal wakes
+// the CPU/radio far less. The host clamps to its ~1 s idle cap, so IDLE_MS is the
+// effective floor; an incoming message snaps the cadence back to ACTIVE on the
+// next tick (≤ the current delay of latency). Guest-authored (the host applies
+// the returned value verbatim, clamped).
+const BG_ACTIVE_MS: u32 = 250; // ~4 Hz right after activity (snappy receive)
+const BG_COOL_MS: u32 = 500; // ~2 Hz cooling down
+const BG_IDLE_MS: u32 = 1000; // ~1 Hz when quiet (= the host idle cap)
+const BG_COOL_AFTER: u32 = 8; // ticks of quiet before cooling
+const BG_IDLE_AFTER: u32 = 24; // ticks of quiet before fully idle
 
 dioxus_canvas::wire!(app, pre_frame: |r| {
     r.set_scale(2.0); // hi-dpi panel — author px are small; 2× for readability
@@ -106,10 +123,27 @@ dioxus_canvas::wire!(app, pre_frame: |r| {
 impl crate::exports::war::background::background::Guest for __DioxusCanvasGuest {
     /// Backgrounded: the host calls this instead of render_frame. Pump the engine
     /// (drains the socket → events → notifications) without rendering the hidden
-    /// surface; ask for a ~4 Hz cadence so a backgrounded message arrives quickly.
+    /// surface, then return an idle-adaptive delay: fast right after activity,
+    /// ramping down to ~1 Hz when the socket is quiet (battery).
     fn bg_tick() -> u32 {
-        pump();
-        250
+        let changed = pump();
+        let idle = if changed {
+            BG_IDLE.with(|c| c.set(0));
+            0
+        } else {
+            BG_IDLE.with(|c| {
+                let n = c.get().saturating_add(1);
+                c.set(n);
+                n
+            })
+        };
+        if idle >= BG_IDLE_AFTER {
+            BG_IDLE_MS
+        } else if idle >= BG_COOL_AFTER {
+            BG_COOL_MS
+        } else {
+            BG_ACTIVE_MS
+        }
     }
 }
 
