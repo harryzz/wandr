@@ -84,7 +84,21 @@ shared direct calls in `shared.rs`; the submodules are readability only (zero
 behavior change, 4 shell tests pass). Revisit a true crate split only with a
 concrete driver (e.g. a swappable real-IME backend, [[project_ime_options]]).
 
-**Deferred (cosmetic / additive, not blocking):** `state.rs` is still a thin
-registry/home/persistence shim (binary uses it; fully deleting it is harmless
-cleanup). Audio/notification `ResourceFocus` variants are purely additive on this
-model. Plan file: `~/.claude/plans/cat-task-state-steady-stallman.md`.
+**Resource-focus variants — status (2026-06-01):** the `focus: HashMap<ResourceKind,
+ResourceFocus>` map is generalized; `ResourceKind::ImeEditor` is the only live
+variant. Of the old "audio-focus / notifications" proposal:
+- **Notifications: DONE, but NOT as a resource-focus** — shipped as M3
+  ([[project_signal_bg_receipt]]): a notification LIST (`war:notify` +
+  `wart-arbiter-notify`), the correct shape since many notifications coexist (a
+  notification isn't a single-holder focus). Do not re-model it into the focus map.
+- **Audio focus: DEFERRED until a driver (user decision 2026-06-01).** A clean fit
+  (single holder, focus-follows-grant → prior holder ducks/pauses, mirrors the IME
+  editor) and an alarm-sized add (`ResourceKind::Audio` + `ResourceFocus::Audio(pid)`
+  + request/abandon verbs + revoke push), but NO wart app currently arbitrates audio
+  (AAudio plumbing exists from task 21; nothing requests focus). Build it only when a
+  consumer needs it (Signal voice-note playback, a media app) — don't build a
+  primitive without a driver.
+
+**Deferred (cosmetic):** `state.rs` is still a thin registry/home/persistence shim
+(binary uses it; fully deleting it is harmless cleanup). Plan file:
+`~/.claude/plans/cat-task-state-steady-stallman.md`.
