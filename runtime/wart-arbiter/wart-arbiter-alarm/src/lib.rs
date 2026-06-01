@@ -20,15 +20,26 @@ impl AlarmModule {
         AlarmModule
     }
 
-    /// `schedule-alarm <app-id> <id> <when-unix-ms> <repeat-ms> [wake-kind]` —
-    /// schedule or replace (idempotent on `(app-id, id)`). `when` is an ABSOLUTE
-    /// unix-ms fire time: the host computes `now + delay` from its own (same
-    /// device) wall clock, so the arbiter stays clockless except for the tick.
+    /// `schedule-alarm <owner> <id> <when-unix-ms> <repeat-ms> [wake-kind]` —
+    /// schedule or replace (idempotent on `(app-id, id)`). `owner` is either the
+    /// caller's **pid** (a bare integer — the host sends `std::process::id()`,
+    /// resolved here to its app-id; app-ids are never bare integers) or an
+    /// **app-id** directly (the CLI). `when` is an ABSOLUTE unix-ms fire time:
+    /// the host computes `now + delay` from its own (same device) wall clock, so
+    /// the arbiter stays clockless except for the tick.
     fn cmd_schedule(&mut self, args: &str, ctx: &mut Ctx) -> Reply {
         let t: Vec<&str> = args.split_whitespace().collect();
         if t.len() < 4 {
-            return Reply::err("schedule-alarm-args: expected <app-id> <id> <when-unix-ms> <repeat-ms> [kind]");
+            return Reply::err("schedule-alarm-args: expected <owner-pid-or-app-id> <id> <when-unix-ms> <repeat-ms> [kind]");
         }
+        // Resolve the owner: a bare integer ⇒ a pid (host self-report) → app-id.
+        let app_id = match t[0].parse::<i32>() {
+            Ok(pid) => match ctx.store.app_by_pid(pid) {
+                Some(app) => app.app_id.clone(),
+                None => return Reply::err(format!("schedule-alarm-unknown-pid {pid}")),
+            },
+            Err(_) => t[0].to_string(),
+        };
         let (Ok(alarm_id), Ok(when_ms), Ok(repeat_ms)) =
             (t[1].parse::<u64>(), t[2].parse::<u64>(), t[3].parse::<u64>())
         else {
@@ -36,7 +47,7 @@ impl AlarmModule {
         };
         let wake_kind = t.get(4).map(|s| LaunchKind::from_wire(s)).unwrap_or(LaunchKind::Headless);
         ctx.store.upsert_alarm(Alarm {
-            app_id: t[0].to_string(),
+            app_id: app_id.clone(),
             alarm_id,
             next_fire_ms: when_ms,
             repeat_ms,
@@ -44,23 +55,31 @@ impl AlarmModule {
             pending_deliver: false,
         });
         log::info!(
-            "arbiter: schedule-alarm app={} id={alarm_id} when={when_ms} repeat={repeat_ms}ms kind={}",
-            t[0], wake_kind.as_wire()
+            "arbiter: schedule-alarm app={app_id} id={alarm_id} when={when_ms} repeat={repeat_ms}ms kind={}",
+            wake_kind.as_wire()
         );
-        Reply::ok(format!("alarm app={} id={alarm_id} when={when_ms} repeat={repeat_ms}ms", t[0]))
+        Reply::ok(format!("alarm app={app_id} id={alarm_id} when={when_ms} repeat={repeat_ms}ms"))
     }
 
     fn cmd_cancel(&mut self, args: &str, ctx: &mut Ctx) -> Reply {
         let t: Vec<&str> = args.split_whitespace().collect();
         if t.len() != 2 {
-            return Reply::err("cancel-alarm-args: expected <app-id> <id>");
+            return Reply::err("cancel-alarm-args: expected <owner-pid-or-app-id> <id>");
         }
         let Ok(alarm_id) = t[1].parse::<u64>() else {
             return Reply::err(format!("cancel-alarm-bad-id {:?}", t[1]));
         };
-        let removed = ctx.store.cancel_alarm(t[0], alarm_id);
-        log::info!("arbiter: cancel-alarm app={} id={alarm_id} removed={removed}", t[0]);
-        Reply::ok(format!("cancel app={} id={alarm_id} removed={removed}", t[0]))
+        // Owner: bare integer ⇒ pid → app-id (host self-report), else app-id (CLI).
+        let app_id = match t[0].parse::<i32>() {
+            Ok(pid) => match ctx.store.app_by_pid(pid) {
+                Some(app) => app.app_id.clone(),
+                None => return Reply::err(format!("cancel-alarm-unknown-pid {pid}")),
+            },
+            Err(_) => t[0].to_string(),
+        };
+        let removed = ctx.store.cancel_alarm(&app_id, alarm_id);
+        log::info!("arbiter: cancel-alarm app={app_id} id={alarm_id} removed={removed}");
+        Reply::ok(format!("cancel app={app_id} id={alarm_id} removed={removed}"))
     }
 
     /// Fire every due alarm (`next_fire_ms <= now`).

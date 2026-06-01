@@ -1,0 +1,58 @@
+// Arbiter Inc. 3c — AlarmManager / JobScheduler (timed-wake).
+//
+// A guest asks the runtime to wake it later / periodically; the arbiter fires
+// the alarm on time and delivers it via the guest's `on-alarm` export —
+// whether the guest is still alive (callback) or has exited (the arbiter
+// relaunches it, then delivers). The arbiter is the scheduling authority
+// (analogous to Android's AlarmManager/JobScheduler); see the
+// `wart-arbiter-alarm` module.
+//
+// Separate package (like `war:ime`) so adding it doesn't touch the shared
+// `my:skiko-gfx` contract (no WIT-sync churn across every guest). A guest that
+// wants timed wakes imports `scheduler` + exports `alarm-handler`
+// (`alarm-client`); the host links `scheduler` (`alarm-host`) and calls the
+// guest's export (`alarm-events`).
+
+package war:alarm@0.1.0;
+
+/// Imported by a guest that wants to be woken. The runtime forwards `schedule`
+/// to the arbiter, which stores the alarm (keyed by `(app, id)`) and fires it.
+interface scheduler {
+    /// Schedule (or replace — idempotent on `id`) a wake. `delay-ms` is relative
+    /// to now; `repeat-ms` > 0 makes it periodic (re-armed after each fire),
+    /// `repeat-ms` == 0 is one-shot. The arbiter delivers `on-alarm(id)` at the
+    /// fire time, relaunching the guest first if it has exited.
+    schedule: func(id: u64, delay-ms: u64, repeat-ms: u64);
+
+    /// Cancel a previously-scheduled alarm by `id`. No-op if unknown.
+    cancel: func(id: u64);
+}
+
+/// Exported by a guest that uses alarms. The runtime (via the arbiter) calls
+/// this when a scheduled alarm fires.
+interface alarm-handler {
+    /// A scheduled alarm fired. `id` is the value passed to `scheduler.schedule`.
+    /// The guest does its bounded work (reconnect + drain, refresh, notify, …).
+    on-alarm: func(id: u64);
+}
+
+/// World a guest implements to use alarms: import the scheduler, export the
+/// handler. A regular wart `.warpkg` whose own world also `include`s the
+/// `my:skiko-gfx` surface for a GUI guest.
+world alarm-client {
+    import scheduler;
+    export alarm-handler;
+}
+
+/// Host-side import world — the runtime `add_to_linker`s `scheduler` (it
+/// implements it, forwarding to the arbiter) onto the guest's linker.
+world alarm-host {
+    import scheduler;
+}
+
+/// Host-side export world — the runtime bindgen's this to get a typed
+/// `call_on_alarm`, bound conditionally per instance (like `war:ime/ime-events`):
+/// guests that export `alarm-handler` get the binding, others yield `None`.
+world alarm-events {
+    export alarm-handler;
+}
