@@ -54,10 +54,16 @@ alarm only does real work when Signal is dead, so a long interval saves wakeups)
 background-pumped via render@1Hz when paused (post-task-64 on-demand) — M4 adds the
 notification ALERT + clean bg-tick pump + wake-from-dead, the actual new value.
 
-**Doze (PowerManager v1, `351394a8`):** host-local — when the screen is off past a
-60s grace, the standalone loop stretches the per-frame cadence (render AND bg-tick)
-to a coarse `DOZE_CADENCE=10s` (10× fewer pumps; verified on device: 1Hz→0.1Hz on
-screen-off, resumes on screen-on). It SLOWS, not suspends: a single keep-alive
+**Doze (PowerManager):** now a proper **`wart-arbiter-power` module** (`5aa52868`,
+refactored from the v0 host-local `351394a8` after the user flagged that host-side
+policy diverged from "arbiter decides, host applies"). The arbiter polls
+`debug.tracing.screen_state` (`spawn_screen_poller`, 2s) → `Event::ScreenState` →
+PowerModule applies the 60s grace + fans `doze <cadence-ms>` (10000/0) to every
+tracked host; the host is a dumb applier (`ime_inbound` `Doze` → stretches its
+render+bg-tick cadence to the pushed value). Device-verified: arbiter logs doze
+ENTER/EXIT, host applies within ~60ms; 10× fewer pumps when screen off, resumes on
+on. Known minor gap: a host launched mid-doze defaults normal until the next
+transition (fan is on-change). It SLOWS not suspends It SLOWS, not suspends: a single keep-alive
 `on-alarm` is one engine step, far short of an async reconnect, and userspace can't
 suspend the SoC — so a coarse cadence (socket still serviced within Signal's
 ~30-55s keepalive; msgs within ~10s when off) is the correct simple win, no
