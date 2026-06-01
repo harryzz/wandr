@@ -16,8 +16,10 @@ use std::cell::RefCell;
 use crate::exports::my::skiko_gfx::frame_pacing::Guest as FramePacingGuest;
 use crate::exports::my::skiko_gfx::renderer::{Guest as RendererGuest, KeyKind, PointerKind};
 use crate::exports::war::alarm::alarm_handler::Guest as AlarmGuest;
+use crate::exports::war::audio_focus::focus_handler::{FocusChange, Guest as FocusHandlerGuest};
 use crate::exports::war::background::background::Guest as BackgroundGuest;
 use crate::exports::war::notify::notify_handler::Guest as NotifyHandlerGuest;
+use crate::war::audio_focus::focus::{self, FocusKind};
 use crate::war::notify::notifier;
 use crate::my::skiko_gfx::canvas::{
     self, BlendMode, ColorFilterKind, PaintAttrs, PaintStyle, StrokeCap, StrokeJoin,
@@ -36,6 +38,11 @@ struct State {
     bg_count: u32,
     notified: bool,
     clicked: u32,
+    // wart-arbiter-audio M2 — focus state. `focus_requested` guards the one-shot
+    // request; `focus_change` is the last on-focus-changed code (0..3) the
+    // arbiter pushed, colouring the bar as visible proof.
+    focus_requested: bool,
+    focus_change: u32,
 }
 
 thread_local! {
@@ -76,12 +83,25 @@ impl RendererGuest for Component {
                 notifier::post(1, "Alarm Test", "tap me");
                 s.notified = true;
             }
+            // wart-arbiter-audio M2 — request permanent audio focus once.
+            if !s.focus_requested {
+                let r = focus::request(FocusKind::Gain);
+                s.focus_requested = true;
+                let _ = r; // host logs the granted/failed result
+            }
             let (w, h) = (s.w.max(1.0), s.h.max(1.0));
             canvas::begin_frame();
             canvas::clear(0xFF12121C);
             // Growing bar: width tracks the alarm count (wraps to stay on-screen).
+            // Colour tracks the audio-focus state — green=owner/gain, amber=duck,
+            // grey=loss/loss-transient — visible proof of on-focus-changed.
+            let bar_color = match s.focus_change {
+                0 | 1 => 0xFF707070, // loss / loss-transient
+                2     => 0xFFD0A030, // duck
+                _     => 0xFF40C040, // gain (owner)
+            };
             let bar_w = ((s.count as f32) * 24.0) % (w - 40.0).max(24.0);
-            canvas::draw_rect(20.0, h * 0.4, bar_w + 24.0, 60.0, paint(0xFF40C040));
+            canvas::draw_rect(20.0, h * 0.4, bar_w + 24.0, 60.0, paint(bar_color));
             canvas::end_frame();
         });
     }
@@ -120,6 +140,19 @@ impl NotifyHandlerGuest for Component {
     fn on_notification_click(id: u64) {
         STATE.with(|s| s.borrow_mut().clicked += 1);
         let _ = id;
+    }
+}
+
+impl FocusHandlerGuest for Component {
+    fn on_focus_changed(change: FocusChange) {
+        // Record the change so render_frame recolours the bar (visible proof).
+        let code = match change {
+            FocusChange::Loss          => 0,
+            FocusChange::LossTransient => 1,
+            FocusChange::Duck          => 2,
+            FocusChange::Gain          => 3,
+        };
+        STATE.with(|s| s.borrow_mut().focus_change = code);
     }
 }
 

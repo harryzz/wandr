@@ -202,6 +202,11 @@ pub struct InstantiatedApp {
     /// `on-notification-click(id)` on these when a `notification-clicked` push
     /// arrives; `None` for guests that don't handle taps.
     pub notify_events: Option<crate::notify_events_bindings::NotifyEvents>,
+    /// wart-arbiter-audio (M2) — `Some(...)` if the component exports
+    /// `war:audio-focus/focus-handler`. The host's `ime_inbound` drain calls
+    /// `on-focus-changed(change)` on these when an `on-focus-changed` push
+    /// arrives; `None` for guests that don't track focus.
+    pub audio_focus_events: Option<crate::audio_focus_events_bindings::AudioFocusEvents>,
 }
 
 impl LoadedApp {
@@ -219,6 +224,8 @@ impl LoadedApp {
             .map_err(|e| anyhow!("NotifyHost::add_to_linker: {e:#}"))?; // Signal bg-receipt M3
         crate::keyguard_host_bindings::KeyguardHost::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)
             .map_err(|e| anyhow!("KeyguardHost::add_to_linker: {e:#}"))?; // keyguard M3
+        crate::audio_focus_host_bindings::AudioFocusHost::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)
+            .map_err(|e| anyhow!("AudioFocusHost::add_to_linker: {e:#}"))?; // wart-arbiter-audio M2
 
         for dep in &self.deps {
             wire_dep_into_linker(&mut linker, store, dep)?;
@@ -266,7 +273,15 @@ impl LoadedApp {
         if notify_events.is_some() {
             log::info!("loader: app exports war:notify/notify-handler — notification taps enabled");
         }
-        Ok(InstantiatedApp { skiko, ime_events, frame_pacing, alarm_events, bg_tick, notify_events })
+        // wart-arbiter-audio (M2) — optional audio-focus handler (same .ok() probe).
+        let audio_focus_events =
+            crate::audio_focus_events_bindings::AudioFocusEvents::new(&mut *store, &instance).ok();
+        if audio_focus_events.is_some() {
+            log::info!("loader: app exports war:audio-focus/focus-handler — focus changes enabled");
+        }
+        Ok(InstantiatedApp {
+            skiko, ime_events, frame_pacing, alarm_events, bg_tick, notify_events, audio_focus_events,
+        })
     }
 
     /// One-shot CLI consumers (`wasi:cli/command` world) — task 36 step 7.
@@ -291,6 +306,8 @@ impl LoadedApp {
             .map_err(|e| anyhow!("NotifyHost::add_to_linker: {e:#}"))?; // Signal bg-receipt M3
         crate::keyguard_host_bindings::KeyguardHost::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)
             .map_err(|e| anyhow!("KeyguardHost::add_to_linker: {e:#}"))?; // keyguard M3
+        crate::audio_focus_host_bindings::AudioFocusHost::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)
+            .map_err(|e| anyhow!("AudioFocusHost::add_to_linker: {e:#}"))?; // wart-arbiter-audio M2
 
         for dep in &self.deps {
             wire_dep_into_linker(&mut linker, store, dep)?;

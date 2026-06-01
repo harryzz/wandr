@@ -1,0 +1,58 @@
+// war:audio-focus — the audio-focus primitive (wart-arbiter-audio, M2). A guest
+// requests audio focus through the `focus` host import; the host forwards it to
+// the arbiter's audio-focus module, which owns the cross-app focus stack and —
+// when the owner changes — delivers `on-focus-changed(change)` to each affected
+// guest's `focus-handler` export. Separate package (like war:alarm / war:notify)
+// so it carries no skiko-gfx WIT-sync obligation.
+
+package war:audio-focus@0.1.0;
+
+interface focus {
+    /// What a guest asks for (Android AUDIOFOCUS_GAIN family).
+    enum focus-kind {
+        /// Permanent — evict prior owners (a call / music start).
+        gain,
+        /// Transient — prior owner pauses, resumes when we abandon (a prompt).
+        gain-transient,
+        /// Transient may-duck — prior owner lowers volume, keeps playing.
+        gain-transient-may-duck,
+    }
+    /// Outcome of a request. `delayed` = not granted yet but queued (reserved);
+    /// `failed` = refused.
+    enum focus-result { granted, delayed, failed }
+
+    /// Request audio focus of the given kind. The arbiter demotes the previous
+    /// owner per `kind` and makes this guest the owner.
+    request: func(kind: focus-kind) -> focus-result;
+    /// Release focus; the prior (transient/duck) owner regains it.
+    abandon: func();
+}
+
+interface focus-handler {
+    /// What an affected owner is told (Android AUDIOFOCUS_LOSS family).
+    enum focus-change {
+        /// Permanent loss — stop + release.
+        loss,
+        /// Transient loss — pause; a `gain` follows when focus returns.
+        loss-transient,
+        /// Duck — lower volume, keep playing.
+        duck,
+        /// Regained focus — resume / unduck.
+        gain,
+    }
+    /// The arbiter changed this guest's focus. It pauses / ducks / resumes.
+    on-focus-changed: func(change: focus-change);
+}
+
+/// Host-import side — the host implements `focus` (request/abandon → forwarded to
+/// the arbiter) and `add_to_linker`s it onto every guest (harmless for ones that
+/// don't import it).
+world audio-focus-host {
+    import focus;
+}
+
+/// Export side — typed `on-focus-changed` for guests that export `focus-handler`
+/// (probed with `.ok()` per instance, like `alarm-events`).
+world audio-focus-events {
+    export focus-handler;
+}

@@ -27,6 +27,7 @@ mod keyboard_host_impl;
 mod alarm_host_impl;
 mod notify_host_impl;
 mod keyguard_host_impl;
+mod audio_focus_host_impl;
 mod display_geometry_impl;
 #[cfg(target_os = "android")]
 mod ime_inbound;
@@ -162,6 +163,26 @@ mod notify_events_bindings {
     wasmtime::component::bindgen!({
         path: "../../wit/notify.wit",
         world: "notify-events",
+    });
+}
+
+/// wart-arbiter-audio (M2) — host-import side of `war:audio-focus`. The host
+/// implements `focus` (request/abandon → forwarded to the arbiter; see
+/// `audio_focus_host_impl.rs`) and `add_to_linker`s it onto every guest.
+mod audio_focus_host_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../wit/audio-focus.wit",
+        world: "audio-focus-host",
+    });
+}
+
+/// wart-arbiter-audio (M2) — export side: typed `call_on_focus_changed` for
+/// guests that export `war:audio-focus/focus-handler`. Bound conditionally per
+/// instance (like `alarm_events`); other guests yield `None` (inert).
+mod audio_focus_events_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../wit/audio-focus.wit",
+        world: "audio-focus-events",
     });
 }
 

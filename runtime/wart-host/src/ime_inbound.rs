@@ -134,6 +134,13 @@ pub enum InboundEvent {
     /// normal pacing; `>0` means slow the render/bg-tick loop to that coarse
     /// cadence while the screen is off. The host is a dumb applier.
     Doze { cadence_ms: u64 },
+
+    /// wart-arbiter-audio (M2) — the audio-focus arbiter changed this guest's
+    /// focus and pushed `on-focus-changed <change>`. `change` is the wire code
+    /// 0=loss, 1=loss-transient, 2=duck, 3=gain (matching the
+    /// `war:audio-focus/focus-handler.focus-change` enum order); the standalone
+    /// drain calls the guest's `on-focus-changed` export (inert if not exported).
+    FocusChanged { change: u32 },
 }
 
 /// Sentinel: a `geometry` inset field the host should leave at its current
@@ -327,6 +334,24 @@ fn parse_and_queue(line: &str) {
                 }
             }
             Err(_) => log::warn!("ime-inbound: bad doze cadence in {line:?}"),
+        }
+    } else if let Some(rest) = line.strip_prefix("on-focus-changed ") {
+        // wart-arbiter-audio M2 — audio-focus change; call the guest's
+        // on-focus-changed. Map the wire token to the focus-change enum order.
+        let change = match rest.trim() {
+            "loss"           => Some(0u32),
+            "loss-transient" => Some(1),
+            "duck"           => Some(2),
+            "gain"           => Some(3),
+            _                => None,
+        };
+        match change {
+            Some(change) => {
+                if let Ok(mut q) = queue().lock() {
+                    q.push_back(InboundEvent::FocusChanged { change });
+                }
+            }
+            None => log::warn!("ime-inbound: bad on-focus-changed token in {line:?}"),
         }
     } else if line == "present" {
         // Task 71 — arbiter-driven "you are visible, repaint now". The drain

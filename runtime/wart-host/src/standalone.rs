@@ -600,6 +600,8 @@ fn run_cwasm_loop(
     let alarm_events = inst.alarm_events;
     // Signal bg-receipt M3 — Some(...) only if the guest exports war:notify/notify-handler.
     let notify_events = inst.notify_events;
+    // wart-arbiter-audio M2 — Some(...) only if the guest exports war:audio-focus/focus-handler.
+    let audio_focus_events = inst.audio_focus_events;
     // Task 64 — Some(...) only if the guest exports my:skiko-gfx/frame-pacing.
     let frame_pacing = inst.frame_pacing;
     // Signal bg-receipt (M2) — a background-service keeps pumping its engine
@@ -1169,6 +1171,31 @@ fn run_cwasm_loop(
                         doze_cadence_ms = cadence_ms;
                         dirty = true;
                         log::info!("standalone: doze cadence ← {cadence_ms}ms (arbiter)");
+                    }
+                }
+                crate::ime_inbound::InboundEvent::FocusChanged { change } => {
+                    // wart-arbiter-audio M2 — the audio-focus arbiter changed our
+                    // focus; call the guest's on-focus-changed (it pauses/ducks/
+                    // resumes). Inert if the guest exports no focus-handler.
+                    use crate::audio_focus_events_bindings::exports::war::audio_focus::focus_handler::FocusChange;
+                    let fc = match change {
+                        0 => FocusChange::Loss,
+                        1 => FocusChange::LossTransient,
+                        2 => FocusChange::Duck,
+                        _ => FocusChange::Gain,
+                    };
+                    dirty = true;
+                    match audio_focus_events.as_ref() {
+                        Some(fe) => match fe
+                            .war_audio_focus_focus_handler()
+                            .call_on_focus_changed(&mut store, fc)
+                        {
+                            Ok(()) => log::info!("focus-inbound: dispatched on-focus-changed({change})"),
+                            Err(e) => log::warn!("focus-inbound: on-focus-changed({change}) failed: {e:#}"),
+                        },
+                        None => log::warn!(
+                            "focus-inbound: on-focus-changed({change}) but guest exports no war:audio-focus/focus-handler"
+                        ),
                     }
                 }
                 // Task 68 — the soft keyboard occludes `px` of our surface. Add

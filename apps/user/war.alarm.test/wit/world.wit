@@ -68,4 +68,8 @@ world alarm-test-app {
     // M3 — notifications: post one + receive taps (on-notification-click).
     import war:notify/notifier@0.1.0;
     export war:notify/notify-handler@0.1.0;
+    // wart-arbiter-audio M2 — audio focus: request gain on first frame, receive
+    // on-focus-changed when another app takes focus.
+    import war:audio-focus/focus@0.1.0;
+    export war:audio-focus/focus-handler@0.1.0;
 }
