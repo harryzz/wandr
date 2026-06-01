@@ -47,7 +47,12 @@ use war::notify::notifier;
 /// it reconnects as a background-service (M2). Coarse interval — the persistent
 /// socket handles liveness while running; this is only the dead-app backstop.
 const KEEPALIVE_ID: u64 = 1;
-const KEEPALIVE_MS: u64 = 300_000; // 5 min
+// 15 min — matches Android's minimum periodic-job interval (its battery policy).
+// This alarm only does real work when Signal is DEAD (relaunch + reconnect); while
+// alive (the common case — resident bg-service) each fire is just a cheap redundant
+// pump, so a long interval costs little and saves wakeups. A dead Signal recovers
+// within one interval.
+const KEEPALIVE_MS: u64 = 900_000;
 
 // Renderer/sink/IME wiring from dioxus-canvas, over the bindings generated above.
 // The pre_frame hook is where we pump the engine each tick.

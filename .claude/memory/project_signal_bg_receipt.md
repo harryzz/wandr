@@ -48,7 +48,8 @@ cap) as the socket goes quiet, reset to 250 on inbound — 4× fewer wakeups whe
 hidden-surface render; new inbound (not open thread) →
 `notifier::post` (one per thread, FNV id, title via `resolve_thread`); open/read → cancel;
 `on-notification-click`→`PENDING_OPEN`→`app()` navigates; `on-alarm`→`pump()`; init schedules
-a 5-min keep-alive alarm. Verified on launch: all 3 exports bind, alarm armed
+a **15-min** keep-alive alarm (`KEEPALIVE_MS=900_000` — Android's periodic-job floor; the
+alarm only does real work when Signal is dead, so a long interval saves wakeups). Verified on launch: all 3 exports bind, alarm armed
 (repeat=300000ms), engine handshakes chat.signal.org. NOTE: the Signal UI already
 background-pumped via render@1Hz when paused (post-task-64 on-demand) — M4 adds the
 notification ALERT + clean bg-tick pump + wake-from-dead, the actual new value.
