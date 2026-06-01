@@ -22,10 +22,29 @@ interface notify-handler {
     on-notification-click: func(id: u64);
 }
 
-/// Host-import side — the host implements `notifier` and add_to_linker's it onto
-/// every guest (harmless for guests that don't import it).
+/// The notification surfacer (status bar) imports this to render the active list
+/// and report taps. Host-implemented: `list-active` is answered from the arbiter
+/// (the host queries `notify-list`); `click` forwards `notify-click <nid>` (the
+/// arbiter foregrounds the owner + delivers `on-notification-click`). M3b.
+interface notify-feed {
+    /// One active notification, as seen by the surfacer. `nid` is the global
+    /// arbiter handle — pass it to `click` when the user taps it.
+    record notification {
+        nid: u64,
+        app-id: string,
+        title: string,
+        body: string,
+    }
+    list-active: func() -> list<notification>;
+    click: func(nid: u64);
+}
+
+/// Host-import side — the host implements `notifier` (every guest) + `notify-feed`
+/// (the status bar) and add_to_linker's them onto every guest (harmless for ones
+/// that don't import them).
 world notify-host {
     import notifier;
+    import notify-feed;
 }
 
 /// Export side — typed `on-notification-click` for guests that export

@@ -11,7 +11,8 @@
 
 wit_bindgen::generate!({
     world: "statusbar-app",
-    path: "wit/statusbar.wit",
+    path: "wit",
+    generate_all,
 });
 
 use std::cell::RefCell;
@@ -22,6 +23,7 @@ use crate::my::skiko_gfx::canvas::{
     self, BlendMode, ColorFilterKind, PaintAttrs, PaintStyle, StrokeCap, StrokeJoin,
 };
 use crate::my::skiko_gfx::status;
+use crate::war::notify::notify_feed;
 
 const BG: u32 = 0xFF12121C; // opaque dark strip
 const FG: u32 = 0xFFECECEC;
@@ -40,6 +42,13 @@ struct State {
     clock_blob: Option<u32>,
     batt_blob: Option<u32>,
     label_blob: Option<u32>,
+    // M3b — notification badge.
+    notif_label: String,
+    notif_blob: Option<u32>,
+    notif_count: u32,
+    notif_nid: u64,
+    badge_x0: f32,
+    badge_x1: f32,
 }
 
 thread_local! {
@@ -67,6 +76,19 @@ const FAMILY: &[u8] = b"sans-serif";
 
 fn blob(text: &str, size: f32, weight: u32) -> u32 {
     canvas::create_text_blob(text.as_bytes(), FAMILY, size, weight, false)
+}
+
+/// M3b — a tap inside the notification badge opens the most recent notification.
+fn tap(kind: PointerKind, x: f32) {
+    if !matches!(kind, PointerKind::Up) {
+        return; // act on release, like a button
+    }
+    STATE.with(|st| {
+        let s = st.borrow();
+        if s.notif_count > 0 && x >= s.badge_x0 && x <= s.badge_x1 {
+            notify_feed::click(s.notif_nid);
+        }
+    });
 }
 
 struct Bar;
@@ -99,6 +121,18 @@ impl Guest for Bar {
                 s.batt_blob = Some(blob(&battery, s.h * 0.32, 400));
                 s.battery = battery;
             }
+            // M3b — active notifications (queried from the arbiter via the host
+            // each ~1 Hz render). Show a "● N" badge; tapping it opens the most
+            // recent one (the arbiter foregrounds the owner + delivers the click).
+            let actives = notify_feed::list_active();
+            s.notif_count = actives.len() as u32;
+            s.notif_nid = actives.last().map(|n| n.nid).unwrap_or(0);
+            let label = if s.notif_count > 0 { format!("\u{25CF} {}", s.notif_count) } else { String::new() };
+            if label != s.notif_label || (s.notif_count > 0 && s.notif_blob.is_none()) {
+                if let Some(b) = s.notif_blob.take() { canvas::drop_text_blob(b); }
+                s.notif_blob = if s.notif_count > 0 { Some(blob(&label, s.h * 0.40, 700)) } else { None };
+                s.notif_label = label;
+            }
 
             let w = s.w;
             let h = s.h;
@@ -112,6 +146,16 @@ impl Guest for Bar {
             if let Some(b) = s.clock_blob { canvas::draw_text_blob(b, w * 0.5 - 48.0, baseline, paint(FG)); }
             // Battery right-aligned-ish.
             if let Some(b) = s.batt_blob { canvas::draw_text_blob(b, w - 160.0, baseline, paint(FG)); }
+            // Notification badge, left of the battery; remember its hit region.
+            let badge_x = w - 300.0;
+            if let Some(b) = s.notif_blob {
+                canvas::draw_text_blob(b, badge_x, baseline, paint(0xFFE5894A));
+                s.badge_x0 = badge_x - 24.0;
+                s.badge_x1 = badge_x + 96.0;
+            } else {
+                s.badge_x0 = 0.0;
+                s.badge_x1 = 0.0;
+            }
             canvas::end_frame();
         });
     }
@@ -124,10 +168,14 @@ impl Guest for Bar {
         });
     }
 
-    fn on_pointer_event(_kind: PointerKind, _x: f32, _y: f32) {}
+    fn on_pointer_event(kind: PointerKind, x: f32, _y: f32) {
+        tap(kind, x);
+    }
     fn on_key_event(_kind: KeyKind, _key_code: u32) {}
     fn on_scheduled_callback(_callback_id: u32) {}
-    fn on_pointer_event_v2(_pid: u32, _kind: PointerKind, _x: f32, _y: f32, _pressure: f32) {}
+    fn on_pointer_event_v2(_pid: u32, kind: PointerKind, x: f32, _y: f32, _pressure: f32) {
+        tap(kind, x);
+    }
     fn on_key_event_v2(_kind: KeyKind, _code_point: u32, _key_id: u32) {}
     fn on_lifecycle_changed(_state: u32) {}
 }

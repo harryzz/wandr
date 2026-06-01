@@ -70,6 +70,10 @@ interface frame-pacing {
 world statusbar-app {
     import canvas;
     import status;
+    // M3b — the notification feed (host-implemented; answered from the arbiter).
+    // The interface lives in wit/deps/notify/ (package war:notify); the host
+    // provides it via NotifyHost::add_to_linker.
+    import war:notify/notify-feed@0.1.0;
     export renderer;
     export frame-pacing;
 }

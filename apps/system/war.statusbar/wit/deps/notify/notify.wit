@@ -1,0 +1,16 @@
+// war:notify/notify-feed — the notification read side for the status bar (M3b).
+// Host-implemented (answered from the arbiter); mirrors the `notify-feed`
+// interface + `notification` record in the canonical wit/notify.wit.
+
+package war:notify@0.1.0;
+
+interface notify-feed {
+    record notification {
+        nid: u64,
+        app-id: string,
+        title: string,
+        body: string,
+    }
+    list-active: func() -> list<notification>;
+    click: func(nid: u64);
+}
