@@ -30,6 +30,7 @@ members = [
     "wart-arbiter-notify",
     "wart-arbiter-power",
     "wart-arbiter-keyguard",
+    "wart-arbiter-audio",
 ]
 
 [workspace.dependencies]

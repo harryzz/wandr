@@ -52,6 +52,7 @@ use anyhow::{anyhow, Context, Result};
 
 use wart_arbiter_alarm::AlarmModule;
 use wart_arbiter_core::{Event, Registry, Reply, Store, PRIMARY_DISPLAY};
+use wart_arbiter_audio::AudioModule;
 use wart_arbiter_keyguard::KeyguardModule;
 use wart_arbiter_notify::NotifyModule;
 use wart_arbiter_power::PowerModule;
@@ -504,6 +505,8 @@ fn build_registry() -> Registry {
     reg.register(Box::new(PowerModule::new()));
     // Keyguard — lockscreen (auto-lock on screen-off; lock/unlock). One line.
     reg.register(Box::new(KeyguardModule::new()));
+    // AudioService role (Arbiter Inc.) — M1: the cross-app audio-focus stack.
+    reg.register(Box::new(AudioModule::new()));
     reg
 }
 

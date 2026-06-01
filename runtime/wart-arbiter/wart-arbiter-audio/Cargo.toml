@@ -1,0 +1,14 @@
+[package]
+name    = "wart-arbiter-audio"
+version = "0.0.1"
+edition = "2021"
+
+# wart-arbiter-audio — the AudioService role (Arbiter Inc.). M1: the audio-focus
+# stack — the cross-app arbitration deciding who owns audio output, evicting /
+# pausing / ducking the previous owner and restoring it on abandon. Drives the
+# `on-focus-changed` push to each affected host. Comms-session (IN_COMMUNICATION)
+# + routing (setForceUse) land in later milestones. Wired in with one line.
+
+[dependencies]
+wart-arbiter-core = { path = "../wart-arbiter-core" }
+log = { workspace = true }
