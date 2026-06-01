@@ -1,26 +1,33 @@
-[package]
-name    = "wart-arbiter"
-version = "0.0.1"
-edition = "2021"
-
-# wart-arbiter — Hybrid runtime policy daemon (task 46 step 3).
+# wart-arbiter — virtual workspace (task 73 / "task A").
 #
-# Talks to wart-host's zygote over its UNIX socket
-# (/data/local/tmp/wart-zygote.sock) to launch / kill / preload apps.
-# Owns its own UNIX socket (/data/local/tmp/wart-arbiter.sock) for
-# client commands (`wart-arbiter launch <app-id>` etc.). Tracks
-# running apps in-memory. Holds policy decisions: who's foreground,
-# who has focus, what OOM scoring to apply (those come in step 4).
+# The arbiter is being modularized into a thin binary + a core kernel +
+# one responsibility crate per system_server role (WMS·IMMS·AMS over
+# time), per docs/visual-sizing-design-patterns.md ("a core + crates,
+# not a monolith"). Strangler migration: the binary keeps the legacy
+# match for every un-migrated verb; new responsibilities arrive as
+# modules wired into the registry.
 #
-# Deliberately tiny: no wasmtime, no skia, no libgui. The arbiter
-# never forks an app itself — that's the zygote's job. The arbiter
-# just decides which app gets forked when.
+#   wart-arbiter-bin   — the daemon/client binary (artifact: wart-arbiter)
+#   wart-arbiter-core  — kernel: per-display Store, event bus, ArbiterModule
+#                        trait + Registry, Ctx. No surfaces, no I/O policy.
+#   wart-arbiter-wm    — first module: WindowManager geometry (insets,
+#                        keyboard depth, orientation) → pushed to hosts.
+#
+# Deliberately tiny: no wasmtime, no skia, no libgui, no serde.
+# `.cargo/config.toml` (NDK r27d, aarch64-linux-android) lives at this
+# workspace root so every member cross-compiles identically; the build
+# script (tools/scripts/build-host-android.sh) still `cd`s here and the
+# binary still lands at target/aarch64-linux-android/release/wart-arbiter.
 
-[[bin]]
-name = "wart-arbiter"
-path = "src/main.rs"
+[workspace]
+resolver = "2"
+members = [
+    "wart-arbiter-bin",
+    "wart-arbiter-core",
+    "wart-arbiter-wm",
+]
 
-[dependencies]
+[workspace.dependencies]
 anyhow         = "1"
 log            = "0.4"
 android_logger = "0.14"

@@ -105,7 +105,25 @@ pub enum InboundEvent {
     /// present-but-empty (the on-demand render gate had nothing to invalidate).
     /// The drain already marks the frame dirty, which forces the repaint.
     Present,
+
+    /// Task 73 (modular WM) — the arbiter (wart-arbiter-wm) is the source of
+    /// this surface's window geometry: chrome insets, soft-keyboard occlusion,
+    /// and orientation, computed once and pushed as data. The host is a dumb
+    /// applier (it still runs its own dihedral skia matrix to render). Fields
+    /// use sentinels so the arbiter can move policy in stages without a wire
+    /// change: `inset_top`/`inset_bottom` = `0xFFFF` means "keep my env-sourced
+    /// inset"; `orient` = `255` means "keep my own orientation". `keyboard_px`
+    /// is always authoritative (0 = no keyboard). Subsumes `KeyboardInset`.
+    Geometry { inset_top: u32, inset_bottom: u32, keyboard_px: u32, orient: u32 },
 }
+
+/// Sentinel: a `geometry` inset field the host should leave at its current
+/// (env-sourced) value. Mirrors `wart_arbiter_core::INSET_HOST_OWNED`.
+pub const GEOM_INSET_KEEP: u32 = 0xFFFF;
+
+/// Sentinel: a `geometry` orient field the host should ignore (it keeps its
+/// own rotation authority). Mirrors `wart_arbiter_core::ORIENT_HOST_OWNED`.
+pub const GEOM_ORIENT_KEEP: u32 = 255;
 
 fn queue() -> &'static Mutex<VecDeque<InboundEvent>> {
     static Q: OnceLock<Mutex<VecDeque<InboundEvent>>> = OnceLock::new();
@@ -238,6 +256,27 @@ fn parse_and_queue(line: &str) {
                 }
             },
             Err(_) => log::warn!("ime-inbound: bad keyboard-inset px in {line:?}"),
+        }
+    } else if let Some(rest) = line.strip_prefix("geometry ") {
+        // <inset_top> <inset_bottom> <keyboard_px> <orient>. Task 73.
+        // Sentinels: inset 0xFFFF = keep; orient 255 = keep. The applier in
+        // standalone.rs reads them.
+        let parts: Vec<&str> = rest.split_whitespace().collect();
+        if parts.len() != 4 {
+            log::warn!("ime-inbound: malformed geometry: {line:?}");
+            return;
+        }
+        let (Ok(inset_top), Ok(inset_bottom), Ok(keyboard_px), Ok(orient)) = (
+            parts[0].parse::<u32>(),
+            parts[1].parse::<u32>(),
+            parts[2].parse::<u32>(),
+            parts[3].parse::<u32>(),
+        ) else {
+            log::warn!("ime-inbound: bad geometry field in {line:?}");
+            return;
+        };
+        if let Ok(mut q) = queue().lock() {
+            q.push_back(InboundEvent::Geometry { inset_top, inset_bottom, keyboard_px, orient });
         }
     } else if line == "present" {
         // Task 71 — arbiter-driven "you are visible, repaint now". The drain

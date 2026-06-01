@@ -41,11 +41,16 @@ system_server policy the arbiter will inherit: DisplayManager, audio focus,
 **AlarmManager/JobScheduler (real gap — background message receipt for Signal)**,
 Notification/StatusBar, Power, Keyguard/Wallpaper/Dream, Clipboard, runtime perms.
 
-**Status:** doc written; FIRST real slices landed in task 71 (see
-[[project_keyboard_overlay_lifecycle]]) — IMMS-style `reconcile_overlay` derived
-state + the WMS `present` visibility push — but inside the still-MONOLITHIC
-arbiter. `wart-arbiter-core` + the crate split are NOT started; WMS geometry is
-NOT yet moved out of the host. Today's *principle* carries forward; today's
-*placement* (global singletons in main.rs) gets relocated when the modular core
-lands. Language-neutrality survey for the demo:
-`docs/wasm-component-language-support.md`.
+**Status:** doc written; IMMS-style `reconcile_overlay` + WMS `present` landed in
+task 71 (see [[project_keyboard_overlay_lifecycle]]). **Task 73 (2026-06-01) built
+the modular core + first WMS slice** — see [[project_task73_modular_arbiter_wm]].
+`runtime/wart-arbiter/` is now a workspace: `wart-arbiter-core` (Store/Event/Ctx/
+`ArbiterModule`/Registry, per-display, full event vocab) + `wart-arbiter-wm`
+(geometry: insets/keyboard/orientation → one `geometry` wire push) + the thin
+`wart-arbiter-bin` (legacy match intact; registry probed first; 5 legacy→bus
+bridges). Host = dumb applier (`InboundEvent::Geometry`); skia matrix stays local.
+Orientation authority moved via host→arbiter `report-orientation` + apply-on-
+push-back with local fallback. Builds + 7 unit tests pass; **NOT device-verified.**
+Still deferred: panel-dims/density report-up + true-dp model, `overlay_rect`
+relocation, migrating state.rs role/overlay into the Store, the `-ime`/`-am`
+crates. Language-neutrality survey: `docs/wasm-component-language-support.md`.

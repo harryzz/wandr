@@ -253,6 +253,28 @@ fn orientation_lock_active() -> bool {
         .unwrap_or(false)
 }
 
+/// Task 73 — the arbiter socket (wart-arbiter-wm owns the orientation
+/// decision). Same path the IME/keyboard host clients use.
+const ARBITER_SOCK_PATH: &str = "/data/local/tmp/wart-arbiter.sock";
+
+/// Task 73 — report the raw device rotation (`Surface.ROTATION_*` index, 0..3)
+/// up to the arbiter, which decides the content orientation and pushes it back
+/// as a `geometry` line. One-shot connect, mirroring
+/// `keyboard_host_impl::send_oneshot`. `Err` ⇒ the arbiter is unreachable, and
+/// the caller falls back to applying the rotation locally so rotation never
+/// depends on a live arbiter.
+fn report_orientation_to_arbiter(raw_rot: u32) -> std::io::Result<()> {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    let mut stream = UnixStream::connect(ARBITER_SOCK_PATH)?;
+    stream.write_all(format!("report-orientation {raw_rot}\n").as_bytes())?;
+    stream.flush()?;
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    let mut buf = [0u8; 64];
+    let _ = stream.read(&mut buf);
+    Ok(())
+}
+
 /// Physical compass edge of the portrait panel buffer.
 #[derive(Clone, Copy)]
 enum Edge { North, South, East, West }
@@ -529,6 +551,19 @@ fn run_cwasm_loop(
     // Tracked so the target orient can be re-derived when the system lock
     // toggles (overlays), not only when the device physically turns.
     let mut last_dev_orient: u32 = 0;
+    // Task 73 — orientation authority moved to the arbiter (wart-arbiter-wm).
+    // A fullscreen app reports the raw sensor rotation up and applies the orient
+    // the arbiter pushes back via `geometry`. `authoritative_orient` is the last
+    // arbiter decision (None until the first push-back, or after the arbiter
+    // goes unreachable → local fallback). `awaiting_orient_since` holds while a
+    // report has been sent and we're waiting for the decision; the timeout
+    // backstop applies the local sensor reading so rotation never stalls if a
+    // push-back is lost. Overlays keep their own local sensor + lock-file path.
+    let mut authoritative_orient: Option<u32> = None;
+    let mut awaiting_orient_since: Option<std::time::Instant> = None;
+    // How long to hold for the arbiter's decision before rotating locally.
+    const ARBITER_ORIENT_TIMEOUT: std::time::Duration =
+        std::time::Duration::from_millis(400);
     // Task 64 — on-demand rendering. The cheap input/IME/scheduler poll
     // still runs every iteration (≤POLL_MS latency), but the expensive
     // render-frame + buffer swap is gated: it fires only when something
@@ -709,9 +744,45 @@ fn run_cwasm_loop(
         if let Some(h) = orient_sensor {
             if let Some(rot) = crate::sensors_impl::poll_device_rotation(h) {
                 last_dev_orient = device_rotation_to_orient(rot);
+                // Task 73 — fullscreen apps defer the rotation DECISION to the
+                // arbiter: report the raw rotation up and hold for the decided
+                // orient to arrive as a `geometry` push (applied in the Geometry
+                // drain arm below). If the arbiter is unreachable, drop the hold
+                // + any stale decision and apply locally this frame (no hang).
+                // Overlays never report — they keep the local sensor+lock path.
+                if mode == OverlayMode::None {
+                    match report_orientation_to_arbiter(rot) {
+                        Ok(()) => awaiting_orient_since = Some(std::time::Instant::now()),
+                        Err(e) => {
+                            log::debug!(
+                                "standalone: report-orientation failed ({e}); rotating locally"
+                            );
+                            awaiting_orient_since = None;
+                            authoritative_orient = None;
+                        }
+                    }
+                }
             }
             let locked = sf.is_overlay() && orientation_lock_active();
-            let orient = if locked { 0 } else { last_dev_orient };
+            let local_target = if locked { 0 } else { last_dev_orient };
+            // Backstop: stop holding for the arbiter once the timeout elapses, so
+            // a lost push-back can't stall rotation.
+            if let Some(since) = awaiting_orient_since {
+                if since.elapsed() > ARBITER_ORIENT_TIMEOUT {
+                    log::info!(
+                        "standalone: arbiter orient push-back timed out — applying local"
+                    );
+                    awaiting_orient_since = None;
+                }
+            }
+            // The arbiter's decision wins when we have one; while holding for it
+            // keep the current orientation; otherwise apply the local sensor
+            // reading (overlays + the no-arbiter fallback land here).
+            let orient = if awaiting_orient_since.is_some() {
+                store.data().renderer.current_orient
+            } else {
+                authoritative_orient.unwrap_or(local_target)
+            };
             if orient != store.data().renderer.current_orient {
                 dirty = true; // task 64 — rotation needs a frame
                 // Task 62 — for an overlay, the anchored rect itself must
@@ -897,6 +968,48 @@ fn run_cwasm_loop(
                     }
                     log::info!(
                         "standalone: keyboard-inset base={px}px → logical {lw}x{lh}"
+                    );
+                }
+                // Task 73 (modular WM) — the arbiter is the source of this
+                // surface's window geometry. Apply what it pushed (host = dumb
+                // applier; the dihedral skia matrix stays local). Subsumes the
+                // legacy KeyboardInset path. Sentinels: inset 0xFFFF = keep the
+                // host's env inset; orient 255 = keep local rotation.
+                crate::ime_inbound::InboundEvent::Geometry {
+                    inset_top, inset_bottom, keyboard_px, orient,
+                } => {
+                    use crate::ime_inbound::{GEOM_INSET_KEEP, GEOM_ORIENT_KEEP};
+                    {
+                        let r = &mut store.data_mut().renderer;
+                        // Insets: apply only when the arbiter authored both real
+                        // values; otherwise keep the host's env-sourced chrome.
+                        if inset_top != GEOM_INSET_KEEP && inset_bottom != GEOM_INSET_KEEP {
+                            r.set_insets(inset_top, inset_bottom);
+                        }
+                        // Keyboard occlusion is always authoritative (0 = hidden).
+                        r.set_keyboard_base(keyboard_px);
+                    }
+                    // Orientation: record the arbiter's decision + release the
+                    // hold; the orientation block above applies it next iteration
+                    // (with the overlay-rect flip / set_orientation path). 255 =
+                    // keep (the arbiter isn't the rotation authority for us yet).
+                    if orient != GEOM_ORIENT_KEEP {
+                        authoritative_orient = Some(orient);
+                        awaiting_orient_since = None;
+                    }
+                    let (lw, lh) = {
+                        let r = &store.data().renderer;
+                        (r.logical_width, r.logical_height)
+                    };
+                    if let Err(e) = skiko
+                        .my_skiko_gfx_renderer()
+                        .call_on_resize(&mut store, lw, lh)
+                    {
+                        log::warn!("standalone: geometry on_resize({lw}x{lh}) failed: {e:#}");
+                    }
+                    log::info!(
+                        "standalone: geometry insets=({inset_top},{inset_bottom}) \
+                         kb={keyboard_px} orient={orient} → logical {lw}x{lh}"
                     );
                 }
             }

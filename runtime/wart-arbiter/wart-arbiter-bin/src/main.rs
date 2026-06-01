@@ -50,6 +50,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{anyhow, Context, Result};
 
+use wart_arbiter_core::{Event, Registry, Store, PRIMARY_DISPLAY};
+use wart_arbiter_wm::WmModule;
+
 use crate::state::AppState;
 
 const ARBITER_SOCK_PATH: &str = "/data/local/tmp/wart-arbiter.sock";
@@ -105,7 +108,11 @@ fn main() {
         Some(verb @ ("set-ime" | "attach-editor" | "detach-editor"
                     | "ime-commit-text" | "ime-send-key-event"
                     | "ime-set-composing-text" | "ime-finish-composing-text"
-                    | "ime-set-selection" | "ime-overlay-height")) => {
+                    | "ime-set-selection" | "ime-overlay-height"
+                    // Task 73 — WM geometry (handled by a core module, not the
+                    // legacy match). The host normally sends this over the raw
+                    // socket; the CLI form is for testing.
+                    | "report-orientation")) => {
             run_client_multi(verb, &args[1..])
         }
         Some(other) => {
@@ -315,7 +322,13 @@ fn handle_client(mut stream: UnixStream) -> Result<()> {
     // a state mutation with a signal cascade. Low frequency — fine.
     let _guard = arbiter_lock().lock().unwrap_or_else(|e| e.into_inner());
 
-    let result = match verb {
+    // Task 73 — strangler join: a registered core module handles the verb if
+    // it owns it (today: `report-orientation` → wart-arbiter-wm); otherwise
+    // fall through to the legacy match below, unchanged.
+    let result = if module_owns(verb) {
+        dispatch_module(verb, &rest, &mut stream)
+    } else {
+    match verb {
         "launch"          => cmd_launch(&mut stream, &rest, LaunchKind::Gui),
         "launch-headless" => cmd_launch(&mut stream, &rest, LaunchKind::Headless),
         // Task 47 step 3c — overlay launch (e.g. an IME app). Same
@@ -354,6 +367,7 @@ fn handle_client(mut stream: UnixStream) -> Result<()> {
             writeln!(stream, "ERR unknown-command {other}")?;
             Ok(())
         }
+    }
     };
 
     // Task 46 crash-marker — persist state after every command. The
@@ -418,13 +432,11 @@ fn cmd_ime_overlay_height(stream: &mut UnixStream, rest: &str) -> Result<()> {
         return Ok(());
     };
     state::set_ime_overlay_height(px);
-    // Live re-push to a focused editor (keyboard resized while shown).
-    if let (Some(ef), Some(i)) = (state::current_editor_focus(), state::current_active_ime()) {
-        if i.pid != ef.pid {
-            let editor_sock = format!("/data/local/tmp/wart-host-{}.sock", ef.pid);
-            let _ = deliver_to_host(&editor_sock, &format!("keyboard-inset {px}\n"));
-        }
-    }
+    // Task 73 — feed the WM module the new keyboard height. It records it in the
+    // per-display store and re-pushes `geometry` to the focused editor (if any),
+    // replacing the legacy `keyboard-inset` re-push. The WM gates on its own
+    // focused-editor cache, so emitting unconditionally is correct.
+    bus_emit(Event::ImeHeightChanged { id: PRIMARY_DISPLAY, px });
     writeln!(stream, "OK ime-overlay-height {px}")?;
     log::info!("arbiter: ime-overlay-height {px}");
     Ok(())
@@ -511,16 +523,17 @@ fn cmd_attach_editor(stream: &mut UnixStream, rest: &str) -> Result<()> {
         None => false,
     };
 
-    // Task 68 — tell the EDITOR's host how much the keyboard will occlude, so it
-    // grows its bottom inset and bottom-anchored content rises above the keyboard.
-    // Only when there's an active IME on a different pid (it's actually showing).
+    // Task 68/72 — the keyboard will occlude this editor: hand the WM module the
+    // current keyboard height (its source, incl. the default before the IME
+    // reports) then mark this editor focused. The WM pushes `geometry` with the
+    // keyboard inset to the editor host so bottom-anchored content rises above
+    // the keyboard — replacing the legacy `keyboard-inset <h>` push. Only when
+    // there's an active IME on a different pid (the keyboard is actually shown).
     if let Some(i) = &ime {
         if i.pid != pid {
             let h = state::ime_overlay_height();
-            let editor_sock = format!("/data/local/tmp/wart-host-{}.sock", pid);
-            if let Err(e) = deliver_to_host(&editor_sock, &format!("keyboard-inset {h}\n")) {
-                log::warn!("arbiter: keyboard-inset({h}) → {editor_sock} failed: {e:#}");
-            }
+            bus_emit(Event::ImeHeightChanged { id: PRIMARY_DISPLAY, px: h });
+            bus_emit(Event::EditorFocusChanged { pid: Some(pid) });
         }
     }
 
@@ -595,11 +608,10 @@ fn cmd_detach_editor(stream: &mut UnixStream, rest: &str) -> Result<()> {
             }
             None => false,
         };
-        // Task 68 — keyboard gone: restore the editor host's base inset.
-        let editor_sock = format!("/data/local/tmp/wart-host-{}.sock", pid);
-        if let Err(e) = deliver_to_host(&editor_sock, "keyboard-inset 0\n") {
-            log::warn!("arbiter: keyboard-inset(0) → {editor_sock} failed: {e:#}");
-        }
+        // Task 68/72 — keyboard gone: clear the WM's focused editor so it pushes
+        // `geometry` with keyboard_px=0 to this editor host, restoring its base
+        // inset (replaces the legacy `keyboard-inset 0` push).
+        bus_emit(Event::EditorFocusChanged { pid: None });
         writeln!(
             stream,
             "OK detached pid={pid} route→{ime_dest} overlay={overlay} delivered={delivered}",
@@ -734,6 +746,96 @@ fn drain_prior_crash_marker() {
 fn arbiter_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+// ─── Core kernel (task 73 — modular wart-arbiter-core) ────────────────
+//
+// The arbiter is being re-centralized into the native system_server
+// coordinator (WMS·IMMS·AMS), one responsibility crate at a time. The
+// kernel (`wart-arbiter-core`) owns a per-display Store + an event bus +
+// a module Registry; modules (`wart-arbiter-wm` is the first) own verbs
+// and react to events. Strangler migration: the legacy `match verb`
+// below stays intact for every un-migrated verb; the registry is probed
+// first and handles only the verbs a module claims (today:
+// `report-orientation`). The legacy handlers feed the bus via `bus_emit`
+// at the seams this task changes (the keyboard-inset / geometry path and
+// the foreground cascade) so the WM module can push geometry.
+//
+// Both the Store and the Registry are process-wide singletons (mirroring
+// state.rs). All access happens under `arbiter_lock` (held by the accept
+// loop + the death watchers), so the inner Mutexes never contend; they
+// exist only to hand out `&'static mut`-shaped access.
+
+fn core_store() -> &'static Mutex<Store> {
+    static STORE: OnceLock<Mutex<Store>> = OnceLock::new();
+    STORE.get_or_init(|| Mutex::new(Store::new()))
+}
+
+fn registry() -> &'static Mutex<Registry> {
+    static REG: OnceLock<Mutex<Registry>> = OnceLock::new();
+    REG.get_or_init(|| Mutex::new(build_registry()))
+}
+
+/// Build the module registry. New responsibility = +1 crate, +1 line here
+/// (Open/Closed — the doc's whole point).
+fn build_registry() -> Registry {
+    let mut reg = Registry::new();
+    reg.register(Box::new(WmModule::new()));
+    reg
+}
+
+/// True if a registered module owns `verb` (so `handle_client` routes it to
+/// the module instead of the legacy match).
+fn module_owns(verb: &str) -> bool {
+    registry().lock().unwrap_or_else(|e| e.into_inner()).owns(verb)
+}
+
+/// Run a module-owned command: dispatch through the registry (which drains the
+/// event cascade), flush every queued host push, and write the single reply
+/// line. Caller holds `arbiter_lock`.
+fn dispatch_module(verb: &str, rest: &str, stream: &mut UnixStream) -> Result<()> {
+    let outcome = {
+        let mut reg = registry().lock().unwrap_or_else(|e| e.into_inner());
+        let mut store = core_store().lock().unwrap_or_else(|e| e.into_inner());
+        reg.dispatch_command(verb, rest, &mut store)
+    };
+    match outcome {
+        Some((reply, pushes)) => {
+            flush_pushes(pushes);
+            writeln!(stream, "{}", reply.render())?;
+        }
+        None => {
+            // `module_owns` said yes but dispatch found no owner — a wiring
+            // bug, not a client error. Report it rather than hang the client.
+            writeln!(stream, "ERR module-dispatch-miss {verb}")?;
+            log::warn!("arbiter: module_owns({verb}) true but dispatch_command returned None");
+        }
+    }
+    Ok(())
+}
+
+/// Inject an event from a legacy handler onto the bus and flush whatever host
+/// pushes the reacting modules produced. The seam by which the legacy state
+/// machine drives the WM geometry module. Caller holds `arbiter_lock`.
+fn bus_emit(ev: Event) {
+    let pushes = {
+        let mut reg = registry().lock().unwrap_or_else(|e| e.into_inner());
+        let mut store = core_store().lock().unwrap_or_else(|e| e.into_inner());
+        reg.dispatch_event(ev, &mut store)
+    };
+    flush_pushes(pushes);
+}
+
+/// Deliver each `(pid, line)` push to that host's control socket. Shared by
+/// `dispatch_module` + `bus_emit`. Fire-and-forget (a dead/just-forked host
+/// simply misses it), matching the existing per-host push semantics.
+fn flush_pushes(pushes: Vec<(i32, String)>) {
+    for (pid, line) in pushes {
+        let sock = host_sock_path(pid);
+        if let Err(e) = deliver_to_host(&sock, &line) {
+            log::debug!("arbiter: geometry/module push → {sock} failed: {e:#}");
+        }
+    }
 }
 
 /// Per-host control socket path for a given child pid. Symmetric with
@@ -1073,11 +1175,10 @@ fn drop_editor_focus_of(pid: i32) {
     // Restore the editor app's full layout: the keyboard is gone, so clear the
     // bottom inset it reserved. Without this the app keeps its shrunk layout and
     // shows a BLANK GAP where the keyboard was (task 68 inset never cleared on
-    // the focus-follows-foreground path). Mirrors `cmd_detach_editor`.
-    let editor_sock = format!("/data/local/tmp/wart-host-{pid}.sock");
-    if let Err(e) = deliver_to_host(&editor_sock, "keyboard-inset 0\n") {
-        log::debug!("arbiter: focus-teardown keyboard-inset(0) → {editor_sock} failed: {e:#}");
-    }
+    // the focus-follows-foreground path). Task 73: the WM module pushes
+    // `geometry` with keyboard_px=0 to its focused editor (mirrors
+    // `cmd_detach_editor`; replaces the legacy `keyboard-inset 0` push).
+    bus_emit(Event::EditorFocusChanged { pid: None });
     log::info!("arbiter: dropped editor focus of pid={pid} (lost foreground)");
 }
 
@@ -1113,6 +1214,14 @@ fn promote_to_foreground(app_id: &str, pid: i32) {
     // hides the keyboard (the new app has no editor focus yet) — matching
     // Android — and a focused field re-shows it via `cmd_attach_editor`.
     reconcile_overlay();
+
+    // Task 73 — tell the WM module the foreground changed so it pushes fresh
+    // geometry (chrome insets in M2, orientation in M3) to the newly-visible
+    // app, mirroring the task-71 present seam. No-op in M1 (no authored policy).
+    bus_emit(Event::ForegroundChanged {
+        app_id: Some(app_id.to_string()),
+        pid: Some(pid),
+    });
 }
 
 /// Task 57 — bring the designated home app to the foreground, launching

@@ -1,0 +1,30 @@
+[package]
+name    = "wart-arbiter"
+version = "0.0.1"
+edition = "2021"
+
+# wart-arbiter — Hybrid runtime policy daemon (task 46 step 3; modularized
+# task 73). The thin binary: socket transport + the legacy command match
+# for verbs not yet migrated to a core module, plus the registry that
+# routes migrated verbs (e.g. WM geometry) to their module.
+#
+# Talks to wart-host's zygote over its UNIX socket
+# (/data/local/tmp/wart-zygote.sock) to launch / kill / preload apps.
+# Owns /data/local/tmp/wart-arbiter.sock for client commands
+# (`wart-arbiter launch <app-id>` etc.). Tracks running apps in-memory.
+#
+# Deliberately tiny: no wasmtime, no skia, no libgui. The arbiter never
+# forks an app itself — that's the zygote's job. The arbiter just decides
+# which app gets forked when.
+
+[[bin]]
+name = "wart-arbiter"
+path = "src/main.rs"
+
+[dependencies]
+wart-arbiter-core = { path = "../wart-arbiter-core" }
+wart-arbiter-wm   = { path = "../wart-arbiter-wm" }
+anyhow         = { workspace = true }
+log            = { workspace = true }
+android_logger = { workspace = true }
+libc           = { workspace = true }
