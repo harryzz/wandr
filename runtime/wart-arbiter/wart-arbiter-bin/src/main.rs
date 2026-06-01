@@ -50,6 +50,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{anyhow, Context, Result};
 
+use wart_arbiter_alarm::AlarmModule;
 use wart_arbiter_core::{Event, Registry, Reply, Store, PRIMARY_DISPLAY};
 use wart_arbiter_shell::ShellModule;
 use wart_arbiter_wm::WmModule;
@@ -114,6 +115,10 @@ fn main() {
                     // for testing/debugging (register-chrome <app-id> <pid>,
                     // set-orientation-lock <0|1>).
                     | "register-chrome" | "set-orientation-lock"
+                    // Arbiter Inc. 3c — alarm verbs (host→arbiter; CLI for testing):
+                    // schedule-alarm <app-id> <id> <when-unix-ms> <repeat-ms> [kind],
+                    // cancel-alarm <app-id> <id>.
+                    | "schedule-alarm" | "cancel-alarm"
                     // Task 73 — WM geometry (handled by a core module, not the
                     // legacy match). The host normally sends this over the raw
                     // socket; the CLI form is for testing.
@@ -279,6 +284,7 @@ fn run_daemon() -> Result<()> {
     // primary (event-driven) path; the poller is the ≤5 s backstop that
     // also covers a dropped subscriber connection or a crashed zygote.
     spawn_death_watchers();
+    spawn_alarm_timer();
 
     // Task 57 — boot to home. If a home app was designated in a previous
     // session (restored above), foreground it now (launching it if it
@@ -477,6 +483,8 @@ fn build_registry() -> Registry {
     // Task 74 C — the AMS+IMMS orchestration module: foreground/overlay/editor-
     // focus/IME-routing/task-cycle policy. The Open/Closed payoff — one line.
     reg.register(Box::new(ShellModule::new()));
+    // Arbiter Inc. 3c — AlarmManager/JobScheduler (timed wake). One line.
+    reg.register(Box::new(AlarmModule::new()));
     reg
 }
 
@@ -561,11 +569,34 @@ fn execute_effects(effects: Vec<wart_arbiter_core::Effect>) {
                 }
             }
             Effect::Launch { app_id, kind } => {
-                // Wired in Step C (the launched pid must come back into the
-                // surface set). No module emits Launch in Step A.
-                log::warn!(
-                    "arbiter: Launch effect (app={app_id} kind={kind:?}) not wired until Step C"
-                );
+                // Arbiter Inc. 3c — the alarm module emits this to wake a dead
+                // owner. Launch via the zygote + register the surface so the next
+                // tick (owner now up) delivers `alarm-fired`. Caller holds
+                // arbiter_lock but NOT the store lock (effects run post-dispatch),
+                // so the state::insert / model_put_surface re-lock is safe.
+                use wart_arbiter_core::{LaunchKind, Role};
+                let result = match kind {
+                    LaunchKind::Gui => zygote_client::launch_gui(&app_id),
+                    LaunchKind::GuiOverlay => zygote_client::launch_gui_overlay(&app_id),
+                    LaunchKind::Headless => zygote_client::launch(&app_id),
+                };
+                match result {
+                    Ok(pid) => {
+                        state::insert(AppState {
+                            app_id: app_id.clone(),
+                            pid,
+                            launched_at: SystemTime::now(),
+                            launched_mono: Instant::now(),
+                        });
+                        model_put_surface(
+                            pid,
+                            &app_id,
+                            if kind == LaunchKind::Headless { Role::Headless } else { Role::Background },
+                        );
+                        log::info!("arbiter: Launch effect — {app_id} kind={kind:?} → pid {pid}");
+                    }
+                    Err(e) => log::warn!("arbiter: Launch effect {app_id} kind={kind:?} failed: {e:#}"),
+                }
             }
         }
     }
@@ -742,6 +773,33 @@ fn handle_child_exit(pid: i32, detail: &str) {
 /// - **Poller** (backstop): every 5 s, liveness-probes every tracked
 ///   pid and cleans up any that died. Covers a dropped subscriber link
 ///   and the zygote-crashed-mid-session case.
+/// Arbiter Inc. 3c — the alarm timer thread. Every ~1 s, if any alarms exist,
+/// inject [`Event::AlarmTick`] (stamped with the current unix-ms) so the alarm
+/// module fires the due ones. Skips the bus entirely when no alarms are
+/// scheduled (no idle churn). Takes `arbiter_lock` to serialize with command
+/// handlers + the death watchers.
+fn spawn_alarm_timer() {
+    std::thread::Builder::new()
+        .name("arbiter-alarm-timer".into())
+        .spawn(|| loop {
+            std::thread::sleep(Duration::from_millis(1000));
+            let has = core_store()
+                .lock()
+                .map(|s| s.has_alarms())
+                .unwrap_or(false);
+            if !has {
+                continue;
+            }
+            let now_ms = SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let _guard = arbiter_lock().lock().unwrap_or_else(|e| e.into_inner());
+            bus_emit(Event::AlarmTick { now_ms });
+        })
+        .expect("spawn alarm timer thread");
+}
+
 fn spawn_death_watchers() {
     // Subscriber thread.
     std::thread::Builder::new()

@@ -128,6 +128,25 @@ impl Store {
         if !apps.is_empty() {
             json.push_str("\n  ");
         }
+        json.push_str("],\n");
+        // Alarms (Arbiter Inc. 3c). `pending_deliver` is transient — not persisted.
+        json.push_str("  \"alarms\": [");
+        for (i, a) in self.alarms.iter().enumerate() {
+            if i > 0 {
+                json.push_str(", ");
+            }
+            json.push_str(&format!(
+                "\n    {{\"app_id\": \"{}\", \"alarm_id\": {}, \"next_fire_ms\": {}, \"repeat_ms\": {}, \"wake_kind\": \"{}\"}}",
+                json_escape(&a.app_id),
+                a.alarm_id,
+                a.next_fire_ms,
+                a.repeat_ms,
+                a.wake_kind.as_wire(),
+            ));
+        }
+        if !self.alarms.is_empty() {
+            json.push_str("\n  ");
+        }
         json.push_str("]\n");
         json.push_str("}\n");
         json
@@ -183,8 +202,44 @@ impl Store {
             self.set_home(Some(home_id));
         }
 
+        // Alarms (Arbiter Inc. 3c) — restore so timed wakes survive a restart.
+        for a in parse_alarms(body) {
+            self.upsert_alarm(a);
+        }
+
         Ok((alive, dead, restored_fg))
     }
+}
+
+/// Parse the `"alarms": [ … ]` array. Mirrors `parse_apps`. `pending_deliver`
+/// is transient → restored false.
+fn parse_alarms(body: &str) -> Vec<crate::Alarm> {
+    let Some(open) = body.find("\"alarms\"") else { return vec![]; };
+    let Some(arr_start) = body[open..].find('[') else { return vec![]; };
+    let arr_start = open + arr_start + 1;
+    let Some(arr_end_rel) = body[arr_start..].find(']') else { return vec![]; };
+    let arr = &body[arr_start..arr_start + arr_end_rel];
+
+    let mut out = Vec::new();
+    for chunk in arr.split('}') {
+        let Some(open) = chunk.find('{') else { continue };
+        let entry = &chunk[open + 1..];
+        let app_id = pick_str(entry, "app_id").unwrap_or_default();
+        if app_id.is_empty() {
+            continue;
+        }
+        out.push(crate::Alarm {
+            app_id,
+            alarm_id: pick_int(entry, "alarm_id").unwrap_or(0) as u64,
+            next_fire_ms: pick_int(entry, "next_fire_ms").unwrap_or(0) as u64,
+            repeat_ms: pick_int(entry, "repeat_ms").unwrap_or(0) as u64,
+            wake_kind: crate::LaunchKind::from_wire(
+                &pick_str(entry, "wake_kind").unwrap_or_default(),
+            ),
+            pending_deliver: false,
+        });
+    }
+    out
 }
 
 /// kill(pid, 0) probes for liveness without delivering a signal. 0 → alive (and

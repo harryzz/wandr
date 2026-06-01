@@ -1,0 +1,14 @@
+[package]
+name    = "wart-arbiter-alarm"
+version = "0.0.1"
+edition = "2021"
+
+# wart-arbiter-alarm — the AlarmManager/JobScheduler module (Arbiter Inc. 3c).
+# Owns timed-wake policy: schedule/cancel alarms (in the core Store) + fire the
+# due ones on each Event::AlarmTick — delivering to an alive owner (alarm-fired
+# → on-alarm export) or relaunching a dead one (Effect::Launch) then delivering
+# once it's up. Wired into the registry with one line.
+
+[dependencies]
+wart-arbiter-core = { path = "../wart-arbiter-core" }
+log = { workspace = true }

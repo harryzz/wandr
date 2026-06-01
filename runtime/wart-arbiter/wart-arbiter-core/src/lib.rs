@@ -24,8 +24,10 @@
 
 use std::collections::HashMap;
 
+mod alarm;
 mod registry;
 mod surface;
+pub use alarm::Alarm;
 pub use registry::{pid_alive, AppState, DEFAULT_IME_HEIGHT_PX};
 pub use surface::{DisplayState, EditorInfo, ResourceFocus, ResourceKind, Role, Surface};
 
@@ -151,6 +153,8 @@ pub struct Store {
     pub(crate) home: Option<String>,
     /// The soft keyboard's reported intrinsic height, px (task 68).
     pub(crate) ime_height: u32,
+    /// Scheduled timed-wake alarms (Arbiter Inc. 3c — see [`alarm`]).
+    pub(crate) alarms: Vec<Alarm>,
 }
 
 impl Default for Store {
@@ -160,6 +164,7 @@ impl Default for Store {
             apps: HashMap::new(),
             home: None,
             ime_height: DEFAULT_IME_HEIGHT_PX,
+            alarms: Vec::new(),
         }
     }
 }
@@ -225,6 +230,9 @@ pub enum Event {
     /// A tracked surface's process exited. Emitted by the binary's death
     /// watcher so a module can prune the surface + re-reconcile (task 74).
     SurfaceRemoved { pid: i32 },
+    /// The binary's alarm timer ticked (unix epoch ms). The alarm module fires
+    /// any due alarms (Arbiter Inc. 3c). Emitted only while alarms exist.
+    AlarmTick { now_ms: u64 },
 }
 
 /// A command's outcome. The binary renders this to one wire line; `Ok`/`Err`
@@ -259,6 +267,25 @@ pub enum LaunchKind {
     Gui,
     GuiOverlay,
     Headless,
+}
+
+impl LaunchKind {
+    /// Stable wire/persistence token (alarm `wake_kind`, schedule-alarm verb).
+    pub fn as_wire(&self) -> &'static str {
+        match self {
+            LaunchKind::Gui => "gui",
+            LaunchKind::GuiOverlay => "gui-overlay",
+            LaunchKind::Headless => "headless",
+        }
+    }
+    /// Parse a wire token; unknown → `Headless` (the safe default for a wake).
+    pub fn from_wire(s: &str) -> Self {
+        match s {
+            "gui" => LaunchKind::Gui,
+            "gui-overlay" => LaunchKind::GuiOverlay,
+            _ => LaunchKind::Headless,
+        }
+    }
 }
 
 /// A side-effect a module *requests*; the binary is the only place that

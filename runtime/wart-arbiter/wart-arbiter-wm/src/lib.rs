@@ -337,7 +337,8 @@ impl ArbiterModule for WmModule {
             | Event::PanelMeasured { .. }
             | Event::InsetsChanged { .. }
             | Event::GeometryRecomputed { .. }
-            | Event::SurfaceRemoved { .. } => {}
+            | Event::SurfaceRemoved { .. }
+            | Event::AlarmTick { .. } => {}
         }
     }
 }
