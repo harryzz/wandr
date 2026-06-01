@@ -567,6 +567,14 @@ fn run_cwasm_loop(
     let alarm_events = inst.alarm_events;
     // Task 64 — Some(...) only if the guest exports my:skiko-gfx/frame-pacing.
     let frame_pacing = inst.frame_pacing;
+    // Signal bg-receipt (M2) — a background-service keeps pumping its engine
+    // (`bg-tick`) while backgrounded instead of freezing. `bg_service` is the
+    // manifest opt-in; `bg_tick` is the typed export (both required to pump).
+    let bg_tick = inst.bg_tick;
+    let bg_service = loaded.background_service();
+    if bg_service && bg_tick.is_some() {
+        log::info!("standalone: background-service pump active (pumps bg-tick while backgrounded)");
+    }
     // Task 64 follow-up — per-app render-rate cap. Resolution order:
     // WART_MAX_FPS env (global, for testing) > package.toml `max_fps` > 60.
     // Enforced host-side as a floor on the render interval, so it caps every
@@ -704,6 +712,7 @@ fn run_cwasm_loop(
     const IDLE_CAP_MS: u64 = 1000;
     const POLL_MS: u64 = 16;
     let mut next_render_at = std::time::Instant::now();
+    let mut bg_ticks: u64 = 0; // M2 — background-service pump count (throttled log)
     loop {
         // Task 64 — set true by any event source below that did real work
         // this iteration; forces a render regardless of the pacing deadline.
@@ -1196,7 +1205,40 @@ fn run_cwasm_loop(
         // interval would otherwise defer the click to the idle deadline). The
         // cap instead floors the TIMED/animation cadence via `next_render_at`
         // below, so unconditional/animating guests stay at `target_fps`.
-        if frame < 3 || std::time::Instant::now() >= next_render_at || dirty {
+        // Signal bg-receipt (M2) — a backgrounded background-service keeps its
+        // engine alive WITHOUT rendering the hidden surface: call `bg-tick`
+        // (cheap; the guest pumps its socket/executor) on its own idle-adaptive
+        // cadence, in place of the expensive render_frame + buffer swap. This is
+        // also the ONLY guest entry for a wake-from-dead service relaunched
+        // straight into Background (it never foregrounds, so render_frame, the
+        // warm-up frames, and on_resize never run — `bg-tick` drives it). The
+        // foreground / non-bg-service paths fall through to the render gate below.
+        let bg_pumping = bg_service
+            && bg_tick.is_some()
+            && matches!(cur_role, crate::app_role::AppRole::Background);
+        if bg_pumping {
+            if std::time::Instant::now() >= next_render_at {
+                // Host SAFETY clamp only — the cadence is guest-authored (the
+                // bg-service returns it from bg-tick, ramping up when its socket is
+                // idle). MIN floors a runaway 0 to one frame; the ceiling reuses
+                // the shared IDLE_CAP_MS so a quiet service can't busy-spin.
+                const BG_TICK_MIN_MS: u64 = 16;
+                const BG_TICK_DEFAULT_MS: u64 = 200;
+                let delay = bg_tick
+                    .as_ref()
+                    .unwrap()
+                    .war_background_background()
+                    .call_bg_tick(&mut store)
+                    .unwrap_or(BG_TICK_DEFAULT_MS as u32)
+                    .clamp(BG_TICK_MIN_MS as u32, IDLE_CAP_MS as u32) as u64;
+                next_render_at =
+                    std::time::Instant::now() + std::time::Duration::from_millis(delay);
+                bg_ticks += 1;
+                if bg_ticks == 1 || bg_ticks % 10 == 0 {
+                    log::info!("standalone: bg-tick #{bg_ticks} (backgrounded service) next={delay}ms");
+                }
+            }
+        } else if frame < 3 || std::time::Instant::now() >= next_render_at || dirty {
             let result = skiko
                 .my_skiko_gfx_renderer()
                 .call_render_frame(&mut store, nanos);

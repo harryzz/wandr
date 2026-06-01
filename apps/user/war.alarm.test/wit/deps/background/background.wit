@@ -1,0 +1,8 @@
+// war:background interface (M2) — dep for the test guest. Canonical copy is
+// wit/background.wit; only the interface is needed here (the guest exports it).
+
+package war:background@0.1.0;
+
+interface background {
+    bg-tick: func() -> u32;
+}

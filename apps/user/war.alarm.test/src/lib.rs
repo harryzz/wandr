@@ -16,6 +16,7 @@ use std::cell::RefCell;
 use crate::exports::my::skiko_gfx::frame_pacing::Guest as FramePacingGuest;
 use crate::exports::my::skiko_gfx::renderer::{Guest as RendererGuest, KeyKind, PointerKind};
 use crate::exports::war::alarm::alarm_handler::Guest as AlarmGuest;
+use crate::exports::war::background::background::Guest as BackgroundGuest;
 use crate::my::skiko_gfx::canvas::{
     self, BlendMode, ColorFilterKind, PaintAttrs, PaintStyle, StrokeCap, StrokeJoin,
 };
@@ -30,6 +31,7 @@ struct State {
     h: f32,
     count: u32,
     scheduled: bool,
+    bg_count: u32,
 }
 
 thread_local! {
@@ -101,6 +103,16 @@ impl AlarmGuest for Component {
     fn on_alarm(id: u64) {
         STATE.with(|s| s.borrow_mut().count += 1);
         let _ = id;
+    }
+}
+
+impl BackgroundGuest for Component {
+    fn bg_tick() -> u32 {
+        // Real background work would pump a socket here; the test just bumps a
+        // counter (the host logs each bg-tick, so logcat proves the pump fires
+        // while backgrounded). Ask for ~1 Hz so the log is easy to read.
+        STATE.with(|s| s.borrow_mut().bg_count += 1);
+        1000
     }
 }
 

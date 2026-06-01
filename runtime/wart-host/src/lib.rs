@@ -120,6 +120,18 @@ mod alarm_events_bindings {
     });
 }
 
+/// Signal bg-receipt (M2) — export side: typed `call_bg_tick` for guests that
+/// declare `background = true` + export `war:background/background`. The
+/// standalone loop calls it in place of render-frame while the guest is a
+/// backgrounded background-service. Bound conditionally per instance (like
+/// `alarm_events`); other guests yield `None` (inert).
+mod background_events_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../wit/background.wit",
+        world: "background-events",
+    });
+}
+
 // markdown_bindings module deleted (task 39 — replaced by generic
 // dep wiring via wasmtime introspection in app_loader.rs). Per-dep
 // `bindgen!` modules are no longer needed; any cross-app dep wires

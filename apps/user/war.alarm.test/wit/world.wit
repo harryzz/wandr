@@ -62,4 +62,7 @@ world alarm-test-app {
     export renderer;
     export frame-pacing;
     export war:alarm/alarm-handler@0.1.0;
+    // M2 — also a background-service: the host calls bg-tick while we're
+    // backgrounded (in place of render-frame) so we can verify the pump fires.
+    export war:background/background@0.1.0;
 }

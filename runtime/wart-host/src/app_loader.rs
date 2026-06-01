@@ -141,6 +141,20 @@ impl LoadedApp {
             .map(|n| n as u32)
             .unwrap_or(60)
     }
+
+    /// Signal bg-receipt (M2): whether this app is a background-service — it keeps
+    /// pumping (via `war:background/background.bg-tick`, called by the standalone
+    /// loop in place of render-frame) while backgrounded, instead of freezing.
+    /// Reads `background = true` from the installed `package.toml` (top-level key,
+    /// NOT in the AOT cache-key — same as `orientation`/`max_fps`). `false` when
+    /// absent / for dev loads (no manifest).
+    pub fn background_service(&self) -> bool {
+        self.install_dir.as_ref()
+            .and_then(|dir| fs::read_to_string(dir.join("package.toml")).ok())
+            .and_then(|src| src.parse::<toml::Value>().ok())
+            .and_then(|doc| doc.get("background").and_then(|v| v.as_bool()))
+            .unwrap_or(false)
+    }
 }
 
 /// One resolved + deserialized same-Store dep.
@@ -178,6 +192,11 @@ pub struct InstantiatedApp {
     /// `war:alarm/alarm-handler`. `ime_inbound`'s `alarm-fired` drain calls
     /// `on-alarm(id)` on these; `None` for guests that don't use alarms.
     pub alarm_events: Option<crate::alarm_events_bindings::AlarmEvents>,
+    /// Signal bg-receipt (M2) — `Some(...)` if the component exports
+    /// `war:background/background`. The standalone loop calls `bg-tick` on these
+    /// in place of render-frame while the guest is a backgrounded background-
+    /// service; `None` for guests that don't opt in.
+    pub bg_tick: Option<crate::background_events_bindings::BackgroundEvents>,
 }
 
 impl LoadedApp {
@@ -226,7 +245,13 @@ impl LoadedApp {
         if alarm_events.is_some() {
             log::info!("loader: app exports war:alarm/alarm-handler — alarm wakes enabled");
         }
-        Ok(InstantiatedApp { skiko, ime_events, frame_pacing, alarm_events })
+        // Signal bg-receipt (M2) — optional background-service pump (same .ok() probe).
+        let bg_tick =
+            crate::background_events_bindings::BackgroundEvents::new(&mut *store, &instance).ok();
+        if bg_tick.is_some() {
+            log::info!("loader: app exports war:background/background — background-service pump enabled");
+        }
+        Ok(InstantiatedApp { skiko, ime_events, frame_pacing, alarm_events, bg_tick })
     }
 
     /// One-shot CLI consumers (`wasi:cli/command` world) — task 36 step 7.

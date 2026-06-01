@@ -1,0 +1,25 @@
+// war:background — generic background-execution primitive (Signal background-
+// receipt subsystem, M2). A guest that declares itself a background-service
+// (manifest `background = true`) and exports `bg-tick` keeps doing work while it
+// is backgrounded: the host calls `bg-tick` on a timer IN PLACE of render-frame
+// (the hidden surface is never rendered), letting the guest pump its engine /
+// keep a network socket alive without burning the render path. Separate package
+// (like war:alarm) so it carries no skiko-gfx WIT-sync obligation.
+
+package war:background@0.1.0;
+
+interface background {
+    /// Called by the host while the guest is a backgrounded background-service,
+    /// instead of render-frame. The guest pumps whatever background work it owns
+    /// (e.g. drains its network socket) and returns the desired delay in
+    /// milliseconds until the next call — idle-adaptive, exactly like
+    /// `my:skiko-gfx/frame-pacing.next-frame-delay`. The host clamps the returned
+    /// value to a safe range; the cadence is otherwise guest-authored.
+    bg-tick: func() -> u32;
+}
+
+/// Host-side bindgen target: the export the host calls. A guest opts in by adding
+/// `export war:background/background;` to its own world.
+world background-events {
+    export background;
+}
