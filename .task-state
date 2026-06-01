@@ -1,5 +1,5 @@
 TASK=signal-bg-receipt
-STEP=M3-done
-STATUS=in-progress
-LAST_SUCCESS=M1+M2+M3 DONE + device-verified + pushed. M1 (55f7ee02) hidden wake. M2 (8ff96df6) bg-tick background-execution. M3a (2fef4244) notify primitive (post/cancel/list/click + on-notification-click + Effect::Foreground). M3b (5d366567) status-bar "● N" badge + tap-to-open (notify-feed, host queries arbiter live). All verified on Pixel 2 XL via war.alarm.test (alarm+bg+notify kitchen-sink test guest).
-NOTES=Next: M4 Signal wiring — NEEDS USER (real Signal account + 2nd device to send from). Signal UI: background=true + bg-tick(poll-events + notify::post on new inbound) + on-notification-click(open thread) + keep-alive alarm. Gotchas: bindgen! is NOT retriggered by .wit-only edits (touch lib.rs); top-level WIT record is invalid (must be inside interface); adb push DIR nests if target exists (rm first); statusbar wit needs versioned import + generate_all. Plan: ~/.claude/plans/cat-task-state-steady-stallman.md.
+STEP=M4-deployed
+STATUS=complete
+LAST_SUCCESS=M1-M4 ALL DONE. M4 (b18a3198) wires the 3 primitives into Signal: background=true + bg-tick pump, notifier::post on new inbound (per-thread, cancel on open), on-notification-click→open thread, 5-min keep-alive alarm (dead→hidden relaunch+reconnect). Deployed to device (/state preserved); all exports bind, alarm armed, engine handshakes chat.signal.org. PENDING: user-driven verify (background Signal, send from a 2nd device → expect notification + receipt; tap → opens thread).
+NOTES=Commits: 55f7ee02(M1) 8ff96df6(M2) 2fef4244+5d366567(M3) b18a3198(M4) + memory. All pushed except possibly b18a3198+memory (push now). If the user reports a problem: check Signal pid logs for bg-tick pumping while backgrounded + notify-host: posted on inbound. on-notification-click navigation is best-effort (PENDING_OPEN→app); arbiter foregrounds regardless.
