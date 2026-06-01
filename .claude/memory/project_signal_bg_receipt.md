@@ -58,9 +58,17 @@ notification ALERT + clean bg-tick pump + wake-from-dead, the actual new value.
 refactored from the v0 host-local `351394a8` after the user flagged that host-side
 policy diverged from "arbiter decides, host applies"). The arbiter polls
 `debug.tracing.screen_state` (`spawn_screen_poller`, 2s) → `Event::ScreenState` →
-PowerModule applies the 60s grace + fans `doze <cadence-ms>` (10000/0) to every
-tracked host; the host is a dumb applier (`ime_inbound` `Doze` → stretches its
-render+bg-tick cadence to the pushed value). Device-verified: arbiter logs doze
+PowerModule applies the 60s grace + fans `doze <cadence-ms>` to every tracked
+host; the host is a dumb applier (`ime_inbound` `Doze` → stretches its
+render+bg-tick cadence to the pushed value). **Class-based (`dabddd76`):** the
+cadence is per-app by power class — bg-service → maintenance 10s (keeps
+receiving), everyone else → suspend 60s. The loader reports the class up
+(`report-power-class <pid> <bg-service|normal>`, from the manifest `background`
+flag) → PowerModule owns the bg-service pid set (cleaned on SurfaceRemoved) +
+fans per-class. "Host reads/reports, arbiter owns/decides" — the arbiter does NOT
+parse the manifest (future PackageManager). Foundation for user per-app profiles
+(restricted/optimized/unrestricted) + wakelock exemptions. Device-verified:
+Signal→doze 10000, launcher→doze 60000. Device-verified: arbiter logs doze
 ENTER/EXIT, host applies within ~60ms; 10× fewer pumps when screen off, resumes on
 on. Known minor gap: a host launched mid-doze defaults normal until the next
 transition (fan is on-change). It SLOWS not suspends It SLOWS, not suspends: a single keep-alive
