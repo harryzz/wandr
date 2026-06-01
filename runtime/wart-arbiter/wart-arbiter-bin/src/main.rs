@@ -50,7 +50,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{anyhow, Context, Result};
 
-use wart_arbiter_core::{Event, Registry, Store, PRIMARY_DISPLAY};
+use wart_arbiter_core::{Event, Registry, Reply, Store, PRIMARY_DISPLAY};
+use wart_arbiter_shell::ShellModule;
 use wart_arbiter_wm::WmModule;
 
 use crate::state::AppState;
@@ -336,40 +337,22 @@ fn handle_client(mut stream: UnixStream) -> Result<()> {
         dispatch_module(verb, &rest, &mut stream)
     } else {
     match verb {
+        // The zygote-coupled verbs stay in the binary (they call the zygote and
+        // own the returned pid). GUI launches then dispatch `foreground` to the
+        // shell module; `go-home`/`set-home` go through `ensure_home_foreground`,
+        // which may relaunch home. Everything else (foreground/kill/set-ime/
+        // attach/detach/ime-*/back/cycle-task/overlay/overlay-clear/list) is owned
+        // by the shell module and routed above via `module_owns`.
         "launch"          => cmd_launch(&mut stream, &rest, LaunchKind::Gui),
         "launch-headless" => cmd_launch(&mut stream, &rest, LaunchKind::Headless),
-        // Task 47 step 3c — overlay launch (e.g. an IME app). Same
-        // shape as `launch` but the child gets a bottom-strip
-        // overlay SurfaceControl. Does NOT auto-promote to fg here
-        // — that's the `overlay` command's job, or the auto-tie in
+        // Task 47 step 3c — overlay launch (e.g. an IME app): a bottom-strip
+        // overlay SurfaceControl, started hidden; shown by `overlay` /
         // `attach-editor` when an editor focuses.
         "launch-overlay"  => cmd_launch(&mut stream, &rest, LaunchKind::GuiOverlay),
-        "kill"            => cmd_kill(&mut stream, &rest),
-        "list"            => cmd_list(&mut stream),
         "preload"         => cmd_preload(&mut stream, &rest),
-        "foreground"      => cmd_foreground(&mut stream, &rest),
-        // Task 57 — launcher / home app.
+        // Task 57 — launcher / home app (may relaunch home → zygote-coupled).
         "set-home"        => cmd_set_home(&mut stream, &rest),
         "go-home"         => cmd_go_home(&mut stream),
-        // Task 56 — taskbar nav (Back / Recents; Home reuses go-home).
-        "back"            => cmd_back(&mut stream),
-        "cycle-task"      => cmd_cycle_task(&mut stream),
-        // Task 47 step 3c — manual overlay handles.
-        "overlay"         => cmd_overlay(&mut stream, &rest),
-        "overlay-clear"   => cmd_overlay_clear(&mut stream),
-        // Task 47 step 1 — IME routing. State maintenance + logging
-        // only; cross-process delivery lands in step 2.
-        "set-ime"                    => cmd_set_ime(&mut stream, &rest),
-        "attach-editor"              => cmd_attach_editor(&mut stream, &rest),
-        "detach-editor"              => cmd_detach_editor(&mut stream, &rest),
-        "ime-commit-text"            => cmd_ime_route(&mut stream, "commit-text", &rest),
-        "ime-send-key-event"         => cmd_ime_route(&mut stream, "send-key-event", &rest),
-        "ime-set-composing-text"     => cmd_ime_route(&mut stream, "set-composing-text", &rest),
-        "ime-finish-composing-text"  => cmd_ime_route(&mut stream, "finish-composing-text", &rest),
-        "ime-set-selection"          => cmd_ime_route(&mut stream, "set-selection", &rest),
-        // Task 68 — IME reports its live overlay height (source of truth for the
-        // keyboard-inset the arbiter pushes to focused editors).
-        "ime-overlay-height"         => cmd_ime_overlay_height(&mut stream, &rest),
         other => {
             writeln!(stream, "ERR unknown-command {other}")?;
             Ok(())
@@ -393,314 +376,12 @@ fn handle_client(mut stream: UnixStream) -> Result<()> {
     result
 }
 
-// ─── IME routing (task 47 step 1) ──────────────────────────────────────
-//
-// Step 1 scope: state maintenance + structured logging of routing
-// intent. Cross-process delivery (per-host control sockets, WIT-proxy
-// invocation) is step 2+. The commands here are how the focused-app's
-// host (via skiko's WasiInputMethod adapter, step 2) and the IME
-// app's host will eventually talk to the arbiter.
 
-fn cmd_set_ime(stream: &mut UnixStream, rest: &str) -> Result<()> {
-    let app_id = rest.trim();
-    if app_id.is_empty() {
-        writeln!(stream, "ERR set-ime-empty-app-id")?;
-        return Ok(());
-    }
-    // Special form: "set-ime -" clears the active IME without naming a
-    // replacement. Useful for tests + future "stop using any IME" flow.
-    if app_id == "-" {
-        let prev_id = model_active_ime().map(|(_, id)| id).unwrap_or_else(|| "(none)".to_string());
-        model_set_active_ime(None);
-        writeln!(stream, "OK cleared prev={prev_id}")?;
-        log::info!("arbiter: cleared active IME (prev={prev_id})");
-        return Ok(());
-    }
-    let Some(s) = state::get(app_id) else {
-        writeln!(stream, "ERR not-running {app_id} (launch first)")?;
-        return Ok(());
-    };
-    let prev_id = model_active_ime().map(|(_, id)| id).unwrap_or_else(|| "(none)".to_string());
-    model_set_active_ime(Some(s.pid));
-    writeln!(stream, "OK ime={app_id} pid={} prev={prev_id}", s.pid)?;
-    log::info!(
-        "arbiter: set active IME app={app_id} pid={} (prev={prev_id})",
-        s.pid
-    );
-    Ok(())
-}
 
-/// Task 68 — `ime-overlay-height <px>`. The IME guest reports its live overlay
-/// height; the arbiter records it as the source of truth for the keyboard-inset
-/// it pushes to focused editors. If an editor is currently focused, re-push the
-/// new height so a runtime keyboard resize reflects immediately.
-fn cmd_ime_overlay_height(stream: &mut UnixStream, rest: &str) -> Result<()> {
-    let Ok(px) = rest.trim().parse::<u32>() else {
-        writeln!(stream, "ERR ime-overlay-height-bad-px {rest:?}")?;
-        return Ok(());
-    };
-    state::set_ime_overlay_height(px);
-    // Task 73 — feed the WM module the new keyboard height. It records it in the
-    // per-display store and re-pushes `geometry` to the focused editor (if any),
-    // replacing the legacy `keyboard-inset` re-push. The WM gates on its own
-    // focused-editor cache, so emitting unconditionally is correct.
-    bus_emit(Event::ImeHeightChanged { id: PRIMARY_DISPLAY, px });
-    writeln!(stream, "OK ime-overlay-height {px}")?;
-    log::info!("arbiter: ime-overlay-height {px}");
-    Ok(())
-}
 
-fn cmd_attach_editor(stream: &mut UnixStream, rest: &str) -> Result<()> {
-    // Wire shape: `attach-editor <pid> [input-type] [hint] [initial-text]`.
-    // input-type defaults to `text`; hint + initial-text default to "".
-    // The CLI doesn't currently support spaces in hint / initial-text;
-    // that comes through skiko in step 2 over the per-host control
-    // socket where we control the serialization.
-    let mut parts = rest.splitn(4, ' ');
-    let Some(pid_s) = parts.next() else {
-        writeln!(stream, "ERR attach-editor-missing-pid")?;
-        return Ok(());
-    };
-    let Ok(pid) = pid_s.parse::<i32>() else {
-        writeln!(stream, "ERR attach-editor-bad-pid {pid_s}")?;
-        return Ok(());
-    };
-    // Validate the pid is one of our tracked apps.
-    let owner = state::snapshot().into_iter().find(|a| a.pid == pid);
-    let Some(owner) = owner else {
-        writeln!(stream, "ERR attach-editor-unknown-pid {pid}")?;
-        return Ok(());
-    };
 
-    let input_type = parts.next().unwrap_or("text").to_string();
-    let hint = parts.next().unwrap_or("").to_string();
-    let initial_text = parts.next().unwrap_or("").to_string();
 
-    // Read the prior focus from the model before overwriting it (reply text).
-    let prev_pid = model_ime_editor()
-        .map(|(p, _)| p.to_string())
-        .unwrap_or_else(|| "-".to_string());
-    model_set_editor(Some((
-        pid,
-        wart_arbiter_core::EditorInfo {
-            input_type: input_type.clone(),
-            hint: hint.clone(),
-            initial_text: initial_text.clone(),
-            initial_selection_start: 0,
-            initial_selection_end: 0,
-        },
-    )));
 
-    let ime = model_active_ime(); // (pid, app_id)
-    let ime_dest = ime
-        .as_ref()
-        .map(|(p, id)| format!("{id} (pid={p})"))
-        .unwrap_or_else(|| "(no active IME — set-ime first)".to_string());
-
-    // Editor focus changed → re-derive IME-overlay visibility in the single
-    // authority. Engages the split (IME shown over this app) when this app is
-    // the visible foreground and there's an active IME on another pid.
-    reconcile_overlay();
-    let auto_overlay = model_overlay_engaged() && model_visible_app() == Some(pid);
-
-    // Task 49 step 1a — deliver editor-attached to the IME's wart-host
-    // via its per-host control socket. The IME's render-loop drain
-    // will call into the guest's exported `war:ime/ime.on-editor-attached`
-    // (step 1b). Fire-and-forget; failure to deliver doesn't roll back
-    // the attach-editor state on the arbiter side.
-    let delivered = match &ime {
-        Some((ime_pid, _)) => {
-            let host_sock = format!("/data/local/tmp/wart-host-{ime_pid}.sock");
-            let line = format!(
-                "editor-attached {input_type} {hint_esc} {text_esc} {sel_start} {sel_end}\n",
-                hint_esc   = escape_underscores(&hint),
-                text_esc   = escape_underscores(&initial_text),
-                sel_start  = 0u32,
-                sel_end    = 0u32,
-            );
-            match deliver_to_host(&host_sock, &line) {
-                Ok(_) => true,
-                Err(e) => {
-                    log::warn!(
-                        "arbiter: editor-attached delivery to {host_sock} failed: {e:#}"
-                    );
-                    false
-                }
-            }
-        }
-        None => false,
-    };
-
-    // Task 68/72 — the keyboard will occlude this editor: hand the WM module the
-    // current keyboard height (its source, incl. the default before the IME
-    // reports) then mark this editor focused. The WM pushes `geometry` with the
-    // keyboard inset to the editor host so bottom-anchored content rises above
-    // the keyboard — replacing the legacy `keyboard-inset <h>` push. Only when
-    // there's an active IME on a different pid (the keyboard is actually shown).
-    if let Some((ime_pid, _)) = &ime {
-        if *ime_pid != pid {
-            let h = state::ime_overlay_height();
-            bus_emit(Event::ImeHeightChanged { id: PRIMARY_DISPLAY, px: h });
-            bus_emit(Event::EditorFocusChanged { pid: Some(pid) });
-        }
-    }
-
-    writeln!(
-        stream,
-        "OK attached editor pid={pid} app={} input-type={input_type} \
-         prev-pid={prev_pid} route→{ime_dest} overlay={overlay} delivered={delivered}",
-        owner.app_id,
-        overlay = if auto_overlay { "engaged" } else { "skipped" },
-    )?;
-    log::info!(
-        "arbiter: attach-editor pid={pid} app={} input-type={input_type} hint={hint:?} \
-         initial-text-len={} → route to {ime_dest} auto-overlay={auto_overlay} \
-         delivered={delivered}",
-        owner.app_id,
-        initial_text.len(),
-    );
-    Ok(())
-}
-
-/// Symmetric with wart-host/src/ime_inbound.rs::unescape_underscores.
-/// Empty → "-"; otherwise spaces → "_". Task 49 step 1a wire format.
-fn escape_underscores(s: &str) -> String {
-    if s.is_empty() {
-        return "-".to_string();
-    }
-    s.replace(' ', "_")
-}
-
-fn cmd_detach_editor(stream: &mut UnixStream, rest: &str) -> Result<()> {
-    let pid_s = rest.trim();
-    if pid_s.is_empty() {
-        writeln!(stream, "ERR detach-editor-missing-pid")?;
-        return Ok(());
-    }
-    let Ok(pid) = pid_s.parse::<i32>() else {
-        writeln!(stream, "ERR detach-editor-bad-pid {pid_s}")?;
-        return Ok(());
-    };
-    let prev = model_ime_editor();
-    let was_focused = prev.as_ref().map(|(p, _)| *p) == Some(pid);
-    if was_focused {
-        model_set_editor(None);
-        let ime = model_active_ime();
-        let ime_dest = ime
-            .as_ref()
-            .map(|(p, id)| format!("{id} (pid={p})"))
-            .unwrap_or_else(|| "(no active IME)".to_string());
-        // Editor focus cleared → re-derive overlay visibility. With no focus on
-        // the visible app, `reconcile_overlay` tears the split down (IME hidden,
-        // editor app back to full foreground). Evaluate `was_engaged` before the
-        // reconcile (roles unchanged until then; the visible app is still this
-        // editor's app behind the overlay).
-        let was_engaged = model_overlay_engaged() && model_visible_app() == Some(pid);
-        reconcile_overlay();
-        let cleared = was_engaged && !model_overlay_engaged();
-        // Task 49 step 1a — deliver editor-detached to the IME's
-        // wart-host via its per-host control socket. Symmetric with
-        // cmd_attach_editor's delivery above. Fire-and-forget.
-        let delivered = match &ime {
-            Some((ime_pid, _)) => {
-                let host_sock = format!("/data/local/tmp/wart-host-{ime_pid}.sock");
-                match deliver_to_host(&host_sock, "editor-detached\n") {
-                    Ok(_) => true,
-                    Err(e) => {
-                        log::warn!(
-                            "arbiter: editor-detached delivery to {host_sock} failed: {e:#}"
-                        );
-                        false
-                    }
-                }
-            }
-            None => false,
-        };
-        // Task 68/72 — keyboard gone: clear the WM's focused editor so it pushes
-        // `geometry` with keyboard_px=0 to this editor host, restoring its base
-        // inset (replaces the legacy `keyboard-inset 0` push).
-        bus_emit(Event::EditorFocusChanged { pid: None });
-        writeln!(
-            stream,
-            "OK detached pid={pid} route→{ime_dest} overlay={overlay} delivered={delivered}",
-            overlay = if cleared { "cleared" } else { "skipped" },
-        )?;
-        log::info!(
-            "arbiter: detach-editor pid={pid} → route to {ime_dest} auto-overlay-clear={cleared} \
-             delivered={delivered}"
-        );
-    } else {
-        writeln!(stream, "OK no-op pid={pid} (not focused)")?;
-        log::info!("arbiter: detach-editor pid={pid} — was not focused, no-op");
-    }
-    Ok(())
-}
-
-/// Shared backend for the five `ime-*` commands: route IME-side input
-/// to the currently-focused editor's app.
-///
-/// Task 47 step 3a — `send-key-event` actually delivers via the
-/// focused app's per-host control socket
-/// (`/data/local/tmp/wart-host-<focus.pid>.sock`). Other ime-* verbs
-/// (commit-text / set-composing-text / finish-composing-text /
-/// set-selection) still just log the intent; they need new WIT
-/// exports on the editor-bearing-app side, and that wiring is the
-/// step 3b work (alongside the first-party war.ime.keyboard).
-fn cmd_ime_route(stream: &mut UnixStream, verb: &str, rest: &str) -> Result<()> {
-    let Some((focus_pid, focus_info)) = model_ime_editor() else {
-        writeln!(stream, "ERR no-focused-editor")?;
-        return Ok(());
-    };
-
-    if verb == "send-key-event" {
-        // Wire format from the IME's perspective:
-        //   ime-send-key-event <code-point> <key-id> <down|up>
-        // The arbiter forwards it to the per-host control socket as:
-        //   key-event <code-point> <key-id> <down|up>
-        let parts: Vec<&str> = rest.split_whitespace().collect();
-        if parts.len() != 3 {
-            writeln!(stream, "ERR send-key-event-bad-args: expected <code-point> <key-id> <down|up>")?;
-            return Ok(());
-        }
-        let host_sock = format!("/data/local/tmp/wart-host-{focus_pid}.sock");
-        let line = format!("key-event {} {} {}\n", parts[0], parts[1], parts[2]);
-        match deliver_to_host(&host_sock, &line) {
-            Ok(()) => {
-                writeln!(stream, "OK route→pid={} (key-event {} {} {})",
-                         focus_pid, parts[0], parts[1], parts[2])?;
-                log::info!(
-                    "arbiter: ime-send-key-event → pid={} ({} {} {}) delivered via {host_sock}",
-                    focus_pid, parts[0], parts[1], parts[2]
-                );
-            }
-            Err(e) => {
-                writeln!(stream, "ERR deliver-failed {host_sock}: {e:#}")?;
-                log::warn!(
-                    "arbiter: ime-send-key-event → pid={} failed: {e:#} \
-                     (host socket missing? guest in fg but ime_inbound listener not spawned?)",
-                    focus_pid
-                );
-            }
-        }
-        return Ok(());
-    }
-
-    // commit-text / set-composing-text / finish-composing-text /
-    // set-selection — log only, await step 3b WIT exports.
-    writeln!(
-        stream,
-        "OK route→pid={} (input-type={}) {verb} args={:?} [step 3b — log only]",
-        focus_pid, focus_info.input_type, rest,
-    )?;
-    log::info!(
-        "arbiter: ime-{verb} → editor pid={} app-input-type={} args={:?} \
-         (step 3b delivers via new editor-side WIT exports)",
-        focus_pid,
-        focus_info.input_type,
-        rest,
-    );
-    Ok(())
-}
 
 /// One-shot write to a wart-host child's control socket. Matches the
 /// one-shot pattern used elsewhere — open, write, drain reply, close.
@@ -789,6 +470,9 @@ fn registry() -> &'static Mutex<Registry> {
 fn build_registry() -> Registry {
     let mut reg = Registry::new();
     reg.register(Box::new(WmModule::new()));
+    // Task 74 C — the AMS+IMMS orchestration module: foreground/overlay/editor-
+    // focus/IME-routing/task-cycle policy. The Open/Closed payoff — one line.
+    reg.register(Box::new(ShellModule::new()));
     reg
 }
 
@@ -798,16 +482,20 @@ fn module_owns(verb: &str) -> bool {
     registry().lock().unwrap_or_else(|e| e.into_inner()).owns(verb)
 }
 
-/// Run a module-owned command: dispatch through the registry (which drains the
-/// event cascade), flush every queued host push, and write the single reply
-/// line. Caller holds `arbiter_lock`.
+/// Dispatch a module-owned command through the registry (draining the event
+/// cascade). Returns the reply + accumulated effects, locks released. Caller
+/// holds `arbiter_lock`; the returned effects must be run via `execute_effects`
+/// AFTER this returns (outside the store/registry locks).
+fn run_module(verb: &str, args: &str) -> Option<(Reply, Vec<wart_arbiter_core::Effect>)> {
+    let mut reg = registry().lock().unwrap_or_else(|e| e.into_inner());
+    let mut store = core_store().lock().unwrap_or_else(|e| e.into_inner());
+    reg.dispatch_command(verb, args, &mut store)
+}
+
+/// Run a module-owned command + flush its effects + write the single reply line.
+/// Caller holds `arbiter_lock`.
 fn dispatch_module(verb: &str, rest: &str, stream: &mut UnixStream) -> Result<()> {
-    let outcome = {
-        let mut reg = registry().lock().unwrap_or_else(|e| e.into_inner());
-        let mut store = core_store().lock().unwrap_or_else(|e| e.into_inner());
-        reg.dispatch_command(verb, rest, &mut store)
-    };
-    match outcome {
+    match run_module(verb, rest) {
         Some((reply, effects)) => {
             execute_effects(effects);
             writeln!(stream, "{}", reply.render())?;
@@ -820,6 +508,16 @@ fn dispatch_module(verb: &str, rest: &str, stream: &mut UnixStream) -> Result<()
         }
     }
     Ok(())
+}
+
+/// Bridge a binary-side launch/home flow into the shell module's foreground
+/// policy: dispatch `foreground <app_id>` and run the resulting effects. The app
+/// must already be in the Store registry + have a surface. Caller holds
+/// `arbiter_lock`.
+fn dispatch_foreground(app_id: &str) {
+    if let Some((_reply, effects)) = run_module("foreground", app_id) {
+        execute_effects(effects);
+    }
 }
 
 /// Inject an event from a legacy handler onto the bus and run whatever effects
@@ -919,88 +617,30 @@ fn seed_surface_model(restored_fg: Option<String>) {
     }
 }
 
-// ── model write-through helpers (task 74) ─────────────────────────────
+// ── model accessors used by the binary (task 74) ──────────────────────
 //
-// The single mechanism by which the model is mutated. Each surface/role/focus
-// change goes through one of these so the model stays the live single source.
+// Only the few the binary still needs outside the modules: seeding/launch put a
+// surface, persistence + the home-fallback read the foreground slot, and the
+// device trace reads visible_app. The orchestration reads/writes moved into
+// `wart-arbiter-shell` (which uses `ctx.store` directly).
 
 fn model_put_surface(pid: i32, app_id: &str, role: wart_arbiter_core::Role) {
     let mut store = core_store().lock().unwrap_or_else(|e| e.into_inner());
     store.display_mut(PRIMARY_DISPLAY).put_surface(pid, app_id, role);
 }
-fn model_set_role(pid: i32, role: wart_arbiter_core::Role) {
-    let mut store = core_store().lock().unwrap_or_else(|e| e.into_inner());
-    store.display_mut(PRIMARY_DISPLAY).set_role(pid, role);
-}
-fn model_remove_surface(pid: i32) {
-    let mut store = core_store().lock().unwrap_or_else(|e| e.into_inner());
-    store.display_mut(PRIMARY_DISPLAY).remove_surface(pid);
-}
-fn model_set_active_ime(pid: Option<i32>) {
-    let mut store = core_store().lock().unwrap_or_else(|e| e.into_inner());
-    store.display_mut(PRIMARY_DISPLAY).active_ime = pid;
-}
-fn model_set_editor(v: Option<(i32, wart_arbiter_core::EditorInfo)>) {
-    let mut store = core_store().lock().unwrap_or_else(|e| e.into_inner());
-    store.display_mut(PRIMARY_DISPLAY).set_ime_editor(v);
-}
 fn model_visible_app() -> Option<i32> {
     let store = core_store().lock().unwrap_or_else(|e| e.into_inner());
     store.display(PRIMARY_DISPLAY).and_then(|d| d.visible_app())
 }
-fn model_overlay_desired() -> Option<i32> {
-    let store = core_store().lock().unwrap_or_else(|e| e.into_inner());
-    store.display(PRIMARY_DISPLAY).and_then(|d| d.overlay_desired())
-}
-
-// ── model READ wrappers (task 74 Step D) ──────────────────────────────
-//
-// The store is behind a `Mutex`, so these return owned snapshots (the legacy
-// singleton getters they replace also returned owned clones). They re-express
-// the four deleted singletons' reads over the live model.
-
-/// The legacy `foreground` slot equivalent — `(pid, app_id)` of the `Overlay`
-/// surface when a split is engaged, else the `Foreground` surface. (Was
-/// `state::current_foreground()` resolved to a pid.)
+/// `(pid, app_id)` of the foreground *slot* (the `Overlay` surface during a
+/// split, else the `Foreground` surface) — used by persistence + the death-path
+/// home-fallback gate.
 fn model_foreground_slot() -> Option<(i32, String)> {
     let store = core_store().lock().unwrap_or_else(|e| e.into_inner());
     store
         .display(PRIMARY_DISPLAY)
         .and_then(|d| d.foreground_slot())
         .map(|s| (s.pid, s.app_id.clone()))
-}
-
-/// `(pid, app_id)` of the surface currently in `role`. (Used by the
-/// promote/demote helpers for prev-foreground / overlay / behind lookups.)
-fn model_first_with_role(role: wart_arbiter_core::Role) -> Option<(i32, String)> {
-    let store = core_store().lock().unwrap_or_else(|e| e.into_inner());
-    store
-        .display(PRIMARY_DISPLAY)
-        .and_then(|d| d.first_with_role(role))
-        .map(|s| (s.pid, s.app_id.clone()))
-}
-
-/// Whether an overlay split is engaged. (Was `state::current_overlay().is_some()`.)
-fn model_overlay_engaged() -> bool {
-    let store = core_store().lock().unwrap_or_else(|e| e.into_inner());
-    store.display(PRIMARY_DISPLAY).map(|d| d.overlay_engaged()).unwrap_or(false)
-}
-
-/// `(pid, app_id)` of the active IME. (Was `state::current_active_ime()`.)
-fn model_active_ime() -> Option<(i32, String)> {
-    let store = core_store().lock().unwrap_or_else(|e| e.into_inner());
-    store
-        .display(PRIMARY_DISPLAY)
-        .and_then(|d| d.active_ime_surface())
-        .map(|s| (s.pid, s.app_id.clone()))
-}
-
-/// `(pid, EditorInfo)` of the focused editor. (Was `state::current_editor_focus()`.)
-fn model_ime_editor() -> Option<(i32, wart_arbiter_core::EditorInfo)> {
-    let store = core_store().lock().unwrap_or_else(|e| e.into_inner());
-    store
-        .display(PRIMARY_DISPLAY)
-        .and_then(|d| d.ime_editor().map(|(pid, info)| (pid, info.clone())))
 }
 
 /// Log the visible-app derivation whenever it changes — a lightweight device
@@ -1064,35 +704,19 @@ fn handle_child_exit(pid: i32, detail: &str) {
 
     log::info!("arbiter: on_child_exit pid={pid} app={} ({detail})", app.app_id);
 
-    // Overlay teardown with signal semantics (the `cmd_overlay_clear`
-    // path). Only fires when this pid was either side of an active split.
-    if model_overlay_engaged() {
-        use wart_arbiter_core::Role;
-        let involved = model_first_with_role(Role::Overlay).map(|(p, _)| p) == Some(pid)
-            || model_first_with_role(Role::OverlayBehind).map(|(p, _)| p) == Some(pid);
-        if involved {
-            let cleared = demote_from_overlay();
-            log::info!(
-                "arbiter: on_child_exit pid={pid} tore down overlay split (cleared={:?})",
-                cleared.is_some(),
-            );
-        }
-    }
+    // Task 74 C — the shell module owns the teardown policy: it tears down an
+    // overlay split this pid was part of, removes the app from the registry, and
+    // prunes the surface. Inject the event + run the effects (overlay role
+    // signals) the module emits.
+    bus_emit(Event::SurfaceRemoved { pid });
 
-    // State teardown (fg / active-IME / editor-focus / overlay pointers).
-    state::remove(&app.app_id);
-    model_remove_surface(pid);
-
-    // Socket cleanup (RC2).
+    // Socket cleanup (RC2) — mechanism, stays in the binary.
     remove_host_socket(pid);
 
-    // Task 57 — never leave the screen empty. If the dead app was the
-    // foreground (the overlay teardown + `state::remove` above left fg
-    // cleared) and a home app is designated, bring home forward —
-    // foregrounding the still-alive backgrounded launcher, or relaunching
-    // it if the launcher itself was what died. If a behind-app was
-    // repromoted by `demote_from_overlay`, fg is non-empty and this is a
-    // no-op.
+    // Task 57 — never leave the screen empty. If pruning left no foreground and a
+    // home app is designated, bring home forward (foregrounding the still-alive
+    // backgrounded launcher, or relaunching it if the launcher itself died). This
+    // home-fallback launch is zygote-coupled, so it stays in the binary.
     if model_foreground_slot().is_none() && state::current_home().is_some() {
         log::info!("arbiter: foreground empty after pid {pid} exit — falling back to home");
         ensure_home_foreground();
@@ -1101,8 +725,6 @@ fn handle_child_exit(pid: i32, detail: &str) {
     if let Err(e) = state::save_to(Path::new(ARBITER_STATE_PATH), model_foreground_slot().as_ref().map(|(_, id)| id.as_str())) {
         log::warn!("arbiter: on_child_exit state save failed: {e:#}");
     }
-    // Task 74 Step A — keep the shadow model + agreement check in sync on the
-    // death path too (an exit changes foreground/overlay just like a command).
     log_visible_app();
     log::info!("arbiter: on_child_exit pid={pid} app={} — cleaned up", app.app_id);
 }
@@ -1211,80 +833,7 @@ fn send_overlay_behind_signal(pid: i32) {
     }
 }
 
-/// Promote `(overlay_app_id, overlay_pid)` to be the foreground overlay and
-/// demote the prior foreground app to `OverlayBehind` (visible, layer 0,
-/// `Resumed`). Returns the pid of the demoted app so callers can store it in
-/// `OverlayState.behind_pid`.
-///
-/// Overlay-generic: the IME keyboard is the caller today (task 47 step 3c via
-/// `cmd_attach_editor`), but any overlay-drawing guest (a side / utility panel,
-/// …) can engage the same split by passing its own pid here.
-///
-/// `behind_pid_hint` is a fallback when there's no current foreground
-/// (e.g. the behind process was launched headless or got cleared) —
-/// callers usually pass the focused editor's pid here.
-fn promote_to_overlay(overlay_app_id: &str, overlay_pid: i32, behind_pid_hint: Option<i32>) -> Option<i32> {
-    use wart_arbiter_core::Role;
-    // Demote whoever is currently foreground to OverlayBehind (visible, layer 0,
-    // Resumed — the behind app keeps rendering, e.g. text mutations), sourcing it
-    // from the model. The IME (overlay) and the editor app are always distinct;
-    // guard against a self-overlay just in case.
-    let demoted = match model_first_with_role(Role::Foreground) {
-        Some((prev_pid, prev_id)) if prev_pid != overlay_pid => {
-            log::info!("arbiter: overlay-demoting prior foreground app={prev_id} pid={prev_pid}");
-            send_overlay_behind_signal(prev_pid);
-            // OOM score: behind-app is still Resumed but visually demoted — keep
-            // it at fg priority so the overlay isn't holding the OOM killer's
-            // attention longer than the behind app.
-            write_oom_score(prev_pid, OOM_FG);
-            model_set_role(prev_pid, Role::OverlayBehind);
-            Some(prev_pid)
-        }
-        _ => {
-            // No distinct foreground to demote; record the caller's behind hint
-            // (the focused editor's pid) as the behind surface so the model stays
-            // honest about who is behind the overlay.
-            if let Some(h) = behind_pid_hint {
-                model_set_role(h, Role::OverlayBehind);
-            }
-            behind_pid_hint
-        }
-    };
-    log::info!("arbiter: overlay-promoting app={overlay_app_id} pid={overlay_pid}");
-    send_role_signal(overlay_pid, /*foreground=*/ true);
-    write_oom_score(overlay_pid, OOM_FG);
-    send_present(overlay_pid); // overlay visible now → force a fresh frame (the re-show repaint fix)
-    model_put_surface(overlay_pid, overlay_app_id, Role::Overlay);
-    demoted
-}
 
-/// Tear down the overlay split: demote the overlay process to `Background` and
-/// repromote the behind-app to `Foreground`. Overlay-generic (IME today; any
-/// overlay guest). Used by `cmd_detach_editor` (auto-tied), `cmd_overlay_clear`
-/// (manual), and `promote_to_foreground` (when the overlay loses foreground).
-/// Returns the (overlay_pid, behind_pid) pair that was active, if any.
-fn demote_from_overlay() -> Option<(i32, i32)> {
-    use wart_arbiter_core::Role;
-    // Read both sides of the split from the model. No Overlay surface → not engaged.
-    let overlay_pid = model_first_with_role(Role::Overlay).map(|(p, _)| p)?;
-    let behind_pid = model_first_with_role(Role::OverlayBehind).map(|(p, _)| p);
-    log::info!(
-        "arbiter: overlay-clearing overlay_pid={overlay_pid} behind_pid={}",
-        behind_pid.unwrap_or(0)
-    );
-    send_role_signal(overlay_pid, /*foreground=*/ false);
-    write_oom_score(overlay_pid, OOM_BG);
-    model_set_role(overlay_pid, Role::Background);
-    // Repromote the behind app (the OverlayBehind surface still carries its
-    // app_id; if it was killed mid-split its surface is already gone and this is
-    // simply skipped, leaving no foreground for the home-fallback to fill).
-    if let Some(bp) = behind_pid {
-        send_role_signal(bp, /*foreground=*/ true);
-        write_oom_score(bp, OOM_FG);
-        model_set_role(bp, Role::Foreground);
-    }
-    Some((overlay_pid, behind_pid.unwrap_or(0)))
-}
 
 /// Task 71 (WMS-authority step) — tell a host its surface is now visible and it
 /// should paint a fresh frame. The arbiter is the visibility authority; this
@@ -1299,104 +848,9 @@ fn send_present(pid: i32) {
     }
 }
 
-/// The pid of the real app the user is currently looking at — the surface/role
-/// model's `visible_app()` derivation, which dissolves the foreground-points-at-IME
-/// knot (Task 74). Task 74 Step D: the model is now the sole source (the legacy
-/// singletons + the parity canary are gone).
-fn active_app_pid() -> Option<i32> {
-    model_visible_app()
-}
 
-/// THE single authority for IME-overlay visibility — overlay visibility is
-/// *derived state*, reconciled in one place. The decision (`desired`) comes from
-/// the model's `overlay_desired()` derivation; the imperative promote/demote
-/// *mechanism* is unchanged. Idempotent — safe after ANY fg/focus/ime change.
-fn reconcile_overlay() {
-    let visible = model_visible_app();
-    match (model_overlay_desired(), model_overlay_engaged()) {
-        (Some(_), false) => {
-            // Engage over the visible app.
-            let (ime_pid, ime_app) = model_active_ime().expect("desired implies ime");
-            promote_to_overlay(&ime_app, ime_pid, visible);
-        }
-        (None, true) => {
-            demote_from_overlay();
-        }
-        // Already in the right state.
-        _ => {}
-    }
-}
 
-/// Clear editor focus if it belongs to `pid`, mirroring Android's `finishInput()`
-/// when a window loses focus: a backgrounded app's editor focus must not linger
-/// (that stale pointer is what made the IME route to / yank the wrong app).
-/// Notifies the active IME so it drops its composing state. Caller reconciles.
-fn drop_editor_focus_of(pid: i32) {
-    if model_ime_editor().map(|(p, _)| p) != Some(pid) {
-        return;
-    }
-    model_set_editor(None);
-    if let Some((ime_pid, _)) = model_active_ime() {
-        let host_sock = format!("/data/local/tmp/wart-host-{ime_pid}.sock");
-        if let Err(e) = deliver_to_host(&host_sock, "editor-detached\n") {
-            log::debug!("arbiter: focus-teardown editor-detached → {host_sock} failed: {e:#}");
-        }
-    }
-    // Restore the editor app's full layout: the keyboard is gone, so clear the
-    // bottom inset it reserved. Without this the app keeps its shrunk layout and
-    // shows a BLANK GAP where the keyboard was (task 68 inset never cleared on
-    // the focus-follows-foreground path). Task 73: the WM module pushes
-    // `geometry` with keyboard_px=0 to its focused editor (mirrors
-    // `cmd_detach_editor`; replaces the legacy `keyboard-inset 0` push).
-    bus_emit(Event::EditorFocusChanged { pid: None });
-    log::info!("arbiter: dropped editor focus of pid={pid} (lost foreground)");
-}
 
-/// Demote whoever is currently foreground (if anyone) and promote the
-/// given (app_id, pid) to foreground. Idempotent if the target is
-/// already foreground.
-fn promote_to_foreground(app_id: &str, pid: i32) {
-    use wart_arbiter_core::Role;
-    // If an overlay split is engaged, tear it down FIRST (this repromotes the
-    // behind app to Foreground in the model); the correct overlay state for the
-    // new foreground is re-derived by `reconcile_overlay()` at the end.
-    if model_overlay_engaged() {
-        demote_from_overlay();
-    }
-
-    // Demote the current foreground (sourced from the model) if it's a different
-    // app than the one being promoted.
-    if let Some((prev_pid, prev_id)) = model_first_with_role(Role::Foreground) {
-        if prev_pid != pid {
-            log::info!("arbiter: demoting prior foreground app={prev_id} pid={prev_pid}");
-            send_role_signal(prev_pid, /*foreground=*/ false);
-            write_oom_score(prev_pid, OOM_BG);
-            model_set_role(prev_pid, Role::Background);
-            // Focus-follows-foreground (Android `finishInput()`): the app losing the
-            // foreground also loses any editor focus, so a stale focus can never make
-            // the IME route to / yank a backgrounded app.
-            drop_editor_focus_of(prev_pid);
-        }
-    }
-    log::info!("arbiter: promoting foreground app={app_id} pid={pid}");
-    send_role_signal(pid, /*foreground=*/ true);
-    write_oom_score(pid, OOM_FG);
-    send_present(pid); // visible now → force a fresh frame (don't rely on the role signal alone)
-    model_put_surface(pid, app_id, Role::Foreground);
-
-    // Derive IME-overlay visibility for the new foreground. Switching apps thus
-    // hides the keyboard (the new app has no editor focus yet) — matching
-    // Android — and a focused field re-shows it via `cmd_attach_editor`.
-    reconcile_overlay();
-
-    // Task 73 — tell the WM module the foreground changed so it pushes fresh
-    // geometry (chrome insets in M2, orientation in M3) to the newly-visible
-    // app, mirroring the task-71 present seam. No-op in M1 (no authored policy).
-    bus_emit(Event::ForegroundChanged {
-        app_id: Some(app_id.to_string()),
-        pid: Some(pid),
-    });
-}
 
 /// Task 57 — bring the designated home app to the foreground, launching
 /// it first if it isn't running. No-op if no home is set or home is
@@ -1410,13 +864,15 @@ fn ensure_home_foreground() {
     if model_foreground_slot().as_ref().map(|(_, id)| id.as_str()) == Some(home.as_str()) {
         return;
     }
-    // Already running (survived as a backgrounded process) → just promote.
+    // Already running (survived as a backgrounded process) → just promote via the
+    // shell module's foreground policy.
     if let Some(s) = state::get(&home) {
         log::info!("arbiter: home {home} already running (pid {}) — foregrounding", s.pid);
-        promote_to_foreground(&home, s.pid);
+        dispatch_foreground(&home);
         return;
     }
-    // Not running — launch it as a fullscreen GUI app, then promote.
+    // Not running — launch it as a fullscreen GUI app (zygote, binary-side), then
+    // dispatch foreground to the module.
     match zygote_client::launch_gui(&home) {
         Ok(pid) => {
             state::insert(AppState {
@@ -1426,7 +882,7 @@ fn ensure_home_foreground() {
                 launched_mono: Instant::now(),
             });
             model_put_surface(pid, &home, wart_arbiter_core::Role::Background);
-            promote_to_foreground(&home, pid);
+            dispatch_foreground(&home);
             log::info!("arbiter: launched home app {home} → pid {pid}");
         }
         Err(e) => log::warn!("arbiter: launch home app {home} failed: {e:#}"),
@@ -1453,7 +909,7 @@ fn cmd_launch(stream: &mut UnixStream, app_id: &str, kind: LaunchKind) -> Result
     if kind == LaunchKind::Gui && !app_id.is_empty() {
         if let Some(s) = state::get(app_id) {
             if state::pid_alive(s.pid) {
-                promote_to_foreground(&s.app_id, s.pid);
+                dispatch_foreground(&s.app_id);
                 writeln!(stream, "OK pid={} app={app_id} foregrounded", s.pid)?;
                 log::info!(
                     "wart-arbiter: {app_id} already running (pid {}) — foregrounding instead of relaunch",
@@ -1494,7 +950,7 @@ fn cmd_launch(stream: &mut UnixStream, app_id: &str, kind: LaunchKind) -> Result
             // `attach-editor` so the IME stays hidden+layered-low
             // until an editor focuses.
             if kind == LaunchKind::Gui {
-                promote_to_foreground(&key, pid);
+                dispatch_foreground(&key);
             } else if kind == LaunchKind::GuiOverlay {
                 // Start the overlay HIDDEN — its default Foreground role
                 // would otherwise show it immediately (e.g. the IME
@@ -1515,21 +971,6 @@ fn cmd_launch(stream: &mut UnixStream, app_id: &str, kind: LaunchKind) -> Result
     }
 }
 
-fn cmd_foreground(stream: &mut UnixStream, app_id: &str) -> Result<()> {
-    if app_id.is_empty() {
-        writeln!(stream, "ERR foreground-empty-app-id")?;
-        return Ok(());
-    }
-    let Some(s) = state::get(app_id) else {
-        writeln!(stream, "ERR not-tracked {app_id}")?;
-        return Ok(());
-    };
-    let prev = model_foreground_slot().map(|(_, id)| id);
-    promote_to_foreground(&s.app_id, s.pid);
-    let prev_str = prev.unwrap_or_else(|| "(none)".to_string());
-    writeln!(stream, "OK fg={app_id} prev={prev_str} pid={pid}", pid = s.pid)?;
-    Ok(())
-}
 
 /// Task 57 — designate the home/launcher app. `'-'` clears it. Takes
 /// effect immediately: the home app is brought to the foreground (and
@@ -1571,161 +1012,11 @@ fn cmd_go_home(stream: &mut UnixStream) -> Result<()> {
     }
 }
 
-/// Chrome app-ids that are overlays/system surfaces, not switchable
-/// user apps — excluded from the recents/cycle ring (task 56).
-const CHROME_APP_IDS: [&str; 3] = ["war.statusbar", "war.taskbar", "war.ime.keyboard"];
 
-/// Task 56 — Back. v1 semantics: route an Escape key (Compose key-id 27)
-/// to the foreground app's control socket, so apps treat it as
-/// dismiss/escape (e.g. wart-app hides the soft keyboard). Full Android
-/// Back (driving `OnBackPressedDispatcher`/`BackHandler`) needs the
-/// guest back-dispatcher wired — deferred; ESC is the honest v1 stand-in.
-fn cmd_back(stream: &mut UnixStream) -> Result<()> {
-    // Route ESC to the foreground *slot* (the IME during a split, so it can
-    // dismiss the keyboard — preserving the legacy `current_foreground()` target).
-    let Some((fg_pid, fg)) = model_foreground_slot() else {
-        writeln!(stream, "OK back noop (no foreground app)")?;
-        return Ok(());
-    };
-    let host_sock = format!("/data/local/tmp/wart-host-{fg_pid}.sock");
-    // ESC: code-point 0, key-id 27. Send down+up so either edge handler fires.
-    let ok = deliver_to_host(&host_sock, "key-event 0 27 down\n").is_ok()
-        & deliver_to_host(&host_sock, "key-event 0 27 up\n").is_ok();
-    if ok {
-        writeln!(stream, "OK back → pid={fg_pid} (esc)")?;
-        log::info!("arbiter: back → ESC delivered to fg={fg} pid={fg_pid}");
-    } else {
-        writeln!(stream, "ERR back deliver-failed (host socket missing for pid={fg_pid})")?;
-        log::warn!("arbiter: back → fg={fg} pid={fg_pid} deliver failed (host socket missing?)");
-    }
-    Ok(())
-}
 
-/// Task 56 — Recents/Tasks. Minimal task-switch: foreground the next
-/// running user app after the current foreground, skipping chrome
-/// overlays. The launcher/home app participates in the ring, so cycling
-/// wraps through home. No-op with fewer than two switchable apps.
-fn cmd_cycle_task(stream: &mut UnixStream) -> Result<()> {
-    let mut apps: Vec<AppState> = state::snapshot()
-        .into_iter()
-        .filter(|s| !CHROME_APP_IDS.contains(&s.app_id.as_str()))
-        .collect();
-    apps.sort_by(|a, b| a.app_id.cmp(&b.app_id));
-    if apps.len() < 2 {
-        writeln!(stream, "OK cycle-task noop ({} switchable app(s))", apps.len())?;
-        return Ok(());
-    }
-    // Current position = the VISIBLE app (the behind-app when the IME overlay is
-    // engaged; the `foreground` slot points at the IME then, which would be
-    // filtered out as chrome and wedge the ring). `active_app_pid` resolves it.
-    let cur_pid = active_app_pid();
-    let idx = cur_pid
-        .and_then(|p| apps.iter().position(|s| s.pid == p))
-        .unwrap_or(usize::MAX); // not found → start so (idx+1)%n == 0
-    let next = &apps[idx.wrapping_add(1) % apps.len()];
-    promote_to_foreground(&next.app_id, next.pid);
-    writeln!(stream, "OK cycle-task → {} pid={}", next.app_id, next.pid)?;
-    log::info!("arbiter: cycle-task → fg={} pid={} (ring of {})", next.app_id, next.pid, apps.len());
-    Ok(())
-}
 
-/// Task 47 step 3c — manually engage the overlay split. Promotes
-/// `app_id` (typically an IME) as foreground overlay; demotes the
-/// prior foreground to `OverlayBehind`. The auto-tied path inside
-/// `cmd_attach_editor` fires the same flow when an editor focuses and
-/// an `ActiveIme` is set; this manual handle is for testing /
-/// arbiter-driven flows that don't go through attach-editor.
-fn cmd_overlay(stream: &mut UnixStream, app_id: &str) -> Result<()> {
-    if app_id.is_empty() {
-        writeln!(stream, "ERR overlay-empty-app-id")?;
-        return Ok(());
-    }
-    let Some(ime) = state::get(app_id) else {
-        writeln!(stream, "ERR overlay-not-tracked {app_id}")?;
-        return Ok(());
-    };
-    let prev_fg = model_foreground_slot();
-    // The prior fg's pid (if any) is the behind_pid_hint. The promote_to_overlay
-    // helper handles the case where there is none.
-    let behind_hint = prev_fg.as_ref().map(|(p, _)| *p);
-    let demoted = promote_to_overlay(&ime.app_id, ime.pid, behind_hint);
-    let prev_str = prev_fg.map(|(_, id)| id).unwrap_or_else(|| "(none)".to_string());
-    let demoted_str = demoted
-        .map(|p| p.to_string())
-        .unwrap_or_else(|| "-".to_string());
-    writeln!(
-        stream,
-        "OK overlay={app_id} pid={ime_pid} prev-fg={prev_str} behind-pid={demoted_str}",
-        ime_pid = ime.pid,
-    )?;
-    Ok(())
-}
 
-/// Task 47 step 3c — tear down the overlay split. Demotes the IME
-/// (Background) and repromotes the behind-app (Foreground).
-fn cmd_overlay_clear(stream: &mut UnixStream) -> Result<()> {
-    match demote_from_overlay() {
-        Some((ime_pid, behind_pid)) => {
-            writeln!(
-                stream,
-                "OK overlay-cleared ime-pid={ime_pid} repromoted-behind-pid={behind_pid}"
-            )?;
-        }
-        None => {
-            writeln!(stream, "OK overlay-was-not-active")?;
-        }
-    }
-    Ok(())
-}
 
-fn cmd_kill(stream: &mut UnixStream, app_id: &str) -> Result<()> {
-    if app_id.is_empty() {
-        writeln!(stream, "ERR kill-empty-app-id")?;
-        return Ok(());
-    }
-    let Some(s) = state::get(app_id) else {
-        writeln!(stream, "ERR not-tracked {app_id}")?;
-        return Ok(());
-    };
-    match zygote_client::kill(s.pid, false) {
-        Ok(()) => {
-            state::remove(app_id);
-            model_remove_surface(s.pid);
-            writeln!(stream, "OK killed app={app_id} pid={pid}", pid = s.pid)?;
-            log::info!("wart-arbiter: killed {app_id} pid={pid}", pid = s.pid);
-            Ok(())
-        }
-        Err(e) => {
-            writeln!(stream, "ERR kill-failed {app_id} pid={pid}: {e:#}", pid = s.pid)?;
-            log::warn!("wart-arbiter: kill {app_id} failed: {e:#}");
-            Ok(())
-        }
-    }
-}
-
-fn cmd_list(stream: &mut UnixStream) -> Result<()> {
-    let mut apps = state::snapshot();
-    apps.sort_by(|a, b| a.app_id.cmp(&b.app_id));
-    let fg = model_foreground_slot().map(|(_, id)| id);
-    let ime = model_active_ime().map(|(_, id)| id);
-    let focus = model_ime_editor();
-    writeln!(stream, "OK count={}", apps.len())?;
-    for app in apps {
-        let elapsed_ms = app.launched_mono.elapsed().as_millis();
-        let mut markers = String::new();
-        if fg.as_deref() == Some(&app.app_id) { markers.push_str(" [fg]"); }
-        if ime.as_deref() == Some(&app.app_id) { markers.push_str(" [ime]"); }
-        if focus.as_ref().map(|(p, _)| *p) == Some(app.pid) {
-            markers.push_str(&format!(" [editor:{}]", focus.as_ref().unwrap().1.input_type));
-        }
-        writeln!(
-            stream,
-            "  app={} pid={} elapsed_ms={elapsed_ms}{markers}",
-            app.app_id, app.pid
-        )?;
-    }
-    Ok(())
-}
 
 fn cmd_preload(stream: &mut UnixStream, app_id: &str) -> Result<()> {
     if app_id.is_empty() {

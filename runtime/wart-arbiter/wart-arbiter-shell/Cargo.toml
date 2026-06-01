@@ -1,0 +1,19 @@
+[package]
+name    = "wart-arbiter-shell"
+version = "0.0.1"
+edition = "2021"
+
+# wart-arbiter-shell — the AMS + IMMS orchestration module (task 74 C).
+#
+# The second responsibility crate (after wart-arbiter-wm). Owns the
+# app-foreground / overlay-split / editor-focus / IME-routing / task-cycle
+# policy that used to live in the binary's command handlers — the entangled
+# state machine the surface/role model was built to untangle. It decides over
+# the core Store and emits Effect::SetRole / HostLine + events; the binary
+# performs the mechanism (signals, /proc, sockets, zygote). Wired into the
+# registry with one line. The zygote-coupled verbs (launch*/preload, plus
+# go-home/set-home which may relaunch home) stay in the binary.
+
+[dependencies]
+wart-arbiter-core = { path = "../wart-arbiter-core" }
+log = { workspace = true }

@@ -28,10 +28,6 @@ pub fn insert(app: AppState) {
     store().insert_app(app);
 }
 
-pub fn remove(app_id: &str) -> Option<AppState> {
-    store().remove_app(app_id)
-}
-
 pub fn get(app_id: &str) -> Option<AppState> {
     store().app(app_id).cloned()
 }
@@ -48,16 +44,6 @@ pub fn current_home() -> Option<String> {
 
 pub fn set_home(new: Option<&str>) -> Option<String> {
     store().set_home(new.map(|s| s.to_string()))
-}
-
-// ── IME intrinsic height (task 68) ──────────────────────────────────────
-
-pub fn ime_overlay_height() -> u32 {
-    store().ime_height()
-}
-
-pub fn set_ime_overlay_height(px: u32) {
-    store().set_ime_height(px);
 }
 
 // ── persistence (file IO here; serialize/parse in core) ─────────────────

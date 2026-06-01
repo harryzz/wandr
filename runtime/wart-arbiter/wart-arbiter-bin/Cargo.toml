@@ -22,8 +22,9 @@ name = "wart-arbiter"
 path = "src/main.rs"
 
 [dependencies]
-wart-arbiter-core = { path = "../wart-arbiter-core" }
-wart-arbiter-wm   = { path = "../wart-arbiter-wm" }
+wart-arbiter-core  = { path = "../wart-arbiter-core" }
+wart-arbiter-wm    = { path = "../wart-arbiter-wm" }
+wart-arbiter-shell = { path = "../wart-arbiter-shell" }
 anyhow         = { workspace = true }
 log            = { workspace = true }
 android_logger = { workspace = true }
