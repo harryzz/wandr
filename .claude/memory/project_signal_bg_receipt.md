@@ -37,9 +37,9 @@ Plan: `~/.claude/plans/cat-task-state-steady-stallman.md`.
 **Test harness:** `apps/user/war.alarm.test` is now the kitchen-sink guest — exports
 alarm-handler + bg-tick + notify-handler, imports scheduler + notifier (`background=true`).
 
-**M4 — Signal wiring** (`b18a3198`): DONE + deployed (`/state` preserved); real
-background-receipt verify is USER-driven (background Signal, send from a 2nd device →
-expect notification + receipt; tap → opens thread). `package.toml background=true`; world
+**M4 — Signal wiring** (`b18a3198`): DONE + **fully device-verified by the user 2026-06-01**
+— backgrounded Signal received a message sent from a 2nd device, the status-bar notification
+appeared, and tapping it opened the right thread. (`/state`/link preserved across deploy.) `package.toml background=true`; world
 exports background/notify-handler/alarm-handler + imports notifier/scheduler (deps under
 `ui/wit/deps/`); the export Guest traits are impl'd on dioxus-canvas's `__DioxusCanvasGuest`
 right AFTER the `wire!` macro (export! resolves them crate-wide — the integration seam).
