@@ -37,11 +37,19 @@ Plan: `~/.claude/plans/cat-task-state-steady-stallman.md`.
 **Test harness:** `apps/user/war.alarm.test` is now the kitchen-sink guest — exports
 alarm-handler + bg-tick + notify-handler, imports scheduler + notifier (`background=true`).
 
-**M4 — Signal wiring (NEXT; NEEDS THE USER — real Signal account + a 2nd device to send
-from).** Signal UI: add `background=true`; export `bg-tick` → `chat::poll-events` + for each
-new inbound `notifier::post`; export `on-notification-click` → open that thread; schedule a
-coarse keep-alive alarm (crashed/rebooted Signal → hidden relaunch → reconnect → resident
-bg-service). Engine already pumps+persists+reconnects per poll-events.
+**M4 — Signal wiring** (`b18a3198`): DONE + deployed (`/state` preserved); real
+background-receipt verify is USER-driven (background Signal, send from a 2nd device →
+expect notification + receipt; tap → opens thread). `package.toml background=true`; world
+exports background/notify-handler/alarm-handler + imports notifier/scheduler (deps under
+`ui/wit/deps/`); the export Guest traits are impl'd on dioxus-canvas's `__DioxusCanvasGuest`
+right AFTER the `wire!` macro (export! resolves them crate-wide — the integration seam).
+`bg-tick`→`pump()` (~4 Hz, no hidden-surface render); new inbound (not open thread) →
+`notifier::post` (one per thread, FNV id, title via `resolve_thread`); open/read → cancel;
+`on-notification-click`→`PENDING_OPEN`→`app()` navigates; `on-alarm`→`pump()`; init schedules
+a 5-min keep-alive alarm. Verified on launch: all 3 exports bind, alarm armed
+(repeat=300000ms), engine handshakes chat.signal.org. NOTE: the Signal UI already
+background-pumped via render@1Hz when paused (post-task-64 on-demand) — M4 adds the
+notification ALERT + clean bg-tick pump + wake-from-dead, the actual new value.
 
 **Gotchas burned this session (all real):**
 - `bindgen!` is NOT re-triggered by a `.wit`-only edit — `touch` the file holding the macro
