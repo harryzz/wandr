@@ -44,18 +44,56 @@ pub fn run(app_id: Option<&str>, mode: OverlayMode) -> Result<()> {
     run_with_engine(&engine, app_id, mode)
 }
 
-/// Initial bottom-overlay (IME) panel height in physical pixels. The IME
-/// guest may resize via `my:skiko-gfx/keyboard.request-overlay-height`.
+/// Initial bottom-overlay (IME) panel height in physical pixels — only the
+/// pre-arbiter fallback; the IME guest resizes to its real height via
+/// `my:skiko-gfx/keyboard.request-overlay-height`.
 const INITIAL_OVERLAY_PX: i32 = 1200;
 
-/// Taskbar (BottomBar) strip height in physical pixels — the Android-style
-/// Back/Home/Recents nav bar (task 56). Env-tunable via `WART_TASKBAR_PX`.
+// ── Chrome strip heights, true-dp (Arbiter Inc. 3b) ───────────────────
+//
+// The arbiter is the authority: it authors the chrome heights (dp×density) and
+// hands them to the host via the `register-chrome` reply (this overlay's own
+// strip) and the `geometry` line (inset_top=sb, inset_bottom=tb, for everyone's
+// `overlay_rect`). The host caches the last arbiter-provided values here.
+// `status_bar_height_px()` / `taskbar_height_px()` return the cache, falling
+// back to dp×`read_dpi` ONLY if the arbiter never provided one (degraded /
+// arbiter-down). The fallback dp consts MIRROR wart-arbiter-core's
+// STATUS_BAR_DP/TASKBAR_DP (the authority) — keep them in lockstep.
+use std::sync::atomic::{AtomicU32, Ordering};
+static CHROME_SB_PX: AtomicU32 = AtomicU32::new(0);
+static CHROME_TB_PX: AtomicU32 = AtomicU32::new(0);
+/// Fallback only (arbiter authoritative): mirror of wart-arbiter-core dp consts.
+const FALLBACK_STATUS_BAR_DP: u32 = 38;
+const FALLBACK_TASKBAR_DP: u32 = 43;
+
+fn dp_to_px(dp: u32) -> u32 {
+    (dp as f32 * (crate::window_impl::read_dpi() as f32 / 160.0)).round() as u32
+}
+
+/// Cache the arbiter-provided chrome heights (0 = leave unchanged).
+pub fn cache_chrome_heights(sb: u32, tb: u32) {
+    if sb > 0 {
+        CHROME_SB_PX.store(sb, Ordering::Relaxed);
+    }
+    if tb > 0 {
+        CHROME_TB_PX.store(tb, Ordering::Relaxed);
+    }
+}
+
+/// Status-bar strip height, px — arbiter-authored (cached), else dp×density.
+pub fn status_bar_height_px() -> u32 {
+    match CHROME_SB_PX.load(Ordering::Relaxed) {
+        0 => dp_to_px(FALLBACK_STATUS_BAR_DP),
+        v => v,
+    }
+}
+
+/// Taskbar strip height, px — arbiter-authored (cached), else dp×density.
 pub fn taskbar_height_px() -> u32 {
-    std::env::var("WART_TASKBAR_PX")
-        .ok()
-        .and_then(|s| s.trim().parse::<u32>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(150)
+    match CHROME_TB_PX.load(Ordering::Relaxed) {
+        0 => dp_to_px(FALLBACK_TASKBAR_DP),
+        v => v,
+    }
 }
 
 
@@ -99,13 +137,32 @@ pub fn run_with_engine(engine: &Engine, app_id: Option<&str>, mode: OverlayMode)
             // INITIAL_OVERLAY_PX. The runtime owns the semantics; the
             // shim is geometry-generic (per the surface-abstraction
             // discussion — task 55).
+            // True-dp + chrome-coherence: the chrome overlays (top/bottom-bar)
+            // self-register with the arbiter and size their strip to the
+            // arbiter-authored height (dp×density) it replies — the arbiter is
+            // the single source. Done before surface creation so we create at
+            // the right height. The IME (Bottom) is arbiter-launched, not chrome.
             let (y, h, label) = match mode {
-                // Status-bar height is a single host parameter
-                // (WART_STATUSBAR_PX); the status.bar-height() verb +
-                // the launcher's inset derive from the same source.
-                OverlayMode::Top => (0, crate::status_impl::status_bar_height_px() as i32, "top"),
-                // Taskbar — bottom-anchored, thin fixed height (task 56).
-                OverlayMode::BottomBar => (-1, taskbar_height_px() as i32, "bottom-bar"),
+                OverlayMode::Top => {
+                    let px = app_id
+                        .and_then(|id| register_chrome_with_arbiter(id, "top"))
+                        .map(|px| {
+                            cache_chrome_heights(px, 0);
+                            px
+                        })
+                        .unwrap_or_else(status_bar_height_px);
+                    (0, px as i32, "top")
+                }
+                OverlayMode::BottomBar => {
+                    let px = app_id
+                        .and_then(|id| register_chrome_with_arbiter(id, "bottom-bar"))
+                        .map(|px| {
+                            cache_chrome_heights(0, px);
+                            px
+                        })
+                        .unwrap_or_else(taskbar_height_px);
+                    (-1, px as i32, "bottom-bar")
+                }
                 _ => (-1, INITIAL_OVERLAY_PX, "bottom"),
             };
             match crate::sf_surface::SfSurface::create_overlay(SHIM_SO, 0, y, 0, h) {
@@ -147,19 +204,20 @@ pub fn run_with_engine(engine: &Engine, app_id: Option<&str>, mode: OverlayMode)
         renderer.width, renderer.height,
     );
 
-    // Task 56 — chrome content insets for a fullscreen app: reserve the
-    // status-bar (top) + taskbar (bottom) strips so the app never draws
-    // under the chrome, in any orientation. Driven by env (the shell sets
-    // WART_INSET_TOP/BOTTOM to the chrome heights when launching the
-    // zygote); unset → 0 → the app gets the full native display size (a
-    // true immersive fullscreen app with no chrome). Only fullscreen
-    // (None) mode insets — the chrome overlays themselves render full.
+    // Chrome content insets for a fullscreen app (true-dp, Arbiter Inc. 3b):
+    // report the panel size + density up and reserve the arbiter-authored chrome
+    // strips (dp×density) so the app never draws under the chrome. Pulling the
+    // insets synchronously from the report-panel reply (vs. relying on a push to
+    // a not-yet-bound control socket) sets them before the first frame — no
+    // launch-time flicker. The arbiter is the single source; on arbiter-down we
+    // render full and a later geometry push fills them in. Only fullscreen mode
+    // insets — the chrome overlays render full strips.
     if mode == OverlayMode::None {
-        let env_px = |k: &str| {
-            std::env::var(k).ok().and_then(|s| s.trim().parse::<u32>().ok()).unwrap_or(0)
-        };
-        let (top, bottom) = (env_px("WART_INSET_TOP"), env_px("WART_INSET_BOTTOM"));
-        if top > 0 || bottom > 0 {
+        let dpi = crate::window_impl::read_dpi();
+        if let Some((top, bottom)) =
+            report_panel_to_arbiter(sf.panel_w.max(0) as u32, sf.panel_h.max(0) as u32, dpi)
+        {
+            cache_chrome_heights(top, bottom);
             renderer.set_insets(top, bottom);
         }
     }
@@ -192,7 +250,7 @@ pub fn run_with_engine(engine: &Engine, app_id: Option<&str>, mode: OverlayMode)
             } else {
                 loaded.rotation_policy()
             };
-            run_cwasm_loop(engine, loaded, renderer, sf, mode, app_id, rotates, is_locked, fg_layer)
+            run_cwasm_loop(engine, loaded, renderer, sf, mode, rotates, is_locked, fg_layer)
         }
         Err(e) => {
             log::warn!(
@@ -260,31 +318,41 @@ fn report_orientation_to_arbiter(raw_rot: u32) -> std::io::Result<()> {
 
 /// One-shot arbiter command (connect, write line, drain + drop reply, close) —
 /// the fire-and-forget shape shared by the chrome-coherence reports.
-fn send_arbiter_oneshot(line: &str) -> std::io::Result<()> {
+fn send_arbiter_oneshot(line: &str) -> std::io::Result<String> {
     use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;
     let mut stream = UnixStream::connect(ARBITER_SOCK_PATH)?;
     stream.write_all(line.as_bytes())?;
     stream.flush()?;
     let _ = stream.shutdown(std::net::Shutdown::Write);
-    let mut buf = [0u8; 64];
-    let _ = stream.read(&mut buf);
-    Ok(())
+    let mut buf = [0u8; 256];
+    let n = stream.read(&mut buf).unwrap_or(0);
+    Ok(String::from_utf8_lossy(&buf[..n]).into_owned())
 }
 
-/// Chrome-coherence — a host-spawned chrome overlay (statusbar/taskbar)
+/// Parse a `key=<u32>` token out of an arbiter reply line (true-dp replies).
+fn parse_reply_u32(reply: &str, key: &str) -> Option<u32> {
+    let needle = format!("{key}=");
+    let after = &reply[reply.find(&needle)? + needle.len()..];
+    let end = after.find(|c: char| !c.is_ascii_digit()).unwrap_or(after.len());
+    after[..end].parse().ok()
+}
+
+/// Chrome-coherence + true-dp — a host-spawned chrome overlay (statusbar/taskbar)
 /// self-registers with the arbiter so it's tracked as a `Role::Chrome` surface
-/// and the arbiter can fan orientation to its control socket. A few short
-/// retries since `run-hybrid-stack.sh` spawns chrome right as the arbiter comes
-/// up. Best-effort: if the arbiter never appears, chrome simply won't rotate
-/// (the arbiter is the orientation authority now).
-fn register_chrome_with_arbiter(app_id: &str) {
-    let line = format!("register-chrome {app_id} {}\n", std::process::id());
+/// (the arbiter fans orientation to its control socket) AND learns its strip
+/// `height` (dp×density, the arbiter-authored chrome height). A few short retries
+/// since `run-hybrid-stack.sh` spawns chrome right as the arbiter comes up.
+/// Returns the strip height px (`None` ⇒ arbiter unreachable / density unknown →
+/// host falls back).
+fn register_chrome_with_arbiter(app_id: &str, anchor: &str) -> Option<u32> {
+    let line = format!("register-chrome {app_id} {} {anchor}\n", std::process::id());
     for attempt in 0..10 {
         match send_arbiter_oneshot(&line) {
-            Ok(()) => {
-                log::info!("standalone: registered chrome {app_id} with arbiter");
-                return;
+            Ok(reply) => {
+                let height = parse_reply_u32(&reply, "height").filter(|&h| h > 0);
+                log::info!("standalone: registered chrome {app_id} ({anchor}) with arbiter → height={height:?}");
+                return height;
             }
             Err(e) => {
                 log::debug!("standalone: register-chrome attempt {attempt} failed: {e}; retrying");
@@ -293,6 +361,28 @@ fn register_chrome_with_arbiter(app_id: &str) {
         }
     }
     log::warn!("standalone: register-chrome {app_id} gave up — arbiter unreachable");
+    None
+}
+
+/// True-dp — the foreground fullscreen app reports the panel size + density on
+/// startup; the arbiter stores density and replies with the authored content
+/// insets `(inset_top, inset_bottom)` so the app reserves the chrome strips
+/// before its first frame (no launch-time push race). `None` ⇒ arbiter
+/// unreachable (host renders full until a later geometry push).
+fn report_panel_to_arbiter(w: u32, h: u32, dpi: u32) -> Option<(u32, u32)> {
+    let line = format!("report-panel {w} {h} {dpi}\n");
+    match send_arbiter_oneshot(&line) {
+        Ok(reply) => {
+            let top = parse_reply_u32(&reply, "inset-top")?;
+            let bottom = parse_reply_u32(&reply, "inset-bottom")?;
+            log::info!("standalone: report-panel {w}x{h} dpi={dpi} → insets ({top},{bottom})");
+            Some((top, bottom))
+        }
+        Err(e) => {
+            log::debug!("standalone: report-panel failed ({e}); arbiter down?");
+            None
+        }
+    }
 }
 
 /// Chrome-coherence — the foreground fullscreen app reports whether it pins
@@ -383,9 +473,6 @@ fn run_cwasm_loop(
     // Task 62 — the surface's anchor (fullscreen vs which overlay edge).
     // Drives the rotated-rect geometry flip for overlays.
     mode: OverlayMode,
-    // Chrome-coherence — the installed app-id (None for the dev-cwasm fallback),
-    // used by chrome overlays to self-register with the arbiter.
-    app_id: Option<&str>,
     // Task 43/62 — auto-follow device screen rotation. True for the
     // fullscreen app (unless locked) and for overlays whose manifest opts
     // in (`orientation = "auto"`); false otherwise.
@@ -539,15 +626,9 @@ fn run_cwasm_loop(
         }
     };
 
-    // Chrome-coherence — the status bar / taskbar are host-spawned (not arbiter-
-    // launched), so they self-register as `Role::Chrome` surfaces now that the
-    // control socket is bound, letting the arbiter fan orientation to them. The
-    // IME (`Bottom`) is already arbiter-launched + tracked, so it doesn't register.
-    if matches!(mode, OverlayMode::Top | OverlayMode::BottomBar) {
-        if let Some(id) = app_id {
-            register_chrome_with_arbiter(id);
-        }
-    }
+    // (Chrome overlays already self-registered with the arbiter during surface
+    // creation above — register-chrome's reply gave their strip height. The
+    // control socket bound here is for the arbiter's ongoing geometry pushes.)
 
     // Task 43 — runtime screen orientation. Read the native Device
     // Orientation HAL sensor (android.sensor.device_orientation, type 27,
@@ -1025,10 +1106,17 @@ fn run_cwasm_loop(
                     inset_top, inset_bottom, keyboard_px, orient,
                 } => {
                     use crate::ime_inbound::{GEOM_INSET_KEEP, GEOM_ORIENT_KEEP};
+                    // True-dp: the inset fields ARE the arbiter-authored chrome
+                    // heights (sb, tb). Cache them for `overlay_rect` (every
+                    // overlay's anchoring math) + the chrome strip heights. Then
+                    // a fullscreen app also reserves them as content insets.
+                    if inset_top != GEOM_INSET_KEEP && inset_bottom != GEOM_INSET_KEEP {
+                        cache_chrome_heights(inset_top, inset_bottom);
+                    }
                     {
                         let r = &mut store.data_mut().renderer;
                         // Insets: apply only when the arbiter authored both real
-                        // values; otherwise keep the host's env-sourced chrome.
+                        // values; otherwise keep the host's current chrome.
                         if inset_top != GEOM_INSET_KEEP && inset_bottom != GEOM_INSET_KEEP {
                             r.set_insets(inset_top, inset_bottom);
                         }

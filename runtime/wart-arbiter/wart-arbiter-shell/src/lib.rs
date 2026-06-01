@@ -27,6 +27,7 @@ use std::time::{Instant, SystemTime};
 
 use wart_arbiter_core::{
     AppState, ArbiterModule, Ctx, Effect, EditorInfo, Event, Reply, Role, Store, PRIMARY_DISPLAY,
+    STATUS_BAR_DP, TASKBAR_DP,
 };
 
 /// OOM scores are applied by the binary's `apply_role`; the module only sets roles.
@@ -242,21 +243,26 @@ impl ShellModule {
         Reply::ok(format!("fg={app_id} prev={prev_str} pid={}", s.pid))
     }
 
-    /// `register-chrome <app-id> <pid>` — a host-spawned chrome overlay
+    /// `register-chrome <app-id> <pid> <anchor>` — a host-spawned chrome overlay
     /// (statusbar/taskbar) self-registers so the arbiter tracks it as a
     /// `Role::Chrome` surface and can fan orientation to its control socket
-    /// (chrome-coherence). The pid is the overlay's own; the control socket is
-    /// `wart-host-<pid>.sock`. Chrome is excluded from `visible_app`/the cycle
-    /// ring by role, so this is inert for AM/IME policy. Death cleanup is the
-    /// existing liveness poller → `SurfaceRemoved`.
+    /// (chrome-coherence). `anchor` ∈ `top|bottom-bar`. The pid is the overlay's
+    /// own; the control socket is `wart-host-<pid>.sock`. Chrome is excluded from
+    /// `visible_app`/the cycle ring by role, so this is inert for AM/IME policy.
+    ///
+    /// True-dp: the REPLY carries the strip `height` (dp×density for the anchor)
+    /// so the overlay sizes its surface to the arbiter-authored value — the
+    /// arbiter is the single source of the chrome heights. `height=0` if the
+    /// density isn't known yet (host falls back); density is fixed per device.
     fn cmd_register_chrome(&mut self, rest: &str, ctx: &mut Ctx) -> Reply {
         let mut parts = rest.split_whitespace();
         let (Some(app_id), Some(pid_s)) = (parts.next(), parts.next()) else {
-            return Reply::err("register-chrome-args: expected <app-id> <pid>");
+            return Reply::err("register-chrome-args: expected <app-id> <pid> <anchor>");
         };
         let Ok(pid) = pid_s.parse::<i32>() else {
             return Reply::err(format!("register-chrome-bad-pid {pid_s}"));
         };
+        let anchor = parts.next().unwrap_or("");
         ctx.store.insert_app(AppState {
             app_id: app_id.to_string(),
             pid,
@@ -266,8 +272,18 @@ impl ShellModule {
         ctx.store
             .display_mut(PRIMARY_DISPLAY)
             .put_surface(pid, app_id, Role::Chrome);
-        log::info!("arbiter: registered chrome surface app={app_id} pid={pid}");
-        Reply::ok(format!("chrome {app_id} pid={pid}"))
+        let dp = match anchor {
+            "top" => STATUS_BAR_DP,
+            "bottom-bar" => TASKBAR_DP,
+            _ => 0,
+        };
+        let height = ctx
+            .store
+            .geometry(PRIMARY_DISPLAY)
+            .map(|g| g.dp_to_px(dp))
+            .unwrap_or(0);
+        log::info!("arbiter: registered chrome surface app={app_id} pid={pid} anchor={anchor} height={height}");
+        Reply::ok(format!("chrome {app_id} pid={pid} height={height}"))
     }
 
     fn cmd_kill(&mut self, app_id: &str, ctx: &mut Ctx) -> Reply {
@@ -674,8 +690,10 @@ mod tests {
     fn register_chrome_adds_chrome_surface_inert_to_policy() {
         let (mut r, mut store) = reg();
         seed_app(&mut store, "app", 10, Role::Foreground);
-        let (reply, _eff) = r.dispatch_command("register-chrome", "war.statusbar 50", &mut store).unwrap();
-        assert_eq!(reply.render(), "OK chrome war.statusbar pid=50");
+        // Density known → the reply carries the dp×density strip height (top → 133).
+        store.geometry_mut(PRIMARY_DISPLAY).density = 560.0 / 160.0;
+        let (reply, _eff) = r.dispatch_command("register-chrome", "war.statusbar 50 top", &mut store).unwrap();
+        assert_eq!(reply.render(), "OK chrome war.statusbar pid=50 height=133");
         assert_eq!(store.display(PRIMARY_DISPLAY).unwrap().role_of(50), Some(Role::Chrome));
         // Inert for AM policy: chrome is never the visible app.
         assert_eq!(store.display(PRIMARY_DISPLAY).unwrap().visible_app(), Some(10));

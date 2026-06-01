@@ -66,14 +66,7 @@ fn device_rotation_to_orient(rot: u32) -> u32 {
 /// `visible_app()` for the no-payload re-push handlers (ImeHeight / Orientation)
 /// and uses the pid carried on the focus/foreground events otherwise — no
 /// private targeting caches that could drift from the model.
-pub struct WmModule {
-    /// Authored chrome insets in px, or `None` ⇒ emit [`INSET_HOST_OWNED`]
-    /// (M1). Read once from the arbiter's own env (the same WART_INSET_*
-    /// config the shell hands the hosts) so there is ONE source of the chrome
-    /// heights, named where the policy lives.
-    inset_top: Option<u32>,
-    inset_bottom: Option<u32>,
-}
+pub struct WmModule;
 
 /// The focused editor's pid for a display, read from the Store's resource-focus
 /// (the single source) — used by the no-payload re-push handlers.
@@ -101,51 +94,28 @@ impl Default for WmModule {
 
 impl WmModule {
     pub fn new() -> Self {
-        let env_px = |k: &str| {
-            std::env::var(k)
-                .ok()
-                .and_then(|s| s.trim().parse::<u32>().ok())
-        };
-        // The arbiter authors chrome insets only if it is told the heights.
-        // Absent ⇒ M1 sentinel (host keeps its env insets). Present ⇒ M2.
-        let inset_top = env_px("WART_INSET_TOP");
-        let inset_bottom = env_px("WART_INSET_BOTTOM");
-        if inset_top.is_some() || inset_bottom.is_some() {
-            log::info!(
-                "wart-arbiter-wm: authoring chrome insets top={:?} bottom={:?} (M2 active)",
-                inset_top, inset_bottom
-            );
-        } else {
-            log::info!(
-                "wart-arbiter-wm: no WART_INSET_* in arbiter env — insets stay host-owned (M1)"
-            );
-        }
-        Self {
-            inset_top,
-            inset_bottom,
-        }
+        WmModule
     }
 
-    /// The inset fields to put on the wire: authored px, or the host-owned
-    /// sentinel. Mirror the seeded values into the store for observability.
-    fn inset_fields(&self) -> (u32, u32) {
-        (
-            self.inset_top.unwrap_or(INSET_HOST_OWNED),
-            self.inset_bottom.unwrap_or(INSET_HOST_OWNED),
-        )
+    /// The inset fields to put on the wire: the arbiter-authored chrome heights
+    /// (`dp × density`) once the host has reported panel density, else the
+    /// host-owned sentinel (pre-report). These ARE the chrome strip heights —
+    /// every surface gets them (fullscreen reserves; chrome sizes; IME anchors).
+    fn inset_fields(store: &Store, id: DisplayId) -> (u32, u32) {
+        match store.geometry(id) {
+            Some(g) if g.density_known() => g.chrome_insets(),
+            _ => (INSET_HOST_OWNED, INSET_HOST_OWNED),
+        }
     }
 
     /// True once the arbiter has any policy worth pushing to a non-editor
-    /// surface (authored insets or a decided orientation). Gates the
-    /// foreground push so M1 stays byte-equivalent (no extra on_resize on a
-    /// plain app switch — the keyboard path is the only thing that moves).
+    /// surface: authored insets (density known) or a decided orientation. Gates
+    /// the foreground push so a plain app switch with no policy stays a no-op.
     fn has_surface_policy(&self, store: &Store, id: DisplayId) -> bool {
-        self.inset_top.is_some()
-            || self.inset_bottom.is_some()
-            || store
-                .geometry(id)
-                .map(|g| g.orientation != ORIENT_HOST_OWNED)
-                .unwrap_or(false)
+        store
+            .geometry(id)
+            .map(|g| g.density_known() || g.orientation != ORIENT_HOST_OWNED)
+            .unwrap_or(false)
     }
 
     /// Build the `geometry` line for `id`, with `keyboard_px` set to this
@@ -153,7 +123,7 @@ impl WmModule {
     /// the focused editor, `0` otherwise).
     fn geometry_line(&self, store: &Store, id: DisplayId, keyboard_px: u32) -> String {
         let orient = effective_orient(store, id);
-        let (top, bottom) = self.inset_fields();
+        let (top, bottom) = Self::inset_fields(store, id);
         format!("geometry {top} {bottom} {keyboard_px} {orient}\n")
     }
 
@@ -222,7 +192,7 @@ impl WmModule {
 
 impl ArbiterModule for WmModule {
     fn verbs(&self) -> &[&'static str] {
-        &["report-orientation", "set-orientation-lock"]
+        &["report-orientation", "set-orientation-lock", "report-panel"]
     }
 
     fn on_command(&mut self, verb: &str, args: &str, ctx: &mut Ctx) -> Reply {
@@ -258,6 +228,49 @@ impl ArbiterModule for WmModule {
                 // (un)rotates and the chrome snaps with it (coherent).
                 self.push_system_orientation(ctx, PRIMARY_DISPLAY);
                 Reply::ok(format!("orientation-lock {}", locked as u8))
+            }
+            // `report-panel <w> <h> <dpi>` — the host reports the panel size +
+            // density (true-dp). The arbiter stores it (density = dpi/160) and now
+            // authors the chrome heights/insets as dp×density. The REPLY carries
+            // the authored insets so the caller can `set_insets` before its first
+            // frame (no launch-time push/socket race). On the first/changed
+            // density, re-push geometry to existing surfaces (chrome that
+            // registered before density was known, the visible app, the IME).
+            "report-panel" => {
+                let toks: Vec<&str> = args.split_whitespace().collect();
+                if toks.len() != 3 {
+                    return Reply::err("report-panel-args: expected <w> <h> <dpi>");
+                }
+                let (Ok(w), Ok(h), Ok(dpi)) =
+                    (toks[0].parse::<u32>(), toks[1].parse::<u32>(), toks[2].parse::<u32>())
+                else {
+                    return Reply::err(format!("report-panel-bad-args {args:?}"));
+                };
+                let density = dpi as f32 / 160.0;
+                let changed = {
+                    let g = ctx.store.geometry_mut(PRIMARY_DISPLAY);
+                    let changed = (g.density - density).abs() > f32::EPSILON
+                        || g.panel_w != w
+                        || g.panel_h != h;
+                    g.panel_w = w;
+                    g.panel_h = h;
+                    g.density = density;
+                    changed
+                };
+                let (top, bottom) = ctx
+                    .store
+                    .geometry(PRIMARY_DISPLAY)
+                    .map(|g| g.chrome_insets())
+                    .unwrap_or((INSET_HOST_OWNED, INSET_HOST_OWNED));
+                if changed {
+                    ctx.emit(Event::PanelMeasured { id: PRIMARY_DISPLAY, w, h, density });
+                    // Density just became known/changed → refresh everyone's geometry.
+                    self.push_system_orientation(ctx, PRIMARY_DISPLAY);
+                }
+                log::info!("wart-arbiter-wm: report-panel w={w} h={h} dpi={dpi} density={density:.3} → insets ({top},{bottom})");
+                Reply::ok(format!(
+                    "panel w={w} h={h} density={density:.3} inset-top={top} inset-bottom={bottom}"
+                ))
             }
             other => Reply::err(format!("wm-unknown-verb {other}")),
         }
@@ -391,6 +404,22 @@ mod tests {
         // editor 99 no longer focused in the Store (already cleared on demote).
         let p = reg.dispatch_event(Event::EditorFocusChanged { editor: 99, focused: false }, &mut store);
         assert_eq!(p, vec![hl(99, "geometry 65535 65535 0 255\n")]);
+    }
+
+    #[test]
+    fn report_panel_authors_dp_insets() {
+        let (mut reg, mut store) = reg_with_wm();
+        store.display_mut(PRIMARY_DISPLAY).put_surface(5, "app", Role::Foreground);
+        // Pixel 2 XL: 560 dpi → density 3.5 → insets (133, 151).
+        let (reply, pushes) = reg.dispatch_command("report-panel", "1440 2880 560", &mut store).unwrap();
+        assert!(reply.render().contains("inset-top=133"), "{}", reply.render());
+        assert!(reply.render().contains("inset-bottom=151"), "{}", reply.render());
+        assert_eq!(store.geometry(PRIMARY_DISPLAY).unwrap().density, 3.5);
+        // Density known → existing surfaces get a real-inset geometry push.
+        assert!(
+            pushes.iter().any(|e| matches!(e, Effect::HostLine { pid: 5, line } if line.starts_with("geometry 133 151 0 "))),
+            "visible app re-pushed with authored insets: {pushes:?}"
+        );
     }
 
     #[test]

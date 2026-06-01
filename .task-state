@@ -1,5 +1,5 @@
-TASK=chrome-coherence
+TASK=true-dp-geometry
 STEP=verify-done
 STATUS=complete
-LAST_SUCCESS=Arbiter Increment 3a (chrome-coherence) done + device-verified 2026-06-01. statusbar/taskbar self-register as Role::Chrome surfaces; arbiter (WM) fans decided orient to all Chrome surfaces + active_ime, gated by foreground lock (set-orientation-lock); orient-lock file retired. Device: chrome registered in list; report-orientation fans orient=4 to statusbar+taskbar+hidden-IME+fullscreen (all flip); locked launcher fg → chrome stays orient=0; orient-lock file ABSENT. 22 arbiter unit tests + wart-host build green.
-NOTES=
+LAST_SUCCESS=Arbiter Increment 3b (true-dp geometry) DONE + device-verified 2026-06-01. Arbiter authors chrome heights/insets in dp (STATUS_BAR_DP=38/TASKBAR_DP=43/KEYBOARD_DEFAULT_DP=343 in core, ×reported density). Host reports panel+density via report-panel (reply carries insets, pulled pre-first-frame); register-chrome carries anchor + reply strip height; geometry-line inset fields = chrome heights sb/tb cached host-side for overlay_rect. All WART_INSET_*/WART_STATUSBAR_PX/WART_TASKBAR_PX env hardcodes removed. Device: density 3.5→insets (133,151); chrome surfaces 1440x133/1440x151; fullscreen logical 1440x2596; rotation+keyboard+chrome coherent (overlay_rect uses cached sb/tb, IME anchors at tb). 23 arbiter unit tests + host build green.
+NOTES=Not yet committed/pushed. Then: optional follow-ups (foreground-only orientation reporting; audio-focus/notifications/AlarmManager; -am/-ime split) per [[project_arbiter_window_server_design]].

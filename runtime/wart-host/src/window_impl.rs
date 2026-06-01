@@ -1,7 +1,7 @@
 use crate::bindings::my::skiko_gfx::window::Host;
 
 #[cfg(target_os = "android")]
-fn read_dpi() -> u32 {
+pub fn read_dpi() -> u32 {
     use android_system_properties::AndroidSystemProperties;
     AndroidSystemProperties::new()
         .get("ro.sf.lcd_density")
@@ -19,7 +19,7 @@ fn read_font_scale() -> f32 {
 }
 
 #[cfg(not(target_os = "android"))]
-fn read_dpi() -> u32 { 320 }
+pub fn read_dpi() -> u32 { 320 }
 
 #[cfg(not(target_os = "android"))]
 fn read_font_scale() -> f32 { 1.0 }

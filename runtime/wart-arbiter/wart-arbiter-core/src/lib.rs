@@ -51,15 +51,29 @@ pub const ORIENT_HOST_OWNED: u32 = 255;
 /// inset is a small px count; `0xFFFF` can never be a real chrome thickness.
 pub const INSET_HOST_OWNED: u32 = 0xFFFF;
 
-/// Per-display physical facts + the chrome/keyboard/orientation **policy**
-/// the arbiter authors. This is the WM module's slice of the [`Store`]; the
-/// computed rects it pushes to hosts are derived from these fields.
+// ── Chrome dimensions, in density-independent pixels (Arbiter Inc. 3b) ──
+//
+// The ONE named source of truth for the chrome heights (the no-hardcoding
+// rule: a genuinely-needed constant lives in the layer that owns the policy —
+// the arbiter). Physical px = dp × density (density reported up by the host).
+// Back-derived from the tuned px at the Pixel 2 XL's density 3.5 so the look is
+// unchanged on this device while scaling correctly on others (38×3.5≈133, etc.).
+
+/// Status-bar strip height, dp.
+pub const STATUS_BAR_DP: u32 = 38;
+/// Taskbar (Back/Home/Recents nav) strip height, dp.
+pub const TASKBAR_DP: u32 = 43;
+/// Soft-keyboard default occlusion before the IME reports its real height, dp.
+pub const KEYBOARD_DEFAULT_DP: u32 = 343;
+
+/// Per-display physical facts + the chrome/keyboard/orientation **policy** the
+/// arbiter authors. This is the WM module's slice of the [`Store`]; the computed
+/// rects it pushes to hosts are derived from these fields.
 ///
-/// All lengths are **physical px** in this increment (the arbiter authors the
-/// inset/keyboard deltas it genuinely owns; the host still owns panel dims and
-/// density, so a true-dp model is deferred — see the plan). `panel_w`,
-/// `panel_h` and `density` are mirrored here for the WM's own math but remain
-/// host-sourced until a panel/density report-up exists.
+/// `panel_w`/`panel_h`/`density` are reported up by the host (`report-panel`);
+/// the chrome heights/insets the arbiter pushes are `dp × density` from the dp
+/// constants above (Arbiter Inc. 3b — true-dp). Lengths on the wire are physical
+/// px (the host applies them verbatim).
 #[derive(Clone, Debug, PartialEq)]
 pub struct DisplayGeometry {
     /// Native portrait panel width, px (host-sourced; 0 = unknown).
@@ -96,6 +110,30 @@ impl Default for DisplayGeometry {
             keyboard_px: 0,
             orientation_locked: false,
         }
+    }
+}
+
+impl DisplayGeometry {
+    /// True once the host has reported the panel density (`report-panel`); until
+    /// then the arbiter can't author px and falls back to host-owned chrome.
+    pub fn density_known(&self) -> bool {
+        self.density > 0.0
+    }
+
+    /// Convert density-independent px to physical px for this display. `0` when
+    /// the density isn't known yet (caller should fall back to host-owned).
+    pub fn dp_to_px(&self, dp: u32) -> u32 {
+        if !self.density_known() {
+            return 0;
+        }
+        (dp as f32 * self.density).round() as u32
+    }
+
+    /// The authored chrome insets `(status_bar_px, taskbar_px)` = the chrome
+    /// strip heights every surface gets on the geometry wire (fullscreen reserves
+    /// them; chrome sizes its strip to them; the IME anchors off them).
+    pub fn chrome_insets(&self) -> (u32, u32) {
+        (self.dp_to_px(STATUS_BAR_DP), self.dp_to_px(TASKBAR_DP))
     }
 }
 
@@ -447,6 +485,21 @@ mod tests {
         assert!(reg.dispatch_command("launch", "x", &mut store).is_none());
         assert!(!reg.owns("launch"));
         assert!(reg.owns("echo"));
+    }
+
+    #[test]
+    fn dp_to_px_scales_with_density() {
+        let mut g = DisplayGeometry::default();
+        assert!(!g.density_known());
+        assert_eq!(g.dp_to_px(STATUS_BAR_DP), 0, "unknown density → 0 (host-owned)");
+        // Pixel 2 XL: 560 dpi → density 3.5. Back-derived dp ≈ the tuned px
+        // (38×3.5=133, 43×3.5=150.5→151, 343×3.5=1200.5→1201 — within 1px).
+        g.density = 560.0 / 160.0;
+        assert_eq!(g.chrome_insets(), (133, 151));
+        assert_eq!(g.dp_to_px(KEYBOARD_DEFAULT_DP), 1201);
+        // Resolution-independence: a 320-dpi panel (density 2.0) → smaller px.
+        g.density = 2.0;
+        assert_eq!(g.chrome_insets(), (76, 86));
     }
 
     #[test]

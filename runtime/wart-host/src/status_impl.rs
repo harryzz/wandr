@@ -9,18 +9,13 @@ use std::process::Command;
 
 use crate::bindings::my::skiko_gfx::status::Host;
 
-/// Status-bar strip height in physical pixels — the single source of
-/// truth (task 55). The host creates the top-overlay surface at this
-/// height, the `status.bar-height()` verb exposes it, and the launcher
-/// queries it for its top inset so the two never desync. Tunable at
-/// runtime via `WART_STATUSBAR_PX` (default 132). Set it uniformly across
-/// the stack (zygote env) so every process agrees.
+/// Status-bar strip height in physical pixels. True-dp (Arbiter Inc. 3b): the
+/// arbiter authors it (dp×density) and the host caches it, so `bar_height()` +
+/// the launcher's top inset both resolve to the same arbiter-authored value.
+/// Delegates to the standalone chrome-height cache (dp×density fallback if the
+/// arbiter hasn't provided one yet).
 pub fn status_bar_height_px() -> u32 {
-    std::env::var("WART_STATUSBAR_PX")
-        .ok()
-        .and_then(|s| s.trim().parse::<u32>().ok())
-        .filter(|&h| h > 0)
-        .unwrap_or(132)
+    crate::standalone::status_bar_height_px()
 }
 
 impl Host for crate::HostState {

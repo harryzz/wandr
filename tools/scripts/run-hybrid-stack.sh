@@ -132,17 +132,15 @@ echo "▸ stopping SystemUI + launcher ($HOME_PKG) …"
 adb shell "su -c 'am force-stop com.android.systemui'"
 adb shell "su -c 'am force-stop $HOME_PKG'"
 
-# Task 56 — chrome content insets for fullscreen apps. The zygote forks
-# every GUI app, so setting these in its env makes fullscreen children
-# reserve the status-bar (top) + taskbar (bottom) strips. Match the chrome
-# heights (defaults 132 / 150; override with WART_STATUSBAR_PX / WART_TASKBAR_PX).
-# A future immersive app launched without these gets the native size.
-INSET_TOP="${WART_STATUSBAR_PX:-132}"
-INSET_BOTTOM="${WART_TASKBAR_PX:-150}"
+# True-dp (Arbiter Inc. 3b): chrome heights / content insets are authored by the
+# arbiter (dp×density) and reported/pushed to the hosts — no WART_INSET_* /
+# WART_STATUSBAR_PX / WART_TASKBAR_PX env hardcodes. Fullscreen apps pull their
+# insets via report-panel at startup; chrome overlays size their strip from the
+# register-chrome reply.
 
-echo "▸ starting wart-host --zygote (detached, insets top=$INSET_TOP bottom=$INSET_BOTTOM) …"
+echo "▸ starting wart-host --zygote (detached; insets arbiter-authored) …"
 spawn_detached /data/local/tmp/wart-zygote.log \
-    "LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT WART_INSET_TOP=$INSET_TOP WART_INSET_BOTTOM=$INSET_BOTTOM /data/local/tmp/wart-host --zygote"
+    "LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-host --zygote"
 if ! wait_for_sock /data/local/tmp/wart-zygote.sock 30; then
     echo "✗ zygote socket never appeared — see /data/local/tmp/wart-zygote.log:" >&2
     adb shell "su -c 'tail -20 /data/local/tmp/wart-zygote.log'" 2>&1 | tr -d '\r' >&2
