@@ -79,6 +79,15 @@ fn main() {
         return;
     }
 
+    // Audio mic→speaker loopback (full capture path: hear yourself).
+    if args.iter().any(|a| a == "--probe-audio-loopback") {
+        android_logger::init_once(
+            android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
+        );
+        wasm_android_host::audio_impl::probe_loopback();
+        return;
+    }
+
     if args.iter().any(|a| a == "--probe-ime-showsoft") {
         android_logger::init_once(
             android_logger::Config::default().with_max_level(log::LevelFilter::Debug),

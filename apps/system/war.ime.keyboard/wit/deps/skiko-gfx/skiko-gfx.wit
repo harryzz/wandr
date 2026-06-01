@@ -779,6 +779,19 @@ interface audio {
     /// next call.
     write-pcm-f32:  func(track: track-handle, samples: list<f32>) -> u32;
 
+    /// Open a PCM mic-capture stream. Symmetric to create-track (shares
+    /// the track-handle space — start / pause / pending-frames / close all
+    /// work on the returned handle), but frames flow HAL→guest: drain them
+    /// with read-pcm-f32. Sentinel 0 on failure (service unavailable,
+    /// RECORD_AUDIO / SELinux denial, or config rejected).
+    open-capture:   func(cfg: track-config) -> track-handle;
+
+    /// Drain captured frames from a capture stream's ring. Returns up to
+    /// `max-frames` × channels interleaved f32 samples; fewer (or empty)
+    /// if the HAL hasn't produced that many yet. `pending-frames` reports
+    /// how many are ready to read.
+    read-pcm-f32:   func(capture: track-handle, max-frames: u32) -> list<f32>;
+
     /// Start data flow. Async: the service spins up its HAL thread.
     /// Returns false on a service error.
     start:          func(track: track-handle) -> bool;
