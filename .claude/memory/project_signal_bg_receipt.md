@@ -54,6 +54,24 @@ alarm only does real work when Signal is dead, so a long interval saves wakeups)
 background-pumped via render@1Hz when paused (post-task-64 on-demand) — M4 adds the
 notification ALERT + clean bg-tick pump + wake-from-dead, the actual new value.
 
+**Doze (PowerManager v1, `351394a8`):** host-local — when the screen is off past a
+60s grace, the standalone loop stretches the per-frame cadence (render AND bg-tick)
+to a coarse `DOZE_CADENCE=10s` (10× fewer pumps; verified on device: 1Hz→0.1Hz on
+screen-off, resumes on screen-on). It SLOWS, not suspends: a single keep-alive
+`on-alarm` is one engine step, far short of an async reconnect, and userspace can't
+suspend the SoC — so a coarse cadence (socket still serviced within Signal's
+~30-55s keepalive; msgs within ~10s when off) is the correct simple win, no
+maintenance-window state machine. Screen state = the existing
+`debug.tracing.screen_state` watcher. **Key insight: do NOT use `IPowerManager`/
+`IDisplayManager` — they're present on-device but are the system_server ART layer
+we drop ([[feedback_no_art_layer_dependencies]]); `IPower` (HAL, survives) is
+perf-hints not screen-state; SurfaceFlinger (survives) knows powerMode but doesn't
+cleanly expose it over binder for READ — it surfaces it as the SF-sourced sysprop
+we already read.** The policy consumes a screen on/off bool, so the source is
+swappable in boot-model (task 33) without touching it. A `wart-arbiter-power`
+module is deferred until richer policy (wakelocks, idle stages, SoC-wakelock deep
+doze) needs it (same discipline as audio-focus).
+
 **Gotchas burned this session (all real):**
 - `bindgen!` is NOT re-triggered by a `.wit`-only edit — `touch` the file holding the macro
   (host `lib.rs`) or you get a STALE cached expansion that still compiles but mismatches at
