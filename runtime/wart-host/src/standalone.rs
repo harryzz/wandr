@@ -395,6 +395,20 @@ fn report_orientation_lock_to_arbiter(locked: bool) {
     }
 }
 
+/// PowerManager — the loader reports this app's power class to the arbiter at
+/// startup so the arbiter (`wart-arbiter-power`) can apply a class-based doze
+/// policy (a background-service gets a lenient maintenance cadence; everyone else
+/// backs off harder when the screen is off). "Host reads/reports, arbiter
+/// owns/decides": the host parses the manifest `background` flag; the arbiter owns
+/// the class + the policy. Best-effort.
+fn report_power_class_to_arbiter(bg_service: bool) {
+    let class = if bg_service { "bg-service" } else { "normal" };
+    let line = format!("report-power-class {} {class}\n", std::process::id());
+    if let Err(e) = send_arbiter_oneshot(&line) {
+        log::debug!("standalone: report-power-class failed ({e}); arbiter down?");
+    }
+}
+
 /// Physical compass edge of the portrait panel buffer.
 #[derive(Clone, Copy)]
 enum Edge { North, South, East, West }
@@ -577,6 +591,8 @@ fn run_cwasm_loop(
     if bg_service && bg_tick.is_some() {
         log::info!("standalone: background-service pump active (pumps bg-tick while backgrounded)");
     }
+    // PowerManager — report our power class so the arbiter applies class-based doze.
+    report_power_class_to_arbiter(bg_service);
     // Task 64 follow-up — per-app render-rate cap. Resolution order:
     // WART_MAX_FPS env (global, for testing) > package.toml `max_fps` > 60.
     // Enforced host-side as a floor on the render interval, so it caps every

@@ -6,30 +6,42 @@
 //! applies a screen-off **grace**, and on a doze transition fans a
 //! `doze <cadence-ms>` line to every tracked host. Each host then slows its own
 //! render/bg-tick loop to that cadence (the mechanism), exactly like it applies
-//! arbiter-decided geometry/orientation/roles. `cadence=0` means "not dozing,
-//! resume normal pacing".
+//! arbiter-decided geometry/orientation/roles. `cadence=0` = "not dozing".
 //!
-//! This is the home for future power policy that genuinely needs the arbiter as
-//! the single authority: wakelocks (an app asks to stay awake → suppress doze),
-//! idle stages, and batching alarms into maintenance windows.
+//! ## Class-based policy
+//! The cadence is **per-app**, keyed on the app's power class — the arbiter is
+//! the single authority, so it can treat apps differently:
+//!   * **background-service** (e.g. Signal): a lenient *maintenance* cadence so it
+//!     keeps receiving in a timely way while the screen is off (a Doze exemption).
+//!   * everyone else (normal / chrome): a longer *suspend* cadence — nothing to
+//!     show off-screen, so back off harder for battery.
+//! The class is reported up by the loader (`report-power-class <pid> <class>` —
+//! the host parses the manifest `background` flag; "host reads/reports, arbiter
+//! owns/decides", like `report-panel`). Unreported pids default to normal.
+//!
+//! Future home for user-set per-app profiles (restricted/optimized/unrestricted),
+//! wakelocks (suppress doze), and maintenance-window alarm batching.
 
+use std::collections::HashSet;
 use std::time::Instant;
 
 use wart_arbiter_core::{ArbiterModule, Ctx, Event, Reply};
 
-/// Screen-off grace before dozing (ms). Catches a message arriving right after
-/// the screen sleeps, before backing off — the "when to doze" policy.
+/// Screen-off grace before dozing (ms) — the "when to doze" policy.
 const DOZE_GRACE_MS: u128 = 60_000;
-/// Coarse cadence (ms) hosts slow their loop to while dozing. Pushed to hosts,
-/// which apply it; `0` = not dozing.
-const DOZE_CADENCE_MS: u64 = 10_000;
+/// Cadence for a background-service while dozing (ms): keeps receiving.
+const DOZE_MAINTENANCE_MS: u64 = 10_000;
+/// Cadence for everyone else while dozing (ms): back off harder (off-screen).
+const DOZE_SUSPEND_MS: u64 = 60_000;
 
 #[derive(Default)]
 pub struct PowerModule {
-    /// When the screen last went non-live (`None` = live). Transient working
-    /// state owned by the module (not persisted, not shared).
+    /// When the screen last went non-live (`None` = live). Transient module state.
     screen_off_at: Option<Instant>,
     dozing: bool,
+    /// Pids the loader reported as background-services (get the maintenance
+    /// cadence). Everyone else is normal. Cleaned on `SurfaceRemoved`.
+    bg_service: HashSet<i32>,
 }
 
 /// Pure doze decision: given how long the screen has been off (`off_ms`, `None`
@@ -45,6 +57,15 @@ impl PowerModule {
         Self::default()
     }
 
+    /// The cadence (ms) to send a pid while dozing, by its class.
+    fn cadence_for(&self, pid: i32) -> u64 {
+        if self.bg_service.contains(&pid) {
+            DOZE_MAINTENANCE_MS
+        } else {
+            DOZE_SUSPEND_MS
+        }
+    }
+
     fn on_screen_state(&mut self, live: bool, ctx: &mut Ctx) {
         if live {
             self.screen_off_at = None;
@@ -56,31 +77,62 @@ impl PowerModule {
             return;
         };
         self.dozing = new_dozing;
-        let cadence = if new_dozing { DOZE_CADENCE_MS } else { 0 };
-        // Fan the doze cadence to every tracked host — they apply it (dumb
-        // appliers). A dead pid's socket just fails silently in the executor.
+        // Fan the per-app cadence to every tracked host (dumb appliers). On EXIT
+        // everyone gets `doze 0`; on ENTER each gets its class's cadence. A dead
+        // pid's socket just fails silently in the executor.
         for app in ctx.store.apps_snapshot() {
+            let cadence = if new_dozing { self.cadence_for(app.pid) } else { 0 };
             ctx.deliver_to_host(app.pid, format!("doze {cadence}\n"));
         }
         log::info!(
-            "arbiter: doze {} (cadence={cadence}ms) — fanned to hosts",
-            if new_dozing { "ENTER" } else { "EXIT" }
+            "arbiter: doze {} — fanned per-class to hosts (maintenance={DOZE_MAINTENANCE_MS}ms / suspend={DOZE_SUSPEND_MS}ms, {} bg-services)",
+            if new_dozing { "ENTER" } else { "EXIT" },
+            self.bg_service.len()
         );
+    }
+
+    /// `report-power-class <pid> <bg-service|normal>` — the loader reports an
+    /// app's power class at startup (host reads the manifest; arbiter owns it).
+    fn cmd_report_class(&mut self, args: &str, _ctx: &mut Ctx) -> Reply {
+        let mut t = args.split_whitespace();
+        let (Some(pid_s), Some(class)) = (t.next(), t.next()) else {
+            return Reply::err("report-power-class-args: expected <pid> <bg-service|normal>");
+        };
+        let Ok(pid) = pid_s.parse::<i32>() else {
+            return Reply::err(format!("report-power-class-bad-pid {pid_s}"));
+        };
+        match class {
+            "bg-service" => {
+                self.bg_service.insert(pid);
+            }
+            _ => {
+                self.bg_service.remove(&pid);
+            }
+        }
+        log::info!("arbiter: power-class pid={pid} class={class}");
+        Reply::ok(format!("power-class pid={pid} class={class}"))
     }
 }
 
 impl ArbiterModule for PowerModule {
     fn verbs(&self) -> &[&'static str] {
-        &[] // event-only module — no command verbs
+        &["report-power-class"]
     }
 
-    fn on_command(&mut self, verb: &str, _args: &str, _ctx: &mut Ctx) -> Reply {
-        Reply::err(format!("power-unknown-verb {verb}"))
+    fn on_command(&mut self, verb: &str, args: &str, ctx: &mut Ctx) -> Reply {
+        match verb {
+            "report-power-class" => self.cmd_report_class(args, ctx),
+            other => Reply::err(format!("power-unknown-verb {other}")),
+        }
     }
 
     fn on_event(&mut self, ev: &Event, ctx: &mut Ctx) {
-        if let Event::ScreenState { live } = ev {
-            self.on_screen_state(*live, ctx);
+        match ev {
+            Event::ScreenState { live } => self.on_screen_state(*live, ctx),
+            Event::SurfaceRemoved { pid } => {
+                self.bg_service.remove(pid);
+            }
+            _ => {}
         }
     }
 }
@@ -93,12 +145,11 @@ mod tests {
 
     #[test]
     fn grace_boundary_decision() {
-        assert_eq!(decide(None, false), None); // live, not dozing → no change
-        assert_eq!(decide(Some(0), false), None); // just off → within grace
-        assert_eq!(decide(Some(59_000), false), None); // still in grace
-        assert_eq!(decide(Some(60_000), false), Some(true)); // grace elapsed → ENTER
-        assert_eq!(decide(Some(120_000), true), None); // already dozing → no change
-        assert_eq!(decide(None, true), Some(false)); // live again → EXIT
+        assert_eq!(decide(None, false), None);
+        assert_eq!(decide(Some(59_000), false), None);
+        assert_eq!(decide(Some(60_000), false), Some(true));
+        assert_eq!(decide(Some(120_000), true), None);
+        assert_eq!(decide(None, true), Some(false));
     }
 
     fn add_app(s: &mut Store, id: &str, pid: i32) {
@@ -111,29 +162,30 @@ mod tests {
     }
 
     #[test]
-    fn screen_off_past_grace_fans_doze_to_all_hosts() {
+    fn doze_fans_per_class_cadence() {
         let mut r = Registry::new();
-        // Pre-age the module's screen-off clock past the grace.
         let mut m = PowerModule::new();
         m.screen_off_at = Some(Instant::now() - std::time::Duration::from_millis(61_000));
         r.register(Box::new(m));
         let mut store = Store::new();
-        add_app(&mut store, "a", 10);
-        add_app(&mut store, "b", 20);
+        add_app(&mut store, "sig", 10);
+        add_app(&mut store, "game", 20);
 
-        // A non-live tick now → grace already elapsed → ENTER, fanned to both pids.
+        // sig reports bg-service; game stays normal.
+        r.dispatch_command("report-power-class", "10 bg-service", &mut store).unwrap();
+
+        // Screen off past grace → ENTER: sig gets maintenance (10s), game suspend (60s).
         let eff = r.dispatch_event(Event::ScreenState { live: false }, &mut store);
-        let mut doze_pids: Vec<i32> = eff
-            .iter()
-            .filter_map(|e| match e {
-                Effect::HostLine { pid, line } if line == "doze 10000\n" => Some(*pid),
+        let cad = |pid: i32| {
+            eff.iter().find_map(|e| match e {
+                Effect::HostLine { pid: p, line } if *p == pid => Some(line.clone()),
                 _ => None,
             })
-            .collect();
-        doze_pids.sort();
-        assert_eq!(doze_pids, vec![10, 20]);
+        };
+        assert_eq!(cad(10).as_deref(), Some("doze 10000\n")); // bg-service → maintenance
+        assert_eq!(cad(20).as_deref(), Some("doze 60000\n")); // normal → suspend
 
-        // A live tick → EXIT (doze 0) to both.
+        // Screen on → EXIT: both get doze 0.
         let eff = r.dispatch_event(Event::ScreenState { live: true }, &mut store);
         assert_eq!(
             eff.iter()
@@ -141,5 +193,25 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn surface_removed_forgets_class() {
+        let mut r = Registry::new();
+        let mut m = PowerModule::new();
+        m.screen_off_at = Some(Instant::now() - std::time::Duration::from_millis(61_000));
+        r.register(Box::new(m));
+        let mut store = Store::new();
+        add_app(&mut store, "sig", 10);
+        r.dispatch_command("report-power-class", "10 bg-service", &mut store).unwrap();
+        // App dies → its class is forgotten (a recycled pid mustn't inherit it).
+        r.dispatch_event(Event::SurfaceRemoved { pid: 10 }, &mut store);
+        // ENTER doze: pid 10 now defaults to normal (suspend), not maintenance.
+        let eff = r.dispatch_event(Event::ScreenState { live: false }, &mut store);
+        let line = eff.iter().find_map(|e| match e {
+            Effect::HostLine { pid: 10, line } => Some(line.clone()),
+            _ => None,
+        });
+        assert_eq!(line.as_deref(), Some("doze 60000\n"));
     }
 }

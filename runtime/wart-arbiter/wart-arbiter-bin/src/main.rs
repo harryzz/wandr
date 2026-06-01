@@ -125,6 +125,8 @@ fn main() {
                     // for testing): notify-post <owner> <id> <enc-title> <enc-body>,
                     // notify-cancel <owner> <id>, notify-list, notify-click <nid>.
                     | "notify-post" | "notify-cancel" | "notify-list" | "notify-click"
+                    // PowerManager — class report (host→arbiter; CLI for testing).
+                    | "report-power-class"
                     // Task 73 — WM geometry (handled by a core module, not the
                     // legacy match). The host normally sends this over the raw
                     // socket; the CLI form is for testing.
