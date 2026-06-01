@@ -8,6 +8,7 @@
 wit_bindgen::generate!({
     world: "keyguard-app",
     path: "wit",
+    generate_all,
 });
 
 use std::cell::RefCell;
@@ -18,6 +19,7 @@ use crate::my::skiko_gfx::canvas::{
     self, BlendMode, ColorFilterKind, PaintAttrs, PaintStyle, StrokeCap, StrokeJoin,
 };
 use crate::my::skiko_gfx::status;
+use crate::war::keyguard::keyguard;
 
 const BG: u32 = 0xFF0A0A12; // near-black lock background
 const CLOCK_FG: u32 = 0xFFFFFFFF;
@@ -32,6 +34,8 @@ struct State {
     clock: String,
     clock_blob: Option<u32>,
     hint_blob: Option<u32>,
+    // M3 — swipe-up unlock: remember the press y; a clear upward release unlocks.
+    down_y: Option<f32>,
 }
 
 thread_local! {
@@ -57,6 +61,25 @@ fn paint(color: u32) -> PaintAttrs {
 
 fn blob(text: &str, size: f32, weight: u32) -> u32 {
     canvas::create_text_blob(text.as_bytes(), FAMILY, size, weight, false)
+}
+
+/// M3 — unlock on a clear upward swipe (Down then Up at least ~12% of the screen
+/// higher). A tap (little movement) does NOT unlock, matching the "swipe up" hint.
+fn gesture(kind: PointerKind, y: f32) {
+    STATE.with(|st| {
+        let mut s = st.borrow_mut();
+        match kind {
+            PointerKind::Down => s.down_y = Some(y),
+            PointerKind::Up => {
+                if let Some(dy) = s.down_y.take() {
+                    if dy - y >= s.h * 0.12 {
+                        keyguard::unlock();
+                    }
+                }
+            }
+            _ => {}
+        }
+    });
 }
 
 struct Lock;
@@ -103,10 +126,14 @@ impl RendererGuest for Lock {
         });
     }
 
-    fn on_pointer_event(_kind: PointerKind, _x: f32, _y: f32) {} // unlock gesture = M3
+    fn on_pointer_event(kind: PointerKind, _x: f32, y: f32) {
+        gesture(kind, y);
+    }
     fn on_key_event(_kind: KeyKind, _key_code: u32) {}
     fn on_scheduled_callback(_callback_id: u32) {}
-    fn on_pointer_event_v2(_pid: u32, _kind: PointerKind, _x: f32, _y: f32, _pressure: f32) {}
+    fn on_pointer_event_v2(_pid: u32, kind: PointerKind, _x: f32, y: f32, _pressure: f32) {
+        gesture(kind, y);
+    }
     fn on_key_event_v2(_kind: KeyKind, _code_point: u32, _key_id: u32) {}
     fn on_lifecycle_changed(_state: u32) {}
 }

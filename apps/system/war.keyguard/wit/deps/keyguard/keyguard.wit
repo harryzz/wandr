@@ -1,0 +1,7 @@
+// war:keyguard interface (M3) — dep for the keyguard guest. Canonical copy is
+// wit/keyguard.wit; the guest imports `keyguard` to signal unlock.
+package war:keyguard@0.1.0;
+
+interface keyguard {
+    unlock: func();
+}

@@ -65,6 +65,8 @@ interface frame-pacing {
 world keyguard-app {
     import canvas;
     import status;
+    // M3 — the unlock channel to the arbiter (dep under wit/deps/keyguard/).
+    import war:keyguard/keyguard@0.1.0;
     export renderer;
     export frame-pacing;
 }

@@ -1,0 +1,18 @@
+// war:keyguard — the lockscreen guest's channel to the arbiter (M3). The keyguard
+// guest, on the unlock gesture (swipe up), calls `unlock`; the host forwards it to
+// the arbiter's `unlock` verb (the keyguard module hides the lock screen + restores
+// the covered app). Separate package (like war:alarm / war:notify).
+
+package war:keyguard@0.1.0;
+
+interface keyguard {
+    /// The user performed the unlock gesture on the lock screen. The host forwards
+    /// to the arbiter, which hides the keyguard + restores the foreground app.
+    unlock: func();
+}
+
+/// Host-import side — the host implements `keyguard` (forwards to the arbiter) and
+/// add_to_linker's it onto guests (harmless for ones that don't import it).
+world keyguard-host {
+    import keyguard;
+}

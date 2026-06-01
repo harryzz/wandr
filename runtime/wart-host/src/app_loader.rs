@@ -217,6 +217,8 @@ impl LoadedApp {
             .map_err(|e| anyhow!("AlarmHost::add_to_linker: {e:#}"))?; // Arbiter Inc. 3c
         crate::notify_host_bindings::NotifyHost::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)
             .map_err(|e| anyhow!("NotifyHost::add_to_linker: {e:#}"))?; // Signal bg-receipt M3
+        crate::keyguard_host_bindings::KeyguardHost::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)
+            .map_err(|e| anyhow!("KeyguardHost::add_to_linker: {e:#}"))?; // keyguard M3
 
         for dep in &self.deps {
             wire_dep_into_linker(&mut linker, store, dep)?;
@@ -287,6 +289,8 @@ impl LoadedApp {
             .map_err(|e| anyhow!("AlarmHost::add_to_linker: {e:#}"))?; // Arbiter Inc. 3c
         crate::notify_host_bindings::NotifyHost::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)
             .map_err(|e| anyhow!("NotifyHost::add_to_linker: {e:#}"))?; // Signal bg-receipt M3
+        crate::keyguard_host_bindings::KeyguardHost::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)
+            .map_err(|e| anyhow!("KeyguardHost::add_to_linker: {e:#}"))?; // keyguard M3
 
         for dep in &self.deps {
             wire_dep_into_linker(&mut linker, store, dep)?;

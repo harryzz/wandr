@@ -25,6 +25,7 @@ mod ime_host_impl;
 mod keyboard_host_impl;
 mod alarm_host_impl;
 mod notify_host_impl;
+mod keyguard_host_impl;
 mod display_geometry_impl;
 #[cfg(target_os = "android")]
 mod ime_inbound;
@@ -140,6 +141,16 @@ mod notify_host_bindings {
     wasmtime::component::bindgen!({
         path: "../../wit/notify.wit",
         world: "notify-host",
+    });
+}
+
+/// Keyguard (M3) — host-import side of `war:keyguard`. The host implements
+/// `keyguard.unlock` (forwarded to the arbiter; see `keyguard_host_impl.rs`) and
+/// `add_to_linker`s it onto guests (the keyguard guest imports it).
+mod keyguard_host_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../wit/keyguard.wit",
+        world: "keyguard-host",
     });
 }
 
