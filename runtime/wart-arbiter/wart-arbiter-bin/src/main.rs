@@ -248,6 +248,10 @@ fn run_daemon() -> Result<()> {
             log::warn!("wart-arbiter: state restore failed: {e:#} (continuing with empty state)");
         }
     }
+    // Task 74 — seed the live surface model from the restored legacy state.
+    // After this, the model is maintained incrementally (write-through); it is
+    // never re-derived on read.
+    rebuild_surface_model();
 
     let sock_path = Path::new(ARBITER_SOCK_PATH);
     if sock_path.exists() {
@@ -404,6 +408,7 @@ fn cmd_set_ime(stream: &mut UnixStream, rest: &str) -> Result<()> {
     // replacement. Useful for tests + future "stop using any IME" flow.
     if app_id == "-" {
         let prev = state::set_active_ime(None);
+        model_set_active_ime(None);
         let prev_id = prev.map(|p| p.app_id).unwrap_or_else(|| "(none)".to_string());
         writeln!(stream, "OK cleared prev={prev_id}")?;
         log::info!("arbiter: cleared active IME (prev={prev_id})");
@@ -417,6 +422,7 @@ fn cmd_set_ime(stream: &mut UnixStream, rest: &str) -> Result<()> {
         app_id: s.app_id.clone(),
         pid: s.pid,
     }));
+    model_set_active_ime(Some(s.pid));
     let prev_id = prev.map(|p| p.app_id).unwrap_or_else(|| "(none)".to_string());
     writeln!(stream, "OK ime={app_id} pid={} prev={prev_id}", s.pid)?;
     log::info!(
@@ -483,6 +489,16 @@ fn cmd_attach_editor(stream: &mut UnixStream, rest: &str) -> Result<()> {
         pid,
         editor_info: info,
     }));
+    model_set_editor(Some((
+        pid,
+        wart_arbiter_core::EditorInfo {
+            input_type: input_type.clone(),
+            hint: hint.clone(),
+            initial_text: initial_text.clone(),
+            initial_selection_start: 0,
+            initial_selection_end: 0,
+        },
+    )));
     let prev_pid = prev.map(|p| p.pid).map(|p| p.to_string()).unwrap_or_else(|| "-".to_string());
 
     let ime = state::current_active_ime();
@@ -581,6 +597,7 @@ fn cmd_detach_editor(stream: &mut UnixStream, rest: &str) -> Result<()> {
     let was_focused = prev.as_ref().map(|p| p.pid) == Some(pid);
     if was_focused {
         let _ = state::set_editor_focus(None);
+        model_set_editor(None);
         let ime = state::current_active_ime();
         let ime_dest = ime
             .as_ref()
@@ -939,13 +956,48 @@ fn rebuild_surface_model() -> Option<i32> {
     ds.visible_app()
 }
 
-/// Rebuild the shadow model + log whether `visible_app()` agrees with the
-/// legacy `active_app_pid()`. The canary for Step A: a MODEL-DRIFT line means
-/// the schema doesn't yet track reality and reads must not be flipped. On
-/// agreement, log the visible-app value only when it *changes* — low-spam
-/// positive confirmation that the model is tracking (not spuriously both-None).
+// ── Task 74 Step C — incremental model write-through ──────────────────
+//
+// The model is now maintained as a LIVE source: each legacy surface/role/focus
+// mutation is mirrored into the Store inline (not re-derived on read), so the
+// legacy singletons can be deleted in Step D. `rebuild_surface_model` is kept
+// only to SEED the model once at daemon startup from restored legacy state.
+// The Step-A/B `mirror_and_check` canary now compares the LIVE model against
+// the legacy formula and catches any missed write-through site.
+
+fn model_put_surface(pid: i32, app_id: &str, role: wart_arbiter_core::Role) {
+    let mut store = core_store().lock().unwrap_or_else(|e| e.into_inner());
+    store.display_mut(PRIMARY_DISPLAY).put_surface(pid, app_id, role);
+}
+fn model_set_role(pid: i32, role: wart_arbiter_core::Role) {
+    let mut store = core_store().lock().unwrap_or_else(|e| e.into_inner());
+    store.display_mut(PRIMARY_DISPLAY).set_role(pid, role);
+}
+fn model_remove_surface(pid: i32) {
+    let mut store = core_store().lock().unwrap_or_else(|e| e.into_inner());
+    store.display_mut(PRIMARY_DISPLAY).remove_surface(pid);
+}
+fn model_set_active_ime(pid: Option<i32>) {
+    let mut store = core_store().lock().unwrap_or_else(|e| e.into_inner());
+    store.display_mut(PRIMARY_DISPLAY).active_ime = pid;
+}
+fn model_set_editor(v: Option<(i32, wart_arbiter_core::EditorInfo)>) {
+    let mut store = core_store().lock().unwrap_or_else(|e| e.into_inner());
+    store.display_mut(PRIMARY_DISPLAY).set_ime_editor(v);
+}
+fn model_visible_app() -> Option<i32> {
+    let store = core_store().lock().unwrap_or_else(|e| e.into_inner());
+    store.display(PRIMARY_DISPLAY).and_then(|d| d.visible_app())
+}
+fn model_overlay_desired() -> Option<i32> {
+    let store = core_store().lock().unwrap_or_else(|e| e.into_inner());
+    store.display(PRIMARY_DISPLAY).and_then(|d| d.overlay_desired())
+}
+
+/// Compare the LIVE model against the legacy formula + log visible-app changes.
+/// The Step-C canary: a MODEL-DRIFT line means a write-through site was missed.
 fn mirror_and_check() {
-    let model = rebuild_surface_model();
+    let model = model_visible_app();
     let legacy = legacy_active_app_pid();
     if model != legacy {
         log::warn!(
@@ -1023,6 +1075,7 @@ fn handle_child_exit(pid: i32, detail: &str) {
 
     // State teardown (fg / active-IME / editor-focus / overlay pointers).
     state::remove(&app.app_id);
+    model_remove_surface(pid);
 
     // Socket cleanup (RC2).
     remove_host_socket(pid);
@@ -1176,6 +1229,7 @@ fn promote_to_overlay(overlay_app_id: &str, overlay_pid: i32, behind_pid_hint: O
         // keep it at fg priority so the overlay isn't holding the OOM
         // killer's attention longer than the behind app.
         write_oom_score(prev_pid, OOM_FG);
+        model_set_role(prev_pid, wart_arbiter_core::Role::OverlayBehind);
         Some(prev_pid)
     } else {
         behind_pid_hint
@@ -1184,6 +1238,7 @@ fn promote_to_overlay(overlay_app_id: &str, overlay_pid: i32, behind_pid_hint: O
     send_role_signal(overlay_pid, /*foreground=*/ true);
     write_oom_score(overlay_pid, OOM_FG);
     send_present(overlay_pid); // overlay visible now → force a fresh frame (the re-show repaint fix)
+    model_set_role(overlay_pid, wart_arbiter_core::Role::Overlay);
     let behind_pid = demoted.unwrap_or(0);
     let _ = state::set_overlay(Some(state::OverlayState {
         overlay_pid,
@@ -1205,6 +1260,7 @@ fn demote_from_overlay() -> Option<(i32, i32)> {
     );
     send_role_signal(prev.overlay_pid, /*foreground=*/ false);
     write_oom_score(prev.overlay_pid, OOM_BG);
+    model_set_role(prev.overlay_pid, wart_arbiter_core::Role::Background);
     if prev.behind_pid > 0 {
         // Find the app_id matching this pid so set_foreground points
         // at the right app. If the behind app was killed in the
@@ -1214,6 +1270,7 @@ fn demote_from_overlay() -> Option<(i32, i32)> {
             let _ = state::set_foreground(Some(&app.app_id));
             send_role_signal(prev.behind_pid, /*foreground=*/ true);
             write_oom_score(prev.behind_pid, OOM_FG);
+            model_set_role(prev.behind_pid, wart_arbiter_core::Role::Foreground);
         } else {
             log::warn!(
                 "arbiter: overlay clear — behind pid={} no longer tracked, fg left unset",
@@ -1244,7 +1301,7 @@ fn send_present(pid: i32) {
 /// mirrored from the legacy singletons (rebuilt here on read) until writes move
 /// to the model in Steps C/D; the *derivation* is the model's.
 fn active_app_pid() -> Option<i32> {
-    rebuild_surface_model()
+    model_visible_app()
 }
 
 /// The legacy formula (overlay behind-pid, else foreground) — kept private as
@@ -1276,12 +1333,9 @@ fn legacy_overlay_desired() -> bool {
 /// imperative promote/demote *mechanism* is unchanged. Idempotent — safe after
 /// ANY fg/focus/ime change.
 fn reconcile_overlay() {
-    // Make the model current + read its decision (the IME pid to show, if any).
-    let visible = rebuild_surface_model();
-    let desired_ime = {
-        let store = core_store().lock().unwrap_or_else(|e| e.into_inner());
-        store.display(PRIMARY_DISPLAY).and_then(|d| d.overlay_desired())
-    };
+    // Read the model's decision (the IME pid to show, if any) + the visible app.
+    let visible = model_visible_app();
+    let desired_ime = model_overlay_desired();
     // Transitional canary (runs on device): the model decision must match the
     // legacy formula. Retired with the legacy state in Step D.
     if desired_ime.is_some() != legacy_overlay_desired() {
@@ -1314,6 +1368,7 @@ fn drop_editor_focus_of(pid: i32) {
         return;
     }
     state::set_editor_focus(None);
+    model_set_editor(None);
     if let Some(i) = state::current_active_ime() {
         let host_sock = format!("/data/local/tmp/wart-host-{}.sock", i.pid);
         if let Err(e) = deliver_to_host(&host_sock, "editor-detached\n") {
@@ -1348,6 +1403,7 @@ fn promote_to_foreground(app_id: &str, pid: i32) {
         log::info!("arbiter: demoting prior foreground app={prev_id} pid={prev_pid}");
         send_role_signal(prev_pid, /*foreground=*/ false);
         write_oom_score(prev_pid, OOM_BG);
+        model_set_role(prev_pid, wart_arbiter_core::Role::Background);
         // Focus-follows-foreground (Android `finishInput()`): the app losing the
         // foreground also loses any editor focus, so a stale focus can never make
         // the IME route to / yank a backgrounded app.
@@ -1357,6 +1413,7 @@ fn promote_to_foreground(app_id: &str, pid: i32) {
     send_role_signal(pid, /*foreground=*/ true);
     write_oom_score(pid, OOM_FG);
     send_present(pid); // visible now → force a fresh frame (don't rely on the role signal alone)
+    model_set_role(pid, wart_arbiter_core::Role::Foreground);
 
     // Derive IME-overlay visibility for the new foreground. Switching apps thus
     // hides the keyboard (the new app has no editor focus yet) — matching
@@ -1399,6 +1456,7 @@ fn ensure_home_foreground() {
                 launched_at: SystemTime::now(),
                 launched_mono: Instant::now(),
             });
+            model_put_surface(pid, &home, wart_arbiter_core::Role::Background);
             promote_to_foreground(&home, pid);
             log::info!("arbiter: launched home app {home} → pid {pid}");
         }
@@ -1449,6 +1507,13 @@ fn cmd_launch(stream: &mut UnixStream, app_id: &str, kind: LaunchKind) -> Result
                 pid,
                 launched_at: SystemTime::now(),
                 launched_mono: Instant::now(),
+            });
+            // Task 74 — register the surface. GUI/overlay start Background;
+            // promotion / overlay-engage sets the live role. Headless has no SF
+            // surface (never visible).
+            model_put_surface(pid, &key, match kind {
+                LaunchKind::Headless => wart_arbiter_core::Role::Headless,
+                _ => wart_arbiter_core::Role::Background,
             });
             // Task 46 step 4 — GUI launches auto-promote to
             // foreground (matches Android's "new activity comes
@@ -1661,6 +1726,7 @@ fn cmd_kill(stream: &mut UnixStream, app_id: &str) -> Result<()> {
     match zygote_client::kill(s.pid, false) {
         Ok(()) => {
             state::remove(app_id);
+            model_remove_surface(s.pid);
             writeln!(stream, "OK killed app={app_id} pid={pid}", pid = s.pid)?;
             log::info!("wart-arbiter: killed {app_id} pid={pid}", pid = s.pid);
             Ok(())
