@@ -81,6 +81,18 @@ fn focused_editor(store: &Store, id: DisplayId) -> Option<i32> {
     store.display(id).and_then(|d| d.ime_editor().map(|(p, _)| p))
 }
 
+/// The **system orientation** every visible surface displays at: `0` (portrait)
+/// when the foreground app pins orientation, else the decided device orient
+/// (`ORIENT_HOST_OWNED` until the arbiter has decided one). The lock is global —
+/// gating ONLY chrome (not the foreground app) is what made a locked launcher
+/// rotate while the bars stayed portrait. So this gates *everyone*.
+fn effective_orient(store: &Store, id: DisplayId) -> u32 {
+    store
+        .geometry(id)
+        .map(|g| if g.orientation_locked { 0 } else { g.orientation })
+        .unwrap_or(ORIENT_HOST_OWNED)
+}
+
 impl Default for WmModule {
     fn default() -> Self {
         Self::new()
@@ -140,10 +152,7 @@ impl WmModule {
     /// surface's keyboard occlusion (caller decides: the keyboard height for
     /// the focused editor, `0` otherwise).
     fn geometry_line(&self, store: &Store, id: DisplayId, keyboard_px: u32) -> String {
-        let orient = store
-            .geometry(id)
-            .map(|g| g.orientation)
-            .unwrap_or(ORIENT_HOST_OWNED);
+        let orient = effective_orient(store, id);
         let (top, bottom) = self.inset_fields();
         format!("geometry {top} {bottom} {keyboard_px} {orient}\n")
     }
@@ -162,16 +171,10 @@ impl WmModule {
     /// IME's own height path is separate). Each overlay applies its own anchor
     /// flip via `overlay_rect`, so only the content `orient` is sent.
     fn fan_overlays(&self, ctx: &mut Ctx, id: DisplayId) {
-        let (locked, decided) = ctx
-            .store
-            .geometry(id)
-            .map(|g| (g.orientation_locked, g.orientation))
-            .unwrap_or((false, ORIENT_HOST_OWNED));
-        // Nothing decided yet (host-owned) and not locked → no orient to fan.
-        if decided == ORIENT_HOST_OWNED && !locked {
+        // Nothing decided yet (host-owned) → no orient to fan.
+        if effective_orient(ctx.store, id) == ORIENT_HOST_OWNED {
             return;
         }
-        let orient = if locked { 0 } else { decided };
         let mut targets: Vec<i32> = ctx
             .store
             .display(id)
@@ -188,11 +191,32 @@ impl WmModule {
                 targets.push(ime);
             }
         }
-        let (top, bottom) = self.inset_fields();
-        let line = format!("geometry {top} {bottom} 0 {orient}\n");
+        let line = self.geometry_line(ctx.store, id, 0);
         for pid in targets {
             ctx.deliver_to_host(pid, line.clone());
         }
+    }
+
+    /// Push the current **system orientation** ([`effective_orient`]) to every
+    /// surface that should display it: the focused editor (with its keyboard
+    /// inset), the visible app, and the chrome + active-IME overlays. Shared by
+    /// `OrientationChanged` (the device rotated) and `set-orientation-lock` (the
+    /// foreground lock toggled). The lock gates ALL of them uniformly, so a locked
+    /// foreground app and the chrome stay coherent (both portrait).
+    fn push_system_orientation(&self, ctx: &mut Ctx, id: DisplayId) {
+        let editor = focused_editor(ctx.store, id);
+        if let Some(ed) = editor {
+            let kb = Self::keyboard_px(ctx.store, id);
+            let line = self.geometry_line(ctx.store, id, kb);
+            ctx.deliver_to_host(ed, line);
+        }
+        if let Some(fg) = ctx.store.display(id).and_then(|d| d.visible_app()) {
+            if Some(fg) != editor {
+                let line = self.geometry_line(ctx.store, id, 0);
+                ctx.deliver_to_host(fg, line);
+            }
+        }
+        self.fan_overlays(ctx, id);
     }
 }
 
@@ -230,7 +254,9 @@ impl ArbiterModule for WmModule {
                     other => return Reply::err(format!("set-orientation-lock-bad-arg {other:?}")),
                 };
                 ctx.store.geometry_mut(PRIMARY_DISPLAY).orientation_locked = locked;
-                self.fan_overlays(ctx, PRIMARY_DISPLAY);
+                // Re-push the system orientation to everyone: the foreground app
+                // (un)rotates and the chrome snaps with it (coherent).
+                self.push_system_orientation(ctx, PRIMARY_DISPLAY);
                 Reply::ok(format!("orientation-lock {}", locked as u8))
             }
             other => Reply::err(format!("wm-unknown-verb {other}")),
@@ -281,28 +307,16 @@ impl ArbiterModule for WmModule {
                 }
             }
 
-            // The arbiter decided a new orientation (from report-orientation).
-            // Apply it to the store and push to the surfaces we reach — read both
-            // targets from the Store (no payload): the focused editor (with its
-            // keyboard inset) and the visible app. Chrome/overlay surfaces aren't
-            // arbiter-tracked here; they keep their sensor + lock-file path.
+            // The arbiter decided a new device orient (from report-orientation).
+            // Record it, then push the system orientation (gated by the foreground
+            // lock) to EVERY surface — focused editor, visible app, chrome +
+            // active-IME. Gating the visible app too (not just chrome) keeps a
+            // locked foreground app and the chrome coherent: a stray rotation
+            // report (e.g. from a backgrounded sensor) can't rotate the locked app
+            // while the bars stay portrait.
             Event::OrientationChanged { id, orient } => {
                 ctx.store.geometry_mut(*id).orientation = *orient;
-                let editor = focused_editor(ctx.store, *id);
-                if let Some(ed) = editor {
-                    let kb = Self::keyboard_px(ctx.store, *id);
-                    let line = self.geometry_line(ctx.store, *id, kb);
-                    ctx.deliver_to_host(ed, line);
-                }
-                if let Some(fg) = ctx.store.display(*id).and_then(|d| d.visible_app()) {
-                    if Some(fg) != editor {
-                        let line = self.geometry_line(ctx.store, *id, 0);
-                        ctx.deliver_to_host(fg, line);
-                    }
-                }
-                // Chrome-coherence — also fan the decided orient to the chrome +
-                // active-IME overlays (gated by the foreground lock).
-                self.fan_overlays(ctx, *id);
+                self.push_system_orientation(ctx, *id);
             }
 
             // Not geometry-relevant to the WM.
@@ -416,6 +430,25 @@ mod tests {
         let (_reply, pushes) = reg.dispatch_command("report-orientation", "1", &mut store).unwrap();
         assert!(pushes.contains(&hl(70, "geometry 65535 65535 0 4\n")), "chrome fanned: {pushes:?}");
         assert!(pushes.contains(&hl(80, "geometry 65535 65535 0 4\n")), "active_ime fanned: {pushes:?}");
+    }
+
+    #[test]
+    fn locked_foreground_app_and_chrome_both_stay_portrait() {
+        // Regression: the lock must gate the VISIBLE APP too, not just chrome —
+        // else a stray rotation report (e.g. from a backgrounded sensor) rotates
+        // the locked foreground app while the bars stay portrait (incoherent).
+        let (mut reg, mut store) = reg_with_wm();
+        store.display_mut(PRIMARY_DISPLAY).put_surface(5, "launcher", Role::Foreground);
+        store.display_mut(PRIMARY_DISPLAY).put_surface(70, "war.statusbar", Role::Chrome);
+        reg.dispatch_command("set-orientation-lock", "1", &mut store); // foreground pins orientation
+        let (_r, pushes) = reg.dispatch_command("report-orientation", "1", &mut store).unwrap();
+        // Both the foreground app AND chrome get orient 0 (portrait) — coherent.
+        assert!(pushes.contains(&hl(5, "geometry 65535 65535 0 0\n")), "fg gated: {pushes:?}");
+        assert!(pushes.contains(&hl(70, "geometry 65535 65535 0 0\n")), "chrome gated: {pushes:?}");
+        assert!(
+            !pushes.iter().any(|e| matches!(e, Effect::HostLine { line, .. } if line.ends_with(" 4\n"))),
+            "nothing rotated to landscape: {pushes:?}"
+        );
     }
 
     #[test]

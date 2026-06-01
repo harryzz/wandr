@@ -110,6 +110,10 @@ fn main() {
                     | "ime-commit-text" | "ime-send-key-event"
                     | "ime-set-composing-text" | "ime-finish-composing-text"
                     | "ime-set-selection" | "ime-overlay-height"
+                    // Chrome-coherence — host→arbiter verbs, exposed on the CLI
+                    // for testing/debugging (register-chrome <app-id> <pid>,
+                    // set-orientation-lock <0|1>).
+                    | "register-chrome" | "set-orientation-lock"
                     // Task 73 — WM geometry (handled by a core module, not the
                     // legacy match). The host normally sends this over the raw
                     // socket; the CLI form is for testing.
