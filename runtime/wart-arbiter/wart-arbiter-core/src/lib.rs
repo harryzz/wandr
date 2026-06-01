@@ -24,7 +24,9 @@
 
 use std::collections::HashMap;
 
+mod registry;
 mod surface;
+pub use registry::{pid_alive, AppState, DEFAULT_IME_HEIGHT_PX};
 pub use surface::{DisplayState, EditorInfo, ResourceFocus, ResourceKind, Role, Surface};
 
 /// Identifies one physical display. `0` is the primary panel. Keyed
@@ -92,12 +94,30 @@ impl Default for DisplayGeometry {
 }
 
 /// The single source of truth. Holds the per-display [`DisplayState`] (geometry
-/// policy + the surface/role stack + resource-focus). The app registry +
-/// home-app still live in the binary's `state.rs` and migrate here in a later
-/// strangler step (registry isn't display-scoped; surfaces reference its pids).
-#[derive(Debug, Default)]
+/// policy + the surface/role stack + resource-focus) AND the arbiter-global app
+/// registry + home designation + IME intrinsic height (task 74 C — moved off the
+/// binary's `state.rs` singletons so the responsibility modules own them via
+/// [`Ctx`]). The registry isn't display-scoped; surfaces reference its pids.
+#[derive(Debug)]
 pub struct Store {
     displays: HashMap<DisplayId, DisplayState>,
+    /// Running-apps registry, keyed by app-id (see [`registry`]).
+    pub(crate) apps: HashMap<String, AppState>,
+    /// The designated home/launcher app-id (task 57), or `None`.
+    pub(crate) home: Option<String>,
+    /// The soft keyboard's reported intrinsic height, px (task 68).
+    pub(crate) ime_height: u32,
+}
+
+impl Default for Store {
+    fn default() -> Self {
+        Self {
+            displays: HashMap::new(),
+            apps: HashMap::new(),
+            home: None,
+            ime_height: DEFAULT_IME_HEIGHT_PX,
+        }
+    }
 }
 
 impl Store {

@@ -904,9 +904,12 @@ fn apply_role(pid: i32, role: wart_arbiter_core::Role) {
 fn seed_surface_model(restored_fg: Option<String>) {
     use wart_arbiter_core::Role;
     let mut store = core_store().lock().unwrap_or_else(|e| e.into_inner());
+    // Read the registry from the *held* store — NOT via `state::snapshot()`,
+    // which (now Store-backed, task 74 C1) would re-lock core_store and deadlock.
+    let apps = store.apps_snapshot();
     let ds = store.display_mut(PRIMARY_DISPLAY);
     ds.clear();
-    for app in state::snapshot() {
+    for app in apps {
         let role = if restored_fg.as_deref() == Some(app.app_id.as_str()) {
             Role::Foreground
         } else {
