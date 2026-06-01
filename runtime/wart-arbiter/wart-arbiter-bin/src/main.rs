@@ -132,6 +132,10 @@ fn main() {
                     | "notify-post" | "notify-cancel" | "notify-list" | "notify-click"
                     // PowerManager — class report (host→arbiter; CLI for testing).
                     | "report-power-class"
+                    // wart-arbiter-audio M1 — audio-focus verbs (host→arbiter; CLI
+                    // for testing): audio-focus-request <pid|app-id> <kind>,
+                    // audio-focus-abandon <pid|app-id>, audio-focus-list.
+                    | "audio-focus-request" | "audio-focus-abandon" | "audio-focus-list"
                     // Task 73 — WM geometry (handled by a core module, not the
                     // legacy match). The host normally sends this over the raw
                     // socket; the CLI form is for testing.
