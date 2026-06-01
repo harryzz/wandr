@@ -43,7 +43,9 @@ appeared, and tapping it opened the right thread. (`/state`/link preserved acros
 exports background/notify-handler/alarm-handler + imports notifier/scheduler (deps under
 `ui/wit/deps/`); the export Guest traits are impl'd on dioxus-canvas's `__DioxusCanvasGuest`
 right AFTER the `wire!` macro (export! resolves them crate-wide — the integration seam).
-`bg-tick`→`pump()` (~4 Hz, no hidden-surface render); new inbound (not open thread) →
+`bg-tick`→`pump()` with an **idle-ramp** (`34afc910`): 250 ms active → 500 → 1000 ms (=host
+cap) as the socket goes quiet, reset to 250 on inbound — 4× fewer wakeups when idle, no
+hidden-surface render; new inbound (not open thread) →
 `notifier::post` (one per thread, FNV id, title via `resolve_thread`); open/read → cancel;
 `on-notification-click`→`PENDING_OPEN`→`app()` navigates; `on-alarm`→`pump()`; init schedules
 a 5-min keep-alive alarm. Verified on launch: all 3 exports bind, alarm armed
