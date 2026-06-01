@@ -1,0 +1,58 @@
+---
+name: project_chrome_coherence
+description: Arbiter Increment 3a — statusbar/taskbar are arbiter-tracked Role::Chrome surfaces; arbiter is the single orientation authority for all overlays; the orient-lock FILE is retired. Done + device-verified.
+metadata: 
+  node_type: memory
+  type: project
+  originSessionId: 981b38b9-858e-4c22-b30d-89c53be34749
+---
+
+**Arbiter Increment 3a — chrome-coherence. DONE + device-verified (Pixel 2 XL,
+2026-06-01). Commit `1da7adb0` on main (after task 74).** Builds on the task-74
+surface/role model ([[project_task74_surface_role_model]]); the design doc's flagged
+next step ([[project_arbiter_window_server_design]]), now additive.
+
+**Problem:** status bar + taskbar were host-spawned by `run-hybrid-stack.sh`
+(`wart-host --standalone-overlay-{top,bottom-bar}`), NOT arbiter-tracked, so the
+arbiter couldn't push to them. Orientation lock was a cross-process **file**
+(`/data/local/tmp/wart-orient-lock`): the foreground app wrote `1/0`, every chrome
+overlay polled it + ran its own device-sensor. That file is now **retired**.
+
+**What shipped:**
+- Chrome stays host-spawned but **self-registers**: on startup each overlay sends
+  `register-chrome <app-id> <pid>` to the arbiter → shell inserts an `AppState` +
+  `Role::Chrome` surface (inert for AM/IME — excluded from `visible_app`/cycle ring;
+  pruned by the existing 5 s liveness poller, since chrome isn't a zygote child).
+- The arbiter is the **single orientation authority for all overlays**. `wart-arbiter-wm`
+  gained `set-orientation-lock <0|1>` (the foreground app reports its lock) + a
+  `fan_overlays` helper: **effective orient = `locked ? 0 : decided`**, fanned to
+  every `Role::Chrome` surface **+ the `active_ime` pid** (so the hidden IME stays
+  orient-fresh → no stale-on-engage). `OrientationChanged` also fans.
+  `DisplayGeometry.orientation_locked` holds the bit. The arbiter pushes only the
+  content `orient`; the **anchor stays host-side** (`overlay_rect` flip in standalone.rs).
+- Host (`wart-host/src/standalone.rs`): chrome self-registers (retries, best-effort);
+  the foreground app reports `set-orientation-lock` instead of writing the file; the
+  orientation block is restructured so an **overlay's target orient comes ONLY from
+  arbiter `geometry` pushes** (no sensor, no file) while **fullscreen is unchanged**
+  (sensor → `report-orientation` → arbiter-decided / local fallback). Overlays no
+  longer open a sensor handle. `run_cwasm_loop` gained an `app_id: Option<&str>` param
+  (the render loop didn't have it). Deleted `ORIENT_LOCK_PATH` /
+  `publish_orientation_lock` / `orientation_lock_active`.
+
+**Device proof:** `wart-arbiter list` shows war.statusbar + war.taskbar tracked
+(no `[fg]`). With an UNLOCKED app fg, one `report-orientation 1` fans `orient=4` to
+statusbar + taskbar + the hidden IME + the fullscreen app — each does its
+`overlay rect flip`. With the LOCKED launcher fg, a landscape report leaves chrome at
+`orient=0`. The orient-lock file stays ABSENT. Arbiter unit tests 22/22.
+
+**Testing note:** physical rotation can be **simulated** without moving the device via
+`wart-arbiter report-orientation <0|1|2|3>` (the CLI verb the host sensor normally
+sends) — drives the WM fan-out; watch the chrome hosts' `geometry … orient=N` +
+`overlay rect flip` logcat. (Visual on-panel confirmation still needs the user's eyes.)
+Launcher is `orientation=locked`; most apps are `auto` ([[reference_warpkg_manifest_convention]]).
+
+**Deferred / additive on this:** real chrome lifecycle via the arbiter (launch chrome
+through `launch-overlay-{top,bottom-bar}` instead of self-register) was the rejected
+alternative; chrome-as-`Chrome`-surface also unblocks coherent inset authoring later.
+Build: `build-host-android.sh` (wart-host changed) + `run-hybrid-stack.sh`. Plan:
+`~/.claude/plans/cat-task-state-steady-stallman.md`.

@@ -7,6 +7,14 @@ metadata:
   originSessionId: d33723e5-8289-42cf-b090-a027d6a8e217
 ---
 
+**SUPERSEDED 2026-06-01 for the orient-lock + overlay-rotation source — see
+[[project_chrome_coherence]] (commit 1da7adb0).** The `wart-orient-lock` FILE is
+RETIRED; chrome/IME overlays no longer poll a sensor or the file — the arbiter is
+the single orientation authority and pushes orient via `geometry`. The
+anchor-aware `overlay_rect` handedness below is STILL current (the host applies it
+on the arbiter-pushed orient). Orientation lock is now `set-orientation-lock` to
+the arbiter, not a file.
+
 Task 62 (device-verified 2026-05-30) made the IME, status bar, and taskbar
 overlays rotate with the device, folding in sibling task 58 (chrome rotation).
 Builds on task-43 fullscreen rotation ([[project-standalone-orientation]],
