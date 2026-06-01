@@ -16,146 +16,6 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
 
-/// Which app-id (if any) is currently foreground. The arbiter
-/// guarantees at most one. `None` = nothing in foreground (cold
-/// arbiter, or last launch was demoted without a successor).
-fn foreground() -> &'static Mutex<Option<String>> {
-    static FG: OnceLock<Mutex<Option<String>>> = OnceLock::new();
-    FG.get_or_init(|| Mutex::new(None))
-}
-
-// ─── IME state (task 47 step 1) ───────────────────────────────────────
-//
-// Two singletons:
-//   - active_ime: the IME app-id currently designated to receive
-//     editor-attached events. At most one. Set by `set-ime <app-id>`.
-//   - editor_focus: which foreground-app pid has a focused editor
-//     right now + its `EditorInfo`. Cleared on detach-editor.
-//
-// The arbiter routes calls from focused-app → IME (attach/detach) and
-// IME → focused-app (commit-text / send-key-event / composing) using
-// these two pointers. Cross-process delivery itself (per-host control
-// socket) lands in step 2; step 1 just maintains the state.
-
-/// IME app currently registered as the active receiver.
-#[derive(Clone, Debug)]
-pub struct ActiveIme {
-    pub app_id: String,
-    pub pid: i32,
-}
-
-fn active_ime() -> &'static Mutex<Option<ActiveIme>> {
-    static IME: OnceLock<Mutex<Option<ActiveIme>>> = OnceLock::new();
-    IME.get_or_init(|| Mutex::new(None))
-}
-
-pub fn current_active_ime() -> Option<ActiveIme> {
-    active_ime().lock().ok().and_then(|m| m.clone())
-}
-
-/// Set / unset the active IME. The caller must guarantee `app_id` (if
-/// `Some`) is currently in `registry()` — typically by calling
-/// `state::get(app_id)` first to look up the pid.
-pub fn set_active_ime(new: Option<ActiveIme>) -> Option<ActiveIme> {
-    let mut m = active_ime().lock().ok()?;
-    let prev = m.clone();
-    *m = new;
-    prev
-}
-
-/// Editor-info subset of the WIT `war:ime/editor-info` record. Mirrors
-/// the on-wire shape exactly. Stored alongside the focused-pid so
-/// future `on-editor-attached` re-dispatches (e.g. after an IME swap)
-/// can re-send the same metadata without re-querying the focused app.
-#[derive(Clone, Debug)]
-pub struct EditorInfo {
-    pub input_type: String, // one of: text, number, phone, email, url, password, multiline-text
-    pub hint: String,
-    pub initial_text: String,
-    pub initial_selection_start: u32,
-    pub initial_selection_end: u32,
-}
-
-impl EditorInfo {
-    pub fn text_default() -> Self {
-        Self {
-            input_type: "text".to_string(),
-            hint: String::new(),
-            initial_text: String::new(),
-            initial_selection_start: 0,
-            initial_selection_end: 0,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct EditorFocus {
-    pub pid: i32,
-    pub editor_info: EditorInfo,
-}
-
-fn editor_focus() -> &'static Mutex<Option<EditorFocus>> {
-    static EF: OnceLock<Mutex<Option<EditorFocus>>> = OnceLock::new();
-    EF.get_or_init(|| Mutex::new(None))
-}
-
-pub fn current_editor_focus() -> Option<EditorFocus> {
-    editor_focus().lock().ok().and_then(|m| m.clone())
-}
-
-/// Set the focused editor. Returns the prior focus (if any), so the
-/// caller can dispatch `on-editor-detached` to the previous focused
-/// app's IME before sending `on-editor-attached` to the new one.
-pub fn set_editor_focus(new: Option<EditorFocus>) -> Option<EditorFocus> {
-    let mut m = editor_focus().lock().ok()?;
-    let prev = m.clone();
-    *m = new;
-    prev
-}
-
-// ─── Overlay state (task 47 step 3c) ──────────────────────────────────
-//
-// Tracks the IME-overlay split: which IME pid is the foreground overlay,
-// and which app pid is the editor "behind" it (visible-but-demoted,
-// not Paused). Used by `cmd_overlay`/`cmd_overlay_clear` and the
-// auto-tie inside `cmd_attach_editor`/`cmd_detach_editor`.
-//
-// Distinct from `foreground()` — when overlay is active, fg points at
-// the IME (so SIGUSR2 routes to the IME), and `behind_pid` records the
-// editor process that received SIGRTMIN+1 (OverlayBehind). On overlay
-// clear, `behind_pid` is repromoted back to foreground.
-
-/// An active overlay split: a foreground OVERLAY process drawn on top of the
-/// app behind it. Generic over *what* the overlay is — the IME keyboard today,
-/// a side / utility panel or any other overlay-drawing guest in future. The
-/// whole lifecycle (engage on show, clear when the overlay loses foreground or
-/// either side exits) is keyed purely on pids, never on a specific app id.
-#[derive(Clone, Debug)]
-pub struct OverlayState {
-    /// The process that owns the overlay surface and is promoted to the
-    /// foreground while the split is active (IME bottom strip, side panel, …).
-    pub overlay_pid: i32,
-    /// The app whose surface is behind the overlay (visible, layer 0,
-    /// lifecycle Resumed). Repromoted on overlay clear.
-    pub behind_pid: i32,
-}
-
-fn overlay_state() -> &'static Mutex<Option<OverlayState>> {
-    static OV: OnceLock<Mutex<Option<OverlayState>>> = OnceLock::new();
-    OV.get_or_init(|| Mutex::new(None))
-}
-
-pub fn current_overlay() -> Option<OverlayState> {
-    overlay_state().lock().ok().and_then(|m| m.clone())
-}
-
-pub fn set_overlay(new: Option<OverlayState>) -> Option<OverlayState> {
-    let mut m = overlay_state().lock().ok()?;
-    let prev = m.clone();
-    *m = new;
-    prev
-}
-
 // ─── IME overlay height (task 68) ─────────────────────────────────────
 //
 // How many physical px the soft keyboard occludes. The IME guest is the
@@ -205,27 +65,6 @@ pub fn set_home(new: Option<&str>) -> Option<String> {
     prev
 }
 
-pub fn current_foreground() -> Option<String> {
-    foreground().lock().ok().and_then(|m| m.clone())
-}
-
-/// Swap the foreground app. Returns the previously-foreground
-/// `(app_id, pid)` pair (if any) so the caller can SIGUSR1 it.
-pub fn set_foreground(new_app_id: Option<&str>) -> Option<(String, i32)> {
-    let prev_app_id = {
-        let mut fg = foreground().lock().ok()?;
-        let prev = fg.clone();
-        *fg = new_app_id.map(|s| s.to_string());
-        prev
-    };
-    let prev = prev_app_id?;
-    if Some(prev.as_str()) == new_app_id {
-        return None;
-    }
-    let pid = get(&prev)?.pid;
-    Some((prev, pid))
-}
-
 /// One running app instance.
 #[derive(Clone, Debug)]
 pub struct AppState {
@@ -251,35 +90,10 @@ pub fn insert(state: AppState) {
 }
 
 pub fn remove(app_id: &str) -> Option<AppState> {
-    // If the removed app was foreground, also clear the fg slot —
-    // arbiter callers will repromote another if there's a successor.
-    if current_foreground().as_deref() == Some(app_id) {
-        let _ = set_foreground(None);
-    }
-    // Task 47 step 1 — if the removed app was the active IME, clear
-    // that pointer too. The arbiter caller will fall back to "no IME"
-    // (or re-promote a different installed IME).
-    if current_active_ime().map(|i| i.app_id) == Some(app_id.to_string()) {
-        let _ = set_active_ime(None);
-    }
-    // If the removed app had a focused editor, clear it — the editor
-    // is dead with its host process.
-    let removed = registry().lock().ok().and_then(|mut m| m.remove(app_id));
-    if let Some(ref s) = removed {
-        if current_editor_focus().map(|f| f.pid) == Some(s.pid) {
-            let _ = set_editor_focus(None);
-        }
-        // Task 47 step 3c — if the removed app was either side of the
-        // overlay split, tear the split down. The surviving side stays
-        // running; the arbiter caller can repromote it to fg if it
-        // was the behind-app.
-        if let Some(ov) = current_overlay() {
-            if ov.overlay_pid == s.pid || ov.behind_pid == s.pid {
-                let _ = set_overlay(None);
-            }
-        }
-    }
-    removed
+    // Registry removal only. The foreground / active-IME / editor-focus /
+    // overlay teardown now lives entirely in the surface model — callers pair
+    // this with `model_remove_surface(pid)` (task 74 D).
+    registry().lock().ok().and_then(|mut m| m.remove(app_id))
 }
 
 pub fn get(app_id: &str) -> Option<AppState> {
@@ -320,9 +134,9 @@ pub fn snapshot() -> Vec<AppState> {
 // no longer in the live set).
 
 /// Write the current state to `path` atomically (`<path>.tmp` → rename).
-pub fn save_to(path: &Path) -> Result<()> {
+pub fn save_to(path: &Path, foreground_app_id: Option<&str>) -> Result<()> {
     let apps = snapshot();
-    let fg = current_foreground();
+    let fg = foreground_app_id.map(|s| s.to_string());
     let home = current_home();
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -378,12 +192,14 @@ fn json_escape(s: &str) -> String {
 /// re-inserted with the original `app_id` + `pid` + `launched_at`.
 /// Foreground is cleared if the persisted fg pid is dead.
 ///
-/// Returns `(restored_alive, dropped_dead)`. A missing file is not
-/// an error — returns `Ok((0, 0))` so cold daemon starts go through
-/// the same call site.
-pub fn restore_from(path: &Path) -> Result<(usize, usize)> {
+/// Returns `(restored_alive, dropped_dead, restored_foreground_app_id)`. The
+/// foreground app-id (if it survived) is returned for the caller to seed the
+/// surface model (task 74 — the legacy `foreground` singleton is gone). A
+/// missing file is not an error — returns `Ok((0, 0, None))` so cold daemon
+/// starts go through the same call site.
+pub fn restore_from(path: &Path) -> Result<(usize, usize, Option<String>)> {
     if !path.exists() {
-        return Ok((0, 0));
+        return Ok((0, 0, None));
     }
     let body = std::fs::read_to_string(path)
         .with_context(|| format!("read {}", path.display()))?;
@@ -415,14 +231,16 @@ pub fn restore_from(path: &Path) -> Result<(usize, usize)> {
         }
     }
 
-    if let Some(fg_id) = fg {
-        if get(&fg_id).is_some() {
-            // The fg app survived; re-install the fg pointer.
-            let _ = set_foreground(Some(&fg_id));
-        } else {
+    // The fg app-id is returned (not applied) so the caller seeds the surface
+    // model; the legacy `foreground` singleton no longer exists (task 74 D).
+    let restored_fg = match fg {
+        Some(fg_id) if get(&fg_id).is_some() => Some(fg_id),
+        Some(fg_id) => {
             log::info!("arbiter: state restore — foreground app {fg_id:?} not alive, fg cleared");
+            None
         }
-    }
+        None => None,
+    };
 
     // Home app-id persists regardless of whether it's currently running
     // (task 57) — the arbiter re-launches it on boot / fall-back.
@@ -431,7 +249,7 @@ pub fn restore_from(path: &Path) -> Result<(usize, usize)> {
         log::info!("arbiter: state restore — home app = {home_id:?}");
     }
 
-    Ok((alive, dead))
+    Ok((alive, dead, restored_fg))
 }
 
 /// kill(pid, 0) probes for liveness without delivering a signal.

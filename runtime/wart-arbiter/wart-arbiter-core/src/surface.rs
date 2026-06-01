@@ -208,6 +208,47 @@ impl DisplayState {
         let vis = self.visible_app()?;
         (editor == vis && ime != vis).then_some(ime)
     }
+
+    // ── legacy-read shims (task 74 Step D) ───────────────────────────────
+    //
+    // The arbiter's command handlers used to read four singletons
+    // (`foreground`/`active_ime`/`editor_focus`/`overlay_state`). These methods
+    // re-express those exact reads over the model so the singletons can be
+    // deleted with no behavior change.
+
+    /// The surface a given `pid` owns (carries `app_id`), if tracked.
+    pub fn surface(&self, pid: i32) -> Option<&Surface> {
+        self.surfaces.iter().find(|s| s.pid == pid)
+    }
+
+    /// The first surface in a given role. At most one `Foreground` /
+    /// `OverlayBehind` / `Overlay` exists by construction, so "first" == "the".
+    pub fn first_with_role(&self, role: Role) -> Option<&Surface> {
+        self.surfaces.iter().find(|s| s.role == role)
+    }
+
+    /// The legacy `foreground` *slot* equivalent: the `Overlay` surface when a
+    /// split is engaged, else the `Foreground` surface. During a split this is
+    /// the **IME** — the slot that "lied" — which is intentional: `cmd_back` /
+    /// `cmd_list` / persistence preserve their exact legacy semantics by reading
+    /// this. Distinct from [`Self::visible_app`] (which is the app *behind* the
+    /// overlay); use that for "what the user is looking at".
+    pub fn foreground_slot(&self) -> Option<&Surface> {
+        self.first_with_role(Role::Overlay)
+            .or_else(|| self.first_with_role(Role::Foreground))
+    }
+
+    /// Whether an overlay split is currently engaged (an `Overlay` surface
+    /// exists). (Was `state::current_overlay().is_some()`.)
+    pub fn overlay_engaged(&self) -> bool {
+        self.first_with_role(Role::Overlay).is_some()
+    }
+
+    /// The active-IME surface (carries `app_id` for the host-route + display
+    /// text). (Was `state::current_active_ime()`.)
+    pub fn active_ime_surface(&self) -> Option<&Surface> {
+        self.surface(self.active_ime?)
+    }
 }
 
 #[cfg(test)]
@@ -246,6 +287,29 @@ mod tests {
         // Editor focus on some other (backgrounded) pid → not desired.
         d.set_ime_editor(Some((11, EditorInfo::default())));
         assert_eq!(d.overlay_desired(), None);
+    }
+
+    #[test]
+    fn foreground_slot_is_overlay_then_foreground() {
+        // No overlay: the slot is the foreground app (== visible_app).
+        let d = ds_with(&[(10, Role::Foreground), (11, Role::Background)]);
+        assert_eq!(d.foreground_slot().map(|s| s.pid), Some(10));
+        assert_eq!(d.visible_app(), Some(10));
+        assert!(!d.overlay_engaged());
+        // Overlay engaged: the slot is the IME (the "lie"); visible is the app.
+        let d = ds_with(&[(20, Role::Overlay), (10, Role::OverlayBehind)]);
+        assert_eq!(d.foreground_slot().map(|s| s.pid), Some(20));
+        assert_eq!(d.visible_app(), Some(10));
+        assert!(d.overlay_engaged());
+    }
+
+    #[test]
+    fn active_ime_surface_resolves_app_id() {
+        let mut d = ds_with(&[(10, Role::Foreground)]);
+        assert!(d.active_ime_surface().is_none());
+        d.put_surface(20, "ime", Role::Background);
+        d.active_ime = Some(20);
+        assert_eq!(d.active_ime_surface().map(|s| s.app_id.as_str()), Some("ime"));
     }
 
     #[test]

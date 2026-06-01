@@ -1,5 +1,5 @@
-TASK=68
-STEP=verify-done
-STATUS=complete
-LAST_SUCCESS=Task 68 keyboard inset done + IME polish (Cyrillic Ч/Ш/Щ/Ю, space-bar lang label, 30% portrait); task 71 (display geometry namespace) filed as design
-NOTES=Local commits not pushed: 20ca3816 (task68 host), 234ddf08 (IME). Landscape keyboard sizing deferred to task 71.
+TASK=74
+STEP=D-done
+STATUS=in-progress
+LAST_SUCCESS=Task 74 Step D (collapse dual-state) committed + device-verified 2026-06-01. The surface/role model is the SOLE arbiter state — the 4 legacy singletons (foreground/active_ime/editor_focus/overlay_state) + structs + parity canaries deleted. Device: knot resolves (visible_app=behind app not IME), overlay engage/disengage, cycle-task off visible, focus-follows-fg, death-watcher home-fallback all correct; no panic/drift. Host wire unchanged.
+NOTES=Next: Step C (extract wart-arbiter-shell). Plan: ~/.claude/plans/cat-task-state-steady-stallman.md. C = move registry/home/ime-height/persistence into core Store; new wart-arbiter-shell crate (ShellModule: ArbiterModule) owning verbs + promote/demote/reconcile emitting Effect::SetRole/Launch/Kill/Persist/HostLine; two-phase launch via new Event::SurfaceCreated; death path via Event::SurfaceRemoved; register one line. Then Step E (WM cache removal). Visual keyboard-reflow/rotation (matrix 5/6) not separately re-eyeballed — unchanged WM path, events fire delivered=true.
