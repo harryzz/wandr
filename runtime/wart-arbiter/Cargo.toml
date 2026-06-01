@@ -27,6 +27,7 @@ members = [
     "wart-arbiter-wm",
     "wart-arbiter-shell",
     "wart-arbiter-alarm",
+    "wart-arbiter-notify",
 ]
 
 [workspace.dependencies]

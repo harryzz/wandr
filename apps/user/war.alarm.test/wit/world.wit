@@ -65,4 +65,7 @@ world alarm-test-app {
     // M2 — also a background-service: the host calls bg-tick while we're
     // backgrounded (in place of render-frame) so we can verify the pump fires.
     export war:background/background@0.1.0;
+    // M3 — notifications: post one + receive taps (on-notification-click).
+    import war:notify/notifier@0.1.0;
+    export war:notify/notify-handler@0.1.0;
 }

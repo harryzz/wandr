@@ -197,6 +197,11 @@ pub struct InstantiatedApp {
     /// in place of render-frame while the guest is a backgrounded background-
     /// service; `None` for guests that don't opt in.
     pub bg_tick: Option<crate::background_events_bindings::BackgroundEvents>,
+    /// Signal bg-receipt (M3) — `Some(...)` if the component exports
+    /// `war:notify/notify-handler`. The host's `ime_inbound` drain calls
+    /// `on-notification-click(id)` on these when a `notification-clicked` push
+    /// arrives; `None` for guests that don't handle taps.
+    pub notify_events: Option<crate::notify_events_bindings::NotifyEvents>,
 }
 
 impl LoadedApp {
@@ -210,6 +215,8 @@ impl LoadedApp {
             .map_err(|e| anyhow!("SkikoUi::add_to_linker: {e:#}"))?;
         crate::alarm_host_bindings::AlarmHost::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)
             .map_err(|e| anyhow!("AlarmHost::add_to_linker: {e:#}"))?; // Arbiter Inc. 3c
+        crate::notify_host_bindings::NotifyHost::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)
+            .map_err(|e| anyhow!("NotifyHost::add_to_linker: {e:#}"))?; // Signal bg-receipt M3
 
         for dep in &self.deps {
             wire_dep_into_linker(&mut linker, store, dep)?;
@@ -251,7 +258,13 @@ impl LoadedApp {
         if bg_tick.is_some() {
             log::info!("loader: app exports war:background/background — background-service pump enabled");
         }
-        Ok(InstantiatedApp { skiko, ime_events, frame_pacing, alarm_events, bg_tick })
+        // Signal bg-receipt (M3) — optional notification tap handler (same .ok() probe).
+        let notify_events =
+            crate::notify_events_bindings::NotifyEvents::new(&mut *store, &instance).ok();
+        if notify_events.is_some() {
+            log::info!("loader: app exports war:notify/notify-handler — notification taps enabled");
+        }
+        Ok(InstantiatedApp { skiko, ime_events, frame_pacing, alarm_events, bg_tick, notify_events })
     }
 
     /// One-shot CLI consumers (`wasi:cli/command` world) — task 36 step 7.
@@ -272,6 +285,8 @@ impl LoadedApp {
             .map_err(|e| anyhow!("SkikoUi::add_to_linker: {e:#}"))?;
         crate::alarm_host_bindings::AlarmHost::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)
             .map_err(|e| anyhow!("AlarmHost::add_to_linker: {e:#}"))?; // Arbiter Inc. 3c
+        crate::notify_host_bindings::NotifyHost::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)
+            .map_err(|e| anyhow!("NotifyHost::add_to_linker: {e:#}"))?; // Signal bg-receipt M3
 
         for dep in &self.deps {
             wire_dep_into_linker(&mut linker, store, dep)?;

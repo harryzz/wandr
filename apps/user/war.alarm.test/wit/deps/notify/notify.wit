@@ -1,0 +1,14 @@
+// war:notify interfaces (M3) — dep for the test guest. Canonical copy is
+// wit/notify.wit; the guest imports `notifier` (to post) + exports
+// `notify-handler` (to receive taps).
+
+package war:notify@0.1.0;
+
+interface notifier {
+    post: func(id: u64, title: string, body: string);
+    cancel: func(id: u64);
+}
+
+interface notify-handler {
+    on-notification-click: func(id: u64);
+}

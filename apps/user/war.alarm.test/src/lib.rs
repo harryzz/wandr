@@ -17,6 +17,8 @@ use crate::exports::my::skiko_gfx::frame_pacing::Guest as FramePacingGuest;
 use crate::exports::my::skiko_gfx::renderer::{Guest as RendererGuest, KeyKind, PointerKind};
 use crate::exports::war::alarm::alarm_handler::Guest as AlarmGuest;
 use crate::exports::war::background::background::Guest as BackgroundGuest;
+use crate::exports::war::notify::notify_handler::Guest as NotifyHandlerGuest;
+use crate::war::notify::notifier;
 use crate::my::skiko_gfx::canvas::{
     self, BlendMode, ColorFilterKind, PaintAttrs, PaintStyle, StrokeCap, StrokeJoin,
 };
@@ -32,6 +34,8 @@ struct State {
     count: u32,
     scheduled: bool,
     bg_count: u32,
+    notified: bool,
+    clicked: u32,
 }
 
 thread_local! {
@@ -65,6 +69,12 @@ impl RendererGuest for Component {
             if !s.scheduled {
                 scheduler::schedule(ALARM_ID, PERIOD_MS, PERIOD_MS);
                 s.scheduled = true;
+            }
+            // M3 — raise one notification on first frame (host logs the post;
+            // tapping it delivers on-notification-click below).
+            if !s.notified {
+                notifier::post(1, "Alarm Test", "tap me");
+                s.notified = true;
             }
             let (w, h) = (s.w.max(1.0), s.h.max(1.0));
             canvas::begin_frame();
@@ -102,6 +112,13 @@ impl FramePacingGuest for Component {
 impl AlarmGuest for Component {
     fn on_alarm(id: u64) {
         STATE.with(|s| s.borrow_mut().count += 1);
+        let _ = id;
+    }
+}
+
+impl NotifyHandlerGuest for Component {
+    fn on_notification_click(id: u64) {
+        STATE.with(|s| s.borrow_mut().clicked += 1);
         let _ = id;
     }
 }

@@ -25,9 +25,11 @@
 use std::collections::HashMap;
 
 mod alarm;
+mod notify;
 mod registry;
 mod surface;
 pub use alarm::Alarm;
+pub use notify::Notification;
 pub use registry::{pid_alive, AppState, DEFAULT_IME_HEIGHT_PX};
 pub use surface::{DisplayState, EditorInfo, ResourceFocus, ResourceKind, Role, Surface};
 
@@ -155,6 +157,11 @@ pub struct Store {
     pub(crate) ime_height: u32,
     /// Scheduled timed-wake alarms (Arbiter Inc. 3c — see [`alarm`]).
     pub(crate) alarms: Vec<Alarm>,
+    /// Active user notifications (Signal bg-receipt M3 — see [`notify`]).
+    /// In-memory (transient); not persisted with the registry.
+    pub(crate) notifications: Vec<Notification>,
+    /// Monotonic global notification handle counter (the surfacer/click key).
+    pub(crate) next_nid: u64,
 }
 
 impl Default for Store {
@@ -165,6 +172,8 @@ impl Default for Store {
             home: None,
             ime_height: DEFAULT_IME_HEIGHT_PX,
             alarms: Vec::new(),
+            notifications: Vec::new(),
+            next_nid: 0,
         }
     }
 }
@@ -302,6 +311,10 @@ pub enum Effect {
     SetRole { pid: i32, role: Role },
     /// Ask the zygote to launch an app (home-fallback / launch verb).
     Launch { app_id: String, kind: LaunchKind },
+    /// Bring a tracked app to the foreground (the binary runs the `foreground`
+    /// verb). No-op if the app isn't tracked (dead) — pair with `Launch` first
+    /// for an open-from-dead (e.g. a notification tap). Signal bg-receipt M3.
+    Foreground { app_id: String },
     /// Ask the zygote to kill a tracked pid.
     Kill { pid: i32 },
     /// Persist the durable slice (registry / home / foreground) to disk.

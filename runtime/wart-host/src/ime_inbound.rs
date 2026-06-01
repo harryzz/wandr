@@ -121,6 +121,13 @@ pub enum InboundEvent {
     /// standalone drain calls the guest's `war:alarm/alarm-handler.on-alarm(id)`
     /// export (if the guest exports it).
     AlarmFired { id: u64 },
+
+    /// Signal bg-receipt M3 — the user tapped this app's notification. The
+    /// arbiter's notify module delivers `notification-clicked <id>` to this
+    /// surface's control socket (and foregrounds the app); the standalone drain
+    /// calls the guest's `war:notify/notify-handler.on-notification-click(id)`
+    /// export (if the guest exports it).
+    NotificationClicked { id: u64 },
 }
 
 /// Sentinel: a `geometry` inset field the host should leave at its current
@@ -293,6 +300,17 @@ fn parse_and_queue(line: &str) {
                 }
             }
             Err(_) => log::warn!("ime-inbound: bad alarm-fired id in {line:?}"),
+        }
+    } else if let Some(rest) = line.strip_prefix("notification-clicked ") {
+        // Signal bg-receipt M3 — the user tapped this app's notification; call
+        // the guest's on-notification-click.
+        match rest.trim().parse::<u64>() {
+            Ok(id) => {
+                if let Ok(mut q) = queue().lock() {
+                    q.push_back(InboundEvent::NotificationClicked { id });
+                }
+            }
+            Err(_) => log::warn!("ime-inbound: bad notification-clicked id in {line:?}"),
         }
     } else if line == "present" {
         // Task 71 — arbiter-driven "you are visible, repaint now". The drain

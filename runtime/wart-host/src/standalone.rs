@@ -565,6 +565,8 @@ fn run_cwasm_loop(
     let ime_events = inst.ime_events;
     // Arbiter Inc. 3c — Some(...) only if the guest exports war:alarm/alarm-handler.
     let alarm_events = inst.alarm_events;
+    // Signal bg-receipt M3 — Some(...) only if the guest exports war:notify/notify-handler.
+    let notify_events = inst.notify_events;
     // Task 64 — Some(...) only if the guest exports my:skiko-gfx/frame-pacing.
     let frame_pacing = inst.frame_pacing;
     // Signal bg-receipt (M2) — a background-service keeps pumping its engine
@@ -1095,6 +1097,23 @@ fn run_cwasm_loop(
                         },
                         None => log::warn!(
                             "alarm-inbound: alarm-fired({id}) but guest exports no war:alarm/alarm-handler"
+                        ),
+                    }
+                }
+                crate::ime_inbound::InboundEvent::NotificationClicked { id } => {
+                    // Signal bg-receipt M3 — the user tapped this app's notification
+                    // (the arbiter also foregrounded us); call on-notification-click.
+                    dirty = true;
+                    match notify_events.as_ref() {
+                        Some(ne) => match ne
+                            .war_notify_notify_handler()
+                            .call_on_notification_click(&mut store, id)
+                        {
+                            Ok(()) => log::info!("notify-inbound: dispatched on-notification-click({id})"),
+                            Err(e) => log::warn!("notify-inbound: on-notification-click({id}) failed: {e:#}"),
+                        },
+                        None => log::warn!(
+                            "notify-inbound: notification-clicked({id}) but guest exports no war:notify/notify-handler"
                         ),
                     }
                 }

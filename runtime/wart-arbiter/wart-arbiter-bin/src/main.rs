@@ -52,6 +52,7 @@ use anyhow::{anyhow, Context, Result};
 
 use wart_arbiter_alarm::AlarmModule;
 use wart_arbiter_core::{Event, Registry, Reply, Store, PRIMARY_DISPLAY};
+use wart_arbiter_notify::NotifyModule;
 use wart_arbiter_shell::ShellModule;
 use wart_arbiter_wm::WmModule;
 
@@ -119,6 +120,10 @@ fn main() {
                     // schedule-alarm <app-id> <id> <when-unix-ms> <repeat-ms> [kind],
                     // cancel-alarm <app-id> <id>.
                     | "schedule-alarm" | "cancel-alarm"
+                    // Signal bg-receipt M3 — notification verbs (host→arbiter; CLI
+                    // for testing): notify-post <owner> <id> <enc-title> <enc-body>,
+                    // notify-cancel <owner> <id>, notify-list, notify-click <nid>.
+                    | "notify-post" | "notify-cancel" | "notify-list" | "notify-click"
                     // Task 73 — WM geometry (handled by a core module, not the
                     // legacy match). The host normally sends this over the raw
                     // socket; the CLI form is for testing.
@@ -485,6 +490,8 @@ fn build_registry() -> Registry {
     reg.register(Box::new(ShellModule::new()));
     // Arbiter Inc. 3c — AlarmManager/JobScheduler (timed wake). One line.
     reg.register(Box::new(AlarmModule::new()));
+    // Signal bg-receipt M3 — the notification module (post/cancel/list/click).
+    reg.register(Box::new(NotifyModule::new()));
     reg
 }
 
@@ -558,6 +565,12 @@ fn execute_effects(effects: Vec<wart_arbiter_core::Effect>) {
                 }
             }
             Effect::SetRole { pid, role } => apply_role(pid, role),
+            Effect::Foreground { app_id } => {
+                // Signal bg-receipt M3 — a notification tap brings the owner
+                // forward. Re-enters the `foreground` verb (safe: execute_effects
+                // runs with no registry/store lock held, like dispatch_foreground).
+                dispatch_foreground(&app_id);
+            }
             Effect::Kill { pid } => {
                 if let Err(e) = zygote_client::kill(pid, false) {
                     log::warn!("arbiter: Kill effect pid={pid} failed: {e:#}");

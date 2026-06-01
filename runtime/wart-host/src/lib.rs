@@ -24,6 +24,7 @@ pub mod wms_impl;
 mod ime_host_impl;
 mod keyboard_host_impl;
 mod alarm_host_impl;
+mod notify_host_impl;
 mod display_geometry_impl;
 #[cfg(target_os = "android")]
 mod ime_inbound;
@@ -129,6 +130,26 @@ mod background_events_bindings {
     wasmtime::component::bindgen!({
         path: "../../wit/background.wit",
         world: "background-events",
+    });
+}
+
+/// Signal bg-receipt (M3) — host-import side of `war:notify`. The host implements
+/// `notifier` (post/cancel → forwarded to the arbiter; see `notify_host_impl.rs`)
+/// and `add_to_linker`s it onto every guest's linker.
+mod notify_host_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../wit/notify.wit",
+        world: "notify-host",
+    });
+}
+
+/// Signal bg-receipt (M3) — export side: typed `call_on_notification_click` for
+/// guests that export `war:notify/notify-handler`. Bound conditionally per
+/// instance (like `alarm_events`); other guests yield `None` (inert).
+mod notify_events_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../wit/notify.wit",
+        world: "notify-events",
     });
 }
 
