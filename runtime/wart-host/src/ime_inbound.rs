@@ -115,6 +115,12 @@ pub enum InboundEvent {
     /// inset"; `orient` = `255` means "keep my own orientation". `keyboard_px`
     /// is always authoritative (0 = no keyboard). Subsumes `KeyboardInset`.
     Geometry { inset_top: u32, inset_bottom: u32, keyboard_px: u32, orient: u32 },
+
+    /// Arbiter Inc. 3c — a scheduled alarm fired. The arbiter's alarm module
+    /// delivers `alarm-fired <id>` to this surface's control socket; the
+    /// standalone drain calls the guest's `war:alarm/alarm-handler.on-alarm(id)`
+    /// export (if the guest exports it).
+    AlarmFired { id: u64 },
 }
 
 /// Sentinel: a `geometry` inset field the host should leave at its current
@@ -277,6 +283,16 @@ fn parse_and_queue(line: &str) {
         };
         if let Ok(mut q) = queue().lock() {
             q.push_back(InboundEvent::Geometry { inset_top, inset_bottom, keyboard_px, orient });
+        }
+    } else if let Some(rest) = line.strip_prefix("alarm-fired ") {
+        // Arbiter Inc. 3c — a scheduled alarm fired; call the guest's on-alarm.
+        match rest.trim().parse::<u64>() {
+            Ok(id) => {
+                if let Ok(mut q) = queue().lock() {
+                    q.push_back(InboundEvent::AlarmFired { id });
+                }
+            }
+            Err(_) => log::warn!("ime-inbound: bad alarm-fired id in {line:?}"),
         }
     } else if line == "present" {
         // Task 71 — arbiter-driven "you are visible, repaint now". The drain

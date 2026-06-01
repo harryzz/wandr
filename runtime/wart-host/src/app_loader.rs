@@ -174,6 +174,10 @@ pub struct InstantiatedApp {
     /// calls `next-frame-delay` after each frame to gate on-demand
     /// rendering; `None` keeps the legacy unconditional 60 fps path.
     pub frame_pacing: Option<crate::frame_pacing_bindings::FramePacingWorld>,
+    /// Arbiter Inc. 3c — `Some(...)` if the component exports
+    /// `war:alarm/alarm-handler`. `ime_inbound`'s `alarm-fired` drain calls
+    /// `on-alarm(id)` on these; `None` for guests that don't use alarms.
+    pub alarm_events: Option<crate::alarm_events_bindings::AlarmEvents>,
 }
 
 impl LoadedApp {
@@ -185,6 +189,8 @@ impl LoadedApp {
             .map_err(|e| anyhow!("signal_tls::add_to_linker: {e:#}"))?;
         bindings::SkikoUi::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)
             .map_err(|e| anyhow!("SkikoUi::add_to_linker: {e:#}"))?;
+        crate::alarm_host_bindings::AlarmHost::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)
+            .map_err(|e| anyhow!("AlarmHost::add_to_linker: {e:#}"))?; // Arbiter Inc. 3c
 
         for dep in &self.deps {
             wire_dep_into_linker(&mut linker, store, dep)?;
@@ -214,7 +220,13 @@ impl LoadedApp {
         if frame_pacing.is_some() {
             log::info!("loader: app exports my:skiko-gfx/frame-pacing — on-demand rendering enabled");
         }
-        Ok(InstantiatedApp { skiko, ime_events, frame_pacing })
+        // Arbiter Inc. 3c — optional alarm handler (same .ok() probe).
+        let alarm_events =
+            crate::alarm_events_bindings::AlarmEvents::new(&mut *store, &instance).ok();
+        if alarm_events.is_some() {
+            log::info!("loader: app exports war:alarm/alarm-handler — alarm wakes enabled");
+        }
+        Ok(InstantiatedApp { skiko, ime_events, frame_pacing, alarm_events })
     }
 
     /// One-shot CLI consumers (`wasi:cli/command` world) — task 36 step 7.
@@ -233,6 +245,8 @@ impl LoadedApp {
             .map_err(|e| anyhow!("signal_tls::add_to_linker: {e:#}"))?;
         bindings::SkikoUi::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)
             .map_err(|e| anyhow!("SkikoUi::add_to_linker: {e:#}"))?;
+        crate::alarm_host_bindings::AlarmHost::add_to_linker::<_, HasSelf<HostState>>(&mut linker, |s| s)
+            .map_err(|e| anyhow!("AlarmHost::add_to_linker: {e:#}"))?; // Arbiter Inc. 3c
 
         for dep in &self.deps {
             wire_dep_into_linker(&mut linker, store, dep)?;

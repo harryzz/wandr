@@ -23,6 +23,7 @@ pub mod ime_impl;
 pub mod wms_impl;
 mod ime_host_impl;
 mod keyboard_host_impl;
+mod alarm_host_impl;
 mod display_geometry_impl;
 #[cfg(target_os = "android")]
 mod ime_inbound;
@@ -96,6 +97,26 @@ mod frame_pacing_bindings {
     wasmtime::component::bindgen!({
         path: "../../wit/skiko-gfx.wit",
         world: "frame-pacing-world",
+    });
+}
+
+/// Arbiter Inc. 3c — host-import side of `war:alarm`. The host implements
+/// `scheduler` (schedule/cancel → forwarded to the arbiter; see
+/// `alarm_host_impl.rs`) and `add_to_linker`s it onto every guest's linker.
+mod alarm_host_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../wit/alarm.wit",
+        world: "alarm-host",
+    });
+}
+
+/// Arbiter Inc. 3c — export side: typed `call_on_alarm` for guests that export
+/// `war:alarm/alarm-handler`. Bound conditionally per instance (like
+/// `ime_bindings`); guests that don't export it yield `None` (inert).
+mod alarm_events_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../wit/alarm.wit",
+        world: "alarm-events",
     });
 }
 

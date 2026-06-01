@@ -563,6 +563,8 @@ fn run_cwasm_loop(
     let inst = loaded.instantiate(&mut store)?;
     let skiko = inst.skiko;
     let ime_events = inst.ime_events;
+    // Arbiter Inc. 3c — Some(...) only if the guest exports war:alarm/alarm-handler.
+    let alarm_events = inst.alarm_events;
     // Task 64 — Some(...) only if the guest exports my:skiko-gfx/frame-pacing.
     let frame_pacing = inst.frame_pacing;
     // Task 64 follow-up — per-app render-rate cap. Resolution order:
@@ -1070,6 +1072,21 @@ fn run_cwasm_loop(
                         log::warn!("ime-inbound: on-editor-detached failed: {e:#}");
                     } else {
                         log::info!("ime-inbound: dispatched on-editor-detached");
+                    }
+                }
+                crate::ime_inbound::InboundEvent::AlarmFired { id } => {
+                    // Arbiter Inc. 3c — a scheduled alarm fired; call the guest's
+                    // war:alarm/alarm-handler.on-alarm(id). Inert if the guest
+                    // doesn't export it (alarm_events == None).
+                    dirty = true; // doing guest work this iteration warrants a frame
+                    match alarm_events.as_ref() {
+                        Some(ae) => match ae.war_alarm_alarm_handler().call_on_alarm(&mut store, id) {
+                            Ok(()) => log::info!("alarm-inbound: dispatched on-alarm({id})"),
+                            Err(e) => log::warn!("alarm-inbound: on-alarm({id}) failed: {e:#}"),
+                        },
+                        None => log::warn!(
+                            "alarm-inbound: alarm-fired({id}) but guest exports no war:alarm/alarm-handler"
+                        ),
                     }
                 }
                 // Task 68 — the soft keyboard occludes `px` of our surface. Add
