@@ -326,7 +326,14 @@ impl DomRenderer {
         if self.scroll_active {
             let (vx, vy, vw, vh) = self.scroll_vp;
             let ch = self.scroll_content_h.max(vh);
-            let thumb_h = (vh * vh / ch).clamp(48.0, vh);
+            // Thumb = proportional height, floored to a min touch target but
+            // never taller than the viewport. NOT `clamp(48, vh)`: when the
+            // viewport collapses below the min (`vh < 48`, e.g. a tiny content
+            // area after rotation) that's `min > max` and `f32::clamp` panics
+            // (SIGILL). Order the bounds so they can't invert: cap to `vh`
+            // first, then floor — and the floor itself can't exceed `vh`.
+            let proportional = vh * vh / ch;
+            let thumb_h = proportional.min(vh).max(48.0_f32.min(vh));
             let thumb_y = if max > 0.0 { vy + (sy / max) * (vh - thumb_h) } else { vy };
             let bw = 10.0;
             sink.fill_rrect(vx + vw - bw - 6.0, thumb_y, bw, thumb_h, bw / 2.0, bw / 2.0, Fill { color: 0x70FF_FFFF });
