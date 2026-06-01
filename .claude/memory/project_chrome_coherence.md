@@ -40,9 +40,11 @@ overlay polled it + ran its own device-sensor. That file is now **retired**.
   comes back as plain Background apps from `state.json`; re-establish with
   `wart-arbiter register-chrome <app-id> <pid>` + `set-ime` + `set-orientation-lock`,
   or do a full `run-hybrid-stack.sh` restart (chrome self-registers + launcher reports
-  lock at boot). A backgrounded auto app still reports its sensor (drives the decided
-  orient); the lock-gate neutralizes it. Tightening to foreground-only reporting is a
-  possible follow-up (host change).
+  lock at boot). A backgrounded auto app used to still report its sensor (drives the decided
+  orient); **DONE — foreground-only reporting** (commit `fd45fe53`): the host gates the
+  sensor poll + report-orientation on `app_role::role()==Foreground`, so only the
+  visible app drives orientation (backgrounded apps skip the sensor; resume on
+  foreground via the arbiter's ForegroundChanged orient push).
 - Host (`wart-host/src/standalone.rs`): chrome self-registers (retries, best-effort);
   the foreground app reports `set-orientation-lock` instead of writing the file; the
   orientation block is restructured so an **overlay's target orient comes ONLY from
