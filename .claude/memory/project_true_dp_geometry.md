@@ -47,6 +47,14 @@ fullscreen logical `1440x2596` (2880−133−151). Rotation + keyboard + chrome 
 coherent — `overlay_rect` uses the cached sb/tb, the IME anchors at `tb=151`, the dp
 insets ride the geometry line through the flip. 23 arbiter unit tests; host build green.
 
+**Gotcha (regression fixed, commit `393081bf`):** the geometry line's inset fields are
+the chrome heights (sb,tb) pushed to EVERY surface, but the host must apply them as
+content insets ONLY on a fullscreen app (`OverlayMode::None`). A chrome overlay IS the
+chrome — it renders its full strip; insetting a 133px status bar by (133,151) shrank its
+content to nothing → blank clock / blank taskbar icons. Overlays still *cache* sb/tb (for
+`overlay_rect`) but keep zero content insets. (Pre-true-dp this was masked because chrome
+got `INSET_HOST_OWNED` → set_insets skipped.)
+
 **Gotcha:** host fallback dp consts (`FALLBACK_STATUS_BAR_DP=38` etc. in standalone.rs)
 duplicate core's — used ONLY when the arbiter never provided a value (arbiter-down /
 pre-report); the race is benign (same dp × same density source → same px). Keep them
