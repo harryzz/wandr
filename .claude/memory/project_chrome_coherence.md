@@ -23,13 +23,26 @@ overlay polled it + ran its own device-sensor. That file is now **retired**.
   `register-chrome <app-id> <pid>` to the arbiter → shell inserts an `AppState` +
   `Role::Chrome` surface (inert for AM/IME — excluded from `visible_app`/cycle ring;
   pruned by the existing 5 s liveness poller, since chrome isn't a zygote child).
-- The arbiter is the **single orientation authority for all overlays**. `wart-arbiter-wm`
-  gained `set-orientation-lock <0|1>` (the foreground app reports its lock) + a
-  `fan_overlays` helper: **effective orient = `locked ? 0 : decided`**, fanned to
-  every `Role::Chrome` surface **+ the `active_ime` pid** (so the hidden IME stays
-  orient-fresh → no stale-on-engage). `OrientationChanged` also fans.
-  `DisplayGeometry.orientation_locked` holds the bit. The arbiter pushes only the
-  content `orient`; the **anchor stays host-side** (`overlay_rect` flip in standalone.rs).
+- The arbiter is the **single orientation authority** — there is ONE *system
+  orientation* every visible surface displays at: `effective_orient = locked ? 0 :
+  decided` (`wart-arbiter-wm`, `DisplayGeometry.orientation_locked`). `geometry_line`
+  uses it; `push_system_orientation` pushes it to the focused editor + visible app +
+  every `Role::Chrome` surface + the `active_ime` pid (hidden IME stays orient-fresh
+  → no stale-on-engage). Both `OrientationChanged` and `set-orientation-lock <0|1>`
+  call it. **The lock gates the FOREGROUND APP too, not just chrome** — gating only
+  chrome (commit 1da7adb0) let a locked launcher rotate while the bars stayed
+  portrait (user-reported on physical rotation); fixed in **commit `fd258fb3`**. The
+  arbiter pushes only the content `orient`; the **anchor stays host-side**
+  (`overlay_rect` flip in standalone.rs).
+- `register-chrome` + `set-orientation-lock` are host→arbiter verbs but are also on
+  the `wart-arbiter` CLI now (testing/debugging). NOTE: an arbiter-only restart drops
+  the runtime-registered Chrome surfaces + active_ime + lock (none persisted) — chrome
+  comes back as plain Background apps from `state.json`; re-establish with
+  `wart-arbiter register-chrome <app-id> <pid>` + `set-ime` + `set-orientation-lock`,
+  or do a full `run-hybrid-stack.sh` restart (chrome self-registers + launcher reports
+  lock at boot). A backgrounded auto app still reports its sensor (drives the decided
+  orient); the lock-gate neutralizes it. Tightening to foreground-only reporting is a
+  possible follow-up (host change).
 - Host (`wart-host/src/standalone.rs`): chrome self-registers (retries, best-effort);
   the foreground app reports `set-orientation-lock` instead of writing the file; the
   orientation block is restructured so an **overlay's target orient comes ONLY from
