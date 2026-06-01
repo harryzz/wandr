@@ -235,6 +235,8 @@ fn main() {
             OverlayMode::Top
         } else if args.iter().any(|a| a == "--standalone-overlay-bottom-bar") {
             OverlayMode::BottomBar
+        } else if args.iter().any(|a| a == "--standalone-overlay-lock") {
+            OverlayMode::Lock
         } else if args.iter().any(|a| a == "--standalone-overlay") {
             OverlayMode::Bottom
         } else {

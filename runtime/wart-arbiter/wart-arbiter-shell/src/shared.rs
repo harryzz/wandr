@@ -10,7 +10,8 @@ use wart_arbiter_core::{Ctx, Effect, EditorInfo, Event, Role, Store, PRIMARY_DIS
 
 /// Chrome app-ids that are overlays/system surfaces, not switchable user apps —
 /// excluded from the recents/cycle ring (task 56).
-pub(crate) const CHROME_APP_IDS: [&str; 3] = ["war.statusbar", "war.taskbar", "war.ime.keyboard"];
+pub(crate) const CHROME_APP_IDS: [&str; 4] =
+    ["war.statusbar", "war.taskbar", "war.ime.keyboard", "war.keyguard"];
 
 // ── owned-snapshot helpers over the Store (avoid borrow conflicts with ctx) ──
 

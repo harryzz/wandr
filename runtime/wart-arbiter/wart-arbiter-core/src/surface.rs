@@ -52,6 +52,12 @@ pub enum Role {
     Chrome,
     /// Launched headless (no SF surface); role signals are N/A.
     Headless,
+    /// The keyguard/lockscreen — a full-screen surface above the app + nav (but
+    /// below the status bar), shown + focused while the device is locked. Mapped
+    /// to the foreground *mechanism* (show + focus) by the binary, but excluded
+    /// from `visible_app`/the task-cycle ring (it is not a switchable app). The
+    /// app it covers is demoted to `Background` so it stops fighting for focus.
+    Lockscreen,
 }
 
 /// One tracked GUI process on a display. The `pid` is the stable identity (it

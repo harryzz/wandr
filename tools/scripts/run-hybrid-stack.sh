@@ -166,6 +166,11 @@ bring_up_chrome() {
     adb shell "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter launch-overlay war.ime.keyboard'" 2>&1 | tr -d '\r'
     sleep 1
     adb shell "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter set-ime war.ime.keyboard'" 2>&1 | tr -d '\r'
+    echo "▸ keyguard (lock overlay) + boot-lock"
+    spawn_detached /dev/null "LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-host --standalone-overlay-lock --app war.keyguard"
+    sleep 1
+    # Boot = locked: the keyguard module shows the lock screen + demotes the app.
+    adb shell "su -c '/data/local/tmp/wart-arbiter lock'" 2>&1 | tr -d '\r'
 }
 
 if [[ -t 1 ]]; then

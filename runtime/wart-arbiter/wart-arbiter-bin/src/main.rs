@@ -52,6 +52,7 @@ use anyhow::{anyhow, Context, Result};
 
 use wart_arbiter_alarm::AlarmModule;
 use wart_arbiter_core::{Event, Registry, Reply, Store, PRIMARY_DISPLAY};
+use wart_arbiter_keyguard::KeyguardModule;
 use wart_arbiter_notify::NotifyModule;
 use wart_arbiter_power::PowerModule;
 use wart_arbiter_shell::ShellModule;
@@ -103,6 +104,9 @@ fn main() {
         // Task 56 — taskbar nav (CLI handles for testing).
         Some("back")        => run_client("back", None),
         Some("cycle-task")  => run_client("cycle-task", None),
+        // Keyguard — lock/unlock (no-arg; auto-lock is screen-off-driven).
+        Some("lock")   => run_client("lock", None),
+        Some("unlock") => run_client("unlock", None),
         // Task 47 step 3c — manual overlay engage/clear.
         Some("overlay") => run_client("overlay", args.get(1).cloned()),
         Some("overlay-clear") => run_client("overlay-clear", None),
@@ -498,6 +502,8 @@ fn build_registry() -> Registry {
     reg.register(Box::new(NotifyModule::new()));
     // PowerManager — doze policy (reacts to Event::ScreenState, fans `doze` to hosts).
     reg.register(Box::new(PowerModule::new()));
+    // Keyguard — lockscreen (auto-lock on screen-off; lock/unlock). One line.
+    reg.register(Box::new(KeyguardModule::new()));
     reg
 }
 
@@ -634,7 +640,11 @@ fn execute_effects(effects: Vec<wart_arbiter_core::Effect>) {
 fn apply_role(pid: i32, role: wart_arbiter_core::Role) {
     use wart_arbiter_core::Role;
     match role {
-        Role::Foreground | Role::Overlay => {
+        // Keyguard reuses the foreground mechanism (show + focus + present). It's
+        // launched at a high layer (--standalone-overlay-lock), so SIGUSR2 shows it
+        // above the app+nav (below the status bar) + grabs focus; the covered app
+        // is demoted to Background by the keyguard module so it doesn't fight back.
+        Role::Foreground | Role::Overlay | Role::Lockscreen => {
             send_role_signal(pid, /*foreground=*/ true);
             write_oom_score(pid, OOM_FG);
             send_present(pid);

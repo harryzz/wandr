@@ -1,0 +1,21 @@
+[package]
+name    = "war-keyguard"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Keyguard/lockscreen — a LIGHT Rust canvas guest (no Kotlin/Compose), like
+# war.statusbar. Full-screen dark surface with a big clock + "swipe up to unlock"
+# hint; launched as a high-layer overlay (--standalone-overlay-lock), shown/hidden
+# by the arbiter keyguard module. Unlock gesture wired in M3.
+#   cargo build --target wasm32-wasip2 --release
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

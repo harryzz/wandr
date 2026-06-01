@@ -37,6 +37,10 @@ pub enum OverlayMode {
     Bottom,
     BottomBar,
     Top,
+    /// Keyguard/lockscreen — a full-screen surface (like `None`) but at a high
+    /// layer (above app + nav, below the status bar), shown/hidden by the arbiter
+    /// keyguard module via the foreground signals (`Role::Lockscreen`).
+    Lock,
 }
 
 pub fn run(app_id: Option<&str>, mode: OverlayMode) -> Result<()> {
@@ -183,15 +187,26 @@ pub fn run_with_engine(engine: &Engine, app_id: Option<&str>, mode: OverlayMode)
                 }
             }
         }
-        OverlayMode::None => {
+        // Fullscreen surface — the app (None) and the keyguard (Lock) both get a
+        // full-panel SF surface; z-order is the `fg_layer` (below) + set_layer.
+        OverlayMode::None | OverlayMode::Lock => {
             let sf = crate::sf_surface::SfSurface::create(SHIM_SO)?;
             log::info!(
-                "standalone: surface {}x{} transform 0x{:x} (ANativeWindow={:p})",
+                "standalone: surface {}x{} transform 0x{:x} (ANativeWindow={:p}, mode={mode:?})",
                 sf.width, sf.height, sf.transform, sf.native_window,
             );
             sf
         }
     };
+
+    // Keyguard self-registers with the arbiter so it's tracked (`war.keyguard →
+    // pid`); the keyguard module flips it from the registered Chrome surface to
+    // Role::Lockscreen on lock. Anchor "lock" → no strip height (it's fullscreen).
+    if mode == OverlayMode::Lock {
+        if let Some(id) = app_id {
+            register_chrome_with_arbiter(id, "lock");
+        }
+    }
 
     // The producer transform hint is only valid once EGL connects, so the
     // renderer queries it through this closure mid-`from_native_window`.
@@ -237,6 +252,9 @@ pub fn run_with_engine(engine: &Engine, app_id: Option<&str>, mode: OverlayMode)
             let fg_layer = match mode {
                 OverlayMode::None      => 0x4000_0000,
                 OverlayMode::BottomBar => 0x6000_0000,
+                // Keyguard: above app + nav, below the status bar (i32::MAX) so the
+                // status-bar clock/battery stays visible on the lock screen.
+                OverlayMode::Lock      => 0x7000_0000,
                 OverlayMode::Bottom | OverlayMode::Top => i32::MAX,
             };
             // Task 62/63 — rotation gate. Fullscreen apps rotate UNLESS they
@@ -450,7 +468,8 @@ fn overlay_rect(mode: OverlayMode, orient: u32, pw: i32, ph: i32, t: i32, sb: i3
         OverlayMode::Top       => (false, sb, 0),         // status bar — user top
         OverlayMode::BottomBar => (true,  tb, 0),         // taskbar — user bottom
         OverlayMode::Bottom    => (true,  ime_depth, tb), // IME — above the taskbar
-        OverlayMode::None      => return (0, 0, pw, ph),  // fullscreen — no flip
+        // fullscreen — no anchored-strip flip (app + keyguard)
+        OverlayMode::None | OverlayMode::Lock => return (0, 0, pw, ph),
     };
     let user_bottom_edge = match orient {
         0 => Edge::South, // portrait — physical bottom

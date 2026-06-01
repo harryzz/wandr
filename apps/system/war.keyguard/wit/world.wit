@@ -1,0 +1,70 @@
+// Trimmed `my:skiko-gfx` for the Rust keyguard guest — same rationale as
+// war.statusbar (the guest wit-parser rejects the canonical skiko-gfx.wit's
+// matrix-3x3, so redeclare just the subset used). canvas + status + renderer +
+// frame-pacing. The unlock gesture (war:keyguard import) is added in M3.
+
+package my:skiko-gfx@0.1.0;
+
+interface canvas {
+    enum paint-style { fill, stroke, fill-and-stroke }
+    enum stroke-cap  { butt, round, square }
+    enum stroke-join { miter, round, bevel }
+    enum blend-mode {
+        src-over, src, dst-in, dst-out, src-atop, dst-atop, xor,
+        multiply, screen, overlay, darken, lighten, color-dodge,
+        color-burn, hard-light, soft-light, difference, exclusion, clear,
+    }
+    enum color-filter-kind { none, blend, invert }
+    record paint-attrs {
+        color:              u32,
+        style:              paint-style,
+        stroke-width:       f32,
+        stroke-miter:       f32,
+        stroke-cap:         stroke-cap,
+        stroke-join:        stroke-join,
+        anti-alias:         bool,
+        alpha:              u8,
+        blend-mode:         blend-mode,
+        shader-id:          u32,
+        color-filter-kind:  color-filter-kind,
+        color-filter-color: u32,
+    }
+    surface-width:  func() -> u32;
+    surface-height: func() -> u32;
+    begin-frame: func();
+    end-frame:   func();
+    clear:       func(argb: u32);
+    draw-rect:   func(x: f32, y: f32, w: f32, h: f32, paint: paint-attrs);
+    create-text-blob: func(text: list<u8>, font-family: list<u8>, size: f32, weight: u32, italic: bool) -> u32;
+    draw-text-blob:   func(id: u32, x: f32, y: f32, paint: paint-attrs);
+    drop-text-blob:   func(id: u32);
+}
+
+interface status {
+    clock-text:   func() -> string;
+    battery-text: func() -> string;
+}
+
+interface renderer {
+    enum pointer-kind { down, up, move, scroll }
+    enum key-kind     { down, up }
+    render-frame:          func(nanos: u64);
+    on-pointer-event:      func(kind: pointer-kind, x: f32, y: f32);
+    on-key-event:          func(kind: key-kind, key-code: u32);
+    on-resize:             func(w: u32, h: u32);
+    on-scheduled-callback: func(callback-id: u32);
+    on-pointer-event-v2:   func(pointer-id: u32, kind: pointer-kind, x: f32, y: f32, pressure: f32);
+    on-key-event-v2:       func(kind: key-kind, code-point: u32, key-id: u32);
+    on-lifecycle-changed:  func(state: u32);
+}
+
+interface frame-pacing {
+    next-frame-delay: func() -> u32;
+}
+
+world keyguard-app {
+    import canvas;
+    import status;
+    export renderer;
+    export frame-pacing;
+}
