@@ -1,5 +1,5 @@
-TASK=alarm-manager
-STEP=verify-done
-STATUS=complete
-LAST_SUCCESS=Arbiter Inc. 3c (AlarmManager/JobScheduler timed-wake) DONE + fully device-verified 2026-06-01. war:alarm WIT + wart-arbiter-alarm module + timer + Effect::Launch wired + host import/export + test guest apps/user/war.alarm.test. Verified all 5: schedule, alive-deliver (on-alarm every 5s), dead-relaunch (kill→Effect::Launch→resume), persistence (arbiter restart→restored), cancel. No regression. Commits af39a1ad/2f125869/3256da1a (pushed) + test-guest commit (pending).
-NOTES=Test-guest commit + memory pending push. Follow-up: Signal background receipt (poll via alarm relaunch headless vs persistent service) — needs Signal engine/ui split. Other additive arbiter items: audio-focus/notifications resource-focus variants; -am/-ime crate split.
+TASK=signal-bg-receipt
+STEP=M3-done
+STATUS=in-progress
+LAST_SUCCESS=M1+M2+M3 DONE + device-verified + pushed. M1 (55f7ee02) hidden wake. M2 (8ff96df6) bg-tick background-execution. M3a (2fef4244) notify primitive (post/cancel/list/click + on-notification-click + Effect::Foreground). M3b (5d366567) status-bar "● N" badge + tap-to-open (notify-feed, host queries arbiter live). All verified on Pixel 2 XL via war.alarm.test (alarm+bg+notify kitchen-sink test guest).
+NOTES=Next: M4 Signal wiring — NEEDS USER (real Signal account + 2nd device to send from). Signal UI: background=true + bg-tick(poll-events + notify::post on new inbound) + on-notification-click(open thread) + keep-alive alarm. Gotchas: bindgen! is NOT retriggered by .wit-only edits (touch lib.rs); top-level WIT record is invalid (must be inside interface); adb push DIR nests if target exists (rm first); statusbar wit needs versioned import + generate_all. Plan: ~/.claude/plans/cat-task-state-steady-stallman.md.
