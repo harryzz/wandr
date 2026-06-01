@@ -284,16 +284,11 @@ enum Edge { North, South, East, West }
 /// given panel, swap the `4`/`7` arms in `user_bottom_edge` (mirrors the
 /// caveat on [`device_rotation_to_orient`]). Host-side only — no shim rebuild.
 fn overlay_rect(mode: OverlayMode, orient: u32, pw: i32, ph: i32, t: i32, sb: i32, tb: i32) -> (i32, i32, i32, i32) {
-    // Landscape keyboard depth: scale `t` (sized as a fraction of the long
-    // edge, ~42%) by pw/ph so it stays the same fraction of the user's
-    // screen height (~600 px) rather than an 83%-of-screen slab. Bars keep
-    // their fixed thickness (sb/tb) in any orientation.
-    let landscape = matches!(orient, 4 | 7);
-    let ime_depth = if landscape {
-        (((t as i64) * (pw as i64)) / (ph as i64).max(1)).max(1) as i32
-    } else {
-        t
-    };
+    // Task 71 — `t` is the exact keyboard depth the IME requested for the
+    // CURRENT orientation; the host applies it verbatim (the IME re-requests a
+    // smaller px in landscape itself). No host-side portrait/landscape scaling;
+    // bars keep their fixed thickness (sb/tb) in any orientation.
+    let ime_depth = t;
     // (at the user's bottom edge?, thickness, inward offset)
     let (at_bottom, th, off) = match mode {
         OverlayMode::Top       => (false, sb, 0),         // status bar — user top
@@ -357,6 +352,12 @@ fn run_cwasm_loop(
     // gets this from a `WindowEvent::Resized`; standalone has no winit, so we
     // drive the guest's `on-resize` export explicitly once, below.
     let (logical_w, logical_h) = (renderer.logical_width, renderer.logical_height);
+
+    // Task 71 step 3 — record the REAL panel size for this process so an overlay
+    // guest (whose own surface is just a strip) can read the true screen via
+    // `display.display-size`. `sf.panel_w/panel_h` came from the `sf_panel_dims`
+    // shim; for a fullscreen app they equal the surface size (no-op).
+    crate::canvas_impl::set_panel_dims(sf.panel_w as u32, sf.panel_h as u32);
 
     // ── Cold start — mirrors App::resumed's cold path ────────────────────
     let mut wasi_builder = WasiCtxBuilder::new();
@@ -874,6 +875,11 @@ fn run_cwasm_loop(
                 // it to the base bottom inset → the guest's logical height shrinks
                 // → re-issue on_resize so bottom-anchored content rises above the
                 // keyboard. px=0 restores the base (keyboard hidden).
+                // Task 71 — explicit repaint request from the arbiter. The loop
+                // already set `dirty = true` for every drained event above, so a
+                // full frame renders into the now-visible surface this iteration.
+                // No extra work needed beyond consuming the event.
+                crate::ime_inbound::InboundEvent::Present => {}
                 crate::ime_inbound::InboundEvent::KeyboardInset { px } => {
                     // `px` is the portrait-reference keyboard height; the renderer
                     // scales it per-orientation and reduces the USER-bottom of the

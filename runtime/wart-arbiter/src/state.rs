@@ -125,10 +125,16 @@ pub fn set_editor_focus(new: Option<EditorFocus>) -> Option<EditorFocus> {
 // editor process that received SIGRTMIN+1 (OverlayBehind). On overlay
 // clear, `behind_pid` is repromoted back to foreground.
 
+/// An active overlay split: a foreground OVERLAY process drawn on top of the
+/// app behind it. Generic over *what* the overlay is — the IME keyboard today,
+/// a side / utility panel or any other overlay-drawing guest in future. The
+/// whole lifecycle (engage on show, clear when the overlay loses foreground or
+/// either side exits) is keyed purely on pids, never on a specific app id.
 #[derive(Clone, Debug)]
 pub struct OverlayState {
-    /// The IME process that owns the bottom-strip overlay surface.
-    pub ime_pid: i32,
+    /// The process that owns the overlay surface and is promoted to the
+    /// foreground while the split is active (IME bottom strip, side panel, …).
+    pub overlay_pid: i32,
     /// The app whose surface is behind the overlay (visible, layer 0,
     /// lifecycle Resumed). Repromoted on overlay clear.
     pub behind_pid: i32,
@@ -268,7 +274,7 @@ pub fn remove(app_id: &str) -> Option<AppState> {
         // running; the arbiter caller can repromote it to fg if it
         // was the behind-app.
         if let Some(ov) = current_overlay() {
-            if ov.ime_pid == s.pid || ov.behind_pid == s.pid {
+            if ov.overlay_pid == s.pid || ov.behind_pid == s.pid {
                 let _ = set_overlay(None);
             }
         }

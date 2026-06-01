@@ -475,27 +475,13 @@ fn cmd_attach_editor(stream: &mut UnixStream, rest: &str) -> Result<()> {
         .map(|i| format!("{} (pid={})", i.app_id, i.pid))
         .unwrap_or_else(|| "(no active IME — set-ime first)".to_string());
 
-    // Task 47 step 3c — auto-tie. If there's an active IME and its
-    // pid differs from the focused editor's, engage the overlay
-    // split: IME → foreground, editor → OverlayBehind. The IME's SF
-    // surface flips visible at MAX-layer; the editor stays visible
-    // at layer 0 (lifecycle Resumed so the cursor keeps blinking).
-    // Skip if the IME pid IS the editor pid (same process owning
-    // both — implausible in practice but defensive).
-    let auto_overlay = match &ime {
-        Some(i) if i.pid != pid => {
-            let already = state::current_overlay()
-                .map(|ov| ov.ime_pid == i.pid && ov.behind_pid == pid)
-                .unwrap_or(false);
-            if !already {
-                promote_to_overlay(&i.app_id, i.pid, Some(pid));
-                true
-            } else {
-                false
-            }
-        }
-        _ => false,
-    };
+    // Editor focus changed → re-derive IME-overlay visibility in the single
+    // authority. Engages the split (IME shown over this app) when this app is
+    // the visible foreground and there's an active IME on another pid.
+    reconcile_overlay();
+    let auto_overlay = state::current_overlay()
+        .map(|ov| ov.behind_pid == pid)
+        .unwrap_or(false);
 
     // Task 49 step 1a — deliver editor-attached to the IME's wart-host
     // via its per-host control socket. The IME's render-loop drain
@@ -583,14 +569,14 @@ fn cmd_detach_editor(stream: &mut UnixStream, rest: &str) -> Result<()> {
             .as_ref()
             .map(|i| format!("{} (pid={})", i.app_id, i.pid))
             .unwrap_or_else(|| "(no active IME)".to_string());
-        // Task 47 step 3c — auto-tie. If we engaged the overlay
-        // split for this editor on attach, tear it down now. The
-        // IME goes back to Background; the editor (this pid) gets
-        // repromoted to Foreground.
-        let cleared = match state::current_overlay() {
-            Some(ov) if ov.behind_pid == pid => demote_from_overlay().is_some(),
-            _ => false,
-        };
+        // Editor focus cleared → re-derive overlay visibility. With no focus on
+        // the visible app, `reconcile_overlay` tears the split down (IME hidden,
+        // editor app back to full foreground).
+        let was_engaged = state::current_overlay()
+            .map(|ov| ov.behind_pid == pid)
+            .unwrap_or(false);
+        reconcile_overlay();
+        let cleared = was_engaged && state::current_overlay().is_none();
         // Task 49 step 1a — deliver editor-detached to the IME's
         // wart-host via its per-host control socket. Symmetric with
         // cmd_attach_editor's delivery above. Fire-and-forget.
@@ -800,7 +786,7 @@ fn handle_child_exit(pid: i32, detail: &str) {
     // Overlay teardown with signal semantics (the `cmd_overlay_clear`
     // path). Only fires when this pid was either side of an active split.
     if let Some(ov) = state::current_overlay() {
-        if ov.ime_pid == pid || ov.behind_pid == pid {
+        if ov.overlay_pid == pid || ov.behind_pid == pid {
             let cleared = demote_from_overlay();
             log::info!(
                 "arbiter: on_child_exit pid={pid} tore down overlay split (cleared={:?})",
@@ -937,53 +923,59 @@ fn send_overlay_behind_signal(pid: i32) {
     }
 }
 
-/// Task 47 step 3c — promote `(ime_app_id, ime_pid)` to be the
-/// foreground overlay and demote the prior foreground app to
-/// `OverlayBehind` (visible, layer 0, `Resumed`). Returns the pid of
-/// the demoted app so callers can store it in `OverlayState.behind_pid`.
+/// Promote `(overlay_app_id, overlay_pid)` to be the foreground overlay and
+/// demote the prior foreground app to `OverlayBehind` (visible, layer 0,
+/// `Resumed`). Returns the pid of the demoted app so callers can store it in
+/// `OverlayState.behind_pid`.
+///
+/// Overlay-generic: the IME keyboard is the caller today (task 47 step 3c via
+/// `cmd_attach_editor`), but any overlay-drawing guest (a side / utility panel,
+/// …) can engage the same split by passing its own pid here.
 ///
 /// `behind_pid_hint` is a fallback when there's no current foreground
-/// (e.g. the editor process was launched headless or got cleared) —
+/// (e.g. the behind process was launched headless or got cleared) —
 /// callers usually pass the focused editor's pid here.
-fn promote_to_overlay(ime_app_id: &str, ime_pid: i32, behind_pid_hint: Option<i32>) -> Option<i32> {
+fn promote_to_overlay(overlay_app_id: &str, overlay_pid: i32, behind_pid_hint: Option<i32>) -> Option<i32> {
     // Demote whoever is currently foreground. Use OverlayBehind, not
-    // Background — the editor needs to keep rendering text mutations.
-    let demoted = if let Some((prev_id, prev_pid)) = state::set_foreground(Some(ime_app_id)) {
+    // Background — the behind app needs to keep rendering (e.g. text mutations).
+    let demoted = if let Some((prev_id, prev_pid)) = state::set_foreground(Some(overlay_app_id)) {
         log::info!(
             "arbiter: overlay-demoting prior foreground app={prev_id} pid={prev_pid}"
         );
         send_overlay_behind_signal(prev_pid);
         // OOM score: behind-app is still Resumed but visually demoted —
-        // keep it at fg priority so the IME isn't holding the OOM
-        // killer's attention longer than the editor.
+        // keep it at fg priority so the overlay isn't holding the OOM
+        // killer's attention longer than the behind app.
         write_oom_score(prev_pid, OOM_FG);
         Some(prev_pid)
     } else {
         behind_pid_hint
     };
-    log::info!("arbiter: overlay-promoting IME app={ime_app_id} pid={ime_pid}");
-    send_role_signal(ime_pid, /*foreground=*/ true);
-    write_oom_score(ime_pid, OOM_FG);
+    log::info!("arbiter: overlay-promoting app={overlay_app_id} pid={overlay_pid}");
+    send_role_signal(overlay_pid, /*foreground=*/ true);
+    write_oom_score(overlay_pid, OOM_FG);
+    send_present(overlay_pid); // overlay visible now → force a fresh frame (the re-show repaint fix)
     let behind_pid = demoted.unwrap_or(0);
     let _ = state::set_overlay(Some(state::OverlayState {
-        ime_pid,
+        overlay_pid,
         behind_pid,
     }));
     demoted
 }
 
-/// Task 47 step 3c — tear down the IME overlay split: demote the IME
-/// to `Background` and repromote the behind-app to `Foreground`. Used
-/// by `cmd_detach_editor` (auto-tied) and `cmd_overlay_clear` (manual).
-/// Returns the (ime_pid, behind_pid) pair that was active, if any.
+/// Tear down the overlay split: demote the overlay process to `Background` and
+/// repromote the behind-app to `Foreground`. Overlay-generic (IME today; any
+/// overlay guest). Used by `cmd_detach_editor` (auto-tied), `cmd_overlay_clear`
+/// (manual), and `promote_to_foreground` (when the overlay loses foreground).
+/// Returns the (overlay_pid, behind_pid) pair that was active, if any.
 fn demote_from_overlay() -> Option<(i32, i32)> {
     let prev = state::set_overlay(None)?;
     log::info!(
-        "arbiter: overlay-clearing ime_pid={} behind_pid={}",
-        prev.ime_pid, prev.behind_pid
+        "arbiter: overlay-clearing overlay_pid={} behind_pid={}",
+        prev.overlay_pid, prev.behind_pid
     );
-    send_role_signal(prev.ime_pid, /*foreground=*/ false);
-    write_oom_score(prev.ime_pid, OOM_BG);
+    send_role_signal(prev.overlay_pid, /*foreground=*/ false);
+    write_oom_score(prev.overlay_pid, OOM_BG);
     if prev.behind_pid > 0 {
         // Find the app_id matching this pid so set_foreground points
         // at the right app. If the behind app was killed in the
@@ -1001,26 +993,126 @@ fn demote_from_overlay() -> Option<(i32, i32)> {
             let _ = state::set_foreground(None);
         }
     }
-    Some((prev.ime_pid, prev.behind_pid))
+    Some((prev.overlay_pid, prev.behind_pid))
+}
+
+/// Task 71 (WMS-authority step) — tell a host its surface is now visible and it
+/// should paint a fresh frame. The arbiter is the visibility authority; this
+/// makes "repaint on show" an explicit push instead of leaving the host to infer
+/// it from the async role signal (which left re-shown surfaces present-but-empty).
+/// Fire-and-forget; a host with no live socket (just-forked / dead) simply misses
+/// it and its own role-transition dirty-frame still covers the common case.
+fn send_present(pid: i32) {
+    let sock = format!("/data/local/tmp/wart-host-{pid}.sock");
+    if let Err(e) = deliver_to_host(&sock, "present\n") {
+        log::debug!("arbiter: present → {sock} failed: {e:#}");
+    }
+}
+
+/// The pid of the real app the user is currently looking at — the behind-app
+/// when an overlay split is engaged (the `foreground` slot points at the IME
+/// then), otherwise the foreground app. Used so overlay/cycle logic always
+/// reasons about the *visible app*, never the IME overlay.
+fn active_app_pid() -> Option<i32> {
+    if let Some(ov) = state::current_overlay() {
+        return Some(ov.behind_pid);
+    }
+    state::current_foreground()
+        .and_then(|id| state::get(&id))
+        .map(|s| s.pid)
+}
+
+/// THE single authority for IME-overlay visibility (the design-note model:
+/// overlay visibility is *derived state*, reconciled in one place — not promoted
+/// / demoted imperatively from every transition). Mirrors Android's hierarchy:
+/// editor focus is only "active" if it belongs to the app currently on screen,
+/// and the IME window is shown iff such a focus exists.
+///
+/// Desired = there is an active IME AND a focused editor AND that editor belongs
+/// to the visible app AND the IME isn't that same app. Then it makes reality
+/// match: engage the split if desired & not engaged, tear it down if engaged &
+/// not desired. Idempotent — safe to call after ANY fg/focus/ime change.
+fn reconcile_overlay() {
+    let ime = state::current_active_ime();
+    let focus = state::current_editor_focus();
+    let app_pid = active_app_pid();
+    let desired = match (&ime, &focus, app_pid) {
+        (Some(i), Some(f), Some(ap)) => f.pid == ap && i.pid != ap,
+        _ => false,
+    };
+    match (desired, state::current_overlay()) {
+        (true, None) => {
+            // Engage over the visible app (== focus.pid when desired).
+            let i = ime.expect("desired implies ime");
+            let ap = app_pid.expect("desired implies app_pid");
+            promote_to_overlay(&i.app_id, i.pid, Some(ap));
+        }
+        (false, Some(_)) => {
+            demote_from_overlay();
+        }
+        // Already in the right state (engaged-and-wanted / hidden-and-not).
+        _ => {}
+    }
+}
+
+/// Clear editor focus if it belongs to `pid`, mirroring Android's `finishInput()`
+/// when a window loses focus: a backgrounded app's editor focus must not linger
+/// (that stale pointer is what made the IME route to / yank the wrong app).
+/// Notifies the active IME so it drops its composing state. Caller reconciles.
+fn drop_editor_focus_of(pid: i32) {
+    if state::current_editor_focus().map(|f| f.pid) != Some(pid) {
+        return;
+    }
+    state::set_editor_focus(None);
+    if let Some(i) = state::current_active_ime() {
+        let host_sock = format!("/data/local/tmp/wart-host-{}.sock", i.pid);
+        if let Err(e) = deliver_to_host(&host_sock, "editor-detached\n") {
+            log::debug!("arbiter: focus-teardown editor-detached → {host_sock} failed: {e:#}");
+        }
+    }
+    // Restore the editor app's full layout: the keyboard is gone, so clear the
+    // bottom inset it reserved. Without this the app keeps its shrunk layout and
+    // shows a BLANK GAP where the keyboard was (task 68 inset never cleared on
+    // the focus-follows-foreground path). Mirrors `cmd_detach_editor`.
+    let editor_sock = format!("/data/local/tmp/wart-host-{pid}.sock");
+    if let Err(e) = deliver_to_host(&editor_sock, "keyboard-inset 0\n") {
+        log::debug!("arbiter: focus-teardown keyboard-inset(0) → {editor_sock} failed: {e:#}");
+    }
+    log::info!("arbiter: dropped editor focus of pid={pid} (lost foreground)");
 }
 
 /// Demote whoever is currently foreground (if anyone) and promote the
 /// given (app_id, pid) to foreground. Idempotent if the target is
 /// already foreground.
 fn promote_to_foreground(app_id: &str, pid: i32) {
-    // set_foreground returns the previously-foreground (id, pid)
-    // pair if there was one different from this app_id. The state
-    // module has updated the fg slot before returning.
+    // If an overlay split is engaged, tear it down FIRST so the `foreground`
+    // slot (which points at the IME while engaged) is normalised back to a real
+    // app before we change it. The correct overlay state for the new foreground
+    // is re-derived by `reconcile_overlay()` at the end.
+    if state::current_overlay().is_some() {
+        demote_from_overlay();
+    }
+
+    // set_foreground returns the previously-foreground (id, pid) pair if there
+    // was one different from this app_id.
     if let Some((prev_id, prev_pid)) = state::set_foreground(Some(app_id)) {
-        log::info!(
-            "arbiter: demoting prior foreground app={prev_id} pid={prev_pid}"
-        );
+        log::info!("arbiter: demoting prior foreground app={prev_id} pid={prev_pid}");
         send_role_signal(prev_pid, /*foreground=*/ false);
         write_oom_score(prev_pid, OOM_BG);
+        // Focus-follows-foreground (Android `finishInput()`): the app losing the
+        // foreground also loses any editor focus, so a stale focus can never make
+        // the IME route to / yank a backgrounded app.
+        drop_editor_focus_of(prev_pid);
     }
     log::info!("arbiter: promoting foreground app={app_id} pid={pid}");
     send_role_signal(pid, /*foreground=*/ true);
     write_oom_score(pid, OOM_FG);
+    send_present(pid); // visible now → force a fresh frame (don't rely on the role signal alone)
+
+    // Derive IME-overlay visibility for the new foreground. Switching apps thus
+    // hides the keyboard (the new app has no editor focus yet) — matching
+    // Android — and a focused field re-shows it via `cmd_attach_editor`.
+    reconcile_overlay();
 }
 
 /// Task 57 — bring the designated home app to the foreground, launching
@@ -1234,10 +1326,12 @@ fn cmd_cycle_task(stream: &mut UnixStream) -> Result<()> {
         writeln!(stream, "OK cycle-task noop ({} switchable app(s))", apps.len())?;
         return Ok(());
     }
-    let cur = state::current_foreground();
-    let idx = cur
-        .as_ref()
-        .and_then(|c| apps.iter().position(|s| &s.app_id == c))
+    // Current position = the VISIBLE app (the behind-app when the IME overlay is
+    // engaged; the `foreground` slot points at the IME then, which would be
+    // filtered out as chrome and wedge the ring). `active_app_pid` resolves it.
+    let cur_pid = active_app_pid();
+    let idx = cur_pid
+        .and_then(|p| apps.iter().position(|s| s.pid == p))
         .unwrap_or(usize::MAX); // not found → start so (idx+1)%n == 0
     let next = &apps[idx.wrapping_add(1) % apps.len()];
     promote_to_foreground(&next.app_id, next.pid);

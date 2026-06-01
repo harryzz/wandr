@@ -97,6 +97,14 @@ pub enum InboundEvent {
     /// guest re-lays-out its bottom content above the keyboard. `0` = keyboard
     /// hidden → restore the base inset.
     KeyboardInset { px: u32 },
+
+    /// Task 71 (WMS-authority step) — the arbiter made this surface visible
+    /// (newly foregrounded, or an overlay re-engaged) and explicitly asks for a
+    /// fresh frame. Decouples "you are visible, repaint" from the async role
+    /// signal: relying on the SIGUSR2 role flip alone left a re-shown surface
+    /// present-but-empty (the on-demand render gate had nothing to invalidate).
+    /// The drain already marks the frame dirty, which forces the repaint.
+    Present,
 }
 
 fn queue() -> &'static Mutex<VecDeque<InboundEvent>> {
@@ -230,6 +238,12 @@ fn parse_and_queue(line: &str) {
                 }
             },
             Err(_) => log::warn!("ime-inbound: bad keyboard-inset px in {line:?}"),
+        }
+    } else if line == "present" {
+        // Task 71 — arbiter-driven "you are visible, repaint now". The drain
+        // marks the frame dirty, forcing a full repaint into the shown surface.
+        if let Ok(mut q) = queue().lock() {
+            q.push_back(InboundEvent::Present);
         }
     } else if !line.is_empty() {
         // Unknown verb — log so we can spot a protocol-skew between
