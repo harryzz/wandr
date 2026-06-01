@@ -187,8 +187,9 @@ pub fn drop_editor_focus_of(ctx: &mut Ctx, pid: i32) {
     if let Some((ime_pid, _)) = active_ime(ctx.store) {
         ctx.deliver_to_host(ime_pid, "editor-detached\n".to_string());
     }
-    // Keyboard gone for this editor → WM pushes geometry with keyboard_px=0.
-    ctx.emit(Event::EditorFocusChanged { pid: None });
+    // Keyboard gone for this (now-backgrounded) editor → WM pushes geometry with
+    // keyboard_px=0 to `pid` (NOT the visible app — this editor is being demoted).
+    ctx.emit(Event::EditorFocusChanged { editor: pid, focused: false });
     log::info!("arbiter: dropped editor focus of pid={pid} (lost foreground)");
 }
 
@@ -348,8 +349,12 @@ impl ShellModule {
         if let Some((ime_pid, _)) = &ime {
             if *ime_pid != pid {
                 let h = ctx.store.ime_height();
+                // ImeHeightChanged carries the keyboard-inset push to this editor
+                // (the WM reads the focused editor from the Store, set just above);
+                // EditorFocusChanged{focused:true} is the focus-gain notice (the WM
+                // no-ops it to avoid double-pushing — the height event does it).
                 ctx.emit(Event::ImeHeightChanged { id: PRIMARY_DISPLAY, px: h });
-                ctx.emit(Event::EditorFocusChanged { pid: Some(pid) });
+                ctx.emit(Event::EditorFocusChanged { editor: pid, focused: true });
             }
         }
 
@@ -396,7 +401,7 @@ impl ShellModule {
             false
         };
         // Keyboard gone → WM pushes geometry keyboard_px=0 to this editor host.
-        ctx.emit(Event::EditorFocusChanged { pid: None });
+        ctx.emit(Event::EditorFocusChanged { editor: pid, focused: false });
         log::info!(
             "arbiter: detach-editor pid={pid} → route to {ime_dest} auto-overlay-clear={cleared} \
              routed={routed}"

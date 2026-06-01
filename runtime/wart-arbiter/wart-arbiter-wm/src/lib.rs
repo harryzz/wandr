@@ -61,24 +61,24 @@ fn device_rotation_to_orient(rot: u32) -> u32 {
 }
 
 /// WindowManager module — owns per-display geometry policy. The authoritative
-/// geometry lives in the core [`Store`]; the module additionally holds the
-/// *targeting* caches (which surface is the focused editor, which is the
-/// foreground app) that it learns purely from bus events — never from another
-/// module's state (the rule that keeps additions non-invasive).
+/// geometry AND the targeting state (focused editor, visible app) both live in
+/// the core [`Store`] now (task 74 E): the module reads `ime_editor()` /
+/// `visible_app()` for the no-payload re-push handlers (ImeHeight / Orientation)
+/// and uses the pid carried on the focus/foreground events otherwise — no
+/// private targeting caches that could drift from the model.
 pub struct WmModule {
-    /// The surface the soft keyboard currently occludes (the focused editor),
-    /// or `None`. Fed by `EditorFocusChanged`; the keyboard re-push on
-    /// `ImeHeightChanged` targets it.
-    focused_editor: Option<i32>,
-    /// The foreground app surface, fed by `ForegroundChanged`. Receives a
-    /// fresh geometry push once the arbiter authors insets / orientation.
-    foreground_pid: Option<i32>,
     /// Authored chrome insets in px, or `None` ⇒ emit [`INSET_HOST_OWNED`]
     /// (M1). Read once from the arbiter's own env (the same WART_INSET_*
     /// config the shell hands the hosts) so there is ONE source of the chrome
     /// heights, named where the policy lives.
     inset_top: Option<u32>,
     inset_bottom: Option<u32>,
+}
+
+/// The focused editor's pid for a display, read from the Store's resource-focus
+/// (the single source) — used by the no-payload re-push handlers.
+fn focused_editor(store: &Store, id: DisplayId) -> Option<i32> {
+    store.display(id).and_then(|d| d.ime_editor().map(|(p, _)| p))
 }
 
 impl Default for WmModule {
@@ -109,8 +109,6 @@ impl WmModule {
             );
         }
         Self {
-            focused_editor: None,
-            foreground_pid: None,
             inset_top,
             inset_bottom,
         }
@@ -183,42 +181,37 @@ impl ArbiterModule for WmModule {
     fn on_event(&mut self, ev: &Event, ctx: &mut Ctx) {
         match ev {
             // The soft keyboard's intrinsic height changed (task 68 seam). Record
-            // it; if an editor is focused, re-push so its bottom inset tracks a
-            // live keyboard resize. Replaces the legacy `keyboard-inset` re-push.
+            // it; if an editor is focused (read from the Store — no payload), re-
+            // push so its bottom inset tracks a live keyboard resize. This is also
+            // the push that engages the inset on attach (the shell sets the editor
+            // in the Store, then co-emits this event — see EditorFocusChanged).
             Event::ImeHeightChanged { id, px } => {
                 ctx.store.geometry_mut(*id).keyboard_px = *px;
-                if let Some(ed) = self.focused_editor {
+                if let Some(ed) = focused_editor(ctx.store, *id) {
                     let line = self.geometry_line(ctx.store, *id, *px);
                     ctx.deliver_to_host(ed, line);
                 }
             }
 
-            // Editor focus engaged/disengaged for the keyboard. On engage, the
-            // keyboard now occludes this editor by its full height; on disengage,
-            // restore the editor's inset (keyboard_px = 0). Replaces the legacy
-            // `keyboard-inset <h>` / `keyboard-inset 0` pushes.
-            Event::EditorFocusChanged { pid } => match pid {
-                Some(ed) => {
-                    self.focused_editor = Some(*ed);
-                    let kb = Self::keyboard_px(ctx.store, PRIMARY_DISPLAY);
-                    let line = self.geometry_line(ctx.store, PRIMARY_DISPLAY, kb);
-                    ctx.deliver_to_host(*ed, line);
+            // Editor keyboard focus changed (carries the affected pid). On gain,
+            // the co-emitted `ImeHeightChanged` already pushed the inset to this
+            // editor (read from the Store), so this is a no-op — pushing here too
+            // would double on attach. On loss, restore the editor's inset
+            // (keyboard_px = 0); we target the carried pid, which on a focus-
+            // follows-foreground blur is the *backgrounded* editor, not the
+            // visible app.
+            Event::EditorFocusChanged { editor, focused } => {
+                if !*focused {
+                    let line = self.geometry_line(ctx.store, PRIMARY_DISPLAY, 0);
+                    ctx.deliver_to_host(*editor, line);
                 }
-                None => {
-                    if let Some(prev) = self.focused_editor.take() {
-                        let line = self.geometry_line(ctx.store, PRIMARY_DISPLAY, 0);
-                        ctx.deliver_to_host(prev, line);
-                    }
-                }
-            },
+            }
 
-            // A new app came forward. Once the arbiter authors any surface policy
-            // (insets in M2, orientation in M3) it pushes fresh geometry to the
-            // newly-visible app — mirroring the task-71 present seam. In M1 there
-            // is no such policy, so this is a no-op (keeps the plain app-switch
-            // byte-equivalent: no extra on_resize).
+            // A new app came forward (carries the pid). Once the arbiter authors
+            // any surface policy (insets in M2, orientation in M3) it pushes fresh
+            // geometry to the newly-visible app. In M1 there is no such policy, so
+            // this is a no-op (keeps the plain app-switch byte-equivalent).
             Event::ForegroundChanged { pid, .. } => {
-                self.foreground_pid = *pid;
                 if let Some(fg) = *pid {
                     if self.has_surface_policy(ctx.store, PRIMARY_DISPLAY) {
                         // The newly-foregrounded app has no editor focus yet, so
@@ -230,19 +223,20 @@ impl ArbiterModule for WmModule {
             }
 
             // The arbiter decided a new orientation (from report-orientation).
-            // Apply it to the store and push to the surfaces we reach: the
-            // foreground app, and the focused editor (with its keyboard inset).
-            // Chrome/overlay surfaces aren't arbiter-tracked here; they keep
-            // their existing sensor + lock-file path this increment.
+            // Apply it to the store and push to the surfaces we reach — read both
+            // targets from the Store (no payload): the focused editor (with its
+            // keyboard inset) and the visible app. Chrome/overlay surfaces aren't
+            // arbiter-tracked here; they keep their sensor + lock-file path.
             Event::OrientationChanged { id, orient } => {
                 ctx.store.geometry_mut(*id).orientation = *orient;
-                if let Some(ed) = self.focused_editor {
+                let editor = focused_editor(ctx.store, *id);
+                if let Some(ed) = editor {
                     let kb = Self::keyboard_px(ctx.store, *id);
                     let line = self.geometry_line(ctx.store, *id, kb);
                     ctx.deliver_to_host(ed, line);
                 }
-                if let Some(fg) = self.foreground_pid {
-                    if Some(fg) != self.focused_editor {
+                if let Some(fg) = ctx.store.display(*id).and_then(|d| d.visible_app()) {
+                    if Some(fg) != editor {
                         let line = self.geometry_line(ctx.store, *id, 0);
                         ctx.deliver_to_host(fg, line);
                     }
@@ -262,7 +256,7 @@ impl ArbiterModule for WmModule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wart_arbiter_core::{Effect, Registry};
+    use wart_arbiter_core::{EditorInfo, Effect, Registry, Role};
 
     /// Shorthand for the `HostLine` effect the WM module emits.
     fn hl(pid: i32, line: &str) -> Effect {
@@ -279,20 +273,47 @@ mod tests {
         (reg, Store::new())
     }
 
+    /// Model an editor focusing: the shell sets the resource-focus in the Store
+    /// (the WM's single source for targeting), then co-emits ImeHeightChanged.
+    fn focus_editor(store: &mut Store, pid: i32) {
+        store.display_mut(PRIMARY_DISPLAY).put_surface(pid, "app", Role::Foreground);
+        store
+            .display_mut(PRIMARY_DISPLAY)
+            .set_ime_editor(Some((pid, EditorInfo::default())));
+    }
+
     #[test]
     fn m1_keyboard_show_then_resize_then_hide() {
         let (mut reg, mut store) = reg_with_wm();
-        // Keyboard intrinsic height known (the IME reported 1200).
+        // No editor focused yet (Store has none) → height change pushes nothing.
         let p = reg.dispatch_event(Event::ImeHeightChanged { id: PRIMARY_DISPLAY, px: 1200 }, &mut store);
         assert!(p.is_empty(), "no editor focused yet → no push");
-        // Editor focuses → keyboard occludes it by full height.
-        let p = reg.dispatch_event(Event::EditorFocusChanged { pid: Some(99) }, &mut store);
+        // Editor focuses: shell sets the Store, co-emits ImeHeightChanged (push)
+        // + EditorFocusChanged{focused:true} (no-op — height event did the push).
+        focus_editor(&mut store, 99);
+        let p = reg.dispatch_event(Event::ImeHeightChanged { id: PRIMARY_DISPLAY, px: 1200 }, &mut store);
         assert_eq!(p, vec![hl(99, "geometry 65535 65535 1200 255\n")]);
-        // Keyboard resizes while shown → re-push to the focused editor.
+        let p = reg.dispatch_event(Event::EditorFocusChanged { editor: 99, focused: true }, &mut store);
+        assert!(p.is_empty(), "focus-gain is a no-op (ImeHeightChanged pushed)");
+        // Keyboard resizes while shown → re-push to the focused editor (Store).
         let p = reg.dispatch_event(Event::ImeHeightChanged { id: PRIMARY_DISPLAY, px: 800 }, &mut store);
         assert_eq!(p, vec![hl(99, "geometry 65535 65535 800 255\n")]);
-        // Editor blurs → restore its inset (keyboard_px 0).
-        let p = reg.dispatch_event(Event::EditorFocusChanged { pid: None }, &mut store);
+        // Editor blurs → restore its inset (keyboard_px 0), targeting the carried
+        // pid. (Shell clears the Store focus; the WM doesn't read it here.)
+        store.display_mut(PRIMARY_DISPLAY).set_ime_editor(None);
+        let p = reg.dispatch_event(Event::EditorFocusChanged { editor: 99, focused: false }, &mut store);
+        assert_eq!(p, vec![hl(99, "geometry 65535 65535 0 255\n")]);
+    }
+
+    #[test]
+    fn blur_targets_carried_pid_not_visible_app() {
+        // Focus-follows-foreground: editor 99 had the keyboard, app 5 is now
+        // visible. The blur push must restore 99 (the backgrounded editor), NOT
+        // the visible app 5 — the regression the carried pid prevents.
+        let (mut reg, mut store) = reg_with_wm();
+        store.display_mut(PRIMARY_DISPLAY).put_surface(5, "vis", Role::Foreground);
+        // editor 99 no longer focused in the Store (already cleared on demote).
+        let p = reg.dispatch_event(Event::EditorFocusChanged { editor: 99, focused: false }, &mut store);
         assert_eq!(p, vec![hl(99, "geometry 65535 65535 0 255\n")]);
     }
 
@@ -309,16 +330,16 @@ mod tests {
     #[test]
     fn m3_orientation_decides_and_pushes() {
         let (mut reg, mut store) = reg_with_wm();
-        // Foreground app + focused editor known.
-        reg.dispatch_event(Event::ForegroundChanged { app_id: Some("a".into()), pid: Some(5) }, &mut store);
+        // Foreground app + focused editor live in the Store (same pid here).
+        focus_editor(&mut store, 5);
         reg.dispatch_event(Event::ImeHeightChanged { id: PRIMARY_DISPLAY, px: 1000 }, &mut store);
-        reg.dispatch_event(Event::EditorFocusChanged { pid: Some(5) }, &mut store);
         // Device rotates 90° (raw=1 → dihedral 4). report-orientation verb.
         let (reply, pushes) = reg
             .dispatch_command("report-orientation", "1", &mut store)
             .expect("WM owns report-orientation");
         assert_eq!(reply.render(), "OK orientation raw=1 orient=4");
-        // Editor (== foreground) gets geometry with orient 4 + its keyboard inset.
+        // Editor (== visible app) gets geometry with orient 4 + its keyboard inset;
+        // the visible-app push is suppressed because it IS the editor.
         assert_eq!(pushes, vec![hl(5, "geometry 65535 65535 1000 4\n")]);
         assert_eq!(store.geometry(PRIMARY_DISPLAY).unwrap().orientation, 4);
     }

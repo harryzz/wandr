@@ -170,8 +170,12 @@ pub enum Event {
     ImeHeightChanged { id: DisplayId, px: u32 },
     /// The foreground app changed. Emitted from the legacy foreground cascade.
     ForegroundChanged { app_id: Option<String>, pid: Option<i32> },
-    /// The focused editor changed (pid; `None` = no focus).
-    EditorFocusChanged { pid: Option<i32> },
+    /// An editor's keyboard focus changed. `editor` is always the affected pid
+    /// (so a blur push can target the editor that lost focus even after the
+    /// resource-focus is cleared in the Store — the focus-follows-foreground
+    /// blur targets the *backgrounded* editor, not the visible app). `focused`
+    /// is true on gain, false on loss.
+    EditorFocusChanged { editor: i32, focused: bool },
     /// A module recomputed a display's geometry (post-recompute notice).
     GeometryRecomputed { id: DisplayId },
     /// A tracked surface's process exited. Emitted by the binary's death
