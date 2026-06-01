@@ -379,6 +379,10 @@ fn handle_client(mut stream: UnixStream) -> Result<()> {
         log::warn!("wart-arbiter: state save failed: {e:#}");
     }
 
+    // Task 74 Step A — rebuild the shadow surface model + assert it agrees with
+    // the legacy `active_app_pid()`. Pure observation; drives nothing yet.
+    mirror_and_check();
+
     result
 }
 
@@ -800,8 +804,8 @@ fn dispatch_module(verb: &str, rest: &str, stream: &mut UnixStream) -> Result<()
         reg.dispatch_command(verb, rest, &mut store)
     };
     match outcome {
-        Some((reply, pushes)) => {
-            flush_pushes(pushes);
+        Some((reply, effects)) => {
+            execute_effects(effects);
             writeln!(stream, "{}", reply.render())?;
         }
         None => {
@@ -814,27 +818,147 @@ fn dispatch_module(verb: &str, rest: &str, stream: &mut UnixStream) -> Result<()
     Ok(())
 }
 
-/// Inject an event from a legacy handler onto the bus and flush whatever host
-/// pushes the reacting modules produced. The seam by which the legacy state
-/// machine drives the WM geometry module. Caller holds `arbiter_lock`.
+/// Inject an event from a legacy handler onto the bus and run whatever effects
+/// the reacting modules requested. The seam by which the legacy state machine
+/// drives the modules. Caller holds `arbiter_lock`.
 fn bus_emit(ev: Event) {
-    let pushes = {
+    let effects = {
         let mut reg = registry().lock().unwrap_or_else(|e| e.into_inner());
         let mut store = core_store().lock().unwrap_or_else(|e| e.into_inner());
         reg.dispatch_event(ev, &mut store)
     };
-    flush_pushes(pushes);
+    execute_effects(effects);
 }
 
-/// Deliver each `(pid, line)` push to that host's control socket. Shared by
-/// `dispatch_module` + `bus_emit`. Fire-and-forget (a dead/just-forked host
-/// simply misses it), matching the existing per-host push semantics.
-fn flush_pushes(pushes: Vec<(i32, String)>) {
-    for (pid, line) in pushes {
-        let sock = host_sock_path(pid);
-        if let Err(e) = deliver_to_host(&sock, &line) {
-            log::debug!("arbiter: geometry/module push → {sock} failed: {e:#}");
+/// The single mechanism executor (task 74) — the only place that performs the
+/// raw OS work a module's [`Effect`] declares. Runs effects in emission order.
+/// Shared by `dispatch_module` + `bus_emit`. Caller holds `arbiter_lock`.
+fn execute_effects(effects: Vec<wart_arbiter_core::Effect>) {
+    use wart_arbiter_core::Effect;
+    for eff in effects {
+        match eff {
+            Effect::HostLine { pid, line } => {
+                let sock = host_sock_path(pid);
+                if let Err(e) = deliver_to_host(&sock, &line) {
+                    log::debug!("arbiter: host push → {sock} failed: {e:#}");
+                }
+            }
+            Effect::SetRole { pid, role } => apply_role(pid, role),
+            Effect::Kill { pid } => {
+                if let Err(e) = zygote_client::kill(pid, false) {
+                    log::warn!("arbiter: Kill effect pid={pid} failed: {e:#}");
+                }
+            }
+            Effect::Persist => {
+                if let Err(e) = state::save_to(Path::new(ARBITER_STATE_PATH)) {
+                    log::warn!("arbiter: Persist effect failed: {e:#}");
+                }
+            }
+            Effect::Launch { app_id, kind } => {
+                // Wired in Step C (the launched pid must come back into the
+                // surface set). No module emits Launch in Step A.
+                log::warn!(
+                    "arbiter: Launch effect (app={app_id} kind={kind:?}) not wired until Step C"
+                );
+            }
         }
+    }
+}
+
+/// Map a surface [`Role`] to the host mechanism (the ONLY place Role→OS lives).
+/// Modules emit `Effect::SetRole`; this performs the signal + OOM-score +
+/// present, keeping `unsafe libc::kill` / `/proc` writes out of the modules.
+fn apply_role(pid: i32, role: wart_arbiter_core::Role) {
+    use wart_arbiter_core::Role;
+    match role {
+        Role::Foreground | Role::Overlay => {
+            send_role_signal(pid, /*foreground=*/ true);
+            write_oom_score(pid, OOM_FG);
+            send_present(pid);
+        }
+        Role::OverlayBehind => {
+            send_overlay_behind_signal(pid);
+            write_oom_score(pid, OOM_FG);
+        }
+        Role::Background => {
+            send_role_signal(pid, /*foreground=*/ false);
+            write_oom_score(pid, OOM_BG);
+        }
+        Role::Chrome | Role::Headless => {}
+    }
+}
+
+// ─── Step-A surface-model mirror (task 74) ────────────────────────────
+//
+// The new core surface/role model is built ALONGSIDE the legacy singletons
+// and kept as write-only shadow state: after every command, rebuild it
+// wholesale from the legacy state, then assert the model's `visible_app()`
+// derivation agrees with the legacy `active_app_pid()`. This proves the
+// schema tracks reality before any reads flip to it (Step B). One rebuild
+// point (not scattered mirror calls) eliminates drift risk.
+
+/// Reconstruct the primary display's surface stack + focus from the legacy
+/// singletons. Returns the model's `visible_app()` for the agreement check.
+/// Leaves geometry (task-73 slice) untouched.
+fn rebuild_surface_model() -> Option<i32> {
+    use wart_arbiter_core::{EditorInfo, Role};
+    let mut store = core_store().lock().unwrap_or_else(|e| e.into_inner());
+    let ds = store.display_mut(PRIMARY_DISPLAY);
+    ds.clear();
+    let overlay = state::current_overlay();
+    let fg = state::current_foreground();
+    for app in state::snapshot() {
+        let role = if let Some(ov) = &overlay {
+            if app.pid == ov.overlay_pid {
+                Role::Overlay
+            } else if app.pid == ov.behind_pid {
+                Role::OverlayBehind
+            } else {
+                Role::Background
+            }
+        } else if fg.as_deref() == Some(app.app_id.as_str()) {
+            Role::Foreground
+        } else {
+            Role::Background
+        };
+        ds.put_surface(app.pid, app.app_id, role);
+    }
+    ds.active_ime = state::current_active_ime().map(|i| i.pid);
+    ds.set_ime_editor(state::current_editor_focus().map(|e| {
+        (
+            e.pid,
+            EditorInfo {
+                input_type: e.editor_info.input_type,
+                hint: e.editor_info.hint,
+                initial_text: e.editor_info.initial_text,
+                initial_selection_start: e.editor_info.initial_selection_start,
+                initial_selection_end: e.editor_info.initial_selection_end,
+            },
+        )
+    }));
+    ds.visible_app()
+}
+
+/// Rebuild the shadow model + log whether `visible_app()` agrees with the
+/// legacy `active_app_pid()`. The canary for Step A: a MODEL-DRIFT line means
+/// the schema doesn't yet track reality and reads must not be flipped. On
+/// agreement, log the visible-app value only when it *changes* — low-spam
+/// positive confirmation that the model is tracking (not spuriously both-None).
+fn mirror_and_check() {
+    let model = rebuild_surface_model();
+    let legacy = legacy_active_app_pid();
+    if model != legacy {
+        log::warn!(
+            "arbiter: MODEL-DRIFT visible_app()={model:?} != legacy active_app_pid()={legacy:?}"
+        );
+        return;
+    }
+    static LAST: OnceLock<Mutex<Option<Option<i32>>>> = OnceLock::new();
+    let cell = LAST.get_or_init(|| Mutex::new(None));
+    let mut last = cell.lock().unwrap_or_else(|e| e.into_inner());
+    if *last != Some(model) {
+        log::info!("arbiter: surface-model OK — visible_app={model:?}");
+        *last = Some(model);
     }
 }
 
@@ -918,6 +1042,9 @@ fn handle_child_exit(pid: i32, detail: &str) {
     if let Err(e) = state::save_to(Path::new(ARBITER_STATE_PATH)) {
         log::warn!("arbiter: on_child_exit state save failed: {e:#}");
     }
+    // Task 74 Step A — keep the shadow model + agreement check in sync on the
+    // death path too (an exit changes foreground/overlay just like a command).
+    mirror_and_check();
     log::info!("arbiter: on_child_exit pid={pid} app={} — cleaned up", app.app_id);
 }
 
@@ -1111,11 +1238,19 @@ fn send_present(pid: i32) {
     }
 }
 
-/// The pid of the real app the user is currently looking at — the behind-app
-/// when an overlay split is engaged (the `foreground` slot points at the IME
-/// then), otherwise the foreground app. Used so overlay/cycle logic always
-/// reasons about the *visible app*, never the IME overlay.
+/// The pid of the real app the user is currently looking at. Task 74 Step B —
+/// this is now **derived from the surface/role model** (`visible_app()`), which
+/// dissolves the foreground-points-at-IME knot. The model's *data* is still
+/// mirrored from the legacy singletons (rebuilt here on read) until writes move
+/// to the model in Steps C/D; the *derivation* is the model's.
 fn active_app_pid() -> Option<i32> {
+    rebuild_surface_model()
+}
+
+/// The legacy formula (overlay behind-pid, else foreground) — kept private as
+/// the device canary: `mirror_and_check` asserts the model derivation agrees
+/// with it. Deleted in Step D with the rest of the legacy state.
+fn legacy_active_app_pid() -> Option<i32> {
     if let Some(ov) = state::current_overlay() {
         return Some(ov.behind_pid);
     }
@@ -1124,35 +1259,48 @@ fn active_app_pid() -> Option<i32> {
         .map(|s| s.pid)
 }
 
-/// THE single authority for IME-overlay visibility (the design-note model:
-/// overlay visibility is *derived state*, reconciled in one place — not promoted
-/// / demoted imperatively from every transition). Mirrors Android's hierarchy:
-/// editor focus is only "active" if it belongs to the app currently on screen,
-/// and the IME window is shown iff such a focus exists.
-///
-/// Desired = there is an active IME AND a focused editor AND that editor belongs
-/// to the visible app AND the IME isn't that same app. Then it makes reality
-/// match: engage the split if desired & not engaged, tear it down if engaged &
-/// not desired. Idempotent — safe to call after ANY fg/focus/ime change.
-fn reconcile_overlay() {
+/// The legacy overlay-desired formula — kept private as the reconcile canary.
+fn legacy_overlay_desired() -> bool {
     let ime = state::current_active_ime();
     let focus = state::current_editor_focus();
-    let app_pid = active_app_pid();
-    let desired = match (&ime, &focus, app_pid) {
-        (Some(i), Some(f), Some(ap)) => f.pid == ap && i.pid != ap,
-        _ => false,
+    let app_pid = legacy_active_app_pid();
+    matches!(
+        (&ime, &focus, app_pid),
+        (Some(i), Some(f), Some(ap)) if f.pid == ap && i.pid != ap
+    )
+}
+
+/// THE single authority for IME-overlay visibility — overlay visibility is
+/// *derived state*, reconciled in one place. Task 74 Step B: the *decision*
+/// (`desired`) now comes from the model's [`overlay_desired`] derivation; the
+/// imperative promote/demote *mechanism* is unchanged. Idempotent — safe after
+/// ANY fg/focus/ime change.
+fn reconcile_overlay() {
+    // Make the model current + read its decision (the IME pid to show, if any).
+    let visible = rebuild_surface_model();
+    let desired_ime = {
+        let store = core_store().lock().unwrap_or_else(|e| e.into_inner());
+        store.display(PRIMARY_DISPLAY).and_then(|d| d.overlay_desired())
     };
-    match (desired, state::current_overlay()) {
-        (true, None) => {
-            // Engage over the visible app (== focus.pid when desired).
-            let i = ime.expect("desired implies ime");
-            let ap = app_pid.expect("desired implies app_pid");
-            promote_to_overlay(&i.app_id, i.pid, Some(ap));
+    // Transitional canary (runs on device): the model decision must match the
+    // legacy formula. Retired with the legacy state in Step D.
+    if desired_ime.is_some() != legacy_overlay_desired() {
+        log::warn!(
+            "arbiter: OVERLAY-DESIRED-DRIFT model={desired_ime:?} legacy={}",
+            legacy_overlay_desired()
+        );
+    }
+    match (desired_ime, state::current_overlay()) {
+        (Some(_), None) => {
+            // Engage over the visible app. The IME app_id/pid still come from
+            // the legacy active-IME pointer (moves to the model in Step C).
+            let i = state::current_active_ime().expect("desired implies ime");
+            promote_to_overlay(&i.app_id, i.pid, visible);
         }
-        (false, Some(_)) => {
+        (None, Some(_)) => {
             demote_from_overlay();
         }
-        // Already in the right state (engaged-and-wanted / hidden-and-not).
+        // Already in the right state.
         _ => {}
     }
 }

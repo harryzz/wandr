@@ -24,6 +24,9 @@
 
 use std::collections::HashMap;
 
+mod surface;
+pub use surface::{DisplayState, EditorInfo, ResourceFocus, ResourceKind, Role, Surface};
+
 /// Identifies one physical display. `0` is the primary panel. Keyed
 /// per-display from day one — "one panel" is a hardcode the doc calls out
 /// (DisplayManager is a foreseen responsibility), so all geometry hangs off
@@ -88,13 +91,13 @@ impl Default for DisplayGeometry {
     }
 }
 
-/// The single source of truth. In this increment it holds **only** the new
-/// per-display geometry; the legacy role/overlay/IME state stays in the
-/// binary's `state.rs` and migrates into the Store only when its own module
-/// is built (strangler: migrate when changing, not before).
+/// The single source of truth. Holds the per-display [`DisplayState`] (geometry
+/// policy + the surface/role stack + resource-focus). The app registry +
+/// home-app still live in the binary's `state.rs` and migrate here in a later
+/// strangler step (registry isn't display-scoped; surfaces reference its pids).
 #[derive(Debug, Default)]
 pub struct Store {
-    displays: HashMap<DisplayId, DisplayGeometry>,
+    displays: HashMap<DisplayId, DisplayState>,
 }
 
 impl Store {
@@ -102,15 +105,25 @@ impl Store {
         Self::default()
     }
 
-    /// Read a display's geometry, if it has been touched.
-    pub fn display(&self, id: DisplayId) -> Option<&DisplayGeometry> {
+    /// Read a display's full state (geometry + surfaces + focus), if touched.
+    pub fn display(&self, id: DisplayId) -> Option<&DisplayState> {
         self.displays.get(&id)
     }
 
-    /// Mutable access, inserting a [`DisplayGeometry::default`] the first time
-    /// a display is referenced (`get_or_default`).
-    pub fn display_mut(&mut self, id: DisplayId) -> &mut DisplayGeometry {
+    /// Mutable access, inserting a [`DisplayState::default`] the first time a
+    /// display is referenced (`get_or_default`).
+    pub fn display_mut(&mut self, id: DisplayId) -> &mut DisplayState {
         self.displays.entry(id).or_default()
+    }
+
+    /// Read a display's geometry policy, if touched.
+    pub fn geometry(&self, id: DisplayId) -> Option<&DisplayGeometry> {
+        self.displays.get(&id).map(|d| &d.geometry)
+    }
+
+    /// Mutable access to a display's geometry policy (`get_or_default`).
+    pub fn geometry_mut(&mut self, id: DisplayId) -> &mut DisplayGeometry {
+        &mut self.displays.entry(id).or_default().geometry
     }
 
     /// Every display id currently in the store.
@@ -141,6 +154,9 @@ pub enum Event {
     EditorFocusChanged { pid: Option<i32> },
     /// A module recomputed a display's geometry (post-recompute notice).
     GeometryRecomputed { id: DisplayId },
+    /// A tracked surface's process exited. Emitted by the binary's death
+    /// watcher so a module can prune the surface + re-reconcile (task 74).
+    SurfaceRemoved { pid: i32 },
 }
 
 /// A command's outcome. The binary renders this to one wire line; `Ok`/`Err`
@@ -167,20 +183,53 @@ impl Reply {
     }
 }
 
+/// How a process is launched (mirrors the binary's launch kinds). Carried on
+/// [`Effect::Launch`] so a module can request a launch without touching the
+/// zygote itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LaunchKind {
+    Gui,
+    GuiOverlay,
+    Headless,
+}
+
+/// A side-effect a module *requests*; the binary is the only place that
+/// actually performs it (raw signals, `/proc` writes, zygote IPC, sockets,
+/// threads). This generalizes the task-73 "`deliver_to_host` queues a push the
+/// binary flushes" pattern to every mechanism the AMS/IMMS responsibilities
+/// drive. Modules stay pure — they emit `Effect`s; the binary's
+/// `execute_effects` runs them in emission order.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Effect {
+    /// Apply a role to a surface. The binary maps [`Role`] to the matching
+    /// signal, OOM-score, and present push (one effect replaces the scattered
+    /// `send_role_signal`/`write_oom_score`/`send_present` trios).
+    SetRole { pid: i32, role: Role },
+    /// Ask the zygote to launch an app (home-fallback / launch verb).
+    Launch { app_id: String, kind: LaunchKind },
+    /// Ask the zygote to kill a tracked pid.
+    Kill { pid: i32 },
+    /// Persist the durable slice (registry / home / foreground) to disk.
+    Persist,
+    /// A one-line push to a host's control socket (`wart-host-<pid>`). `line`
+    /// must already end with `\n`. (Was the only kind of effect in task 73.)
+    HostLine { pid: i32, line: String },
+}
+
 /// The handle a module uses during a command or event reaction. It exposes
-/// the [`Store`] and two outboxes — emitted events (fanned to every module to
-/// a fixpoint) and host pushes (flushed by the binary after the handler
-/// returns). A fresh `Ctx` is created per `on_command` / `on_event` call; its
-/// outboxes are drained by the [`Registry`].
+/// the [`Store`] and two outboxes — emitted [`Event`]s (fanned to every module
+/// to a fixpoint) and requested [`Effect`]s (run by the binary after the
+/// handler returns). A fresh `Ctx` is created per `on_command` / `on_event`
+/// call; its outboxes are drained by the [`Registry`].
 pub struct Ctx<'a> {
     pub store: &'a mut Store,
     events: Vec<Event>,
-    pushes: Vec<(i32, String)>,
+    effects: Vec<Effect>,
 }
 
 impl<'a> Ctx<'a> {
     fn new(store: &'a mut Store) -> Self {
-        Self { store, events: Vec::new(), pushes: Vec::new() }
+        Self { store, events: Vec::new(), effects: Vec::new() }
     }
 
     /// Emit an event for other modules to react to. Cascaded to a fixpoint by
@@ -189,12 +238,15 @@ impl<'a> Ctx<'a> {
         self.events.push(e);
     }
 
-    /// Queue a one-line push to a host's control socket (`wart-host-<pid>`).
-    /// The binary owns the actual socket I/O; it flushes the queue after the
-    /// handler + its event cascade complete. `line` should already end with
-    /// `\n` per the wire convention.
+    /// Request a side-effect the binary will perform (in emission order).
+    pub fn request(&mut self, eff: Effect) {
+        self.effects.push(eff);
+    }
+
+    /// Queue a one-line push to a host's control socket — sugar for
+    /// [`Effect::HostLine`]. `line` should already end with `\n`.
     pub fn deliver_to_host(&mut self, pid: i32, line: impl Into<String>) {
-        self.pushes.push((pid, line.into()));
+        self.request(Effect::HostLine { pid, line: line.into() });
     }
 }
 
@@ -251,7 +303,7 @@ impl Registry {
     }
 
     /// Dispatch a command to its owning module, then drain the event cascade
-    /// it triggered. Returns the reply + every host push accumulated across
+    /// it triggered. Returns the reply + every [`Effect`] accumulated across
     /// the command and the cascade. `None` if no module owns `verb` (the
     /// binary then falls through to its legacy match).
     pub fn dispatch_command(
@@ -259,33 +311,33 @@ impl Registry {
         verb: &str,
         args: &str,
         store: &mut Store,
-    ) -> Option<(Reply, Vec<(i32, String)>)> {
+    ) -> Option<(Reply, Vec<Effect>)> {
         let idx = *self.verb_index.get(verb)?;
-        let (reply, events, pushes) = {
+        let (reply, events, effects) = {
             let mut ctx = Ctx::new(store);
             let reply = self.modules[idx].on_command(verb, args, &mut ctx);
-            (reply, ctx.events, ctx.pushes)
+            (reply, ctx.events, ctx.effects)
         };
-        let all_pushes = self.drain_cascade(store, events, pushes);
-        Some((reply, all_pushes))
+        let all_effects = self.drain_cascade(store, events, effects);
+        Some((reply, all_effects))
     }
 
     /// Inject an event from outside the module system (a legacy handler that
     /// changed shared state the modules care about) and run the cascade.
-    /// Returns every host push the reacting modules produced.
-    pub fn dispatch_event(&mut self, ev: Event, store: &mut Store) -> Vec<(i32, String)> {
+    /// Returns every [`Effect`] the reacting modules produced.
+    pub fn dispatch_event(&mut self, ev: Event, store: &mut Store) -> Vec<Effect> {
         self.drain_cascade(store, vec![ev], Vec::new())
     }
 
     /// Fan a batch of events to every module's `on_event`, looping over any
     /// events those reactions emit until none remain (fixpoint), accumulating
-    /// all host pushes. Bounded by [`MAX_CASCADE_DEPTH`].
+    /// all effects in emission order. Bounded by [`MAX_CASCADE_DEPTH`].
     fn drain_cascade(
         &mut self,
         store: &mut Store,
         mut events: Vec<Event>,
-        mut pushes: Vec<(i32, String)>,
-    ) -> Vec<(i32, String)> {
+        mut effects: Vec<Effect>,
+    ) -> Vec<Effect> {
         let mut depth = 0usize;
         while !events.is_empty() {
             depth += 1;
@@ -303,11 +355,11 @@ impl Registry {
                     let mut ctx = Ctx::new(store);
                     m.on_event(ev, &mut ctx);
                     events.extend(ctx.events);
-                    pushes.extend(ctx.pushes);
+                    effects.extend(ctx.effects);
                 }
             }
         }
-        pushes
+        effects
     }
 }
 
@@ -343,12 +395,18 @@ mod tests {
         let mut reg = Registry::new();
         reg.register(Box::new(Echo::default()));
         let mut store = Store::new();
-        let (reply, pushes) = reg
+        let (reply, effects) = reg
             .dispatch_command("echo", "hi", &mut store)
             .expect("module owns echo");
         assert_eq!(reply.render(), "OK echoed hi");
-        // The command push, plus the cascade reaction push.
-        assert_eq!(pushes, vec![(42, "echo hi\n".to_string()), (7, "reacted\n".to_string())]);
+        // The command push, plus the cascade reaction push — both as HostLine.
+        assert_eq!(
+            effects,
+            vec![
+                Effect::HostLine { pid: 42, line: "echo hi\n".to_string() },
+                Effect::HostLine { pid: 7, line: "reacted\n".to_string() },
+            ]
+        );
     }
 
     #[test]
@@ -362,10 +420,10 @@ mod tests {
     }
 
     #[test]
-    fn display_store_is_get_or_default() {
+    fn geometry_store_is_get_or_default() {
         let mut store = Store::new();
-        assert!(store.display(PRIMARY_DISPLAY).is_none());
-        store.display_mut(PRIMARY_DISPLAY).inset_top = 96;
-        assert_eq!(store.display(PRIMARY_DISPLAY).unwrap().inset_top, 96);
+        assert!(store.geometry(PRIMARY_DISPLAY).is_none());
+        store.geometry_mut(PRIMARY_DISPLAY).inset_top = 96;
+        assert_eq!(store.geometry(PRIMARY_DISPLAY).unwrap().inset_top, 96);
     }
 }

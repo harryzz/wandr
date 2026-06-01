@@ -133,7 +133,7 @@ impl WmModule {
         self.inset_top.is_some()
             || self.inset_bottom.is_some()
             || store
-                .display(id)
+                .geometry(id)
                 .map(|g| g.orientation != ORIENT_HOST_OWNED)
                 .unwrap_or(false)
     }
@@ -143,7 +143,7 @@ impl WmModule {
     /// the focused editor, `0` otherwise).
     fn geometry_line(&self, store: &Store, id: DisplayId, keyboard_px: u32) -> String {
         let orient = store
-            .display(id)
+            .geometry(id)
             .map(|g| g.orientation)
             .unwrap_or(ORIENT_HOST_OWNED);
         let (top, bottom) = self.inset_fields();
@@ -152,7 +152,7 @@ impl WmModule {
 
     /// The keyboard's current intrinsic height for `id` (px; 0 if unknown).
     fn keyboard_px(store: &Store, id: DisplayId) -> u32 {
-        store.display(id).map(|g| g.keyboard_px).unwrap_or(0)
+        store.geometry(id).map(|g| g.keyboard_px).unwrap_or(0)
     }
 }
 
@@ -186,7 +186,7 @@ impl ArbiterModule for WmModule {
             // it; if an editor is focused, re-push so its bottom inset tracks a
             // live keyboard resize. Replaces the legacy `keyboard-inset` re-push.
             Event::ImeHeightChanged { id, px } => {
-                ctx.store.display_mut(*id).keyboard_px = *px;
+                ctx.store.geometry_mut(*id).keyboard_px = *px;
                 if let Some(ed) = self.focused_editor {
                     let line = self.geometry_line(ctx.store, *id, *px);
                     ctx.deliver_to_host(ed, line);
@@ -235,7 +235,7 @@ impl ArbiterModule for WmModule {
             // Chrome/overlay surfaces aren't arbiter-tracked here; they keep
             // their existing sensor + lock-file path this increment.
             Event::OrientationChanged { id, orient } => {
-                ctx.store.display_mut(*id).orientation = *orient;
+                ctx.store.geometry_mut(*id).orientation = *orient;
                 if let Some(ed) = self.focused_editor {
                     let kb = Self::keyboard_px(ctx.store, *id);
                     let line = self.geometry_line(ctx.store, *id, kb);
@@ -253,7 +253,8 @@ impl ArbiterModule for WmModule {
             Event::DisplayAdded { .. }
             | Event::PanelMeasured { .. }
             | Event::InsetsChanged { .. }
-            | Event::GeometryRecomputed { .. } => {}
+            | Event::GeometryRecomputed { .. }
+            | Event::SurfaceRemoved { .. } => {}
         }
     }
 }
@@ -261,7 +262,12 @@ impl ArbiterModule for WmModule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wart_arbiter_core::Registry;
+    use wart_arbiter_core::{Effect, Registry};
+
+    /// Shorthand for the `HostLine` effect the WM module emits.
+    fn hl(pid: i32, line: &str) -> Effect {
+        Effect::HostLine { pid, line: line.to_string() }
+    }
 
     fn reg_with_wm() -> (Registry, Store) {
         // Force M1 (no env insets) for deterministic tests regardless of the
@@ -281,13 +287,13 @@ mod tests {
         assert!(p.is_empty(), "no editor focused yet → no push");
         // Editor focuses → keyboard occludes it by full height.
         let p = reg.dispatch_event(Event::EditorFocusChanged { pid: Some(99) }, &mut store);
-        assert_eq!(p, vec![(99, "geometry 65535 65535 1200 255\n".to_string())]);
+        assert_eq!(p, vec![hl(99, "geometry 65535 65535 1200 255\n")]);
         // Keyboard resizes while shown → re-push to the focused editor.
         let p = reg.dispatch_event(Event::ImeHeightChanged { id: PRIMARY_DISPLAY, px: 800 }, &mut store);
-        assert_eq!(p, vec![(99, "geometry 65535 65535 800 255\n".to_string())]);
+        assert_eq!(p, vec![hl(99, "geometry 65535 65535 800 255\n")]);
         // Editor blurs → restore its inset (keyboard_px 0).
         let p = reg.dispatch_event(Event::EditorFocusChanged { pid: None }, &mut store);
-        assert_eq!(p, vec![(99, "geometry 65535 65535 0 255\n".to_string())]);
+        assert_eq!(p, vec![hl(99, "geometry 65535 65535 0 255\n")]);
     }
 
     #[test]
@@ -313,8 +319,8 @@ mod tests {
             .expect("WM owns report-orientation");
         assert_eq!(reply.render(), "OK orientation raw=1 orient=4");
         // Editor (== foreground) gets geometry with orient 4 + its keyboard inset.
-        assert_eq!(pushes, vec![(5, "geometry 65535 65535 1000 4\n".to_string())]);
-        assert_eq!(store.display(PRIMARY_DISPLAY).unwrap().orientation, 4);
+        assert_eq!(pushes, vec![hl(5, "geometry 65535 65535 1000 4\n")]);
+        assert_eq!(store.geometry(PRIMARY_DISPLAY).unwrap().orientation, 4);
     }
 
     #[test]
