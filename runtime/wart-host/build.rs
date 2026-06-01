@@ -641,6 +641,11 @@ interface ISurfaceComposer {
             .source(sensorsvc_aidl.join("android/frameworks/sensorservice/IEventQueueCallback.aidl"))
             .source(aaudio_aidl.join("aaudio/IAAudioService.aidl"))
             .source(aaudio_aidl.join("aaudio/IAAudioClient.aidl"))
+            // Call-audio control (Signal VoIP / future Phone app): a positional
+            // stub of IAudioPolicyService keeping only setPhoneState/setForceUse/
+            // getForceUse/getPhoneState real (the 3 enums live in the stubs dir;
+            // AudioMode resolves via audio_common_aidl). See the stub header.
+            .source(stubs.join("android/media/IAudioPolicyService.aidl"))
             .source(surfaceflinger_aidl_main.join("android/gui/ISurfaceComposer.aidl"))
             .source(imm_aidl_dir.join("android/view/IWindowManager.aidl"))
             .source(imm_aidl_dir.join("android/view/IWindowSession.aidl"))

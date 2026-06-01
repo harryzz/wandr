@@ -88,6 +88,27 @@ fn main() {
         return;
     }
 
+    // Call-audio reachability (read-only): does a root caller reach
+    // media.audio_policy? Logs phone state + COMMUNICATION routing.
+    if args.iter().any(|a| a == "--probe-audio-policy") {
+        android_logger::init_once(
+            android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
+        );
+        wasm_android_host::audio_policy_impl::probe();
+        return;
+    }
+
+    // Call-audio routing WRITE probe: setForceUse(COMMUNICATION, speaker|earpiece)
+    // then restore. `--probe-audio-policy-route speaker` | `... earpiece`.
+    if let Some(i) = args.iter().position(|a| a == "--probe-audio-policy-route") {
+        android_logger::init_once(
+            android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
+        );
+        let speaker = args.get(i + 1).map(|s| s == "speaker").unwrap_or(false);
+        wasm_android_host::audio_policy_impl::probe_route(speaker);
+        return;
+    }
+
     if args.iter().any(|a| a == "--probe-ime-showsoft") {
         android_logger::init_once(
             android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
