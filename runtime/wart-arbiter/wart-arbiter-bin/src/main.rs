@@ -136,6 +136,10 @@ fn main() {
                     // for testing): audio-focus-request <pid|app-id> <kind>,
                     // audio-focus-abandon <pid|app-id>, audio-focus-list.
                     | "audio-focus-request" | "audio-focus-abandon" | "audio-focus-list"
+                    // wart-arbiter-audio M3 — comms-session + routing verbs:
+                    // audio-call-start/end <pid|app-id>, audio-route <pid|app-id>
+                    // <speaker|earpiece>.
+                    | "audio-call-start" | "audio-call-end" | "audio-route"
                     // Task 73 — WM geometry (handled by a core module, not the
                     // legacy match). The host normally sends this over the raw
                     // socket; the CLI form is for testing.

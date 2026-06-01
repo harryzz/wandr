@@ -141,6 +141,17 @@ pub enum InboundEvent {
     /// `war:audio-focus/focus-handler.focus-change` enum order); the standalone
     /// drain calls the guest's `on-focus-changed` export (inert if not exported).
     FocusChanged { change: u32 },
+
+    /// wart-arbiter-audio (M3) — the arbiter started/ended a comms session on
+    /// this host and pushed `audio-policy set-mode <comm|normal>`. The host (the
+    /// call owner, which holds the binder connection) applies it globally via
+    /// `audio_policy_impl::set_mode` (setPhoneState). "arbiter decides, host applies."
+    CommMode { comm: bool },
+
+    /// wart-arbiter-audio (M3) — the arbiter changed the call routing and pushed
+    /// `audio-policy set-route <speaker|earpiece>`. The host applies it via
+    /// `audio_policy_impl::set_route` (setForceUse COMMUNICATION).
+    CommRoute { speaker: bool },
 }
 
 /// Sentinel: a `geometry` inset field the host should leave at its current
@@ -352,6 +363,20 @@ fn parse_and_queue(line: &str) {
                 }
             }
             None => log::warn!("ime-inbound: bad on-focus-changed token in {line:?}"),
+        }
+    } else if let Some(rest) = line.strip_prefix("audio-policy set-mode ") {
+        // wart-arbiter-audio M3 — comms session mode (the call owner applies it).
+        match rest.trim() {
+            "comm"   => { if let Ok(mut q) = queue().lock() { q.push_back(InboundEvent::CommMode { comm: true }); } }
+            "normal" => { if let Ok(mut q) = queue().lock() { q.push_back(InboundEvent::CommMode { comm: false }); } }
+            other    => log::warn!("ime-inbound: bad audio-policy set-mode {other:?}"),
+        }
+    } else if let Some(rest) = line.strip_prefix("audio-policy set-route ") {
+        // wart-arbiter-audio M3 — comms routing (speaker/earpiece).
+        match rest.trim() {
+            "speaker"  => { if let Ok(mut q) = queue().lock() { q.push_back(InboundEvent::CommRoute { speaker: true }); } }
+            "earpiece" => { if let Ok(mut q) = queue().lock() { q.push_back(InboundEvent::CommRoute { speaker: false }); } }
+            other      => log::warn!("ime-inbound: bad audio-policy set-route {other:?}"),
         }
     } else if line == "present" {
         // Task 71 — arbiter-driven "you are visible, repaint now". The drain

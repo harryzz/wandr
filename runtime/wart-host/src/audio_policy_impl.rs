@@ -49,6 +49,34 @@ mod binder_path {
         }
     }
 
+    // The originator uid for setPhoneState (the mode owner the policy service
+    // tracks). We run as root; report our real uid.
+    extern "C" { fn getuid() -> u32; }
+
+    /// wart-arbiter-audio M3 — set the global audio mode (the call-owner host
+    /// applies this when the arbiter starts/ends a comms session). `comm=true` →
+    /// IN_COMMUNICATION (VoIP routing + AEC tuning); `false` → NORMAL.
+    pub fn set_mode(comm: bool) {
+        let Some(svc) = service() else { return };
+        let state = if comm { AudioMode::IN_COMMUNICATION } else { AudioMode::NORMAL };
+        let uid = unsafe { getuid() } as i32;
+        match svc.r#setPhoneState(state, uid) {
+            Ok(())  => log::info!("audio-policy: setPhoneState {} (uid={uid})", mode_name(state)),
+            Err(e)  => log::warn!("audio-policy: setPhoneState {} failed: {e:?}", mode_name(state)),
+        }
+    }
+
+    /// wart-arbiter-audio M3 — set the communication routing (the speaker /
+    /// earpiece toggle). `speaker=true` → SPEAKER; `false` → NONE (earpiece).
+    pub fn set_route(speaker: bool) {
+        let Some(svc) = service() else { return };
+        let cfg = if speaker { AudioPolicyForcedConfig::SPEAKER } else { AudioPolicyForcedConfig::NONE };
+        match svc.r#setForceUse(AudioPolicyForceUse::COMMUNICATION, cfg) {
+            Ok(())  => log::info!("audio-policy: setForceUse COMMUNICATION {}", cfg_name(cfg)),
+            Err(e)  => log::warn!("audio-policy: setForceUse {} failed: {e:?}", cfg_name(cfg)),
+        }
+    }
+
     /// Read-only probe: does a root/su caller reach the policy service, and what
     /// are the current phone state + communication routing? No side effects.
     pub fn probe() {
@@ -116,3 +144,15 @@ pub fn probe() { log::warn!("audio-policy probe: android-only build"); }
 pub fn probe_route(speaker: bool) { binder_path::probe_route(speaker); }
 #[cfg(not(target_os = "android"))]
 pub fn probe_route(_speaker: bool) { log::warn!("audio-policy route: android-only build"); }
+
+/// wart-arbiter-audio M3 — set the global audio mode (comms session start/end).
+#[cfg(target_os = "android")]
+pub fn set_mode(comm: bool) { binder_path::set_mode(comm); }
+#[cfg(not(target_os = "android"))]
+pub fn set_mode(_comm: bool) {}
+
+/// wart-arbiter-audio M3 — set the communication routing (speaker/earpiece).
+#[cfg(target_os = "android")]
+pub fn set_route(speaker: bool) { binder_path::set_route(speaker); }
+#[cfg(not(target_os = "android"))]
+pub fn set_route(_speaker: bool) {}

@@ -1198,6 +1198,15 @@ fn run_cwasm_loop(
                         ),
                     }
                 }
+                crate::ime_inbound::InboundEvent::CommMode { comm } => {
+                    // wart-arbiter-audio M3 — the arbiter started/ended a comms
+                    // session on us; apply the global audio mode (dumb applier).
+                    crate::audio_policy_impl::set_mode(comm);
+                }
+                crate::ime_inbound::InboundEvent::CommRoute { speaker } => {
+                    // wart-arbiter-audio M3 — apply the call routing (speaker/earpiece).
+                    crate::audio_policy_impl::set_route(speaker);
+                }
                 // Task 68 — the soft keyboard occludes `px` of our surface. Add
                 // it to the base bottom inset → the guest's logical height shrinks
                 // → re-issue on_resize so bottom-anchored content rises above the
