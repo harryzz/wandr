@@ -869,14 +869,17 @@ fn run_cwasm_loop(
         // target-vs-current so it also re-applies when the lock toggles
         // without the device moving. Fullscreen apps don't read the lock —
         // they ARE the locker (a locked one has no sensor, stays portrait).
-        // Fullscreen apps own a sensor: report the raw rotation up and hold for
-        // the arbiter's decided orient (a `geometry` push). If the arbiter is
-        // unreachable, drop the hold + stale decision and apply locally (no hang).
-        // Chrome-coherence: overlays have NO sensor — their orient comes ONLY from
-        // arbiter `geometry` pushes (fanned to chrome + the active IME), so the
-        // single orientation authority is the arbiter (no per-overlay sensor, no
-        // orient-lock file).
-        if mode == OverlayMode::None {
+        // Only the FOREGROUND fullscreen app drives the system orientation: it
+        // owns the screen, so it reports the raw rotation up and holds for the
+        // arbiter's decided orient (a `geometry` push). A backgrounded app skips
+        // the sensor entirely (it isn't visible; reporting from the background
+        // would let an off-screen app drive everyone's orientation) — when it
+        // returns to the foreground the arbiter pushes the current orient via
+        // `ForegroundChanged` and it resumes polling. Chrome-coherence: overlays
+        // have NO sensor — their orient comes only from arbiter `geometry` pushes.
+        if mode == OverlayMode::None
+            && crate::app_role::role() == crate::app_role::AppRole::Foreground
+        {
             if let Some(h) = orient_sensor {
                 if let Some(rot) = crate::sensors_impl::poll_device_rotation(h) {
                     last_dev_orient = device_rotation_to_orient(rot);
