@@ -72,9 +72,19 @@ or an arbiter-only restart (push binary + `pkill -9 -f wart-arbiter` + restart
 detached — re-attaches running apps from `state.json`); **NEVER**
 `build-system-warpkgs.sh`. Host is arbiter-only across all of task 74.
 
+**`-am`/`-ime` split (2026-06-01, `1878936a`):** done as an INTERNAL submodule
+split of `wart-arbiter-shell` (`am.rs`/`ime.rs`/`shared.rs`), NOT separate crates.
+Decision: a full crate split would re-express focus-follows-foreground
+(`finishInput()`) — where an AM foreground change drives IME overlay/editor
+teardown in ONE synchronous pass inside `promote_to_foreground` — as an event
+cascade on the hottest path (every app switch), i.e. digging into working code,
+which the design rule forbids. Android's own `system_server` keeps AMS+IMMS
+coordinating for the same reason. So: one `ArbiterModule` (one registration),
+shared direct calls in `shared.rs`; the submodules are readability only (zero
+behavior change, 4 shell tests pass). Revisit a true crate split only with a
+concrete driver (e.g. a swappable real-IME backend, [[project_ime_options]]).
+
 **Deferred (cosmetic / additive, not blocking):** `state.rs` is still a thin
 registry/home/persistence shim (binary uses it; fully deleting it is harmless
-cleanup). Chrome-coherence (statusbar/taskbar as `Chrome` surfaces), overlay_rect
-relocation, panel/density report-up, audio/notification `ResourceFocus` variants,
-and the `-am`/`-ime` crate split are all now purely additive on this model. Plan
-file: `~/.claude/plans/cat-task-state-steady-stallman.md`.
+cleanup). Audio/notification `ResourceFocus` variants are purely additive on this
+model. Plan file: `~/.claude/plans/cat-task-state-steady-stallman.md`.

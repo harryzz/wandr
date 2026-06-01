@@ -1,5 +1,5 @@
-TASK=signal-bg-receipt
+TASK=arbiter-shell-submodule-split
 STEP=complete
 STATUS=complete
-LAST_SUCCESS=Signal background-receipt subsystem M1-M4 COMPLETE + fully device-verified 2026-06-01. M1 hidden wake (55f7ee02), M2 bg-tick background-execution (8ff96df6), M3 notify primitive + status-bar badge (2fef4244/5d366567), M4 Signal wiring (b18a3198). USER CONFIRMED on device: backgrounded Signal received a message from a 2nd device + notification appeared + tap opened the thread. All pushed to codeberg main.
-NOTES=Three reusable generic primitives (war:background, war:notify, war:alarm-extended) + Signal as first consumer. Test harness apps/user/war.alarm.test still installed on device (harmless "Alarm Test" tile) — offer to remove if unwanted. Possible polish: bg-tick idle-ramp for battery; notification on lockscreen; multi-notification cycling. Plan: ~/.claude/plans/cat-task-state-steady-stallman.md.
+LAST_SUCCESS=wart-arbiter-shell split into am.rs/ime.rs/shared.rs submodules (1878936a) — internal reorg, ONE ArbiterModule, zero behavior change. 4 shell unit tests pass; arbiter builds; on-device AM dispatch (list/go-home/cycle-task) verified. Chose internal split over full -am/-ime crate split: focus-follows-foreground couples AMS+IMMS synchronously in promote_to_foreground; a crate split would re-plumb the hottest path through events (digging into working code). All pushed to codeberg main.
+NOTES=Prior context: Signal background-receipt M1-M4 + idle-ramp + 15-min keep-alive all done+device-verified+pushed. Remaining additive arbiter items: audio-focus/notifications ResourceFocus variants. True -am/-ime crate split only with a concrete driver (swappable real-IME backend). Plan: ~/.claude/plans/cat-task-state-steady-stallman.md.
