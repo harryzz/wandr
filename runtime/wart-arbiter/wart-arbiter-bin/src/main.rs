@@ -588,12 +588,19 @@ fn execute_effects(effects: Vec<wart_arbiter_core::Effect>) {
                             launched_at: SystemTime::now(),
                             launched_mono: Instant::now(),
                         });
-                        model_put_surface(
-                            pid,
-                            &app_id,
-                            if kind == LaunchKind::Headless { Role::Headless } else { Role::Background },
-                        );
-                        log::info!("arbiter: Launch effect — {app_id} kind={kind:?} → pid {pid}");
+                        let role = if kind == LaunchKind::Headless { Role::Headless } else { Role::Background };
+                        model_put_surface(pid, &app_id, role);
+                        // M1 (Signal bg-receipt) — a wake-launch (alarm/keep-alive)
+                        // must NOT steal the foreground: `model_put_surface` only
+                        // updates the model, so without this the fresh GUI surface
+                        // comes up at the host default (visible) over the launcher.
+                        // `apply_role(Background)` SIGUSR1s the child → it starts
+                        // hidden, mirroring cmd_launch's GuiOverlay "start hidden"
+                        // path. Safe immediately post-launch (the zygote ack means
+                        // the child has installed its role handler); a no-op for
+                        // Headless (no SF surface).
+                        apply_role(pid, role);
+                        log::info!("arbiter: Launch effect — {app_id} kind={kind:?} → pid {pid} (hidden/background)");
                     }
                     Err(e) => log::warn!("arbiter: Launch effect {app_id} kind={kind:?} failed: {e:#}"),
                 }
