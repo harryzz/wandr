@@ -77,6 +77,11 @@ pub struct DisplayGeometry {
     pub inset_bottom: u32,
     /// Soft-keyboard occlusion, px (0 = no keyboard). Arbiter-owned (task 68).
     pub keyboard_px: u32,
+    /// Whether the foreground app pins orientation (chrome-coherence): when set,
+    /// the arbiter fans `orient=0` (portrait) to chrome/IME overlays regardless of
+    /// the device sensor. Replaces the cross-process orient-lock file — the
+    /// foreground host reports it via `set-orientation-lock`.
+    pub orientation_locked: bool,
 }
 
 impl Default for DisplayGeometry {
@@ -89,6 +94,7 @@ impl Default for DisplayGeometry {
             inset_top: 0,
             inset_bottom: 0,
             keyboard_px: 0,
+            orientation_locked: false,
         }
     }
 }

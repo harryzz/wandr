@@ -37,7 +37,7 @@
 //!   it and pushes a real `orient`; the host applies it on push-back.
 
 use wart_arbiter_core::{
-    ArbiterModule, Ctx, DisplayId, Event, Reply, Store, INSET_HOST_OWNED, ORIENT_HOST_OWNED,
+    ArbiterModule, Ctx, DisplayId, Event, Reply, Role, Store, INSET_HOST_OWNED, ORIENT_HOST_OWNED,
     PRIMARY_DISPLAY,
 };
 
@@ -152,30 +152,89 @@ impl WmModule {
     fn keyboard_px(store: &Store, id: DisplayId) -> u32 {
         store.geometry(id).map(|g| g.keyboard_px).unwrap_or(0)
     }
+
+    /// Fan the effective overlay orientation to the chrome + active-IME surfaces
+    /// (chrome-coherence). Effective orient = `0` (portrait) when the foreground
+    /// app pins orientation, else the decided orient. The target set is bounded:
+    /// every `Role::Chrome` surface + the `active_ime` pid (so the IME stays
+    /// orient-fresh even while hidden → no stale-on-engage). Chrome/IME ignore
+    /// insets (`INSET_HOST_OWNED`) and carry no keyboard inset on this push (the
+    /// IME's own height path is separate). Each overlay applies its own anchor
+    /// flip via `overlay_rect`, so only the content `orient` is sent.
+    fn fan_overlays(&self, ctx: &mut Ctx, id: DisplayId) {
+        let (locked, decided) = ctx
+            .store
+            .geometry(id)
+            .map(|g| (g.orientation_locked, g.orientation))
+            .unwrap_or((false, ORIENT_HOST_OWNED));
+        // Nothing decided yet (host-owned) and not locked → no orient to fan.
+        if decided == ORIENT_HOST_OWNED && !locked {
+            return;
+        }
+        let orient = if locked { 0 } else { decided };
+        let mut targets: Vec<i32> = ctx
+            .store
+            .display(id)
+            .map(|d| {
+                d.surfaces()
+                    .iter()
+                    .filter(|s| s.role == Role::Chrome)
+                    .map(|s| s.pid)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(ime) = ctx.store.display(id).and_then(|d| d.active_ime) {
+            if !targets.contains(&ime) {
+                targets.push(ime);
+            }
+        }
+        let (top, bottom) = self.inset_fields();
+        let line = format!("geometry {top} {bottom} 0 {orient}\n");
+        for pid in targets {
+            ctx.deliver_to_host(pid, line.clone());
+        }
+    }
 }
 
 impl ArbiterModule for WmModule {
     fn verbs(&self) -> &[&'static str] {
-        &["report-orientation"]
+        &["report-orientation", "set-orientation-lock"]
     }
 
-    /// `report-orientation <raw 0..3>` — the foreground host's sensor reports
-    /// a screen rotation. Translate it (device→content dihedral) and emit an
-    /// `OrientationChanged`; the event handler applies it to the store and
-    /// pushes the new geometry to the surfaces we reach. The host applies it
-    /// on push-back (with a local fallback if we're unreachable), so rotation
-    /// authority moves here without a hang risk if the arbiter is down.
     fn on_command(&mut self, verb: &str, args: &str, ctx: &mut Ctx) -> Reply {
-        debug_assert_eq!(verb, "report-orientation");
-        let Some(raw_tok) = args.split_whitespace().next() else {
-            return Reply::err("report-orientation-missing-raw");
-        };
-        let Ok(raw) = raw_tok.parse::<u32>() else {
-            return Reply::err(format!("report-orientation-bad-raw {raw_tok:?}"));
-        };
-        let orient = device_rotation_to_orient(raw);
-        ctx.emit(Event::OrientationChanged { id: PRIMARY_DISPLAY, orient });
-        Reply::ok(format!("orientation raw={raw} orient={orient}"))
+        match verb {
+            // `report-orientation <raw 0..3>` — the foreground host's sensor
+            // reports a screen rotation. Translate it (device→content dihedral)
+            // and emit `OrientationChanged`; the event handler applies it + fans
+            // to the surfaces we reach (fullscreen applies on push-back, with a
+            // local fallback if we're unreachable).
+            "report-orientation" => {
+                let Some(raw_tok) = args.split_whitespace().next() else {
+                    return Reply::err("report-orientation-missing-raw");
+                };
+                let Ok(raw) = raw_tok.parse::<u32>() else {
+                    return Reply::err(format!("report-orientation-bad-raw {raw_tok:?}"));
+                };
+                let orient = device_rotation_to_orient(raw);
+                ctx.emit(Event::OrientationChanged { id: PRIMARY_DISPLAY, orient });
+                Reply::ok(format!("orientation raw={raw} orient={orient}"))
+            }
+            // `set-orientation-lock <0|1>` — the foreground fullscreen app reports
+            // whether it pins orientation (chrome-coherence; replaces the
+            // orient-lock file). Record it + re-fan the effective orient to the
+            // chrome/IME overlays so they snap on a foreground/lock change.
+            "set-orientation-lock" => {
+                let locked = match args.trim() {
+                    "1" => true,
+                    "0" => false,
+                    other => return Reply::err(format!("set-orientation-lock-bad-arg {other:?}")),
+                };
+                ctx.store.geometry_mut(PRIMARY_DISPLAY).orientation_locked = locked;
+                self.fan_overlays(ctx, PRIMARY_DISPLAY);
+                Reply::ok(format!("orientation-lock {}", locked as u8))
+            }
+            other => Reply::err(format!("wm-unknown-verb {other}")),
+        }
     }
 
     fn on_event(&mut self, ev: &Event, ctx: &mut Ctx) {
@@ -241,6 +300,9 @@ impl ArbiterModule for WmModule {
                         ctx.deliver_to_host(fg, line);
                     }
                 }
+                // Chrome-coherence — also fan the decided orient to the chrome +
+                // active-IME overlays (gated by the foreground lock).
+                self.fan_overlays(ctx, *id);
             }
 
             // Not geometry-relevant to the WM.
@@ -342,6 +404,33 @@ mod tests {
         // the visible-app push is suppressed because it IS the editor.
         assert_eq!(pushes, vec![hl(5, "geometry 65535 65535 1000 4\n")]);
         assert_eq!(store.geometry(PRIMARY_DISPLAY).unwrap().orientation, 4);
+    }
+
+    #[test]
+    fn rotate_fans_orient_to_chrome_and_active_ime() {
+        let (mut reg, mut store) = reg_with_wm();
+        store.display_mut(PRIMARY_DISPLAY).put_surface(70, "war.statusbar", Role::Chrome);
+        store.display_mut(PRIMARY_DISPLAY).put_surface(80, "war.ime.keyboard", Role::Background);
+        store.display_mut(PRIMARY_DISPLAY).active_ime = Some(80);
+        // Device rotates 90° → dihedral 4. Chrome + the (hidden) IME both get it.
+        let (_reply, pushes) = reg.dispatch_command("report-orientation", "1", &mut store).unwrap();
+        assert!(pushes.contains(&hl(70, "geometry 65535 65535 0 4\n")), "chrome fanned: {pushes:?}");
+        assert!(pushes.contains(&hl(80, "geometry 65535 65535 0 4\n")), "active_ime fanned: {pushes:?}");
+    }
+
+    #[test]
+    fn lock_snaps_chrome_portrait_then_unlock_restores() {
+        let (mut reg, mut store) = reg_with_wm();
+        store.display_mut(PRIMARY_DISPLAY).put_surface(70, "war.statusbar", Role::Chrome);
+        // Establish a decided rotated orient.
+        reg.dispatch_command("report-orientation", "1", &mut store); // decided = 4
+        // Foreground app pins orientation → chrome snaps to portrait (0).
+        let (reply, pushes) = reg.dispatch_command("set-orientation-lock", "1", &mut store).unwrap();
+        assert_eq!(reply.render(), "OK orientation-lock 1");
+        assert_eq!(pushes, vec![hl(70, "geometry 65535 65535 0 0\n")]);
+        // Unlock → chrome returns to the decided orient (4).
+        let (_r, pushes) = reg.dispatch_command("set-orientation-lock", "0", &mut store).unwrap();
+        assert_eq!(pushes, vec![hl(70, "geometry 65535 65535 0 4\n")]);
     }
 
     #[test]

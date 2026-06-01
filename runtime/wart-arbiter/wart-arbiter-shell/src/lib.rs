@@ -23,8 +23,10 @@
 //! (demote-behind → promote-overlay, etc.); the store is mutated inline so
 //! derivations stay correct mid-handler.
 
+use std::time::{Instant, SystemTime};
+
 use wart_arbiter_core::{
-    ArbiterModule, Ctx, Effect, EditorInfo, Event, Reply, Role, Store, PRIMARY_DISPLAY,
+    AppState, ArbiterModule, Ctx, Effect, EditorInfo, Event, Reply, Role, Store, PRIMARY_DISPLAY,
 };
 
 /// OOM scores are applied by the binary's `apply_role`; the module only sets roles.
@@ -238,6 +240,34 @@ impl ShellModule {
         promote_to_foreground(ctx, &s.app_id, s.pid);
         let prev_str = prev.unwrap_or_else(|| "(none)".to_string());
         Reply::ok(format!("fg={app_id} prev={prev_str} pid={}", s.pid))
+    }
+
+    /// `register-chrome <app-id> <pid>` — a host-spawned chrome overlay
+    /// (statusbar/taskbar) self-registers so the arbiter tracks it as a
+    /// `Role::Chrome` surface and can fan orientation to its control socket
+    /// (chrome-coherence). The pid is the overlay's own; the control socket is
+    /// `wart-host-<pid>.sock`. Chrome is excluded from `visible_app`/the cycle
+    /// ring by role, so this is inert for AM/IME policy. Death cleanup is the
+    /// existing liveness poller → `SurfaceRemoved`.
+    fn cmd_register_chrome(&mut self, rest: &str, ctx: &mut Ctx) -> Reply {
+        let mut parts = rest.split_whitespace();
+        let (Some(app_id), Some(pid_s)) = (parts.next(), parts.next()) else {
+            return Reply::err("register-chrome-args: expected <app-id> <pid>");
+        };
+        let Ok(pid) = pid_s.parse::<i32>() else {
+            return Reply::err(format!("register-chrome-bad-pid {pid_s}"));
+        };
+        ctx.store.insert_app(AppState {
+            app_id: app_id.to_string(),
+            pid,
+            launched_at: SystemTime::now(),
+            launched_mono: Instant::now(),
+        });
+        ctx.store
+            .display_mut(PRIMARY_DISPLAY)
+            .put_surface(pid, app_id, Role::Chrome);
+        log::info!("arbiter: registered chrome surface app={app_id} pid={pid}");
+        Reply::ok(format!("chrome {app_id} pid={pid}"))
     }
 
     fn cmd_kill(&mut self, app_id: &str, ctx: &mut Ctx) -> Reply {
@@ -542,6 +572,7 @@ impl ArbiterModule for ShellModule {
     fn verbs(&self) -> &[&'static str] {
         &[
             "foreground",
+            "register-chrome",
             "kill",
             "set-ime",
             "attach-editor",
@@ -563,6 +594,7 @@ impl ArbiterModule for ShellModule {
     fn on_command(&mut self, verb: &str, args: &str, ctx: &mut Ctx) -> Reply {
         match verb {
             "foreground" => self.cmd_foreground(args, ctx),
+            "register-chrome" => self.cmd_register_chrome(args, ctx),
             "kill" => self.cmd_kill(args, ctx),
             "set-ime" => self.cmd_set_ime(args, ctx),
             "attach-editor" => self.cmd_attach_editor(args, ctx),
@@ -636,6 +668,18 @@ mod tests {
             .collect();
         assert_eq!(roles, vec![(10, Role::OverlayBehind), (20, Role::Overlay)]);
         assert!(effects.iter().any(|e| matches!(e, Effect::HostLine { pid: 20, .. })));
+    }
+
+    #[test]
+    fn register_chrome_adds_chrome_surface_inert_to_policy() {
+        let (mut r, mut store) = reg();
+        seed_app(&mut store, "app", 10, Role::Foreground);
+        let (reply, _eff) = r.dispatch_command("register-chrome", "war.statusbar 50", &mut store).unwrap();
+        assert_eq!(reply.render(), "OK chrome war.statusbar pid=50");
+        assert_eq!(store.display(PRIMARY_DISPLAY).unwrap().role_of(50), Some(Role::Chrome));
+        // Inert for AM policy: chrome is never the visible app.
+        assert_eq!(store.display(PRIMARY_DISPLAY).unwrap().visible_app(), Some(10));
+        assert!(store.app("war.statusbar").is_some());
     }
 
     #[test]

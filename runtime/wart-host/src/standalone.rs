@@ -192,7 +192,7 @@ pub fn run_with_engine(engine: &Engine, app_id: Option<&str>, mode: OverlayMode)
             } else {
                 loaded.rotation_policy()
             };
-            run_cwasm_loop(engine, loaded, renderer, sf, mode, rotates, is_locked, fg_layer)
+            run_cwasm_loop(engine, loaded, renderer, sf, mode, app_id, rotates, is_locked, fg_layer)
         }
         Err(e) => {
             log::warn!(
@@ -229,29 +229,12 @@ fn device_rotation_to_orient(rot: u32) -> u32 {
     }
 }
 
-/// Task 63 — global system orientation lock (cross-process IPC). The
-/// foreground fullscreen app writes `1` here when it declares
-/// `orientation = "locked"`, `0` otherwise; the system chrome overlays
-/// (status bar / taskbar / IME) read it each frame and stay portrait while
-/// it's set, regardless of the device sensor. A plain file (alongside the
-/// zygote/arbiter sockets) — the status bar / taskbar are launched directly,
-/// not arbiter-tracked, so a per-socket push can't reach them; a global file
-/// they all poll is the simplest reliable channel.
-const ORIENT_LOCK_PATH: &str = "/data/local/tmp/wart-orient-lock";
-
-/// Publish the system orientation lock (foreground fullscreen app only).
-fn publish_orientation_lock(locked: bool) {
-    if let Err(e) = std::fs::write(ORIENT_LOCK_PATH, if locked { "1" } else { "0" }) {
-        log::warn!("standalone: could not publish orientation lock: {e:#}");
-    }
-}
-
-/// Read the system orientation lock. Absent / unreadable ⇒ unlocked.
-fn orientation_lock_active() -> bool {
-    std::fs::read_to_string(ORIENT_LOCK_PATH)
-        .map(|s| s.trim() == "1")
-        .unwrap_or(false)
-}
+// Chrome-coherence (Arbiter Increment 3a) — the orientation lock used to be a
+// polled file (`/data/local/tmp/wart-orient-lock`) because the chrome overlays
+// weren't arbiter-tracked. They now self-register (`register-chrome`) as
+// `Role::Chrome` surfaces and the arbiter fans the decided/locked orient to
+// them, so the file is gone: the foreground app reports its lock via
+// `set-orientation-lock` and the arbiter is the single orientation authority.
 
 /// Task 73 — the arbiter socket (wart-arbiter-wm owns the orientation
 /// decision). Same path the IME/keyboard host clients use.
@@ -273,6 +256,53 @@ fn report_orientation_to_arbiter(raw_rot: u32) -> std::io::Result<()> {
     let mut buf = [0u8; 64];
     let _ = stream.read(&mut buf);
     Ok(())
+}
+
+/// One-shot arbiter command (connect, write line, drain + drop reply, close) —
+/// the fire-and-forget shape shared by the chrome-coherence reports.
+fn send_arbiter_oneshot(line: &str) -> std::io::Result<()> {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    let mut stream = UnixStream::connect(ARBITER_SOCK_PATH)?;
+    stream.write_all(line.as_bytes())?;
+    stream.flush()?;
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    let mut buf = [0u8; 64];
+    let _ = stream.read(&mut buf);
+    Ok(())
+}
+
+/// Chrome-coherence — a host-spawned chrome overlay (statusbar/taskbar)
+/// self-registers with the arbiter so it's tracked as a `Role::Chrome` surface
+/// and the arbiter can fan orientation to its control socket. A few short
+/// retries since `run-hybrid-stack.sh` spawns chrome right as the arbiter comes
+/// up. Best-effort: if the arbiter never appears, chrome simply won't rotate
+/// (the arbiter is the orientation authority now).
+fn register_chrome_with_arbiter(app_id: &str) {
+    let line = format!("register-chrome {app_id} {}\n", std::process::id());
+    for attempt in 0..10 {
+        match send_arbiter_oneshot(&line) {
+            Ok(()) => {
+                log::info!("standalone: registered chrome {app_id} with arbiter");
+                return;
+            }
+            Err(e) => {
+                log::debug!("standalone: register-chrome attempt {attempt} failed: {e}; retrying");
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+        }
+    }
+    log::warn!("standalone: register-chrome {app_id} gave up — arbiter unreachable");
+}
+
+/// Chrome-coherence — the foreground fullscreen app reports whether it pins
+/// orientation; the arbiter gates the orient it fans to chrome/IME on this
+/// (replaces the old `wart-orient-lock` file write). Best-effort.
+fn report_orientation_lock_to_arbiter(locked: bool) {
+    let line = format!("set-orientation-lock {}\n", locked as u8);
+    if let Err(e) = send_arbiter_oneshot(&line) {
+        log::debug!("standalone: set-orientation-lock failed ({e}); arbiter down?");
+    }
 }
 
 /// Physical compass edge of the portrait panel buffer.
@@ -353,6 +383,9 @@ fn run_cwasm_loop(
     // Task 62 — the surface's anchor (fullscreen vs which overlay edge).
     // Drives the rotated-rect geometry flip for overlays.
     mode: OverlayMode,
+    // Chrome-coherence — the installed app-id (None for the dev-cwasm fallback),
+    // used by chrome overlays to self-register with the arbiter.
+    app_id: Option<&str>,
     // Task 43/62 — auto-follow device screen rotation. True for the
     // fullscreen app (unless locked) and for overlays whose manifest opts
     // in (`orientation = "auto"`); false otherwise.
@@ -506,6 +539,16 @@ fn run_cwasm_loop(
         }
     };
 
+    // Chrome-coherence — the status bar / taskbar are host-spawned (not arbiter-
+    // launched), so they self-register as `Role::Chrome` surfaces now that the
+    // control socket is bound, letting the arbiter fan orientation to them. The
+    // IME (`Bottom`) is already arbiter-launched + tracked, so it doesn't register.
+    if matches!(mode, OverlayMode::Top | OverlayMode::BottomBar) {
+        if let Some(id) = app_id {
+            register_chrome_with_arbiter(id);
+        }
+    }
+
     // Task 43 — runtime screen orientation. Read the native Device
     // Orientation HAL sensor (android.sensor.device_orientation, type 27,
     // on-change) — the SAME source WMS's WindowOrientationListener uses,
@@ -521,8 +564,11 @@ fn run_cwasm_loop(
     // disables auto-follow — useful for forcing a fixed orientation in a
     // stationary test. Overlays rotate only when their manifest declares
     // `orientation = "auto"` (task 62); otherwise they stay portrait.
+    // Chrome-coherence — only fullscreen apps read the device sensor (they report
+    // up + the arbiter decides). Overlays get their orient from arbiter pushes, so
+    // they no longer open a sensor handle.
     let orient_sensor: Option<u32> =
-        if enable_rotation && std::env::var("WART_ORIENT").is_err() {
+        if mode == OverlayMode::None && enable_rotation && std::env::var("WART_ORIENT").is_err() {
             match crate::sensors_impl::device_orientation_handle() {
                 Some(h) => {
                     let ok = crate::sensors_impl::enable_sensor(h, 5);
@@ -609,11 +655,12 @@ fn run_cwasm_loop(
                     sf.set_layer(fg_layer);
                     sf.set_visible(true);
                     sf.request_focus();
-                    // Task 63 — the foreground fullscreen app owns the system
-                    // orientation lock: publish ours so the chrome overlays
-                    // honor it. (Overlays never write it — they only read.)
+                    // Chrome-coherence — the foreground fullscreen app reports its
+                    // orientation-lock policy to the arbiter, which gates the orient
+                    // it fans to the chrome/IME overlays (replaces the old
+                    // wart-orient-lock file).
                     if mode == OverlayMode::None {
-                        publish_orientation_lock(orientation_locked);
+                        report_orientation_lock_to_arbiter(orientation_locked);
                     }
                     let target = bindings::my::skiko_gfx::lifecycle::State::Resumed;
                     if store.data().lifecycle.current != target {
@@ -741,16 +788,17 @@ fn run_cwasm_loop(
         // target-vs-current so it also re-applies when the lock toggles
         // without the device moving. Fullscreen apps don't read the lock —
         // they ARE the locker (a locked one has no sensor, stays portrait).
-        if let Some(h) = orient_sensor {
-            if let Some(rot) = crate::sensors_impl::poll_device_rotation(h) {
-                last_dev_orient = device_rotation_to_orient(rot);
-                // Task 73 — fullscreen apps defer the rotation DECISION to the
-                // arbiter: report the raw rotation up and hold for the decided
-                // orient to arrive as a `geometry` push (applied in the Geometry
-                // drain arm below). If the arbiter is unreachable, drop the hold
-                // + any stale decision and apply locally this frame (no hang).
-                // Overlays never report — they keep the local sensor+lock path.
-                if mode == OverlayMode::None {
+        // Fullscreen apps own a sensor: report the raw rotation up and hold for
+        // the arbiter's decided orient (a `geometry` push). If the arbiter is
+        // unreachable, drop the hold + stale decision and apply locally (no hang).
+        // Chrome-coherence: overlays have NO sensor — their orient comes ONLY from
+        // arbiter `geometry` pushes (fanned to chrome + the active IME), so the
+        // single orientation authority is the arbiter (no per-overlay sensor, no
+        // orient-lock file).
+        if mode == OverlayMode::None {
+            if let Some(h) = orient_sensor {
+                if let Some(rot) = crate::sensors_impl::poll_device_rotation(h) {
+                    last_dev_orient = device_rotation_to_orient(rot);
                     match report_orientation_to_arbiter(rot) {
                         Ok(()) => awaiting_orient_since = Some(std::time::Instant::now()),
                         Err(e) => {
@@ -762,61 +810,59 @@ fn run_cwasm_loop(
                         }
                     }
                 }
-            }
-            let locked = sf.is_overlay() && orientation_lock_active();
-            let local_target = if locked { 0 } else { last_dev_orient };
-            // Backstop: stop holding for the arbiter once the timeout elapses, so
-            // a lost push-back can't stall rotation.
-            if let Some(since) = awaiting_orient_since {
-                if since.elapsed() > ARBITER_ORIENT_TIMEOUT {
-                    log::info!(
-                        "standalone: arbiter orient push-back timed out — applying local"
-                    );
-                    awaiting_orient_since = None;
+                // Backstop: stop holding once the timeout elapses so a lost
+                // push-back can't stall rotation.
+                if let Some(since) = awaiting_orient_since {
+                    if since.elapsed() > ARBITER_ORIENT_TIMEOUT {
+                        log::info!("standalone: arbiter orient push-back timed out — applying local");
+                        awaiting_orient_since = None;
+                    }
                 }
             }
-            // The arbiter's decision wins when we have one; while holding for it
-            // keep the current orientation; otherwise apply the local sensor
-            // reading (overlays + the no-arbiter fallback land here).
-            let orient = if awaiting_orient_since.is_some() {
-                store.data().renderer.current_orient
+        }
+        // The target orient: fullscreen prefers the arbiter decision (holding the
+        // current orient while a report is in flight, else the local sensor
+        // fallback); an overlay applies only the arbiter's pushed orient and stays
+        // put until one arrives.
+        let cur_orient = store.data().renderer.current_orient;
+        let target_orient = if mode == OverlayMode::None {
+            if awaiting_orient_since.is_some() {
+                cur_orient
             } else {
-                authoritative_orient.unwrap_or(local_target)
-            };
-            if orient != store.data().renderer.current_orient {
-                dirty = true; // task 64 — rotation needs a frame
-                // Task 62 — for an overlay, the anchored rect itself must
-                // flip (bottom strip ⇄ side strip). Do the SF move/resize +
-                // GL-buffer resize BEFORE set_orientation, which reads the
-                // buffer dims. Fullscreen leaves the buffer alone (task 43).
-                if sf.is_overlay() {
-                    let sb = crate::status_impl::status_bar_height_px() as i32;
-                    let tb = taskbar_height_px() as i32;
-                    let (rx, ry, rw, rh) =
-                        overlay_rect(mode, orient, sf.panel_w, sf.panel_h, strip_t, sb, tb);
-                    if sf.set_overlay_geometry(rx, ry, rw, rh, rw, rh) {
-                        store.data_mut().renderer.resize(rw as u32, rh as u32);
-                        log::info!(
-                            "standalone: overlay rect flip → orient {orient}{} rect ({rx},{ry},{rw},{rh})",
-                            if locked { " (locked)" } else { "" }
-                        );
-                    }
-                }
-                if store.data_mut().renderer.set_orientation(orient) {
-                    let (lw, lh) = {
-                        let r = &store.data().renderer;
-                        (r.logical_width, r.logical_height)
-                    };
+                authoritative_orient.unwrap_or(last_dev_orient)
+            }
+        } else {
+            authoritative_orient.unwrap_or(cur_orient)
+        };
+        if target_orient != cur_orient {
+            dirty = true; // task 64 — rotation needs a frame
+            // Task 62 — for an overlay, the anchored rect itself must flip
+            // (bottom strip ⇄ side strip). Do the SF move/resize + GL-buffer
+            // resize BEFORE set_orientation, which reads the buffer dims.
+            // Fullscreen leaves the buffer alone (task 43).
+            if sf.is_overlay() {
+                let sb = crate::status_impl::status_bar_height_px() as i32;
+                let tb = taskbar_height_px() as i32;
+                let (rx, ry, rw, rh) =
+                    overlay_rect(mode, target_orient, sf.panel_w, sf.panel_h, strip_t, sb, tb);
+                if sf.set_overlay_geometry(rx, ry, rw, rh, rw, rh) {
+                    store.data_mut().renderer.resize(rw as u32, rh as u32);
                     log::info!(
-                        "standalone: orient change → {orient}{} logical {lw}x{lh}",
-                        if locked { " (system lock)" } else { "" }
+                        "standalone: overlay rect flip → orient {target_orient} rect ({rx},{ry},{rw},{rh})"
                     );
-                    if let Err(e) = skiko
-                        .my_skiko_gfx_renderer()
-                        .call_on_resize(&mut store, lw, lh)
-                    {
-                        log::warn!("standalone: rotation on_resize({lw}x{lh}) failed: {e:#}");
-                    }
+                }
+            }
+            if store.data_mut().renderer.set_orientation(target_orient) {
+                let (lw, lh) = {
+                    let r = &store.data().renderer;
+                    (r.logical_width, r.logical_height)
+                };
+                log::info!("standalone: orient change → {target_orient} logical {lw}x{lh}");
+                if let Err(e) = skiko
+                    .my_skiko_gfx_renderer()
+                    .call_on_resize(&mut store, lw, lh)
+                {
+                    log::warn!("standalone: rotation on_resize({lw}x{lh}) failed: {e:#}");
                 }
             }
         }

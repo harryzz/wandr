@@ -1,5 +1,5 @@
-TASK=74
+TASK=chrome-coherence
 STEP=verify-done
 STATUS=complete
-LAST_SUCCESS=Task 74 COMPLETE (D+C1+C+E) committed + device-verified 2026-06-01. The surface/role model is the sole arbiter state; registry/home/persistence in core Store; AMS+IMMS orchestration extracted to wart-arbiter-shell module (registered one line); WM reads targeting from the Store (no private caches). Device: knot resolves, overlay/cycle/launch-bridge/kill/death-fallback all correct; keyboard reflow ONE geometry push (no double), focus-follows-fg un-shrinks the backgrounded editor via the carried pid. Commits a9f6ba73 (D), c8d00643 (C1), 4272848b (C), + E.
+LAST_SUCCESS=Arbiter Increment 3a (chrome-coherence) done + device-verified 2026-06-01. statusbar/taskbar self-register as Role::Chrome surfaces; arbiter (WM) fans decided orient to all Chrome surfaces + active_ime, gated by foreground lock (set-orientation-lock); orient-lock file retired. Device: chrome registered in list; report-orientation fans orient=4 to statusbar+taskbar+hidden-IME+fullscreen (all flip); locked launcher fg → chrome stays orient=0; orient-lock file ABSENT. 22 arbiter unit tests + wart-host build green.
 NOTES=
