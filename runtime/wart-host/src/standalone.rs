@@ -1108,16 +1108,21 @@ fn run_cwasm_loop(
                     use crate::ime_inbound::{GEOM_INSET_KEEP, GEOM_ORIENT_KEEP};
                     // True-dp: the inset fields ARE the arbiter-authored chrome
                     // heights (sb, tb). Cache them for `overlay_rect` (every
-                    // overlay's anchoring math) + the chrome strip heights. Then
-                    // a fullscreen app also reserves them as content insets.
+                    // overlay's anchoring math) on ALL surfaces…
                     if inset_top != GEOM_INSET_KEEP && inset_bottom != GEOM_INSET_KEEP {
                         cache_chrome_heights(inset_top, inset_bottom);
                     }
                     {
                         let r = &mut store.data_mut().renderer;
-                        // Insets: apply only when the arbiter authored both real
-                        // values; otherwise keep the host's current chrome.
-                        if inset_top != GEOM_INSET_KEEP && inset_bottom != GEOM_INSET_KEEP {
+                        // …but apply them as CONTENT insets only on a FULLSCREEN
+                        // app (it reserves the chrome strips). An overlay IS the
+                        // chrome — it renders its full strip, so insetting it by
+                        // (sb,tb) would shrink its content to nothing (blank status
+                        // bar / taskbar). Overlays keep zero content insets.
+                        if mode == OverlayMode::None
+                            && inset_top != GEOM_INSET_KEEP
+                            && inset_bottom != GEOM_INSET_KEEP
+                        {
                             r.set_insets(inset_top, inset_bottom);
                         }
                         // Keyboard occlusion is always authoritative (0 = hidden).
