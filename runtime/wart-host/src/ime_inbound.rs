@@ -128,6 +128,12 @@ pub enum InboundEvent {
     /// calls the guest's `war:notify/notify-handler.on-notification-click(id)`
     /// export (if the guest exports it).
     NotificationClicked { id: u64 },
+
+    /// PowerManager (wart-arbiter-power) — the arbiter decided the doze state and
+    /// pushed `doze <cadence-ms>` to this host. `cadence_ms = 0` means resume
+    /// normal pacing; `>0` means slow the render/bg-tick loop to that coarse
+    /// cadence while the screen is off. The host is a dumb applier.
+    Doze { cadence_ms: u64 },
 }
 
 /// Sentinel: a `geometry` inset field the host should leave at its current
@@ -311,6 +317,16 @@ fn parse_and_queue(line: &str) {
                 }
             }
             Err(_) => log::warn!("ime-inbound: bad notification-clicked id in {line:?}"),
+        }
+    } else if let Some(rest) = line.strip_prefix("doze ") {
+        // PowerManager — arbiter-decided doze cadence (ms; 0 = resume normal).
+        match rest.trim().parse::<u64>() {
+            Ok(cadence_ms) => {
+                if let Ok(mut q) = queue().lock() {
+                    q.push_back(InboundEvent::Doze { cadence_ms });
+                }
+            }
+            Err(_) => log::warn!("ime-inbound: bad doze cadence in {line:?}"),
         }
     } else if line == "present" {
         // Task 71 — arbiter-driven "you are visible, repaint now". The drain

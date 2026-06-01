@@ -27,6 +27,7 @@ wart-arbiter-wm    = { path = "../wart-arbiter-wm" }
 wart-arbiter-shell = { path = "../wart-arbiter-shell" }
 wart-arbiter-alarm = { path = "../wart-arbiter-alarm" }
 wart-arbiter-notify = { path = "../wart-arbiter-notify" }
+wart-arbiter-power = { path = "../wart-arbiter-power" }
 anyhow         = { workspace = true }
 log            = { workspace = true }
 android_logger = { workspace = true }

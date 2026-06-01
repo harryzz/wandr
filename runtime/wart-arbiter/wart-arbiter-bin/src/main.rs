@@ -53,6 +53,7 @@ use anyhow::{anyhow, Context, Result};
 use wart_arbiter_alarm::AlarmModule;
 use wart_arbiter_core::{Event, Registry, Reply, Store, PRIMARY_DISPLAY};
 use wart_arbiter_notify::NotifyModule;
+use wart_arbiter_power::PowerModule;
 use wart_arbiter_shell::ShellModule;
 use wart_arbiter_wm::WmModule;
 
@@ -290,6 +291,7 @@ fn run_daemon() -> Result<()> {
     // also covers a dropped subscriber connection or a crashed zygote.
     spawn_death_watchers();
     spawn_alarm_timer();
+    spawn_screen_poller();
 
     // Task 57 — boot to home. If a home app was designated in a previous
     // session (restored above), foreground it now (launching it if it
@@ -492,6 +494,8 @@ fn build_registry() -> Registry {
     reg.register(Box::new(AlarmModule::new()));
     // Signal bg-receipt M3 — the notification module (post/cancel/list/click).
     reg.register(Box::new(NotifyModule::new()));
+    // PowerManager — doze policy (reacts to Event::ScreenState, fans `doze` to hosts).
+    reg.register(Box::new(PowerModule::new()));
     reg
 }
 
@@ -818,6 +822,42 @@ fn spawn_alarm_timer() {
             bus_emit(Event::AlarmTick { now_ms });
         })
         .expect("spawn alarm timer thread");
+}
+
+/// PowerManager — poll the display power state (`debug.tracing.screen_state`, the
+/// SF-sourced survivor sysprop; NOT IPowerManager, which is the system_server ART
+/// layer we drop) every ~2 s and inject [`Event::ScreenState`] so the power module
+/// applies the doze grace + fans the cadence to hosts. The arbiter is the single
+/// power authority; the poll interval doubles as the grace tick. `On`=2 / `Vr`=5
+/// are live; everything else (Off=1, Doze=3, …) is non-live.
+fn spawn_screen_poller() {
+    fn read_live() -> Option<bool> {
+        let out = std::process::Command::new("/system/bin/getprop")
+            .arg("debug.tracing.screen_state")
+            .output()
+            .ok()?;
+        let v: i32 = String::from_utf8_lossy(&out.stdout).trim().parse().ok()?;
+        Some(matches!(v, 2 | 5)) // Display.STATE_ON | STATE_VR
+    }
+    std::thread::Builder::new()
+        .name("arbiter-screen-poller".into())
+        .spawn(|| {
+            let mut last: Option<bool> = None;
+            loop {
+                std::thread::sleep(Duration::from_millis(2000));
+                let Some(live) = read_live() else { continue };
+                // Always emit while non-live (the power module re-checks the grace
+                // each tick); when live, only emit on the change to live (no idle
+                // churn while the screen stays on).
+                if live && last == Some(true) {
+                    continue;
+                }
+                last = Some(live);
+                let _guard = arbiter_lock().lock().unwrap_or_else(|e| e.into_inner());
+                bus_emit(Event::ScreenState { live });
+            }
+        })
+        .expect("spawn screen poller thread");
 }
 
 fn spawn_death_watchers() {

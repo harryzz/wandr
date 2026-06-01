@@ -242,6 +242,10 @@ pub enum Event {
     /// The binary's alarm timer ticked (unix epoch ms). The alarm module fires
     /// any due alarms (Arbiter Inc. 3c). Emitted only while alarms exist.
     AlarmTick { now_ms: u64 },
+    /// The binary's screen poller reported the display power state (`live` =
+    /// On/Vr; false = Off/Doze). The power module (`wart-arbiter-power`) applies
+    /// the doze grace + decides dozing, fanning the cadence to hosts. PowerManager.
+    ScreenState { live: bool },
 }
 
 /// A command's outcome. The binary renders this to one wire line; `Ok`/`Err`

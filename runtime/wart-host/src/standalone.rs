@@ -713,22 +713,14 @@ fn run_cwasm_loop(
     // guest can sleep, so e.g. the status-bar clock still ticks ~1/sec.
     const IDLE_CAP_MS: u64 = 1000;
     const POLL_MS: u64 = 16;
-    // Doze (PowerManager) — when the screen has been OFF for the grace period,
-    // stretch the per-frame cadence (render AND bg-tick) to a coarse floor so a
-    // backgrounded/locked guest stops pumping its engine ~1 Hz and burning CPU/
-    // radio for an off-screen surface. The socket stays serviced within Signal's
-    // ~30-55 s websocket keepalive, so messages still land within ~DOZE_CADENCE
-    // when the screen is off; instantly once it's back on. Screen state is the
-    // host's existing `screen_rx` watcher (SF-sourced sysprop — a post-ART
-    // survivor; source is swappable without touching this policy). The grace
-    // catches a message that arrives right after you pocket the phone. The
-    // keep-alive alarm (dead-app recovery) is orthogonal.
-    const DOZE_GRACE_MS: u64 = 60_000;
-    const DOZE_CADENCE_MS: u64 = 10_000;
     let mut next_render_at = std::time::Instant::now();
     let mut bg_ticks: u64 = 0; // M2 — background-service pump count (throttled log)
-    let mut screen_off_at: Option<std::time::Instant> = None; // doze: when screen went off
-    let mut dozing = false; // doze: log transitions once
+    // Doze (PowerManager) — the ARBITER decides dozing (screen-off grace) and pushes
+    // `doze <cadence-ms>` to this host; we are a dumb applier (like geometry/orient).
+    // While dozing we stretch the per-frame cadence (render AND bg-tick) to that
+    // coarse value so a backgrounded/locked guest stops pumping its engine ~1 Hz for
+    // an off-screen surface. `0` = not dozing (normal pacing). See wart-arbiter-power.
+    let mut doze_cadence_ms: u64 = 0;
     loop {
         // Task 64 — set true by any event source below that did real work
         // this iteration; forces a render regardless of the pacing deadline.
@@ -867,12 +859,8 @@ fn run_cwasm_loop(
             let mut latest = None;
             while let Ok(s) = rx.try_recv() { latest = Some(s); }
             if let Some(s) = latest {
-                // Doze — start/clear the screen-off clock on a live↔off transition.
-                if s.is_live() {
-                    screen_off_at = None;
-                } else if screen_off_at.is_none() {
-                    screen_off_at = Some(std::time::Instant::now());
-                }
+                // (Doze is arbiter-decided now; this watcher only drives the guest
+                // lifecycle Paused/Resumed below.)
                 let target = if s.is_live() {
                     bindings::my::skiko_gfx::lifecycle::State::Resumed
                 } else {
@@ -1137,6 +1125,17 @@ fn run_cwasm_loop(
                         ),
                     }
                 }
+                crate::ime_inbound::InboundEvent::Doze { cadence_ms } => {
+                    // PowerManager — arbiter decided the doze state; apply it (dumb
+                    // applier). The cadence-extension at the end of the loop reads
+                    // `doze_cadence_ms`. A change wants a frame (resume render
+                    // promptly on `doze 0`).
+                    if doze_cadence_ms != cadence_ms {
+                        doze_cadence_ms = cadence_ms;
+                        dirty = true;
+                        log::info!("standalone: doze cadence ← {cadence_ms}ms (arbiter)");
+                    }
+                }
                 // Task 68 — the soft keyboard occludes `px` of our surface. Add
                 // it to the base bottom inset → the guest's logical height shrinks
                 // → re-issue on_resize so bottom-anchored content rises above the
@@ -1252,17 +1251,6 @@ fn run_cwasm_loop(
         // straight into Background (it never foregrounds, so render_frame, the
         // warm-up frames, and on_resize never run — `bg-tick` drives it). The
         // foreground / non-bg-service paths fall through to the render gate below.
-        // Doze — true once the screen has been off for the grace period. Slows
-        // (does not stop) the cadence below so a backgrounded/locked guest pumps
-        // ~DOZE_CADENCE instead of ~1 Hz while nothing is on screen.
-        let now_doze = std::time::Instant::now();
-        let dozing_now = screen_off_at
-            .map(|t| now_doze.duration_since(t).as_millis() as u64 >= DOZE_GRACE_MS)
-            .unwrap_or(false);
-        if dozing_now != dozing {
-            dozing = dozing_now;
-            log::info!("standalone: doze {} (screen off ≥ {}ms)", if dozing { "ENTER" } else { "EXIT" }, DOZE_GRACE_MS);
-        }
         let bg_pumping = bg_service
             && bg_tick.is_some()
             && matches!(cur_role, crate::app_role::AppRole::Background);
@@ -1337,13 +1325,13 @@ fn run_cwasm_loop(
             }
         }
 
-        // Doze — once the screen has been off past the grace period, push the next
-        // wake out to the coarse doze cadence (applies to whichever branch above
-        // set it: render OR bg-tick). A screen-on transition clears `screen_off_at`
-        // + marks the frame dirty, so the next iteration renders/pumps promptly.
-        if dozing {
+        // Doze — apply the arbiter-pushed cadence (0 = not dozing): push the next
+        // wake out to the coarse value, whichever branch above set it (render OR
+        // bg-tick). The arbiter sends `doze 0` (+ the guest's screen-on dirty) to
+        // resume promptly.
+        if doze_cadence_ms > 0 {
             next_render_at = next_render_at
-                .max(std::time::Instant::now() + std::time::Duration::from_millis(DOZE_CADENCE_MS));
+                .max(std::time::Instant::now() + std::time::Duration::from_millis(doze_cadence_ms));
         }
 
         frame += 1;
