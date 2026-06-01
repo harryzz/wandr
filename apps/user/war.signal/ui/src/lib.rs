@@ -36,6 +36,18 @@ dioxus_canvas::__wit_bindgen::generate!({
 });
 
 use wart::signal::chat;
+// M4 — host imports the guest calls: raise/clear notifications + schedule the
+// keep-alive alarm. (The matching exports are impl'd on `__DioxusCanvasGuest`
+// after the `wire!` below.)
+use war::alarm::scheduler;
+use war::notify::notifier;
+
+/// M4 — keep-alive alarm: re-wake Signal if it dies (crash / OOM / reboot). When
+/// alive it's a no-op refresh; when dead the arbiter relaunches it hidden (M1) →
+/// it reconnects as a background-service (M2). Coarse interval — the persistent
+/// socket handles liveness while running; this is only the dead-app backstop.
+const KEEPALIVE_ID: u64 = 1;
+const KEEPALIVE_MS: u64 = 300_000; // 5 min
 
 // Renderer/sink/IME wiring from dioxus-canvas, over the bindings generated above.
 // The pre_frame hook is where we pump the engine each tick.
@@ -84,6 +96,40 @@ dioxus_canvas::wire!(app, pre_frame: |r| {
     };
     r.set_min_frame_delay(delay);
 });
+
+// ── M4: background-receipt exports ───────────────────────────────────────────
+// `wire!` above defines `__DioxusCanvasGuest` (the renderer/frame-pacing export
+// target) and `export!`s the whole world. The world now also exports background /
+// notify-handler / alarm-handler, so we impl those on the SAME guest type here
+// (trait impls are crate-wide, order-independent — `export!` finds them).
+
+impl crate::exports::war::background::background::Guest for __DioxusCanvasGuest {
+    /// Backgrounded: the host calls this instead of render_frame. Pump the engine
+    /// (drains the socket → events → notifications) without rendering the hidden
+    /// surface; ask for a ~4 Hz cadence so a backgrounded message arrives quickly.
+    fn bg_tick() -> u32 {
+        pump();
+        250
+    }
+}
+
+impl crate::exports::war::notify::notify_handler::Guest for __DioxusCanvasGuest {
+    /// A notification was tapped (the arbiter already foregrounded us). Resolve the
+    /// thread it belongs to and request opening it (applied in `app`).
+    fn on_notification_click(id: u64) {
+        if let Some(thread) = NID_THREAD.with(|m| m.borrow().get(&id).cloned()) {
+            PENDING_OPEN.with(|p| *p.borrow_mut() = Some(thread));
+        }
+    }
+}
+
+impl crate::exports::war::alarm::alarm_handler::Guest for __DioxusCanvasGuest {
+    /// Keep-alive wake. If we were dead the arbiter relaunched us (hidden) and
+    /// this runs after `chat::init`; either way force an immediate sync.
+    fn on_alarm(_id: u64) {
+        pump();
+    }
+}
 
 // ── palette ─────────────────────────────────────────────────────────────────
 const BG: &str = "#0E0E16";
@@ -345,6 +391,24 @@ thread_local! {
     /// runtime, knows not to count incoming messages there as unread). Set when a
     /// thread is opened, cleared on back.
     static VIEWING: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// M4 — notification id → thread, so an `on-notification-click` tap resolves
+    /// back to which conversation to open. One notification per thread.
+    static NID_THREAD: RefCell<std::collections::HashMap<u64, String>> =
+        RefCell::new(std::collections::HashMap::new());
+    /// M4 — a thread the user asked to open via a notification tap (set outside
+    /// the dioxus runtime by `on-notification-click`; applied in `app`).
+    static PENDING_OPEN: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// M4 — stable per-thread notification id (one notification per conversation,
+/// updated in place rather than spamming). FNV-1a over the thread key.
+fn thread_nid(thread: &str) -> u64 {
+    let mut h: u64 = 0xcbf29ce4_84222325;
+    for b in thread.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
 }
 
 /// Open a conversation: mark it the viewed thread, clear its unread badge, and
@@ -355,6 +419,12 @@ fn open_thread(id: &str) {
         m.borrow_mut().unread.remove(id);
     });
     chat::mark_read(id);
+    // M4 — viewing a thread clears its notification.
+    let nid = thread_nid(id);
+    notifier::cancel(nid);
+    NID_THREAD.with(|m| {
+        m.borrow_mut().remove(&nid);
+    });
 }
 
 /// Leave the open conversation (back to the list).
@@ -418,6 +488,9 @@ fn pump() -> bool {
         if !s.get() {
             chat::init();
             s.set(true);
+            // M4 — arm the keep-alive alarm so a dead Signal (crash/OOM/reboot)
+            // is relaunched + reconnects. Idempotent on the arbiter side.
+            scheduler::schedule(KEEPALIVE_ID, KEEPALIVE_MS, KEEPALIVE_MS);
             // Backfill persisted history (messages from before this UI started;
             // live ones arrive as events below).
             let hist = chat::history();
@@ -450,6 +523,9 @@ fn pump() -> bool {
     let mut changed = false;
     let mut refresh = false;
     let mut refresh_groups = false;
+    // M4 — (thread, body-preview) for each new inbound message not in the open
+    // thread; resolved to titles + posted as notifications after the borrow ends.
+    let mut to_notify: Vec<(String, String)> = Vec::new();
     let events = chat::poll_events();
     if !events.is_empty() {
         MODEL.with(|m| {
@@ -464,6 +540,13 @@ fn pump() -> bool {
                                 let viewing = VIEWING.with(|v| v.borrow().clone());
                                 if viewing.as_deref() != Some(msg.thread.as_str()) {
                                     *m.unread.entry(msg.thread.clone()).or_insert(0) += 1;
+                                    // M4 — alert the user (works backgrounded too).
+                                    let preview: String = if msg.text.is_empty() && !msg.attachments.is_empty() {
+                                        "\u{1F4F7} Photo".to_string()
+                                    } else {
+                                        msg.text.chars().take(120).collect()
+                                    };
+                                    to_notify.push((msg.thread.clone(), preview));
                                 } else {
                                     // Arrived in the open thread → it's read now.
                                     chat::mark_read(&msg.thread);
@@ -520,6 +603,23 @@ fn pump() -> bool {
     if refresh_groups {
         let groups = load_groups();
         MODEL.with(|m| m.borrow_mut().groups = groups);
+    }
+
+    // M4 — post one notification per thread that got a new (unviewed) message.
+    // Resolved here (after the MODEL borrow) so titles use the latest contacts.
+    if !to_notify.is_empty() {
+        let (self_id, contacts, groups) = MODEL.with(|m| {
+            let m = m.borrow();
+            (m.account_id.clone(), m.contacts.clone(), m.groups.clone())
+        });
+        for (thread, body) in to_notify {
+            let (title, _is_group) = resolve_thread(&thread, &self_id, &contacts, &groups);
+            let nid = thread_nid(&thread);
+            notifier::post(nid, &title, &body);
+            NID_THREAD.with(|m| {
+                m.borrow_mut().insert(nid, thread);
+            });
+        }
     }
 
     let state = chat::state();
@@ -657,6 +757,15 @@ fn app() -> Element {
     let show_profile = use_signal(|| false);
 
     let (state, link_url, messages, contacts, groups, self_id, unread, my_profile) = snapshot();
+
+    // M4 — a notification tap asked to open a thread (set by on-notification-click,
+    // outside the runtime). Resolve + navigate to it now.
+    if let Some(tid) = PENDING_OPEN.with(|p| p.borrow_mut().take()) {
+        let (title, is_group) = resolve_thread(&tid, &self_id, &contacts, &groups);
+        open_thread(&tid);
+        let mut current = current;
+        current.set(Some(Thread { id: tid, title, is_group }));
+    }
 
     // Not linked yet → just the QR.
     if let Some(url) = link_url {

@@ -115,4 +115,12 @@ world signal-ui-app {
     import wart:signal/chat@0.1.0;
     export renderer;
     export frame-pacing;
+    // M4 (Signal background-receipt) — keep the engine pumping while backgrounded
+    // (bg-tick instead of render), raise notifications on inbound, re-wake if
+    // killed (keep-alive alarm), and open the right thread on a notification tap.
+    export war:background/background@0.1.0;
+    import war:notify/notifier@0.1.0;
+    export war:notify/notify-handler@0.1.0;
+    import war:alarm/scheduler@0.1.0;
+    export war:alarm/alarm-handler@0.1.0;
 }

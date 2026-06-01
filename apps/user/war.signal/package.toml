@@ -11,6 +11,9 @@ orientation = "auto"
 label       = "Signal"
 # A chat UI doesn't need 60 fps; 30 halves animating cost (host-enforced).
 max_fps     = 30
+# M4 — a background-service: the host pumps `bg-tick` while we're backgrounded so
+# the Signal socket stays live + messages arrive (with a notification) off-screen.
+background  = true
 
 [components]
 ui = "components/ui.wasm"

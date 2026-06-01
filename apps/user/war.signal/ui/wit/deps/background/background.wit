@@ -1,0 +1,7 @@
+// war:background/background — M4. Signal exports bg-tick so the host pumps the
+// engine while backgrounded (instead of rendering the hidden surface).
+package war:background@0.1.0;
+
+interface background {
+    bg-tick: func() -> u32;
+}

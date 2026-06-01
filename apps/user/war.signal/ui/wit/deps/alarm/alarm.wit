@@ -1,0 +1,12 @@
+// war:alarm — M4. Signal imports `scheduler` (keep-alive alarm) + exports
+// `alarm-handler` (wake → sync).
+package war:alarm@0.1.0;
+
+interface scheduler {
+    schedule: func(id: u64, delay-ms: u64, repeat-ms: u64);
+    cancel: func(id: u64);
+}
+
+interface alarm-handler {
+    on-alarm: func(id: u64);
+}
