@@ -246,6 +246,11 @@ pub enum Event {
     /// On/Vr; false = Off/Doze). The power module (`wart-arbiter-power`) applies
     /// the doze grace + decides dozing, fanning the cadence to hosts. PowerManager.
     ScreenState { live: bool },
+
+    /// wart-arbiter-audio (M3b) — a comms session (call) started/ended on `pid`.
+    /// The power module keeps the call host OUT of doze while active (no dozing
+    /// mid-call). Emitted by the audio module on call-start / call-end.
+    CommsActive { pid: i32, active: bool },
 }
 
 /// A command's outcome. The binary renders this to one wire line; `Ok`/`Err`

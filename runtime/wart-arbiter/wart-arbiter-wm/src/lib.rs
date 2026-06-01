@@ -339,7 +339,8 @@ impl ArbiterModule for WmModule {
             | Event::GeometryRecomputed { .. }
             | Event::SurfaceRemoved { .. }
             | Event::AlarmTick { .. }
-            | Event::ScreenState { .. } => {}
+            | Event::ScreenState { .. }
+            | Event::CommsActive { .. } => {}
         }
     }
 }

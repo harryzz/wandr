@@ -42,6 +42,10 @@ pub struct PowerModule {
     /// Pids the loader reported as background-services (get the maintenance
     /// cadence). Everyone else is normal. Cleaned on `SurfaceRemoved`.
     bg_service: HashSet<i32>,
+    /// M3b — pids in an active comms session (a call). They are NEVER dozed
+    /// (`cadence 0`) so a call keeps running with the screen off. Driven by
+    /// `Event::CommsActive` from the audio module; cleaned on `SurfaceRemoved`.
+    comms: HashSet<i32>,
 }
 
 /// Pure doze decision: given how long the screen has been off (`off_ms`, `None`
@@ -57,9 +61,12 @@ impl PowerModule {
         Self::default()
     }
 
-    /// The cadence (ms) to send a pid while dozing, by its class.
+    /// The cadence (ms) to send a pid while dozing, by its class. A comms-session
+    /// pid is never dozed (cadence 0) — a live call must keep running off-screen.
     fn cadence_for(&self, pid: i32) -> u64 {
-        if self.bg_service.contains(&pid) {
+        if self.comms.contains(&pid) {
+            0 // in a call — never doze
+        } else if self.bg_service.contains(&pid) {
             DOZE_MAINTENANCE_MS
         } else {
             DOZE_SUSPEND_MS
@@ -131,6 +138,19 @@ impl ArbiterModule for PowerModule {
             Event::ScreenState { live } => self.on_screen_state(*live, ctx),
             Event::SurfaceRemoved { pid } => {
                 self.bg_service.remove(pid);
+                self.comms.remove(pid);
+            }
+            // M3b — a call started/ended: update the keep-alive set. If we're
+            // already dozing, re-fan THIS pid's cadence now (a call starting
+            // mid-doze must wake to 0; ending mid-doze re-dozes to its class).
+            Event::CommsActive { pid, active } => {
+                if *active { self.comms.insert(*pid); } else { self.comms.remove(pid); }
+                if self.dozing {
+                    let cadence = self.cadence_for(*pid);
+                    ctx.deliver_to_host(*pid, format!("doze {cadence}\n"));
+                    log::info!("arbiter: comms {} pid={pid} mid-doze → doze {cadence}",
+                        if *active { "start" } else { "end" });
+                }
             }
             _ => {}
         }
@@ -159,6 +179,47 @@ mod tests {
             launched_at: SystemTime::now(),
             launched_mono: Instant::now(),
         });
+    }
+
+    fn doze_line(eff: &[Effect], pid: i32) -> Option<String> {
+        eff.iter().find_map(|e| match e {
+            Effect::HostLine { pid: p, line } if *p == pid => Some(line.trim().to_string()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn comms_pid_kept_out_of_doze() {
+        let mut r = Registry::new();
+        let mut m = PowerModule::new();
+        m.screen_off_at = Some(Instant::now() - std::time::Duration::from_millis(61_000));
+        r.register(Box::new(m));
+        let mut store = Store::new();
+        add_app(&mut store, "sig", 10);
+        // A call is active on pid 10 (not yet dozing → no immediate fan).
+        r.dispatch_event(Event::CommsActive { pid: 10, active: true }, &mut store);
+        // Screen off past grace → ENTER doze: the call host gets `doze 0`, not suspend.
+        let eff = r.dispatch_event(Event::ScreenState { live: false }, &mut store);
+        assert_eq!(doze_line(&eff, 10).as_deref(), Some("doze 0"));
+    }
+
+    #[test]
+    fn call_start_and_end_mid_doze_refan() {
+        let mut r = Registry::new();
+        let mut m = PowerModule::new();
+        m.screen_off_at = Some(Instant::now() - std::time::Duration::from_millis(61_000));
+        r.register(Box::new(m));
+        let mut store = Store::new();
+        add_app(&mut store, "sig", 10);
+        // Already dozing (pid 10 = normal → suspend).
+        let eff = r.dispatch_event(Event::ScreenState { live: false }, &mut store);
+        assert_eq!(doze_line(&eff, 10).as_deref(), Some(&format!("doze {DOZE_SUSPEND_MS}")[..]));
+        // Call starts mid-doze → immediate wake to 0.
+        let eff = r.dispatch_event(Event::CommsActive { pid: 10, active: true }, &mut store);
+        assert_eq!(doze_line(&eff, 10).as_deref(), Some("doze 0"));
+        // Call ends mid-doze → re-doze to its class cadence.
+        let eff = r.dispatch_event(Event::CommsActive { pid: 10, active: false }, &mut store);
+        assert_eq!(doze_line(&eff, 10).as_deref(), Some(&format!("doze {DOZE_SUSPEND_MS}")[..]));
     }
 
     #[test]

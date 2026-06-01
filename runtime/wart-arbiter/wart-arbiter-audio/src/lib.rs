@@ -206,6 +206,8 @@ impl AudioModule {
         ctx.deliver_to_host(pid, "audio-policy set-mode comm\n");
         // Ongoing-call badge in the status bar (notify module's Store).
         ctx.store.post_notification(&app_id, CALL_NOTIF_ID, "Ongoing call".into(), app_id.clone());
+        // Keep the call host out of doze (the power module reacts). M3b.
+        ctx.emit(Event::CommsActive { pid, active: true });
         ctx.request(Effect::Persist);
         log::info!("arbiter: audio-call-start pid={pid} app={app_id} → IN_COMMUNICATION");
         Reply::ok(format!("call-start pid={pid} app={app_id}"))
@@ -225,6 +227,8 @@ impl AudioModule {
         ctx.deliver_to_host(pid, "audio-policy set-mode normal\n");
         self.drop_pid(pid, ctx); // release focus → prior owner regains
         ctx.store.cancel_notification(&app_id, CALL_NOTIF_ID);
+        // Release the doze keep-alive (the power module reacts). M3b.
+        ctx.emit(Event::CommsActive { pid, active: false });
         ctx.request(Effect::Persist);
         log::info!("arbiter: audio-call-end pid={pid} app={app_id} → NORMAL");
         Reply::ok(format!("call-end pid={pid} app={app_id}"))
