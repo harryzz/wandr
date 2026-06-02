@@ -111,14 +111,15 @@ The `PeerSession` API is the engine; what remains is integration:
 2. **Real audio** — DONE. `repros/call-audio-wire` (`war.probe.callaudio`) wires
    `MediaSession`'s PCM ends to the host `audio` WIT — mic `open-capture`/
    `read-pcm-f32` in, AAudio `create-track`/`write-pcm-f32` out — and round-trips
-   the live mic through Opus+SRTP back to the speaker on a Pixel 2 XL
-   (mechanism device-verified: capture `channels=1` + playback `channels=2`
-   streams both open, 150 frames through the pipeline). Two device gotchas
-   handled: the MMAP **output is stereo-only** (play a stereo track, interleave
-   the mono pipeline output L=R; capture stays mono), and there's **no
-   simultaneous input+output MMAP** (so it records-then-plays — not a limit for a
-   real call, where each device only captures *or* plays). Composing this with a
-   networked `PeerSession` (step 1) is a complete live call.
+   the live mic through Opus+SRTP back to the speaker on a Pixel 2 XL —
+   **audibly verified** (a reference tone + the captured voice both play out the
+   speaker). Three device gotchas handled: the MMAP **output is stereo-only**
+   (play a stereo track, interleave the mono pipeline output L=R; capture stays
+   mono); there's **no simultaneous input+output MMAP** (so it records-then-plays
+   — not a limit for a real call, where each device only captures *or* plays); and
+   the output is a **DMA ring that needs write-then-start** (prime it with PCM
+   before `start()`, else the HAL never begins pulling → silence). Composing this
+   with a networked `PeerSession` (step 1) is a complete live call.
 3. **Signaling channel** — exchange the SDP (`Signaling::to_sdp`/`from_sdp`) +
    trickled candidates over a signaling server. (The DTLS-cert fingerprint is
    real: `transport.rs` computes SHA-256 over the cert DER, carries it in the

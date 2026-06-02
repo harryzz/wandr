@@ -42,20 +42,23 @@ ICE pair; mirror the offer's media DIRECTION in the answer (recvonly offer →
 sendonly answer, RFC 3264 — libwebrtc rejects sendrecv). Browser env: disable
 mDNS host-candidate obfuscation (.local unresolvable); UDP reachability (not WSL).
 
-**Real audio wiring DONE + mechanism device-verified** (`repros/call-audio-wire`,
+**Real audio wiring DONE + AUDIBLY device-verified** (`repros/call-audio-wire`,
 `war.probe.callaudio`): a command guest wires MediaSession's PCM ends to the host
 `audio` WIT — mic open-capture/read-pcm-f32 in, AAudio create-track/write-pcm-f32
 out — and round-trips the live mic through Opus+SRTP back to the speaker on the
-Pixel 2 XL (capture channels=1 + playback channels=2 both open, 150 frames
-through the pipeline). Command+custom-import guest: the wasm32-wasip2 target
-already emits a wasi:cli/command COMPONENT with the extra `my:skiko-gfx/audio`
-import (no `component new` — just copy the built wasm); the run-once linker adds
-SkikoUi which satisfies audio; the audio service is lazy (rsbinder hub OnceLock),
-works in any host context. TWO device gotchas (both handled): MMAP **output is
+Pixel 2 XL. User confirmed: reference tone + their captured VOICE both play out
+the speaker. Command+custom-import guest: the wasm32-wasip2 target already emits a
+wasi:cli/command COMPONENT with the extra `my:skiko-gfx/audio` import (no
+`component new` — just copy the built wasm); the run-once linker adds SkikoUi
+which satisfies audio; the audio service is lazy (rsbinder hub OnceLock), works in
+any host context. THREE device gotchas (all handled): (1) MMAP **output is
 stereo-only** (mono track → -889; play stereo, interleave mono L=R; capture stays
-mono), and **no simultaneous in+out MMAP** (record-then-play; not a limit for a
-real call — each device only captures OR plays). Audible "hear yourself" quality
-= user's subjective check.
+mono); (2) **no simultaneous in+out MMAP** (record-then-play; not a limit for a
+real call — each device only captures OR plays); (3) **write-then-start** — the
+output is a DMA ring the HAL pulls; `start()` on an EMPTY ring never begins
+pulling (writes return 0, ~32 s grind for 4.5 s audio, silence) → PRIME the ring
+with PCM first, THEN start ([[feedback_aaudio_gotchas]] flagged this). Mic on this
+device sits near the noise floor (peak ~0.008) — a gain question, not wiring.
 
 **Remaining to a shippable feature**: compose call-audio-wire's PCM pump with a
 networked `PeerSession` (real DTLS keys instead of loopback) + a signaling

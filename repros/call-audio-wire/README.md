@@ -33,27 +33,33 @@ wart-host --install <warpkg>                         # app_id war.probe.callaudi
 wart-host --run-once war.probe.callaudio             # speak during "capturing…"
 ```
 
-## Result (2026-06-02) — mechanism device-verified ✅
+## Result (2026-06-02) — audibly device-verified ✅
 
 ```
 [callaudio] capturing ~3 s of mic → wart-call (Opus + SRTP loopback) — speak now…
 [callaudio] 150 frames through wart-call (144000 samples out); mic_rms=… out_rms=…
-[callaudio] playing back 144000 frames (stereo) through AAudio — listen for yourself…
+[callaudio] playing 1.5 s reference tone + your captured mic ×30.0 (peak …)…
 [callaudio] DONE — mic → wart-call (Opus + SRTP) → AAudio, end-to-end on real hardware
 ```
 
-Host log confirms both AAudio streams open: capture `channels=1`, playback
-`channels=2`. So the PCM↔hardware wiring is complete: the mic feeds wart-call's
-encoder and wart-call's decoder feeds the speaker — the last integration step
-before a live two-device call.
+**Confirmed on a Pixel 2 XL: the reference tone and the captured voice both play
+out the speaker** — the mic feeds wart-call's encoder and wart-call's decoder
+feeds the speaker, the full audio plane of a call, on real hardware. (The mic
+plays back amplified because this device's mic sits near the noise floor — a gain
+question, not a wiring one.)
 
-## Two device gotchas (both handled here)
+## Three device gotchas (all handled here)
 
 1. **Stereo-only MMAP output.** The Pixel 2 XL's MMAP *output* endpoint rejects a
    mono track (`openMmapStream → -38`, then `-889`). Play a **stereo** track and
    interleave the mono pipeline output L = R. (Capture is fine in mono.)
 2. **No simultaneous input+output MMAP.** Hence record-then-play, not a live
    monitor loop. Not a call limitation (one direction per device).
+3. **Write-then-start (DMA prime).** The output is a shared-memory ring the HAL
+   DMA-pulls; if you `start()` it empty it never begins pulling (the ring stays
+   full, writes return 0, ~32 s of grind for 4.5 s of audio, silence). **Prime the
+   ring with PCM first, *then* `start`**, then stream the rest — playback runs at
+   real-time and is audible.
 
 ## What's NOT here
 

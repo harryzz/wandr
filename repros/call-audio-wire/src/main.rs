@@ -44,6 +44,7 @@ fn rms(x: &[f32]) -> f32 {
     (x.iter().map(|&v| v * v).sum::<f32>() / x.len() as f32).sqrt()
 }
 
+
 fn main() {
     let cfg = TrackConfig {
         sample_rate: SAMPLE_RATE,
@@ -114,22 +115,51 @@ fn main() {
         println!("[callaudio] create-track failed");
         std::process::exit(1);
     }
+    // Build the full interleaved-stereo playback buffer:
+    //   (a) a loud 1.5 s 440 Hz reference tone — isolates the speaker path from
+    //       the mic; if you hear THIS but not yourself, the mic gain is the issue,
+    //   (b) the captured mic, amplified so quiet speech is audible.
+    let mut all: Vec<f32> = Vec::new();
+    let tone_frames = SAMPLE_RATE as usize * 3 / 2;
+    for n in 0..tone_frames {
+        let s = (2.0 * std::f32::consts::PI * 440.0 * n as f32 / SAMPLE_RATE as f32).sin() * 0.3;
+        all.push(s);
+        all.push(s);
+    }
+    let peak = out.iter().fold(0f32, |m, &v| m.max(v.abs()));
+    let gain = if peak > 1e-6 { (0.3 / peak).min(30.0) } else { 1.0 };
+    for &s in &out {
+        let a = (s * gain).clamp(-1.0, 1.0);
+        all.push(a);
+        all.push(a);
+    }
+    println!(
+        "[callaudio] playing 1.5 s reference tone + your captured mic ×{gain:.1} (peak {peak:.4})…"
+    );
+
+    // write-then-start: this device's AAudio output won't pull a stream that was
+    // started empty — prime the ring first, THEN start, then stream the rest.
+    let mut i = 0; // sample index (2 per frame)
+    while i < all.len() {
+        let end = (i + FRAME * 2).min(all.len());
+        let wrote = audio::write_pcm_f32(trk, &all[i..end]) as usize;
+        if wrote == 0 {
+            break; // ring primed (full)
+        }
+        i += wrote * 2;
+    }
     audio::start(trk);
-    let stereo: Vec<f32> = out.iter().flat_map(|&s| [s, s]).collect();
-    println!("[callaudio] playing back {} frames (stereo) through AAudio — listen for yourself…", out.len());
-    let mut i = 0; // sample index into the interleaved stereo buffer
-    let play_deadline = Instant::now() + Duration::from_secs(10);
-    while i < stereo.len() && Instant::now() < play_deadline {
-        let end = (i + FRAME * 2).min(stereo.len()); // FRAME frames = FRAME*2 stereo samples
-        let wrote = audio::write_pcm_f32(trk, &stereo[i..end]) as usize; // frames written
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while i < all.len() && Instant::now() < deadline {
+        let end = (i + FRAME * 2).min(all.len());
+        let wrote = audio::write_pcm_f32(trk, &all[i..end]) as usize;
         if wrote == 0 {
             std::thread::sleep(Duration::from_millis(5));
             continue;
         }
-        i += wrote * 2; // 2 samples (L,R) per frame
+        i += wrote * 2;
     }
-    // Let the HAL drain the ring before closing.
-    let drain = Instant::now() + Duration::from_secs(3);
+    let drain = Instant::now() + Duration::from_secs(5);
     while audio::pending_frames(trk) > 0 && Instant::now() < drain {
         std::thread::sleep(Duration::from_millis(20));
     }
