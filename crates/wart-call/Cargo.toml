@@ -27,7 +27,7 @@ edition = "2021"
 # `signal` adds Signal's 1:1 call protocol: the `opaque` codec (src/signal/) AND
 # the X25519-DH SRTP keying (ringrtc V4) in transport.rs. Pulls prost + the DH/HKDF
 # crypto; the WebRTC-native path + repros/call-* build without it.
-signal = ["dep:prost", "dep:x25519-dalek", "dep:hkdf", "dep:rand_core"]
+signal = ["dep:prost", "dep:x25519-dalek", "dep:hkdf", "dep:rand_core", "dep:rtc-turn"]
 
 [dependencies]
 bytes      = "1"
@@ -44,3 +44,4 @@ rtc-srtp   = { path = "../../external/rtc/rtc-srtp" }
 rtc-rtp    = { path = "../../external/rtc/rtc-rtp" }
 rtc-sdp    = { path = "../../external/rtc/rtc-sdp" }
 rtc-shared = { path = "../../external/rtc/rtc-shared", default-features = false }
+rtc-turn   = { path = "../../external/rtc/rtc-turn", optional = true }  # TURN relay (feature = "signal")

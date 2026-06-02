@@ -28,6 +28,8 @@ pub mod session;
 pub mod signal;
 pub mod signaling;
 pub mod transport;
+#[cfg(feature = "signal")]
+pub mod turn;
 
 pub use media::{MediaSession, SrtpKeys};
 pub use session::{PeerSession, Role, SessionState};
@@ -49,6 +51,8 @@ pub enum Error {
     Dtls(&'static str),
     /// Signal X25519-DH key agreement (the `signal` feature keying path).
     Dh(&'static str),
+    /// TURN relay client / allocation (the `signal` feature relay path).
+    Turn(&'static str),
     /// Signal `opaque` protobuf encode/decode (the `signal` feature codec).
     Proto(&'static str),
     /// Used before the session is connected.
@@ -65,6 +69,7 @@ impl core::fmt::Display for Error {
             Error::Ice(s) => write!(f, "ice: {s}"),
             Error::Dtls(s) => write!(f, "dtls: {s}"),
             Error::Dh(s) => write!(f, "dh: {s}"),
+            Error::Turn(s) => write!(f, "turn: {s}"),
             Error::Proto(s) => write!(f, "proto: {s}"),
             Error::NotConnected => write!(f, "session not connected yet"),
         }

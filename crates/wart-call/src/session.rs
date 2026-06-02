@@ -84,20 +84,24 @@ impl PeerSession {
     /// `caller_identity`/`callee_identity` are the two ACI identity public keys
     /// (serialized, caller = offerer first) that authenticate the derived keys.
     /// Pair the signaling with the [`crate::signal`] `opaque` codec.
+    /// `turn` (optional) allocates a TURN relay so the call connects across NAT;
+    /// `None` gathers host candidates only.
     #[cfg(feature = "signal")]
     pub fn new_signal(
         role: Role,
         local_addr: SocketAddr,
         caller_identity: Vec<u8>,
         callee_identity: Vec<u8>,
+        turn: Option<crate::turn::TurnConfig>,
     ) -> Result<Self, Error> {
         // Random per-call ICE creds (advertised in our offer/answer). libwebrtc
         // (real Signal) requires ufrag ≥4 and pwd ≥22 chars from the ICE charset;
         // ringrtc generates these per call, so fixed creds would be an interop tell.
         let ufrag = random_ice_cred(8);
         let pwd = random_ice_cred(24);
-        let transport =
-            Transport::new_signal(role, &ufrag, &pwd, local_addr, caller_identity, callee_identity)?;
+        let transport = Transport::new_signal(
+            role, &ufrag, &pwd, local_addr, caller_identity, callee_identity, turn,
+        )?;
         Ok(Self {
             role,
             local_addr,
@@ -166,6 +170,14 @@ impl PeerSession {
             Some(addr) => self.transport.add_remote_candidate(addr),
             None => Ok(()),
         }
+    }
+
+    /// New local candidate lines to trickle to the peer (Signal relay path) — the
+    /// relay candidate appears once the TURN allocation completes. Drain each tick
+    /// and send each as a `CallSignal::Ice`. Empty without a `TurnConfig`.
+    #[cfg(feature = "signal")]
+    pub fn take_new_local_candidates(&mut self) -> Vec<String> {
+        self.transport.take_new_local_candidates()
     }
 
     pub fn state(&self) -> SessionState {
@@ -358,6 +370,14 @@ mod tests {
         assert!(!a.is_connected(), "A must not connect on fingerprint mismatch");
     }
 
+    /// A remote TURN relay candidate's connection address (the relayed addr, fields
+    /// 4/5) is extracted by `parse_candidate_addr`, ignoring the `typ relay raddr…` tail.
+    #[test]
+    fn relay_candidate_address_parses_to_relayed_addr() {
+        let line = "1 1 udp 16777215 5.6.7.8 5000 typ relay raddr 1.2.3.4 6000";
+        assert_eq!(parse_candidate_addr(line), Some("5.6.7.8:5000".parse().unwrap()));
+    }
+
     /// Signal-mode call (ringrtc V4): NO DTLS — keys come from X25519-DH over the
     /// public keys exchanged in signaling. Two wart peers connect over real UDP and
     /// exchange AEAD-AES-256-GCM-protected Opus. The analog of
@@ -375,7 +395,7 @@ mod tests {
             let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
             sock.set_nonblocking(true).unwrap();
             let s = PeerSession::new_signal(
-                role, sock.local_addr().unwrap(), caller_id.clone(), callee_id.clone(),
+                role, sock.local_addr().unwrap(), caller_id.clone(), callee_id.clone(), None,
             )
             .unwrap();
             (s, sock)
@@ -417,7 +437,7 @@ mod tests {
         let bind = |role, caller: Vec<u8>, callee: Vec<u8>| {
             let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
             sock.set_nonblocking(true).unwrap();
-            let s = PeerSession::new_signal(role, sock.local_addr().unwrap(), caller, callee).unwrap();
+            let s = PeerSession::new_signal(role, sock.local_addr().unwrap(), caller, callee, None).unwrap();
             (s, sock)
         };
         let (mut a, asock) = bind(Role::Offerer, vec![0x05; 33], vec![0xAA; 33]);

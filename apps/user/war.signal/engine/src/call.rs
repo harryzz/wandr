@@ -20,8 +20,10 @@ use std::net::{SocketAddr, UdpSocket};
 use std::time::Instant;
 
 use libsignal_service::proto::{call_message, CallMessage};
+use libsignal_service::push_service::TurnServerInfo;
 use wart_call::local_lan_ip;
 use wart_call::signal::{CallSignal, CallState, HangupKind, SignalCall};
+use wart_call::turn::TurnConfig;
 
 use crate::my::skiko_gfx::audio::{self, ChannelLayout, Format, TrackConfig};
 
@@ -36,6 +38,51 @@ const HANGUP_NORMAL: i32 = 0;
 const HANGUP_ACCEPTED: i32 = 1;
 const HANGUP_DECLINED: i32 = 2;
 const HANGUP_BUSY: i32 = 3;
+
+/// Build a wart-call [`TurnConfig`] from a Signal calling relay. Prefers the
+/// IP-pinned URLs (`urlsWithIps`) and requires `ip:port` form — the wasip2 guest has
+/// no reliable DNS, and wart-call demuxes inbound TURN traffic by the server address.
+/// Picks a UDP `turn:` server (+ a `stun:` server if present). `None` if none usable.
+pub fn turn_config_from(relay: &TurnServerInfo) -> Option<TurnConfig> {
+    let pick = |want: &str, require_udp: bool| -> Option<String> {
+        relay
+            .urls_with_ips
+            .iter()
+            .chain(relay.urls.iter())
+            .filter_map(|u| parse_ice_uri(u))
+            .find(|(scheme, hostport, udp)| {
+                scheme == want
+                    && (!require_udp || *udp)
+                    && hostport.parse::<std::net::SocketAddr>().is_ok()
+            })
+            .map(|(_, hostport, _)| hostport)
+    };
+    let turn_serv_addr = pick("turn", true)?;
+    Some(TurnConfig {
+        stun_serv_addr: pick("stun", false).unwrap_or_default(),
+        turn_serv_addr,
+        username: relay.username.clone(),
+        password: relay.password.clone(),
+        realm: relay.hostname.clone().unwrap_or_default(),
+    })
+}
+
+/// Parse an ICE URI (`turn:1.2.3.4:80?transport=udp`) → (scheme, "host:port", is_udp).
+/// `turns:`/`stuns:` (TLS) collapse to `turn`/`stun` but are marked non-UDP.
+fn parse_ice_uri(uri: &str) -> Option<(String, String, bool)> {
+    let (scheme, rest) = uri.split_once(':')?;
+    let scheme = scheme.to_ascii_lowercase();
+    let (base, tls) = match scheme.as_str() {
+        "turn" => ("turn", false),
+        "turns" => ("turn", true),
+        "stun" => ("stun", false),
+        "stuns" => ("stun", true),
+        _ => return None,
+    };
+    let (hostport, query) = rest.split_once('?').unwrap_or((rest, ""));
+    let udp = !tls && !query.contains("transport=tcp");
+    Some((base.to_string(), hostport.to_string(), udp))
+}
 
 /// Map one outgoing [`CallSignal`] to a libsignal `CallMessage`.
 pub fn signal_to_call_message(sig: &CallSignal) -> CallMessage {
@@ -233,6 +280,7 @@ impl CallEngine {
         my_identity: Vec<u8>,
         peer_identity: Vec<u8>,
         peer_aci: String,
+        turn: Option<wart_call::turn::TurnConfig>,
     ) -> Result<Vec<CallSignal>, String> {
         if self.active.is_some() {
             return Err("a call is already active".into());
@@ -240,7 +288,7 @@ impl CallEngine {
         let sock = bind_socket()?;
         let local = local_candidate_addr(&sock)?;
         // caller = us (offerer): caller_identity = my, callee_identity = peer.
-        let call = SignalCall::place(call_id, local, my_identity, peer_identity)
+        let call = SignalCall::place(call_id, local, my_identity, peer_identity, turn)
             .map_err(|e| e.to_string())?;
         let mut active = ActiveCall::new(call, sock, peer_aci);
         let sigs = active.call.poll_signals();
@@ -259,6 +307,7 @@ impl CallEngine {
         sender_aci: &str,
         my_identity: &[u8],
         sender_identity: &[u8],
+        turn: Option<wart_call::turn::TurnConfig>,
     ) -> (Vec<CallSignal>, Option<String>) {
         let signals = call_message_to_signals(cm);
         let mut out = Vec::new();
@@ -269,7 +318,7 @@ impl CallEngine {
                 // caller = the remote offerer (sender), callee = us.
                 (CallSignal::Offer { call_id, opaque }, false) => {
                     let (call_id, opaque) = (*call_id, opaque.clone());
-                    match self.start_incoming(call_id, sender_aci, sender_identity, my_identity, &opaque) {
+                    match self.start_incoming(call_id, sender_aci, sender_identity, my_identity, &opaque, turn.clone()) {
                         Ok(()) => incoming = Some(sender_aci.to_owned()),
                         Err(_) => out.push(CallSignal::Busy { call_id }),
                     }
@@ -298,6 +347,7 @@ impl CallEngine {
         caller_identity: &[u8],
         callee_identity: &[u8],
         offer_opaque: &[u8],
+        turn: Option<wart_call::turn::TurnConfig>,
     ) -> Result<(), String> {
         if caller_identity.is_empty() || callee_identity.is_empty() {
             return Err("missing identity key for the call".into());
@@ -310,6 +360,7 @@ impl CallEngine {
             caller_identity.to_vec(),
             callee_identity.to_vec(),
             offer_opaque,
+            turn,
         )
         .map_err(|e| e.to_string())?;
         self.active = Some(ActiveCall::new(call, sock, caller_aci.to_owned()));

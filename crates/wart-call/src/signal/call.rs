@@ -107,9 +107,11 @@ impl SignalCall {
         local_addr: SocketAddr,
         caller_identity: Vec<u8>,
         callee_identity: Vec<u8>,
+        turn: Option<crate::turn::TurnConfig>,
     ) -> Result<Self, Error> {
-        let session =
-            PeerSession::new_signal(Role::Offerer, local_addr, caller_identity, callee_identity)?;
+        let session = PeerSession::new_signal(
+            Role::Offerer, local_addr, caller_identity, callee_identity, turn,
+        )?;
         let mut call = Self {
             call_id,
             state: CallState::Outgoing,
@@ -132,9 +134,11 @@ impl SignalCall {
         caller_identity: Vec<u8>,
         callee_identity: Vec<u8>,
         offer_opaque: &[u8],
+        turn: Option<crate::turn::TurnConfig>,
     ) -> Result<Self, Error> {
-        let session =
-            PeerSession::new_signal(Role::Answerer, local_addr, caller_identity, callee_identity)?;
+        let session = PeerSession::new_signal(
+            Role::Answerer, local_addr, caller_identity, callee_identity, turn,
+        )?;
         let offer = decode_offer(offer_opaque)?;
         Ok(Self {
             call_id,
@@ -220,6 +224,15 @@ impl SignalCall {
 
     pub fn handle_timeout(&mut self, now: Instant) {
         self.session.handle_timeout(now);
+        // Trickle any newly-gathered local candidate (the TURN relay candidate
+        // arrives after allocation completes) as a fresh `CallSignal::Ice`.
+        if self.state != CallState::Ended {
+            for line in self.session.take_new_local_candidates() {
+                if let Ok(opaque) = encode_ice_candidate(&line) {
+                    self.out.push(CallSignal::Ice { call_id: self.call_id, opaque });
+                }
+            }
+        }
         if self.state == CallState::Connecting && self.session.is_connected() {
             self.state = CallState::Connected;
         }
@@ -308,7 +321,7 @@ mod tests {
         let (asock, bsock) = (udp(), udp());
 
         // Caller places — Offer + trickled Ice are queued.
-        let mut a = SignalCall::place(call_id, asock.local_addr().unwrap(), caller_id.clone(), callee_id.clone()).unwrap();
+        let mut a = SignalCall::place(call_id, asock.local_addr().unwrap(), caller_id.clone(), callee_id.clone(), None).unwrap();
         assert_eq!(a.state(), CallState::Outgoing);
 
         // The engine delivers the Offer to B; the trickled Ice follows.
@@ -317,7 +330,7 @@ mod tests {
             CallSignal::Offer { opaque, .. } => Some(opaque.clone()),
             _ => None,
         }).expect("place queues an Offer");
-        let mut b = SignalCall::incoming(call_id, bsock.local_addr().unwrap(), caller_id, callee_id, &offer).unwrap();
+        let mut b = SignalCall::incoming(call_id, bsock.local_addr().unwrap(), caller_id, callee_id, &offer, None).unwrap();
         assert_eq!(b.state(), CallState::Ringing);
         b.accept().unwrap();
         assert_eq!(b.state(), CallState::Connecting);
@@ -358,7 +371,7 @@ mod tests {
         let (caller_id, callee_id) = identities();
         let call_id = 0x42;
         let sock = udp();
-        let mut a = SignalCall::place(call_id, sock.local_addr().unwrap(), caller_id, callee_id).unwrap();
+        let mut a = SignalCall::place(call_id, sock.local_addr().unwrap(), caller_id, callee_id, None).unwrap();
         assert_eq!(a.state(), CallState::Outgoing);
         a.on_signal(CallSignal::Busy { call_id }).unwrap();
         assert_eq!(a.state(), CallState::Ended);
@@ -370,7 +383,7 @@ mod tests {
     #[test]
     fn foreign_call_id_signal_ignored() {
         let (caller_id, callee_id) = identities();
-        let mut a = SignalCall::place(1, udp().local_addr().unwrap(), caller_id, callee_id).unwrap();
+        let mut a = SignalCall::place(1, udp().local_addr().unwrap(), caller_id, callee_id, None).unwrap();
         a.on_signal(CallSignal::Hangup { call_id: 999, kind: HangupKind::Normal }).unwrap();
         assert_eq!(a.state(), CallState::Outgoing, "a hangup for another call must not end this one");
     }

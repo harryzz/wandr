@@ -2747,6 +2747,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rtc-turn"
+version = "0.20.0-alpha.1"
+dependencies = [
+ "bytes",
+ "log",
+ "rtc-shared",
+ "rtc-stun",
+ "sansio",
+]
+
+[[package]]
 name = "rustc-hash"
 version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3570,6 +3581,7 @@ dependencies = [
  "rtc-sdp",
  "rtc-shared",
  "rtc-srtp",
+ "rtc-turn",
  "sansio",
  "sha2",
  "x25519-dalek",

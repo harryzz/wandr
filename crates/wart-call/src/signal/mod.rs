@@ -240,6 +240,14 @@ mod tests {
     }
 
     #[test]
+    fn ice_candidate_relay_line_round_trips() {
+        // A trickled TURN relay candidate is just another candidate line.
+        let line = "1 1 udp 16777215 5.6.7.8 5000 typ relay raddr 1.2.3.4 6000";
+        let blob = encode_ice_candidate(line).unwrap();
+        assert_eq!(decode_ice_candidate(&blob).unwrap(), Some(line.to_owned()));
+    }
+
+    #[test]
     fn ice_candidate_without_added_is_none() {
         // An IceCandidate carrying no `added_v3` (e.g. a removal) → None.
         let blob = proto::IceCandidate { added_v3: None }.encode_to_vec();

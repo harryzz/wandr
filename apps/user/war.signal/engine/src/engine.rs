@@ -171,6 +171,15 @@ fn to_wit_call_state(s: wart_call::signal::CallState) -> CallState {
     }
 }
 
+/// Fetch Signal's calling relays and build a TURN config from the first usable UDP
+/// relay (so a call connects across NAT). `None` on any failure — calls then fall
+/// back to host candidates only.
+async fn fetch_turn(push: &PushService) -> Option<wart_call::turn::TurnConfig> {
+    let mut p = push.clone();
+    let resp = p.get_calling_relays().await.ok()?;
+    resp.relays.iter().find_map(call::turn_config_from)
+}
+
 /// Resolve a peer's serialized identity public key from the protocol store — the
 /// 33-byte key ringrtc's call HKDF binds to. `None` if we hold no identity for them
 /// yet (no session). Looks up device 1 (the identity key is account-level).
@@ -946,8 +955,15 @@ async fn receive_and_send(
                                     .unwrap_or_default(),
                                 None => Vec::new(),
                             };
+                            // Fetch TURN only for a likely incoming offer (no active
+                            // call) — not for mid-call Answer/Ice.
+                            let turn = if call_engine.is_active() {
+                                None
+                            } else {
+                                fetch_turn(&push).await
+                            };
                             let (replies, incoming) = call_engine.on_call_message(
-                                cm, &from, &my_identity, &sender_identity,
+                                cm, &from, &my_identity, &sender_identity, turn,
                             );
                             if let Some(sender) = sender.as_mut() {
                                 send_signals!(sender, from, replies);
@@ -1036,15 +1052,18 @@ async fn receive_and_send(
                                 let call_id = now_ms();
                                 // Resolve the callee's identity key (need a session).
                                 match peer_identity_key(&store, &thread).await {
-                                    Some(peer_id) => match call_engine.place(
-                                        call_id, my_identity.clone(), peer_id, thread,
+                                    Some(peer_id) => {
+                                      let turn = fetch_turn(&push).await;
+                                      match call_engine.place(
+                                        call_id, my_identity.clone(), peer_id, thread, turn,
                                     ) {
                                         Ok(sigs) => (call_engine.peer(), sigs),
                                         Err(e) => {
                                             shared.set_state(format!("call: {e}"));
                                             (String::new(), Vec::new())
                                         }
-                                    },
+                                      }
+                                    }
                                     None => {
                                         shared.set_state(
                                             "call: no identity for peer (message them first)",

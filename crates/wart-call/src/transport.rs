@@ -49,6 +49,130 @@ pub(crate) enum Demux {
     Media(Vec<u8>),
 }
 
+/// TURN relay path (Signal, `feature = "signal"`). Drives an `rtc_turn::Client` on
+/// the SAME UDP socket as ICE: allocates a relay on the TURN server, advertises the
+/// relayed address as a local relay candidate, and creates permissions so remote
+/// candidates may send to our relay. Datagrams to/from `turn_serv_addr` are demuxed
+/// here; everything else stays on the direct ICE/DTLS/SRTP path. (Phase A: gather +
+/// advertise + permissions; routing media *through* the relay is Phase B.)
+#[cfg(feature = "signal")]
+struct RelayState {
+    client: rtc_turn::client::Client,
+    /// The TURN server's `ip:port` — the demux key for inbound TURN datagrams.
+    turn_serv_addr: SocketAddr,
+    /// Our host base address (the bound socket) — the relay candidate's raddr.
+    local: SocketAddr,
+    relayed_addr: Option<SocketAddr>,
+    /// Local relay candidate lines newly available (drained by the session to trickle).
+    new_candidates: Vec<String>,
+    /// Remote candidate addrs we've requested a TURN permission for (dedup).
+    permitted: std::collections::HashSet<SocketAddr>,
+    /// Remotes seen before allocation finished — permitted on `AllocateResponse`.
+    pending_remotes: Vec<SocketAddr>,
+}
+
+#[cfg(feature = "signal")]
+impl RelayState {
+    fn new(tc: crate::turn::TurnConfig, local: SocketAddr) -> Result<Self, Error> {
+        use rtc_turn::client::{Client, ClientConfig};
+        let turn_serv_addr: SocketAddr =
+            tc.turn_serv_addr.parse().map_err(|_| Error::Turn("turn server must be ip:port"))?;
+        let mut client = Client::new(ClientConfig {
+            stun_serv_addr: tc.stun_serv_addr,
+            turn_serv_addr: tc.turn_serv_addr,
+            local_addr: local,
+            transport_protocol: TransportProtocol::UDP,
+            username: tc.username,
+            password: tc.password,
+            realm: tc.realm,
+            software: String::new(),
+            rto_in_ms: 0,
+        })
+        .map_err(|_| Error::Turn("client init"))?;
+        client.allocate().map_err(|_| Error::Turn("allocate"))?;
+        Ok(Self {
+            client,
+            turn_serv_addr,
+            local,
+            relayed_addr: None,
+            new_candidates: Vec::new(),
+            permitted: std::collections::HashSet::new(),
+            pending_remotes: Vec::new(),
+        })
+    }
+
+    /// Permit a remote candidate `addr` to send to our relay (deferred until the
+    /// allocation completes if the relay isn't ready yet).
+    fn permit(&mut self, addr: SocketAddr) {
+        if self.permitted.contains(&addr) {
+            return;
+        }
+        match self.relayed_addr {
+            Some(relayed) => {
+                if let Ok(mut relay) = self.client.relay(relayed) {
+                    let _ = relay.create_permission(addr);
+                }
+                self.permitted.insert(addr);
+            }
+            None => self.pending_remotes.push(addr),
+        }
+    }
+
+    /// Feed a datagram received FROM the TURN server, then process events.
+    fn handle_turn_datagram(&mut self, src: SocketAddr, data: &[u8]) {
+        let msg = TaggedBytesMut {
+            now: Instant::now(),
+            transport: ctx(self.local, src),
+            message: bytes::BytesMut::from(data),
+        };
+        let _ = self.client.handle_read(msg);
+        self.drain_events();
+    }
+
+    fn drain_events(&mut self) {
+        use rtc_turn::client::Event;
+        while let Some(ev) = self.client.poll_event() {
+            if let Event::AllocateResponse(_, relayed) = ev {
+                self.relayed_addr = Some(relayed);
+                self.new_candidates.push(relay_candidate_string(relayed, self.local));
+                let pending: Vec<SocketAddr> = std::mem::take(&mut self.pending_remotes);
+                for addr in pending {
+                    self.permit(addr);
+                }
+            }
+            // Phase B will surface Event::DataIndicationOrChannelData as media.
+        }
+    }
+
+    fn poll_transmit(&mut self) -> Vec<(SocketAddr, Vec<u8>)> {
+        let mut out = Vec::new();
+        while let Some(t) = self.client.poll_write() {
+            out.push((t.transport.peer_addr, t.message.to_vec()));
+        }
+        out
+    }
+
+    fn handle_timeout(&mut self, now: Instant) {
+        let _ = self.client.handle_timeout(now);
+        self.drain_events();
+    }
+
+    fn take_new_candidates(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.new_candidates)
+    }
+}
+
+/// SDP relay-candidate line: the connection address is the relayed addr; `raddr`/
+/// `rport` are our host base. Low priority (relay type-preference) so a direct pair
+/// wins when one exists.
+#[cfg(feature = "signal")]
+fn relay_candidate_string(relayed: SocketAddr, base: SocketAddr) -> String {
+    format!(
+        "1 1 udp 16777215 {} {} typ relay raddr {} rport {}",
+        relayed.ip(), relayed.port(), base.ip(), base.port()
+    )
+}
+
 /// How the SRTP keys are agreed — the only thing that differs between the
 /// WebRTC-native and Signal call paths. ICE + media are shared.
 enum Keying {
@@ -123,6 +247,9 @@ pub(crate) struct Transport {
     keys: Option<(SrtpKeys, SrtpKeys)>,
     /// Keying complete (DTLS handshake done, or Signal DH derived).
     done: bool,
+    /// TURN relay (Signal path with a `TurnConfig`); `None` = host candidates only.
+    #[cfg(feature = "signal")]
+    relay: Option<RelayState>,
 }
 
 impl Transport {
@@ -170,6 +297,8 @@ impl Transport {
                 dtls, client_cfg, started: false, fingerprint, expected_remote_fp: None,
             }),
             keys: None, done: false,
+            #[cfg(feature = "signal")]
+            relay: None,
         })
     }
 
@@ -183,6 +312,7 @@ impl Transport {
         local: SocketAddr,
         caller_identity: Vec<u8>,
         callee_identity: Vec<u8>,
+        turn: Option<crate::turn::TurnConfig>,
     ) -> Result<Self, Error> {
         use rand_core::OsRng;
         use x25519_dalek::{PublicKey, StaticSecret};
@@ -190,12 +320,19 @@ impl Transport {
         let ice = make_ice(ufrag, pwd, local)?;
         let secret = StaticSecret::random_from_rng(OsRng);
         let public = PublicKey::from(&secret).to_bytes();
+        // A TurnConfig means: allocate a relay on Signal's TURN server (gathers a
+        // relay candidate so the call connects across NAT). None = host-only.
+        let relay = match turn {
+            Some(tc) => Some(RelayState::new(tc, local)?),
+            None => None,
+        };
         Ok(Self {
             role, local, remote: None, ice,
             keying: Keying::Signal(SignalKeying {
                 secret, public, remote_public: None, caller_identity, callee_identity,
             }),
             keys: None, done: false,
+            relay,
         })
     }
 
@@ -266,6 +403,10 @@ impl Transport {
         // set is fine; the bundled (DTLS/SDP) path supplies them up front.
         for r in remotes.iter().filter(|r| r.is_ipv4() == self.local.is_ipv4()) {
             let _ = self.ice.add_remote_candidate(host_candidate(*r));
+            #[cfg(feature = "signal")]
+            if let Some(relay) = &mut self.relay {
+                relay.permit(*r); // let this remote reach us via our relay
+            }
         }
         let controlling = matches!(self.role, Role::Offerer);
         self.ice
@@ -280,10 +421,24 @@ impl Transport {
         if addr.is_ipv4() != self.local.is_ipv4() {
             return Ok(()); // address-family mismatch — not reachable from our socket
         }
+        #[cfg(feature = "signal")]
+        if let Some(relay) = &mut self.relay {
+            relay.permit(addr);
+        }
         self.ice
             .add_remote_candidate(host_candidate(addr))
             .map(|_| ())
             .map_err(|_| Error::Ice("add remote candidate"))
+    }
+
+    /// New local candidate lines (Signal relay path) ready to trickle to the peer —
+    /// the relay candidate becomes available once the TURN allocation completes.
+    #[cfg(feature = "signal")]
+    pub(crate) fn take_new_local_candidates(&mut self) -> Vec<String> {
+        match &mut self.relay {
+            Some(relay) => relay.take_new_candidates(),
+            None => Vec::new(),
+        }
     }
 
     pub(crate) fn handle_timeout(&mut self, now: Instant) {
@@ -293,6 +448,10 @@ impl Transport {
             if let Some(remote) = remote {
                 let _ = d.dtls.handle_timeout(remote, now);
             }
+        }
+        #[cfg(feature = "signal")]
+        if let Some(relay) = &mut self.relay {
+            relay.handle_timeout(now); // drives TURN allocation + TTL refresh
         }
         self.maybe_advance();
     }
@@ -308,10 +467,23 @@ impl Transport {
                 out.push((t.transport.peer_addr, t.message.to_vec()));
             }
         }
+        #[cfg(feature = "signal")]
+        if let Some(relay) = &mut self.relay {
+            out.extend(relay.poll_transmit()); // allocate/refresh/permission to the TURN server
+        }
         out
     }
 
     pub(crate) fn handle_datagram(&mut self, src: SocketAddr, data: &[u8]) -> Result<Demux, Error> {
+        // TURN traffic is demuxed by source address (the same socket carries both
+        // direct ICE/DTLS/SRTP and TURN protocol to/from the TURN server).
+        #[cfg(feature = "signal")]
+        if let Some(relay) = &mut self.relay {
+            if src == relay.turn_serv_addr {
+                relay.handle_turn_datagram(src, data);
+                return Ok(Demux::Consumed);
+            }
+        }
         match data.first().copied() {
             Some(0..=3) => {
                 let msg = TaggedBytesMut {
