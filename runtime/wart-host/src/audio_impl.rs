@@ -651,6 +651,39 @@ mod binder_path {
     }
 }
 
+// ── Host-internal playback API ───────────────────────────────────────────────
+// Module-level free functions so a background thread (the ringer) can drive AAudio
+// directly without the WIT `Host` trait (`&mut HostState`). Same cfg-switch as the
+// trait methods below; non-Android is a no-op (returns 0/false).
+
+pub fn create_track(cfg: TrackConfig) -> u32 {
+    #[cfg(target_os = "android")]
+    { return binder_path::create_track(cfg); }
+    #[cfg(not(target_os = "android"))]
+    { let _ = cfg; 0 }
+}
+
+pub fn write_pcm_f32(track: u32, samples: &[f32]) -> u32 {
+    #[cfg(target_os = "android")]
+    { return binder_path::write_pcm_f32(track, samples); }
+    #[cfg(not(target_os = "android"))]
+    { let _ = (track, samples); 0 }
+}
+
+pub fn start(track: u32) -> bool {
+    #[cfg(target_os = "android")]
+    { return binder_path::start(track); }
+    #[cfg(not(target_os = "android"))]
+    { let _ = track; false }
+}
+
+pub fn close(track: u32) {
+    #[cfg(target_os = "android")]
+    { binder_path::close(track); }
+    #[cfg(not(target_os = "android"))]
+    { let _ = track; }
+}
+
 impl Host for crate::HostState {
     fn create_track(&mut self, cfg: TrackConfig) -> TrackHandle {
         #[cfg(target_os = "android")]

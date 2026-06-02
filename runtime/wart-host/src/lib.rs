@@ -6,6 +6,7 @@ mod scheduler_impl;
 mod text_segmentation_impl;
 mod lifecycle_impl;
 mod haptics_impl;
+mod ringer_impl;
 mod lights_impl;
 mod power_impl;
 mod thermal_impl;

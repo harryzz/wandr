@@ -152,6 +152,15 @@ pub enum InboundEvent {
     /// `audio-policy set-route <speaker|earpiece>`. The host applies it via
     /// `audio_policy_impl::set_route` (setForceUse COMMUNICATION).
     CommRoute { speaker: bool },
+
+    /// wart-arbiter-audio Ringer — the arbiter pushed `ringtone start|stop` for an
+    /// incoming call. The owner host plays/stops a generated ringtone over AAudio
+    /// (`ringer_impl`). `start=false` ⇒ stop.
+    Ringtone { start: bool },
+
+    /// wart-arbiter-audio Ringer — the arbiter pushed `haptics ring-start|ring-stop`.
+    /// The host runs/stops a repeating ring-vibrate over the vibrator HAL.
+    RingVibrate { start: bool },
 }
 
 /// Sentinel: a `geometry` inset field the host should leave at its current
@@ -377,6 +386,20 @@ fn parse_and_queue(line: &str) {
             "speaker"  => { if let Ok(mut q) = queue().lock() { q.push_back(InboundEvent::CommRoute { speaker: true }); } }
             "earpiece" => { if let Ok(mut q) = queue().lock() { q.push_back(InboundEvent::CommRoute { speaker: false }); } }
             other      => log::warn!("ime-inbound: bad audio-policy set-route {other:?}"),
+        }
+    } else if let Some(rest) = line.strip_prefix("ringtone ") {
+        // wart-arbiter-audio Ringer — incoming-call ringtone.
+        match rest.trim() {
+            "start" => { if let Ok(mut q) = queue().lock() { q.push_back(InboundEvent::Ringtone { start: true }); } }
+            "stop"  => { if let Ok(mut q) = queue().lock() { q.push_back(InboundEvent::Ringtone { start: false }); } }
+            other   => log::warn!("ime-inbound: bad ringtone {other:?}"),
+        }
+    } else if let Some(rest) = line.strip_prefix("haptics ") {
+        // wart-arbiter-audio Ringer — incoming-call vibrate.
+        match rest.trim() {
+            "ring-start" => { if let Ok(mut q) = queue().lock() { q.push_back(InboundEvent::RingVibrate { start: true }); } }
+            "ring-stop"  => { if let Ok(mut q) = queue().lock() { q.push_back(InboundEvent::RingVibrate { start: false }); } }
+            other        => log::warn!("ime-inbound: bad haptics {other:?}"),
         }
     } else if line == "present" {
         // Task 71 — arbiter-driven "you are visible, repaint now". The drain

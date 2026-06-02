@@ -170,6 +170,18 @@ fn feedback_duration(f: Feedback) -> u32 {
     }
 }
 
+/// Host-internal vibrate (for the ringer) — same path as the WIT `vibrate_ms`:
+/// vibrator HAL first, then the sysfs fallback. Free fn so a background thread can
+/// call it without the `Host` trait (`&mut HostState`).
+pub fn vibrate_ms(duration_ms: u32) -> bool {
+    let clamped = duration_ms.clamp(1, 1000);
+    #[cfg(target_os = "android")]
+    if binder_path::vibrate_ms(clamped) {
+        return true;
+    }
+    try_vibrate_sysfs(clamped)
+}
+
 impl Host for crate::HostState {
     fn perform(&mut self, feedback: Feedback) -> bool {
         #[cfg(target_os = "android")]

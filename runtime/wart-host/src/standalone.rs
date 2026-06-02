@@ -1207,6 +1207,16 @@ fn run_cwasm_loop(
                     // wart-arbiter-audio M3 — apply the call routing (speaker/earpiece).
                     crate::audio_policy_impl::set_route(speaker);
                 }
+                crate::ime_inbound::InboundEvent::Ringtone { start } => {
+                    // wart-arbiter-audio Ringer — play/stop the incoming-call ringtone.
+                    if start { crate::ringer_impl::ringtone_start(); }
+                    else { crate::ringer_impl::ringtone_stop(); }
+                }
+                crate::ime_inbound::InboundEvent::RingVibrate { start } => {
+                    // wart-arbiter-audio Ringer — start/stop the ring-vibrate.
+                    if start { crate::ringer_impl::vibrate_start(); }
+                    else { crate::ringer_impl::vibrate_stop(); }
+                }
                 // Task 68 — the soft keyboard occludes `px` of our surface. Add
                 // it to the base bottom inset → the guest's logical height shrinks
                 // → re-issue on_resize so bottom-anchored content rises above the
