@@ -47,6 +47,8 @@ pub struct PeerSession {
     pwd: String,
     transport: Transport,
     media: Option<MediaSession>,
+    /// The offer's media direction (answerer mirrors its reverse).
+    remote_direction: Option<String>,
     /// SRTP media datagrams queued for the wire (drained by `poll_transmit`).
     media_out: Vec<Vec<u8>>,
     /// Decoded PCM frames from inbound media (drained by `recv_audio`).
@@ -71,6 +73,7 @@ impl PeerSession {
             pwd: pwd.to_owned(),
             transport,
             media: None,
+            remote_direction: None,
             media_out: Vec::new(),
             audio_in: Vec::new(),
         })
@@ -86,6 +89,14 @@ impl PeerSession {
                 Role::Offerer => "actpass".to_owned(),
                 Role::Answerer => "active".to_owned(),
             },
+            direction: match self.role {
+                // Offer sendrecv; an answer mirrors the offer's direction.
+                Role::Offerer => "sendrecv".to_owned(),
+                Role::Answerer => {
+                    let offer = self.remote_direction.as_deref().unwrap_or("sendrecv");
+                    crate::signaling::reverse_direction(offer).to_owned()
+                }
+            },
             candidates: vec![candidate_string(self.local_addr)],
         }
     }
@@ -98,6 +109,7 @@ impl PeerSession {
         if remotes.is_empty() {
             return Err(Error::Ice("no usable remote candidate"));
         }
+        self.remote_direction = Some(remote.direction.clone());
         self.transport.set_remote(&remote.ice_ufrag, &remote.ice_pwd, &remote.fingerprint, &remotes)
     }
 

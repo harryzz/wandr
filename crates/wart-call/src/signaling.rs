@@ -20,8 +20,22 @@ pub struct Signaling {
     pub fingerprint: String,
     /// DTLS role: `actpass` (offer), `active` (answer→client), `passive`.
     pub setup: String,
+    /// Media direction: `sendrecv` / `sendonly` / `recvonly` / `inactive`.
+    /// An answer must be the reverse-compatible of the offer (e.g. a `recvonly`
+    /// offer requires a `sendonly` answer — libwebrtc rejects a `sendrecv` one).
+    pub direction: String,
     /// `a=candidate:…` values (without the `candidate:` prefix).
     pub candidates: Vec<String>,
+}
+
+/// The answer direction for a given offer direction (RFC 3264).
+pub fn reverse_direction(offer: &str) -> &'static str {
+    match offer {
+        "recvonly" => "sendonly",
+        "sendonly" => "recvonly",
+        "inactive" => "inactive",
+        _ => "sendrecv",
+    }
 }
 
 impl Signaling {
@@ -32,7 +46,9 @@ impl Signaling {
             .with_ice_credentials(self.ice_ufrag.clone(), self.ice_pwd.clone())
             .with_value_attribute("setup".to_owned(), self.setup.clone())
             .with_property_attribute("rtcp-mux".to_owned())
-            .with_property_attribute("sendrecv".to_owned())
+            .with_property_attribute(
+                if self.direction.is_empty() { "sendrecv".to_owned() } else { self.direction.clone() },
+            )
             .with_codec(
                 OPUS_PAYLOAD_TYPE,
                 "opus".to_owned(),
@@ -72,11 +88,17 @@ impl Signaling {
             .filter(|a| a.key == "candidate")
             .filter_map(|a| a.value.clone())
             .collect();
+        let direction = ["sendrecv", "sendonly", "recvonly", "inactive"]
+            .into_iter()
+            .find(|d| media.has_attribute(d))
+            .unwrap_or("sendrecv")
+            .to_owned();
         Ok(Signaling {
             ice_ufrag: attr("ice-ufrag"),
             ice_pwd: attr("ice-pwd"),
             fingerprint: attr("fingerprint"),
             setup: attr("setup"),
+            direction,
             candidates,
         })
     }
