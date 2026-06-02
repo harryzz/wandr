@@ -39,16 +39,15 @@ Open that URL, click **Start call**, and watch the page's state + log.
    tricky** — its `172.x` network isn't reachable from a Windows/LAN browser
    without mirrored networking or port-forwarding; prefer a native host.
 
-## What it proves / next
+## Result — VERIFIED ✅ (2026-06-02)
 
-If it connects, wart-call's SDP/ICE/DTLS-SRTP interoperate with libwebrtc — the
-real thing. If the browser rejects the answer or the audio doesn't render, the
-browser console + the page log show why; the likely gaps are **strict-SDP
-additions** libwebrtc wants in the answer that our minimal SDP omits (e.g.
-`a=msid`/`a=ssrc` for the media track to render, exact `mid`/BUNDLE matching).
-Connection (ICE+DTLS) is the core proof; audio *rendering* may need those lines —
-paste the browser's errors and they're quick to add.
+wart-call connected to a real browser (Google libwebrtc): `CONNECTED — wart-call
+↔ browser ✓`, and the browser **played the Opus tone** wart-call streamed over
+SRTP. So wart-call's SDP/ICE/DTLS-SRTP/Opus interoperate with the actual
+reference WebRTC implementation, media included. (The audio rendered without
+`a=msid`/`a=ssrc` — libwebrtc accepted the unsignaled stream.)
 
-The headless interop (`../call-interop`) already validates ICE + DTLS-SRTP
-against an independent stack, so this harness is mostly about surfacing any
-libwebrtc-specific SDP strictness.
+The only fix the browser demanded was mirroring the offer's media **direction**
+in the answer (a `recvonly` offer needs a `sendonly` answer — RFC 3264; handled
+in `wart_call::signaling`). The headless `../call-interop` validates the same
+against an independent stack.

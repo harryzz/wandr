@@ -79,13 +79,21 @@ Each is a `wasi:cli/command` warpkg, device-verified via `wart-host --run-once`:
 | `call-interop` | **interop with an independent WebRTC stack** (native) | — |
 | `webrtc-rs-wasip2` | the rtc-ice mDNS-optional patch + spike notes | — |
 
-**Cross-implementation interop is proven** (`repros/call-interop`): wart-call (our
-sans-IO `rtc-*` engine) connects to the webrtc-rs **async** `webrtc` crate — a
-separate codebase (its own webrtc-ice/webrtc-dtls), the closest scriptable proxy
-for a browser/libwebrtc. The full `RTCPeerConnection` offers; wart-call answers;
-our answer SDP is accepted and both reach `Connected` (ICE + DTLS-SRTP over real
-UDP). This de-risks the browser test — the remaining browser-specific work is a
-signaling channel + the page, plus any strict-SDP additions a real browser flags.
+**Interop is proven against real WebRTC — including a real browser.**
+- `repros/call-interop` (headless): wart-call connects to the webrtc-rs **async**
+  `webrtc` crate — a separate codebase (its own webrtc-ice/webrtc-dtls). Both
+  reach `Connected` (ICE + DTLS-SRTP over real UDP).
+- `repros/call-browser` (a real browser): **Chrome/Firefox = Google libwebrtc**
+  offers a recvonly audio call; wart-call answers, connects, and **streams an Opus
+  tone the browser plays** — confirmed `CONNECTED — wart-call ↔ browser ✓` with
+  audio. So wart-call's SDP/ICE/DTLS-SRTP/Opus interoperate with the actual
+  reference WebRTC implementation, media included.
+
+The only fix the browser demanded was mirroring the offer's media **direction**
+in the answer (a `recvonly` offer needs a `sendonly` answer — RFC 3264). Two
+environment notes for `call-browser`: disable the browser's mDNS host-candidate
+obfuscation (wart-call can't resolve `.local`), and run the harness where the
+browser can reach it over UDP (not WSL).
 
 ## From here to a shippable call
 
