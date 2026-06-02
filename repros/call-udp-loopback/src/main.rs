@@ -5,20 +5,29 @@
 //!
 //!   wart-host --run-once war.probe.calludp
 
-use std::net::UdpSocket;
+use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
 use wart_call::signaling::Signaling;
-use wart_call::{PeerSession, Role, SAMPLE_RATE};
+use wart_call::{local_lan_ip, PeerSession, Role, SAMPLE_RATE};
 
 fn main() {
-    let asock = UdpSocket::bind("127.0.0.1:0").expect("bind A");
-    let bsock = UdpSocket::bind("127.0.0.1:0").expect("bind B");
+    // Advertise the real LAN IP (what a peer on the network reaches us at) — the
+    // address that makes browser/real-peer interop possible. Falls back to
+    // loopback if there's no route.
+    let lan = local_lan_ip();
+    let ip = lan.unwrap_or(IpAddr::from([127, 0, 0, 1]));
+    println!("[calludp] discovered LAN IP = {lan:?} (advertising {ip})");
+
+    let asock = UdpSocket::bind("0.0.0.0:0").expect("bind A");
+    let bsock = UdpSocket::bind("0.0.0.0:0").expect("bind B");
     asock.set_nonblocking(true).unwrap();
     bsock.set_nonblocking(true).unwrap();
-    let mut a = PeerSession::new(Role::Offerer, asock.local_addr().unwrap()).expect("A");
-    let mut b = PeerSession::new(Role::Answerer, bsock.local_addr().unwrap()).expect("B");
-    println!("[calludp] A={} B={}", asock.local_addr().unwrap(), bsock.local_addr().unwrap());
+    let a_addr = SocketAddr::new(ip, asock.local_addr().unwrap().port());
+    let b_addr = SocketAddr::new(ip, bsock.local_addr().unwrap().port());
+    let mut a = PeerSession::new(Role::Offerer, a_addr).expect("A");
+    let mut b = PeerSession::new(Role::Answerer, b_addr).expect("B");
+    println!("[calludp] A advertises {a_addr}, B advertises {b_addr}");
 
     // Signaling exchange (SDP offer/answer).
     let offer = a.local_signaling().to_sdp();

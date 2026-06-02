@@ -86,9 +86,9 @@ The `PeerSession` API is the engine; what remains is integration:
    `handle_datagram(src, bytes)` takes what `recv_from` got; candidates carry the
    real addresses via SDP. Device-verified: `repros/call-udp-loopback`
    (`war.probe.calludp`) runs a full call between two `wasi:sockets` UDP sockets
-   in a guest on the Pixel 2 XL. (For a peer on the LAN, advertise the LAN IP —
-   bind+connect a probe socket to a public IP and read `local_addr`, per
-   `wasi-udp-probe`.)
+   in a guest on the Pixel 2 XL — over the device's real LAN IP via
+   `wart_call::local_lan_ip()` (device-verified: the guest discovers the Pixel's
+   WiFi IP, e.g. `192.168.1.173`, the address a peer on the same network reaches).
 2. **Real audio** — wire `send_audio`'s input to the mic-capture WIT and
    `recv_audio`'s output to AAudio playback (both proven; note the device's
    input+output MMAP limit — fine for a real two-device call).

@@ -69,3 +69,17 @@ impl std::error::Error for Error {}
 pub const OPUS_PAYLOAD_TYPE: u8 = 111;
 /// The audio device sample rate wart uses end to end.
 pub const SAMPLE_RATE: u32 = 48_000;
+
+/// Discover the primary local (LAN) IP — the address a peer on the same network
+/// reaches us at — to advertise as our host ICE candidate.
+///
+/// Uses the standard trick: `connect` a UDP socket to a public IP and read its
+/// `local_addr`. No packets are sent; the OS just picks the egress interface, so
+/// it needs no network round-trip (works behind a firewall). Returns `None` if
+/// there's no route (offline). Pair the returned IP with the bound socket's port:
+/// `PeerSession::new(role, SocketAddr::new(local_lan_ip()?, sock.local_addr()?.port()))`.
+pub fn local_lan_ip() -> Option<std::net::IpAddr> {
+    let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.connect("8.8.8.8:80").ok()?;
+    sock.local_addr().ok().map(|a| a.ip())
+}
