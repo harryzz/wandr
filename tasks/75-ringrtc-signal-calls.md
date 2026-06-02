@@ -132,6 +132,26 @@ ringrtc's `signaling.proto` and map it ⇄ `wart_call::Signaling`.
 > import (mic/AAudio PCM pump) + identity keys from `store.identity()`, the `run()`
 > call loop + `Shared` call state, UI in-call screen, and the live two-account device
 > test (per-app `--install`; **never** `build-system-warpkgs.sh`).
+>
+> **Phase 2b-ii status — DONE (engine wiring + in-call UI, device-smoke-verified).**
+> The host-tested `SignalCall` driver is folded into the live `war.signal` engine:
+> `engine/src/call.rs` maps libsignal `CallMessage` ⇄ `wart_call::CallSignal` and runs
+> a `CallEngine` (one `SignalCall` over `std::net::UdpSocket` + the host `audio` WIT:
+> mic→`send_audio`, `recv_audio`→stereo track). `engine.rs` adds `Shared` call state +
+> `CallIntent`s + run-loop wiring (inbound `CallMessage` dispatch; an adaptive 10 ms/
+> 200 ms tick that pumps UDP+audio and ships signaling via `send_signals!`; state
+> mirrored for `call-status`/`call-peer`). WIT: engine imports host `audio`
+> (`wit/deps/skiko-gfx/audio.wit`) + a call API in `chat`, synced to the UI copy.
+> Minimal in-call UI (`ui/src/lib.rs`): a 📞 place-call button in 1:1 thread headers +
+> a `CallBar` (Calling/Incoming/On-call + Accept/Decline/End). **Deployed via the safe
+> `build.sh --deploy`** (backs up `/state` first) and **smoke-verified on a Pixel 2 XL**:
+> link resumes + stays "connected", chat history intact, no crash; a **self-call**
+> rendered the "Calling…" CallBar (place path + 10 ms tick work). **INTERIM:** SRTP-DH
+> HKDF bound to ACIs, not real identity keys — keys only wart↔wart (Phase 3 replaces
+> this). **Refinements noted:** no call timeout (unanswered call rings forever); the
+> CallBar is too thin / overlaps the status bar (End hard to tap). **Not verified live:**
+> actual connect + two-way audio (needs a 2nd wart account), duplex-audio MMAP `-889`,
+> NAT (LAN-only host candidate).
 
 ## Two approaches (decide in step 1)
 
