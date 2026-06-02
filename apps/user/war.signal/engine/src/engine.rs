@@ -1281,8 +1281,9 @@ async fn receive_and_send(
                             last_call_stat = now;
                             if let Some(m) = call_engine.media_stats() {
                                 dbg_line(&format!(
-                                    "media {:?}: udp tx={} rx={} | audio tx={} rx={}",
+                                    "media {:?}: udp tx={} rx={} | audio tx={} rx={} | srtp seen={} ok={} err={}",
                                     m.state, m.udp_tx, m.udp_rx, m.aud_tx, m.aud_rx,
+                                    m.srtp_seen, m.decode_ok, m.decode_err,
                                 ));
                             }
                         }

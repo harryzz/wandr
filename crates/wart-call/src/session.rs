@@ -53,6 +53,12 @@ pub struct PeerSession {
     media_out: Vec<Vec<u8>>,
     /// Decoded PCM frames from inbound media (drained by `recv_audio`).
     audio_in: Vec<Vec<f32>>,
+    /// Inbound-media diagnostics: datagrams demuxed as SRTP media, and how many
+    /// then decrypt+decode OK vs error. `seen` climbing with `err` climbing (and
+    /// `ok` flat) = SRTP decrypt mismatch with the peer (key/KDF convention).
+    media_seen: u64,
+    decode_ok: u64,
+    decode_err: u64,
 }
 
 impl PeerSession {
@@ -76,6 +82,7 @@ impl PeerSession {
             remote_direction: None,
             media_out: Vec::new(),
             audio_in: Vec::new(),
+            media_seen: 0, decode_ok: 0, decode_err: 0,
         })
     }
 
@@ -112,6 +119,7 @@ impl PeerSession {
             remote_direction: None,
             media_out: Vec::new(),
             audio_in: Vec::new(),
+            media_seen: 0, decode_ok: 0, decode_err: 0,
         })
     }
 
@@ -207,14 +215,21 @@ impl PeerSession {
     /// PCM lands in `recv_audio`.
     pub fn handle_datagram(&mut self, src: SocketAddr, data: &[u8]) -> Result<(), Error> {
         if let Demux::Media(srtp) = self.transport.handle_datagram(src, data)? {
+            self.media_seen += 1;
             self.ensure_media()?;
             if let Some(m) = &mut self.media {
-                if let Ok(pcm) = m.recv(&srtp) {
-                    self.audio_in.push(pcm);
+                match m.recv(&srtp) {
+                    Ok(pcm) => { self.audio_in.push(pcm); self.decode_ok += 1; }
+                    Err(_) => { self.decode_err += 1; }
                 }
             }
         }
         Ok(())
+    }
+
+    /// Inbound-media diagnostics: `(seen, decode_ok, decode_err)`.
+    pub fn media_diag(&self) -> (u64, u64, u64) {
+        (self.media_seen, self.decode_ok, self.decode_err)
     }
 
     pub fn handle_timeout(&mut self, now: Instant) {

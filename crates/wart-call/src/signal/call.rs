@@ -264,6 +264,11 @@ impl SignalCall {
         self.session.is_connected()
     }
 
+    /// Inbound-media diagnostics: `(srtp_seen, decode_ok, decode_err)`.
+    pub fn media_diag(&self) -> (u64, u64, u64) {
+        self.session.media_diag()
+    }
+
     pub fn call_id(&self) -> u64 {
         self.call_id
     }

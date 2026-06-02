@@ -202,6 +202,10 @@ pub struct MediaStats {
     pub udp_rx: u64,
     pub aud_tx: u64,
     pub aud_rx: u64,
+    // Inbound SRTP: datagrams seen as media, decoded OK, decode errored.
+    pub srtp_seen: u64,
+    pub decode_ok: u64,
+    pub decode_err: u64,
 }
 
 impl ActiveCall {
@@ -320,12 +324,18 @@ impl CallEngine {
 
     /// Media-flow counters for the active call (diagnostic), or `None` (idle).
     pub fn media_stats(&self) -> Option<MediaStats> {
-        self.active.as_ref().map(|a| MediaStats {
-            state: a.call.state(),
-            udp_tx: a.udp_tx,
-            udp_rx: a.udp_rx,
-            aud_tx: a.aud_tx,
-            aud_rx: a.aud_rx,
+        self.active.as_ref().map(|a| {
+            let (srtp_seen, decode_ok, decode_err) = a.call.media_diag();
+            MediaStats {
+                state: a.call.state(),
+                udp_tx: a.udp_tx,
+                udp_rx: a.udp_rx,
+                aud_tx: a.aud_tx,
+                aud_rx: a.aud_rx,
+                srtp_seen,
+                decode_ok,
+                decode_err,
+            }
         })
     }
 
