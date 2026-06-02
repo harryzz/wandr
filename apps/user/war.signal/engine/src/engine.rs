@@ -1071,6 +1071,18 @@ async fn receive_and_send(
                                 })
                                 .collect();
                             dbg_line(&format!("RX call from {from}: {kinds:?}"));
+                            // DIAGNOSTIC: dump the raw opaque of a received Offer/Answer
+                            // so we can decode real ringrtc's full ConnectionParametersV4
+                            // offline (esp. receive_video_codecs, which our encoder omits)
+                            // and match it. Real ringrtc rejects our V4 params today.
+                            if let Some(op) = cm.offer.as_ref().and_then(|o| o.opaque.as_ref()) {
+                                let hex: String = op.iter().map(|b| format!("{b:02x}")).collect();
+                                dbg_line(&format!("RX OFFER opaque[{}]: {hex}", op.len()));
+                            }
+                            if let Some(op) = cm.answer.as_ref().and_then(|a| a.opaque.as_ref()) {
+                                let hex: String = op.iter().map(|b| format!("{b:02x}")).collect();
+                                dbg_line(&format!("RX ANSWER opaque[{}]: {hex}", op.len()));
+                            }
                             // The offerer's identity key (caller) — from the exact
                             // address the message came from (its identity is stored).
                             let sender_identity = match content

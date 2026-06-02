@@ -91,8 +91,22 @@ mod proto {
         pub ice_ufrag: Option<String>,
         #[prost(string, optional, tag = "3")]
         pub ice_pwd: Option<String>,
+        /// Codecs we can RECEIVE. ringrtc requires a non-empty set even for an
+        /// audio call (calls can upgrade to video mid-session) — with this empty
+        /// the peer rejects the whole V4 block: it never rings our offer and
+        /// instantly hangs up on our answer. Mirror real ringrtc: VP9 then VP8.
+        #[prost(message, repeated, tag = "4")]
+        pub receive_video_codecs: Vec<VideoCodec>,
         #[prost(uint64, optional, tag = "5")]
         pub max_bitrate_bps: Option<u64>,
+    }
+
+    /// One entry of `receive_video_codecs`. `type` is ringrtc's `VideoCodecType`
+    /// (VP8 = 8, VP9 = 9); `level` is omitted by real ringrtc, so we omit it too.
+    #[derive(Clone, PartialEq, Message)]
+    pub struct VideoCodec {
+        #[prost(uint32, optional, tag = "1")]
+        pub r#type: Option<u32>,
     }
 }
 
@@ -111,7 +125,13 @@ fn params_from(s: &Signaling) -> Result<proto::ConnectionParametersV4, Error> {
         public_key: Some(public_key),
         ice_ufrag: Some(s.ice_ufrag.clone()),
         ice_pwd: Some(s.ice_pwd.clone()),
-        max_bitrate_bps: None,
+        // ringrtc rejects a V4 block with no receive codecs (see the field doc).
+        // Advertise the same set + max-bitrate a real ringrtc audio call sends.
+        receive_video_codecs: vec![
+            proto::VideoCodec { r#type: Some(9) }, // VP9
+            proto::VideoCodec { r#type: Some(8) }, // VP8
+        ],
+        max_bitrate_bps: Some(2_000_000),
     })
 }
 
@@ -255,19 +275,24 @@ mod tests {
     }
 
     /// Golden bytes — locks wire compatibility with Signal/ringrtc WITHOUT a live
-    /// client. Field tags must be 0x0A(public_key) / 0x12(ufrag) / 0x1A(pwd) inside
-    /// an Offer whose `v4=4` message tag is 0x22. Derived from proto2 tag rules, not
-    /// from ringrtc's (AGPL) crate. If this breaks, the on-wire format drifted.
+    /// client. The field layout matches a real ringrtc audio-call offer captured
+    /// on-device: public_key / ice_ufrag / ice_pwd / 2× receive_video_codecs
+    /// (VP9, VP8) / max_bitrate_bps, inside an Offer whose `v4=4` tag is 0x22. The
+    /// codecs + bitrate are MANDATORY — without them ringrtc rejects the V4 block.
+    /// If this breaks, the on-wire format drifted.
     #[test]
     fn offer_golden_bytes() {
         let s = sig(Some(vec![0x01, 0x02])); // ufrag "AB", pwd "CD"
         let blob = encode_offer(&s).unwrap();
         #[rustfmt::skip]
         let expected: &[u8] = &[
-            0x22, 0x0C,                   // Offer.v4 (tag 4, LEN), 12-byte ConnectionParametersV4
+            0x22, 0x18,                   // Offer.v4 (tag 4, LEN), 24-byte ConnectionParametersV4
               0x0A, 0x02, 0x01, 0x02,     //   public_key (tag 1, LEN 2) = 01 02
               0x12, 0x02, 0x41, 0x42,     //   ice_ufrag  (tag 2, LEN 2) = "AB"
               0x1A, 0x02, 0x43, 0x44,     //   ice_pwd    (tag 3, LEN 2) = "CD"
+              0x22, 0x02, 0x08, 0x09,     //   receive_video_codecs[0] = { type: 9 (VP9) }
+              0x22, 0x02, 0x08, 0x08,     //   receive_video_codecs[1] = { type: 8 (VP8) }
+              0x28, 0x80, 0x89, 0x7A,     //   max_bitrate_bps (tag 5, varint) = 2_000_000
         ];
         assert_eq!(blob, expected, "Signal opaque wire format drifted");
     }
