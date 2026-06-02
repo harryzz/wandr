@@ -841,7 +841,7 @@ fn app() -> Element {
             div {
                 style: "display:flex; flex-direction:column; height:100%; background:{BG};",
                 CallBar { status: call_status }
-                ThreadHeader { title: thread.title.clone(), current, call_status, call_peer: call_peer.clone() }
+                ThreadHeader { title: thread.title.clone(), current, call_status, call_peer: call_peer.clone(), is_self: thread.id == self_id }
                 Conversation { messages: thread_msgs, contacts: contacts.clone(), stick_key: thread.id.clone() }
                 Composer { thread: thread.id.clone() }
             }
@@ -961,15 +961,16 @@ fn ThreadHeader(
     current: Signal<Option<Thread>>,
     call_status: chat::CallState,
     call_peer: String,
+    is_self: bool,
 ) -> Element {
     let mut current = current;
     // The open thread's id + kind, for the 1:1 call button (Phase 2b-ii).
     let (thread_id, is_group) = current().map(|t| (t.id, t.is_group)).unwrap_or_default();
     let call_tid = thread_id.clone();
-    // One big handset toggle: GREEN to place a call, RED to hang up the active call
-    // with this peer (no separate End button). Driven by the call-state props.
-    let in_call = !is_group
-        && !thread_id.is_empty()
+    // The handset shows for a real 1:1 peer only — not groups, and not Note-to-Self
+    // (you can't call yourself). GREEN to place / RED to hang up (props-driven).
+    let can_call = !is_group && !is_self && !thread_id.is_empty();
+    let in_call = can_call
         && !matches!(call_status, chat::CallState::Idle | chat::CallState::Ended)
         && call_peer == thread_id;
     let handset_bg = if in_call { "#C62828" } else { "#2E7D32" }; // red end / green call
@@ -982,8 +983,8 @@ fn ThreadHeader(
                 div { style: "color:{TEXT}; font-size:36px;", "‹" }
             }
             div { style: "color:{TEXT}; font-size:36px; font-weight:700; flex-grow:1;", "{title}" }
-            // 1:1 voice call (groups deferred): big green→place / red→hang-up toggle.
-            if !is_group && !thread_id.is_empty() {
+            // 1:1 voice call (not groups, not Note-to-Self): big green→place / red→hang-up.
+            if can_call {
                 button {
                     style: format!("display:flex; justify-content:center; align-items:center; width:128px; height:128px; border-radius:28px; background:{};", handset_bg),
                     onmousedown: move |_| {},

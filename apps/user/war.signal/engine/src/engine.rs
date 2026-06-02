@@ -868,7 +868,6 @@ async fn receive_and_send(
     // up; otherwise the normal 200 ms message cadence.
     let mut call_engine = CallEngine::new();
     let my_identity: Vec<u8> = store.identity().identity_key().serialize().to_vec();
-    let my_self_aci = aci.to_string(); // Note-to-Self peer = us (self-call keys with my id)
     loop {
         let tick_ms = if call_engine.is_active() { 10 } else { 200 };
         let tick = wart_step_executor::sleep(Duration::from_millis(tick_ms));
@@ -1035,14 +1034,8 @@ async fn receive_and_send(
                         let (peer, sigs) = match intent {
                             CallIntent::Place(thread) => {
                                 let call_id = now_ms();
-                                // Resolve the callee's identity key (need a session);
-                                // a self-call (Note to Self) keys with our own.
-                                let peer_id = if thread == my_self_aci {
-                                    Some(my_identity.clone())
-                                } else {
-                                    peer_identity_key(&store, &thread).await
-                                };
-                                match peer_id {
+                                // Resolve the callee's identity key (need a session).
+                                match peer_identity_key(&store, &thread).await {
                                     Some(peer_id) => match call_engine.place(
                                         call_id, my_identity.clone(), peer_id, thread,
                                     ) {
