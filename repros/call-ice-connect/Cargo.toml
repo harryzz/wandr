@@ -18,5 +18,5 @@ publish = false
 [dependencies]
 bytes      = "1"
 sansio     = "1"
-rtc-ice    = { path = "/tmp/rtc-spike/rtc-ice", default-features = false }
-rtc-shared = { path = "/tmp/rtc-spike/rtc-shared", default-features = false }
+rtc-ice    = { path = "../../external/rtc/rtc-ice", default-features = false }
+rtc-shared = { path = "../../external/rtc/rtc-shared", default-features = false }

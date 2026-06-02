@@ -1,0 +1,71 @@
+//! # wart-call — the wart call engine
+//!
+//! A guest-side Rust library that establishes a secure real-time audio call from
+//! a `wasm32-wasip2` component. WebRTC is the first backend:
+//!
+//! - **signaling** ([`signaling`]) — SDP offer/answer carrying ICE creds, the
+//!   DTLS fingerprint, and the Opus rtpmap.
+//! - **transport** ([`transport`]) — ICE connectivity + the DTLS-SRTP handshake
+//!   that derives the SRTP keys.
+//! - **media** ([`media`]) — Opus + RTP + SRTP: PCM ⇄ encrypted RTP datagrams.
+//! - **session** ([`session`]) — [`PeerSession`], the API that composes them.
+//!
+//! The media core (RTP/SRTP/Opus) and the ICE transport are protocol-agnostic,
+//! so a SIP or Jingle backend can reuse them later.
+//!
+//! ## WIT-agnostic
+//! wart-call deals only in **PCM f32 frames** and **opaque datagrams** — no host
+//! WIT. The consuming guest wires the PCM ends to the host audio interface
+//! (capture/playback) and the datagram ends to a UDP socket (`wasi:sockets`),
+//! and carries the SDP over its own signaling channel.
+//!
+//! Every layer is device-verified individually + composed (repros/call-*; the
+//! end-to-end call is repros/call-capstone, "CALL ESTABLISHED" on a Pixel 2 XL).
+
+pub mod media;
+pub mod session;
+pub mod signaling;
+pub mod transport;
+
+pub use media::{MediaSession, SrtpKeys};
+pub use session::{PeerSession, Role, SessionState};
+
+/// Errors from any stage of the call engine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Error {
+    /// Opus encode/decode or setup.
+    Codec(&'static str),
+    /// SRTP context / protect / unprotect.
+    Srtp(&'static str),
+    /// RTP marshal / unmarshal.
+    Rtp(&'static str),
+    /// SDP build / parse / missing field.
+    Sdp(&'static str),
+    /// ICE agent / candidate / connectivity.
+    Ice(&'static str),
+    /// DTLS handshake / key export.
+    Dtls(&'static str),
+    /// Used before the session is connected.
+    NotConnected,
+}
+
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Error::Codec(s) => write!(f, "codec: {s}"),
+            Error::Srtp(s) => write!(f, "srtp: {s}"),
+            Error::Rtp(s) => write!(f, "rtp: {s}"),
+            Error::Sdp(s) => write!(f, "sdp: {s}"),
+            Error::Ice(s) => write!(f, "ice: {s}"),
+            Error::Dtls(s) => write!(f, "dtls: {s}"),
+            Error::NotConnected => write!(f, "session not connected yet"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+/// Opus dynamic payload type used by WebRTC (a=rtpmap:111 opus/48000/2).
+pub const OPUS_PAYLOAD_TYPE: u8 = 111;
+/// The audio device sample rate wart uses end to end.
+pub const SAMPLE_RATE: u32 = 48_000;
