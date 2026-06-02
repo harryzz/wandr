@@ -64,11 +64,14 @@ impl Signaling {
             .ok_or(Error::Sdp("no audio m-section"))?;
 
         let attr = |k: &str| media.attribute(k).flatten().unwrap_or("").to_owned();
+        // ALL candidate lines (a peer offers several — IPv4/IPv6/host/srflx);
+        // `attribute()` only returns the first, so iterate the raw attributes.
         let candidates: Vec<String> = media
-            .attribute("candidate")
-            .flatten()
-            .map(|c| vec![c.to_owned()])
-            .unwrap_or_default();
+            .attributes
+            .iter()
+            .filter(|a| a.key == "candidate")
+            .filter_map(|a| a.value.clone())
+            .collect();
         Ok(Signaling {
             ice_ufrag: attr("ice-ufrag"),
             ice_pwd: attr("ice-pwd"),

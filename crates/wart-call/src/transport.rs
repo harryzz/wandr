@@ -2,13 +2,13 @@
 //! over **real datagrams**: `poll_transmit` yields `(dest, bytes)` to send on a
 //! UDP socket; `handle_datagram(src, bytes)` feeds what the socket received.
 //!
-//! Sequencing: run ICE checks; once a candidate pair is selected, run the DTLS
-//! handshake over it; on completion, export the SRTP keys and verify the peer's
-//! cert against its SDP fingerprint. Inbound datagrams are demuxed by leading
-//! byte (STUN → ICE, DTLS → DTLS, SRTP → media).
+//! Proper ICE: add *all* of the peer's candidates, run connectivity checks until
+//! a pair is **selected**, then run DTLS over the selected remote and export the
+//! SRTP keys (verifying the peer's cert against its SDP fingerprint). Inbound
+//! datagrams are demuxed by leading byte (STUN → ICE, DTLS → DTLS, SRTP → media).
 //!
-//! Composes the device-verified repros/call-{ice-connect,dtls-handshake}; UDP
-//! itself is repros/wasi-udp-probe.
+//! Composes the device-verified repros/call-{ice-connect,dtls-handshake}; UDP is
+//! repros/wasi-udp-probe; interop with the webrtc-rs async stack is repros/call-interop.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -38,22 +38,18 @@ const KEY: usize = 16;
 const SALT: usize = 14;
 const EXPORT_LEN: usize = 2 * (KEY + SALT);
 
-/// What a demuxed inbound datagram was.
 pub(crate) enum Demux {
-    /// Consumed by ICE or DTLS internally.
     Consumed,
-    /// SRTP media — hand to the media session.
     Media(Vec<u8>),
 }
 
 pub(crate) struct Transport {
     role: Role,
     local: SocketAddr,
+    /// The selected pair's remote address — set once ICE connects.
     remote: Option<SocketAddr>,
     ice: Agent,
     dtls: DtlsEndpoint,
-    /// Our cert, kept to build the client config once the remote addr is known.
-    cert: Certificate,
     client_cfg: Option<Arc<HandshakeConfig>>,
     dtls_started: bool,
     dtls_done: bool,
@@ -63,7 +59,7 @@ pub(crate) struct Transport {
 }
 
 impl Transport {
-    /// `local` is our bound UDP socket address — the host candidate we advertise.
+    /// `local` is our bound UDP socket address — advertised as our host candidate.
     pub(crate) fn new(role: Role, ufrag: &str, pwd: &str, local: SocketAddr) -> Result<Self, Error> {
         let ice = Agent::new(Arc::new(AgentConfig {
             local_ufrag: ufrag.to_owned(),
@@ -78,29 +74,38 @@ impl Transport {
         let der = cert.certificate.first().ok_or(Error::Dtls("cert der"))?;
         let fingerprint = fingerprint_sha256(der.as_ref());
 
-        // Offerer = DTLS server (waits for ClientHello, requests the client cert
-        // for the mutual-auth fingerprint check). Answerer = DTLS client (connects
-        // once ICE is up; its config is built in `set_remote`, needing the addr).
-        let dtls = match role {
+        // Offerer = DTLS server (requests the client cert for the fingerprint
+        // check). Answerer = DTLS client (connects to the selected remote later).
+        let (dtls, client_cfg) = match role {
             Role::Offerer => {
                 let server_cfg = Arc::new(
                     ConfigBuilder::default()
-                        .with_certificates(vec![cert.clone()])
+                        .with_certificates(vec![cert])
                         .with_srtp_protection_profiles(srtp_profiles())
                         .with_insecure_skip_verify(true)
                         .with_client_auth(ClientAuthType::RequireAnyClientCert)
                         .build(false, None)
                         .map_err(|_| Error::Dtls("server cfg"))?,
                 );
-                DtlsEndpoint::new(local, TransportProtocol::UDP, Some(server_cfg))
+                (DtlsEndpoint::new(local, TransportProtocol::UDP, Some(server_cfg)), None)
             }
-            Role::Answerer => DtlsEndpoint::new(local, TransportProtocol::UDP, None),
+            Role::Answerer => {
+                let client_cfg = Arc::new(
+                    ConfigBuilder::default()
+                        .with_certificates(vec![cert])
+                        .with_srtp_protection_profiles(srtp_profiles())
+                        .with_insecure_skip_verify(true)
+                        .build(true, None)
+                        .map_err(|_| Error::Dtls("client cfg"))?,
+                );
+                (DtlsEndpoint::new(local, TransportProtocol::UDP, None), Some(client_cfg))
+            }
         };
 
         let mut t = Self {
-            role, local, remote: None, ice, dtls, cert,
-            client_cfg: None, dtls_started: false, dtls_done: false,
-            fingerprint, expected_remote_fp: None, keys: None,
+            role, local, remote: None, ice, dtls, client_cfg,
+            dtls_started: false, dtls_done: false, fingerprint,
+            expected_remote_fp: None, keys: None,
         };
         t.ice.add_local_candidate(host_candidate(local)).map_err(|_| Error::Ice("local cand"))?;
         Ok(t)
@@ -110,36 +115,31 @@ impl Transport {
         &self.fingerprint
     }
 
-    /// The peer's address (media destination), once `set_remote` is called.
     pub(crate) fn remote_addr(&self) -> Option<SocketAddr> {
         self.remote
     }
 
-    /// Apply the remote's signaling (creds + fingerprint + candidate addr) +
-    /// start connectivity checks.
+    /// Apply the remote's signaling (creds + fingerprint) + ALL its candidates
+    /// (those matching our address family) + start connectivity checks.
     pub(crate) fn set_remote(
         &mut self,
         ufrag: &str,
         pwd: &str,
         fingerprint: &str,
-        remote: SocketAddr,
+        remotes: &[SocketAddr],
     ) -> Result<(), Error> {
-        self.remote = Some(remote);
         if !fingerprint.is_empty() {
             self.expected_remote_fp = Some(normalize_fp(fingerprint));
         }
-        // The DTLS client config needs the remote addr (server name).
-        if matches!(self.role, Role::Answerer) {
-            self.client_cfg = Some(Arc::new(
-                ConfigBuilder::default()
-                    .with_certificates(vec![self.cert.clone()])
-                    .with_srtp_protection_profiles(srtp_profiles())
-                    .with_insecure_skip_verify(true)
-                    .build(true, Some(remote))
-                    .map_err(|_| Error::Dtls("client cfg"))?,
-            ));
+        let mut added = 0;
+        for r in remotes.iter().filter(|r| r.is_ipv4() == self.local.is_ipv4()) {
+            if self.ice.add_remote_candidate(host_candidate(*r)).is_ok() {
+                added += 1;
+            }
         }
-        self.ice.add_remote_candidate(host_candidate(remote)).map_err(|_| Error::Ice("remote cand"))?;
+        if added == 0 {
+            return Err(Error::Ice("no reachable remote candidate"));
+        }
         let controlling = matches!(self.role, Role::Offerer);
         self.ice
             .start_connectivity_checks(controlling, ufrag.to_owned(), pwd.to_owned())
@@ -155,7 +155,6 @@ impl Transport {
         self.maybe_start_dtls();
     }
 
-    /// Drain outgoing datagrams (ICE checks + DTLS handshake): `(dest, bytes)`.
     pub(crate) fn poll_transmit(&mut self) -> Vec<(SocketAddr, Vec<u8>)> {
         self.maybe_start_dtls();
         let mut out = Vec::new();
@@ -168,7 +167,6 @@ impl Transport {
         out
     }
 
-    /// Demux + dispatch one inbound datagram from `src`.
     pub(crate) fn handle_datagram(&mut self, src: SocketAddr, data: &[u8]) -> Result<Demux, Error> {
         match data.first().copied() {
             Some(0..=3) => {
@@ -210,11 +208,16 @@ impl Transport {
         matches!(self.ice.state(), ConnectionState::Connected | ConnectionState::Completed)
     }
 
+    /// Once ICE selects a pair, latch the selected remote + (client side) start DTLS.
     fn maybe_start_dtls(&mut self) {
         if self.dtls_started || !self.ice_connected() {
             return;
         }
-        if let (Some(cfg), Some(remote)) = (self.client_cfg.take(), self.remote) {
+        let Some(remote) = self.ice.get_selected_candidate_pair().map(|(_, r)| r.addr()) else {
+            return; // connected but pair not yet exposed — try next tick
+        };
+        self.remote = Some(remote);
+        if let Some(cfg) = self.client_cfg.take() {
             let _ = self.dtls.connect(remote, cfg, None);
         }
         self.dtls_started = true;
@@ -225,7 +228,6 @@ impl Transport {
             return Ok(());
         }
         let state = self.dtls.get_connection_state(remote).ok_or(Error::Dtls("no state"))?;
-        // MITM check: the cert the peer presented must match its SDP fingerprint.
         if let Some(expected) = &self.expected_remote_fp {
             let peer_der = state.peer_certificates.first().ok_or(Error::Dtls("no peer cert"))?;
             let got = normalize_fp(&fingerprint_sha256(peer_der));
@@ -239,8 +241,8 @@ impl Transport {
         let client = SrtpKeys { key: arr16(&km[0..16]), salt: arr14(&km[32..46]) };
         let server = SrtpKeys { key: arr16(&km[16..32]), salt: arr14(&km[46..60]) };
         self.keys = Some(match self.role {
-            Role::Answerer => (client, server), // we're the DTLS client
-            Role::Offerer => (server, client),  // we're the DTLS server
+            Role::Answerer => (client, server),
+            Role::Offerer => (server, client),
         });
         self.dtls_done = true;
         Ok(())
@@ -280,7 +282,6 @@ fn fingerprint_sha256(der: &[u8]) -> String {
     format!("sha-256 {}", hex.join(":"))
 }
 
-/// Normalize a fingerprint for comparison (upper-case hex, single spaces).
 fn normalize_fp(fp: &str) -> String {
     fp.to_ascii_uppercase().split_whitespace().collect::<Vec<_>>().join(" ")
 }

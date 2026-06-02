@@ -75,7 +75,17 @@ Each is a `wasi:cli/command` warpkg, device-verified via `wart-host --run-once`:
 | `call-ice-connect` | ICE connectivity | `war.probe.ice` |
 | `call-signaling-sdp` | WebRTC SDP | `war.probe.sdp` |
 | `call-capstone` | end-to-end call | `war.probe.call` |
+| `call-udp-loopback` | a call over real wasi:sockets UDP (LAN IP) | `war.probe.calludp` |
+| `call-interop` | **interop with an independent WebRTC stack** (native) | — |
 | `webrtc-rs-wasip2` | the rtc-ice mDNS-optional patch + spike notes | — |
+
+**Cross-implementation interop is proven** (`repros/call-interop`): wart-call (our
+sans-IO `rtc-*` engine) connects to the webrtc-rs **async** `webrtc` crate — a
+separate codebase (its own webrtc-ice/webrtc-dtls), the closest scriptable proxy
+for a browser/libwebrtc. The full `RTCPeerConnection` offers; wart-call answers;
+our answer SDP is accepted and both reach `Connected` (ICE + DTLS-SRTP over real
+UDP). This de-risks the browser test — the remaining browser-specific work is a
+signaling channel + the page, plus any strict-SDP additions a real browser flags.
 
 ## From here to a shippable call
 

@@ -93,12 +93,12 @@ impl PeerSession {
     /// Apply the peer's signaling (from their SDP) → start ICE connectivity. The
     /// peer's cert fingerprint is checked against the handshake cert on connect.
     pub fn set_remote_signaling(&mut self, remote: &Signaling) -> Result<(), Error> {
-        let remote_addr = remote
-            .candidates
-            .iter()
-            .find_map(|c| parse_candidate_addr(c))
-            .ok_or(Error::Ice("no usable remote candidate"))?;
-        self.transport.set_remote(&remote.ice_ufrag, &remote.ice_pwd, &remote.fingerprint, remote_addr)
+        let remotes: Vec<SocketAddr> =
+            remote.candidates.iter().filter_map(|c| parse_candidate_addr(c)).collect();
+        if remotes.is_empty() {
+            return Err(Error::Ice("no usable remote candidate"));
+        }
+        self.transport.set_remote(&remote.ice_ufrag, &remote.ice_pwd, &remote.fingerprint, &remotes)
     }
 
     pub fn state(&self) -> SessionState {
