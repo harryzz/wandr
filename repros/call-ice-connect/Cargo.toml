@@ -1,0 +1,22 @@
+[package]
+name = "call-ice-connect"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Call engine — Stage 2b (transport plane, ICE half). Two sans-IO rtc-ice Agents
+# (controlling + controlled) exchange candidates + credentials and complete ICE
+# connectivity checks (STUN) until a candidate pair is selected — proving the ICE
+# agent reaches connectivity in a wasm32-wasip2 guest. The checks run over an
+# in-memory loopback wire here (real wasi:sockets UDP is separately de-risked in
+# ../wasi-udp-probe; the final assembly swaps the wire for it). DTLS (Stage 2a)
+# then runs over the selected pair.
+#
+# rtc-ice needs the mDNS-optional fork (see ../webrtc-rs-wasip2) to build for
+# wasip2 → path dep to the patched clone, default-features = false.
+
+[dependencies]
+bytes      = "1"
+sansio     = "1"
+rtc-ice    = { path = "/tmp/rtc-spike/rtc-ice", default-features = false }
+rtc-shared = { path = "/tmp/rtc-spike/rtc-shared", default-features = false }
