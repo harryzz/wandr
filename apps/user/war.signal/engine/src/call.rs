@@ -190,6 +190,18 @@ struct ActiveCall {
     accepted: bool,  // we pressed accept on an incoming ring
     declined: bool,  // we declined an incoming ring (hung up while ringing)
     busy: bool,      // peer replied Busy
+    // Media-flow diagnostics (→ periodic log; proves where audio stops).
+    udp_tx: u64, udp_rx: u64, // datagrams sent / received on the media socket
+    aud_tx: u64, aud_rx: u64, // PCM frames mic→peer / peer→speaker
+}
+
+/// A snapshot of one call's media-flow counters, for periodic logging.
+pub struct MediaStats {
+    pub state: CallState,
+    pub udp_tx: u64,
+    pub udp_rx: u64,
+    pub aud_tx: u64,
+    pub aud_rx: u64,
 }
 
 impl ActiveCall {
@@ -199,6 +211,7 @@ impl ActiveCall {
             call, sock, peer_aci, cap: None, trk: None, track_started: false,
             mic_buf: Vec::new(), last_state,
             outgoing, connected: false, accepted: false, declined: false, busy: false,
+            udp_tx: 0, udp_rx: 0, aud_tx: 0, aud_rx: 0,
         }
     }
 
@@ -239,7 +252,9 @@ impl ActiveCall {
             }
             while self.mic_buf.len() >= FRAME {
                 let frame: Vec<f32> = self.mic_buf.drain(..FRAME).collect();
-                let _ = self.call.send_audio(&frame);
+                if self.call.send_audio(&frame).is_ok() {
+                    self.aud_tx += 1;
+                }
             }
         }
         if let Some(trk) = self.trk {
@@ -247,6 +262,7 @@ impl ActiveCall {
             while let Some(pcm) = self.call.recv_audio() {
                 let stereo: Vec<f32> = pcm.iter().flat_map(|&s| [s, s]).collect();
                 let _ = audio::write_pcm_f32(trk, &stereo);
+                self.aud_rx += 1;
                 wrote = true;
             }
             if wrote && !self.track_started {
@@ -300,6 +316,17 @@ impl CallEngine {
 
     pub fn is_active(&self) -> bool {
         self.active.is_some()
+    }
+
+    /// Media-flow counters for the active call (diagnostic), or `None` (idle).
+    pub fn media_stats(&self) -> Option<MediaStats> {
+        self.active.as_ref().map(|a| MediaStats {
+            state: a.call.state(),
+            udp_tx: a.udp_tx,
+            udp_rx: a.udp_rx,
+            aud_tx: a.aud_tx,
+            aud_rx: a.aud_rx,
+        })
     }
 
     pub fn peer(&self) -> String {
@@ -453,9 +480,12 @@ impl CallEngine {
             let mut buf = [0u8; 2048];
             a.call.handle_timeout(now);
             for (dst, dg) in a.call.poll_transmit() {
-                let _ = a.sock.send_to(&dg, dst);
+                if a.sock.send_to(&dg, dst).is_ok() {
+                    a.udp_tx += 1;
+                }
             }
             while let Ok((n, src)) = a.sock.recv_from(&mut buf) {
+                a.udp_rx += 1;
                 let _ = a.call.handle_datagram(src, &buf[..n]);
             }
             if a.call.is_connected() {

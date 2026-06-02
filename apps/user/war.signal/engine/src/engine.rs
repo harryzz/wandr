@@ -997,6 +997,8 @@ async fn receive_and_send(
     let my_identity: Vec<u8> = store.identity().identity_key().serialize().to_vec();
     // Wall-clock of the previous tick, for the wake-from-sleep watchdog below.
     let mut last_wall = now_ms();
+    // Last time we logged a media-flow stat line for an active call (~1 Hz).
+    let mut last_call_stat = 0u64;
     loop {
         let tick_ms = if call_engine.is_active() { 10 } else { 200 };
         let tick = wart_step_executor::sleep(Duration::from_millis(tick_ms));
@@ -1262,9 +1264,27 @@ async fn receive_and_send(
                     }
                     if call_engine.is_active() {
                         let peer = call_engine.peer();
-                        let (sigs, _) = call_engine.tick(std::time::Instant::now());
+                        let (sigs, st) = call_engine.tick(std::time::Instant::now());
+                        // Log every driver-state transition (esp. Connected) so the
+                        // media leg is provable from the log: does ICE connect?
+                        if let Some(st) = st {
+                            dbg_line(&format!("call state -> {st:?}"));
+                        }
                         if let Some(sender) = sender.as_mut() {
                             send_signals!(sender, peer, sigs);
+                        }
+                        // Periodic media-flow counters (~1 Hz): udp datagrams +
+                        // PCM frames each way. Bisects connected-but-silent (udp
+                        // flowing, audio not) from never-connected (no udp).
+                        let now = now_ms();
+                        if now.saturating_sub(last_call_stat) >= 1000 {
+                            last_call_stat = now;
+                            if let Some(m) = call_engine.media_stats() {
+                                dbg_line(&format!(
+                                    "media {:?}: udp tx={} rx={} | audio tx={} rx={}",
+                                    m.state, m.udp_tx, m.udp_rx, m.aud_tx, m.aud_rx,
+                                ));
+                            }
                         }
                     }
                     if sync_call_state(&shared, &call_engine) {
