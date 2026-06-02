@@ -508,8 +508,22 @@ mod binder_path {
             let write_ctr = unsafe { &*st.write_ctr_ptr };
 
             let r = read_ctr.load(Ordering::Acquire) as u64;
-            let w = write_ctr.load(Ordering::Relaxed) as u64;
-            let in_flight = w.wrapping_sub(r);
+            let mut w = write_ctr.load(Ordering::Relaxed) as u64;
+            // Underrun resync. The HAL's read cursor advances at the sample clock
+            // whether or not we feed it, so on starvation it catches up to / passes
+            // our write cursor (r >= w). Computing `w - r` then wraps to a huge
+            // value, the free-space guard sees zero room, and EVERY subsequent
+            // write is rejected — only the initial prime lands and the speaker goes
+            // silent. This is gotcha #5 for *streaming* playback (the batch-write
+            // call-live repro pre-filled a huge buffer so the ring never drained).
+            // Treat r >= w as an empty ring: jump our write cursor to the read head
+            // (drop the silent gap) and write fresh audio at the play position — a
+            // brief glitch, but continuous sound instead of a 40 ms blip.
+            if r >= w {
+                w = r;
+                write_ctr.store(w as i64, Ordering::Relaxed);
+            }
+            let in_flight = w - r;
             let free_frames = (st.capacity_frames as u64)
                 .saturating_sub(in_flight) as u32;
 
