@@ -153,17 +153,33 @@ macro_rules! send_signals {
         if let Ok(uuid) = Uuid::parse_str(&$peer) {
             let recipient = ServiceId::Aci(uuid.into());
             for sig in $sigs {
-                // Surface the trickled TURN relay candidate (Phase A device check).
-                if let wart_call::signal::CallSignal::Ice { opaque, .. } = &sig {
-                    if let Ok(Some(line)) = wart_call::signal::decode_ice_candidate(opaque) {
-                        let kind = if line.contains("typ relay") { "RELAY" } else { "host" };
-                        dbg_line(&format!("trickle {kind} candidate -> {line}"));
+                use wart_call::signal::CallSignal as CS;
+                let kind = match &sig {
+                    CS::Offer { .. } => "Offer",
+                    CS::Answer { .. } => "Answer",
+                    CS::Ice { opaque, .. } => {
+                        // Surface the trickled candidate (host vs TURN relay).
+                        if let Ok(Some(line)) =
+                            wart_call::signal::decode_ice_candidate(opaque)
+                        {
+                            let k = if line.contains("typ relay") { "RELAY" } else { "host" };
+                            dbg_line(&format!("trickle {k} candidate -> {line}"));
+                        }
+                        "Ice"
                     }
-                }
+                    CS::Hangup { .. } => "Hangup",
+                    CS::Busy { .. } => "Busy",
+                };
                 let cm = call::signal_to_call_message(&sig);
-                let _ = $sender
+                // Log the send RESULT — a discarded error here is exactly why a
+                // call can silently fail to ring (the Offer/Answer never landed).
+                match $sender
                     .send_message(&recipient, None, cm, now_ms(), false, false)
-                    .await;
+                    .await
+                {
+                    Ok(_) => dbg_line(&format!("TX {kind} -> {} OK", $peer)),
+                    Err(e) => dbg_line(&format!("TX {kind} -> {} ERR: {e}", $peer)),
+                }
             }
         }
     }};
