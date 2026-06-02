@@ -1,0 +1,62 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>wart-call ↔ browser WebRTC test</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; }
+    #state { font-size: 1.2rem; padding: .5rem; border-radius: .4rem; background: #eee; }
+    .ok { background: #cfc !important; } .bad { background: #fcc !important; }
+    pre { background: #f4f4f4; padding: .5rem; overflow: auto; font-size: .8rem; }
+  </style>
+</head>
+<body>
+  <h2>wart-call ↔ browser WebRTC test</h2>
+  <p>The browser offers a <b>recvonly</b> audio call; <code>wart-call</code> answers,
+     connects (ICE + DTLS-SRTP), and streams a 440&nbsp;Hz Opus tone.</p>
+  <button id="go">Start call</button>
+  <div id="state">idle</div>
+  <audio id="audio" autoplay controls></audio>
+  <h4>log</h4>
+  <pre id="log"></pre>
+<script>
+const log = (m) => { document.getElementById('log').textContent += m + "\n"; console.log(m); };
+const setState = (m, cls) => { const e = document.getElementById('state'); e.textContent = m; e.className = cls || ''; };
+
+document.getElementById('go').onclick = async () => {
+  try {
+    setState('connecting…');
+    const pc = new RTCPeerConnection();           // no STUN — host candidates only
+    pc.addTransceiver('audio', { direction: 'recvonly' });
+
+    pc.oniceconnectionstatechange = () => log('ice: ' + pc.iceConnectionState);
+    pc.onconnectionstatechange = () => {
+      log('pc: ' + pc.connectionState);
+      if (pc.connectionState === 'connected') setState('CONNECTED — wart-call ↔ browser ✓', 'ok');
+      if (['failed','disconnected'].includes(pc.connectionState)) setState('failed: ' + pc.connectionState, 'bad');
+    };
+    pc.ontrack = (e) => { log('ontrack — audio'); document.getElementById('audio').srcObject = e.streams[0]; };
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    // Non-trickle: wait for ICE gathering to finish so candidates are in the SDP.
+    await new Promise((res) => {
+      if (pc.iceGatheringState === 'complete') return res();
+      pc.onicegatheringstatechange = () => { if (pc.iceGatheringState === 'complete') res(); };
+    });
+    log('posting offer (' + pc.localDescription.sdp.length + ' bytes)…');
+
+    const resp = await fetch('/offer', { method: 'POST', body: pc.localDescription.sdp });
+    if (!resp.ok) throw new Error('server: ' + (await resp.text()));
+    const answer = await resp.text();
+    log('got answer (' + answer.length + ' bytes)');
+    await pc.setRemoteDescription({ type: 'answer', sdp: answer });
+    log('answer applied — connecting over UDP…');
+  } catch (e) {
+    setState('error: ' + e.message, 'bad');
+    log('ERROR ' + e.message);
+  }
+};
+</script>
+</body>
+</html>
