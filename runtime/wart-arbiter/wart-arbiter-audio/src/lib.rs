@@ -509,11 +509,11 @@ mod tests {
     #[test]
     fn app_id_resolves_to_pid() {
         let (mut r, mut store) = reg();
-        seed(&mut store, "war.signal", 4321);
-        let (reply, _) = r.dispatch_command("audio-focus-request", "war.signal gain", &mut store).unwrap();
+        seed(&mut store, "test.caller", 4321);
+        let (reply, _) = r.dispatch_command("audio-focus-request", "test.caller gain", &mut store).unwrap();
         let Reply::Ok(body) = reply else { panic!() };
         assert!(body.contains("pid=4321"));
-        assert!(body.contains("app=war.signal"));
+        assert!(body.contains("app=test.caller"));
     }
 
     #[test]
@@ -533,31 +533,31 @@ mod tests {
     #[test]
     fn call_start_pauses_music_sets_mode_and_badges() {
         let (mut r, mut store) = reg();
-        seed(&mut store, "war.signal", 500);
+        seed(&mut store, "test.caller", 500);
         // Music playing (permanent focus).
         r.dispatch_command("audio-focus-request", "111 gain", &mut store).unwrap();
-        let (reply, eff) = r.dispatch_command("audio-call-start", "war.signal", &mut store).unwrap();
+        let (reply, eff) = r.dispatch_command("audio-call-start", "test.caller", &mut store).unwrap();
         assert!(matches!(reply, Reply::Ok(_)));
         // Music pauses (transient), not permanently evicted.
         assert_eq!(changes_for(&eff, 111), vec!["on-focus-changed loss-transient"]);
         // The owner host is told to switch the global mode.
         assert!(changes_for(&eff, 500).iter().any(|l| l == "audio-policy set-mode comm"));
         // Ongoing-call badge raised.
-        assert!(store.notifications().iter().any(|n| n.app_id == "war.signal"));
+        assert!(store.notifications().iter().any(|n| n.app_id == "test.caller"));
     }
 
     #[test]
     fn call_end_resumes_music_restores_mode_clears_badge() {
         let (mut r, mut store) = reg();
-        seed(&mut store, "war.signal", 500);
+        seed(&mut store, "test.caller", 500);
         r.dispatch_command("audio-focus-request", "111 gain", &mut store).unwrap();
-        r.dispatch_command("audio-call-start", "war.signal", &mut store).unwrap();
-        let (_r, eff) = r.dispatch_command("audio-call-end", "war.signal", &mut store).unwrap();
+        r.dispatch_command("audio-call-start", "test.caller", &mut store).unwrap();
+        let (_r, eff) = r.dispatch_command("audio-call-end", "test.caller", &mut store).unwrap();
         // Mode restored on the owner + music regains focus.
         assert!(changes_for(&eff, 500).iter().any(|l| l == "audio-policy set-mode normal"));
         assert_eq!(changes_for(&eff, 111), vec!["on-focus-changed gain"]);
         // Badge cleared.
-        assert!(store.notifications().iter().all(|n| n.app_id != "war.signal"));
+        assert!(store.notifications().iter().all(|n| n.app_id != "test.caller"));
     }
 
     #[test]
@@ -571,12 +571,12 @@ mod tests {
     #[test]
     fn comms_owner_death_ends_session() {
         let (mut r, mut store) = reg();
-        seed(&mut store, "war.signal", 500);
-        r.dispatch_command("audio-call-start", "war.signal", &mut store).unwrap();
-        assert!(store.notifications().iter().any(|n| n.app_id == "war.signal"));
+        seed(&mut store, "test.caller", 500);
+        r.dispatch_command("audio-call-start", "test.caller", &mut store).unwrap();
+        assert!(store.notifications().iter().any(|n| n.app_id == "test.caller"));
         // Owner dies → session ends, badge cleared.
         r.dispatch_event(Event::SurfaceRemoved { pid: 500 }, &mut store);
-        assert!(store.notifications().iter().all(|n| n.app_id != "war.signal"));
+        assert!(store.notifications().iter().all(|n| n.app_id != "test.caller"));
     }
 
     #[test]
@@ -596,53 +596,53 @@ mod tests {
     #[test]
     fn ring_start_normal_rings_vibrates_and_pauses_music() {
         let (mut r, mut store) = reg();
-        seed(&mut store, "war.signal", 500);
+        seed(&mut store, "test.caller", 500);
         r.dispatch_command("audio-focus-request", "111 gain", &mut store).unwrap(); // music
-        let (reply, eff) = r.dispatch_command("audio-ring-start", "war.signal", &mut store).unwrap();
+        let (reply, eff) = r.dispatch_command("audio-ring-start", "test.caller", &mut store).unwrap();
         assert!(matches!(reply, Reply::Ok(_)));
         let lines = changes_for(&eff, 500);
         assert!(lines.iter().any(|l| l == "ringtone start"));
         assert!(lines.iter().any(|l| l == "haptics ring-start"));
         // Music pauses (transient), incoming-call badge raised.
         assert_eq!(changes_for(&eff, 111), vec!["on-focus-changed loss-transient"]);
-        assert!(store.notifications().iter().any(|n| n.app_id == "war.signal"));
+        assert!(store.notifications().iter().any(|n| n.app_id == "test.caller"));
     }
 
     #[test]
     fn ring_stop_silences_and_resumes_music() {
         let (mut r, mut store) = reg();
-        seed(&mut store, "war.signal", 500);
+        seed(&mut store, "test.caller", 500);
         r.dispatch_command("audio-focus-request", "111 gain", &mut store).unwrap();
-        r.dispatch_command("audio-ring-start", "war.signal", &mut store).unwrap();
-        let (_r, eff) = r.dispatch_command("audio-ring-stop", "war.signal", &mut store).unwrap();
+        r.dispatch_command("audio-ring-start", "test.caller", &mut store).unwrap();
+        let (_r, eff) = r.dispatch_command("audio-ring-stop", "test.caller", &mut store).unwrap();
         let lines = changes_for(&eff, 500);
         assert!(lines.iter().any(|l| l == "ringtone stop"));
         assert!(lines.iter().any(|l| l == "haptics ring-stop"));
         // Music regains, badge cleared.
         assert_eq!(changes_for(&eff, 111), vec!["on-focus-changed gain"]);
-        assert!(store.notifications().iter().all(|n| n.app_id != "war.signal"));
+        assert!(store.notifications().iter().all(|n| n.app_id != "test.caller"));
     }
 
     #[test]
     fn answer_stops_ring_then_enters_comm() {
         let (mut r, mut store) = reg();
-        seed(&mut store, "war.signal", 500);
-        r.dispatch_command("audio-ring-start", "war.signal", &mut store).unwrap();
+        seed(&mut store, "test.caller", 500);
+        r.dispatch_command("audio-ring-start", "test.caller", &mut store).unwrap();
         // Answering = call-start: it stops the ring + switches to comm mode.
-        let (_r, eff) = r.dispatch_command("audio-call-start", "war.signal", &mut store).unwrap();
+        let (_r, eff) = r.dispatch_command("audio-call-start", "test.caller", &mut store).unwrap();
         let lines = changes_for(&eff, 500);
         assert!(lines.iter().any(|l| l == "ringtone stop"));
         assert!(lines.iter().any(|l| l == "audio-policy set-mode comm"));
         // Ongoing-call badge present; not still "ringing".
-        assert!(store.notifications().iter().any(|n| n.app_id == "war.signal"));
+        assert!(store.notifications().iter().any(|n| n.app_id == "test.caller"));
     }
 
     #[test]
     fn ringer_mode_vibrate_buzzes_without_ringtone() {
         let (mut r, mut store) = reg();
-        seed(&mut store, "war.signal", 500);
+        seed(&mut store, "test.caller", 500);
         r.dispatch_command("audio-ringer-mode", "vibrate", &mut store).unwrap();
-        let (_r, eff) = r.dispatch_command("audio-ring-start", "war.signal", &mut store).unwrap();
+        let (_r, eff) = r.dispatch_command("audio-ring-start", "test.caller", &mut store).unwrap();
         let lines = changes_for(&eff, 500);
         assert!(lines.iter().any(|l| l == "haptics ring-start"));
         assert!(!lines.iter().any(|l| l == "ringtone start"));
@@ -651,23 +651,23 @@ mod tests {
     #[test]
     fn ringer_mode_silent_is_visual_only() {
         let (mut r, mut store) = reg();
-        seed(&mut store, "war.signal", 500);
+        seed(&mut store, "test.caller", 500);
         r.dispatch_command("audio-ringer-mode", "silent", &mut store).unwrap();
-        let (_r, eff) = r.dispatch_command("audio-ring-start", "war.signal", &mut store).unwrap();
+        let (_r, eff) = r.dispatch_command("audio-ring-start", "test.caller", &mut store).unwrap();
         let lines = changes_for(&eff, 500);
         assert!(!lines.iter().any(|l| l == "ringtone start"));
         assert!(!lines.iter().any(|l| l == "haptics ring-start"));
         // Still badges the incoming call.
-        assert!(store.notifications().iter().any(|n| n.app_id == "war.signal"));
+        assert!(store.notifications().iter().any(|n| n.app_id == "test.caller"));
     }
 
     #[test]
     fn ringing_owner_death_clears_ring() {
         let (mut r, mut store) = reg();
-        seed(&mut store, "war.signal", 500);
-        r.dispatch_command("audio-ring-start", "war.signal", &mut store).unwrap();
-        assert!(store.notifications().iter().any(|n| n.app_id == "war.signal"));
+        seed(&mut store, "test.caller", 500);
+        r.dispatch_command("audio-ring-start", "test.caller", &mut store).unwrap();
+        assert!(store.notifications().iter().any(|n| n.app_id == "test.caller"));
         r.dispatch_event(Event::SurfaceRemoved { pid: 500 }, &mut store);
-        assert!(store.notifications().iter().all(|n| n.app_id != "war.signal"));
+        assert!(store.notifications().iter().all(|n| n.app_id != "test.caller"));
     }
 }
