@@ -43,6 +43,11 @@ use prost::Message;
 use crate::signaling::Signaling;
 use crate::Error;
 
+#[cfg(feature = "signal")]
+mod call;
+#[cfg(feature = "signal")]
+pub use call::{CallSignal, CallState, HangupKind, SignalCall};
+
 /// Hand-derived [`prost::Message`] mirrors of `proto/signal_signaling.proto`.
 /// Tags and types are the on-wire contract — keep them in lockstep with the proto.
 #[cfg(feature = "signal")]

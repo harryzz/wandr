@@ -141,11 +141,11 @@ impl PeerSession {
     /// Apply the peer's signaling (from their SDP) → start ICE connectivity. The
     /// peer's cert fingerprint is checked against the handshake cert on connect.
     pub fn set_remote_signaling(&mut self, remote: &Signaling) -> Result<(), Error> {
+        // The bundled (SDP/DTLS) path carries candidates here; the Signal trickle
+        // path carries none (they arrive via `add_remote_candidate`), so an empty
+        // set is allowed — ICE just has no pair to check until candidates trickle in.
         let remotes: Vec<SocketAddr> =
             remote.candidates.iter().filter_map(|c| parse_candidate_addr(c)).collect();
-        if remotes.is_empty() {
-            return Err(Error::Ice("no usable remote candidate"));
-        }
         self.remote_direction = Some(remote.direction.clone());
         self.transport.set_remote(
             &remote.ice_ufrag,
@@ -154,6 +154,17 @@ impl PeerSession {
             remote.public_key.as_deref(),
             &remotes,
         )
+    }
+
+    /// Add one trickled remote ICE candidate (a candidate line in
+    /// [`Signaling::candidates`] form, i.e. without the `candidate:` prefix). The
+    /// Signal path delivers candidates this way, one per `IceUpdate`, after
+    /// [`Self::set_remote_signaling`]. Unparseable lines are ignored.
+    pub fn add_remote_candidate(&mut self, candidate: &str) -> Result<(), Error> {
+        match parse_candidate_addr(candidate) {
+            Some(addr) => self.transport.add_remote_candidate(addr),
+            None => Ok(()),
+        }
     }
 
     pub fn state(&self) -> SessionState {

@@ -261,20 +261,29 @@ impl Transport {
                 s.remote_public = Some(arr);
             }
         }
-        let mut added = 0;
+        // Add whatever candidates came with the signaling. Trickle (Signal) sends
+        // none here — they arrive later via `add_remote_candidate` — so an empty
+        // set is fine; the bundled (DTLS/SDP) path supplies them up front.
         for r in remotes.iter().filter(|r| r.is_ipv4() == self.local.is_ipv4()) {
-            if self.ice.add_remote_candidate(host_candidate(*r)).is_ok() {
-                added += 1;
-            }
-        }
-        if added == 0 {
-            return Err(Error::Ice("no reachable remote candidate"));
+            let _ = self.ice.add_remote_candidate(host_candidate(*r));
         }
         let controlling = matches!(self.role, Role::Offerer);
         self.ice
             .start_connectivity_checks(controlling, ufrag.to_owned(), pwd.to_owned())
             .map_err(|_| Error::Ice("start checks"))?;
         Ok(())
+    }
+
+    /// Add one trickled remote ICE candidate after `set_remote` started checks
+    /// (the Signal path delivers candidates as separate `IceUpdate`s).
+    pub(crate) fn add_remote_candidate(&mut self, addr: SocketAddr) -> Result<(), Error> {
+        if addr.is_ipv4() != self.local.is_ipv4() {
+            return Ok(()); // address-family mismatch — not reachable from our socket
+        }
+        self.ice
+            .add_remote_candidate(host_candidate(addr))
+            .map(|_| ())
+            .map_err(|_| Error::Ice("add remote candidate"))
     }
 
     pub(crate) fn handle_timeout(&mut self, now: Instant) {

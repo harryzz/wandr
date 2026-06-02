@@ -109,6 +109,29 @@ ringrtc's `signaling.proto` and map it ⇄ `wart_call::Signaling`.
 > nail in Phase 3 (real-Signal interop): the exact serialized form of the identity
 > keys in the HKDF `info` (assumed 33-byte `0x05‖X25519`), and randomizing the
 > per-role ICE ufrag/pwd (currently fixed).
+>
+> **Phase 2b status — DONE (host-tested call driver in wart-call).**
+> `crates/wart-call/src/signal/call.rs` adds `SignalCall` — the 1:1 protocol driver
+> tying the Phase-1 codec + Phase-2a DH keying into the
+> offer→answer→connected→hangup state machine with ICE trickle and the audio pump.
+> It's **transport/Signal-proto-agnostic**: emits/consumes abstract `CallSignal`
+> events (`Offer`/`Answer`/`Ice`/`Hangup`/`Busy`, each wrapping `opaque` bytes) that
+> the engine will map ⇄ libsignal `CallMessage`. API: `place` / `incoming` /
+> `accept` / `hangup` / `on_signal` / `poll_signals` + the UDP+audio pump
+> (`poll_transmit`/`handle_datagram`/`handle_timeout`/`send_audio`/`recv_audio`).
+> Supporting change: incremental ICE (`PeerSession::add_remote_candidate`;
+> `set_remote_signaling` tolerates zero initial candidates) so candidates trickle as
+> separate `Ice` signals, ringrtc-style. **Host-verified:**
+> `full_call_place_accept_connect_audio_hangup` drives the complete wart↔wart call
+> over real loopback UDP (place→incoming→accept→trickle→DH/GCM connect→two-way
+> audio→hangup) minus the real Signal wire + mic/speaker; plus `received_busy_*` and
+> `foreign_call_id_*`. 14/14 signal tests pass, default DTLS path undisturbed (2/2),
+> builds for wasm32-wasip2. **Next = Phase 2b-ii (device):** engine `call.rs` adapter
+> mapping `CallSignal` ⇄ libsignal `CallMessage` (real `MessageSender` send + inbound
+> dispatch at engine.rs ~:778-815), a `wasi:sockets` UDP socket + the `audio` WIT
+> import (mic/AAudio PCM pump) + identity keys from `store.identity()`, the `run()`
+> call loop + `Shared` call state, UI in-call screen, and the live two-account device
+> test (per-app `--install`; **never** `build-system-warpkgs.sh`).
 
 ## Two approaches (decide in step 1)
 
