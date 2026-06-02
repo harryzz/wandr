@@ -183,6 +183,13 @@ fn to_wit_call_state(s: wart_call::signal::CallState) -> CallState {
 /// Fetch Signal's calling relays and build a TURN config from the first usable UDP
 /// relay (so a call connects across NAT). `None` on any failure — calls then fall
 /// back to host candidates only.
+/// If a single message-loop tick takes longer than this in real wall time, the
+/// device was suspended (the executor only runs while the UI polls us) and the
+/// message socket is almost certainly stale — force a reconnect. Comfortably
+/// above normal scheduling jitter, and below the libsignal 55 s keepalive so we
+/// recover before it would (and where, pre-supervisor, it never did).
+const WAKE_GAP_MS: u64 = 45_000;
+
 /// Append a line to `/state/calldbg.log` — guest `log::` doesn't reach logcat on
 /// this build, so call/TURN tracing goes to a file we read over adb.
 fn dbg_line(s: &str) {
@@ -680,25 +687,59 @@ async fn run() {
         None => return,
     };
 
-    let setup = match persist::load_account() {
-        Some(account) => resume(&shared, account),
-        None => link(&shared).await,
-    };
-    let (store, credentials, aci, device_id) = match setup {
-        Ok(v) => v,
-        Err(e) => {
+    // First run links (interactive QR), persisting the account; every run after
+    // that resumes. If there's no saved account and linking fails, that's fatal.
+    if persist::load_account().is_none() {
+        if let Err(e) = link(&shared).await {
             shared.set_state(format!("error: {e}"));
             shared.push_event(Event::Disconnected);
             return;
-        },
-    };
-    *shared.account_id.borrow_mut() = aci.to_string();
+        }
+    }
 
-    if let Err(e) =
-        receive_and_send(&shared, store, credentials, aci, device_id).await
-    {
-        shared.set_state(format!("error: {e}"));
+    // Supervised reconnect loop. The message socket can drop for three reasons:
+    // a clean server close, a transport error, or a wake-from-sleep that left it
+    // half-open (the executor freezes while the device sleeps, so the 55 s
+    // keepalive never runs and the OS/NAT reaps the idle TCP). Previously `run()`
+    // was one-shot: on any drop the task simply ended and the stale "connected"
+    // state string was never reset — the "shows connected but receives/sends
+    // nothing after sleep" bug. Now we re-resume with exponential backoff.
+    let mut backoff_ms = 1_000u64;
+    loop {
+        let setup = match persist::load_account() {
+            Some(account) => resume(&shared, account),
+            None => {
+                shared.set_state("error: account vanished");
+                shared.push_event(Event::Disconnected);
+                return;
+            },
+        };
+        let (store, credentials, aci, device_id) = match setup {
+            Ok(v) => v,
+            Err(e) => {
+                shared.set_state(format!("error: {e}"));
+                shared.push_event(Event::Disconnected);
+                return;
+            },
+        };
+        *shared.account_id.borrow_mut() = aci.to_string();
+
+        let started = now_ms();
+        match receive_and_send(&shared, store, credentials, aci, device_id).await
+        {
+            Ok(()) => dbg_line("socket closed — reconnecting"),
+            Err(e) => dbg_line(&format!("socket error: {e} — reconnecting")),
+        }
+        shared.set_state("reconnecting");
         shared.push_event(Event::Disconnected);
+
+        // A connection that stayed up a while was healthy — reset the backoff so
+        // a later drop reconnects fast; only a rapid flap escalates the delay.
+        if now_ms().saturating_sub(started) > 60_000 {
+            backoff_ms = 1_000;
+        }
+        wart_step_executor::sleep(Duration::from_millis(backoff_ms)).await;
+        backoff_ms = backoff_ms.saturating_mul(2).min(30_000);
     }
 }
 
@@ -938,6 +979,8 @@ async fn receive_and_send(
     // emit the matching call-end (not ring-stop) when it ends.
     let mut comm_started = false;
     let my_identity: Vec<u8> = store.identity().identity_key().serialize().to_vec();
+    // Wall-clock of the previous tick, for the wake-from-sleep watchdog below.
+    let mut last_wall = now_ms();
     loop {
         let tick_ms = if call_engine.is_active() { 10 } else { 200 };
         let tick = wart_step_executor::sleep(Duration::from_millis(tick_ms));
@@ -1118,6 +1161,22 @@ async fn receive_and_send(
                 },
             },
             _ = tick.fuse() => {
+                // Wake-from-sleep watchdog. This loop only advances while the UI
+                // polls us, so a device suspend freezes it. If real wall time
+                // jumped far past the tick interval, we were suspended and the
+                // message socket is almost certainly half-open (dead) — bail so
+                // run()'s supervisor reconnects immediately, instead of waiting up
+                // to ~110 s for the 55 s keepalive to notice. Skipped mid-call
+                // (calls have their own teardown and tick at 10 ms).
+                {
+                    let now = now_ms();
+                    let gap = now.saturating_sub(last_wall);
+                    last_wall = now;
+                    if !call_engine.is_active() && gap > WAKE_GAP_MS {
+                        dbg_line(&format!("wake gap {gap}ms — reconnecting socket"));
+                        return Ok(());
+                    }
+                }
                 // 1:1 voice call (Phase 2b-ii): process UI intents, then pump the
                 // active call (UDP + audio) and ship any signaling it emits. Runs
                 // before the message outbox so audio stays low-latency.
