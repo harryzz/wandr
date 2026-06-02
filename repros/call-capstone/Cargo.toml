@@ -1,0 +1,26 @@
+[package]
+name = "call-capstone"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Call engine — the CAPSTONE. Chains every proven stage into one end-to-end
+# secure call between two peers (A + B) in a single wasm32-wasip2 guest:
+#
+#   signaling (ICE creds + DTLS fingerprint + Opus) → ICE connectivity →
+#   DTLS-SRTP handshake over the selected pair → encrypted Opus media A→B
+#
+# Each link is individually device-verified (../call-{signaling-sdp,ice-connect,
+# dtls-handshake,media-pipeline}). This proves they compose into a working call.
+# In-memory wire (real wasi:sockets UDP de-risked in ../wasi-udp-probe).
+# rtc-ice needs the mDNS-optional fork (../webrtc-rs-wasip2).
+
+[dependencies]
+opus-rs    = "0.1.22"
+bytes      = "1"
+sansio     = "1"
+rtc-ice    = { path = "/tmp/rtc-spike/rtc-ice", default-features = false }
+rtc-dtls   = { path = "/tmp/rtc-spike/rtc-dtls" }
+rtc-srtp   = { path = "/tmp/rtc-spike/rtc-srtp" }
+rtc-rtp    = { path = "/tmp/rtc-spike/rtc-rtp" }
+rtc-shared = { path = "/tmp/rtc-spike/rtc-shared", default-features = false }
