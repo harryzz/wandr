@@ -44,44 +44,52 @@ const HANGUP_BUSY: i32 = 3;
 /// no reliable DNS, and wart-call demuxes inbound TURN traffic by the server address.
 /// Picks a UDP `turn:` server (+ a `stun:` server if present). `None` if none usable.
 pub fn turn_config_from(relay: &TurnServerInfo) -> Option<TurnConfig> {
-    let pick = |want: &str, require_udp: bool| -> Option<String> {
-        relay
-            .urls_with_ips
-            .iter()
-            .chain(relay.urls.iter())
-            .filter_map(|u| parse_ice_uri(u))
-            .find(|(scheme, hostport, udp)| {
-                scheme == want
-                    && (!require_udp || *udp)
-                    && hostport.parse::<std::net::SocketAddr>().is_ok()
-            })
-            .map(|(_, hostport, _)| hostport)
+    // Pick a UDP server of `scheme`, preferring IPv4 (our media socket is IPv4).
+    let pick = |want: &str| -> Option<std::net::SocketAddr> {
+        let (mut v4, mut v6) = (None, None);
+        for u in relay.urls_with_ips.iter().chain(relay.urls.iter()) {
+            let Some((scheme, addr)) = parse_ice_uri(u) else { continue };
+            if scheme != want {
+                continue;
+            }
+            if addr.is_ipv4() {
+                v4.get_or_insert(addr);
+            } else {
+                v6.get_or_insert(addr);
+            }
+        }
+        v4.or(v6)
     };
-    let turn_serv_addr = pick("turn", true)?;
+    let turn = pick("turn")?;
     Some(TurnConfig {
-        stun_serv_addr: pick("stun", false).unwrap_or_default(),
-        turn_serv_addr,
+        stun_serv_addr: pick("stun").map(|a| a.to_string()).unwrap_or_default(),
+        turn_serv_addr: turn.to_string(),
         username: relay.username.clone(),
         password: relay.password.clone(),
         realm: relay.hostname.clone().unwrap_or_default(),
     })
 }
 
-/// Parse an ICE URI (`turn:1.2.3.4:80?transport=udp`) → (scheme, "host:port", is_udp).
-/// `turns:`/`stuns:` (TLS) collapse to `turn`/`stun` but are marked non-UDP.
-fn parse_ice_uri(uri: &str) -> Option<(String, String, bool)> {
+/// Parse a **UDP** ICE URI in IP form → (scheme, `SocketAddr`). Only plain
+/// `turn:`/`stun:` (not `turns:`/`stuns:` TLS, not `transport=tcp`) on an IP host;
+/// a missing port defaults to 3478 (the STUN/TURN default). `None` otherwise.
+fn parse_ice_uri(uri: &str) -> Option<(&'static str, std::net::SocketAddr)> {
     let (scheme, rest) = uri.split_once(':')?;
-    let scheme = scheme.to_ascii_lowercase();
-    let (base, tls) = match scheme.as_str() {
-        "turn" => ("turn", false),
-        "turns" => ("turn", true),
-        "stun" => ("stun", false),
-        "stuns" => ("stun", true),
-        _ => return None,
+    let base = match scheme.to_ascii_lowercase().as_str() {
+        "turn" => "turn",
+        "stun" => "stun",
+        _ => return None, // turns:/stuns: are TLS/TCP — skip
     };
     let (hostport, query) = rest.split_once('?').unwrap_or((rest, ""));
-    let udp = !tls && !query.contains("transport=tcp");
-    Some((base.to_string(), hostport.to_string(), udp))
+    if query.contains("transport=tcp") {
+        return None;
+    }
+    // Accept `ip:port`, or default the port to 3478 for a bare `ip` (incl. IPv6).
+    let addr = hostport
+        .parse::<std::net::SocketAddr>()
+        .or_else(|_| format!("{hostport}:3478").parse::<std::net::SocketAddr>())
+        .ok()?;
+    Some((base, addr))
 }
 
 /// Map one outgoing [`CallSignal`] to a libsignal `CallMessage`.

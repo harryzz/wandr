@@ -151,6 +151,13 @@ macro_rules! send_signals {
         if let Ok(uuid) = Uuid::parse_str(&$peer) {
             let recipient = ServiceId::Aci(uuid.into());
             for sig in $sigs {
+                // Surface the trickled TURN relay candidate (Phase A device check).
+                if let wart_call::signal::CallSignal::Ice { opaque, .. } = &sig {
+                    if let Ok(Some(line)) = wart_call::signal::decode_ice_candidate(opaque) {
+                        let kind = if line.contains("typ relay") { "RELAY" } else { "host" };
+                        dbg_line(&format!("trickle {kind} candidate -> {line}"));
+                    }
+                }
                 let cm = call::signal_to_call_message(&sig);
                 let _ = $sender
                     .send_message(&recipient, None, cm, now_ms(), false, false)
@@ -174,10 +181,38 @@ fn to_wit_call_state(s: wart_call::signal::CallState) -> CallState {
 /// Fetch Signal's calling relays and build a TURN config from the first usable UDP
 /// relay (so a call connects across NAT). `None` on any failure — calls then fall
 /// back to host candidates only.
+/// Append a line to `/state/calldbg.log` — guest `log::` doesn't reach logcat on
+/// this build, so call/TURN tracing goes to a file we read over adb.
+fn dbg_line(s: &str) {
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/state/calldbg.log")
+    {
+        let _ = writeln!(f, "{} {}", now_ms(), s);
+    }
+}
+
 async fn fetch_turn(push: &PushService) -> Option<wart_call::turn::TurnConfig> {
     let mut p = push.clone();
-    let resp = p.get_calling_relays().await.ok()?;
-    resp.relays.iter().find_map(call::turn_config_from)
+    let resp = match p.get_calling_relays().await {
+        Ok(r) => r,
+        Err(e) => {
+            dbg_line(&format!("turn: get_calling_relays FAILED: {e}"));
+            return None;
+        }
+    };
+    let tc = resp.relays.iter().find_map(call::turn_config_from);
+    match &tc {
+        Some(c) => dbg_line(&format!("turn: relay {} realm={:?}", c.turn_serv_addr, c.realm)),
+        None => dbg_line(&format!(
+            "turn: NO usable UDP relay among {} set(s); first urls={:?}",
+            resp.relays.len(),
+            resp.relays.first().map(|r| (&r.urls, &r.urls_with_ips)),
+        )),
+    }
+    tc
 }
 
 /// Resolve a peer's serialized identity public key from the protocol store — the
@@ -187,8 +222,18 @@ async fn peer_identity_key(store: &MemStore, aci: &str) -> Option<Vec<u8>> {
     let uuid = Uuid::parse_str(aci).ok()?;
     let device = DeviceId::try_from(1u32).ok()?;
     let addr = ServiceId::Aci(uuid.into()).to_protocol_address(device).ok()?;
-    let ik = store.get_identity(&addr).await.ok().flatten()?;
-    Some(ik.serialize().to_vec())
+    // Try device 1, then scan all devices (identity key is account-level).
+    let ik = match store.get_identity(&addr).await.ok().flatten() {
+        Some(ik) => Some(ik),
+        None => store.identity_for_name(addr.name()),
+    };
+    dbg_line(&format!(
+        "peer_identity {} ({}) -> {}",
+        aci,
+        addr.name(),
+        if ik.is_some() { "FOUND" } else { "MISSING (no session?)" },
+    ));
+    Some(ik?.serialize().to_vec())
 }
 
 /// Mirror the driver's call state into `Shared` (for the synchronous

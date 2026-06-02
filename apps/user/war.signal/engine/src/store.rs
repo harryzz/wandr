@@ -78,6 +78,19 @@ impl MemStore {
     pub fn identity(&self) -> IdentityKeyPair {
         *self.inner.identity.borrow()
     }
+
+    /// Any stored identity for a protocol-address `name` (an ACI's service-id
+    /// string), scanning across devices — the identity key is account-level, so
+    /// device 1's exact entry may be absent even when we hold the peer's key.
+    pub fn identity_for_name(&self, name: &str) -> Option<IdentityKey> {
+        let prefix = format!("{name}.");
+        self.inner
+            .identities
+            .borrow()
+            .iter()
+            .find(|(k, _)| k.starts_with(&prefix))
+            .map(|(_, v)| *v)
+    }
 }
 
 // SAFETY: the guest is single-threaded (wstd, no thread::spawn), so the `Rc` +
