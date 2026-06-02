@@ -1,0 +1,27 @@
+# SRTP crypto hot-path bench for the WebRTC call engine. Confirms WHY the live
+# Signal call (AEAD-AES-256-GCM, mandated by Signal's DH keying) is ~10x slower
+# in the wasm guest than the AES-128-CM loopback, and sizes the host-offload win
+# (native ARMv8 AES). See project_crypto_hw_offload.
+#
+#   cargo build --release --target wasm32-wasip2 && \
+#     wasmtime run target/wasm32-wasip2/release/crypto-bench.wasm   # wasm soft AES
+#   cargo run --release                                             # desktop native (AES-NI)
+#   cargo build --release --target aarch64-linux-android            # → push + run on device (ARMv8 HW AES)
+[package]
+name = "crypto-bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Standalone — detach from any parent workspace.
+[workspace]
+
+[dependencies]
+aes-gcm = { version = "0.10", features = ["std"] }
+aes = "0.8"
+ctr = "0.9"
+hmac = "0.12"
+sha1 = "0.10"
+
+[profile.release]
+opt-level = 3

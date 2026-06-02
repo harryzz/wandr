@@ -269,6 +269,11 @@ impl SignalCall {
         self.session.media_diag()
     }
 
+    /// DIAG: inbound RTP stats `(seq_gaps, last_ts_step, last_payload_len)`.
+    pub fn rtp_diag(&self) -> (u64, u32, usize) {
+        self.session.rtp_diag()
+    }
+
     pub fn call_id(&self) -> u64 {
         self.call_id
     }

@@ -100,6 +100,12 @@ dioxus_canvas::wire!(app, pre_frame: |r| {
     // truly idle (incoming still lands within ~0.5s; keepalive is serviced far
     // more often than it needs). Input (scroll/type) drives its own immediate
     // frames, so interactivity is unaffected by the idle floor.
+    // NOTE: do NOT speed up RENDERING during a call. The engine's audio/UDP pump
+    // runs on the render-INDEPENDENT bg-tick (~60/s, cheap engine steps) — see
+    // bg_tick(). The visible call screen changes slowly (timer/state), so it can
+    // idle-ramp like any other screen. Forcing 10 ms here made skia re-render the
+    // whole UI at ~60 fps → ~250% CPU. Keep render on the idle ramp; bg-tick feeds
+    // the audio ring.
     let delay = if r.is_paused() {
         // Backgrounded: the surface is hidden, so every frame's repaint is wasted.
         // Ask for a slow cadence (the host clamps to its ~1/s idle floor) — still
@@ -132,6 +138,16 @@ impl crate::exports::war::background::background::Guest for __DioxusCanvasGuest 
     /// ramping down to ~1 Hz when the socket is quiet (battery).
     fn bg_tick() -> u32 {
         let changed = pump();
+        // Active call: pump fast (host clamps to its ~16 ms floor ≈ 60/s) so the
+        // ~32 ms audio ring stays fed. The foreground render loop is fps-capped
+        // (~20/s) and too slow; bg-tick is render-free and runs in every role now.
+        if !matches!(
+            chat::call_status(),
+            chat::CallState::Idle | chat::CallState::Ended
+        ) {
+            BG_IDLE.with(|c| c.set(0));
+            return 10;
+        }
         let idle = if changed {
             BG_IDLE.with(|c| c.set(0));
             0

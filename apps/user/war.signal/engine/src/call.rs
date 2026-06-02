@@ -183,6 +183,7 @@ struct ActiveCall {
     trk: Option<u32>,
     track_started: bool,
     mic_buf: Vec<f32>,
+    play_buf: Vec<f32>, // stereo playout FIFO; carries samples the host ring couldn't take this tick
     last_state: CallState,
     // Call-log metadata (→ a history entry when the call ends).
     outgoing: bool,
@@ -193,6 +194,8 @@ struct ActiveCall {
     // Media-flow diagnostics (→ periodic log; proves where audio stops).
     udp_tx: u64, udp_rx: u64, // datagrams sent / received on the media socket
     aud_tx: u64, aud_rx: u64, // PCM frames mic→peer / peer→speaker
+    aud_peak: f32,            // max |sample| of decoded audio (0 ⇒ silent decode)
+    wr_ok: u64, wr_zero: u64, // write_pcm_f32 accepted (>0) vs rejected (ring full)
 }
 
 /// A snapshot of one call's media-flow counters, for periodic logging.
@@ -202,10 +205,18 @@ pub struct MediaStats {
     pub udp_rx: u64,
     pub aud_tx: u64,
     pub aud_rx: u64,
+    pub aud_peak: f32,
+    pub wr_ok: u64,
+    pub wr_zero: u64,
     // Inbound SRTP: datagrams seen as media, decoded OK, decode errored.
     pub srtp_seen: u64,
     pub decode_ok: u64,
     pub decode_err: u64,
+    // DIAG inbound RTP: cumulative seq gaps (loss), last ts step (frame samples:
+    // 960=20ms/2880=60ms), last payload size.
+    pub rtp_seq_gaps: u64,
+    pub rtp_ts_step: u32,
+    pub rtp_payload_len: usize,
 }
 
 impl ActiveCall {
@@ -213,9 +224,10 @@ impl ActiveCall {
         let last_state = call.state();
         Self {
             call, sock, peer_aci, cap: None, trk: None, track_started: false,
-            mic_buf: Vec::new(), last_state,
+            mic_buf: Vec::new(), play_buf: Vec::new(), last_state,
             outgoing, connected: false, accepted: false, declined: false, busy: false,
             udp_tx: 0, udp_rx: 0, aud_tx: 0, aud_rx: 0,
+            aud_peak: 0.0, wr_ok: 0, wr_zero: 0,
         }
     }
 
@@ -234,7 +246,13 @@ impl ActiveCall {
     /// `recv_audio` → speaker. Capture (mono) + playback (stereo — this device's
     /// MMAP output is stereo-only) are opened lazily on the first connected tick.
     fn pump_audio(&mut self) {
-        if self.cap.is_none() {
+        // RX_ONLY again (temporary): full-duplex mic is deferred to a proper P1
+        // pass. Enabling capture made the AAudioService capture thread spin
+        // (processDataNow "wait for valid timestamps") AND the mic didn't actually
+        // carry audio to the peer — needs its own investigation (capture config /
+        // in+out coexistence). Keep receive-only (real voice, low CPU) for now.
+        const RX_ONLY: bool = true;
+        if !RX_ONLY && self.cap.is_none() {
             let cfg = TrackConfig { sample_rate: SAMPLE_RATE, channel_layout: ChannelLayout::Mono, format: Format::PcmF32 };
             let h = audio::open_capture(cfg);
             if h != 0 {
@@ -243,6 +261,10 @@ impl ActiveCall {
             }
         }
         if self.trk.is_none() {
+            // Stereo on the USAGE_MEDIA path (the only output AAudio can open on
+            // this device — voice-comm usage gets -889). The mono Opus frames are
+            // duplicated L/R below. Ducking is avoided by staying in NORMAL mode
+            // (COMMS_MODE=false), not by the stream usage.
             let cfg = TrackConfig { sample_rate: SAMPLE_RATE, channel_layout: ChannelLayout::Stereo, format: Format::PcmF32 };
             let h = audio::create_track(cfg);
             if h != 0 {
@@ -262,16 +284,41 @@ impl ActiveCall {
             }
         }
         if let Some(trk) = self.trk {
-            let mut wrote = false;
+            // 1. Drain every decoded frame into the stereo playout FIFO (mono Opus
+            //    → L/R). The host ring is tiny (~32 ms); writing each frame straight
+            //    through dropped most of a jittery burst. Buffer here instead.
             while let Some(pcm) = self.call.recv_audio() {
-                let stereo: Vec<f32> = pcm.iter().flat_map(|&s| [s, s]).collect();
-                let _ = audio::write_pcm_f32(trk, &stereo);
+                for &s in &pcm {
+                    let a = s.abs();
+                    if a > self.aud_peak { self.aud_peak = a; }
+                }
+                self.play_buf.extend(pcm.iter().flat_map(|&s| [s, s]));
                 self.aud_rx += 1;
-                wrote = true;
             }
-            if wrote && !self.track_started {
-                audio::start(trk);
-                self.track_started = true;
+            // Cap playout latency: a sustained stall must not grow the FIFO without
+            // bound. 200 ms of stereo @ 48 k = 19_200 samples; drop the oldest past
+            // that (the host ring's underrun-resync covers the resulting gap).
+            const MAX_PLAY_SAMPLES: usize = 48_000 * 2 / 5;
+            if self.play_buf.len() > MAX_PLAY_SAMPLES {
+                let drop = self.play_buf.len() - MAX_PLAY_SAMPLES;
+                self.play_buf.drain(..drop);
+            }
+            // 2. Feed the host ring as much as it has room for; write_pcm_f32 returns
+            //    the stereo frames it accepted (2 samples each). Keep the rest for
+            //    the next tick rather than dropping it.
+            if !self.play_buf.is_empty() {
+                let frames = audio::write_pcm_f32(trk, &self.play_buf) as usize;
+                let consumed = (frames * 2).min(self.play_buf.len());
+                if consumed > 0 {
+                    self.play_buf.drain(..consumed);
+                    self.wr_ok += 1;
+                    if !self.track_started {
+                        audio::start(trk); // write-then-start: prime before the HAL pulls
+                        self.track_started = true;
+                    }
+                } else {
+                    self.wr_zero += 1; // ring full this tick — remainder carried forward
+                }
             }
         }
     }
@@ -326,15 +373,22 @@ impl CallEngine {
     pub fn media_stats(&self) -> Option<MediaStats> {
         self.active.as_ref().map(|a| {
             let (srtp_seen, decode_ok, decode_err) = a.call.media_diag();
+            let (rtp_seq_gaps, rtp_ts_step, rtp_payload_len) = a.call.rtp_diag();
             MediaStats {
                 state: a.call.state(),
                 udp_tx: a.udp_tx,
                 udp_rx: a.udp_rx,
                 aud_tx: a.aud_tx,
                 aud_rx: a.aud_rx,
+                aud_peak: a.aud_peak,
+                wr_ok: a.wr_ok,
+                wr_zero: a.wr_zero,
                 srtp_seen,
                 decode_ok,
                 decode_err,
+                rtp_seq_gaps,
+                rtp_ts_step,
+                rtp_payload_len,
             }
         })
     }

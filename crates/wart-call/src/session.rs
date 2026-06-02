@@ -232,6 +232,12 @@ impl PeerSession {
         (self.media_seen, self.decode_ok, self.decode_err)
     }
 
+    /// DIAG: inbound RTP stats `(seq_gaps, last_ts_step, last_payload_len)`; zeros
+    /// until the media session exists.
+    pub fn rtp_diag(&self) -> (u64, u32, usize) {
+        self.media.as_ref().map(|m| m.rtp_diag()).unwrap_or((0, 0, 0))
+    }
+
     pub fn handle_timeout(&mut self, now: Instant) {
         self.transport.handle_timeout(now);
         let _ = self.ensure_media();

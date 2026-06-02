@@ -751,6 +751,11 @@ fn run_cwasm_loop(
     const IDLE_CAP_MS: u64 = 1000;
     const POLL_MS: u64 = 16;
     let mut next_render_at = std::time::Instant::now();
+    // Render-INDEPENDENT engine-pump cadence (bg-tick). Separate from next_render_at
+    // so a live call can pump the socket/executor/audio at ~60/s even in the
+    // foreground, where render is fps-capped (frame_interval) and too slow to keep
+    // the ~32 ms audio ring fed. Drives the M2 backgrounded-service pump too.
+    let mut next_bg_tick_at = std::time::Instant::now();
     let mut bg_ticks: u64 = 0; // M2 — background-service pump count (throttled log)
     // Doze (PowerManager) — the ARBITER decides dozing (screen-off grace) and pushes
     // `doze <cadence-ms>` to this host; we are a dumb applier (like geometry/orient).
@@ -1332,32 +1337,36 @@ fn run_cwasm_loop(
         // straight into Background (it never foregrounds, so render_frame, the
         // warm-up frames, and on_resize never run — `bg-tick` drives it). The
         // foreground / non-bg-service paths fall through to the render gate below.
-        let bg_pumping = bg_service
-            && bg_tick.is_some()
-            && matches!(cur_role, crate::app_role::AppRole::Background);
-        if bg_pumping {
-            if std::time::Instant::now() >= next_render_at {
-                // Host SAFETY clamp only — the cadence is guest-authored (the
-                // bg-service returns it from bg-tick, ramping up when its socket is
-                // idle). MIN floors a runaway 0 to one frame; the ceiling reuses
-                // the shared IDLE_CAP_MS so a quiet service can't busy-spin.
-                const BG_TICK_MIN_MS: u64 = 16;
-                const BG_TICK_DEFAULT_MS: u64 = 200;
-                let delay = bg_tick
-                    .as_ref()
-                    .unwrap()
-                    .war_background_background()
-                    .call_bg_tick(&mut store)
-                    .unwrap_or(BG_TICK_DEFAULT_MS as u32)
-                    .clamp(BG_TICK_MIN_MS as u32, IDLE_CAP_MS as u32) as u64;
-                next_render_at =
-                    std::time::Instant::now() + std::time::Duration::from_millis(delay);
-                bg_ticks += 1;
-                if bg_ticks == 1 || bg_ticks % 10 == 0 {
-                    log::info!("standalone: bg-tick #{bg_ticks} (backgrounded service) next={delay}ms");
-                }
+        // Engine pump on the guest's bg-tick cadence — render-INDEPENDENT, runs in
+        // EVERY role. Foreground render is fps-capped (frame_interval), too slow to
+        // keep a live call's ~32 ms audio ring fed; bg-tick (cheap — the guest pumps
+        // its socket/executor/audio, no buffer swap) runs at its guest-authored
+        // cadence (≈16 ms ≈ 60/s during a call; ramps to ~1 Hz when idle). The M2
+        // backgrounded-service pump is now just the Background case of this.
+        if bg_service && bg_tick.is_some() && std::time::Instant::now() >= next_bg_tick_at {
+            // Host SAFETY clamp only — the cadence is guest-authored. MIN floors a
+            // runaway 0; the ceiling reuses IDLE_CAP_MS so a quiet service can't spin.
+            const BG_TICK_MIN_MS: u64 = 16;
+            const BG_TICK_DEFAULT_MS: u64 = 200;
+            let delay = bg_tick
+                .as_ref()
+                .unwrap()
+                .war_background_background()
+                .call_bg_tick(&mut store)
+                .unwrap_or(BG_TICK_DEFAULT_MS as u32)
+                .clamp(BG_TICK_MIN_MS as u32, IDLE_CAP_MS as u32) as u64;
+            next_bg_tick_at =
+                std::time::Instant::now() + std::time::Duration::from_millis(delay);
+            bg_ticks += 1;
+            if bg_ticks == 1 || bg_ticks % 50 == 0 {
+                log::info!("standalone: bg-tick #{bg_ticks} next={delay}ms role={cur_role:?}");
             }
-        } else if frame < 3 || std::time::Instant::now() >= next_render_at || dirty {
+        }
+
+        // Render the visible UI — foreground only (a Background surface is hidden, so
+        // skip the expensive render_frame + buffer swap; bg-tick keeps it alive).
+        let backgrounded = matches!(cur_role, crate::app_role::AppRole::Background);
+        if !backgrounded && (frame < 3 || std::time::Instant::now() >= next_render_at || dirty) {
             let result = skiko
                 .my_skiko_gfx_renderer()
                 .call_render_frame(&mut store, nanos);
@@ -1439,9 +1448,22 @@ fn run_cwasm_loop(
         } else {
             POLL_MS
         };
-        let nap = next_render_at
-            .saturating_duration_since(std::time::Instant::now())
-            .min(std::time::Duration::from_millis(poll_cap));
+        let now_nap = std::time::Instant::now();
+        let mut nap = std::time::Duration::from_millis(poll_cap);
+        // The render deadline gates the nap ONLY when we actually render
+        // (foreground). When backgrounded the render block is skipped, so
+        // `next_render_at` is never advanced — it sits in the past and would zero
+        // the nap → 100% busy-spin on every backgrounded process. (This is what
+        // made the device hot.) Just poll-cap (BG_POLL_MS) when backgrounded.
+        if !backgrounded {
+            nap = nap.min(next_render_at.saturating_duration_since(now_nap));
+        }
+        // Also wake for the render-independent bg-tick pump — but ONLY for a
+        // bg-service app that actually runs it. Otherwise `next_bg_tick_at` stays
+        // at its init value (never advanced) → always in the past → nap 0 → spin.
+        if bg_service && bg_tick.is_some() {
+            nap = nap.min(next_bg_tick_at.saturating_duration_since(now_nap));
+        }
         if !nap.is_zero() {
             std::thread::sleep(nap);
         }

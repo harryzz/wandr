@@ -59,8 +59,20 @@ mod binder_path {
     // Input source preset — VOICE_RECOGNITION = raw-ish mic, no AGC/NS, low latency.
     const AAUDIO_INPUT_PRESET_VOICE_RECOGNITION: i32 = 6;
     const AAUDIO_SHARING_MODE_SHARED: i32 = 1;
+    // Kept for the Phase-B `usage` mapping (media tracks); unused while the
+    // Phase-A spike hard-codes voice-comms on every track.
+    #[allow(dead_code)]
     const AAUDIO_USAGE_MEDIA:         i32 = 1;
+    #[allow(dead_code)]
     const AAUDIO_CONTENT_TYPE_MUSIC:  i32 = 2;
+    // Comms-call playback. The AudioPolicyManager ducks/parks USAGE_MEDIA
+    // streams to ~1% (volume=0.01) while the device is in IN_COMMUNICATION
+    // mode (our calls set that via the arbiter), and the comms endpoint mixer
+    // won't pull a media stream — so call audio MUST be tagged voice-comms or
+    // the shared mixer's readCounter never advances. (Phase-A hard-code; Phase
+    // B plumbs `usage` through the audio WIT track-config.)
+    const AAUDIO_USAGE_VOICE_COMMUNICATION: i32 = 2;
+    const AAUDIO_CONTENT_TYPE_SPEECH:       i32 = 1;
     // AAUDIO_CHANNEL_MONO   = FRONT_LEFT          = bit 0  (0x1)
     // AAUDIO_CHANNEL_STEREO = FRONT_LEFT|RIGHT    = bits 0+1 (0x3)
     const AAUDIO_CHANNEL_MONO:        i32 = 0x1;
@@ -314,6 +326,18 @@ mod binder_path {
         }
     }
 
+    // Earpiece output-port id for the call-audio experiment (Pixel 2 XL:
+    // dumpsys media.audio_policy → "Port ID: 2; Earpiece"). Empty (= policy
+    // default, i.e. speaker) when WART_EARPIECE=0. Other devices may differ;
+    // a later proper version should enumerate ports instead of hard-coding 2.
+    fn earpiece_device_ids() -> Vec<i32> {
+        if std::env::var("WART_EARPIECE").as_deref() == Ok("0") {
+            Vec::new()
+        } else {
+            vec![2]
+        }
+    }
+
     pub fn create_track(cfg: super::TrackConfig) -> u32 {
         let (channels, channel_mask) = channel_of(&cfg);
         let params = StreamParameters {
@@ -322,8 +346,23 @@ mod binder_path {
             r#sharingMode:         AAUDIO_SHARING_MODE_SHARED,
             r#audioFormat:         pcm_f32_format(),
             r#direction:           AAUDIO_DIRECTION_OUTPUT,
+            // USAGE_MEDIA is the ONLY output usage AAudio can open on this device:
+            // the policy routes it to the primary mixer (MMAP fails -19 → legacy
+            // Shared fallback succeeds). USAGE_VOICE_COMMUNICATION routes to a
+            // voice/telephony output with no AAudio mixer profile → -889 in every
+            // mode (verified task 75). Call audio plays on the media path; the
+            // comms-mode ducking is avoided by NOT entering IN_COMMUNICATION
+            // (guest COMMS_MODE=false).
             r#usage:               AAUDIO_USAGE_MEDIA,
             r#contentType:         AAUDIO_CONTENT_TYPE_MUSIC,
+            // EXPERIMENT: pin output to the EARPIECE port (id 2 on this device:
+            // dumpsys media.audio_policy → "Port ID: 2; Earpiece") so a call plays
+            // to the ear, not the loud speaker. AAudio deviceIds = audio-port ids;
+            // the earpiece is in the output MixPort's supported devices. If the
+            // policy rejects a MEDIA stream there, openStream may fail — watch the
+            // log. (Routes ALL host playback for now; plumb a per-call flag if it
+            // works.) Set WART_EARPIECE=0 in env to disable without a rebuild.
+            r#deviceIds:           earpiece_device_ids(),
             ..Default::default()
         };
         open_pcm_stream(params, channels, /*capture=*/ false)

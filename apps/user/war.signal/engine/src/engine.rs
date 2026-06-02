@@ -208,6 +208,17 @@ const WAKE_GAP_MS: u64 = 45_000;
 
 /// Append a line to `/state/calldbg.log` — guest `log::` doesn't reach logcat on
 /// this build, so call/TURN tracing goes to a file we read over adb.
+/// EXPERIMENT: when false, a call does NOT put the device in IN_COMMUNICATION
+/// mode (no `focus::call_start()`). Comms mode is the common playback blocker —
+/// it ducks USAGE_MEDIA to ~1% and leaves USAGE_VOICE_COMMUNICATION with no MMAP
+/// device (openStream -889). NORMAL mode lets the voice-comm stream open + mix.
+const COMMS_MODE: bool = false;
+
+/// EXPERIMENT: when true, calls skip TURN entirely (host candidates only). Use to
+/// test whether the ~64% inbound packet loss is the Signal TURN relay path — both
+/// peers on the same LAN should connect directly. Flip false to restore relay.
+const NO_TURN: bool = false;
+
 fn dbg_line(s: &str) {
     use std::io::Write;
     if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -994,15 +1005,30 @@ async fn receive_and_send(
     // Whether we've opened a comms session (call-start) for the active call — so we
     // emit the matching call-end (not ring-stop) when it ends.
     let mut comm_started = false;
+    // Whether an incoming ring is currently playing (ring-start sent, not yet
+    // stopped). Tracked SEPARATELY from comm_started so the ring is always stopped
+    // on answer/decline/end regardless of COMMS_MODE — otherwise (COMMS_MODE=false)
+    // call_start never fires and the ringtone/vibrate runs forever.
+    let mut ring_started = false;
     let my_identity: Vec<u8> = store.identity().identity_key().serialize().to_vec();
     // Wall-clock of the previous tick, for the wake-from-sleep watchdog below.
     let mut last_wall = now_ms();
     // Last time we logged a media-flow stat line for an active call (~1 Hz).
     let mut last_call_stat = 0u64;
+    // DIAG: count tick-branch iterations to measure the REAL pump rate (frames
+    // vs host clamp). Logged as ticks/s in the 1 Hz media line.
+    let mut ticks: u64 = 0;
+    let mut last_ticks: u64 = 0;
     loop {
         let tick_ms = if call_engine.is_active() { 10 } else { 200 };
         let tick = wart_step_executor::sleep(Duration::from_millis(tick_ms));
-        futures::select! {
+        // BIASED: poll the websocket FIRST, then the tick. A call pumps the tick
+        // at ~10 ms; with a fair select! the always-ready tick frequently won the
+        // race and the dropped `stream.next()` future could strand a buffered
+        // inbound CallMessage → a peer Hangup (or incoming Offer) was missed, so
+        // the call stayed "On Call" / an incoming call never rang. Biasing toward
+        // the stream guarantees inbound signaling is handled before the tick.
+        futures::select_biased! {
             item = stream.next().fuse() => match item {
                 Some(Ok(Incoming::Envelope(env))) => {
                     let content = match cipher.open_envelope(env, &mut csprng).await {
@@ -1104,7 +1130,7 @@ async fn receive_and_send(
                             };
                             // Fetch TURN only for a likely incoming offer (no active
                             // call) — not for mid-call Answer/Ice.
-                            let turn = if call_engine.is_active() {
+                            let turn = if call_engine.is_active() || NO_TURN {
                                 None
                             } else {
                                 fetch_turn(&push).await
@@ -1119,6 +1145,7 @@ async fn receive_and_send(
                                 // Incoming call → start the ringer (arbiter decides
                                 // ringtone/vibrate/silent; host plays it).
                                 focus::ring_start();
+                                ring_started = true;
                                 shared.push_event(Event::CallIncoming(peer));
                             }
                             sync_call_state(&shared, &call_engine);
@@ -1191,6 +1218,7 @@ async fn receive_and_send(
                 },
             },
             _ = tick.fuse() => {
+                ticks += 1; // DIAG: pump-rate counter (see ticks/s in the media line)
                 // Wake-from-sleep watchdog. This loop only advances while the UI
                 // polls us, so a device suspend freezes it. If real wall time
                 // jumped far past the tick interval, we were suspended and the
@@ -1221,7 +1249,7 @@ async fn receive_and_send(
                                 // Resolve the callee's identity key (need a session).
                                 match peer_identity_key(&store, &thread).await {
                                     Some(peer_id) => {
-                                      let turn = fetch_turn(&push).await;
+                                      let turn = if NO_TURN { None } else { fetch_turn(&push).await };
                                       match call_engine.place(
                                         call_id, my_identity.clone(), peer_id, thread, turn,
                                     ) {
@@ -1252,7 +1280,23 @@ async fn receive_and_send(
                                 // ring_stop also releases focus (music would resume
                                 // then re-pause) — that path is only for an UNANSWERED
                                 // ring ending (see take_ended below).
-                                focus::call_start();
+                                // EXPERIMENT (COMMS_MODE): IN_COMMUNICATION mode is the
+                                // common blocker for playback — it ducks USAGE_MEDIA to ~1%
+                                // AND leaves USAGE_VOICE_COMMUNICATION with no MMAP device
+                                // (openStream -889). Skip it to test audibility on the NORMAL
+                                // route (where voice-comm opens + mixes). Flip true to restore.
+                                // Stop the ring on answer. With COMMS_MODE, call_start
+                                // stops it (and keeps focus); without, call_start never
+                                // fires, so explicitly ring_stop. UNCONDITIONAL (not
+                                // gated on ring_started) — ring_stop is harmless if not
+                                // ringing, and this guarantees answer always silences it.
+                                if COMMS_MODE {
+                                    focus::call_start();
+                                } else {
+                                    focus::ring_stop();
+                                }
+                                dbg_line(&format!("accept: ring_stop sent (ring_started was {ring_started})"));
+                                ring_started = false;
                                 comm_started = true;
                                 (call_engine.peer(), call_engine.accept())
                             }
@@ -1269,6 +1313,16 @@ async fn receive_and_send(
                         // media leg is provable from the log: does ICE connect?
                         if let Some(st) = st {
                             dbg_line(&format!("call state -> {st:?}"));
+                            // Outbound connected → open the comms session (inbound
+                            // does this on accept). Sets IN_COMMUNICATION mode +
+                            // setForceUse(COMMUNICATION, SPEAKER) via the arbiter so
+                            // the call audio routes to the speaker; without it the
+                            // device stays in NORMAL mode with no call route and the
+                            // playback stream is never mixed (readCounter frozen).
+                            if st == wart_call::signal::CallState::Connected && !comm_started {
+                                if COMMS_MODE { focus::call_start(); } // see COMMS_MODE note above
+                                comm_started = true;
+                            }
                         }
                         if let Some(sender) = sender.as_mut() {
                             send_signals!(sender, peer, sigs);
@@ -1280,10 +1334,14 @@ async fn receive_and_send(
                         if now.saturating_sub(last_call_stat) >= 1000 {
                             last_call_stat = now;
                             if let Some(m) = call_engine.media_stats() {
+                                let tps = ticks.saturating_sub(last_ticks);
+                                last_ticks = ticks;
                                 dbg_line(&format!(
-                                    "media {:?}: udp tx={} rx={} | audio tx={} rx={} | srtp seen={} ok={} err={}",
-                                    m.state, m.udp_tx, m.udp_rx, m.aud_tx, m.aud_rx,
+                                    "media {:?}: ticks/s={} | udp tx={} rx={} | audio tx={} rx={} peak={:.3} wr_ok={} wr_zero={} | srtp seen={} ok={} err={} | rtp gaps={} ts_step={} plen={}",
+                                    m.state, tps, m.udp_tx, m.udp_rx, m.aud_tx, m.aud_rx,
+                                    m.aud_peak, m.wr_ok, m.wr_zero,
                                     m.srtp_seen, m.decode_ok, m.decode_err,
+                                    m.rtp_seq_gaps, m.rtp_ts_step, m.rtp_payload_len,
                                 ));
                             }
                         }
@@ -1293,15 +1351,17 @@ async fn receive_and_send(
                     }
                     // A call just ended → close the arbiter session + log it.
                     if let Some(ended) = call_engine.take_ended() {
-                        // Two ways a ring ends: ANSWERED → call_start already stopped
-                        // it (focus kept) and this is its call_end; UNANSWERED
-                        // (declined/missed/remote-canceled) → ring_stop here stops it
-                        // AND releases focus so music resumes.
+                        // Always stop a still-playing ring first (declined / missed /
+                        // remote-canceled before answer) — independent of comms mode so
+                        // the ringtone/vibrate can never run on past the call.
+                        if ring_started {
+                            focus::ring_stop();
+                            ring_started = false;
+                        }
+                        // Answered call → close the comms session (restores audio mode).
                         if comm_started {
-                            focus::call_end(); // restore audio mode + focus
+                            focus::call_end();
                             comm_started = false;
-                        } else if !ended.outgoing {
-                            focus::ring_stop(); // an incoming ring ended unanswered
                         }
                         let log = ended_call_log(&ended);
                         let msg = Message {
