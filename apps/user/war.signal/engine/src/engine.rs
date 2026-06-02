@@ -36,8 +36,9 @@ use libsignal_service::proto::{
     AttachmentPointer, DataMessage, GroupContextV2, ReceiptMessage,
 };
 use libsignal_service::protocol::{
-    DeviceId, IdentityKeyPair, ProtocolAddress, ServiceId,
+    DeviceId, IdentityKeyPair, IdentityKeyStore, ProtocolAddress, ServiceId,
 };
+use libsignal_service::ServiceIdExt;
 use libsignal_service::provisioning::{
     generate_registration_id, link_device, SecondaryDeviceProvisioning,
 };
@@ -168,6 +169,17 @@ fn to_wit_call_state(s: wart_call::signal::CallState) -> CallState {
         W::Connected => CallState::Connected,
         W::Ended => CallState::Ended,
     }
+}
+
+/// Resolve a peer's serialized identity public key from the protocol store — the
+/// 33-byte key ringrtc's call HKDF binds to. `None` if we hold no identity for them
+/// yet (no session). Looks up device 1 (the identity key is account-level).
+async fn peer_identity_key(store: &MemStore, aci: &str) -> Option<Vec<u8>> {
+    let uuid = Uuid::parse_str(aci).ok()?;
+    let device = DeviceId::try_from(1u32).ok()?;
+    let addr = ServiceId::Aci(uuid.into()).to_protocol_address(device).ok()?;
+    let ik = store.get_identity(&addr).await.ok().flatten()?;
+    Some(ik.serialize().to_vec())
 }
 
 /// Mirror the driver's call state into `Shared` (for the synchronous
@@ -850,11 +862,13 @@ async fn receive_and_send(
     // pipe (the profile fetch in the tick below uses it).
     let mut profile_ws = pipe.ws();
     let mut stream = Box::pin(pipe.stream());
-    // Phase 2b-ii: the 1:1 voice-call driver. Our ACI binds the call's SRTP keys
-    // (interim — see call.rs). While a call is active the loop ticks at ~10 ms so
-    // the audio/UDP pump keeps up; otherwise the normal 200 ms message cadence.
+    // Phase 2b-ii/3: the 1:1 voice-call driver. Our serialized identity public key
+    // binds the call's SRTP keys (the peer's is resolved per call from the store).
+    // While a call is active the loop ticks at ~10 ms so the audio/UDP pump keeps
+    // up; otherwise the normal 200 ms message cadence.
     let mut call_engine = CallEngine::new();
-    let my_aci = aci.to_string();
+    let my_identity: Vec<u8> = store.identity().identity_key().serialize().to_vec();
+    let my_self_aci = aci.to_string(); // Note-to-Self peer = us (self-call keys with my id)
     loop {
         let tick_ms = if call_engine.is_active() { 10 } else { 200 };
         let tick = wart_step_executor::sleep(Duration::from_millis(tick_ms));
@@ -916,8 +930,26 @@ async fn receive_and_send(
                         // offer, else apply answer/ICE/hangup; send any reply (Busy).
                         if let ContentBody::CallMessage(cm) = &content.body {
                             let from = content.metadata.sender.raw_uuid().to_string();
-                            let (replies, incoming) =
-                                call_engine.on_call_message(cm, &from, &my_aci);
+                            // The offerer's identity key (caller) — from the exact
+                            // address the message came from (its identity is stored).
+                            let sender_identity = match content
+                                .metadata
+                                .sender
+                                .to_protocol_address(content.metadata.sender_device)
+                                .ok()
+                            {
+                                Some(addr) => store
+                                    .get_identity(&addr)
+                                    .await
+                                    .ok()
+                                    .flatten()
+                                    .map(|ik| ik.serialize().to_vec())
+                                    .unwrap_or_default(),
+                                None => Vec::new(),
+                            };
+                            let (replies, incoming) = call_engine.on_call_message(
+                                cm, &from, &my_identity, &sender_identity,
+                            );
                             if let Some(sender) = sender.as_mut() {
                                 send_signals!(sender, from, replies);
                             }
@@ -1003,10 +1035,27 @@ async fn receive_and_send(
                         let (peer, sigs) = match intent {
                             CallIntent::Place(thread) => {
                                 let call_id = now_ms();
-                                match call_engine.place(call_id, &my_aci, thread) {
-                                    Ok(sigs) => (call_engine.peer(), sigs),
-                                    Err(e) => {
-                                        shared.set_state(format!("call: {e}"));
+                                // Resolve the callee's identity key (need a session);
+                                // a self-call (Note to Self) keys with our own.
+                                let peer_id = if thread == my_self_aci {
+                                    Some(my_identity.clone())
+                                } else {
+                                    peer_identity_key(&store, &thread).await
+                                };
+                                match peer_id {
+                                    Some(peer_id) => match call_engine.place(
+                                        call_id, my_identity.clone(), peer_id, thread,
+                                    ) {
+                                        Ok(sigs) => (call_engine.peer(), sigs),
+                                        Err(e) => {
+                                            shared.set_state(format!("call: {e}"));
+                                            (String::new(), Vec::new())
+                                        }
+                                    },
+                                    None => {
+                                        shared.set_state(
+                                            "call: no identity for peer (message them first)",
+                                        );
                                         (String::new(), Vec::new())
                                     }
                                 }

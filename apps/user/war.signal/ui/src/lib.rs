@@ -956,6 +956,13 @@ fn ThreadHeader(title: String, current: Signal<Option<Thread>>) -> Element {
     // The open thread's id + kind, for the 1:1 call button (Phase 2b-ii).
     let (thread_id, is_group) = current().map(|t| (t.id, t.is_group)).unwrap_or_default();
     let call_tid = thread_id.clone();
+    // One big handset toggle: GREEN to place a call, RED to hang up the active call
+    // with this peer (no separate End button). Polls the engine's call state.
+    let in_call = !is_group
+        && !thread_id.is_empty()
+        && !matches!(chat::call_status(), chat::CallState::Idle | chat::CallState::Ended)
+        && chat::call_peer() == thread_id;
+    let handset_bg = if in_call { "#C62828" } else { "#2E7D32" }; // red end / green call
     rsx! {
         div {
             style: "display:flex; flex-direction:row; align-items:center; gap:20px; padding:22px 24px; background:{BAR};",
@@ -965,13 +972,15 @@ fn ThreadHeader(title: String, current: Signal<Option<Thread>>) -> Element {
                 div { style: "color:{TEXT}; font-size:36px;", "‹" }
             }
             div { style: "color:{TEXT}; font-size:36px; font-weight:700; flex-grow:1;", "{title}" }
-            // 1:1 voice call (groups deferred). Places a call to this thread's peer.
+            // 1:1 voice call (groups deferred): big green→place / red→hang-up toggle.
             if !is_group && !thread_id.is_empty() {
                 button {
-                    style: format!("display:flex; justify-content:center; align-items:center; width:64px; height:64px; border-radius:14px; background:{};", FIELD),
+                    style: format!("display:flex; justify-content:center; align-items:center; width:128px; height:128px; border-radius:28px; background:{};", handset_bg),
                     onmousedown: move |_| {},
-                    onclick: move |_| { let _ = chat::place_call(&call_tid); },
-                    div { style: "color:{TEXT}; font-size:32px;", "📞" }
+                    onclick: move |_| {
+                        if in_call { chat::hangup_call(); } else { let _ = chat::place_call(&call_tid); }
+                    },
+                    div { style: "color:#FFFFFF; font-size:64px;", "📞" }
                 }
             }
         }
@@ -980,7 +989,8 @@ fn ThreadHeader(title: String, current: Signal<Option<Thread>>) -> Element {
 
 /// The active-call banner (Phase 2b-ii): shown whenever a 1:1 voice call is in
 /// progress. Polls the engine's call state each render (the app re-renders on
-/// engine events). Ringing → Accept/Decline; otherwise → state + End.
+/// engine events). Ringing → big Accept/Decline; otherwise → status only (end the
+/// call with the red handset in the thread header — no separate End button).
 #[component]
 fn CallBar() -> Element {
     let status = chat::call_status();
@@ -994,30 +1004,25 @@ fn CallBar() -> Element {
         chat::CallState::Connected => "On call",
         _ => "",
     };
-    let btn = "display:flex; justify-content:center; align-items:center; padding:14px 22px; border-radius:14px;";
+    let btn = "display:flex; justify-content:center; align-items:center; width:128px; height:128px; border-radius:28px; color:#FFFFFF; font-size:60px;";
     rsx! {
         div {
-            style: "display:flex; flex-direction:row; align-items:center; gap:14px; padding:18px 24px; background:{ACCENT};",
-            div { style: "color:#FFFFFF; font-size:30px; font-weight:700; flex-grow:1;", "{label}" }
+            style: "display:flex; flex-direction:row; align-items:center; gap:20px; padding:18px 24px; background:{ACCENT};",
+            div { style: "color:#FFFFFF; font-size:32px; font-weight:700; flex-grow:1;", "{label}" }
+            // Only incoming calls need controls here: big green Accept + red Decline
+            // handsets (active calls are ended via the red handset in the thread).
             if matches!(status, chat::CallState::Ringing) {
                 button {
-                    style: format!("{btn} background:#2E7D32; color:#FFFFFF; font-size:28px;"),
+                    style: format!("{btn} background:#2E7D32;"),
                     onmousedown: move |_| {},
                     onclick: move |_| chat::accept_call(),
-                    "Accept"
+                    "📞"
                 }
                 button {
-                    style: format!("{btn} background:#C62828; color:#FFFFFF; font-size:28px;"),
+                    style: format!("{btn} background:#C62828;"),
                     onmousedown: move |_| {},
                     onclick: move |_| chat::hangup_call(),
-                    "Decline"
-                }
-            } else {
-                button {
-                    style: format!("{btn} background:#C62828; color:#FFFFFF; font-size:28px;"),
-                    onmousedown: move |_| {},
-                    onclick: move |_| chat::hangup_call(),
-                    "End"
+                    "📵"
                 }
             }
         }

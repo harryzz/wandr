@@ -10,18 +10,16 @@
 //! `CallMessage`s in, `tick`s it every ~10 ms (UDP + audio pump), and sends the
 //! `CallSignal`s it emits back out as `CallMessage`s.
 //!
-//! **Interim identity binding (Phase 3 must replace):** ringrtc's DH-SRTP HKDF
-//! binds the SRTP keys to the two participants' *identity public keys*. Here we
-//! bind to their **ACIs** instead — both wart ends compute the same `info`, so
-//! wart↔wart calls key correctly, but this will NOT interop with a real Signal
-//! client until we feed the real serialized identity keys (the open noted in
-//! `tasks/75`). See [`identity_for`].
+//! **Identity binding (Phase 3):** ringrtc's DH-SRTP HKDF binds the SRTP keys to
+//! the two participants' serialized **identity public keys** (33-byte `0x05‖X25519`,
+//! caller = offerer first). The engine resolves these from the protocol store —
+//! ours via `store.identity()`, the peer's via `store.get_identity(addr)` — and
+//! passes the bytes in, so the derived keys match a real Signal client's.
 
 use std::net::{SocketAddr, UdpSocket};
 use std::time::Instant;
 
 use libsignal_service::proto::{call_message, CallMessage};
-use uuid::Uuid;
 use wart_call::local_lan_ip;
 use wart_call::signal::{CallSignal, CallState, HangupKind, SignalCall};
 
@@ -38,14 +36,6 @@ const HANGUP_NORMAL: i32 = 0;
 const HANGUP_ACCEPTED: i32 = 1;
 const HANGUP_DECLINED: i32 = 2;
 const HANGUP_BUSY: i32 = 3;
-
-/// The SRTP-HKDF identity binding for an ACI (interim — see module docs). Uses the
-/// ACI's 16 raw UUID bytes so both ends derive an identical value deterministically.
-pub fn identity_for(aci: &str) -> Vec<u8> {
-    Uuid::parse_str(aci)
-        .map(|u| u.as_bytes().to_vec())
-        .unwrap_or_else(|_| aci.as_bytes().to_vec())
-}
 
 /// Map one outgoing [`CallSignal`] to a libsignal `CallMessage`.
 pub fn signal_to_call_message(sig: &CallSignal) -> CallMessage {
@@ -234,12 +224,14 @@ impl CallEngine {
         self.active.as_ref().map(|a| a.call.call_id())
     }
 
-    /// Place an outgoing call. `my_aci`/`peer_aci` bind the SRTP keys (interim).
+    /// Place an outgoing call. `my_identity`/`peer_identity` are the serialized
+    /// identity public keys that bind the SRTP keys (caller = us = offerer first).
     /// Returns the `CallSignal`s to send (the `Offer` + trickled ICE).
     pub fn place(
         &mut self,
         call_id: u64,
-        my_aci: &str,
+        my_identity: Vec<u8>,
+        peer_identity: Vec<u8>,
         peer_aci: String,
     ) -> Result<Vec<CallSignal>, String> {
         if self.active.is_some() {
@@ -248,7 +240,7 @@ impl CallEngine {
         let sock = bind_socket()?;
         let local = local_candidate_addr(&sock)?;
         // caller = us (offerer): caller_identity = my, callee_identity = peer.
-        let call = SignalCall::place(call_id, local, identity_for(my_aci), identity_for(&peer_aci))
+        let call = SignalCall::place(call_id, local, my_identity, peer_identity)
             .map_err(|e| e.to_string())?;
         let mut active = ActiveCall::new(call, sock, peer_aci);
         let sigs = active.call.poll_signals();
@@ -265,7 +257,8 @@ impl CallEngine {
         &mut self,
         cm: &CallMessage,
         sender_aci: &str,
-        my_aci: &str,
+        my_identity: &[u8],
+        sender_identity: &[u8],
     ) -> (Vec<CallSignal>, Option<String>) {
         let signals = call_message_to_signals(cm);
         let mut out = Vec::new();
@@ -273,9 +266,10 @@ impl CallEngine {
         for sig in signals {
             match (&sig, self.active.is_some()) {
                 // A fresh incoming offer with no active call → start ringing.
+                // caller = the remote offerer (sender), callee = us.
                 (CallSignal::Offer { call_id, opaque }, false) => {
                     let (call_id, opaque) = (*call_id, opaque.clone());
-                    match self.start_incoming(call_id, sender_aci, my_aci, &opaque) {
+                    match self.start_incoming(call_id, sender_aci, sender_identity, my_identity, &opaque) {
                         Ok(()) => incoming = Some(sender_aci.to_owned()),
                         Err(_) => out.push(CallSignal::Busy { call_id }),
                     }
@@ -301,17 +295,20 @@ impl CallEngine {
         &mut self,
         call_id: u64,
         caller_aci: &str,
-        my_aci: &str,
+        caller_identity: &[u8],
+        callee_identity: &[u8],
         offer_opaque: &[u8],
     ) -> Result<(), String> {
+        if caller_identity.is_empty() || callee_identity.is_empty() {
+            return Err("missing identity key for the call".into());
+        }
         let sock = bind_socket()?;
         let local = local_candidate_addr(&sock)?;
-        // caller = the remote offerer; callee = us.
         let call = SignalCall::incoming(
             call_id,
             local,
-            identity_for(caller_aci),
-            identity_for(my_aci),
+            caller_identity.to_vec(),
+            callee_identity.to_vec(),
             offer_opaque,
         )
         .map_err(|e| e.to_string())?;

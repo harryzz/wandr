@@ -91,17 +91,18 @@ impl PeerSession {
         caller_identity: Vec<u8>,
         callee_identity: Vec<u8>,
     ) -> Result<Self, Error> {
-        let (ufrag, pwd) = match role {
-            Role::Offerer => ("ufrAgentA", "passwordApasswordApasswordA00"),
-            Role::Answerer => ("ufrAgentB", "passwordBpasswordBpasswordB00"),
-        };
+        // Random per-call ICE creds (advertised in our offer/answer). libwebrtc
+        // (real Signal) requires ufrag ≥4 and pwd ≥22 chars from the ICE charset;
+        // ringrtc generates these per call, so fixed creds would be an interop tell.
+        let ufrag = random_ice_cred(8);
+        let pwd = random_ice_cred(24);
         let transport =
-            Transport::new_signal(role, ufrag, pwd, local_addr, caller_identity, callee_identity)?;
+            Transport::new_signal(role, &ufrag, &pwd, local_addr, caller_identity, callee_identity)?;
         Ok(Self {
             role,
             local_addr,
-            ufrag: ufrag.to_owned(),
-            pwd: pwd.to_owned(),
+            ufrag,
+            pwd,
             transport,
             media: None,
             remote_direction: None,
@@ -245,6 +246,17 @@ impl PeerSession {
 /// Build a standard SDP host-candidate string for an address.
 fn candidate_string(addr: SocketAddr) -> String {
     format!("1 1 udp 2130706431 {} {} typ host", addr.ip(), addr.port())
+}
+
+/// A random ICE ufrag/pwd of `len` chars from the ICE-safe alphanumeric set.
+#[cfg(feature = "signal")]
+fn random_ice_cred(len: usize) -> String {
+    use rand_core::RngCore;
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let mut rng = rand_core::OsRng;
+    (0..len)
+        .map(|_| ALPHABET[(rng.next_u32() % ALPHABET.len() as u32) as usize] as char)
+        .collect()
 }
 
 /// Parse the connection address from an SDP candidate string.
