@@ -1,0 +1,15 @@
+[package]
+name = "call-signaling-sdp"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Call engine — Stage 3 (signaling). Builds a WebRTC audio SDP offer carrying the
+# signaling params the other stages produce — ICE ufrag/pwd, the DTLS-cert
+# fingerprint, the Opus rtpmap, an ICE candidate — marshals it, parses it back,
+# and extracts the fields. Proves the signaling payload (the thing exchanged
+# out-of-band to set up a call) round-trips in a wasm32-wasip2 guest. Pure data:
+# only rtc-sdp (no fork, no sockets, no crypto).
+
+[dependencies]
+rtc-sdp = { git = "https://github.com/webrtc-rs/rtc" }
