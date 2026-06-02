@@ -196,10 +196,18 @@ fn dbg_line(s: &str) {
 
 async fn fetch_turn(push: &PushService) -> Option<wart_call::turn::TurnConfig> {
     let mut p = push.clone();
-    let resp = match p.get_calling_relays().await {
-        Ok(r) => r,
-        Err(e) => {
-            dbg_line(&format!("turn: get_calling_relays FAILED: {e}"));
+    // Bounded: a stale connection after wake-from-sleep must NOT hang the call tick.
+    // On timeout/failure we place host-only (no relay) rather than block.
+    let resp = futures::select! {
+        r = p.get_calling_relays().fuse() => match r {
+            Ok(r) => r,
+            Err(e) => {
+                dbg_line(&format!("turn: get_calling_relays FAILED: {e}"));
+                return None;
+            }
+        },
+        _ = wart_step_executor::sleep(Duration::from_secs(4)).fuse() => {
+            dbg_line("turn: get_calling_relays TIMEOUT (4s) — host-only");
             return None;
         }
     };
@@ -1108,6 +1116,7 @@ async fn receive_and_send(
                         let (peer, sigs) = match intent {
                             CallIntent::Place(thread) => {
                                 let call_id = now_ms();
+                                dbg_line(&format!("place intent peer={thread}"));
                                 // Resolve the callee's identity key (need a session).
                                 match peer_identity_key(&store, &thread).await {
                                     Some(peer_id) => {
@@ -1115,8 +1124,12 @@ async fn receive_and_send(
                                       match call_engine.place(
                                         call_id, my_identity.clone(), peer_id, thread, turn,
                                     ) {
-                                        Ok(sigs) => (call_engine.peer(), sigs),
+                                        Ok(sigs) => {
+                                            dbg_line("place -> Outgoing");
+                                            (call_engine.peer(), sigs)
+                                        }
                                         Err(e) => {
+                                            dbg_line(&format!("place ERR: {e}"));
                                             shared.set_state(format!("call: {e}"));
                                             (String::new(), Vec::new())
                                         }
