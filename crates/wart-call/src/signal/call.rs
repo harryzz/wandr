@@ -226,7 +226,12 @@ impl SignalCall {
         self.session.handle_timeout(now);
         // Trickle any newly-gathered local candidate (the TURN relay candidate
         // arrives after allocation completes) as a fresh `CallSignal::Ice`.
-        if self.state != CallState::Ended {
+        // NOT while `Ringing`: as the answerer the call is Ringing until accept(),
+        // and ringrtc rejects an ice-update that arrives before our Answer (the
+        // caller hangs up instantly). Hold candidates until accept() sends the
+        // Answer and moves us to Connecting; they're drained on the next tick.
+        // The offerer's Outgoing state already sent its Offer first, so it's fine.
+        if !matches!(self.state, CallState::Ended | CallState::Ringing) {
             for line in self.session.take_new_local_candidates() {
                 if let Ok(opaque) = encode_ice_candidate(&line) {
                     self.out.push(CallSignal::Ice { call_id: self.call_id, opaque });
