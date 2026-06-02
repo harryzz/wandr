@@ -983,6 +983,19 @@ async fn receive_and_send(
                         // offer, else apply answer/ICE/hangup; send any reply (Busy).
                         if let ContentBody::CallMessage(cm) = &content.body {
                             let from = content.metadata.sender.raw_uuid().to_string();
+                            // Log what the (real Signal) peer sent us — confirms
+                            // whether an answered/Hangup/Busy ends our outgoing call.
+                            let kinds: Vec<&str> = call::call_message_to_signals(cm)
+                                .iter()
+                                .map(|s| match s {
+                                    wart_call::signal::CallSignal::Offer { .. } => "Offer",
+                                    wart_call::signal::CallSignal::Answer { .. } => "Answer",
+                                    wart_call::signal::CallSignal::Ice { .. } => "Ice",
+                                    wart_call::signal::CallSignal::Hangup { .. } => "Hangup",
+                                    wart_call::signal::CallSignal::Busy { .. } => "Busy",
+                                })
+                                .collect();
+                            dbg_line(&format!("RX call from {from}: {kinds:?}"));
                             // The offerer's identity key (caller) — from the exact
                             // address the message came from (its identity is stored).
                             let sender_identity = match content
@@ -1477,9 +1490,22 @@ fn extract(body: &ContentBody) -> (Option<String>, bool, Option<String>, Option<
         ContentBody::SynchronizeMessage(sm) => {
             let sent = sm.sent.as_ref();
             let msg = sent.and_then(|s| s.message.as_ref());
+            // Recipient thread: group, else the sent transcript's destination — the
+            // string `destinationServiceId`, OR (modern Signal Android sends only
+            // this) the binary `destinationServiceIdBinary`. Missing both →
+            // `None` ⇒ the caller defaults to the envelope sender (us) = Note-to-Self,
+            // which is the bug when a real recipient was just encoded in binary form.
             let thread = msg.and_then(group_thread).or_else(|| {
-                sent.and_then(|s| s.destination_service_id.clone())
-                    .map(|d| normalize_service_id(&d))
+                sent.and_then(|s| {
+                    s.destination_service_id
+                        .clone()
+                        .map(|d| normalize_service_id(&d))
+                        .or_else(|| {
+                            s.destination_service_id_binary
+                                .as_deref()
+                                .and_then(service_id_from_binary)
+                        })
+                })
             });
             // The original send timestamp (so reactions match + time is the send
             // time), from the inner message or the sync-sent envelope.
@@ -1556,6 +1582,17 @@ fn group_thread(dm: &DataMessage) -> Option<String> {
 /// `"PNI:uuid"` / `"uuid"` → the bare lowercase uuid (matches contact ids).
 fn normalize_service_id(s: &str) -> String {
     s.rsplit(':').next().unwrap_or(s).to_lowercase()
+}
+
+/// A binary service id → the lowercase UUID thread key (matching
+/// `normalize_service_id`). ACI = 16-byte UUID; PNI = 0x01 prefix + 16-byte UUID.
+fn service_id_from_binary(b: &[u8]) -> Option<String> {
+    let uuid = match b.len() {
+        16 => b,
+        17 => &b[1..], // PNI prefix byte
+        _ => return None,
+    };
+    Uuid::from_slice(uuid).ok().map(|u| u.to_string())
 }
 
 fn to_stored(m: &Message) -> persist::StoredMessage {
