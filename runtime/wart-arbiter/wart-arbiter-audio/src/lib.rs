@@ -68,9 +68,43 @@ struct FocusEntry {
     kind:   FocusKind,
 }
 
+/// System ringer policy (Android `AudioManager.RINGER_MODE_*`) — what an incoming
+/// ring does. The arbiter owns this, like AudioService does in system_server.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum RingerMode {
+    /// Ringtone + vibrate.
+    #[default]
+    Normal,
+    /// Vibrate only.
+    Vibrate,
+    /// Neither — visual (badge) only.
+    Silent,
+}
+
+impl RingerMode {
+    fn from_wire(s: &str) -> Option<Self> {
+        match s {
+            "normal"  => Some(Self::Normal),
+            "vibrate" => Some(Self::Vibrate),
+            "silent"  => Some(Self::Silent),
+            _ => None,
+        }
+    }
+    fn as_wire(&self) -> &'static str {
+        match self {
+            Self::Normal  => "normal",
+            Self::Vibrate => "vibrate",
+            Self::Silent  => "silent",
+        }
+    }
+}
+
 /// App-assigned notification id the audio module uses for the ongoing-call
 /// badge (its own id space, keyed per owner app like any notifier).
 const CALL_NOTIF_ID: u64 = 0xCA11;
+/// …and the incoming-call (ringing) badge — a distinct id so it can coexist with
+/// and be cleared independently of the ongoing-call badge.
+const RING_NOTIF_ID: u64 = 0xCA12;
 
 /// The audio-focus arbiter. `stack.last()` is the current owner.
 #[derive(Default)]
@@ -79,6 +113,10 @@ pub struct AudioModule {
     /// M3 — the pid currently in a comms session (a VoIP call), if any. One call
     /// at a time; it holds permanent focus + drives the global audio mode.
     comms: Option<i32>,
+    /// The pid with an active incoming-call ring, if any (the Ringer; one at a time).
+    ringing: Option<i32>,
+    /// System ringer policy — what a ring does (ringtone/vibrate/silent).
+    ringer_mode: RingerMode,
 }
 
 impl AudioModule {
@@ -198,6 +236,8 @@ impl AudioModule {
         let Some((pid, app_id)) = Self::resolve(token, ctx) else {
             return Reply::err(format!("audio-call-unknown-owner {token}"));
         };
+        // Answering a ringing call: stop the ring (keep focus — we re-grant below).
+        self.stop_ring(pid, &app_id, ctx);
         // Transient focus → music pauses now and resumes when the call ends
         // (Android telephony uses GAIN_TRANSIENT for exactly this).
         self.grant(pid, app_id.clone(), FocusKind::GainTransient, ctx);
@@ -232,6 +272,82 @@ impl AudioModule {
         ctx.request(Effect::Persist);
         log::info!("arbiter: audio-call-end pid={pid} app={app_id} → NORMAL");
         Reply::ok(format!("call-end pid={pid} app={app_id}"))
+    }
+
+    // ── Ringer (incoming-call ringtone + vibrate) ───────────────────────────
+    // The system_server analog: Telecom's Ringer + AudioService + VibratorService.
+    // The arbiter decides (ringer mode); the owner host plays the ringtone (its
+    // `audio` interface) and vibrates (its `haptics` interface).
+
+    /// `audio-ring-start <pid|app-id>` — an incoming call is ringing. Per the
+    /// ringer mode: ringtone + vibrate (normal), vibrate only (vibrate), or silent.
+    /// Pauses music (transient focus) + raises an incoming-call badge. Stopped by
+    /// `audio-ring-stop` (decline/miss) or `audio-call-start` (answer).
+    fn cmd_ring_start(&mut self, args: &str, ctx: &mut Ctx) -> Reply {
+        let token = args.trim();
+        let Some((pid, app_id)) = Self::resolve(token, ctx) else {
+            return Reply::err(format!("audio-ring-unknown-owner {token}"));
+        };
+        self.ringing = Some(pid);
+        // The ringtone pauses music; it resumes when the ring stops (Android uses
+        // GAIN_TRANSIENT for the ring stream).
+        self.grant(pid, app_id.clone(), FocusKind::GainTransient, ctx);
+        match self.ringer_mode {
+            RingerMode::Normal => {
+                ctx.deliver_to_host(pid, "ringtone start\n");
+                ctx.deliver_to_host(pid, "haptics ring-start\n");
+            }
+            RingerMode::Vibrate => ctx.deliver_to_host(pid, "haptics ring-start\n"),
+            RingerMode::Silent => {}
+        }
+        ctx.store.post_notification(&app_id, RING_NOTIF_ID, "Incoming call".into(), app_id.clone());
+        ctx.request(Effect::Persist);
+        log::info!("arbiter: audio-ring-start pid={pid} app={app_id} mode={}", self.ringer_mode.as_wire());
+        Reply::ok(format!("ring-start pid={pid} app={app_id} mode={}", self.ringer_mode.as_wire()))
+    }
+
+    /// `audio-ring-stop <pid|app-id>` — the incoming call was declined / missed /
+    /// canceled (not answered). Stop the ring + release focus (music resumes).
+    fn cmd_ring_stop(&mut self, args: &str, ctx: &mut Ctx) -> Reply {
+        let token = args.trim();
+        let Some((pid, app_id)) = Self::resolve(token, ctx) else {
+            return Reply::err(format!("audio-ring-unknown-owner {token}"));
+        };
+        if self.ringing != Some(pid) {
+            return Reply::err(format!("audio-ring-not-ringing pid={pid}"));
+        }
+        self.stop_ring(pid, &app_id, ctx);
+        self.drop_pid(pid, ctx); // release transient focus → prior owner resumes
+        ctx.request(Effect::Persist);
+        log::info!("arbiter: audio-ring-stop pid={pid} app={app_id}");
+        Reply::ok(format!("ring-stop pid={pid} app={app_id}"))
+    }
+
+    /// `audio-ringer-mode <normal|vibrate|silent>` — set the system ringer policy
+    /// (Android `AudioManager.setRingerMode`). Applies to subsequent rings.
+    fn cmd_ringer_mode(&mut self, args: &str, _ctx: &mut Ctx) -> Reply {
+        match RingerMode::from_wire(args.trim()) {
+            Some(m) => {
+                self.ringer_mode = m;
+                log::info!("arbiter: ringer-mode → {}", m.as_wire());
+                Reply::ok(format!("ringer-mode {}", m.as_wire()))
+            }
+            None => Reply::err("audio-ringer-mode: expected normal|vibrate|silent"),
+        }
+    }
+
+    /// Stop the active ring's sounds + clear its badge (does NOT touch focus — the
+    /// caller decides whether to release it: `audio-ring-stop` releases, an answer
+    /// via `audio-call-start` keeps it). No-op if this pid isn't ringing.
+    fn stop_ring(&mut self, pid: i32, app_id: &str, ctx: &mut Ctx) {
+        if self.ringing != Some(pid) {
+            return;
+        }
+        self.ringing = None;
+        // Always send both stops (idempotent on the host even if one wasn't started).
+        ctx.deliver_to_host(pid, "ringtone stop\n");
+        ctx.deliver_to_host(pid, "haptics ring-stop\n");
+        ctx.store.cancel_notification(app_id, RING_NOTIF_ID);
     }
 
     /// `audio-route <pid|app-id> <speaker|earpiece>` — the speaker toggle: the
@@ -272,6 +388,7 @@ impl ArbiterModule for AudioModule {
         &[
             "audio-focus-request", "audio-focus-abandon", "audio-focus-list",
             "audio-call-start", "audio-call-end", "audio-route",
+            "audio-ring-start", "audio-ring-stop", "audio-ringer-mode",
         ]
     }
 
@@ -283,6 +400,9 @@ impl ArbiterModule for AudioModule {
             "audio-call-start"    => self.cmd_call_start(args, ctx),
             "audio-call-end"      => self.cmd_call_end(args, ctx),
             "audio-route"         => self.cmd_route(args, ctx),
+            "audio-ring-start"    => self.cmd_ring_start(args, ctx),
+            "audio-ring-stop"     => self.cmd_ring_stop(args, ctx),
+            "audio-ringer-mode"   => self.cmd_ringer_mode(args, ctx),
             other => Reply::err(format!("audio-unknown-verb {other}")),
         }
     }
@@ -299,6 +419,15 @@ impl ArbiterModule for AudioModule {
                     ctx.store.cancel_notification(&app, CALL_NOTIF_ID);
                 }
                 log::info!("arbiter: audio-call owner pid={pid} died — session ended");
+            }
+            // A ringing owner died → clear the ring + its badge (the host is gone,
+            // so no stop push is needed).
+            if self.ringing == Some(*pid) {
+                self.ringing = None;
+                if let Some(app) = ctx.store.app_by_pid(*pid).map(|a| a.app_id.clone()) {
+                    ctx.store.cancel_notification(&app, RING_NOTIF_ID);
+                }
+                log::info!("arbiter: audio-ring owner pid={pid} died — ring cleared");
             }
             if self.drop_pid(*pid, ctx) {
                 log::info!("arbiter: audio-focus dropped dead pid={pid}");
@@ -460,5 +589,85 @@ mod tests {
         let (reply, _) = r.dispatch_command("audio-focus-list", "", &mut store).unwrap();
         let Reply::Ok(body) = reply else { panic!() };
         assert!(body.contains("count=1"));
+    }
+
+    // ── Ringer ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn ring_start_normal_rings_vibrates_and_pauses_music() {
+        let (mut r, mut store) = reg();
+        seed(&mut store, "war.signal", 500);
+        r.dispatch_command("audio-focus-request", "111 gain", &mut store).unwrap(); // music
+        let (reply, eff) = r.dispatch_command("audio-ring-start", "war.signal", &mut store).unwrap();
+        assert!(matches!(reply, Reply::Ok(_)));
+        let lines = changes_for(&eff, 500);
+        assert!(lines.iter().any(|l| l == "ringtone start"));
+        assert!(lines.iter().any(|l| l == "haptics ring-start"));
+        // Music pauses (transient), incoming-call badge raised.
+        assert_eq!(changes_for(&eff, 111), vec!["on-focus-changed loss-transient"]);
+        assert!(store.notifications().iter().any(|n| n.app_id == "war.signal"));
+    }
+
+    #[test]
+    fn ring_stop_silences_and_resumes_music() {
+        let (mut r, mut store) = reg();
+        seed(&mut store, "war.signal", 500);
+        r.dispatch_command("audio-focus-request", "111 gain", &mut store).unwrap();
+        r.dispatch_command("audio-ring-start", "war.signal", &mut store).unwrap();
+        let (_r, eff) = r.dispatch_command("audio-ring-stop", "war.signal", &mut store).unwrap();
+        let lines = changes_for(&eff, 500);
+        assert!(lines.iter().any(|l| l == "ringtone stop"));
+        assert!(lines.iter().any(|l| l == "haptics ring-stop"));
+        // Music regains, badge cleared.
+        assert_eq!(changes_for(&eff, 111), vec!["on-focus-changed gain"]);
+        assert!(store.notifications().iter().all(|n| n.app_id != "war.signal"));
+    }
+
+    #[test]
+    fn answer_stops_ring_then_enters_comm() {
+        let (mut r, mut store) = reg();
+        seed(&mut store, "war.signal", 500);
+        r.dispatch_command("audio-ring-start", "war.signal", &mut store).unwrap();
+        // Answering = call-start: it stops the ring + switches to comm mode.
+        let (_r, eff) = r.dispatch_command("audio-call-start", "war.signal", &mut store).unwrap();
+        let lines = changes_for(&eff, 500);
+        assert!(lines.iter().any(|l| l == "ringtone stop"));
+        assert!(lines.iter().any(|l| l == "audio-policy set-mode comm"));
+        // Ongoing-call badge present; not still "ringing".
+        assert!(store.notifications().iter().any(|n| n.app_id == "war.signal"));
+    }
+
+    #[test]
+    fn ringer_mode_vibrate_buzzes_without_ringtone() {
+        let (mut r, mut store) = reg();
+        seed(&mut store, "war.signal", 500);
+        r.dispatch_command("audio-ringer-mode", "vibrate", &mut store).unwrap();
+        let (_r, eff) = r.dispatch_command("audio-ring-start", "war.signal", &mut store).unwrap();
+        let lines = changes_for(&eff, 500);
+        assert!(lines.iter().any(|l| l == "haptics ring-start"));
+        assert!(!lines.iter().any(|l| l == "ringtone start"));
+    }
+
+    #[test]
+    fn ringer_mode_silent_is_visual_only() {
+        let (mut r, mut store) = reg();
+        seed(&mut store, "war.signal", 500);
+        r.dispatch_command("audio-ringer-mode", "silent", &mut store).unwrap();
+        let (_r, eff) = r.dispatch_command("audio-ring-start", "war.signal", &mut store).unwrap();
+        let lines = changes_for(&eff, 500);
+        assert!(!lines.iter().any(|l| l == "ringtone start"));
+        assert!(!lines.iter().any(|l| l == "haptics ring-start"));
+        // Still badges the incoming call.
+        assert!(store.notifications().iter().any(|n| n.app_id == "war.signal"));
+    }
+
+    #[test]
+    fn ringing_owner_death_clears_ring() {
+        let (mut r, mut store) = reg();
+        seed(&mut store, "war.signal", 500);
+        r.dispatch_command("audio-ring-start", "war.signal", &mut store).unwrap();
+        assert!(store.notifications().iter().any(|n| n.app_id == "war.signal"));
+        r.dispatch_event(Event::SurfaceRemoved { pid: 500 }, &mut store);
+        assert!(store.notifications().iter().all(|n| n.app_id != "war.signal"));
     }
 }
