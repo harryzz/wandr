@@ -1156,8 +1156,13 @@ async fn receive_and_send(
                                 }
                             }
                             CallIntent::Accept => {
-                                // Answered → comms session (stops the ring + sets
-                                // IN_COMMUNICATION via the arbiter).
+                                // Answered → open the comms session. We deliberately
+                                // do NOT call ring_stop here: the arbiter's call_start
+                                // already stops the ringtone/vibrate while KEEPING
+                                // audio focus (seamless ring→call). The public
+                                // ring_stop also releases focus (music would resume
+                                // then re-pause) — that path is only for an UNANSWERED
+                                // ring ending (see take_ended below).
                                 focus::call_start();
                                 comm_started = true;
                                 (call_engine.peer(), call_engine.accept())
@@ -1180,6 +1185,10 @@ async fn receive_and_send(
                     }
                     // A call just ended → close the arbiter session + log it.
                     if let Some(ended) = call_engine.take_ended() {
+                        // Two ways a ring ends: ANSWERED → call_start already stopped
+                        // it (focus kept) and this is its call_end; UNANSWERED
+                        // (declined/missed/remote-canceled) → ring_stop here stops it
+                        // AND releases focus so music resumes.
                         if comm_started {
                             focus::call_end(); // restore audio mode + focus
                             comm_started = false;
