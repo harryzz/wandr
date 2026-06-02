@@ -187,7 +187,8 @@ struct ActiveCall {
     // Call-log metadata (→ a history entry when the call ends).
     outgoing: bool,
     connected: bool, // reached Connected (answered)
-    declined: bool,  // we declined an incoming ring
+    accepted: bool,  // we pressed accept on an incoming ring
+    declined: bool,  // we declined an incoming ring (hung up while ringing)
     busy: bool,      // peer replied Busy
 }
 
@@ -197,7 +198,7 @@ impl ActiveCall {
         Self {
             call, sock, peer_aci, cap: None, trk: None, track_started: false,
             mic_buf: Vec::new(), last_state,
-            outgoing, connected: false, declined: false, busy: false,
+            outgoing, connected: false, accepted: false, declined: false, busy: false,
         }
     }
 
@@ -417,6 +418,7 @@ impl CallEngine {
     /// Accept the ringing call; returns the `Answer` + trickled ICE to send.
     pub fn accept(&mut self) -> Vec<CallSignal> {
         if let Some(a) = &mut self.active {
+            a.accepted = true; // pressed green → not a decline, even if media never connects
             let _ = a.call.accept();
             return a.call.poll_signals();
         }
@@ -426,8 +428,11 @@ impl CallEngine {
     /// Hang up; returns the `Hangup` to send and drops the call.
     pub fn hangup(&mut self) -> Vec<CallSignal> {
         if let Some(mut a) = self.active.take() {
-            // Hanging up an un-connected incoming call = we declined it.
-            if !a.outgoing && !a.connected {
+            // Declined = we hung up an incoming ring we never accepted. If we
+            // pressed accept (`accepted`) but media never connected, it's NOT a
+            // decline — it falls through to `in-missed` (an answered call that
+            // failed to connect), not `in-declined`.
+            if !a.outgoing && !a.connected && !a.accepted {
                 a.declined = true;
             }
             a.call.hangup();
