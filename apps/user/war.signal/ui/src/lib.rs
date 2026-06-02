@@ -801,6 +801,11 @@ fn app() -> Element {
 
     let (state, link_url, messages, contacts, groups, self_id, unread, my_profile) = snapshot();
 
+    // Call state read HERE (app re-renders on engine events) and passed down as
+    // props, so the memoized CallBar/ThreadHeader actually re-render when it changes.
+    let call_status = chat::call_status();
+    let call_peer = chat::call_peer();
+
     // M4 — a notification tap asked to open a thread (set by on-notification-click,
     // outside the runtime). Resolve + navigate to it now.
     if let Some(tid) = PENDING_OPEN.with(|p| p.borrow_mut().take()) {
@@ -835,8 +840,8 @@ fn app() -> Element {
         return rsx! {
             div {
                 style: "display:flex; flex-direction:column; height:100%; background:{BG};",
-                CallBar {}
-                ThreadHeader { title: thread.title.clone(), current }
+                CallBar { status: call_status }
+                ThreadHeader { title: thread.title.clone(), current, call_status, call_peer: call_peer.clone() }
                 Conversation { messages: thread_msgs, contacts: contacts.clone(), stick_key: thread.id.clone() }
                 Composer { thread: thread.id.clone() }
             }
@@ -848,7 +853,7 @@ fn app() -> Element {
     rsx! {
         div {
             style: "display:flex; flex-direction:column; height:100%; background:{BG};",
-            CallBar {}
+            CallBar { status: call_status }
             TitleBar { state, my_profile: my_profile.clone(), show_profile }
             div {
                 style: "display:flex; flex-direction:row; gap:12px; padding:14px 24px; background:{BAR};",
@@ -951,17 +956,22 @@ fn ProfileScreen(profile: UiProfile, show_profile: Signal<bool>) -> Element {
 
 /// Header for an open conversation: a back arrow (clears `current`) + the title.
 #[component]
-fn ThreadHeader(title: String, current: Signal<Option<Thread>>) -> Element {
+fn ThreadHeader(
+    title: String,
+    current: Signal<Option<Thread>>,
+    call_status: chat::CallState,
+    call_peer: String,
+) -> Element {
     let mut current = current;
     // The open thread's id + kind, for the 1:1 call button (Phase 2b-ii).
     let (thread_id, is_group) = current().map(|t| (t.id, t.is_group)).unwrap_or_default();
     let call_tid = thread_id.clone();
     // One big handset toggle: GREEN to place a call, RED to hang up the active call
-    // with this peer (no separate End button). Polls the engine's call state.
+    // with this peer (no separate End button). Driven by the call-state props.
     let in_call = !is_group
         && !thread_id.is_empty()
-        && !matches!(chat::call_status(), chat::CallState::Idle | chat::CallState::Ended)
-        && chat::call_peer() == thread_id;
+        && !matches!(call_status, chat::CallState::Idle | chat::CallState::Ended)
+        && call_peer == thread_id;
     let handset_bg = if in_call { "#C62828" } else { "#2E7D32" }; // red end / green call
     rsx! {
         div {
@@ -992,8 +1002,7 @@ fn ThreadHeader(title: String, current: Signal<Option<Thread>>) -> Element {
 /// engine events). Ringing → big Accept/Decline; otherwise → status only (end the
 /// call with the red handset in the thread header — no separate End button).
 #[component]
-fn CallBar() -> Element {
-    let status = chat::call_status();
+fn CallBar(status: chat::CallState) -> Element {
     if matches!(status, chat::CallState::Idle | chat::CallState::Ended) {
         return rsx! {};
     }
