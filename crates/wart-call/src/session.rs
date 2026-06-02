@@ -1,15 +1,15 @@
 //! [`PeerSession`] — the call engine API. Composes signaling + transport + media
-//! into an event-loop-driveable session: the guest feeds it inbound datagrams +
-//! time, drains outbound datagrams, exchanges SDP out-of-band, and pumps PCM in
-//! and out.
+//! into an event-loop-driveable session over real UDP datagrams.
 //!
 //! ```ignore
-//! let mut s = PeerSession::new(Role::Offerer)?;
+//! let sock = UdpSocket::bind("0.0.0.0:0")?;        // wasi:sockets in the guest
+//! sock.set_nonblocking(true)?;
+//! let mut s = PeerSession::new(Role::Offerer, sock.local_addr()?)?;
 //! let offer = s.local_signaling().to_sdp();        // → send over signaling channel
 //! s.set_remote_signaling(&Signaling::from_sdp(&answer)?)?;   // ← peer's answer
 //! loop {
-//!     for dg in s.poll_transmit() { udp.send(dg); }          // → UDP socket
-//!     while let Some(dg) = udp.recv() { s.handle_datagram(&dg)?; }
+//!     for (dest, data) in s.poll_transmit() { sock.send_to(&data, dest); }
+//!     while let Ok((n, src)) = sock.recv_from(&mut buf) { s.handle_datagram(src, &buf[..n])?; }
 //!     s.handle_timeout(now());
 //!     if s.is_connected() {
 //!         s.send_audio(&mic_frame)?;                          // mic → wire
@@ -18,6 +18,7 @@
 //! }
 //! ```
 
+use std::net::SocketAddr;
 use std::time::Instant;
 
 use crate::media::MediaSession;
@@ -41,6 +42,7 @@ pub enum SessionState {
 
 pub struct PeerSession {
     role: Role,
+    local_addr: SocketAddr,
     ufrag: String,
     pwd: String,
     transport: Transport,
@@ -52,16 +54,19 @@ pub struct PeerSession {
 }
 
 impl PeerSession {
-    pub fn new(role: Role) -> Result<Self, Error> {
-        // Per-role ICE creds (exchanged via signaling). A production session
-        // generates these randomly; fixed-per-role is fine for one call pair.
+    /// `local_addr` is the bound UDP socket address — advertised as our host
+    /// candidate and used as the source address of our datagrams.
+    pub fn new(role: Role, local_addr: SocketAddr) -> Result<Self, Error> {
+        // Per-role ICE creds (exchanged via signaling). Production generates these
+        // randomly; fixed-per-role is fine for one call pair.
         let (ufrag, pwd) = match role {
             Role::Offerer => ("ufrAgentA", "passwordApasswordApasswordA00"),
             Role::Answerer => ("ufrAgentB", "passwordBpasswordBpasswordB00"),
         };
-        let transport = Transport::new(role, ufrag, pwd)?;
+        let transport = Transport::new(role, ufrag, pwd, local_addr)?;
         Ok(Self {
             role,
+            local_addr,
             ufrag: ufrag.to_owned(),
             pwd: pwd.to_owned(),
             transport,
@@ -81,14 +86,19 @@ impl PeerSession {
                 Role::Offerer => "actpass".to_owned(),
                 Role::Answerer => "active".to_owned(),
             },
-            candidates: vec!["1 1 udp 2130706431 127.0.0.1 0 typ host".to_owned()],
+            candidates: vec![candidate_string(self.local_addr)],
         }
     }
 
     /// Apply the peer's signaling (from their SDP) → start ICE connectivity. The
     /// peer's cert fingerprint is checked against the handshake cert on connect.
     pub fn set_remote_signaling(&mut self, remote: &Signaling) -> Result<(), Error> {
-        self.transport.set_remote(&remote.ice_ufrag, &remote.ice_pwd, &remote.fingerprint)
+        let remote_addr = remote
+            .candidates
+            .iter()
+            .find_map(|c| parse_candidate_addr(c))
+            .ok_or(Error::Ice("no usable remote candidate"))?;
+        self.transport.set_remote(&remote.ice_ufrag, &remote.ice_pwd, &remote.fingerprint, remote_addr)
     }
 
     pub fn state(&self) -> SessionState {
@@ -103,17 +113,21 @@ impl PeerSession {
         self.transport.is_connected()
     }
 
-    /// Drain outbound datagrams (ICE/DTLS handshake + SRTP media) for the wire.
-    pub fn poll_transmit(&mut self) -> Vec<Vec<u8>> {
+    /// Drain outbound datagrams (ICE/DTLS handshake + SRTP media): `(dest, bytes)`.
+    pub fn poll_transmit(&mut self) -> Vec<(SocketAddr, Vec<u8>)> {
         let mut out = self.transport.poll_transmit();
-        out.append(&mut self.media_out);
+        if let Some(dest) = self.transport.remote_addr() {
+            for dg in self.media_out.drain(..) {
+                out.push((dest, dg));
+            }
+        }
         out
     }
 
-    /// Feed one inbound datagram; demuxed to ICE/DTLS/media. Decoded PCM lands in
-    /// `recv_audio`.
-    pub fn handle_datagram(&mut self, data: &[u8]) -> Result<(), Error> {
-        if let Demux::Media(srtp) = self.transport.handle_datagram(data)? {
+    /// Feed one inbound datagram from `src`; demuxed to ICE/DTLS/media. Decoded
+    /// PCM lands in `recv_audio`.
+    pub fn handle_datagram(&mut self, src: SocketAddr, data: &[u8]) -> Result<(), Error> {
+        if let Demux::Media(srtp) = self.transport.handle_datagram(src, data)? {
             self.ensure_media()?;
             if let Some(m) = &mut self.media {
                 if let Ok(pcm) = m.recv(&srtp) {
@@ -148,7 +162,6 @@ impl PeerSession {
         if self.audio_in.is_empty() { None } else { Some(self.audio_in.remove(0)) }
     }
 
-    /// Build the media session once the DTLS keys are available.
     fn ensure_media(&mut self) -> Result<(), Error> {
         if self.media.is_some() {
             return Ok(());
@@ -161,78 +174,107 @@ impl PeerSession {
     }
 }
 
+/// Build a standard SDP host-candidate string for an address.
+fn candidate_string(addr: SocketAddr) -> String {
+    format!("1 1 udp 2130706431 {} {} typ host", addr.ip(), addr.port())
+}
+
+/// Parse the connection address from an SDP candidate string.
+fn parse_candidate_addr(cand: &str) -> Option<SocketAddr> {
+    // foundation component transport priority <ip> <port> typ host …
+    let f: Vec<&str> = cand.split_whitespace().collect();
+    if f.len() >= 6 {
+        let ip: std::net::IpAddr = f[4].parse().ok()?;
+        let port: u16 = f[5].parse().ok()?;
+        return Some(SocketAddr::new(ip, port));
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, Instant};
+    use std::net::UdpSocket;
+    use std::time::Duration;
 
-    /// Reproduce the capstone through the library API: two PeerSessions exchange
-    /// signaling, connect (ICE → DTLS-SRTP), and pass an encrypted Opus frame.
+    /// Bind a peer to a real loopback UDP socket + a PeerSession on its address.
+    fn peer(role: Role) -> (PeerSession, UdpSocket) {
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        sock.set_nonblocking(true).unwrap();
+        let s = PeerSession::new(role, sock.local_addr().unwrap()).unwrap();
+        (s, sock)
+    }
+
+    /// Drive two sessions over their real UDP sockets until both connect (or give
+    /// up). Returns whether a fingerprint mismatch was raised.
+    fn drive(
+        a: &mut PeerSession, asock: &UdpSocket,
+        b: &mut PeerSession, bsock: &UdpSocket,
+    ) -> bool {
+        let mut buf = [0u8; 2048];
+        let mut mismatch = false;
+        for _ in 0..1200 {
+            let now = Instant::now();
+            a.handle_timeout(now);
+            b.handle_timeout(now);
+            for (dest, data) in a.poll_transmit() { let _ = asock.send_to(&data, dest); }
+            for (dest, data) in b.poll_transmit() { let _ = bsock.send_to(&data, dest); }
+            while let Ok((n, src)) = asock.recv_from(&mut buf) {
+                if matches!(a.handle_datagram(src, &buf[..n]), Err(Error::Dtls(_))) { mismatch = true; }
+            }
+            while let Ok((n, src)) = bsock.recv_from(&mut buf) {
+                let _ = b.handle_datagram(src, &buf[..n]);
+            }
+            if (a.is_connected() && b.is_connected()) || mismatch { break; }
+            std::thread::sleep(Duration::from_millis(3));
+        }
+        mismatch
+    }
+
+    /// Full call over REAL loopback UDP sockets: signaling → ICE → DTLS-SRTP →
+    /// encrypted Opus media. This is repros/call-capstone over wasi:sockets-shaped
+    /// transport (std::net::UdpSocket on host; wasi:sockets in the guest).
     #[test]
-    fn two_peers_connect_and_exchange_audio() {
-        let mut a = PeerSession::new(Role::Offerer).unwrap();
-        let mut b = PeerSession::new(Role::Answerer).unwrap();
+    fn two_peers_connect_over_real_udp() {
+        let (mut a, asock) = peer(Role::Offerer);
+        let (mut b, bsock) = peer(Role::Answerer);
 
-        // Signaling: exchange offer/answer (via SDP round-trip, exercising it).
         let offer = a.local_signaling().to_sdp();
         let answer = b.local_signaling().to_sdp();
         a.set_remote_signaling(&Signaling::from_sdp(&answer).unwrap()).unwrap();
         b.set_remote_signaling(&Signaling::from_sdp(&offer).unwrap()).unwrap();
 
-        // Drive both until connected (in-memory wire).
-        let mut connected = false;
-        for _ in 0..800 {
-            let now = Instant::now();
-            a.handle_timeout(now);
-            b.handle_timeout(now);
-            for dg in a.poll_transmit() { b.handle_datagram(&dg).unwrap(); }
-            for dg in b.poll_transmit() { a.handle_datagram(&dg).unwrap(); }
-            if a.is_connected() && b.is_connected() { connected = true; break; }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        assert!(connected, "PeerSessions failed to connect");
+        drive(&mut a, &asock, &mut b, &bsock);
+        assert!(a.is_connected() && b.is_connected(), "failed to connect over real UDP");
 
-        // Media: A sends a tone frame → B decodes non-silent audio.
+        // A sends a tone → B decodes non-silent audio.
         let frame: Vec<f32> = (0..a.frame_len())
             .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / SAMPLE_RATE as f32).sin() * 0.5)
             .collect();
         a.send_audio(&frame).unwrap();
-        for dg in a.poll_transmit() { b.handle_datagram(&dg).unwrap(); }
-        let got = b.recv_audio().expect("B received an audio frame");
+        let mut buf = [0u8; 2048];
+        for (dest, data) in a.poll_transmit() { let _ = asock.send_to(&data, dest); }
+        std::thread::sleep(Duration::from_millis(20));
+        while let Ok((n, src)) = bsock.recv_from(&mut buf) { b.handle_datagram(src, &buf[..n]).unwrap(); }
+        let got = b.recv_audio().expect("B received an audio frame over UDP");
         let rms = (got.iter().map(|&v| (v as f64) * (v as f64)).sum::<f64>() / got.len() as f64).sqrt();
         assert!(rms > 0.0, "decoded audio present");
     }
 
-    /// A tampered fingerprint (MITM swapping the cert) must be rejected — the
-    /// handshake completes but the peer-cert fingerprint check fails, so the
-    /// session never connects.
+    /// A tampered fingerprint (MITM) is rejected over real UDP — no connection.
     #[test]
-    fn mismatched_fingerprint_rejected() {
-        let mut a = PeerSession::new(Role::Offerer).unwrap();
-        let mut b = PeerSession::new(Role::Answerer).unwrap();
+    fn mismatched_fingerprint_rejected_over_udp() {
+        let (mut a, asock) = peer(Role::Offerer);
+        let (mut b, bsock) = peer(Role::Answerer);
 
         let offer = a.local_signaling().to_sdp();
-        // Give A a BOGUS fingerprint for B (as if a MITM swapped B's cert).
         let mut b_sig = Signaling::from_sdp(&b.local_signaling().to_sdp()).unwrap();
-        b_sig.fingerprint = format!("sha-256 {}", vec!["DE"; 32].join(":"));
+        b_sig.fingerprint = format!("sha-256 {}", vec!["DE"; 32].join(":")); // bogus
         a.set_remote_signaling(&b_sig).unwrap();
         b.set_remote_signaling(&Signaling::from_sdp(&offer).unwrap()).unwrap();
 
-        let mut rejected = false;
-        for _ in 0..800 {
-            let now = Instant::now();
-            a.handle_timeout(now);
-            b.handle_timeout(now);
-            for dg in a.poll_transmit() { let _ = b.handle_datagram(&dg); }
-            for dg in b.poll_transmit() {
-                if matches!(a.handle_datagram(&dg), Err(Error::Dtls("peer fingerprint mismatch — possible MITM"))) {
-                    rejected = true;
-                }
-            }
-            if rejected || (a.is_connected() && b.is_connected()) { break; }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        assert!(rejected, "A must reject B's cert on fingerprint mismatch");
-        assert!(!a.is_connected(), "A must not connect when the fingerprint mismatches");
+        let mismatch = drive(&mut a, &asock, &mut b, &bsock);
+        assert!(mismatch, "A must raise a fingerprint mismatch");
+        assert!(!a.is_connected(), "A must not connect on fingerprint mismatch");
     }
 }

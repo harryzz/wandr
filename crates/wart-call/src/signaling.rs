@@ -64,12 +64,17 @@ impl Signaling {
             .ok_or(Error::Sdp("no audio m-section"))?;
 
         let attr = |k: &str| media.attribute(k).flatten().unwrap_or("").to_owned();
+        let candidates: Vec<String> = media
+            .attribute("candidate")
+            .flatten()
+            .map(|c| vec![c.to_owned()])
+            .unwrap_or_default();
         Ok(Signaling {
             ice_ufrag: attr("ice-ufrag"),
             ice_pwd: attr("ice-pwd"),
             fingerprint: attr("fingerprint"),
             setup: attr("setup"),
-            candidates: vec![], // trickle candidates arrive separately; full-SDP candidates TODO
+            candidates,
         })
     }
 }

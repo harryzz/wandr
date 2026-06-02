@@ -81,10 +81,14 @@ Each is a `wasi:cli/command` warpkg, device-verified via `wart-host --run-once`:
 
 The `PeerSession` API is the engine; what remains is integration:
 
-1. **Real UDP** — bind a `wasi:sockets` UDP socket (proven), feed `recv` into
-   `handle_datagram` and `send` from `poll_transmit`. The current `transport.rs`
-   uses fixed loopback addresses for the in-process test; production passes the
-   real socket + ICE candidate addresses.
+1. **Real UDP** — DONE. `PeerSession::new(role, local_addr)` takes the bound
+   socket address; `poll_transmit()` yields `(dest, bytes)` to `send_to`,
+   `handle_datagram(src, bytes)` takes what `recv_from` got; candidates carry the
+   real addresses via SDP. Device-verified: `repros/call-udp-loopback`
+   (`war.probe.calludp`) runs a full call between two `wasi:sockets` UDP sockets
+   in a guest on the Pixel 2 XL. (For a peer on the LAN, advertise the LAN IP —
+   bind+connect a probe socket to a public IP and read `local_addr`, per
+   `wasi-udp-probe`.)
 2. **Real audio** — wire `send_audio`'s input to the mic-capture WIT and
    `recv_audio`'s output to AAudio playback (both proven; note the device's
    input+output MMAP limit — fine for a real two-device call).
