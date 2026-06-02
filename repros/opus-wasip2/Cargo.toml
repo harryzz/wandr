@@ -1,0 +1,12 @@
+[package]
+name = "opus-wasip2-probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# De-risk: does the pure-Rust Opus codec (restsend/opus-rs, no C deps) build +
+# run for wasm32-wasip2? It's the call engine's codec — encode mic PCM → RTP,
+# decode RTP → speaker PCM. f32 API matches our PCM-f32 audio pipeline.
+
+[dependencies]
+opus-rs = "0.1.22"
