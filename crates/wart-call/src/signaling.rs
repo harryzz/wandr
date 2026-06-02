@@ -12,7 +12,7 @@ use rtc_sdp::description::session::SessionDescription;
 use crate::{Error, OPUS_PAYLOAD_TYPE};
 
 /// The signaling parameters an SDP carries for one audio m-section.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Signaling {
     pub ice_ufrag: String,
     pub ice_pwd: String,
@@ -26,6 +26,11 @@ pub struct Signaling {
     pub direction: String,
     /// `a=candidate:…` values (without the `candidate:` prefix).
     pub candidates: Vec<String>,
+    /// X25519 public key for Signal's DH-SRTP keying
+    /// (ringrtc `ConnectionParametersV4.public_key`, the DTLS-fingerprint
+    /// replacement). `None` on the WebRTC-native/DTLS path (`to_sdp`/`from_sdp`
+    /// ignore it); `Some(32 bytes)` on the Signal path (`crate::signal`).
+    pub public_key: Option<Vec<u8>>,
 }
 
 /// The answer direction for a given offer direction (RFC 3264).
@@ -100,6 +105,7 @@ impl Signaling {
             setup: attr("setup"),
             direction,
             candidates,
+            public_key: None, // SDP path carries no X25519 key (Signal-only; see crate::signal)
         })
     }
 }

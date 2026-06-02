@@ -63,6 +63,32 @@ RTP header-extension ids, and SRTP/transport params — i.e. everything our
 blob faithfully is the central protocol task.** First job of the build is to pull
 ringrtc's `signaling.proto` and map it ⇄ `wart_call::Signaling`.
 
+> **Phase 1 finding (2026-06-02) — corrects the paragraph above.** ringrtc's **V4**
+> 1:1 protocol does **NOT use DTLS-SRTP**, so the `opaque` carries no DTLS
+> fingerprint and no SDP media params (Opus PT / RTP header-ext ids are *not* on the
+> wire — both ends synthesize identical local SDP). The blob is just
+> `ConnectionParametersV4 { public_key (X25519), ice_ufrag, ice_pwd,
+> receive_video_codecs, max_bitrate_bps }`. SRTP keys are derived from an **X25519
+> Diffie-Hellman** exchange: `HKDF-SHA256(ikm=DH(local_secret, remote_public_key),
+> salt=[0;32], info="Signal_Calling_20200807_SignallingDH_SRTPKey_KDF" ||
+> caller_idkey || callee_idkey)` → `offer_key(32)|offer_salt(12)|answer_key(32)|
+> answer_salt(12)`, suite **AEAD AES-256-GCM** (not the `AES128_CM_HMAC_SHA1_80`
+> wart-call hardcodes; the vendored `external/rtc/rtc-srtp` already supports GCM
+> profile `0x0008`). **Consequence:** Phase 2 replaces wart-call's `transport.rs`
+> DTLS handshake with X25519 keygen+DH on the Signal path and widens `SrtpKeys`
+> (32B key / 12B salt) — the caller/callee ACI identity keys feeding the HKDF info
+> come from the Signal engine's `IdentityKeyPair`
+> (`apps/user/war.signal/engine/src/store.rs`).
+>
+> **Phase 1 status — DONE (codec only).** The `opaque` ⇄ `Signaling` codec ships as
+> `crates/wart-call/src/signal/` behind the `signal` cargo feature (own minimal
+> `proto/signal_signaling.proto`, hand-derived `prost::Message`, no protoc):
+> `encode/decode_{offer,answer}` + `encode/decode_ice_candidate`, `Signaling` gains
+> `public_key: Option<Vec<u8>>`, golden-bytes wire-compat test included. Host-tested
+> (`cargo test --manifest-path crates/wart-call/Cargo.toml --features signal`). No
+> crypto and no engine wiring yet — that's Phase 2 (the DH/GCM keying above + the
+> `CallMessage` dispatch the Phased-plan §2 describes).
+
 ## Two approaches (decide in step 1)
 
 - **(A) Vendor ringrtc's Rust, replace its libwebrtc backend with a wart-call

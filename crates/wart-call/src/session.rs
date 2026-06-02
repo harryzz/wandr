@@ -98,6 +98,7 @@ impl PeerSession {
                 }
             },
             candidates: vec![candidate_string(self.local_addr)],
+            public_key: None, // WebRTC-native path keys via DTLS; Signal sets this in crate::signal
         }
     }
 

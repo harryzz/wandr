@@ -19,11 +19,19 @@ edition = "2021"
 # default-features=false (drops rtc-mdns → socket2/tokio, which don't build for
 # wasip2). Proven end-to-end in repros/call-capstone.
 
+# The `signal` feature adds the Signal 1:1 call protocol: the `opaque` ⇄ Signaling
+# codec (src/signal/) that lets a Signal guest place/receive calls on this engine.
+# It's the only thing that pulls prost; the WebRTC-native path + repros/call-* build
+# without it.
+[features]
+signal = ["dep:prost"]
+
 [dependencies]
 bytes      = "1"
 opus-rs    = "0.1.22"
 sansio     = "1"
 sha2       = "0.10"   # DTLS cert fingerprint (a=fingerprint:sha-256 …)
+prost      = { version = "0.14", optional = true }  # Signal `opaque` blob codec (feature = "signal")
 rtc-ice    = { path = "../../external/rtc/rtc-ice", default-features = false }
 rtc-dtls   = { path = "../../external/rtc/rtc-dtls" }
 rtc-srtp   = { path = "../../external/rtc/rtc-srtp" }
