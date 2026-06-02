@@ -81,4 +81,28 @@ impl Host for crate::HostState {
             log::warn!("audio-focus-host: abandon forward failed: {e:#}");
         }
     }
+
+    fn ring_start(&mut self) {
+        forward("audio-ring-start");
+    }
+
+    fn ring_stop(&mut self) {
+        forward("audio-ring-stop");
+    }
+
+    fn call_start(&mut self) {
+        forward("audio-call-start");
+    }
+
+    fn call_end(&mut self) {
+        forward("audio-call-end");
+    }
+}
+
+/// Fire-and-forget `<verb> <pid>` to the arbiter (the call/ring session commands).
+fn forward(verb: &str) {
+    let pid = std::process::id();
+    if let Err(e) = send_oneshot(&format!("{verb} {pid}\n")) {
+        log::warn!("audio-focus-host: {verb} forward failed: {e:#}");
+    }
 }

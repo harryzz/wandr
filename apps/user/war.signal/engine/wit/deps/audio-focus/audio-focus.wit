@@ -1,0 +1,16 @@
+// The `focus` interface the engine imports to drive the ring/comms session on
+// wart-arbiter-audio. Mirror of wit/audio-focus.wit's `focus` (the host links it
+// onto every guest; the engine only needs `focus`, not `focus-handler`).
+package war:audio-focus@0.1.0;
+
+interface focus {
+    enum focus-kind { gain, gain-transient, gain-transient-may-duck }
+    enum focus-result { granted, delayed, failed }
+    request: func(kind: focus-kind) -> focus-result;
+    abandon: func();
+    /// Ringer + comms session (forwarded to the arbiter for this guest's pid).
+    ring-start: func();
+    ring-stop: func();
+    call-start: func();
+    call-end: func();
+}

@@ -26,6 +26,22 @@ interface focus {
     request: func(kind: focus-kind) -> focus-result;
     /// Release focus; the prior (transient/duck) owner regains it.
     abandon: func();
+
+    // ── Call session + Ringer (wart-arbiter-audio M3 + Ringer) ───────────────
+    // Fire-and-forget: the host forwards each to the arbiter's audio-* command for
+    // this guest's pid. The arbiter owns policy (ringer mode, comms mode); the host
+    // applies (ringtone/vibrate playback, audio policy).
+
+    /// An incoming call is ringing — start the ringtone/vibrate (per ringer mode) +
+    /// pause music. Stop with `ring-stop` (declined/missed) or `call-start` (answered).
+    ring-start: func();
+    /// The incoming call was declined / missed / canceled (not answered).
+    ring-stop: func();
+    /// Begin a comms session (answered, or an outgoing call connected): stops any
+    /// ring + sets the IN_COMMUNICATION audio mode.
+    call-start: func();
+    /// End the comms session: restore the normal audio mode + focus.
+    call-end: func();
 }
 
 interface focus-handler {

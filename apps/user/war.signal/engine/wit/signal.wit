@@ -230,4 +230,6 @@ world signal-engine {
   /// Mic capture + AAudio playback for live calls (Phase 2b-ii). Host-provided
   /// (skiko-gfx); after `wac plug`, this remains a host import of the composite.
   import my:skiko-gfx/audio@0.1.0;
+  /// Drive the ringer + comms session on wart-arbiter-audio (host-forwarded).
+  import war:audio-focus/focus@0.1.0;
 }

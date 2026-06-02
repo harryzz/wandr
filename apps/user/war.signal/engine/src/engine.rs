@@ -56,6 +56,8 @@ use crate::exports::wart::signal::chat::{
 use crate::call::{self, CallEngine};
 use crate::persist;
 use crate::store::MemStore;
+// wart-arbiter-audio Ringer + comms session (host-forwarded to the arbiter).
+use crate::war::audio_focus::focus;
 
 // ---- shared state ----------------------------------------------------------
 
@@ -932,6 +934,9 @@ async fn receive_and_send(
     // While a call is active the loop ticks at ~10 ms so the audio/UDP pump keeps
     // up; otherwise the normal 200 ms message cadence.
     let mut call_engine = CallEngine::new();
+    // Whether we've opened a comms session (call-start) for the active call — so we
+    // emit the matching call-end (not ring-stop) when it ends.
+    let mut comm_started = false;
     let my_identity: Vec<u8> = store.identity().identity_key().serialize().to_vec();
     loop {
         let tick_ms = if call_engine.is_active() { 10 } else { 200 };
@@ -1038,6 +1043,9 @@ async fn receive_and_send(
                                 send_signals!(sender, from, replies);
                             }
                             if let Some(peer) = incoming {
+                                // Incoming call → start the ringer (arbiter decides
+                                // ringtone/vibrate/silent; host plays it).
+                                focus::ring_start();
                                 shared.push_event(Event::CallIncoming(peer));
                             }
                             sync_call_state(&shared, &call_engine);
@@ -1147,7 +1155,13 @@ async fn receive_and_send(
                                     }
                                 }
                             }
-                            CallIntent::Accept => (call_engine.peer(), call_engine.accept()),
+                            CallIntent::Accept => {
+                                // Answered → comms session (stops the ring + sets
+                                // IN_COMMUNICATION via the arbiter).
+                                focus::call_start();
+                                comm_started = true;
+                                (call_engine.peer(), call_engine.accept())
+                            }
                             CallIntent::Hangup => (call_engine.peer(), call_engine.hangup()),
                         };
                         if let Some(sender) = sender.as_mut() {
@@ -1164,8 +1178,14 @@ async fn receive_and_send(
                     if sync_call_state(&shared, &call_engine) {
                         shared.push_event(Event::CallStateChanged(shared.call_state.get()));
                     }
-                    // A call just ended → drop a call-history entry into the thread.
+                    // A call just ended → close the arbiter session + log it.
                     if let Some(ended) = call_engine.take_ended() {
+                        if comm_started {
+                            focus::call_end(); // restore audio mode + focus
+                            comm_started = false;
+                        } else if !ended.outgoing {
+                            focus::ring_stop(); // an incoming ring ended unanswered
+                        }
                         let log = ended_call_log(&ended);
                         let msg = Message {
                             id: shared.next_id(),
