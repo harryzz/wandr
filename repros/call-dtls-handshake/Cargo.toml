@@ -1,0 +1,18 @@
+[package]
+name = "call-dtls-handshake"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Call engine — Stage 2 (transport plane, DTLS-SRTP half). Two sans-IO rtc-dtls
+# Endpoints (client + server) complete a real DTLS handshake over loopback, then
+# export the SRTP keying material (RFC 5764) — the REAL keys that replace Stage 1's
+# fixed key. Proves DTLS-SRTP runs in a wasm32-wasip2 guest + produces agreeing,
+# usable SRTP keys. (ICE connectivity = Stage 2b.) No fork needed — DTLS builds
+# for wasip2 as-is, and export_keying_material is a public trait method.
+
+[dependencies]
+bytes      = "1"
+rtc-dtls   = { git = "https://github.com/webrtc-rs/rtc" }
+rtc-srtp   = { git = "https://github.com/webrtc-rs/rtc" }
+rtc-shared = { git = "https://github.com/webrtc-rs/rtc", default-features = false }
