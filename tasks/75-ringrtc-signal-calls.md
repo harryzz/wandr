@@ -88,6 +88,27 @@ ringrtc's `signaling.proto` and map it ⇄ `wart_call::Signaling`.
 > (`cargo test --manifest-path crates/wart-call/Cargo.toml --features signal`). No
 > crypto and no engine wiring yet — that's Phase 2 (the DH/GCM keying above + the
 > `CallMessage` dispatch the Phased-plan §2 describes).
+>
+> **Phase 2a status — DONE (Signal DH/GCM keying in wart-call, host-verified).**
+> `transport.rs` now has a `Keying` enum: `Dtls` (the unchanged device-verified
+> WebRTC-native path) and `Signal` (`feature = "signal"`). The Signal arm does
+> **no DTLS** — `PeerSession::new_signal(role, addr, caller_id, callee_id)`
+> generates an ephemeral X25519 keypair (advertised via `Signaling::public_key`),
+> and once ICE selects a pair it derives the SRTP keys exactly per ringrtc
+> `negotiate_srtp_keys` (the HKDF/OKM/GCM recipe above), feeding `MediaSession`
+> with `ProtectionProfile::AeadAes256Gcm`. `SrtpKeys` generalized to `Vec` (16/14
+> for DTLS, 32/12 for GCM); `MediaSession::new` gained a `profile` param. Verified
+> host-side: **two wart peers connect over real loopback UDP with DH keying (no
+> DTLS) and exchange GCM-protected Opus**, plus an identity-mismatch test proving
+> the HKDF identity-binding feeds keying (`two_peers_connect_signal_dh_over_real_udp`,
+> `signal_dh_identity_mismatch_breaks_media`). Default build undisturbed (DTLS 2/2),
+> `prost` still gated, builds for wasm32-wasip2. **Remaining for Phase 2b (next,
+> device):** wire `CallMessage` dispatch into the `war.signal` engine (Phased-plan
+> §2) — the persistent call driver + place/answer/trickle/hangup, feeding
+> `new_signal` the real ACI identity keys from `store.rs::identity()`. Two opens to
+> nail in Phase 3 (real-Signal interop): the exact serialized form of the identity
+> keys in the HKDF `info` (assumed 33-byte `0x05‖X25519`), and randomizing the
+> per-role ICE ufrag/pwd (currently fixed).
 
 ## Two approaches (decide in step 1)
 

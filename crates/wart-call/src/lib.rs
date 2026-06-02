@@ -47,6 +47,8 @@ pub enum Error {
     Ice(&'static str),
     /// DTLS handshake / key export.
     Dtls(&'static str),
+    /// Signal X25519-DH key agreement (the `signal` feature keying path).
+    Dh(&'static str),
     /// Signal `opaque` protobuf encode/decode (the `signal` feature codec).
     Proto(&'static str),
     /// Used before the session is connected.
@@ -62,6 +64,7 @@ impl core::fmt::Display for Error {
             Error::Sdp(s) => write!(f, "sdp: {s}"),
             Error::Ice(s) => write!(f, "ice: {s}"),
             Error::Dtls(s) => write!(f, "dtls: {s}"),
+            Error::Dh(s) => write!(f, "dh: {s}"),
             Error::Proto(s) => write!(f, "proto: {s}"),
             Error::NotConnected => write!(f, "session not connected yet"),
         }

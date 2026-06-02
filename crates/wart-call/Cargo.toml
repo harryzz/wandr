@@ -24,14 +24,20 @@ edition = "2021"
 # It's the only thing that pulls prost; the WebRTC-native path + repros/call-* build
 # without it.
 [features]
-signal = ["dep:prost"]
+# `signal` adds Signal's 1:1 call protocol: the `opaque` codec (src/signal/) AND
+# the X25519-DH SRTP keying (ringrtc V4) in transport.rs. Pulls prost + the DH/HKDF
+# crypto; the WebRTC-native path + repros/call-* build without it.
+signal = ["dep:prost", "dep:x25519-dalek", "dep:hkdf", "dep:rand_core"]
 
 [dependencies]
 bytes      = "1"
 opus-rs    = "0.1.22"
 sansio     = "1"
-sha2       = "0.10"   # DTLS cert fingerprint (a=fingerprint:sha-256 …)
-prost      = { version = "0.14", optional = true }  # Signal `opaque` blob codec (feature = "signal")
+sha2       = "0.10"   # DTLS cert fingerprint + HKDF-SHA256 for Signal DH
+prost        = { version = "0.14", optional = true }                          # Signal `opaque` blob codec
+x25519-dalek = { version = "2", optional = true, features = ["static_secrets"] } # Signal DH keying
+hkdf         = { version = "0.12", optional = true }                          # SRTP key derivation
+rand_core    = { version = "0.6", optional = true, features = ["getrandom"] } # OsRng for X25519 keygen
 rtc-ice    = { path = "../../external/rtc/rtc-ice", default-features = false }
 rtc-dtls   = { path = "../../external/rtc/rtc-dtls" }
 rtc-srtp   = { path = "../../external/rtc/rtc-srtp" }

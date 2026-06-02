@@ -1,10 +1,11 @@
 //! Media plane — the protocol-agnostic part of a call: PCM ⇄ encrypted RTP.
 //!
-//! Reused by every backend (WebRTC, and SIP/Jingle later) — only the keys and
-//! the wire differ. `MediaSession::send` takes a 20 ms PCM frame and returns the
-//! SRTP datagram to put on the wire; `MediaSession::recv` takes an inbound SRTP
-//! datagram and returns the decoded PCM. The SRTP keys come from the transport's
-//! key exchange (DTLS-SRTP for WebRTC).
+//! Reused by every backend (WebRTC, and SIP/Jingle later) — only the keys, the
+//! SRTP profile, and the wire differ. `MediaSession::send` takes a 20 ms PCM frame
+//! and returns the SRTP datagram to put on the wire; `MediaSession::recv` takes an
+//! inbound SRTP datagram and returns the decoded PCM. The SRTP keys + profile come
+//! from the transport's key exchange (DTLS-SRTP for WebRTC-native; X25519-DH for
+//! Signal — see `crate::signal` / `crate::transport`).
 //!
 //! Device-verified as repros/call-media-pipeline (38× real-time on a Pixel 2 XL).
 
@@ -18,10 +19,11 @@ use rtc_srtp::protection_profile::ProtectionProfile;
 
 use crate::Error;
 
-/// SRTP_AES128_CM_HMAC_SHA1_80 key (16 B) + salt (14 B) for one direction.
+/// SRTP key + salt for one direction. Lengths depend on the profile:
+/// AES128_CM_HMAC_SHA1_80 → 16 B key / 14 B salt; AEAD_AES_256_GCM → 32 B / 12 B.
 pub struct SrtpKeys {
-    pub key: [u8; 16],
-    pub salt: [u8; 14],
+    pub key: Vec<u8>,
+    pub salt: Vec<u8>,
 }
 
 /// One audio stream: Opus codec + RTP packetization + SRTP, both directions.
@@ -40,15 +42,17 @@ pub struct MediaSession {
 
 impl MediaSession {
     /// `send` keys protect our outbound media; `recv` keys unprotect the peer's.
+    /// `profile` is the SRTP suite both keys are sized for (the key exchange picks
+    /// it: AES128_CM_HMAC_SHA1_80 for DTLS-SRTP, AEAD_AES_256_GCM for Signal DH).
     pub fn new(
         sample_rate: u32,
         channels: u8,
         payload_type: u8,
         ssrc: u32,
+        profile: ProtectionProfile,
         send: &SrtpKeys,
         recv: &SrtpKeys,
     ) -> Result<Self, Error> {
-        let profile = ProtectionProfile::Aes128CmHmacSha1_80;
         Ok(Self {
             enc: OpusEncoder::new(sample_rate as _, channels as _, Application::Voip)
                 .map_err(|_| Error::Codec("opus encoder"))?,

@@ -1869,8 +1869,10 @@ name = "wart-call"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "hkdf",
  "opus-rs",
  "prost",
+ "rand_core 0.6.4",
  "rtc-dtls",
  "rtc-ice",
  "rtc-rtp",
@@ -1879,6 +1881,7 @@ dependencies = [
  "rtc-srtp",
  "sansio",
  "sha2",
+ "x25519-dalek",
 ]
 
 [[package]]

@@ -79,6 +79,37 @@ impl PeerSession {
         })
     }
 
+    /// A Signal call session (ringrtc V4 keying): no DTLS — SRTP keys come from an
+    /// X25519-DH exchange whose public key rides in signaling ([`Signaling::public_key`]).
+    /// `caller_identity`/`callee_identity` are the two ACI identity public keys
+    /// (serialized, caller = offerer first) that authenticate the derived keys.
+    /// Pair the signaling with the [`crate::signal`] `opaque` codec.
+    #[cfg(feature = "signal")]
+    pub fn new_signal(
+        role: Role,
+        local_addr: SocketAddr,
+        caller_identity: Vec<u8>,
+        callee_identity: Vec<u8>,
+    ) -> Result<Self, Error> {
+        let (ufrag, pwd) = match role {
+            Role::Offerer => ("ufrAgentA", "passwordApasswordApasswordA00"),
+            Role::Answerer => ("ufrAgentB", "passwordBpasswordBpasswordB00"),
+        };
+        let transport =
+            Transport::new_signal(role, ufrag, pwd, local_addr, caller_identity, callee_identity)?;
+        Ok(Self {
+            role,
+            local_addr,
+            ufrag: ufrag.to_owned(),
+            pwd: pwd.to_owned(),
+            transport,
+            media: None,
+            remote_direction: None,
+            media_out: Vec::new(),
+            audio_in: Vec::new(),
+        })
+    }
+
     /// Our signaling params — marshal to SDP and send over the signaling channel.
     pub fn local_signaling(&self) -> Signaling {
         Signaling {
@@ -98,7 +129,12 @@ impl PeerSession {
                 }
             },
             candidates: vec![candidate_string(self.local_addr)],
-            public_key: None, // WebRTC-native path keys via DTLS; Signal sets this in crate::signal
+            // WebRTC-native path keys via DTLS (None); the Signal path advertises
+            // its ephemeral X25519 public key here for the peer's DH.
+            #[cfg(feature = "signal")]
+            public_key: self.transport.signal_public_key().map(|k| k.to_vec()),
+            #[cfg(not(feature = "signal"))]
+            public_key: None,
         }
     }
 
@@ -111,7 +147,13 @@ impl PeerSession {
             return Err(Error::Ice("no usable remote candidate"));
         }
         self.remote_direction = Some(remote.direction.clone());
-        self.transport.set_remote(&remote.ice_ufrag, &remote.ice_pwd, &remote.fingerprint, &remotes)
+        self.transport.set_remote(
+            &remote.ice_ufrag,
+            &remote.ice_pwd,
+            &remote.fingerprint,
+            remote.public_key.as_deref(),
+            &remotes,
+        )
     }
 
     pub fn state(&self) -> SessionState {
@@ -181,7 +223,9 @@ impl PeerSession {
         }
         if let Some((send, recv)) = self.transport.take_keys() {
             let ssrc = if self.role == Role::Offerer { 0xA } else { 0xB };
-            self.media = Some(MediaSession::new(SAMPLE_RATE, 1, OPUS_PAYLOAD_TYPE, ssrc, &send, &recv)?);
+            let profile = self.transport.srtp_profile();
+            self.media =
+                Some(MediaSession::new(SAMPLE_RATE, 1, OPUS_PAYLOAD_TYPE, ssrc, profile, &send, &recv)?);
         }
         Ok(())
     }
@@ -289,5 +333,91 @@ mod tests {
         let mismatch = drive(&mut a, &asock, &mut b, &bsock);
         assert!(mismatch, "A must raise a fingerprint mismatch");
         assert!(!a.is_connected(), "A must not connect on fingerprint mismatch");
+    }
+
+    /// Signal-mode call (ringrtc V4): NO DTLS — keys come from X25519-DH over the
+    /// public keys exchanged in signaling. Two wart peers connect over real UDP and
+    /// exchange AEAD-AES-256-GCM-protected Opus. The analog of
+    /// `two_peers_connect_over_real_udp`, proving the DH/GCM keying path end-to-end
+    /// (the two-wart half of Phase 2; real-Signal interop is Phase 3).
+    #[cfg(feature = "signal")]
+    #[test]
+    fn two_peers_connect_signal_dh_over_real_udp() {
+        // Both peers must agree on the same (caller, callee) identity keys — caller
+        // = offerer. Stand-in 33-byte serialized identity pubkeys (0x05 ‖ 32).
+        let caller_id: Vec<u8> = std::iter::once(0x05).chain(0..32).collect();
+        let callee_id: Vec<u8> = std::iter::once(0x05).chain(32..64).collect();
+
+        let bind = |role| {
+            let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+            sock.set_nonblocking(true).unwrap();
+            let s = PeerSession::new_signal(
+                role, sock.local_addr().unwrap(), caller_id.clone(), callee_id.clone(),
+            )
+            .unwrap();
+            (s, sock)
+        };
+        let (mut a, asock) = bind(Role::Offerer);
+        let (mut b, bsock) = bind(Role::Answerer);
+
+        // Signaling rides the `opaque` codec, not SDP — exchange Signaling directly
+        // (it carries each peer's X25519 public_key + ICE creds/candidates).
+        let offer = a.local_signaling();
+        let answer = b.local_signaling();
+        assert_eq!(offer.public_key.as_ref().map(|k| k.len()), Some(32), "offer carries X25519 key");
+        assert!(offer.fingerprint.is_empty(), "Signal path has no DTLS fingerprint");
+        a.set_remote_signaling(&answer).unwrap();
+        b.set_remote_signaling(&offer).unwrap();
+
+        drive(&mut a, &asock, &mut b, &bsock);
+        assert!(a.is_connected() && b.is_connected(), "Signal-DH peers failed to connect");
+
+        // A sends a tone → B decrypts (GCM) + decodes non-silent audio.
+        let frame: Vec<f32> = (0..a.frame_len())
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / SAMPLE_RATE as f32).sin() * 0.5)
+            .collect();
+        a.send_audio(&frame).unwrap();
+        let mut buf = [0u8; 2048];
+        for (dest, data) in a.poll_transmit() { let _ = asock.send_to(&data, dest); }
+        std::thread::sleep(Duration::from_millis(20));
+        while let Ok((n, src)) = bsock.recv_from(&mut buf) { b.handle_datagram(src, &buf[..n]).unwrap(); }
+        let got = b.recv_audio().expect("B received a GCM-protected audio frame");
+        let rms = (got.iter().map(|&v| (v as f64) * (v as f64)).sum::<f64>() / got.len() as f64).sqrt();
+        assert!(rms > 0.0, "decoded audio present");
+    }
+
+    /// Mismatched identity keys (the HKDF `info`) → divergent SRTP keys → B cannot
+    /// decrypt A's media. Guards that the identity binding actually feeds keying.
+    #[cfg(feature = "signal")]
+    #[test]
+    fn signal_dh_identity_mismatch_breaks_media() {
+        let bind = |role, caller: Vec<u8>, callee: Vec<u8>| {
+            let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+            sock.set_nonblocking(true).unwrap();
+            let s = PeerSession::new_signal(role, sock.local_addr().unwrap(), caller, callee).unwrap();
+            (s, sock)
+        };
+        let (mut a, asock) = bind(Role::Offerer, vec![0x05; 33], vec![0xAA; 33]);
+        // B uses a different callee identity → different HKDF info → different keys.
+        let (mut b, bsock) = bind(Role::Answerer, vec![0x05; 33], vec![0xBB; 33]);
+
+        a.set_remote_signaling(&b.local_signaling()).unwrap();
+        b.set_remote_signaling(&a.local_signaling()).unwrap();
+        drive(&mut a, &asock, &mut b, &bsock);
+        // ICE/DH still "connect" (DH succeeds; only the derived keys differ).
+        assert!(a.is_connected() && b.is_connected());
+
+        let frame = vec![0.3f32; a.frame_len()];
+        a.send_audio(&frame).unwrap();
+        let mut buf = [0u8; 2048];
+        for (dest, data) in a.poll_transmit() { let _ = asock.send_to(&data, dest); }
+        std::thread::sleep(Duration::from_millis(20));
+        // B's SRTP unprotect fails (wrong key) → the datagram errors, no audio.
+        let mut got_audio = false;
+        while let Ok((n, src)) = bsock.recv_from(&mut buf) {
+            let _ = b.handle_datagram(src, &buf[..n]);
+            if b.recv_audio().is_some() { got_audio = true; }
+        }
+        assert!(!got_audio, "mismatched identity keys must not yield decryptable media");
     }
 }
