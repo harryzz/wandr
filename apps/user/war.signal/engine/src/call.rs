@@ -184,12 +184,32 @@ struct ActiveCall {
     track_started: bool,
     mic_buf: Vec<f32>,
     last_state: CallState,
+    // Call-log metadata (→ a history entry when the call ends).
+    outgoing: bool,
+    connected: bool, // reached Connected (answered)
+    declined: bool,  // we declined an incoming ring
+    busy: bool,      // peer replied Busy
 }
 
 impl ActiveCall {
-    fn new(call: SignalCall, sock: UdpSocket, peer_aci: String) -> Self {
+    fn new(call: SignalCall, sock: UdpSocket, peer_aci: String, outgoing: bool) -> Self {
         let last_state = call.state();
-        Self { call, sock, peer_aci, cap: None, trk: None, track_started: false, mic_buf: Vec::new(), last_state }
+        Self {
+            call, sock, peer_aci, cap: None, trk: None, track_started: false,
+            mic_buf: Vec::new(), last_state,
+            outgoing, connected: false, declined: false, busy: false,
+        }
+    }
+
+    /// The call-log outcome for this (now ending) call.
+    fn outcome(&self) -> EndedCall {
+        EndedCall {
+            peer_aci: self.peer_aci.clone(),
+            outgoing: self.outgoing,
+            connected: self.connected,
+            declined: self.declined,
+            busy: self.busy,
+        }
     }
 
     /// Pump the host audio once media is connected: mic → `send_audio`, and
@@ -245,9 +265,20 @@ impl ActiveCall {
     }
 }
 
+/// Summary of a call that just ended, for the conversation call-log entry.
+pub struct EndedCall {
+    pub peer_aci: String,
+    pub outgoing: bool,
+    pub connected: bool,
+    pub declined: bool,
+    pub busy: bool,
+}
+
 /// The engine-side call orchestrator: at most one active 1:1 call.
 pub struct CallEngine {
     active: Option<ActiveCall>,
+    /// Set when a call ends — drained by the engine to log a history entry.
+    ended: Option<EndedCall>,
 }
 
 impl Default for CallEngine {
@@ -258,7 +289,12 @@ impl Default for CallEngine {
 
 impl CallEngine {
     pub fn new() -> Self {
-        Self { active: None }
+        Self { active: None, ended: None }
+    }
+
+    /// Take the just-ended call's summary (for a conversation call-log entry).
+    pub fn take_ended(&mut self) -> Option<EndedCall> {
+        self.ended.take()
     }
 
     pub fn is_active(&self) -> bool {
@@ -298,7 +334,7 @@ impl CallEngine {
         // caller = us (offerer): caller_identity = my, callee_identity = peer.
         let call = SignalCall::place(call_id, local, my_identity, peer_identity, turn)
             .map_err(|e| e.to_string())?;
-        let mut active = ActiveCall::new(call, sock, peer_aci);
+        let mut active = ActiveCall::new(call, sock, peer_aci, true);
         let sigs = active.call.poll_signals();
         self.active = Some(active);
         Ok(sigs)
@@ -340,6 +376,9 @@ impl CallEngine {
                 // Everything else feeds the active call.
                 _ => {
                     if let Some(a) = &mut self.active {
+                        if matches!(sig, CallSignal::Busy { .. }) {
+                            a.busy = true;
+                        }
                         let _ = a.call.on_signal(sig);
                     }
                 }
@@ -371,7 +410,7 @@ impl CallEngine {
             turn,
         )
         .map_err(|e| e.to_string())?;
-        self.active = Some(ActiveCall::new(call, sock, caller_aci.to_owned()));
+        self.active = Some(ActiveCall::new(call, sock, caller_aci.to_owned(), false));
         Ok(())
     }
 
@@ -387,8 +426,13 @@ impl CallEngine {
     /// Hang up; returns the `Hangup` to send and drops the call.
     pub fn hangup(&mut self) -> Vec<CallSignal> {
         if let Some(mut a) = self.active.take() {
+            // Hanging up an un-connected incoming call = we declined it.
+            if !a.outgoing && !a.connected {
+                a.declined = true;
+            }
             a.call.hangup();
             let sigs = a.call.poll_signals();
+            self.ended = Some(a.outcome());
             a.teardown_audio();
             return sigs;
         }
@@ -410,6 +454,7 @@ impl CallEngine {
                 let _ = a.call.handle_datagram(src, &buf[..n]);
             }
             if a.call.is_connected() {
+                a.connected = true;
                 a.pump_audio();
             }
             let sigs = a.call.poll_signals();
@@ -420,6 +465,7 @@ impl CallEngine {
         };
         if new_state == CallState::Ended {
             if let Some(mut a) = self.active.take() {
+                self.ended = Some(a.outcome()); // remote-ended → log it
                 a.teardown_audio();
             }
         }

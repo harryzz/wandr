@@ -302,6 +302,8 @@ struct UiMsg {
     reactions: String,
     /// Image attachments, ready to render (`data:` URI + display box in logical px).
     images: Vec<UiImage>,
+    /// Call-history entry (renders as a call log, not a bubble); `None` = a message.
+    call: Option<chat::CallLog>,
 }
 
 /// A renderable image attachment: a `data:` URI plus the display box (logical px,
@@ -553,6 +555,7 @@ fn pump() -> bool {
                         status: status_rank(msg.status),
                         reactions: msg.reactions,
                         images,
+                        call: msg.call,
                     });
                 }
             });
@@ -602,6 +605,7 @@ fn pump() -> bool {
                                 status: status_rank(msg.status),
                                 reactions: msg.reactions,
                                 images,
+                        call: msg.call,
                             });
                         }
                     }
@@ -1210,6 +1214,19 @@ fn Conversation(messages: Vec<UiMsg>, contacts: Vec<UiContact>, stick_key: Strin
                                 }
                             }
                         }
+                        if let Some((icon, color)) = m.call.map(call_log_style) {
+                            // Call-history entry: a centered pill, not a bubble.
+                            div {
+                                key: "{m.id}",
+                                style: "display:flex; flex-direction:row; justify-content:center; padding:6px;",
+                                div {
+                                    style: format!("display:flex; flex-direction:row; align-items:center; gap:14px; padding:12px 26px; border-radius:18px; background:{};", BAR),
+                                    div { style: format!("color:{}; font-size:30px;", color), "{icon}" }
+                                    div { style: format!("color:{}; font-size:26px;", color), "{m.text}" }
+                                    div { style: format!("color:{}; font-size:20px;", META), "{time}" }
+                                }
+                            }
+                        } else {
                         div {
                             key: "{m.id}",
                             // Row: align outgoing right, incoming left.
@@ -1257,10 +1274,24 @@ fn Conversation(messages: Vec<UiMsg>, contacts: Vec<UiContact>, stick_key: Strin
                                 }
                             }
                         }
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+/// Icon + color for a call-log entry (↗ outgoing / ↙ incoming; green answered,
+/// red missed, orange declined/busy, muted unanswered-outgoing).
+fn call_log_style(c: chat::CallLog) -> (&'static str, &'static str) {
+    match c {
+        chat::CallLog::OutAnswered => ("↗ 📞", "#3CB043"),
+        chat::CallLog::OutMissed => ("↗ 📞", MUTED),
+        chat::CallLog::OutBusy => ("↗ 📵", "#E0922A"),
+        chat::CallLog::InAnswered => ("↙ 📞", "#3CB043"),
+        chat::CallLog::InMissed => ("↙ 📵", "#E04A4A"),
+        chat::CallLog::InDeclined => ("↙ 📵", "#E0922A"),
     }
 }
 

@@ -50,8 +50,8 @@ use libsignal_service::websocket::Unidentified;
 use uuid::Uuid;
 
 use crate::exports::wart::signal::chat::{
-    Attachment, CallState, Contact, Delivery, DeliveryStatus, Event, Group, Message, Profile,
-    ReactionUpdate,
+    Attachment, CallLog, CallState, Contact, Delivery, DeliveryStatus, Event, Group, Message,
+    Profile, ReactionUpdate,
 };
 use crate::call::{self, CallEngine};
 use crate::persist;
@@ -426,6 +426,7 @@ pub fn init() {
                 })
             })
             .collect();
+        let call = m.call.as_deref().and_then(call_log_from_code);
         history.push(Message {
             id,
             sender: m.from,
@@ -436,6 +437,7 @@ pub fn init() {
             status,
             reactions: reaction_str,
             attachments,
+            call,
         });
     }
 
@@ -597,6 +599,7 @@ pub fn send(thread: String, text: String) -> Result<(), String> {
         status: Delivery::Sending,
         reactions: String::new(),
         attachments: Vec::new(),
+        call: None,
     };
     let _ = persist::append_message(&to_stored(&msg));
     shared.add_message(msg);
@@ -1092,6 +1095,7 @@ async fn receive_and_send(
                                 status: Delivery::Sent,
                                 reactions,
                                 attachments,
+                                call: None,
                             };
                             let _ = persist::append_message(&to_stored(&msg));
                             shared.add_message(msg);
@@ -1159,6 +1163,24 @@ async fn receive_and_send(
                     }
                     if sync_call_state(&shared, &call_engine) {
                         shared.push_event(Event::CallStateChanged(shared.call_state.get()));
+                    }
+                    // A call just ended → drop a call-history entry into the thread.
+                    if let Some(ended) = call_engine.take_ended() {
+                        let log = ended_call_log(&ended);
+                        let msg = Message {
+                            id: shared.next_id(),
+                            sender: if ended.outgoing { "me".to_string() } else { ended.peer_aci.clone() },
+                            text: call_log_label(log).to_string(),
+                            ts: now_ms(),
+                            outgoing: ended.outgoing,
+                            thread: ended.peer_aci.clone(),
+                            status: Delivery::Sent,
+                            reactions: String::new(),
+                            attachments: Vec::new(),
+                            call: Some(log),
+                        };
+                        let _ = persist::append_message(&to_stored(&msg));
+                        shared.add_message(msg);
                     }
                 }
                 if let Some(sender) = sender.as_mut() {
@@ -1634,7 +1656,60 @@ fn to_stored(m: &Message) -> persist::StoredMessage {
         outgoing: m.outgoing,
         thread: m.thread.clone(),
         attachments,
+        call: m.call.map(call_log_code),
     }
+}
+
+/// Call-log enum ⇄ its persisted string code.
+fn call_log_code(c: CallLog) -> String {
+    match c {
+        CallLog::OutAnswered => "out-answered",
+        CallLog::OutMissed => "out-missed",
+        CallLog::OutBusy => "out-busy",
+        CallLog::InAnswered => "in-answered",
+        CallLog::InMissed => "in-missed",
+        CallLog::InDeclined => "in-declined",
+    }
+    .to_string()
+}
+
+/// A short human label for a call-log entry (the conversation-list preview text).
+fn call_log_label(c: CallLog) -> &'static str {
+    match c {
+        CallLog::OutAnswered => "Outgoing call",
+        CallLog::OutMissed => "Outgoing call (no answer)",
+        CallLog::OutBusy => "Busy",
+        CallLog::InAnswered => "Incoming call",
+        CallLog::InMissed => "Missed call",
+        CallLog::InDeclined => "Declined call",
+    }
+}
+
+/// Map a just-ended call to its conversation call-log entry.
+fn ended_call_log(e: &call::EndedCall) -> CallLog {
+    if e.busy && e.outgoing {
+        CallLog::OutBusy
+    } else if e.outgoing {
+        if e.connected { CallLog::OutAnswered } else { CallLog::OutMissed }
+    } else if e.connected {
+        CallLog::InAnswered
+    } else if e.declined {
+        CallLog::InDeclined
+    } else {
+        CallLog::InMissed
+    }
+}
+
+fn call_log_from_code(s: &str) -> Option<CallLog> {
+    Some(match s {
+        "out-answered" => CallLog::OutAnswered,
+        "out-missed" => CallLog::OutMissed,
+        "out-busy" => CallLog::OutBusy,
+        "in-answered" => CallLog::InAnswered,
+        "in-missed" => CallLog::InMissed,
+        "in-declined" => CallLog::InDeclined,
+        _ => return None,
+    })
 }
 
 /// Persisted profile → WIT record (avatar b64 → bytes).

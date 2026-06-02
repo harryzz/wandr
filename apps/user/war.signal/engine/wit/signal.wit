@@ -25,6 +25,17 @@ interface chat {
     height: u32,
   }
 
+  /// A 1:1 voice-call history entry (direction + outcome) shown inline in the
+  /// conversation. `None` on a normal message ⇒ it's a text/attachment message.
+  enum call-log {
+    out-answered,   // we called, connected
+    out-missed,     // we called, no answer / canceled
+    out-busy,       // we called, peer was busy
+    in-answered,    // they called, we answered
+    in-missed,      // they called, we didn't answer
+    in-declined,    // they called, we declined
+  }
+
   /// One stored conversation message. `id` is engine-assigned and stable.
   record message {
     id: u64,
@@ -42,6 +53,9 @@ interface chat {
     /// Media attachments (v1: images), decrypted and ready to render. Empty for
     /// a text-only message.
     attachments: list<attachment>,
+    /// Set when this entry is a call-history record (renders as a call log, not a
+    /// bubble); `none` for a normal text/attachment message.
+    call: option<call-log>,
   }
 
   /// An outgoing message's delivery state advanced (delivery/read receipt).

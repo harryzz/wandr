@@ -74,6 +74,10 @@ pub struct StoredMessage {
     /// blobs expire, so we keep them); this records each one's type/dims/file.
     #[serde(default)]
     pub attachments: Vec<StoredAttachment>,
+    /// Call-history entry kind (`out-answered`/`in-missed`/…) when this row is a
+    /// call log rather than a message. `default` None ⇒ a normal message.
+    #[serde(default)]
+    pub call: Option<String>,
 }
 
 /// A persisted attachment: metadata in the message log, bytes in `/state/att/`.

@@ -4,7 +4,8 @@ package wart:signal@0.1.0;
 interface chat {
   enum delivery { sending, sent, delivered, read }
   record attachment { content-type: string, data: list<u8>, width: u32, height: u32 }
-  record message { id: u64, sender: string, text: string, ts: u64, outgoing: bool, thread: string, status: delivery, reactions: string, attachments: list<attachment> }
+  enum call-log { out-answered, out-missed, out-busy, in-answered, in-missed, in-declined }
+  record message { id: u64, sender: string, text: string, ts: u64, outgoing: bool, thread: string, status: delivery, reactions: string, attachments: list<attachment>, call: option<call-log> }
   record contact { id: string, name: string, phone: option<string>, inbox-position: u32, avatar: option<list<u8>> }
   record group { id: string, title: string, members: list<string>, avatar: option<list<u8>> }
   record profile { given-name: string, family-name: string, about: string, about-emoji: string, phone: string, avatar: option<list<u8>> }
