@@ -50,6 +50,18 @@ interface chat {
     status: delivery,
   }
 
+  /// State of the current 1:1 voice call (audio only). `idle` = no call.
+  /// outgoing → connecting → connected (we placed it); ringing → connecting →
+  /// connected (we received + accepted it); `ended` = hung up / declined / busy.
+  enum call-state {
+    idle,
+    outgoing,
+    ringing,
+    connecting,
+    connected,
+    ended,
+  }
+
   /// A message's emoji reactions changed (someone added/removed a reaction).
   record reaction-update {
     id: u64,
@@ -116,6 +128,11 @@ interface chat {
     reaction-changed(reaction-update),
     /// Our own profile was fetched/updated (read it via `my-profile`).
     profile-updated,
+    /// An incoming 1:1 call is ringing — carries the caller's ACI (the thread to
+    /// show the in-call UI for). Accept with `accept-call`, reject with `hangup-call`.
+    call-incoming(string),
+    /// The current call's state changed (read detail via `call-status`/`call-peer`).
+    call-state-changed(call-state),
   }
 
   /// Start the engine: load saved account + history, then link (first run) or
@@ -172,6 +189,23 @@ interface chat {
   /// Re-fetch our own profile from the profile service. Also done once on
   /// connect. Non-blocking — the result arrives via `profile-updated`.
   sync-profile: func();
+
+  /// Place a 1:1 audio call to `thread` (a peer ACI). Non-blocking — progress
+  /// surfaces via `call-state-changed` events + `call-status`. Errors if a call
+  /// is already active.
+  place-call: func(thread: string) -> result<_, string>;
+
+  /// Accept the ringing incoming call (no-op if nothing is ringing).
+  accept-call: func();
+
+  /// Hang up / decline the current or ringing call (no-op if no call).
+  hangup-call: func();
+
+  /// The current 1:1 call state.
+  call-status: func() -> call-state;
+
+  /// The peer ACI on the current/ringing call, or "" when idle.
+  call-peer: func() -> string;
 }
 
 /// The engine half of the Signal app. wasi imports (sockets/tls/io/fs/random/
@@ -179,4 +213,7 @@ interface chat {
 /// declared here.
 world signal-engine {
   export chat;
+  /// Mic capture + AAudio playback for live calls (Phase 2b-ii). Host-provided
+  /// (skiko-gfx); after `wac plug`, this remains a host import of the composite.
+  import my:skiko-gfx/audio@0.1.0;
 }

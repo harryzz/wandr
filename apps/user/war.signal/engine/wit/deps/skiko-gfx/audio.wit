@@ -1,0 +1,25 @@
+// The host `audio` interface (mic capture + AAudio playback) — the call engine
+// (Phase 2b-ii) imports this to pump a live call's PCM. Byte-identical to the
+// `audio` interface in wit/skiko-gfx.wit (and repros/call-live/wit/world.wit); the
+// host links the full skiko-gfx world (SkikoUi::add_to_linker), so importing this
+// subset resolves at instantiation. Keep the signatures in sync with the canonical.
+package my:skiko-gfx@0.1.0;
+
+interface audio {
+    enum format { pcm-f32 }
+    enum channel-layout { mono, stereo }
+    record track-config {
+        sample-rate:    u32,
+        channel-layout: channel-layout,
+        format:         format,
+    }
+    type track-handle = u32;
+    create-track:   func(cfg: track-config) -> track-handle;
+    write-pcm-f32:  func(track: track-handle, samples: list<f32>) -> u32;
+    open-capture:   func(cfg: track-config) -> track-handle;
+    read-pcm-f32:   func(capture: track-handle, max-frames: u32) -> list<f32>;
+    start:          func(track: track-handle) -> bool;
+    pause:          func(track: track-handle) -> bool;
+    close:          func(track: track-handle);
+    pending-frames: func(track: track-handle) -> u32;
+}

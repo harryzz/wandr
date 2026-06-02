@@ -13,13 +13,15 @@
 wit_bindgen::generate!({
     world: "signal-engine",
     path: "wit",
+    generate_all,
 });
 
+mod call;
 mod engine;
 mod persist;
 mod store;
 
-use exports::wart::signal::chat::{Contact, Event, Group, Guest, Message, Profile};
+use exports::wart::signal::chat::{CallState, Contact, Event, Group, Guest, Message, Profile};
 
 struct Component;
 
@@ -74,6 +76,26 @@ impl Guest for Component {
 
     fn sync_profile() {
         engine::sync_profile();
+    }
+
+    fn place_call(thread: String) -> Result<(), String> {
+        engine::place_call(thread)
+    }
+
+    fn accept_call() {
+        engine::accept_call();
+    }
+
+    fn hangup_call() {
+        engine::hangup_call();
+    }
+
+    fn call_status() -> CallState {
+        engine::call_status()
+    }
+
+    fn call_peer() -> String {
+        engine::call_peer()
     }
 }
 

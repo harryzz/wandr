@@ -49,8 +49,10 @@ use libsignal_service::websocket::Unidentified;
 use uuid::Uuid;
 
 use crate::exports::wart::signal::chat::{
-    Attachment, Contact, Delivery, DeliveryStatus, Event, Group, Message, Profile, ReactionUpdate,
+    Attachment, CallState, Contact, Delivery, DeliveryStatus, Event, Group, Message, Profile,
+    ReactionUpdate,
 };
+use crate::call::{self, CallEngine};
 use crate::persist;
 use crate::store::MemStore;
 
@@ -122,6 +124,60 @@ struct Shared {
     /// thread doesn't re-ack everything). In-memory — resending on restart is
     /// harmless (idempotent on the peer).
     read_acked: RefCell<HashSet<u64>>,
+    /// 1:1 voice call (Phase 2b-ii). The export-thread `place/accept/hangup-call`
+    /// funcs enqueue intents; the background `run()` loop drives the `CallEngine`
+    /// and mirrors its state back here for the synchronous `call-status`/`call-peer`.
+    call_intents: RefCell<VecDeque<CallIntent>>,
+    /// Latest call state, mirrored for the synchronous `call-status` getter.
+    call_state: Cell<CallState>,
+    /// Peer ACI of the current/ringing call ("" when idle).
+    call_peer: RefCell<String>,
+}
+
+/// A call action requested by the UI (`place/accept/hangup-call`), processed by
+/// the background loop on its next tick.
+enum CallIntent {
+    Place(String),
+    Accept,
+    Hangup,
+}
+
+/// Send each [`wart_call::signal::CallSignal`] to `$peer` (an ACI string) as a
+/// `CallMessage` over the Signal channel. A macro, not a fn, to dodge naming
+/// `MessageSender`'s store bounds; `$sender` is an already-borrowed `&mut MessageSender`.
+macro_rules! send_signals {
+    ($sender:expr, $peer:expr, $sigs:expr) => {{
+        if let Ok(uuid) = Uuid::parse_str(&$peer) {
+            let recipient = ServiceId::Aci(uuid.into());
+            for sig in $sigs {
+                let cm = call::signal_to_call_message(&sig);
+                let _ = $sender
+                    .send_message(&recipient, None, cm, now_ms(), false, false)
+                    .await;
+            }
+        }
+    }};
+}
+
+fn to_wit_call_state(s: wart_call::signal::CallState) -> CallState {
+    use wart_call::signal::CallState as W;
+    match s {
+        W::Outgoing => CallState::Outgoing,
+        W::Ringing => CallState::Ringing,
+        W::Connecting => CallState::Connecting,
+        W::Connected => CallState::Connected,
+        W::Ended => CallState::Ended,
+    }
+}
+
+/// Mirror the driver's call state into `Shared` (for the synchronous
+/// `call-status`/`call-peer` getters). Returns whether the state changed.
+fn sync_call_state(shared: &Shared, ce: &CallEngine) -> bool {
+    let wit = ce.state().map(to_wit_call_state).unwrap_or(CallState::Idle);
+    *shared.call_peer.borrow_mut() = ce.peer();
+    let changed = shared.call_state.get() != wit;
+    shared.call_state.set(wit);
+    changed
 }
 
 impl Shared {
@@ -367,6 +423,9 @@ pub fn init() {
         resync_profile: Cell::new(false),
         receipt_outbox: RefCell::new(Vec::new()),
         read_acked: RefCell::new(HashSet::new()),
+        call_intents: RefCell::new(VecDeque::new()),
+        call_state: Cell::new(CallState::Idle),
+        call_peer: RefCell::new(String::new()),
     });
     SHARED.with(|slot| *slot.borrow_mut() = Some(s));
 
@@ -411,6 +470,39 @@ pub fn sync_profile() {
     if let Some(s) = shared() {
         s.resync_profile.set(true);
     }
+}
+
+pub fn place_call(thread: String) -> Result<(), String> {
+    let s = shared().ok_or("engine not initialized")?;
+    if thread.trim().is_empty() {
+        return Err("no call peer".to_string());
+    }
+    if s.call_state.get() != CallState::Idle {
+        return Err("a call is already active".to_string());
+    }
+    // Driven on the next background tick (needs the network sender + UDP/audio).
+    s.call_intents.borrow_mut().push_back(CallIntent::Place(thread));
+    Ok(())
+}
+
+pub fn accept_call() {
+    if let Some(s) = shared() {
+        s.call_intents.borrow_mut().push_back(CallIntent::Accept);
+    }
+}
+
+pub fn hangup_call() {
+    if let Some(s) = shared() {
+        s.call_intents.borrow_mut().push_back(CallIntent::Hangup);
+    }
+}
+
+pub fn call_status() -> CallState {
+    shared().map(|s| s.call_state.get()).unwrap_or(CallState::Idle)
+}
+
+pub fn call_peer() -> String {
+    shared().map(|s| s.call_peer.borrow().clone()).unwrap_or_default()
 }
 
 pub fn send(thread: String, text: String) -> Result<(), String> {
@@ -758,8 +850,14 @@ async fn receive_and_send(
     // pipe (the profile fetch in the tick below uses it).
     let mut profile_ws = pipe.ws();
     let mut stream = Box::pin(pipe.stream());
+    // Phase 2b-ii: the 1:1 voice-call driver. Our ACI binds the call's SRTP keys
+    // (interim — see call.rs). While a call is active the loop ticks at ~10 ms so
+    // the audio/UDP pump keeps up; otherwise the normal 200 ms message cadence.
+    let mut call_engine = CallEngine::new();
+    let my_aci = aci.to_string();
     loop {
-        let tick = wart_step_executor::sleep(Duration::from_millis(200));
+        let tick_ms = if call_engine.is_active() { 10 } else { 200 };
+        let tick = wart_step_executor::sleep(Duration::from_millis(tick_ms));
         futures::select! {
             item = stream.next().fuse() => match item {
                 Some(Ok(Incoming::Envelope(env))) => {
@@ -812,6 +910,21 @@ async fn receive_and_send(
                                     shared.apply_reaction(target_ts, reactor, emoji, remove);
                                 }
                             }
+                        }
+                        // 1:1 voice-call signaling (Phase 2b-ii): feed inbound
+                        // CallMessages to the driver — start ringing on a fresh
+                        // offer, else apply answer/ICE/hangup; send any reply (Busy).
+                        if let ContentBody::CallMessage(cm) = &content.body {
+                            let from = content.metadata.sender.raw_uuid().to_string();
+                            let (replies, incoming) =
+                                call_engine.on_call_message(cm, &from, &my_aci);
+                            if let Some(sender) = sender.as_mut() {
+                                send_signals!(sender, from, replies);
+                            }
+                            if let Some(peer) = incoming {
+                                shared.push_event(Event::CallIncoming(peer));
+                            }
+                            sync_call_state(&shared, &call_engine);
                         }
                         let (body, outgoing, thread_override, wire_ts) =
                             extract(&content.body);
@@ -880,6 +993,42 @@ async fn receive_and_send(
                 },
             },
             _ = tick.fuse() => {
+                // 1:1 voice call (Phase 2b-ii): process UI intents, then pump the
+                // active call (UDP + audio) and ship any signaling it emits. Runs
+                // before the message outbox so audio stays low-latency.
+                {
+                    let intents: Vec<CallIntent> =
+                        shared.call_intents.borrow_mut().drain(..).collect();
+                    for intent in intents {
+                        let (peer, sigs) = match intent {
+                            CallIntent::Place(thread) => {
+                                let call_id = now_ms();
+                                match call_engine.place(call_id, &my_aci, thread) {
+                                    Ok(sigs) => (call_engine.peer(), sigs),
+                                    Err(e) => {
+                                        shared.set_state(format!("call: {e}"));
+                                        (String::new(), Vec::new())
+                                    }
+                                }
+                            }
+                            CallIntent::Accept => (call_engine.peer(), call_engine.accept()),
+                            CallIntent::Hangup => (call_engine.peer(), call_engine.hangup()),
+                        };
+                        if let Some(sender) = sender.as_mut() {
+                            send_signals!(sender, peer, sigs);
+                        }
+                    }
+                    if call_engine.is_active() {
+                        let peer = call_engine.peer();
+                        let (sigs, _) = call_engine.tick(std::time::Instant::now());
+                        if let Some(sender) = sender.as_mut() {
+                            send_signals!(sender, peer, sigs);
+                        }
+                    }
+                    if sync_call_state(&shared, &call_engine) {
+                        shared.push_event(Event::CallStateChanged(shared.call_state.get()));
+                    }
+                }
                 if let Some(sender) = sender.as_mut() {
                     let pending: Vec<(String, String, u64)> =
                         shared.outbox.borrow_mut().drain(..).collect();

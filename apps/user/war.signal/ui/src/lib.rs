@@ -629,6 +629,10 @@ fn pump() -> bool {
                     // Re-fetched below (load_* needs no &mut m borrow).
                     chat::Event::ContactsUpdated(_) => refresh = true,
                     chat::Event::GroupsUpdated(_) => refresh_groups = true,
+                    // Voice-call events (Phase 2b-ii). The in-call UI is a
+                    // follow-up (step 4); for now the engine drives the call and
+                    // these are surfaced via `chat::call-status`/`call-peer`.
+                    chat::Event::CallIncoming(_) | chat::Event::CallStateChanged(_) => {}
                 }
             }
         });
