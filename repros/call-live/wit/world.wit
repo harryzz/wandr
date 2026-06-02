@@ -1,0 +1,33 @@
+// Trimmed `my:skiko-gfx` — just the `audio` interface (mic capture + AAudio
+// playback) the call-audio-wire probe needs. The host adds the full skiko-gfx
+// world to the linker (bindings::SkikoUi::add_to_linker, also in the
+// run-once/command path), which satisfies this subset import. Keep the
+// signatures byte-identical to wit/skiko-gfx.wit's `audio` interface.
+
+package my:skiko-gfx@0.1.0;
+
+interface audio {
+    enum format { pcm-f32 }
+    enum channel-layout { mono, stereo }
+    record track-config {
+        sample-rate:    u32,
+        channel-layout: channel-layout,
+        format:         format,
+    }
+    type track-handle = u32;
+    create-track:   func(cfg: track-config) -> track-handle;
+    write-pcm-f32:  func(track: track-handle, samples: list<f32>) -> u32;
+    open-capture:   func(cfg: track-config) -> track-handle;
+    read-pcm-f32:   func(capture: track-handle, max-frames: u32) -> list<f32>;
+    start:          func(track: track-handle) -> bool;
+    pause:          func(track: track-handle) -> bool;
+    close:          func(track: track-handle);
+    pending-frames: func(track: track-handle) -> u32;
+}
+
+// A wasi:cli/command guest (fn main → wasi:cli/run) that additionally imports
+// the host audio interface. The wasi:cli exports come from the Rust wasip2
+// target + the command adapter; this world declares only the extra import.
+world callaudio {
+    import audio;
+}

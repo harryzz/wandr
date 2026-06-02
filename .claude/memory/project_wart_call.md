@@ -60,9 +60,19 @@ pulling (writes return 0, ~32 s grind for 4.5 s audio, silence) → PRIME the ri
 with PCM first, THEN start ([[feedback_aaudio_gotchas]] flagged this). Mic on this
 device sits near the noise floor (peak ~0.008) — a gain question, not wiring.
 
-**Remaining to a shippable feature**: compose call-audio-wire's PCM pump with a
-networked `PeerSession` (real DTLS keys instead of loopback) + a signaling
-channel; the wart-arbiter-audio comms session ([[project_arbiter_audio]]) already
-coordinates focus/routing/mode/doze. CAVEAT: a real SIGNAL call = ringrtc (a Rust wrapper
+**CAPSTONE DONE — live call device-verified** (`repros/call-live`,
+`war.probe.calllive`): two PeerSessions (A caller, B callee) connect over real
+wasi:sockets UDP (ICE + DTLS-SRTP, fingerprint verified); the device MIC feeds
+A.send_audio → encrypted RTP crosses the socket → B.recv_audio decrypts+decodes →
+plays out the speaker. Real DTLS-derived SRTP keys + real UDP (not loopback keys
+like call-audio-wire). 150 frames A→B, B decoded 144000 samples FROM THE WIRE,
+real-time playback. Single device = record-then-play (in+out MMAP limit); a real
+two-device call splits A/B across two phones via local_lan_ip(). So the full
+engine is proven end-to-end on real hardware: signaling·ICE·DTLS-SRTP·RTP/SRTP·
+Opus·real-UDP·real-mic/speaker, PLUS browser interop.
+
+**Remaining to a product** (NOT engine work): a signaling channel between two real
+devices (exchange SDP + trickle candidates) + app/UX; the wart-arbiter-audio comms
+session ([[project_arbiter_audio]]) already coordinates focus/routing/mode/doze. CAVEAT: a real SIGNAL call = ringrtc (a Rust wrapper
 over C++ libwebrtc, NOT wasm-viable) + Signal's calling service — separate. SIP/
 Jingle would reuse media+transport with a different signaling module.

@@ -1,0 +1,29 @@
+[package]
+name = "call-live"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# The call-engine capstone: a LIVE call between two PeerSessions over real UDP,
+# carrying real microphone audio to a real speaker — every plane composed.
+#
+# Two PeerSessions (A offerer, B answerer) connect over real wasi:sockets UDP
+# (ICE + DTLS-SRTP). The device mic feeds A.send_audio; the SRTP datagrams cross
+# the socket; B.recv_audio decodes them; the PCM plays out the speaker. So:
+#
+#   mic → A: Opus/RTP/SRTP(DTLS keys) ─real UDP→ B: SRTP/RTP/Opus → speaker
+#
+# Unlike call-audio-wire (loopback SRTP keys, no transport) this is the FULL
+# stack: the keys come from a real DTLS-SRTP handshake and the media crosses a
+# real socket. Record-then-play (one device can't hold input+output MMAP at once;
+# a real two-device call splits these across the two phones).
+#   wart-host --run-once war.probe.calllive
+
+[dependencies]
+wart-call = { path = "../../crates/wart-call" }
+wit-bindgen = "0.46"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

@@ -4,11 +4,14 @@ A secure real-time audio call from a `wasm32-wasip2` guest. WebRTC is the first
 backend; the design keeps the reusable parts (media, ICE) protocol-agnostic so
 SIP/Jingle can slot in later.
 
-Status (2026-06-02): **fully de-risked + assembled, device-verified.** Every
-protocol/crypto/codec/transport/signaling layer runs in a wasm guest on a
-Pixel 2 XL, individually (`repros/call-*` + `repros/{wasi-udp,opus}-*`) and
-composed end-to-end (`repros/call-capstone` → "CALL ESTABLISHED"). The library
-form is `crates/wart-call` (the `PeerSession` two-peer test reproduces it).
+Status (2026-06-02): **complete + device-verified, including real audio + a real
+browser.** Every protocol/crypto/codec/transport/signaling layer runs in a wasm
+guest on a Pixel 2 XL, individually (`repros/call-*` + `repros/{wasi-udp,opus}-*`)
+and composed into a **live call carrying real mic audio to the speaker over real
+UDP with real DTLS-SRTP keys** (`repros/call-live` → "live call: mic →
+ICE/DTLS-SRTP/UDP → speaker"). It also interoperates with a real browser
+(libwebrtc) — connection + audio (`repros/call-browser`). The library form is
+`crates/wart-call` (the `PeerSession` two-peer test reproduces it).
 
 ## The three planes
 
@@ -77,6 +80,7 @@ Each is a `wasi:cli/command` warpkg, device-verified via `wart-host --run-once`:
 | `call-capstone` | end-to-end call | `war.probe.call` |
 | `call-udp-loopback` | a call over real wasi:sockets UDP (LAN IP) | `war.probe.calludp` |
 | `call-audio-wire` | **PCM ends wired to real mic/AAudio** (mic→engine→speaker) | `war.probe.callaudio` |
+| `call-live` | **the capstone** — live call: mic→DTLS-SRTP/UDP→speaker | `war.probe.calllive` |
 | `call-interop` | **interop with an independent WebRTC stack** (native) | — |
 | `webrtc-rs-wasip2` | the rtc-ice mDNS-optional patch + spike notes | — |
 
