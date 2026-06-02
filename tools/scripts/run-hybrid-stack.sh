@@ -128,17 +128,6 @@ wait_for_sock() {
     return 1
 }
 
-# Full-duplex audio for VoIP (a call needs mic + speaker open at once): the
-# Pixel 2 XL's MMAP path can't hold input + output endpoints simultaneously
-# (-889 — DMA-endpoint contention). Force AAudio onto the legacy AudioFlinger
-# mixer (SHARED software FIFO, no dedicated DMA endpoint) so both coexist.
-# Slightly higher latency, fine for voice. Set the policy then bounce audioserver
-# so it re-reads it (it caches at startup) BEFORE wart-host connects to it.
-echo "▸ AAudio: forcing legacy path (mmap_policy=never) for full-duplex calls …"
-adb shell "su -c 'setprop aaudio.mmap_policy 1; setprop aaudio.mmap_exclusive_policy 1'"
-adb shell "su -c 'killall audioserver 2>/dev/null'" || true
-sleep 2
-
 echo "▸ stopping SystemUI + launcher ($HOME_PKG) …"
 adb shell "su -c 'am force-stop com.android.systemui'"
 adb shell "su -c 'am force-stop $HOME_PKG'"
