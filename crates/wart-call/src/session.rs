@@ -85,9 +85,10 @@ impl PeerSession {
         }
     }
 
-    /// Apply the peer's signaling (from their SDP) → start ICE connectivity.
+    /// Apply the peer's signaling (from their SDP) → start ICE connectivity. The
+    /// peer's cert fingerprint is checked against the handshake cert on connect.
     pub fn set_remote_signaling(&mut self, remote: &Signaling) -> Result<(), Error> {
-        self.transport.set_remote(&remote.ice_ufrag, &remote.ice_pwd)
+        self.transport.set_remote(&remote.ice_ufrag, &remote.ice_pwd, &remote.fingerprint)
     }
 
     pub fn state(&self) -> SessionState {
@@ -200,5 +201,38 @@ mod tests {
         let got = b.recv_audio().expect("B received an audio frame");
         let rms = (got.iter().map(|&v| (v as f64) * (v as f64)).sum::<f64>() / got.len() as f64).sqrt();
         assert!(rms > 0.0, "decoded audio present");
+    }
+
+    /// A tampered fingerprint (MITM swapping the cert) must be rejected — the
+    /// handshake completes but the peer-cert fingerprint check fails, so the
+    /// session never connects.
+    #[test]
+    fn mismatched_fingerprint_rejected() {
+        let mut a = PeerSession::new(Role::Offerer).unwrap();
+        let mut b = PeerSession::new(Role::Answerer).unwrap();
+
+        let offer = a.local_signaling().to_sdp();
+        // Give A a BOGUS fingerprint for B (as if a MITM swapped B's cert).
+        let mut b_sig = Signaling::from_sdp(&b.local_signaling().to_sdp()).unwrap();
+        b_sig.fingerprint = format!("sha-256 {}", vec!["DE"; 32].join(":"));
+        a.set_remote_signaling(&b_sig).unwrap();
+        b.set_remote_signaling(&Signaling::from_sdp(&offer).unwrap()).unwrap();
+
+        let mut rejected = false;
+        for _ in 0..800 {
+            let now = Instant::now();
+            a.handle_timeout(now);
+            b.handle_timeout(now);
+            for dg in a.poll_transmit() { let _ = b.handle_datagram(&dg); }
+            for dg in b.poll_transmit() {
+                if matches!(a.handle_datagram(&dg), Err(Error::Dtls("peer fingerprint mismatch — possible MITM"))) {
+                    rejected = true;
+                }
+            }
+            if rejected || (a.is_connected() && b.is_connected()) { break; }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(rejected, "A must reject B's cert on fingerprint mismatch");
+        assert!(!a.is_connected(), "A must not connect when the fingerprint mismatches");
     }
 }

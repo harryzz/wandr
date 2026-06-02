@@ -23,6 +23,7 @@ edition = "2021"
 bytes      = "1"
 opus-rs    = "0.1.22"
 sansio     = "1"
+sha2       = "0.10"   # DTLS cert fingerprint (a=fingerprint:sha-256 …)
 rtc-ice    = { path = "../../external/rtc/rtc-ice", default-features = false }
 rtc-dtls   = { path = "../../external/rtc/rtc-dtls" }
 rtc-srtp   = { path = "../../external/rtc/rtc-srtp" }

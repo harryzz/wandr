@@ -89,8 +89,11 @@ The `PeerSession` API is the engine; what remains is integration:
    `recv_audio`'s output to AAudio playback (both proven; note the device's
    input+output MMAP limit — fine for a real two-device call).
 3. **Signaling channel** — exchange the SDP (`Signaling::to_sdp`/`from_sdp`) +
-   trickled candidates over a signaling server; wire the real DTLS-cert
-   fingerprint into `Signaling` (a `transport.rs` TODO).
+   trickled candidates over a signaling server. (The DTLS-cert fingerprint is
+   real: `transport.rs` computes SHA-256 over the cert DER, carries it in the
+   SDP, and verifies the peer's handshake cert against it — mutual-auth MITM
+   prevention, the WebRTC trust model. `mismatched_fingerprint_rejected` proves
+   a swapped cert is refused.)
 4. **Coordination** — `wart-arbiter-audio` already provides the comms session
    (focus / routing / mode / doze-exemption); a call app calls `audio-call-start`
    when a `PeerSession` connects.

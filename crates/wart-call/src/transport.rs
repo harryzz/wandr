@@ -12,7 +12,7 @@ use std::time::Instant;
 
 use sansio::Protocol;
 
-use rtc_dtls::config::ConfigBuilder;
+use rtc_dtls::config::{ClientAuthType, ConfigBuilder};
 use rtc_dtls::crypto::Certificate;
 use rtc_dtls::endpoint::{Endpoint as DtlsEndpoint, EndpointEvent};
 use rtc_dtls::extension::extension_use_srtp::SrtpProtectionProfile;
@@ -24,6 +24,7 @@ use rtc_ice::mdns::MulticastDnsMode;
 use rtc_ice::state::ConnectionState;
 use rtc_shared::crypto::KeyingMaterialExporter;
 use rtc_shared::{TaggedBytesMut, TransportContext, TransportProtocol};
+use sha2::{Digest, Sha256};
 
 use crate::media::SrtpKeys;
 use crate::session::Role;
@@ -51,6 +52,8 @@ pub(crate) struct Transport {
     dtls_started: bool,
     dtls_done: bool,
     fingerprint: String,
+    /// The peer's cert fingerprint from its SDP — the handshake cert must match.
+    expected_remote_fp: Option<String>,
     /// RFC-5764 keying material once DTLS completes.
     keys: Option<(SrtpKeys, SrtpKeys)>,
 }
@@ -77,7 +80,11 @@ impl Transport {
         // verify = the WebRTC fingerprint trust model.
         let cert = Certificate::generate_self_signed(vec!["wart-call".to_owned()])
             .map_err(|_| Error::Dtls("cert"))?;
-        let fingerprint = "sha-256 00".to_owned(); // real fp wiring: hash the cert DER (TODO)
+        // The SDP fingerprint = SHA-256 over our cert's DER. The peer checks the
+        // cert it receives in the handshake against this (out-of-band), which is
+        // what makes self-signed DTLS-SRTP safe — see `verify_peer_fingerprint`.
+        let der = cert.certificate.first().ok_or(Error::Dtls("cert der"))?;
+        let fingerprint = fingerprint_sha256(der.as_ref());
         let profiles = vec![SrtpProtectionProfile::Srtp_Aes128_Cm_Hmac_Sha1_80];
 
         // Offerer = DTLS server (passive), Answerer = DTLS client (active). (Either
@@ -89,6 +96,10 @@ impl Transport {
                         .with_certificates(vec![cert.clone()])
                         .with_srtp_protection_profiles(profiles.clone())
                         .with_insecure_skip_verify(true)
+                        // Mutual auth: request the client's cert so we can check
+                        // its fingerprint (WebRTC DTLS-SRTP). Chain validation is
+                        // skipped; the fingerprint is the trust anchor.
+                        .with_client_auth(ClientAuthType::RequireAnyClientCert)
                         .build(false, None)
                         .map_err(|_| Error::Dtls("server cfg"))?,
                 ),
@@ -112,7 +123,8 @@ impl Transport {
 
         let mut t = Self {
             role, local, remote, ice, dtls, client_cfg,
-            dtls_started: false, dtls_done: false, fingerprint, keys: None,
+            dtls_started: false, dtls_done: false, fingerprint,
+            expected_remote_fp: None, keys: None,
         };
         // Gather our single host candidate.
         t.ice.add_local_candidate(host_candidate(local.port())).map_err(|_| Error::Ice("local cand"))?;
@@ -123,8 +135,11 @@ impl Transport {
         &self.fingerprint
     }
 
-    /// Apply the remote's signaling (creds) + start connectivity checks.
-    pub(crate) fn set_remote(&mut self, ufrag: &str, pwd: &str) -> Result<(), Error> {
+    /// Apply the remote's signaling (creds + cert fingerprint) + start checks.
+    pub(crate) fn set_remote(&mut self, ufrag: &str, pwd: &str, fingerprint: &str) -> Result<(), Error> {
+        if !fingerprint.is_empty() {
+            self.expected_remote_fp = Some(normalize_fp(fingerprint));
+        }
         self.ice.add_remote_candidate(host_candidate(self.remote.port())).map_err(|_| Error::Ice("remote cand"))?;
         let controlling = matches!(self.role, Role::Offerer);
         self.ice.start_connectivity_checks(controlling, ufrag.to_owned(), pwd.to_owned())
@@ -213,6 +228,16 @@ impl Transport {
             return Ok(());
         }
         let state = self.dtls.get_connection_state(self.remote).ok_or(Error::Dtls("no state"))?;
+        // MITM check: the cert the peer presented in the handshake must match the
+        // fingerprint from its SDP. (DTLS itself runs insecure_skip_verify — the
+        // trust comes from this out-of-band fingerprint, the WebRTC model.)
+        if let Some(expected) = &self.expected_remote_fp {
+            let peer_der = state.peer_certificates.first().ok_or(Error::Dtls("no peer cert"))?;
+            let got = normalize_fp(&fingerprint_sha256(peer_der));
+            if &got != expected {
+                return Err(Error::Dtls("peer fingerprint mismatch — possible MITM"));
+            }
+        }
         let km = state
             .export_keying_material("EXTRACTOR-dtls_srtp", &[], EXPORT_LEN)
             .map_err(|_| Error::Dtls("export keys"))?;
@@ -251,3 +276,16 @@ fn ctx(local: std::net::SocketAddr, remote: std::net::SocketAddr) -> TransportCo
 
 fn arr16(s: &[u8]) -> [u8; 16] { let mut a = [0; 16]; a.copy_from_slice(s); a }
 fn arr14(s: &[u8]) -> [u8; 14] { let mut a = [0; 14]; a.copy_from_slice(s); a }
+
+/// SDP `a=fingerprint` value over a cert's DER: `sha-256 AB:CD:…` (upper hex).
+fn fingerprint_sha256(der: &[u8]) -> String {
+    let digest = Sha256::digest(der);
+    let hex: Vec<String> = digest.iter().map(|b| format!("{b:02X}")).collect();
+    format!("sha-256 {}", hex.join(":"))
+}
+
+/// Normalize a fingerprint for comparison (upper-case hex, single spaces) so an
+/// offer's casing doesn't matter.
+fn normalize_fp(fp: &str) -> String {
+    fp.to_ascii_uppercase().split_whitespace().collect::<Vec<_>>().join(" ")
+}

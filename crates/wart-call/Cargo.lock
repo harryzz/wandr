@@ -1839,6 +1839,7 @@ dependencies = [
  "rtc-shared",
  "rtc-srtp",
  "sansio",
+ "sha2",
 ]
 
 [[package]]
