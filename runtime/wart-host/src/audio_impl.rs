@@ -142,6 +142,12 @@ mod binder_path {
         capacity_frames: u32,
         bytes_per_frame: u32,
         channels:        u32,
+        // The service→client up-message queue counters (control/event/timestamp
+        // messages). We poll-drive and ignore the events, but MUST drain this or
+        // the service's writeUpMessageQueue fills, it decides the client stopped,
+        // and it suspends + closes the stream. `read` = ours, `write` = service's.
+        up_msg_read_ptr:  Option<*mut AtomicI64>,
+        up_msg_write_ptr: Option<*mut AtomicI64>,
     }
     // SAFETY: raw pointers reference mmaps owned by this struct (stable
     // for the lifetime of `_mmaps`). Cross-process atomic ops on the
@@ -469,6 +475,12 @@ mod binder_path {
         let read_ctr_p  = resolve(&rb.r#readCounterParcelable);
         let write_ctr_p = resolve(&rb.r#writeCounterParcelable);
         let data_p      = resolve(&rb.r#dataParcelable);
+        // Also resolve the service→client up-message queue counters so we can
+        // drain it (see TrackState). Best-effort: if it can't be resolved we
+        // still run, just risk the suspend-on-full the drain prevents.
+        let up = &endpoint.r#upMessageQueueParcelable;
+        let up_msg_read_p  = resolve(&up.r#readCounterParcelable).map(|p| p as *mut AtomicI64);
+        let up_msg_write_p = resolve(&up.r#writeCounterParcelable).map(|p| p as *mut AtomicI64);
         let (Some(read_ctr_p), Some(write_ctr_p), Some(data_p)) =
             (read_ctr_p, write_ctr_p, data_p)
         else {
@@ -489,6 +501,8 @@ mod binder_path {
             capacity_frames,
             bytes_per_frame,
             channels,
+            up_msg_read_ptr:  up_msg_read_p,
+            up_msg_write_ptr: up_msg_write_p,
         };
         let id = alloc_handle(state);
         log::info!(
@@ -499,8 +513,21 @@ mod binder_path {
         id
     }
 
+    /// Drain the service→client up-message queue (timestamps / stream events) by
+    /// advancing our read cursor to the service's write cursor and discarding the
+    /// contents. We poll-drive and don't need the events, but if this queue fills
+    /// the service decides the client stopped and suspends + closes the stream.
+    fn drain_up_messages(st: &TrackState) {
+        if let (Some(rp), Some(wp)) = (st.up_msg_read_ptr, st.up_msg_write_ptr) {
+            // SAFETY: same shared-ring contract as the data-queue counters.
+            let w = unsafe { &*wp }.load(Ordering::Acquire);
+            unsafe { &*rp }.store(w, Ordering::Release);
+        }
+    }
+
     pub fn write_pcm_f32(track: u32, samples: &[f32]) -> u32 {
         with_track(track, |st| {
+            drain_up_messages(st);
             // SAFETY: ptrs reference an 8-byte aligned i64 slot inside an
             // mmap shared with media.aaudio. Cross-process atomic ops
             // on the counter pair are AAudio's signaling contract.
@@ -574,6 +601,7 @@ mod binder_path {
     /// (`frames × channels`), or empty if nothing is ready yet.
     pub fn read_pcm_f32(capture: u32, max_frames: u32) -> Vec<f32> {
         with_track(capture, |st| {
+            drain_up_messages(st);
             // SAFETY: same shared-ring contract as write_pcm_f32, roles
             // reversed — see TrackState's read_ctr_ptr note.
             let read_ctr  = unsafe { &*st.read_ctr_ptr };
