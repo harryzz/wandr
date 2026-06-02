@@ -202,6 +202,15 @@ struct SignalKeying {
     callee_identity: Vec<u8>,
 }
 
+/// The 32-byte raw X25519 public key for the SRTP KDF: a Signal `IdentityKey`
+/// serializes as 33 bytes (`0x05` DJB type prefix + key), but ringrtc/Signal feed
+/// the prefix-stripped 32-byte key. Drop a leading `0x05` on a 33-byte input;
+/// pass anything else through unchanged.
+#[cfg(feature = "signal")]
+fn raw_identity_key(id: &[u8]) -> &[u8] {
+    if id.len() == 33 && id[0] == 0x05 { &id[1..] } else { id }
+}
+
 #[cfg(feature = "signal")]
 impl SignalKeying {
     /// Derive the SRTP send/recv key pair from the DH shared secret, exactly as
@@ -217,10 +226,17 @@ impl SignalKeying {
             return Err(Error::Dh("non-contributory DH shared secret (rejected)"));
         }
         // HKDF-SHA256, salt = 32 zero bytes, info = label || caller_id || callee_id.
-        let mut info = Vec::with_capacity(48 + self.caller_identity.len() + self.callee_identity.len());
+        // The identity keys MUST be the 32-byte RAW X25519 public key — Signal
+        // strips the 0x05 DJB type prefix before the KDF (Signal-Desktop
+        // calling.preload.ts `publicKey.subarray(1)`, Signal-iOS `.keyBytes`).
+        // Our identities arrive as 33-byte `IdentityKey::serialize()` (0x05‖key),
+        // so drop the prefix or the derived keys diverge and SRTP can't decrypt.
+        let caller = raw_identity_key(&self.caller_identity);
+        let callee = raw_identity_key(&self.callee_identity);
+        let mut info = Vec::with_capacity(48 + caller.len() + callee.len());
         info.extend_from_slice(b"Signal_Calling_20200807_SignallingDH_SRTPKey_KDF");
-        info.extend_from_slice(&self.caller_identity);
-        info.extend_from_slice(&self.callee_identity);
+        info.extend_from_slice(caller);
+        info.extend_from_slice(callee);
 
         // AEAD_AES_256_GCM: 32 B key + 12 B salt per direction; offer then answer.
         let hk = Hkdf::<Sha256>::new(Some(&[0u8; 32]), shared.as_bytes());
