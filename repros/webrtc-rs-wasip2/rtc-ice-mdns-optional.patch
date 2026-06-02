@@ -1,0 +1,200 @@
+diff --git a/rtc-ice/Cargo.toml b/rtc-ice/Cargo.toml
+index ccb8bd0..d88d5b0 100644
+--- a/rtc-ice/Cargo.toml
++++ b/rtc-ice/Cargo.toml
+@@ -15,7 +15,10 @@ categories.workspace = true
+ shared = { workspace = true, default-features = false, features = [] }
+ sansio.workspace = true
+ stun.workspace = true
+-mdns.workspace = true
++# mDNS ICE candidates are optional (default on). rtc-mdns pulls socket2 + tokio
++# for real multicast UDP, which doesn't build for wasm32-wasip2; disable with
++# `--no-default-features` to get a sans-IO ICE agent that builds for wasip2.
++mdns = { workspace = true, optional = true }
+ 
+ crc = "3.0.1"
+ log.workspace = true
+@@ -40,6 +43,11 @@ tokio.workspace = true
+ futures = "0.3.30"
+ ctrlc.workspace = true
+ 
++[features]
++default = ["mdns"]
++# mDNS ICE candidate support (pulls rtc-mdns → socket2/tokio; native only).
++mdns = ["dep:mdns"]
++
+ [[example]]
+ name = "ping_pong"
+ path = "examples/ping_pong.rs"
+diff --git a/rtc-ice/src/agent/agent_proto.rs b/rtc-ice/src/agent/agent_proto.rs
+index 4807749..920bb73 100644
+--- a/rtc-ice/src/agent/agent_proto.rs
++++ b/rtc-ice/src/agent/agent_proto.rs
+@@ -1,4 +1,5 @@
+ use super::*;
++#[cfg(feature = "mdns")]
+ use mdns::{MDNS_PORT, MdnsEvent};
+ 
+ impl sansio::Protocol<TaggedBytesMut, (), ()> for Agent {
+@@ -10,6 +11,7 @@ impl sansio::Protocol<TaggedBytesMut, (), ()> for Agent {
+ 
+     fn handle_read(&mut self, msg: TaggedBytesMut) -> Result<()> {
+         // demuxing mDNS packet from STUN packet whether peer addr port is MDNS_PORT
++        #[cfg(feature = "mdns")]
+         if msg.transport.peer_addr.port() == MDNS_PORT {
+             let remote_candidates = if let Some(mdns_conn) = &mut self.mdns {
+                 mdns_conn.handle_read(msg)?;
+@@ -45,8 +47,10 @@ impl sansio::Protocol<TaggedBytesMut, (), ()> for Agent {
+ 
+             self.trigger_request_connectivity_check(remote_candidates);
+ 
+-            Ok(())
+-        } else if let Some(local_index) =
++            return Ok(());
++        }
++
++        if let Some(local_index) =
+             self.find_local_candidate(msg.transport.local_addr, msg.transport.transport_protocol)
+         {
+             self.handle_inbound_candidate_msg(local_index, msg)
+@@ -70,6 +74,7 @@ impl sansio::Protocol<TaggedBytesMut, (), ()> for Agent {
+     }
+ 
+     fn poll_write(&mut self) -> Option<Self::Wout> {
++        #[cfg(feature = "mdns")]
+         if let Some(mdns_conn) = &mut self.mdns {
+             while let Some(msg) = mdns_conn.poll_write() {
+                 self.write_outs.push_back(msg);
+@@ -88,6 +93,9 @@ impl sansio::Protocol<TaggedBytesMut, (), ()> for Agent {
+     }
+ 
+     fn handle_timeout(&mut self, now: Self::Time) -> std::result::Result<(), Self::Error> {
++        #[cfg(not(feature = "mdns"))]
++        let remote_candidates: Vec<Candidate> = vec![];
++        #[cfg(feature = "mdns")]
+         let remote_candidates = if let Some(mdns_conn) = &mut self.mdns {
+             let _ = mdns_conn.handle_timeout(now);
+ 
+@@ -130,6 +138,9 @@ impl sansio::Protocol<TaggedBytesMut, (), ()> for Agent {
+     }
+ 
+     fn poll_timeout(&mut self) -> Option<Self::Time> {
++        #[cfg(not(feature = "mdns"))]
++        let mdns_timeout: Option<Instant> = None;
++        #[cfg(feature = "mdns")]
+         let mdns_timeout = if let Some(mdns_conn) = &mut self.mdns {
+             mdns_conn.poll_timeout()
+         } else {
+@@ -150,6 +161,7 @@ impl sansio::Protocol<TaggedBytesMut, (), ()> for Agent {
+         self.set_selected_pair(None);
+         self.delete_all_candidates(false);
+         self.update_connection_state(ConnectionState::Closed);
++        #[cfg(feature = "mdns")]
+         if let Some(mdns_conn) = &mut self.mdns {
+             mdns_conn.close()?;
+         }
+diff --git a/rtc-ice/src/agent/mod.rs b/rtc-ice/src/agent/mod.rs
+index 719f06c..bed65cb 100644
+--- a/rtc-ice/src/agent/mod.rs
++++ b/rtc-ice/src/agent/mod.rs
+@@ -9,9 +9,12 @@ pub mod agent_stats;
+ use agent_config::*;
+ use bytes::BytesMut;
+ use log::{debug, error, info, trace, warn};
++#[cfg(feature = "mdns")]
+ use mdns::{Mdns, QueryId};
+ use sansio::Protocol;
+-use std::collections::{HashMap, VecDeque};
++#[cfg(feature = "mdns")]
++use std::collections::HashMap;
++use std::collections::VecDeque;
+ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+ use std::sync::Arc;
+ use std::time::{Duration, Instant};
+@@ -24,7 +27,9 @@ use stun::xoraddr::*;
+ 
+ use crate::candidate::candidate_peer_reflexive::CandidatePeerReflexiveConfig;
+ use crate::candidate::{candidate_pair::*, *};
+-use crate::mdns::{MulticastDnsMode, create_multicast_dns, generate_multicast_dns_name};
++#[cfg(feature = "mdns")]
++use crate::mdns::create_multicast_dns;
++use crate::mdns::{MulticastDnsMode, generate_multicast_dns_name};
+ use crate::network_type::NetworkType;
+ use crate::rand::*;
+ use crate::state::*;
+@@ -141,7 +146,9 @@ pub struct Agent {
+     pub(crate) checking_duration: Instant,
+     pub(crate) last_checking_time: Instant,
+ 
++    #[cfg(feature = "mdns")]
+     pub(crate) mdns: Option<Mdns>,
++    #[cfg(feature = "mdns")]
+     pub(crate) mdns_queries: HashMap<QueryId, Candidate>,
+ 
+     pub(crate) mdns_mode: MulticastDnsMode,
+@@ -188,7 +195,9 @@ impl Default for Agent {
+             mdns_mode: MulticastDnsMode::Disabled,
+             mdns_local_name: "".to_owned(),
+             mdns_local_ip: None,
++            #[cfg(feature = "mdns")]
+             mdns_queries: HashMap::new(),
++            #[cfg(feature = "mdns")]
+             mdns: None,
+             candidate_types: vec![],
+             network_types: vec![],
+@@ -212,6 +221,7 @@ impl Agent {
+         }
+ 
+         let mdns_mode = config.multicast_dns_mode;
++        #[cfg(feature = "mdns")]
+         let mdns = create_multicast_dns(
+             mdns_mode,
+             &mdns_local_name,
+@@ -330,7 +340,9 @@ impl Agent {
+             last_checking_time: Instant::now(),
+             last_connection_state: ConnectionState::Unspecified,
+ 
++            #[cfg(feature = "mdns")]
+             mdns,
++            #[cfg(feature = "mdns")]
+             mdns_queries: HashMap::new(),
+ 
+             mdns_mode,
+@@ -478,6 +490,7 @@ impl Agent {
+                 return Err(Error::ErrAddressParseFailed);
+             }
+ 
++            #[cfg(feature = "mdns")]
+             if let Some(mdns_conn) = &mut self.mdns {
+                 let query_id = mdns_conn.query(c.address());
+                 self.mdns_queries.insert(query_id, c);
+diff --git a/rtc-ice/src/mdns/mod.rs b/rtc-ice/src/mdns/mod.rs
+index 591158a..21634ba 100644
+--- a/rtc-ice/src/mdns/mod.rs
++++ b/rtc-ice/src/mdns/mod.rs
+@@ -1,12 +1,17 @@
+ //#[cfg(test)]
+ //mod mdns_test;
+ 
++#[cfg(feature = "mdns")]
+ use mdns::Mdns;
++#[cfg(feature = "mdns")]
+ use mdns::MdnsConfig;
++#[cfg(feature = "mdns")]
+ use std::net::{IpAddr, Ipv4Addr};
++#[cfg(feature = "mdns")]
+ use std::time::Duration;
+ use uuid::Uuid;
+ 
++#[cfg(feature = "mdns")]
+ use shared::error::Result;
+ 
+ /// Represents the different Multicast modes that ICE can run.
+@@ -30,6 +35,7 @@ pub(crate) fn generate_multicast_dns_name() -> String {
+     format!("{u}.local")
+ }
+ 
++#[cfg(feature = "mdns")]
+ pub(crate) fn create_multicast_dns(
+     mdns_mode: MulticastDnsMode,
+     mdns_local_name: &str,
