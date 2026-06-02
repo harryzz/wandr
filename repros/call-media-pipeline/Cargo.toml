@@ -1,0 +1,20 @@
+[package]
+name = "call-media-pipeline"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Call engine — Stage 1 (media plane). Composes the three de-risked pieces into
+# one pipeline and runs it in a wasm32-wasip2 guest:
+#   PCM → Opus encode → RTP packetize → SRTP protect → [wire] →
+#   SRTP unprotect → RTP depacketize → Opus decode → PCM
+# Proves the codec + secure-RTP + packetization assemble + run real-time. The
+# transport plane (ICE/DTLS over UDP) derives the real SRTP keys later; here a
+# fixed key + loopback context stand in.
+
+[dependencies]
+opus-rs    = "0.1.22"
+bytes      = "1"
+rtc-rtp    = { git = "https://github.com/webrtc-rs/rtc" }
+rtc-srtp   = { git = "https://github.com/webrtc-rs/rtc" }
+rtc-shared = { git = "https://github.com/webrtc-rs/rtc", default-features = false }
