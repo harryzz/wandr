@@ -73,6 +73,16 @@ Opus·real-UDP·real-mic/speaker, PLUS browser interop.
 
 **Remaining to a product** (NOT engine work): a signaling channel between two real
 devices (exchange SDP + trickle candidates) + app/UX; the wart-arbiter-audio comms
-session ([[project_arbiter_audio]]) already coordinates focus/routing/mode/doze. CAVEAT: a real SIGNAL call = ringrtc (a Rust wrapper
+session ([[project_arbiter_audio]]) already coordinates focus/routing/mode/doze.
+
+**SIGNAL 1:1 CALLS scoped as `tasks/75-ringrtc-signal-calls.md`** (do in a fresh
+session). Key framing: don't port ringrtc (= Rust orchestration + C++ libwebrtc) —
+graft Signal's 1:1 call protocol onto wart-call (which already replaces libwebrtc,
+interop-proven). Head start: the `CallMessage`(Offer/Answer/IceUpdate/Hangup/Busy +
+`opaque`) envelope is already vendored in SignalService.proto + rides the existing
+E2E channel (task 67). Crux = the `opaque` ConnectionParameters blob (ringrtc
+`signaling.proto`) ⇄ `wart_call::Signaling`. Recommended approach B (reimplement on
+wart-call, ringrtc=spec; AGPL caveat). v1 audio-only + 1:1-only (video/group
+deferred). See the task doc for the 4-phase plan + risks. CAVEAT: a real SIGNAL call = ringrtc (a Rust wrapper
 over C++ libwebrtc, NOT wasm-viable) + Signal's calling service — separate. SIP/
 Jingle would reuse media+transport with a different signaling module.
