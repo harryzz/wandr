@@ -1,0 +1,26 @@
+[package]
+name = "call-audio-wire"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# The final call-engine integration: wire wart-call's PCM ends to the real audio
+# hardware via the host `audio` WIT — mic-capture in, AAudio playback out.
+#
+# Captures the device mic, runs each 20 ms frame through wart-call's MediaSession
+# (Opus encode → RTP → SRTP → SRTP⁻¹ → RTP → Opus decode, loopback keys), buffers
+# the result, then plays it back through AAudio. So you SPEAK, then HEAR yourself
+# back through the exact codec+crypto pipeline a live call uses. Sequential
+# record-then-play because this device can't hold input+output MMAP at once (a
+# real two-device call only captures OR plays per device, so that limit is moot
+# there). Proves the PCM↔hardware wiring end-to-end on real hardware.
+#   wart-host --run-once war.probe.callaudio
+
+[dependencies]
+wart-call = { path = "../../crates/wart-call" }
+wit-bindgen = "0.46"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

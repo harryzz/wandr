@@ -76,6 +76,7 @@ Each is a `wasi:cli/command` warpkg, device-verified via `wart-host --run-once`:
 | `call-signaling-sdp` | WebRTC SDP | `war.probe.sdp` |
 | `call-capstone` | end-to-end call | `war.probe.call` |
 | `call-udp-loopback` | a call over real wasi:sockets UDP (LAN IP) | `war.probe.calludp` |
+| `call-audio-wire` | **PCM ends wired to real mic/AAudio** (mic→engine→speaker) | `war.probe.callaudio` |
 | `call-interop` | **interop with an independent WebRTC stack** (native) | — |
 | `webrtc-rs-wasip2` | the rtc-ice mDNS-optional patch + spike notes | — |
 
@@ -107,9 +108,17 @@ The `PeerSession` API is the engine; what remains is integration:
    in a guest on the Pixel 2 XL — over the device's real LAN IP via
    `wart_call::local_lan_ip()` (device-verified: the guest discovers the Pixel's
    WiFi IP, e.g. `192.168.1.173`, the address a peer on the same network reaches).
-2. **Real audio** — wire `send_audio`'s input to the mic-capture WIT and
-   `recv_audio`'s output to AAudio playback (both proven; note the device's
-   input+output MMAP limit — fine for a real two-device call).
+2. **Real audio** — DONE. `repros/call-audio-wire` (`war.probe.callaudio`) wires
+   `MediaSession`'s PCM ends to the host `audio` WIT — mic `open-capture`/
+   `read-pcm-f32` in, AAudio `create-track`/`write-pcm-f32` out — and round-trips
+   the live mic through Opus+SRTP back to the speaker on a Pixel 2 XL
+   (mechanism device-verified: capture `channels=1` + playback `channels=2`
+   streams both open, 150 frames through the pipeline). Two device gotchas
+   handled: the MMAP **output is stereo-only** (play a stereo track, interleave
+   the mono pipeline output L=R; capture stays mono), and there's **no
+   simultaneous input+output MMAP** (so it records-then-plays — not a limit for a
+   real call, where each device only captures *or* plays). Composing this with a
+   networked `PeerSession` (step 1) is a complete live call.
 3. **Signaling channel** — exchange the SDP (`Signaling::to_sdp`/`from_sdp`) +
    trickled candidates over a signaling server. (The DTLS-cert fingerprint is
    real: `transport.rs` computes SHA-256 over the cert DER, carries it in the
