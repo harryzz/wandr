@@ -21,7 +21,7 @@
 //! task 20.
 
 use crate::bindings::my::skiko_gfx::audio::{
-    ChannelLayout, Format, Host, TrackConfig, TrackHandle,
+    ChannelLayout, Format, Host, StreamClass, TrackConfig, TrackHandle,
 };
 
 #[cfg(target_os = "android")]
@@ -266,6 +266,7 @@ mod binder_path {
             sample_rate:    48_000,
             channel_layout: super::ChannelLayout::Mono,
             format:         super::Format::PcmF32,
+            class:          super::StreamClass::VoiceCall, // loopback ≈ a call
         };
         let cap = create_capture(cfg());
         if cap == 0 {
@@ -357,14 +358,21 @@ mod binder_path {
         open_pcm_stream(params, channels, /*capture=*/ false)
     }
 
-    /// WIT `create-track` path. The guest doesn't yet declare a stream class
-    /// (increment 2), so a guest track follows the **arbiter's current comms
-    /// route** — `Route::Call` with the speaker/earpiece the arbiter last
-    /// decided (default earpiece). This is what makes the arbiter's routing
-    /// decision actually move the call's USAGE_MEDIA stream (a per-stream
-    /// `deviceIds` pin — `setForceUse(COMMUNICATION)` does not redirect it).
+    /// WIT `create-track` path. The guest declares a [`StreamClass`] intent; the
+    /// host maps it to a [`Route`](crate::audio_routing::Route). A `voice-call`
+    /// follows the **arbiter's current comms route** (earpiece/speaker the
+    /// arbiter last decided) — which is what makes the routing decision actually
+    /// move the call's USAGE_MEDIA stream (a per-stream `deviceIds` pin;
+    /// `setForceUse(COMMUNICATION)` does not redirect it). `media`/`notification`
+    /// are fixed applier mappings.
     pub fn create_track(cfg: super::TrackConfig) -> u32 {
-        open_routed(cfg, crate::audio_routing::Route::Call { speaker: super::comms_route_speaker() })
+        use crate::audio_routing::Route;
+        let route = match cfg.class {
+            super::StreamClass::Media        => Route::Media,
+            super::StreamClass::Notification => Route::Notification,
+            super::StreamClass::VoiceCall    => Route::Call { speaker: super::comms_route_speaker() },
+        };
+        open_routed(cfg, route)
     }
 
     /// Open a PCM mic-capture stream (AAUDIO_DIRECTION_INPUT). Symmetric to

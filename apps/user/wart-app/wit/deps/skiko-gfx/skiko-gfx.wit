@@ -756,12 +756,25 @@ interface audio {
     /// Speaker layout. Mono only in v1.
     enum channel-layout { mono, stereo }
 
+    /// What a track is FOR — the guest's routing intent. The host maps it to a
+    /// device via the routing core (audio_routing): `media` → the policy
+    /// default output (usually the loudspeaker); `notification` → the
+    /// loudspeaker; `voice-call` → the system's current call route
+    /// (earpiece/speaker), which the arbiter decides. Ringtone is system-owned
+    /// (the host ringer), not a guest intent. (Per the decides/applies split:
+    /// the guest expresses intent here, the arbiter decides the call route, the
+    /// host applies it.)
+    enum stream-class { media, voice-call, notification }
+
     /// Stream configuration. `sample-rate` is the audio device's native
     /// rate (48000 is universally accepted; the HAL resamples otherwise).
+    /// `class` is the routing intent (see stream-class); for capture
+    /// (open-capture) it is ignored — capture always opens the mic.
     record track-config {
         sample-rate:    u32,
         channel-layout: channel-layout,
         format:         format,
+        class:          stream-class,
     }
 
     /// Opaque handle returned by create-track. Sentinel 0 = invalid /

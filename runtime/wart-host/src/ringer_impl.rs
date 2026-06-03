@@ -13,7 +13,7 @@ use std::sync::Mutex;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use crate::bindings::my::skiko_gfx::audio::{ChannelLayout, Format, TrackConfig};
+use crate::bindings::my::skiko_gfx::audio::{ChannelLayout, Format, StreamClass, TrackConfig};
 
 const SAMPLE_RATE: u32 = 48_000;
 /// Write granularity — 20 ms of stereo frames (matches the AAudio burst pacing).
@@ -66,6 +66,9 @@ fn ring_loop() {
         sample_rate: SAMPLE_RATE,
         channel_layout: ChannelLayout::Stereo,
         format: Format::PcmF32,
+        // Ignored on the routed path below (create_track_routed forces
+        // Route::Ringtone → loudspeaker); set for record completeness.
+        class: StreamClass::Notification,
     };
     // The ringtone is a fixed-intent route — the loud speaker, never the
     // earpiece (which the classless guest `create_track` defaults to). Express

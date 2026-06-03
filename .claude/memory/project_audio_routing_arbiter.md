@@ -33,6 +33,9 @@ consistent with the project-wide arbiter split ([[project_arbiter_window_server_
 `setForceUse(COMMUNICATION,…)` does NOT redirect a MEDIA stream — which is why
 task-75 hand-pinned `deviceIds=[2]`. So the arbiter's route decision must reach
 the host as a **per-stream device pin**, applied at open (re-pin = close+reopen).
+DEVICE-VERIFIED 2026-06-03 (user): `audio-route <pid> speaker` → call audio on
+loudspeaker on redial; earpiece default works. **Live mid-call re-pin** (toggle
+while the stream is open) is a tracked follow-up — applies at open-time only now.
 
 **dumpsys caveat (user-flagged):** the host caps model currently parses
 `dumpsys media.audio_policy` at startup to get the port table. Avoiding runtime

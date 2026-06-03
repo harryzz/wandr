@@ -25,7 +25,7 @@ use wart_call::local_lan_ip;
 use wart_call::signal::{CallSignal, CallState, HangupKind, SignalCall};
 use wart_call::turn::TurnConfig;
 
-use crate::my::skiko_gfx::audio::{self, ChannelLayout, Format, TrackConfig};
+use crate::my::skiko_gfx::audio::{self, ChannelLayout, Format, StreamClass, TrackConfig};
 
 const SAMPLE_RATE: u32 = wart_call::SAMPLE_RATE;
 /// 20 ms @ 48 kHz mono — the Opus frame + audio tick granularity.
@@ -253,7 +253,7 @@ impl ActiveCall {
         // in+out coexistence). Keep receive-only (real voice, low CPU) for now.
         const RX_ONLY: bool = true;
         if !RX_ONLY && self.cap.is_none() {
-            let cfg = TrackConfig { sample_rate: SAMPLE_RATE, channel_layout: ChannelLayout::Mono, format: Format::PcmF32 };
+            let cfg = TrackConfig { sample_rate: SAMPLE_RATE, channel_layout: ChannelLayout::Mono, format: Format::PcmF32, class: StreamClass::VoiceCall };
             let h = audio::open_capture(cfg);
             if h != 0 {
                 audio::start(h);
@@ -265,7 +265,9 @@ impl ActiveCall {
             // this device — voice-comm usage gets -889). The mono Opus frames are
             // duplicated L/R below. Ducking is avoided by staying in NORMAL mode
             // (COMMS_MODE=false), not by the stream usage.
-            let cfg = TrackConfig { sample_rate: SAMPLE_RATE, channel_layout: ChannelLayout::Stereo, format: Format::PcmF32 };
+            // voice-call class → the host routes to the arbiter's call route
+            // (earpiece by default, speaker on `audio-route`).
+            let cfg = TrackConfig { sample_rate: SAMPLE_RATE, channel_layout: ChannelLayout::Stereo, format: Format::PcmF32, class: StreamClass::VoiceCall };
             let h = audio::create_track(cfg);
             if h != 0 {
                 self.trk = Some(h); // started after the first write (write-then-start)

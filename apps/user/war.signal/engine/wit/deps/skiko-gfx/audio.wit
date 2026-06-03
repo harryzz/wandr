@@ -8,10 +8,15 @@ package my:skiko-gfx@0.1.0;
 interface audio {
     enum format { pcm-f32 }
     enum channel-layout { mono, stereo }
+    // Routing intent — the host maps it to a device (media→default,
+    // notification→speaker, voice-call→arbiter-decided call route). See the
+    // canonical wit/skiko-gfx.wit. Capture ignores it.
+    enum stream-class { media, voice-call, notification }
     record track-config {
         sample-rate:    u32,
         channel-layout: channel-layout,
         format:         format,
+        class:          stream-class,
     }
     type track-handle = u32;
     create-track:   func(cfg: track-config) -> track-handle;
