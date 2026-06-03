@@ -79,6 +79,16 @@ fn main() {
         return;
     }
 
+    // Task 76 P1 — call-order full-duplex capture probe: --probe-audio-duplex <preset>.
+    if let Some(i) = args.iter().position(|a| a == "--probe-audio-duplex") {
+        android_logger::init_once(
+            android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
+        );
+        let preset = args.get(i + 1).and_then(|s| s.parse::<i32>().ok()).unwrap_or(6);
+        wasm_android_host::audio_impl::probe_duplex(preset);
+        return;
+    }
+
     // Audio mic→speaker loopback (full capture path: hear yourself).
     if args.iter().any(|a| a == "--probe-audio-loopback") {
         android_logger::init_once(

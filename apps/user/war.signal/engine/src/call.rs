@@ -195,6 +195,7 @@ struct ActiveCall {
     udp_tx: u64, udp_rx: u64, // datagrams sent / received on the media socket
     aud_tx: u64, aud_rx: u64, // PCM frames mic→peer / peer→speaker
     aud_peak: f32,            // max |sample| of decoded audio (0 ⇒ silent decode)
+    mic_peak: f32,            // max |sample| captured from mic (0 ⇒ silent/muted capture)
     wr_ok: u64, wr_zero: u64, // write_pcm_f32 accepted (>0) vs rejected (ring full)
 }
 
@@ -206,6 +207,7 @@ pub struct MediaStats {
     pub aud_tx: u64,
     pub aud_rx: u64,
     pub aud_peak: f32,
+    pub mic_peak: f32,
     pub wr_ok: u64,
     pub wr_zero: u64,
     // Inbound SRTP: datagrams seen as media, decoded OK, decode errored.
@@ -226,7 +228,7 @@ impl ActiveCall {
             call, sock, peer_aci, cap: None, trk: None, track_started: false,
             mic_buf: Vec::new(), play_buf: Vec::new(), last_state,
             outgoing, connected: false, accepted: false, declined: false, busy: false,
-            udp_tx: 0, udp_rx: 0, aud_tx: 0, aud_rx: 0,
+            udp_tx: 0, udp_rx: 0, aud_tx: 0, aud_rx: 0, mic_peak: 0.0,
             aud_peak: 0.0, wr_ok: 0, wr_zero: 0,
         }
     }
@@ -246,13 +248,27 @@ impl ActiveCall {
     /// `recv_audio` → speaker. Capture (mono) + playback (stereo — this device's
     /// MMAP output is stereo-only) are opened lazily on the first connected tick.
     fn pump_audio(&mut self) {
-        // RX_ONLY again (temporary): full-duplex mic is deferred to a proper P1
-        // pass. Enabling capture made the AAudioService capture thread spin
-        // (processDataNow "wait for valid timestamps") AND the mic didn't actually
-        // carry audio to the peer — needs its own investigation (capture config /
-        // in+out coexistence). Keep receive-only (real voice, low CPU) for now.
-        const RX_ONLY: bool = true;
-        if !RX_ONLY && self.cap.is_none() {
+        // P1 — full-duplex. ORDER MATTERS on this device (taimen): the output
+        // USAGE_MEDIA stream falls back to the legacy SHARED path (MMAP -19), but
+        // the mic capture takes an MMAP input endpoint — and you can't acquire an
+        // MMAP capture endpoint while an output MMAP is held, nor vice-versa.
+        // Opening the OUTPUT FIRST (legacy) lets the capture MMAP coexist; opening
+        // capture first -889's the output (kills RX). So: output, THEN capture
+        // (gated on the output being up). RX_ONLY left as a quick kill-switch.
+        const RX_ONLY: bool = false;
+        if self.trk.is_none() {
+            // Stereo on the USAGE_MEDIA path (the only output AAudio can open on
+            // this device — voice-comm usage gets -889). The mono Opus frames are
+            // duplicated L/R below. voice-call class → the host routes to the
+            // arbiter's call route (earpiece by default, speaker on `audio-route`).
+            let cfg = TrackConfig { sample_rate: SAMPLE_RATE, channel_layout: ChannelLayout::Stereo, format: Format::PcmF32, class: StreamClass::VoiceCall };
+            let h = audio::create_track(cfg);
+            if h != 0 {
+                self.trk = Some(h); // started after the first write (write-then-start)
+            }
+        }
+        if !RX_ONLY && self.trk.is_some() && self.cap.is_none() {
+            // Capture only after the output is up (see ORDER note above).
             let cfg = TrackConfig { sample_rate: SAMPLE_RATE, channel_layout: ChannelLayout::Mono, format: Format::PcmF32, class: StreamClass::VoiceCall };
             let h = audio::open_capture(cfg);
             if h != 0 {
@@ -260,22 +276,10 @@ impl ActiveCall {
                 self.cap = Some(h);
             }
         }
-        if self.trk.is_none() {
-            // Stereo on the USAGE_MEDIA path (the only output AAudio can open on
-            // this device — voice-comm usage gets -889). The mono Opus frames are
-            // duplicated L/R below. Ducking is avoided by staying in NORMAL mode
-            // (COMMS_MODE=false), not by the stream usage.
-            // voice-call class → the host routes to the arbiter's call route
-            // (earpiece by default, speaker on `audio-route`).
-            let cfg = TrackConfig { sample_rate: SAMPLE_RATE, channel_layout: ChannelLayout::Stereo, format: Format::PcmF32, class: StreamClass::VoiceCall };
-            let h = audio::create_track(cfg);
-            if h != 0 {
-                self.trk = Some(h); // started after the first write (write-then-start)
-            }
-        }
         if let Some(cap) = self.cap {
             let chunk = audio::read_pcm_f32(cap, FRAME as u32);
             if !chunk.is_empty() {
+                for &s in &chunk { let a = s.abs(); if a > self.mic_peak { self.mic_peak = a; } }
                 self.mic_buf.extend_from_slice(&chunk);
             }
             while self.mic_buf.len() >= FRAME {
@@ -383,6 +387,7 @@ impl CallEngine {
                 aud_tx: a.aud_tx,
                 aud_rx: a.aud_rx,
                 aud_peak: a.aud_peak,
+                mic_peak: a.mic_peak,
                 wr_ok: a.wr_ok,
                 wr_zero: a.wr_zero,
                 srtp_seen,

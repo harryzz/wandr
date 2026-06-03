@@ -317,6 +317,70 @@ mod binder_path {
         if out != 0 { close(out); }
     }
 
+    /// Task 76 P1 — CALL-ORDER full-duplex capture probe. Opens the OUTPUT first
+    /// (USAGE_MEDIA → legacy SHARED, like a live call), keeps it active, THEN
+    /// opens a CAPTURE with the given `inputPreset` and reads ~4 s. The mic-only
+    /// loopback can't reproduce the call (output -889'd there); this matches the
+    /// call exactly. MMAP capture spins on "wait for valid timestamps" while an
+    /// output is active (Oboe #1842), delivering ~0 frames. Sweep presets to find
+    /// one routed to the non-MMAP (legacy) input. frames≈0 ⇒ MMAP spin (bad);
+    /// frames≫0 ⇒ legacy capture coexists (good).
+    pub fn probe_duplex(preset: i32) {
+        if let Err(e) = crate::binder::init() {
+            log::warn!("probe-duplex: binder init failed: {e}"); return;
+        }
+        // Output first → legacy fallback, exactly like a call.
+        let out = create_track(super::TrackConfig {
+            sample_rate: 48_000, channel_layout: super::ChannelLayout::Stereo,
+            format: super::Format::PcmF32, class: super::StreamClass::VoiceCall,
+        });
+        if out == 0 {
+            log::warn!("probe-duplex[preset={preset}]: output open failed (-889) — aborting");
+            return;
+        }
+        start(out);
+        // Capture with the requested inputPreset.
+        let cap_params = StreamParameters {
+            r#channelMask: AAUDIO_CHANNEL_MONO,
+            r#sampleRate:  48000,
+            r#sharingMode: AAUDIO_SHARING_MODE_SHARED,
+            r#audioFormat: pcm_f32_format(),
+            r#direction:   AAUDIO_DIRECTION_INPUT,
+            r#inputPreset: preset,
+            ..Default::default()
+        };
+        let cap = open_pcm_stream(cap_params, 1, /*capture=*/ true);
+        if cap == 0 {
+            log::warn!("probe-duplex[preset={preset}]: capture open failed");
+            close(out); return;
+        }
+        start(cap);
+        log::info!("probe-duplex[preset={preset}]: output+capture open — reading ~4 s…");
+        let t0 = std::time::Instant::now();
+        let (mut total, mut peak, mut sumsq) = (0u64, 0.0f32, 0.0f64);
+        while t0.elapsed().as_secs() < 4 {
+            let frames = read_pcm_f32(cap, 480);
+            if !frames.is_empty() {
+                for &s in &frames { peak = peak.max(s.abs()); sumsq += (s as f64) * (s as f64); }
+                total += frames.len() as u64;
+                // keep the output ACTIVE (mic→speaker) — reproduces the call.
+                let mut off = 0usize;
+                while off < frames.len() {
+                    let w = write_pcm_f32(out, &frames[off..]) as usize;
+                    if w == 0 { break; }
+                    off += w;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let rms = if total > 0 { (sumsq / total as f64).sqrt() } else { 0.0 };
+        log::info!(
+            "probe-duplex[preset={preset}]: {total} frames, peak={peak:.4} rms={rms:.4} — {}",
+            if total > 100_000 { "LEGACY/coexists ✓" } else { "MMAP-spin/no-data ✗" },
+        );
+        close(cap); close(out);
+    }
+
     fn channel_of(cfg: &super::TrackConfig) -> (u32, i32) {
         match cfg.channel_layout {
             super::ChannelLayout::Mono   => (1, AAUDIO_CHANNEL_MONO),
@@ -1035,6 +1099,12 @@ pub fn probe_loopback() {
 pub fn probe_loopback() {
     log::warn!("probe-loopback: android-only build");
 }
+
+/// Task 76 P1 — call-order full-duplex capture probe with a given input preset.
+#[cfg(target_os = "android")]
+pub fn probe_duplex(preset: i32) { binder_path::probe_duplex(preset); }
+#[cfg(not(target_os = "android"))]
+pub fn probe_duplex(_preset: i32) { log::warn!("probe-duplex: android-only build"); }
 
 /// Task-76 capability-matrix open probe (`--probe-audio-matrix`, via
 /// `audio_caps`): open one fully-specified stream, log the result + granted
