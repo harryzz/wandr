@@ -69,6 +69,10 @@ struct RelayState {
     permitted: std::collections::HashSet<SocketAddr>,
     /// Remotes seen before allocation finished — permitted on `AllocateResponse`.
     pending_remotes: Vec<SocketAddr>,
+    /// Payloads the TURN server relayed to us (`DataIndication`/`ChannelData`),
+    /// each tagged with the peer addr that sent it — drained back into the demux
+    /// as if received directly from that peer (Phase B inbound).
+    relayed_in: Vec<(SocketAddr, Vec<u8>)>,
 }
 
 #[cfg(feature = "signal")]
@@ -98,6 +102,7 @@ impl RelayState {
             new_candidates: Vec::new(),
             permitted: std::collections::HashSet::new(),
             pending_remotes: Vec::new(),
+            relayed_in: Vec::new(),
         })
     }
 
@@ -140,7 +145,28 @@ impl RelayState {
                     self.permit(addr);
                 }
             }
-            // Phase B will surface Event::DataIndicationOrChannelData as media.
+            // Inbound relay payload: the TURN server forwarded data the peer sent
+            // to our relayed address. Tag it with the peer addr and re-demux it as
+            // if it had arrived directly (STUN→ICE, SRTP→media).
+            if let Event::DataIndicationOrChannelData(_, peer, data) = ev {
+                self.relayed_in.push((peer, data.to_vec()));
+            }
+        }
+    }
+
+    /// Drain payloads the TURN server relayed to us since the last call.
+    fn take_relayed(&mut self) -> Vec<(SocketAddr, Vec<u8>)> {
+        std::mem::take(&mut self.relayed_in)
+    }
+
+    /// Send `bytes` to `peer` THROUGH the relay (ChannelData once a channel is
+    /// bound, else a Send indication). Requires a permission for `peer` (we permit
+    /// every remote candidate). The wrapped wire bytes surface via `poll_transmit`.
+    fn send_via(&mut self, bytes: &[u8], peer: SocketAddr) {
+        if let Some(relayed) = self.relayed_addr {
+            if let Ok(mut relay) = self.client.relay(relayed) {
+                let _ = relay.send_to(bytes, peer);
+            }
         }
     }
 
@@ -263,9 +289,17 @@ pub(crate) struct Transport {
     keys: Option<(SrtpKeys, SrtpKeys)>,
     /// Keying complete (DTLS handshake done, or Signal DH derived).
     done: bool,
+    /// SRTP media datagrams queued for the wire — addressed to the selected remote
+    /// in `poll_transmit` (and routed through the relay when that remote is one).
+    media_out: Vec<Vec<u8>>,
     /// TURN relay (Signal path with a `TurnConfig`); `None` = host candidates only.
     #[cfg(feature = "signal")]
     relay: Option<RelayState>,
+    /// Remote candidate addrs of type `relay` — outbound to these is routed THROUGH
+    /// our relay (their TURN server only accepts traffic from our permitted relayed
+    /// address, not our raw host/srflx). Off-LAN, this is the only pair that works.
+    #[cfg(feature = "signal")]
+    relay_remotes: std::collections::HashSet<SocketAddr>,
 }
 
 impl Transport {
@@ -313,8 +347,11 @@ impl Transport {
                 dtls, client_cfg, started: false, fingerprint, expected_remote_fp: None,
             }),
             keys: None, done: false,
+            media_out: Vec::new(),
             #[cfg(feature = "signal")]
             relay: None,
+            #[cfg(feature = "signal")]
+            relay_remotes: std::collections::HashSet::new(),
         })
     }
 
@@ -348,7 +385,9 @@ impl Transport {
                 secret, public, remote_public: None, caller_identity, callee_identity,
             }),
             keys: None, done: false,
+            media_out: Vec::new(),
             relay,
+            relay_remotes: std::collections::HashSet::new(),
         })
     }
 
@@ -378,10 +417,6 @@ impl Transport {
             Keying::Signal(_) => ProtectionProfile::AeadAes256Gcm,
             _ => ProtectionProfile::Aes128CmHmacSha1_80,
         }
-    }
-
-    pub(crate) fn remote_addr(&self) -> Option<SocketAddr> {
-        self.remote
     }
 
     /// Apply the remote's signaling — keying material (DTLS fingerprint, or the
@@ -432,14 +467,23 @@ impl Transport {
     }
 
     /// Add one trickled remote ICE candidate after `set_remote` started checks
-    /// (the Signal path delivers candidates as separate `IceUpdate`s).
-    pub(crate) fn add_remote_candidate(&mut self, addr: SocketAddr) -> Result<(), Error> {
+    /// (the Signal path delivers candidates as separate `IceUpdate`s). `is_relay`
+    /// marks a `typ relay` candidate, whose address is reachable only by sending
+    /// THROUGH our relay (see `relay_remotes`).
+    pub(crate) fn add_remote_candidate(&mut self, addr: SocketAddr, is_relay: bool) -> Result<(), Error> {
+        #[cfg(not(feature = "signal"))]
+        let _ = is_relay;
         if addr.is_ipv4() != self.local.is_ipv4() {
             return Ok(()); // address-family mismatch — not reachable from our socket
         }
         #[cfg(feature = "signal")]
-        if let Some(relay) = &mut self.relay {
-            relay.permit(addr);
+        {
+            if is_relay {
+                self.relay_remotes.insert(addr);
+            }
+            if let Some(relay) = &mut self.relay {
+                relay.permit(addr);
+            }
         }
         self.ice
             .add_remote_candidate(host_candidate(addr))
@@ -472,34 +516,89 @@ impl Transport {
         self.maybe_advance();
     }
 
+    /// Queue an SRTP media datagram for the wire — addressed to the selected remote
+    /// (and relay-routed if that remote is a relay candidate) in `poll_transmit`.
+    pub(crate) fn queue_media(&mut self, dg: Vec<u8>) {
+        self.media_out.push(dg);
+    }
+
     pub(crate) fn poll_transmit(&mut self) -> Vec<(SocketAddr, Vec<u8>)> {
         self.maybe_advance();
-        let mut out = Vec::new();
+        // Gather every logical outbound (dest, bytes): ICE checks, DTLS, then media
+        // to the selected remote. Routing through the relay (below) is applied last.
+        let mut logical: Vec<(SocketAddr, Vec<u8>)> = Vec::new();
         while let Some(t) = self.ice.poll_write() {
-            out.push((t.transport.peer_addr, t.message.to_vec()));
+            logical.push((t.transport.peer_addr, t.message.to_vec()));
         }
         if let Keying::Dtls(d) = &mut self.keying {
             while let Some(t) = d.dtls.poll_transmit() {
-                out.push((t.transport.peer_addr, t.message.to_vec()));
+                logical.push((t.transport.peer_addr, t.message.to_vec()));
             }
         }
-        #[cfg(feature = "signal")]
-        if let Some(relay) = &mut self.relay {
-            out.extend(relay.poll_transmit()); // allocate/refresh/permission to the TURN server
+        if let Some(dest) = self.remote {
+            for dg in self.media_out.drain(..) {
+                logical.push((dest, dg));
+            }
         }
-        out
+
+        #[cfg(feature = "signal")]
+        {
+            // Datagrams to a relay-type remote can't go direct (their TURN server
+            // only accepts our permitted relayed address) — send them THROUGH our
+            // relay; the rest go direct. Then drain the relay's own wire output
+            // (TURN allocate/refresh/permission + the ChannelData we just queued).
+            let mut out = Vec::new();
+            for (dest, bytes) in logical {
+                if self.relay_remotes.contains(&dest) {
+                    if let Some(relay) = &mut self.relay {
+                        relay.send_via(&bytes, dest);
+                        continue;
+                    }
+                }
+                out.push((dest, bytes));
+            }
+            if let Some(relay) = &mut self.relay {
+                out.extend(relay.poll_transmit());
+            }
+            out
+        }
+        #[cfg(not(feature = "signal"))]
+        {
+            logical
+        }
     }
 
     pub(crate) fn handle_datagram(&mut self, src: SocketAddr, data: &[u8]) -> Result<Demux, Error> {
         // TURN traffic is demuxed by source address (the same socket carries both
-        // direct ICE/DTLS/SRTP and TURN protocol to/from the TURN server).
+        // direct ICE/DTLS/SRTP and TURN protocol to/from the TURN server). A datagram
+        // from the TURN server is a TURN message; if it wraps relayed peer data
+        // (DataIndication/ChannelData), unwrap it and re-demux as if it had arrived
+        // directly from that peer — STUN→ICE (connectivity over the relay), SRTP→media.
         #[cfg(feature = "signal")]
-        if let Some(relay) = &mut self.relay {
-            if src == relay.turn_serv_addr {
-                relay.handle_turn_datagram(src, data);
-                return Ok(Demux::Consumed);
+        {
+            let is_turn = self.relay.as_ref().is_some_and(|r| src == r.turn_serv_addr);
+            if is_turn {
+                let relayed = {
+                    let relay = self.relay.as_mut().unwrap();
+                    relay.handle_turn_datagram(src, data);
+                    relay.take_relayed()
+                };
+                let mut media = None;
+                for (peer, payload) in relayed {
+                    if let Demux::Media(m) = self.demux_payload(peer, &payload)? {
+                        media = Some(m);
+                    }
+                }
+                return Ok(media.map(Demux::Media).unwrap_or(Demux::Consumed));
             }
         }
+        self.demux_payload(src, data)
+    }
+
+    /// Demux one datagram by its leading byte: STUN→ICE, DTLS records→DTLS, SRTP→
+    /// media. `src` is the apparent origin (a direct peer, or the relayed peer addr
+    /// extracted from a TURN message).
+    fn demux_payload(&mut self, src: SocketAddr, data: &[u8]) -> Result<Demux, Error> {
         match data.first().copied() {
             Some(0..=3) => {
                 let msg = TaggedBytesMut {

@@ -49,8 +49,6 @@ pub struct PeerSession {
     media: Option<MediaSession>,
     /// The offer's media direction (answerer mirrors its reverse).
     remote_direction: Option<String>,
-    /// SRTP media datagrams queued for the wire (drained by `poll_transmit`).
-    media_out: Vec<Vec<u8>>,
     /// Decoded PCM frames from inbound media (drained by `recv_audio`).
     audio_in: Vec<Vec<f32>>,
     /// Inbound-media diagnostics: datagrams demuxed as SRTP media, and how many
@@ -84,7 +82,6 @@ impl PeerSession {
             transport,
             media: None,
             remote_direction: None,
-            media_out: Vec::new(),
             audio_in: Vec::new(),
             media_seen: 0, decode_ok: 0, decode_err: 0,
             audio_pt: OPUS_PAYLOAD_TYPE,
@@ -122,7 +119,6 @@ impl PeerSession {
             transport,
             media: None,
             remote_direction: None,
-            media_out: Vec::new(),
             audio_in: Vec::new(),
             media_seen: 0, decode_ok: 0, decode_err: 0,
             audio_pt: OPUS_PAYLOAD_TYPE,
@@ -184,7 +180,12 @@ impl PeerSession {
     /// [`Self::set_remote_signaling`]. Unparseable lines are ignored.
     pub fn add_remote_candidate(&mut self, candidate: &str) -> Result<(), Error> {
         match parse_candidate_addr(candidate) {
-            Some(addr) => self.transport.add_remote_candidate(addr),
+            Some(addr) => {
+                // A `typ relay` candidate is reachable only by sending through our
+                // own relay (its TURN server won't accept our raw host/srflx).
+                let is_relay = candidate.contains("typ relay");
+                self.transport.add_remote_candidate(addr, is_relay)
+            }
             None => Ok(()),
         }
     }
@@ -209,15 +210,10 @@ impl PeerSession {
         self.transport.is_connected()
     }
 
-    /// Drain outbound datagrams (ICE/DTLS handshake + SRTP media): `(dest, bytes)`.
+    /// Drain outbound datagrams (ICE/DTLS handshake + SRTP media, relay-routed as
+    /// needed): `(dest, bytes)`. Media addressing + relay routing live in transport.
     pub fn poll_transmit(&mut self) -> Vec<(SocketAddr, Vec<u8>)> {
-        let mut out = self.transport.poll_transmit();
-        if let Some(dest) = self.transport.remote_addr() {
-            for dg in self.media_out.drain(..) {
-                out.push((dest, dg));
-            }
-        }
-        out
+        self.transport.poll_transmit()
     }
 
     /// Feed one inbound datagram from `src`; demuxed to ICE/DTLS/media. Decoded
@@ -270,7 +266,7 @@ impl PeerSession {
         self.ensure_media()?;
         let m = self.media.as_mut().ok_or(Error::NotConnected)?;
         let dg = m.send(pcm)?;
-        self.media_out.push(dg);
+        self.transport.queue_media(dg);
         Ok(())
     }
 
