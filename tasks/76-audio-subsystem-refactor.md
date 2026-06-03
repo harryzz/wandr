@@ -20,6 +20,7 @@ channels / volume, and stop hard-coding magic values.
 | Output MUTE — global (policy) | 5 | ✅ verified | `86e3b8f6` |
 | Output MUTE — per-app (host PCM gate) | 5 | ✅ verified | `35d68fee` |
 | MIC-mute / input-disable — global + per-app | 5 | ✅ verified (dormant until TX) | `1ffd8918` |
+| #6 port enum via binder `listAudioPorts` (dumpsys→binder) | — | ✅ verified | `1b20c1cb` |
 
 **Architecture of record:** arbiter decides, host applies, guest expresses
 intent ([[project_audio_routing_arbiter]]). Routing/volume/mute policy lives in
@@ -31,12 +32,16 @@ per-app}, all arbiter-decided, `effective = global || per-app`. Mic-mute is
 built + mechanism-verified but **dormant** until a guest opens capture (Signal
 RX-only); it activates with outbound mic.
 
+Port enumeration is now **binder `listAudioPorts`** (no dumpsys, no ART
+coupling), which required bumping **rsbinder→0.9.0 git** (0.8.0 mis-decoded
+`AudioPortFw`; see [[reference_rsbinder_version]]). Point-G API-of-record settled
+**binder-for-routing AND binder-for-port-enum** (dumpsys retained only in the
+diagnostic `--probe-audio-caps`).
+
 **Remaining:** outbound mic / TX itself (P1) — which also activates mic-mute;
-speakerphone microphony/AEC (P2 — task #10); replace startup `dumpsys` port-enum
-with binder `listAudioPorts` (task #6); live in-call speakerphone re-pin (task #7);
-scaffolding cleanup (design goal #5 — task-75 diag / `COMMS_MODE` / `RX_ONLY` in
-Signal); a final full-call re-verify (step 8). Point-G API-of-record settled
-(binder-for-routing + dumpsys-for-bulk-caps).
+speakerphone microphony/AEC (P2 — task #10); live in-call speakerphone re-pin
+(task #7); scaffolding cleanup (design goal #5 — task-75 diag / `COMMS_MODE` /
+`RX_ONLY` in Signal); a final full-call re-verify (step 8).
 
 ## Why (motivation)
 
