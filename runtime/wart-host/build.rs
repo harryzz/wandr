@@ -144,6 +144,10 @@ interface IDirectReportChannel {}
         // IAudioPolicyService / AudioPolicy* win for those 3 shared FQNs;
         // AudioPortFw & friends (11 framework types, no name clash) resolve here.
         let audioclient_aidl = aaudio_av.join("media/libaudioclient/aidl");
+        // frameworks-av/aidl/ — com.android.media.permission.* +
+        // VolumeShaper/Interpolator/MicrophoneInfoFw, the rest of the real
+        // IAudioPolicyService type closure (task 76 #6).
+        let av_aidl = aaudio_av.join("aidl");
         let audio_common_aidl = PathBuf::from(
             "vendor/aosp-system-hardware-interfaces/media/aidl"
         );
@@ -634,6 +638,25 @@ interface ISurfaceComposer {
         // IWindowSessionCallback is already minimal upstream (1 oneway
         // method, no imports). Used as-is — no patch needed.
 
+        // ── HeadTracking.aidl float-default patch (task 76 #6) ───────────────
+        // The real IAudioPolicyService pulls HeadTracking (via the spatializer
+        // methods) whose `float[6] headToStage = {0f, 0f, 0f, 0f, 0f, 0f}`
+        // default trips rsbinder-aidl 0.9.0's expression parser (the `0f` float
+        // literal). We never call the spatializer; strip the default so the file
+        // parses. In-place + idempotent → self-heals on submodule update (same
+        // pattern as the IMM/WMS stubs), keeps the submodule pristine.
+        {
+            let ht = audio_common_aidl.join("android/media/audio/common/HeadTracking.aidl");
+            if let Ok(s) = std::fs::read_to_string(&ht) {
+                if s.contains("headToStage = {0f") {
+                    let patched = s.replace(
+                        "float[6] headToStage = {0f, 0f, 0f, 0f, 0f, 0f};",
+                        "float[6] headToStage;");
+                    std::fs::write(&ht, patched).expect("patch HeadTracking.aidl");
+                }
+            }
+        }
+
         // Pass only the interface .aidl files; parcelables/enums in the same
         // package are resolved automatically via include_dir. Passing the full
         // dir causes the package modules to be re-emitted once per file (~3×).
@@ -647,11 +670,13 @@ interface ISurfaceComposer {
             .source(sensorsvc_aidl.join("android/frameworks/sensorservice/IEventQueueCallback.aidl"))
             .source(aaudio_aidl.join("aaudio/IAAudioService.aidl"))
             .source(aaudio_aidl.join("aaudio/IAAudioClient.aidl"))
-            // Call-audio control (Signal VoIP / future Phone app): a positional
-            // stub of IAudioPolicyService keeping only setPhoneState/setForceUse/
-            // getForceUse/getPhoneState real (the 3 enums live in the stubs dir;
-            // AudioMode resolves via audio_common_aidl). See the stub header.
-            .source(stubs.join("android/media/IAudioPolicyService.aidl"))
+            // Call-audio control (Signal VoIP / future Phone app): the REAL
+            // libaudioclient IAudioPolicyService — all 106 methods, codegen-
+            // derived (correct) transaction indices, full type closure resolves
+            // from the vendored AIDLs (audioclient + audio-common + av/aidl).
+            // Replaced the brittle hand-maintained positional slot-stub once
+            // rsbinder 0.9.0 could decode AudioPortFw (task 76 #6).
+            .source(audioclient_aidl.join("android/media/IAudioPolicyService.aidl"))
             .source(surfaceflinger_aidl_main.join("android/gui/ISurfaceComposer.aidl"))
             .source(imm_aidl_dir.join("android/view/IWindowManager.aidl"))
             .source(imm_aidl_dir.join("android/view/IWindowSession.aidl"))
@@ -673,9 +698,11 @@ interface ISurfaceComposer {
             .include_dir(surfaceflinger_aidl_extras.clone())
             .include_dir(imm_aidl_dir.clone())
             .include_dir(stubs.clone())
-            // After `stubs` so the stub IAudioPolicyService/AudioPolicy* win;
-            // provides AudioPortFw closure (task 76 #6).
+            // Real IAudioPolicyService closure (task 76 #6): libaudioclient/aidl
+            // (AudioPortFw, AudioPolicyForceUse, …) + frameworks-av/aidl
+            // (com.android.media.permission.*, VolumeShaper, MicrophoneInfoFw).
             .include_dir(audioclient_aidl.clone())
+            .include_dir(av_aidl.clone())
             .set_async_support(true)
             .output(PathBuf::from(&out_dir).join("aosp_hal_bindings.rs"))
             .generate()
@@ -692,6 +719,8 @@ interface ISurfaceComposer {
         println!("cargo:rerun-if-changed={}", aaudio_aidl.display());
         println!("cargo:rerun-if-changed={}", shmem_aidl.display());
         println!("cargo:rerun-if-changed={}", audio_common_aidl.display());
+        println!("cargo:rerun-if-changed={}", audioclient_aidl.display());
+        println!("cargo:rerun-if-changed={}", av_aidl.display());
         println!("cargo:rerun-if-changed={}", surfaceflinger_aidl_main.display());
         println!("cargo:rerun-if-changed={}", surfaceflinger_aidl_extras.display());
         println!("cargo:rerun-if-changed={}", imm_aidl_dir.display());
