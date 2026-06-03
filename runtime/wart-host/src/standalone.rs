@@ -1051,11 +1051,21 @@ fn run_cwasm_loop(
             } else if ev.kind == 10 || ev.kind == 11 {
                 // 10=key-down, 11=key-up. Action byte (0/1) matches the
                 // dispatch_*_v1/v2 contract.
-                let action = if ev.kind == 10 { 0u8 } else { 1u8 };
-                if let Err(e) = crate::input::dispatch_android_key(
-                    &skiko, &mut store, action, ev.key_code, ev.meta_state,
-                ) {
-                    log::warn!("standalone: dispatch_android_key failed: {e:#}");
+                // Task 76 P8 — VOLUME_UP(24)/VOLUME_DOWN(25) are system keys: the
+                // host (this is the focused app's process) steps the media volume
+                // on the active output device and swallows the event so it never
+                // reaches the guest.
+                if ev.key_code == 24 || ev.key_code == 25 {
+                    if ev.kind == 10 {
+                        crate::audio_policy_impl::adjust_volume(ev.key_code == 24);
+                    }
+                } else {
+                    let action = if ev.kind == 10 { 0u8 } else { 1u8 };
+                    if let Err(e) = crate::input::dispatch_android_key(
+                        &skiko, &mut store, action, ev.key_code, ev.meta_state,
+                    ) {
+                        log::warn!("standalone: dispatch_android_key failed: {e:#}");
+                    }
                 }
             }
         }
@@ -1207,6 +1217,8 @@ fn run_cwasm_loop(
                     // wart-arbiter-audio M3 — the arbiter started/ended a comms
                     // session on us; apply the global audio mode (dumb applier).
                     crate::audio_policy_impl::set_mode(comm);
+                    // Volume keys target the call's output device while a call is up.
+                    crate::audio_impl::set_comms_active(comm);
                 }
                 crate::ime_inbound::InboundEvent::CommRoute { speaker } => {
                     // wart-arbiter-audio — apply the arbiter's call route decision.

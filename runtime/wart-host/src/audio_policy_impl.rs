@@ -173,6 +173,32 @@ mod binder_path {
         }
     }
 
+    /// Hardware VOLUME_UP/DOWN handler. Adjusts the **media** volume by one step
+    /// on the device the active output is on: the call route (earpiece/speaker)
+    /// while a comms session is up, the loudspeaker otherwise — i.e. it follows
+    /// the arbiter's route decision (mirrored in `audio_impl`). Our call audio
+    /// rides the MEDIA stream (USAGE_MEDIA), so MEDIA volume is the lever for
+    /// both call and media. Step ≈ 1/10 of the range (≥1).
+    pub fn adjust_volume(up: bool) {
+        let device = if crate::audio_impl::comms_active() {
+            if crate::audio_impl::comms_route_speaker() {
+                AudioDeviceType::OUT_SPEAKER
+            } else {
+                AudioDeviceType::OUT_SPEAKER_EARPIECE
+            }
+        } else {
+            AudioDeviceType::OUT_SPEAKER
+        };
+        let (min, max) = media_volume_range().unwrap_or((0, 15));
+        let step = ((max - min) / 10).max(1);
+        let Some(cur) = get_media_volume(device) else {
+            log::warn!("audio-policy: volume key — read failed");
+            return;
+        };
+        let next = if up { cur + step } else { cur - step };
+        set_media_volume(device, next);
+    }
+
     /// Read-only-ish volume probe (`--probe-audio-volume`): reads the media
     /// range + current index on speaker & earpiece, then sets the speaker index
     /// to max, reads it back, and restores the previous value (self-restoring,
@@ -305,3 +331,10 @@ pub fn set_mode(_comm: bool) {}
 pub fn set_route(speaker: bool) { binder_path::set_route(speaker); }
 #[cfg(not(target_os = "android"))]
 pub fn set_route(_speaker: bool) {}
+
+/// Task-76 P8 — hardware VOLUME_UP(true)/VOLUME_DOWN(false) media-volume step on
+/// the active output device (call route while in a call, else loudspeaker).
+#[cfg(target_os = "android")]
+pub fn adjust_volume(up: bool) { binder_path::adjust_volume(up); }
+#[cfg(not(target_os = "android"))]
+pub fn adjust_volume(_up: bool) {}
