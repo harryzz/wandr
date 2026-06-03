@@ -167,6 +167,11 @@ pub enum InboundEvent {
     /// write path (silence). Orthogonal to the global policy mute.
     AppMute { muted: bool },
 
+    /// wart-arbiter-audio (P8) — mic-mute / input-disable: the arbiter pushed
+    /// `audio-policy mic-mute <on|off>` to the owner host, which gates its
+    /// capture read path (returns silence). Dormant until capture is opened.
+    MicMute { muted: bool },
+
     /// wart-arbiter-audio Ringer — the arbiter pushed `ringtone start|stop` for an
     /// incoming call. The owner host plays/stops a generated ringtone over AAudio
     /// (`ringer_impl`). `start=false` ⇒ stop.
@@ -429,6 +434,13 @@ fn parse_and_queue(line: &str) {
             "on"  => { if let Ok(mut q) = queue().lock() { q.push_back(InboundEvent::AppMute { muted: true }); } }
             "off" => { if let Ok(mut q) = queue().lock() { q.push_back(InboundEvent::AppMute { muted: false }); } }
             other => log::warn!("ime-inbound: bad audio-policy app-mute {other:?}"),
+        }
+    } else if let Some(rest) = line.strip_prefix("audio-policy mic-mute ") {
+        // wart-arbiter-audio P8 — mic-mute / input-disable: "<on|off>".
+        match rest.trim() {
+            "on"  => { if let Ok(mut q) = queue().lock() { q.push_back(InboundEvent::MicMute { muted: true }); } }
+            "off" => { if let Ok(mut q) = queue().lock() { q.push_back(InboundEvent::MicMute { muted: false }); } }
+            other => log::warn!("ime-inbound: bad audio-policy mic-mute {other:?}"),
         }
     } else if let Some(rest) = line.strip_prefix("ringtone ") {
         // wart-arbiter-audio Ringer — incoming-call ringtone.

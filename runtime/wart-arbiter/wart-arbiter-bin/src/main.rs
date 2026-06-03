@@ -144,8 +144,10 @@ fn main() {
                     // raw socket from a VOLUME key; CLI form for testing/scripting).
                     | "volume"
                     // wart-arbiter-audio P8 — global mute <on|off|toggle> +
-                    // per-app mute <pid|app-id> <on|off|toggle>.
-                    | "mute" | "app-mute"
+                    // per-app mute <pid|app-id> <on|off|toggle>; mic-mute
+                    // <on|off|toggle> (input/mic-disable, global); per-app
+                    // app-mic-mute <pid|app-id> <on|off|toggle>.
+                    | "mute" | "app-mute" | "mic-mute" | "app-mic-mute"
                     // Task 73 — WM geometry (handled by a core module, not the
                     // legacy match). The host normally sends this over the raw
                     // socket; the CLI form is for testing.

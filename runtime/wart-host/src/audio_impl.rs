@@ -811,6 +811,11 @@ mod binder_path {
                 r.wrapping_add(to_read as u64) as i64,
                 Ordering::Release,
             );
+            // Mic-mute (input gate): still DRAIN the ring (keep capture flowing,
+            // no overflow) but hand the guest SILENCE, so it sends silence and
+            // the peer hears nothing. Arbiter-decided; orthogonal to anything
+            // else. Dormant until a guest actually opens capture.
+            if super::mic_muted() { out.iter_mut().for_each(|s| *s = 0.0); }
             out
         }).unwrap_or_default()
     }
@@ -891,6 +896,21 @@ pub fn set_app_output_muted(muted: bool) {
 }
 pub fn app_output_muted() -> bool {
     APP_OUTPUT_MUTED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Mic-mute / input-disable — a process-wide gate (one wart-host = one app) the
+/// host applies at the capture READ path in `read_pcm_f32` (returns silence
+/// while still draining the ring). Arbiter-decided (`audio-policy mic-mute`).
+/// Dormant until a guest opens capture (today Signal is RX-only). When outbound
+/// mic (P1/TX) lands this mutes the mic to the peer + kills speakerphone
+/// microphony.
+static MIC_MUTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub fn set_mic_muted(muted: bool) {
+    MIC_MUTED.store(muted, std::sync::atomic::Ordering::Relaxed);
+    log::info!("audio: mic {}", if muted { "MUTED" } else { "unmuted" });
+}
+pub fn mic_muted() -> bool {
+    MIC_MUTED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 // ── Host-internal playback API ───────────────────────────────────────────────
