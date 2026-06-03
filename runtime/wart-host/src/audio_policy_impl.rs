@@ -190,6 +190,21 @@ mod binder_path {
         set_media_volume(device, next);
     }
 
+    /// Apply output mute/unmute on `device` (arbiter-decided). Uses the policy
+    /// volume setter's `muted` flag, preserving the current index so unmute
+    /// restores the prior level. `speaker` selects OUT_SPEAKER vs earpiece.
+    pub fn set_media_mute(speaker: bool, muted: bool) {
+        let Some(svc) = service() else { return };
+        let device = if speaker { AudioDeviceType::OUT_SPEAKER } else { AudioDeviceType::OUT_SPEAKER_EARPIECE };
+        let attr = media_attr();
+        let dev = dev_desc(device);
+        let cur = svc.r#getVolumeIndexForAttributes(&attr, &dev).unwrap_or(0);
+        match svc.r#setVolumeIndexForAttributes(&attr, &dev, cur, muted) {
+            Ok(())  => log::info!("audio-policy: media {} on {device:?} (idx={cur})", if muted { "MUTED" } else { "unmuted" }),
+            Err(e)  => log::warn!("audio-policy: setVolumeIndexForAttributes(mute) err: {e:?}"),
+        }
+    }
+
     /// Read-only-ish volume probe (`--probe-audio-volume`): reads the media
     /// range + current index on speaker & earpiece, then sets the speaker index
     /// to max, reads it back, and restores the previous value (self-restoring,
@@ -329,6 +344,12 @@ pub fn set_route(_speaker: bool) {}
 pub fn adjust_volume_on(speaker: bool, up: bool) { binder_path::adjust_volume_on(speaker, up); }
 #[cfg(not(target_os = "android"))]
 pub fn adjust_volume_on(_speaker: bool, _up: bool) {}
+
+/// Task-76 — apply output mute/unmute on the arbiter-chosen device.
+#[cfg(target_os = "android")]
+pub fn set_media_mute(speaker: bool, muted: bool) { binder_path::set_media_mute(speaker, muted); }
+#[cfg(not(target_os = "android"))]
+pub fn set_media_mute(_speaker: bool, _muted: bool) {}
 
 /// Task-76 P8 — forward a hardware VOLUME_UP(true)/DOWN(false) press to the
 /// arbiter, the single volume decider. The arbiter picks the target device +

@@ -1225,6 +1225,10 @@ fn run_cwasm_loop(
                     // device the arbiter chose. We are the owner it picked.
                     crate::audio_policy_impl::adjust_volume_on(speaker, up);
                 }
+                crate::ime_inbound::InboundEvent::MuteSet { muted, speaker } => {
+                    // Arbiter-decided output mute (task 76 P8): apply on the chosen device.
+                    crate::audio_policy_impl::set_media_mute(speaker, muted);
+                }
                 crate::ime_inbound::InboundEvent::CommRoute { speaker } => {
                     // wart-arbiter-audio — apply the arbiter's call route decision.
                     // Two mechanisms: setForceUse(COMMUNICATION) (legacy lever),

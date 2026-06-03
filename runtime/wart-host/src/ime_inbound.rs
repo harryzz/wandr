@@ -158,6 +158,10 @@ pub enum InboundEvent {
     /// host, which applies it via `audio_policy_impl::adjust_volume_on`.
     VolumeAdjust { up: bool, speaker: bool },
 
+    /// wart-arbiter-audio (P8) — the arbiter decided an output mute change and
+    /// pushed `audio-policy mute <on|off> <speaker|earpiece>` to the owner host.
+    MuteSet { muted: bool, speaker: bool },
+
     /// wart-arbiter-audio Ringer — the arbiter pushed `ringtone start|stop` for an
     /// incoming call. The owner host plays/stops a generated ringtone over AAudio
     /// (`ringer_impl`). `start=false` ⇒ stop.
@@ -402,6 +406,17 @@ fn parse_and_queue(line: &str) {
                 }
             }
             _ => log::warn!("ime-inbound: bad audio-policy volume {rest:?}"),
+        }
+    } else if let Some(rest) = line.strip_prefix("audio-policy mute ") {
+        // wart-arbiter-audio P8 — output mute: "<on|off> <speaker|earpiece>".
+        let t: Vec<&str> = rest.split_whitespace().collect();
+        match (t.first().copied(), t.get(1).copied()) {
+            (Some(st), Some(dev)) if (st == "on" || st == "off") && (dev == "speaker" || dev == "earpiece") => {
+                if let Ok(mut q) = queue().lock() {
+                    q.push_back(InboundEvent::MuteSet { muted: st == "on", speaker: dev == "speaker" });
+                }
+            }
+            _ => log::warn!("ime-inbound: bad audio-policy mute {rest:?}"),
         }
     } else if let Some(rest) = line.strip_prefix("ringtone ") {
         // wart-arbiter-audio Ringer — incoming-call ringtone.

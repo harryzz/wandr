@@ -116,6 +116,9 @@ pub struct AudioModule {
     /// The call route the arbiter last decided (`true` = loudspeaker, `false` =
     /// earpiece). Volume keys target this device while a call is up.
     comms_speaker: bool,
+    /// Output-mute state (the arbiter is the single source of truth, so `toggle`
+    /// works). Applied by the owner host via the policy volume setter's `muted`.
+    muted: bool,
     /// The pid with an active incoming-call ring, if any (the Ringer; one at a time).
     ringing: Option<i32>,
     /// System ringer policy — what a ring does (ringtone/vibrate/silent).
@@ -380,6 +383,20 @@ impl AudioModule {
     /// apply the step. This dedups the key (which the framework delivers to
     /// several wart surfaces) and keeps the choice correct regardless of which
     /// surface caught it. Host applies via `audio-policy volume <dir> <dev>`.
+    /// Resolve the host + device an audio control should act on: the comms owner
+    /// on the call route while a call is up, else the foreground app, else the
+    /// forwarding host (`sender`, so a control still works with no Foreground
+    /// slot — e.g. keyguard locked). The single place the "who/where" is decided.
+    fn audio_target(&self, ctx: &mut Ctx, sender: Option<i32>) -> Option<(i32, &'static str)> {
+        if let Some(pid) = self.comms {
+            return Some((pid, if self.comms_speaker { "speaker" } else { "earpiece" }));
+        }
+        ctx.store.display(PRIMARY_DISPLAY)
+            .and_then(|d| d.foreground_slot()).map(|s| s.pid)
+            .or(sender)
+            .map(|pid| (pid, "speaker"))
+    }
+
     fn cmd_volume(&mut self, args: &str, ctx: &mut Ctx) -> Reply {
         // "<up|down> [sender-pid]" — the host forwards its own pid so we always
         // have a live applier even when there's no Foreground slot (e.g. while
@@ -391,20 +408,35 @@ impl AudioModule {
             other        => return Reply::err(format!("volume-bad-dir {other:?}")),
         };
         let sender = t.get(1).and_then(|p| p.parse::<i32>().ok());
-        let (owner, dev) = if let Some(pid) = self.comms {
-            (pid, if self.comms_speaker { "speaker" } else { "earpiece" })
-        } else if let Some(pid) = ctx.store.display(PRIMARY_DISPLAY)
-            .and_then(|d| d.foreground_slot()).map(|s| s.pid)
-            .or(sender)
-        {
-            (pid, "speaker")
-        } else {
+        let Some((owner, dev)) = self.audio_target(ctx, sender) else {
             return Reply::err("volume-no-target");
         };
         let dir = if up { "up" } else { "down" };
         ctx.deliver_to_host(owner, format!("audio-policy volume {dir} {dev}\n"));
         log::info!("arbiter: volume {dir} → pid={owner} {dev}");
         Reply::ok(format!("volume {dir} pid={owner} {dev}"))
+    }
+
+    /// `mute <on|off|toggle> [sender-pid]` — task 76. Output mute, arbiter-owned
+    /// (so `toggle` has a single source of truth). Same target resolution as
+    /// volume; the owner host applies it via the policy volume setter's `muted`.
+    fn cmd_mute(&mut self, args: &str, ctx: &mut Ctx) -> Reply {
+        let t: Vec<&str> = args.split_whitespace().collect();
+        let new = match t.first().copied() {
+            Some("on")     => true,
+            Some("off")    => false,
+            Some("toggle") => !self.muted,
+            other          => return Reply::err(format!("mute-bad-arg {other:?}")),
+        };
+        let sender = t.get(1).and_then(|p| p.parse::<i32>().ok());
+        let Some((owner, dev)) = self.audio_target(ctx, sender) else {
+            return Reply::err("mute-no-target");
+        };
+        self.muted = new;
+        let state = if new { "on" } else { "off" };
+        ctx.deliver_to_host(owner, format!("audio-policy mute {state} {dev}\n"));
+        log::info!("arbiter: mute {state} → pid={owner} {dev}");
+        Reply::ok(format!("mute {state} pid={owner} {dev}"))
     }
 
     /// `audio-focus-list` — the stack, owner last. CLI + inspection.
@@ -427,7 +459,7 @@ impl ArbiterModule for AudioModule {
             "audio-focus-request", "audio-focus-abandon", "audio-focus-list",
             "audio-call-start", "audio-call-end", "audio-route",
             "audio-ring-start", "audio-ring-stop", "audio-ringer-mode",
-            "volume",
+            "volume", "mute",
         ]
     }
 
@@ -443,6 +475,7 @@ impl ArbiterModule for AudioModule {
             "audio-ring-stop"     => self.cmd_ring_stop(args, ctx),
             "audio-ringer-mode"   => self.cmd_ringer_mode(args, ctx),
             "volume"              => self.cmd_volume(args, ctx),
+            "mute"                => self.cmd_mute(args, ctx),
             other => Reply::err(format!("audio-unknown-verb {other}")),
         }
     }

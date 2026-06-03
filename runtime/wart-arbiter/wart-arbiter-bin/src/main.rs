@@ -143,6 +143,8 @@ fn main() {
                     // wart-arbiter-audio P8 — volume <up|down> (host→arbiter on the
                     // raw socket from a VOLUME key; CLI form for testing/scripting).
                     | "volume"
+                    // wart-arbiter-audio P8 — output mute <on|off|toggle>.
+                    | "mute"
                     // Task 73 — WM geometry (handled by a core module, not the
                     // legacy match). The host normally sends this over the raw
                     // socket; the CLI form is for testing.
