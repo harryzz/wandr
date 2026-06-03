@@ -70,7 +70,7 @@ android_logger   = "0.14"
 ndk              = "0.9"
 ndk-context      = "0.1"
 android_system_properties = "0.1"
-rsbinder         = { version = "=0.8.0", features = ["android_11_plus"] }
+rsbinder         = { git = "https://github.com/hiking90/rsbinder", rev = "5e999e04a", features = ["android_11_plus"] }   # task 76 #6 trial: does master (0.9.0) decode AudioPortFw?
 async-trait      = "0.1"
 # tokio current-thread runtime for the BnEventQueueCallback registration
 # in sensors_impl.rs. Earlier task-16 work showed that a hand-rolled
@@ -86,7 +86,7 @@ winit      = { version = "0.30", features = [] }
 
 [build-dependencies]
 cc = "1"
-rsbinder-aidl = "=0.8.0"
+rsbinder-aidl = { git = "https://github.com/hiking90/rsbinder", rev = "5e999e04a" }   # task 76 #6 trial
 
 [features]
 default = []

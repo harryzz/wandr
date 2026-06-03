@@ -138,6 +138,12 @@ interface IDirectReportChannel {}
         let aaudio_av  = PathBuf::from("vendor/aosp-frameworks-av");
         let aaudio_aidl = aaudio_av.join("media/libaaudio/src/binding/aidl");
         let shmem_aidl  = aaudio_av.join("media/libshmem/aidl");
+        // Framework (libaudioclient, native audioserver) AIDL — resolves the
+        // `android.media.AudioPortFw` closure for IAudioPolicyService.listAudioPorts
+        // (task 76 #6). Listed as an include AFTER `stubs` so the stub's
+        // IAudioPolicyService / AudioPolicy* win for those 3 shared FQNs;
+        // AudioPortFw & friends (11 framework types, no name clash) resolve here.
+        let audioclient_aidl = aaudio_av.join("media/libaudioclient/aidl");
         let audio_common_aidl = PathBuf::from(
             "vendor/aosp-system-hardware-interfaces/media/aidl"
         );
@@ -667,6 +673,9 @@ interface ISurfaceComposer {
             .include_dir(surfaceflinger_aidl_extras.clone())
             .include_dir(imm_aidl_dir.clone())
             .include_dir(stubs.clone())
+            // After `stubs` so the stub IAudioPolicyService/AudioPolicy* win;
+            // provides AudioPortFw closure (task 76 #6).
+            .include_dir(audioclient_aidl.clone())
             .set_async_support(true)
             .output(PathBuf::from(&out_dir).join("aosp_hal_bindings.rs"))
             .generate()

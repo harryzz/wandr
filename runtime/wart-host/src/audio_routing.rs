@@ -84,18 +84,16 @@ pub struct DeviceModel {
 static MODEL: std::sync::OnceLock<DeviceModel> = std::sync::OnceLock::new();
 
 impl DeviceModel {
-    /// Process-wide model, built lazily from `dumpsys media.audio_policy`.
+    /// Process-wide model, built lazily by enumerating ports over binder
+    /// (`IAudioPolicyService.listAudioPorts`, native audioserver — task 76 #6).
+    /// Replaces the earlier `dumpsys media.audio_policy` parse: no shell, no
+    /// ART-layer coupling. Requires rsbinder ≥ 0.9.0 (0.8.0 mis-decoded
+    /// `AudioPortFw`).
     #[cfg(target_os = "android")]
     pub fn get() -> &'static DeviceModel {
         MODEL.get_or_init(|| {
-            let dump = match std::process::Command::new("dumpsys")
-                .arg("media.audio_policy").output()
-            {
-                Ok(o) => String::from_utf8_lossy(&o.stdout).into_owned(),
-                Err(e) => { log::warn!("audio-routing: dumpsys failed: {e}"); String::new() }
-            };
-            let devices = parse_devices(&dump);
-            log::info!("audio-routing: device model built — {} ports", devices.len());
+            let devices = crate::audio_policy_impl::enumerate_device_ports();
+            log::info!("audio-routing: device model built — {} ports (binder listAudioPorts)", devices.len());
             DeviceModel { devices }
         })
     }

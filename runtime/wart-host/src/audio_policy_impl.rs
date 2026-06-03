@@ -22,6 +22,13 @@ mod binder_path {
         IAudioPolicyService::IAudioPolicyService,
     };
     use crate::binder_aidl::android::media::audio::common::AudioMode::AudioMode;
+    use crate::binder_aidl::android::media::{
+        AudioPortFw::AudioPortFw,
+        AudioPortRole::AudioPortRole,
+        AudioPortType::AudioPortType,
+    };
+    use crate::binder_aidl::android::media::audio::common::Int::Int;
+    use crate::binder_aidl::android::media::audio::common::AudioPortExt::AudioPortExt;
     use crate::binder_aidl::android::media::audio::common::{
         AudioAttributes::AudioAttributes,
         AudioContentType::AudioContentType,
@@ -245,6 +252,73 @@ mod binder_path {
         }
     }
 
+    /// Map the common `AudioDeviceType` to a legacy `AUDIO_DEVICE_(OUT|IN)_*`
+    /// token — the same shape `dumpsys` produced — so the routing core's
+    /// type-token lookup works unchanged. Speaker/earpiece are mapped precisely
+    /// (routing needs them); others descriptively.
+    fn device_type_token(t: AudioDeviceType) -> String {
+        if t == AudioDeviceType::OUT_SPEAKER          { "AUDIO_DEVICE_OUT_SPEAKER".into() }
+        else if t == AudioDeviceType::OUT_SPEAKER_EARPIECE { "AUDIO_DEVICE_OUT_EARPIECE".into() }
+        else if t == AudioDeviceType::OUT_SPEAKER_SAFE     { "AUDIO_DEVICE_OUT_SPEAKER_SAFE".into() }
+        else if t == AudioDeviceType::OUT_TELEPHONY_TX     { "AUDIO_DEVICE_OUT_TELEPHONY_TX".into() }
+        else { format!("AUDIO_DEVICE_TYPE_{}", t.0) }
+    }
+
+    /// Task 76 #6 — enumerate audio **device** ports over binder (native
+    /// audioserver, `listAudioPorts`) instead of parsing `dumpsys`. Returns the
+    /// device-independent port table the routing core consumes (port id + type +
+    /// direction). Requires rsbinder ≥ master/0.9.0 (0.8.0 mis-decoded
+    /// `AudioPortFw`). Empty on error. Two-pass: count, then fetch (the ports
+    /// vec stays empty — the service allocates + fills it).
+    pub fn enumerate_device_ports() -> Vec<crate::audio_routing::AudioDeviceCaps> {
+        use crate::audio_routing::{AudioDeviceCaps, Direction};
+        let mut out = Vec::new();
+        if crate::binder::init().is_err() { return out; }
+        let Some(svc) = service() else { return out };
+        let mut count = Int { r#value: 0 };
+        let mut tmp: Vec<AudioPortFw> = Vec::new();
+        if svc.r#listAudioPorts(AudioPortRole::NONE, AudioPortType::DEVICE, &mut count, &mut tmp).is_err() {
+            log::warn!("audio-routing: listAudioPorts(count) failed"); return out;
+        }
+        let mut count2 = Int { r#value: count.r#value.max(0) };
+        let mut ports: Vec<AudioPortFw> = Vec::new();
+        if let Err(e) = svc.r#listAudioPorts(AudioPortRole::NONE, AudioPortType::DEVICE, &mut count2, &mut ports) {
+            log::warn!("audio-routing: listAudioPorts(fetch) failed: {e:?}"); return out;
+        }
+        for p in &ports {
+            // A device port's ext carries the AudioDevice (type + address).
+            let dev_type = match &p.r#hal.r#ext {
+                AudioPortExt::r#Device(d) => d.r#device.r#type.r#type,
+                _ => continue,
+            };
+            let direction = if dev_type.0 >= AudioDeviceType::OUT_DEFAULT.0 {
+                Direction::Output
+            } else {
+                Direction::Input
+            };
+            out.push(AudioDeviceCaps {
+                direction,
+                port_id: p.r#hal.r#id,
+                name: p.r#hal.r#name.clone(),
+                type_token: device_type_token(dev_type),
+                formats: Vec::new(),
+                sample_rates: Vec::new(),
+                channel_masks: Vec::new(),
+            });
+        }
+        out
+    }
+
+    /// `--probe-audio-ports`: log the binder-enumerated device ports.
+    pub fn probe_list_audio_ports() {
+        let ports = enumerate_device_ports();
+        log::info!("audio-caps: listAudioPorts (binder) -> {} device ports", ports.len());
+        for d in &ports {
+            log::info!("audio-caps: port id={} {:?} {} name={:?}",
+                d.port_id, d.direction, d.type_token, d.name);
+        }
+    }
+
     /// Read-only probe: does a root/su caller reach the policy service, and what
     /// are the current phone state + communication routing? No side effects.
     pub fn probe() {
@@ -318,6 +392,20 @@ pub fn probe_devices_for_attributes() { log::warn!("audio-caps devices-for-attr:
 pub fn probe_volume() { binder_path::probe_volume(); }
 #[cfg(not(target_os = "android"))]
 pub fn probe_volume() { log::warn!("audio-caps volume: android-only build"); }
+
+/// Task-76 #6 port-enum probe (`--probe-audio-ports`): listAudioPorts over binder.
+#[cfg(target_os = "android")]
+pub fn probe_list_audio_ports() { binder_path::probe_list_audio_ports(); }
+#[cfg(not(target_os = "android"))]
+pub fn probe_list_audio_ports() { log::warn!("audio-caps ports: android-only build"); }
+
+/// Task-76 #6 — enumerate device ports over binder (the routing core's source).
+#[cfg(target_os = "android")]
+pub fn enumerate_device_ports() -> Vec<crate::audio_routing::AudioDeviceCaps> {
+    binder_path::enumerate_device_ports()
+}
+#[cfg(not(target_os = "android"))]
+pub fn enumerate_device_ports() -> Vec<crate::audio_routing::AudioDeviceCaps> { Vec::new() }
 
 /// Routing write probe (`--probe-audio-policy-route <speaker|earpiece>`):
 /// drives the COMMUNICATION force-use then restores it.

@@ -2721,12 +2721,12 @@ dependencies = [
 
 [[package]]
 name = "rsbinder"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b0207f72798efb685a6ece16a5371a50b6c8d3d28910b5bd7822390d482cb71"
+version = "0.9.0"
+source = "git+https://github.com/hiking90/rsbinder?rev=5e999e04a#5e999e04aacc5be355ee9ed9d78cf5fbdabedb54"
 dependencies = [
  "async-trait",
  "downcast-rs 2.0.2",
+ "libc",
  "log",
  "pretty-hex",
  "rsbinder-aidl",
@@ -2737,9 +2737,8 @@ dependencies = [
 
 [[package]]
 name = "rsbinder-aidl"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29e825dc38822f987756db83895ea43533846c0a027553bf81f61573fd479318"
+version = "0.9.0"
+source = "git+https://github.com/hiking90/rsbinder?rev=5e999e04a#5e999e04aacc5be355ee9ed9d78cf5fbdabedb54"
 dependencies = [
  "convert_case",
  "miette",
@@ -2752,9 +2751,9 @@ dependencies = [
 
 [[package]]
 name = "rsproperties"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b98d55abde44982a00d67a84809166ea8f5c143abc86818f555485f19766cfe4"
+checksum = "7822263cfb0ee69f42277c46fe8f02143aaf31510278de8802f6d35d2f6e57a9"
 dependencies = [
  "log",
  "pretty-hex",

@@ -109,6 +109,16 @@ fn main() {
         return;
     }
 
+    // Task-76 #6 — enumerate audio ports over binder (listAudioPorts) instead
+    // of dumpsys; tests AudioPortFw decode at runtime.
+    if args.iter().any(|a| a == "--probe-audio-ports") {
+        android_logger::init_once(
+            android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
+        );
+        wasm_android_host::audio_policy_impl::probe_list_audio_ports();
+        return;
+    }
+
     // Task-76 routing core (step 4): build the live device model and log the
     // resolved stream plan for every intent (read-only). See audio_routing.rs.
     if args.iter().any(|a| a == "--probe-audio-route") {

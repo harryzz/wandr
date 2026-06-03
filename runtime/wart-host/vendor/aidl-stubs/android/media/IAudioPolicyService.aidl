@@ -22,6 +22,10 @@ import android.media.audio.common.AudioMode;
 import android.media.audio.common.AudioAttributes;
 import android.media.audio.common.AudioDevice;
 import android.media.audio.common.AudioDeviceDescription;
+import android.media.audio.common.Int;
+import android.media.AudioPortFw;
+import android.media.AudioPortRole;
+import android.media.AudioPortType;
 
 interface IAudioPolicyService {
     void slot_0();
@@ -77,7 +81,11 @@ interface IAudioPolicyService {
     void slot_40();
     void slot_41();
     void slot_42();
-    void slot_43();
+    // index 43 — task 76 #6: enumerate audio ports over binder (native
+    // audioserver) instead of shelling dumpsys. Returns the framework AudioPortFw
+    // (deep, 6 unions, all vendored) — trialling whether rsbinder-aidl 0.8.0
+    // generates + decodes it.
+    int listAudioPorts(AudioPortRole role, AudioPortType type, inout Int count, out AudioPortFw[] ports);
     void slot_44();
     void slot_45();
     void slot_46();
