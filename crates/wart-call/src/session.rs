@@ -238,6 +238,11 @@ impl PeerSession {
         self.media.as_ref().map(|m| m.rtp_diag()).unwrap_or((0, 0, 0))
     }
 
+    /// DIAG: the peer's RTP `(payload_type, ssrc)`; zeros until media exists.
+    pub fn rtp_peer_ids(&self) -> (u8, u32) {
+        self.media.as_ref().map(|m| m.rtp_peer_ids()).unwrap_or((0, 0))
+    }
+
     pub fn handle_timeout(&mut self, now: Instant) {
         self.transport.handle_timeout(now);
         let _ = self.ensure_media();

@@ -78,8 +78,14 @@ impl core::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// Opus dynamic payload type used by WebRTC (a=rtpmap:111 opus/48000/2).
-pub const OPUS_PAYLOAD_TYPE: u8 = 111;
+/// Opus dynamic payload type. **102** — the value ringrtc/Signal uses for Opus
+/// (captured on the wire from a real Signal peer: peer_pt=102 ssrc=0x7d2). A
+/// real ringrtc client accepts our unsignaled audio SSRC only if the PT matches
+/// a registered receive codec; PT 111 (the browser/Chrome default) is NOT in
+/// ringrtc's receive map, so it silently dropped our outbound stream. The SDP
+/// (`to_sdp`) advertises this same PT, and libwebrtc honors any dynamic PT, so
+/// the WebRTC-native path stays compatible too.
+pub const OPUS_PAYLOAD_TYPE: u8 = 102;
 /// The audio device sample rate wart uses end to end.
 pub const SAMPLE_RATE: u32 = 48_000;
 

@@ -73,6 +73,10 @@ pub struct MediaSession {
     rx_seq_gaps: u64,
     rx_ts_step: u32,
     rx_payload_len: usize,
+    // DIAG: the PT + SSRC the PEER sends with — tells us what ringrtc expects us
+    // to send on (its audio receiver demuxes by these; a mismatch = it drops us).
+    rx_pt: u8,
+    rx_ssrc: u32,
 }
 
 impl MediaSession {
@@ -108,12 +112,21 @@ impl MediaSession {
             rx_seq_gaps: 0,
             rx_ts_step: 0,
             rx_payload_len: 0,
+            rx_pt: 0,
+            rx_ssrc: 0,
         })
     }
 
     /// DIAG: inbound RTP stats `(seq_gaps, last_ts_step, last_payload_len)`.
     pub fn rtp_diag(&self) -> (u64, u32, usize) {
         (self.rx_seq_gaps, self.rx_ts_step, self.rx_payload_len)
+    }
+
+    /// DIAG: the peer's RTP `(payload_type, ssrc)` — what ringrtc sends with, and
+    /// (by symmetry) what its audio receiver demuxes for. We send PT 102 / ssrc
+    /// 0xA|0xB; if the peer uses something else, it likely drops our stream.
+    pub fn rtp_peer_ids(&self) -> (u8, u32) {
+        (self.rx_pt, self.rx_ssrc)
     }
 
     /// Frames per 20 ms tick at this sample rate (e.g. 960 @ 48 kHz).
@@ -161,6 +174,8 @@ impl MediaSession {
         self.rx_prev_seq = Some(seq);
         self.rx_prev_ts = Some(ts);
         self.rx_payload_len = pkt.payload.len();
+        self.rx_pt = pkt.header.payload_type;
+        self.rx_ssrc = pkt.header.ssrc;
         // Decode at the packet's EXACT sample count, read from its Opus TOC. The peer
         // packetizes 60 ms frames (2880 samples), not our 20 ms — decoding into a
         // 960-sample buffer dropped 2/3 of every packet (garbled). But opus-rs 0.1.22

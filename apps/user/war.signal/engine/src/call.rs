@@ -219,6 +219,9 @@ pub struct MediaStats {
     pub rtp_seq_gaps: u64,
     pub rtp_ts_step: u32,
     pub rtp_payload_len: usize,
+    // Peer's RTP demux ids (what ringrtc sends with → what it expects from us).
+    pub peer_pt: u8,
+    pub peer_ssrc: u32,
 }
 
 impl ActiveCall {
@@ -380,6 +383,7 @@ impl CallEngine {
         self.active.as_ref().map(|a| {
             let (srtp_seen, decode_ok, decode_err) = a.call.media_diag();
             let (rtp_seq_gaps, rtp_ts_step, rtp_payload_len) = a.call.rtp_diag();
+            let (peer_pt, peer_ssrc) = a.call.rtp_peer_ids();
             MediaStats {
                 state: a.call.state(),
                 udp_tx: a.udp_tx,
@@ -396,6 +400,8 @@ impl CallEngine {
                 rtp_seq_gaps,
                 rtp_ts_step,
                 rtp_payload_len,
+                peer_pt,
+                peer_ssrc,
             }
         })
     }

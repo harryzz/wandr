@@ -274,6 +274,11 @@ impl SignalCall {
         self.session.rtp_diag()
     }
 
+    /// DIAG: the peer's RTP `(payload_type, ssrc)` — what ringrtc actually sends.
+    pub fn rtp_peer_ids(&self) -> (u8, u32) {
+        self.session.rtp_peer_ids()
+    }
+
     pub fn call_id(&self) -> u64 {
         self.call_id
     }
