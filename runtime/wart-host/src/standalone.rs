@@ -1209,8 +1209,14 @@ fn run_cwasm_loop(
                     crate::audio_policy_impl::set_mode(comm);
                 }
                 crate::ime_inbound::InboundEvent::CommRoute { speaker } => {
-                    // wart-arbiter-audio M3 — apply the call routing (speaker/earpiece).
+                    // wart-arbiter-audio — apply the arbiter's call route decision.
+                    // Two mechanisms: setForceUse(COMMUNICATION) (legacy lever),
+                    // AND the per-stream deviceIds pin that actually moves our
+                    // USAGE_MEDIA call stream — the latter via set_comms_route,
+                    // applied when the call track (re)opens. See
+                    // [[project_audio_routing_arbiter]].
                     crate::audio_policy_impl::set_route(speaker);
+                    crate::audio_impl::set_comms_route(speaker);
                 }
                 crate::ime_inbound::InboundEvent::Ringtone { start } => {
                     // wart-arbiter-audio Ringer — play/stop the incoming-call ringtone.

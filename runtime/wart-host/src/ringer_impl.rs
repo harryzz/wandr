@@ -67,7 +67,10 @@ fn ring_loop() {
         channel_layout: ChannelLayout::Stereo,
         format: Format::PcmF32,
     };
-    let track = crate::audio_impl::create_track(cfg);
+    // The ringtone is a fixed-intent route — the loud speaker, never the
+    // earpiece (which the classless guest `create_track` defaults to). Express
+    // that intent directly instead of inheriting the comms route.
+    let track = crate::audio_impl::create_track_routed(cfg, crate::audio_routing::Route::Ringtone);
     if track == 0 {
         RINGING.store(false, Ordering::SeqCst);
         return;

@@ -71,7 +71,11 @@ mod binder_path {
     // won't pull a media stream — so call audio MUST be tagged voice-comms or
     // the shared mixer's readCounter never advances. (Phase-A hard-code; Phase
     // B plumbs `usage` through the audio WIT track-config.)
+    // Kept for reference / the matrix probe; the live path now sources usage +
+    // content from the routing core's StreamPlan (task 76).
+    #[allow(dead_code)]
     const AAUDIO_USAGE_VOICE_COMMUNICATION: i32 = 2;
+    #[allow(dead_code)]
     const AAUDIO_CONTENT_TYPE_SPEECH:       i32 = 1;
     // AAUDIO_CHANNEL_MONO   = FRONT_LEFT          = bit 0  (0x1)
     // AAUDIO_CHANNEL_STEREO = FRONT_LEFT|RIGHT    = bits 0+1 (0x3)
@@ -326,46 +330,41 @@ mod binder_path {
         }
     }
 
-    // Earpiece output-port id for the call-audio experiment (Pixel 2 XL:
-    // dumpsys media.audio_policy → "Port ID: 2; Earpiece"). Empty (= policy
-    // default, i.e. speaker) when WART_EARPIECE=0. Other devices may differ;
-    // a later proper version should enumerate ports instead of hard-coding 2.
-    fn earpiece_device_ids() -> Vec<i32> {
-        if std::env::var("WART_EARPIECE").as_deref() == Ok("0") {
-            Vec::new()
-        } else {
-            vec![2]
-        }
-    }
-
-    pub fn create_track(cfg: super::TrackConfig) -> u32 {
+    /// Open an output stream for an intent [`Route`], resolving usage / device /
+    /// format from the routing core ([[project_audio_routing_arbiter]]): the
+    /// arbiter decides the `Route` (for calls), the host applies it here by
+    /// pinning `StreamParameters.deviceIds` to the resolved port. Channels stay
+    /// guest-provided (`cfg.channel_layout`) for now — host-owned channel
+    /// authority + mono→stereo upmix is a later refinement.
+    pub fn open_routed(cfg: super::TrackConfig, route: crate::audio_routing::Route) -> u32 {
+        let plan = crate::audio_routing::DeviceModel::get().resolve_output(route);
         let (channels, channel_mask) = channel_of(&cfg);
+        log::info!(
+            "audio: create_track route={:?} -> [{}] usage={} content={} deviceIds={:?} (ch={channels})",
+            route, plan.label, plan.usage, plan.content_type, plan.device_ids,
+        );
         let params = StreamParameters {
-            r#channelMask:         channel_mask,
-            r#sampleRate:          cfg.sample_rate as i32,
-            r#sharingMode:         AAUDIO_SHARING_MODE_SHARED,
-            r#audioFormat:         pcm_f32_format(),
-            r#direction:           AAUDIO_DIRECTION_OUTPUT,
-            // USAGE_MEDIA is the ONLY output usage AAudio can open on this device:
-            // the policy routes it to the primary mixer (MMAP fails -19 → legacy
-            // Shared fallback succeeds). USAGE_VOICE_COMMUNICATION routes to a
-            // voice/telephony output with no AAudio mixer profile → -889 in every
-            // mode (verified task 75). Call audio plays on the media path; the
-            // comms-mode ducking is avoided by NOT entering IN_COMMUNICATION
-            // (guest COMMS_MODE=false).
-            r#usage:               AAUDIO_USAGE_MEDIA,
-            r#contentType:         AAUDIO_CONTENT_TYPE_MUSIC,
-            // EXPERIMENT: pin output to the EARPIECE port (id 2 on this device:
-            // dumpsys media.audio_policy → "Port ID: 2; Earpiece") so a call plays
-            // to the ear, not the loud speaker. AAudio deviceIds = audio-port ids;
-            // the earpiece is in the output MixPort's supported devices. If the
-            // policy rejects a MEDIA stream there, openStream may fail — watch the
-            // log. (Routes ALL host playback for now; plumb a per-call flag if it
-            // works.) Set WART_EARPIECE=0 in env to disable without a rebuild.
-            r#deviceIds:           earpiece_device_ids(),
+            r#channelMask: channel_mask,
+            r#sampleRate:  cfg.sample_rate as i32,
+            r#sharingMode: plan.sharing,
+            r#audioFormat: if plan.f32_format { pcm_f32_format() } else { pcm_i16_format() },
+            r#direction:   AAUDIO_DIRECTION_OUTPUT,
+            r#usage:       plan.usage,
+            r#contentType: plan.content_type,
+            r#deviceIds:   plan.device_ids,
             ..Default::default()
         };
         open_pcm_stream(params, channels, /*capture=*/ false)
+    }
+
+    /// WIT `create-track` path. The guest doesn't yet declare a stream class
+    /// (increment 2), so a guest track follows the **arbiter's current comms
+    /// route** — `Route::Call` with the speaker/earpiece the arbiter last
+    /// decided (default earpiece). This is what makes the arbiter's routing
+    /// decision actually move the call's USAGE_MEDIA stream (a per-stream
+    /// `deviceIds` pin — `setForceUse(COMMUNICATION)` does not redirect it).
+    pub fn create_track(cfg: super::TrackConfig) -> u32 {
+        open_routed(cfg, crate::audio_routing::Route::Call { speaker: super::comms_route_speaker() })
     }
 
     /// Open a PCM mic-capture stream (AAUDIO_DIRECTION_INPUT). Symmetric to
@@ -373,14 +372,15 @@ mod binder_path {
     /// start / pause / pending-frames / close all work on them unchanged.
     /// The PCM frames flow the other way — drain them with read_pcm_f32.
     pub fn create_capture(cfg: super::TrackConfig) -> u32 {
+        let plan = crate::audio_routing::DeviceModel::get().resolve_capture();
         let (channels, channel_mask) = channel_of(&cfg);
         let params = StreamParameters {
-            r#channelMask:         channel_mask,
-            r#sampleRate:          cfg.sample_rate as i32,
-            r#sharingMode:         AAUDIO_SHARING_MODE_SHARED,
-            r#audioFormat:         pcm_f32_format(),
-            r#direction:           AAUDIO_DIRECTION_INPUT,
-            r#inputPreset:         AAUDIO_INPUT_PRESET_VOICE_RECOGNITION,
+            r#channelMask: channel_mask,
+            r#sampleRate:  cfg.sample_rate as i32,
+            r#sharingMode: plan.sharing,
+            r#audioFormat: if plan.f32_format { pcm_f32_format() } else { pcm_i16_format() },
+            r#direction:   AAUDIO_DIRECTION_INPUT,
+            r#inputPreset: plan.input_preset,
             ..Default::default()
         };
         open_pcm_stream(params, channels, /*capture=*/ true)
@@ -837,6 +837,26 @@ mod binder_path {
     }
 }
 
+// ── Comms route (arbiter-decided) ────────────────────────────────────────────
+// The arbiter (wart-arbiter-audio) owns the call earpiece↔speaker decision and
+// pushes it down as `audio-policy set-route` (handled in standalone.rs, which
+// calls `set_comms_route`). A guest `create-track` (a call stream) is pinned to
+// the resolved device for this route. Default earpiece (`false`). See
+// [[project_audio_routing_arbiter]]. Live mid-call re-pin (speakerphone toggle
+// after the stream is open) is a follow-up — the route applies at open time.
+static COMMS_SPEAKER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Apply the arbiter's call route decision (`true` = loudspeaker / speakerphone,
+/// `false` = earpiece). Affects subsequently-opened call streams.
+pub fn set_comms_route(speaker: bool) {
+    COMMS_SPEAKER.store(speaker, std::sync::atomic::Ordering::Relaxed);
+    log::info!("audio: comms route = {}", if speaker { "speaker" } else { "earpiece" });
+}
+/// The arbiter's current call route (`true` = speaker, `false` = earpiece).
+pub fn comms_route_speaker() -> bool {
+    COMMS_SPEAKER.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 // ── Host-internal playback API ───────────────────────────────────────────────
 // Module-level free functions so a background thread (the ringer) can drive AAudio
 // directly without the WIT `Host` trait (`&mut HostState`). Same cfg-switch as the
@@ -847,6 +867,15 @@ pub fn create_track(cfg: TrackConfig) -> u32 {
     { return binder_path::create_track(cfg); }
     #[cfg(not(target_os = "android"))]
     { let _ = cfg; 0 }
+}
+
+/// Open an output track for an explicit intent [`crate::audio_routing::Route`]
+/// (host-side callers that know their intent, e.g. the ringer → `Ringtone`).
+pub fn create_track_routed(cfg: TrackConfig, route: crate::audio_routing::Route) -> u32 {
+    #[cfg(target_os = "android")]
+    { return binder_path::open_routed(cfg, route); }
+    #[cfg(not(target_os = "android"))]
+    { let _ = (cfg, route); 0 }
 }
 
 pub fn write_pcm_f32(track: u32, samples: &[f32]) -> u32 {
