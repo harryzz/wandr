@@ -1,11 +1,36 @@
 # Task 76 — Audio subsystem ground-up refactor (capability-driven)
 
-**Status:** SCOPED, not started (filed 2026-06-03). Fresh-session task. Builds on
-the call-audio work in task 75 ([[project_call_audio_output]]), which got
-outbound call audio working but exposed a **hard-coded, fragile, guess-driven
-audio layer**. This task replaces it with a **capability-driven** audio
-subsystem: query the device for what it actually supports, build a clean model
-of routing / devices / channels / volume, and stop hard-coding magic values.
+**Status:** CORE DONE + device-verified (2026-06-03), some follow-ups open.
+Builds on task 75 ([[project_call_audio_output]]), which got outbound call audio
+working but exposed a **hard-coded, fragile, guess-driven audio layer**. This
+task replaces it with a **capability-driven** audio subsystem: query the device
+for what it actually supports, build a clean model of routing / devices /
+channels / volume, and stop hard-coding magic values.
+
+### Progress (commits on `main`)
+
+| Piece | Step | Status | Commit |
+|---|---|---|---|
+| Capability probe (`--probe-audio-caps`) + matrix | 1–3 | ✅ device-verified | `367121ca` |
+| Routing core — `DeviceModel` + `Route`→`StreamPlan` (ports by type) | 4 | ✅ verified | `57cf4506` |
+| Host applies arbiter route via per-stream `deviceIds` | 4/6 | ✅ verified (earpiece/speaker) | `323c61fe` |
+| WIT `stream-class` intent (guest expresses, host maps) | 7 | ✅ verified | `a965bf0e` |
+| Volume get/set/max/min via `IAudioPolicyService` | 5 | ✅ verified (0..25) | `bbd65362` |
+| Volume keys — arbiter decides, host applies | 5 | ✅ verified (real keys, on call) | `7535008c`,`87ec38fe` |
+| Output MUTE — global (policy) | 5 | ✅ verified | `86e3b8f6` |
+| Output MUTE — per-app (host PCM gate) | 5 | ✅ verified | `35d68fee` |
+
+**Architecture of record:** arbiter decides, host applies, guest expresses
+intent ([[project_audio_routing_arbiter]]). Routing/volume/mute policy lives in
+`wart-arbiter-audio`; the host owns the AAudio/policy binding + capability model.
+Mute is two orthogonal gates — `audible = !global_mute && !app_mute`.
+
+**Remaining:** mic-disable / input mute (gated on outbound mic, P1/TX — task #11);
+speakerphone microphony/AEC (P2 — task #10); replace startup `dumpsys` port-enum
+with binder `listAudioPorts` (task #6); live in-call speakerphone re-pin (task #7);
+scaffolding cleanup (design goal #5 — task-75 diag / `COMMS_MODE` / `RX_ONLY` in
+Signal); a final full-call re-verify (step 8). Point-G API-of-record settled
+(binder-for-routing + dumpsys-for-bulk-caps).
 
 ## Why (motivation)
 

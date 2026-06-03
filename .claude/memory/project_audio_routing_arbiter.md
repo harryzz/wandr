@@ -47,3 +47,20 @@ parcelable, deferred during the probe). `getDevicesForAttributes` gives device
 Non-stateful routes (media→policy default, ringtone→speaker) are pure mechanism
 and stay host-side applier mappings; only the stateful call earpiece/speaker
 decision must round-trip through the arbiter.
+
+
+**Volume (P8 / task 76 step 5) — arbiter owns it (87ec38fe).** Mechanism:
+get/set/max/min media volume via IAudioPolicyService attributes API (slots 20-23,
+indices parsed from the vendored real AIDL; device-verified range 0..25,
+speaker22/earpiece8 matching dumpsys). Flow: host VOLUME_UP/DOWN intercept →
+forward_volume_key sends `volume <dir> <pid>` to the arbiter socket →
+wart-arbiter-audio::cmd_volume decides target (comms owner on the call route
+while a call is up, else foreground app, else the forwarding host — covers
+keyguard-locked = no Foreground slot) → pushes `audio-policy volume <dir> <dev>`
+to ONE host → adjust_volume_on steps media volume on speaker/earpiece. Dedups the
+key (framework delivers a press to several wart surfaces). KEY INPUT FINDING:
+real hardware volume keys DO reach wart's InputConsumer channel (intercept fires);
+injected `input keyevent 24/25` do NOT (policy-intercepted by PhoneWindowManager) —
+so evdev capture is unnecessary. OPEN: if a single physical press is delivered to
+multiple surfaces, each forwards → multiple steps; add a debounce in cmd_volume if
+the real-key check shows multi-stepping (CLI path is clean 1:1).
