@@ -206,19 +206,13 @@ fn to_wit_call_state(s: wart_call::signal::CallState) -> CallState {
 /// recover before it would (and where, pre-supervisor, it never did).
 const WAKE_GAP_MS: u64 = 45_000;
 
-/// Append a line to `/state/calldbg.log` — guest `log::` doesn't reach logcat on
-/// this build, so call/TURN tracing goes to a file we read over adb.
-/// EXPERIMENT: when false, a call does NOT put the device in IN_COMMUNICATION
-/// mode (no `focus::call_start()`). Comms mode is the common playback blocker —
-/// it ducks USAGE_MEDIA to ~1% and leaves USAGE_VOICE_COMMUNICATION with no MMAP
-/// device (openStream -889). NORMAL mode lets the voice-comm stream open + mix.
-const COMMS_MODE: bool = false;
-
 /// EXPERIMENT: when true, calls skip TURN entirely (host candidates only). Use to
 /// test whether the ~64% inbound packet loss is the Signal TURN relay path — both
 /// peers on the same LAN should connect directly. Flip false to restore relay.
 const NO_TURN: bool = false;
 
+/// Append a line to `/state/calldbg.log` — guest `log::` doesn't reach logcat on
+/// this build, so call/TURN tracing goes to a file we read over adb.
 fn dbg_line(s: &str) {
     use std::io::Write;
     if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -1002,13 +996,13 @@ async fn receive_and_send(
     // While a call is active the loop ticks at ~10 ms so the audio/UDP pump keeps
     // up; otherwise the normal 200 ms message cadence.
     let mut call_engine = CallEngine::new();
-    // Whether we've opened a comms session (call-start) for the active call — so we
-    // emit the matching call-end (not ring-stop) when it ends.
+    // Whether the call reached answered/connected — so teardown emits call_end
+    // (which releases any audio focus + restores NORMAL mode) rather than treating
+    // it as an unanswered ring.
     let mut comm_started = false;
     // Whether an incoming ring is currently playing (ring-start sent, not yet
     // stopped). Tracked SEPARATELY from comm_started so the ring is always stopped
-    // on answer/decline/end regardless of COMMS_MODE — otherwise (COMMS_MODE=false)
-    // call_start never fires and the ringtone/vibrate runs forever.
+    // on answer/decline/end — otherwise the ringtone/vibrate runs forever.
     let mut ring_started = false;
     let my_identity: Vec<u8> = store.identity().identity_key().serialize().to_vec();
     // Wall-clock of the previous tick, for the wake-from-sleep watchdog below.
@@ -1273,28 +1267,16 @@ async fn receive_and_send(
                                 }
                             }
                             CallIntent::Accept => {
-                                // Answered → open the comms session. We deliberately
-                                // do NOT call ring_stop here: the arbiter's call_start
-                                // already stops the ringtone/vibrate while KEEPING
-                                // audio focus (seamless ring→call). The public
-                                // ring_stop also releases focus (music would resume
-                                // then re-pause) — that path is only for an UNANSWERED
-                                // ring ending (see take_ended below).
-                                // EXPERIMENT (COMMS_MODE): IN_COMMUNICATION mode is the
-                                // common blocker for playback — it ducks USAGE_MEDIA to ~1%
-                                // AND leaves USAGE_VOICE_COMMUNICATION with no MMAP device
-                                // (openStream -889). Skip it to test audibility on the NORMAL
-                                // route (where voice-comm opens + mixes). Flip true to restore.
-                                // Stop the ring on answer. With COMMS_MODE, call_start
-                                // stops it (and keeps focus); without, call_start never
-                                // fires, so explicitly ring_stop. UNCONDITIONAL (not
-                                // gated on ring_started) — ring_stop is harmless if not
-                                // ringing, and this guarantees answer always silences it.
-                                if COMMS_MODE {
-                                    focus::call_start();
-                                } else {
-                                    focus::ring_stop();
-                                }
+                                // Answered → stop the ring. We deliberately do NOT open
+                                // an IN_COMMUNICATION comms session (focus::call_start):
+                                // that mode is the common playback blocker on this device
+                                // — it ducks USAGE_MEDIA to ~1% and leaves
+                                // USAGE_VOICE_COMMUNICATION with no MMAP device (openStream
+                                // -889). The call runs on the NORMAL route instead, where
+                                // the USAGE_MEDIA stream opens + mixes. ring_stop is
+                                // UNCONDITIONAL (not gated on ring_started): harmless if not
+                                // ringing, and guarantees answer always silences it.
+                                focus::ring_stop();
                                 dbg_line(&format!("accept: ring_stop sent (ring_started was {ring_started})"));
                                 ring_started = false;
                                 comm_started = true;
@@ -1313,14 +1295,11 @@ async fn receive_and_send(
                         // media leg is provable from the log: does ICE connect?
                         if let Some(st) = st {
                             dbg_line(&format!("call state -> {st:?}"));
-                            // Outbound connected → open the comms session (inbound
-                            // does this on accept). Sets IN_COMMUNICATION mode +
-                            // setForceUse(COMMUNICATION, SPEAKER) via the arbiter so
-                            // the call audio routes to the speaker; without it the
-                            // device stays in NORMAL mode with no call route and the
-                            // playback stream is never mixed (readCounter frozen).
+                            // Outbound connected → mark the call active so teardown
+                            // emits the matching call_end. Like the answer path, we do
+                            // NOT open an IN_COMMUNICATION comms session — the call runs
+                            // on the NORMAL audio route.
                             if st == wart_call::signal::CallState::Connected && !comm_started {
-                                if COMMS_MODE { focus::call_start(); } // see COMMS_MODE note above
                                 comm_started = true;
                             }
                         }
@@ -1359,7 +1338,8 @@ async fn receive_and_send(
                             focus::ring_stop();
                             ring_started = false;
                         }
-                        // Answered call → close the comms session (restores audio mode).
+                        // Answered/connected call ended → call_end releases any audio
+                        // focus held during the call and restores NORMAL audio mode.
                         if comm_started {
                             focus::call_end();
                             comm_started = false;

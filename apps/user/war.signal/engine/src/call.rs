@@ -257,8 +257,7 @@ impl ActiveCall {
         // MMAP capture endpoint while an output MMAP is held, nor vice-versa.
         // Opening the OUTPUT FIRST (legacy) lets the capture MMAP coexist; opening
         // capture first -889's the output (kills RX). So: output, THEN capture
-        // (gated on the output being up). RX_ONLY left as a quick kill-switch.
-        const RX_ONLY: bool = false;
+        // (gated on the output being up).
         if self.trk.is_none() {
             // Stereo on the USAGE_MEDIA path (the only output AAudio can open on
             // this device — voice-comm usage gets -889). The mono Opus frames are
@@ -270,7 +269,7 @@ impl ActiveCall {
                 self.trk = Some(h); // started after the first write (write-then-start)
             }
         }
-        if !RX_ONLY && self.trk.is_some() && self.cap.is_none() {
+        if self.trk.is_some() && self.cap.is_none() {
             // Capture only after the output is up (see ORDER note above).
             let cfg = TrackConfig { sample_rate: SAMPLE_RATE, channel_layout: ChannelLayout::Mono, format: Format::PcmF32, class: StreamClass::VoiceCall };
             let h = audio::open_capture(cfg);
