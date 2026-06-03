@@ -1,0 +1,22 @@
+# Vendored fork of opus-rs 0.1.22 (crates.io, BSD-3-Clause, restsend/opus-rs)
+# with ONE fix vs upstream: the SILK decoder's `w_pcm_i16` working buffer was
+# hardcoded to 640 i16, too small for a 60 ms wideband SILK frame
+# (internal_frame_size = 60ms * 16kHz/1000 = 960 per channel) — a real ringrtc
+# peer sends such frames when it drops to a low bitrate (e.g. off-LAN / lossy
+# links), and the undersized slice panicked (range end 960 out of range for
+# slice of length 640) → SIGILL, killing the call guest. Sized it like the
+# crate's sibling buffers (5760 * channels) in src/lib.rs. See the comment there.
+# Trimmed to the [lib] only (upstream's tests/benches/examples + dev-deps dropped;
+# we consume it purely as a dependency).
+[package]
+name = "opus-rs"
+version = "0.1.22"
+edition = "2024"
+authors = ["jinti<shenjindi@fourz.cn>"]
+description = "pure Rust implementation of Opus codec (wart vendored fork)"
+license = "BSD-3-Clause"
+repository = "https://github.com/restsend/opus-rs"
+
+[lib]
+name = "opus_rs"
+path = "src/lib.rs"

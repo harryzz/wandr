@@ -31,7 +31,9 @@ signal = ["dep:prost", "dep:x25519-dalek", "dep:hkdf", "dep:rand_core", "dep:rtc
 
 [dependencies]
 bytes      = "1"
-opus-rs    = "0.1.22"
+# Vendored fork of opus-rs 0.1.22 with the SILK `w_pcm_i16` buffer-size fix (a
+# 60 ms wideband frame from a low-bitrate peer panicked the stock crate → SIGILL).
+opus-rs    = { path = "../../external/opus-rs" }
 sansio     = "1"
 sha2       = "0.10"   # DTLS cert fingerprint + HKDF-SHA256 for Signal DH
 prost        = { version = "0.14", optional = true }                          # Signal `opaque` blob codec
