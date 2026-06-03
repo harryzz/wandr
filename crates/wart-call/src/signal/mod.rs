@@ -108,6 +108,51 @@ mod proto {
         #[prost(uint32, optional, tag = "1")]
         pub r#type: Option<u32>,
     }
+
+    // ── ringrtc RTP-data control channel (`rtp_data.proto`) ─────────────────
+    // ringrtc multiplexes a control channel onto the media transport: RTP
+    // payload-type 101 / SSRC 0xD, SRTP-encrypted, carrying these protobuf
+    // `Message`s (resent ~1 Hz). The crucial one is `Accepted`: a 1:1 *caller*
+    // sits in "ConnectingBeforeAccepted" and streams NO media until the *callee*
+    // sends `accepted`. So as the answerer we must send it on accept, or the
+    // peer never starts audio. See ringrtc `connection.rs` send_accepted_via_rtp_data.
+
+    /// `rtp_data.Accepted` — the callee telling the caller "I picked up".
+    #[derive(Clone, PartialEq, Message)]
+    pub struct RtpDataAccepted {
+        #[prost(uint64, optional, tag = "1")]
+        pub id: Option<u64>,
+    }
+
+    /// `rtp_data.Message` — the accumulated control state sent over RTP data.
+    /// We only populate `accepted` + `seqnum`; the other fields (hangup,
+    /// sender/receiver status) are parsed-tolerant but unused for a 1:1 call.
+    #[derive(Clone, PartialEq, Message)]
+    pub struct RtpDataMessage {
+        #[prost(message, optional, tag = "1")]
+        pub accepted: Option<RtpDataAccepted>,
+        #[prost(uint64, optional, tag = "4")]
+        pub seqnum: Option<u64>,
+    }
+}
+
+/// ringrtc RTP-data control channel: RTP payload-type + SSRC (connection.rs
+/// `RTP_DATA_PAYLOAD_TYPE` / `RTP_DATA_SSRC`).
+#[cfg(feature = "signal")]
+pub const RTP_DATA_PAYLOAD_TYPE: u8 = 101;
+#[cfg(feature = "signal")]
+pub const RTP_DATA_SSRC: u32 = 0xD;
+
+/// Encode an `rtp_data.Message{ accepted{ id=call_id }, seqnum }` for the RTP
+/// control channel — what a 1:1 callee sends so the caller leaves
+/// `ConnectingBeforeAccepted` and starts streaming media.
+#[cfg(feature = "signal")]
+pub fn encode_rtp_data_accepted(call_id: u64, seqnum: u64) -> Vec<u8> {
+    proto::RtpDataMessage {
+        accepted: Some(proto::RtpDataAccepted { id: Some(call_id) }),
+        seqnum: Some(seqnum),
+    }
+    .encode_to_vec()
 }
 
 #[cfg(feature = "signal")]

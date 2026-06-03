@@ -189,6 +189,9 @@ struct ActiveCall {
     outgoing: bool,
     connected: bool, // reached Connected (answered)
     accepted: bool,  // we pressed accept on an incoming ring
+    // ringrtc: as the answerer we must send `accepted` over RTP-data (resent ~1 Hz)
+    // or the caller never leaves "ConnectingBeforeAccepted" and streams no audio.
+    last_accepted_sent: Option<Instant>,
     declined: bool,  // we declined an incoming ring (hung up while ringing)
     busy: bool,      // peer replied Busy
     // Media-flow diagnostics (→ periodic log; proves where audio stops).
@@ -230,7 +233,8 @@ impl ActiveCall {
         Self {
             call, sock, peer_aci, cap: None, trk: None, track_started: false,
             mic_buf: Vec::new(), play_buf: Vec::new(), last_state,
-            outgoing, connected: false, accepted: false, declined: false, busy: false,
+            outgoing, connected: false, accepted: false, last_accepted_sent: None,
+            declined: false, busy: false,
             udp_tx: 0, udp_rx: 0, aud_tx: 0, aud_rx: 0, mic_peak: 0.0,
             aud_peak: 0.0, wr_ok: 0, wr_zero: 0,
         }
@@ -460,12 +464,29 @@ impl CallEngine {
         sender_aci: &str,
         my_identity: &[u8],
         sender_identity: &[u8],
+        my_device_id: u32,
         turn: Option<wart_call::turn::TurnConfig>,
     ) -> (Vec<CallSignal>, Option<String>) {
         let signals = call_message_to_signals(cm);
+        // Multi-device coordination: when THIS device (e.g. wart) accepts/declines,
+        // the caller relays a `Hangup{type=Accepted/Declined/Busy, device_id=ours}`
+        // to the user's *other* devices so they stop ringing. That message is also
+        // delivered to us — but it's the echo of our OWN action, NOT a signal to end
+        // our just-accepted call. ringrtc ignores a hangup whose device_id is its
+        // own; without this, wart (device_id N) hangs up on itself the instant it
+        // answers. Only a `Normal` hangup, or a coordination hangup from a DIFFERENT
+        // device, ends our call.
+        let self_coordination_hangup = matches!(
+            cm.hangup.as_ref().and_then(|h| h.r#type),
+            Some(HANGUP_ACCEPTED) | Some(HANGUP_DECLINED) | Some(HANGUP_BUSY)
+        ) && cm.hangup.as_ref().and_then(|h| h.device_id) == Some(my_device_id);
         let mut out = Vec::new();
         let mut incoming = None;
         for sig in signals {
+            // Drop our own action echoed back (see above) so it can't end the call.
+            if self_coordination_hangup && matches!(sig, CallSignal::Hangup { .. }) {
+                continue;
+            }
             match (&sig, self.active.is_some()) {
                 // A fresh incoming offer with no active call → start ringing.
                 // caller = the remote offerer (sender), callee = us.
@@ -571,6 +592,18 @@ impl CallEngine {
             }
             if a.call.is_connected() {
                 a.connected = true;
+                // ringrtc: the answerer must send `accepted` over RTP-data so the
+                // caller leaves "ConnectingBeforeAccepted" and starts streaming.
+                // Send on connect + resend ~1 Hz (ringrtc resends too) until ended.
+                if a.accepted && a.call.is_answerer() {
+                    let due = a
+                        .last_accepted_sent
+                        .map(|t| now.duration_since(t) >= std::time::Duration::from_secs(1))
+                        .unwrap_or(true);
+                    if due && a.call.send_accepted().is_ok() {
+                        a.last_accepted_sent = Some(now);
+                    }
+                }
                 a.pump_audio();
             }
             let sigs = a.call.poll_signals();

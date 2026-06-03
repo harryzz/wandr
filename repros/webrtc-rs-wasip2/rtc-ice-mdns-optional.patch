@@ -93,8 +93,52 @@ index 4807749..920bb73 100644
          if let Some(mdns_conn) = &mut self.mdns {
              mdns_conn.close()?;
          }
+diff --git a/rtc-ice/src/agent/agent_selector.rs b/rtc-ice/src/agent/agent_selector.rs
+index 1610804..15c15df 100644
+--- a/rtc-ice/src/agent/agent_selector.rs
++++ b/rtc-ice/src/agent/agent_selector.rs
+@@ -309,6 +309,7 @@ impl ControllingSelector for Agent {
+             // Assert that NAT is not symmetric
+             // https://tools.ietf.org/html/rfc8445#section-7.2.5.2.1
+             if transaction_addr != remote_addr {
++                self.ice_dbg.sym_guard_discards += 1; // DIAG (wart)
+                 debug!(
+                     "discard message: transaction source and destination does not match expected({}), actual({})",
+                     transaction_addr, remote_index
+@@ -323,6 +324,7 @@ impl ControllingSelector for Agent {
+             let selected_pair_is_none = self.get_selected_pair().is_none();
+ 
+             if let Some(pair_index) = self.find_pair(local_index, remote_index) {
++                self.ice_dbg.pairs_succeeded += 1; // DIAG (wart)
+                 let p = &mut self.candidate_pairs[pair_index];
+                 p.state = CandidatePairState::Succeeded;
+ 
+@@ -476,6 +478,7 @@ impl ControlledSelector for Agent {
+             // Assert that NAT is not symmetric
+             // https://tools.ietf.org/html/rfc8445#section-7.2.5.2.1
+             if transaction_addr != remote_addr {
++                self.ice_dbg.sym_guard_discards += 1; // DIAG (wart)
+                 debug!(
+                     "discard message: transaction source and destination does not match expected({}), actual({})",
+                     transaction_addr, remote_index
+@@ -489,6 +492,7 @@ impl ControlledSelector for Agent {
+             );
+ 
+             if let Some(pair_index) = self.find_pair(local_index, remote_index) {
++                self.ice_dbg.pairs_succeeded += 1; // DIAG (wart)
+                 let p = &mut self.candidate_pairs[pair_index];
+                 p.state = CandidatePairState::Succeeded;
+ 
+@@ -527,6 +531,7 @@ impl ControlledSelector for Agent {
+             let p = &self.candidate_pairs[pair_index];
+             let use_candidate = m.contains(ATTR_USE_CANDIDATE);
+             if use_candidate {
++                self.ice_dbg.use_candidate_rx += 1; // DIAG (wart)
+                 // https://tools.ietf.org/html/rfc8445#section-7.3.1.5
+ 
+                 if p.state == CandidatePairState::Succeeded {
 diff --git a/rtc-ice/src/agent/mod.rs b/rtc-ice/src/agent/mod.rs
-index 719f06c..bed65cb 100644
+index 719f06c..977bb76 100644
 --- a/rtc-ice/src/agent/mod.rs
 +++ b/rtc-ice/src/agent/mod.rs
 @@ -9,9 +9,12 @@ pub mod agent_stats;
@@ -122,7 +166,52 @@ index 719f06c..bed65cb 100644
  use crate::network_type::NetworkType;
  use crate::rand::*;
  use crate::state::*;
-@@ -141,7 +146,9 @@ pub struct Agent {
+@@ -95,8 +100,44 @@ pub enum Event {
+     RoleChange(bool),
+ }
+ 
++/// DIAG (wart): counters that localize where a relay/controlled-role connect
++/// stalls — surfaced through `Transport::conn_debug` → `/state/calldbg.log`.
++/// See tasks/16 (incoming-call ICE). Cheap; left in permanently.
++#[derive(Default, Clone, Copy)]
++pub struct IceDebug {
++    /// Peer-reflexive remote candidates created (an inbound request from an
++    /// addr we didn't already know as a remote).
++    pub prflx_created: u64,
++    /// Candidate pairs that transitioned to `Succeeded` (our check got a reply).
++    pub pairs_succeeded: u64,
++    /// Inbound binding requests carrying USE-CANDIDATE (the peer nominating).
++    pub use_candidate_rx: u64,
++    /// Success responses discarded by the symmetric-NAT guard
++    /// (`transaction_addr != remote_addr`) — the relay-path suspect.
++    pub sym_guard_discards: u64,
++    /// `set_selected_pair(Some(_))` calls (a pair was actually selected).
++    pub selected_pair_set: u64,
++    /// Success responses dropped because no remote candidate matched the source.
++    pub success_no_remote: u64,
++    /// Inbound binding REQUESTS that arrived on our relay local candidate
++    /// (i.e. the peer is checking us via the TURN relay).
++    pub req_on_relay: u64,
++    /// Inbound binding REQUESTS that arrived on a non-relay (host) local candidate.
++    pub req_on_host: u64,
++    /// Binding SUCCESS responses we sent (replies to the peer's checks).
++    pub bind_success_tx: u64,
++}
++
+ /// Represents the ICE agent.
+ pub struct Agent {
++    /// DIAG (wart): connect-path counters, see [`IceDebug`].
++    pub(crate) ice_dbg: IceDebug,
++    /// DIAG (wart, task 16): a small ring buffer of the most recent STUN wire
++    /// events (`>`=outbound, `<`=inbound; `r`=relay local cand, `h`=host;
++    /// `REQ`/`OK`/`IND`; `+uc`=USE-CANDIDATE). Surfaced via `wire_tail()` →
++    /// `conn_debug` so we can see X-vs-Y on the relay path + whether the peer
++    /// ever nominates. Capped; printed each ~1 Hz tick (repeats are harmless).
++    pub(crate) wire: std::collections::VecDeque<String>,
+     pub(crate) tie_breaker: u64,
+     pub(crate) is_controlling: bool,
+     pub(crate) lite: bool,
+@@ -141,7 +182,9 @@ pub struct Agent {
      pub(crate) checking_duration: Instant,
      pub(crate) last_checking_time: Instant,
  
@@ -132,7 +221,16 @@ index 719f06c..bed65cb 100644
      pub(crate) mdns_queries: HashMap<QueryId, Candidate>,
  
      pub(crate) mdns_mode: MulticastDnsMode,
-@@ -188,7 +195,9 @@ impl Default for Agent {
+@@ -159,6 +202,8 @@ pub struct Agent {
+ impl Default for Agent {
+     fn default() -> Self {
+         Self {
++            ice_dbg: IceDebug::default(),
++            wire: std::collections::VecDeque::new(),
+             tie_breaker: 0,
+             is_controlling: false,
+             lite: false,
+@@ -188,7 +233,9 @@ impl Default for Agent {
              mdns_mode: MulticastDnsMode::Disabled,
              mdns_local_name: "".to_owned(),
              mdns_local_ip: None,
@@ -142,7 +240,7 @@ index 719f06c..bed65cb 100644
              mdns: None,
              candidate_types: vec![],
              network_types: vec![],
-@@ -212,6 +221,7 @@ impl Agent {
+@@ -212,6 +259,7 @@ impl Agent {
          }
  
          let mdns_mode = config.multicast_dns_mode;
@@ -150,7 +248,16 @@ index 719f06c..bed65cb 100644
          let mdns = create_multicast_dns(
              mdns_mode,
              &mdns_local_name,
-@@ -330,7 +340,9 @@ impl Agent {
+@@ -244,6 +292,8 @@ impl Agent {
+         }
+ 
+         let mut agent = Self {
++            ice_dbg: IceDebug::default(),
++            wire: std::collections::VecDeque::new(),
+             tie_breaker: rand::random::<u64>(),
+             is_controlling: config.is_controlling,
+             lite: config.lite,
+@@ -330,7 +380,9 @@ impl Agent {
              last_checking_time: Instant::now(),
              last_connection_state: ConnectionState::Unspecified,
  
@@ -160,7 +267,7 @@ index 719f06c..bed65cb 100644
              mdns_queries: HashMap::new(),
  
              mdns_mode,
-@@ -478,6 +490,7 @@ impl Agent {
+@@ -478,6 +530,7 @@ impl Agent {
                  return Err(Error::ErrAddressParseFailed);
              }
  
@@ -168,6 +275,227 @@ index 719f06c..bed65cb 100644
              if let Some(mdns_conn) = &mut self.mdns {
                  let query_id = mdns_conn.query(c.address());
                  self.mdns_queries.insert(query_id, c);
+@@ -566,6 +619,52 @@ impl Agent {
+         self.connection_state
+     }
+ 
++    /// DIAG (wart): snapshot of the connect-path counters, see [`IceDebug`].
++    pub fn ice_debug(&self) -> IceDebug {
++        self.ice_dbg
++    }
++
++    /// DIAG (wart): push a STUN wire event into the ring buffer (cap 28).
++    pub(crate) fn wlog(&mut self, ev: String) {
++        self.wire.push_back(ev);
++        while self.wire.len() > 28 {
++            self.wire.pop_front();
++        }
++    }
++
++    /// DIAG (wart): the recent STUN wire events, oldest→newest.
++    pub fn wire_tail(&self) -> String {
++        self.wire.iter().cloned().collect::<Vec<_>>().join(" ")
++    }
++
++    /// DIAG (wart): is the ICE agent currently in the controlling role? (May
++    /// switch from the initial value via RFC 8445 role-conflict resolution.)
++    pub fn is_controlling(&self) -> bool {
++        self.is_controlling
++    }
++
++    /// FIX (wart, task 16): self-select the best succeeded pair when the
++    /// controlled (answerer) role is stuck because the peer never sends
++    /// USE-CANDIDATE. ringrtc/libwebrtc with `presume_writable_when_fully_relayed`
++    /// starts media on a presumed-writable relay connection **without** the
++    /// standard nomination handshake, so a strict controlled agent waits forever
++    /// (`usecand=0`, `pair=none`) even though working pairs exist and the peer is
++    /// already streaming SRTP. Picking the best valid pair ourselves lets keying
++    /// proceed. No-op if a pair is already selected or none has Succeeded; the
++    /// caller gates this behind a grace period so a well-behaved peer's normal
++    /// nomination still wins. Returns true if it selected a pair.
++    pub fn self_select_best_pair(&mut self) -> bool {
++        if self.get_selected_pair().is_some() {
++            return false;
++        }
++        if let Some(idx) = self.get_best_valid_candidate_pair() {
++            self.set_selected_pair(Some(idx));
++            true
++        } else {
++            false
++        }
++    }
++
+     pub fn is_valid_non_stun_traffic(&mut self, transport: TransportContext) -> bool {
+         self.find_local_candidate(transport.local_addr, transport.transport_protocol)
+             .is_some()
+@@ -603,6 +702,39 @@ impl Agent {
+         interval
+     }
+ 
++    /// DIAG (wart, task 16): compact dump of every candidate pair as
++    /// `<localport>-><remoteaddr>[<remote-type>]=<state>`, plus the remote
++    /// candidate list with types. Tells us whether the Succeeded pairs are to
++    /// the peer's *advertised* candidate or to a peer-reflexive one, and what
++    /// addresses the peer is actually reaching us from.
++    pub fn debug_pairs(&self) -> String {
++        // Defensive: during teardown `close()` clears local/remote candidates
++        // while candidate_pairs may still hold entries — index with `.get()` so
++        // this diagnostic never panics (it once SIGILL'd the host on hangup).
++        let pairs: Vec<String> = self
++            .candidate_pairs
++            .iter()
++            .filter_map(|p| {
++                let l = self.local_candidates.get(p.local_index)?;
++                let r = self.remote_candidates.get(p.remote_index)?;
++                Some(format!(
++                    "{}->{}[{}]={}{}",
++                    l.addr().port(),
++                    r.addr(),
++                    short_type(r.candidate_type()),
++                    pair_state_str(p.state),
++                    if p.nominated { "*" } else { "" },
++                ))
++            })
++            .collect();
++        let remotes: Vec<String> = self
++            .remote_candidates
++            .iter()
++            .map(|c| format!("{}[{}]", c.addr(), short_type(c.candidate_type())))
++            .collect();
++        format!("remotes=[{}] pairs=[{}]", remotes.join(","), pairs.join(","))
++    }
++
+     /// Returns the selected pair (local_candidate, remote_candidate) or none
+     pub fn get_selected_candidate_pair(&self) -> Option<(&Candidate, &Candidate)> {
+         if let Some(pair_index) = self.get_selected_pair() {
+@@ -750,6 +882,7 @@ impl Agent {
+ 
+     pub(crate) fn set_selected_pair(&mut self, selected_pair: Option<usize>) {
+         if let Some(pair_index) = selected_pair {
++            self.ice_dbg.selected_pair_set += 1; // DIAG (wart)
+             trace!(
+                 "[{}]: Set selected candidate pair: {:?}",
+                 self.get_name(),
+@@ -1018,6 +1151,7 @@ impl Agent {
+                 err
+             );
+         } else {
++            self.ice_dbg.bind_success_tx += 1; // DIAG (wart)
+             // Track response sent on the candidate pair
+             if let Some(pair_index) = self.find_pair(local_index, remote_index) {
+                 self.candidate_pairs[pair_index].on_response_sent();
+@@ -1167,6 +1301,32 @@ impl Agent {
+             return Err(Error::ErrUnhandledStunpacket);
+         }
+ 
++        // DIAG (wart): record the inbound STUN event.
++        {
++            let lt = if self.local_candidates[local_index].candidate_type() == CandidateType::Relay {
++                "r"
++            } else {
++                "h"
++            };
++            let cls = if m.typ.class == CLASS_REQUEST {
++                "REQ"
++            } else if m.typ.class == CLASS_SUCCESS_RESPONSE {
++                "OK"
++            } else {
++                "IND"
++            };
++            let uc = if m.contains(ATTR_USE_CANDIDATE) { "+uc" } else { "" };
++            // Which ICE role does the peer claim? (deadlock if both controlled)
++            let role = if m.contains(ATTR_ICE_CONTROLLING) {
++                "[C]" // peer says it is controlling (expected for the caller)
++            } else if m.contains(ATTR_ICE_CONTROLLED) {
++                "[c]" // peer says it is controlled (would deadlock with us)
++            } else {
++                ""
++            };
++            self.wlog(format!("<{lt}{cls}{uc}{role}<-{remote_addr}"));
++        }
++
+         // RFC 8445 Section 7.3.1.1 - Detecting and Repairing Role Conflicts
+         if self.is_controlling {
+             if m.contains(ATTR_ICE_CONTROLLING) {
+@@ -1274,6 +1434,7 @@ impl Agent {
+             if let Some(remote_index) = &remote_candidate_index {
+                 self.handle_success_response(now, m, local_index, *remote_index, remote_addr);
+             } else {
++                self.ice_dbg.success_no_remote += 1; // DIAG (wart)
+                 warn!(
+                     "[{}]: discard success message from ({}), no such remote",
+                     self.get_name(),
+@@ -1282,6 +1443,12 @@ impl Agent {
+                 return Err(Error::ErrUnhandledStunpacket);
+             }
+         } else if m.typ.class == CLASS_REQUEST {
++            // DIAG (wart): is the peer checking us via the relay or direct?
++            if self.local_candidates[local_index].candidate_type() == CandidateType::Relay {
++                self.ice_dbg.req_on_relay += 1;
++            } else {
++                self.ice_dbg.req_on_host += 1;
++            }
+             {
+                 let username = self.ufrag_pwd.local_credentials.ufrag.clone()
+                     + ":"
+@@ -1330,6 +1497,7 @@ impl Agent {
+                         if let Ok(added) = self.add_remote_candidate(prflx_candidate)
+                             && added
+                         {
++                            self.ice_dbg.prflx_created += 1; // DIAG (wart)
+                             remote_candidate_index = Some(self.remote_candidates.len() - 1);
+                         }
+                     }
+@@ -1382,6 +1550,23 @@ impl Agent {
+     pub(crate) fn send_stun(&mut self, msg: &Message, local_index: usize, remote_index: usize) {
+         let peer_addr = self.remote_candidates[remote_index].addr();
+         let local_addr = self.local_candidates[local_index].addr();
++        // DIAG (wart): record the outbound STUN event.
++        {
++            let lt = if self.local_candidates[local_index].candidate_type() == CandidateType::Relay {
++                "r"
++            } else {
++                "h"
++            };
++            let cls = if msg.typ.class == CLASS_REQUEST {
++                "REQ"
++            } else if msg.typ.class == CLASS_SUCCESS_RESPONSE {
++                "OK"
++            } else {
++                "?"
++            };
++            let uc = if msg.contains(ATTR_USE_CANDIDATE) { "+uc" } else { "" };
++            self.wlog(format!(">{lt}{cls}{uc}->{peer_addr}"));
++        }
+         let transport_protocol = if self.local_candidates[local_index].network_type().is_tcp() {
+             TransportProtocol::TCP
+         } else {
+@@ -1497,3 +1682,25 @@ impl Agent {
+         best_pair_index
+     }
+ }
++
++/// DIAG (wart): one-char candidate-type tag for [`Agent::debug_pairs`].
++fn short_type(t: CandidateType) -> &'static str {
++    match t {
++        CandidateType::Host => "h",
++        CandidateType::ServerReflexive => "s",
++        CandidateType::PeerReflexive => "p",
++        CandidateType::Relay => "r",
++        CandidateType::Unspecified => "?",
++    }
++}
++
++/// DIAG (wart): short pair-state tag for [`Agent::debug_pairs`].
++fn pair_state_str(s: CandidatePairState) -> &'static str {
++    match s {
++        CandidatePairState::Waiting => "wait",
++        CandidatePairState::InProgress => "prog",
++        CandidatePairState::Failed => "fail",
++        CandidatePairState::Succeeded => "succ",
++        CandidatePairState::Unspecified => "?",
++    }
++}
 diff --git a/rtc-ice/src/mdns/mod.rs b/rtc-ice/src/mdns/mod.rs
 index 591158a..21634ba 100644
 --- a/rtc-ice/src/mdns/mod.rs

@@ -1105,6 +1105,14 @@ async fn receive_and_send(
                                 let hex: String = op.iter().map(|b| format!("{b:02x}")).collect();
                                 dbg_line(&format!("RX ANSWER opaque[{}]: {hex}", op.len()));
                             }
+                            // Hangup detail: type (0=Normal,1=Accepted,2=Declined,
+                            // 3=Busy,4=NeedPermission) + device_id (which of the
+                            // user's devices answered) — drives the multi-ring fix.
+                            if let Some(h) = cm.hangup.as_ref() {
+                                dbg_line(&format!(
+                                    "RX HANGUP type={:?} device_id={:?}", h.r#type, h.device_id
+                                ));
+                            }
                             // The offerer's identity key (caller) — from the exact
                             // address the message came from (its identity is stored).
                             let sender_identity = match content
@@ -1130,7 +1138,7 @@ async fn receive_and_send(
                                 fetch_turn(&push).await
                             };
                             let (replies, incoming) = call_engine.on_call_message(
-                                cm, &from, &my_identity, &sender_identity, turn,
+                                cm, &from, &my_identity, &sender_identity, device_id, turn,
                             );
                             if let Some(sender) = sender.as_mut() {
                                 send_signals!(sender, from, replies);

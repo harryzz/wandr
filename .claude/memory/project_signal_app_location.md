@@ -7,6 +7,16 @@ metadata:
   originSessionId: 81538868-ab9d-48a4-8de3-a56739b11c3e
 ---
 
+**ROLE: war.signal is the runtime's capability-PROOF demo, not the product.** It
+was chosen because it brutally exercises EVERY subsystem at once — Compose/GPU
+display, audio capture+playback+Opus+SRTP+WebRTC media, background receipt while
+not foregrounded, the alarm/scheduler keep-alive, networking, crypto,
+notifications, keyguard. A real client that interops with Google's libwebrtc can't
+cut corners, so "Signal works end-to-end" is the demonstration that wart can
+replace ART. Corollary for diagnosis: when something "in Signal" breaks, look in
+the RUNTIME LAYER first — Signal is usually just the lens exercising a gap, not
+the bug's home. (User framing, 2026-06-04.) [[feedback_read_source_first]]
+
 The Signal app (text-only Signal client, tasks 67/69/70) was promoted out of
 `repros/` into **`apps/user/war.signal/`** on 2026-05-31:
 

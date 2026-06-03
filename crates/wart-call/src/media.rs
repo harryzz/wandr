@@ -65,6 +65,10 @@ pub struct MediaSession {
     ssrc: u32,
     seq: u16,
     ts: u32,
+    // ringrtc RTP-data control channel (PT 101 / SSRC 0xD) shares our SRTP send
+    // context but needs its own monotonic seq/timestamp; ringrtc drives both off
+    // one counter, so we do too.
+    data_ctr: u32,
     // DIAG (inbound): cumulative RTP-seq gaps (lost/missing packets), last
     // inter-packet timestamp delta (= Opus frame samples: 960=20ms, 2880=60ms),
     // and last payload size. Pins arrival rate / frame size / loss for the call.
@@ -107,6 +111,7 @@ impl MediaSession {
             ssrc,
             seq: 1,
             ts: 0,
+            data_ctr: 0,
             rx_prev_seq: None,
             rx_prev_ts: None,
             rx_seq_gaps: 0,
@@ -153,6 +158,29 @@ impl MediaSession {
         let srtp = self.tx.encrypt_rtp(&rtp).map_err(|_| Error::Srtp("encrypt"))?;
         self.seq = self.seq.wrapping_add(1);
         self.ts = self.ts.wrapping_add(self.frame as u32);
+        Ok(srtp.to_vec())
+    }
+
+    /// Packetize + SRTP-protect an opaque control payload on a side channel
+    /// (`pt`/`ssrc`), e.g. ringrtc's RTP-data channel (PT 101 / SSRC 0xD). Uses a
+    /// dedicated monotonic counter for both seq and timestamp (ringrtc does the
+    /// same) and the SAME send SRTP context — an SRTP context keys each SSRC's
+    /// keystream independently, so multiplexing a second SSRC is correct.
+    pub fn send_rtp_data(&mut self, pt: u8, ssrc: u32, payload: &[u8]) -> Result<Vec<u8>, Error> {
+        self.data_ctr = self.data_ctr.wrapping_add(1);
+        let pkt = Packet {
+            header: Header {
+                version: 2,
+                payload_type: pt,
+                sequence_number: self.data_ctr as u16,
+                timestamp: self.data_ctr,
+                ssrc,
+                ..Default::default()
+            },
+            payload: Bytes::copy_from_slice(payload),
+        };
+        let rtp = pkt.marshal().map_err(|_| Error::Rtp("marshal"))?;
+        let srtp = self.tx.encrypt_rtp(&rtp).map_err(|_| Error::Srtp("encrypt"))?;
         Ok(srtp.to_vec())
     }
 

@@ -61,6 +61,10 @@ pub struct PeerSession {
     /// WebRTC path `set_remote_signaling` adopts the peer's SDP rtpmap PT, so we
     /// send + decode on whatever the peer uses (ringrtc fixes it at 102).
     audio_pt: u8,
+    /// Monotonic seqnum for the ringrtc RTP-data control channel (the `accepted`
+    /// message). Incremented per send; ringrtc resends accumulated state ~1 Hz.
+    #[cfg(feature = "signal")]
+    rtp_data_seqnum: u64,
 }
 
 impl PeerSession {
@@ -85,6 +89,8 @@ impl PeerSession {
             audio_in: Vec::new(),
             media_seen: 0, decode_ok: 0, decode_err: 0,
             audio_pt: OPUS_PAYLOAD_TYPE,
+            #[cfg(feature = "signal")]
+            rtp_data_seqnum: 0,
         })
     }
 
@@ -122,6 +128,7 @@ impl PeerSession {
             audio_in: Vec::new(),
             media_seen: 0, decode_ok: 0, decode_err: 0,
             audio_pt: OPUS_PAYLOAD_TYPE,
+            rtp_data_seqnum: 0,
         })
     }
 
@@ -278,6 +285,30 @@ impl PeerSession {
     /// Next decoded PCM frame from the peer, if any.
     pub fn recv_audio(&mut self) -> Option<Vec<f32>> {
         if self.audio_in.is_empty() { None } else { Some(self.audio_in.remove(0)) }
+    }
+
+    /// This session's role (offerer = caller, answerer = callee).
+    pub fn role(&self) -> Role {
+        self.role
+    }
+
+    /// Send ringrtc's `accepted` over the RTP-data control channel (PT 101 /
+    /// SSRC 0xD), queued for the next `poll_transmit`. A 1:1 *caller* streams no
+    /// media until it receives this from the *callee*, so the answerer must send
+    /// it (repeatedly, ~1 Hz) once keyed. No-op-errs as `NotConnected` until the
+    /// SRTP keys exist. `call_id` is the ringrtc call id (binds the message).
+    #[cfg(feature = "signal")]
+    pub fn send_accepted(&mut self, call_id: u64) -> Result<(), Error> {
+        self.ensure_media()?;
+        self.rtp_data_seqnum += 1;
+        let payload = crate::signal::encode_rtp_data_accepted(call_id, self.rtp_data_seqnum);
+        let dg = self
+            .media
+            .as_mut()
+            .ok_or(Error::NotConnected)?
+            .send_rtp_data(crate::signal::RTP_DATA_PAYLOAD_TYPE, crate::signal::RTP_DATA_SSRC, &payload)?;
+        self.transport.queue_media(dg);
+        Ok(())
     }
 
     fn ensure_media(&mut self) -> Result<(), Error> {

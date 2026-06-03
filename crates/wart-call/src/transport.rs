@@ -333,7 +333,19 @@ pub(crate) struct Transport {
     /// to the selected remote must be wrapped through the TURN client.
     #[cfg(feature = "signal")]
     media_via_relay: bool,
+    /// FIX (task 16): for the Signal **answerer** (controlled), the time after
+    /// which we self-select the best succeeded pair if the peer hasn't sent a
+    /// USE-CANDIDATE. ringrtc presume-writable-relays and streams media without
+    /// the standard nomination handshake, so a strict controlled agent would
+    /// hang forever. `None` = not the answerer path / checks not started yet.
+    #[cfg(feature = "signal")]
+    self_select_at: Option<Instant>,
 }
+
+/// Grace period after the answerer starts ICE checks before it self-selects a
+/// working pair (gives a well-behaved peer's normal nomination time to win).
+#[cfg(feature = "signal")]
+const ANSWERER_SELF_SELECT_GRACE: std::time::Duration = std::time::Duration::from_secs(4);
 
 impl Transport {
     /// WebRTC-native (DTLS-SRTP). `local` is our bound UDP socket address —
@@ -387,6 +399,8 @@ impl Transport {
             relay_local_added: false,
             #[cfg(feature = "signal")]
             media_via_relay: false,
+            #[cfg(feature = "signal")]
+            self_select_at: None,
         })
     }
 
@@ -424,6 +438,7 @@ impl Transport {
             relay,
             relay_local_added: false,
             media_via_relay: false,
+            self_select_at: None,
         })
     }
 
@@ -499,6 +514,12 @@ impl Transport {
         self.ice
             .start_connectivity_checks(controlling, ufrag.to_owned(), pwd.to_owned())
             .map_err(|_| Error::Ice("start checks"))?;
+        // FIX (task 16): arm the answerer self-select fallback — if the peer never
+        // nominates (ringrtc presume-writable-relayed), self-select after the grace.
+        #[cfg(feature = "signal")]
+        if !controlling {
+            self.self_select_at = Some(Instant::now() + ANSWERER_SELF_SELECT_GRACE);
+        }
         Ok(())
     }
 
@@ -547,6 +568,15 @@ impl Transport {
         }
         #[cfg(feature = "signal")]
         self.ensure_relay_local_candidate();
+        // FIX (task 16): once the grace elapses, if the answerer still hasn't a
+        // selected pair, self-select the best succeeded one (no-op until a pair
+        // succeeds). Clears the deadline once it selects so this runs once.
+        #[cfg(feature = "signal")]
+        if let Some(deadline) = self.self_select_at {
+            if now >= deadline && self.ice.self_select_best_pair() {
+                self.self_select_at = None;
+            }
+        }
         self.maybe_advance();
     }
 
@@ -725,13 +755,22 @@ impl Transport {
         );
         #[cfg(not(feature = "signal"))]
         let (relay_local, via, counts) = (false, false, (0u64, 0u64, 0u64));
+        // DIAG (wart, task 16): ICE connect-path counters that localize where a
+        // controlled-role relay connect stalls (prflx/succeeded/use-candidate/
+        // symmetric-guard discard/selected/no-remote). See rtc-ice IceDebug.
+        let d = self.ice.ice_debug();
         format!(
-            "role={:?} ice={:?} pair={pair} keyed={} relay_local_cand={relay_local} media_via_relay={via} relay[sent={} noperm={} recv={}]",
+            "role={:?} ctrl={} ice={:?} pair={pair} keyed={} relay_local_cand={relay_local} media_via_relay={via} relay[sent={} noperm={} recv={}] ice_dbg[prflx={} succ={} usecand={} symdisc={} sel={} norem={} reqrelay={} reqhost={} bsucctx={}]",
             self.role,
+            self.ice.is_controlling(),
             self.ice.state(),
             self.done,
             counts.0, counts.1, counts.2,
-        )
+            d.prflx_created, d.pairs_succeeded, d.use_candidate_rx,
+            d.sym_guard_discards, d.selected_pair_set, d.success_no_remote,
+            d.req_on_relay, d.req_on_host, d.bind_success_tx,
+        ) + &format!(" {}", self.ice.debug_pairs())
+            + &format!(" wire[{}]", self.ice.wire_tail())
     }
 
     pub(crate) fn take_keys(&mut self) -> Option<(SrtpKeys, SrtpKeys)> {

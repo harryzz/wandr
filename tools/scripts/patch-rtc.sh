@@ -3,9 +3,16 @@
 # (webrtc-rs/rtc). Idempotent: skips a patch that's already applied.
 #
 # Why: external/rtc tracks pristine upstream webrtc-rs/rtc (pinned). We carry a
-# small delta — rtc-ice's mDNS made optional/default-on — so the ICE crate builds
-# for wasm32-wasip2 (`--no-default-features`); upstream pulls rtc-mdns →
-# socket2/tokio, which don't build for wasip2. See repros/webrtc-rs-wasip2.
+# delta in one patch file (`rtc-ice-mdns-optional.patch`) covering two things:
+#   1. rtc-ice's mDNS made optional/default-on so the ICE crate builds for
+#      wasm32-wasip2 (`--no-default-features`); upstream pulls rtc-mdns →
+#      socket2/tokio, which don't build for wasip2. See repros/webrtc-rs-wasip2.
+#   2. wart call-engine support (task 16): Agent::self_select_best_pair() — the
+#      answerer self-selects a Succeeded pair when the peer (ringrtc, which uses
+#      libwebrtc presume_writable_when_fully_relayed) never sends USE-CANDIDATE —
+#      plus connect-path diagnostics (IceDebug counters, wire log, debug_pairs).
+# (Filename kept for stability; it now carries both. Regenerate after editing the
+#  submodule: git -C external/rtc diff > repros/webrtc-rs-wasip2/rtc-ice-mdns-optional.patch)
 #
 # Run after a fresh clone / `git submodule update`, before building wart-call or
 # the call-engine repros.

@@ -256,6 +256,21 @@ impl SignalCall {
         self.session.recv_audio()
     }
 
+    /// True if we are the **answerer** (callee) — the side that must send
+    /// ringrtc's `accepted` so the caller starts streaming media.
+    pub fn is_answerer(&self) -> bool {
+        matches!(self.session.role(), crate::session::Role::Answerer)
+    }
+
+    /// Send ringrtc's `accepted` control message (RTP-data PT 101 / SSRC 0xD),
+    /// queued for the next `poll_transmit`. The answerer calls this once keyed and
+    /// resends ~1 Hz (ringrtc does the same); the caller stays in
+    /// "ConnectingBeforeAccepted" — no audio — until it arrives. No-op-errs until
+    /// the SRTP keys exist.
+    pub fn send_accepted(&mut self) -> Result<(), Error> {
+        self.session.send_accepted(self.call_id)
+    }
+
     pub fn state(&self) -> CallState {
         self.state
     }

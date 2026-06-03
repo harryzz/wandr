@@ -3,6 +3,25 @@
 > Lean router (slimmed 2026-05-30). Detail lives in `docs/`, `tasks/`, and the
 > project memory — read the relevant file on demand (see **Where to look**).
 
+## ‼️ Working rules (BINDING — these override the default action loop)
+
+1. **Read the source/docs FIRST — do not patch-and-cycle.** For any interop /
+   protocol / library / external-system task, before the FIRST patch: locate the
+   authoritative reference (clone the upstream source into `/tmp` or `repros/`,
+   read the official docs, search the project's GitHub issues) and read the
+   governing code path end-to-end. Instrument only to *confirm* a specific
+   reading, never to fish. **If you are about to make a 2nd device-test / patch on
+   the same problem without having read the source path that governs the
+   behavior, STOP and go read it.** One source-grounded change beats ten
+   speculative ones. (Cost of ignoring this: ~5h cycling on task #16 incoming
+   calls; ringrtc source had the answers in minutes. See `[[feedback_read_source_first]]`.)
+
+2. **Do NOT hardcode.** Derive values from first principles / real runtime inputs
+   (screen geometry, density, row counts) — not magic numbers; keep it
+   resolution/device-independent. A genuinely-needed constant must be ONE named,
+   justified source of truth in the layer that owns the policy. See
+   `[[feedback_no_hardcoding]]`.
+
 ## What this project is
 
 Replace Android's ART runtime with a wasmtime-based host that:

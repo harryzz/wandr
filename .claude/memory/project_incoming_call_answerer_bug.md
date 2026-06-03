@@ -79,7 +79,70 @@ relayed-receive `add_remote_candidate` are DELETED. Builds clean, 18 tests pass.
 **Outgoing calls still work (device-verified) — no regression.** Committed
 <this rework's commit>.
 
-**STILL `ice=Checking pair=none` for the answerer** (relay_local_cand=true,
+**✅ RESOLVED 2026-06-04 — incoming calls connect with two-way audio (device-
+verified).** THREE source-grounded fixes (all from reading ringrtc `/tmp/ringrtc`,
+not guessing): (1) **self-select** — the peer uses libwebrtc
+`presume_writable_when_fully_relayed` and never sends USE-CANDIDATE, so the strict
+controlled answerer never selected a pair; `rtc-ice Agent::self_select_best_pair()`
++ a transport answerer grace timer pick the best Succeeded pair so keys derive.
+(2) **`accepted` RTP-data** — a ringrtc *caller* sits in `ConnectingBeforeAccepted`
+and streams NO media until the *callee* sends `rtp_data.Message{accepted}` over
+RTP PT 101 / SSRC 0xD (SRTP-encrypted, resent ~1 Hz); the answerer now sends it on
+accept. (3) **self-hangup fix** — wart (device_id 4) was hanging up on itself: the
+caller's multi-device `Hangup{type=Accepted, device_id=4}` is coordination echoing
+wart's OWN accept; ringrtc ignores a hangup whose device_id is its own, so the
+engine now drops a coordination hangup (Accepted/Declined/Busy) whose device_id ==
+ours. SRTP KDF verified byte-identical to ringrtc `negotiate_srtp_keys` (NOT the
+bug). Files: rtc-ice (submodule) + crates/wart-call {transport,media,session,
+signal/{mod,call}} + apps/user/war.signal/engine {call,engine}.rs. UNCOMMITTED;
+rtc-ice delta should fold into tools/scripts/patch-rtc.sh. OPEN follow-ups:
+diagnostics (counters/wire-log) can be trimmed; verify self-select still needed
+(one call connected just before its grace fired — peer may nominate post-accept).
+**MULTI-RING fully working both ways (device-verified 2026-06-04):** answer on
+wart → other devices stop; answer on another device → wart stops. The CALLER
+relays the coordination `Hangup{Accepted, device_id=winner}` to all the user's
+devices, so wart needs NO send-side change — just the device_id filter (ignore
+when winner == our device_id, stop when it's a different device). Process lesson:
+[[feedback_read_source_first]].
+
+**⚠️ MAJOR CONFOUND (2026-06-03): the failing CALLER is Signal Desktop running
+inside WSL behind Tailscale** — a triple-NAT (WSL→Windows→router) + VPN overlay.
+PROOF = the candidates it advertised every call: `100.64.0.10` (Tailscale CGNAT
+range), `172.20.40.244` (WSL2 internal net), `192.168.1.175` (Windows host LAN),
+`77.70.64.156` (public srflx), `104.30.145.x` (Signal TURN). This topology
+*alone* reproduces every symptom below: wart's replies to the caller's
+WSL/Windows-host address don't route back into WSL → the caller's pair never
+becomes "writable" → it NEVER nominates (`usecand=0`) while it presume-writable-
+relays a few SRTP packets (`seen=43`). User reports incoming likely WORKS when
+the caller is a real Android Signal phone (normal network). **So the long-standing
+"incoming calls don't connect" bug may be largely/entirely a TEST-RIG artifact,
+not a wart defect.** VALIDATE FIRST with a non-WSL caller before changing connect
+logic. The candidate self-nominate / presume-writable fix is DEFERRED pending that.
+
+**DEFINITIVE DIAGNOSIS (2026-06-03, instrumented rtc-ice + 2 live incoming
+calls) — interpret in light of the WSL confound above.** Added 9 ICE counters to vendored `external/rtc/rtc-ice` (Agent
+`IceDebug` + `ice_debug()`/`debug_pairs()`, surfaced through `conn_debug` →
+`/state/calldbg.log`). Results KILLED the earlier symmetric-guard hypothesis:
+`symdisc=0` (the guard at `agent_selector.rs:478` NEVER fires). The real break:
+**the peer (controlling) NEVER sends USE-CANDIDATE (`usecand=0`)** so the
+controlled side never selects. Many pairs reach `succ` — including a working
+DIRECT-LAN pair `host->192.168.1.175(peer LAN, same WiFi)=succ` AND
+`our-relay->peer-advertised-relay 104.30.145.x=succ`. So OUR checks succeed (we'd
+connect if we were controlling — which is exactly why OUTGOING works); as
+CONTROLLED we depend entirely on the peer nominating, which it never does. The
+peer's inbound checks create prflx at X=`77.70.64.156:61856`/`192.168.1.175`
+(≠ its advertised candidates; note srflx port 61856 vs advertised 61858); the
+relay prflx pairs to X FAIL. Hypothesis under test: the peer (relay-forced
+privacy) won't nominate the non-relay pairs that work, and the relay↔relay
+nomination never completes because our relay responses to the peer's actual
+checking source don't get back. Creds verified consistent (local_signaling ==
+agent local ufrag/pwd — NOT the cause). GOTCHA fixed: `debug_pairs` indexed
+local/remote candidate vecs that `close()` clears on hangup → index-OOB panic →
+SIGILL host abort; now uses `.get()`. NEXT counters added: `reqrelay`/`reqhost`
+(is the peer checking our RELAY candidate at all?) + `bsucctx` (are we sending
+binding-success replies?) — one more live incoming call to read them.
+
+**(SUPERSEDED) earlier hypothesis — STILL `ice=Checking pair=none` for the answerer** (relay_local_cand=true,
 sent/recv climb, noperm plateaus). Since OUTGOING (controlling) connects with the
 SAME relay-candidate routing, our outbound checks DO get matched responses over
 the relay — so the break is specific to the CONTROLLED role: either our reply to
