@@ -99,6 +99,16 @@ fn main() {
         return;
     }
 
+    // Task-76 routing core (step 4): build the live device model and log the
+    // resolved stream plan for every intent (read-only). See audio_routing.rs.
+    if args.iter().any(|a| a == "--probe-audio-route") {
+        android_logger::init_once(
+            android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
+        );
+        wasm_android_host::audio_routing::probe_routes();
+        return;
+    }
+
     // Task-76 audio state matrix (step 3): targeted self-restoring on-device
     // opens filling the (usage × mode × device × sharing × format × channels)
     // matrix. Restores phone state to NORMAL after the comms-mode cells.

@@ -29,55 +29,10 @@
 
 #[cfg(target_os = "android")]
 use crate::{audio_impl, audio_policy_impl};
-
-// ── AAudio.h contract constants ──────────────────────────────────────────────
-// Stable AAudio.h enum values (we don't link libaaudio). These mirror the
-// privates in `audio_impl::binder_path`; the task-76 routing core (step 4) will
-// fold both into one named source per the no-hardcoding rule. They live here so
-// the matrix can drive `audio_impl::probe_open` with explicit configs.
+// The capability model + parser + AAudio constants live in the routing core;
+// the probe reuses them (step 2's typed model is now `audio_routing`'s).
 #[cfg(target_os = "android")]
-mod aa {
-    pub const DIR_OUTPUT: i32 = 0;
-    pub const DIR_INPUT:  i32 = 1;
-    pub const SHARING_EXCLUSIVE: i32 = 0;
-    pub const SHARING_SHARED:    i32 = 1;
-    pub const USAGE_MEDIA:               i32 = 1;
-    pub const USAGE_VOICE_COMMUNICATION: i32 = 2;
-    pub const CONTENT_SPEECH: i32 = 1;
-    pub const CONTENT_MUSIC:  i32 = 2;
-    pub const CHANNEL_MONO:   i32 = 0x1;
-    pub const CHANNEL_STEREO: i32 = 0x3;
-    pub const INPUT_PRESET_VOICE_RECOGNITION: i32 = 6;
-    pub const INPUT_PRESET_NONE: i32 = 0;
-}
-
-// ── Typed device model (step 2) ──────────────────────────────────────────────
-
-/// Direction of an audio device port.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Direction { Output, Input }
-
-/// One audio device port as reported by the platform policy, parsed from
-/// `dumpsys media.audio_policy`'s "Available output/input devices" sections.
-/// This is the device-independent capability table the refactor's routing core
-/// will consume (instead of the hard-coded `deviceIds=[2]`).
-#[derive(Debug, Clone)]
-pub struct AudioDeviceCaps {
-    pub direction: Direction,
-    /// Audio-policy **port id** (the namespace `deviceIds=[2]` used). Whether
-    /// this equals the AAudio device id granted to a stream is resolved
-    /// empirically by `probe_aaudio_granted_device`.
-    pub port_id: i32,
-    pub name: String,
-    /// The `AUDIO_DEVICE_OUT_*` / `AUDIO_DEVICE_IN_*` token (e.g. EARPIECE).
-    pub type_token: String,
-    /// Supported PCM formats (`AUDIO_FORMAT_*` tokens) across all profiles.
-    pub formats: Vec<String>,
-    /// Supported sample rates (Hz) across all profiles.
-    pub sample_rates: Vec<u32>,
-    /// Supported channel masks (raw hex values) across all profiles.
-    pub channel_masks: Vec<u32>,
-}
+use crate::audio_routing::{aa, parse_devices, AudioDeviceCaps, Direction};
 
 // ── Entry points ─────────────────────────────────────────────────────────────
 
@@ -232,72 +187,6 @@ fn log_policy_state(dump: &str) {
             log::info!("audio-caps: policy {}", t);
         }
     }
-}
-
-/// Parse the "Available output devices" / "Available input devices" sections.
-/// Device header form (from the device):
-///   `  1. Port ID: 2; "Earpiece"; {AUDIO_DEVICE_OUT_EARPIECE, @:}`
-/// followed by profile lines carrying `AUDIO_FORMAT_*`, `sampling rates: ...`,
-/// `channel masks: 0x..`.
-#[cfg(target_os = "android")]
-fn parse_devices(dump: &str) -> Vec<AudioDeviceCaps> {
-    let mut out = Vec::new();
-    let mut dir: Option<Direction> = None;
-    let mut cur: Option<AudioDeviceCaps> = None;
-
-    let flush = |cur: &mut Option<AudioDeviceCaps>, out: &mut Vec<AudioDeviceCaps>| {
-        if let Some(d) = cur.take() { out.push(d); }
-    };
-
-    for line in dump.lines() {
-        let t = line.trim();
-        if t.starts_with("Available output devices") { flush(&mut cur, &mut out); dir = Some(Direction::Output); continue; }
-        if t.starts_with("Available input devices")  { flush(&mut cur, &mut out); dir = Some(Direction::Input);  continue; }
-        if t.starts_with("Hardware modules")          { flush(&mut cur, &mut out); dir = None; continue; }
-        let Some(direction) = dir else { continue };
-
-        // Device header: `N. Port ID: <id>; "<name>"; {<TYPE>, ...}`
-        if let Some(rest) = t.split_once("Port ID:").map(|(_, r)| r) {
-            // Only treat as a top-level device if the line begins with `<num>.`
-            // (the "Supported devices" sub-lists inside Hardware modules are
-            // excluded already by the section gate above).
-            if t.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
-                flush(&mut cur, &mut out);
-                let port_id = rest.trim().split(';').next()
-                    .and_then(|s| s.trim().parse::<i32>().ok()).unwrap_or(-1);
-                let name = rest.split('"').nth(1).unwrap_or("").to_string();
-                let type_token = rest.split('{').nth(1)
-                    .and_then(|s| s.split([',', '}']).next())
-                    .unwrap_or("").trim().to_string();
-                cur = Some(AudioDeviceCaps {
-                    direction, port_id, name, type_token,
-                    formats: Vec::new(), sample_rates: Vec::new(), channel_masks: Vec::new(),
-                });
-                continue;
-            }
-        }
-
-        // Profile detail lines for the current device.
-        if let Some(d) = cur.as_mut() {
-            if let Some(idx) = t.find("AUDIO_FORMAT_") {
-                let fmt: String = t[idx..].split([' ', ';']).next().unwrap_or("").to_string();
-                if fmt != "AUDIO_FORMAT_DEFAULT" && !d.formats.contains(&fmt) { d.formats.push(fmt); }
-            }
-            if let Some(rates) = t.strip_prefix("sampling rates:") {
-                for r in rates.split(',') {
-                    if let Ok(v) = r.trim().parse::<u32>() { if !d.sample_rates.contains(&v) { d.sample_rates.push(v); } }
-                }
-            }
-            if let Some(masks) = t.strip_prefix("channel masks:") {
-                for m in masks.split(',') {
-                    let m = m.trim().trim_start_matches("0x");
-                    if let Ok(v) = u32::from_str_radix(m, 16) { if !d.channel_masks.contains(&v) { d.channel_masks.push(v); } }
-                }
-            }
-        }
-    }
-    flush(&mut cur, &mut out);
-    out
 }
 
 #[cfg(target_os = "android")]

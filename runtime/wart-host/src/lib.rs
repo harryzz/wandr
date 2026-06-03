@@ -14,6 +14,7 @@ mod sensors_impl;
 pub mod audio_impl;
 pub mod audio_policy_impl;
 pub mod audio_caps;
+pub mod audio_routing;
 mod locale_impl;
 mod clipboard_impl;
 mod pointer_icon_impl;
