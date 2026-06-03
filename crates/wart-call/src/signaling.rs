@@ -12,7 +12,7 @@ use rtc_sdp::description::session::SessionDescription;
 use crate::{Error, OPUS_PAYLOAD_TYPE};
 
 /// The signaling parameters an SDP carries for one audio m-section.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Signaling {
     pub ice_ufrag: String,
     pub ice_pwd: String,
@@ -26,11 +26,31 @@ pub struct Signaling {
     pub direction: String,
     /// `a=candidate:…` values (without the `candidate:` prefix).
     pub candidates: Vec<String>,
+    /// The Opus dynamic payload type for this m-section. On the WebRTC-native path
+    /// it's the NEGOTIATED value (parsed from the peer's SDP rtpmap by `from_sdp`,
+    /// emitted by `to_sdp`); on the Signal path it's ringrtc's fixed value. The
+    /// session adopts the remote's value so we send/decode on the PT the peer uses.
+    pub audio_pt: u8,
     /// X25519 public key for Signal's DH-SRTP keying
     /// (ringrtc `ConnectionParametersV4.public_key`, the DTLS-fingerprint
     /// replacement). `None` on the WebRTC-native/DTLS path (`to_sdp`/`from_sdp`
     /// ignore it); `Some(32 bytes)` on the Signal path (`crate::signal`).
     pub public_key: Option<Vec<u8>>,
+}
+
+impl Default for Signaling {
+    fn default() -> Self {
+        Signaling {
+            ice_ufrag: String::new(),
+            ice_pwd: String::new(),
+            fingerprint: String::new(),
+            setup: String::new(),
+            direction: String::new(),
+            candidates: Vec::new(),
+            audio_pt: OPUS_PAYLOAD_TYPE,
+            public_key: None,
+        }
+    }
 }
 
 /// The answer direction for a given offer direction (RFC 3264).
@@ -55,7 +75,7 @@ impl Signaling {
                 if self.direction.is_empty() { "sendrecv".to_owned() } else { self.direction.clone() },
             )
             .with_codec(
-                OPUS_PAYLOAD_TYPE,
+                self.audio_pt,
                 "opus".to_owned(),
                 crate::SAMPLE_RATE,
                 2,
@@ -98,6 +118,18 @@ impl Signaling {
             .find(|d| media.has_attribute(d))
             .unwrap_or("sendrecv")
             .to_owned();
+        // The Opus payload type from `a=rtpmap:<PT> opus/48000/2` — the PT the peer
+        // sends/expects. Honor it rather than assuming our default, so we interop
+        // with any peer's dynamic-PT choice. Falls back to our default if absent.
+        let audio_pt = media
+            .attributes
+            .iter()
+            .filter(|a| a.key == "rtpmap")
+            .filter_map(|a| a.value.as_deref())
+            .find(|v| v.to_ascii_lowercase().contains("opus"))
+            .and_then(|v| v.split_whitespace().next())
+            .and_then(|pt| pt.parse::<u8>().ok())
+            .unwrap_or(OPUS_PAYLOAD_TYPE);
         Ok(Signaling {
             ice_ufrag: attr("ice-ufrag"),
             ice_pwd: attr("ice-pwd"),
@@ -105,7 +137,31 @@ impl Signaling {
             setup: attr("setup"),
             direction,
             candidates,
+            audio_pt,
             public_key: None, // SDP path carries no X25519 key (Signal-only; see crate::signal)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn audio_pt_round_trips_through_sdp() {
+        // A non-default PT survives to_sdp → from_sdp (interop with a peer that
+        // picks its own dynamic PT).
+        let mut s = Signaling { audio_pt: 96, ..Default::default() };
+        s.fingerprint = "sha-256 AB:CD".to_owned();
+        let parsed = Signaling::from_sdp(&s.to_sdp()).unwrap();
+        assert_eq!(parsed.audio_pt, 96);
+    }
+
+    #[test]
+    fn default_offer_advertises_102() {
+        // Our default offer uses ringrtc's Opus PT, and it parses back as 102.
+        let parsed = Signaling::from_sdp(&Signaling::default().to_sdp()).unwrap();
+        assert_eq!(parsed.audio_pt, OPUS_PAYLOAD_TYPE);
+        assert_eq!(OPUS_PAYLOAD_TYPE, 102);
     }
 }

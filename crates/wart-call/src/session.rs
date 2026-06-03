@@ -59,6 +59,10 @@ pub struct PeerSession {
     media_seen: u64,
     decode_ok: u64,
     decode_err: u64,
+    /// Negotiated Opus payload type. Defaults to [`OPUS_PAYLOAD_TYPE`]; on the
+    /// WebRTC path `set_remote_signaling` adopts the peer's SDP rtpmap PT, so we
+    /// send + decode on whatever the peer uses (ringrtc fixes it at 102).
+    audio_pt: u8,
 }
 
 impl PeerSession {
@@ -83,6 +87,7 @@ impl PeerSession {
             media_out: Vec::new(),
             audio_in: Vec::new(),
             media_seen: 0, decode_ok: 0, decode_err: 0,
+            audio_pt: OPUS_PAYLOAD_TYPE,
         })
     }
 
@@ -120,6 +125,7 @@ impl PeerSession {
             media_out: Vec::new(),
             audio_in: Vec::new(),
             media_seen: 0, decode_ok: 0, decode_err: 0,
+            audio_pt: OPUS_PAYLOAD_TYPE,
         })
     }
 
@@ -142,6 +148,7 @@ impl PeerSession {
                 }
             },
             candidates: vec![candidate_string(self.local_addr)],
+            audio_pt: self.audio_pt,
             // WebRTC-native path keys via DTLS (None); the Signal path advertises
             // its ephemeral X25519 public key here for the peer's DH.
             #[cfg(feature = "signal")]
@@ -160,6 +167,8 @@ impl PeerSession {
         let remotes: Vec<SocketAddr> =
             remote.candidates.iter().filter_map(|c| parse_candidate_addr(c)).collect();
         self.remote_direction = Some(remote.direction.clone());
+        // Adopt the peer's Opus PT (WebRTC: parsed from their SDP; Signal: 102).
+        self.audio_pt = remote.audio_pt;
         self.transport.set_remote(
             &remote.ice_ufrag,
             &remote.ice_pwd,
@@ -219,6 +228,9 @@ impl PeerSession {
             self.ensure_media()?;
             if let Some(m) = &mut self.media {
                 match m.recv(&srtp) {
+                    // Empty = a non-Opus stream we skipped (telephone-event etc.) —
+                    // not audio, not an error; don't queue or count it.
+                    Ok(pcm) if pcm.is_empty() => {}
                     Ok(pcm) => { self.audio_in.push(pcm); self.decode_ok += 1; }
                     Err(_) => { self.decode_err += 1; }
                 }
@@ -275,7 +287,7 @@ impl PeerSession {
             let ssrc = if self.role == Role::Offerer { 0xA } else { 0xB };
             let profile = self.transport.srtp_profile();
             self.media =
-                Some(MediaSession::new(SAMPLE_RATE, 1, OPUS_PAYLOAD_TYPE, ssrc, profile, &send, &recv)?);
+                Some(MediaSession::new(SAMPLE_RATE, 1, self.audio_pt, ssrc, profile, &send, &recv)?);
         }
         Ok(())
     }

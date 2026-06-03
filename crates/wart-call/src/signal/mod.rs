@@ -148,6 +148,8 @@ fn params_into(p: proto::ConnectionParametersV4) -> Signaling {
         setup: String::new(),
         direction: "sendrecv".to_owned(),
         candidates: Vec::new(),
+        // ringrtc fixes Opus at PT 102 (not SDP-negotiated on this path).
+        audio_pt: crate::OPUS_PAYLOAD_TYPE,
         public_key: p.public_key,
     }
 }
@@ -220,6 +222,7 @@ mod tests {
             setup: "actpass".to_owned(),
             direction: "recvonly".to_owned(),
             candidates: vec!["1 1 udp 2130706431 10.0.0.1 5000 typ host".to_owned()],
+            audio_pt: crate::OPUS_PAYLOAD_TYPE,
             public_key: pk,
         }
     }

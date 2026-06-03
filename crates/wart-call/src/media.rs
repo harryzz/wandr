@@ -156,12 +156,27 @@ impl MediaSession {
         Ok(srtp.to_vec())
     }
 
-    /// Inbound SRTP datagram → RTP → decoded PCM frame.
+    /// Inbound SRTP datagram → RTP → decoded PCM frame. Returns an EMPTY vec for a
+    /// packet that isn't our Opus audio stream (a benign skip, not an error): a
+    /// real ringrtc peer multiplexes several streams onto the one port — the Opus
+    /// audio (e.g. PT 102 / ssrc 0x7d2) interleaved with a telephone-event / other
+    /// stream (PT 101) — and feeding those non-Opus payloads to the decoder
+    /// produced ~16 % spurious decode errors and made the seq/ts diag meaningless
+    /// (gaps in the millions from interleaved SSRCs). Filter to our audio PT.
     pub fn recv(&mut self, srtp: &[u8]) -> Result<Vec<f32>, Error> {
         let rtp = self.rx.decrypt_rtp(srtp).map_err(|_| Error::Srtp("decrypt"))?;
         let mut b = &rtp[..];
         let pkt = Packet::unmarshal(&mut b).map_err(|_| Error::Rtp("unmarshal"))?;
-        // DIAG: track inbound RTP seq gaps + timestamp step + payload size.
+        // DIAG (all streams): the last PT/SSRC/payload size seen on the wire.
+        self.rx_pt = pkt.header.payload_type;
+        self.rx_ssrc = pkt.header.ssrc;
+        self.rx_payload_len = pkt.payload.len();
+        // Only the Opus audio stream is ours to decode; skip everything else so the
+        // decoder + the seq/ts/gap stats see a single, coherent stream.
+        if pkt.header.payload_type != self.payload_type {
+            return Ok(Vec::new());
+        }
+        // DIAG (audio stream only): seq gaps + timestamp step — now meaningful.
         let seq = pkt.header.sequence_number;
         let ts = pkt.header.timestamp;
         if let Some(prev) = self.rx_prev_seq {
@@ -173,9 +188,6 @@ impl MediaSession {
         }
         self.rx_prev_seq = Some(seq);
         self.rx_prev_ts = Some(ts);
-        self.rx_payload_len = pkt.payload.len();
-        self.rx_pt = pkt.header.payload_type;
-        self.rx_ssrc = pkt.header.ssrc;
         // Decode at the packet's EXACT sample count, read from its Opus TOC. The peer
         // packetizes 60 ms frames (2880 samples), not our 20 ms — decoding into a
         // 960-sample buffer dropped 2/3 of every packet (garbled). But opus-rs 0.1.22
