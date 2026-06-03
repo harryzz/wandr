@@ -120,3 +120,15 @@ adb shell 'su -c "logcat -d"' | grep -iE 'AAudioServiceEndpoint|EndpointShared|E
 - `apps/user/war.signal/engine/src/engine.rs` — call run-loop, media/state logging.
 - `crates/wart-call/src/{transport.rs,session.rs,signal/}` — SRTP keying, media.
 - `repros/call-live/` — the working standalone mic→speaker reference.
+
+## Follow-up: durable audio API foundation (→ task 76)
+
+The audio subsystem was built on hand-rolled raw binder to `media.aaudio` /
+`media.audio_policy` — fast to reach but the most ABI-fragile path. Before
+extending it further, **research the stable / officially-recommended audio API
+that fits and will long-live in this framework** (NDK AAudio vs Oboe vs
+NDK AudioTrack/AudioRecord vs pinned-@VintfStability binder vs a wart audio-HAL
+abstraction where the WIT contract outlives the backend). This is point **G** of
+`tasks/76-audio-subsystem-refactor.md` (with internet sources) — the audio
+subsystem refactor should pick the long-lived foundation deliberately, not stay
+on the expedient raw-binder path.
