@@ -386,6 +386,111 @@ mod binder_path {
         open_pcm_stream(params, channels, /*capture=*/ true)
     }
 
+    fn pcm_i16_format() -> AudioFormatDescription {
+        AudioFormatDescription {
+            r#type:     AudioFormatType::PCM,
+            r#pcm:      PcmType::INT_16_BIT,
+            r#encoding: String::new(),
+        }
+    }
+
+    /// Task-76 capability-matrix probe: open ONE stream with a fully-specified
+    /// config, log the openStream result + the granted `params_out` (device id
+    /// / rate / channels / hardware format — the real AAudio-deviceId namespace
+    /// vs the policy port id), then immediately close it. Returns the openStream
+    /// return value: a positive stream handle on success, the negative AAudio
+    /// result code on failure (e.g. -889 UNAVAILABLE), or `i32::MIN` on a binder
+    /// transport error. Does NOT mmap or write any audio — no sound is produced.
+    /// Read-only investigation only; never wires into the live track path.
+    #[allow(clippy::too_many_arguments)]
+    pub fn probe_open(
+        label: &str,
+        direction: i32,
+        usage: i32,
+        content_type: i32,
+        sharing: i32,
+        channel_mask: i32,
+        f32_format: bool,
+        device_ids: Vec<i32>,
+        input_preset: i32,
+    ) -> i32 {
+        let Some(svc) = service() else {
+            log::warn!("audio-caps[{label}]: media.aaudio unavailable");
+            return i32::MIN;
+        };
+        let params = StreamParameters {
+            r#channelMask: channel_mask,
+            r#sampleRate:  48000,
+            r#sharingMode: sharing,
+            r#audioFormat: if f32_format { pcm_f32_format() } else { pcm_i16_format() },
+            r#direction:   direction,
+            r#usage:       usage,
+            r#contentType: content_type,
+            r#inputPreset: input_preset,
+            r#deviceIds:   device_ids,
+            ..Default::default()
+        };
+        let req = StreamRequest {
+            r#params: params,
+            r#attributionSource: Default::default(),
+            r#sharingModeMatchRequired: false,
+            r#inService: false,
+        };
+        let mut po = StreamParameters::default();
+        let rc = match svc.r#openStream(&req, &mut po) {
+            Ok(h)  => h,
+            Err(e) => { log::warn!("audio-caps[{label}]: openStream binder err: {e:?}"); return i32::MIN; }
+        };
+        if rc > 0 {
+            log::info!(
+                "audio-caps[{label}]: OPEN ok handle={rc} granted_deviceIds={:?} \
+                 rate={} chMask=0x{:x} hwRate={} hwSpf={}",
+                po.r#deviceIds, po.r#sampleRate, po.r#channelMask,
+                po.r#hardwareSampleRate, po.r#hardwareSamplesPerFrame,
+            );
+            let _ = svc.r#closeStream(rc);
+        } else {
+            log::info!("audio-caps[{label}]: OPEN failed rc={rc}");
+        }
+        rc
+    }
+
+    /// Task-76 matrix: do an OUTPUT and an INPUT stream open *simultaneously*?
+    /// (Task 75 left this ambiguous — MMAP in+out historically -889'd, but a
+    /// SHARED+SHARED pair seemed to coexist once.) Opens both SHARED/F32, logs
+    /// each rc, then closes both. Returns (out_rc, in_rc). No audio produced.
+    pub fn probe_coexist() -> (i32, i32) {
+        let Some(svc) = service() else { return (i32::MIN, i32::MIN) };
+        let mk = |dir: i32, mask: i32, usage: i32, preset: i32| StreamRequest {
+            r#params: StreamParameters {
+                r#channelMask: mask,
+                r#sampleRate:  48000,
+                r#sharingMode: AAUDIO_SHARING_MODE_SHARED,
+                r#audioFormat: pcm_f32_format(),
+                r#direction:   dir,
+                r#usage:       usage,
+                r#inputPreset: preset,
+                ..Default::default()
+            },
+            r#attributionSource: Default::default(),
+            r#sharingModeMatchRequired: false,
+            r#inService: false,
+        };
+        let mut po = StreamParameters::default();
+        let out_rc = svc.r#openStream(
+            &mk(AAUDIO_DIRECTION_OUTPUT, AAUDIO_CHANNEL_STEREO, AAUDIO_USAGE_MEDIA, 0),
+            &mut po,
+        ).unwrap_or(i32::MIN);
+        let in_rc = svc.r#openStream(
+            &mk(AAUDIO_DIRECTION_INPUT, AAUDIO_CHANNEL_MONO, 0, AAUDIO_INPUT_PRESET_VOICE_RECOGNITION),
+            &mut po,
+        ).unwrap_or(i32::MIN);
+        log::info!("audio-caps[coexist]: out_rc={out_rc} in_rc={in_rc} (both SHARED/F32)");
+        if out_rc > 0 { let _ = svc.r#closeStream(out_rc); }
+        if in_rc > 0 { let _ = svc.r#closeStream(in_rc); }
+        (out_rc, in_rc)
+    }
+
     /// Shared open path for both playback (capture=false → downDataQueue,
     /// host→HAL) and capture (capture=true → upDataQueue, HAL→host):
     /// openStream → mmap the endpoint's SharedFileRegions → resolve the
@@ -845,6 +950,37 @@ pub fn probe_loopback() {
 pub fn probe_loopback() {
     log::warn!("probe-loopback: android-only build");
 }
+
+/// Task-76 capability-matrix open probe (`--probe-audio-matrix`, via
+/// `audio_caps`): open one fully-specified stream, log the result + granted
+/// params, close. Returns the AAudio openStream code (handle>0 ok, negative =
+/// failure code such as -889, `i32::MIN` = binder error). Read-only.
+#[cfg(target_os = "android")]
+#[allow(clippy::too_many_arguments)]
+pub fn probe_open(
+    label: &str, direction: i32, usage: i32, content_type: i32,
+    sharing: i32, channel_mask: i32, f32_format: bool,
+    device_ids: Vec<i32>, input_preset: i32,
+) -> i32 {
+    binder_path::probe_open(
+        label, direction, usage, content_type, sharing,
+        channel_mask, f32_format, device_ids, input_preset,
+    )
+}
+#[cfg(not(target_os = "android"))]
+#[allow(clippy::too_many_arguments)]
+pub fn probe_open(
+    _label: &str, _direction: i32, _usage: i32, _content_type: i32,
+    _sharing: i32, _channel_mask: i32, _f32_format: bool,
+    _device_ids: Vec<i32>, _input_preset: i32,
+) -> i32 { i32::MIN }
+
+/// Task-76 matrix: open OUTPUT + INPUT simultaneously (both SHARED/F32), log
+/// each rc, close both. Returns (out_rc, in_rc).
+#[cfg(target_os = "android")]
+pub fn probe_coexist() -> (i32, i32) { binder_path::probe_coexist() }
+#[cfg(not(target_os = "android"))]
+pub fn probe_coexist() -> (i32, i32) { (i32::MIN, i32::MIN) }
 
 // Silence "unused" warnings when targeting desktop where binder_path is gone.
 #[cfg(not(target_os = "android"))]

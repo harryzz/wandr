@@ -174,6 +174,70 @@ Decode/codec facts (not routing, but adjacent): peer sends **60 ms Opus**; decod
 at the packet's exact TOC sample count (opus-rs 0.1.22 panics on mismatched
 frame_size). See [[project_call_audio_output]].
 
+## Probe results — session 1 (steps 1–3, device-verified 2026-06-03)
+
+Implemented `wart-host --probe-audio-caps` (dump + typed model) and
+`--probe-audio-matrix` (state matrix), both read-only. Run on the Pixel 2 XL.
+Code: `runtime/wart-host/src/audio_caps.rs` (+ `audio_impl::probe_open`/
+`probe_coexist`, `audio_policy_impl::probe_devices_for_attributes`, slot-25
+`getDevicesForAttributes` in the policy AIDL stub).
+
+**Device table (parsed from `dumpsys media.audio_policy`).** Outputs: Earpiece
+**port 2**, Speaker **3**, Telephony-Tx **12**, Speaker-Safe **4** (all
+`[dynamic]` profiles — no fixed format/rate/mask). Inputs: Built-In Mic **19**,
+Telephony-Rx **24**, Back Mic **20**, Remote-Submix **27** (mic profiles:
+PCM_8_24, 8k–48k, masks 0xc/0x10/0x30/0x80000007).
+
+**Namespace resolved (the `deviceIds=[2]` mystery).** A default `USAGE_MEDIA`
+open was granted `deviceIds=[3]` = the **Speaker port id**. So **AAudio
+`deviceIds` == audio-policy port id** (same namespace) — task-75's `deviceIds=[2]`
+genuinely pinned the Earpiece port. The routing core can enumerate ports from
+the policy and pin AAudio streams by the same id. (A third namespace exists too:
+the common `AudioDeviceType` enum below — distinct from both.)
+
+**`getDevicesForAttributes` over binder WORKS and decodes cleanly** (slot 25;
+`AudioDevice[]` incl. the `AudioDeviceAddress` union — rsbinder-aidl **0.8.0**
+has union support; the memory's "0.7.0" was stale). Returned, per usage:
+`MEDIA → OUT_SPEAKER(140)`, `VOICE_COMMUNICATION → OUT_SPEAKER_EARPIECE(141)`,
+`NOTIFICATION/ALARM → OUT_SPEAKER_SAFE(142)`. Accurate + meaningful → **the
+refactor can drive routing decisions from binder, not by parsing `dumpsys` at
+runtime** (key point-G/API-of-record evidence). Note the policy's *preferred*
+call-audio device is the **earpiece** (141).
+
+**State matrix (filled; ✅ = openStream handle>0):**
+
+| Config | Result |
+|---|---|
+| OUT MEDIA NORMAL default SHARED F32 **mono** | ❌ **-889** — mono output not offered |
+| OUT MEDIA NORMAL default SHARED F32 **stereo** | ✅ granted speaker(3), 48k, hwSpf=2 |
+| OUT MEDIA NORMAL default SHARED **I16** stereo | ❌ **-883** (INVALID_FORMAT) — F32 required |
+| OUT MEDIA NORMAL **EARPIECE(port 2)** SHARED F32 stereo | ✅ (port-id pin works) |
+| OUT MEDIA NORMAL default **EXCLUSIVE/MMAP** F32 stereo | ✅ (MMAP opens when uncontended) |
+| OUT `VOICE_COMMUNICATION` NORMAL SHARED F32 mono | ❌ -889 (matches task 75) |
+| OUT `VOICE_COMMUNICATION` **IN_COMMUNICATION** SHARED F32 mono | ❌ -889 — **mode-independent** |
+| OUT MEDIA **IN_COMMUNICATION** SHARED F32 stereo | ✅ opens (task-75 ducking is a runtime *volume* effect, not an open failure) |
+| IN VOICE_RECOGNITION NORMAL SHARED F32 mono | ✅ |
+| IN default NORMAL SHARED **I16** mono | ❌ -883 — F32 required |
+| **in+out SHARED+SHARED simultaneous** | ✅✅ out+in both open (resolves the task-75 ambiguity — SHARED pairs coexist; only MMAP pairs contend) |
+
+New facts vs task 75: **output must be F32 stereo** (mono → -889, I16 → -883);
+the `-889` on `VOICE_COMMUNICATION` is **mode-independent**; SHARED in+out
+**coexist**. Cross-checks (MEDIA/NORMAL/stereo ✅, VOICE_COMM ❌-889) reproduced
+the task-75 table → harness validated. Device left clean (phone state restored to
+NORMAL, force-use 0, no stuck streams).
+
+**Volume (read from `dumpsys audio` — the robust source).** Full per-stream
+index/min/max table captured: `STREAM_MUSIC` max **25** (earpiece idx 8 /
+speaker 22), `STREAM_VOICE_CALL` max **15** (earpiece 5). The ~230-method
+`IAudioService` positional stub for volume *writes* (P8) is **deferred** to its
+own session — a WebFetch of the r36 AIDL returned contradictory transaction
+indices, so a positional stub is too fragile to land blind (a wrong slot could
+hit a setter); validate indices against read-back when wiring writes.
+
+**Deferred / not attempted this phase:** `listAudioPorts` over binder (returns
+the framework `AudioPortFw` parcelable — used `dumpsys` instead); `IAudioService`
+volume stub (above); routing core / volume writes / mic-TX / AEC (steps 4+).
+
 ## Refactor design goals (the deliverable)
 
 1. **A capability/device model** built at startup from `listAudioPorts` +

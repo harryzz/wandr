@@ -88,6 +88,28 @@ fn main() {
         return;
     }
 
+    // Task-76 audio capability probe (read-only): dump the device's real audio
+    // picture (ports/routing/volumes via dumpsys + binder reachability) and a
+    // typed device model. See audio_caps.rs.
+    if args.iter().any(|a| a == "--probe-audio-caps") {
+        android_logger::init_once(
+            android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
+        );
+        wasm_android_host::audio_caps::probe();
+        return;
+    }
+
+    // Task-76 audio state matrix (step 3): targeted self-restoring on-device
+    // opens filling the (usage × mode × device × sharing × format × channels)
+    // matrix. Restores phone state to NORMAL after the comms-mode cells.
+    if args.iter().any(|a| a == "--probe-audio-matrix") {
+        android_logger::init_once(
+            android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
+        );
+        wasm_android_host::audio_caps::probe_matrix();
+        return;
+    }
+
     // Call-audio reachability (read-only): does a root caller reach
     // media.audio_policy? Logs phone state + COMMUNICATION routing.
     if args.iter().any(|a| a == "--probe-audio-policy") {

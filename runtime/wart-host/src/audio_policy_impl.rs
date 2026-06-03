@@ -22,6 +22,12 @@ mod binder_path {
         IAudioPolicyService::IAudioPolicyService,
     };
     use crate::binder_aidl::android::media::audio::common::AudioMode::AudioMode;
+    use crate::binder_aidl::android::media::audio::common::{
+        AudioAttributes::AudioAttributes,
+        AudioContentType::AudioContentType,
+        AudioSource::AudioSource,
+        AudioUsage::AudioUsage,
+    };
 
     fn service() -> Option<rsbinder::Strong<dyn IAudioPolicyService>> {
         match rsbinder::hub::get_interface::<dyn IAudioPolicyService>("media.audio_policy") {
@@ -74,6 +80,47 @@ mod binder_path {
         match svc.r#setForceUse(AudioPolicyForceUse::COMMUNICATION, cfg) {
             Ok(())  => log::info!("audio-policy: setForceUse COMMUNICATION {}", cfg_name(cfg)),
             Err(e)  => log::warn!("audio-policy: setForceUse {} failed: {e:?}", cfg_name(cfg)),
+        }
+    }
+
+    /// Task-76 read-only probe: ask the policy service where each usage would
+    /// route RIGHT NOW (`getDevicesForAttributes`, transaction index 25). This
+    /// is the binder equivalent of the routing the refactor will consult at
+    /// runtime instead of shelling `dumpsys`. The `AudioAttributes` wire layout
+    /// is the common (HAL) shape; if it differs from the device's framework
+    /// shape the call returns an error/garbage — either way the log is
+    /// API-of-record evidence ("does AudioDevice[] decode over binder?").
+    /// `dumpsys media.audio_policy` strategy→device lines remain authoritative.
+    pub fn probe_devices_for_attributes() {
+        if let Err(e) = crate::binder::init() {
+            log::warn!("audio-caps devices-for-attr: binder init failed: {e}");
+            return;
+        }
+        let Some(svc) = service() else { return };
+        let usages: &[(&str, AudioUsage, AudioContentType, AudioSource)] = &[
+            ("MEDIA",               AudioUsage::MEDIA,               AudioContentType::MUSIC,   AudioSource::DEFAULT),
+            ("VOICE_COMMUNICATION", AudioUsage::VOICE_COMMUNICATION, AudioContentType::SPEECH,  AudioSource::DEFAULT),
+            ("NOTIFICATION",        AudioUsage::NOTIFICATION,        AudioContentType::SONIFICATION, AudioSource::DEFAULT),
+            ("ALARM",               AudioUsage::ALARM,               AudioContentType::SONIFICATION, AudioSource::DEFAULT),
+        ];
+        for (label, usage, content, source) in usages {
+            let attr = AudioAttributes {
+                r#contentType: *content,
+                r#usage:       *usage,
+                r#source:      *source,
+                r#flags:       0,
+                r#tags:        Vec::new(),
+                ..Default::default()
+            };
+            match svc.r#getDevicesForAttributes(&attr, false) {
+                Ok(devs) => log::info!(
+                    "audio-caps: getDevicesForAttributes({label}) -> {} device(s): {:?}",
+                    devs.len(), devs,
+                ),
+                Err(e) => log::warn!(
+                    "audio-caps: getDevicesForAttributes({label}) binder err / decode gap: {e:?}",
+                ),
+            }
         }
     }
 
@@ -137,6 +184,12 @@ mod binder_path {
 pub fn probe() { binder_path::probe(); }
 #[cfg(not(target_os = "android"))]
 pub fn probe() { log::warn!("audio-policy probe: android-only build"); }
+
+/// Task-76 read-only routing probe (`getDevicesForAttributes` per usage).
+#[cfg(target_os = "android")]
+pub fn probe_devices_for_attributes() { binder_path::probe_devices_for_attributes(); }
+#[cfg(not(target_os = "android"))]
+pub fn probe_devices_for_attributes() { log::warn!("audio-caps devices-for-attr: android-only build"); }
 
 /// Routing write probe (`--probe-audio-policy-route <speaker|earpiece>`):
 /// drives the COMMUNICATION force-use then restores it.

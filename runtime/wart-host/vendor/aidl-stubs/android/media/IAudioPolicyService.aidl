@@ -2,8 +2,9 @@
 //
 // Transaction codes in binder are POSITIONAL (FIRST_CALL_TRANSACTION + the
 // method's 0-based declaration index), so to call a real method we must keep
-// EVERY method at its true position. We only need 4 — setPhoneState (4),
-// setForceUse (5), getForceUse (6), getPhoneState (55) — so every other slot
+// EVERY method at its true position. We keep 5 real — setPhoneState (4),
+// setForceUse (5), getForceUse (6), getDevicesForAttributes (25, task 76),
+// getPhoneState (55) — so every other slot
 // is a `void slot_N()` placeholder that preserves the index without pulling in
 // the ~100 transitive parcelables the real interface references. Same pattern
 // as the IInputMethodManager stub (build.rs). The 3 enums used by the kept
@@ -18,6 +19,8 @@ package android.media;
 import android.media.AudioPolicyForceUse;
 import android.media.AudioPolicyForcedConfig;
 import android.media.audio.common.AudioMode;
+import android.media.audio.common.AudioAttributes;
+import android.media.audio.common.AudioDevice;
 
 interface IAudioPolicyService {
     void slot_0();
@@ -45,7 +48,12 @@ interface IAudioPolicyService {
     void slot_22();
     void slot_23();
     void slot_24();
-    void slot_25();
+    // index 25 — task 76: the policy's own "where would this route now" answer.
+    // Returns the common AudioDevice[]; AudioDeviceAddress is a union (rsbinder-
+    // aidl 0.8.0 supports unions). Wire layout may differ from the device's
+    // framework AudioAttributes — treat the result as binder-reachability
+    // evidence; dumpsys media.audio_policy is the authoritative routing source.
+    AudioDevice[] getDevicesForAttributes(in AudioAttributes attr, boolean forVolume);
     void slot_26();
     void slot_27();
     void slot_28();
