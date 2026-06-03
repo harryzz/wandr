@@ -1229,6 +1229,10 @@ fn run_cwasm_loop(
                     // Arbiter-decided output mute (task 76 P8): apply on the chosen device.
                     crate::audio_policy_impl::set_media_mute(speaker, muted);
                 }
+                crate::ime_inbound::InboundEvent::AppMute { muted } => {
+                    // Arbiter-decided per-app mute (task 76 P8): gate our PCM write path.
+                    crate::audio_impl::set_app_output_muted(muted);
+                }
                 crate::ime_inbound::InboundEvent::CommRoute { speaker } => {
                     // wart-arbiter-audio — apply the arbiter's call route decision.
                     // Two mechanisms: setForceUse(COMMUNICATION) (legacy lever),

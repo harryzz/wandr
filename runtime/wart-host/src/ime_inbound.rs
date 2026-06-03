@@ -162,6 +162,11 @@ pub enum InboundEvent {
     /// pushed `audio-policy mute <on|off> <speaker|earpiece>` to the owner host.
     MuteSet { muted: bool, speaker: bool },
 
+    /// wart-arbiter-audio (P8) — per-app output mute: the arbiter pushed
+    /// `audio-policy app-mute <on|off>` to this app's host, which gates its PCM
+    /// write path (silence). Orthogonal to the global policy mute.
+    AppMute { muted: bool },
+
     /// wart-arbiter-audio Ringer — the arbiter pushed `ringtone start|stop` for an
     /// incoming call. The owner host plays/stops a generated ringtone over AAudio
     /// (`ringer_impl`). `start=false` ⇒ stop.
@@ -417,6 +422,13 @@ fn parse_and_queue(line: &str) {
                 }
             }
             _ => log::warn!("ime-inbound: bad audio-policy mute {rest:?}"),
+        }
+    } else if let Some(rest) = line.strip_prefix("audio-policy app-mute ") {
+        // wart-arbiter-audio P8 — per-app output mute: "<on|off>".
+        match rest.trim() {
+            "on"  => { if let Ok(mut q) = queue().lock() { q.push_back(InboundEvent::AppMute { muted: true }); } }
+            "off" => { if let Ok(mut q) = queue().lock() { q.push_back(InboundEvent::AppMute { muted: false }); } }
+            other => log::warn!("ime-inbound: bad audio-policy app-mute {other:?}"),
         }
     } else if let Some(rest) = line.strip_prefix("ringtone ") {
         // wart-arbiter-audio Ringer — incoming-call ringtone.

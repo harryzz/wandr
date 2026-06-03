@@ -717,22 +717,36 @@ mod binder_path {
             let src_bytes = (to_write as u64 * bpf) as usize;
             let first     = src_bytes.min((cap_bytes - base_off) as usize);
 
+            // Per-app mute (host PCM gate): when this app is muted we write
+            // SILENCE into the ring instead of the samples, but still advance
+            // the write cursor so playback timing is preserved. (f32 0.0 is
+            // all-zero bytes, so write_bytes(0) zeroes the floats.) This is
+            // independent of the global policy mute — audio is audible only if
+            // both gates are open.
+            let muted = super::app_output_muted();
             // SAFETY: bounds checked above — base_off + first <= cap_bytes;
             // (src_bytes - first) <= base_off; samples has at least
             // to_write*channels f32s, so src_bytes <= samples.len()*4.
             unsafe {
-                let src = samples.as_ptr() as *const u8;
-                std::ptr::copy_nonoverlapping(
-                    src,
-                    st.data_ptr.add(base_off as usize),
-                    first,
-                );
-                if first < src_bytes {
+                if muted {
+                    std::ptr::write_bytes(st.data_ptr.add(base_off as usize), 0, first);
+                    if first < src_bytes {
+                        std::ptr::write_bytes(st.data_ptr, 0, src_bytes - first);
+                    }
+                } else {
+                    let src = samples.as_ptr() as *const u8;
                     std::ptr::copy_nonoverlapping(
-                        src.add(first),
-                        st.data_ptr,
-                        src_bytes - first,
+                        src,
+                        st.data_ptr.add(base_off as usize),
+                        first,
                     );
+                    if first < src_bytes {
+                        std::ptr::copy_nonoverlapping(
+                            src.add(first),
+                            st.data_ptr,
+                            src_bytes - first,
+                        );
+                    }
                 }
             }
 
@@ -863,6 +877,20 @@ pub fn set_comms_route(speaker: bool) {
 /// The arbiter's current call route (`true` = speaker, `false` = earpiece).
 pub fn comms_route_speaker() -> bool {
     COMMS_SPEAKER.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Per-app output mute — a process-wide gate (one wart-host process = one app)
+/// the host applies at the PCM source in `write_pcm_f32` (writes silence). The
+/// arbiter decides which app to mute and pushes `audio-policy app-mute`. This is
+/// orthogonal to the global policy mute: audio is audible only if BOTH gates are
+/// open. New tracks honour the flag automatically.
+static APP_OUTPUT_MUTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub fn set_app_output_muted(muted: bool) {
+    APP_OUTPUT_MUTED.store(muted, std::sync::atomic::Ordering::Relaxed);
+    log::info!("audio: app output {}", if muted { "MUTED" } else { "unmuted" });
+}
+pub fn app_output_muted() -> bool {
+    APP_OUTPUT_MUTED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 // ── Host-internal playback API ───────────────────────────────────────────────

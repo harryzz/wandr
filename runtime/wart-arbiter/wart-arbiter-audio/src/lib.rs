@@ -116,9 +116,12 @@ pub struct AudioModule {
     /// The call route the arbiter last decided (`true` = loudspeaker, `false` =
     /// earpiece). Volume keys target this device while a call is up.
     comms_speaker: bool,
-    /// Output-mute state (the arbiter is the single source of truth, so `toggle`
-    /// works). Applied by the owner host via the policy volume setter's `muted`.
+    /// Global output-mute state (the arbiter is the single source of truth, so
+    /// `toggle` works). Applied by the owner host via the policy `muted` flag.
     muted: bool,
+    /// Per-app (per-pid) output-mute set — the apps whose PCM the host should
+    /// silence. Orthogonal to `muted` (global): audible iff neither gate is set.
+    app_muted: std::collections::HashSet<i32>,
     /// The pid with an active incoming-call ring, if any (the Ringer; one at a time).
     ringing: Option<i32>,
     /// System ringer policy — what a ring does (ringtone/vibrate/silent).
@@ -439,6 +442,30 @@ impl AudioModule {
         Reply::ok(format!("mute {state} pid={owner} {dev}"))
     }
 
+    /// `app-mute <pid|app-id> <on|off|toggle>` — task 76. Per-app output mute:
+    /// the owner host gates that app's PCM at the source (silence). Orthogonal to
+    /// the global `mute`. The arbiter tracks the per-pid state so `toggle` works.
+    fn cmd_app_mute(&mut self, args: &str, ctx: &mut Ctx) -> Reply {
+        let t: Vec<&str> = args.split_whitespace().collect();
+        if t.len() != 2 {
+            return Reply::err("app-mute-args: expected <pid|app-id> <on|off|toggle>");
+        }
+        let Some((pid, _app)) = Self::resolve(t[0], ctx) else {
+            return Reply::err(format!("app-mute-unknown {}", t[0]));
+        };
+        let new = match t[1] {
+            "on"     => true,
+            "off"    => false,
+            "toggle" => !self.app_muted.contains(&pid),
+            other    => return Reply::err(format!("app-mute-bad-arg {other:?}")),
+        };
+        if new { self.app_muted.insert(pid); } else { self.app_muted.remove(&pid); }
+        let state = if new { "on" } else { "off" };
+        ctx.deliver_to_host(pid, format!("audio-policy app-mute {state}\n"));
+        log::info!("arbiter: app-mute {state} → pid={pid}");
+        Reply::ok(format!("app-mute {state} pid={pid}"))
+    }
+
     /// `audio-focus-list` — the stack, owner last. CLI + inspection.
     fn cmd_list(&self) -> Reply {
         let mut out = format!("count={}", self.stack.len());
@@ -459,7 +486,7 @@ impl ArbiterModule for AudioModule {
             "audio-focus-request", "audio-focus-abandon", "audio-focus-list",
             "audio-call-start", "audio-call-end", "audio-route",
             "audio-ring-start", "audio-ring-stop", "audio-ringer-mode",
-            "volume", "mute",
+            "volume", "mute", "app-mute",
         ]
     }
 
@@ -476,6 +503,7 @@ impl ArbiterModule for AudioModule {
             "audio-ringer-mode"   => self.cmd_ringer_mode(args, ctx),
             "volume"              => self.cmd_volume(args, ctx),
             "mute"                => self.cmd_mute(args, ctx),
+            "app-mute"            => self.cmd_app_mute(args, ctx),
             other => Reply::err(format!("audio-unknown-verb {other}")),
         }
     }
@@ -502,6 +530,8 @@ impl ArbiterModule for AudioModule {
                 }
                 log::info!("arbiter: audio-ring owner pid={pid} died — ring cleared");
             }
+            // Drop stale per-app mute so a recycled pid doesn't inherit it.
+            self.app_muted.remove(pid);
             if self.drop_pid(*pid, ctx) {
                 log::info!("arbiter: audio-focus dropped dead pid={pid}");
             }
