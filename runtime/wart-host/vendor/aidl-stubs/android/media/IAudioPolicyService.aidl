@@ -21,6 +21,7 @@ import android.media.AudioPolicyForcedConfig;
 import android.media.audio.common.AudioMode;
 import android.media.audio.common.AudioAttributes;
 import android.media.audio.common.AudioDevice;
+import android.media.audio.common.AudioDeviceDescription;
 
 interface IAudioPolicyService {
     void slot_0();
@@ -43,10 +44,15 @@ interface IAudioPolicyService {
     void slot_17();
     void slot_18();
     void slot_19();
-    void slot_20();
-    void slot_21();
-    void slot_22();
-    void slot_23();
+    // indices 20-23 — task 76 volume control (P8). The attributes-based volume
+    // API: get/set an index for an AudioAttributes on a device, plus the
+    // device-independent max/min range. Verified indices (parsed from the
+    // vendored real AIDL; anchors setPhoneState=4 / getDevicesForAttributes=25 /
+    // getPhoneState=55 all match the device).
+    void setVolumeIndexForAttributes(in AudioAttributes attr, in AudioDeviceDescription device, int index, boolean muted);
+    int getVolumeIndexForAttributes(in AudioAttributes attr, in AudioDeviceDescription device);
+    int getMaxVolumeIndexForAttributes(in AudioAttributes attr);
+    int getMinVolumeIndexForAttributes(in AudioAttributes attr);
     void slot_24();
     // index 25 — task 76: the policy's own "where would this route now" answer.
     // Returns the common AudioDevice[]; AudioDeviceAddress is a union (rsbinder-

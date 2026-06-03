@@ -25,6 +25,8 @@ mod binder_path {
     use crate::binder_aidl::android::media::audio::common::{
         AudioAttributes::AudioAttributes,
         AudioContentType::AudioContentType,
+        AudioDeviceDescription::AudioDeviceDescription,
+        AudioDeviceType::AudioDeviceType,
         AudioSource::AudioSource,
         AudioUsage::AudioUsage,
     };
@@ -124,6 +126,93 @@ mod binder_path {
         }
     }
 
+    // ── Volume (task 76 P8) ──────────────────────────────────────────────────
+    // The attributes-based volume API on the policy service (verified indices
+    // 20-23). Volume is stored per (attributes/stream, device); the index runs
+    // over a device-independent [min,max] range (media = 0..25 on this device).
+    // The arbiter decides the policy (target stream, level); these are the host
+    // appliers + read accessors.
+
+    fn media_attr() -> AudioAttributes {
+        AudioAttributes {
+            r#contentType: AudioContentType::MUSIC,
+            r#usage:       AudioUsage::MEDIA,
+            r#source:      AudioSource::DEFAULT,
+            r#flags:       0,
+            r#tags:        Vec::new(),
+            ..Default::default()
+        }
+    }
+    fn dev_desc(t: AudioDeviceType) -> AudioDeviceDescription {
+        AudioDeviceDescription { r#type: t, r#connection: String::new() }
+    }
+
+    /// Media volume range `[min, max]` (device-independent). `None` if the
+    /// service is unreachable.
+    pub fn media_volume_range() -> Option<(i32, i32)> {
+        let svc = service()?;
+        let attr = media_attr();
+        let max = svc.r#getMaxVolumeIndexForAttributes(&attr).ok()?;
+        let min = svc.r#getMinVolumeIndexForAttributes(&attr).ok()?;
+        Some((min, max))
+    }
+    /// Current media volume index on `device` (e.g. `OUT_SPEAKER`).
+    pub fn get_media_volume(device: AudioDeviceType) -> Option<i32> {
+        let svc = service()?;
+        svc.r#getVolumeIndexForAttributes(&media_attr(), &dev_desc(device)).ok()
+    }
+    /// Set the media volume index on `device`, clamped to `[min, max]`. Returns
+    /// the index actually applied (post-clamp), or `None` on failure.
+    pub fn set_media_volume(device: AudioDeviceType, index: i32) -> Option<i32> {
+        let svc = service()?;
+        let (min, max) = media_volume_range().unwrap_or((0, index.max(0)));
+        let idx = index.clamp(min, max);
+        match svc.r#setVolumeIndexForAttributes(&media_attr(), &dev_desc(device), idx, false) {
+            Ok(())  => { log::info!("audio-policy: media volume {idx} on {device:?} [{min}..{max}]"); Some(idx) }
+            Err(e)  => { log::warn!("audio-policy: setVolumeIndexForAttributes err: {e:?}"); None }
+        }
+    }
+
+    /// Read-only-ish volume probe (`--probe-audio-volume`): reads the media
+    /// range + current index on speaker & earpiece, then sets the speaker index
+    /// to max, reads it back, and restores the previous value (self-restoring,
+    /// like `probe_route`). Proves the write path before keys/arbiter wire it.
+    pub fn probe_volume() {
+        if let Err(e) = crate::binder::init() {
+            log::warn!("audio-caps volume: binder init failed: {e}");
+            return;
+        }
+        let Some(svc) = service() else { return };
+        let attr = media_attr();
+        log::info!("audio-caps: media volume range min={:?} max={:?}",
+            svc.r#getMinVolumeIndexForAttributes(&attr),
+            svc.r#getMaxVolumeIndexForAttributes(&attr));
+        for (label, t) in [("speaker", AudioDeviceType::OUT_SPEAKER),
+                           ("earpiece", AudioDeviceType::OUT_SPEAKER_EARPIECE)] {
+            match svc.r#getVolumeIndexForAttributes(&attr, &dev_desc(t)) {
+                Ok(v)  => log::info!("audio-caps: media volume on {label} = {v}"),
+                Err(e) => log::warn!("audio-caps: getVolumeIndexForAttributes({label}) err: {e:?}"),
+            }
+        }
+        let dev = dev_desc(AudioDeviceType::OUT_SPEAKER);
+        let prev = match svc.r#getVolumeIndexForAttributes(&attr, &dev) {
+            Ok(v)  => v,
+            Err(e) => { log::warn!("audio-caps: volume read err: {e:?}"); return; }
+        };
+        let max = svc.r#getMaxVolumeIndexForAttributes(&attr).unwrap_or(prev);
+        match svc.r#setVolumeIndexForAttributes(&attr, &dev, max, false) {
+            Ok(())  => log::info!("audio-caps: set speaker media volume {prev} -> {max} — WRITE ACCESS OK"),
+            Err(e)  => { log::warn!("audio-caps: set volume DENIED/err: {e:?} — perm/SELinux?"); return; }
+        }
+        if let Ok(v) = svc.r#getVolumeIndexForAttributes(&attr, &dev) {
+            log::info!("audio-caps: confirmed speaker media volume = {v}");
+        }
+        match svc.r#setVolumeIndexForAttributes(&attr, &dev, prev, false) {
+            Ok(())  => log::info!("audio-caps: restored speaker media volume to {prev}"),
+            Err(e)  => log::warn!("audio-caps: RESTORE FAILED: {e:?}"),
+        }
+    }
+
     /// Read-only probe: does a root/su caller reach the policy service, and what
     /// are the current phone state + communication routing? No side effects.
     pub fn probe() {
@@ -190,6 +279,13 @@ pub fn probe() { log::warn!("audio-policy probe: android-only build"); }
 pub fn probe_devices_for_attributes() { binder_path::probe_devices_for_attributes(); }
 #[cfg(not(target_os = "android"))]
 pub fn probe_devices_for_attributes() { log::warn!("audio-caps devices-for-attr: android-only build"); }
+
+/// Task-76 P8 volume probe (`--probe-audio-volume`): read range + speaker/
+/// earpiece media volume, set speaker to max, read back, restore.
+#[cfg(target_os = "android")]
+pub fn probe_volume() { binder_path::probe_volume(); }
+#[cfg(not(target_os = "android"))]
+pub fn probe_volume() { log::warn!("audio-caps volume: android-only build"); }
 
 /// Routing write probe (`--probe-audio-policy-route <speaker|earpiece>`):
 /// drives the COMMUNICATION force-use then restores it.
