@@ -173,26 +173,17 @@ mod binder_path {
         }
     }
 
-    /// Hardware VOLUME_UP/DOWN handler. Adjusts the **media** volume by one step
-    /// on the device the active output is on: the call route (earpiece/speaker)
-    /// while a comms session is up, the loudspeaker otherwise — i.e. it follows
-    /// the arbiter's route decision (mirrored in `audio_impl`). Our call audio
-    /// rides the MEDIA stream (USAGE_MEDIA), so MEDIA volume is the lever for
-    /// both call and media. Step ≈ 1/10 of the range (≥1).
-    pub fn adjust_volume(up: bool) {
-        let device = if crate::audio_impl::comms_active() {
-            if crate::audio_impl::comms_route_speaker() {
-                AudioDeviceType::OUT_SPEAKER
-            } else {
-                AudioDeviceType::OUT_SPEAKER_EARPIECE
-            }
-        } else {
-            AudioDeviceType::OUT_SPEAKER
-        };
+    /// Apply a one-step MEDIA volume change on `device` (the **arbiter** picks
+    /// which device — speaker or earpiece — and which host applies; this is the
+    /// pure applier). `speaker` selects OUT_SPEAKER vs OUT_SPEAKER_EARPIECE. Our
+    /// call audio rides the MEDIA stream (USAGE_MEDIA), so MEDIA volume is the
+    /// lever for both call and media. Step ≈ 1/10 of the range (≥1).
+    pub fn adjust_volume_on(speaker: bool, up: bool) {
+        let device = if speaker { AudioDeviceType::OUT_SPEAKER } else { AudioDeviceType::OUT_SPEAKER_EARPIECE };
         let (min, max) = media_volume_range().unwrap_or((0, 15));
         let step = ((max - min) / 10).max(1);
         let Some(cur) = get_media_volume(device) else {
-            log::warn!("audio-policy: volume key — read failed");
+            log::warn!("audio-policy: volume — read failed");
             return;
         };
         let next = if up { cur + step } else { cur - step };
@@ -332,9 +323,31 @@ pub fn set_route(speaker: bool) { binder_path::set_route(speaker); }
 #[cfg(not(target_os = "android"))]
 pub fn set_route(_speaker: bool) {}
 
-/// Task-76 P8 — hardware VOLUME_UP(true)/VOLUME_DOWN(false) media-volume step on
-/// the active output device (call route while in a call, else loudspeaker).
+/// Task-76 P8 — apply a media-volume step on the arbiter-chosen device
+/// (`speaker` = loudspeaker, else earpiece). The host applier.
 #[cfg(target_os = "android")]
-pub fn adjust_volume(up: bool) { binder_path::adjust_volume(up); }
+pub fn adjust_volume_on(speaker: bool, up: bool) { binder_path::adjust_volume_on(speaker, up); }
 #[cfg(not(target_os = "android"))]
-pub fn adjust_volume(_up: bool) {}
+pub fn adjust_volume_on(_speaker: bool, _up: bool) {}
+
+/// Task-76 P8 — forward a hardware VOLUME_UP(true)/DOWN(false) press to the
+/// arbiter, the single volume decider. The arbiter picks the target device +
+/// owner host and pushes back `audio-policy volume <dir> <dev>`. Forwarding
+/// (rather than acting locally) dedups the key — the framework delivers it to
+/// several wart surfaces, but only the arbiter-chosen host applies.
+#[cfg(target_os = "android")]
+pub fn forward_volume_key(up: bool) {
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
+    // Include our pid so the arbiter can target this (live) host when there is
+    // no Foreground slot (e.g. keyguard locked). During a call the arbiter
+    // overrides this to the comms owner on the call route.
+    let dir = if up { "up" } else { "down" };
+    let line = format!("volume {dir} {}\n", std::process::id());
+    match UnixStream::connect("/data/local/tmp/wart-arbiter.sock") {
+        Ok(mut s) => { let _ = s.write_all(line.as_bytes()); let _ = s.flush(); }
+        Err(e)    => log::warn!("audio: volume-key forward failed: {e} (arbiter down?)"),
+    }
+}
+#[cfg(not(target_os = "android"))]
+pub fn forward_volume_key(_up: bool) {}

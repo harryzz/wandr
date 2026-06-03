@@ -14,7 +14,7 @@
 //! Focus is runtime-only (it dies with a reboot), so the stack lives in this
 //! module, not the durable core Store.
 
-use wart_arbiter_core::{ArbiterModule, Ctx, Effect, Event, Reply};
+use wart_arbiter_core::{ArbiterModule, Ctx, Effect, Event, Reply, PRIMARY_DISPLAY};
 
 /// What a guest requests (Android AUDIOFOCUS_GAIN family).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,6 +113,9 @@ pub struct AudioModule {
     /// M3 — the pid currently in a comms session (a VoIP call), if any. One call
     /// at a time; it holds permanent focus + drives the global audio mode.
     comms: Option<i32>,
+    /// The call route the arbiter last decided (`true` = loudspeaker, `false` =
+    /// earpiece). Volume keys target this device while a call is up.
+    comms_speaker: bool,
     /// The pid with an active incoming-call ring, if any (the Ringer; one at a time).
     ringing: Option<i32>,
     /// System ringer policy — what a ring does (ringtone/vibrate/silent).
@@ -364,9 +367,44 @@ impl AudioModule {
         let Some((pid, _app)) = Self::resolve(t[0], ctx) else {
             return Reply::err(format!("audio-route-unknown-owner {}", t[0]));
         };
+        self.comms_speaker = route == "speaker";
         ctx.deliver_to_host(pid, format!("audio-policy set-route {route}\n"));
         log::info!("arbiter: audio-route pid={pid} → {route}");
         Reply::ok(format!("route pid={pid} {route}"))
+    }
+
+    /// `volume <up|down>` — task 76 P8. The arbiter is the single decider: it
+    /// owns the call/comms state + route + foreground, so it picks the target
+    /// (the comms owner on the call route while a call is up, else the
+    /// foreground app on the loudspeaker) and tells exactly **one** host to
+    /// apply the step. This dedups the key (which the framework delivers to
+    /// several wart surfaces) and keeps the choice correct regardless of which
+    /// surface caught it. Host applies via `audio-policy volume <dir> <dev>`.
+    fn cmd_volume(&mut self, args: &str, ctx: &mut Ctx) -> Reply {
+        // "<up|down> [sender-pid]" — the host forwards its own pid so we always
+        // have a live applier even when there's no Foreground slot (e.g. while
+        // the keyguard is locked). During a call we override to the comms owner.
+        let t: Vec<&str> = args.split_whitespace().collect();
+        let up = match t.first().copied() {
+            Some("up")   => true,
+            Some("down") => false,
+            other        => return Reply::err(format!("volume-bad-dir {other:?}")),
+        };
+        let sender = t.get(1).and_then(|p| p.parse::<i32>().ok());
+        let (owner, dev) = if let Some(pid) = self.comms {
+            (pid, if self.comms_speaker { "speaker" } else { "earpiece" })
+        } else if let Some(pid) = ctx.store.display(PRIMARY_DISPLAY)
+            .and_then(|d| d.foreground_slot()).map(|s| s.pid)
+            .or(sender)
+        {
+            (pid, "speaker")
+        } else {
+            return Reply::err("volume-no-target");
+        };
+        let dir = if up { "up" } else { "down" };
+        ctx.deliver_to_host(owner, format!("audio-policy volume {dir} {dev}\n"));
+        log::info!("arbiter: volume {dir} → pid={owner} {dev}");
+        Reply::ok(format!("volume {dir} pid={owner} {dev}"))
     }
 
     /// `audio-focus-list` — the stack, owner last. CLI + inspection.
@@ -389,6 +427,7 @@ impl ArbiterModule for AudioModule {
             "audio-focus-request", "audio-focus-abandon", "audio-focus-list",
             "audio-call-start", "audio-call-end", "audio-route",
             "audio-ring-start", "audio-ring-stop", "audio-ringer-mode",
+            "volume",
         ]
     }
 
@@ -403,6 +442,7 @@ impl ArbiterModule for AudioModule {
             "audio-ring-start"    => self.cmd_ring_start(args, ctx),
             "audio-ring-stop"     => self.cmd_ring_stop(args, ctx),
             "audio-ringer-mode"   => self.cmd_ringer_mode(args, ctx),
+            "volume"              => self.cmd_volume(args, ctx),
             other => Reply::err(format!("audio-unknown-verb {other}")),
         }
     }

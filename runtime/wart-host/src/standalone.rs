@@ -1056,8 +1056,10 @@ fn run_cwasm_loop(
                 // on the active output device and swallows the event so it never
                 // reaches the guest.
                 if ev.key_code == 24 || ev.key_code == 25 {
+                    // Forward to the arbiter (single volume decider); it picks
+                    // the target device + owner host and pushes back the apply.
                     if ev.kind == 10 {
-                        crate::audio_policy_impl::adjust_volume(ev.key_code == 24);
+                        crate::audio_policy_impl::forward_volume_key(ev.key_code == 24);
                     }
                 } else {
                     let action = if ev.kind == 10 { 0u8 } else { 1u8 };
@@ -1217,8 +1219,11 @@ fn run_cwasm_loop(
                     // wart-arbiter-audio M3 — the arbiter started/ended a comms
                     // session on us; apply the global audio mode (dumb applier).
                     crate::audio_policy_impl::set_mode(comm);
-                    // Volume keys target the call's output device while a call is up.
-                    crate::audio_impl::set_comms_active(comm);
+                }
+                crate::ime_inbound::InboundEvent::VolumeAdjust { up, speaker } => {
+                    // Arbiter-decided volume step (task 76 P8): apply on the
+                    // device the arbiter chose. We are the owner it picked.
+                    crate::audio_policy_impl::adjust_volume_on(speaker, up);
                 }
                 crate::ime_inbound::InboundEvent::CommRoute { speaker } => {
                     // wart-arbiter-audio — apply the arbiter's call route decision.

@@ -865,17 +865,6 @@ pub fn comms_route_speaker() -> bool {
     COMMS_SPEAKER.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// Whether a comms session (call) is active — set from the arbiter's
-/// `audio-policy set-mode comm|normal`. Volume keys target the call's output
-/// device while a call is up, the loudspeaker otherwise.
-static COMMS_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-pub fn set_comms_active(active: bool) {
-    COMMS_ACTIVE.store(active, std::sync::atomic::Ordering::Relaxed);
-}
-pub fn comms_active() -> bool {
-    COMMS_ACTIVE.load(std::sync::atomic::Ordering::Relaxed)
-}
-
 // ── Host-internal playback API ───────────────────────────────────────────────
 // Module-level free functions so a background thread (the ringer) can drive AAudio
 // directly without the WIT `Host` trait (`&mut HostState`). Same cfg-switch as the
