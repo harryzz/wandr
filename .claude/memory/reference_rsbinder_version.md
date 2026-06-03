@@ -38,3 +38,16 @@ unknown-tag arm returns `StatusCode::BadValue`. Proven rigorously:
 
 Docs read: <https://moru.rs/rsbinder/> (overview, parcelable, enum-union,
 print.html). See [[project_audio_capability_model]], [[project_audio_routing_arbiter]].
+
+
+**Stub cleanup (30c984ab):** wart-host now generates from the **real**
+`libaudioclient/aidl/IAudioPolicyService.aidl` (all 106 methods, codegen-derived
+indices) — the brittle hand-maintained positional slot-stub
+(`vendor/aidl-stubs/android/media/IAudioPolicyService.aidl` + AudioPolicyForceUse
+/ForcedConfig) is DELETED. build.rs includes `frameworks-av/aidl` for the
+permission/VolumeShaper types. **rsbinder-aidl 0.9.0 parse quirk:** it can't
+parse a `float[]` default with `0f` literals — `HeadTracking.aidl`'s
+`float[6] headToStage = {0f,...}` (pulled via the spatializer methods) → build.rs
+strips that default in-place (idempotent, self-healing, submodule stays pristine;
+we never call the spatializer). The aidl-stubs dir keeps only the unrelated
+AttributionSourceState / PersistableBundle / ParcelFileDescriptor stubs.
