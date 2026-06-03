@@ -28,6 +28,8 @@ use rtc_dtls::extension::extension_use_srtp::SrtpProtectionProfile;
 use rtc_ice::agent::agent_config::AgentConfig;
 use rtc_ice::agent::Agent;
 use rtc_ice::candidate::candidate_host::CandidateHostConfig;
+#[cfg(feature = "signal")]
+use rtc_ice::candidate::candidate_relay::CandidateRelayConfig;
 use rtc_ice::candidate::{Candidate, CandidateConfig};
 use rtc_ice::mdns::MulticastDnsMode;
 use rtc_ice::state::ConnectionState;
@@ -175,6 +177,11 @@ impl RelayState {
         std::mem::take(&mut self.relayed_in)
     }
 
+    /// Our TURN-allocated relayed transport address, once the allocation completed.
+    fn relayed_addr(&self) -> Option<SocketAddr> {
+        self.relayed_addr
+    }
+
     /// Send `bytes` to `peer` THROUGH the relay (ChannelData once a channel is
     /// bound, else a Send indication). Requires a permission for `peer` (we permit
     /// every remote candidate). The wrapped wire bytes surface via `poll_transmit`.
@@ -318,11 +325,14 @@ pub(crate) struct Transport {
     /// TURN relay (Signal path with a `TurnConfig`); `None` = host candidates only.
     #[cfg(feature = "signal")]
     relay: Option<RelayState>,
-    /// Remote candidate addrs of type `relay` — outbound to these is routed THROUGH
-    /// our relay (their TURN server only accepts traffic from our permitted relayed
-    /// address, not our raw host/srflx). Off-LAN, this is the only pair that works.
+    /// Whether we've registered the relay's allocated address as a LOCAL ICE
+    /// candidate yet (done once the TURN allocation completes).
     #[cfg(feature = "signal")]
-    relay_remotes: std::collections::HashSet<SocketAddr>,
+    relay_local_added: bool,
+    /// Whether the SELECTED ICE pair's local candidate is the relay — i.e. media
+    /// to the selected remote must be wrapped through the TURN client.
+    #[cfg(feature = "signal")]
+    media_via_relay: bool,
 }
 
 impl Transport {
@@ -374,7 +384,9 @@ impl Transport {
             #[cfg(feature = "signal")]
             relay: None,
             #[cfg(feature = "signal")]
-            relay_remotes: std::collections::HashSet::new(),
+            relay_local_added: false,
+            #[cfg(feature = "signal")]
+            media_via_relay: false,
         })
     }
 
@@ -410,7 +422,8 @@ impl Transport {
             keys: None, done: false,
             media_out: Vec::new(),
             relay,
-            relay_remotes: std::collections::HashSet::new(),
+            relay_local_added: false,
+            media_via_relay: false,
         })
     }
 
@@ -493,20 +506,16 @@ impl Transport {
     /// (the Signal path delivers candidates as separate `IceUpdate`s). `is_relay`
     /// marks a `typ relay` candidate, whose address is reachable only by sending
     /// THROUGH our relay (see `relay_remotes`).
-    pub(crate) fn add_remote_candidate(&mut self, addr: SocketAddr, is_relay: bool) -> Result<(), Error> {
-        #[cfg(not(feature = "signal"))]
-        let _ = is_relay;
+    pub(crate) fn add_remote_candidate(&mut self, addr: SocketAddr, _is_relay: bool) -> Result<(), Error> {
         if addr.is_ipv4() != self.local.is_ipv4() {
             return Ok(()); // address-family mismatch — not reachable from our socket
         }
+        // Permit this remote on our relay so the agent's checks to it (sent from our
+        // relay local candidate) are allowed through the TURN server. Relay routing
+        // is decided by the LOCAL candidate now, not the remote's type.
         #[cfg(feature = "signal")]
-        {
-            if is_relay {
-                self.relay_remotes.insert(addr);
-            }
-            if let Some(relay) = &mut self.relay {
-                relay.permit(addr);
-            }
+        if let Some(relay) = &mut self.relay {
+            relay.permit(addr);
         }
         self.ice
             .add_remote_candidate(host_candidate(addr))
@@ -536,6 +545,8 @@ impl Transport {
         if let Some(relay) = &mut self.relay {
             relay.handle_timeout(now); // drives TURN allocation + TTL refresh
         }
+        #[cfg(feature = "signal")]
+        self.ensure_relay_local_candidate();
         self.maybe_advance();
     }
 
@@ -547,47 +558,77 @@ impl Transport {
 
     pub(crate) fn poll_transmit(&mut self) -> Vec<(SocketAddr, Vec<u8>)> {
         self.maybe_advance();
-        // Gather every logical outbound (dest, bytes): ICE checks, DTLS, then media
-        // to the selected remote. Routing through the relay (below) is applied last.
-        let mut logical: Vec<(SocketAddr, Vec<u8>)> = Vec::new();
+        #[cfg(feature = "signal")]
+        self.ensure_relay_local_candidate();
+
+        // Our relay's allocated address (if any). Any outbound the ICE agent emits
+        // FROM this local candidate (`local_addr == relayed`) must be wrapped through
+        // the TURN client; everything else goes direct on our host socket.
+        #[cfg(feature = "signal")]
+        let relayed = self.relay.as_ref().and_then(|r| r.relayed_addr());
+
+        // Collect ICE + DTLS transmits as (local_addr, peer_addr, bytes) so we can
+        // route each by its LOCAL candidate (relay vs host).
+        let mut transmits: Vec<(SocketAddr, SocketAddr, Vec<u8>)> = Vec::new();
         while let Some(t) = self.ice.poll_write() {
-            logical.push((t.transport.peer_addr, t.message.to_vec()));
+            transmits.push((t.transport.local_addr, t.transport.peer_addr, t.message.to_vec()));
         }
         if let Keying::Dtls(d) = &mut self.keying {
             while let Some(t) = d.dtls.poll_transmit() {
-                logical.push((t.transport.peer_addr, t.message.to_vec()));
-            }
-        }
-        if let Some(dest) = self.remote {
-            for dg in self.media_out.drain(..) {
-                logical.push((dest, dg));
+                transmits.push((t.transport.local_addr, t.transport.peer_addr, t.message.to_vec()));
             }
         }
 
-        #[cfg(feature = "signal")]
-        {
-            // Datagrams to a relay-type remote can't go direct (their TURN server
-            // only accepts our permitted relayed address) — send them THROUGH our
-            // relay; the rest go direct. Then drain the relay's own wire output
-            // (TURN allocate/refresh/permission + the ChannelData we just queued).
-            let mut out = Vec::new();
-            for (dest, bytes) in logical {
-                if self.relay_remotes.contains(&dest) {
-                    if let Some(relay) = &mut self.relay {
-                        relay.send_via(&bytes, dest);
-                        continue;
-                    }
+        let mut out: Vec<(SocketAddr, Vec<u8>)> = Vec::new();
+        for (_local_addr, peer_addr, bytes) in transmits {
+            #[cfg(feature = "signal")]
+            if Some(_local_addr) == relayed {
+                if let Some(relay) = &mut self.relay {
+                    relay.send_via(&bytes, peer_addr);
                 }
-                out.push((dest, bytes));
+                continue;
             }
-            if let Some(relay) = &mut self.relay {
-                out.extend(relay.poll_transmit());
-            }
-            out
+            out.push((peer_addr, bytes));
         }
-        #[cfg(not(feature = "signal"))]
-        {
-            logical
+
+        // Media → the selected remote, wrapped through the relay iff the selected
+        // ICE pair's local candidate is the relay (set in `maybe_advance`).
+        if let Some(dest) = self.remote {
+            let media: Vec<Vec<u8>> = self.media_out.drain(..).collect();
+            for dg in media {
+                #[cfg(feature = "signal")]
+                if self.media_via_relay {
+                    if let Some(relay) = &mut self.relay {
+                        relay.send_via(&dg, dest);
+                    }
+                    continue;
+                }
+                out.push((dest, dg));
+            }
+        }
+
+        // The relay's own wire output: TURN allocate/refresh/permission + the
+        // ChannelData we just queued via `send_via`.
+        #[cfg(feature = "signal")]
+        if let Some(relay) = &mut self.relay {
+            out.extend(relay.poll_transmit());
+        }
+        out
+    }
+
+    /// Register the relay's allocated address as a LOCAL ICE candidate, once the
+    /// TURN allocation has completed. Idempotent. This is what lets the ICE agent
+    /// pair/validate over the relay with correct address bookkeeping.
+    #[cfg(feature = "signal")]
+    fn ensure_relay_local_candidate(&mut self) {
+        if self.relay_local_added {
+            return;
+        }
+        let Some(relayed) = self.relay.as_ref().and_then(|r| r.relayed_addr()) else {
+            return;
+        };
+        if self.ice.add_local_candidate(relay_candidate(relayed, self.local)).is_ok() {
+            self.relay_local_added = true;
         }
     }
 
@@ -601,45 +642,39 @@ impl Transport {
         {
             let is_turn = self.relay.as_ref().is_some_and(|r| src == r.turn_serv_addr);
             if is_turn {
-                let relayed = {
+                let (relayed_payloads, relayed_local) = {
                     let relay = self.relay.as_mut().unwrap();
                     relay.handle_turn_datagram(src, data);
-                    relay.take_relayed()
+                    (relay.take_relayed(), relay.relayed_addr())
                 };
+                // Feed each relayed payload to the demux tagged with our RELAY local
+                // address, so the ICE agent associates it with the relay local
+                // candidate (correct pairing/validation) — and STUN from an unknown
+                // peer addr becomes a peer-reflexive remote on that candidate, which
+                // the agent then checks + can be nominated over.
+                let local = relayed_local.unwrap_or(self.local);
                 let mut media = None;
-                for (peer, payload) in relayed {
-                    // Anything that reaches us via the relay is, by definition, only
-                    // reachable by sending back THROUGH the relay — and the peer's
-                    // relayed *sending* address (X) can differ from the relay
-                    // candidate it advertised (Y). Mark X relay-reachable so our
-                    // replies route through the relay, and register X as a remote ICE
-                    // candidate so our agent checks X *directly* — otherwise it only
-                    // checks the advertised Y, and the response (which arrives from X)
-                    // is discarded by ICE's symmetric-NAT guard (transaction dest Y ≠
-                    // response src X), so no pair ever succeeds and the answerer
-                    // (controlled) role never gets nominated.
-                    if self.relay_remotes.insert(peer) {
-                        let _ = self.ice.add_remote_candidate(host_candidate(peer));
-                    }
-                    if let Demux::Media(m) = self.demux_payload(peer, &payload)? {
+                for (peer, payload) in relayed_payloads {
+                    if let Demux::Media(m) = self.demux_payload(local, peer, &payload)? {
                         media = Some(m);
                     }
                 }
                 return Ok(media.map(Demux::Media).unwrap_or(Demux::Consumed));
             }
         }
-        self.demux_payload(src, data)
+        self.demux_payload(self.local, src, data)
     }
 
     /// Demux one datagram by its leading byte: STUN→ICE, DTLS records→DTLS, SRTP→
-    /// media. `src` is the apparent origin (a direct peer, or the relayed peer addr
-    /// extracted from a TURN message).
-    fn demux_payload(&mut self, src: SocketAddr, data: &[u8]) -> Result<Demux, Error> {
+    /// media. `local` is the local candidate address it arrived on (our host socket,
+    /// or our relay's allocated address for TURN-relayed traffic); `src` is the
+    /// apparent origin (a direct peer, or the relayed peer addr from a TURN message).
+    fn demux_payload(&mut self, local: SocketAddr, src: SocketAddr, data: &[u8]) -> Result<Demux, Error> {
         match data.first().copied() {
             Some(0..=3) => {
                 let msg = TaggedBytesMut {
                     now: Instant::now(),
-                    transport: ctx(self.local, src),
+                    transport: ctx(local, src),
                     message: bytes::BytesMut::from(data),
                 };
                 let _ = self.ice.handle_read(msg);
@@ -683,14 +718,15 @@ impl Transport {
             .map(|(l, r)| format!("{}->{}", l.addr(), r.addr()))
             .unwrap_or_else(|| "none".to_owned());
         #[cfg(feature = "signal")]
-        let (relay_n, counts) = (
-            self.relay_remotes.len(),
+        let (relay_local, via, counts) = (
+            self.relay_local_added,
+            self.media_via_relay,
             self.relay.as_ref().map(|r| r.dbg_counts()).unwrap_or((0, 0, 0)),
         );
         #[cfg(not(feature = "signal"))]
-        let (relay_n, counts) = (0usize, (0u64, 0u64, 0u64));
+        let (relay_local, via, counts) = (false, false, (0u64, 0u64, 0u64));
         format!(
-            "role={:?} ice={:?} pair={pair} keyed={} relay_remotes={relay_n} relay[sent={} noperm={} recv={}]",
+            "role={:?} ice={:?} pair={pair} keyed={} relay_local_cand={relay_local} media_via_relay={via} relay[sent={} noperm={} recv={}]",
             self.role,
             self.ice.state(),
             self.done,
@@ -714,10 +750,21 @@ impl Transport {
         if self.done || !self.ice_connected() {
             return;
         }
-        let Some(remote) = self.ice.get_selected_candidate_pair().map(|(_, r)| r.addr()) else {
+        let Some((local_addr, remote)) =
+            self.ice.get_selected_candidate_pair().map(|(l, r)| (l.addr(), r.addr()))
+        else {
             return; // connected but pair not yet exposed — try next tick
         };
         self.remote = Some(remote);
+        // If the selected pair's LOCAL candidate is our relay, media must be wrapped
+        // through the TURN client (same routing as the ICE checks were).
+        #[cfg(feature = "signal")]
+        {
+            self.media_via_relay =
+                self.relay.as_ref().and_then(|r| r.relayed_addr()) == Some(local_addr);
+        }
+        #[cfg(not(feature = "signal"))]
+        let _ = local_addr;
         let role = self.role;
         match &mut self.keying {
             Keying::Dtls(d) => {
@@ -801,6 +848,29 @@ fn host_candidate(addr: SocketAddr) -> Candidate {
     }
     .new_candidate_host()
     .expect("host candidate")
+}
+
+/// A relay LOCAL candidate at our TURN-allocated address `relayed`, with `base`
+/// (our host socket) as the related address. Registering this as a local
+/// candidate is what makes the ICE agent's address bookkeeping correct for
+/// relayed traffic: checks it sends from this candidate are tagged
+/// `local_addr == relayed`, and we wrap exactly those through the TURN client.
+#[cfg(feature = "signal")]
+fn relay_candidate(relayed: SocketAddr, base: SocketAddr) -> Candidate {
+    CandidateRelayConfig {
+        base_config: CandidateConfig {
+            network: "udp".to_owned(),
+            address: relayed.ip().to_string(),
+            port: relayed.port(),
+            component: 1,
+            ..Default::default()
+        },
+        rel_addr: base.ip().to_string(),
+        rel_port: base.port(),
+        ..Default::default()
+    }
+    .new_candidate_relay()
+    .expect("relay candidate")
 }
 
 fn ctx(local: SocketAddr, remote: SocketAddr) -> TransportContext {

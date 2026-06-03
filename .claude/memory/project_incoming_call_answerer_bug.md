@@ -67,11 +67,35 @@ relayed-receive `add_remote_candidate`/`permit` patches added this session (comm
 WIP <fill>). Check the async `ice` crate's relay wiring (or ringrtc) for the exact
 sans-io seam. This fixes BOTH roles, not just the answerer.
 
-Partial fixes landed this session (relay now exchanges ICE both ways for the
-answerer — sent/recv climb, noperm fixed — but pair still never selected; see
-above for why): in `transport.rs` on relayed-receive we insert into
-`relay_remotes`, `permit(peer)`, and `add_remote_candidate(host_candidate(peer))`.
-These are stopgaps to be REPLACED by the proper relay-candidate integration.
+**REWORK DONE (the correct architecture) but incoming STILL not connecting.**
+`transport.rs` now registers the relay as a first-class ICE LOCAL candidate
+(`relay_candidate()` → `ice.add_local_candidate`, gated on TURN allocation via
+`ensure_relay_local_candidate`) and routes by the transmit's `local_addr`:
+ICE/media whose `local_addr == relayed` go through `relay.send_via`; inbound TURN
+payloads are fed to `demux_payload(local=relayed, peer, …)` so the agent
+associates them with the relay local candidate. `media_via_relay` set in
+`maybe_advance` from the selected pair's local. The old `relay_remotes` hack +
+relayed-receive `add_remote_candidate` are DELETED. Builds clean, 18 tests pass.
+**Outgoing calls still work (device-verified) — no regression.** Committed
+<this rework's commit>.
+
+**STILL `ice=Checking pair=none` for the answerer** (relay_local_cand=true,
+sent/recv climb, noperm plateaus). Since OUTGOING (controlling) connects with the
+SAME relay-candidate routing, our outbound checks DO get matched responses over
+the relay — so the break is specific to the CONTROLLED role: either our reply to
+the peer's check isn't reaching it (so the peer's pair never Succeeds → it never
+sends USE-CANDIDATE) or the peer's USE-CANDIDATE isn't applied. `pair=none` = no
+SELECTED pair (controlled only selects on an inbound USE-CANDIDATE for a Succeeded
+pair); a pair may be Succeeded-but-not-Selected. Likely still the peer's relay
+SENDING addr (X) ≠ advertised (Y) breaking strict matching, even via
+peer-reflexive. **NEXT: instrument vendored `external/rtc/rtc-ice`
+`agent_selector.rs` (ControlledSelector) + `agent/mod.rs`: count peer-reflexive
+remote-candidate creations, pairs reaching `Succeeded`, USE-CANDIDATE requests
+received, symmetric-guard discards (`transaction_addr != remote_addr`), and
+`set_selected_pair` calls — surfaced via a debug accessor → the `conn:` line.**
+That definitively says which of {our reply not delivered / peer's pair not
+Succeeding / USE-CANDIDATE not arriving / discarded} is the break. Best done in a
+fresh focused session.
 
 **SEPARATE bug (also open): multi-ring coordination missing.** User has 3 devices
 on one account; all ring; answering on wart stops wart's ring but the other phone
