@@ -279,6 +279,11 @@ impl SignalCall {
         self.session.rtp_peer_ids()
     }
 
+    /// DIAG: one-line ICE/keying snapshot (role/state/selected pair/keyed).
+    pub fn conn_debug(&self) -> String {
+        self.session.conn_debug()
+    }
+
     pub fn call_id(&self) -> u64 {
         self.call_id
     }

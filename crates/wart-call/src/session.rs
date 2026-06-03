@@ -206,6 +206,11 @@ impl PeerSession {
         }
     }
 
+    /// DIAG: one-line connection snapshot (role/ICE state/selected pair/keyed).
+    pub fn conn_debug(&self) -> String {
+        self.transport.conn_debug()
+    }
+
     pub fn is_connected(&self) -> bool {
         self.transport.is_connected()
     }

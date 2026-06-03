@@ -419,6 +419,11 @@ impl CallEngine {
         self.active.as_ref().map(|a| a.call.call_id())
     }
 
+    /// DIAG: one-line ICE/keying snapshot for the active call (role/state/pair).
+    pub fn conn_debug(&self) -> Option<String> {
+        self.active.as_ref().map(|a| a.call.conn_debug())
+    }
+
     /// Place an outgoing call. `my_identity`/`peer_identity` are the serialized
     /// identity public keys that bind the SRTP keys (caller = us = offerer first).
     /// Returns the `CallSignal`s to send (the `Offer` + trickled ICE).

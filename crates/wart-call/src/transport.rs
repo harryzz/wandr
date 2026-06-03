@@ -73,6 +73,11 @@ struct RelayState {
     /// each tagged with the peer addr that sent it — drained back into the demux
     /// as if received directly from that peer (Phase B inbound).
     relayed_in: Vec<(SocketAddr, Vec<u8>)>,
+    /// DIAG counters: outbound datagrams sent via the relay, those rejected for
+    /// no permission yet, and inbound payloads relayed to us.
+    dbg_sent: u64,
+    dbg_noperm: u64,
+    dbg_recv: u64,
 }
 
 #[cfg(feature = "signal")]
@@ -103,6 +108,9 @@ impl RelayState {
             permitted: std::collections::HashSet::new(),
             pending_remotes: Vec::new(),
             relayed_in: Vec::new(),
+            dbg_sent: 0,
+            dbg_noperm: 0,
+            dbg_recv: 0,
         })
     }
 
@@ -149,6 +157,14 @@ impl RelayState {
             // to our relayed address. Tag it with the peer addr and re-demux it as
             // if it had arrived directly (STUN→ICE, SRTP→media).
             if let Event::DataIndicationOrChannelData(_, peer, data) = ev {
+                self.dbg_recv += 1;
+                // Create a permission for the peer's ACTUAL relayed sending address
+                // so we can reply to it via the relay. We can *receive* from it
+                // (TURN permissions are per-IP) even though it differs from the
+                // advertised relay candidate (different port) — but rtc_turn gates
+                // *sending* per ip:port, so without this `send_to` it returns
+                // ErrNoPermission and the peer's ICE checks never get a response.
+                self.permit(peer);
                 self.relayed_in.push((peer, data.to_vec()));
             }
         }
@@ -165,9 +181,16 @@ impl RelayState {
     fn send_via(&mut self, bytes: &[u8], peer: SocketAddr) {
         if let Some(relayed) = self.relayed_addr {
             if let Ok(mut relay) = self.client.relay(relayed) {
-                let _ = relay.send_to(bytes, peer);
+                match relay.send_to(bytes, peer) {
+                    Ok(()) => self.dbg_sent += 1,
+                    Err(_) => self.dbg_noperm += 1,
+                }
             }
         }
+    }
+
+    fn dbg_counts(&self) -> (u64, u64, u64) {
+        (self.dbg_sent, self.dbg_noperm, self.dbg_recv)
     }
 
     fn poll_transmit(&mut self) -> Vec<(SocketAddr, Vec<u8>)> {
@@ -585,6 +608,19 @@ impl Transport {
                 };
                 let mut media = None;
                 for (peer, payload) in relayed {
+                    // Anything that reaches us via the relay is, by definition, only
+                    // reachable by sending back THROUGH the relay — and the peer's
+                    // relayed *sending* address (X) can differ from the relay
+                    // candidate it advertised (Y). Mark X relay-reachable so our
+                    // replies route through the relay, and register X as a remote ICE
+                    // candidate so our agent checks X *directly* — otherwise it only
+                    // checks the advertised Y, and the response (which arrives from X)
+                    // is discarded by ICE's symmetric-NAT guard (transaction dest Y ≠
+                    // response src X), so no pair ever succeeds and the answerer
+                    // (controlled) role never gets nominated.
+                    if self.relay_remotes.insert(peer) {
+                        let _ = self.ice.add_remote_candidate(host_candidate(peer));
+                    }
                     if let Demux::Media(m) = self.demux_payload(peer, &payload)? {
                         media = Some(m);
                     }
@@ -633,6 +669,33 @@ impl Transport {
 
     pub(crate) fn is_connected(&self) -> bool {
         self.ice_connected() && self.done
+    }
+
+    /// DIAG: one-line connection snapshot — role, ICE state, the selected pair (if
+    /// any), whether keying completed, and how many relay-type remotes we know of.
+    /// Pins where an answerer (controlled) call stalls: ICE never Checking? Checking
+    /// but no pair (peer never nominates / our checks never succeed)? pair but not
+    /// keyed?
+    pub(crate) fn conn_debug(&self) -> String {
+        let pair = self
+            .ice
+            .get_selected_candidate_pair()
+            .map(|(l, r)| format!("{}->{}", l.addr(), r.addr()))
+            .unwrap_or_else(|| "none".to_owned());
+        #[cfg(feature = "signal")]
+        let (relay_n, counts) = (
+            self.relay_remotes.len(),
+            self.relay.as_ref().map(|r| r.dbg_counts()).unwrap_or((0, 0, 0)),
+        );
+        #[cfg(not(feature = "signal"))]
+        let (relay_n, counts) = (0usize, (0u64, 0u64, 0u64));
+        format!(
+            "role={:?} ice={:?} pair={pair} keyed={} relay_remotes={relay_n} relay[sent={} noperm={} recv={}]",
+            self.role,
+            self.ice.state(),
+            self.done,
+            counts.0, counts.1, counts.2,
+        )
     }
 
     pub(crate) fn take_keys(&mut self) -> Option<(SrtpKeys, SrtpKeys)> {

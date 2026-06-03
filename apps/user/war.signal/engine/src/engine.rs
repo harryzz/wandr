@@ -1312,6 +1312,10 @@ async fn receive_and_send(
                         let now = now_ms();
                         if now.saturating_sub(last_call_stat) >= 1000 {
                             last_call_stat = now;
+                            // ICE/keying snapshot — pins where an answerer call stalls.
+                            if let Some(cd) = call_engine.conn_debug() {
+                                dbg_line(&format!("conn: {cd}"));
+                            }
                             if let Some(m) = call_engine.media_stats() {
                                 let tps = ticks.saturating_sub(last_ticks);
                                 last_ticks = ticks;
