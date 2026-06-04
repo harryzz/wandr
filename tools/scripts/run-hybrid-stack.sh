@@ -287,6 +287,15 @@ if [[ "$NO_ART" == "1" ]]; then
     ssp="$(adb shell "su -c 'pidof system_server'" | tr -d '\r' || true)"
     [ -n "$ssp" ] && { echo "  system_server still up ($ssp) — killing"; adb shell "su -c 'kill -9 $ssp'" >/dev/null 2>&1 || true; sleep 1; }
 
+    # Sweep Magisk su-loggers stuck on the boundary grants: the `magisk --sqlite`
+    # disable can't suppress logging of its OWN su grant, and `stop zygote` can race
+    # magiskd's policy reload — both spawn an app_process that spins ~100%/core
+    # retrying the now-dead framework forever. They never respawn, so one kill clears
+    # them; `logging=0` is in effect now, so this sweep isn't itself logged. (The bulk
+    # of bringup su is already quiet from the disable above.)
+    echo "▸ --no-art: sweeping any stuck Magisk su-loggers"
+    adb shell "su -c 'pkill -9 -f com.topjohnwu.magisk'" >/dev/null 2>&1 || true
+
     # Start wart-inputflinger (registers "inputflinger") before the zygote/hosts so
     # their input client path resolves to OUR service. This gives WORKING system-key
     # dedup (POWER/VOLUME → arbiter once, no fan-out flicker). App TOUCH/key routing
