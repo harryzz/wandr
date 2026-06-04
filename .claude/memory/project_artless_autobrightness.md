@@ -76,6 +76,22 @@ the spawn_detached logfile (arbiter.log only shows child stdout like `wart-scree
 set_display_power`). 35 arbiter unit tests green. Subjective smooth/no-flicker = user's
 visual call ([[feedback_visual_verification]]).
 
+**Screen-off timeout + auto-lock (same task-86 follow-on, PowerManager role).** Under
+`--no-art` there's no PowerManagerService, so the screen never auto-slept and keyguard
+(which auto-locks on screen-off) never fired. Built the AOSP-faithful split: the input
+dispatcher pokes activity, the arbiter decides the timeout — mirroring
+`InputDispatcher::pokeUserActivity → PowerManagerService.userActivity`. NOT the host
+(each host sees only its own window; the dispatcher sees all). Wiring:
+`wart-inputflinger`'s `pokeUserActivity` policy hook (the exact AOSP spot; was an empty
+override) → `arbiter_send("user-activity")` throttled ~1/s; `wart-arbiter-power` tracks
+`last_activity`, a 5 s `Event::IdleTick` ticker (binary, `--no-art` only) checks idle vs
+`screen_off_timeout` (default 60 s, live `screen-timeout <ms|off>`) → `set_panel_on(false)`
+which already cascades to keyguard auto-lock + panel-off + backlight-0. Wake (POWER)
+resets the clock. Device-verified: idle→backlight 0 + keyguard up, power-key→restored,
+no immediate re-sleep. `wart-inputflinger` rebuilt via NINJA-DIRECT (`m` died in kati
+dexpreopt) — see [[reference-a03-ninja-build]]. Also: run-hybrid-stack `--no-art` now
+kills `bootanimation` (init restarts it framework-down → it covers the wart UI).
+
 See [[project_artless_sensors]] (task 85 — the wart-sensors+arbiter feed pattern
 mirrored here), [[project_proximity_screen_off]] (task 78 — the blank that
 auto-brightness must not fight), [[feedback_no_hardcoding]],

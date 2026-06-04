@@ -317,6 +317,11 @@ pub enum Event {
     /// near/far threshold. Consumers react (e.g. screen-off during a call —
     /// follow-on). `near` = an object is close to the panel.
     ProximityChanged { near: bool },
+    /// The binary's inactivity ticker fired (PowerManager screen-off-timeout role,
+    /// task 86 follow-on). Emitted periodically under `--no-art` (where there is no
+    /// PowerManagerService); the power module checks input-idle elapsed vs the
+    /// screen-off timeout and sleeps the panel when exceeded. Monotonic, no payload.
+    IdleTick,
 }
 
 /// A command's outcome. The binary renders this to one wire line; `Ok`/`Err`

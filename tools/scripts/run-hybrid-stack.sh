@@ -287,6 +287,13 @@ if [[ "$NO_ART" == "1" ]]; then
     ssp="$(adb shell "su -c 'pidof system_server'" | tr -d '\r' || true)"
     [ -n "$ssp" ] && { echo "  system_server still up ($ssp) — killing"; adb shell "su -c 'kill -9 $ssp'" >/dev/null 2>&1 || true; sleep 1; }
 
+    # Stop the boot animation: with the framework down init can (re)start
+    # bootanimation, which draws over SurfaceFlinger and covers the wart UI. Ask it
+    # to exit (the canonical setprop), stop the init service, and hard-kill as a
+    # backstop.
+    echo "▸ --no-art: stopping bootanimation (covers the wart UI otherwise)"
+    adb shell "su -c 'setprop service.bootanim.exit 1; stop bootanim; pkill -9 -f bootanimation'" >/dev/null 2>&1 || true
+
     # Sweep Magisk su-loggers stuck on the boundary grants: the `magisk --sqlite`
     # disable can't suppress logging of its OWN su grant, and `stop zygote` can race
     # magiskd's policy reload — both spawn an app_process that spins ~100%/core

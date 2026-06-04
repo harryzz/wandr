@@ -178,7 +178,10 @@ fn main() {
                     | "power-key" | "panel"
                     // Task 86 — auto-brightness manual override + live curve tuning:
                     // brightness <auto|0.0..1.0>, brightness-scale <lux>.
-                    | "brightness" | "brightness-scale")) => {
+                    | "brightness" | "brightness-scale"
+                    // Task 86 follow-on — PowerManager screen-off-timeout:
+                    // user-activity (input dispatcher poke), screen-timeout <ms|off>.
+                    | "user-activity" | "screen-timeout")) => {
             run_client_multi(verb, &args[1..])
         }
         Some(other) => {
@@ -350,6 +353,12 @@ fn run_daemon() -> Result<()> {
     if no_art() {
         log::info!("wart-arbiter: WART_NO_ART — screen poller OFF; arbiter owns panel power");
         apply_display_power(true); // boot force-on (panel may be off from a prior --no-art wedge)
+        // Task 86 follow-on — PowerManager screen-off-timeout. There is no PMS under
+        // --no-art, so the arbiter owns the inactivity→sleep decision: this ticker
+        // feeds Event::IdleTick to the power module (which checks idle vs the
+        // timeout); wart-inputflinger pokes `user-activity` on real input. Under
+        // ART-up the framework's PowerManagerService owns this (poller drives doze).
+        spawn_inactivity_timer();
     } else {
         spawn_screen_poller();
     }
@@ -1161,6 +1170,24 @@ fn spawn_screen_poller() {
             }
         })
         .expect("spawn screen poller thread");
+}
+
+/// Inactivity ticker (PowerManager screen-off-timeout role, task 86 follow-on) —
+/// only under `--no-art` (no PMS). Periodically injects [`Event::IdleTick`] so the
+/// power module re-checks input-idle elapsed vs the screen-off timeout and sleeps the
+/// panel when exceeded. The tick interval bounds how late the sleep can fire (a few
+/// seconds past the timeout — fine), and is cheap (one lock + bus dispatch). The
+/// activity side is `user-activity`, poked by wart-inputflinger's dispatcher policy.
+fn spawn_inactivity_timer() {
+    const TICK: Duration = Duration::from_secs(5);
+    std::thread::Builder::new()
+        .name("arbiter-inactivity-timer".into())
+        .spawn(|| loop {
+            std::thread::sleep(TICK);
+            let _guard = arbiter_lock().lock().unwrap_or_else(|e| e.into_inner());
+            bus_emit(Event::IdleTick);
+        })
+        .expect("spawn inactivity timer thread");
 }
 
 fn spawn_death_watchers() {

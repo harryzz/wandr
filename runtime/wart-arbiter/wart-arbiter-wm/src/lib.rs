@@ -538,7 +538,8 @@ impl ArbiterModule for WmModule {
             | Event::SensorAcquire { .. }
             | Event::SensorRelease { .. }
             | Event::SensorReading { .. }
-            | Event::ProximityChanged { .. } => {}
+            | Event::ProximityChanged { .. }
+            | Event::IdleTick => {}
         }
     }
 }

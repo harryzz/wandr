@@ -23,7 +23,7 @@
 //! wakelocks (suppress doze), and maintenance-window alarm batching.
 
 use std::collections::HashSet;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use wart_arbiter_core::{ArbiterModule, Ctx, Effect, Event, Reply, SensorKind};
 
@@ -33,6 +33,13 @@ const DOZE_GRACE_MS: u128 = 60_000;
 const DOZE_MAINTENANCE_MS: u64 = 10_000;
 /// Cadence for everyone else while dozing (ms): back off harder (off-screen).
 const DOZE_SUSPEND_MS: u64 = 60_000;
+
+/// Default screen-off timeout (ms): input-idle this long → sleep the panel + lock,
+/// the PowerManagerService role under `--no-art` (no PMS to own
+/// `Settings.System.SCREEN_OFF_TIMEOUT`). AOSP's stock default is 30 s; 60 s is a
+/// gentler dev default. The ONE named timeout source; live-tunable via
+/// `screen-timeout <ms|off>`.
+const DEFAULT_SCREEN_OFF_TIMEOUT_MS: u64 = 60_000;
 
 // ── Auto-brightness (task 86) ────────────────────────────────────────────────
 // Under `--no-art` there is no DisplayManager auto-brightness controller, so the
@@ -108,6 +115,15 @@ pub struct PowerModule {
     /// Last raw lux reading — kept so a live `brightness-scale` change can recompute
     /// the level immediately from the same ambient (snap, no wait for the next read).
     last_lux: Option<f32>,
+
+    // ── Screen-off timeout state (PowerManager role, task 86 follow-on) ───────
+    /// When user input last happened (the dispatcher pokes `user-activity`). `None`
+    /// until the first poke / tick; the inactivity check seeds it to "now" so the
+    /// countdown starts. Reset on wake so a wake doesn't immediately re-sleep.
+    last_activity: Option<Instant>,
+    /// Screen-off timeout (`None` = never auto-sleep). Live-tunable via
+    /// `screen-timeout <ms|off>`; defaults to [`DEFAULT_SCREEN_OFF_TIMEOUT_MS`].
+    screen_off_timeout: Option<Duration>,
 }
 
 /// Pure doze decision: given how long the screen has been off (`off_ms`, `None`
@@ -138,6 +154,7 @@ impl PowerModule {
         Self {
             panel_on: true, // the screen comes up on
             full_scale_lux: FULL_SCALE_LUX,
+            screen_off_timeout: Some(Duration::from_millis(DEFAULT_SCREEN_OFF_TIMEOUT_MS)),
             ..Self::default()
         }
     }
@@ -157,9 +174,11 @@ impl PowerModule {
         }
         // Task 86 — waking the panel restores the ambient/manual backlight level
         // (the `SetDisplayPower(on)` applier only sets the boot default), so the
-        // screen comes back at the right brightness, not the default.
+        // screen comes back at the right brightness, not the default. Also restart
+        // the inactivity countdown so a wake doesn't immediately re-sleep.
         if on {
             self.reassert_backlight(ctx);
+            self.last_activity = Some(Instant::now());
         }
         ctx.emit(Event::ScreenState { live: on });
         log::info!("arbiter: panel {} (power-key/explicit)", if on { "ON" } else { "OFF" });
@@ -382,11 +401,78 @@ impl PowerModule {
         log::info!("arbiter: brightness-scale → {lux} lux full-scale");
         Reply::ok(format!("brightness-scale {lux}"))
     }
+
+    // ── Screen-off timeout (PowerManager role, task 86 follow-on) ─────────────
+
+    /// `user-activity` — the input dispatcher (wart-inputflinger, the wart
+    /// "PhoneWindowManager") pokes this on real user input, mirroring AOSP's
+    /// `InputDispatcher::pokeUserActivity → PowerManagerService.userActivity`. It
+    /// just resets the idle clock; it never wakes the panel (only POWER does), so a
+    /// stray touch while off can't turn the screen on.
+    fn cmd_user_activity(&mut self, _args: &str, _ctx: &mut Ctx) -> Reply {
+        self.last_activity = Some(Instant::now());
+        Reply::ok("user-activity")
+    }
+
+    /// `screen-timeout <ms|off>` — live-set the inactivity screen-off timeout
+    /// (`off`/`0` disables auto-sleep). The PowerManager `SCREEN_OFF_TIMEOUT` knob;
+    /// resets the countdown so the new value takes effect from now.
+    fn cmd_screen_timeout(&mut self, args: &str, _ctx: &mut Ctx) -> Reply {
+        match args.split_whitespace().next() {
+            Some("off") | Some("none") | Some("0") => {
+                self.screen_off_timeout = None;
+                log::info!("arbiter: screen-timeout → off (no auto-sleep)");
+                Reply::ok("screen-timeout off")
+            }
+            Some(tok) => match tok.parse::<u64>() {
+                Ok(ms) => {
+                    self.screen_off_timeout = Some(Duration::from_millis(ms));
+                    self.last_activity = Some(Instant::now());
+                    log::info!("arbiter: screen-timeout → {ms} ms");
+                    Reply::ok(format!("screen-timeout {ms}"))
+                }
+                Err(_) => Reply::err("screen-timeout-args: expected <ms|off>"),
+            },
+            None => Reply::err("screen-timeout-usage: screen-timeout <ms|off>"),
+        }
+    }
+
+    /// Inactivity tick (PowerManager screen-off-timeout). If the panel is on (and
+    /// not proximity-blanked) and input has been idle past the timeout, sleep it —
+    /// reusing `set_panel_on(false)`, so this cascades exactly like a POWER-off:
+    /// keyguard auto-locks, doze grace starts, the panel powers off, backlight → 0.
+    /// Pure decision is [`idle_should_sleep`]; this wires it to the clock + state.
+    fn on_idle_tick(&mut self, ctx: &mut Ctx) {
+        if !self.panel_on || self.blanked {
+            return;
+        }
+        let Some(timeout) = self.screen_off_timeout else { return };
+        let idle = match self.last_activity {
+            Some(t) => t.elapsed(),
+            None => {
+                // First tick with no recorded activity → start the countdown now.
+                self.last_activity = Some(Instant::now());
+                return;
+            }
+        };
+        if idle_should_sleep(idle, timeout) {
+            log::info!("arbiter: screen-off timeout — idle {}s ≥ {}s → panel OFF + lock",
+                idle.as_secs(), timeout.as_secs());
+            self.set_panel_on(false, ctx);
+        }
+    }
+}
+
+/// Pure screen-off-timeout decision: sleep once input has been idle at least as long
+/// as the timeout. Split out so the boundary is unit-testable without real time.
+fn idle_should_sleep(idle: Duration, timeout: Duration) -> bool {
+    idle >= timeout
 }
 
 impl ArbiterModule for PowerModule {
     fn verbs(&self) -> &[&'static str] {
-        &["report-power-class", "power-key", "panel", "brightness", "brightness-scale"]
+        &["report-power-class", "power-key", "panel", "brightness", "brightness-scale",
+          "user-activity", "screen-timeout"]
     }
 
     fn on_command(&mut self, verb: &str, args: &str, ctx: &mut Ctx) -> Reply {
@@ -396,6 +482,8 @@ impl ArbiterModule for PowerModule {
             "panel" => self.cmd_panel(args, ctx),
             "brightness" => self.cmd_brightness(args, ctx),
             "brightness-scale" => self.cmd_brightness_scale(args, ctx),
+            "user-activity" => self.cmd_user_activity(args, ctx),
+            "screen-timeout" => self.cmd_screen_timeout(args, ctx),
             other => Reply::err(format!("power-unknown-verb {other}")),
         }
     }
@@ -460,6 +548,8 @@ impl ArbiterModule for PowerModule {
             // Task 86 — ambient light → backlight (auto-brightness). The lux is the
             // reading's `x`. Other sensor kinds are owned by their own consumers.
             Event::SensorReading { kind: SensorKind::Light, x, .. } => self.on_light(*x, ctx),
+            // PowerManager screen-off-timeout — the inactivity ticker fired.
+            Event::IdleTick => self.on_idle_tick(ctx),
             _ => {}
         }
     }
@@ -920,5 +1010,78 @@ mod tests {
         let bl = backlight(&eff);
         assert_eq!(bl.len(), 1, "wake re-applies ambient backlight");
         assert!(bl[0] > MIN_FRACTION, "ambient level, not floor");
+    }
+
+    // ── Screen-off timeout (PowerManager role, task 86 follow-on) ─────────────
+
+    #[test]
+    fn idle_should_sleep_boundary() {
+        assert!(!idle_should_sleep(Duration::from_secs(59), Duration::from_secs(60)));
+        assert!(idle_should_sleep(Duration::from_secs(60), Duration::from_secs(60)));
+        assert!(idle_should_sleep(Duration::from_secs(61), Duration::from_secs(60)));
+    }
+
+    /// Input idle past the timeout → an IdleTick sleeps the panel (SetDisplayPower off).
+    #[test]
+    fn idle_past_timeout_sleeps_panel() {
+        let mut r = Registry::new();
+        let mut m = PowerModule::new();
+        m.last_activity = Some(Instant::now() - Duration::from_millis(DEFAULT_SCREEN_OFF_TIMEOUT_MS + 1000));
+        r.register(Box::new(m));
+        let mut store = Store::new();
+        let eff = r.dispatch_event(Event::IdleTick, &mut store);
+        assert_eq!(display_power(&eff), vec![false], "idle past timeout → panel OFF");
+    }
+
+    /// A `user-activity` poke resets the idle clock, so the next tick doesn't sleep.
+    #[test]
+    fn user_activity_resets_idle() {
+        let mut r = Registry::new();
+        let mut m = PowerModule::new();
+        m.last_activity = Some(Instant::now() - Duration::from_millis(DEFAULT_SCREEN_OFF_TIMEOUT_MS + 1000));
+        r.register(Box::new(m));
+        let mut store = Store::new();
+        r.dispatch_command("user-activity", "", &mut store).unwrap();
+        let eff = r.dispatch_event(Event::IdleTick, &mut store);
+        assert!(display_power(&eff).is_empty(), "recent activity → no sleep");
+    }
+
+    /// `screen-timeout off` disables auto-sleep entirely.
+    #[test]
+    fn screen_timeout_off_never_sleeps() {
+        let mut r = Registry::new();
+        let mut m = PowerModule::new();
+        m.last_activity = Some(Instant::now() - Duration::from_secs(3600));
+        r.register(Box::new(m));
+        let mut store = Store::new();
+        r.dispatch_command("screen-timeout", "off", &mut store).unwrap();
+        let eff = r.dispatch_event(Event::IdleTick, &mut store);
+        assert!(display_power(&eff).is_empty(), "timeout off → never sleeps");
+    }
+
+    /// No auto-sleep when the panel is already off (idempotent) or proximity-blanked.
+    #[test]
+    fn no_idle_sleep_while_off() {
+        let mut r = Registry::new();
+        let mut m = PowerModule::new();
+        m.panel_on = false;
+        m.last_activity = Some(Instant::now() - Duration::from_secs(3600));
+        r.register(Box::new(m));
+        let mut store = Store::new();
+        let eff = r.dispatch_event(Event::IdleTick, &mut store);
+        assert!(display_power(&eff).is_empty(), "already off → no-op");
+    }
+
+    /// Waking via POWER resets the countdown, so the next tick doesn't immediately re-sleep.
+    #[test]
+    fn wake_resets_idle_countdown() {
+        let mut r = Registry::new();
+        let mut m = PowerModule::new();
+        m.panel_on = false; // asleep
+        r.register(Box::new(m));
+        let mut store = Store::new();
+        r.dispatch_command("power-key", "", &mut store).unwrap(); // wake (on)
+        let eff = r.dispatch_event(Event::IdleTick, &mut store);
+        assert!(display_power(&eff).is_empty(), "just woke → no immediate re-sleep");
     }
 }

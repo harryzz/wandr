@@ -222,7 +222,19 @@ public:
         return std::nullopt;
     }
     void notifySwitch(nsecs_t, uint32_t, uint32_t, uint32_t) override {}
-    void pokeUserActivity(nsecs_t, int32_t, ui::LogicalDisplayId, int32_t) override {}
+    // AOSP: the InputDispatcher calls this for every event passed to a window
+    // (InputDispatcher.cpp pokeUserActivityLocked → mPolicy.pokeUserActivity), and
+    // the real policy forwards it to PowerManagerService.userActivity() to reset the
+    // screen-off timer. In wart the arbiter IS PowerManagerService, so we forward a
+    // `user-activity` poke. The dispatcher already rate-limits these, but throttle
+    // here too (~1/s) so a swipe can't flood the arbiter socket. `eventTime` is the
+    // event's CLOCK_MONOTONIC ns.
+    void pokeUserActivity(nsecs_t eventTime, int32_t, ui::LogicalDisplayId, int32_t) override {
+        static nsecs_t s_lastSent = 0;
+        if (eventTime - s_lastSent < 1'000'000'000LL) return; // ≥ 1 s apart
+        s_lastSent = eventTime;
+        arbiter_send("user-activity\n");
+    }
     void onPointerDownOutsideFocus(const sp<IBinder>&) override {}
     void setPointerCapture(const PointerCaptureRequest&) override {}
     void notifyDropWindow(const sp<IBinder>&, float, float) override {}
