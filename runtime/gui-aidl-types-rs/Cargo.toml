@@ -1,0 +1,24 @@
+[package]
+name    = "gui-aidl-types-rs"
+version = "0.0.1"
+edition = "2021"
+
+# gui_aidl_types_rs — rsbinder shim for the native-backed `android.gui` parcelables
+# (task 78). The full `android.gui.ISurfaceComposer` AIDL declares a handful of
+# types as `parcelable X cpp_header "..." rust_type "gui_aidl_types_rs::X"` — i.e.
+# C++-backed, with the Rust side living in AOSP's `gui_aidl_types_rs` crate. That
+# AOSP crate is itself just `todo!()` stubs (frameworks/native/libs/gui/rust/
+# aidl_types), and it targets AOSP's `binder` crate, not rsbinder. So this crate
+# replicates those stubs against rsbinder's `Parcelable` traits, named so the
+# codegen's `pub type X = gui_aidl_types_rs::X;` resolves. NONE of these types are
+# on the `setPowerMode`/`getPhysicalDisplayToken` path we actually call — the
+# bodies are `unimplemented!()` and exist only so the full interface compiles.
+
+[workspace]
+
+[lib]
+name = "gui_aidl_types_rs"
+path = "src/lib.rs"
+
+[target.'cfg(target_os = "android")'.dependencies]
+rsbinder = { git = "https://github.com/hiking90/rsbinder", rev = "5e999e04a", features = ["android_11_plus"] }

@@ -25,7 +25,7 @@
 use std::collections::HashSet;
 use std::time::Instant;
 
-use wart_arbiter_core::{ArbiterModule, Ctx, Event, Reply, SensorKind};
+use wart_arbiter_core::{ArbiterModule, Ctx, Effect, Event, Reply, SensorKind};
 
 /// Screen-off grace before dozing (ms) — the "when to doze" policy.
 const DOZE_GRACE_MS: u128 = 60_000;
@@ -46,6 +46,11 @@ pub struct PowerModule {
     /// (`cadence 0`) so a call keeps running with the screen off. Driven by
     /// `Event::CommsActive` from the audio module; cleaned on `SurfaceRemoved`.
     comms: HashSet<i32>,
+    /// Task 78 — whether we have forced the panel OFF for proximity (phone at the
+    /// ear during a call). Tracked so we toggle on transitions only and, crucially,
+    /// **always restore** the panel when the call ends / the sensor uncovers (a
+    /// stuck-off panel would feel like a bricked device).
+    blanked: bool,
 }
 
 /// Pure doze decision: given how long the screen has been off (`off_ms`, `None`
@@ -70,6 +75,17 @@ impl PowerModule {
             DOZE_MAINTENANCE_MS
         } else {
             DOZE_SUSPEND_MS
+        }
+    }
+
+    /// Fail-safe: restore the panel if proximity had blanked it. Idempotent —
+    /// safe to call on every call-end / surface-removed. A stuck-off panel would
+    /// feel like a bricked device, so this is the invariant the policy guarantees.
+    fn ensure_unblanked(&mut self, ctx: &mut Ctx) {
+        if self.blanked {
+            ctx.request(Effect::SetDisplayPower { on: true });
+            self.blanked = false;
+            log::info!("arbiter: proximity blank cleared → panel ON");
         }
     }
 
@@ -139,12 +155,22 @@ impl ArbiterModule for PowerModule {
             Event::SurfaceRemoved { pid } => {
                 self.bg_service.remove(pid);
                 self.comms.remove(pid);
+                // Task 78 fail-safe: if the call host died while we'd blanked the
+                // panel for proximity, restore it (no live call to uncover it).
+                if self.comms.is_empty() {
+                    self.ensure_unblanked(ctx);
+                }
             }
             // M3b — a call started/ended: update the keep-alive set. If we're
             // already dozing, re-fan THIS pid's cadence now (a call starting
             // mid-doze must wake to 0; ending mid-doze re-dozes to its class).
             Event::CommsActive { pid, active } => {
                 if *active { self.comms.insert(*pid); } else { self.comms.remove(pid); }
+                // Task 78 fail-safe: a call ending must restore the panel if
+                // proximity had blanked it (the user can't uncover it post-call).
+                if !*active && self.comms.is_empty() {
+                    self.ensure_unblanked(ctx);
+                }
                 // Task 77 — proximity is only worth powering during a call (the
                 // screen-off-on-ear use case). Express that intent to the
                 // SensorService via the consumer protocol (acquire on call start,
@@ -164,17 +190,22 @@ impl ArbiterModule for PowerModule {
                         if *active { "start" } else { "end" });
                 }
             }
-            // Task 77 — the SensorService's semantic proximity event. The first
-            // consumer proof: log the would-blank decision (the actual panel-blank
-            // applier + the screen-off policy are the deliberate follow-on). Only
-            // meaningful while a call holds proximity; logged unconditionally so the
-            // seam is observable on device.
+            // Task 78 — proximity screen-off during a call. Only blank while a
+            // call is active (phone at the ear); never otherwise. Toggle on the
+            // debounced transition and track `blanked` so the fail-safes below can
+            // always restore the panel.
             Event::ProximityChanged { near } => {
                 let in_call = !self.comms.is_empty();
-                log::info!(
-                    "arbiter: proximity near={near} in_call={in_call} — would {} now (applier=follow-on)",
-                    if *near { "blank" } else { "unblank" }
-                );
+                if in_call && *near && !self.blanked {
+                    ctx.request(Effect::SetDisplayPower { on: false });
+                    self.blanked = true;
+                    log::info!("arbiter: proximity near + in-call → panel OFF");
+                } else if !*near && self.blanked {
+                    self.ensure_unblanked(ctx);
+                } else if !in_call && self.blanked {
+                    // Defensive: a call ended between the blank and this event.
+                    self.ensure_unblanked(ctx);
+                }
             }
             _ => {}
         }
@@ -349,5 +380,65 @@ mod tests {
                 (false, SensorKind::Proximity, 10),
             ]
         );
+    }
+
+    fn display_power(eff: &[Effect]) -> Vec<bool> {
+        eff.iter()
+            .filter_map(|e| match e {
+                Effect::SetDisplayPower { on } => Some(*on),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Task 78 — proximity blanks the panel only during a call; uncover restores it.
+    #[test]
+    fn proximity_blanks_only_during_call() {
+        let mut r = Registry::new();
+        r.register(Box::new(PowerModule::new()));
+        let mut store = Store::new();
+        add_app(&mut store, "sig", 10);
+
+        // No call yet: a near reading must NOT blank.
+        let eff = r.dispatch_event(Event::ProximityChanged { near: true }, &mut store);
+        assert_eq!(display_power(&eff), Vec::<bool>::new(), "no blank without a call");
+
+        // Call active → near blanks (off), far restores (on).
+        r.dispatch_event(Event::CommsActive { pid: 10, active: true }, &mut store);
+        let eff = r.dispatch_event(Event::ProximityChanged { near: true }, &mut store);
+        assert_eq!(display_power(&eff), vec![false], "near in-call → OFF");
+        // Repeat near = no-op (transition-only).
+        let eff = r.dispatch_event(Event::ProximityChanged { near: true }, &mut store);
+        assert_eq!(display_power(&eff), Vec::<bool>::new(), "repeat near = no toggle");
+        // Far → restore.
+        let eff = r.dispatch_event(Event::ProximityChanged { near: false }, &mut store);
+        assert_eq!(display_power(&eff), vec![true], "far → ON");
+    }
+
+    /// Task 78 fail-safe — call ending while blanked restores the panel.
+    #[test]
+    fn call_end_while_blanked_restores_panel() {
+        let mut r = Registry::new();
+        r.register(Box::new(PowerModule::new()));
+        let mut store = Store::new();
+        add_app(&mut store, "sig", 10);
+        r.dispatch_event(Event::CommsActive { pid: 10, active: true }, &mut store);
+        r.dispatch_event(Event::ProximityChanged { near: true }, &mut store); // blanked
+        // Hang up while still covered → panel must come back on.
+        let eff = r.dispatch_event(Event::CommsActive { pid: 10, active: false }, &mut store);
+        assert_eq!(display_power(&eff), vec![true], "call end while blanked → ON");
+    }
+
+    /// Task 78 fail-safe — call host dying while blanked restores the panel.
+    #[test]
+    fn surface_removed_while_blanked_restores_panel() {
+        let mut r = Registry::new();
+        r.register(Box::new(PowerModule::new()));
+        let mut store = Store::new();
+        add_app(&mut store, "sig", 10);
+        r.dispatch_event(Event::CommsActive { pid: 10, active: true }, &mut store);
+        r.dispatch_event(Event::ProximityChanged { near: true }, &mut store); // blanked
+        let eff = r.dispatch_event(Event::SurfaceRemoved { pid: 10 }, &mut store);
+        assert_eq!(display_power(&eff), vec![true], "call host death while blanked → ON");
     }
 }

@@ -623,6 +623,13 @@ fn execute_effects(effects: Vec<wart_arbiter_core::Effect>) {
                     log::warn!("arbiter: Persist effect failed: {e:#}");
                 }
             }
+            Effect::SetDisplayPower { on } => {
+                // Task 78 — the power module's proximity-screen-off decision.
+                // wart-hal-display drives SurfaceFlinger setPowerMode (the proper
+                // panel-off). Failure is logged + ignored (a no-op, never fatal).
+                let ok = wart_hal_display::set_display_power(on);
+                log::info!("arbiter: SetDisplayPower on={on} applied={ok}");
+            }
             Effect::SetSensor { kind, on, rate_hz } => {
                 // Task 77 — the sensors module's enable-on-demand decision. The
                 // HAL driver thread (Step 3) performs the actual enable/disable;

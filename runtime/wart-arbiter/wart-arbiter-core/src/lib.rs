@@ -426,6 +426,12 @@ pub enum Effect {
     /// A one-line push to a host's control socket (`wart-host-<pid>`). `line`
     /// must already end with `\n`. (Was the only kind of effect in task 73.)
     HostLine { pid: i32, line: String },
+    /// Turn the primary display panel on/off via SurfaceFlinger `setPowerMode`
+    /// (task 78). Requested by `wart-arbiter-power` when proximity says "near"
+    /// during a call (off) and on uncover / call-end (on). The binary performs it
+    /// via `wart-hal-display`. Single primary display for now (generalize to a
+    /// `DisplayId` when multi-display lands).
+    SetDisplayPower { on: bool },
     /// Enable or disable a hardware sensor on the HAL (task 77). The binary's
     /// sensor driver thread is the only place this is performed; the pure
     /// sensors module emits it when the per-`kind` ref-count goes 0→1 (`on:true`)

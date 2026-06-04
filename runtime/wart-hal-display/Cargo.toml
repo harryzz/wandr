@@ -1,0 +1,29 @@
+[package]
+name    = "wart-hal-display"
+version = "0.0.1"
+edition = "2021"
+
+# wart-hal-display — shared SurfaceFlinger display-power access (task 78). The one
+# binder owner of the `android.gui.ISurfaceComposer` `setPowerMode` path (the
+# proper panel-off), used by the arbiter's power applier. Mirrors wart-hal-sensors:
+# standalone package, AIDL codegen in build.rs (android only), off-android stubs.
+#
+# build.rs codegens the FULL ISurfaceComposer (un-trimmed) from the vendored
+# extract AIDL — rsbinder-aidl 0.9.0 resolves it after a trivial float-literal fix
+# (done in OUT_DIR copies, never mutating vendored files). The native-backed
+# parcelables it references resolve to the `gui_aidl_types_rs` shim crate.
+
+[workspace]
+
+[dependencies]
+log = "0.4"
+
+[target.'cfg(target_os = "android")'.dependencies]
+rsbinder         = { git = "https://github.com/hiking90/rsbinder", rev = "5e999e04a", features = ["android_11_plus"] }
+async-trait      = "0.1"
+tokio            = { version = "1", features = ["rt"] }
+gui_aidl_types_rs = { path = "../gui-aidl-types-rs", package = "gui-aidl-types-rs" }
+
+[build-dependencies]
+rsbinder-aidl = { git = "https://github.com/hiking90/rsbinder", rev = "5e999e04a" }
+regex         = "1"
