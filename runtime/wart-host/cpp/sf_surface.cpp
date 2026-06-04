@@ -144,6 +144,23 @@ sp<gui::WindowInfoHandle>      g_window_info;
 // events. 0 = fullscreen surface (no subtraction).
 int32_t g_overlay_y_offset = 0;
 
+// Task 80 Step 2 — per-host input-region routing. With our own InputReader, every
+// host receives every touch; each host drops touches outside the visible region of
+// its surface so a tap on a chrome strip doesn't leak to the app underneath (and
+// vice-versa). The region is in GLOBAL display coords and is checked BEFORE the
+// g_overlay_y_offset local-mapping. Overlays self-set it to their strip at create;
+// the fullscreen app sets it to its content rect (panel minus chrome insets) via
+// sf_set_input_rect when the arbiter pushes geometry. Inactive = accept all (the
+// pre-routing behavior + the inputflinger path are unaffected).
+bool    g_input_filter_active = false;
+int32_t g_input_fx = 0, g_input_fy = 0, g_input_fw = 0, g_input_fh = 0;
+
+static bool input_accepts(float gx, float gy) {
+    if (!g_input_filter_active) return true;
+    return gx >= static_cast<float>(g_input_fx) && gx < static_cast<float>(g_input_fx + g_input_fw) &&
+           gy >= static_cast<float>(g_input_fy) && gy < static_cast<float>(g_input_fy + g_input_fh);
+}
+
 // ── Task 80: ART-less input via a standalone Android InputReader ──────────────
 // When WART_EVDEV_INPUT is set, source input from a private InputReader (its
 // EventHub reads /dev/input/* directly) instead of the system_server InputFlinger
@@ -175,12 +192,17 @@ public:
         const size_t count = a.pointerCoords.size();
         auto emit = [&](size_t idx, int32_t kind) {
             if (idx >= count) return;
+            const float gx = a.pointerCoords[idx].getX();
+            const float gy = a.pointerCoords[idx].getY();
+            // Step 2 routing — drop touches outside this surface's visible region
+            // (global coords), so chrome/app input don't leak into each other.
+            if (!input_accepts(gx, gy)) return;
             SfInputEvent e{};
             e.kind = kind;
             e.pointer_id = a.pointerProperties[idx].id;
-            e.x = a.pointerCoords[idx].getX();
+            e.x = gx;
             // InputReader gives display-global coords; guest wants surface-local.
-            e.y = a.pointerCoords[idx].getY() - static_cast<float>(g_overlay_y_offset);
+            e.y = gy - static_cast<float>(g_overlay_y_offset);
             e.pressure = a.pointerCoords[idx].getAxisValue(AMOTION_EVENT_AXIS_PRESSURE);
             std::lock_guard<std::mutex> lk(g_evdev_mutex);
             g_evdev_queue.push_back(e);
@@ -753,6 +775,11 @@ ANativeWindow* sf_create_overlay_surface(int32_t x, int32_t y, int32_t w, int32_
     // surface-local Y. (X is 0 for the full-width horizontal strips we
     // support today; add an x-offset here if vertical/side bars land.)
     g_overlay_y_offset = Y;
+    // Step 2 routing — this overlay only accepts touches inside its own strip
+    // (global coords), so a tap on the app/another strip never reaches it.
+    g_input_filter_active = true;
+    g_input_fx = X; g_input_fy = Y;
+    g_input_fw = static_cast<int32_t>(W); g_input_fh = static_cast<int32_t>(H);
 
     // Pin display projection to portrait identity — same reasoning as
     // sf_create_fullscreen_surface (clears any prior skew).
@@ -945,6 +972,22 @@ int32_t sf_resize_overlay(int32_t new_height_px) {
     }
     // x=0, y=-1 (bottom-anchored), w=0 (full panel width), h=new_height_px.
     return sf_set_overlay_geometry(0, -1, 0, new_height_px);
+}
+
+// Task 80 Step 2 — set this host's input region (global display coords); touches
+// outside it are dropped by our InputReader path. The fullscreen app calls this
+// with its content rect (panel minus chrome insets) when the arbiter pushes
+// geometry, so taps on the statusbar/taskbar strips don't leak to the app. A
+// non-positive w or h clears the filter (accept all). No-op for the inputflinger
+// path (which never consults the filter).
+void sf_set_input_rect(int32_t x, int32_t y, int32_t w, int32_t h) {
+    if (w <= 0 || h <= 0) {
+        g_input_filter_active = false;
+        return;
+    }
+    g_input_filter_active = true;
+    g_input_fx = x; g_input_fy = y; g_input_fw = w; g_input_fh = h;
+    LOGI("input region set to (%d,%d)-(%d,%d)", x, y, x + w, y + h);
 }
 
 // Release the surface, control, client and input plumbing.

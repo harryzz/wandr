@@ -9,8 +9,16 @@
 > **Capstone verified:** with `system_server` + both zygotes stopped (SF/audioserver/
 > sensorservice/adbd survive, adb alive), a `sendevent` swipe-up on `/dev/input/event1`
 > → keyguard guest → `keyguard UNLOCKED`. Fully interactive with ART off.
-> **Remaining: Step 2** — input-focus routing (today every host runs an InputReader
-> and gets every touch; only the surface that cares acts). See `[[project_art_shutdown]]`.
+> **Step 2** (routing) DONE + device-verified ART-off: per-host input-region
+> filtering — each host drops touches outside its surface's visible region
+> (`sf_surface` `g_input_filter`/`input_accepts`); overlays self-set their strip,
+> the fullscreen app sets its content rect (panel minus chrome insets) via
+> `sf_set_input_rect` on the arbiter `geometry` push, and the keyguard is modal via
+> task-79 `input-suppress` of the covered app. Verified: app-area tap doesn't leak
+> to the taskbar; taskbar-strip tap fires `go-home`; boot-lock suppresses the
+> launcher; swipe-unlock resumes it. **All of Steps 0/1/2/3 done.** Follow-ons:
+> overlap/popup z-order, side-strip x-offset, `--no-art` reboot-persistence.
+> See `[[project_art_shutdown]]`.
 
 ## Why
 

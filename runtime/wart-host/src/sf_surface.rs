@@ -54,6 +54,10 @@ type ResizeOverlayFn = unsafe extern "C" fn(i32) -> i32;
 type SetOverlayGeometryFn = unsafe extern "C" fn(i32, i32, i32, i32) -> i32;
 /// `void sf_panel_dims(int32_t* out_w, int32_t* out_h)` — task 62.
 type PanelDimsFn = unsafe extern "C" fn(*mut i32, *mut i32);
+/// `void sf_set_input_rect(int32_t x, int32_t y, int32_t w, int32_t h)` — task 80
+/// Step 2. Sets this host's input region (global coords) for the ART-less
+/// InputReader path; non-positive w/h clears the filter.
+type SetInputRectFn = unsafe extern "C" fn(i32, i32, i32, i32);
 /// `int32_t sf_input_poll(SfInputEvent*, int32_t)`.
 type InputPollFn = unsafe extern "C" fn(*mut SfInputEvent, i32) -> i32;
 /// `uint32_t sf_query_transform_hint(void)`.
@@ -88,7 +92,7 @@ const ANW_FORMAT_RGBA_8888: i32 = 1;
 /// overlay-rotation path to a no-op (it's gated on `set_overlay_geometry`).
 unsafe fn resolve_geometry_syms(
     handle: *mut c_void,
-) -> (Option<SetOverlayGeometryFn>, Option<PanelDimsFn>) {
+) -> (Option<SetOverlayGeometryFn>, Option<PanelDimsFn>, Option<SetInputRectFn>) {
     let geom_name = CString::new("sf_set_overlay_geometry").unwrap();
     let geom_sym = libc::dlsym(handle, geom_name.as_ptr());
     let set_overlay_geometry: Option<SetOverlayGeometryFn> =
@@ -99,7 +103,13 @@ unsafe fn resolve_geometry_syms(
     let panel_dims: Option<PanelDimsFn> =
         if pd_sym.is_null() { None } else { Some(std::mem::transmute(pd_sym)) };
 
-    (set_overlay_geometry, panel_dims)
+    // Task 80 Step 2 — optional input-region setter (None on a pre-task-80 shim).
+    let ir_name = CString::new("sf_set_input_rect").unwrap();
+    let ir_sym = libc::dlsym(handle, ir_name.as_ptr());
+    let set_input_rect: Option<SetInputRectFn> =
+        if ir_sym.is_null() { None } else { Some(std::mem::transmute(ir_sym)) };
+
+    (set_overlay_geometry, panel_dims, set_input_rect)
 }
 
 /// Task 62 — read the panel's native dimensions via `sf_panel_dims`,
@@ -174,6 +184,10 @@ pub struct SfSurface {
     /// Generic move+resize used by the overlay-rotation path to flip a
     /// bottom strip into a vertical side strip on landscape.
     set_overlay_geometry: Option<SetOverlayGeometryFn>,
+    /// `sf_set_input_rect` — `None` if the shim predates task 80 Step 2. Sets
+    /// the fullscreen app's input region (panel minus chrome insets) so taps on
+    /// chrome strips don't leak to the app under the ART-less InputReader path.
+    set_input_rect: Option<SetInputRectFn>,
     /// Panel's native (portrait) dimensions, read once via `sf_panel_dims`
     /// at create time (falls back to the surface dims when the shim
     /// predates task 62). The overlay-rotation path needs `panel_h` to
@@ -256,7 +270,7 @@ impl SfSurface {
                 Some(std::mem::transmute(resize_sym))
             };
 
-            let (set_overlay_geometry, panel_dims) = resolve_geometry_syms(handle);
+            let (set_overlay_geometry, panel_dims, set_input_rect) = resolve_geometry_syms(handle);
 
             // Summarize which optional symbols were resolved — handy when
             // the shim .so is older than the wart-host binary expects.
@@ -295,6 +309,7 @@ impl SfSurface {
                 set_visible,
                 resize_overlay,
                 set_overlay_geometry,
+                set_input_rect,
                 panel_w,
                 panel_h,
                 is_overlay: false,
@@ -381,7 +396,7 @@ impl SfSurface {
                 Some(std::mem::transmute(resize_sym))
             };
 
-            let (set_overlay_geometry, panel_dims) = resolve_geometry_syms(handle);
+            let (set_overlay_geometry, panel_dims, set_input_rect) = resolve_geometry_syms(handle);
 
             log::info!(
                 "sf_surface: overlay dlsym summary — input_poll={} query_hint={} request_focus={} set_layer={} set_visible={} resize_overlay={} set_overlay_geometry={} panel_dims={}",
@@ -423,6 +438,7 @@ impl SfSurface {
                 set_visible,
                 resize_overlay,
                 set_overlay_geometry,
+                set_input_rect,
                 panel_w,
                 panel_h,
                 is_overlay: true,
@@ -540,6 +556,17 @@ impl SfSurface {
         match self.set_visible {
             Some(f) => unsafe { f(if visible { 1 } else { 0 }) == 0 },
             None    => false,
+        }
+    }
+
+    /// Task 80 Step 2 — set this host's input region (global display coords) for
+    /// the ART-less InputReader path; touches outside are dropped. The fullscreen
+    /// app passes its content rect (panel minus chrome insets) so chrome-strip taps
+    /// don't leak to it. Non-positive w/h clears (accept all). No-op on a pre-task-80
+    /// shim or the inputflinger path.
+    pub fn set_input_rect(&self, x: i32, y: i32, w: i32, h: i32) {
+        if let Some(f) = self.set_input_rect {
+            unsafe { f(x, y, w, h) };
         }
     }
 

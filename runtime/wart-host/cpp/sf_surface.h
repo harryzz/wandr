@@ -106,6 +106,14 @@ int32_t sf_set_overlay_geometry(int32_t x, int32_t y, int32_t w, int32_t h);
 // out-pointer may be NULL.
 void sf_panel_dims(int32_t* out_w, int32_t* out_h);
 
+// Task 80 Step 2 — set this host's input region (global display coords). With the
+// ART-less InputReader path, every host sees every touch; touches outside this
+// rect are dropped so chrome/app input don't leak. The fullscreen app sets its
+// content rect (panel minus chrome insets) when the arbiter pushes geometry;
+// overlays self-set their strip at create. Non-positive w/h clears (accept all).
+// No-op for the inputflinger path.
+void sf_set_input_rect(int32_t x, int32_t y, int32_t w, int32_t h);
+
 // Release the surface/control/client and input plumbing.
 void sf_destroy_surface(void);
 

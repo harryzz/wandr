@@ -24,6 +24,11 @@ pub struct KeyguardModule {
     /// The app-id covered by the keyguard (to restore on unlock). `None` if
     /// nothing was foreground at lock time.
     saved_fg: Option<String>,
+    /// Task 80 Step 2 — the covered app's pid, suppressed for input while locked
+    /// so the keyguard is modal (a fullscreen lock overlay shares the content
+    /// region with the app behind it; rect-filtering alone wouldn't exclude it).
+    /// Re-enabled on unlock.
+    suppressed_pid: Option<i32>,
 }
 
 impl KeyguardModule {
@@ -48,6 +53,11 @@ impl KeyguardModule {
         if let Some(pid) = vis {
             ctx.request(Effect::SetRole { pid, role: Role::Background });
             ctx.store.display_mut(PRIMARY_DISPLAY).set_role(pid, Role::Background);
+            // Task 80 Step 2 — suppress the covered app's touch so the keyguard is
+            // modal (it overlaps the app's content region; rect-filtering can't
+            // exclude a fullscreen overlay). Re-enabled on unlock.
+            ctx.deliver_to_host(pid, "input-suppress 1\n");
+            self.suppressed_pid = Some(pid);
         }
         // Show the keyguard topmost + focused (the binary maps Lockscreen → the
         // foreground mechanism). put_surface create-or-updates it.
@@ -67,6 +77,11 @@ impl KeyguardModule {
         if let Some(kg) = Self::keyguard_pid(ctx) {
             ctx.request(Effect::SetRole { pid: kg, role: Role::Background });
             ctx.store.display_mut(PRIMARY_DISPLAY).set_role(kg, Role::Background);
+        }
+        // Task 80 Step 2 — re-enable the covered app's touch (it was suppressed for
+        // modality while locked).
+        if let Some(pid) = self.suppressed_pid.take() {
+            ctx.deliver_to_host(pid, "input-suppress 0\n");
         }
         // Restore the covered app to foreground (proper shell promote: demotes
         // others, reconciles overlay, emits ForegroundChanged). No-op if it died.

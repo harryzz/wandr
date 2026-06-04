@@ -1316,6 +1316,18 @@ fn run_cwasm_loop(
                         // Keyboard occlusion is always authoritative (0 = hidden).
                         r.set_keyboard_base(keyboard_px);
                     }
+                    // Task 80 Step 2 — the fullscreen app accepts touches only in
+                    // its content rect (panel minus the chrome strips), so under the
+                    // ART-less InputReader path a tap on the statusbar/taskbar
+                    // doesn't leak to the app behind it. Overlays self-set their
+                    // strip at create; the inputflinger path ignores this.
+                    if mode == OverlayMode::None
+                        && inset_top != GEOM_INSET_KEEP
+                        && inset_bottom != GEOM_INSET_KEEP
+                    {
+                        let content_h = sf.panel_h - inset_top as i32 - inset_bottom as i32;
+                        sf.set_input_rect(0, inset_top as i32, sf.panel_w, content_h);
+                    }
                     // Orientation: record the arbiter's decision + release the
                     // hold; the orientation block above applies it next iteration
                     // (with the overlay-rect flip / set_orientation path). 255 =
