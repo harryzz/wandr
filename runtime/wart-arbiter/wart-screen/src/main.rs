@@ -9,11 +9,25 @@
 
 fn main() {
     let arg = std::env::args().nth(1).unwrap_or_default();
+    // `wart-screen brightness <0.0..1.0>` — task 86 probe of SurfaceFlinger
+    // setDisplayBrightness (binder) vs the sysfs backlight write.
+    if arg == "brightness" {
+        let level: f32 = match std::env::args().nth(2).and_then(|s| s.parse().ok()) {
+            Some(v) => v,
+            None => {
+                eprintln!("usage: wart-screen brightness <0.0..1.0>");
+                std::process::exit(2);
+            }
+        };
+        let ok = wart_hal_display::set_display_brightness(level);
+        println!("wart-screen: set_display_brightness({level}) = {ok}");
+        std::process::exit(if ok { 0 } else { 1 });
+    }
     let on = match arg.as_str() {
         "on" | "1" | "wake" => true,
         "off" | "0" | "sleep" => false,
         _ => {
-            eprintln!("usage: wart-screen on|off");
+            eprintln!("usage: wart-screen on|off | brightness <0.0..1.0>");
             std::process::exit(2);
         }
     };

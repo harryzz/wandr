@@ -32,10 +32,14 @@ root write). Is there a binder way? Both exist, with caveats:
 1. **`ISurfaceComposer::setDisplayBrightness(displayToken, DisplayBrightness{...})`**
    (AIDL) — the modern path; `DisplayBrightness` (0–1 float, `-1` = backlight off, nits)
    is already codegen'd in **`wart-hal-display`** (`sf_bindings.rs`), and SurfaceFlinger
-   survives ART-off (we already call `setPowerMode` there, task 78). BUT on this **old
-   Pixel 2 XL (taimen)** panel brightness traditionally flows through the **Lights HAL**,
-   not the composer — so SF `setDisplayBrightness` may be a no-op here. **Verify on
-   device** (set 0.5, watch the panel) before adopting.
+   survives ART-off (we already call `setPowerMode` there, task 78). **TESTED on device
+   2026-06-04** (added `wart-hal-display::set_display_brightness` + `wart-screen
+   brightness <0-1>`): the call is fully **reachable** as uid system (no permission
+   issue) but returns **`IllegalState`** — the taimen panel does NOT support
+   composer-driven brightness (the HWC reports it unsupported); brightness routes
+   through the Lights HAL / sysfs here. So on THIS device SF brightness is a dead end;
+   on a newer device whose HWC supports it, `set_display_brightness` is the clean path
+   (it's now wired + ready). sysfs unchanged by the call (confirmed 149→149).
 2. **Lights HAL** — the device exposes `android.hardware.light@2.0::ILight/default`
    (vendor HAL, pid 1130, **survives ART-off**), and the framework set brightness via it
    (LIGHT_ID_BACKLIGHT) — which itself writes the **same sysfs node**. wart has an
