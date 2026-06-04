@@ -68,6 +68,28 @@ user/group/capabilities/seclabel + wart sepolicy, ART services not started, enfo
 keep the dev scaffold** (rooted + su/setenforce 0 + a setuid+caps `wart-launch`
 launcher mimicking the init.rc context) → **task 83**; flashable image later.
 
+**⚠️ HIGH-CPU under --no-art = Magisk su-log workers (CORRECTED 2026-06-05; the
+earlier 3-part fix was INCOMPLETE).** Symptom: phone HOT, `top` ~260% busy (129%user
++122%sys) vs ~14% with ART up. Cause: on every `su -c`, magiskd forks a worker that
+runs `am ... action log` to notify the (dead) framework; `am` can never reach
+ActivityManager so the worker **loops it forever** (new PID each retry → defeats
+naive PID tracking, ~100%/core), and they **accumulate** across the many `su -c` of
+bringup. WHY THE OLD FIX FAILED: (a) `magisk --sqlite "UPDATE policies SET
+logging=0,notification=0"` does NOTHING — the boot magiskd CACHED its policy and
+never re-reads the DB; (b) the one-time `pkill -f com.topjohnwu.magisk` killed only
+the `am` CHILDREN (their args contain that string), NOT the magiskd WORKER PARENTS
+(named just `magiskd`) — so the parents instantly respawn `am`; (c) it ran
+mid-bringup, before all the `spawn_detached`/arbiter `su -c` that each leave a fresh
+worker. THE REAL FIX (`magisk_worker_sweep` in run-hybrid-stack, run at the END of
+bringup, --no-art only): for each `com.android.commands.am.Am`, kill its PARENT
+(the stuck worker, stops respawn) + the am child; the MAIN magiskd has no am child
+so it survives and `su` keeps working. A 2nd pass after `sleep 4` (same su session,
+no new grant) catches the worker the sweep's OWN `su -c` spawns. Verified: ~260% →
+~14%. Manual one-shot: `pgrep -f com.android.commands.am.Am` → kill PPIDs (≠1) +
+`pkill -f com.android.commands.am.Am`, twice. NOTE: any later manual `adb shell su
+-c` re-creates one worker; re-run the sweep. (Steady-state the stack uses the setuid
+`wart-launch`, NOT magisk su, so no new workers form on its own.)
+
 **The blocker for true ART-less operation = INPUT.** `InputDispatcher` /
 `InputManagerService` (the `input`/`inputflinger` binder services) are **hosted
 inside system_server** — there's no separate `inputflinger` process. So with ART

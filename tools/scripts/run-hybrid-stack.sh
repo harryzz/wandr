@@ -238,6 +238,31 @@ magisk_su_logging() {
         >/dev/null 2>&1 || true
 }
 
+# --no-art high-CPU fix — the part magisk_su_logging CANNOT cover. The magiskd that
+# started at boot keeps its policy CACHED, so even with logging=0 in the DB every
+# `su -c` of bringup still makes magiskd fork a worker that runs `am ... action log`
+# to notify the (now dead) framework. `am` can never reach ActivityManager, so the
+# worker loops it forever (new PID each retry, ~100% of a core) and they ACCUMULATE
+# across the many `su -c` of bringup → pinned cores + a hot phone (measured: ~260%
+# busy vs ~14% once cleared). The am logger's PARENT is the stuck worker: kill the
+# parents (stops the respawn) + the am children. The MAIN magiskd has no am child,
+# so it survives and `su` keeps working. MUST run AFTER all bringup `su -c`; a 2nd
+# pass (same su session, no new grant) catches the worker this sweep itself spawns.
+magisk_worker_sweep() {
+    adb shell 'cat > /data/local/tmp/wart-magisk-sweep.sh' <<'SWEEP' 2>/dev/null || true
+#!/system/bin/sh
+kw() {
+  for am in $(pgrep -f com.android.commands.am.Am 2>/dev/null); do
+    p=$(awk '{print $4}' "/proc/$am/stat" 2>/dev/null)
+    [ -n "$p" ] && [ "$p" != "1" ] && kill -9 "$p" 2>/dev/null
+  done
+  pkill -9 -f com.android.commands.am.Am 2>/dev/null
+}
+kw; sleep 4; kw
+SWEEP
+    adb shell "su -c 'sh /data/local/tmp/wart-magisk-sweep.sh'" >/dev/null 2>&1 || true
+}
+
 # Poll up to tries×0.5 s for a device unix socket to appear. 0 = it showed up.
 wait_for_sock() {
     local sock="$1" tries="${2:-40}"
@@ -386,6 +411,16 @@ bring_up_chrome() {
     sleep 1
     # Boot = locked: the keyguard module shows the lock screen + demotes the app.
     adb shell "su -c '/data/local/tmp/wart-arbiter lock'" 2>&1 | tr -d '\r'
+
+    # --no-art high-CPU fix: clear the Magisk su-log workers accumulated across ALL
+    # the `su -c` of bringup (the mid-bringup sweep above runs before zygote/chrome,
+    # so every `spawn_detached` + arbiter call after it leaves a fresh stuck worker).
+    # This runs last, after bringup's final `su -c`. --no-art only (under ART `am`
+    # works, so there's nothing stuck and a legit `am`'s parent must not be killed).
+    if [[ "$NO_ART" == "1" ]]; then
+        echo "▸ --no-art: clearing stuck Magisk su-log workers (high-CPU fix)"
+        magisk_worker_sweep
+    fi
 }
 
 if [[ -t 1 ]]; then
