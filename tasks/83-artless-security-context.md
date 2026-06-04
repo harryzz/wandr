@@ -1,8 +1,16 @@
 # Task 83 — ART-less security context (run wart native procs as system_server's context)
 
-> Status: 🔲 scoped. The shared prerequisite for ALL ART-off privileged native work
-> (display power, standalone inputflinger, future SF/audio ops). See
-> `post-art-roadmap.md` §6.6 and `[[project_art_shutdown]]`.
+> Status: 🟢 dev stand-in DONE + device-verified (2026-06-04). `tools/wart-launch/`
+> built (NDK, plain C); it drops root → uid system + gid system,graphics,input +
+> retains CAP_BLOCK_SUSPEND/SYS_NICE/WAKE_ALARM (ambient, across exec). **Proven:**
+> the path-A inputflinger spike run via `wart-launch` (framework stopped, setenforce 0)
+> cleared BOTH blockers — `addService(inputflinger) → 0`, `InputManager::start() → 0`,
+> EventHub enumerated all devices (no abort), touchscreen reconfigured to display 0,
+> and `service list` shows `inputflinger: [android.os.IInputFlinger]` on our uid-system
+> pid. So this also **fully proves PATH A** (AOSP InputManager runs standalone as the
+> inputflinger service, ART off). Remaining: wire `run-hybrid-stack --no-art` to launch
+> SF-privileged procs via `wart-launch` (next), and the flashable-image init.rc+sepolicy
+> form (deferred). See `post-art-roadmap.md` §6.6.
 
 ## Why
 
