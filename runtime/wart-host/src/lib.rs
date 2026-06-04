@@ -1,3 +1,4 @@
+pub mod arbiter_sock;
 mod egl;
 mod canvas_impl;
 mod paragraph_impl;

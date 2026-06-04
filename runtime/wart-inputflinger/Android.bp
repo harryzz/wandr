@@ -1,0 +1,39 @@
+// wart-inputflinger — AOSP InputManager run standalone as the "inputflinger"
+// binder service for ART-less operation (path A). soong cc_binary, built on a-03
+// against the vendored frameworks/native inputflinger headers. Deploy the binary
+// to /data/local/tmp/wart-inputflinger and launch via wart-launch (uid system).
+cc_binary {
+    name: "wart-inputflinger",
+    srcs: ["wart_inputflinger.cpp"],
+    shared_libs: [
+        "libinputflinger",
+        "libinputreader",
+        "libinputflinger_base",
+        "libinput",
+        "libgui",
+        "libui",
+        "libbinder",
+        "libutils",
+        "liblog",
+        "libbase",
+        "libcutils",
+        "libstatslog",
+        "android.hardware.input.processor-V1-ndk",
+        "com.android.server.inputflinger-ndk",
+    ],
+    include_dirs: [
+        "frameworks/native/services/inputflinger",
+        "frameworks/native/services/inputflinger/include",
+        "frameworks/native/services/inputflinger/reader/include",
+        "frameworks/native/services/inputflinger/dispatcher/include",
+    ],
+    cflags: ["-Wall", "-Wextra", "-Wno-unused-parameter"],
+}
+
+// Minimal SF WindowInfos probe (diagnostic, safe under ART). See cpp header.
+cc_binary {
+    name: "wart_wininfo_probe",
+    srcs: ["wart_wininfo_probe.cpp"],
+    shared_libs: ["libgui", "libui", "libbinder", "libutils", "liblog", "libbase"],
+    cflags: ["-Wall", "-Wextra", "-Wno-unused-parameter"],
+}

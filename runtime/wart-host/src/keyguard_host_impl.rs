@@ -8,10 +8,10 @@ use std::os::unix::net::UnixStream;
 
 use crate::keyguard_host_bindings::war::keyguard::keyguard::Host;
 
-const ARBITER_SOCK_PATH: &str = "/data/local/tmp/wart-arbiter.sock";
+// arbiter socket: crate::arbiter_sock::arbiter_sock_path() ($WART_ARBITER_SOCK)
 
 fn send_oneshot(line: &str) -> std::io::Result<()> {
-    let mut stream = UnixStream::connect(ARBITER_SOCK_PATH)?;
+    let mut stream = UnixStream::connect(crate::arbiter_sock::arbiter_sock_path())?;
     stream.write_all(line.as_bytes())?;
     stream.flush()?;
     let _ = stream.shutdown(std::net::Shutdown::Write);

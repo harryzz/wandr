@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use crate::bindings::my::skiko_gfx::launcher::Host;
 
-const ARBITER_SOCK_PATH: &str = "/data/local/tmp/wart-arbiter.sock";
+// arbiter socket: crate::arbiter_sock::arbiter_sock_path() ($WART_ARBITER_SOCK)
 
 impl Host for crate::HostState {
     fn list_apps(&mut self) -> String {
@@ -114,7 +114,7 @@ fn read_label(app_dir: &Path) -> Option<String> {
 /// Connect, write one line, drain + drop the reply, close. Matches the
 /// one-shot pattern in `ime_host_impl`.
 fn send_oneshot(line: &str) -> std::io::Result<()> {
-    let mut stream = UnixStream::connect(ARBITER_SOCK_PATH)?;
+    let mut stream = UnixStream::connect(crate::arbiter_sock::arbiter_sock_path())?;
     stream.write_all(line.as_bytes())?;
     stream.flush()?;
     let _ = stream.shutdown(std::net::Shutdown::Write);

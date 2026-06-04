@@ -453,7 +453,7 @@ pub fn forward_volume_key(up: bool) {
     // overrides this to the comms owner on the call route.
     let dir = if up { "up" } else { "down" };
     let line = format!("volume {dir} {}\n", std::process::id());
-    match UnixStream::connect("/data/local/tmp/wart-arbiter.sock") {
+    match UnixStream::connect(crate::arbiter_sock::arbiter_sock_path()) {
         Ok(mut s) => { let _ = s.write_all(line.as_bytes()); let _ = s.flush(); }
         Err(e)    => log::warn!("audio: volume-key forward failed: {e} (arbiter down?)"),
     }
@@ -470,7 +470,7 @@ pub fn forward_power_key() {
     use std::io::Write;
     use std::os::unix::net::UnixStream;
     let line = format!("power-key {}\n", std::process::id());
-    match UnixStream::connect("/data/local/tmp/wart-arbiter.sock") {
+    match UnixStream::connect(crate::arbiter_sock::arbiter_sock_path()) {
         Ok(mut s) => { let _ = s.write_all(line.as_bytes()); let _ = s.flush(); }
         Err(e)    => log::warn!("power: power-key forward failed: {e} (arbiter down?)"),
     }

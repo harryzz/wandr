@@ -19,7 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::alarm_host_bindings::war::alarm::scheduler::Host;
 
-const ARBITER_SOCK_PATH: &str = "/data/local/tmp/wart-arbiter.sock";
+// arbiter socket: crate::arbiter_sock::arbiter_sock_path() ($WART_ARBITER_SOCK)
 
 fn now_unix_ms() -> u64 {
     SystemTime::now()
@@ -31,7 +31,7 @@ fn now_unix_ms() -> u64 {
 /// Connect, write one line, drop the reply, close. Fire-and-forget (the arbiter
 /// is the authority; if it's down the alarm just isn't scheduled).
 fn send_oneshot(line: &str) -> std::io::Result<()> {
-    let mut stream = UnixStream::connect(ARBITER_SOCK_PATH)?;
+    let mut stream = UnixStream::connect(crate::arbiter_sock::arbiter_sock_path())?;
     stream.write_all(line.as_bytes())?;
     stream.flush()?;
     let _ = stream.shutdown(std::net::Shutdown::Write);

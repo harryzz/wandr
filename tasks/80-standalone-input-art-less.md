@@ -79,3 +79,54 @@ post-ART design wants (no ART-layer dependency — `[[feedback_no_art_layer_depe
 - With `run-hybrid-stack --no-art` (ART stopped, native survivors + our stack up),
   touch + keys drive the wart UI end-to-end — fully interactive with system_server
   dead. adb stays alive throughout (recovery via `start`).
+
+---
+
+## Path A — single `inputflinger` service (supersedes per-host evdev)
+
+> Decision 2026-06-04 (user-directed): the per-host evdev InputReader (Steps 0/1/3)
+> was the bootstrap that PROVED ART-less input. But it has N readers for one device,
+> so **global keys fan out to every host** — task-81's ART-off device test showed one
+> POWER press → **68 `power-key` forwards across 9 hosts** → screen flicker (the
+> "volume ×6" problem on the power key). The fix the user steered to is the proven
+> Android architecture: **ONE input source, host = applier.**
+
+**Architecture.** Run Android's real `InputManager` (`InputReader` + `InputDispatcher`)
+standalone as the `inputflinger` binder service (`runtime/wart-inputflinger/`,
+soong cc_binary on a-03). One dispatcher reads `/dev/input` once and routes:
+- **app keys/touches → the FOCUSED window only** (focus-based dispatch). The hosts
+  connect via their EXISTING inputflinger client path (`sf_surface.cpp:309-352`
+  `waitForService("inputflinger") → createInputChannel → InputConsumer →
+  setInputWindowInfo`) — i.e. host = applier by simply **not** setting
+  `WART_EVDEV_INPUT`. No fan-out, no per-host region filter needed.
+- **system keys (POWER 26 / VOLUME 24,25) → the arbiter, ONCE.** Intercepted in our
+  dispatcher policy `interceptKeyBeforeQueueing`: forward to the arbiter socket
+  (`power-key` / `volume up|down`) and DON'T set `POLICY_FLAG_PASS_TO_USER`, so the
+  dispatcher drops them from window dispatch (`InputDispatcher.cpp:1191` →
+  `DropReason::POLICY`). This is the wart PhoneWindowManager role.
+
+**Key source finding (why this is small).** `InputDispatcher`'s constructor
+**self-registers as a SurfaceFlinger `WindowInfosListener`**
+(`InputDispatcher.cpp:962 SurfaceComposerClient::getDefault()->addWindowInfosListener`).
+So window geometry/focus flows in automatically from the hosts'
+`setInputWindowInfo` calls — the spike's "stage-2 bridge" needs **no** code.
+
+**Integration plan (`run-hybrid-stack --no-art`, reordered to avoid host reconnect).**
+The host connects input at surface-creation, so `inputflinger` must be OURS before
+the hosts start. SurfaceFlinger survives a framework stop, so:
+1. resolve HOME_PKG (`cmd package …`, needs ART) — *while ART up*;
+2. force-stop SystemUI + launcher; **stop the Java framework** (zygote +
+   zygote_secondary → system_server); SF/audioserver survive;
+3. **start `wart-inputflinger` via `wart-launch`** (uid system + gid input +
+   CAP_BLOCK_SUSPEND) — registers `inputflinger`;
+4. start zygote + arbiter + hosts + chrome **without** `WART_EVDEV_INPUT` → each
+   host's client path connects to `wart-inputflinger`.
+This avoids any "reconnect-input" mechanism: hosts only ever see our service.
+
+**Status:** service written + API-verified (`runtime/wart-inputflinger/`,
+`wart_inputflinger.cpp` + `Android.bp`); building on a-03. Remaining: copy binary
+back + deploy; reorder `run-hybrid-stack --no-art` per above; device-verify under
+ART-off (focused window gets touch/keys; one POWER press = one toggle, no flicker;
+volume once). The task-81 display-power code (power module `power-key`/`panel` +
+`wart-screen`) stays — the arbiter is still the power owner, now fed by the
+dispatcher policy instead of N hosts.

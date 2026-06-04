@@ -18,10 +18,10 @@ use std::os::unix::net::UnixStream;
 use crate::notify_host_bindings::war::notify::notifier::Host as NotifierHost;
 use crate::notify_host_bindings::war::notify::notify_feed::{Host as FeedHost, Notification};
 
-const ARBITER_SOCK_PATH: &str = "/data/local/tmp/wart-arbiter.sock";
+// arbiter socket: crate::arbiter_sock::arbiter_sock_path() ($WART_ARBITER_SOCK)
 
 fn send_oneshot(line: &str) -> std::io::Result<()> {
-    let mut stream = UnixStream::connect(ARBITER_SOCK_PATH)?;
+    let mut stream = UnixStream::connect(crate::arbiter_sock::arbiter_sock_path())?;
     stream.write_all(line.as_bytes())?;
     stream.flush()?;
     let _ = stream.shutdown(std::net::Shutdown::Write);
@@ -31,7 +31,7 @@ fn send_oneshot(line: &str) -> std::io::Result<()> {
 /// Connect, write `line`, read the whole reply. `None` if the arbiter is
 /// unreachable (the surfacer then shows nothing — fail-soft).
 fn arbiter_query(line: &str) -> Option<String> {
-    let mut stream = UnixStream::connect(ARBITER_SOCK_PATH).ok()?;
+    let mut stream = UnixStream::connect(crate::arbiter_sock::arbiter_sock_path()).ok()?;
     stream.write_all(line.as_bytes()).ok()?;
     stream.flush().ok()?;
     let _ = stream.shutdown(std::net::Shutdown::Write);

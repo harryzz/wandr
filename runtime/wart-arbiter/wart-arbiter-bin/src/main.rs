@@ -63,7 +63,21 @@ use wart_arbiter_wm::WmModule;
 
 use crate::state::AppState;
 
-const ARBITER_SOCK_PATH: &str = "/data/local/tmp/wart-arbiter.sock";
+/// The arbiter control socket — resolved (NOT hardcoded) from `WART_ARBITER_SOCK`
+/// else the canonical default. This is the OWNER of the path (the daemon binds it);
+/// the host crate + the C++ `wart-inputflinger` service resolve the same env var so
+/// all three agree without re-hardcoding the literal. Resolved once.
+fn arbiter_sock_path() -> &'static str {
+    use std::sync::OnceLock;
+    static S: OnceLock<String> = OnceLock::new();
+    S.get_or_init(|| {
+        std::env::var("WART_ARBITER_SOCK")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "/data/local/tmp/wart-arbiter.sock".to_string())
+    })
+    .as_str()
+}
 
 /// Where the running-apps state is persisted between daemon restarts.
 /// Children of the zygote outlive arbiter restarts; this lets us
@@ -157,7 +171,11 @@ fn main() {
                     // Task 77 — SensorService verbs (sim/test + device verify):
                     // report-sensor <kind> <x> [y z], sensor-state, sensor-hold
                     // <kind> <on|off>.
-                    | "report-sensor" | "sensor-state" | "sensor-hold")) => {
+                    | "report-sensor" | "sensor-state" | "sensor-hold"
+                    // Task 81 — ART-less display power (host→arbiter on the raw
+                    // socket from a POWER key; CLI form for testing/boot force-on):
+                    // power-key [pid] (toggle), panel <on|off> (explicit).
+                    | "power-key" | "panel")) => {
             run_client_multi(verb, &args[1..])
         }
         Some(other) => {
@@ -252,8 +270,8 @@ fn run_client_multi(verb: &str, rest: &[String]) -> Result<()> {
 }
 
 fn send_and_print(line: &str) -> Result<()> {
-    let mut stream = UnixStream::connect(ARBITER_SOCK_PATH)
-        .with_context(|| format!("connect {ARBITER_SOCK_PATH} — is the daemon running?"))?;
+    let mut stream = UnixStream::connect(arbiter_sock_path())
+        .with_context(|| format!("connect {} — is the daemon running?", arbiter_sock_path()))?;
     stream.write_all(line.as_bytes())?;
     stream.flush().ok();
     // Half-close write so the server's read_to_string-like loop sees
@@ -272,7 +290,7 @@ fn send_and_print(line: &str) -> Result<()> {
 // ─── Daemon mode ──────────────────────────────────────────────────────
 
 fn run_daemon() -> Result<()> {
-    log::info!("wart-arbiter: starting daemon — sock={ARBITER_SOCK_PATH}");
+    log::info!("wart-arbiter: starting daemon — sock={}", arbiter_sock_path());
     log::info!("wart-arbiter: zygote sock = {}", zygote_client::zygote_sock_path());
 
     // Task 46 crash-marker — panic-hook drops a JSON file on the way
@@ -301,16 +319,16 @@ fn run_daemon() -> Result<()> {
     // the model is the sole state, maintained incrementally by write-through.
     seed_surface_model(restored_fg);
 
-    let sock_path = Path::new(ARBITER_SOCK_PATH);
+    let sock_path = Path::new(arbiter_sock_path());
     if sock_path.exists() {
         std::fs::remove_file(sock_path)
-            .with_context(|| format!("removing stale socket {ARBITER_SOCK_PATH}"))?;
+            .with_context(|| format!("removing stale socket {}", arbiter_sock_path()))?;
     }
-    let listener = UnixListener::bind(ARBITER_SOCK_PATH)
-        .with_context(|| format!("UnixListener::bind {ARBITER_SOCK_PATH}"))?;
+    let listener = UnixListener::bind(arbiter_sock_path())
+        .with_context(|| format!("UnixListener::bind {}", arbiter_sock_path()))?;
     use std::os::unix::fs::PermissionsExt;
     let _ = std::fs::set_permissions(
-        ARBITER_SOCK_PATH,
+        arbiter_sock_path(),
         std::fs::Permissions::from_mode(0o666),
     );
     log::info!("wart-arbiter: listening");
@@ -320,7 +338,18 @@ fn run_daemon() -> Result<()> {
     // also covers a dropped subscriber connection or a crashed zygote.
     spawn_death_watchers();
     spawn_alarm_timer();
-    spawn_screen_poller();
+    // Task 81 — the screen poller reads `debug.tracing.screen_state`, an
+    // SF-sourced sysprop that goes STALE with the Java framework stopped (the
+    // last value before ART-off lingers → spurious doze/auto-lock). Under
+    // `WART_NO_ART` the arbiter is the sole screen-state authority instead: it
+    // drives `Event::ScreenState` from its own `panel_on` (POWER-key toggles via
+    // the power module) and force-ons the panel at boot below.
+    if no_art() {
+        log::info!("wart-arbiter: WART_NO_ART — screen poller OFF; arbiter owns panel power");
+        apply_display_power(true); // boot force-on (panel may be off from a prior --no-art wedge)
+    } else {
+        spawn_screen_poller();
+    }
     sensor_driver::spawn();
 
     // Task 57 — boot to home. If a home app was designated in a previous
@@ -624,11 +653,18 @@ fn execute_effects(effects: Vec<wart_arbiter_core::Effect>) {
                 }
             }
             Effect::SetDisplayPower { on } => {
-                // Task 78 — the power module's proximity-screen-off decision.
-                // wart-hal-display drives SurfaceFlinger setPowerMode (the proper
-                // panel-off). Failure is logged + ignored (a no-op, never fatal).
-                let ok = wart_hal_display::set_display_power(on);
-                log::info!("arbiter: SetDisplayPower on={on} applied={ok}");
+                // Task 78/81 — the power module's screen-power decision drives
+                // SurfaceFlinger setPowerMode (the proper panel-off/on).
+                //
+                // ART-up: the arbiter is root and SF short-circuits its
+                // ACCESS_SURFACE_FLINGER check, so we call wart-hal-display inline.
+                // ART-off (`WART_NO_ART`): bare root HANGS on that check (the
+                // permission service lives in the dead system_server), so we must
+                // run as uid system — shell out to `wart-launch wart-screen on|off`
+                // (task 83 launcher drops root→system). Either way, failure is
+                // logged + ignored (never fatal — a stuck call is worse than a
+                // missed blank).
+                apply_display_power(on);
             }
             Effect::SetSensor { kind, on, rate_hz } => {
                 // Task 77 — the sensors module's enable-on-demand decision. The
@@ -878,6 +914,48 @@ fn spawn_alarm_timer() {
             bus_emit(Event::AlarmTick { now_ms });
         })
         .expect("spawn alarm timer thread");
+}
+
+/// True with the Java framework stopped (set by `run-hybrid-stack.sh --no-art`).
+/// Switches the arbiter to owning display power + screen state itself (the SF
+/// sysprop the poller reads is stale once system_server is gone).
+fn no_art() -> bool {
+    std::env::var_os("WART_NO_ART").is_some()
+}
+
+/// Resolve a binary deployed alongside `wart-arbiter` (e.g. `wart-launch`,
+/// `wart-screen`) — derived from this exe's own dir so it follows the deploy
+/// location, falling back to the canonical device dir.
+fn sibling_bin(name: &str) -> std::path::PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join(name)))
+        .unwrap_or_else(|| std::path::PathBuf::from(format!("/data/local/tmp/{name}")))
+}
+
+/// Apply a SurfaceFlinger panel-power change (task 78/81). ART-up: inline
+/// wart-hal-display (the arbiter is root and SF short-circuits its permission
+/// check). ART-off: bare root HANGS on `ACCESS_SURFACE_FLINGER`, so run as uid
+/// system via `wart-launch wart-screen on|off` (task 83). Never fatal.
+fn apply_display_power(on: bool) {
+    if no_art() {
+        let launch = sibling_bin("wart-launch");
+        let screen = sibling_bin("wart-screen");
+        match std::process::Command::new(&launch)
+            .arg(&screen)
+            .arg(if on { "on" } else { "off" })
+            .status()
+        {
+            Ok(s) => log::info!("arbiter: SetDisplayPower on={on} via wart-launch → {s}"),
+            Err(e) => log::warn!(
+                "arbiter: SetDisplayPower on={on} via {} failed: {e:#}",
+                launch.display()
+            ),
+        }
+    } else {
+        let ok = wart_hal_display::set_display_power(on);
+        log::info!("arbiter: SetDisplayPower on={on} applied={ok}");
+    }
 }
 
 /// PowerManager — poll the display power state (`debug.tracing.screen_state`, the

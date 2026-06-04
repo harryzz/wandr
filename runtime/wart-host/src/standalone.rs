@@ -314,7 +314,7 @@ fn device_rotation_to_orient(rot: u32) -> u32 {
 
 /// Task 73 — the arbiter socket (wart-arbiter-wm owns the orientation
 /// decision). Same path the IME/keyboard host clients use.
-const ARBITER_SOCK_PATH: &str = "/data/local/tmp/wart-arbiter.sock";
+// arbiter socket: crate::arbiter_sock::arbiter_sock_path() ($WART_ARBITER_SOCK)
 
 /// Task 73 — report the raw device rotation (`Surface.ROTATION_*` index, 0..3)
 /// up to the arbiter, which decides the content orientation and pushes it back
@@ -325,7 +325,7 @@ const ARBITER_SOCK_PATH: &str = "/data/local/tmp/wart-arbiter.sock";
 fn report_orientation_to_arbiter(raw_rot: u32) -> std::io::Result<()> {
     use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;
-    let mut stream = UnixStream::connect(ARBITER_SOCK_PATH)?;
+    let mut stream = UnixStream::connect(crate::arbiter_sock::arbiter_sock_path())?;
     stream.write_all(format!("report-orientation {raw_rot}\n").as_bytes())?;
     stream.flush()?;
     let _ = stream.shutdown(std::net::Shutdown::Write);
@@ -339,7 +339,7 @@ fn report_orientation_to_arbiter(raw_rot: u32) -> std::io::Result<()> {
 fn send_arbiter_oneshot(line: &str) -> std::io::Result<String> {
     use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;
-    let mut stream = UnixStream::connect(ARBITER_SOCK_PATH)?;
+    let mut stream = UnixStream::connect(crate::arbiter_sock::arbiter_sock_path())?;
     stream.write_all(line.as_bytes())?;
     stream.flush()?;
     let _ = stream.shutdown(std::net::Shutdown::Write);

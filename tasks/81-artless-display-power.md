@@ -1,8 +1,12 @@
 # Task 81 — ART-less display power ownership
 
-> Status: 🔲 in progress. Found in human testing of `--no-art` (2026-06-04): the
-> device wedged (black screen, power button + touch dead) because **nothing owns
-> display power when ART is off**.
+> Status: 🟡 implemented, device-verify pending (2026-06-04). Found in human testing
+> of `--no-art`: the device wedged (black screen, power button + touch dead) because
+> **nothing owns display power when ART is off**. Implemented: power-key→panel toggle,
+> arbiter owns screen state under `WART_NO_ART`, setPowerMode runs as uid system via
+> `wart-launch wart-screen` (root HANGS on SF's permission check with ART off), boot
+> force-on, sysprop poller gated. 13 power-module unit tests pass; aarch64 build OK.
+> Device `--no-art` power-cycle verification is the remaining step.
 
 ## Why (the wedge)
 
@@ -40,16 +44,26 @@ the dead PMS sysprop. Never wedge.
 4. (later) idle dim/off policy owned by the arbiter (a real screen-off timeout that
    blanks via setPowerMode), replacing PMS's role fully.
 
-## Files
-- `runtime/wart-host/src/standalone.rs` (+`lib.rs`) — intercept `KEYCODE_POWER` →
-  forward `power-key` (next to the volume-key intercept at the input loop).
-- `runtime/wart-arbiter/wart-arbiter-power/src/lib.rs` — `power-key` verb + `panel_on`
-  + drive `ScreenState` from it; force-on at boot.
-- `runtime/wart-arbiter/wart-arbiter-bin/src/main.rs` — gate `spawn_screen_poller`
-  under `WART_NO_ART`; CLI passthrough for `power-key`/`screen-on`.
-- `tools/scripts/run-hybrid-stack.sh` — `--no-art` sets `WART_NO_ART=1` + panel-on.
-- Reuse: `wart_hal_display::set_display_power` (task 78), the volume-key intercept
-  pattern, `Effect::SetDisplayPower`.
+## What shipped (implementation)
+- `runtime/wart-host/src/{standalone.rs,audio_policy_impl.rs}` — intercept
+  `KEYCODE_POWER` (26) → `forward_power_key()` sends `power-key <pid>` to the arbiter
+  (mirror of the volume-key intercept). [committed d6a01360]
+- `runtime/wart-arbiter/wart-arbiter-power/src/lib.rs` — `panel_on` field +
+  `power-key` (toggle) / `panel <on|off>` (explicit) verbs + `set_panel_on()` which
+  requests `SetDisplayPower` AND emits `Event::ScreenState` (so doze grace + keyguard
+  auto-lock react exactly as to a real power transition). Proximity uncover now
+  restores to `panel_on` (not unconditionally on). +3 unit tests.
+- `runtime/wart-arbiter/wart-screen/` — NEW workspace member: `wart-screen on|off`
+  calls `wart_hal_display::set_display_power`. Runs as a separate process so the
+  arbiter can launch it via `wart-launch` (uid system).
+- `runtime/wart-arbiter/wart-arbiter-bin/src/main.rs` — `no_art()` + `sibling_bin()`
+  + `apply_display_power()` (ART-up: inline hal; ART-off: `wart-launch wart-screen`);
+  `Effect::SetDisplayPower` routes through it; `spawn_screen_poller` gated under
+  `WART_NO_ART` + boot force-on; `power-key`/`panel` added to the CLI allowlist.
+- `tools/scripts/run-hybrid-stack.sh` — pushes `wart-launch` + `wart-screen`;
+  `--no-art` sets `WART_NO_ART=1` on the `--daemon` start.
+- Reuse: `wart_hal_display::set_display_power` (task 78), `wart-launch` (task 83),
+  `Effect::SetDisplayPower`, the volume-key intercept pattern.
 
 ## Verification (device, `--no-art`)
 - Panel comes up ON and stays on; no spurious auto-lock from the stale sysprop.

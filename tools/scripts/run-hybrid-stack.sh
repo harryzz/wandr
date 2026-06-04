@@ -27,9 +27,10 @@ set -euo pipefail
 
 # Detached stop path: tear the stack down and restore SystemUI, then exit.
 if [[ "${1:-}" == "--stop" ]]; then
-    echo "▸ stopping wart-arbiter + wart-host …"
+    echo "▸ stopping wart-arbiter + wart-host + wart-inputflinger …"
     adb shell "su -c 'pkill -9 -f wart-arbiter'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-host'"    >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f wart-inputflinger'" >/dev/null 2>&1 || true
     adb shell "su -c 'rm -f /data/local/tmp/wart-zygote.sock /data/local/tmp/wart-arbiter.sock'" >/dev/null 2>&1 || true
     adb shell "su -c 'am start -n com.android.systemui/.SystemUIService'" >/dev/null 2>&1 || true
     adb shell "input keyevent KEYCODE_HOME" >/dev/null 2>&1 || true
@@ -38,8 +39,14 @@ if [[ "${1:-}" == "--stop" ]]; then
 fi
 
 # Restore the Android Java framework after a --no-art run (task 80). adbd
-# (class core, USB) survives the framework stop, so this always recovers.
+# (class core, USB) survives the framework stop, so this always recovers. Path A:
+# kill wart-inputflinger first so the restarting system_server re-registers the
+# real platform inputflinger (else our dead service name lingers).
 if [[ "${1:-}" == "--restore-art" ]]; then
+    echo "▸ stopping wart stack (incl wart-inputflinger) before restoring framework …"
+    adb shell "su -c 'pkill -9 -f wart-inputflinger'" >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f wart-arbiter'" >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f wart-host'"    >/dev/null 2>&1 || true
     echo "▸ restoring Android framework (start) …"
     adb shell "su -c 'start'" >/dev/null 2>&1 || true
     echo "▸ done — framework restarting. Re-run run-hybrid-stack.sh to bring the test stack back."
@@ -57,16 +64,36 @@ EXTRA_ENV=""
 NO_ART=0
 for arg in "$@"; do
     case "$arg" in
+        # --evdev = the task-80 BOOTSTRAP path: each host runs its own evdev
+        # InputReader (proves ART-less input, but global keys fan out to every host
+        # → power-key flicker). Kept as a fallback / for the per-host experiment.
         --evdev)  EXTRA_ENV="WART_EVDEV_INPUT=1 " ;;
-        --no-art) EXTRA_ENV="WART_EVDEV_INPUT=1 "; NO_ART=1 ;;
+        # --no-art = PATH A: ONE wart-inputflinger service reads input + routes it
+        # (focus-based for apps, system keys → arbiter once). Hosts use their normal
+        # inputflinger CLIENT path (NO evdev), so EXTRA_ENV stays empty here.
+        --no-art) NO_ART=1 ;;
     esac
 done
+
+# Task 81 — with ART off the arbiter owns display power (no PMS): WART_NO_ART makes
+# it drive screen state from its own panel_on, force-on the panel at boot, and run
+# setPowerMode as uid system via `wart-launch wart-screen` (bare root HANGS on SF's
+# permission check once system_server is gone). Only the --daemon invocation needs it.
+ARB_ENV=""
+[[ "$NO_ART" == "1" ]] && ARB_ENV="WART_NO_ART=1 "
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 HOST_BIN="$REPO_ROOT/runtime/wart-host/target/aarch64-linux-android/release/wasm-android-host"
 ARB_BIN="$REPO_ROOT/runtime/wart-arbiter/target/aarch64-linux-android/release/wart-arbiter"
 SHIM="$REPO_ROOT/runtime/wart-host/cpp/build/libsf_surface.so"
+# Task 81/83 — ART-off display power: wart-launch (uid-system launcher) + wart-screen
+# (setPowerMode helper). Best-effort: pushed if present, only USED under --no-art.
+LAUNCH_BIN="$REPO_ROOT/tools/wart-launch/wart-launch"
+SCREEN_BIN="$REPO_ROOT/runtime/wart-arbiter/target/aarch64-linux-android/release/wart-screen"
+# Path A (task 80) — the standalone inputflinger service (built on a-03). Only
+# USED under --no-art; the platform libinputflinger.so etc. already live on-device.
+INFL_BIN="$REPO_ROOT/runtime/wart-inputflinger/wart-inputflinger"
 APPS_ROOT="/data/local/tmp/wart-apps"
 # Task 57 — the app the arbiter designates as "home": foregrounded at
 # boot, on `go-home`, and as the fall-back when the foreground app dies.
@@ -101,7 +128,15 @@ restore_ui() {
     echo "▸ stopping wart-arbiter + wart-host …"
     adb shell "su -c 'pkill -9 -f wart-arbiter'" >/dev/null 2>&1
     adb shell "su -c 'pkill -9 -f wart-host'"    >/dev/null 2>&1
+    adb shell "su -c 'pkill -9 -f wart-inputflinger'" >/dev/null 2>&1
     adb shell "su -c 'rm -f /data/local/tmp/wart-zygote.sock /data/local/tmp/wart-arbiter.sock'" >/dev/null 2>&1
+    # Path A stops the Java framework EARLY (before the zygote), so a failure here
+    # leaves it down — restart it (else `am start` below is a no-op + the device
+    # has no UI owner at all). adbd survives, so this recovers.
+    if [[ "${NO_ART:-0}" == "1" ]]; then
+        echo "▸ --no-art failure path: restarting Android framework (start) …"
+        adb shell "su -c 'start'" >/dev/null 2>&1
+    fi
     adb shell "su -c 'am start -n com.android.systemui/.SystemUIService'" >/dev/null 2>&1
     adb shell "input keyevent KEYCODE_HOME" >/dev/null 2>&1
     set -e
@@ -122,9 +157,10 @@ push_if_newer() {
     fi
 }
 
-echo "▸ killing any existing wart-host / wart-arbiter …"
+echo "▸ killing any existing wart-host / wart-arbiter / wart-inputflinger …"
 adb shell "su -c 'pkill -9 -f wart-arbiter'" >/dev/null 2>&1 || true
 adb shell "su -c 'pkill -9 -f wart-host'"    >/dev/null 2>&1 || true
+adb shell "su -c 'pkill -9 -f wart-inputflinger'" >/dev/null 2>&1 || true
 adb shell "su -c 'rm -f /data/local/tmp/wart-zygote.sock /data/local/tmp/wart-arbiter.sock'" >/dev/null 2>&1
 
 echo "▸ pushing artifacts …"
@@ -132,6 +168,27 @@ push_if_newer "$SHIM"     "/data/local/tmp/libsf_surface.so"
 push_if_newer "$HOST_BIN" "/data/local/tmp/wart-host"
 push_if_newer "$ARB_BIN"  "/data/local/tmp/wart-arbiter"
 adb shell 'chmod 755 /data/local/tmp/wart-host /data/local/tmp/wart-arbiter'
+# Task 81/83 — display-power helpers (uid-system launcher + setPowerMode bin).
+if [[ -f "$LAUNCH_BIN" && -f "$SCREEN_BIN" ]]; then
+    push_if_newer "$LAUNCH_BIN" "/data/local/tmp/wart-launch"
+    push_if_newer "$SCREEN_BIN" "/data/local/tmp/wart-screen"
+    adb shell 'chmod 755 /data/local/tmp/wart-launch /data/local/tmp/wart-screen'
+elif [[ "$NO_ART" == "1" ]]; then
+    echo "✗ --no-art needs wart-launch + wart-screen (display power); build them:" >&2
+    echo "    (cd tools/wart-launch && \$CC_aarch64_linux_android -O2 -o wart-launch wart-launch.c)" >&2
+    echo "    (cd runtime/wart-arbiter && cargo build --release -p wart-screen)" >&2
+    exit 1
+fi
+# Path A — the standalone inputflinger service.
+if [[ -f "$INFL_BIN" ]]; then
+    push_if_newer "$INFL_BIN" "/data/local/tmp/wart-inputflinger"
+    adb shell 'chmod 755 /data/local/tmp/wart-inputflinger'
+elif [[ "$NO_ART" == "1" ]]; then
+    echo "✗ --no-art (path A) needs wart-inputflinger; build it on a-03:" >&2
+    echo "    scp runtime/wart-inputflinger/{wart_inputflinger.cpp,Android.bp} a-03:~/android/lineage/external/wart-inputflinger/" >&2
+    echo "    ssh a-03 'cd ~/android/lineage && source build/envsetup.sh && lunch aosp_arm64-trunk_staging-userdebug && export TARGET_RELEASE=trunk_staging && m wart-inputflinger'" >&2
+    exit 1
+fi
 
 # Robustly start a long-lived device process, fully detached from this adb
 # session: `setsid` (new session, no controlling tty) + stdin from /dev/null so
@@ -156,6 +213,62 @@ wait_for_sock() {
 echo "▸ stopping SystemUI + launcher ($HOME_PKG) …"
 adb shell "su -c 'am force-stop com.android.systemui'"
 adb shell "su -c 'am force-stop $HOME_PKG'"
+
+# Path A (--no-art): stop the Java framework FIRST, then start wart-inputflinger,
+# BEFORE the zygote/hosts — so the hosts' inputflinger client path
+# (waitForService("inputflinger")) only ever resolves to OUR service, never
+# system_server's (which is now dead). SurfaceFlinger/audioserver are native
+# survivors, so the wart stack still attaches. This ordering avoids any host
+# input-channel "reconnect" mechanism. HOME_PKG was already resolved above (needed
+# the framework). wart-inputflinger runs via wart-launch (uid system + gid input +
+# CAP_BLOCK_SUSPEND) — bare root HANGS on SF's perm check + aborts in EventHub.
+if [[ "$NO_ART" == "1" ]]; then
+    echo "▸ --no-art path A: stopping Java framework (zygote + system_server) …"
+    adb shell "su -c 'stop zygote; stop zygote_secondary'" >/dev/null 2>&1 || true
+    # system_server is a forked child of zygote; give it a moment to actually exit
+    # so its "inputflinger" servicemanager registration clears before ours.
+    for _ in $(seq 1 20); do
+        [ -z "$(adb shell "su -c 'pidof system_server'" | tr -d '\r')" ] && break
+        sleep 0.5
+    done
+    # `|| true` INSIDE the substitution: with `set -o pipefail`, a bare
+    # `x=$(… pidof …)` inherits pidof's exit 1 when the process is already gone
+    # (our success case), which `set -e` would treat as fatal.
+    ssp="$(adb shell "su -c 'pidof system_server'" | tr -d '\r' || true)"
+    [ -n "$ssp" ] && { echo "  system_server still up ($ssp) — killing"; adb shell "su -c 'kill -9 $ssp'" >/dev/null 2>&1 || true; sleep 1; }
+
+    # Start wart-inputflinger (registers "inputflinger") before the zygote/hosts so
+    # their input client path resolves to OUR service. This gives WORKING system-key
+    # dedup (POWER/VOLUME → arbiter once, no fan-out flicker). App TOUCH routing is a
+    # known OPEN item: SurfaceFlinger won't push WindowInfos to our dispatcher under
+    # ART-off (it binds the inputflinger service once at its own init / mInputFlinger,
+    # cleared when system_server died, and updateInputFlinger early-returns). Making
+    # SF re-bind needs a fragile SF-restart dance that also regressed input reading,
+    # so it is intentionally NOT done here — see memory project_pathA_inputflinger for
+    # the diagnosis + remaining options. Until then, use --evdev for ART-off touch.
+    echo "▸ starting wart-inputflinger (path A, via wart-launch → uid system) …"
+    # Forward any WART_VP_* viewport-tuning vars set in THIS script's environment so
+    # the InputReader's display viewport can be aligned to SF's window coordinate
+    # space on rotated panels without rebuilding the service (env inherited across
+    # wart-launch's exec). Default (unset) = the service's portrait default.
+    INFL_VP_ENV=""
+    for v in WART_VP_LOGICAL_W WART_VP_LOGICAL_H WART_VP_DEVICE_W WART_VP_DEVICE_H WART_VP_ORIENT; do
+        [ -n "${!v:-}" ] && INFL_VP_ENV="${INFL_VP_ENV}${v}=${!v} "
+    done
+    [ -n "$INFL_VP_ENV" ] && echo "  viewport env: $INFL_VP_ENV"
+    spawn_detached /data/local/tmp/wart-inputflinger.log \
+        "${INFL_VP_ENV}/data/local/tmp/wart-launch /data/local/tmp/wart-inputflinger"
+    for _ in $(seq 1 20); do
+        adb shell "su -c 'service check inputflinger'" 2>/dev/null | grep -q found && break
+        sleep 0.5
+    done
+    if adb shell "su -c 'service check inputflinger'" 2>/dev/null | grep -q found; then
+        echo "  inputflinger registered (wart-inputflinger) — system-key dedup active"
+    else
+        echo "  ⚠ inputflinger not registered — see /data/local/tmp/wart-inputflinger.log:" >&2
+        adb shell "su -c 'tail -15 /data/local/tmp/wart-inputflinger.log'" 2>&1 | tr -d '\r' >&2
+    fi
+fi
 
 # True-dp (Arbiter Inc. 3b): chrome heights / content insets are authored by the
 # arbiter (dp×density) and reported/pushed to the hosts — no WART_INSET_* /
@@ -204,7 +317,7 @@ if [[ -t 1 ]]; then
     # and Ctrl-C tears the whole stack down via the EXIT/INT trap.
     ( wait_for_sock /data/local/tmp/wart-arbiter.sock 40 && bring_up_chrome ) &
     echo "▸ starting wart-arbiter --daemon in foreground (Ctrl-C to stop) …"
-    adb shell -t "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter --daemon'"
+    adb shell -t "su -c '${ARB_ENV}WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter --daemon'"
 else
     # No controlling TTY (backgrounded / nohup / CI): start the arbiter detached
     # and VERIFY its socket appears, retrying the start if it doesn't — that
@@ -215,7 +328,7 @@ else
     arbiter_up=
     for attempt in 1 2 3; do
         spawn_detached /data/local/tmp/wart-arbiter.log \
-            "LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter --daemon"
+            "${ARB_ENV}LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter --daemon"
         if wait_for_sock /data/local/tmp/wart-arbiter.sock 20; then arbiter_up=1; break; fi
         echo "  arbiter socket not up after 10 s (attempt $attempt/3) — retrying …"
         adb shell "su -c 'pkill -9 -f wart-arbiter'" >/dev/null 2>&1
@@ -229,13 +342,11 @@ else
     bring_up_chrome
     trap - EXIT INT TERM       # don't tear the stack down on this script's exit
     if [[ "$NO_ART" == "1" ]]; then
-        # Task 80 — shut off the Android Java framework (system_server etc.) now
-        # that the wart stack is up + reading input via its own InputReader. Stop
-        # ONLY the zygote services; surfaceflinger/audioserver/sensorservice (native,
-        # class core) and adbd survive → recoverable with `--restore-art`.
-        echo "▸ --no-art: stopping the Android Java framework (zygote + system_server) …"
-        adb shell "su -c 'stop zygote; stop zygote_secondary'" >/dev/null 2>&1 || true
-        echo "  Java framework stopped (native survivors + wart stack remain). adb is alive."
+        # Path A — the Java framework was already stopped + wart-inputflinger started
+        # BEFORE the zygote (above), so the hosts connected to OUR inputflinger. The
+        # native survivors (surfaceflinger/audioserver/sensorservice, class core) +
+        # adbd are up; input + display power are wart-owned. Recover with --restore-art.
+        echo "  --no-art path A: framework already stopped; wart-inputflinger owns input."
         echo "  Recover with: $0 --restore-art"
     fi
     echo "▸ stack up (detached). Stop with: $0 --stop"

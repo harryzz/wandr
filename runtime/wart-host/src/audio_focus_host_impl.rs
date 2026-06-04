@@ -19,7 +19,7 @@ use crate::audio_focus_host_bindings::war::audio_focus::focus::{
     FocusKind, FocusResult, Host,
 };
 
-const ARBITER_SOCK_PATH: &str = "/data/local/tmp/wart-arbiter.sock";
+// arbiter socket: crate::arbiter_sock::arbiter_sock_path() ($WART_ARBITER_SOCK)
 
 impl FocusKind {
     fn as_wire(self) -> &'static str {
@@ -33,7 +33,7 @@ impl FocusKind {
 
 /// Fire-and-forget one line to the arbiter (abandon).
 fn send_oneshot(line: &str) -> std::io::Result<()> {
-    let mut stream = UnixStream::connect(ARBITER_SOCK_PATH)?;
+    let mut stream = UnixStream::connect(crate::arbiter_sock::arbiter_sock_path())?;
     stream.write_all(line.as_bytes())?;
     stream.flush()?;
     let _ = stream.shutdown(std::net::Shutdown::Write);
@@ -42,7 +42,7 @@ fn send_oneshot(line: &str) -> std::io::Result<()> {
 
 /// Send one line and read the arbiter's single-line reply (`OK …` / `ERR …`).
 fn send_and_read(line: &str) -> std::io::Result<String> {
-    let mut stream = UnixStream::connect(ARBITER_SOCK_PATH)?;
+    let mut stream = UnixStream::connect(crate::arbiter_sock::arbiter_sock_path())?;
     stream.write_all(line.as_bytes())?;
     stream.flush()?;
     let _ = stream.shutdown(std::net::Shutdown::Write);

@@ -51,6 +51,11 @@ pub struct PowerModule {
     /// **always restore** the panel when the call ends / the sensor uncovers (a
     /// stuck-off panel would feel like a bricked device).
     blanked: bool,
+    /// Task 81 — the user-facing panel power (POWER-key toggle). With ART off the
+    /// arbiter is the sole display-power authority (no PMS), so this is the
+    /// source of truth that a proximity uncover restores TO (not unconditionally
+    /// on). Starts on; the binary force-ons the panel at boot under `WART_NO_ART`.
+    panel_on: bool,
 }
 
 /// Pure doze decision: given how long the screen has been off (`off_ms`, `None`
@@ -63,7 +68,47 @@ fn decide(off_ms: Option<u128>, dozing: bool) -> Option<bool> {
 
 impl PowerModule {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            panel_on: true, // the screen comes up on
+            ..Self::default()
+        }
+    }
+
+    /// Task 81 — set the user-facing panel power and broadcast it: drive
+    /// SurfaceFlinger (the applier executes the effect via wart-screen under
+    /// ART-off) AND emit [`Event::ScreenState`] so the rest of the system reacts
+    /// exactly as it does to a real power transition — doze grace begins on off,
+    /// keyguard auto-locks on off, both clear on on. A proximity blank is an
+    /// independent transient override on top of this (uncover restores TO it).
+    fn set_panel_on(&mut self, on: bool, ctx: &mut Ctx) {
+        self.panel_on = on;
+        // If proximity has the panel blanked, don't fight it on the hardware —
+        // the blank wins until uncover, which will then restore to this `panel_on`.
+        if !self.blanked {
+            ctx.request(Effect::SetDisplayPower { on });
+        }
+        ctx.emit(Event::ScreenState { live: on });
+        log::info!("arbiter: panel {} (power-key/explicit)", if on { "ON" } else { "OFF" });
+    }
+
+    /// `power-key [pid]` — a hardware POWER press (the host forwards it; pid is
+    /// informational). Toggles the panel, the ART-off analogue of PMS's
+    /// power-button→screen-toggle.
+    fn cmd_power_key(&mut self, _args: &str, ctx: &mut Ctx) -> Reply {
+        let on = !self.panel_on;
+        self.set_panel_on(on, ctx);
+        Reply::ok(format!("panel {}", if on { "on" } else { "off" }))
+    }
+
+    /// `panel <on|off>` — explicit panel power (boot force-on / scripting).
+    fn cmd_panel(&mut self, args: &str, ctx: &mut Ctx) -> Reply {
+        let on = match args.split_whitespace().next() {
+            Some("on") | Some("1") => true,
+            Some("off") | Some("0") => false,
+            other => return Reply::err(format!("panel-args: expected on|off, got {other:?}")),
+        };
+        self.set_panel_on(on, ctx);
+        Reply::ok(format!("panel {}", if on { "on" } else { "off" }))
     }
 
     /// The cadence (ms) to send a pid while dozing, by its class. A comms-session
@@ -84,7 +129,11 @@ impl PowerModule {
     /// touch. The suppress flag is fanned to EVERY tracked host (a cheek at the
     /// ear can land on chrome too, and the screen is off so nothing needs touch).
     fn set_panel_blanked(&mut self, blank: bool, ctx: &mut Ctx) {
-        ctx.request(Effect::SetDisplayPower { on: !blank });
+        // On blank → off; on uncover → restore to the user-facing `panel_on`
+        // (task 81), not unconditionally on, so a power-off during a call survives
+        // a proximity cycle.
+        let on = if blank { false } else { self.panel_on };
+        ctx.request(Effect::SetDisplayPower { on });
         for app in ctx.store.apps_snapshot() {
             ctx.deliver_to_host(app.pid, format!("input-suppress {}\n", blank as u8));
         }
@@ -152,12 +201,14 @@ impl PowerModule {
 
 impl ArbiterModule for PowerModule {
     fn verbs(&self) -> &[&'static str] {
-        &["report-power-class"]
+        &["report-power-class", "power-key", "panel"]
     }
 
     fn on_command(&mut self, verb: &str, args: &str, ctx: &mut Ctx) -> Reply {
         match verb {
             "report-power-class" => self.cmd_report_class(args, ctx),
+            "power-key" => self.cmd_power_key(args, ctx),
+            "panel" => self.cmd_panel(args, ctx),
             other => Reply::err(format!("power-unknown-verb {other}")),
         }
     }
@@ -452,6 +503,46 @@ mod tests {
         r.dispatch_event(Event::ProximityChanged { near: true }, &mut store); // blanked
         let eff = r.dispatch_event(Event::SurfaceRemoved { pid: 10 }, &mut store);
         assert_eq!(display_power(&eff), vec![true], "call host death while blanked → ON");
+    }
+
+    /// Task 81 — POWER key toggles the panel: on→off→on, each press a SetDisplayPower.
+    #[test]
+    fn power_key_toggles_panel() {
+        let mut r = Registry::new();
+        r.register(Box::new(PowerModule::new()));
+        let mut store = Store::new();
+        let (_reply, eff) = r.dispatch_command("power-key", "100", &mut store).unwrap();
+        assert_eq!(display_power(&eff), vec![false], "first press → OFF");
+        let (_reply, eff) = r.dispatch_command("power-key", "100", &mut store).unwrap();
+        assert_eq!(display_power(&eff), vec![true], "second press → ON");
+    }
+
+    /// Task 81 — `panel on|off` sets explicit power (boot force-on / scripting).
+    #[test]
+    fn panel_explicit_off_then_on() {
+        let mut r = Registry::new();
+        r.register(Box::new(PowerModule::new()));
+        let mut store = Store::new();
+        let (_r, eff) = r.dispatch_command("panel", "off", &mut store).unwrap();
+        assert_eq!(display_power(&eff), vec![false]);
+        let (_r, eff) = r.dispatch_command("panel", "on", &mut store).unwrap();
+        assert_eq!(display_power(&eff), vec![true]);
+    }
+
+    /// Task 81 — a proximity uncover restores to the user-facing `panel_on`, not
+    /// unconditionally on: power off during a call then a near/far cycle keeps it off.
+    #[test]
+    fn proximity_uncover_restores_to_panel_state() {
+        let mut r = Registry::new();
+        r.register(Box::new(PowerModule::new()));
+        let mut store = Store::new();
+        add_app(&mut store, "sig", 10);
+        r.dispatch_command("panel", "off", &mut store).unwrap(); // panel_on = false
+        r.dispatch_event(Event::CommsActive { pid: 10, active: true }, &mut store);
+        let eff = r.dispatch_event(Event::ProximityChanged { near: true }, &mut store);
+        assert_eq!(display_power(&eff), vec![false], "near → OFF");
+        let eff = r.dispatch_event(Event::ProximityChanged { near: false }, &mut store);
+        assert_eq!(display_power(&eff), vec![false], "far → restore to panel_on=off");
     }
 
     fn suppress_lines(eff: &[Effect]) -> Vec<String> {

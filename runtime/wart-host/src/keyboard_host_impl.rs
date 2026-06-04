@@ -18,7 +18,7 @@ use std::os::unix::net::UnixStream;
 
 use crate::bindings::my::skiko_gfx::keyboard::Host;
 
-const ARBITER_SOCK_PATH: &str = "/data/local/tmp/wart-arbiter.sock";
+// arbiter socket: crate::arbiter_sock::arbiter_sock_path() ($WART_ARBITER_SOCK)
 
 impl Host for crate::HostState {
     fn send_key_event(&mut self, code_point: u32, key_id: u32, action: u8) {
@@ -71,7 +71,7 @@ impl Host for crate::HostState {
 /// Same one-shot connect pattern as `ime_host_impl::send_oneshot`.
 /// Open → write one line → half-close → drain reply → close.
 fn send_oneshot(line: &str) -> std::io::Result<()> {
-    let mut stream = UnixStream::connect(ARBITER_SOCK_PATH)?;
+    let mut stream = UnixStream::connect(crate::arbiter_sock::arbiter_sock_path())?;
     stream.write_all(line.as_bytes())?;
     stream.flush()?;
     let _ = stream.shutdown(std::net::Shutdown::Write);
