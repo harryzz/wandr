@@ -78,14 +78,27 @@ impl PowerModule {
         }
     }
 
-    /// Fail-safe: restore the panel if proximity had blanked it. Idempotent —
-    /// safe to call on every call-end / surface-removed. A stuck-off panel would
-    /// feel like a bricked device, so this is the invariant the policy guarantees.
+    /// Apply the panel-blank state: SurfaceFlinger panel power AND touch
+    /// suppression move together (task 79) so they can never drift — a blanked
+    /// panel always has touch dropped, and restoring the panel always restores
+    /// touch. The suppress flag is fanned to EVERY tracked host (a cheek at the
+    /// ear can land on chrome too, and the screen is off so nothing needs touch).
+    fn set_panel_blanked(&mut self, blank: bool, ctx: &mut Ctx) {
+        ctx.request(Effect::SetDisplayPower { on: !blank });
+        for app in ctx.store.apps_snapshot() {
+            ctx.deliver_to_host(app.pid, format!("input-suppress {}\n", blank as u8));
+        }
+        self.blanked = blank;
+    }
+
+    /// Fail-safe: restore the panel + touch if proximity had blanked them.
+    /// Idempotent — safe to call on every call-end / surface-removed. A stuck-off
+    /// panel (or dead touch) would feel like a bricked device, so this is the
+    /// invariant the policy guarantees.
     fn ensure_unblanked(&mut self, ctx: &mut Ctx) {
         if self.blanked {
-            ctx.request(Effect::SetDisplayPower { on: true });
-            self.blanked = false;
-            log::info!("arbiter: proximity blank cleared → panel ON");
+            self.set_panel_blanked(false, ctx);
+            log::info!("arbiter: proximity blank cleared → panel ON + touch resumed");
         }
     }
 
@@ -197,9 +210,8 @@ impl ArbiterModule for PowerModule {
             Event::ProximityChanged { near } => {
                 let in_call = !self.comms.is_empty();
                 if in_call && *near && !self.blanked {
-                    ctx.request(Effect::SetDisplayPower { on: false });
-                    self.blanked = true;
-                    log::info!("arbiter: proximity near + in-call → panel OFF");
+                    self.set_panel_blanked(true, ctx);
+                    log::info!("arbiter: proximity near + in-call → panel OFF + touch suppressed");
                 } else if !*near && self.blanked {
                     self.ensure_unblanked(ctx);
                 } else if !in_call && self.blanked {
@@ -440,5 +452,44 @@ mod tests {
         r.dispatch_event(Event::ProximityChanged { near: true }, &mut store); // blanked
         let eff = r.dispatch_event(Event::SurfaceRemoved { pid: 10 }, &mut store);
         assert_eq!(display_power(&eff), vec![true], "call host death while blanked → ON");
+    }
+
+    fn suppress_lines(eff: &[Effect]) -> Vec<String> {
+        eff.iter()
+            .filter_map(|e| match e {
+                Effect::HostLine { line, .. } if line.starts_with("input-suppress") => {
+                    Some(line.trim().to_string())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Task 79 — a proximity blank fans `input-suppress 1` to every tracked host
+    /// alongside the panel-off, and unblank fans `input-suppress 0`.
+    #[test]
+    fn proximity_blank_fans_input_suppress() {
+        let mut r = Registry::new();
+        r.register(Box::new(PowerModule::new()));
+        let mut store = Store::new();
+        add_app(&mut store, "sig", 10);
+        add_app(&mut store, "bar", 20);
+        r.dispatch_event(Event::CommsActive { pid: 10, active: true }, &mut store);
+
+        // Near in-call → panel OFF + suppress fanned to BOTH hosts.
+        let eff = r.dispatch_event(Event::ProximityChanged { near: true }, &mut store);
+        assert_eq!(display_power(&eff), vec![false]);
+        assert_eq!(
+            suppress_lines(&eff),
+            vec!["input-suppress 1".to_string(), "input-suppress 1".to_string()]
+        );
+
+        // Far → panel ON + suppress cleared on both.
+        let eff = r.dispatch_event(Event::ProximityChanged { near: false }, &mut store);
+        assert_eq!(display_power(&eff), vec![true]);
+        assert_eq!(
+            suppress_lines(&eff),
+            vec!["input-suppress 0".to_string(), "input-suppress 0".to_string()]
+        );
     }
 }

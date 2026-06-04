@@ -1,7 +1,42 @@
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use wasmtime::Store;
 use crate::HostState;
 use crate::bindings::SkikoUi;
 use crate::bindings::exports::my::skiko_gfx::renderer::{KeyKind, PointerKind};
+
+/// Touch-suppression gate (task 79). When set, all pointer dispatch is dropped
+/// — used during a proximity screen-off (call at the ear) so a cheek/ear touch
+/// can't trigger taps on the invisible UI. The arbiter pushes `input-suppress
+/// <0|1>` (parsed in `ime_inbound`) to toggle it, tied to the panel-blank state.
+/// Process-global: set on the control-socket thread, read on the render thread.
+/// Hardware keys are deliberately NOT gated (volume etc. stay usable in a call).
+static TOUCH_SUPPRESSED: AtomicBool = AtomicBool::new(false);
+/// Touches dropped in the current suppression episode (reset on each engage) —
+/// just enough to log the first drop as on-device proof without per-event spam.
+static SUPPRESSED_DROPS: AtomicU32 = AtomicU32::new(0);
+
+/// Toggle touch suppression. Logs only on an actual state change.
+pub fn set_touch_suppressed(on: bool) {
+    if TOUCH_SUPPRESSED.swap(on, Ordering::Relaxed) != on {
+        if on {
+            SUPPRESSED_DROPS.store(0, Ordering::Relaxed);
+        }
+        log::info!("input: touch {}", if on { "SUPPRESSED (proximity blank)" } else { "resumed" });
+    }
+}
+
+/// The dispatch gate: true if touch is suppressed. Counts + logs the first drop
+/// of each episode so a real cheek/finger touch during the blank is visible.
+fn touch_suppressed() -> bool {
+    if TOUCH_SUPPRESSED.load(Ordering::Relaxed) {
+        if SUPPRESSED_DROPS.fetch_add(1, Ordering::Relaxed) == 0 {
+            log::info!("input: dropped touch while suppressed (first of episode)");
+        }
+        true
+    } else {
+        false
+    }
+}
 
 pub fn dispatch_pointer(
     bindings: &SkikoUi,
@@ -9,6 +44,10 @@ pub fn dispatch_pointer(
     kind: u8,
     x: f32, y: f32,
 ) -> anyhow::Result<()> {
+    // Task 79 — drop touch while the panel is blanked for proximity.
+    if touch_suppressed() {
+        return Ok(());
+    }
     let kind = match kind {
         0 => PointerKind::Down,
         1 => PointerKind::Up,
@@ -31,6 +70,10 @@ pub fn dispatch_pointer_v2(
     x: f32, y: f32,
     pressure: f32,
 ) -> anyhow::Result<()> {
+    // Task 79 — drop touch while the panel is blanked for proximity.
+    if touch_suppressed() {
+        return Ok(());
+    }
     let pk = match kind {
         0 => PointerKind::Down,
         1 => PointerKind::Up,

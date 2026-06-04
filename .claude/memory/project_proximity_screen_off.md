@@ -47,8 +47,16 @@ emits CommsActive → proximity auto-enabled (task-77 wiring) → cover sensor �
 OFF → uncover → ON → `audio-call-end <pid>` while covered → panel ON (fail-safe) +
 sensor disabled. All verified; `setPowerMode applied=true`.
 
-Out of scope (follow-ons): touch suppression during blank (InputFlinger separate —
-cheek touches still register); underlying Android PowerManager contention;
-auto-brightness via the now-reachable setDisplayBrightness. Related:
+**Task 79 (touch suppression, DONE+device-verified)** closed the cheek-touch
+follow-on: host `input.rs` TOUCH_SUPPRESSED atomic gates `dispatch_pointer*` (the
+single touch choke point); `ime_inbound.rs` parses `input-suppress <0|1>`;
+`wart-arbiter-power::set_panel_blanked` fans the suppress flag to ALL hosts
+alongside SetDisplayPower, riding the same blank trigger + 3 fail-safes (never
+stuck). Touch-only (keys live). Verified self-driven via report-sensor sim:
+cover→all hosts suppressed + injected tap dropped; uncover/call-end→resumed.
+
+Out of scope (remaining follow-ons): underlying Android PowerManager contention;
+auto-brightness via the now-reachable setDisplayBrightness; stylus/hover gating;
+InputFlinger/kernel-level touch disable. Related:
 [[project_arbiter_sensors]], [[feedback_no_art_layer_dependencies]],
 [[reference_rsbinder_version]].

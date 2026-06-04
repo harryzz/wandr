@@ -374,6 +374,15 @@ fn parse_and_queue(line: &str) {
             }
             Err(_) => log::warn!("ime-inbound: bad doze cadence in {line:?}"),
         }
+    } else if let Some(rest) = line.strip_prefix("input-suppress ") {
+        // Task 79 — proximity screen-off: drop touch while the panel is blanked.
+        // Applied directly (the gate is a process-global atomic in `input`, read
+        // on the render thread), so no InboundEvent queue plumbing is needed.
+        match rest.trim() {
+            "1" => crate::input::set_touch_suppressed(true),
+            "0" => crate::input::set_touch_suppressed(false),
+            other => log::warn!("ime-inbound: bad input-suppress arg {other:?}"),
+        }
     } else if let Some(rest) = line.strip_prefix("on-focus-changed ") {
         // wart-arbiter-audio M2 — audio-focus change; call the guest's
         // on-focus-changed. Map the wire token to the focus-change enum order.
