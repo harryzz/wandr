@@ -1,5 +1,5 @@
-TASK=80-pathA
-STEP=touch-blocked-mInputFlinger-recommend-consolidate
-STATUS=in-progress
-LAST_SUCCESS=DECISIVE diagnosis via wart_wininfo_probe: a plain process UNDER ART-UP receives SF WindowInfos pushes fine (11 windows, portrait frames) → SF push is NOT permission-gated against us → ART-off touch failure is CONCLUSIVELY mInputFlinger==null (SF updateInputFlinger early-return). Transpose 2880x1440 = our hosts' pre-rotation (separate). BYPASS ruled out (onWindowInfosChanged = concrete InputDispatcher only / 42 internal headers; no binder inject; pull=push-cache). System-key dedup + display power WORK ART-off.
-NOTES=FIX ATTEMPT (inputflinger-first → SF restart + reconnect-poke getPhysicalDisplayIds) is FRAGILE + NOT working: poke fires (ComposerServiceAIDL reconnected) + SF-new binds mInputFlinger (no Failed-to-link) + has windows, but still no push (SF pushes only on change AFTER reregister); and the reorder REGRESSED input reading (power died too). RECOMMEND: consolidate wins + commit, make path-A touch a focused task. Full details + remaining options (instrument SF properly / host→inputflinger custom binder + construct concrete dispatcher) in memory project_pathA_inputflinger.md. Device: ART restored. UNCOMMITTED: runtime/wart-inputflinger/* (+probe +poke), arbiter_sock refactor, run-hybrid-stack, task-81 code, tasks/80+81 docs. NEXT to get a clean state: revert run-hybrid-stack to SF-restart-FIRST order (power worked there) OR consolidate. DO NOT build-system-warpkgs.
+TASK=84
+STEP=scoped-not-started
+STATUS=ready
+LAST_SUCCESS=Task 80/81 wins committed 5e99896e (ART-less display power + path-A system-key dedup + WART_ARBITER_SOCK). Device clean, normal ART.
+NOTES=NEXT (likely new session): tasks/84-pathA-touch-windowinfos.md — make path-A app TOUCH/keys route under ART-off. Blocker fully diagnosed: SF won't push WindowInfos to our dispatcher (mInputFlinger null after system_server death). 3 options scoped (instrument SF / reliable SF re-bind / host->inputflinger custom feed). Read memory project_pathA_inputflinger.md FIRST. Build = a-03 direct-ninja. Test = wart_wininfo_probe + run-hybrid-stack --no-art. DO NOT build-system-warpkgs.

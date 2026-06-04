@@ -79,4 +79,8 @@ binder) so we feed windows without SF — but onWindowInfosChanged isn't reachab
 needs constructing the concrete InputDispatcher directly (re-implementing InputManager
 wiring). Both are real work. SF-restart choreography is inherently fragile under ART-off.
 
-See [[project_art_shutdown]], tasks/80-standalone-input-art-less.md (Path A section).
+**Scoped as a focused task: `tasks/84-pathA-touch-windowinfos.md`** (the 3 options +
+build/test recipe + the ruled-out shortcuts) — start there in the new session.
+
+See [[project_art_shutdown]], tasks/80-standalone-input-art-less.md (Path A section),
+tasks/84-pathA-touch-windowinfos.md.
