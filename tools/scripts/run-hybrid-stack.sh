@@ -49,6 +49,10 @@ if [[ "${1:-}" == "--restore-art" ]]; then
     adb shell "su -c 'pkill -9 -f wart-sensors'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-arbiter'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-host'"    >/dev/null 2>&1 || true
+    # Also kill any stuck Magisk su-loggers spinning against the (dead) framework,
+    # then restore Magisk su logging/notification (disabled on --no-art entry).
+    adb shell "su -c 'pkill -9 -f \"com.topjohnwu.magisk\"'" >/dev/null 2>&1 || true
+    adb shell "su -c 'command -v magisk >/dev/null 2>&1 && magisk --sqlite \"UPDATE policies SET logging=1, notification=1\"'" >/dev/null 2>&1 || true
     echo "▸ restoring Android framework (start) …"
     adb shell "su -c 'start'" >/dev/null 2>&1 || true
     echo "▸ done — framework restarting. Re-run run-hybrid-stack.sh to bring the test stack back."
@@ -143,6 +147,8 @@ restore_ui() {
     # has no UI owner at all). adbd survives, so this recovers.
     if [[ "${NO_ART:-0}" == "1" ]]; then
         echo "▸ --no-art failure path: restarting Android framework (start) …"
+        adb shell "su -c 'pkill -9 -f \"com.topjohnwu.magisk\"'" >/dev/null 2>&1
+        magisk_su_logging 1  # restore Magisk su logging (disabled on --no-art entry)
         adb shell "su -c 'start'" >/dev/null 2>&1
     fi
     adb shell "su -c 'am start -n com.android.systemui/.SystemUIService'" >/dev/null 2>&1
@@ -218,6 +224,20 @@ spawn_detached() {
     adb shell "su -c 'setsid sh -c \"$cmd\" </dev/null >$logfile 2>&1 &'" >/dev/null 2>&1
 }
 
+# Magisk su-logging control (high-CPU fix under --no-art). On every `su -c`, Magisk
+# logs the grant + notifies its manager app via `am`/`content` against the
+# framework. With ART stopped the framework is dead, so each of those spawns an
+# app_process that spins ~100% on a core retrying ActivityManager forever — and the
+# stack + scripts issue many `su -c`. So under --no-art we set the policies'
+# logging/notification to 0 BEFORE stopping the framework (no backlog is ever
+# queued), and restore them to 1 on --restore-art. No-op if Magisk isn't installed.
+magisk_su_logging() {
+    local on="$1" # 1 = enable (normal), 0 = disable (quiet)
+    adb shell "su -c 'command -v magisk >/dev/null 2>&1 && \
+        magisk --sqlite \"UPDATE policies SET logging=$on, notification=$on\"'" \
+        >/dev/null 2>&1 || true
+}
+
 # Poll up to tries×0.5 s for a device unix socket to appear. 0 = it showed up.
 wait_for_sock() {
     local sock="$1" tries="${2:-40}"
@@ -227,6 +247,17 @@ wait_for_sock() {
     done
     return 1
 }
+
+# --no-art high-CPU fix: quiet Magisk su-logging BEFORE the first su that races the
+# framework stop. Every `su -c` makes Magisk log/notify via `am`/`content` against
+# the framework; the force-stops below + the bringup issue many, and any still
+# in-flight when the framework goes down spin ~100%/core retrying forever. Disabling
+# here (framework still up, so this su logs + completes cleanly) means none are ever
+# queued. Restored on --restore-art. No-op without Magisk.
+if [[ "$NO_ART" == "1" ]]; then
+    echo "▸ --no-art: disabling Magisk su logging/notification (avoids ~100%/core spin)"
+    magisk_su_logging 0
+fi
 
 echo "▸ stopping SystemUI + launcher ($HOME_PKG) …"
 adb shell "su -c 'am force-stop com.android.systemui'"
