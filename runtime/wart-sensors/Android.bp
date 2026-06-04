@@ -1,0 +1,31 @@
+// wart-sensors — task 85. C++ HIDL shim/probe reading android.hardware.sensors@1.0
+// directly under ART-off (the framework SensorService/ISensorManager is gone). Built
+// on a-03; deploy to /data/local/tmp, run via wart-launch (uid system).
+
+cc_binary {
+    name: "wart_sensors_probe",
+    srcs: ["wart_sensors_probe.cpp"],
+    shared_libs: [
+        "android.hardware.sensors@1.0",
+        "libhidlbase",
+        "libutils",
+        "liblog",
+        "libbase",
+    ],
+    cflags: ["-Wall", "-Wextra", "-Wno-unused-parameter"],
+}
+
+// The C-ABI HIDL sensor shim the Rust wart-sensors daemon dlopen's (like
+// wart-host loads libsf_surface). Deploy to /data/local/tmp/libwart_sensors_hal.so.
+cc_library_shared {
+    name: "libwart_sensors_hal",
+    srcs: ["cpp/wart_sensors_hal.cpp"],
+    shared_libs: [
+        "android.hardware.sensors@1.0",
+        "libhidlbase",
+        "libutils",
+        "liblog",
+        "libbase",
+    ],
+    cflags: ["-Wall", "-Wextra", "-Wno-unused-parameter"],
+}

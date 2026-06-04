@@ -31,6 +31,7 @@ if [[ "${1:-}" == "--stop" ]]; then
     adb shell "su -c 'pkill -9 -f wart-arbiter'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-host'"    >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-inputflinger'" >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f wart-sensors'" >/dev/null 2>&1 || true
     adb shell "su -c 'rm -f /data/local/tmp/wart-zygote.sock /data/local/tmp/wart-arbiter.sock'" >/dev/null 2>&1 || true
     adb shell "su -c 'am start -n com.android.systemui/.SystemUIService'" >/dev/null 2>&1 || true
     adb shell "input keyevent KEYCODE_HOME" >/dev/null 2>&1 || true
@@ -45,6 +46,7 @@ fi
 if [[ "${1:-}" == "--restore-art" ]]; then
     echo "▸ stopping wart stack (incl wart-inputflinger) before restoring framework …"
     adb shell "su -c 'pkill -9 -f wart-inputflinger'" >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f wart-sensors'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-arbiter'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-host'"    >/dev/null 2>&1 || true
     echo "▸ restoring Android framework (start) …"
@@ -94,6 +96,11 @@ SCREEN_BIN="$REPO_ROOT/runtime/wart-arbiter/target/aarch64-linux-android/release
 # Path A (task 80) — the standalone inputflinger service (built on a-03). Only
 # USED under --no-art; the platform libinputflinger.so etc. already live on-device.
 INFL_BIN="$REPO_ROOT/runtime/wart-inputflinger/wart-inputflinger"
+# Task 85 — ART-off sensors / auto-rotation: the wart-sensors daemon (Rust) +
+# its C++ HIDL shim libwart_sensors_hal.so (built on a-03). Reads the sensor HAL
+# directly (the framework SensorService dies with ART) and drives report-orientation.
+SENSORS_BIN="$REPO_ROOT/runtime/wart-sensors/target/aarch64-linux-android/release/wart-sensors"
+SENSORS_LIB="$REPO_ROOT/runtime/wart-sensors/libwart_sensors_hal.so"
 APPS_ROOT="/data/local/tmp/wart-apps"
 # Task 57 — the app the arbiter designates as "home": foregrounded at
 # boot, on `go-home`, and as the fall-back when the foreground app dies.
@@ -129,6 +136,7 @@ restore_ui() {
     adb shell "su -c 'pkill -9 -f wart-arbiter'" >/dev/null 2>&1
     adb shell "su -c 'pkill -9 -f wart-host'"    >/dev/null 2>&1
     adb shell "su -c 'pkill -9 -f wart-inputflinger'" >/dev/null 2>&1
+    adb shell "su -c 'pkill -9 -f wart-sensors'" >/dev/null 2>&1
     adb shell "su -c 'rm -f /data/local/tmp/wart-zygote.sock /data/local/tmp/wart-arbiter.sock'" >/dev/null 2>&1
     # Path A stops the Java framework EARLY (before the zygote), so a failure here
     # leaves it down — restart it (else `am start` below is a no-op + the device
@@ -188,6 +196,16 @@ elif [[ "$NO_ART" == "1" ]]; then
     echo "    scp runtime/wart-inputflinger/{wart_inputflinger.cpp,Android.bp} a-03:~/android/lineage/external/wart-inputflinger/" >&2
     echo "    ssh a-03 'cd ~/android/lineage && source build/envsetup.sh && lunch aosp_arm64-trunk_staging-userdebug && export TARGET_RELEASE=trunk_staging && m wart-inputflinger'" >&2
     exit 1
+fi
+# Task 85 — ART-off sensors / auto-rotation daemon + its HIDL shim. Best-effort:
+# pushed if present (the .so is built on a-03); only launched under --no-art.
+if [[ -f "$SENSORS_BIN" && -f "$SENSORS_LIB" ]]; then
+    push_if_newer "$SENSORS_LIB" "/data/local/tmp/libwart_sensors_hal.so"
+    push_if_newer "$SENSORS_BIN" "/data/local/tmp/wart-sensors"
+    adb shell 'chmod 755 /data/local/tmp/wart-sensors /data/local/tmp/libwart_sensors_hal.so'
+elif [[ "$NO_ART" == "1" ]]; then
+    echo "  ⚠ wart-sensors / libwart_sensors_hal.so missing — auto-rotation off under --no-art" >&2
+    echo "    build: cargo build --release (in runtime/wart-sensors) + m libwart_sensors_hal on a-03" >&2
 fi
 
 # Robustly start a long-lived device process, fully detached from this adb
@@ -294,6 +312,15 @@ echo "  zygote up (pid $ZPID, socket present)"
 # overlay), and IME keyboard (bottom overlay + set-ime). Each piece is
 # best-effort — only fires if installed. Runs once the arbiter socket exists.
 bring_up_chrome() {
+    # Task 85 — under --no-art, start the sensor daemon (auto-rotation). The
+    # framework SensorService is gone; wart-sensors reads the HAL directly (via
+    # wart-launch → uid system) and drives report-orientation. The arbiter socket
+    # exists by now (caller waited on it).
+    if [[ "$NO_ART" == "1" ]] && adb shell 'ls /data/local/tmp/wart-sensors' >/dev/null 2>&1; then
+        echo "▸ sensor daemon (auto-rotation, path A)"
+        spawn_detached /data/local/tmp/wart-sensors.log \
+            "/data/local/tmp/wart-launch /data/local/tmp/wart-sensors"
+    fi
     if [[ -n "$HOME_APP" ]]; then
         echo "▸ boot-to-home: set-home $HOME_APP"
         adb shell "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter set-home $HOME_APP'" 2>&1 | tr -d '\r'

@@ -1,0 +1,5 @@
+# Built artifacts (a-03 / cross-compile) — not committed, like the other native shims.
+/target
+/wart-sensors
+/libwart_sensors_hal.so
+/wart_sensors_probe

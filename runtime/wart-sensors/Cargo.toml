@@ -1,0 +1,21 @@
+[package]
+name = "wart-sensors"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+# wart-sensors — task 85. ART-off sensor daemon: owns the sensor HAL (via the C++
+# HIDL shim libwart_sensors_hal.so, dlopen'd like wart-host loads libsf_surface),
+# computes orientation (+ fusion ported from AOSP Fusion.cpp) in Rust, and feeds
+# the arbiter (report-orientation) so auto-rotation works with the Java framework
+# stopped. The C++ shim is the only native piece (HIDL = hwbinder, not reachable
+# from rsbinder); all sensor processing is Rust.
+
+[[bin]]
+name = "wart-sensors"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+log = "0.4"
+env_logger = "0.11"
