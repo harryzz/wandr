@@ -18,6 +18,7 @@
 #include <binder/ProcessState.h>
 #include <binder/IServiceManager.h>
 #include <binder/Binder.h>
+#include <binder/Parcel.h>
 #include <android/os/IInputFlinger.h>
 #include <android/gui/FocusRequest.h>
 #include <input/Input.h>
@@ -33,6 +34,7 @@
 #include <deque>
 #include <mutex>
 #include <cstdlib>
+#include <unistd.h>
 #include <ui/PixelFormat.h>
 #include <ui/DisplayId.h>
 #include <ui/DisplayMode.h>
@@ -296,6 +298,31 @@ void start_evdev_input() {
          PANEL_W, PANEL_H);
 }
 
+// Task 84 — register this host's input-channel token with wart-inputflinger's
+// "wart.windowreg" service (transaction code must match WartWindowReg::TX_REGISTER
+// = FIRST_CALL_TRANSACTION). The token only exists in our process + wart-
+// inputflinger (which minted it at createInputChannel); the arbiter authors the
+// window list by pid and wart-inputflinger joins pid→token here. Fire-and-forget
+// (oneway). No-op under normal ART — checkService returns null when the standalone
+// inputflinger isn't the one serving input.
+void register_window_token_artless() {
+    if (g_input_channel == nullptr) {
+        return;
+    }
+    sp<IBinder> reg =
+        defaultServiceManager()->checkService(String16("wart.windowreg"));
+    if (reg == nullptr) {
+        return; // normal ART — system InputDispatcher owns windows via SF
+    }
+    static constexpr uint32_t TX_REGISTER = IBinder::FIRST_CALL_TRANSACTION;
+    Parcel data, reply;
+    data.writeInt32(static_cast<int32_t>(getpid()));
+    data.writeStrongBinder(g_input_channel->getConnectionToken());
+    status_t st = reg->transact(TX_REGISTER, data, &reply, IBinder::FLAG_ONEWAY);
+    LOGI("registered window token with wart.windowreg (pid=%d) → %d",
+         getpid(), static_cast<int>(st));
+}
+
 // Register an InputFlinger input window for g_control so InputDispatcher
 // routes touch events inside `rect` (in display coords) to our input
 // channel. Recipe from
@@ -360,6 +387,16 @@ void register_input_window_at(const Rect& rect, const char* name) {
     LOGI("input window '%s' registered at (%d,%d)-(%d,%d) (channel fd %d)",
          name, rect.left, rect.top, rect.right, rect.bottom,
          g_input_channel->getFd());
+
+    // Task 84 — under ART-off, SurfaceFlinger can't deliver the WindowInfo above
+    // to the standalone wart-inputflinger dispatcher (it never re-bound
+    // mInputFlinger after system_server died). Instead the wart-arbiter authors
+    // the window list by pid and wart-inputflinger feeds the dispatcher — but it
+    // needs our input-channel token keyed by pid, which only WE hold. Register it
+    // directly with wart-inputflinger's "wart.windowreg" binder service (the
+    // token's kernel identity round-trips intact). No-op under normal ART: the
+    // service isn't published, so checkService returns null and we skip.
+    register_window_token_artless();
 }
 
 // Back-compat wrapper for the fullscreen path. Same behavior as the

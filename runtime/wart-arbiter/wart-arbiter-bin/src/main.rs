@@ -449,6 +449,11 @@ fn handle_client(mut stream: UnixStream) -> Result<()> {
     // the legacy `active_app_pid()`. Pure observation; drives nothing yet.
     log_visible_app();
 
+    // Task 84 — re-author the input-window list for wart-inputflinger after any
+    // command that may have moved a surface/role/inset/focus (no-op + cheap when
+    // the derived block is unchanged, or when not running --no-art).
+    push_input_windows();
+
     result
 }
 
@@ -814,6 +819,85 @@ fn host_sock_path(pid: i32) -> String {
     format!("/data/local/tmp/wart-host-{pid}.sock")
 }
 
+/// The wart-inputflinger window-feed socket (task 84) — resolved from
+/// `WART_INPUTFLINGER_SOCK`, else the canonical default. Symmetric with the C++
+/// side's resolution (arg > env > default): one named source, overridable.
+///
+/// ABSTRACT namespace by default (leading `@`): wart-inputflinger binds it as uid
+/// system, which can't create a file under `/data/local/tmp`; the abstract
+/// namespace sidesteps filesystem perms entirely. A `@name` ⇒ abstract `\0name`.
+fn inputflinger_sock_path() -> &'static str {
+    static S: OnceLock<String> = OnceLock::new();
+    S.get_or_init(|| {
+        std::env::var("WART_INPUTFLINGER_SOCK")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "@wart-inputflinger".to_string())
+    })
+    .as_str()
+}
+
+/// Connect to the wart-inputflinger socket, honoring the abstract-namespace `@`
+/// convention (mirrors the C++ `fill_un_addr`). Filesystem paths take the plain
+/// `UnixStream::connect`.
+fn connect_inputflinger(path: &str) -> std::io::Result<UnixStream> {
+    if let Some(name) = path.strip_prefix('@') {
+        // The abstract-namespace extension trait lives under a per-OS module
+        // (android on-device, linux for desktop unit builds); both expose
+        // `from_abstract_name`.
+        #[cfg(target_os = "android")]
+        use std::os::android::net::SocketAddrExt;
+        #[cfg(target_os = "linux")]
+        use std::os::linux::net::SocketAddrExt;
+        use std::os::unix::net::SocketAddr;
+        let addr = SocketAddr::from_abstract_name(name.as_bytes())?;
+        UnixStream::connect_addr(&addr)
+    } else {
+        UnixStream::connect(path)
+    }
+}
+
+/// Task 84 — author + push the input-window list to wart-inputflinger so the
+/// standalone `InputDispatcher` can hit-test app touches under ART-off (with
+/// system_server gone, SurfaceFlinger never pushes WindowInfos to it, so every
+/// touch was dropped). The arbiter is the WMS: [`wart_arbiter_wm::input_window_block`]
+/// derives the ordered rects from the surface model + geometry. Diffed against the
+/// last-sent block so an unchanged model is a no-op (this runs after every command
+/// + child-exit). Gated on `--no-art` — the only time wart-inputflinger owns
+/// dispatch; a normal-ART run leaves windows to SurfaceFlinger. Caller holds
+/// `arbiter_lock`.
+fn push_input_windows() {
+    if !no_art() {
+        return;
+    }
+    let block = {
+        let store = core_store().lock().unwrap_or_else(|e| e.into_inner());
+        wart_arbiter_wm::input_window_block(&store, PRIMARY_DISPLAY)
+    };
+    let Some(block) = block else { return };
+    static LAST: OnceLock<Mutex<String>> = OnceLock::new();
+    let cell = LAST.get_or_init(|| Mutex::new(String::new()));
+    {
+        let mut last = cell.lock().unwrap_or_else(|e| e.into_inner());
+        if *last == block {
+            return; // model unchanged → nothing to push
+        }
+        *last = block.clone();
+    }
+    let sock = inputflinger_sock_path();
+    log::debug!("arbiter: input-windows push →\n{}", block.trim_end());
+    match connect_inputflinger(sock) {
+        Ok(mut stream) => {
+            use std::io::Write;
+            let _ = stream.write_all(block.as_bytes());
+            let _ = stream.flush();
+            // Half-close so the C++ reader sees EOF + feeds the (complete) block.
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+        }
+        Err(e) => log::debug!("arbiter: input-windows → {sock} failed: {e:#}"),
+    }
+}
+
 /// Unlink a dead child's per-host control socket (RC2). Ignore
 /// not-found — the child may have unlinked it itself on a graceful
 /// exit, or it may never have bound one (headless consumer).
@@ -877,6 +961,9 @@ fn handle_child_exit(pid: i32, detail: &str) {
         log::warn!("arbiter: on_child_exit state save failed: {e:#}");
     }
     log_visible_app();
+    // Task 84 — a surface vanished; re-author the input-window list (drops its
+    // window; promotes home's if the fallback ran above).
+    push_input_windows();
     log::info!("arbiter: on_child_exit pid={pid} app={} — cleaned up", app.app_id);
 }
 
@@ -952,9 +1039,36 @@ fn apply_display_power(on: bool) {
                 launch.display()
             ),
         }
+        apply_backlight(on);
     } else {
         let ok = wart_hal_display::set_display_power(on);
         log::info!("arbiter: SetDisplayPower on={on} applied={ok}");
+    }
+}
+
+/// Drive the panel backlight alongside display power. Under `--no-art` there is
+/// no DisplayManager, so `setPowerMode(ON)` lights the panel but the backlight
+/// stays at whatever it held (often 0 → the screen renders, via `screencap`, but
+/// is physically invisible — this bit us in task-84 bring-up). The arbiter, the
+/// sole display-power authority under `--no-art`, sets a visible level on and 0
+/// off. Node path + on-level are env-overridable (one named source); best-effort
+/// (a device lacking the node just no-ops). Only under `--no-art` — the Java
+/// framework owns the backlight otherwise.
+fn apply_backlight(on: bool) {
+    const DEFAULT_NODE: &str = "/sys/class/leds/lcd-backlight/brightness";
+    const DEFAULT_ON_LEVEL: u32 = 150;
+    let path = std::env::var("WART_BACKLIGHT_PATH").unwrap_or_else(|_| DEFAULT_NODE.to_string());
+    let level = if on {
+        std::env::var("WART_BACKLIGHT_LEVEL")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(DEFAULT_ON_LEVEL)
+    } else {
+        0
+    };
+    match std::fs::write(&path, level.to_string()) {
+        Ok(()) => log::info!("arbiter: backlight → {level} ({path})"),
+        Err(e) => log::debug!("arbiter: backlight {level} → {path} failed: {e}"),
     }
 }
 

@@ -239,13 +239,15 @@ if [[ "$NO_ART" == "1" ]]; then
 
     # Start wart-inputflinger (registers "inputflinger") before the zygote/hosts so
     # their input client path resolves to OUR service. This gives WORKING system-key
-    # dedup (POWER/VOLUME → arbiter once, no fan-out flicker). App TOUCH routing is a
-    # known OPEN item: SurfaceFlinger won't push WindowInfos to our dispatcher under
-    # ART-off (it binds the inputflinger service once at its own init / mInputFlinger,
-    # cleared when system_server died, and updateInputFlinger early-returns). Making
-    # SF re-bind needs a fragile SF-restart dance that also regressed input reading,
-    # so it is intentionally NOT done here — see memory project_pathA_inputflinger for
-    # the diagnosis + remaining options. Until then, use --evdev for ART-off touch.
+    # dedup (POWER/VOLUME → arbiter once, no fan-out flicker). App TOUCH/key routing
+    # (task 84): SurfaceFlinger can't push WindowInfos to our dispatcher under ART-off
+    # (it bound the inputflinger service once at its own init / mInputFlinger, cleared
+    # when system_server died, and updateInputFlinger early-returns), so instead the
+    # wart-arbiter (the window manager) authors the window list and pushes it to
+    # wart-inputflinger's abstract socket (@wart-inputflinger), which feeds the
+    # dispatcher via onWindowInfosChanged. Hosts register their channel token with the
+    # "wart.windowreg" binder service so the arbiter's per-pid windows resolve. See
+    # memory project_pathA_inputflinger + tasks/84-pathA-touch-windowinfos.md.
     echo "▸ starting wart-inputflinger (path A, via wart-launch → uid system) …"
     # Forward any WART_VP_* viewport-tuning vars set in THIS script's environment so
     # the InputReader's display viewport can be aligned to SF's window coordinate

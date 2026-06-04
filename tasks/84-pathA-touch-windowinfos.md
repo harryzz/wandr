@@ -1,11 +1,67 @@
 # Task 84 — Path-A app touch/key routing under ART-off (SF WindowInfos → our dispatcher)
 
-> Status: 🔲 open (scoped 2026-06-04). Spun out of task 80 path A. The standalone
-> `wart-inputflinger` service works for **system keys** (POWER/VOLUME deduped, no
-> flicker — committed `5e99896e`), but **app touch/keys don't route** under ART-off
-> because SurfaceFlinger never delivers WindowInfos to our InputDispatcher. This
-> task is to make app input route to the focused window with the Java framework off.
-> Full hard-won diagnosis lives in `[[project_pathA_inputflinger]]` — read it first.
+> Status: ✅ DONE + device-verified in PORTRAIT (Pixel 2 XL, 2026-06-04). Solved via
+> **Option 3, arbiter-driven**: the wart-arbiter (the WMS) authors the ordered
+> input-window list and pushes it to wart-inputflinger, which feeds the standalone
+> InputDispatcher via `onWindowInfosChanged` — sidestepping the dead SF push entirely.
+> Under `--no-art`: swipe-up unlocks the keyguard, launcher taps launch apps,
+> app-switching works, **IME typing works, taskbar works with the keyboard up**,
+> system keys still dedup, no "no touchable window". Spun out of task 80 path A.
+> **Follow-on (open): LANDSCAPE.** Rotation doesn't route touch — the arbiter authors
+> rects in portrait `[0,0,panel_w,panel_h]` + the reader viewport is portrait, so a
+> landscape layout (swapped dims, chrome on the sides) mismatches. Needs: arbiter
+> authors rects in the rotated display space + pushes the orientation so
+> wart-inputflinger reconfigures the reader `DisplayViewport`. This IS the task's
+> original "secondary coordinate issue" (below).
+>
+> ## What shipped (the implementation)
+> - **Arbiter (WMS authors windows):** `wart-arbiter-wm::input_window_block` derives the
+>   ordered per-display window rects from the surface/role model + insets + orientation
+>   + keyboard occlusion (no hardcoded geometry); chrome strips placed from a new
+>   `Surface.anchor` (`ChromeAnchor::{Top,Bottom}`, set at `register-chrome`). The binary
+>   diffs + pushes the block (`win-begin`/`win`/`win-focus`/`win-commit`) after every
+>   command + child-exit, gated on `--no-art`, to the `@wart-inputflinger` socket.
+> - **Transport:** ABSTRACT-namespace UNIX socket (`@wart-inputflinger`) — wart-inputflinger
+>   runs as uid system and can't bind a file under `/data/local/tmp` (0771 shell:shell);
+>   the abstract namespace sidesteps filesystem perms. Arbiter (root) connects per push.
+> - **wart-inputflinger (feeds the dispatcher):** a socket listener builds `gui::WindowInfo`s
+>   (token per pid, unique `id=pid`) and calls the concrete dispatcher's
+>   `onWindowInfosChanged` + `setFocusedWindow`. The concrete method is reached WITHOUT
+>   the heavy private `InputDispatcher.h` via a one-method local decl in
+>   `namespace android::inputdispatcher` — InputDispatcher is single-inheritance from
+>   InputDispatcherInterface, so `getDispatcher()` IS the object at offset 0; the call
+>   resolves against `libinputflinger.so`'s exported symbol (verified `llvm-nm -D`).
+> - **Host (carries the token):** `register_window_token_artless()` registers
+>   `(pid, channel-token)` with the `wart.windowreg` binder service after `createInputChannel`
+>   (token can't ride the socket — kernel object; this one hop is binder, host↔inputflinger,
+>   never through the Rust arbiter). No-op under normal ART (`checkService` null).
+>
+> ## Gotchas hit + fixed during bring-up
+> - `sf_surface.cpp` compiles into **`libsf_surface.so`** (built on a-03), NOT the Rust
+>   `wart-host` — must rebuild + push the shim, not just the host.
+> - Dispatcher FATAL-asserts on duplicate window `id` (default -1) → set `id=pid` + dedup.
+> - **`WindowInfo.transform` MUST be set** (the bug that made the IME/taskbar dead while
+>   fullscreen worked): the dispatcher delivers `transform.transform(rawX,rawY)` as the
+>   window-local coords (InputDispatcher.cpp:2135) and the host passes them to the guest
+>   verbatim. SF normally authors this; bypassing SF we set `transform.set(-left,-top)`
+>   per window — identity for fullscreen (offset 0, so keyguard/launcher worked), a real
+>   translate for offset strips (IME bottom strip, taskbar) so their guests get
+>   surface-local coords instead of raw display coords. `touchableRegion` stays display-
+>   space (hit-test at :599). IME strip anchored ABOVE the taskbar:
+>   `[h - inset_bottom - keyboard_px, h - inset_bottom]` (anchoring at `h` overlapped +
+>   stole the taskbar's taps and mis-aligned the keys).
+> - **Backlight = 0 under ART-off** (no DisplayManager): the panel renders (`screencap`
+>   proves it) but is invisible — looked like "touch broken" for a whole debugging round.
+>   Fixed properly: the arbiter (display-power authority under `--no-art`) drives
+>   `/sys/class/leds/lcd-backlight/brightness` in `apply_display_power` (on→level, off→0;
+>   `WART_BACKLIGHT_{PATH,LEVEL}` overridable). Boot force-on lights it automatically.
+> - **Backlight gap (SEPARATE follow-on, not this task):** under ART-off the backlight
+>   sits at brightness 0 (no DisplayManager) — the screen renders (screencap proves it)
+>   but is invisible. Set `/sys/class/leds/lcd-backlight/brightness`. Relates to task 81
+>   display power; should be folded into the ART-off display-power ownership.
+>
+> ---
+> Original scoping (kept for reference) follows. Full diagnosis: `[[project_pathA_inputflinger]]`.
 
 ## The blocker (decisively diagnosed — don't re-derive)
 

@@ -5,7 +5,7 @@
 use std::time::{Instant, SystemTime};
 
 use wart_arbiter_core::{
-    AppState, Ctx, Effect, Reply, Role, PRIMARY_DISPLAY, STATUS_BAR_DP, TASKBAR_DP,
+    AppState, ChromeAnchor, Ctx, Effect, Reply, Role, PRIMARY_DISPLAY, STATUS_BAR_DP, TASKBAR_DP,
 };
 
 use crate::shared::{
@@ -52,14 +52,19 @@ impl crate::ShellModule {
             launched_at: SystemTime::now(),
             launched_mono: Instant::now(),
         });
-        ctx.store
-            .display_mut(PRIMARY_DISPLAY)
-            .put_surface(pid, app_id, Role::Chrome);
-        let dp = match anchor {
-            "top" => STATUS_BAR_DP,
-            "bottom-bar" => TASKBAR_DP,
-            _ => 0,
+        let display = ctx.store.display_mut(PRIMARY_DISPLAY);
+        display.put_surface(pid, app_id, Role::Chrome);
+        // Record the anchor edge on the surface so the WMS can place this
+        // chrome's input strip from the live insets (top→inset_top strip,
+        // bottom→inset_bottom strip).
+        let (dp, chrome_anchor) = match anchor {
+            "top" => (STATUS_BAR_DP, Some(ChromeAnchor::Top)),
+            "bottom-bar" => (TASKBAR_DP, Some(ChromeAnchor::Bottom)),
+            _ => (0, None),
         };
+        if let Some(a) = chrome_anchor {
+            display.set_chrome_anchor(pid, a);
+        }
         let height = ctx
             .store
             .geometry(PRIMARY_DISPLAY)

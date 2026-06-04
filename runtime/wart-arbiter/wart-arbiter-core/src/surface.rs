@@ -60,6 +60,19 @@ pub enum Role {
     Lockscreen,
 }
 
+/// Which screen edge a [`Role::Chrome`] surface is anchored to — the stable
+/// semantic carried on `register-chrome` (`top` / `bottom-bar`). Stored on the
+/// surface so the WMS can place its input strip from the current insets +
+/// orientation (rather than re-deriving a stale rect or hardcoding app-ids).
+/// `None` on non-chrome surfaces.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChromeAnchor {
+    /// Status-bar strip pinned to the top edge (height = `inset_top`).
+    Top,
+    /// Taskbar/nav strip pinned to the bottom edge (height = `inset_bottom`).
+    Bottom,
+}
+
 /// One tracked GUI process on a display. The `pid` is the stable identity (it
 /// keys every existing signal/socket path); `app_id` is carried for AM-level
 /// reasoning + `list`.
@@ -68,6 +81,9 @@ pub struct Surface {
     pub pid: i32,
     pub app_id: String,
     pub role: Role,
+    /// Set on [`Role::Chrome`] surfaces (which edge they anchor to); `None`
+    /// otherwise. Preserved across role updates by [`DisplayState::put_surface`].
+    pub anchor: Option<ChromeAnchor>,
 }
 
 /// Editor metadata — moved verbatim from the binary's `state.rs::EditorInfo`,
@@ -129,8 +145,19 @@ impl DisplayState {
         if let Some(s) = self.surfaces.iter_mut().find(|s| s.pid == pid) {
             s.app_id = app_id;
             s.role = role;
+            // anchor preserved across role updates (set separately by the AMS at
+            // register-chrome; a plain re-register/role-change must not clobber it).
         } else {
-            self.surfaces.push(Surface { pid, app_id, role });
+            self.surfaces.push(Surface { pid, app_id, role, anchor: None });
+        }
+    }
+
+    /// Record which edge a chrome surface anchors to (`register-chrome`). No-op
+    /// if the pid isn't present. The WMS reads this to place the chrome input
+    /// strip from the live insets + orientation.
+    pub fn set_chrome_anchor(&mut self, pid: i32, anchor: ChromeAnchor) {
+        if let Some(s) = self.surfaces.iter_mut().find(|s| s.pid == pid) {
+            s.anchor = Some(anchor);
         }
     }
 

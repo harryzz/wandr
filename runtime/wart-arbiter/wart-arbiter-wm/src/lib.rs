@@ -37,8 +37,8 @@
 //!   it and pushes a real `orient`; the host applies it on push-back.
 
 use wart_arbiter_core::{
-    ArbiterModule, Ctx, DisplayId, Event, Reply, Role, Store, INSET_HOST_OWNED, ORIENT_HOST_OWNED,
-    PRIMARY_DISPLAY,
+    ArbiterModule, ChromeAnchor, Ctx, DisplayId, Event, Reply, Role, Store, INSET_HOST_OWNED,
+    ORIENT_HOST_OWNED, PRIMARY_DISPLAY,
 };
 
 /// Map the Device Orientation HAL value (`Surface.ROTATION_*` index) to the
@@ -188,6 +188,177 @@ impl WmModule {
         }
         self.fan_overlays(ctx, id);
     }
+}
+
+// ── Input-window authoring (task 84) ─────────────────────────────────────────
+//
+// Under ART-off there is no system_server WindowManager, so SurfaceFlinger never
+// pushes WindowInfos to the standalone InputDispatcher (wart-inputflinger) — every
+// touch is dropped ("no touchable window"). The arbiter *is* the WMS, so it authors
+// the ordered input-window list itself and pushes it to wart-inputflinger, which
+// feeds the dispatcher via `onWindowInfosChanged`. This is the same decide-don't-
+// render split as the `geometry` push: the arbiter owns roles + insets + orient +
+// focus; the rects are derived from them (never hardcoded).
+
+/// Input z-order policy — the single source of truth for how surface roles stack
+/// for *hit-testing* (distinct from the render/OOM role mechanics). Higher value =
+/// closer to the user = hit-tested first. Chrome splits by anchor: the status bar
+/// sits above the lockscreen; the taskbar/nav sits below it (the keyguard covers
+/// nav but not the status bar — see [`Role::Lockscreen`]).
+mod input_z {
+    pub const STATUS_BAR: i32 = 100;
+    pub const LOCKSCREEN: i32 = 90;
+    pub const IME: i32 = 85;
+    pub const TASKBAR: i32 = 80;
+    pub const APP: i32 = 10;
+}
+
+/// One authored input window: its display-space rect, z, focusability, and pid.
+struct InputWin {
+    pid: i32,
+    z: i32,
+    l: i32,
+    t: i32,
+    r: i32,
+    b: i32,
+    /// Whether this window can hold key focus. Chrome + IME are touch-only
+    /// (keys go to the editor/app); app + lockscreen are focusable.
+    focusable: bool,
+}
+
+/// Build the ordered input-window block the arbiter pushes to wart-inputflinger,
+/// or `None` if there's nothing to author yet (panel dims unknown — pre
+/// report-panel — or no visible surface). Pure derivation over the [`Store`]:
+///
+/// ```text
+/// win-begin <orient> <panel_w> <panel_h>
+/// win <pid> <l> <t> <r> <b> <focusable:0|1>   (repeated, TOP→BOTTOM z-order)
+/// win-focus <pid|-1>
+/// win-commit
+/// ```
+///
+/// Rects come from the live insets + keyboard occlusion + panel dims, so they
+/// track rotation/keyboard changes with no hardcoded geometry. The app surface is
+/// authored fullscreen (the host renders fullscreen); chrome/IME sit above it by
+/// z-order, so their strips win where they overlap and taps elsewhere fall through
+/// to the app — exactly the stock-Android stacking.
+pub fn input_window_block(store: &Store, id: DisplayId) -> Option<String> {
+    let disp = store.display(id)?;
+    let g = store.geometry(id)?;
+    if g.panel_w == 0 || g.panel_h == 0 {
+        return None; // no panel measured yet → can't place anything
+    }
+    let (w, h) = (g.panel_w as i32, g.panel_h as i32);
+    let orient = effective_orient(store, id);
+    // Chrome strip heights from the authored insets (0 when not yet known → no
+    // strip authored, app still routes).
+    let (inset_top, inset_bottom) = match g.chrome_insets() {
+        (t, b) if t != INSET_HOST_OWNED && b != INSET_HOST_OWNED => (t as i32, b as i32),
+        _ => (0, 0),
+    };
+    let kb = g.keyboard_px as i32;
+
+    let mut wins: Vec<InputWin> = Vec::new();
+    for s in disp.surfaces() {
+        let win = match s.role {
+            // Fullscreen, focusable. The app the user is looking at.
+            Role::Foreground | Role::OverlayBehind => {
+                InputWin { pid: s.pid, z: input_z::APP, l: 0, t: 0, r: w, b: h, focusable: true }
+            }
+            // Fullscreen lockscreen above the app + nav, below the status bar.
+            Role::Lockscreen => InputWin {
+                pid: s.pid,
+                z: input_z::LOCKSCREEN,
+                l: 0,
+                t: 0,
+                r: w,
+                b: h,
+                focusable: true,
+            },
+            // IME overlay — keyboard strip, touch-only. Sits ABOVE the bottom
+            // chrome (taskbar), matching how the editor is laid out: its content
+            // is inset by statusbar + keyboard + taskbar, so the keyboard occupies
+            // `[h - inset_bottom - kb, h - inset_bottom]` — NOT the screen bottom
+            // (anchoring at `h` would overlap + steal the taskbar's taps and
+            // mis-align the keys by `inset_bottom`). Skip if no height.
+            Role::Overlay => {
+                if kb <= 0 {
+                    continue;
+                }
+                let bottom = h - inset_bottom; // top of the taskbar strip
+                InputWin {
+                    pid: s.pid,
+                    z: input_z::IME,
+                    l: 0,
+                    t: bottom - kb,
+                    r: w,
+                    b: bottom,
+                    focusable: false,
+                }
+            }
+            // Chrome strip placed from its anchor + the matching inset, touch-only.
+            Role::Chrome => match s.anchor {
+                Some(ChromeAnchor::Top) => {
+                    if inset_top <= 0 {
+                        continue;
+                    }
+                    InputWin {
+                        pid: s.pid,
+                        z: input_z::STATUS_BAR,
+                        l: 0,
+                        t: 0,
+                        r: w,
+                        b: inset_top,
+                        focusable: false,
+                    }
+                }
+                Some(ChromeAnchor::Bottom) => {
+                    if inset_bottom <= 0 {
+                        continue;
+                    }
+                    InputWin {
+                        pid: s.pid,
+                        z: input_z::TASKBAR,
+                        l: 0,
+                        t: h - inset_bottom,
+                        r: w,
+                        b: h,
+                        focusable: false,
+                    }
+                }
+                None => continue, // unplaced chrome — don't guess
+            },
+            // Not visible / no SF surface → no input window.
+            Role::Background | Role::Headless => continue,
+        };
+        wins.push(win);
+    }
+    if wins.is_empty() {
+        return None;
+    }
+    // Top→bottom: highest z first (the dispatcher returns the first touchable
+    // window containing the point). Stable so equal-z order is deterministic.
+    wins.sort_by(|a, b| b.z.cmp(&a.z));
+
+    // Key focus: the lockscreen when locked, else the visible app. Chrome/IME are
+    // never focus targets (touch-only).
+    let focus_pid = disp
+        .first_with_role(Role::Lockscreen)
+        .map(|s| s.pid)
+        .or_else(|| disp.visible_app())
+        .unwrap_or(-1);
+
+    let mut out = String::new();
+    out.push_str(&format!("win-begin {orient} {w} {h}\n"));
+    for win in &wins {
+        out.push_str(&format!(
+            "win {} {} {} {} {} {}\n",
+            win.pid, win.l, win.t, win.r, win.b, win.focusable as u8
+        ));
+    }
+    out.push_str(&format!("win-focus {focus_pid}\n"));
+    out.push_str("win-commit\n");
+    Some(out)
 }
 
 impl ArbiterModule for WmModule {
@@ -352,7 +523,7 @@ impl ArbiterModule for WmModule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wart_arbiter_core::{EditorInfo, Effect, Registry, Role};
+    use wart_arbiter_core::{ChromeAnchor, EditorInfo, Effect, Registry, Role};
 
     /// Shorthand for the `HostLine` effect the WM module emits.
     fn hl(pid: i32, line: &str) -> Effect {
@@ -367,6 +538,88 @@ mod tests {
         let mut reg = Registry::new();
         reg.register(Box::new(WmModule::new()));
         (reg, Store::new())
+    }
+
+    /// A Pixel-2-XL-shaped store with the panel measured (560 dpi → density 3.5,
+    /// chrome insets 133/151) so `input_window_block` can place strips.
+    fn measured_store() -> Store {
+        let mut store = Store::new();
+        let g = store.geometry_mut(PRIMARY_DISPLAY);
+        g.panel_w = 1440;
+        g.panel_h = 2880;
+        g.density = 3.5;
+        store
+    }
+
+    #[test]
+    fn input_window_block_none_before_panel_measured() {
+        let mut store = Store::new();
+        store.display_mut(PRIMARY_DISPLAY).put_surface(10, "app", Role::Foreground);
+        assert_eq!(input_window_block(&store, PRIMARY_DISPLAY), None);
+    }
+
+    #[test]
+    fn input_window_block_orders_chrome_above_app() {
+        let mut store = measured_store();
+        let d = store.display_mut(PRIMARY_DISPLAY);
+        d.put_surface(10, "app", Role::Foreground);
+        d.put_surface(70, "war.statusbar", Role::Chrome);
+        d.set_chrome_anchor(70, ChromeAnchor::Top);
+        d.put_surface(71, "war.taskbar", Role::Chrome);
+        d.set_chrome_anchor(71, ChromeAnchor::Bottom);
+        // A backgrounded app contributes no input window.
+        d.put_surface(20, "bg", Role::Background);
+        let block = input_window_block(&store, PRIMARY_DISPLAY).unwrap();
+        // Top→bottom: statusbar(133-tall top strip), taskbar(151-tall bottom strip),
+        // fullscreen app; chrome touch-only, app focusable + focused.
+        let expected = "\
+win-begin 255 1440 2880\n\
+win 70 0 0 1440 133 0\n\
+win 71 0 2729 1440 2880 0\n\
+win 10 0 0 1440 2880 1\n\
+win-focus 10\n\
+win-commit\n";
+        assert_eq!(block, expected);
+    }
+
+    #[test]
+    fn input_window_block_lockscreen_is_focused_above_app() {
+        let mut store = measured_store();
+        let d = store.display_mut(PRIMARY_DISPLAY);
+        // Locked: the app is demoted to Background, the keyguard is fullscreen.
+        d.put_surface(10, "app", Role::Background);
+        d.put_surface(99, "war.keyguard", Role::Lockscreen);
+        d.put_surface(70, "war.statusbar", Role::Chrome);
+        d.set_chrome_anchor(70, ChromeAnchor::Top);
+        let block = input_window_block(&store, PRIMARY_DISPLAY).unwrap();
+        // statusbar above lockscreen; the backgrounded app is excluded; focus = keyguard.
+        let expected = "\
+win-begin 255 1440 2880\n\
+win 70 0 0 1440 133 0\n\
+win 99 0 0 1440 2880 1\n\
+win-focus 99\n\
+win-commit\n";
+        assert_eq!(block, expected);
+    }
+
+    #[test]
+    fn input_window_block_ime_strip_when_keyboard_up() {
+        let mut store = measured_store();
+        store.geometry_mut(PRIMARY_DISPLAY).keyboard_px = 1000;
+        let d = store.display_mut(PRIMARY_DISPLAY);
+        d.put_surface(10, "app", Role::OverlayBehind);
+        d.put_surface(30, "war.ime", Role::Overlay);
+        let block = input_window_block(&store, PRIMARY_DISPLAY).unwrap();
+        // IME = 1000px strip sitting ABOVE the taskbar inset (151px @ 3.5 density),
+        // i.e. [2880-151-1000, 2880-151] = [1729, 2729], touch-only, above the
+        // fullscreen app; the visible app (OverlayBehind) holds focus, not the IME.
+        let expected = "\
+win-begin 255 1440 2880\n\
+win 30 0 1729 1440 2729 0\n\
+win 10 0 0 1440 2880 1\n\
+win-focus 10\n\
+win-commit\n";
+        assert_eq!(block, expected);
     }
 
     /// Model an editor focusing: the shell sets the resource-focus in the Store

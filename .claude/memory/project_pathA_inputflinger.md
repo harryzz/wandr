@@ -7,6 +7,42 @@ metadata:
   originSessionId: a6ba002c-9c9c-4673-9e97-6c4e1c3eba6d
 ---
 
+**✅ RESOLVED (task 84, device-verified 2026-06-04):** app touch/keys now route under
+ART-off. The SF-push blocker (below) was sidestepped, NOT fixed: the **wart-arbiter
+(the WMS) authors the ordered window list and pushes it to wart-inputflinger**, which
+feeds the standalone dispatcher via `InputDispatcher::onWindowInfosChanged` (the
+unit-test entry). Key pieces: (1) `wart-arbiter-wm::input_window_block` derives rects
+from the surface/role model + insets/orient/keyboard (chrome strips from a new
+`Surface.anchor`); binary diff-pushes `win-begin/win/win-focus/win-commit` to the
+**abstract** socket `@wart-inputflinger` (uid-system can't bind a file in /data/local/tmp)
+after every command/child-exit, gated `--no-art`. (2) wart-inputflinger reaches the
+concrete `onWindowInfosChanged` WITHOUT the heavy private InputDispatcher.h: a one-method
+decl in `namespace android::inputdispatcher` (single-inherit from InputDispatcherInterface
+→ getDispatcher() is the object at offset 0; resolves vs libinputflinger.so's exported
+symbol). (3) host registers `(pid,channel-token)` with the `wart.windowreg` binder svc
+after createInputChannel (token is a kernel object — can't ride the socket; this one hop
+is binder, never through the Rust arbiter); arbiter refers to windows by pid. Gotchas (all fixed):
+`sf_surface.cpp`→`libsf_surface.so` (a-03 build, NOT Rust host); dispatcher FATAL-asserts
+on duplicate WindowInfo.id (default -1) → set `id=pid`+dedup. **THE key fix: set
+`WindowInfo.transform.set(-left,-top)`** — the dispatcher delivers `transform.transform(
+rawX,rawY)` as window-local coords (InputDispatcher.cpp:2135) and the host passes them to
+the guest verbatim; SF normally authors this, so bypassing SF an offset window (IME
+strip, taskbar) handed the guest RAW DISPLAY coords → keys dead, while fullscreen
+(offset 0=identity) worked → that's why keyguard/launcher worked but IME/taskbar didn't.
+`touchableRegion` stays display-space (hit-test InputDispatcher.cpp:599). IME strip
+anchored ABOVE the taskbar: `[h-inset_bottom-keyboard_px, h-inset_bottom]`. Backlight=0
+under ART-off (no DisplayManager) — panel renders but invisible (cost a full debug round)
+→ arbiter drives `/sys/class/leds/lcd-backlight/brightness` in apply_display_power
+(WART_BACKLIGHT_{PATH,LEVEL} overridable; boot force-on lights it). VERIFIED PORTRAIT:
+swipe-unlock, launcher, app-switch, IME typing, taskbar-with-keyboard, system-key dedup.
+**OPEN FOLLOW-ON: LANDSCAPE** — arbiter authors rects portrait `[0,0,panel_w,panel_h]` +
+reader viewport is portrait, so rotation mismatches; needs arbiter to author rotated-space
+rects + push orientation so wart-inputflinger reconfigures the reader DisplayViewport
+(== the original "secondary coordinate issue"). The blocker write-up below is the
+diagnosis record.
+
+---
+
 Path A (task 80) = run AOSP's real `InputManager` (InputReader+InputDispatcher) as
 the standalone `inputflinger` binder service so ONE dispatcher reads input once and
 routes it (vs the task-80 per-host evdev bootstrap, which fanned global keys to every

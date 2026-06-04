@@ -31,7 +31,9 @@ mod surface;
 pub use alarm::Alarm;
 pub use notify::Notification;
 pub use registry::{pid_alive, AppState, DEFAULT_IME_HEIGHT_PX};
-pub use surface::{DisplayState, EditorInfo, ResourceFocus, ResourceKind, Role, Surface};
+pub use surface::{
+    ChromeAnchor, DisplayState, EditorInfo, ResourceFocus, ResourceKind, Role, Surface,
+};
 
 /// Identifies one physical display. `0` is the primary panel. Keyed
 /// per-display from day one — "one panel" is a hardcode the doc calls out

@@ -26,7 +26,10 @@
 #include <binder/IServiceManager.h>
 #include <binder/ProcessState.h>
 #include <binder/IPCThreadState.h>
+#include <binder/Binder.h>
+#include <binder/Parcel.h>
 #include <utils/StrongPointer.h>
+#include <utils/Timers.h>
 
 #include "InputManager.h"
 #include "InputReaderBase.h"
@@ -36,16 +39,28 @@
 
 #include <input/DisplayViewport.h>
 #include <input/Input.h>
+#include <gui/WindowInfo.h>
+#include <gui/WindowInfosUpdate.h>
 #include <android/keycodes.h>
+#include <ui/Rect.h>
+#include <ui/Region.h>
 #include <ui/Rotation.h>
 #include <ui/LogicalDisplayId.h>
 
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/stat.h>
 #include <unistd.h>
+#include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <cerrno>
+#include <cstddef>
 #include <string>
+#include <vector>
+#include <map>
+#include <mutex>
+#include <thread>
 
 using namespace android;
 
@@ -76,6 +91,34 @@ static int env_int(const char* name, int dflt) {
 // path lives in one named place per process, overridable, never sprinkled.
 static constexpr const char* ARBITER_SOCK_DEFAULT = "/data/local/tmp/wart-arbiter.sock";
 static std::string g_arbiter_sock = ARBITER_SOCK_DEFAULT;
+
+// The arbiter→inputflinger window-feed socket (task 84). WE listen here; the
+// arbiter connects + pushes the ordered window list. Resolved (NOT hardcoded)
+// from `--inputflinger-sock <path>` > `WART_INPUTFLINGER_SOCK` env > default —
+// symmetric with the Rust arbiter's resolution of the same env var.
+//
+// ABSTRACT namespace by default (leading `@`): wart-inputflinger runs as uid
+// system (via wart-launch) and CANNOT create a file under `/data/local/tmp`
+// (0771 shell:shell — connect-yes, bind-no), so a filesystem socket bind would
+// EACCES. The abstract namespace has no filesystem entry + no path perms; the
+// root arbiter connects to it by name. A `@name` here ⇒ abstract `\0name`.
+static constexpr const char* INPUTFLINGER_SOCK_DEFAULT = "@wart-inputflinger";
+static std::string g_inputflinger_sock = INPUTFLINGER_SOCK_DEFAULT;
+
+// Fill a sockaddr_un for either a filesystem path or (if it starts with '@') an
+// abstract-namespace name; returns the address length to pass to bind/connect.
+static socklen_t fill_un_addr(sockaddr_un& addr, const std::string& path) {
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    if (!path.empty() && path[0] == '@') {
+        // Abstract: sun_path[0] = '\0', then the name (NOT NUL-terminated).
+        const std::string name = path.substr(1);
+        memcpy(addr.sun_path + 1, name.c_str(), name.size());
+        return static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + 1 + name.size());
+    }
+    strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
+    return static_cast<socklen_t>(sizeof(addr));
+}
 
 // Fire-and-forget one command line to the arbiter (connect + write + close). Used
 // for system keys, which are rare + user-initiated, so a quick blocking local
@@ -204,14 +247,238 @@ public:
     void notifyStickyModifierStateChanged(uint32_t, uint32_t) override {}
 };
 
+// ── Task 84: feed app windows to the dispatcher (ART-off) ────────────────────
+//
+// With the Java framework stopped there is no system_server WindowManager, so
+// SurfaceFlinger never pushes WindowInfos to our InputDispatcher (it binds the
+// inputflinger service once at its own init, cleared mInputFlinger when
+// system_server died, and updateInputFlinger then early-returns). The dispatcher
+// thus has ZERO windows and drops every touch ("no touchable window"). The
+// wart-arbiter — which IS the window manager — instead authors the ordered window
+// list and pushes it to us over a UNIX socket; we feed it straight into the
+// dispatcher via InputDispatcher::onWindowInfosChanged, the same entry the AOSP
+// dispatcher unit tests use to simulate SF's WindowInfosListener callback.
+//
+// Reaching that concrete method without dragging in the heavy private
+// InputDispatcher.h (its 42 internal headers + perfetto + aconfig + the Rust
+// bridge — none of which we link): InputDispatcher is *single*-inheritance from
+// InputDispatcherInterface (InputDispatcher.h: `class InputDispatcher : public
+// android::InputDispatcherInterface`), so the `InputDispatcherInterface&` that
+// InputManager::getDispatcher() hands us IS the InputDispatcher object at offset
+// 0. We declare just the one method here, in the dispatcher's real namespace
+// (android::inputdispatcher), so the call resolves against libinputflinger.so's
+// exported symbol `android::inputdispatcher::InputDispatcher::onWindowInfosChanged`
+// (verified present via llvm-nm -D). (Invariant: if a future AOSP bump inserts a
+// base before InputDispatcherInterface, this offset-0 cast must be revisited.)
+namespace android {
+namespace inputdispatcher {
+class InputDispatcher {
+public:
+    void onWindowInfosChanged(const gui::WindowInfosUpdate&);
+};
+}  // namespace inputdispatcher
+}  // namespace android
+
+// pid → its input-channel connection token (minted by our own dispatcher at
+// createInputChannel, then registered back by the host over binder so the token's
+// kernel identity is preserved end-to-end) + a stable per-pid application token
+// for focus/ANR ownership. The arbiter refers to windows by pid (which it already
+// keys everything on); we join pid → token here. The token cannot ride the
+// arbiter's socket (it's a kernel binder object), so this one hop is binder —
+// host↔inputflinger, never through the (Rust) arbiter.
+struct WinTokens {
+    sp<IBinder> channel;
+    sp<IBinder> application;
+};
+static std::mutex g_win_mtx;
+static std::map<int32_t, WinTokens> g_win_tokens;
+
+static void wart_register_token(int32_t pid, const sp<IBinder>& token) {
+    std::lock_guard<std::mutex> lk(g_win_mtx);
+    WinTokens& e = g_win_tokens[pid];
+    e.channel = token;
+    if (e.application == nullptr) e.application = sp<BBinder>::make();
+    ALOGI("wart-inputflinger: registered window token pid=%d", pid);
+}
+static void wart_unregister_token(int32_t pid) {
+    std::lock_guard<std::mutex> lk(g_win_mtx);
+    g_win_tokens.erase(pid);
+    ALOGI("wart-inputflinger: unregistered window token pid=%d", pid);
+}
+
+// Hand-rolled binder service the hosts call to register their (pid, token). A
+// plain BBinder (no AIDL codegen) with two transaction codes; the payload is read
+// directly — no interface-token handshake for this private, same-tree contract.
+// Registered as "wart.windowreg"; the host resolves it after createInputChannel.
+class WartWindowReg : public BBinder {
+public:
+    enum { TX_REGISTER = IBinder::FIRST_CALL_TRANSACTION, TX_UNREGISTER };
+    status_t onTransact(uint32_t code, const Parcel& data, Parcel* reply,
+                        uint32_t flags) override {
+        switch (code) {
+            case TX_REGISTER: {
+                int32_t pid = data.readInt32();
+                sp<IBinder> token = data.readStrongBinder();
+                if (token != nullptr) wart_register_token(pid, token);
+                return OK;
+            }
+            case TX_UNREGISTER:
+                wart_unregister_token(data.readInt32());
+                return OK;
+            default:
+                return BBinder::onTransact(code, data, reply, flags);
+        }
+    }
+};
+
+// Parse one arbiter window-list block (terminated by `win-commit`) and feed the
+// dispatcher. Lines:
+//   win-begin <orient> <w> <h>                 (informational — rects are already
+//                                               in the reader's display space)
+//   win <pid> <l> <t> <r> <b> <focusable:0|1>  (TOP→BOTTOM z-order)
+//   win-focus <pid|-1>
+//   win-commit
+// Each window's token is looked up by pid; a window whose host hasn't registered
+// its token yet is skipped (it'll appear on the next push after registration).
+static void feed_window_block(InputManagerInterface* im,
+                              const std::vector<std::string>& lines) {
+    std::vector<gui::WindowInfo> wins;
+    std::map<int32_t, bool> seen;  // dedup pids — the dispatcher rejects dup window ids
+    int32_t focus_pid = -1;
+    for (const std::string& ln : lines) {
+        if (ln.rfind("win ", 0) == 0) {
+            int pid = 0, l = 0, t = 0, r = 0, b = 0, foc = 0;
+            if (sscanf(ln.c_str(), "win %d %d %d %d %d %d", &pid, &l, &t, &r, &b, &foc) != 6) {
+                continue;
+            }
+            if (seen.count(pid)) continue;
+            seen[pid] = true;
+            sp<IBinder> chan, app;
+            {
+                std::lock_guard<std::mutex> lk(g_win_mtx);
+                auto it = g_win_tokens.find(pid);
+                if (it == g_win_tokens.end()) continue;  // token not registered yet
+                chan = it->second.channel;
+                app = it->second.application;
+            }
+            gui::WindowInfo wi;
+            wi.token = chan;
+            // The dispatcher rejects a WindowInfosUpdate with duplicate window ids
+            // (default -1) — one per host surface, so key it on the (unique) pid.
+            wi.id = pid;
+            wi.name = "wart-" + std::to_string(pid);
+            wi.globalScaleFactor = 1.0f;
+            wi.frame = Rect(l, t, r, b);
+            // touchableRegion is display-space (the dispatcher hit-tests it against
+            // the display-transformed touch point — InputDispatcher.cpp:599).
+            wi.touchableRegion.orSelf(Rect(l, t, r, b));
+            // transform maps DISPLAY → WINDOW-LOCAL: the dispatcher delivers
+            // `transform.transform(rawX, rawY)` to the channel (InputDispatcher.cpp
+            // :2135), and the host passes that through to the guest verbatim. Under
+            // normal ART, SurfaceFlinger authored this; bypassing SF we must set it
+            // ourselves or an offset window (the IME, a bottom strip) hands the
+            // guest raw display coords — far outside its surface — so its keys never
+            // register. Pure translate by -topLeft (identity for fullscreen windows).
+            wi.transform.set(static_cast<float>(-l), static_cast<float>(-t));
+            wi.displayId = ui::LogicalDisplayId::DEFAULT;
+            wi.applicationInfo.token = app;
+            wi.applicationInfo.name = wi.name;
+            wi.applicationInfo.dispatchingTimeoutMillis = 5000;
+            // Default inputConfig = touchable + focusable (matches the proven host
+            // WindowInfo). Chrome/IME are touch-only → mark NOT_FOCUSABLE so keys
+            // never target a bar/keyboard strip.
+            if (foc == 0) {
+                wi.inputConfig |= gui::WindowInfo::InputConfig::NOT_FOCUSABLE;
+            }
+            wins.push_back(std::move(wi));
+        } else if (ln.rfind("win-focus ", 0) == 0) {
+            sscanf(ln.c_str(), "win-focus %d", &focus_pid);
+        }
+    }
+
+    static int64_t vsync = 0;
+    gui::WindowInfosUpdate update(std::move(wins), {}, ++vsync,
+                                  systemTime(SYSTEM_TIME_MONOTONIC));
+    reinterpret_cast<android::inputdispatcher::InputDispatcher*>(&im->getDispatcher())
+            ->onWindowInfosChanged(update);
+
+    // Key focus (touch routes by hit-test regardless). setFocusedWindow is on the
+    // public InputDispatcherInterface, so no shim needed. The window must be a
+    // focusable one we just pushed — which holds (the arbiter picks a focusable
+    // pid: lockscreen or the visible app).
+    if (focus_pid >= 0) {
+        sp<IBinder> chan;
+        {
+            std::lock_guard<std::mutex> lk(g_win_mtx);
+            auto it = g_win_tokens.find(focus_pid);
+            if (it != g_win_tokens.end()) chan = it->second.channel;
+        }
+        if (chan != nullptr) {
+            gui::FocusRequest fr;
+            fr.token = chan;
+            fr.windowName = "wart-" + std::to_string(focus_pid);
+            fr.timestamp = systemTime(SYSTEM_TIME_MONOTONIC);
+            fr.displayId = ui::LogicalDisplayId::DEFAULT.val();
+            im->getDispatcher().setFocusedWindow(fr);
+        }
+    }
+}
+
+// Listen on the arbiter→inputflinger window-feed socket. The arbiter pushes one
+// block per connection (connect → write → shutdown(Write) → close), so we read to
+// EOF, split into lines, and feed iff the block is complete (`win-commit` seen).
+static void window_feed_listener(InputManagerInterface* im, std::string sock_path) {
+    const bool is_abstract = !sock_path.empty() && sock_path[0] == '@';
+    if (!is_abstract) unlink(sock_path.c_str());
+    int srv = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (srv < 0) {
+        ALOGE("wart-inputflinger: window-feed socket() failed: %s", strerror(errno));
+        return;
+    }
+    sockaddr_un addr;
+    socklen_t len = fill_un_addr(addr, sock_path);
+    if (bind(srv, reinterpret_cast<sockaddr*>(&addr), len) != 0) {
+        ALOGE("wart-inputflinger: window-feed bind(%s) failed: %s", sock_path.c_str(),
+              strerror(errno));
+        close(srv);
+        return;
+    }
+    if (!is_abstract) chmod(sock_path.c_str(), 0666);
+    listen(srv, 8);
+    ALOGI("wart-inputflinger: window-feed listening on %s", sock_path.c_str());
+    for (;;) {
+        int c = accept(srv, nullptr, nullptr);
+        if (c < 0) continue;
+        std::string buf;
+        char tmp[2048];
+        ssize_t n;
+        while ((n = read(c, tmp, sizeof(tmp))) > 0) buf.append(tmp, static_cast<size_t>(n));
+        close(c);
+        std::vector<std::string> lines;
+        bool commit = false;
+        size_t start = 0, nl;
+        while ((nl = buf.find('\n', start)) != std::string::npos) {
+            std::string line = buf.substr(start, nl - start);
+            if (line == "win-commit") commit = true;
+            lines.push_back(std::move(line));
+            start = nl + 1;
+        }
+        if (commit) feed_window_block(im, lines);
+    }
+}
+
 int main(int argc, char** argv) {
     // Resolve the arbiter socket: --arbiter-sock <path> > WART_ARBITER_SOCK env >
     // default. (No hardcoded literal in the hot path; one source, overridable.)
     for (int i = 1; i + 1 < argc; ++i) {
-        if (strcmp(argv[i], "--arbiter-sock") == 0) { g_arbiter_sock = argv[i + 1]; break; }
+        if (strcmp(argv[i], "--arbiter-sock") == 0) g_arbiter_sock = argv[i + 1];
+        else if (strcmp(argv[i], "--inputflinger-sock") == 0) g_inputflinger_sock = argv[i + 1];
     }
     if (g_arbiter_sock == ARBITER_SOCK_DEFAULT) {
         if (const char* e = getenv("WART_ARBITER_SOCK"); e && *e) g_arbiter_sock = e;
+    }
+    if (g_inputflinger_sock == INPUTFLINGER_SOCK_DEFAULT) {
+        if (const char* e = getenv("WART_INPUTFLINGER_SOCK"); e && *e) g_inputflinger_sock = e;
     }
     // Viewport tuning (default = portrait panel; override to align with SF's window
     // coordinate space on rotated/landscape-native panels).
@@ -251,18 +518,26 @@ int main(int argc, char** argv) {
     // interception in interceptKeyBeforeQueueing runs at enqueue time and works
     // regardless, which is why POWER/VOLUME worked but touch was dropped.)
     im->getDispatcher().setInputDispatchMode(/*enabled=*/true, /*frozen=*/false);
+    // We own the (single) display; system_server's IMS normally sets this. Needed
+    // for key events to reach the focused window (touch hit-tests by displayId
+    // regardless). The arbiter authors per-window focus via the feed below.
+    im->getDispatcher().setFocusedDisplay(ui::LogicalDisplayId::DEFAULT);
     ALOGI("wart-inputflinger: input dispatch ENABLED");
 
-    // NOTE (path A, open item): under ART-off, SurfaceFlinger does NOT push
-    // WindowInfos to our dispatcher because SF binds the inputflinger service once
-    // at its own init (mInputFlinger) and cleared it when system_server died, so
-    // SF::updateInputFlinger early-returns. System-key interception (above) works
-    // because it runs at enqueue; app TOUCH does not route (the dispatcher has no
-    // windows). Cracking that needs SF to re-bind mInputFlinger to us — a fragile
-    // SF-restart dance — or a different window source. See memory
-    // project_pathA_inputflinger + the wart_wininfo_probe diagnostic.
-    ALOGI("wart-inputflinger: up — system keys → arbiter (dedup); app touch routing "
-          "pending SF mInputFlinger fix under ART-off");
+    // Task 84 — app TOUCH/key routing under ART-off. SurfaceFlinger can't push
+    // WindowInfos to us (it bound the inputflinger service once at its own init,
+    // cleared mInputFlinger when system_server died, and updateInputFlinger then
+    // early-returns), so instead the wart-arbiter (the window manager) authors the
+    // window list and pushes it to our socket; we feed it to the dispatcher via
+    // onWindowInfosChanged. Two pieces:
+    //   1. a binder service the hosts register their (pid, channel-token) with, and
+    status_t wreg = defaultServiceManager()->addService(String16("wart.windowreg"),
+                                                        sp<WartWindowReg>::make());
+    ALOGI("wart-inputflinger: addService(wart.windowreg) → %d", wreg);
+    //   2. a socket listener that turns each arbiter push into onWindowInfosChanged.
+    std::thread(window_feed_listener, im.get(), g_inputflinger_sock).detach();
+    ALOGI("wart-inputflinger: up — system keys → arbiter (dedup); app touch/keys → "
+          "arbiter window-feed (%s)", g_inputflinger_sock.c_str());
     android::IPCThreadState::self()->joinThreadPool();
     return 0;
 }
