@@ -178,6 +178,30 @@ impl SensorsModule {
         Reply::ok(format!("report-sensor {} x={x} y={y} z={z}", kind.as_wire()))
     }
 
+    /// `report-sensor-descriptor <kind> <max_range> <resolution>` — set a sensor's
+    /// descriptor from an EXTERNAL driver. The in-process `sensor_driver` seeds this
+    /// at enumerate via the framework SensorManager, but that's dead under ART-off;
+    /// the standalone `wart-sensors` daemon (which reads the HAL directly) sends it
+    /// here so the proximity near/far classifier has the `max_range` it needs.
+    fn cmd_report_sensor_descriptor(&mut self, args: &str, ctx: &mut Ctx) -> Reply {
+        let toks: Vec<&str> = args.split_whitespace().collect();
+        let (Some(kind_tok), Some(mr_tok)) = (toks.first(), toks.get(1)) else {
+            return Reply::err("report-sensor-descriptor-usage <kind> <max_range> <resolution>");
+        };
+        let Some(kind) = SensorKind::from_wire(kind_tok) else {
+            return Reply::err(format!("report-sensor-descriptor-unknown-kind {kind_tok:?}"));
+        };
+        let Ok(max_range) = mr_tok.parse::<f32>() else {
+            return Reply::err(format!("report-sensor-descriptor-bad-max-range {mr_tok:?}"));
+        };
+        let resolution = toks.get(2).and_then(|t| t.parse::<f32>().ok()).unwrap_or(0.0);
+        ctx.store.set_sensor_descriptor(kind, max_range, resolution);
+        Reply::ok(format!(
+            "report-sensor-descriptor {} max_range={max_range} resolution={resolution}",
+            kind.as_wire()
+        ))
+    }
+
     /// `sensor-hold <kind> <on|off>` — manually acquire/release a sensor under a
     /// synthetic requester, for device verification of the real HAL enable path
     /// (cover/uncover, battery power-down) without needing a live call to drive
@@ -227,12 +251,13 @@ impl SensorsModule {
 
 impl ArbiterModule for SensorsModule {
     fn verbs(&self) -> &[&'static str] {
-        &["report-sensor", "sensor-state", "sensor-hold"]
+        &["report-sensor", "report-sensor-descriptor", "sensor-state", "sensor-hold"]
     }
 
     fn on_command(&mut self, verb: &str, args: &str, ctx: &mut Ctx) -> Reply {
         match verb {
             "report-sensor" => self.cmd_report_sensor(args, ctx),
+            "report-sensor-descriptor" => self.cmd_report_sensor_descriptor(args, ctx),
             "sensor-state" => self.cmd_sensor_state(ctx),
             "sensor-hold" => self.cmd_sensor_hold(args, ctx),
             other => Reply::err(format!("sensors-unknown-verb {other}")),
@@ -300,6 +325,27 @@ mod tests {
             Reply::Ok(s) => assert!(s.contains("prox=far"), "expected far, got {s:?}"),
             Reply::Err(e) => panic!("sensor-state err {e}"),
         }
+    }
+
+    #[test]
+    fn report_sensor_descriptor_enables_classification() {
+        // Without a descriptor the classifier can't decide; the new verb supplies it
+        // (the ART-off path, where wart-sensors feeds max_range from the HAL).
+        let mut r = reg();
+        let mut store = Store::new();
+        // No descriptor yet → a reading can't flip prox state (stays unknown).
+        r.dispatch_command("report-sensor", "proximity 0", &mut store).unwrap();
+        let (reply, _) = r.dispatch_command("sensor-state", "", &mut store).unwrap();
+        assert!(matches!(reply, Reply::Ok(ref s) if s.contains("prox=unknown")));
+        // Supply the descriptor (max_range 5), then the same reading classifies near.
+        let (reply, _) = r
+            .dispatch_command("report-sensor-descriptor", "proximity 5 0.1", &mut store)
+            .unwrap();
+        assert!(matches!(reply, Reply::Ok(_)));
+        assert_eq!(store.sensor(SensorKind::Proximity).unwrap().max_range, 5.0);
+        r.dispatch_command("report-sensor", "proximity 0", &mut store).unwrap();
+        let (reply, _) = r.dispatch_command("sensor-state", "", &mut store).unwrap();
+        assert!(matches!(reply, Reply::Ok(ref s) if s.contains("prox=near")), "{reply:?}");
     }
 
     #[test]

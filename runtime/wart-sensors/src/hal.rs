@@ -38,11 +38,14 @@ pub const TYPE_DEVICE_ORIENTATION: i32 = 27;
 type OpenFn = unsafe extern "C" fn() -> c_int;
 type EnableFn = unsafe extern "C" fn(i32, i64, c_int) -> c_int;
 type PollFn = unsafe extern "C" fn(*mut WartSensorEvent, c_int) -> c_int;
+type FloatByTypeFn = unsafe extern "C" fn(i32) -> f32;
 
 pub struct SensorHal {
     _handle: *mut c_void,
     enable: EnableFn,
     poll: PollFn,
+    max_range: FloatByTypeFn,
+    resolution: FloatByTypeFn,
 }
 
 // The dlopen'd library lives for the process lifetime; the fn pointers are Send.
@@ -63,11 +66,21 @@ impl SensorHal {
         let open: OpenFn = unsafe { sym(handle, "wart_sensors_open")? };
         let enable: EnableFn = unsafe { sym(handle, "wart_sensors_enable")? };
         let poll: PollFn = unsafe { sym(handle, "wart_sensors_poll")? };
+        let max_range: FloatByTypeFn = unsafe { sym(handle, "wart_sensors_max_range")? };
+        let resolution: FloatByTypeFn = unsafe { sym(handle, "wart_sensors_resolution")? };
         let rc = unsafe { open() };
         if rc != 0 {
             return Err(format!("wart_sensors_open() = {rc} (HAL unreachable?)"));
         }
-        Ok(Self { _handle: handle, enable, poll })
+        Ok(Self { _handle: handle, enable, poll, max_range, resolution })
+    }
+
+    /// The sensor type's `max_range` / `resolution` from the HAL (0 if absent).
+    pub fn max_range(&self, stype: i32) -> f32 {
+        unsafe { (self.max_range)(stype) }
+    }
+    pub fn resolution(&self, stype: i32) -> f32 {
+        unsafe { (self.resolution)(stype) }
     }
 
     /// Enable/disable a sensor by android type at `period_ns`. Returns Ok on 0.

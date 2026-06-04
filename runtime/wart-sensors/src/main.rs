@@ -12,7 +12,7 @@ mod orientation;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 
-use hal::{SensorHal, WartSensorEvent, TYPE_ACCEL, TYPE_DEVICE_ORIENTATION};
+use hal::{SensorHal, WartSensorEvent, TYPE_ACCEL, TYPE_DEVICE_ORIENTATION, TYPE_PROXIMITY};
 use orientation::OrientationTracker;
 
 /// Sampling period — ~10 Hz is plenty for rotation + cheap on power. (DEVICE_ORIENTATION
@@ -26,18 +26,18 @@ fn arbiter_sock_path() -> String {
         .unwrap_or_else(|| "/data/local/tmp/wart-arbiter.sock".to_string())
 }
 
-/// Push `report-orientation <rot>` to the arbiter (one-shot connect+write, like the
+/// Push one command line to the arbiter (one-shot connect+write+close, like the
 /// host's `report_orientation_to_arbiter`). Best-effort.
-fn report_orientation(rot: u32) {
+fn send_arbiter(line: &str) {
     let sock = arbiter_sock_path();
     match UnixStream::connect(&sock) {
         Ok(mut s) => {
-            let _ = write!(s, "report-orientation {rot}\n");
+            let _ = writeln!(s, "{line}");
             let _ = s.flush();
             let _ = s.shutdown(std::net::Shutdown::Write);
-            log::info!("wart-sensors: report-orientation {rot} → {sock}");
+            log::debug!("wart-sensors: {line} → {sock}");
         }
-        Err(e) => log::debug!("wart-sensors: report-orientation {rot} → {sock} failed: {e}"),
+        Err(e) => log::debug!("wart-sensors: {line:?} → {sock} failed: {e}"),
     }
 }
 
@@ -67,6 +67,20 @@ fn main() {
         std::process::exit(1);
     }
 
+    // Proximity (task 78 under ART-off): enable it, push its descriptor (the HAL's
+    // max_range/resolution) so the arbiter's classifier can decide near/far, and
+    // feed each reading. The arbiter then blanks the screen on near *during a call*
+    // (wart-arbiter-power gated on CommsActive). On-demand ref-counting via the
+    // arbiter's SetSensor effect is a follow-on; always-on proximity is cheap.
+    let have_prox = hal.enable(TYPE_PROXIMITY, ROTATION_PERIOD_NS, true).is_ok();
+    if have_prox {
+        let mr = hal.max_range(TYPE_PROXIMITY);
+        let res = hal.resolution(TYPE_PROXIMITY);
+        send_arbiter(&format!("report-sensor-descriptor proximity {mr} {res}"));
+        log::info!("wart-sensors: proximity enabled (max_range={mr} resolution={res}) → arbiter near/far");
+    }
+    let mut last_prox = f32::NAN;
+
     let mut tracker = OrientationTracker::new();
     let mut buf = [WartSensorEvent::default(); 32];
     loop {
@@ -77,18 +91,26 @@ fn main() {
             continue;
         }
         for ev in events {
+            if ev.stype == TYPE_PROXIMITY {
+                if ev.x != last_prox {
+                    last_prox = ev.x;
+                    send_arbiter(&format!("report-sensor proximity {}", ev.x));
+                    log::info!("wart-sensors: proximity x={} → arbiter", ev.x);
+                }
+                continue;
+            }
             if use_hal_orient {
                 if ev.stype == TYPE_DEVICE_ORIENTATION {
                     // DEVICE_ORIENTATION reports the rotation index in x (0/1/2/3).
                     let rot = ev.x.round().rem_euclid(4.0) as u32;
                     if tracker.current() != Some(rot) {
                         tracker.set(rot); // record (no debounce needed — HAL already debounced)
-                        report_orientation(rot);
+                        send_arbiter(&format!("report-orientation {rot}"));
                     }
                 }
             } else if ev.stype == TYPE_ACCEL {
                 if let Some(rot) = tracker.update(ev.x, ev.y, ev.z) {
-                    report_orientation(rot);
+                    send_arbiter(&format!("report-orientation {rot}"));
                 }
             }
         }

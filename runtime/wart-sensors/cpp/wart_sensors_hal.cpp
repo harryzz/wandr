@@ -22,8 +22,13 @@ using android::hardware::sensors::V1_0::Result;
 using android::hardware::sensors::V1_0::SensorInfo;
 
 namespace {
+struct SensorMeta {
+    int32_t handle;
+    float max_range;
+    float resolution;
+};
 sp<ISensors> g_sensors;
-std::map<int32_t, int32_t> g_type_handle; // android sensor type → first handle
+std::map<int32_t, SensorMeta> g_type_meta; // android sensor type → first sensor's meta
 }  // namespace
 
 // Must match the Rust `WartSensorEvent` (#[repr(C)]). `x/y/z` are the event vector;
@@ -44,18 +49,30 @@ extern "C" int wart_sensors_open(void) {
     g_sensors->getSensorsList([](const hidl_vec<SensorInfo>& list) {
         for (const SensorInfo& s : list) {
             int32_t t = static_cast<int32_t>(s.type);
-            g_type_handle.emplace(t, s.sensorHandle); // keep the first handle per type
+            // keep the first sensor's meta per type
+            g_type_meta.emplace(t, SensorMeta{s.sensorHandle, s.maxRange, s.resolution});
         }
     });
-    ALOGI("wart_sensors_open: %zu sensor types", g_type_handle.size());
+    ALOGI("wart_sensors_open: %zu sensor types", g_type_meta.size());
     return 0;
+}
+
+// max_range / resolution for a sensor type (the proximity classifier needs
+// max_range under ART-off). Returns 0 if the type isn't present.
+extern "C" float wart_sensors_max_range(int32_t type) {
+    auto it = g_type_meta.find(type);
+    return it == g_type_meta.end() ? 0.0f : it->second.max_range;
+}
+extern "C" float wart_sensors_resolution(int32_t type) {
+    auto it = g_type_meta.find(type);
+    return it == g_type_meta.end() ? 0.0f : it->second.resolution;
 }
 
 extern "C" int wart_sensors_enable(int32_t type, int64_t period_ns, int enable) {
     if (g_sensors == nullptr) return -1;
-    auto it = g_type_handle.find(type);
-    if (it == g_type_handle.end()) return -2; // sensor type not present on this device
-    int32_t handle = it->second;
+    auto it = g_type_meta.find(type);
+    if (it == g_type_meta.end()) return -2; // sensor type not present on this device
+    int32_t handle = it->second.handle;
     if (enable) {
         g_sensors->batch(handle, period_ns, 0);
         Result r = g_sensors->activate(handle, true);
