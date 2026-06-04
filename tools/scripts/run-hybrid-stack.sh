@@ -105,6 +105,12 @@ INFL_BIN="$REPO_ROOT/runtime/wart-inputflinger/wart-inputflinger"
 # directly (the framework SensorService dies with ART) and drives report-orientation.
 SENSORS_BIN="$REPO_ROOT/runtime/wart-sensors/target/aarch64-linux-android/release/wart-sensors"
 SENSORS_LIB="$REPO_ROOT/runtime/wart-sensors/libwart_sensors_hal.so"
+# ART-off audio: a stub "activity" (IActivityManager) + "sensor_privacy" binder
+# service (C++, built on a-03). audioserver/cameraserver block on
+# waitForService("activity")/("sensor_privacy") (those live in the dead system_server)
+# → audioserver wedges in init → media.audio_* never register → no audio. The stub
+# unblocks them. See [[project-artless-audio]].
+ACTIVITYMS_BIN="$REPO_ROOT/runtime/wart-activityms/cpp/wart-activityms"
 APPS_ROOT="/data/local/tmp/wart-apps"
 # Task 57 — the app the arbiter designates as "home": foregrounded at
 # boot, on `go-home`, and as the fall-back when the foreground app dies.
@@ -212,6 +218,16 @@ if [[ -f "$SENSORS_BIN" && -f "$SENSORS_LIB" ]]; then
 elif [[ "$NO_ART" == "1" ]]; then
     echo "  ⚠ wart-sensors / libwart_sensors_hal.so missing — auto-rotation off under --no-art" >&2
     echo "    build: cargo build --release (in runtime/wart-sensors) + m libwart_sensors_hal on a-03" >&2
+fi
+
+# ART-off audio stub (activity + sensor_privacy). Pushed if present (built on a-03);
+# launched under --no-art (below).
+if [[ -f "$ACTIVITYMS_BIN" ]]; then
+    push_if_newer "$ACTIVITYMS_BIN" "/data/local/tmp/wart-activityms"
+    adb shell 'chmod 755 /data/local/tmp/wart-activityms'
+elif [[ "$NO_ART" == "1" ]]; then
+    echo "  ⚠ wart-activityms missing — audio (audioserver) will wedge under --no-art" >&2
+    echo "    build on a-03: ninja -f out/combined-aosp_arm64.ninja out/soong/.intermediates/external/wart-activityms/..." >&2
 fi
 
 # Robustly start a long-lived device process, fully detached from this adb
@@ -393,6 +409,17 @@ bring_up_chrome() {
         echo "▸ sensor daemon (auto-rotation, path A)"
         spawn_detached /data/local/tmp/wart-sensors.log \
             "/data/local/tmp/wart-launch /data/local/tmp/wart-sensors"
+    fi
+    # ART-off audio: start the stub activity/sensor_privacy service, THEN restart
+    # audioserver so it re-inits with those present (it wedged on
+    # waitForService("activity") when the framework stopped → media.audio_* dropped).
+    # Once it re-registers media.audio_flinger/policy/aaudio, audio works again.
+    if [[ "$NO_ART" == "1" ]] && adb shell 'ls /data/local/tmp/wart-activityms' >/dev/null 2>&1; then
+        echo "▸ audio stub (activity + sensor_privacy) + audioserver restart"
+        spawn_detached /data/local/tmp/wart-activityms.log \
+            "/data/local/tmp/wart-launch /data/local/tmp/wart-activityms"
+        sleep 1
+        adb shell "su -c 'pkill -9 audioserver'" >/dev/null 2>&1 || true
     fi
     if [[ -n "$HOME_APP" ]]; then
         echo "▸ boot-to-home: set-home $HOME_APP"
