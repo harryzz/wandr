@@ -441,6 +441,15 @@ pub enum Effect {
     /// disable / on-change sensors). This is the battery contract — a sensor
     /// only draws power while a consumer holds it.
     SetSensor { kind: SensorKind, on: bool, rate_hz: u32 },
+    /// Set the primary display's backlight to a normalized brightness fraction
+    /// (0.0–1.0) — auto-brightness (task 86). Emitted by `wart-arbiter-power` from
+    /// the ambient-light curve (and a manual override). A *fraction* (not raw
+    /// units) keeps the pure module device-independent; the binary maps it to the
+    /// panel's raw range (sysfs `max_brightness`, or SurfaceFlinger
+    /// `setDisplayBrightness` where the HWC supports it). Distinct from
+    /// `SetDisplayPower` (panel on/off): brightness only matters while the panel
+    /// is on, so the power module gates it on `panel_on && !blanked`.
+    SetBacklight { level: f32 },
 }
 
 /// The handle a module uses during a command or event reaction. It exposes

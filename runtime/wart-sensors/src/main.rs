@@ -12,7 +12,7 @@ mod orientation;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 
-use hal::{SensorHal, WartSensorEvent, TYPE_ACCEL, TYPE_DEVICE_ORIENTATION, TYPE_PROXIMITY};
+use hal::{SensorHal, WartSensorEvent, TYPE_ACCEL, TYPE_DEVICE_ORIENTATION, TYPE_LIGHT, TYPE_PROXIMITY};
 use orientation::OrientationTracker;
 
 /// Sampling period — ~10 Hz is plenty for rotation + cheap on power. (DEVICE_ORIENTATION
@@ -81,6 +81,20 @@ fn main() {
     }
     let mut last_prox = f32::NAN;
 
+    // Ambient light (task 86 — ART-off auto-brightness): enable it, push its
+    // descriptor (the HAL's max_range = lux ceiling, which the arbiter's curve uses
+    // as its normalization ceiling — no hardcoded lux), and feed each reading. The
+    // arbiter's power module maps lux → backlight (curve + smoothing/hysteresis).
+    // Mirrors proximity; always-on (cheap; on-demand ref-count is a follow-on).
+    let have_light = hal.enable(TYPE_LIGHT, ROTATION_PERIOD_NS, true).is_ok();
+    if have_light {
+        let mr = hal.max_range(TYPE_LIGHT);
+        let res = hal.resolution(TYPE_LIGHT);
+        send_arbiter(&format!("report-sensor-descriptor light {mr} {res}"));
+        log::info!("wart-sensors: light enabled (max_range={mr} resolution={res}) → arbiter auto-brightness");
+    }
+    let mut last_lux = f32::NAN;
+
     let mut tracker = OrientationTracker::new();
     let mut buf = [WartSensorEvent::default(); 32];
     loop {
@@ -96,6 +110,17 @@ fn main() {
                     last_prox = ev.x;
                     send_arbiter(&format!("report-sensor proximity {}", ev.x));
                     log::info!("wart-sensors: proximity x={} → arbiter", ev.x);
+                }
+                continue;
+            }
+            if ev.stype == TYPE_LIGHT {
+                // De-dupe identical consecutive lux (a steady ALS re-reports the
+                // same value) so we don't spam the arbiter socket. The arbiter does
+                // the smoothing/hysteresis; this is just transport thrift.
+                if ev.x != last_lux {
+                    last_lux = ev.x;
+                    send_arbiter(&format!("report-sensor light {}", ev.x));
+                    log::debug!("wart-sensors: light lux={} → arbiter", ev.x);
                 }
                 continue;
             }

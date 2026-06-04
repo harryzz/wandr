@@ -1,6 +1,24 @@
 # Task 86 — ART-off auto-brightness (light sensor → backlight)
 
-> Status: 🔲 scoped (2026-06-04). Follow-on to task 85 (ART-off sensors) + task 81
+> Status: ✅ DONE + device-verified (2026-06-04). Live on a Pixel 2 XL under `--no-art`:
+> covering the ALS (~0.4 lux) → backlight node 15/255, lit room (~250 lux) → 219/255,
+> immediate response (real lux↔backlight live-logged via `sensor-state` + the sysfs
+> node). `brightness 0.9`→230 / `0.1`→25 / manual suppresses auto / `auto` re-tracks.
+> TWO user-caught curve fixes vs the first cut: (a) ceiling = a perceptual
+> `FULL_SCALE_LUX=600`, NOT the sensor's max_range 32767 (=direct sun) which squeezed
+> the indoor range flat; (b) **no EMA** — the ALS is on-change so an EMA only stepped
+> ~20%/reading then froze; each reading now snaps to its curve target. Live-tunable
+> ceiling: `brightness-scale <lux>`. Subjective smooth/no-flicker is the user's call.
+> Implementation notes are in `[[project-artless-autobrightness]]`. Two deviations from
+> the scope below: (a) **no `SensorAcquire{Light}`** — under ART-up it would enable the
+> ALS and fight the framework's own auto-brightness; under `--no-art` `wart-sensors`
+> force-enables the ALS directly, so the acquire was both unnecessary and harmful;
+> (b) the applier is **sysfs-only** (NOT inline SF try-first) — a bare-root SF call
+> HANGS under `--no-art`, and on taimen `setDisplayBrightness` is `IllegalState`
+> regardless; the SF path stays reachable/tested via `wart-screen brightness` for a
+> future device whose HWC supports it.
+>
+> Follow-on to task 85 (ART-off sensors) + task 81
 > (ART-off display power). With the Java framework stopped there is no DisplayManager
 > /automatic-brightness controller, so the screen sits at a fixed backlight (task 85
 > set a constant level so it's visible). This task makes brightness track the ambient

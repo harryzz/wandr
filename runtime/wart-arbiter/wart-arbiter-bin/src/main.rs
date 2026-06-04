@@ -175,7 +175,10 @@ fn main() {
                     // Task 81 — ART-less display power (host→arbiter on the raw
                     // socket from a POWER key; CLI form for testing/boot force-on):
                     // power-key [pid] (toggle), panel <on|off> (explicit).
-                    | "power-key" | "panel")) => {
+                    | "power-key" | "panel"
+                    // Task 86 — auto-brightness manual override + live curve tuning:
+                    // brightness <auto|0.0..1.0>, brightness-scale <lux>.
+                    | "brightness" | "brightness-scale")) => {
             run_client_multi(verb, &args[1..])
         }
         Some(other) => {
@@ -678,6 +681,12 @@ fn execute_effects(effects: Vec<wart_arbiter_core::Effect>) {
                 // observable on the bus.
                 sensor_driver::set_sensor(kind, on, rate_hz);
             }
+            Effect::SetBacklight { level } => {
+                // Task 86 — the power module's auto-brightness (ambient-light curve)
+                // or a manual override. Applied as a normalized fraction; the applier
+                // maps it to the panel's raw range (sysfs) and no-ops under ART-up.
+                apply_backlight(level);
+            }
             Effect::Launch { app_id, kind } => {
                 // Arbiter Inc. 3c — the alarm module emits this to wake a dead
                 // owner. Launch via the zygote + register the surface so the next
@@ -1039,35 +1048,81 @@ fn apply_display_power(on: bool) {
                 launch.display()
             ),
         }
-        apply_backlight(on);
+        apply_backlight(if on { default_on_fraction() } else { 0.0 });
     } else {
         let ok = wart_hal_display::set_display_power(on);
         log::info!("arbiter: SetDisplayPower on={on} applied={ok}");
     }
 }
 
-/// Drive the panel backlight alongside display power. Under `--no-art` there is
-/// no DisplayManager, so `setPowerMode(ON)` lights the panel but the backlight
-/// stays at whatever it held (often 0 → the screen renders, via `screencap`, but
-/// is physically invisible — this bit us in task-84 bring-up). The arbiter, the
-/// sole display-power authority under `--no-art`, sets a visible level on and 0
-/// off. Node path + on-level are env-overridable (one named source); best-effort
-/// (a device lacking the node just no-ops). Only under `--no-art` — the Java
-/// framework owns the backlight otherwise.
-fn apply_backlight(on: bool) {
-    const DEFAULT_NODE: &str = "/sys/class/leds/lcd-backlight/brightness";
-    const DEFAULT_ON_LEVEL: u32 = 150;
-    let path = std::env::var("WART_BACKLIGHT_PATH").unwrap_or_else(|_| DEFAULT_NODE.to_string());
-    let level = if on {
-        std::env::var("WART_BACKLIGHT_LEVEL")
+const BACKLIGHT_NODE: &str = "/sys/class/leds/lcd-backlight/brightness";
+const BACKLIGHT_MAX_NODE: &str = "/sys/class/leds/lcd-backlight/max_brightness";
+
+/// The default-on backlight fraction — what `apply_display_power(on)` sets at boot /
+/// wake until the first ambient-light reading refines it (task 86). Was a raw
+/// `150` in task 84/85; expressed as a fraction now so it's panel-range-independent
+/// (≈ the same visible level on a 255-step panel). `WART_BACKLIGHT_DEFAULT` (0.0–1.0)
+/// overrides — the ONE named default-brightness source.
+const DEFAULT_ON_FRACTION: f32 = 0.6;
+
+fn default_on_fraction() -> f32 {
+    std::env::var("WART_BACKLIGHT_DEFAULT")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .filter(|f| (0.0..=1.0).contains(f))
+        .unwrap_or(DEFAULT_ON_FRACTION)
+}
+
+/// The panel's raw backlight range (`max_brightness`), read once and cached. Lets
+/// `apply_backlight` map a normalized fraction → raw units without hardcoding the
+/// panel's depth. `WART_BACKLIGHT_MAX` overrides; fallback 255 (the near-universal
+/// 8-bit range) if the node is absent.
+fn backlight_max() -> u32 {
+    use std::sync::OnceLock;
+    static MAX: OnceLock<u32> = OnceLock::new();
+    *MAX.get_or_init(|| {
+        if let Some(n) = std::env::var("WART_BACKLIGHT_MAX").ok().and_then(|s| s.parse::<u32>().ok()) {
+            if n > 0 {
+                return n;
+            }
+        }
+        std::fs::read_to_string(BACKLIGHT_MAX_NODE)
             .ok()
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(DEFAULT_ON_LEVEL)
-    } else {
-        0
-    };
+            .and_then(|s| s.trim().parse::<u32>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(255)
+    })
+}
+
+/// Apply a normalized backlight fraction (0.0–1.0) to the primary panel — the
+/// task-86 auto-brightness applier (and the on/off default from
+/// `apply_display_power`). Under `--no-art` there is no DisplayManager, so
+/// `setPowerMode(ON)` lights the panel but the backlight stays at whatever it held
+/// (often 0 → the screen renders but is physically invisible — this bit us in
+/// task-84 bring-up); the arbiter, the sole display-power authority under
+/// `--no-art`, owns it.
+///
+/// Writes the **sysfs** node — exactly what the Lights HAL writes on this device, so
+/// it's the same endpoint, not a hack. We deliberately do NOT call SurfaceFlinger
+/// `setDisplayBrightness` inline here: the arbiter runs as plain root and a bare-root
+/// SF call HANGS on the permission check under `--no-art` (the reason
+/// `apply_display_power` shells out to `wart-launch wart-screen`), and on taimen
+/// `setDisplayBrightness` is `IllegalState` regardless (HWC unsupported, task-86
+/// device-confirmed). The SF path stays reachable + tested via `wart-screen
+/// brightness <f>` (uid system) for a future device whose HWC supports it.
+///
+/// Only under `--no-art` — with the Java framework up, DisplayManager owns the
+/// backlight and we must not fight it. Node + max range env-overridable; best-effort.
+fn apply_backlight(frac: f32) {
+    if !no_art() {
+        return; // ART-up: DisplayManager owns the backlight; don't fight it.
+    }
+    let frac = frac.clamp(0.0, 1.0);
+    let max = backlight_max();
+    let level = (frac * max as f32).round() as u32;
+    let path = std::env::var("WART_BACKLIGHT_PATH").unwrap_or_else(|_| BACKLIGHT_NODE.to_string());
     match std::fs::write(&path, level.to_string()) {
-        Ok(()) => log::info!("arbiter: backlight → {level} ({path})"),
+        Ok(()) => log::info!("arbiter: backlight → {level}/{max} (frac={frac:.3}, {path})"),
         Err(e) => log::debug!("arbiter: backlight {level} → {path} failed: {e}"),
     }
 }

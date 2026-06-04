@@ -28,6 +28,8 @@ pub struct WartSensorEvent {
 }
 
 pub const TYPE_ACCEL: i32 = 1;
+/// Ambient light sensor (lux in event `x`) — drives ART-off auto-brightness (task 86).
+pub const TYPE_LIGHT: i32 = 5;
 /// Used by the upcoming proximity-under-ART-off wiring (task 78 follow-on).
 #[allow(dead_code)]
 pub const TYPE_PROXIMITY: i32 = 8;
