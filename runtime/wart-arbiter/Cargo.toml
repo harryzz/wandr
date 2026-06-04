@@ -31,6 +31,7 @@ members = [
     "wart-arbiter-power",
     "wart-arbiter-keyguard",
     "wart-arbiter-audio",
+    "wart-arbiter-sensors",
 ]
 
 [workspace.dependencies]

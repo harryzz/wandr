@@ -30,6 +30,8 @@ wart-arbiter-notify = { path = "../wart-arbiter-notify" }
 wart-arbiter-power = { path = "../wart-arbiter-power" }
 wart-arbiter-keyguard = { path = "../wart-arbiter-keyguard" }
 wart-arbiter-audio = { path = "../wart-arbiter-audio" }
+wart-arbiter-sensors = { path = "../wart-arbiter-sensors" }
+wart-hal-sensors = { path = "../../wart-hal-sensors" }
 anyhow         = { workspace = true }
 log            = { workspace = true }
 android_logger = { workspace = true }

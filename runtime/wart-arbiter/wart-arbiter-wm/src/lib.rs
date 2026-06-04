@@ -340,7 +340,11 @@ impl ArbiterModule for WmModule {
             | Event::SurfaceRemoved { .. }
             | Event::AlarmTick { .. }
             | Event::ScreenState { .. }
-            | Event::CommsActive { .. } => {}
+            | Event::CommsActive { .. }
+            | Event::SensorAcquire { .. }
+            | Event::SensorRelease { .. }
+            | Event::SensorReading { .. }
+            | Event::ProximityChanged { .. } => {}
         }
     }
 }

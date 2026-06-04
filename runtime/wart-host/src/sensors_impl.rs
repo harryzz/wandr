@@ -1,203 +1,51 @@
 use crate::bindings::my::skiko_gfx::sensors::{Host, Kind, SensorInfo, SensorSample};
+use wart_hal_sensors::{HalSample, HalSensor};
 
-// ── Binder path (Android, frameworks-layer AIDL) ─────────────────────────────
+// ── Sensor WIT impl ──────────────────────────────────────────────────────────
 //
-// Reaches `android.frameworks.sensorservice.ISensorManager/default` via
-// libbinder_ndk. The frameworks-layer wrapper exists on every Android 11+
-// device (it bridges to the vendor sensors HAL, which may be HIDL on older
-// Pixels and stable AIDL on newer ones).
-//
-// First task with a real Bn-side binder server: BnEventQueueCallback wraps
-// our `EventCollector` so the HAL can deliver `Event` records into our
-// process. Latest sample per sensor handle is accumulated in a
-// `HashMap<i32, SensorSample>`; the guest polls per frame via poll-latest().
-//
-// SELinux: `untrusted_app → sensorservice` is usually allowed (apps need
-// sensor access), but the chain through the vendor HAL may still be denied.
-// `setenforce 0` is the dev workflow on rooted devices.
+// The binder mechanism (ISensorManager event-queue path) was extracted into the
+// shared `wart-hal-sensors` crate (task 77) so the arbiter's sensor-driver
+// thread and this guest-facing WIT impl share one HAL owner. This file is now a
+// thin adapter: it maps the crate's neutral `HalSensor`/`HalSample` structs to
+// the `skiko-gfx` `sensors` WIT types and keeps the task-43 device-orientation
+// helpers. All cross-platform gating lives in `wart-hal-sensors` (off-android the
+// API is no-op stubs), so this file needs no `cfg` of its own.
 
-#[cfg(target_os = "android")]
-mod binder_path {
-    use crate::binder_aidl::android::{
-        frameworks::sensorservice::{
-            IEventQueue::IEventQueue,
-            IEventQueueCallback::{IEventQueueCallback, IEventQueueCallbackAsyncService, BnEventQueueCallback},
-            ISensorManager::ISensorManager,
-        },
-        hardware::sensors::{
-            Event::{Event, EventPayload},
-            SensorInfo::SensorInfo as AidlSensorInfo,
-            SensorType::SensorType as AidlSensorType,
-        },
-    };
-    use std::collections::HashMap;
-    use std::sync::{Arc, Mutex, OnceLock};
-
-    /// Map AIDL SensorType i32 → our WIT Kind. `Unknown` covers anything
-    /// we don't recognize so list-sensors keeps device-private sensors
-    /// visible.
-    fn aidl_type_to_wit(t: AidlSensorType) -> super::Kind {
-        match t.0 {
-            1  => super::Kind::Accelerometer,
-            2  => super::Kind::MagneticField,
-            4  => super::Kind::Gyroscope,
-            5  => super::Kind::Light,
-            6  => super::Kind::Pressure,
-            8  => super::Kind::Proximity,
-            9  => super::Kind::Gravity,
-            10 => super::Kind::LinearAcceleration,
-            11 => super::Kind::RotationVector,
-            12 => super::Kind::RelativeHumidity,
-            13 => super::Kind::AmbientTemperature,
-            15 => super::Kind::GameRotationVector,
-            _  => super::Kind::Unknown,
-        }
+/// Map AIDL `SensorType` i32 → our WIT `Kind`. `Unknown` covers anything we
+/// don't recognize so `list_sensors` keeps device-private sensors visible.
+fn aidl_type_to_wit(t: i32) -> Kind {
+    match t {
+        1 => Kind::Accelerometer,
+        2 => Kind::MagneticField,
+        4 => Kind::Gyroscope,
+        5 => Kind::Light,
+        6 => Kind::Pressure,
+        8 => Kind::Proximity,
+        9 => Kind::Gravity,
+        10 => Kind::LinearAcceleration,
+        11 => Kind::RotationVector,
+        12 => Kind::RelativeHumidity,
+        13 => Kind::AmbientTemperature,
+        15 => Kind::GameRotationVector,
+        _ => Kind::Unknown,
     }
+}
 
-    /// Extract x/y/z scalar values from the event's payload union. Only
-    /// vec3 and scalar variants are interpreted; everything else returns
-    /// zeros (the timestamp is still useful — guest sees a non-sentinel
-    /// reading and can know the sensor is alive).
-    fn extract_sample(event: &Event) -> super::SensorSample {
-        let (x, y, z) = match &event.r#payload {
-            EventPayload::EventPayload::Vec3(v)    => (v.r#x, v.r#y, v.r#z),
-            EventPayload::EventPayload::Vec4(v)    => (v.r#x, v.r#y, v.r#z),  // drop w
-            EventPayload::EventPayload::Scalar(s)  => (*s, 0.0, 0.0),
-            EventPayload::EventPayload::Uncal(u)   => (u.r#x, u.r#y, u.r#z),
-            _ => (0.0, 0.0, 0.0),
-        };
-        super::SensorSample {
-            timestamp_ns: event.r#timestamp as u64,
-            x, y, z,
-        }
+fn hal_to_wit_info(s: HalSensor) -> SensorInfo {
+    SensorInfo {
+        handle: s.handle,
+        kind: aidl_type_to_wit(s.aidl_type),
+        max_range: s.max_range,
+        resolution: s.resolution,
+        // minDelayUs is microseconds; convert to ms, clamp to >= 1 so a guest
+        // divider never sees 0. On-change sensors return 0 → we expose 1 ms.
+        min_delay_ms: ((s.min_delay_us / 1000).max(1)) as u32,
+        power_ma: s.power_ma,
     }
+}
 
-    type SampleMap = Arc<Mutex<HashMap<i32, super::SensorSample>>>;
-
-    struct EventCollector { latest: SampleMap }
-    impl rsbinder::Interface for EventCollector {}
-    #[async_trait::async_trait]
-    impl IEventQueueCallbackAsyncService for EventCollector {
-        async fn r#onEvent(&self, event: &Event) -> rsbinder::status::Result<()> {
-            let sample = extract_sample(event);
-            if let Ok(mut map) = self.latest.lock() {
-                map.insert(event.r#sensorHandle, sample);
-            }
-            Ok(())
-        }
-    }
-
-    /// tokio current-thread runtime as the `BinderAsyncRuntime`. Needed by
-    /// `BnEventQueueCallback::new_async_binder`. The runtime is cached so
-    /// only one tokio reactor is built per process.
-    struct TokioRuntime;
-    impl rsbinder::BinderAsyncRuntime for TokioRuntime {
-        fn block_on<F: std::future::Future>(&self, f: F) -> F::Output {
-            static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-            let rt = RT.get_or_init(|| {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("tokio current-thread runtime")
-            });
-            rt.block_on(f)
-        }
-    }
-
-    /// Lazy global state — initialized on the first WIT call. Splitting
-    /// out the queue/callback init from list-sensors lets list-sensors
-    /// stay cheap when the guest doesn't actually enable anything.
-    fn service() -> Option<&'static rsbinder::Strong<dyn ISensorManager>> {
-        static SVC: OnceLock<Option<rsbinder::Strong<dyn ISensorManager>>> = OnceLock::new();
-        SVC.get_or_init(|| {
-            rsbinder::hub::get_interface::<dyn ISensorManager>(
-                "android.frameworks.sensorservice.ISensorManager/default"
-            ).ok()
-        }).as_ref()
-    }
-
-    fn sample_map() -> SampleMap {
-        static MAP: OnceLock<SampleMap> = OnceLock::new();
-        MAP.get_or_init(|| Arc::new(Mutex::new(HashMap::new()))).clone()
-    }
-
-    /// Build the event queue + register the Bn callback exactly once.
-    /// Returns None if the service is unavailable or callback registration
-    /// failed.
-    fn queue() -> Option<&'static rsbinder::Strong<dyn IEventQueue>> {
-        static QUEUE: OnceLock<Option<rsbinder::Strong<dyn IEventQueue>>> = OnceLock::new();
-        QUEUE.get_or_init(|| {
-            let svc = service()?;
-            let collector = EventCollector { latest: sample_map() };
-            let cb: rsbinder::Strong<dyn IEventQueueCallback> =
-                BnEventQueueCallback::new_async_binder(collector, TokioRuntime);
-            match svc.r#createEventQueue(&cb) {
-                Ok(q) => {
-                    log::info!("sensors: event queue created");
-                    Some(q)
-                }
-                Err(e) => {
-                    log::warn!("sensors: createEventQueue failed: {e:?}");
-                    None
-                }
-            }
-        }).as_ref()
-    }
-
-    pub fn list_sensors() -> Vec<super::SensorInfo> {
-        let Some(svc) = service() else { return Vec::new() };
-        let Ok(list) = svc.r#getSensorList() else { return Vec::new() };
-        list.into_iter()
-            .map(|s: AidlSensorInfo| super::SensorInfo {
-                handle:       s.r#sensorHandle as u32,
-                kind:         aidl_type_to_wit(s.r#type),
-                max_range:    s.r#maxRange,
-                resolution:   s.r#resolution,
-                // SensorInfo.minDelayUs is microseconds; convert to ms,
-                // clamp to >= 1 so a guest divider never sees 0. On-change
-                // sensors return 0 (no period); we expose as 1 ms.
-                min_delay_ms: ((s.r#minDelayUs / 1000).max(1)) as u32,
-                power_ma:     s.r#power,
-            })
-            .collect()
-    }
-
-    /// Find the handle of the first sensor whose raw AIDL type equals
-    /// `aidl_type` (task 43 — the Device Orientation sensor, type 27,
-    /// isn't in our WIT `Kind` enum so `list_sensors` reports it as
-    /// `Unknown`; the host needs the handle by raw type). Returns the
-    /// first match, or None if absent / service unavailable.
-    pub fn find_handle_by_type(aidl_type: i32) -> Option<u32> {
-        let svc = service()?;
-        let list = svc.r#getSensorList().ok()?;
-        list.into_iter()
-            .find(|s| s.r#type.0 == aidl_type)
-            .map(|s| s.r#sensorHandle as u32)
-    }
-
-    pub fn enable(handle: u32, rate_hz: u32) -> bool {
-        let Some(q) = queue() else { return false };
-        let period_us = if rate_hz == 0 { 1_000_000 } else { (1_000_000 / rate_hz).max(1) };
-        match q.r#enableSensor(handle as i32, period_us as i32, 0_i64) {
-            Ok(_)  => true,
-            Err(e) => { log::warn!("sensors: enableSensor({handle}, {rate_hz}Hz) err={e:?}"); false }
-        }
-    }
-
-    pub fn disable(handle: u32) {
-        let Some(q) = queue() else { return };
-        let _ = q.r#disableSensor(handle as i32);
-    }
-
-    pub fn poll_latest(handle: u32) -> super::SensorSample {
-        if let Ok(mut map) = sample_map().lock() {
-            if let Some(s) = map.remove(&(handle as i32)) {
-                return s;
-            }
-        }
-        // Sentinel
-        super::SensorSample { timestamp_ns: 0, x: 0.0, y: 0.0, z: 0.0 }
-    }
+fn hal_to_wit_sample(s: HalSample) -> SensorSample {
+    SensorSample { timestamp_ns: s.ts_ns, x: s.x, y: s.y, z: s.z }
 }
 
 // ── Host-internal orientation API (task 43) ───────────────────────────
@@ -205,85 +53,49 @@ mod binder_path {
 // The Device Orientation HAL sensor (android.sensor.device_orientation,
 // type 27, on-change mode) reports screen rotation directly as 0/1/2/3
 // — the SAME native sensor that WMS's WindowOrientationListener reads,
-// but consumed here ART-free via the rsbinder sensorservice path. The
-// standalone render loop (task 43) enables it once and polls it per
-// frame. Cross-platform stubs return None / false off-android so the
-// caller needs no cfg gates.
+// but consumed here ART-free via the sensorservice path. The standalone
+// render loop (task 43) enables it once and polls it per frame.
 
 /// `android.sensor.device_orientation` raw AIDL sensor type.
 pub const SENSOR_TYPE_DEVICE_ORIENTATION: i32 = 27;
 
-/// Handle of the Device Orientation sensor, or None if the device lacks
-/// it (fall back to no rotation) or we're off-android.
+/// Handle of the Device Orientation sensor, or None if the device lacks it
+/// (fall back to no rotation) or we're off-android.
 pub fn device_orientation_handle() -> Option<u32> {
-    #[cfg(target_os = "android")]
-    { binder_path::find_handle_by_type(SENSOR_TYPE_DEVICE_ORIENTATION) }
-    #[cfg(not(target_os = "android"))]
-    { None }
+    wart_hal_sensors::find_handle_by_type(SENSOR_TYPE_DEVICE_ORIENTATION)
 }
 
-/// Enable a sensor by handle at `rate_hz` (on-change sensors ignore the
-/// rate but still need a non-zero period). Returns false off-android.
+/// Enable a sensor by handle at `rate_hz` (on-change sensors ignore the rate but
+/// still need a non-zero period). Returns false off-android.
 pub fn enable_sensor(handle: u32, rate_hz: u32) -> bool {
-    #[cfg(target_os = "android")]
-    { binder_path::enable(handle, rate_hz) }
-    #[cfg(not(target_os = "android"))]
-    { let _ = (handle, rate_hz); false }
+    wart_hal_sensors::enable(handle, rate_hz)
 }
 
-/// Poll the latest screen rotation (0/1/2/3) from the Device Orientation
-/// sensor. `None` = "no fresh on-change event since the last poll" (or
-/// off-android) — callers keep their last known rotation. The HAL
-/// delivers the rotation as value[0], routed to `SensorSample.x` by
-/// `extract_sample`; the no-sample sentinel has `timestamp_ns == 0`
-/// (a real HAL event carries a non-zero elapsed-realtime timestamp).
+/// Poll the latest screen rotation (0/1/2/3) from the Device Orientation sensor.
+/// `None` = "no fresh on-change event since the last poll" (or off-android) —
+/// callers keep their last known rotation. The HAL delivers the rotation as
+/// value[0], routed to `HalSample.x`.
 pub fn poll_device_rotation(handle: u32) -> Option<u32> {
-    #[cfg(target_os = "android")]
-    {
-        let s = binder_path::poll_latest(handle);
-        if s.timestamp_ns == 0 {
-            return None;
-        }
-        Some((s.x.round() as i64).clamp(0, 3) as u32)
-    }
-    #[cfg(not(target_os = "android"))]
-    { let _ = handle; None }
+    let s = wart_hal_sensors::poll_latest(handle)?;
+    Some((s.x.round() as i64).clamp(0, 3) as u32)
 }
 
 impl Host for crate::HostState {
     fn list_sensors(&mut self) -> Vec<SensorInfo> {
-        #[cfg(target_os = "android")]
-        { return binder_path::list_sensors(); }
-        #[cfg(not(target_os = "android"))]
-        { Vec::new() }
+        wart_hal_sensors::enumerate().into_iter().map(hal_to_wit_info).collect()
     }
 
     fn enable(&mut self, handle: u32, rate_hz: u32) -> bool {
-        #[cfg(target_os = "android")]
-        { return binder_path::enable(handle, rate_hz); }
-        #[cfg(not(target_os = "android"))]
-        { let _ = (handle, rate_hz); false }
+        wart_hal_sensors::enable(handle, rate_hz)
     }
 
     fn disable(&mut self, handle: u32) {
-        #[cfg(target_os = "android")]
-        binder_path::disable(handle);
-        #[cfg(not(target_os = "android"))]
-        { let _ = handle; }
+        wart_hal_sensors::disable(handle);
     }
 
     fn poll_latest(&mut self, handle: u32) -> SensorSample {
-        #[cfg(target_os = "android")]
-        { return binder_path::poll_latest(handle); }
-        #[cfg(not(target_os = "android"))]
-        {
-            let _ = handle;
-            SensorSample { timestamp_ns: 0, x: 0.0, y: 0.0, z: 0.0 }
-        }
+        wart_hal_sensors::poll_latest(handle)
+            .map(hal_to_wit_sample)
+            .unwrap_or(SensorSample { timestamp_ns: 0, x: 0.0, y: 0.0, z: 0.0 })
     }
 }
-
-// Silence unused-import warning on desktop where the binder path is gone.
-#[cfg(not(target_os = "android"))]
-#[allow(dead_code)]
-fn _unused(k: Kind) { let _ = k; }

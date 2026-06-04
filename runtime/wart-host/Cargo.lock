@@ -3640,6 +3640,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "wart-hal-sensors"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "log",
+ "rsbinder",
+ "rsbinder-aidl",
+ "tokio",
+]
+
+[[package]]
 name = "wasi"
 version = "0.11.1+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3690,6 +3701,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "toml 0.8.23",
+ "wart-hal-sensors",
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-tls",

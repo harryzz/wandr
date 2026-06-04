@@ -665,9 +665,8 @@ interface ISurfaceComposer {
             .source(light_aidl.join("android/hardware/light/ILights.aidl"))
             .source(power_aidl.join("android/hardware/power/IPower.aidl"))
             .source(thermal_aidl.join("android/hardware/thermal/IThermal.aidl"))
-            .source(sensorsvc_aidl.join("android/frameworks/sensorservice/ISensorManager.aidl"))
-            .source(sensorsvc_aidl.join("android/frameworks/sensorservice/IEventQueue.aidl"))
-            .source(sensorsvc_aidl.join("android/frameworks/sensorservice/IEventQueueCallback.aidl"))
+            // Sensors (ISensorManager closure) moved to the shared `wart-hal-sensors`
+            // crate (task 77) — codegen'd there now, consumed by both host + arbiter.
             .source(aaudio_aidl.join("aaudio/IAAudioService.aidl"))
             .source(aaudio_aidl.join("aaudio/IAAudioClient.aidl"))
             // Call-audio control (Signal VoIP / future Phone app): the REAL

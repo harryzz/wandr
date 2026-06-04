@@ -39,6 +39,7 @@
 //!   ime-finish-composing-text       — IME → finalize composing region.
 //!   ime-set-selection <start> <end> — IME → editor cursor/selection.
 
+mod sensor_driver;
 mod state;
 mod zygote_client;
 
@@ -56,6 +57,7 @@ use wart_arbiter_audio::AudioModule;
 use wart_arbiter_keyguard::KeyguardModule;
 use wart_arbiter_notify::NotifyModule;
 use wart_arbiter_power::PowerModule;
+use wart_arbiter_sensors::SensorsModule;
 use wart_arbiter_shell::ShellModule;
 use wart_arbiter_wm::WmModule;
 
@@ -151,7 +153,11 @@ fn main() {
                     // Task 73 — WM geometry (handled by a core module, not the
                     // legacy match). The host normally sends this over the raw
                     // socket; the CLI form is for testing.
-                    | "report-orientation")) => {
+                    | "report-orientation"
+                    // Task 77 — SensorService verbs (sim/test + device verify):
+                    // report-sensor <kind> <x> [y z], sensor-state, sensor-hold
+                    // <kind> <on|off>.
+                    | "report-sensor" | "sensor-state" | "sensor-hold")) => {
             run_client_multi(verb, &args[1..])
         }
         Some(other) => {
@@ -315,6 +321,7 @@ fn run_daemon() -> Result<()> {
     spawn_death_watchers();
     spawn_alarm_timer();
     spawn_screen_poller();
+    sensor_driver::spawn();
 
     // Task 57 — boot to home. If a home app was designated in a previous
     // session (restored above), foreground it now (launching it if it
@@ -523,6 +530,10 @@ fn build_registry() -> Registry {
     reg.register(Box::new(KeyguardModule::new()));
     // AudioService role (Arbiter Inc.) — M1: the cross-app audio-focus stack.
     reg.register(Box::new(AudioModule::new()));
+    // SensorService role (task 77) — enable-on-demand HAL arbitration + raw→
+    // semantic translation (proximity near/far). The binary's sensor-driver
+    // thread feeds it Event::SensorReading; it emits Effect::SetSensor. One line.
+    reg.register(Box::new(SensorsModule::new()));
     reg
 }
 
@@ -611,6 +622,13 @@ fn execute_effects(effects: Vec<wart_arbiter_core::Effect>) {
                 if let Err(e) = state::save_to(Path::new(ARBITER_STATE_PATH), model_foreground_slot().as_ref().map(|(_, id)| id.as_str())) {
                     log::warn!("arbiter: Persist effect failed: {e:#}");
                 }
+            }
+            Effect::SetSensor { kind, on, rate_hz } => {
+                // Task 77 — the sensors module's enable-on-demand decision. The
+                // HAL driver thread (Step 3) performs the actual enable/disable;
+                // until it's wired this logs the contract so the policy is
+                // observable on the bus.
+                sensor_driver::set_sensor(kind, on, rate_hz);
             }
             Effect::Launch { app_id, kind } => {
                 // Arbiter Inc. 3c — the alarm module emits this to wake a dead

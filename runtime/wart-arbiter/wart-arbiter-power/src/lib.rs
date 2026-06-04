@@ -25,7 +25,7 @@
 use std::collections::HashSet;
 use std::time::Instant;
 
-use wart_arbiter_core::{ArbiterModule, Ctx, Event, Reply};
+use wart_arbiter_core::{ArbiterModule, Ctx, Event, Reply, SensorKind};
 
 /// Screen-off grace before dozing (ms) — the "when to doze" policy.
 const DOZE_GRACE_MS: u128 = 60_000;
@@ -145,12 +145,36 @@ impl ArbiterModule for PowerModule {
             // mid-doze must wake to 0; ending mid-doze re-dozes to its class).
             Event::CommsActive { pid, active } => {
                 if *active { self.comms.insert(*pid); } else { self.comms.remove(pid); }
+                // Task 77 — proximity is only worth powering during a call (the
+                // screen-off-on-ear use case). Express that intent to the
+                // SensorService via the consumer protocol (acquire on call start,
+                // release on end); the sensors module ref-counts + drives the HAL.
+                // Power never reads the sensor itself — it reacts to
+                // `Event::ProximityChanged` below.
+                let kind = SensorKind::Proximity;
+                if *active {
+                    ctx.emit(Event::SensorAcquire { kind, requester: *pid });
+                } else {
+                    ctx.emit(Event::SensorRelease { kind, requester: *pid });
+                }
                 if self.dozing {
                     let cadence = self.cadence_for(*pid);
                     ctx.deliver_to_host(*pid, format!("doze {cadence}\n"));
                     log::info!("arbiter: comms {} pid={pid} mid-doze → doze {cadence}",
                         if *active { "start" } else { "end" });
                 }
+            }
+            // Task 77 — the SensorService's semantic proximity event. The first
+            // consumer proof: log the would-blank decision (the actual panel-blank
+            // applier + the screen-off policy are the deliberate follow-on). Only
+            // meaningful while a call holds proximity; logged unconditionally so the
+            // seam is observable on device.
+            Event::ProximityChanged { near } => {
+                let in_call = !self.comms.is_empty();
+                log::info!(
+                    "arbiter: proximity near={near} in_call={in_call} — would {} now (applier=follow-on)",
+                    if *near { "blank" } else { "unblank" }
+                );
             }
             _ => {}
         }
@@ -274,5 +298,56 @@ mod tests {
             _ => None,
         });
         assert_eq!(line.as_deref(), Some("doze 60000\n"));
+    }
+
+    /// Task 77 — the consumer protocol: a call start/end makes power acquire /
+    /// release proximity (so the sensor is only on during calls). Asserted via a
+    /// sink module that records the emitted intents (keeps power decoupled from
+    /// the sensors crate).
+    #[test]
+    fn comms_acquires_and_releases_proximity() {
+        use std::sync::{Arc, Mutex};
+        use wart_arbiter_core::{Ctx, SensorKind};
+
+        struct Sink {
+            seen: Arc<Mutex<Vec<(bool, SensorKind, i32)>>>, // (acquire?, kind, requester)
+        }
+        impl ArbiterModule for Sink {
+            fn verbs(&self) -> &[&'static str] {
+                &[]
+            }
+            fn on_command(&mut self, _v: &str, _a: &str, _c: &mut Ctx) -> Reply {
+                Reply::ok("")
+            }
+            fn on_event(&mut self, ev: &Event, _c: &mut Ctx) {
+                match ev {
+                    Event::SensorAcquire { kind, requester } => {
+                        self.seen.lock().unwrap().push((true, *kind, *requester))
+                    }
+                    Event::SensorRelease { kind, requester } => {
+                        self.seen.lock().unwrap().push((false, *kind, *requester))
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let mut r = Registry::new();
+        r.register(Box::new(PowerModule::new()));
+        r.register(Box::new(Sink { seen: seen.clone() }));
+        let mut store = Store::new();
+        add_app(&mut store, "sig", 10);
+
+        r.dispatch_event(Event::CommsActive { pid: 10, active: true }, &mut store);
+        r.dispatch_event(Event::CommsActive { pid: 10, active: false }, &mut store);
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                (true, SensorKind::Proximity, 10),
+                (false, SensorKind::Proximity, 10),
+            ]
+        );
     }
 }

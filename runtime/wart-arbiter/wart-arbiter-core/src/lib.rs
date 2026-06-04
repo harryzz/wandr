@@ -141,6 +141,27 @@ impl DisplayGeometry {
     }
 }
 
+/// A sensor's static descriptor (from the HAL enumerate) plus its last raw
+/// reading — the arbiter's per-sensor slice of the [`Store`] (task 77). The
+/// binary's sensor driver seeds `max_range`/`resolution` at enumerate so the
+/// pure sensors module can derive the proximity near/far threshold from the
+/// hardware (no hardcoded distance — [[feedback_no_hardcoding]]); the module
+/// updates `last_*` on each [`Event::SensorReading`] so the `sensor-state` verb
+/// and a freshly-attached consumer read current state without a fresh sample.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SensorSlot {
+    /// HAL `maxRange` — the saturation value (proximity: the "far" distance).
+    pub max_range: f32,
+    /// HAL `resolution` — the smallest reportable step (the debounce dead-band).
+    pub resolution: f32,
+    pub last_x: f32,
+    pub last_y: f32,
+    pub last_z: f32,
+    pub last_ts_ns: u64,
+    /// False until the first reading lands (distinguishes a real 0.0 from unset).
+    pub has_reading: bool,
+}
+
 /// The single source of truth. Holds the per-display [`DisplayState`] (geometry
 /// policy + the surface/role stack + resource-focus) AND the arbiter-global app
 /// registry + home designation + IME intrinsic height (task 74 C — moved off the
@@ -162,6 +183,10 @@ pub struct Store {
     pub(crate) notifications: Vec<Notification>,
     /// Monotonic global notification handle counter (the surfacer/click key).
     pub(crate) next_nid: u64,
+    /// Per-sensor descriptor + last reading (task 77 — SensorService). Seeded by
+    /// the binary's sensor driver at enumerate; updated on each reading. Runtime
+    /// only (re-seeded on every boot; not persisted with the registry).
+    pub(crate) sensors: HashMap<SensorKind, SensorSlot>,
 }
 
 impl Default for Store {
@@ -174,6 +199,7 @@ impl Default for Store {
             alarms: Vec::new(),
             notifications: Vec::new(),
             next_nid: 0,
+            sensors: HashMap::new(),
         }
     }
 }
@@ -207,6 +233,25 @@ impl Store {
     /// Every display id currently in the store.
     pub fn display_ids(&self) -> Vec<DisplayId> {
         self.displays.keys().copied().collect()
+    }
+
+    /// Read a sensor's slot (descriptor + last reading), if known.
+    pub fn sensor(&self, kind: SensorKind) -> Option<&SensorSlot> {
+        self.sensors.get(&kind)
+    }
+
+    /// Mutable access to a sensor's slot (`get_or_default`). Used by the sensors
+    /// module to cache readings and by the binary's driver to seed descriptors.
+    pub fn sensor_mut(&mut self, kind: SensorKind) -> &mut SensorSlot {
+        self.sensors.entry(kind).or_default()
+    }
+
+    /// Seed a sensor's static descriptor (HAL enumerate → driver). Preserves any
+    /// existing last reading.
+    pub fn set_sensor_descriptor(&mut self, kind: SensorKind, max_range: f32, resolution: f32) {
+        let slot = self.sensors.entry(kind).or_default();
+        slot.max_range = max_range;
+        slot.resolution = resolution;
     }
 }
 
@@ -251,6 +296,25 @@ pub enum Event {
     /// The power module keeps the call host OUT of doze while active (no dozing
     /// mid-call). Emitted by the audio module on call-start / call-end.
     CommsActive { pid: i32, active: bool },
+
+    // ── SensorService (task 77) ─────────────────────────────────────────────
+    /// A consumer wants `kind` enabled (the **consumer protocol** — modules
+    /// never call the sensors module directly, they emit intent). The sensors
+    /// module ref-counts `requester` per kind and enables the HAL on the first
+    /// holder. `requester` is the holding pid (or a synthetic id) so a later
+    /// `SurfaceRemoved`/release drops exactly one reference.
+    SensorAcquire { kind: SensorKind, requester: i32 },
+    /// A consumer no longer needs `kind`. The sensors module drops `requester`'s
+    /// reference and disables the HAL when the last holder releases.
+    SensorRelease { kind: SensorKind, requester: i32 },
+    /// A raw HAL sample for `kind` (the binary's sensor driver thread bus-emits
+    /// these). The sensors module caches it in the Store and translates it to a
+    /// semantic event (e.g. [`Event::ProximityChanged`]).
+    SensorReading { kind: SensorKind, x: f32, y: f32, z: f32, ts_ns: u64 },
+    /// Semantic: the proximity sensor crossed the (descriptor-derived, debounced)
+    /// near/far threshold. Consumers react (e.g. screen-off during a call —
+    /// follow-on). `near` = an object is close to the panel.
+    ProximityChanged { near: bool },
 }
 
 /// A command's outcome. The binary renders this to one wire line; `Ok`/`Err`
@@ -306,6 +370,37 @@ impl LaunchKind {
     }
 }
 
+/// A hardware sensor kind the arbiter's SensorService (task 77) arbitrates.
+/// The wire tokens mirror the `skiko-gfx` `sensors` WIT `kind` set so the
+/// `report-sensor` sim verb and any future cross-process plumbing share one
+/// vocabulary. Only the kinds a consumer needs are enumerated; extend `+1`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SensorKind {
+    Proximity,
+    Accelerometer,
+    Light,
+}
+
+impl SensorKind {
+    /// Stable wire/log token (the `report-sensor <kind>` arg).
+    pub fn as_wire(&self) -> &'static str {
+        match self {
+            SensorKind::Proximity => "proximity",
+            SensorKind::Accelerometer => "accelerometer",
+            SensorKind::Light => "light",
+        }
+    }
+    /// Parse a wire token; `None` for an unknown kind (the verb rejects it).
+    pub fn from_wire(s: &str) -> Option<Self> {
+        match s {
+            "proximity" => Some(SensorKind::Proximity),
+            "accelerometer" | "accel" => Some(SensorKind::Accelerometer),
+            "light" => Some(SensorKind::Light),
+            _ => None,
+        }
+    }
+}
+
 /// A side-effect a module *requests*; the binary is the only place that
 /// actually performs it (raw signals, `/proc` writes, zygote IPC, sockets,
 /// threads). This generalizes the task-73 "`deliver_to_host` queues a push the
@@ -331,6 +426,13 @@ pub enum Effect {
     /// A one-line push to a host's control socket (`wart-host-<pid>`). `line`
     /// must already end with `\n`. (Was the only kind of effect in task 73.)
     HostLine { pid: i32, line: String },
+    /// Enable or disable a hardware sensor on the HAL (task 77). The binary's
+    /// sensor driver thread is the only place this is performed; the pure
+    /// sensors module emits it when the per-`kind` ref-count goes 0→1 (`on:true`)
+    /// or 1→0 (`on:false`). `rate_hz` is the requested sample rate (ignored on
+    /// disable / on-change sensors). This is the battery contract — a sensor
+    /// only draws power while a consumer holds it.
+    SetSensor { kind: SensorKind, on: bool, rate_hz: u32 },
 }
 
 /// The handle a module uses during a command or event reaction. It exposes

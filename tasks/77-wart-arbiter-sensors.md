@@ -1,6 +1,15 @@
 # Task 77 — `wart-arbiter-sensors` (the arbiter's SensorService)
 
-> Status: 🔲 scoped, not started — fresh session.
+> Status: ✅ DONE — device-verified on Pixel 2 XL (2026-06-04). Service + 1
+> consumer proof shipped: `wart-arbiter-sensors` (pure policy) + shared
+> `wart-hal-sensors` crate (rsbinder `ISensorManager`, also adopted by wart-host)
+> + binary sensor-driver thread; `wart-arbiter-power` ref-counts proximity on
+> `CommsActive` and reacts to `ProximityChanged` (log-only — applier is the
+> follow-on). Real cover/uncover gives clean debounced near/far transitions; the
+> sensor enables/disables on demand (vendor HAL `Enabling/Disabling proximity` —
+> battery contract). No AVC denial reading sensorservice from the arbiter. 23
+> arbiter unit tests + host guest-sensor path re-verified. Threshold derived from
+> the HAL `max_range` (mid = 5.0 × 0.5 = 2.5), no hardcode. Follow-ons below.
 >
 > Establish the **sensors responsibility crate now**, before any sensor
 > consumer (proximity-screen-off during calls, accel→orientation,
