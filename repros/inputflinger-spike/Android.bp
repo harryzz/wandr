@@ -1,0 +1,29 @@
+// wart_inputflinger_spike — run AOSP InputManager standalone as the inputflinger
+// service (task 81 / input-architecture spike). soong cc_binary on a-03.
+cc_binary {
+    name: "wart_inputflinger_spike",
+    srcs: ["wart_inputflinger_spike.cpp"],
+    shared_libs: [
+        "libinputflinger",
+        "libinputreader",
+        "libinputflinger_base",
+        "libinput",
+        "libgui",
+        "libui",
+        "libbinder",
+        "libutils",
+        "liblog",
+        "libbase",
+        "libcutils",
+        "libstatslog",
+        "android.hardware.input.processor-V1-ndk",
+        "com.android.server.inputflinger-ndk",
+    ],
+    include_dirs: [
+        "frameworks/native/services/inputflinger",
+        "frameworks/native/services/inputflinger/include",
+        "frameworks/native/services/inputflinger/reader/include",
+        "frameworks/native/services/inputflinger/dispatcher/include",
+    ],
+    cflags: ["-Wall", "-Wextra", "-Wno-unused-parameter"],
+}

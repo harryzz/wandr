@@ -460,3 +460,20 @@ pub fn forward_volume_key(up: bool) {
 }
 #[cfg(not(target_os = "android"))]
 pub fn forward_volume_key(_up: bool) {}
+
+/// Task 81 — forward a KEYCODE_POWER press to the arbiter (the single display-power
+/// authority). Every host's InputReader sees the key under the ART-less path; the
+/// arbiter dedups the fan-in and toggles the panel via setPowerMode. (Lives here
+/// alongside `forward_volume_key` — the established host→arbiter key-forward spot.)
+#[cfg(target_os = "android")]
+pub fn forward_power_key() {
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
+    let line = format!("power-key {}\n", std::process::id());
+    match UnixStream::connect("/data/local/tmp/wart-arbiter.sock") {
+        Ok(mut s) => { let _ = s.write_all(line.as_bytes()); let _ = s.flush(); }
+        Err(e)    => log::warn!("power: power-key forward failed: {e} (arbiter down?)"),
+    }
+}
+#[cfg(not(target_os = "android"))]
+pub fn forward_power_key() {}

@@ -43,6 +43,31 @@ system_server kill — while leaving surfaceflinger up.
 SF restarts (they were bound to the old SF instance), so after `start` re-run
 `tools/scripts/run-hybrid-stack.sh` to re-attach our stack to the fresh SF.
 
+**Human-test findings (2026-06-04, `--no-art`):** two gaps surfaced. (1) **No display-
+power owner with ART off → device wedges** (black screen; power button dead because
+power-key→wake is a PMS function; touch dead because the panel is off; the arbiter's
+screen poller reads the now-stale `debug.tracing.screen_state` → spurious doze/auto-
+lock). Recover with `adb shell input keyevent 224` after restoring ART. → **task 81**:
+wart owns display power (power-key→`SetDisplayPower` toggle via task-78 wart-hal-display;
+arbiter drives screen state from its own `panel_on` under `WART_NO_ART`; force-on at
+boot). (2) **Keys not routed** — task-80 Step-2 routed touch only, so every host's
+InputReader reads hardware keys → one volume press fanned to 6 pids (volume ×6). →
+**task 82** (key dedup/focus).
+
+**Service strategy (roadmap §6.6, post-spike):** three buckets — KEEP (bind surviving
+native daemons: SF/audioserver/sensorservice/HALs — done), REIMPLEMENT (Java policy →
+arbiter modules: AMS/WMS/PMS/alarm/notify/audio/keyguard/sensors/pkg — done), PATH A
+(run a system_server-hosted C++ service standalone + register its binder name — only
+candidate = InputFlinger; spike proved it runs). The bottleneck is a shared **security
+context**, not per-service work: a wart native proc needs **uid system + gid input +
+CAP_BLOCK_SUSPEND + a sepolicy domain** to use the survivors with ART off (bare root
+hangs on SF's ACCESS_SURFACE_FLINGER check + aborts in EventHub:894). Same context
+task 81 setPowerMode needs. **The right way = our flashable image** (init.rc
+user/group/capabilities/seclabel + wart sepolicy, ART services not started, enforcing)
+— DEFERRED (needs lineage_taimen device build + vendor blobs). **Decision 2026-06-04:
+keep the dev scaffold** (rooted + su/setenforce 0 + a setuid+caps `wart-launch`
+launcher mimicking the init.rc context) → **task 83**; flashable image later.
+
 **The blocker for true ART-less operation = INPUT.** `InputDispatcher` /
 `InputManagerService` (the `input`/`inputflinger` binder services) are **hosted
 inside system_server** — there's no separate `inputflinger` process. So with ART

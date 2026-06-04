@@ -1061,6 +1061,15 @@ fn run_cwasm_loop(
                     if ev.kind == 10 {
                         crate::audio_policy_impl::forward_volume_key(ev.key_code == 24);
                     }
+                } else if ev.key_code == 26 {
+                    // Task 81 — KEYCODE_POWER. With ART off there's no PMS to wake
+                    // the panel, so forward to the arbiter (single display-power
+                    // authority) to toggle setPowerMode; swallow it from the guest.
+                    // The arbiter dedups the per-host fan-in (every host's
+                    // InputReader sees the key). On key-down only.
+                    if ev.kind == 10 {
+                        crate::audio_policy_impl::forward_power_key();
+                    }
                 } else {
                     let action = if ev.kind == 10 { 0u8 } else { 1u8 };
                     if let Err(e) = crate::input::dispatch_android_key(

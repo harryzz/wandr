@@ -24,6 +24,13 @@ Remove:
 
 Apps run on **WAR's wasmtime-based runtime** instead, as WASM components.
 
+**Target = a full functional daily-driver** (not a reduced appliance). Because the
+end goal keeps *all* native daemons (incl. RIL/telephony, GNSS, Bluetooth, Camera,
+Wifi/netd), every phone feature stays reachable; WAR wires each into the runtime
+(WIT + arbiter) over time. Features not yet wired are **deferred (priority), not
+dropped** — see §6.4. The only things genuinely gone are ART/Java + design-level
+non-needs (multi-user/MDM, §6.3).
+
 This is a strictly bigger project than the current "WASM app on Android"
 PoC and is *not* the work tracked in CLAUDE.md tasks 01–14. Those tasks
 remain valid as the foundation; this roadmap describes what comes after.
@@ -288,22 +295,37 @@ native daemons that we keep running. WAR-relevant bucketing:
 | AudioFocus | ~50 lines of in-runtime arbitration + WIT `acquire-focus` / `release-focus`. |
 | PowerManager (kernel parts) | Write directly to `/sys/power/wake_lock` and `/sys/power/state`. |
 
-### 6.3 Drop entirely (don't apply to WAR's app model)
+### 6.3 Replaced by WAR's model / not needed by design (genuinely gone)
 
+These don't apply to WAR's architecture — *replaced*, not deferred:
 - PackageManager — see §7, replaced by a component graph loader
 - StatusBar / SystemUI / WallpaperManager — runtime draws everything
 - NotificationManager — replaced by WIT `post-notification` into a
-  runtime-owned compositor row
+  runtime-owned compositor row (minimal today; richer later)
 - AlarmManager / JobScheduler — runtime's own scheduler
-- StorageManager / ContentService / AccountManager / DPM / UserManager
-  — out of scope
-- Telephony stack — not a phone replacement
+- DevicePolicyManager (MDM) — **out of scope** (personal daily-driver, no
+  enterprise/device-owner management).
+- AccountManager — out of scope (Java account framework; WAR apps own their auth).
+- UserManager (multi-user) — **not an Android-service port.** Android's
+  `UserManager` is a Java abstraction over Linux primitives that already exist
+  (per-user uids, `/data/user/<id>` roots, namespaces/cgroups). If guest/profile
+  isolation is ever wanted, it's a **Linux-layer** capability orchestrated by WAR's
+  session model — it leaves this list, not a system_server reimplementation.
 
-### 6.4 Defer to later milestones
+### 6.4 Deferred — IN SCOPE, not a priority now (NOT dropped)
 
-- Wifi / Connectivity — talk to `wpa_supplicant` socket directly
-- LocationManager — bind to GNSS HAL via rsbinder
-- BluetoothManager — bind to bluetooth HAL daemon
+The end goal is a **full functional Android without ART** (daily-driver). The
+following are real, planned features — deferred only by priority, each a
+"bind a surviving native daemon/HAL + WIT + maybe an arbiter module" task
+(the KEEP pattern we used for sensors/audio/haptics), NOT new system_server
+reimplementation:
+- Wifi / Connectivity — `wpa_supplicant` / `netd`
+- LocationManager — GNSS HAL via rsbinder
+- BluetoothManager — bluetooth HAL daemon
+- Camera — CameraServer survives (KEEP); needs WIT + guest path + arbiter access
+- Telephony / RIL — cellular calls/SMS via the RIL daemon (telephony) — deferred,
+  in scope (was previously mis-marked "drop"; corrected 2026-06-04)
+- StorageManager / ContentService — as features need them
 
 ### 6.5 Key insight
 
@@ -325,6 +347,51 @@ What's left after dropping the irrelevant 70–80% is:
 The arbiter's *location* (in-process in a monolithic runtime, or a
 separate session-manager process coordinating per-app runtimes) is the
 open question in §9.
+
+### 6.6 Post-spike findings (2026-06) — three strategies + the security-context prerequisite
+
+Empirical ART-off bring-up (tasks 77–82 + the inputflinger spike) refined §6 into
+**three concrete strategies**, with status:
+
+| Strategy | Meaning | Status |
+|---|---|---|
+| **KEEP** | Service is already a separate native daemon → bind via rsbinder | DONE: SurfaceFlinger, AudioFlinger/AudioPolicy, SensorService HAL, vibrator/lights/power/thermal HALs, servicemanager |
+| **REIMPLEMENT** | Java *policy* → arbiter module over the kept natives | DONE: AMS→`shell`+zygote, WMS→`wm`, PowerManager-policy→`power`, AudioFocus→`audio`, Alarm→`alarm`, Notify→`notify`, Keyguard→`keyguard`, SensorService-policy→`sensors`, PackageManager→component loader (§7) |
+| **PATH A** | C++ service *hosted in* system_server → run standalone + register its binder name | only candidate is **InputFlinger** (`InputManager` IS `BnInputFlinger`); spike proved it runs standalone |
+
+**Scope honesty.** "DONE" above means the **arbitration + UI core** that WAR's
+*current* runtime exercises — NOT a full phone. The phone-feature breadth
+(Connectivity, Location, Bluetooth, Camera, Telephony/RIL) is **deferred but IN
+SCOPE** (§6.4) toward the full-functional-Android goal — each a KEEP-style HAL
+binding, not done yet. Don't read "core done" as "most of Android done."
+
+**Key realization — the bottleneck is a shared *security context*, not per-service work.**
+Under ART-off, system_server's permission service is gone, so a wart native process
+can use the surviving native daemons only if it runs in roughly system_server's
+context. The spike pinned the exact requirements for the inputflinger process:
+- **uid `system` (1000)** — else SurfaceFlinger's `ACCESS_SURFACE_FLINGER` check
+  *hangs* (it routes to the dead permission service); SF short-circuits for
+  system/graphics uids.
+- **gid `input` (1004)** — EventHub `/dev/input` access.
+- **`CAP_BLOCK_SUSPEND`** — EventHub *aborts* without it (`EventHub.cpp:894`, EPOLLWAKEUP).
+- a **sepolicy domain** allowed to register/call those services.
+
+This same context is required by **task 81 display power** (`setPowerMode` is
+SF-privileged → bare root hangs under ART-off too) and *any* future SF/audio-privileged
+op. So the reusable investment is **the security context**, not path A as a
+"bring-up-many-services" lever (there's only InputFlinger to bring up that way).
+
+**Easy way (dev) vs right way (image).** All of the above (uid/gid/caps/sepolicy) is
+*build-time config* in our own flashable image: `init.rc` `user`/`group`/
+`capabilities`/`seclabel` stanzas + a wart sepolicy module, ART services simply not
+started — runs enforcing, no `setenforce 0`, no `su`, no `stop zygote`. The problems
+we hit are artifacts of running as an uninvited root process **on top of** a stock
+image. **Decision (2026-06-04): keep the dev scaffold** (rooted device + `su`/
+`setenforce 0` + a setuid+caps launcher mimicking the init.rc context) to keep
+iterating on the runtime/services, and **defer the flashable `lineage_taimen` image**
+(needs the full device build + vendor blobs) until the runtime is more complete. The
+security context is therefore scoped as a dev stand-in now (see `tasks/83`), init.rc
++ sepolicy later.
 
 ---
 
