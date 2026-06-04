@@ -33,13 +33,17 @@ strip, taskbar) handed the guest RAW DISPLAY coords → keys dead, while fullscr
 anchored ABOVE the taskbar: `[h-inset_bottom-keyboard_px, h-inset_bottom]`. Backlight=0
 under ART-off (no DisplayManager) — panel renders but invisible (cost a full debug round)
 → arbiter drives `/sys/class/leds/lcd-backlight/brightness` in apply_display_power
-(WART_BACKLIGHT_{PATH,LEVEL} overridable; boot force-on lights it). VERIFIED PORTRAIT:
-swipe-unlock, launcher, app-switch, IME typing, taskbar-with-keyboard, system-key dedup.
-**OPEN FOLLOW-ON: LANDSCAPE** — arbiter authors rects portrait `[0,0,panel_w,panel_h]` +
-reader viewport is portrait, so rotation mismatches; needs arbiter to author rotated-space
-rects + push orientation so wart-inputflinger reconfigures the reader DisplayViewport
-(== the original "secondary coordinate issue"). The blocker write-up below is the
-diagnosis record.
+(WART_BACKLIGHT_{PATH,LEVEL} overridable; boot force-on lights it). VERIFIED PORTRAIT + LANDSCAPE:
+swipe-unlock, launcher, app-switch, IME typing, taskbar-with-keyboard, system-key dedup,
+landscape chrome/IME + app + keyboard. LANDSCAPE fix: the fullscreen app/keyguard already
+worked any orientation (host inverse-maps touch via renderer base_matrix, standalone.rs
+:1035); only chrome/IME strips were wrong (authored portrait top/bottom while host renders
+them on the physical SIDES). Fix = `wart-arbiter-wm::strip_rect` mirrors the host's
+`overlay_rect` (handedness 0→S/3→N/4→W/7→E; strip th-thick off-inward from the user's
+edge) so the input region follows the bars. PURE arbiter change — reader stays portrait
+(panel buffer is physically portrait; host owns content rotation), NO wart-inputflinger/
+viewport change. Portrait rects byte-identical (no regression). The blocker write-up below
+is the diagnosis record.
 
 ---
 

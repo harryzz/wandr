@@ -213,6 +213,49 @@ mod input_z {
     pub const APP: i32 = 10;
 }
 
+/// The display-space rect a chrome/IME strip occupies for a given content
+/// orientation — a faithful mirror of the host's `overlay_rect`
+/// (wart-host/src/standalone.rs) so the strip's INPUT region tracks where it
+/// actually RENDERS after the device rotates (in landscape the bars move to the
+/// physical sides). Without this the input rects stay portrait top/bottom strips
+/// while the bars draw on the sides → taps miss. `at_bottom`/`th`/`off` mirror
+/// `overlay_rect`'s per-strip tuple; the panel buffer is fixed portrait `pw×ph`.
+/// Returns `(l, t, r, b)`. Handedness (0→S/3→N/4→W/7→E, else portrait) MUST stay
+/// in lockstep with the host's `user_bottom_edge`.
+fn strip_rect(at_bottom: bool, th: i32, off: i32, orient: u32, pw: i32, ph: i32) -> (i32, i32, i32, i32) {
+    #[derive(Clone, Copy)]
+    enum Edge {
+        N,
+        S,
+        W,
+        E,
+    }
+    let user_bottom = match orient {
+        3 => Edge::N, // 180°
+        4 => Edge::W, // 90°  — physical left
+        7 => Edge::E, // 270° — physical right
+        _ => Edge::S, // portrait (0) / host-owned (255)
+    };
+    let edge = if at_bottom {
+        user_bottom
+    } else {
+        match user_bottom {
+            Edge::S => Edge::N,
+            Edge::N => Edge::S,
+            Edge::W => Edge::E,
+            Edge::E => Edge::W,
+        }
+    };
+    // A `th`-thick, full-span strip `off` px inward from `edge` (overlay_rect's
+    // (x,y,w,h), converted to (l,t,r,b)).
+    match edge {
+        Edge::S => (0, ph - off - th, pw, ph - off),
+        Edge::N => (0, off, pw, off + th),
+        Edge::W => (off, 0, off + th, ph),
+        Edge::E => (pw - off - th, 0, pw - off, ph),
+    }
+}
+
 /// One authored input window: its display-space rect, z, focusability, and pid.
 struct InputWin {
     pid: i32,
@@ -275,56 +318,36 @@ pub fn input_window_block(store: &Store, id: DisplayId) -> Option<String> {
                 b: h,
                 focusable: true,
             },
-            // IME overlay — keyboard strip, touch-only. Sits ABOVE the bottom
-            // chrome (taskbar), matching how the editor is laid out: its content
-            // is inset by statusbar + keyboard + taskbar, so the keyboard occupies
-            // `[h - inset_bottom - kb, h - inset_bottom]` — NOT the screen bottom
-            // (anchoring at `h` would overlap + steal the taskbar's taps and
-            // mis-align the keys by `inset_bottom`). Skip if no height.
+            // IME overlay — keyboard strip, touch-only. `strip_rect` places it like
+            // the host's `overlay_rect`: at the user's bottom edge, `inset_bottom`
+            // inward (just above the taskbar), thickness = keyboard depth. In
+            // landscape this is a side strip, matching where the keyboard renders.
+            // Skip if no height.
             Role::Overlay => {
                 if kb <= 0 {
                     continue;
                 }
-                let bottom = h - inset_bottom; // top of the taskbar strip
-                InputWin {
-                    pid: s.pid,
-                    z: input_z::IME,
-                    l: 0,
-                    t: bottom - kb,
-                    r: w,
-                    b: bottom,
-                    focusable: false,
-                }
+                let (l, t, r, b) = strip_rect(true, kb, inset_bottom, orient, w, h);
+                InputWin { pid: s.pid, z: input_z::IME, l, t, r, b, focusable: false }
             }
-            // Chrome strip placed from its anchor + the matching inset, touch-only.
+            // Chrome strip placed from its anchor via `strip_rect` (rotation-aware,
+            // mirrors the host's `overlay_rect`), touch-only.
             Role::Chrome => match s.anchor {
                 Some(ChromeAnchor::Top) => {
                     if inset_top <= 0 {
                         continue;
                     }
-                    InputWin {
-                        pid: s.pid,
-                        z: input_z::STATUS_BAR,
-                        l: 0,
-                        t: 0,
-                        r: w,
-                        b: inset_top,
-                        focusable: false,
-                    }
+                    // status bar — the user's TOP edge (at_bottom = false).
+                    let (l, t, r, b) = strip_rect(false, inset_top, 0, orient, w, h);
+                    InputWin { pid: s.pid, z: input_z::STATUS_BAR, l, t, r, b, focusable: false }
                 }
                 Some(ChromeAnchor::Bottom) => {
                     if inset_bottom <= 0 {
                         continue;
                     }
-                    InputWin {
-                        pid: s.pid,
-                        z: input_z::TASKBAR,
-                        l: 0,
-                        t: h - inset_bottom,
-                        r: w,
-                        b: h,
-                        focusable: false,
-                    }
+                    // taskbar — the user's BOTTOM edge (at_bottom = true).
+                    let (l, t, r, b) = strip_rect(true, inset_bottom, 0, orient, w, h);
+                    InputWin { pid: s.pid, z: input_z::TASKBAR, l, t, r, b, focusable: false }
                 }
                 None => continue, // unplaced chrome — don't guess
             },
@@ -576,6 +599,31 @@ mod tests {
 win-begin 255 1440 2880\n\
 win 70 0 0 1440 133 0\n\
 win 71 0 2729 1440 2880 0\n\
+win 10 0 0 1440 2880 1\n\
+win-focus 10\n\
+win-commit\n";
+        assert_eq!(block, expected);
+    }
+
+    #[test]
+    fn input_window_block_rotates_chrome_in_landscape() {
+        let mut store = measured_store();
+        store.geometry_mut(PRIMARY_DISPLAY).orientation = 4; // 90° → user-bottom West
+        let d = store.display_mut(PRIMARY_DISPLAY);
+        d.put_surface(10, "app", Role::Foreground);
+        d.put_surface(70, "war.statusbar", Role::Chrome);
+        d.set_chrome_anchor(70, ChromeAnchor::Top);
+        d.put_surface(71, "war.taskbar", Role::Chrome);
+        d.set_chrome_anchor(71, ChromeAnchor::Bottom);
+        let block = input_window_block(&store, PRIMARY_DISPLAY).unwrap();
+        // orient=4 (user bottom = physical West): the status bar moves to the
+        // physical East edge (right vertical strip, thickness inset_top=133) and the
+        // taskbar to the West edge (left vertical strip, inset_bottom=151) — matching
+        // where the host renders them. The fullscreen app rect is unchanged.
+        let expected = "\
+win-begin 4 1440 2880\n\
+win 70 1307 0 1440 2880 0\n\
+win 71 0 0 151 2880 0\n\
 win 10 0 0 1440 2880 1\n\
 win-focus 10\n\
 win-commit\n";

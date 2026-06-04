@@ -1,18 +1,24 @@
 # Task 84 — Path-A app touch/key routing under ART-off (SF WindowInfos → our dispatcher)
 
-> Status: ✅ DONE + device-verified in PORTRAIT (Pixel 2 XL, 2026-06-04). Solved via
-> **Option 3, arbiter-driven**: the wart-arbiter (the WMS) authors the ordered
-> input-window list and pushes it to wart-inputflinger, which feeds the standalone
-> InputDispatcher via `onWindowInfosChanged` — sidestepping the dead SF push entirely.
-> Under `--no-art`: swipe-up unlocks the keyguard, launcher taps launch apps,
-> app-switching works, **IME typing works, taskbar works with the keyboard up**,
-> system keys still dedup, no "no touchable window". Spun out of task 80 path A.
-> **Follow-on (open): LANDSCAPE.** Rotation doesn't route touch — the arbiter authors
-> rects in portrait `[0,0,panel_w,panel_h]` + the reader viewport is portrait, so a
-> landscape layout (swapped dims, chrome on the sides) mismatches. Needs: arbiter
-> authors rects in the rotated display space + pushes the orientation so
-> wart-inputflinger reconfigures the reader `DisplayViewport`. This IS the task's
-> original "secondary coordinate issue" (below).
+> Status: ✅ DONE + device-verified, PORTRAIT **and LANDSCAPE** (Pixel 2 XL,
+> 2026-06-04). Solved via **Option 3, arbiter-driven**: the wart-arbiter (the WMS)
+> authors the ordered input-window list and pushes it to wart-inputflinger, which
+> feeds the standalone InputDispatcher via `onWindowInfosChanged` — sidestepping the
+> dead SF push entirely. Under `--no-art`: swipe-up unlocks the keyguard, launcher
+> taps launch apps, app-switching works, IME typing works, taskbar works with the
+> keyboard up, system keys still dedup, no "no touchable window". In landscape the
+> chrome/IME input strips track the rotated render positions (bars on the sides) and
+> app elements + the keyboard route correctly. Spun out of task 80 path A.
+>
+> **Landscape fix:** the fullscreen app/keyguard already worked in any orientation
+> (the host inverse-maps touch via the renderer `base_matrix`, standalone.rs:1035) —
+> only the chrome/IME strips were wrong, authored as portrait top/bottom strips while
+> the host renders them on the physical sides. Fix: `wart-arbiter-wm::strip_rect`
+> faithfully mirrors the host's `overlay_rect` (handedness `0→S/3→N/4→W/7→E`, strip
+> `th` thick `off` inward from the user's edge), so the input region follows the
+> bars. Pure arbiter change — no wart-inputflinger / reader-viewport change (the
+> reader stays portrait; the panel buffer is physically portrait and the host owns
+> content rotation). Portrait rects are byte-identical (no regression).
 >
 > ## What shipped (the implementation)
 > - **Arbiter (WMS authors windows):** `wart-arbiter-wm::input_window_block` derives the
