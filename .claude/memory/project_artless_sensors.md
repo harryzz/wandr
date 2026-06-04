@@ -21,7 +21,16 @@ report-orientation 0↔3). Wired into run-hybrid-stack --no-art (launched via wa
 uid system, after the arbiter). a-03 NEW-MODULE build gotcha: `m` dies in kati (LineageOS
 dexpreopt `$(error)`) but soong shards regen first → direct-ninja the soong intermediate
 (`out/soong/.intermediates/external/wart-sensors/<tgt>/android_arm64_armv8-a*/...`) via the
-combined ninja. Next consumer: proximity (task 78) under --no-art.
+combined ninja. PROXIMITY also DONE+device-verified (2026-06-04): wart-sensors enables proximity HAL
+sensor (type 8), pushes descriptor (max_range from HAL SensorInfo) via NEW arbiter verb
+`report-sensor-descriptor <kind> <max_range> <resolution>` (the in-process sensor_driver
+seeds this at enumerate normally, dead under ART-off), feeds readings via `report-sensor
+proximity <x>`. Arbiter classifies near/far → wart-arbiter-power (gated CommsActive) blanks
+panel on near + restores on far + touch-suppress (task 79). Verified: cover→blank+suppress,
+uncover→panel ON+resume (raw HAL 0 near / 5.0 far). C++ shim exposes wart_sensors_max_range/
+_resolution. Daemon launch gotcha: `setsid` wrapper made it die right after startup — use
+plain `(wart-launch wart-sensors &)`. Follow-on: on-demand ref-counted enable (arbiter
+SetSensor→wart-sensors) vs always-on; light/other sensors.
 
 (Diagnosis record below — why the simpler paths failed.)
 

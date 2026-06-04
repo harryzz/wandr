@@ -9,8 +9,17 @@
 > pushes `report-orientation` to the arbiter. **Verified: physically rotating the phone
 > auto-rotates the UI with the Java framework fully stopped** (daemon logged
 > `report-orientation 0↔3`, UI + chrome + touch followed via task 84). Wired into
-> `run-hybrid-stack.sh --no-art`. Proximity (task 78 under `--no-art`) is the next
-> consumer of the same daemon.
+> `run-hybrid-stack.sh --no-art`.
+>
+> **PROXIMITY also done + device-verified (2026-06-04):** wart-sensors enables the
+> proximity HAL sensor (type 8), pushes its descriptor (`max_range` from the HAL) via
+> a new arbiter verb `report-sensor-descriptor`, and feeds each reading via
+> `report-sensor proximity <x>`. The arbiter classifies near/far and — during a call
+> (`wart-arbiter-power` gated on `CommsActive`) — blanks the panel on near + restores
+> on far, with touch suppression (task 79). Verified: cover → screen blanks + touch
+> suppressed, uncover → panel ON + touch resumed (raw HAL values 0 near / 5.0 far).
+> Follow-on: on-demand ref-counted enable (arbiter `SetSensor` → wart-sensors) instead
+> of always-on; light / other sensors as needed.
 
 ## Experiment 1 (2026-06-04): standalone `sensorservice` — BLOCKED by system_server deps
 
