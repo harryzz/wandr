@@ -23,6 +23,16 @@
 #include <input/Input.h>
 #include <input/InputConsumer.h>
 #include <input/InputTransport.h>
+// Task 80 — standalone InputReader for ART-less input. Headers from
+// frameworks/native/services/inputflinger/{include,reader/include} (Android.bp
+// include_dirs). EventHub reads /dev/input/* directly; no system_server.
+#include "InputReaderBase.h"
+#include "InputReaderFactory.h"
+#include "InputListener.h"
+#include <input/DisplayViewport.h>
+#include <deque>
+#include <mutex>
+#include <cstdlib>
 #include <ui/PixelFormat.h>
 #include <ui/DisplayId.h>
 #include <ui/DisplayMode.h>
@@ -134,6 +144,136 @@ sp<gui::WindowInfoHandle>      g_window_info;
 // events. 0 = fullscreen surface (no subtraction).
 int32_t g_overlay_y_offset = 0;
 
+// ── Task 80: ART-less input via a standalone Android InputReader ──────────────
+// When WART_EVDEV_INPUT is set, source input from a private InputReader (its
+// EventHub reads /dev/input/* directly) instead of the system_server InputFlinger
+// channel — so input survives with the Java framework stopped. sf_input_poll
+// drains the queue our listener fills; the SfInputEvent contract to the host is
+// unchanged. Validated by the task-80 spike (createInputReader runs standalone;
+// MT touch decodes 1:1). Routing (which surface) stays the arbiter's job; this
+// first cut feeds the foreground host its events.
+bool                                  g_evdev_mode = false;
+std::unique_ptr<InputReaderInterface> g_input_reader;
+std::deque<SfInputEvent>              g_evdev_queue;
+std::mutex                            g_evdev_mutex;
+
+class WartInputListener : public InputListenerInterface {
+public:
+    void notifyInputDevicesChanged(const NotifyInputDevicesChangedArgs&) override {}
+    void notifyKey(const NotifyKeyArgs& a) override {
+        SfInputEvent e{};
+        if (a.action == AKEY_EVENT_ACTION_DOWN) e.kind = 10;
+        else if (a.action == AKEY_EVENT_ACTION_UP) e.kind = 11;
+        else return;
+        e.key_code = a.keyCode;
+        e.meta_state = a.metaState;
+        std::lock_guard<std::mutex> lk(g_evdev_mutex);
+        g_evdev_queue.push_back(e);
+    }
+    void notifyMotion(const NotifyMotionArgs& a) override {
+        const int32_t masked = a.action & AMOTION_EVENT_ACTION_MASK;
+        const size_t count = a.pointerCoords.size();
+        auto emit = [&](size_t idx, int32_t kind) {
+            if (idx >= count) return;
+            SfInputEvent e{};
+            e.kind = kind;
+            e.pointer_id = a.pointerProperties[idx].id;
+            e.x = a.pointerCoords[idx].getX();
+            // InputReader gives display-global coords; guest wants surface-local.
+            e.y = a.pointerCoords[idx].getY() - static_cast<float>(g_overlay_y_offset);
+            e.pressure = a.pointerCoords[idx].getAxisValue(AMOTION_EVENT_AXIS_PRESSURE);
+            std::lock_guard<std::mutex> lk(g_evdev_mutex);
+            g_evdev_queue.push_back(e);
+        };
+        const int32_t pidx = (a.action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK)
+                             >> AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT;
+        switch (masked) {
+            case AMOTION_EVENT_ACTION_DOWN:
+            case AMOTION_EVENT_ACTION_POINTER_DOWN:
+                emit(pidx, 0);
+                break;
+            case AMOTION_EVENT_ACTION_UP:
+            case AMOTION_EVENT_ACTION_POINTER_UP:
+            case AMOTION_EVENT_ACTION_CANCEL:
+                emit(pidx, 1);
+                break;
+            case AMOTION_EVENT_ACTION_MOVE:
+                for (size_t i = 0; i < count; i++) emit(i, 2);
+                break;
+            default:
+                break;
+        }
+    }
+    void notifySwitch(const NotifySwitchArgs&) override {}
+    void notifySensor(const NotifySensorArgs&) override {}
+    void notifyVibratorState(const NotifyVibratorStateArgs&) override {}
+    void notifyDeviceReset(const NotifyDeviceResetArgs&) override {}
+    void notifyPointerCaptureChanged(const NotifyPointerCaptureChangedArgs&) override {}
+};
+
+class WartInputPolicy : public InputReaderPolicyInterface {
+public:
+    void getReaderConfiguration(InputReaderConfiguration* outConfig) override {
+        // Associate the touchscreen with the internal display so InputReader
+        // configures it + maps coords. 1:1 viewport, ROT_0 (the host applies its
+        // own content rotation; the standalone loop inverse-maps input to match).
+        const int32_t pw = static_cast<int32_t>(PANEL_W);
+        const int32_t ph = static_cast<int32_t>(PANEL_H);
+        DisplayViewport v;
+        v.displayId = ui::LogicalDisplayId::DEFAULT;
+        v.orientation = ui::ROTATION_0;
+        v.logicalRight = pw;  v.logicalBottom = ph;
+        v.physicalRight = pw; v.physicalBottom = ph;
+        v.deviceWidth = pw;   v.deviceHeight = ph;
+        v.isActive = true;
+        v.uniqueId = "local:0";
+        v.type = ViewportType::INTERNAL;
+        outConfig->setDisplayViewports({v});
+    }
+    void notifyInputDevicesChanged(const std::vector<InputDeviceInfo>&) override {}
+    void notifyTouchpadHardwareState(const SelfContainedHardwareState&, int32_t) override {}
+    void notifyTouchpadGestureInfo(GestureType, int32_t) override {}
+    void notifyTouchpadThreeFingerTap() override {}
+    std::shared_ptr<KeyCharacterMap> getKeyboardLayoutOverlay(
+            const InputDeviceIdentifier&, const std::optional<KeyboardLayoutInfo>) override {
+        return nullptr;
+    }
+    std::string getDeviceAlias(const InputDeviceIdentifier&) override { return ""; }
+    TouchAffineTransformation getTouchAffineTransformation(
+            const std::string&, ui::Rotation) override {
+        return TouchAffineTransformation();
+    }
+    void notifyStylusGestureStarted(int32_t, nsecs_t) override {}
+    bool isInputMethodConnectionActive() override { return false; }
+    std::optional<DisplayViewport> getPointerViewportForAssociatedDisplay(
+            ui::LogicalDisplayId) override {
+        return std::nullopt;
+    }
+};
+
+sp<WartInputPolicy> g_evdev_policy;
+WartInputListener   g_evdev_listener;
+
+// Start the private InputReader once. Idempotent.
+void start_evdev_input() {
+    if (g_input_reader != nullptr) {
+        return;
+    }
+    g_evdev_policy = sp<WartInputPolicy>::make();
+    g_input_reader = createInputReader(g_evdev_policy, g_evdev_listener);
+    if (g_input_reader == nullptr) {
+        LOGE("evdev: createInputReader returned null — input disabled");
+        return;
+    }
+    if (g_input_reader->start() != OK) {
+        LOGE("evdev: InputReader start failed — input disabled");
+        g_input_reader.reset();
+        return;
+    }
+    LOGI("evdev: standalone InputReader started (ART-less input, panel %ux%u)",
+         PANEL_W, PANEL_H);
+}
+
 // Register an InputFlinger input window for g_control so InputDispatcher
 // routes touch events inside `rect` (in display coords) to our input
 // channel. Recipe from
@@ -147,6 +287,14 @@ int32_t g_overlay_y_offset = 0;
 // and sf_input_poll subtracts g_overlay_y_offset to give the guest
 // surface-local coords.
 void register_input_window_at(const Rect& rect, const char* name) {
+    // Task 80 — ART-less mode: skip the system_server InputFlinger channel and
+    // run our own InputReader instead (idempotent across the fullscreen + overlay
+    // call sites). Routing is the arbiter's job; this host consumes its events.
+    if (getenv("WART_EVDEV_INPUT") != nullptr) {
+        g_evdev_mode = true;
+        start_evdev_input();
+        return;
+    }
     sp<IBinder> binder =
         defaultServiceManager()->waitForService(String16("inputflinger"));
     sp<os::IInputFlinger> inputFlinger = interface_cast<os::IInputFlinger>(binder);
@@ -348,7 +496,9 @@ ANativeWindow* sf_create_fullscreen_surface(int32_t* out_w, int32_t* out_h,
         return nullptr;
     }
 
-    // Step 4 — register an InputFlinger input window (task 33 Step 3).
+    // Step 4 — register an InputFlinger input window (task 33 Step 3), or in
+    // ART-less mode start our own InputReader (task 80; the InputReader display
+    // viewport reads the global PANEL_W/PANEL_H set by init_panel_dims).
     register_input_window(PW, PH);
 
     // Report the portrait logical size. out_transform stays 0 here — the
@@ -367,7 +517,20 @@ ANativeWindow* sf_create_fullscreen_surface(int32_t* out_w, int32_t* out_h,
 // consumed InputFlinger event is decoded to the action pointer and finished.
 // Returns 0 if input was never set up.
 int32_t sf_input_poll(SfInputEvent* out, int32_t max) {
-    if (g_input_consumer == nullptr || out == nullptr || max <= 0) {
+    if (out == nullptr || max <= 0) {
+        return 0;
+    }
+    // Task 80 — ART-less mode: drain the queue our InputReader listener fills.
+    if (g_evdev_mode) {
+        int32_t n = 0;
+        std::lock_guard<std::mutex> lk(g_evdev_mutex);
+        while (n < max && !g_evdev_queue.empty()) {
+            out[n++] = g_evdev_queue.front();
+            g_evdev_queue.pop_front();
+        }
+        return n;
+    }
+    if (g_input_consumer == nullptr) {
         return 0;
     }
     static PreallocatedInputEventFactory factory;

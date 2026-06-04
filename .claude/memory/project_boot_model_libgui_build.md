@@ -59,3 +59,23 @@ across a long task-33 Step 1 session.
 back and deploy with adb. Don't attempt to vendor AOSP headers into
 `wart-host/build.rs`. See `tasks/33-boot-model-bringup.md` Step 1.
 Related: [[feedback-bionic-compat]].
+
+**WORKING RECIPE (verified 2026-06-04, task 80 spike) — non-interactive ssh:**
+```
+ssh -i ~/.ssh/id_rsa.my harry@a-03 'bash -lc "
+  cd ~/android/lineage
+  source build/envsetup.sh >/dev/null 2>&1
+  lunch aosp_arm64-trunk_staging-userdebug >/dev/null 2>&1
+  export TARGET_RELEASE=trunk_staging TARGET_PRODUCT=aosp_arm64 TARGET_BUILD_VARIANT=userdebug
+  export DISABLE_DEXPREOPT_CHECK=true
+  m <module>
+"'
+```
+GOTCHA: `lunch` sets `TARGET_RELEASE` but it does NOT survive into `m`'s child →
+you MUST re-`export TARGET_RELEASE=trunk_staging` yourself, else
+`release_config.mk:273: No release config set ... release is one of: .`. The full
+`m` does a ~5-min kati full-tree parse EVERY time. **After the first `m` adds the
+module to the soong ninja, iterate in SECONDS via direct-ninja (skips kati):**
+`prebuilts/build-tools/linux-x86/bin/ninja -f out/combined-aosp_arm64.ninja <out-artifact-path>`.
+cc_binary artifact: `out/soong/.intermediates/external/<mod>/<mod>/android_arm64_armv8-a/<mod>`
+(no `_shared`); cc_library_shared: `.../android_arm64_armv8-a_shared/lib<mod>.so`.

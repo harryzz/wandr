@@ -1,7 +1,16 @@
 # Task 80 — standalone input source (ART-less input)
 
-> Status: 🔲 scoped, not started. The blocker for running the wart stack with the
-> Android Java framework (ART) fully off.
+> Status: 🟢 core PROVEN + device-verified (2026-06-04). Chose **Option B** (reuse
+> Android's C++ `InputReader` standalone) after proving it has no blocking cases.
+> **Step 0** (spike): `createInputReader` runs with no system_server; injected
+> touch decodes 1:1. **Step 1** (shim): `sf_surface.cpp` runs the InputReader +
+> feeds `sf_input_poll` (evdev mode, gated by `WART_EVDEV_INPUT`); built on a-03.
+> **Step 3** (harness): `run-hybrid-stack.sh --no-art`/`--restore-art`/`--evdev`.
+> **Capstone verified:** with `system_server` + both zygotes stopped (SF/audioserver/
+> sensorservice/adbd survive, adb alive), a `sendevent` swipe-up on `/dev/input/event1`
+> → keyguard guest → `keyguard UNLOCKED`. Fully interactive with ART off.
+> **Remaining: Step 2** — input-focus routing (today every host runs an InputReader
+> and gets every touch; only the surface that cares acts). See `[[project_art_shutdown]]`.
 
 ## Why
 

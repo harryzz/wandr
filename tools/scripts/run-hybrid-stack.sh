@@ -37,6 +37,31 @@ if [[ "${1:-}" == "--stop" ]]; then
     exit 0
 fi
 
+# Restore the Android Java framework after a --no-art run (task 80). adbd
+# (class core, USB) survives the framework stop, so this always recovers.
+if [[ "${1:-}" == "--restore-art" ]]; then
+    echo "▸ restoring Android framework (start) …"
+    adb shell "su -c 'start'" >/dev/null 2>&1 || true
+    echo "▸ done — framework restarting. Re-run run-hybrid-stack.sh to bring the test stack back."
+    exit 0
+fi
+
+# Flags (task 80):
+#   --evdev   run hosts with WART_EVDEV_INPUT=1 (input via our standalone
+#             InputReader reading /dev/input directly, not system_server).
+#   --no-art  implies --evdev, and after the stack is up, stop ONLY the Java
+#             framework (zygote + zygote_secondary → system_server) while keeping
+#             the native survivors (surfaceflinger/audioserver/sensorservice).
+#             Recover with `--restore-art`.
+EXTRA_ENV=""
+NO_ART=0
+for arg in "$@"; do
+    case "$arg" in
+        --evdev)  EXTRA_ENV="WART_EVDEV_INPUT=1 " ;;
+        --no-art) EXTRA_ENV="WART_EVDEV_INPUT=1 "; NO_ART=1 ;;
+    esac
+done
+
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 HOST_BIN="$REPO_ROOT/runtime/wart-host/target/aarch64-linux-android/release/wasm-android-host"
@@ -140,7 +165,7 @@ adb shell "su -c 'am force-stop $HOME_PKG'"
 
 echo "▸ starting wart-host --zygote (detached; insets arbiter-authored) …"
 spawn_detached /data/local/tmp/wart-zygote.log \
-    "LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-host --zygote"
+    "${EXTRA_ENV}LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-host --zygote"
 if ! wait_for_sock /data/local/tmp/wart-zygote.sock 30; then
     echo "✗ zygote socket never appeared — see /data/local/tmp/wart-zygote.log:" >&2
     adb shell "su -c 'tail -20 /data/local/tmp/wart-zygote.log'" 2>&1 | tr -d '\r' >&2
@@ -159,15 +184,15 @@ bring_up_chrome() {
         adb shell "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter set-home $HOME_APP'" 2>&1 | tr -d '\r'
     fi
     echo "▸ status bar (top overlay)"
-    spawn_detached /dev/null "LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-host --standalone-overlay-top --app war.statusbar"
+    spawn_detached /dev/null "${EXTRA_ENV}LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-host --standalone-overlay-top --app war.statusbar"
     echo "▸ taskbar (bottom nav overlay)"
-    spawn_detached /dev/null "LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-host --standalone-overlay-bottom-bar --app war.taskbar"
+    spawn_detached /dev/null "${EXTRA_ENV}LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-host --standalone-overlay-bottom-bar --app war.taskbar"
     echo "▸ IME keyboard (bottom overlay) + set-ime"
     adb shell "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter launch-overlay war.ime.keyboard'" 2>&1 | tr -d '\r'
     sleep 1
     adb shell "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter set-ime war.ime.keyboard'" 2>&1 | tr -d '\r'
     echo "▸ keyguard (lock overlay) + boot-lock"
-    spawn_detached /dev/null "LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-host --standalone-overlay-lock --app war.keyguard"
+    spawn_detached /dev/null "${EXTRA_ENV}LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-host --standalone-overlay-lock --app war.keyguard"
     sleep 1
     # Boot = locked: the keyguard module shows the lock screen + demotes the app.
     adb shell "su -c '/data/local/tmp/wart-arbiter lock'" 2>&1 | tr -d '\r'
@@ -203,5 +228,15 @@ else
     echo "  arbiter up (socket present)"
     bring_up_chrome
     trap - EXIT INT TERM       # don't tear the stack down on this script's exit
+    if [[ "$NO_ART" == "1" ]]; then
+        # Task 80 — shut off the Android Java framework (system_server etc.) now
+        # that the wart stack is up + reading input via its own InputReader. Stop
+        # ONLY the zygote services; surfaceflinger/audioserver/sensorservice (native,
+        # class core) and adbd survive → recoverable with `--restore-art`.
+        echo "▸ --no-art: stopping the Android Java framework (zygote + system_server) …"
+        adb shell "su -c 'stop zygote; stop zygote_secondary'" >/dev/null 2>&1 || true
+        echo "  Java framework stopped (native survivors + wart stack remain). adb is alive."
+        echo "  Recover with: $0 --restore-art"
+    fi
     echo "▸ stack up (detached). Stop with: $0 --stop"
 fi

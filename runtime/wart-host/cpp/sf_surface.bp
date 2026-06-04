@@ -15,6 +15,15 @@ cc_library_shared {
         "liblog",
         "libnativewindow",
         "libinput",
+        // Task 80 — standalone InputReader for ART-less input. libinputreader
+        // pulls libinputflinger_base; neither needs libgui/system_server.
+        "libinputreader",
+        "libinputflinger_base",
     ],
-    cflags: ["-Wall", "-Wextra"],
+    // InputReader/EventHub headers live in services/inputflinger.
+    include_dirs: [
+        "frameworks/native/services/inputflinger/include",
+        "frameworks/native/services/inputflinger/reader/include",
+    ],
+    cflags: ["-Wall", "-Wextra", "-Wno-unused-parameter"],
 }
