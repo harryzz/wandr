@@ -248,20 +248,21 @@ wait_for_sock() {
     return 1
 }
 
-# --no-art high-CPU fix: quiet Magisk su-logging BEFORE the first su that races the
-# framework stop. Every `su -c` makes Magisk log/notify via `am`/`content` against
-# the framework; the force-stops below + the bringup issue many, and any still
-# in-flight when the framework goes down spin ~100%/core retrying forever. Disabling
-# here (framework still up, so this su logs + completes cleanly) means none are ever
-# queued. Restored on --restore-art. No-op without Magisk.
+# --no-art high-CPU fix: every `su -c` makes Magisk log/notify the grant via
+# `am`/`content` against the framework; with ART stopped those spawn an app_process
+# that spins ~100%/core retrying ActivityManager forever, and the bringup issues
+# many. Two parts: (1) quiet Magisk su-logging up front; (2) SKIP the SystemUI/
+# launcher force-stops — `stop zygote` kills them anyway, and they're the one su that
+# runs at the framework-up/down boundary, where a logger they spawn can still be
+# in-flight when the framework drops and gets stuck. Restored on --restore-art.
 if [[ "$NO_ART" == "1" ]]; then
     echo "▸ --no-art: disabling Magisk su logging/notification (avoids ~100%/core spin)"
     magisk_su_logging 0
+else
+    echo "▸ stopping SystemUI + launcher ($HOME_PKG) …"
+    adb shell "su -c 'am force-stop com.android.systemui'"
+    adb shell "su -c 'am force-stop $HOME_PKG'"
 fi
-
-echo "▸ stopping SystemUI + launcher ($HOME_PKG) …"
-adb shell "su -c 'am force-stop com.android.systemui'"
-adb shell "su -c 'am force-stop $HOME_PKG'"
 
 # Path A (--no-art): stop the Java framework FIRST, then start wart-inputflinger,
 # BEFORE the zygote/hosts — so the hosts' inputflinger client path
