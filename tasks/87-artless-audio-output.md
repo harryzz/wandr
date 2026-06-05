@@ -1,7 +1,8 @@
 # Task 87 — ART-off audio output (make sound actually play under `--no-art`)
 
-> Status: 🟡 IN PROGRESS — two of N layers solved + device-verified; one blocker
-> remains (the stream reaches `STARTED` but the MMAP PCM never runs → silent).
+> Status: ✅ SOLVED + USER-CONFIRMED AUDIBLE (2026-06-05). Four layers, each a
+> thing `system_server` does that's missing under `--no-art`; the last (Layer 4)
+> was the missing `permission` binder. See "Layer 4 — RESOLVED" below.
 > Follow-on to task 85 (ART-off sensors) / 86 (ART-off auto-brightness) / the
 > ART-off audio-stub work (`wart-activityms`). Detail + history:
 > `[[project-artless-audio]]`. Written as a fresh-head handoff — everything needed
@@ -31,7 +32,46 @@ the vendor HAL) survives and is fine.
 | 1. `activity` / `sensor_privacy` binders | audioserver wedges in init, `media.audio_*` never register | `wart-activityms` stub (C++/libbinder, a-03) | ✅ shipped (pre-87) |
 | 2. stream volume init | policy volume range `-1`, every stream `-inf dB` | `audio_policy_impl::init_audio_policy()` (Rust) | ✅ this task |
 | 3. `scheduling_policy` binder | `Command 6 REGISTER_AUDIO_THREAD` infinite-loops → stream never `STARTED` | add to `wart-activityms` generics[] | ✅ this task |
-| 4. **stream actually starts the PCM** | reaches `STARTED` but `Command 7` times out, MMAP PCM not RUNNING, `QUAT_MI2S_RX` Off → **SILENT** | **UNSOLVED — this is the remaining work** | 🔲 |
+| 4. **stream actually starts the PCM** | reaches `STARTED` but `Command 7` times out, MMAP PCM not RUNNING, `QUAT_MI2S_RX` Off → **SILENT** | `permission` (`IPermissionController`) binder stub in `wart-activityms` | ✅ this task |
+
+---
+
+## Layer 4 — RESOLVED (the `permission` binder)
+
+**Root cause (ART-up vs `--no-art` A/B + source-confirmed):** `MmapThread::start`
+(`audioflinger/Threads.cpp:10508`, the START_CLIENT path) calls
+`afutils::checkAttributionSourcePackage` → `PermissionController::getPackagesForUid`
+→ `PermissionController::getService()`
+(`frameworks-native/libs/binder/PermissionController.cpp:30`), which loops
+`checkService("permission"); sleep(1);` for **10 s** then "giving up" when
+`system_server`'s `IPermissionController` is dead. That 10 s block runs **on the
+audioserver command thread inside START_CLIENT**, so the host's `startStream`
+(`TIMEOUT_NANOS = 3 s`) times out → `Command 6/7/10 time out` → no PCM RUNNING →
+`QUAT_MI2S_RX` Off → silence. Device-confirmed: audioserver logs
+`"Waiting for permission service"` / `"Waiting too long … giving up"` ×N during a tone.
+
+**Fix:** add a 4th generic stub binder — `{"permission",
+"android.os.IPermissionController"}` — to `wart-activityms` `generics[]`
+(`runtime/wart-activityms/cpp/wart_activityms.cpp`), alongside `activity` /
+`sensor_privacy` / `scheduling_policy`. Registering any binder makes
+`checkService("permission")` return instantly (no block); `GenericStub`'s
+`writeNoException()+writeInt32(0)` decodes as `getPackagesForUid`'s empty
+`Vector<String16>`, which `checkAttributionSourcePackage` handles fine. Built on
+a-03 (ninja-direct the soong intermediate — source-only change), redeployed.
+**Result:** `--no-art` play-tone is **audible** (user-confirmed), `pcm4p` RUNNING,
+`QUAT_MI2S_RX … MultiMedia3` On, no Command timeouts — identical to the ART-up trace.
+
+**Dead ends ruled out (both via the ART-up A/B):**
+- *EXCLUSIVE vs SHARED sharing mode* — changing the host stream-open path is wrong
+  (it works under ART); reverted. The shared mixer thread is not the wedge.
+- *`AudioSystem.systemReady()`* (replicate `AudioService.onIndicateSystemReady()`
+  via a `media.audio_flinger` `IAudioFlingerService` stub) — lands correctly
+  (`AudioFlinger: systemReady` logged) but does **not** fix the wedge; inert under
+  `--no-art` (the power service it would gate the wakelock on is also dead). Reverted.
+- *"Could not set MMAP stream volume: no volume callback!"* — appears under **ART-up
+  too** (where audio is audible), so it's an irrelevant symptom, not the cause. The
+  `MmapStreamCallback` is the in-process `AAudioServiceEndpointMMAP` (passes `this`),
+  not anything `system_server` registers — nothing for wart to supply.
 
 ---
 

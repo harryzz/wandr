@@ -1,10 +1,46 @@
 ---
 name: project-artless-audio
-description: "ART-off audio: audioserver is native+standalone but WEDGES on waitForService('activity') (ActivityManager) → no audio under --no-art; fix = tiny IActivityManager stub, NOT an audioflinger refactor"
+description: "ART-off audio FULLY SOLVED (audible): audioserver needs 4 system_server binder stubs in wart-activityms — activity, sensor_privacy, scheduling_policy, AND permission (IPermissionController). The last unblocks MMAP playback START."
 metadata: 
   node_type: memory
   type: project
   originSessionId: 023c2492-85e0-4052-bd04-4dc23f02fd88
+---
+
+**✅ TASK 87 FULLY SOLVED + USER-CONFIRMED AUDIBLE (2026-06-05).** ART-off audio output
+works: a `--no-art` play-tone is heard on the Pixel 2 XL speaker. The complete recipe is
+**4 system_server binder stubs in `wart-activityms` generics[]** + native volume init:
+`activity` + `sensor_privacy` (audioserver init un-wedge), `scheduling_policy`
+(REGISTER_AUDIO_THREAD requestPriority loop), **`permission` =
+`android.os.IPermissionController` (LAYER 4, the final blocker)**, plus
+`audio_policy_impl::init_audio_policy()` for volume levels.
+
+**LAYER 4 root cause (found via ART-up vs --no-art play-tone A/B):** `MmapThread::start`
+(audioflinger/Threads.cpp:10508, the START_CLIENT path) → `afutils::
+checkAttributionSourcePackage` → `PermissionController::getPackagesForUid` →
+`getService()` (frameworks-native/libs/binder/PermissionController.cpp:30) loops
+`checkService("permission"); sleep(1)` for **10s then "giving up"** when system_server's
+IPermissionController is dead. That 10s block runs ON the audioserver command thread
+inside START_CLIENT → host `startStream` (AAudioServiceStreamBase TIMEOUT_NANOS=3s) times
+out → `Command 6/7/10 time out`, MMAP PCM never RUNNING, `QUAT_MI2S_RX` Off → silence.
+Smoking gun: audioserver logs `"Waiting for permission service"` ×N during a tone. FIX =
+`{"permission","android.os.IPermissionController"}` in generics[] (GenericStub
+writeNoException+writeInt32(0) = empty getPackagesForUid Vector<String16>, fine). Built
+a-03 ninja-direct, redeployed. Now matches ART-up: pcm4p RUNNING, route On, no timeouts.
+
+**DEAD ENDS RULED OUT (don't re-try):** (1) EXCLUSIVE vs SHARED sharing mode — host
+stream-open path works under ART, must NOT change it; the shared mixer thread is not the
+wedge (reverted). (2) `AudioSystem.systemReady()` (replicate
+AudioService.onIndicateSystemReady via a media.audio_flinger IAudioFlingerService stub) —
+lands correctly (`AudioFlinger: systemReady` logged at transaction code 53) but does NOT
+fix the wedge; inert under --no-art (power service dead → no wakelock) (reverted). (3)
+`"Could not set MMAP stream volume: no volume callback!"` — appears under ART-up TOO
+(audible there) = irrelevant symptom; the MmapStreamCallback is the in-process
+AAudioServiceEndpointMMAP (passes `this`), not a system_server thing. **Method = the
+ART-up A/B is the high-signal tool; "works under ART" means diff what system_server
+provides, don't change the host audio path.** a-03 IPermissionController descriptor +
+the generic-stub reply shape are the reusable bits if a 5th audioserver stub surfaces.
+
 ---
 
 **✅ SOLVED + device-verified (2026-06-05): C++ stub `wart-activityms`.** Registers a

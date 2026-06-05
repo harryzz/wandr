@@ -177,6 +177,18 @@ int main() {
         // writeNoException()+writeInt32(0) is exactly what BpSchedulingPolicyService
         // ::requestPriority reads (NO_ERROR). See [[project-artless-audio]].
         {"scheduling_policy", "android.os.ISchedulingPolicyService"},
+        // AAudio MMAP start path (4th stub): MmapThread::start ->
+        // afutils::checkAttributionSourcePackage -> PermissionController::
+        // getPackagesForUid -> getService() loops `checkService("permission");
+        // sleep(1)` for 10s then "giving up" (frameworks-native/libs/binder/
+        // PermissionController.cpp:30) when system_server's IPermissionController
+        // is gone. This 10s block runs ON the audioserver command thread inside
+        // START_CLIENT, so the host's startStream (3s timeout) gives up -> no PCM
+        // -> silence (device-confirmed: "Waiting for permission service" x N).
+        // Registering any binder makes checkService return instantly; GenericStub's
+        // writeNoException()+writeInt32(0) decodes as getPackagesForUid's empty
+        // Vector<String16>, which checkAttributionSourcePackage handles fine.
+        {"permission", "android.os.IPermissionController"},
     };
     for (const auto& g : generics) {
         status_t s = sm->addService(String16(g.name), sp<GenericStub>::make(g.descriptor));
