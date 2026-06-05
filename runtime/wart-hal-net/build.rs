@@ -83,6 +83,24 @@ interface IDnsResolver {
         .output(out_dir.join("inetd_bindings.rs"))
         .generate()
         .expect("rsbinder-aidl INetd codegen failed");
+
+    // ISupplicant HAL (M2 probe — WiFi association over binder, the Android-native
+    // path). The full real AIDL parses + compiles in async mode; it imports two
+    // framework types (PersistableBundle / ParcelFileDescriptor) stubbed in
+    // aidl-stubs.
+    let sup = PathBuf::from("../wart-host/vendor/aosp-hardware-interfaces/wifi/supplicant/aidl");
+    let wifi_common = PathBuf::from("../wart-host/vendor/aosp-hardware-interfaces/wifi/common/aidl");
+    let stubs = PathBuf::from("../wart-host/vendor/aidl-stubs");
+    println!("cargo:rerun-if-changed={}", sup.display());
+    rsbinder_aidl::Builder::new()
+        .source(sup.join("android/hardware/wifi/supplicant/ISupplicant.aidl"))
+        .include_dir(&sup)
+        .include_dir(&wifi_common)
+        .include_dir(&stubs)
+        .set_async_support(true)
+        .output(out_dir.join("isupplicant_bindings.rs"))
+        .generate()
+        .expect("rsbinder-aidl ISupplicant codegen failed");
 }
 
 fn copy(src: &Path, dst: &Path) {

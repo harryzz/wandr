@@ -19,6 +19,22 @@ pub mod supplicant;
 #[cfg(target_os = "android")]
 mod netd;
 
+#[cfg(target_os = "android")]
+mod supplicant_hal;
+
+/// M2 probe: can this process reach the vendor ISupplicant HAL over binder (as
+/// whatever uid it runs)? Read-only. `false` off-android.
+pub fn probe_supplicant() -> bool {
+    #[cfg(target_os = "android")]
+    {
+        supplicant_hal::probe()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        false
+    }
+}
+
 /// The network (on-link) CIDR for an address + prefix, e.g. `192.168.1.179`/`22`
 /// → `"192.168.0.0/22"`. Used as netd's connected route.
 pub fn subnet_cidr(ip: Ipv4Addr, prefix: u8) -> String {

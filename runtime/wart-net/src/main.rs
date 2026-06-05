@@ -203,6 +203,14 @@ fn main() {
         std::process::exit(if net_ok && dns_ok { 0 } else { 1 });
     }
 
+    // `--probe-supplicant` — M2 reconnaissance: try to reach the ISupplicant HAL
+    // over binder (run as `su 1000` to test the uid-system case).
+    if args.iter().any(|a| a == "--probe-supplicant") {
+        let ok = wart_hal_net::probe_supplicant();
+        println!("probe-supplicant -> {ok}");
+        std::process::exit(if ok { 0 } else { 1 });
+    }
+
     let once = args.iter().any(|a| a == "--once");
 
     match bring_up() {

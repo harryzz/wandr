@@ -84,6 +84,31 @@ system works: `ndc network create` and the binder calls all succeed. So:
    `--no-art` boot needs the IWifi HAL to power the chip + create the STA iface
    first (today done by the dead WifiService).
 
+## M2 — supplicant over binder (STARTED — reconnaissance ✅)
+
+Replace the ctrl-socket nudge with the Android-native path: drive
+`android.hardware.wifi.supplicant.ISupplicant` over binder (what `WifiNative`
+uses). Reconnaissance done + device-verified under `--no-art`:
+
+- **rsbinder codegen**: the full real `ISupplicant.aidl` (134 files) parses +
+  generates (26457 lines) + **compiles** as-is in async mode — only needs the
+  framework-type stubs already in `vendor/aidl-stubs` (`PersistableBundle`,
+  `ParcelFileDescriptor`). No trimming, unlike `IDnsResolver`.
+- **Runtime reachability (the real unknown) = GREEN**: as uid `system` a process
+  `get_interface`s `…ISupplicant/default` over the *default* `/dev/binder` +
+  servicemanager (it's registered there, like `netd` — visible in `service list`
+  under `--no-art`); **no SELinux/AVC denial**; `listInterfaces()` returns `wlan0`
+  (STA). `IWifi/default` is likewise registered (the cold chip power-up path).
+- Vendored AIDL is already present (`aosp-hardware-interfaces/wifi/supplicant`).
+- Scaffolding landed: `wart-hal-net` codegens ISupplicant + `supplicant_hal::probe`;
+  `wart-net --probe-supplicant` (run as `su 1000`).
+- Nuance (not a blocker): `getStaInterface("wlan0")` → `ServiceSpecific(1)` because
+  our supplicant created the iface via legacy `-i/-c` config, not the HAL's
+  `addStaInterface()`; M2 either calls `addStaInterface` or starts it HAL-managed.
+
+M2 remaining: drive associate via `ISupplicantStaIface` (`addNetwork` →
+`setSsid`/`setPsk`/`setKeyMgmt` → `reassociate`) + cold chip power-up via `IWifi`.
+
 ## Goal
 
 A wart-native connectivity layer that replaces Android's `ConnectivityService` +
