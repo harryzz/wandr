@@ -35,6 +35,7 @@ mod binder_path {
         AudioDeviceDescription::AudioDeviceDescription,
         AudioDeviceType::AudioDeviceType,
         AudioSource::AudioSource,
+        AudioStreamType::AudioStreamType,
         AudioUsage::AudioUsage,
     };
 
@@ -89,6 +90,72 @@ mod binder_path {
         match svc.r#setForceUse(AudioPolicyForceUse::COMMUNICATION, cfg) {
             Ok(())  => log::info!("audio-policy: setForceUse COMMUNICATION {}", cfg_name(cfg)),
             Err(e)  => log::warn!("audio-policy: setForceUse {} failed: {e:?}", cfg_name(cfg)),
+        }
+    }
+
+    /// Replicate the boot-time audio init that `AudioService.java` normally does in
+    /// `system_server` — which is dead under `--no-art`. Without it the policy
+    /// service reports a volume index range of `-1` (`initStreamVolume` never ran)
+    /// and every stream sits at `-inf dB`, so nothing is audible even though the
+    /// stream opens and routes. This is the native (Rust) stand-in for
+    /// `AudioService.onReinitVolumes()` + the boot mode/force-use defaults:
+    /// for each public stream, set its index range (`initStreamVolume`, values
+    /// copied verbatim from `AudioService.MIN_/MAX_STREAM_VOLUME`) and seed a
+    /// per-device index (`setStreamVolumeIndex`), then set NORMAL phone state and
+    /// clear the comms force-route. Idempotent — safe to re-run after an
+    /// `audioserver` restart (the `onAudioServerDied` recovery AudioService does).
+    pub fn init_audio_policy() {
+        if let Err(e) = crate::binder::init() {
+            log::warn!("audio-init: binder init failed: {e}");
+            return;
+        }
+        let Some(svc) = service() else {
+            log::warn!("audio-init: media.audio_policy unavailable — skipping");
+            return;
+        };
+        // AudioStreamType value = array index. Order: VOICE_CALL, SYSTEM, RING,
+        // MUSIC, ALARM, NOTIFICATION, BLUETOOTH_SCO, ENFORCED_AUDIBLE, DTMF, TTS,
+        // ACCESSIBILITY, ASSISTANT (the 12 public streams AudioService inits).
+        const MIN: [i32; 12] = [1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0];
+        const MAX: [i32; 12] = [5, 7, 7, 15, 7, 7, 15, 7, 15, 15, 15, 15];
+        // Output devices to seed. OUT_DEFAULT is the generic fallback APM applies
+        // to any device without a specific index; the rest are the built-in /
+        // common wired outputs so the index is right whichever one is selected.
+        let devices = [
+            AudioDeviceType::OUT_DEFAULT,
+            AudioDeviceType::OUT_SPEAKER,
+            AudioDeviceType::OUT_SPEAKER_EARPIECE,
+            AudioDeviceType::OUT_HEADPHONE,
+            AudioDeviceType::OUT_HEADSET,
+        ];
+        let mut ok = 0;
+        for s in 0..12i32 {
+            let stream = AudioStreamType(s);
+            let (min, max) = (MIN[s as usize], MAX[s as usize]);
+            if let Err(e) = svc.r#initStreamVolume(stream, min, max) {
+                log::warn!("audio-init: initStreamVolume stream={s} ({min}..{max}) failed: {e:?}");
+                continue;
+            }
+            // No settings store under --no-art, so pick a sensible default: full
+            // scale for MUSIC (so media/tones are loud) and ~80% of range for the
+            // rest. The user can still adjust via the volume keys, which now work
+            // (the index range is no longer -1).
+            let idx = if s == 3 { max } else { min + (max - min) * 4 / 5 };
+            for d in devices {
+                let _ = svc.r#setStreamVolumeIndex(stream, &dev_desc(d), idx, false);
+            }
+            ok += 1;
+        }
+        log::info!("audio-init: initStreamVolume + setStreamVolumeIndex done for {ok}/12 streams");
+
+        // Boot mode/route defaults: NORMAL phone state, no forced comms route.
+        let uid = unsafe { getuid() } as i32;
+        match svc.r#setPhoneState(AudioMode::NORMAL, uid) {
+            Ok(())  => log::info!("audio-init: setPhoneState NORMAL (uid={uid})"),
+            Err(e)  => log::warn!("audio-init: setPhoneState NORMAL failed: {e:?}"),
+        }
+        if let Err(e) = svc.r#setForceUse(AudioPolicyForceUse::COMMUNICATION, AudioPolicyForcedConfig::NONE) {
+            log::warn!("audio-init: setForceUse COMMUNICATION NONE failed: {e:?}");
         }
     }
 
@@ -379,6 +446,13 @@ mod binder_path {
 pub fn probe() { binder_path::probe(); }
 #[cfg(not(target_os = "android"))]
 pub fn probe() { log::warn!("audio-policy probe: android-only build"); }
+
+/// `--init-audio-policy`: replicate AudioService's boot volume/device init so audio
+/// is audible under `--no-art` (run by run-hybrid-stack after audioserver is up).
+#[cfg(target_os = "android")]
+pub fn init_audio_policy() { binder_path::init_audio_policy(); }
+#[cfg(not(target_os = "android"))]
+pub fn init_audio_policy() { log::warn!("audio-init: android-only build"); }
 
 /// Task-76 read-only routing probe (`getDevicesForAttributes` per usage).
 #[cfg(target_os = "android")]

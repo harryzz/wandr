@@ -383,6 +383,15 @@ fn parse_and_queue(line: &str) {
             "0" => crate::input::set_touch_suppressed(false),
             other => log::warn!("ime-inbound: bad input-suppress arg {other:?}"),
         }
+    } else if let Some(rest) = line.strip_prefix("play-tone") {
+        // arbiter-audio → host applier: play a sine tone (test / warm-up). Runs for
+        // ~ms, so spawn it off the control thread. `play-tone [ms] [hz] [vol0-1]`.
+        let toks: Vec<&str> = rest.split_whitespace().collect();
+        let ms = toks.first().and_then(|s| s.parse::<u32>().ok()).unwrap_or(1500);
+        let hz = toks.get(1).and_then(|s| s.parse::<f32>().ok()).unwrap_or(440.0);
+        let vol = toks.get(2).and_then(|s| s.parse::<f32>().ok()).unwrap_or(0.5);
+        log::info!("ime-inbound: play-tone {ms}ms {hz}Hz vol={vol}");
+        std::thread::spawn(move || crate::audio_impl::play_tone(ms, hz, vol));
     } else if let Some(rest) = line.strip_prefix("on-focus-changed ") {
         // wart-arbiter-audio M2 — audio-focus change; call the guest's
         // on-focus-changed. Map the wire token to the focus-change enum order.

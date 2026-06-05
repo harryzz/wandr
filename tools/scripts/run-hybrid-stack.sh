@@ -344,6 +344,50 @@ if [[ "$NO_ART" == "1" ]]; then
     echo "▸ --no-art: sweeping any stuck Magisk su-loggers"
     adb shell "su -c 'pkill -9 -f com.topjohnwu.magisk'" >/dev/null 2>&1 || true
 
+    # ART-off audio: bring up the stub activity/sensor_privacy service + re-init
+    # audioserver NOW — BEFORE the zygote/apps — and WAIT for the audio services to
+    # register before continuing. audioserver wedges on waitForService("activity")
+    # when the framework drops (→ media.audio_* unregister); the stub unblocks it.
+    # Doing it here (not after apps launch) means audio is ready before any app opens
+    # an audio stream — avoiding the ~20s openStream block an app hits when it races a
+    # late audioserver restart, and letting the HAL settle before streams open. See
+    # [[project-artless-audio]].
+    if adb shell 'ls /data/local/tmp/wart-activityms' >/dev/null 2>&1; then
+        echo "▸ --no-art: audio stub (activity + sensor_privacy) + audioserver re-init"
+        spawn_detached /data/local/tmp/wart-activityms.log \
+            "/data/local/tmp/wart-launch /data/local/tmp/wart-activityms"
+        # The poll loops use PLAIN `adb shell` (NOT `su -c`): `service list` is a
+        # read any uid can do, and crucially every `su -c` under --no-art spawns a
+        # crashing Magisk su-log `am` process — 40 polls × su = a logger storm that
+        # pins the CPU and slows the very audioserver/openStream we're waiting on.
+        #
+        # Wait for the stub to register "activity" BEFORE kicking audioserver: if
+        # activity is up when audioserver restarts it re-registers the audio services
+        # in ~1s; if it restarts wedged (no activity) it stalls ~20s (and apps then
+        # block that long in openStream).
+        for _ in $(seq 1 20); do
+            adb shell 'service list 2>/dev/null' 2>/dev/null | grep -q "activity:" && break
+            sleep 0.5
+        done
+        adb shell "su -c 'pkill -9 audioserver'" >/dev/null 2>&1 || true
+        # Wait for the (non-lazy) audio policy service to re-register — fast now that
+        # activity is up — so apps never block in openStream. (media.aaudio is lazy:
+        # it only appears once a client opens a stream, so don't poll for it here.)
+        for _ in $(seq 1 20); do
+            if adb shell 'service list 2>/dev/null' 2>/dev/null | grep -q "media.audio_policy:"; then
+                echo "  audio ready (media.audio_policy registered)"
+                break
+            fi
+            sleep 1
+        done
+        # Replicate AudioService's boot volume/device init (dead with system_server):
+        # initStreamVolume + per-device index + NORMAL mode. Without it the policy
+        # reports volume range -1 and every stream sits at -inf dB → silence even
+        # though streams open + route. Native Rust stand-in; see audio_policy_impl.rs.
+        echo "  --no-art: initializing audio volumes (AudioService boot replica)"
+        adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/wart-host --init-audio-policy'" >/dev/null 2>&1 || true
+    fi
+
     # Start wart-inputflinger (registers "inputflinger") before the zygote/hosts so
     # their input client path resolves to OUR service. This gives WORKING system-key
     # dedup (POWER/VOLUME → arbiter once, no fan-out flicker). App TOUCH/key routing
@@ -410,17 +454,8 @@ bring_up_chrome() {
         spawn_detached /data/local/tmp/wart-sensors.log \
             "/data/local/tmp/wart-launch /data/local/tmp/wart-sensors"
     fi
-    # ART-off audio: start the stub activity/sensor_privacy service, THEN restart
-    # audioserver so it re-inits with those present (it wedged on
-    # waitForService("activity") when the framework stopped → media.audio_* dropped).
-    # Once it re-registers media.audio_flinger/policy/aaudio, audio works again.
-    if [[ "$NO_ART" == "1" ]] && adb shell 'ls /data/local/tmp/wart-activityms' >/dev/null 2>&1; then
-        echo "▸ audio stub (activity + sensor_privacy) + audioserver restart"
-        spawn_detached /data/local/tmp/wart-activityms.log \
-            "/data/local/tmp/wart-launch /data/local/tmp/wart-activityms"
-        sleep 1
-        adb shell "su -c 'pkill -9 audioserver'" >/dev/null 2>&1 || true
-    fi
+    # (ART-off audio stub + audioserver re-init now runs EARLY, before the zygote —
+    # see the framework-stop section — so audio is ready before any app launches.)
     if [[ -n "$HOME_APP" ]]; then
         echo "▸ boot-to-home: set-home $HOME_APP"
         adb shell "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter set-home $HOME_APP'" 2>&1 | tr -d '\r'

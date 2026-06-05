@@ -385,6 +385,45 @@ impl AudioModule {
         Reply::ok(format!("route pid={pid} {route}"))
     }
 
+    /// `play-tone [pid|app-id] [ms] [hz] [vol0-1]` — tell a host (the audio applier)
+    /// to play a sine tone. Arbiter decides → host applies (same path as audio-route):
+    /// a runtime/CLI way to make a sound + warm the audio output path. Output-only on
+    /// the host side (no capture → no in+out MMAP -889).
+    ///
+    /// The target is OPTIONAL: the arbiter doesn't open audio itself, so the tone
+    /// runs *inside a host process*. With no target it defaults to the foreground
+    /// app's host (`visible_app`) — the one the user is looking at. A leading
+    /// `pid|app-id` overrides that (e.g. to warm a specific app's output). The
+    /// remaining positionals are `ms hz vol`. Defaults: 1500 ms, 440 Hz, 0.5.
+    fn cmd_play_tone(&mut self, args: &str, ctx: &mut Ctx) -> Reply {
+        let mut t: Vec<&str> = args.split_whitespace().collect();
+        // First token is a target only if it names a host the store actually
+        // tracks — a known app-id, or a KNOWN pid (not just any integer, since
+        // `resolve` maps unknown pids to "?"). Otherwise it's the start of the
+        // numeric `ms hz vol` triple and the target defaults to the foreground
+        // host. Keeps `play-tone`, `play-tone 2000 660 0.5`, and
+        // `play-tone war.launcher 2000` all unambiguous.
+        let first_is_target = t.first().is_some_and(|tok| match tok.parse::<i32>() {
+            Ok(pid) => ctx.store.app_by_pid(pid).is_some(),
+            Err(_)  => ctx.store.app(tok).is_some(),
+        });
+        let pid = if first_is_target {
+            let (pid, _app) = Self::resolve(t.remove(0), ctx).expect("known target resolves");
+            pid
+        } else {
+            match ctx.store.display(PRIMARY_DISPLAY).and_then(|d| d.visible_app()) {
+                Some(pid) => pid,
+                None => return Reply::err("play-tone-no-foreground: no visible app; pass <pid|app-id>"),
+            }
+        };
+        let ms  = t.first().copied().unwrap_or("1500");
+        let hz  = t.get(1).copied().unwrap_or("440");
+        let vol = t.get(2).copied().unwrap_or("0.5");
+        ctx.deliver_to_host(pid, format!("play-tone {ms} {hz} {vol}\n"));
+        log::info!("arbiter: play-tone pid={pid} ms={ms} hz={hz} vol={vol}");
+        Reply::ok(format!("play-tone pid={pid} ms={ms} hz={hz} vol={vol}"))
+    }
+
     /// `volume <up|down>` — task 76 P8. The arbiter is the single decider: it
     /// owns the call/comms state + route + foreground, so it picks the target
     /// (the comms owner on the call route while a call is up, else the
@@ -546,6 +585,7 @@ impl ArbiterModule for AudioModule {
             "audio-call-start", "audio-call-end", "audio-route",
             "audio-ring-start", "audio-ring-stop", "audio-ringer-mode",
             "volume", "mute", "app-mute", "mic-mute", "app-mic-mute",
+            "play-tone",
         ]
     }
 
@@ -557,6 +597,7 @@ impl ArbiterModule for AudioModule {
             "audio-call-start"    => self.cmd_call_start(args, ctx),
             "audio-call-end"      => self.cmd_call_end(args, ctx),
             "audio-route"         => self.cmd_route(args, ctx),
+            "play-tone"           => self.cmd_play_tone(args, ctx),
             "audio-ring-start"    => self.cmd_ring_start(args, ctx),
             "audio-ring-stop"     => self.cmd_ring_stop(args, ctx),
             "audio-ringer-mode"   => self.cmd_ringer_mode(args, ctx),

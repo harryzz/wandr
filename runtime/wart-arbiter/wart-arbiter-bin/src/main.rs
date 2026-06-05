@@ -156,6 +156,9 @@ fn main() {
                     // audio-call-start/end <pid|app-id>, audio-route <pid|app-id>
                     // <speaker|earpiece>.
                     | "audio-call-start" | "audio-call-end" | "audio-route"
+                    // play-tone [pid|app-id] [ms] [hz] [vol0-1] — arbiter→host tone
+                    // (test/warm-up); target optional, defaults to the foreground host.
+                    | "play-tone"
                     // wart-arbiter-audio P8 — volume <up|down> (host→arbiter on the
                     // raw socket from a VOLUME key; CLI form for testing/scripting).
                     | "volume"

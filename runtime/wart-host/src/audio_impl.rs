@@ -82,31 +82,48 @@ mod binder_path {
     const AAUDIO_CHANNEL_MONO:        i32 = 0x1;
     const AAUDIO_CHANNEL_STEREO:      i32 = 0x3;
 
-    fn service() -> Option<&'static rsbinder::Strong<dyn IAAudioService>> {
-        static SVC: OnceLock<Option<rsbinder::Strong<dyn IAAudioService>>> = OnceLock::new();
-        SVC.get_or_init(|| {
-            let svc = match rsbinder::hub::get_interface::<dyn IAAudioService>("media.aaudio") {
-                Ok(s)  => { log::info!("audio: media.aaudio ready"); s }
-                Err(e) => { log::warn!("audio: media.aaudio unavailable: {e:?}"); return None }
-            };
-            // Register a minimal IAAudioClient so the service has a callback
-            // sink. Without this the SHARED-mode AudioFlinger fallback was
-            // never tried on the Pixel 2 XL — the service's MMAP attempt
-            // failed and it bailed instead of falling back, possibly because
-            // a stream-change event had no client to deliver to. Reuses the
-            // tokio current-thread runtime pattern from sensors_impl.rs.
-            let cb: rsbinder::Strong<dyn IAAudioClient> =
-                BnAAudioClient::new_async_binder(AAudioClientStub, TokioRuntime);
-            match svc.r#registerClient(&cb) {
-                Ok(())  => log::info!("audio: registerClient ok"),
-                Err(e)  => log::warn!("audio: registerClient failed: {e:?}"),
+    /// Resolve `media.aaudio`, re-resolving if the cached handle is dead.
+    ///
+    /// `media.aaudio` is a LAZY service: it (re)registers a brand-new binder
+    /// whenever audioserver (re)starts. A handle cached across an audioserver
+    /// restart is stale → openStream fails with `DeadObject`. So we `ping_binder`
+    /// the cached handle and, if it's dead, drop it and look the service up
+    /// again (and re-`registerClient`). Returns an owned `Strong` clone (cheap,
+    /// ref-counted) rather than a `&'static` so the cache can be swapped.
+    fn service() -> Option<rsbinder::Strong<dyn IAAudioService>> {
+        static SVC: OnceLock<Mutex<Option<rsbinder::Strong<dyn IAAudioService>>>> = OnceLock::new();
+        let mut guard = SVC.get_or_init(|| Mutex::new(None)).lock().unwrap();
+
+        if let Some(svc) = guard.as_ref() {
+            if svc.as_binder().ping_binder().is_ok() {
+                return Some(svc.clone());
             }
-            // Hold the callback alive for the process lifetime so the
-            // service's weak ref doesn't drop and trigger re-registration
-            // demands on every openStream.
-            let _ = AAUDIO_CLIENT.set(cb);
-            Some(svc)
-        }).as_ref()
+            log::warn!("audio: media.aaudio handle dead (audioserver restarted?) — re-resolving");
+            *guard = None;
+        }
+
+        let svc = match rsbinder::hub::get_interface::<dyn IAAudioService>("media.aaudio") {
+            Ok(s)  => { log::info!("audio: media.aaudio ready"); s }
+            Err(e) => { log::warn!("audio: media.aaudio unavailable: {e:?}"); return None }
+        };
+        // Register a minimal IAAudioClient so the service has a callback
+        // sink. Without this the SHARED-mode AudioFlinger fallback was
+        // never tried on the Pixel 2 XL — the service's MMAP attempt
+        // failed and it bailed instead of falling back, possibly because
+        // a stream-change event had no client to deliver to. Reuses the
+        // tokio current-thread runtime pattern from sensors_impl.rs.
+        let cb: rsbinder::Strong<dyn IAAudioClient> =
+            BnAAudioClient::new_async_binder(AAudioClientStub, TokioRuntime);
+        match svc.r#registerClient(&cb) {
+            Ok(())  => log::info!("audio: registerClient ok"),
+            Err(e)  => log::warn!("audio: registerClient failed: {e:?}"),
+        }
+        // Hold the latest callback alive so the service's weak ref doesn't drop
+        // and trigger re-registration demands on every openStream. Re-resolve
+        // replaces it (can't use a write-once OnceLock here).
+        *aaudio_client_slot().lock().unwrap() = Some(cb);
+        *guard = Some(svc.clone());
+        Some(svc)
     }
 
     /// Bn-side `IAAudioClient` stub. The service uses this to deliver
@@ -124,7 +141,12 @@ mod binder_path {
             Ok(())
         }
     }
-    static AAUDIO_CLIENT: OnceLock<rsbinder::Strong<dyn IAAudioClient>> = OnceLock::new();
+    /// Latest registered `IAAudioClient`, held alive for the process. A
+    /// `Mutex<Option<>>` (not `OnceLock`) so re-resolve can replace it.
+    fn aaudio_client_slot() -> &'static Mutex<Option<rsbinder::Strong<dyn IAAudioClient>>> {
+        static C: OnceLock<Mutex<Option<rsbinder::Strong<dyn IAAudioClient>>>> = OnceLock::new();
+        C.get_or_init(|| Mutex::new(None))
+    }
 
     /// tokio current-thread runtime for the Bn server. Same pattern as
     /// sensors_impl.rs (see notes there about why a real runtime is
@@ -315,6 +337,73 @@ mod binder_path {
         );
         close(cap);
         if out != 0 { close(out); }
+    }
+
+    /// Play a sine tone to the speaker for `ms` at `hz` — the host-side applier for
+    /// the arbiter's `play-tone` push (and a CLI/warm-up way to make a sound). OUTPUT
+    /// ONLY (no capture → avoids the taimen in+out MMAP -889 conflict). Mirrors the
+    /// create_track → start → write_pcm_f32 → close flow the guest drives. Blocking;
+    /// callers (the control socket) run it off-thread.
+    pub fn play_tone(ms: u32, hz: f32, vol: f32) {
+        if let Err(e) = crate::binder::init() {
+            log::warn!("play-tone: binder init failed: {e}");
+            return;
+        }
+        // Output on taimen must be F32 STEREO — mono → openStream -889
+        // (AAUDIO_ERROR_UNAVAILABLE). See [[project_call_audio_output]].
+        let cfg = super::TrackConfig {
+            sample_rate:    48_000,
+            channel_layout: super::ChannelLayout::Stereo,
+            format:         super::Format::PcmF32,
+            class:          super::StreamClass::Media,
+        };
+        let out = create_track(cfg);
+        if out == 0 {
+            log::warn!("play-tone: output open failed");
+            return;
+        }
+        if !start(out) {
+            log::warn!("play-tone: startStream failed");
+            close(out);
+            return;
+        }
+        let sr = 48_000.0_f32;
+        let total_frames: usize = (sr * (ms as f32) / 1000.0) as usize;
+        // Amplitude = caller's volume, clamped to [0,1]. This is the tone's
+        // digital level (a relative gain in the PCM), NOT the device master
+        // volume — absolute volume under --no-art is a separate problem.
+        let amp = vol.clamp(0.0, 1.0);
+        let chunk_frames = 480_usize; // ~10 ms @ 48k
+        log::info!("play-tone: {hz} Hz for {ms} ms vol={amp:.2} stereo (handle={out})");
+        let mut n = 0_usize; // frame index
+        while n < total_frames {
+            let end = (n + chunk_frames).min(total_frames);
+            // Interleaved stereo: L,R per frame (same sine in both channels).
+            let mut buf: Vec<f32> = Vec::with_capacity((end - n) * 2);
+            for i in n..end {
+                let t = (i as f32) / sr;
+                let s = (2.0 * std::f32::consts::PI * hz * t).sin() * amp;
+                buf.push(s); // L
+                buf.push(s); // R
+            }
+            let mut off = 0_usize; // sample offset into the interleaved buf
+            let mut spins = 0;
+            while off < buf.len() {
+                let wrote_frames = write_pcm_f32(out, &buf[off..]) as usize;
+                if wrote_frames == 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(3));
+                    spins += 1;
+                    if spins > 300 { break; } // ~0.9 s stuck → bail (don't hang forever)
+                    continue;
+                }
+                off += wrote_frames * 2; // stereo: 2 samples per frame
+                spins = 0;
+            }
+            n = end;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(120)); // let the ring drain
+        close(out);
+        log::info!("play-tone: done");
     }
 
     /// Task 76 P1 — CALL-ORDER full-duplex capture probe. Opens the OUTPUT first
@@ -1105,6 +1194,12 @@ pub fn probe_loopback() {
 pub fn probe_duplex(preset: i32) { binder_path::probe_duplex(preset); }
 #[cfg(not(target_os = "android"))]
 pub fn probe_duplex(_preset: i32) { log::warn!("probe-duplex: android-only build"); }
+
+/// Play a sine tone to the speaker (arbiter `play-tone` host applier / warm-up).
+#[cfg(target_os = "android")]
+pub fn play_tone(ms: u32, hz: f32, vol: f32) { binder_path::play_tone(ms, hz, vol); }
+#[cfg(not(target_os = "android"))]
+pub fn play_tone(_ms: u32, _hz: f32, _vol: f32) { log::warn!("play-tone: android-only build"); }
 
 /// Task-76 capability-matrix open probe (`--probe-audio-matrix`, via
 /// `audio_caps`): open one fully-specified stream, log the result + granted

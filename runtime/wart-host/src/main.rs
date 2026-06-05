@@ -119,6 +119,31 @@ fn main() {
         return;
     }
 
+    // Standalone tone player (same media.aaudio MMAP path the host uses) — for
+    // A/B testing audio routing with vs without system_server. `--play-tone [ms]
+    // [hz] [vol]`. Defaults 8000ms, 440Hz, 0.6.
+    if let Some(i) = args.iter().position(|a| a == "--play-tone") {
+        android_logger::init_once(
+            android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
+        );
+        let ms  = args.get(i + 1).and_then(|s| s.parse::<u32>().ok()).unwrap_or(8000);
+        let hz  = args.get(i + 2).and_then(|s| s.parse::<f32>().ok()).unwrap_or(440.0);
+        let vol = args.get(i + 3).and_then(|s| s.parse::<f32>().ok()).unwrap_or(0.6);
+        wasm_android_host::audio_impl::play_tone(ms, hz, vol);
+        return;
+    }
+
+    // --no-art audio bring-up: replicate AudioService's boot volume/device init
+    // (initStreamVolume + setStreamVolumeIndex + mode/force-use) so audio is
+    // audible without system_server. Run by run-hybrid-stack after audioserver.
+    if args.iter().any(|a| a == "--init-audio-policy") {
+        android_logger::init_once(
+            android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
+        );
+        wasm_android_host::audio_policy_impl::init_audio_policy();
+        return;
+    }
+
     // Task-76 #6 — enumerate audio ports over binder (listAudioPorts) instead
     // of dumpsys; tests AudioPortFw decode at runtime.
     if args.iter().any(|a| a == "--probe-audio-ports") {

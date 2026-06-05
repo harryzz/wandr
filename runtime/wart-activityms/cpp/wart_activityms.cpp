@@ -170,6 +170,13 @@ int main() {
     // wait on under --no-art. Add names here as more surface in the logs.
     struct { const char* name; const char* descriptor; } generics[] = {
         {"sensor_privacy", "android.hardware.ISensorPrivacyManager"},
+        // AAudio MMAP start path: AAudioServiceStreamBase::registerAudioThread ->
+        // android::requestPriority(isForApp=true) -> infinite loop on
+        // checkService("scheduling_policy") when system_server is gone, so the
+        // stream never starts (no PCM, no route) -> silence. GenericStub's
+        // writeNoException()+writeInt32(0) is exactly what BpSchedulingPolicyService
+        // ::requestPriority reads (NO_ERROR). See [[project-artless-audio]].
+        {"scheduling_policy", "android.os.ISchedulingPolicyService"},
     };
     for (const auto& g : generics) {
         status_t s = sm->addService(String16(g.name), sp<GenericStub>::make(g.descriptor));
