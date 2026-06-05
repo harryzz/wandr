@@ -33,6 +33,7 @@ if [[ "${1:-}" == "--stop" ]]; then
     adb shell "su -c 'pkill -9 -f wart-inputflinger'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-sensors'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-net'" >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f wart-activityms'" >/dev/null 2>&1 || true
     adb shell "su -c 'rm -f /data/local/tmp/wart-zygote.sock /data/local/tmp/wart-arbiter.sock'" >/dev/null 2>&1 || true
     adb shell "su -c 'am start -n com.android.systemui/.SystemUIService'" >/dev/null 2>&1 || true
     adb shell "input keyevent KEYCODE_HOME" >/dev/null 2>&1 || true
@@ -49,6 +50,9 @@ if [[ "${1:-}" == "--restore-art" ]]; then
     adb shell "su -c 'pkill -9 -f wart-inputflinger'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-sensors'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-net'" >/dev/null 2>&1 || true
+    # Kill our stub system_server (activity/permission/...) BEFORE `start` brings the
+    # real system_server back — else our stub shadows the real services.
+    adb shell "su -c 'pkill -9 -f wart-activityms'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-arbiter'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-host'"    >/dev/null 2>&1 || true
     # Also kill any stuck Magisk su-loggers spinning against the (dead) framework,
@@ -159,6 +163,7 @@ restore_ui() {
     adb shell "su -c 'pkill -9 -f wart-inputflinger'" >/dev/null 2>&1
     adb shell "su -c 'pkill -9 -f wart-sensors'" >/dev/null 2>&1
     adb shell "su -c 'pkill -9 -f wart-net'" >/dev/null 2>&1
+    adb shell "su -c 'pkill -9 -f wart-activityms'" >/dev/null 2>&1
     adb shell "su -c 'rm -f /data/local/tmp/wart-zygote.sock /data/local/tmp/wart-arbiter.sock'" >/dev/null 2>&1
     # Path A stops the Java framework EARLY (before the zygote), so a failure here
     # leaves it down — restart it (else `am start` below is a no-op + the device
@@ -376,6 +381,13 @@ if [[ "$NO_ART" == "1" ]]; then
     # [[project-artless-audio]].
     if adb shell 'ls /data/local/tmp/wart-activityms' >/dev/null 2>&1; then
         echo "▸ --no-art: audio stub (activity + sensor_privacy) + audioserver re-init"
+        # Kill any prior stub host FIRST — each bringup re-addService's the same
+        # names (activity/permission/sensor_privacy/scheduling_policy), and leaking
+        # old hosts churns those registrations: the audioserver caches binder handles
+        # to them, so a shadowed/dead stub makes the permission/attribution path
+        # (output-stream open, and `dumpsys media.audio_flinger`) wedge → audioserver
+        # restarts → stream volumes wiped → call goes silent. Exactly one must run.
+        adb shell "su -c 'pkill -9 -f wart-activityms'" >/dev/null 2>&1 || true
         spawn_detached /data/local/tmp/wart-activityms.log \
             "/data/local/tmp/wart-launch /data/local/tmp/wart-activityms"
         # The poll loops use PLAIN `adb shell` (NOT `su -c`): `service list` is a
