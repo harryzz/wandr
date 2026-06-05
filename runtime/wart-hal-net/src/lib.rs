@@ -22,6 +22,54 @@ mod netd;
 #[cfg(target_os = "android")]
 mod supplicant_hal;
 
+#[cfg(target_os = "android")]
+mod wifi_chip;
+
+/// Cold-boot chip power-up: drive the `IWifi` HAL to power the chip + create the
+/// STA interface (what WifiService does). Requires uid `system`. Returns the STA
+/// iface name on success. `None` off-android / on failure.
+pub fn ensure_chip_up(iface: &str) -> Option<String> {
+    #[cfg(target_os = "android")]
+    {
+        if wifi_chip::ensure_chip_up(iface) {
+            Some(iface.to_string())
+        } else {
+            None
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = iface;
+        None
+    }
+}
+
+/// Power the WiFi chip down via the `IWifi` HAL (test / teardown). uid `system`.
+pub fn stop_chip() -> bool {
+    #[cfg(target_os = "android")]
+    {
+        wifi_chip::stop_chip()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        false
+    }
+}
+
+/// Remove the STA interface via the chip (genuine cold state for testing; clean
+/// teardown). uid `system`.
+pub fn remove_sta_iface(iface: &str) -> bool {
+    #[cfg(target_os = "android")]
+    {
+        wifi_chip::remove_sta_iface(iface)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = iface;
+        false
+    }
+}
+
 /// M2 probe: can this process reach the vendor ISupplicant HAL over binder (as
 /// whatever uid it runs)? Read-only. `false` off-android.
 pub fn probe_supplicant() -> bool {

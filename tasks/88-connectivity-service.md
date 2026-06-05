@@ -101,9 +101,21 @@ netd → `ping` 0%, `https://codeberg.org` 200. (`getStaInterface` failed in the
 probe only because the legacy `-i` mode never HAL-creates the iface;
 `addStaInterface` in HAL mode does.)
 
-M2 remaining: cold chip power-up via the `IWifi` HAL (so a `--no-art` boot where
-WiFi was never on still works); scan/known-network selection; the now-unused
-ctrl-socket code in `supplicant.rs` can be retired.
+**Cold chip power-up ✅ DONE + device-verified** — a `--no-art` boot where WiFi was
+never on (chip unpowered) now works. `wart-hal-net::wifi_chip` drives the `IWifi`
+HAL over binder as uid system: `isStarted()` (the canonical power signal) →
+`start()` (poll) → `getChip` → `configureChip(<STA mode derived from the chip's
+reported concurrency combinations>)` → `createStaIface()`. Idempotent /
+non-disruptive (returns early if a STA iface already exists). The daemon runs it
+(`su 1000 --power-chip`) in the no-carrier branch before the supplicant. Device
+note: on this device the `wlan0` *netdev* is kernel-driver-created + persistent
+(survives `IWifi.stop()` / `removeStaIface()`), so the cold signal is
+`isStarted()`, not netdev presence. Verified: `--stop-chip` (chip down) → daemon
+→ `IWifi` power-up → associate → DHCP → netd → `ping` 0%, `https://codeberg.org`
+200, zero AVC denials. No `IWifiChipEventCallback` Bn needed (the scoped bet).
+
+M2 remaining: scan/known-network selection (multi-network). The ctrl-socket code
+is already retired (M2 association commit).
 
 ### Earlier reconnaissance (kept for context)
 

@@ -101,6 +101,21 @@ interface IDnsResolver {
         .output(out_dir.join("isupplicant_bindings.rs"))
         .generate()
         .expect("rsbinder-aidl ISupplicant codegen failed");
+
+    // IWifi HAL (M2 — cold chip power-up: start the chip + create the STA iface,
+    // what WifiService/WifiNative normally do). 140 files; imports stay within
+    // android.hardware.wifi(.common). Parses/compiles in async mode like ISupplicant.
+    let wifi = PathBuf::from("../wart-host/vendor/aosp-hardware-interfaces/wifi/aidl");
+    println!("cargo:rerun-if-changed={}", wifi.display());
+    rsbinder_aidl::Builder::new()
+        .source(wifi.join("android/hardware/wifi/IWifi.aidl"))
+        .include_dir(&wifi)
+        .include_dir(&wifi_common)
+        .include_dir(&stubs)
+        .set_async_support(true)
+        .output(out_dir.join("iwifi_bindings.rs"))
+        .generate()
+        .expect("rsbinder-aidl IWifi codegen failed");
 }
 
 fn copy(src: &Path, dst: &Path) {

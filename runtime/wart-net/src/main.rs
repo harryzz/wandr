@@ -83,6 +83,11 @@ fn bring_up() -> Result<Link, String> {
     if has_carrier(WLAN_IF) {
         log::info!("wart-net: {WLAN_IF} already has carrier — reusing existing association");
     } else {
+        // Cold boot: ensure the WiFi chip is powered + a STA iface exists
+        // (IWifi.start + createStaIface, as uid system — what WifiService does).
+        // Idempotent + non-disruptive when the chip is already up; must precede the
+        // supplicant so the iface is ready for addStaInterface.
+        power_chip_via_hal()?;
         // Clear any leaked/old supplicant + stale ctrl socket so the fresh spawn
         // binds cleanly (a dropped Child doesn't die; a stale socket → ECONNREFUSED).
         supplicant::cleanup_stale(WLAN_IF);
@@ -155,6 +160,27 @@ fn associate_via_hal(creds: &WifiCreds) -> Result<(), String> {
         return Err(format!(
             "associate failed (exit {:?}): {} {}",
             out.status.code(),
+            stdout.trim(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+/// Drive the IWifi HAL chip power-up as uid `system` (the HAL rejects root):
+/// re-exec `--power-chip` under `su 1000`.
+fn power_chip_via_hal() -> Result<(), String> {
+    let self_exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+    let inner = format!("{} --power-chip", self_exe.to_string_lossy());
+    let out = Command::new("su")
+        .args(["1000", "-c", &inner])
+        .output()
+        .map_err(|e| format!("su 1000 spawn: {e}"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    log::info!("wart-net: power-chip (uid system) -> {}", stdout.trim());
+    if !out.status.success() {
+        return Err(format!(
+            "power-chip failed: {} {}",
             stdout.trim(),
             String::from_utf8_lossy(&out.stderr).trim()
         ));
@@ -256,6 +282,24 @@ fn main() {
     if args.iter().any(|a| a == "--probe-supplicant") {
         let ok = wart_hal_net::probe_supplicant();
         println!("probe-supplicant -> {ok}");
+        std::process::exit(if ok { 0 } else { 1 });
+    }
+
+    // `--power-chip` — cold-boot: drive the IWifi HAL to power the chip + create
+    // the STA iface (run as `su 1000`). `--stop-chip` powers it down (test/teardown).
+    if args.iter().any(|a| a == "--power-chip") {
+        let ok = wart_hal_net::ensure_chip_up(WLAN_IF).is_some();
+        println!("power-chip -> {ok}");
+        std::process::exit(if ok { 0 } else { 1 });
+    }
+    if args.iter().any(|a| a == "--stop-chip") {
+        let ok = wart_hal_net::stop_chip();
+        println!("stop-chip -> {ok}");
+        std::process::exit(if ok { 0 } else { 1 });
+    }
+    if args.iter().any(|a| a == "--remove-iface") {
+        let ok = wart_hal_net::remove_sta_iface(WLAN_IF);
+        println!("remove-iface -> {ok}");
         std::process::exit(if ok { 0 } else { 1 });
     }
 
