@@ -1226,8 +1226,9 @@ fn run_cwasm_loop(
                 }
                 crate::ime_inbound::InboundEvent::CommMode { comm } => {
                     // wart-arbiter-audio M3 — the arbiter started/ended a comms
-                    // session on us; apply the global audio mode (dumb applier).
-                    crate::audio_policy_impl::set_mode(comm);
+                    // session on us; apply the call-audio mode recipe (the dumb
+                    // applier: mirrors AudioService.onUpdateAudioMode).
+                    crate::audio_policy_impl::on_update_audio_mode(comm);
                 }
                 crate::ime_inbound::InboundEvent::VolumeAdjust { up, speaker } => {
                     // Arbiter-decided volume step (task 76 P8): apply on the

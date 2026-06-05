@@ -145,7 +145,8 @@ pub enum InboundEvent {
     /// wart-arbiter-audio (M3) — the arbiter started/ended a comms session on
     /// this host and pushed `audio-policy set-mode <comm|normal>`. The host (the
     /// call owner, which holds the binder connection) applies it globally via
-    /// `audio_policy_impl::set_mode` (setPhoneState). "arbiter decides, host applies."
+    /// `audio_policy_impl::on_update_audio_mode` (mirrors `AudioService
+    /// .onUpdateAudioMode`: setPhoneState + volume re-apply). "arbiter decides, host applies."
     CommMode { comm: bool },
 
     /// wart-arbiter-audio (M3) — the arbiter changed the call routing and pushed

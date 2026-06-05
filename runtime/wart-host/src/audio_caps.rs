@@ -113,14 +113,14 @@ pub fn probe_matrix() {
     // IN_COMMUNICATION cells — toggle phone state, run, restore to NORMAL.
     // The caps probe confirmed the device rests at NORMAL; we restore there.
     log::info!("audio-caps: entering IN_COMMUNICATION for comms-mode cells (will restore NORMAL)");
-    audio_policy_impl::set_mode(true);
+    audio_policy_impl::on_update_audio_mode(true);
     matrix_cell("OUT MEDIA IN_COMMUNICATION default SHARED F32 stereo",
         aa::DIR_OUTPUT, aa::USAGE_MEDIA, aa::CONTENT_MUSIC, aa::SHARING_SHARED,
         aa::CHANNEL_STEREO, true, vec![], aa::INPUT_PRESET_NONE);
     matrix_cell("OUT VOICE_COMMUNICATION IN_COMMUNICATION default SHARED F32 mono",
         aa::DIR_OUTPUT, aa::USAGE_VOICE_COMMUNICATION, aa::CONTENT_SPEECH, aa::SHARING_SHARED,
         aa::CHANNEL_MONO, true, vec![], aa::INPUT_PRESET_NONE);
-    audio_policy_impl::set_mode(false);
+    audio_policy_impl::on_update_audio_mode(false);
     log::info!("audio-caps: phone state restored to NORMAL");
 
     log::info!("==== audio-caps: matrix complete ====");

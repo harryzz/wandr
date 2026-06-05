@@ -69,10 +69,26 @@ mod binder_path {
     // tracks). We run as root; report our real uid.
     extern "C" { fn getuid() -> u32; }
 
-    /// wart-arbiter-audio M3 — set the global audio mode (the call-owner host
-    /// applies this when the arbiter starts/ends a comms session). `comm=true` →
-    /// IN_COMMUNICATION (VoIP routing + AEC tuning); `false` → NORMAL.
-    pub fn set_mode(comm: bool) {
+    /// Replicates `AudioService.onUpdateAudioMode` (frameworks/base
+    /// .../server/audio/AudioService.java:6607) — the call-owner host applies this
+    /// when the arbiter starts/ends a comms session. The Java method does three
+    /// things in order; we do the two that aren't already covered elsewhere:
+    ///   1. `setPhoneState(mode, uid)`            → [`set_phone_state`]
+    ///   2. re-apply volume for the new mode      → [`on_update_contextual_volumes`]
+    ///   3. route the comms device (`setPreferredDevicesForStrategy`) — wart's
+    ///      equivalent is [`set_route`] (`setForceUse(COMMUNICATION)`) + the guest's
+    ///      per-stream `deviceIds` pin, applied via the arbiter's `audio-route`.
+    /// `comm=true` → IN_COMMUNICATION; `false` → NORMAL. Without step 2, entering
+    /// IN_COMMUNICATION leaves wart's USAGE_MEDIA call stream ducked to ~1%
+    /// (task 75); without step 1 the earpiece output won't open (`-889`).
+    pub fn on_update_audio_mode(comm: bool) {
+        set_phone_state(comm);
+        on_update_contextual_volumes(comm);
+    }
+
+    /// `AudioSystem.setPhoneState(mode, uid)` — the global audio-mode switch
+    /// (`AudioService.onUpdateAudioMode` step 1).
+    fn set_phone_state(comm: bool) {
         let Some(svc) = service() else { return };
         let state = if comm { AudioMode::IN_COMMUNICATION } else { AudioMode::NORMAL };
         let uid = unsafe { getuid() } as i32;
@@ -80,6 +96,29 @@ mod binder_path {
             Ok(())  => log::info!("audio-policy: setPhoneState {} (uid={uid})", mode_name(state)),
             Err(e)  => log::warn!("audio-policy: setPhoneState {} failed: {e:?}", mode_name(state)),
         }
+    }
+
+    /// Slice of `AudioService.onUpdateContextualVolumes` (AudioService.java:6665):
+    /// "change of mode may require volume to be re-applied on some devices." For
+    /// wart's call (USAGE_MEDIA → MUSIC stream), entering IN_COMMUNICATION ducks
+    /// MUSIC to ~1% (task 75); re-asserting its index on the comms output devices
+    /// (earpiece + speaker) after the mode flip restores it. Same
+    /// `setStreamVolumeIndex` API + full-scale value `init_audio_policy` uses for
+    /// MUSIC. No-op on NORMAL (the boot-init levels already apply).
+    fn on_update_contextual_volumes(comm: bool) {
+        if !comm {
+            return;
+        }
+        let Some(svc) = service() else { return };
+        const STREAM_MUSIC: i32 = 3; // wart's call output is USAGE_MEDIA → MUSIC.
+        const MUSIC_MAX_INDEX: i32 = 15; // matches init_audio_policy's full-scale MUSIC.
+        let stream = AudioStreamType(STREAM_MUSIC);
+        for d in [AudioDeviceType::OUT_SPEAKER_EARPIECE, AudioDeviceType::OUT_SPEAKER] {
+            if let Err(e) = svc.r#setStreamVolumeIndex(stream, &dev_desc(d), MUSIC_MAX_INDEX, false) {
+                log::warn!("audio-policy: onUpdateContextualVolumes reapply MUSIC on {d:?} failed: {e:?}");
+            }
+        }
+        log::info!("audio-policy: onUpdateContextualVolumes — re-asserted MUSIC full-scale (comms)");
     }
 
     /// wart-arbiter-audio M3 — set the communication routing (the speaker /
@@ -488,11 +527,12 @@ pub fn probe_route(speaker: bool) { binder_path::probe_route(speaker); }
 #[cfg(not(target_os = "android"))]
 pub fn probe_route(_speaker: bool) { log::warn!("audio-policy route: android-only build"); }
 
-/// wart-arbiter-audio M3 — set the global audio mode (comms session start/end).
+/// Comms-session start/end audio recipe — mirrors `AudioService.onUpdateAudioMode`
+/// (setPhoneState + contextual-volume re-apply). See `binder_path`.
 #[cfg(target_os = "android")]
-pub fn set_mode(comm: bool) { binder_path::set_mode(comm); }
+pub fn on_update_audio_mode(comm: bool) { binder_path::on_update_audio_mode(comm); }
 #[cfg(not(target_os = "android"))]
-pub fn set_mode(_comm: bool) {}
+pub fn on_update_audio_mode(_comm: bool) {}
 
 /// wart-arbiter-audio M3 — set the communication routing (speaker/earpiece).
 #[cfg(target_os = "android")]
