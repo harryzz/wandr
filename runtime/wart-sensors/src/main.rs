@@ -41,6 +41,38 @@ fn send_arbiter(line: &str) {
     }
 }
 
+/// Reconnect to the sensors HAL after a transport drop and re-enable the sensors
+/// we had on (task 89 Issue 1). Blocks (with backoff) until reconnected — the HAL
+/// comes back once the churn settles; the alternative (exiting) silently kills
+/// auto-brightness / auto-rotation / proximity with no restart.
+fn reconnect(hal: &SensorHal, sensors: &[(i32, i64)]) {
+    let mut attempt: u32 = 0;
+    loop {
+        attempt += 1;
+        // backoff 200ms → 2s cap
+        std::thread::sleep(std::time::Duration::from_millis((200 * attempt as u64).min(2000)));
+        if hal.reopen().is_err() {
+            log::debug!("wart-sensors: HAL reopen attempt {attempt} failed — retrying");
+            continue;
+        }
+        let mut all_ok = true;
+        for &(stype, period) in sensors {
+            if let Err(rc) = hal.enable(stype, period, true) {
+                log::warn!("wart-sensors: re-enable type={stype} after reconnect failed (rc={rc})");
+                all_ok = false;
+            }
+        }
+        if all_ok {
+            log::info!(
+                "wart-sensors: HAL reconnected (attempt {attempt}); {} sensor(s) re-enabled",
+                sensors.len()
+            );
+            return;
+        }
+        // a re-enable hit a fresh transport error → loop drops the handle, retry
+    }
+}
+
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
@@ -95,10 +127,38 @@ fn main() {
     }
     let mut last_lux = f32::NAN;
 
+    // Record the sensors we actually enabled so we can re-enable them after a HAL
+    // reconnect (task 89 Issue 1 — the HAL forgets activations when its connection
+    // drops). Orientation is whichever of DEVICE_ORIENTATION / ACCEL we enabled above.
+    let mut enabled_sensors: Vec<(i32, i64)> = Vec::new();
+    enabled_sensors.push((
+        if use_hal_orient { TYPE_DEVICE_ORIENTATION } else { TYPE_ACCEL },
+        ROTATION_PERIOD_NS,
+    ));
+    if have_prox {
+        enabled_sensors.push((TYPE_PROXIMITY, ROTATION_PERIOD_NS));
+    }
+    if have_light {
+        enabled_sensors.push((TYPE_LIGHT, ROTATION_PERIOD_NS));
+    }
+
     let mut tracker = OrientationTracker::new();
     let mut buf = [WartSensorEvent::default(); 32];
     loop {
-        let events = hal.poll(&mut buf);
+        let events = match hal.poll(&mut buf) {
+            Ok(ev) => ev,
+            Err(rc) => {
+                // The sensors HAL connection dropped (DEAD_OBJECT). The shim already
+                // nulled its handle (instead of aborting — task 89 Issue 1); reconnect
+                // and re-enable, then resume. Force fresh readings so the arbiter
+                // immediately gets the current lux/proximity after the gap.
+                log::warn!("wart-sensors: HAL poll transport error ({rc}) — reconnecting");
+                reconnect(&hal, &enabled_sensors);
+                last_prox = f32::NAN;
+                last_lux = f32::NAN;
+                continue;
+            }
+        };
         if events.is_empty() {
             // poll blocks; guard against a misbehaving HAL spinning us.
             std::thread::sleep(std::time::Duration::from_millis(50));

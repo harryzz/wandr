@@ -1,5 +1,5 @@
-TASK=87
-STEP=verify-done
-STATUS=complete
-LAST_SUCCESS=Task 87 ART-off audio output SOLVED + USER-CONFIRMED AUDIBLE. Root cause Layer 4 = missing system_server "permission" (IPermissionController) binder: MmapThread::start -> checkAttributionSourcePackage -> PermissionController::getService() 10s sleep-loop on checkService("permission") (frameworks-native PermissionController.cpp:30) blocked the audioserver command thread inside START_CLIENT -> host startStream (3s) timed out -> no PCM. FIX = 4th stub binder {"permission","android.os.IPermissionController"} in wart-activityms generics[] (built a-03, deployed). Device --no-art: play-tone arpeggio AUDIBLE, pcm4p RUNNING, QUAT_MI2S_RX On, no Command timeouts, matches ART-up. Ruled out (both via ART-up A/B): EXCLUSIVE sharing (reverted), systemReady (lands but no effect), "no volume callback" (appears under ART-up too = symptom).
-NOTES=OPEN: decide keep/revert the systemReady scaffolding (audio_flinger_impl.rs + IAudioFlingerService stub + build.rs source + main.rs wiring) — confirmed NOT the fix and inert under --no-art (power svc dead so no wakelock); recommend revert for minimal diff. Then commit (permission stub + whatever Layers 2/3 still uncommitted) + update tasks/87 + project-artless-audio memory.
+TASK=89
+STEP=issue1-done-verified
+STATUS=in-progress
+LAST_SUCCESS=Task 89 Issue 1 (wart-sensors HAL-drop crash) FIXED + device-verified: killed sensors HAL → wart-sensors reconnected (same pid, NO new tombstone, light feed recovered 6.488lux) instead of SIGABRT. cpp Return<>-checks (poll/enable/open, a-03 rebuilt) + Rust reopen()+reconnect loop re-enabling tracked sensors + run-hybrid respawn backstop.
+NOTES=Issue 1 DONE. Files: runtime/wart-sensors/cpp/wart_sensors_hal.cpp (+libwart_sensors_hal.so a-03), src/hal.rs (reopen + poll->Result), src/main.rs (enabled_sensors vec + reconnect fn + loop match), tools/scripts/run-hybrid-stack.sh (respawn while-loop, untested-only-on-next-bringup). REMAINING: Issue 2 (panel_on↔power-button wake sync — wart-arbiter-power; needs physical power-button test w/ user) + Issue 3 (screen-timeout tune). Commit Issue 1 then do 2/3 with user.

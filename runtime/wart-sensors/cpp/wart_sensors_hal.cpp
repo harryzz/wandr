@@ -40,19 +40,29 @@ struct WartSensorEvent {
     float x, y, z;
 };
 
+// Open (or RE-open, after a HAL drop) the sensors HAL. Idempotent: re-`getService`
+// and rebuild the type→meta map, so the Rust caller can call this again to
+// reconnect after `wart_sensors_poll`/`_enable` returned a transport error (task 89).
 extern "C" int wart_sensors_open(void) {
     g_sensors = ISensors::getService();
     if (g_sensors == nullptr) {
         ALOGE("ISensors@1.0::getService() returned null");
         return 1;
     }
-    g_sensors->getSensorsList([](const hidl_vec<SensorInfo>& list) {
+    g_type_meta.clear();
+    auto ret = g_sensors->getSensorsList([](const hidl_vec<SensorInfo>& list) {
         for (const SensorInfo& s : list) {
             int32_t t = static_cast<int32_t>(s.type);
             // keep the first sensor's meta per type
             g_type_meta.emplace(t, SensorMeta{s.sensorHandle, s.maxRange, s.resolution});
         }
     });
+    if (!ret.isOk()) {
+        ALOGE("wart_sensors_open: getSensorsList transport failed (%s)",
+              ret.description().c_str());
+        g_sensors = nullptr;
+        return 2;
+    }
     ALOGI("wart_sensors_open: %zu sensor types", g_type_meta.size());
     return 0;
 }
@@ -73,21 +83,33 @@ extern "C" int wart_sensors_enable(int32_t type, int64_t period_ns, int enable) 
     auto it = g_type_meta.find(type);
     if (it == g_type_meta.end()) return -2; // sensor type not present on this device
     int32_t handle = it->second.handle;
+    // CHECK every HIDL Return<> (same DEAD_OBJECT-abort trap as poll). On a
+    // transport failure during (re-)enable, drop the handle and return -4 so the
+    // caller reconnects instead of aborting. NB: `Result r = activate(...)` would
+    // implicitly convert-and-check (and abort) on a dead handle, so capture first.
     if (enable) {
-        g_sensors->batch(handle, period_ns, 0);
-        Result r = g_sensors->activate(handle, true);
+        if (!g_sensors->batch(handle, period_ns, 0).isOk()) { g_sensors = nullptr; return -4; }
+        auto ar = g_sensors->activate(handle, true);
+        if (!ar.isOk()) { g_sensors = nullptr; return -4; }
+        Result r = ar;
         ALOGI("enable type=%d handle=%d → %d", type, handle, static_cast<int>(r));
         return r == Result::OK ? 0 : -3;
     }
-    g_sensors->activate(handle, false);
+    if (!g_sensors->activate(handle, false).isOk()) { g_sensors = nullptr; return -4; }
     return 0;
 }
 
 extern "C" int wart_sensors_poll(WartSensorEvent* out, int max) {
     if (g_sensors == nullptr || out == nullptr || max <= 0) return -1;
     int n = 0;
-    g_sensors->poll(max, [&](Result res, const hidl_vec<Event>& events,
-                             const hidl_vec<SensorInfo>&) {
+    // Capture the HIDL Return<> and CHECK it. If the sensors HAL connection drops
+    // (DEAD_OBJECT — HAL churn across an ART restart, or SensorService re-grabbing
+    // it), an *unchecked* Return<> aborts the whole process in its destructor
+    // (libhidlbase checkSuccess → abort). That was task-89 Issue 1: SIGABRT in
+    // wart_sensors_poll, no auto-restart, all sensors die. Instead, drop the stale
+    // handle and return -2 so the Rust caller reconnects (SensorHal::reopen).
+    auto ret = g_sensors->poll(max, [&](Result res, const hidl_vec<Event>& events,
+                                        const hidl_vec<SensorInfo>&) {
         if (res != Result::OK) return;
         for (const Event& e : events) {
             if (n >= max) break;
@@ -99,5 +121,12 @@ extern "C" int wart_sensors_poll(WartSensorEvent* out, int max) {
             n++;
         }
     });
+    if (!ret.isOk()) {
+        ALOGE("wart_sensors_poll: HAL transport failed (%s) — dropping handle",
+              ret.description().c_str());
+        g_sensors = nullptr;
+        g_type_meta.clear();
+        return -2;
+    }
     return n;
 }

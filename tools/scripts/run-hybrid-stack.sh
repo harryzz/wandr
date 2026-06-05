@@ -451,8 +451,13 @@ bring_up_chrome() {
     # exists by now (caller waited on it).
     if [[ "$NO_ART" == "1" ]] && adb shell 'ls /data/local/tmp/wart-sensors' >/dev/null 2>&1; then
         echo "▸ sensor daemon (auto-rotation, path A)"
+        # Respawn loop (task 89): wart-sensors now reconnects to the sensors HAL on a
+        # DEAD_OBJECT drop instead of SIGABRT-ing (the primary fix), but keep a
+        # supervisor as a backstop for any other unexpected exit so auto-brightness /
+        # auto-rotation / proximity don't silently stay dead. Kept quote-free for the
+        # spawn_detached `sh -c "$cmd"` nesting.
         spawn_detached /data/local/tmp/wart-sensors.log \
-            "/data/local/tmp/wart-launch /data/local/tmp/wart-sensors"
+            "while true; do /data/local/tmp/wart-launch /data/local/tmp/wart-sensors; sleep 2; done"
     fi
     # (ART-off audio stub + audioserver re-init now runs EARLY, before the zygote —
     # see the framework-stop section — so audio is ready before any app launches.)

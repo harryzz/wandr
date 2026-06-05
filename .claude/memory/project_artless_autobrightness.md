@@ -19,12 +19,18 @@ return status not checked … Status(EX_TRANSACTION_FAILED): DEAD_OBJECT"** in
 **unchecked `Return<>`** forces a `libhidlbase` abort → the daemon dies. There is **no
 auto-restart**, so the light feed stops (`wart-arbiter sensor-state` → `light[holders=0
 (no reading)]`) and the backlight freezes at its last value → "auto-brightness doesn't
-work". This also kills auto-ROTATION + proximity (same daemon). FIX (not yet done,
-needs a-03 C++): in `wart_sensors_poll` CHECK the HIDL Return status and return an error
-to Rust on DEAD_OBJECT instead of letting it abort; + wart-sensors should re-acquire the
-HAL (or run-hybrid-stack should respawn the daemon). To re-verify, keep the screen awake
-(backlight only applies panel-on, and the screen idles off fast). The "DONE+device-
-verified" below was true at first launch but does NOT survive a sensors-HAL drop.
+work". This also kills auto-ROTATION + proximity (same daemon). ✅ **FIXED +
+device-verified (task 89 Issue 1, 2026-06-05):** the C++ shim now CHECKS every HIDL
+`Return<>` (`poll`/`enable`/`open` — capture + `.isOk()`, null the handle + return a
+negative rc instead of letting the destructor abort); `wart_sensors_open` is idempotent
+(reusable as reopen); Rust `SensorHal::reopen()` + a `reconnect()` loop re-`getService`s
+and re-enables the tracked sensors (light/proximity/orientation) with backoff on a poll
+`Err`; run-hybrid-stack supervises with a respawn loop. VERIFIED: `pkill` the sensors
+HAL → `wart-sensors` survived (same pid, NO new tombstone vs the old SIGABRT) + logged
+`transport error (-2) → reconnected, 3 sensors re-enabled` + light feed recovered. To
+re-verify the brightness itself, keep the screen awake (backlight only applies panel-on,
+and the screen idles off fast). Commit: see task 89. Issues 2 (panel_on↔power-button
+sync) + 3 (screen-timeout) still open.
 
 **✅ DONE + device-verified (task 86, 2026-06-04).** Under `--no-art` there is no
 DisplayManager auto-brightness, so the ambient light sensor → backlight policy lives

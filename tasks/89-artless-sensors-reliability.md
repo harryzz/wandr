@@ -14,7 +14,15 @@ brightness`. Across 4 cover/uncover cycles: **covered → lux 0 → backlight ~1
 uncovered → lux 5 → backlight ~63–67.** The curve + applier are correct. What
 undermines the *experience* are the reliability bugs below.
 
-## Issue 1 (primary) — `wart-sensors` aborts on HAL `DEAD_OBJECT`, no auto-restart
+## Issue 1 (primary) — `wart-sensors` aborts on HAL `DEAD_OBJECT`, no auto-restart — ✅ DONE + device-verified (2026-06-05)
+
+**Verified:** `pkill` the sensors HAL → `wart-sensors` **survived** (same pid, **no new
+tombstone** vs the old SIGABRT) + logged `transport error (-2) → reconnected, 3 sensors
+re-enabled` + the light feed recovered (6.488 lux). All three sub-fixes below landed:
+the C++ shim checks every HIDL `Return<>` (`wart_sensors_hal.cpp`, a-03 rebuilt),
+`SensorHal::reopen()` + a `reconnect()` loop re-enable the tracked sensors
+(`hal.rs`/`main.rs`), and `run-hybrid-stack.sh` adds a respawn backstop.
+
 
 **Symptom:** sensors (light → auto-brightness, proximity → screen-off, accel →
 auto-rotation) all silently stop; `wart-arbiter sensor-state` shows

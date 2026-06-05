@@ -44,6 +44,7 @@ type FloatByTypeFn = unsafe extern "C" fn(i32) -> f32;
 
 pub struct SensorHal {
     _handle: *mut c_void,
+    open: OpenFn,
     enable: EnableFn,
     poll: PollFn,
     max_range: FloatByTypeFn,
@@ -74,7 +75,16 @@ impl SensorHal {
         if rc != 0 {
             return Err(format!("wart_sensors_open() = {rc} (HAL unreachable?)"));
         }
-        Ok(Self { _handle: handle, enable, poll, max_range, resolution })
+        Ok(Self { _handle: handle, open, enable, poll, max_range, resolution })
+    }
+
+    /// Re-`getService` the sensors HAL after a transport drop (poll/enable returned
+    /// a negative rc). Rebuilds the type→meta map; the caller must re-`enable` the
+    /// sensors it wants afterwards (the HAL forgot the activations). Returns the
+    /// `wart_sensors_open` rc (0 = reconnected).
+    pub fn reopen(&self) -> Result<(), i32> {
+        let rc = unsafe { (self.open)() };
+        if rc == 0 { Ok(()) } else { Err(rc) }
     }
 
     /// The sensor type's `max_range` / `resolution` from the HAL (0 if absent).
@@ -95,12 +105,17 @@ impl SensorHal {
         }
     }
 
-    /// Block for the next batch of events (up to `buf.len()`); returns the slice
-    /// that was filled. An empty slice means the HAL returned no events this call.
-    pub fn poll<'a>(&self, buf: &'a mut [WartSensorEvent]) -> &'a [WartSensorEvent] {
+    /// Block for the next batch of events (up to `buf.len()`). `Ok(slice)` is the
+    /// events filled (empty = none this call); `Err(rc)` is a HAL transport error
+    /// (`rc < 0` from the shim — the connection dropped; the shim has already nulled
+    /// its handle), signalling the caller to [`reopen`](Self::reopen) + re-enable.
+    pub fn poll<'a>(&self, buf: &'a mut [WartSensorEvent]) -> Result<&'a [WartSensorEvent], i32> {
         let n = unsafe { (self.poll)(buf.as_mut_ptr(), buf.len() as c_int) };
-        let n = if n < 0 { 0 } else { n as usize };
-        &buf[..n.min(buf.len())]
+        if n < 0 {
+            return Err(n);
+        }
+        let n = (n as usize).min(buf.len());
+        Ok(&buf[..n])
     }
 }
 
