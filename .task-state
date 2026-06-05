@@ -1,5 +1,5 @@
 TASK=89
-STEP=issue1-done-verified
-STATUS=in-progress
-LAST_SUCCESS=Task 89 Issue 1 (wart-sensors HAL-drop crash) FIXED + device-verified: killed sensors HAL → wart-sensors reconnected (same pid, NO new tombstone, light feed recovered 6.488lux) instead of SIGABRT. cpp Return<>-checks (poll/enable/open, a-03 rebuilt) + Rust reopen()+reconnect loop re-enabling tracked sensors + run-hybrid respawn backstop.
-NOTES=Issue 1 DONE. Files: runtime/wart-sensors/cpp/wart_sensors_hal.cpp (+libwart_sensors_hal.so a-03), src/hal.rs (reopen + poll->Result), src/main.rs (enabled_sensors vec + reconnect fn + loop match), tools/scripts/run-hybrid-stack.sh (respawn while-loop, untested-only-on-next-bringup). REMAINING: Issue 2 (panel_on↔power-button wake sync — wart-arbiter-power; needs physical power-button test w/ user) + Issue 3 (screen-timeout tune). Commit Issue 1 then do 2/3 with user.
+STEP=issue1-done-issues2-3-reassessed
+STATUS=complete
+LAST_SUCCESS=Task 89 effectively DONE. Issue 1 (wart-sensors HAL-drop SIGABRT) FIXED+device-verified+pushed (96a58117): HIDL Return-check in a-03 shim + Rust reconnect loop + run-hybrid respawn. Issues 2+3 investigated on-device → NOT real bugs: power-key path works end-to-end (wart-arbiter power-key toggles panel + applies backlight 0↔91; physical press drove set_display_power(true)); the "key never reaches arbiter" was a LOGGING ARTIFACT (arbiter log::info not captured in wart-arbiter.log). screen-timeout is a reasonable 60s. The user's symptom was entirely Issue 1.
+NOTES=UNCOMMITTED: tasks/89 (Issue2/3 reassessed) + STATUS.md (89 line). Optional follow-ups: (a) fix arbiter log::info not landing in wart-arbiter.log (debugging); (b) clean real-world re-confirm with user (idle 60s→off→power→wakes+brightness tracks). Device: held wart-sensors (fixed daemon) alive via adb; proper persistence = fresh --no-art bringup (has respawn supervisor now).

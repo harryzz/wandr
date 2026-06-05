@@ -51,7 +51,23 @@ daemon dies and **nothing respawns it**.
    `wart-sensors` if it exits under `--no-art` (today it's a one-shot
    `spawn_detached`; add a small respawn loop or a watchdog).
 
-## Issue 2 — `panel_on` not synced to the power-button wake
+## Issue 2 — `panel_on` not synced to the power-button wake — ⛔ REASSESSED: NOT a real bug (2026-06-05)
+
+**Investigated on-device and could not reproduce a desync.** The power-key path works
+end to end: `wart-arbiter power-key` toggles the panel and applies the ambient
+backlight (`0 → 91 → 0`), and a physical power press drove `wart-screen:
+set_display_power(true)`. The earlier "the key never reaches the arbiter" was a
+**logging artifact** — the arbiter's own `log::info` ("arbiter: panel ON …") does not
+land in `/data/local/tmp/wart-arbiter.log` (only the `wart-screen:` applier lines do),
+so a grep for it returned 0 and misled me. The user's original "had to send a command
+to get sensors working" was **Issue 1** (dead `wart-sensors` → no light feed), now
+fixed. The one *real* sub-finding here is minor and separate: **the arbiter's
+`log::info` is not captured in its logfile** (a debugging annoyance, broader than this
+task — `[[project_artless_autobrightness]]` already notes "arbiter log::info → STDERR").
+**Recommendation: close Issue 2** pending a clean real-world re-confirm (idle 60 s →
+screen off → press power → wakes + brightness tracks + 2nd press off).
+
+### (original hypothesis, kept for context)
 
 **Symptom (user-reported):** pressing the power button lights the panel, but the
 light sensor stays disabled until the arbiter's "power on display" command runs
@@ -67,7 +83,13 @@ button press alone fully restores auto-brightness. Also surface a clean panel
 state query (today `wart-arbiter power-state` = "unknown command"; the stale
 `debug.tracing.screen_state` sysprop reads `1` while `backlight=0`).
 
-## Issue 3 (secondary) — screen idles off too fast / coarse sensor
+## Issue 3 (secondary) — screen idles off too fast / coarse sensor — ⛔ REASSESSED: mostly a non-issue
+
+`DEFAULT_SCREEN_OFF_TIMEOUT_MS = 60_000` (60 s) and it resets on real input
+(`user-activity`, poked by wart-inputflinger) — a reasonable default, not aggressive.
+What looked aggressive in testing was the test not generating input. The light sensor's
+coarseness (0/5 indoors) is hardware. **No action needed** beyond leaving the
+`screen-timeout <ms|off>` knob available. (Original notes below.)
 
 - The panel blanks aggressively (observed: backlight `0` for ~9 s mid-test while
   lit) → no auto-brightness while off (correct gating, but the short timeout makes
