@@ -35,6 +35,22 @@ pub fn probe_supplicant() -> bool {
     }
 }
 
+/// Associate `iface` to `ssid`/`psk` via the ISupplicant AIDL HAL (the
+/// Android-native path). Requires the HAL-managed supplicant
+/// ([`supplicant::spawn_hal`]) and uid `system`. Triggers `select()`; the caller
+/// confirms via [`has_carrier`]. `false` off-android / on failure.
+pub fn associate_supplicant(iface: &str, ssid: &str, psk: &str) -> bool {
+    #[cfg(target_os = "android")]
+    {
+        supplicant_hal::associate(iface, ssid, psk)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (iface, ssid, psk);
+        false
+    }
+}
+
 /// The network (on-link) CIDR for an address + prefix, e.g. `192.168.1.179`/`22`
 /// → `"192.168.0.0/22"`. Used as netd's connected route.
 pub fn subnet_cidr(ip: Ipv4Addr, prefix: u8) -> String {

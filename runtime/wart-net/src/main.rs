@@ -16,11 +16,11 @@
 use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::process::{Child, Command};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use wart_hal_net::{
     apply_address, dhcp, has_carrier, install_default_rule, read_saved_creds, supplicant,
-    DhcpLease, LinkStatus, WART_NETID, WLAN_IF,
+    DhcpLease, LinkStatus, WifiCreds, WART_NETID, WLAN_IF,
 };
 
 fn arbiter_sock_path() -> String {
@@ -86,15 +86,17 @@ fn bring_up() -> Result<Link, String> {
         // Clear any leaked/old supplicant + stale ctrl socket so the fresh spawn
         // binds cleanly (a dropped Child doesn't die; a stale socket → ECONNREFUSED).
         supplicant::cleanup_stale(WLAN_IF);
-        supplicant::write_conf(&creds).map_err(|e| format!("write conf: {e}"))?;
-        child = Some(supplicant::spawn(WLAN_IF).map_err(|e| format!("spawn supplicant: {e}"))?);
-        let ctrl = supplicant::CtrlSocket::connect(WLAN_IF)
-            .map_err(|e| format!("ctrl connect: {e}"))?;
-        ctrl.associate().map_err(|e| format!("associate: {e}"))?;
-        if !ctrl.wait_connected(Duration::from_secs(20)) {
-            return Err("association timed out (no wpa_state=COMPLETED)".into());
+        // Start the supplicant HAL-managed (no -i/-c) so the ISupplicant AIDL HAL
+        // can addStaInterface + drive it; then associate over the HAL — the
+        // Android-native path that replaces the legacy ctrl-socket nudge.
+        child = Some(supplicant::spawn_hal().map_err(|e| format!("spawn supplicant: {e}"))?);
+        associate_via_hal(&creds)?;
+        // Confirm via carrier (the scoped no-Bn-callback choice; the HAL accepted
+        // select() and the kernel reports L2 up on a completed 4-way handshake).
+        if !wait_carrier(WLAN_IF, Duration::from_secs(25)) {
+            return Err("association timed out (no carrier after select)".into());
         }
-        log::info!("wart-net: associated to {:?}", creds.ssid);
+        log::info!("wart-net: associated to {:?} (via ISupplicant AIDL)", creds.ssid);
     }
 
     // 3. DHCP lease.
@@ -124,6 +126,52 @@ fn bring_up() -> Result<Link, String> {
         _supplicant: child,
         status,
     })
+}
+
+/// Single-quote a value for the `su 1000 -c` shell (handles embedded quotes).
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Drive the ISupplicant AIDL association as uid `system` (the HAL rejects root):
+/// re-exec `--associate` under `su 1000`. The HAL-managed supplicant is already
+/// spawned by the root daemon. PSK is passed as an arg — it's already plaintext +
+/// root-readable in WifiConfigStore, so this adds no exposure beyond root.
+fn associate_via_hal(creds: &WifiCreds) -> Result<(), String> {
+    let self_exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+    let inner = format!(
+        "{self} --associate {ssid} {psk}",
+        self = self_exe.to_string_lossy(),
+        ssid = shell_quote(&creds.ssid),
+        psk = shell_quote(&creds.psk),
+    );
+    let out = Command::new("su")
+        .args(["1000", "-c", &inner])
+        .output()
+        .map_err(|e| format!("su 1000 spawn: {e}"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    log::info!("wart-net: associate (uid system) -> {}", stdout.trim());
+    if !out.status.success() {
+        return Err(format!(
+            "associate failed (exit {:?}): {} {}",
+            out.status.code(),
+            stdout.trim(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+/// Poll the interface's L2 carrier until up or the deadline.
+fn wait_carrier(iface: &str, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if has_carrier(iface) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(400));
+    }
+    false
 }
 
 /// Drive the netd binder configuration as uid `system`: re-exec this binary's
@@ -208,6 +256,22 @@ fn main() {
     if args.iter().any(|a| a == "--probe-supplicant") {
         let ok = wart_hal_net::probe_supplicant();
         println!("probe-supplicant -> {ok}");
+        std::process::exit(if ok { 0 } else { 1 });
+    }
+
+    // `--associate <ssid> <psk>` — drive association via the ISupplicant AIDL HAL.
+    // Split out to run as uid `system` (the HAL rejects root) while the daemon
+    // proper runs as root to spawn the supplicant; invoked as `su 1000 …`.
+    if let Some(pos) = args.iter().position(|a| a == "--associate") {
+        let rest = &args[pos + 1..];
+        let ssid = rest.first().cloned().unwrap_or_default();
+        let psk = rest.get(1).cloned().unwrap_or_default();
+        if ssid.is_empty() || psk.is_empty() {
+            eprintln!("usage: wart-net --associate <ssid> <psk>");
+            std::process::exit(2);
+        }
+        let ok = wart_hal_net::associate_supplicant(WLAN_IF, &ssid, &psk);
+        println!("associate ssid={ssid:?} -> {ok}");
         std::process::exit(if ok { 0 } else { 1 });
     }
 

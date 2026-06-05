@@ -84,11 +84,28 @@ system works: `ndc network create` and the binder calls all succeed. So:
    `--no-art` boot needs the IWifi HAL to power the chip + create the STA iface
    first (today done by the dead WifiService).
 
-## M2 — supplicant over binder (STARTED — reconnaissance ✅)
+## M2 — supplicant over binder (association ✅ DONE + device-verified)
 
-Replace the ctrl-socket nudge with the Android-native path: drive
-`android.hardware.wifi.supplicant.ISupplicant` over binder (what `WifiNative`
-uses). Reconnaissance done + device-verified under `--no-art`:
+The ctrl-socket nudge is **replaced** by the Android-native path: associate by
+driving `android.hardware.wifi.supplicant.ISupplicant` over binder (what
+`WifiNative` does), as uid `system`. Device-verified under `--no-art`: the daemon
+spawns the supplicant **HAL-managed** (`supplicant::spawn_hal`:
+`-O<dir> -dd -g@android:wpa_wlan0`, no `-i/-c` — the vendor init form) and
+re-execs `wart-net --associate <ssid> <psk>` under `su 1000`, which does
+`addStaInterface("wlan0") → addNetwork() → setSsid/setKeyMgmt(WPA_PSK)/
+setPskPassphrase/setScanSsid(true) → select()`. Association confirmed via
+**carrier** (`/sys/class/net/wlan0/carrier`) — `select()` triggered it with **no
+registered callback**, so no `ISupplicantStaIfaceCallback` Bn was needed (the
+scoped bet). Zero AVC denials. End-to-end: associate `zah004` via AIDL → DHCP →
+netd → `ping` 0%, `https://codeberg.org` 200. (`getStaInterface` failed in the
+probe only because the legacy `-i` mode never HAL-creates the iface;
+`addStaInterface` in HAL mode does.)
+
+M2 remaining: cold chip power-up via the `IWifi` HAL (so a `--no-art` boot where
+WiFi was never on still works); scan/known-network selection; the now-unused
+ctrl-socket code in `supplicant.rs` can be retired.
+
+### Earlier reconnaissance (kept for context)
 
 - **rsbinder codegen**: the full real `ISupplicant.aidl` (134 files) parses +
   generates (26457 lines) + **compiles** as-is in async mode — only needs the
