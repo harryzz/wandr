@@ -57,6 +57,7 @@ use wart_arbiter_audio::AudioModule;
 use wart_arbiter_keyguard::KeyguardModule;
 use wart_arbiter_notify::NotifyModule;
 use wart_arbiter_power::PowerModule;
+use wart_arbiter_net::NetModule;
 use wart_arbiter_sensors::SensorsModule;
 use wart_arbiter_shell::ShellModule;
 use wart_arbiter_wm::WmModule;
@@ -184,7 +185,13 @@ fn main() {
                     | "brightness" | "brightness-scale"
                     // Task 86 follow-on — PowerManager screen-off-timeout:
                     // user-activity (input dispatcher poke), screen-timeout <ms|off>.
-                    | "user-activity" | "screen-timeout")) => {
+                    | "user-activity" | "screen-timeout"
+                    // Task 88 — connectivity verbs. The wart-net daemon sends
+                    // report-net-state over the raw socket and the host sends
+                    // net-subscribe; the CLI forms are for testing/verification
+                    // (net-status dumps the current link, e.g. `wart-arbiter
+                    // net-status`).
+                    | "report-net-state" | "net-status" | "net-subscribe")) => {
             run_client_multi(verb, &args[1..])
         }
         Some(other) => {
@@ -583,6 +590,10 @@ fn build_registry() -> Registry {
     // semantic translation (proximity near/far). The binary's sensor-driver
     // thread feeds it Event::SensorReading; it emits Effect::SetSensor. One line.
     reg.register(Box::new(SensorsModule::new()));
+    // ConnectivityService role (task 88 M1) — link status of record + guest
+    // on-connectivity-change fan-out. The wart-net daemon feeds it
+    // report-net-state; it emits Effect::HostLine to subscribers. One line.
+    reg.register(Box::new(NetModule::new()));
     reg
 }
 

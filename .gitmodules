@@ -49,3 +49,11 @@
 [submodule "external/rtc"]
 	path = external/rtc
 	url = https://github.com/webrtc-rs/rtc
+[submodule "runtime/wart-host/vendor/aosp-packages-modules-dnsresolver"]
+	path = runtime/wart-host/vendor/aosp-packages-modules-dnsresolver
+	url = https://android.googlesource.com/platform/packages/modules/DnsResolver
+	branch = android15-qpr1-release
+[submodule "runtime/wart-host/vendor/aosp-packages-modules-connectivity"]
+	path = runtime/wart-host/vendor/aosp-packages-modules-connectivity
+	url = https://android.googlesource.com/platform/packages/modules/Connectivity
+	branch = android15-qpr1-release

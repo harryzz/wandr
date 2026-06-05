@@ -31,6 +31,7 @@ wart-arbiter-power = { path = "../wart-arbiter-power" }
 wart-arbiter-keyguard = { path = "../wart-arbiter-keyguard" }
 wart-arbiter-audio = { path = "../wart-arbiter-audio" }
 wart-arbiter-sensors = { path = "../wart-arbiter-sensors" }
+wart-arbiter-net = { path = "../wart-arbiter-net" }
 wart-hal-sensors = { path = "../../wart-hal-sensors" }
 wart-hal-display = { path = "../../wart-hal-display" }
 anyhow         = { workspace = true }

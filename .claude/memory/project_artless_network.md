@@ -71,3 +71,66 @@ REIMPLEMENT strategy), [[feedback_no_art_layer_dependencies]].
 **Device state after the demo:** WiFi left UP (standalone wpa_supplicant pid running, route
 added); plaintext-PSK conf removed; wpanudge left at /data/local/tmp. A run-hybrid-stack
 --restore-art → --no-art cycle resets all of this.
+
+**TASK 88 M1 PRODUCTIZATION (2026-06-05, code-complete, pending --no-art device verify):**
+Built the wart triad mirroring sensors/audio. Decisions: ctrl-socket associate NOW (ISupplicant
+AIDL later), **pure-Rust DHCPv4 up front** (no lease-reuse stopgap), thinnest slice.
+- `runtime/wart-hal-net` (pure-Rust, NO binder in M1): `dhcp.rs` DHCPv4 DISCOVER/OFFER/REQUEST/ACK
+  (UDP 0.0.0.0:68 + SO_BINDTODEVICE + broadcast; unit-tested parse) + `supplicant.rs` (write
+  world-readable conf, spawn `/vendor/bin/hw/wpa_supplicant -i wlan0 -Dnl80211 -c <conf> -O
+  /data/vendor/wifi/wpa/sockets`, AF_UNIX SOCK_DGRAM ctrl SELECT_NETWORK 0/REASSOCIATE/STATUS) +
+  `lib.rs` (WifiConfigStore.xml cred parse, `ip addr/route` applier). 6 tests pass.
+- `runtime/wart-net` daemon: associate→DHCP→apply→DNS→`report-net-state`; `--once` investigation
+  mode; respawn-supervised via run-hybrid-stack --no-art (runs as ROOT via su — nl80211/route/port68).
+- `runtime/wart-arbiter/wart-arbiter-net` module: `report-net-state`/`net-status`/`net-subscribe`
+  verbs + `on-connectivity-change` fan-out (Effect::HostLine `net-changed …`). Wired 1-line. 5 tests.
+- `wit/connectivity.wit` (war:connectivity): get-status import + on-connectivity-change export.
+  Host bindgen wiring + test guest = M1b (NOT wired into wart-host yet).
+KEY CAVEATS for device verify: (a) **chip must be POWERED first** — WiFi ON under ART before
+--no-art (IWifi HAL powers chip + creates STA iface; cold power-up = M2). Device recon: wlan0 exists
+but DOWN when wifi off. (b) **DNS still the open gap** — `dns.rs` tries resolv.conf/net.dns*/ndc
+best-effort; the device run decides what makes guest getaddrinfo resolve (host inherit_network →
+bionic → netd dnsproxyd). Fallback if none work: vendor `android.net.INetd`+`android.net.IDnsResolver`
+(NOT vendored — only the OEM-subset `android.system.net.netd.INetd` is) + call as privileged uid +
+create a netId + set default network. ISupplicant AIDL tree IS already vendored under wart-host/vendor.
+
+**M1 DEVICE-VERIFIED 2026-06-05 (Pixel 2 XL, live --no-art session):** wart-net auto-brought-up
+WiFi end-to-end: associate zah004 → pure-Rust DHCP lease 192.168.1.179/22 gw .1.1 → applied →
+**ping 8.8.8.8 3/3 0% loss**. TWO on-device fixes baked into wart-hal-net: (1) leaked supplicants
+(std Child drop does NOT kill child!) + stale ctrl socket → `cleanup_stale` (pkill wpa_supplicant +
+rm socket) + connect-retry-on-ECONNREFUSED with PING/PONG probe. (2) **THE ROUTING GOTCHA**: a
+default route in `main` is IGNORED — Android's `ip rule`s (set by the dead ConnectivityService) send
+all unmarked traffic through fwmark per-network tables (16000+) then `32000: unreachable`, never
+consulting `main`. FIX = `ip rule add pref 15000 from all lookup main` + add default route `onlink`
+(the gw-reachability check at insert honors the rules, which don't yet see the connected route).
+This is why the demo's `ip route replace default` "worked" only with a particular pre-existing rule
+state. **DNS DEFINITIVELY DIAGNOSED = M1b:** IP works but getaddrinfo fails. A15 bionic ALWAYS uses
+netd dnsproxyd — `ANDROID_DNS_MODE=local` is GONE (tested, dead), /etc/resolv.conf is read-only
+/system, net.dns* props ignored. netd has no resolver bc `ndc network create`/createPhysicalNetwork
+is PERMISSION-REJECTED EVEN AS ROOT (400 failed — netd's IPermissionController check fails --no-art).
+M1b DNS paths: (a) task-87 permission stub → INetd networkCreatePhysical+networkSetDefault +
+IDnsResolver.setResolverConfiguration as privileged caller; (b) custom UDP resolver in wart-host
+wasi:sockets/ip-name-lookup (bypass bionic/netd). Also: `from all lookup main` rule lingers after
+restore-art (could interfere w/ framework routing) — clean it on teardown (TODO).
+
+**DNS SOLVED + PRODUCTIZED 2026-06-05 (netd over binder as uid SYSTEM):** the demo + my first
+attempts failed bc run as ROOT — **netd AND dnsresolver special-case AID_SYSTEM (uid 1000), not
+root** (checkAnyPermission special-cases AID_SYSTEM). As `su 1000`: ndc network create + the INetd
+binder calls + IDnsResolver.setResolverConfiguration ALL succeed. Productized in wart-net:
+- root (link): associate + DHCP + `ip addr add` (address only).
+- re-exec `su 1000 wart-net --netd-config`: drive over binder INetd networkCreatePhysical(netId,
+  PERMISSION_NONE=0)/networkAddInterface/networkAddRoute(connected subnet THEN default via gw)/
+  networkSetDefault + IDnsResolver createNetworkCache + setResolverConfiguration(ResolverParamsParcel
+  {netId,servers,interfaceNames=[wlan0],transportTypes=[WIFI]}).
+- root: ONE catch-all `ip rule add pref 15000 from all lookup <iface>` — netd routes per-netId by
+  fwmark (CS assigns per-UID, dead here) so unmarked traffic (fwmark 0) → 32000 unreachable; this
+  points it at netd's per-net table (named after the iface). Single-network bypass.
+GOTCHAS: (1) networkAddRoute default fails "Network is unreachable" unless the CONNECTED subnet route
+is added to the per-net table FIRST (we set the addr via ip out-of-band, so networkAddInterface
+doesn't seed it). (2) rsbinder-aidl: full real android.net.INetd.aidl parses+generates+COMPILES in
+ASYNC mode as-is (sync codegen broken — BnX never emitted); IDnsResolver needs a TRIMMED copy
+(methods 0-7, positional transaction codes preserved) bc its listener-callback methods break async
+dyn-compat. Vendored submodules: aosp-packages-modules-connectivity (INetd) +
+aosp-packages-modules-dnsresolver (IDnsResolver). Device: daemon auto → ping 8.8.8.8 0% + curl
+http://example.com 200 + https://codeberg.org 200 (DNS+TLS). PROCESS NOTE: I patch-and-cycled this
+on-device instead of reading netd's permission/routing source first (violated [[feedback_read_source_first]]).

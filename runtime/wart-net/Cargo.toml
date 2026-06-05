@@ -1,0 +1,22 @@
+[package]
+name = "wart-net"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+# wart-net — task 88 (M1). ART-off connectivity daemon: brings WiFi-STA up with
+# the Java framework stopped by driving the native survivors via wart-hal-net
+# (spawn vendor wpa_supplicant + ctrl-socket associate → pure-Rust DHCPv4 →
+# apply address/route → configure DNS), then reports link status to the arbiter
+# (report-net-state). Respawn-supervised by run-hybrid-stack --no-art, mirroring
+# wart-sensors. Pure-Rust + the on-device `ip`/`ndc` tools; no binder in M1.
+
+[[bin]]
+name = "wart-net"
+path = "src/main.rs"
+
+[dependencies]
+wart-hal-net = { path = "../wart-hal-net" }
+libc = "0.2"
+log = "0.4"
+env_logger = "0.11"

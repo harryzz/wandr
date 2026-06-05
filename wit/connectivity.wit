@@ -1,0 +1,69 @@
+// Task 88 (M1) — ConnectivityService surface (war:connectivity).
+//
+// The guest-facing control/status/monitor API for the wart connectivity stack
+// (the `wart-arbiter-net` module + the `wart-net` daemon). It is NOT a data path
+// — guests move packets over `wasi:sockets` → kernel directly; this interface is
+// the app-facing equivalent of Android's `ConnectivityManager`: "am I online?"
+// and "tell me when that changes" (`registerDefaultNetworkCallback`, the single
+// most-used feature — Signal/apps reconnect on it).
+//
+// Separate package (like `war:alarm`) so adding it doesn't touch the shared
+// `my:skiko-gfx` contract (no WIT-sync churn across every guest). A guest that
+// cares about connectivity imports `network` + exports `connectivity-handler`
+// (`connectivity-client`); the host links `network` (`connectivity-host`,
+// forwarding to the arbiter `net-status`) and calls the guest's export
+// (`connectivity-events`) when the arbiter fans a `net-changed` line.
+
+package war:connectivity@0.1.0;
+
+/// A connectivity snapshot. Mirrors the arbiter's `NetState` wire form.
+record network-status {
+    /// Reachable default network present (validated-internet is M1b — for now
+    /// "online" means a default route + DNS are configured).
+    online: bool,
+    /// Active transport: "wifi" (M1), later "ethernet" / "cellular"; "none" offline.
+    transport: string,
+    /// Associated network name when on WiFi (none otherwise).
+    ssid: option<string>,
+    /// IPv4 address of the active link (none offline).
+    ip: option<string>,
+}
+
+/// Imported by any guest. `get-status` is unprivileged (status is public);
+/// scan/connect/disconnect (privileged) arrive in M2.
+interface network {
+    /// Current connectivity snapshot. The host forwards to the arbiter
+    /// (`net-status`) and maps the reply into `network-status`.
+    get-status: func() -> network-status;
+}
+
+/// Exported by a guest that wants change notifications. The runtime (via the
+/// arbiter) calls this when the default network flips online↔offline (or the
+/// active transport/address changes).
+interface connectivity-handler {
+    /// Connectivity changed — the guest reconnects sockets / updates UI. Carries
+    /// the new snapshot so the guest needn't immediately call `get-status`.
+    on-connectivity-change: func(status: network-status);
+}
+
+/// World a guest implements to use connectivity: import status, export the
+/// change handler. A regular wart `.warpkg` whose own world also `include`s the
+/// `my:skiko-gfx` surface for a GUI guest.
+world connectivity-client {
+    import network;
+    export connectivity-handler;
+}
+
+/// Host-side import world — the runtime `add_to_linker`s `network` (it
+/// implements it, forwarding `get-status` to the arbiter) onto the guest's linker.
+world connectivity-host {
+    import network;
+}
+
+/// Host-side export world — the runtime bindgen's this to get a typed
+/// `call_on_connectivity_change`, bound conditionally per instance (like
+/// `war:alarm/alarm-events`): guests that export `connectivity-handler` get the
+/// binding, others yield `None`.
+world connectivity-events {
+    export connectivity-handler;
+}

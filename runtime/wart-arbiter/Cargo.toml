@@ -32,6 +32,7 @@ members = [
     "wart-arbiter-keyguard",
     "wart-arbiter-audio",
     "wart-arbiter-sensors",
+    "wart-arbiter-net",
     "wart-screen",
 ]
 

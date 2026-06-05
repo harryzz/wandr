@@ -32,6 +32,7 @@ if [[ "${1:-}" == "--stop" ]]; then
     adb shell "su -c 'pkill -9 -f wart-host'"    >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-inputflinger'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-sensors'" >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f wart-net'" >/dev/null 2>&1 || true
     adb shell "su -c 'rm -f /data/local/tmp/wart-zygote.sock /data/local/tmp/wart-arbiter.sock'" >/dev/null 2>&1 || true
     adb shell "su -c 'am start -n com.android.systemui/.SystemUIService'" >/dev/null 2>&1 || true
     adb shell "input keyevent KEYCODE_HOME" >/dev/null 2>&1 || true
@@ -47,6 +48,7 @@ if [[ "${1:-}" == "--restore-art" ]]; then
     echo "▸ stopping wart stack (incl wart-inputflinger) before restoring framework …"
     adb shell "su -c 'pkill -9 -f wart-inputflinger'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-sensors'" >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f wart-net'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-arbiter'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-host'"    >/dev/null 2>&1 || true
     # Also kill any stuck Magisk su-loggers spinning against the (dead) framework,
@@ -105,6 +107,15 @@ INFL_BIN="$REPO_ROOT/runtime/wart-inputflinger/wart-inputflinger"
 # directly (the framework SensorService dies with ART) and drives report-orientation.
 SENSORS_BIN="$REPO_ROOT/runtime/wart-sensors/target/aarch64-linux-android/release/wart-sensors"
 SENSORS_LIB="$REPO_ROOT/runtime/wart-sensors/libwart_sensors_hal.so"
+# Task 88 — ART-off connectivity: the wart-net daemon (Rust) brings WiFi-STA up
+# (spawn vendor wpa_supplicant + ctrl-socket associate → pure-Rust DHCPv4 →
+# apply address) as root, then drives netd + dnsresolver over binder AS UID
+# SYSTEM (INetd networkCreate/AddRoute/SetDefault + IDnsResolver
+# setResolverConfiguration — both reject root) for routing + DNS, and reports
+# link state to the arbiter. Only launched under --no-art.
+# NOTE: assumes the WiFi chip is already powered + STA iface up (WiFi was ON
+# under ART before --no-art); cold chip power-up via the IWifi HAL is M2.
+WART_NET_BIN="$REPO_ROOT/runtime/wart-net/target/aarch64-linux-android/release/wart-net"
 # ART-off audio: a stub "activity" (IActivityManager) + "sensor_privacy" binder
 # service (C++, built on a-03). audioserver/cameraserver block on
 # waitForService("activity")/("sensor_privacy") (those live in the dead system_server)
@@ -147,6 +158,7 @@ restore_ui() {
     adb shell "su -c 'pkill -9 -f wart-host'"    >/dev/null 2>&1
     adb shell "su -c 'pkill -9 -f wart-inputflinger'" >/dev/null 2>&1
     adb shell "su -c 'pkill -9 -f wart-sensors'" >/dev/null 2>&1
+    adb shell "su -c 'pkill -9 -f wart-net'" >/dev/null 2>&1
     adb shell "su -c 'rm -f /data/local/tmp/wart-zygote.sock /data/local/tmp/wart-arbiter.sock'" >/dev/null 2>&1
     # Path A stops the Java framework EARLY (before the zygote), so a failure here
     # leaves it down — restart it (else `am start` below is a no-op + the device
@@ -181,6 +193,7 @@ echo "▸ killing any existing wart-host / wart-arbiter / wart-inputflinger …"
 adb shell "su -c 'pkill -9 -f wart-arbiter'" >/dev/null 2>&1 || true
 adb shell "su -c 'pkill -9 -f wart-host'"    >/dev/null 2>&1 || true
 adb shell "su -c 'pkill -9 -f wart-inputflinger'" >/dev/null 2>&1 || true
+adb shell "su -c 'pkill -9 -f wart-net'" >/dev/null 2>&1 || true
 adb shell "su -c 'rm -f /data/local/tmp/wart-zygote.sock /data/local/tmp/wart-arbiter.sock'" >/dev/null 2>&1
 
 echo "▸ pushing artifacts …"
@@ -218,6 +231,15 @@ if [[ -f "$SENSORS_BIN" && -f "$SENSORS_LIB" ]]; then
 elif [[ "$NO_ART" == "1" ]]; then
     echo "  ⚠ wart-sensors / libwart_sensors_hal.so missing — auto-rotation off under --no-art" >&2
     echo "    build: cargo build --release (in runtime/wart-sensors) + m libwart_sensors_hal on a-03" >&2
+fi
+# Task 88 — ART-off connectivity daemon. Best-effort: pushed if present; only
+# launched under --no-art (below).
+if [[ -f "$WART_NET_BIN" ]]; then
+    push_if_newer "$WART_NET_BIN" "/data/local/tmp/wart-net"
+    adb shell 'chmod 755 /data/local/tmp/wart-net'
+elif [[ "$NO_ART" == "1" ]]; then
+    echo "  ⚠ wart-net missing — no WiFi under --no-art" >&2
+    echo "    build: (cd runtime/wart-net && cargo build --release)" >&2
 fi
 
 # ART-off audio stub (activity + sensor_privacy). Pushed if present (built on a-03);
@@ -458,6 +480,17 @@ bring_up_chrome() {
         # spawn_detached `sh -c "$cmd"` nesting.
         spawn_detached /data/local/tmp/wart-sensors.log \
             "while true; do /data/local/tmp/wart-launch /data/local/tmp/wart-sensors; sleep 2; done"
+    fi
+    # Task 88 — under --no-art, start the connectivity daemon (WiFi). WifiService /
+    # ConnectivityService die with ART; wart-net drives the native survivors
+    # (wpa_supplicant + DHCPv4 + ip route + DNS) and reports to the arbiter
+    # (report-net-state). Runs as root via spawn_detached's `su -c` (nl80211 /
+    # route / port 68 need it). Respawn-supervised like wart-sensors: on a link
+    # drop or bring-up failure the daemon exits non-zero and the loop retries.
+    if [[ "$NO_ART" == "1" ]] && adb shell 'ls /data/local/tmp/wart-net' >/dev/null 2>&1; then
+        echo "▸ connectivity daemon (WiFi, --no-art)"
+        spawn_detached /data/local/tmp/wart-net.log \
+            "while true; do /data/local/tmp/wart-net; sleep 3; done"
     fi
     # (ART-off audio stub + audioserver re-init now runs EARLY, before the zygote —
     # see the framework-stop section — so audio is ready before any app launches.)

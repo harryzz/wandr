@@ -1,11 +1,88 @@
 # Task 88 — wart connectivity service (ART-off networking, productized)
 
-> Status: 🔲 SCOPED (design). Follow-on to the `--no-art` networking analysis +
-> live demo in `[[project_artless_network]]` (WiFi+internet brought up by hand:
-> ping 8.8.8.8 0% loss, TCP 443 open). This task turns that one-off recipe into a
-> first-class wart subsystem. Binder analysis: `[[project_artless_network]]` +
-> the session that found `connectivity`/`wifi` are dead system_server binders
-> while `netd`/`dnsresolver`/`IWifi`/`ISupplicant` survive natively.
+> Status: 🚧 M1 — full IP **+ DNS** DEVICE-VERIFIED + productized (`--no-art`).
+> Follow-on to the `--no-art` networking analysis + live demo in
+> `[[project_artless_network]]` (WiFi+internet brought up by hand: ping 8.8.8.8
+> 0% loss, TCP 443 open). This task turns that one-off recipe into a first-class
+> wart subsystem. Binder analysis: `[[project_artless_network]]` + the session
+> that found `connectivity`/`wifi` are dead system_server binders while
+> `netd`/`dnsresolver`/`IWifi`/`ISupplicant` survive natively.
+
+## M1 implementation status (2026-06-05)
+
+Thinnest end-to-end slice (decisions: ctrl-socket associate now / ISupplicant
+AIDL later; **pure-Rust DHCPv4 up front**; DNS mechanism = on-device
+investigation). Built + builds clean (desktop tests + aarch64-android cross):
+
+- **`runtime/wart-hal-net`** (pure-Rust, no binder in M1) — `dhcp.rs` (DHCPv4
+  DISCOVER/OFFER/REQUEST/ACK, the one missing native binary; unit-tested parse),
+  `supplicant.rs` (write conf + spawn vendor `wpa_supplicant` + ctrl-socket
+  `SELECT_NETWORK`/`REASSOCIATE` nudge), `lib.rs` (WifiConfigStore.xml cred
+  parse + `ip`-based addr/route applier). 6 unit tests pass.
+- **`runtime/wart-net`** (daemon) — orchestrates associate→DHCP→apply→DNS, reports
+  `report-net-state` to the arbiter, monitors carrier + re-associates. `--once`
+  mode = on-device bring-up/DNS investigation harness. `dns.rs` tries
+  resolv.conf / `net.dns*` props / `ndc resolver setnetdns` (best-effort, logged).
+- **`runtime/wart-arbiter/wart-arbiter-net`** (module) — status of record
+  (`report-net-state` / `net-status`) + `on-connectivity-change` fan-out to
+  subscribed guests (`net-subscribe`). 5 unit tests pass; wired into the arbiter
+  binary (one line) + cross-compiles clean.
+- **`wit/connectivity.wit`** (`war:connectivity`) — `get-status` import +
+  `on-connectivity-change` export contract. **Host bindgen/linker wiring + a
+  guest that exports the handler = the immediate next step (M1b)**; not yet wired
+  into wart-host this session.
+- **`tools/scripts/run-hybrid-stack.sh`** — pushes + launches `wart-net` under
+  `--no-art` (respawn-supervised, as root via `su`) next to `wart-sensors`;
+  teardown/restore paths stop it so WifiService can reclaim `wlan0`.
+
+### Device verification (2026-06-05, Pixel 2 XL, live `--no-art` session)
+
+✅ **IP path fully verified, end-to-end automated.** `wart-net` (run as root)
+brought WiFi up with zero manual steps: associate to `zah004` via the ctrl-socket
+nudge → **pure-Rust DHCPv4 lease** (`192.168.1.179/22` gw `192.168.1.1` dns
+`192.168.1.1`, 600s) → applied addr + `default via … onlink` + the
+`lookup main` rule → **`ping 8.8.8.8` 3/3 0% loss (~18 ms)**.
+
+Two fixes found on-device (now in the code): (a) leaked supplicants + stale ctrl
+socket → `cleanup_stale` (kill `wpa_supplicant` + rm socket before spawn) +
+connect-retry-on-`ECONNREFUSED` with a `PING`/`PONG` probe; (b) **policy
+routing** — Android's `ip rule`s (set by the dead ConnectivityService) never
+consult `main`, so a default route there is ignored (all traffic → `32000:
+unreachable`); fixed by installing `ip rule pref 15000 from all lookup main` +
+adding the default route `onlink` (gateway-reachability check honors the
+not-yet-consulted rules). `MAIN_LOOKUP_RULE_PREF` is the one named constant.
+
+✅ **DNS SOLVED — netd over binder as uid `system`** (the demo's one open gap).
+Root cause of the demo's failure: on Android 15 bionic *always* routes name
+lookups to netd's `dnsproxyd` (the in-process `ANDROID_DNS_MODE=local` resolver
+is gone, `/etc/resolv.conf` is read-only `/system`, `net.dns*` ignored), and netd
+has no resolver because `ndc`/`networkCreate` were run **as root** — but **netd +
+dnsresolver special-case `AID_SYSTEM` (uid 1000), not root**. Driving them as uid
+system works: `ndc network create` and the binder calls all succeed. So:
+- Vendored `android.net.INetd` (`packages/modules/Connectivity`) +
+  `android.net.IDnsResolver` (`packages/modules/DnsResolver`) AIDLs as submodules.
+- `wart-hal-net` codegens both via rsbinder (the full real INetd parses/compiles
+  as-is in async mode; IDnsResolver needs a trimmed copy — its listener callbacks
+  break codegen).
+- `wart-net` (root: link/DHCP/address) re-execs `--netd-config` under `su 1000`
+  to drive, over binder: **INetd** `networkCreatePhysical`/`networkAddInterface`/
+  `networkAddRoute` (connected + default)/`networkSetDefault`, then **IDnsResolver**
+  `createNetworkCache` + `setResolverConfiguration`. One catch-all `ip rule from
+  all lookup <iface>` (root) bridges netd's per-UID fwmark routing (CS-managed,
+  dead here) for the single-network case.
+- Device-verified end to end: daemon auto-brings-up → `ping 8.8.8.8` 0% loss,
+  `http://example.com` HTTP 200, **`https://codeberg.org` HTTP 200** (DNS+TLS).
+
+### Remaining for M1 done
+1. **`war:connectivity` host wiring** — bindgen `connectivity-host`/`-events`,
+   forward `get-status` to arbiter `net-status`, deliver `net-changed` → guest
+   `on-connectivity-change`; a test guest. (Arbiter `wart-arbiter-net` module is
+   built + unit-tested; the device's *running* arbiter is still the old binary —
+   integration verifies on the next full `run-hybrid-stack --no-art`.)
+2. **Cold chip power-up** (M2 proper, but blocks a clean-boot M1): the verify
+   reused a powered chip (WiFi was on under ART before `--no-art`). A cold
+   `--no-art` boot needs the IWifi HAL to power the chip + create the STA iface
+   first (today done by the dead WifiService).
 
 ## Goal
 
