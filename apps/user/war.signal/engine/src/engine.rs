@@ -1275,17 +1275,18 @@ async fn receive_and_send(
                                 }
                             }
                             CallIntent::Accept => {
-                                // Answered → stop the ring. We deliberately do NOT open
-                                // an IN_COMMUNICATION comms session (focus::call_start):
-                                // that mode is the common playback blocker on this device
-                                // — it ducks USAGE_MEDIA to ~1% and leaves
-                                // USAGE_VOICE_COMMUNICATION with no MMAP device (openStream
-                                // -889). The call runs on the NORMAL route instead, where
-                                // the USAGE_MEDIA stream opens + mixes. ring_stop is
-                                // UNCONDITIONAL (not gated on ring_started): harmless if not
-                                // ringing, and guarantees answer always silences it.
+                                // Answered → stop the ring + open the comms session.
+                                // `call_start` signals the arbiter (CommsActive) so
+                                // proximity-screen-off + doze keep-alive engage during
+                                // the call. It does NOT switch the global audio mode to
+                                // IN_COMMUNICATION (the arbiter dropped that — that mode
+                                // ducks USAGE_MEDIA to ~1% on this device, task 75); the
+                                // call still runs on the NORMAL/USAGE_MEDIA route.
+                                // ring_stop is UNCONDITIONAL: harmless if not ringing, and
+                                // guarantees answer always silences it.
                                 focus::ring_stop();
-                                dbg_line(&format!("accept: ring_stop sent (ring_started was {ring_started})"));
+                                focus::call_start();
+                                dbg_line(&format!("accept: ring_stop + call_start sent (ring_started was {ring_started})"));
                                 ring_started = false;
                                 comm_started = true;
                                 (call_engine.peer(), call_engine.accept())
@@ -1303,11 +1304,13 @@ async fn receive_and_send(
                         // media leg is provable from the log: does ICE connect?
                         if let Some(st) = st {
                             dbg_line(&format!("call state -> {st:?}"));
-                            // Outbound connected → mark the call active so teardown
-                            // emits the matching call_end. Like the answer path, we do
-                            // NOT open an IN_COMMUNICATION comms session — the call runs
-                            // on the NORMAL audio route.
+                            // Outbound connected → open the comms session (call_start
+                            // → arbiter CommsActive → proximity-screen-off + doze
+                            // keep-alive), so teardown emits the matching call_end. Like
+                            // the answer path, this does NOT set IN_COMMUNICATION — the
+                            // call runs on the NORMAL audio route.
                             if st == wart_call::signal::CallState::Connected && !comm_started {
+                                focus::call_start();
                                 comm_started = true;
                             }
                         }

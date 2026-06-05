@@ -243,9 +243,18 @@ impl AudioModule {
     }
 
     /// `audio-call-start <pid|app-id>` — begin a comms session (a VoIP call):
-    /// grab transient focus (music pauses, resuming after the call), switch the
-    /// global audio mode to IN_COMMUNICATION (the owner host applies it), and
-    /// raise an ongoing-call notification. One call at a time.
+    /// grab transient focus (music pauses, resuming after the call), mark the
+    /// session active (`Event::CommsActive` → proximity-screen-off + doze
+    /// keep-alive), and raise an ongoing-call notification. One call at a time.
+    ///
+    /// We deliberately do NOT switch the global audio mode to IN_COMMUNICATION.
+    /// On this device IN_COMMUNICATION ducks the `USAGE_MEDIA` call stream to ~1%
+    /// (task 75) and the VoIP call already runs on the NORMAL/`USAGE_MEDIA` route,
+    /// so the mode buys nothing and kills the call audio — which is exactly why
+    /// the guest had stopped signalling the session at all (losing
+    /// proximity-screen-off). Signalling it *without* the mode (this change) gives
+    /// the screen-off back without ducking. A future comms-route (cellular) call
+    /// would re-introduce IN_COMMUNICATION conditionally.
     fn cmd_call_start(&mut self, args: &str, ctx: &mut Ctx) -> Reply {
         let token = args.trim();
         let Some((pid, app_id)) = Self::resolve(token, ctx) else {
@@ -257,19 +266,18 @@ impl AudioModule {
         // (Android telephony uses GAIN_TRANSIENT for exactly this).
         self.grant(pid, app_id.clone(), FocusKind::GainTransient, ctx);
         self.comms = Some(pid);
-        // The owner host (it holds the binder connection) applies the mode.
-        ctx.deliver_to_host(pid, "audio-policy set-mode comm\n");
         // Ongoing-call badge in the status bar (notify module's Store).
         ctx.store.post_notification(&app_id, CALL_NOTIF_ID, "Ongoing call".into(), app_id.clone());
-        // Keep the call host out of doze (the power module reacts). M3b.
+        // Arm proximity-screen-off + keep the call host out of doze (the power
+        // module reacts: acquires proximity, never dozes this pid). Task 78 / M3b.
         ctx.emit(Event::CommsActive { pid, active: true });
         ctx.request(Effect::Persist);
-        log::info!("arbiter: audio-call-start pid={pid} app={app_id} → IN_COMMUNICATION");
+        log::info!("arbiter: audio-call-start pid={pid} app={app_id} → comms session (NORMAL route)");
         Reply::ok(format!("call-start pid={pid} app={app_id}"))
     }
 
-    /// `audio-call-end <pid|app-id>` — end the comms session: restore NORMAL
-    /// mode, release focus (the prior owner regains), clear the badge.
+    /// `audio-call-end <pid|app-id>` — end the comms session: release focus (the
+    /// prior owner regains), clear the badge, drop the proximity/doze keep-alive.
     fn cmd_call_end(&mut self, args: &str, ctx: &mut Ctx) -> Reply {
         let token = args.trim();
         let Some((pid, app_id)) = Self::resolve(token, ctx) else {
@@ -279,13 +287,13 @@ impl AudioModule {
             return Reply::err(format!("audio-call-not-in-session pid={pid}"));
         }
         self.comms = None;
-        ctx.deliver_to_host(pid, "audio-policy set-mode normal\n");
+        // (No audio-mode restore — we never set IN_COMMUNICATION; see cmd_call_start.)
         self.drop_pid(pid, ctx); // release focus → prior owner regains
         ctx.store.cancel_notification(&app_id, CALL_NOTIF_ID);
-        // Release the doze keep-alive (the power module reacts). M3b.
+        // Release proximity + the doze keep-alive (the power module reacts). M3b.
         ctx.emit(Event::CommsActive { pid, active: false });
         ctx.request(Effect::Persist);
-        log::info!("arbiter: audio-call-end pid={pid} app={app_id} → NORMAL");
+        log::info!("arbiter: audio-call-end pid={pid} app={app_id} → ended");
         Reply::ok(format!("call-end pid={pid} app={app_id}"))
     }
 
@@ -737,7 +745,7 @@ mod tests {
     }
 
     #[test]
-    fn call_start_pauses_music_sets_mode_and_badges() {
+    fn call_start_pauses_music_and_badges() {
         let (mut r, mut store) = reg();
         seed(&mut store, "test.caller", 500);
         // Music playing (permanent focus).
@@ -746,21 +754,22 @@ mod tests {
         assert!(matches!(reply, Reply::Ok(_)));
         // Music pauses (transient), not permanently evicted.
         assert_eq!(changes_for(&eff, 111), vec!["on-focus-changed loss-transient"]);
-        // The owner host is told to switch the global mode.
-        assert!(changes_for(&eff, 500).iter().any(|l| l == "audio-policy set-mode comm"));
+        // We do NOT switch the global audio mode — IN_COMMUNICATION ducks the call
+        // audio on this device (see cmd_call_start).
+        assert!(!changes_for(&eff, 500).iter().any(|l| l.starts_with("audio-policy set-mode")));
         // Ongoing-call badge raised.
         assert!(store.notifications().iter().any(|n| n.app_id == "test.caller"));
     }
 
     #[test]
-    fn call_end_resumes_music_restores_mode_clears_badge() {
+    fn call_end_resumes_music_clears_badge() {
         let (mut r, mut store) = reg();
         seed(&mut store, "test.caller", 500);
         r.dispatch_command("audio-focus-request", "111 gain", &mut store).unwrap();
         r.dispatch_command("audio-call-start", "test.caller", &mut store).unwrap();
         let (_r, eff) = r.dispatch_command("audio-call-end", "test.caller", &mut store).unwrap();
-        // Mode restored on the owner + music regains focus.
-        assert!(changes_for(&eff, 500).iter().any(|l| l == "audio-policy set-mode normal"));
+        // No audio-mode restore (we never set one); music regains focus.
+        assert!(!changes_for(&eff, 500).iter().any(|l| l.starts_with("audio-policy set-mode")));
         assert_eq!(changes_for(&eff, 111), vec!["on-focus-changed gain"]);
         // Badge cleared.
         assert!(store.notifications().iter().all(|n| n.app_id != "test.caller"));
@@ -830,15 +839,16 @@ mod tests {
     }
 
     #[test]
-    fn answer_stops_ring_then_enters_comm() {
+    fn answer_stops_ring_then_starts_session() {
         let (mut r, mut store) = reg();
         seed(&mut store, "test.caller", 500);
         r.dispatch_command("audio-ring-start", "test.caller", &mut store).unwrap();
-        // Answering = call-start: it stops the ring + switches to comm mode.
+        // Answering = call-start: it stops the ring + opens the comms session
+        // (without switching the global audio mode).
         let (_r, eff) = r.dispatch_command("audio-call-start", "test.caller", &mut store).unwrap();
         let lines = changes_for(&eff, 500);
         assert!(lines.iter().any(|l| l == "ringtone stop"));
-        assert!(lines.iter().any(|l| l == "audio-policy set-mode comm"));
+        assert!(!lines.iter().any(|l| l.starts_with("audio-policy set-mode")));
         // Ongoing-call badge present; not still "ringing".
         assert!(store.notifications().iter().any(|n| n.app_id == "test.caller"));
     }

@@ -1,5 +1,40 @@
 # Task 91 — ART-off call audio (two-way voice in a Signal call under `--no-art`)
 
+> Status: 🚧 SCREEN half FIXED (code, device-verified-mechanism, pending deploy);
+> AUDIO half reframed (intermittent, not deterministic). Follow-on to task 87
+
+## DEVICE-VERIFIED DIAGNOSIS (2026-06-05) — supersedes the hypotheses below
+
+Two separate bugs in the `--no-art` call; the proximity probe + a live call settled both:
+
+**SCREEN (proximity → screen-off + touch-disable doesn't engage) — root cause +
+fix found, mechanism device-verified.** The whole chain works under `--no-art`:
+on a connected call the real proximity sensor reports near on cover
+(`x=0`, `ccb_proximityHandle: PRX_STATE nearBy` → `report-sensor proximity 0` →
+`sensors: proximity near`), the classifier flips, and with a comms session active
+`Event::ProximityChanged{near}` blanks the panel (`set_display_power(false)`) +
+suppresses touch on every host — confirmed live (screen ON → cover → OFF →
+uncover → ON). The ONLY missing link: the call **never signals the comms session**
+— `audio-focus-list count=0`, `proximity holders=0` during a connected call —
+because the Signal engine calls `focus::call_start()` **nowhere** (only
+`call_end`). It was dropped on purpose: the arbiter coupled `call_start` to
+`setPhoneState(IN_COMMUNICATION)`, which ducks the `USAGE_MEDIA` call audio to ~1%
+on this device (task 75). **FIX (this task, code done):** decouple them —
+`wart-arbiter-audio` `cmd_call_start`/`end` no longer send `audio-policy
+set-mode comm`/`normal` (keep `CommsActive`, transient focus, badge); the guest
+(`engine.rs`) calls `focus::call_start()` at both connect sites (incoming Accept +
+outgoing Connected), symmetric to `call_end`. 16 audio tests pass; engine builds.
+
+**AUDIO (no speech in/out) — reframed: intermittent, NOT a deterministic earpiece
+block.** A standalone `--probe-audio-duplex` got `-889` on the earpiece-pinned
+output (`deviceIds=[2]`, "could not open in EXCLUSIVE mode"), BUT a *live* call's
+same `create_track(call-earpiece, deviceIds=[2])` opened fine (`startClient …
+result 0`, full duplex — mic+out audible, user-confirmed). So the earpiece output
+is **not** a hard `-889`; the failure is **intermittent MMAP flakiness** (the
+task-87-class `-889`/`-895` + `pcm_sync_ptr FD in bad state`). Needs an A/B over
+*several* calls to characterize, not a single probe. Separate from the screen fix.
+
+> (Original scoping + the now-superseded hypotheses H1–H4 follow.)
 > Status: 🔲 SCOPED + GROUNDED (no device test / patch yet). Follow-on to task 87
 > (ART-off audio *output* — ringtones/tones now audible) and task 75 (call-audio
 > output, solved under ART). Distinct from both: this is **full-duplex call
