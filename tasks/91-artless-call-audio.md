@@ -1,7 +1,38 @@
 # Task 91 — ART-off call audio (two-way voice in a Signal call under `--no-art`)
 
-> Status: 🚧 SCREEN half FIXED (code, device-verified-mechanism, pending deploy);
-> AUDIO half reframed (intermittent, not deterministic). Follow-on to task 87
+> Status: ✅ SOLVED + device-verified (2026-06-05) — BOTH halves working in a live
+> Signal call under `--no-art`: earpiece audio + mic (user-confirmed audible both
+> ways) AND proximity blanks the screen. Follow-on to task 87.
+
+## RESOLUTION (2026-06-05) — both halves verified live
+
+**AUDIO (earpiece + mic) — FIXED by replicating `AudioService.onUpdateAudioMode`.**
+The earpiece output on this device only opens in IN_COMMUNICATION mode (NORMAL →
+`-889`), so the call must re-enter comms mode — but the *old* bare
+`setPhoneState(IN_COMMUNICATION)` ducked the USAGE_MEDIA call stream to ~1%
+(task 75), which is why it had been removed. Source-read the framework:
+`AudioService.onUpdateAudioMode` does setPhoneState **then re-applies volume for
+the new mode** (`onUpdateContextualVolumes`) — the volume re-apply was the missing
+half. Host `audio_policy_impl.rs` now exposes Java-mirrored fns:
+`on_update_audio_mode()` = `set_phone_state()` (IN_COMMUNICATION/NORMAL) +
+`on_update_contextual_volumes()` (re-assert MUSIC full-scale on earpiece+speaker).
+Arbiter `cmd_call_start/end` re-send `audio-policy set-mode comm/normal` (drives
+`on_update_audio_mode` on the owner host). The Signal guest calls
+`focus::call_start()` at both connect sites → `CommsActive`. Device-verified:
+AudioFlinger output thread routed to `0x1 (AUDIO_DEVICE_OUT_EARPIECE)`, patch
+flips SPEAKER→EARPIECE at call start, call audio on the SHARED/legacy path with
+**no `-889`**. (Open watch item: earpiece MUSIC stream measured −32 dB in the
+dump — audible, but verify it's not quieter than ART; if so investigate why the
+re-assert landed below full-scale.) Commits 47cde354 (guest) + 3f75ddb0 (host+arbiter).
+
+**SCREEN (proximity → screen-off) — FIXED.** Root cause: the Signal engine called
+`focus::call_start()` nowhere (only `call_end`) → no `CommsActive` → proximity
+never armed. Added it at both connect sites. Device-verified: `set_display_power`
+toggles false/true on cover/uncover during the call.
+
+> (Original diagnosis follows.)
+
+## DEVICE-VERIFIED DIAGNOSIS (2026-06-05) — supersedes the hypotheses below
 
 ## DEVICE-VERIFIED DIAGNOSIS (2026-06-05) — supersedes the hypotheses below
 
