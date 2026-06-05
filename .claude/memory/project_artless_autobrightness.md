@@ -7,6 +7,25 @@ metadata:
   originSessionId: 023c2492-85e0-4052-bd04-4dc23f02fd88
 ---
 
+**⚠️ RELIABILITY BUG (2026-06-05, found verifying a user doubt that auto-brightness
+"doesn't work"):** the curve/applier are fine (live: 5 lux → backlight 63, a sensible
+dim value; manual `wart-arbiter brightness 0..1` applies when the panel is on), BUT
+auto-brightness **silently dies whenever `wart-sensors` crashes**, which it does
+repeatedly. Tombstones (27/28/29/40/41) show `wart-sensors` **SIGABRT: "Failed HIDL
+return status not checked … Status(EX_TRANSACTION_FAILED): DEAD_OBJECT"** in
+`wart_sensors_poll+128` (`libwart_sensors_hal.so`). I.e. when the sensors HAL
+(`android.hardware.sensors@1.0-service`) connection drops — e.g. HAL churn across a
+`--restore-art`→`--no-art` cycle, or SensorService re-grabbing it — the C++ HIDL shim's
+**unchecked `Return<>`** forces a `libhidlbase` abort → the daemon dies. There is **no
+auto-restart**, so the light feed stops (`wart-arbiter sensor-state` → `light[holders=0
+(no reading)]`) and the backlight freezes at its last value → "auto-brightness doesn't
+work". This also kills auto-ROTATION + proximity (same daemon). FIX (not yet done,
+needs a-03 C++): in `wart_sensors_poll` CHECK the HIDL Return status and return an error
+to Rust on DEAD_OBJECT instead of letting it abort; + wart-sensors should re-acquire the
+HAL (or run-hybrid-stack should respawn the daemon). To re-verify, keep the screen awake
+(backlight only applies panel-on, and the screen idles off fast). The "DONE+device-
+verified" below was true at first launch but does NOT survive a sensors-HAL drop.
+
 **✅ DONE + device-verified (task 86, 2026-06-04).** Under `--no-art` there is no
 DisplayManager auto-brightness, so the ambient light sensor → backlight policy lives
 in **`wart-arbiter-power`** (it already owns `panel_on`/`blanked` + is the
