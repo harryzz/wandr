@@ -74,11 +74,12 @@ system works: `ndc network create` and the binder calls all succeed. So:
   `http://example.com` HTTP 200, **`https://codeberg.org` HTTP 200** (DNS+TLS).
 
 ### Remaining for M1 done
-1. **`war:connectivity` host wiring** — bindgen `connectivity-host`/`-events`,
-   forward `get-status` to arbiter `net-status`, deliver `net-changed` → guest
-   `on-connectivity-change`; a test guest. (Arbiter `wart-arbiter-net` module is
-   built + unit-tested; the device's *running* arbiter is still the old binary —
-   integration verifies on the next full `run-hybrid-stack --no-art`.)
+1. **`war:connectivity` host wiring + the `wifi` management impl** → spun out to
+   **`tasks/90-connectivity-wit-implementation.md`** (bindgen the worlds into
+   wart-host, forward to the arbiter, deliver `on-connectivity-change`, implement
+   `scan`/`connect`/saved-networks; a test/Settings guest). The arbiter
+   `wart-arbiter-net` module is built + unit-tested. Deferred so we can return to
+   task 87 (ART-off audio bugs) first.
 2. **Cold chip power-up** (M2 proper, but blocks a clean-boot M1): the verify
    reused a powered chip (WiFi was on under ART before `--no-art`). A cold
    `--no-art` boot needs the IWifi HAL to power the chip + create the STA iface
