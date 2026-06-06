@@ -95,18 +95,37 @@ Note: the bringup hit a transient `sensorservice` HAL-claim `DEAD_OBJECT` ×3 (t
 endpoint registered on a later retry) — a single-client-HAL handoff flake after the ART
 restart, related to C4; self-recovered.
 
-### C2 — One shared SCHED_FIFO poll thread for all AIDL consumers — OPEN
-`SensorManagerAidl::getLooper` (vendored `aidl/SensorManager.cpp`): *"One global
-looper for all event queues."* That single thread runs **SCHED_FIFO prio 10**
-(device-confirmed: the spinner is tid `binder:<pid>_N` with `rt_priority 10`,
-`policy 1`, `epoll_wait` stack — it's the poll thread, mis-named because it's spawned
-from the `createEventQueue` binder worker) and makes a **synchronous `onEvent` binder
-call per event to each client**. So (a) a slow/blocked client stalls sensor delivery
-for *everyone* (head-of-line blocking), and (b) when it runs hot it starves
-normal-priority threads (render/input/adbd) on its core. This is the mechanism
-behind "100% pins a core" and a frozen UI. C1 halves the AIDL clients but doesn't
-remove the shared-thread coupling. Possible fixes: per-client queue draining off the
-RT thread, or async/oneway `onEvent`, or drop the RT priority.
+### C2 — Shared poll thread escalated to SCHED_FIFO (whole-system freeze) — ✅ RESOLVED (device-verified 2026-06-07)
+**Was:** `SensorManagerAidl::getLooper` (vendored `aidl/SensorManager.cpp`): *"One
+global looper for all event queues"* — a single thread that does
+`sched_setscheduler(SCHED_FIFO, prio 10)` and makes a **synchronous `onEvent` binder
+call per event to each client**. The **RT priority** was the dangerous part: when that
+thread ran hot or busy-looped (C3) it *preempted* normal-priority render/input/adbd on
+its core → "100% pins a core" + frozen UI (device-confirmed the spinner was tid
+`binder:<pid>_N`, `rt_priority 10`, `policy 1`, `epoll_wait` stack — the poll thread,
+mis-named because it's spawned from the `createEventQueue` binder worker).
+
+**Fix (2026-06-07):** we don't need RT here — orientation/proximity/light are low-rate
+and the camera EIS uses the HIDL *direct channel* (no poll thread), so the poll
+thread's scheduling can't affect gyro timing. `wart-sensormanager` now **drops
+`CAP_SYS_NICE` at the top of `main()`** (raw `capset` syscall, no libcap/Android.bp
+change → ninja-only rebuild). Linux caps are per-thread and inherited by threads
+created later, so every event-queue poll thread (spawned lazily by a binder worker)
+inherits the restricted creds; its `sched_setscheduler(SCHED_FIFO)` returns EPERM (the
+lib logs a warning and continues), and it runs **SCHED_OTHER** — a spin/hot loop now
+time-slices fairly and degrades instead of starving the box.
+File: `runtime/wart-sensormanager/cpp/wart_sensormanager.cpp` (`drop_rt_scheduling_capability`).
+
+**Device-verified (2026-06-07)** after a fresh `--no-art` bringup with the rebuilt
+binary: logcat `wart-sensormanager: dropped CAP_SYS_NICE …` + `E AidlSensorManager:
+Could not use SCHED_FIFO for looper thread: Operation not permitted`; the poll thread
+(`binder:<pid>_N`) now reports `/proc/<tid>/stat` `rt_priority 0`, `policy 0`
+(SCHED_OTHER) — was `10`/`1` (SCHED_FIFO). Every wart-sensormanager thread is policy 0.
+
+**Residual (NOT a freeze):** the shared-thread head-of-line coupling remains — one slow
+client's synchronous `onEvent` still delays delivery to the others. Now benign (sensor
+latency, not a system freeze). A fuller fix (oneway `onEvent` / per-client draining)
+would need a platform-lib patch; deferred. The latent busy-spin trigger itself is C3.
 
 ### C3 — Latent HANGUP busy-spin × non-reconnecting client cache — OPEN
 The AIDL `EventQueueLooperCallback::handleEvent` (`aidl/EventQueue.cpp`) has **no
