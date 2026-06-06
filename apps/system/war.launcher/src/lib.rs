@@ -115,20 +115,27 @@ fn relayout(s: &mut State) {
     // chrome gap), so the launcher lays out from its own logical (0,0); no
     // manual top inset here (would double-count with the host's).
     let top_inset = 0.0_f32;
-    // Title.
-    let title = new_blob("Apps", 44.0, 600);
+    // Title — "Apps" header, 2× the original size.
+    let title_size = 88.0_f32;
+    let title = new_blob("Apps", title_size, 600);
     s.blobs.push(title);
-    s.items.push(DrawItem::Text { id: title, x: margin, y: top_inset + 56.0, color: 0xFFFFFFFF });
+    // Baseline one em below the top edge so the larger glyphs aren't clipped.
+    let title_baseline = top_inset + title_size;
+    s.items.push(DrawItem::Text { id: title, x: margin, y: title_baseline, color: 0xFFFFFFFF });
 
     // Grid. Tiles are 2× the original size (task 57 follow-up).
     let tile = 264.0_f32;
     let gap = 56.0_f32;
-    let label_h = 56.0_f32;
+    // App-name label, 2× the original size; reserve room (em + descent pad) below
+    // each tile so the taller text fits within the cell.
+    let label_size = 56.0_f32;
+    let label_h = label_size + 24.0_f32;
     let cell_w = tile + gap;
     let cell_h = tile + label_h + gap;
     let usable = (s.w - margin * 2.0).max(cell_w);
     let cols = ((usable + gap) / cell_w).floor().max(1.0) as usize;
-    let top = top_inset + 116.0_f32;
+    // Start the grid a gap below the (now taller) title baseline+descent.
+    let top = title_baseline + title_size * 0.3 + gap;
 
     for (i, (id, label)) in s.apps.iter().enumerate() {
         let col = i % cols;
@@ -143,14 +150,17 @@ fn relayout(s: &mut State) {
         s.blobs.push(lblob);
         s.items.push(DrawItem::Text { id: lblob, x: x + tile * 0.5 - 36.0, y: y + tile * 0.5 + 44.0, color: 0xFFFFFFFF });
 
-        // Label under the tile (truncated).
+        // Label under the tile, truncated to the tile width at the larger size
+        // (max chars derived from tile width ÷ approx glyph advance ≈ 0.55·em,
+        // so it stays within the cell on any density instead of overflowing).
+        let max_chars = ((tile / (label_size * 0.55)) as usize).max(4);
         let mut disp = label.clone();
-        if disp.chars().count() > 14 {
-            disp = disp.chars().take(13).collect::<String>() + "…";
+        if disp.chars().count() > max_chars {
+            disp = disp.chars().take(max_chars - 1).collect::<String>() + "…";
         }
-        let tblob = new_blob(&disp, 28.0, 400);
+        let tblob = new_blob(&disp, label_size, 400);
         s.blobs.push(tblob);
-        s.items.push(DrawItem::Text { id: tblob, x, y: y + tile + 36.0, color: 0xFFE0E0E0 });
+        s.items.push(DrawItem::Text { id: tblob, x, y: y + tile + label_size, color: 0xFFE0E0E0 });
 
         s.hits.push(HitRect { x, y, w: tile, h: tile + label_h, app_id: id.clone() });
     }
