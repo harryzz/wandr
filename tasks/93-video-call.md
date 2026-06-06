@@ -246,14 +246,29 @@ So the encoder-surface 0×0 was real but secondary; the deeper wall is the **clo
 vendor camera HAL aborting when it starts the sensor channel ART-off** — beyond the
 binder stubs (can't patch `camera.msm8998.so`).
 
-**Next diagnostic (not a blind patch): ART-up vs `--no-art` A/B** — the high-signal
-tool ([[project_artless_audio]]). Run the SAME probe with the framework UP: if the HAL
-streams there but aborts ART-off, it's a `--no-art` dependency the HAL needs at
-channel-start (a vendor daemon — perfd/cnd/sensor-cal — or framework state/property);
-identify + start/stub it. If it ALSO aborts under ART, it's our capture-request config
-(e.g. qcom HALs often want a PREVIEW stream alongside, or a metadata tag) — fix in the
-probe. Either way, characterize before patching. (Camera open + codec configure remain
-solved; this is purely the sensor-streaming step.)
+**A/B DONE (2026-06-06) — it's a `--no-art` dependency, confirmed.** Same probe
+(`--probe-video imagereader`), framework UP:
+
+| | camera → ImageReader (640×480 YUV) |
+|---|---|
+| ART up    | ✅ **145 frames in 5.0s = 29 fps**, 640×480, first-frame 181 ms |
+| `--no-art` | ❌ qcom HAL SIGABRT in `startChannelLocked` |
+
+The probe is correct (flawless under ART); the camera HAL aborts at sensor
+channel-start ONLY with the framework stopped — the task-87 pattern. So the remaining
+work is to identify the specific framework-provided dependency the qcom HAL needs at
+`startChannelLocked`. Leads to chase next (get the `--no-art` abort message +
+diff property/service access vs the working ART run):
+- **System properties** the HAL reads (seen in the ART run, harmless there but worth
+  checking ART-off values): `persist.vendor.camera.privapp.list`,
+  `ro.vendor.camera.res.fmq.size`, `service.bootanim.exit`, vendor camera props.
+- A **vendor daemon** normally (re)started in the framework boot path (perfd/cnd/
+  sensor-cal/`vendor.qti.*`) that the channel-start RPCs into.
+- Framework-set **camera state** (e.g. `cameraserver`↔framework `ICameraServiceProxy`
+  notifications, or a gralloc/usage flag only set with SF fully up).
+Method: under `--no-art`, capture the provider@2.4 tombstone **Abort message** +
+`strace`/property-access just before `startChannelLocked`, and diff vs the ART run.
+(Camera open + codec configure remain solved; this is purely sensor-streaming.)
 
 ## Net result of task 93 so far
 - Analysis: every native AV service for video calling exists under `--no-art`; HW VP8 present.
