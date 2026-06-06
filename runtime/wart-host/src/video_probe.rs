@@ -57,6 +57,8 @@ mod android {
     #[repr(C)] pub struct AMediaCodec { _p: [u8; 0] }
     #[repr(C)] pub struct AMediaFormat { _p: [u8; 0] }
     #[repr(C)] pub struct ANativeWindow { _p: [u8; 0] }
+    #[repr(C)] pub struct AImageReader { _p: [u8; 0] }
+    #[repr(C)] pub struct AImage { _p: [u8; 0] }
 
     #[repr(C)]
     struct ACameraIdList {
@@ -145,6 +147,17 @@ mod android {
         fn AMediaFormat_delete(f: *mut AMediaFormat) -> c_int;
         fn AMediaFormat_setString(f: *mut AMediaFormat, key: *const c_char, val: *const c_char);
         fn AMediaFormat_setInt32(f: *mut AMediaFormat, key: *const c_char, val: i32);
+        // AImageReader (also in libmediandk) — a camera target with EXPLICIT
+        // dimensions, to prove the camera delivers frames under --no-art (decisive
+        // test, sidestepping the encoder input-surface's 0x0 geometry).
+        fn AImageReader_new(width: i32, height: i32, format: i32, max_images: i32,
+            out: *mut *mut AImageReader) -> c_int;
+        fn AImageReader_getWindow(r: *mut AImageReader, out: *mut *mut ANativeWindow) -> c_int;
+        fn AImageReader_acquireLatestImage(r: *mut AImageReader, out: *mut *mut AImage) -> c_int;
+        fn AImageReader_delete(r: *mut AImageReader);
+        fn AImage_getWidth(img: *mut AImage, out: *mut i32) -> c_int;
+        fn AImage_getHeight(img: *mut AImage, out: *mut i32) -> c_int;
+        fn AImage_delete(img: *mut AImage);
     }
 
     #[link(name = "android")]
@@ -212,11 +225,121 @@ mod android {
             .skip_while(|a| a != "--probe-video")
             .nth(1)
             .filter(|s| !s.starts_with("--"));
+        // `--probe-video imagereader` → camera → AImageReader(YUV) frame-count test
+        // (proves camera delivery under --no-art with explicit dims).
+        if codec_name.as_deref() == Some("imagereader") {
+            p!("=== wart-host --probe-video — camera → AImageReader YUV ({W}x{H}) ===");
+            unsafe { run_imagereader(W, H) }
+            return;
+        }
         match &codec_name {
             Some(n) => p!("=== wart-host --probe-video — camera → encode via '{n}' ({W}x{H}) ==="),
             None => p!("=== wart-host --probe-video — camera → HW VP8 encode ({W}x{H}) ==="),
         }
         unsafe { run_inner(W, H, VP8, codec_name.as_deref()) }
+    }
+
+    const AIMAGE_FORMAT_YUV_420_888: i32 = 0x23;
+
+    // Decisive camera-delivery test: camera → AImageReader (explicit dims, no
+    // encoder). If frames arrive, camera capture works end-to-end under --no-art
+    // and the encoder-surface 0x0 was the only gap.
+    unsafe fn run_imagereader(w: i32, h: i32) {
+        let tp = start_binder_threadpool();
+        p!("binder threadpool started: {tp}");
+        let mgr = ACameraManager_create();
+        if mgr.is_null() { p!("FAIL: ACameraManager_create -> null"); return; }
+        let mut id_list: *mut ACameraIdList = ptr::null_mut();
+        if ACameraManager_getCameraIdList(mgr, &mut id_list) != ACAMERA_OK || id_list.is_null() {
+            p!("FAIL: getCameraIdList"); ACameraManager_delete(mgr); return;
+        }
+        let n = (*id_list).num_cameras;
+        p!("cameras visible: {n}");
+        if n <= 0 { cleanup_mgr(mgr, id_list); return; }
+        let cam_id_ptr = *(*id_list).camera_ids.add(0);
+        let cam_id = CStr::from_ptr(cam_id_ptr).to_string_lossy().into_owned();
+
+        p!("opening camera id={cam_id} …");
+        let dev_cbs = ACameraDeviceStateCallbacks { context: ptr::null_mut(), on_disconnected, on_error };
+        let mut device: *mut ACameraDevice = ptr::null_mut();
+        let ost = ACameraManager_openCamera(mgr, cam_id_ptr, &dev_cbs, &mut device);
+        if ost != ACAMERA_OK || device.is_null() {
+            p!("FAIL: openCamera status={ost}"); cleanup_mgr(mgr, id_list); return;
+        }
+        p!("camera OPENED ✓");
+
+        // AImageReader with EXPLICIT dims → its window has 640x480 (no 0x0).
+        let mut reader: *mut AImageReader = ptr::null_mut();
+        let rs = AImageReader_new(w, h, AIMAGE_FORMAT_YUV_420_888, 4, &mut reader);
+        if rs != AMEDIA_OK || reader.is_null() {
+            p!("FAIL: AImageReader_new status={rs}");
+            ACameraDevice_close(device); cleanup_mgr(mgr, id_list); return;
+        }
+        let mut win: *mut ANativeWindow = ptr::null_mut();
+        AImageReader_getWindow(reader, &mut win);
+        p!("AImageReader {w}x{h} YUV ready");
+
+        // Capture session → the ImageReader window.
+        let mut out: *mut ACaptureSessionOutput = ptr::null_mut();
+        let mut container: *mut ACaptureSessionOutputContainer = ptr::null_mut();
+        ACaptureSessionOutput_create(win, &mut out);
+        ACaptureSessionOutputContainer_create(&mut container);
+        ACaptureSessionOutputContainer_add(container, out);
+        let sess_cbs = ACameraCaptureSessionStateCallbacks {
+            context: ptr::null_mut(),
+            on_closed: on_session_noop, on_ready: on_session_noop, on_active: on_session_noop,
+        };
+        let mut session: *mut ACameraCaptureSession = ptr::null_mut();
+        let sst = ACameraDevice_createCaptureSession(device, container, &sess_cbs, &mut session);
+        if sst != ACAMERA_OK || session.is_null() {
+            p!("FAIL: createCaptureSession status={sst}");
+            AImageReader_delete(reader); ACameraDevice_close(device); cleanup_mgr(mgr, id_list); return;
+        }
+        let mut req: *mut ACaptureRequest = ptr::null_mut();
+        ACameraDevice_createCaptureRequest(device, TEMPLATE_RECORD, &mut req);
+        let mut target: *mut ACameraOutputTarget = ptr::null_mut();
+        ACameraOutputTarget_create(win, &mut target);
+        ACaptureRequest_addTarget(req, target);
+        let mut seq: c_int = 0;
+        let rst = ACameraCaptureSession_setRepeatingRequest(session, ptr::null(), 1, &mut req, &mut seq);
+        p!("repeating capture set (status={rst}); draining ImageReader ~5s …");
+
+        let start = Instant::now();
+        let mut frames = 0u64;
+        let mut first_ms: i128 = -1;
+        let mut dims = (0i32, 0i32);
+        while start.elapsed().as_secs() < 5 {
+            let mut img: *mut AImage = ptr::null_mut();
+            if AImageReader_acquireLatestImage(reader, &mut img) == AMEDIA_OK && !img.is_null() {
+                if first_ms < 0 { first_ms = start.elapsed().as_millis() as i128; }
+                if dims.0 == 0 { AImage_getWidth(img, &mut dims.0); AImage_getHeight(img, &mut dims.1); }
+                frames += 1;
+                AImage_delete(img);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+        let secs = start.elapsed().as_secs_f64();
+        p!("──────── RESULT ────────");
+        p!("camera-open    : OK ({n} cameras, id={cam_id})");
+        p!("captured frames: {frames} in {secs:.1}s = {:.1} fps", frames as f64 / secs);
+        p!("frame dims     : {}x{}", dims.0, dims.1);
+        p!("first-frame    : {first_ms} ms");
+        if frames > 0 {
+            p!("VERDICT: camera DELIVERS frames under --no-art ✓ — capture works end-to-end");
+        } else {
+            p!("VERDICT: still 0 frames even with explicit-dim ImageReader — deeper camera/session issue");
+        }
+        if CAM_ERROR.load(Relaxed) { p!("camera onError: code={}", CAM_ERR_CODE.load(Relaxed)); }
+
+        ACameraCaptureSession_stopRepeating(session);
+        ACameraCaptureSession_close(session);
+        ACaptureRequest_free(req);
+        ACameraOutputTarget_free(target);
+        ACaptureSessionOutputContainer_free(container);
+        ACaptureSessionOutput_free(out);
+        AImageReader_delete(reader);
+        ACameraDevice_close(device);
+        cleanup_mgr(mgr, id_list);
     }
 
     unsafe fn run_inner(w: i32, h: i32, vp8: &str, codec_name: Option<&str>) {

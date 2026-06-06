@@ -228,6 +228,33 @@ input buffers) instead of the zero-copy input Surface — gives explicit dimensi
 and is also what the WIT path wants (the host owns the YUV → VP8 step). The
 zero-copy Surface path can be revisited later as an optimization.
 
+## FRAME DELIVERY: vendor camera HAL crashes on stream-start under `--no-art`
+
+Decisive test (`--probe-video imagereader`, 2026-06-06): camera → **AImageReader**
+(`640×480 YUV_420_888`, explicit dims — sidesteps the encoder 0×0). Still **0
+frames**, but for a NEW reason: with correct dims the stream configures
+(`mm-camera: VIDEO hw_stream width 640, height 480`) and then the **Qualcomm camera
+HAL crashes** — `provider@2.4-service` (pid) takes `SIGABRT` inside
+`QCamera3HardwareInterface::startChannelLocked()` ← `process_capture_request`
+(`/vendor/lib/hw/camera.msm8998.so`, via `camera.device@3.4/3.5-impl.so`). cameraserver
+then sees `DEAD_OBJECT` / `Broken pipe (-32)` / `Shutting down in an error state` /
+`Stream 0 leaked`, and the BufferQueue is abandoned. The HAL respawns and
+re-enumerates fine, so it's a **deterministic crash on stream-start**, not a teardown
+race. (Also seen: an UNRELATED `storaged` SIGSEGV — a separate `--no-art` casualty.)
+
+So the encoder-surface 0×0 was real but secondary; the deeper wall is the **closed
+vendor camera HAL aborting when it starts the sensor channel ART-off** — beyond the
+binder stubs (can't patch `camera.msm8998.so`).
+
+**Next diagnostic (not a blind patch): ART-up vs `--no-art` A/B** — the high-signal
+tool ([[project_artless_audio]]). Run the SAME probe with the framework UP: if the HAL
+streams there but aborts ART-off, it's a `--no-art` dependency the HAL needs at
+channel-start (a vendor daemon — perfd/cnd/sensor-cal — or framework state/property);
+identify + start/stub it. If it ALSO aborts under ART, it's our capture-request config
+(e.g. qcom HALs often want a PREVIEW stream alongside, or a metadata tag) — fix in the
+probe. Either way, characterize before patching. (Camera open + codec configure remain
+solved; this is purely the sensor-streaming step.)
+
 ## Net result of task 93 so far
 - Analysis: every native AV service for video calling exists under `--no-art`; HW VP8 present.
 - Spike: camera OPEN + codec CONFIGURE both work `--no-art` after 4 `wart-activityms`
