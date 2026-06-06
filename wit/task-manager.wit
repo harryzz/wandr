@@ -1,0 +1,147 @@
+// war:task-manager — a guest-facing "running apps" / task-manager interface.
+//
+// Lets a guest (a Task Manager / System Monitor app) enumerate the apps the
+// runtime is currently running, see each one's kind (system vs user) and runtime
+// state (foreground/background/…), read its CPU + memory usage, and request that
+// an app be killed. The arbiter is the authority on the running-app set + roles
+// (it *is* the AMS); the host implements this interface by forwarding `list`/
+// `kill` to the arbiter and enriching each entry with a `/proc/<pid>` sample
+// (CPU jiffies, RSS/PSS, thread count) — the arbiter already touches `/proc`
+// (oom_score_adj, smaps_rollup), so nothing new is exposed to the guest beyond
+// what `wart-arbiter list` + a proc read already know.
+//
+// Separate package (like `war:alarm`, `war:connectivity`) so it doesn't touch the
+// shared `my:skiko-gfx` contract — no WIT-sync churn across every guest. A GUI
+// task-manager guest imports `task-manager` and also `include`s the `my:skiko-gfx`
+// surface world for rendering.
+
+package war:task-manager@0.1.0;
+
+/// Shared value types.
+interface types {
+    /// Where the app came from — its install class. `system` apps live under
+    /// `system-apps/` (chrome, IME, keyguard, launcher, library components);
+    /// `user` apps are genuine installed apps under `apps/`. Derived from the
+    /// install location / the app's `package.toml [package].kind`.
+    enum app-kind {
+        system,
+        user,
+    }
+
+    /// The app's current runtime role — what the arbiter has it doing right now
+    /// (a flattened, guest-facing view of the internal `Role`).
+    enum app-state {
+        /// The visible, focused app the user is interacting with.
+        foreground,
+        /// Alive but not visible (demoted; may be doing background work).
+        background,
+        /// A system overlay surface: status bar / taskbar / IME / keyguard.
+        overlay,
+        /// Running with no surface (background-execution / bg-tick only).
+        headless,
+    }
+
+    /// A point-in-time resource sample for one app process.
+    record resource-usage {
+        /// Recent CPU load in per-mille of a *single* core, averaged over the
+        /// runtime's sample window (so 1000 = one core fully busy; can exceed
+        /// 1000 on multiple cores). Computed from the delta of
+        /// `(utime+stime)` between samples — meaningful once the runtime has two
+        /// samples; the first read for a freshly seen pid reports 0.
+        cpu-permille: u32,
+        /// Cumulative CPU time the process has used since launch, milliseconds
+        /// (`(utime+stime)` converted from clock ticks). Monotonic per pid.
+        cpu-time-ms: u64,
+        /// Resident set size — physical RAM mapped by the process, KiB
+        /// (`/proc/<pid>/status` VmRSS). Overcounts pages shared with the
+        /// zygote/other apps via copy-on-write.
+        mem-rss-kb: u64,
+        /// Proportional set size — RSS with each shared page divided by the
+        /// number of sharers, KiB (`/proc/<pid>/smaps_rollup` Pss). The honest
+        /// per-app footprint given the zygote COW sharing; pricier to sample, so
+        /// `0` if the runtime skipped it this snapshot.
+        mem-pss-kb: u64,
+        /// Live thread count (`/proc/<pid>/status` Threads).
+        threads: u32,
+    }
+
+    /// One running app, as the task manager should display it.
+    record app-info {
+        /// Stable identity (e.g. `war.signal`, `com.example.wart-app`). The key
+        /// `kill-app` takes.
+        app-id: string,
+        /// Human-readable name from the app's `package.toml [package].label`,
+        /// falling back to `app-id`.
+        label: string,
+        /// OS process id of the running instance.
+        pid: u32,
+        /// System vs user app.
+        kind: app-kind,
+        /// Current runtime role.
+        state: app-state,
+        /// Wall-clock time since the app was launched, milliseconds.
+        uptime-ms: u64,
+        /// CPU + memory sample for this process.
+        usage: resource-usage,
+    }
+
+    /// Whole-device memory, for the task manager's header/summary
+    /// (`/proc/meminfo`). All KiB.
+    record system-memory {
+        /// Total usable RAM (`MemTotal`).
+        total-kb: u64,
+        /// RAM available for new allocations without swapping (`MemAvailable`).
+        available-kb: u64,
+        /// Sum of PSS across all wart app processes — how much the running app
+        /// set actually costs (0 if PSS wasn't sampled this snapshot).
+        wart-pss-kb: u64,
+    }
+
+    /// Why a kill request didn't take.
+    variant kill-error {
+        /// No running app with that `app-id`.
+        not-found,
+        /// A system-critical surface (launcher/keyguard/chrome) the runtime keeps
+        /// alive — the arbiter will immediately relaunch it, so the kill is
+        /// refused rather than thrashed. (Plain `system` apps are killable.)
+        protected,
+        /// The kill was attempted but failed; the string is a short reason.
+        failed(string),
+    }
+}
+
+/// Imported by a task-manager guest. The host implements it, forwarding the
+/// snapshot/kill to the arbiter (`list` / `kill`) and attaching the `/proc`
+/// resource sample. All calls are cheap, synchronous request/replies; a live
+/// task manager just polls `list-apps` on a timer (e.g. 1–2 s) — the CPU figures
+/// become meaningful from the second poll on.
+interface task-manager {
+    use types.{app-info, system-memory, kill-error};
+
+    /// Snapshot of every app the runtime is currently running, each with its
+    /// kind, state, uptime, and a CPU/memory sample. Ordered by the arbiter's
+    /// launch registry (stable across polls so a UI list doesn't jump).
+    list-apps: func() -> list<app-info>;
+
+    /// Whole-device memory summary for a header/gauge.
+    system-mem: func() -> system-memory;
+
+    /// Request that the app with `app-id` be terminated. Forwarded to the
+    /// arbiter, which kills the process and cleans up its surfaces/registrations
+    /// (the same path as `wart-arbiter kill`). Returns `ok` once requested;
+    /// `protected` for a runtime-managed system surface, `not-found` if it isn't
+    /// running.
+    kill-app: func(app-id: string) -> result<_, kill-error>;
+}
+
+/// World a task-manager guest implements: import the interface (and, for a GUI,
+/// also `include` the `my:skiko-gfx` surface world in its own `world`).
+world task-manager-client {
+    import task-manager;
+}
+
+/// Host-side import world — the runtime `add_to_linker`s `task-manager` (which it
+/// implements, forwarding to the arbiter + reading `/proc`) onto the guest linker.
+world task-manager-host {
+    import task-manager;
+}
