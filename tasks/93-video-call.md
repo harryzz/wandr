@@ -119,5 +119,45 @@ to open-camera-first to isolate it next.
 Spike artifacts committed: `video_probe.rs`, the `sf_start_binder_threadpool` shim
 entry, `build.rs` (camera2ndk/mediandk links), `--probe-video` dispatch.
 
+## IDENTIFIED BLOCKER + fixes to try (2026-06-06) — camera privacy/policy services
+
+Tracing the hang surfaced the privacy/permission angle: during the probe,
+**cameraserver logs `PermissionChecker: Waiting for permission checker service`**.
+`service check` confirms which `system_server`-hosted policy services are GONE
+under `--no-art` (and NOT in our task-87 stub set):
+
+| service | present? | who needs it |
+|---|---|---|
+| `permission_checker` (IPermissionChecker) | **missing** | cameraserver (observed wait); the modern AppOps-integrated permission check |
+| `appops` (IAppOpsService) | **missing** | camera/mic op gating (noteOp/checkOp CAMERA) |
+| `platform_compat` (IPlatformCompat) | **missing** | MediaCodec/Codec2 compat-change checks |
+| `device_policy` (IDevicePolicyManager) | missing | admin camera-disable (likely not critical) |
+| `permission`,`sensor_privacy`,`activity`,`scheduling_policy` | present | already stubbed (task 87, `wart-activityms`) |
+
+**Fixes to try, in priority order** (each = a new binder stub in
+`runtime/wart-activityms/cpp/wart_activityms.cpp`, the proven task-87 pattern —
+`addService` a `BnX` returning the allow/granted answer; built on a-03):
+
+1. **`permission_checker` / `IPermissionChecker`** — the directly-observed blocker.
+   Stub `checkPermission(...)`-family to return `PERMISSION_GRANTED`
+   (`PermissionChecker::PERMISSION_GRANTED = 0`). Highest-value first try.
+2. **`appops` / `IAppOpsService`** — stub `checkOperation`/`noteOperation`/
+   `startOperation` to return `MODE_ALLOWED (0)`, `checkPackage` OK. Camera+mic
+   attribution rides AppOps; very likely needed alongside #1.
+3. **`platform_compat` / `IPlatformCompat`** — if the codec `configure` still hangs
+   after #1/#2, stub `isChangeEnabled*` → false / no-op. Codec2/MediaCodec query
+   compat changes during configure.
+
+**Still to disentangle:** the probe currently creates+configures the encoder
+BEFORE opening the camera, so it's unclear whether `permission_checker`/`appops`
+is blocking the *codec configure* or only the *camera open*. Reorder the probe to
+**open-camera-first** (then encoder) to isolate which service each step needs —
+do this together with adding stub #1 so the next run shows real progress. The
+`permission_checker` wait is a certainty for camera `open()` regardless (risk #1).
+
+Method note: don't `pkill -9` a hung probe (wedges cameraserver — restart it
+between runs). Trace blockers via `cat /sys/kernel/debug/binder/proc/<pid>` +
+`logcat | grep -iE 'Waiting for|waitForService|PermissionChecker'`.
+
 See `wit/task-manager.wit` sibling-package style for `war:video`, `audio_impl.rs`
 (integration pattern), `external/rtc/rtc-rtp/src/codec/vp8` (packetizer).
