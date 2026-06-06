@@ -127,16 +127,44 @@ client's synchronous `onEvent` still delays delivery to the others. Now benign (
 latency, not a system freeze). A fuller fix (oneway `onEvent` / per-client draining)
 would need a platform-lib patch; deferred. The latent busy-spin trigger itself is C3.
 
-### C3 — Latent HANGUP busy-spin × non-reconnecting client cache — OPEN
-The AIDL `EventQueueLooperCallback::handleEvent` (`aidl/EventQueue.cpp`) has **no
-`ALOOPER_EVENT_HANGUP` / `read()<0` guard** (unlike `SensorEventQueue::waitForEvent`,
-`libs/sensor/SensorEventQueue.cpp:134`), so a dead BitTube fd stays level-triggered
-readable and the shared RT thread busy-spins. Compounding it, `wart-hal-sensors`
-caches the event queue on success and **never rebuilds** (`src/lib.rs:173`), so after
-a sensorservice restart a stale dead queue would spin forever. Latent — not observed
-in current runs (strace showed normal `EAGAIN` draining, never `recvfrom`=0). Fix:
-add the HANGUP guard (return 0 to drop the fd) in the vendored callback + recreate the
-queue client-side on stall.
+### C3 — Latent HANGUP busy-spin × non-reconnecting client cache — 🟡 PARTIAL (cache half RESOLVED + device-verified 2026-06-07)
+Two coupled problems:
+- **Non-reconnecting client cache:** `wart-hal-sensors` cached the resolved
+  `ISensorManager` + event queue on success and **never rebuilt** them, so after a
+  `wart-sensormanager` restart the arbiter/host latched a dead handle → sensors
+  silently dead forever (until a full stack re-bringup).
+- **Server busy-spin:** the AIDL `EventQueueLooperCallback::handleEvent`
+  (`aidl/EventQueue.cpp`) has **no `ALOOPER_EVENT_HANGUP`/`read()<0` guard** (unlike
+  `SensorEventQueue::waitForEvent`, `libs/sensor/SensorEventQueue.cpp:134`), so a dead
+  BitTube fd stays level-triggered readable and the poll thread busy-loops.
+
+**Fixed (2026-06-07) — cache half:** `wart-hal-sensors` now `ping_binder`s the cached
+`ISensorManager` and event-queue handles (the established audio_impl.rs pattern) and,
+on death, re-resolves the service + recreates the queue, **replaying the desired
+enabled-sensor set** onto the fresh queue (tracked in `enabled_sensors()`). New
+`ensure_connected()` is called each tick by the arbiter sensor-driver
+(`sensor_driver.rs`) so recovery happens with no re-bringup. Files:
+`runtime/wart-hal-sensors/src/lib.rs`, `runtime/wart-arbiter/wart-arbiter-bin/src/sensor_driver.rs`.
+
+Recreating the client queue also drops the stale server-side `EventQueue` (its dtor
+`removeFd`s the hung fd from the shared looper), so this **also stops the server spin
+for the wart-sensormanager-restart case**.
+
+**Device-verified (2026-06-07):** killed `wart-sensormanager` under a live arbiter →
+logcat `event queue dead — recreating + replaying enables` / `ISensorManager handle
+dead … re-resolving` → after the new instance registered, `event queue created
+(replayed 1 enables)`; `dumpsys sensorservice` showed the arbiter's Device Orientation
+connection back, `active-count = 1` — all without a stack re-bringup.
+
+**Residual (OPEN):** a `sensorservice` restart (wart-sensormanager stays up, its
+*internal* BitTube to sensorservice hangs up) still trips the unguarded
+`handleEvent` → the poll thread spins. Now **benign** (C2 made it SCHED_OTHER — wastes
+one core's slice, no freeze), and the client can't detect it (its proxy to
+wart-sensormanager is still alive). The complete fix is the `ALOOPER_EVENT_HANGUP`
+guard in the vendored `EventQueue.cpp` → rebuild `libsensorserviceaidl` on a-03 +
+side-load via `LD_LIBRARY_PATH` on the wart-sensormanager launch. Deferred (platform-lib
+ship; low urgency post-C2). Note: the spin was never reproduced in practice (strace
+showed normal `EAGAIN` draining, never `recvfrom`=0).
 
 ### C4 — Cross-path HAL perturbation onto the camera — OPEN
 The wart AIDL consumers and the camera's timing-sensitive EIS gyro share the one
