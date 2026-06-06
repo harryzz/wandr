@@ -26,11 +26,17 @@ Five new pieces, all device-verified, take the camera from "can't open" to
 
 **Runtime recipe (camera under `--no-art`):** the 4 stubs (wart-activityms) +
 `sensorservice` (owns the sensors HAL, registers `sensorservice`) +
-`wart-sensormanager` (registers the HIDL `ISensorManager` on top). NOTE the
-sensors-HAL ownership: `sensorservice` now owns the single-client HAL, so the
-task-85 `wart-sensors` daemon must be reshaped to consume `sensorservice`'s
-`ISensorManager` instead of the HAL directly (the auto-rotation path) — the one
-integration follow-up.
+`wart-sensormanager` (registers the HIDL `ISensorManager` on top).
+
+> ‼️ **PREREQUISITE — `tasks/94-wart-sensors-refactor-for-sensorservice.md`.** The
+> sensors HAL (`ISensors@1.0`) is single-client. `sensorservice` MUST own it (only
+> it provides the `ISensorManager` the camera needs), but the task-85 `wart-sensors`
+> daemon currently opens that HAL DIRECTLY → they can't coexist (device-confirmed
+> `DEAD_OBJECT` abort). **Task 94 refactors `wart-sensors` to read sensors *through*
+> `sensorservice` (libsensor client) instead of the HAL** — required before the
+> camera path can run alongside wart's auto-rotation / proximity / auto-brightness.
+> Until then, the camera helpers + wart-sensors are mutually exclusive (the probe
+> ran with wart-sensors stopped).
 
 > (Original analysis + spike narrative follows.)
 
