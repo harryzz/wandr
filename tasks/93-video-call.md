@@ -159,5 +159,36 @@ Method note: don't `pkill -9` a hung probe (wedges cameraserver — restart it
 between runs). Trace blockers via `cat /sys/kernel/debug/binder/proc/<pid>` +
 `logcat | grep -iE 'Waiting for|waitForService|PermissionChecker'`.
 
+## CAMERA-OPEN STUB CHAIN (2026-06-06, in progress) — peeling the privacy/policy layers
+
+Probe reordered **open-camera-first** (`video_probe.rs`) to isolate the camera-open
+gate from the codec. Each `system_server` service cameraserver needs is being
+stubbed in `wart-activityms` (the proven task-87 pattern). Progress, layer by layer
+(each verified on device by the error CHANGING):
+
+1. ✅ **`permission_checker`** (IPermissionChecker) — was: `openCamera` HANGS
+   ("Waiting for permission checker service"). Stub (GenericStub, descriptor
+   `android.permission.IPermissionChecker`) → hang gone; `openCamera` now *returns*.
+2. ✅ **`media.camera.proxy`** (ICameraServiceProxy) — was: `-10012
+   PERMISSION_DENIED`, "Camera disabled by device policy".
+   `CameraServiceProxyWrapper::isCameraDisabled` FAIL-CLOSES (`proxyBinder==nullptr
+   → return true`). Stub (GenericStub, `android.hardware.ICameraServiceProxy`;
+   `boolean isCameraDisabled(int)` reads `writeInt32(0)`=false → enabled) → policy
+   check passes; error moved on.
+3. 🔲 **`processinfo`** (IProcessInfoService) — NOW: `-10000`, cameraserver
+   `getProcessStatesScoresImpl: Could not retrieve process states and scores from
+   ProcessInfoService after 5 retries` → `handleEvictionsLocked: Priority score
+   query failed: -110` (timeout) → `connectHelper: Connection timed out`. The
+   camera eviction logic queries `processinfo`. **Needs a CUSTOM stub** (not the
+   blanket GenericStub): `void getProcessStatesAndOomScoresFromPids(in int[] pids,
+   out int[] states, out int[] scores)` — read the input pids (count N) and reply
+   `writeNoException` + `states[N]` (e.g. PROCESS_STATE_TOP) + `scores[N]` (e.g. 0).
+   Code 2 (FIRST_CALL+1). Descriptor `android.os.IProcessInfoService`.
+
+Remaining-after-3 unknowns: AppOps (`appops`) for the data-delivery/attribution
+path may surface once open passes; the CODEC `configure` block (pre-reorder) is
+still separately unconfirmed (may share these stubs or need its own). Camera open
+is close — 2 layers down, ≥1 (processinfo) to go.
+
 See `wit/task-manager.wit` sibling-package style for `war:video`, `audio_impl.rs`
 (integration pattern), `external/rtc/rtc-rtp/src/codec/vp8` (packetizer).

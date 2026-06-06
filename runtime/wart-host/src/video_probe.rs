@@ -246,7 +246,25 @@ mod android {
         let cam_id_ptr = *(*id_list).camera_ids.add(0);
         let cam_id = CStr::from_ptr(cam_id_ptr).to_string_lossy().into_owned();
 
-        // 2. VP8 encoder + input surface (color-format = Surface).
+        // 2. Open the camera FIRST (reordered) — isolates the camera-open
+        //    permission path (risk #1; the permission_checker stub) from the codec
+        //    configure. If open blocks here, it's the camera privacy gate; if it
+        //    succeeds and the encoder step blocks, that's a separate codec dependency.
+        p!("opening camera id={cam_id} …");
+        let dev_cbs = ACameraDeviceStateCallbacks {
+            context: ptr::null_mut(), on_disconnected, on_error,
+        };
+        let mut device: *mut ACameraDevice = ptr::null_mut();
+        let ost = ACameraManager_openCamera(mgr, cam_id_ptr, &dev_cbs, &mut device);
+        if ost != ACAMERA_OK || device.is_null() {
+            p!("FAIL: openCamera(id={cam_id}) status={ost} \
+                — camera open BLOCKED under this runtime (permission/AppOps?)");
+            cleanup_mgr(mgr, id_list);
+            return;
+        }
+        p!("camera OPENED id={cam_id} (status={ost}) ✓  — open works under --no-art");
+
+        // 3. VP8 encoder + input surface (color-format = Surface).
         let codec = match codec_name {
             Some(name) => {
                 p!("creating encoder by name '{name}' …");
@@ -261,7 +279,7 @@ mod android {
         };
         if codec.is_null() {
             p!("FAIL: encoder create -> null (no such VP8 encoder?)");
-            cleanup_mgr(mgr, id_list);
+            ACameraDevice_close(device); cleanup_mgr(mgr, id_list);
             return;
         }
         p!("encoder created; configuring {w}x{h} …");
@@ -276,7 +294,7 @@ mod android {
         let cfg = AMediaCodec_configure(codec, fmt, ptr::null_mut(), ptr::null_mut(), CONFIGURE_FLAG_ENCODE);
         if cfg != AMEDIA_OK {
             p!("FAIL: AMediaCodec_configure status={cfg}");
-            AMediaFormat_delete(fmt); AMediaCodec_delete(codec); cleanup_mgr(mgr, id_list);
+            AMediaFormat_delete(fmt); AMediaCodec_delete(codec); ACameraDevice_close(device); cleanup_mgr(mgr, id_list);
             return;
         }
         p!("configured; creating input surface …");
@@ -284,31 +302,16 @@ mod android {
         let isc = AMediaCodec_createInputSurface(codec, &mut win);
         if isc != AMEDIA_OK || win.is_null() {
             p!("FAIL: createInputSurface status={isc}");
-            AMediaFormat_delete(fmt); AMediaCodec_delete(codec); cleanup_mgr(mgr, id_list);
+            AMediaFormat_delete(fmt); AMediaCodec_delete(codec); ACameraDevice_close(device); cleanup_mgr(mgr, id_list);
             return;
         }
         p!("input surface ready; starting encoder …");
         if AMediaCodec_start(codec) != AMEDIA_OK {
             p!("FAIL: AMediaCodec_start");
-            ANativeWindow_release(win); AMediaFormat_delete(fmt); AMediaCodec_delete(codec); cleanup_mgr(mgr, id_list);
+            ANativeWindow_release(win); AMediaFormat_delete(fmt); AMediaCodec_delete(codec); ACameraDevice_close(device); cleanup_mgr(mgr, id_list);
             return;
         }
         p!("VP8 encoder configured + started; input surface ready");
-
-        // 3. Open the camera — the RISK-1 question.
-        let dev_cbs = ACameraDeviceStateCallbacks {
-            context: ptr::null_mut(), on_disconnected, on_error,
-        };
-        let mut device: *mut ACameraDevice = ptr::null_mut();
-        let ost = ACameraManager_openCamera(mgr, cam_id_ptr, &dev_cbs, &mut device);
-        if ost != ACAMERA_OK || device.is_null() {
-            p!("FAIL: openCamera(id={cam_id}) status={ost} \
-                — camera open BLOCKED under this runtime (permission/AppOps?)");
-            ANativeWindow_release(win); AMediaCodec_stop(codec); AMediaCodec_delete(codec);
-            AMediaFormat_delete(fmt); cleanup_mgr(mgr, id_list);
-            return;
-        }
-        p!("camera OPENED id={cam_id} (status={ost}) ✓  — open works under --no-art");
 
         // 4. Capture session → the encoder's input surface.
         let mut out: *mut ACaptureSessionOutput = ptr::null_mut();

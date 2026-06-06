@@ -189,6 +189,26 @@ int main() {
         // writeNoException()+writeInt32(0) decodes as getPackagesForUid's empty
         // Vector<String16>, which checkAttributionSourcePackage handles fine.
         {"permission", "android.os.IPermissionController"},
+        // Camera/codec path (task 93): cameraserver's AttributionAndPermissionUtils
+        // -> PermissionChecker (frameworks/native/libs/permission) blocks on
+        // `getService("permission_checker")` when system_server's
+        // PermissionCheckerService is gone (device-confirmed: cameraserver logs
+        // "PermissionChecker: Waiting for permission checker service"). The
+        // IPermissionChecker methods we hit return an int: checkPermission/checkOp
+        // -> PERMISSION_GRANTED (0); finishDataDelivery is void. GenericStub's
+        // writeNoException()+writeInt32(0) is exactly PERMISSION_GRANTED, so a single
+        // generic stub unblocks the camera (and the codec attribution path).
+        {"permission_checker", "android.permission.IPermissionChecker"},
+        // Camera open (task 93): CameraService::connectDeviceImpl ->
+        // CameraServiceProxyWrapper::isCameraDisabled does
+        // `checkService("media.camera.proxy")` and FAIL-CLOSES — `if (proxyBinder
+        // == nullptr) return true` (camera DISABLED) — when system_server's
+        // ICameraServiceProxy is gone (device-confirmed: "Camera disabled by device
+        // policy", openCamera -> ACAMERA_ERROR_PERMISSION_DENIED -10012). Registering
+        // a stub makes the proxy non-null; `boolean isCameraDisabled(int)` then
+        // reads GenericStub's writeInt32(0) = false → camera ENABLED. Its other
+        // methods are oneway void (reply ignored).
+        {"media.camera.proxy", "android.hardware.ICameraServiceProxy"},
     };
     for (const auto& g : generics) {
         status_t s = sm->addService(String16(g.name), sp<GenericStub>::make(g.descriptor));
