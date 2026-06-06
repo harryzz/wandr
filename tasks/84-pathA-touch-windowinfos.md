@@ -1,5 +1,16 @@
 # Task 84 — Path-A app touch/key routing under ART-off (SF WindowInfos → our dispatcher)
 
+> Follow-up fix (2026-06-06, commit 735a0b9d): **first-launch dead input**. A
+> freshly launched app was unresponsive until backgrounded+foregrounded from the
+> taskbar. Race: the arbiter authors+pushes the input-window list at `launch`, but
+> the forked host registers its window token with `wart.windowreg` ~70 ms LATER
+> (after EGL surface + input channel). `feed_window_block` skips a pid with no
+> token, and nothing re-pushed until the next arbiter command (the foreground
+> round-trip). Fix in wart-inputflinger: cache the last block + have `TX_REGISTER`
+> call `refeed_last_block()` so the window is delivered the instant its token
+> registers. Device-verified: fresh apps responsive on first tap. (`g_feed_mtx`
+> serializes listener vs. binder re-feed; re-feed passes cache=false.)
+
 > Status: ✅ DONE + device-verified, PORTRAIT **and LANDSCAPE** (Pixel 2 XL,
 > 2026-06-04). Solved via **Option 3, arbiter-driven**: the wart-arbiter (the WMS)
 > authors the ordered input-window list and pushes it to wart-inputflinger, which
