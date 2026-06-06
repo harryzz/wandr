@@ -305,6 +305,20 @@ struct WinTokens {
 static std::mutex g_win_mtx;
 static std::map<int32_t, WinTokens> g_win_tokens;
 
+// Last complete window block the arbiter pushed, cached so a token that registers
+// AFTER the block referencing its pid (the common case at launch — the arbiter
+// authors the window before the forked host has created its input channel) can be
+// re-applied. Without this re-feed the freshly launched app's window stays skipped
+// (feed_window_block drops pids with no token) until the next arbiter push, i.e.
+// the user has to background+foreground the app to get input. `g_block_mtx` guards
+// the cache; `g_feed_mtx` serializes the dispatch itself (the listener thread and
+// the binder re-feed below both call feed_window_block).
+static std::mutex g_block_mtx;
+static std::vector<std::string> g_last_block;
+static InputManagerInterface* g_last_im = nullptr;
+static std::mutex g_feed_mtx;
+static void refeed_last_block();  // defined below feed_window_block
+
 static void wart_register_token(int32_t pid, const sp<IBinder>& token) {
     std::lock_guard<std::mutex> lk(g_win_mtx);
     WinTokens& e = g_win_tokens[pid];
@@ -331,7 +345,13 @@ public:
             case TX_REGISTER: {
                 int32_t pid = data.readInt32();
                 sp<IBinder> token = data.readStrongBinder();
-                if (token != nullptr) wart_register_token(pid, token);
+                if (token != nullptr) {
+                    wart_register_token(pid, token);
+                    // The arbiter likely authored this pid's window before we had
+                    // its token (it was skipped). Re-apply the last block now so
+                    // the app gets input immediately, with no foreground round-trip.
+                    refeed_last_block();
+                }
                 return OK;
             }
             case TX_UNREGISTER:
@@ -351,9 +371,23 @@ public:
 //   win-focus <pid|-1>
 //   win-commit
 // Each window's token is looked up by pid; a window whose host hasn't registered
-// its token yet is skipped (it'll appear on the next push after registration).
+// its token yet is skipped — but the block is cached and TX_REGISTER re-applies it
+// via refeed_last_block() the moment that token arrives, so the window appears
+// without waiting for the next arbiter push (a background+foreground round-trip).
 static void feed_window_block(InputManagerInterface* im,
-                              const std::vector<std::string>& lines) {
+                              const std::vector<std::string>& lines,
+                              bool cache = true) {
+    // Serialize dispatch: the window-feed listener thread and the binder re-feed
+    // (refeed_last_block, from a token registration) can both land here.
+    std::lock_guard<std::mutex> feed_lk(g_feed_mtx);
+    // Cache this block so a late token registration can re-apply it. The re-feed
+    // itself passes cache=false so it can't revert the cache to a stale block if a
+    // newer arbiter push raced in between its copy and this dispatch.
+    if (cache) {
+        std::lock_guard<std::mutex> lk(g_block_mtx);
+        g_last_im = im;
+        g_last_block = lines;
+    }
     std::vector<gui::WindowInfo> wins;
     std::map<int32_t, bool> seen;  // dedup pids — the dispatcher rejects dup window ids
     int32_t focus_pid = -1;
@@ -434,6 +468,22 @@ static void feed_window_block(InputManagerInterface* im,
             im->getDispatcher().setFocusedWindow(fr);
         }
     }
+}
+
+// Re-apply the last authored window block — called when a host registers its
+// window token, which may have arrived after the arbiter pushed the block that
+// referenced that pid (so the window was skipped). Re-running the feed now picks
+// the pid up via the (now-present) token. Copies the cache out before dispatch so
+// it doesn't hold g_block_mtx across feed_window_block.
+static void refeed_last_block() {
+    InputManagerInterface* im;
+    std::vector<std::string> block;
+    {
+        std::lock_guard<std::mutex> lk(g_block_mtx);
+        im = g_last_im;
+        block = g_last_block;
+    }
+    if (im != nullptr && !block.empty()) feed_window_block(im, block, /*cache=*/false);
 }
 
 // Listen on the arbiter→inputflinger window-feed socket. The arbiter pushes one
