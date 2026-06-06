@@ -258,6 +258,16 @@ int main() {
         // reads GenericStub's writeInt32(0) = false → camera ENABLED. Its other
         // methods are oneway void (reply ignored).
         {"media.camera.proxy", "android.hardware.ICameraServiceProxy"},
+        // Codec configure (task 93): MediaCodec::connectFormatShaper does
+        // `waitForService("package_native")` (BLOCKS forever until registered) and
+        // then `IPackageManagerNative::hasSystemFeature(name, ver, out bool)` only to
+        // guess if the device is "handheld" for format-shaping — the answer isn't
+        // load-bearing for configure (device-confirmed: AMediaCodec_configure hangs,
+        // probe pid retrying `package_native` 14×, service not found). A GenericStub
+        // unblocks the wait; its writeNoException()+writeInt32(0) reads as Status OK +
+        // hasFeature=false (→ shaper treats us as not-handheld, harmless), so configure
+        // proceeds. (MediaCodec.cpp:2681; descriptor = the stable-AIDL package.name.)
+        {"package_native", "android.content.pm.IPackageManagerNative"},
     };
     for (const auto& g : generics) {
         status_t s = sm->addService(String16(g.name), sp<GenericStub>::make(g.descriptor));
