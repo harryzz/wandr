@@ -431,6 +431,16 @@ void update_input_window_bounds(const Rect& rect) {
 
 extern "C" {
 
+// Start the process-wide C++ libbinder threadpool. Needed by any in-process C++
+// binder CLIENT that receives callbacks — e.g. the NDK Camera2 client
+// (libcamera2ndk uses C++ libbinder, NOT libbinder_ndk; rsbinder's threadpool is a
+// separate context and does not service it). Idempotent; safe to call before any
+// camera/codec use (task 93). The surface entry points below already call this,
+// but a non-surface caller (the video probe) needs it standalone.
+void sf_start_binder_threadpool() {
+    ProcessState::self()->startThreadPool();
+}
+
 // Allocate a fullscreen, top-z-order SurfaceControl from SurfaceFlinger and
 // return its ANativeWindow* (a libgui Surface; the caller drives EGL on it).
 // Writes the portrait logical dimensions to out_w/out_h and the SurfaceFlinger

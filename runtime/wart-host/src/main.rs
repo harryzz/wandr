@@ -109,6 +109,16 @@ fn main() {
         return;
     }
 
+    // Task-93 video spike: open the camera + HW VP8-encode its frames under
+    // --no-art, report fps / first-frame latency. `wart-host --probe-video`.
+    if args.iter().any(|a| a == "--probe-video") {
+        android_logger::init_once(
+            android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
+        );
+        wasm_android_host::video_probe::probe_video();
+        return;
+    }
+
     // Task-76 P8 volume probe: read media volume range + speaker/earpiece index,
     // set speaker to max, read back, restore. Proves the write path.
     if args.iter().any(|a| a == "--probe-audio-volume") {

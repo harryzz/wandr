@@ -82,6 +82,11 @@ fn main() {
         println!("cargo:rustc-link-lib=GLESv2");
         println!("cargo:rustc-link-lib=dl");
         println!("cargo:rustc-link-lib=binder_ndk");
+        // Task 93 — `--probe-video` (camera → HW VP8 encode) via the NDK C APIs.
+        // These NDK libs are themselves the binder clients to cameraserver /
+        // media.codec, so the camera/codec path needs no AIDL vendoring.
+        println!("cargo:rustc-link-lib=camera2ndk");
+        println!("cargo:rustc-link-lib=mediandk");
 
         // ── rsbinder-aidl codegen for vendored AOSP HALs ─────────────────────
         // Vendored under vendor/aosp-hardware-interfaces/ as a shallow
