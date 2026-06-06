@@ -106,6 +106,29 @@ So **wart-sensors stops touching the HAL** and reads sensors *through* sensorser
 - Device A/B as in task 93: rotate / cover-proximity / lux-change while
   `--probe-video imagereader` streams — both must work together.
 
+## ‼️ KNOWN BUG (2026-06-06) — AIDL `SensorManagerAidl` event-queue spins 100% CPU
+
+When the **arbiter actively consumes** sensors via the AIDL
+`android.frameworks.sensorservice.ISensorManager` (this build's `wart-sensormanager`
+registers HIDL **and** AIDL), a **wart-sensormanager binder thread busy-loops at ~100%
+CPU** (device-confirmed: `binder:<pid>_1`, huge utime+stime). Root cause: the AIDL
+`SensorManagerAidl` **`createEventQueue` poll thread under the fakeVM (null `JNIEnv`)** —
+its looper `pollOnce` returns immediately instead of blocking on the sensor BitTube fd,
+so it spins. The **camera never hit this** (camera EIS uses the HIDL **direct channel**,
+no poll thread); only the **event-queue** path the arbiter sensor-driver uses trips it.
+
+Consequence: the current task-94 stack is **not deployable as-is** — bringing up
+arbiter + AIDL wart-sensormanager pins a core, and bad proximity readings make the power
+module flap `set_display_power`. (Also: restarting the arbiter alone orphans the
+wart-inputflinger window registration → touch dies; needs a full re-bringup or the
+`refeed_last_block` path — see `[[project_pathA_inputflinger]]`.)
+
+**Fix before landing:** give the fakeVM poll thread a real blocking looper (proper
+`ALooper`/fd wait), or pump the AIDL event queue directly from the BitTube fd without
+the libsensorservice poll-thread JNI path, or gate the arbiter to HIDL
+`createDirectChannel`. Until fixed, use the **HIDL-only nullptr wart-sensormanager** for
+camera work (no AIDL consumer → no spin). Tracked alongside `tasks/95-*` (gyro race).
+
 See `[[project_artless_camera]]` (task 93), `[[project_artless_sensors]]` (task 85),
 `[[project_proximity_screen_off]]` (task 78), `[[project_artless_autobrightness]]`
 (task 86), `runtime/wart-sensors/`, `runtime/wart-sensormanager/`.
