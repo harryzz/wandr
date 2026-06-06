@@ -1,6 +1,40 @@
 # Task 93 — Video calls (AV gap to a full Signal app)
 
-> Status: 🟡 ANALYSIS + SPIKE. Audio calls work (tasks 75/87/91); video is the
+> Status: ✅ CAMERA CAPTURE WORKS under `--no-art` (2026-06-06, device-verified:
+> **28.8 fps, 640×480 YUV** via `--probe-video imagereader`). Camera open + codec
+> configure + sensor-stream-start all solved. Remaining = pure integration (no
+> `--no-art` blockers): encode-feed, decode, WIT + wart-call video track.
+
+## ✅ SOLVED: full `--no-art` camera capture chain (2026-06-06)
+
+Five new pieces, all device-verified, take the camera from "can't open" to
+**28.8 fps capture** with the Java framework stopped (matches ART's 29 fps):
+
+1. **`permission_checker`** stub (wart-activityms) — camera-open permission gate.
+2. **`media.camera.proxy`** stub — `isCameraDisabled` fail-closed → device-policy.
+3. **`processinfo`** custom stub — camera eviction priority query.
+4. **`package_native`** stub — codec `configure` (`connectFormatShaper`).
+5. **`wart-sensormanager`** (NEW C++ service, `runtime/wart-sensormanager/`) —
+   registers `android.frameworks.sensorservice@1.0::ISensorManager`, which
+   system_server normally publishes (`new SensorManager(vm)`). The qcom camera
+   HAL's **EIS** (video stabilization) needs the gyro via `ISensorManager`;
+   without it `startChannelLocked` SIGABRTs (`mct_controller_proc_serv_msg:
+   Timedout in processing HAL command type=1`). Runs alongside the standalone
+   `/system/bin/sensorservice` (which our `package_native` stub un-hung — the
+   task-85 blocker). `SensorManager(nullptr)` JavaVM is fine (only `createEventQueue`
+   touches it; EIS uses direct channels).
+
+**Runtime recipe (camera under `--no-art`):** the 4 stubs (wart-activityms) +
+`sensorservice` (owns the sensors HAL, registers `sensorservice`) +
+`wart-sensormanager` (registers the HIDL `ISensorManager` on top). NOTE the
+sensors-HAL ownership: `sensorservice` now owns the single-client HAL, so the
+task-85 `wart-sensors` daemon must be reshaped to consume `sensorservice`'s
+`ISensorManager` instead of the HAL directly (the auto-rotation path) — the one
+integration follow-up.
+
+> (Original analysis + spike narrative follows.)
+
+> Earlier status: 🟡 ANALYSIS + SPIKE. Audio calls work (tasks 75/87/91); video is the
 > remaining AV gap. This task scopes what's needed and de-risks it with a
 > `wart-host --probe-video` camera→HW-VP8 spike. Analysis 2026-06-06.
 

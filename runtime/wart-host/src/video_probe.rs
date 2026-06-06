@@ -94,6 +94,10 @@ mod android {
     const AMEDIA_OK: c_int = 0;
     // ACameraDevice_request_template
     const TEMPLATE_RECORD: c_int = 3;
+    // TEMPLATE_PREVIEW (=1) avoids the qcom HAL's video-stabilization (EIS) path,
+    // which needs the gyro via android.frameworks.sensorservice.ISensorManager
+    // (gone under --no-art → HAL SIGABRT at startChannelLocked). task 93.
+    const TEMPLATE_PREVIEW: c_int = 1;
     // MediaCodec
     const COLOR_FORMAT_SURFACE: i32 = 0x7F00_0789; // COLOR_FormatSurface
     const CONFIGURE_FLAG_ENCODE: u32 = 1;
@@ -466,7 +470,7 @@ mod android {
 
         // 5. Repeating RECORD request targeting the same surface.
         let mut req: *mut ACaptureRequest = ptr::null_mut();
-        ACameraDevice_createCaptureRequest(device, TEMPLATE_RECORD, &mut req);
+        ACameraDevice_createCaptureRequest(device, TEMPLATE_PREVIEW, &mut req);
         let mut target: *mut ACameraOutputTarget = ptr::null_mut();
         ACameraOutputTarget_create(win, &mut target);
         ACaptureRequest_addTarget(req, target);
