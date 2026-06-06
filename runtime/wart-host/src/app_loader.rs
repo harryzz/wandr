@@ -328,15 +328,31 @@ pub struct WartLoader {
     pub root: PathBuf,
 }
 
-/// Convenience entry point. Default root is `/data/wart/apps` (the
-/// scoped registry root). Smoke / dev override via `WART_APPS_ROOT`
-/// env var — useful on un-sepolicy'd devices where `/data/wart/` is
-/// not writable from a `su` shell.
-pub fn default_for_target() -> WartLoader {
-    let root = std::env::var("WART_APPS_ROOT")
+/// The single source of truth for the on-device app-registry root path. Used
+/// as the fallback default when `WART_APPS_ROOT` is unset.
+///
+/// `/data/local/tmp/wart-apps` is the world-readable path **every** launcher
+/// actually uses on this rooted device — `run-hybrid-stack.sh`, the magisk
+/// module, and the build/smoke scripts all set `WART_APPS_ROOT` to it, and the
+/// live stack (zygote + installer + loader) reads from it. Keeping the in-code
+/// default equal to that value means a bare `wart-host --install` (no env) lands
+/// in the same place the running stack reads, instead of a stray
+/// `/data/wart/apps` nothing consults. Override with `WART_APPS_ROOT` for a
+/// sepolicy'd production root or a test sandbox.
+pub const DEFAULT_APPS_ROOT: &str = "/data/local/tmp/wart-apps";
+
+/// Resolve the app-registry root: `WART_APPS_ROOT` if set, else
+/// [`DEFAULT_APPS_ROOT`]. The one place the env var name + default live; every
+/// loader / installer / zygote / launcher call site resolves through here.
+pub fn apps_root() -> PathBuf {
+    std::env::var("WART_APPS_ROOT")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/data/wart/apps"));
-    WartLoader { root }
+        .unwrap_or_else(|_| PathBuf::from(DEFAULT_APPS_ROOT))
+}
+
+/// Convenience entry point — a loader rooted at [`apps_root`].
+pub fn default_for_target() -> WartLoader {
+    WartLoader { root: apps_root() }
 }
 
 impl AppLoader for WartLoader {

@@ -61,10 +61,7 @@ pub struct WartInstaller {
 }
 
 pub fn default_for_target() -> WartInstaller {
-    let root = std::env::var("WART_APPS_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/data/wart/apps"));
-    WartInstaller { root }
+    WartInstaller { root: crate::app_loader::apps_root() }
 }
 
 impl AppInstaller for WartInstaller {

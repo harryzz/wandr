@@ -282,9 +282,7 @@ pub fn serve(preload_app_id: Option<&str>) -> Result<()> {
     // here — they wait for an explicit `PRELOAD <app-id>` socket
     // command from the arbiter / installer / tests (see
     // `handle_one`).
-    let apps_root = std::env::var("WART_APPS_ROOT")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("/data/wart/apps"));
+    let apps_root = crate::app_loader::apps_root();
     let preloaded = crate::preload::preload_all_system_apps(
         PRELOADED_ENGINE.get().expect("engine just set"),
         &apps_root,
@@ -582,9 +580,7 @@ fn handle_preload(stream: &mut UnixStream, rest: &str) -> Result<()> {
         let _ = writeln!(stream, "ERR preload-empty-app-id");
         return Err(anyhow!("PRELOAD: empty app-id"));
     }
-    let apps_root = std::env::var("WART_APPS_ROOT")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("/data/wart/apps"));
+    let apps_root = crate::app_loader::apps_root();
     let engine = PRELOADED_ENGINE.get().expect("PRELOADED_ENGINE not set in PRELOAD handler");
     match crate::preload::preload_either(engine, &apps_root, app_id) {
         Ok((kind, n)) => {

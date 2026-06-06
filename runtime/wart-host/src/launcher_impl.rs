@@ -11,7 +11,7 @@
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::bindings::my::skiko_gfx::launcher::Host;
 
@@ -57,18 +57,12 @@ fn forward(verb: &str, arg: &str) {
     }
 }
 
-fn apps_root() -> PathBuf {
-    std::env::var("WART_APPS_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/data/wart/apps"))
-}
-
 /// Scan `<APPS_ROOT>/apps/*` (user apps only — system-apps are
 /// library/headless components, not launchable). For each app-id dir,
 /// read `[package].label` from the latest version's `package.toml`,
 /// falling back to the app-id. Returns `app-id\tlabel\n` lines, sorted.
 fn scan_installed_apps() -> String {
-    let dir = apps_root().join("apps");
+    let dir = crate::app_loader::apps_root().join("apps");
     let entries = match std::fs::read_dir(&dir) {
         Ok(e) => e,
         Err(e) => {
