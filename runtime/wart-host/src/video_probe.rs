@@ -150,6 +150,8 @@ mod android {
     #[link(name = "android")]
     extern "C" {
         fn ANativeWindow_release(win: *mut ANativeWindow);
+        fn ANativeWindow_getFormat(win: *mut ANativeWindow) -> i32;
+        fn ANativeWindow_setBuffersGeometry(win: *mut ANativeWindow, w: i32, h: i32, format: i32) -> i32;
     }
 
     // The NDK Camera2 path talks to cameraserver over C++ libbinder and needs a
@@ -305,7 +307,13 @@ mod android {
             AMediaFormat_delete(fmt); AMediaCodec_delete(codec); ACameraDevice_close(device); cleanup_mgr(mgr, id_list);
             return;
         }
-        p!("input surface ready; starting encoder …");
+        // The MediaCodec input surface's BufferQueue defaults to 0x0, so the camera
+        // configures a 0x0 stream and the HAL tears it down ("width 0 height 0" →
+        // DEL_STREAM). Give it concrete geometry (keep the codec's negotiated format)
+        // before the camera targets it, so the capture stream is sized correctly.
+        let fmt_px = ANativeWindow_getFormat(win);
+        let sg = ANativeWindow_setBuffersGeometry(win, w, h, fmt_px);
+        p!("input surface geometry set {w}x{h} fmt={fmt_px} -> {sg}; starting encoder …");
         if AMediaCodec_start(codec) != AMEDIA_OK {
             p!("FAIL: AMediaCodec_start");
             ANativeWindow_release(win); AMediaFormat_delete(fmt); AMediaCodec_delete(codec); ACameraDevice_close(device); cleanup_mgr(mgr, id_list);

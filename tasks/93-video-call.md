@@ -196,18 +196,45 @@ to the encoder and hangs at **`AMediaCodec_configure`** (the separate, already-k
 codec blocker — `media.codec`'s `omx@1.0-service` stuck in binder), now cleanly
 isolated *after* a good camera open.
 
-## REMAINING BLOCKER: codec `configure` (the last piece for camera→VP8)
+## ✅ CODEC CONFIGURE UNBLOCKED — all `--no-art` service blockers solved (2026-06-06)
 
-The codec `configure` hang is independent of the camera path (it hangs for both HW
-`OMX.qcom.video.encoder.vp8` and SW `c2.android.vp8.encoder`). Same task-87 method:
-trace what `media.codec`/`omx@1.0-service` waits on during configure
-(`cat /sys/kernel/debug/binder/proc/<media.codec-pid>` for its outgoing target +
-`logcat | grep -iE 'Waiting for|MediaCodec|Codec2|resource'`) and stub it. Candidate
-dependencies: `IResourceManagerService` (`media.resource_manager` — present, but the
-*registration* call from configure may need a working reply), `platform_compat`
-(missing), `gpu`/`graphicsstats`, or an AppOps (`appops`, missing) attribution on
-the codec. Once configure passes, `createInputSurface` + `setRepeatingRequest` +
-the encoder drain complete the `camera → HW VP8` proof.
+4th stub: **`package_native`** (IPackageManagerNative). `AMediaCodec_configure`
+hung in `MediaCodec::connectFormatShaper` → `waitForService("package_native")`
+(device-confirmed: probe pid retrying it 14×). It only calls `hasSystemFeature()`
+to guess "handheld" for format-shaping (not load-bearing), so a GenericStub
+unblocks it. `MediaCodec.cpp:2681`.
+
+**Full `--no-art` camera→HW-VP8 service chain is now resolved** — 4 stubs in
+`wart-activityms` (`permission_checker`, `media.camera.proxy`, `processinfo`,
+`package_native`). Device-verified end of the binder-blocker hunt: the reordered
+`--probe-video` runs the WHOLE setup clean — camera OPEN ✓, encoder configure ✓,
+start ✓, input surface ✓, repeating capture ✓ — and the camera HAL streams
+(`mm-camera: Session stream linked successfully`).
+
+## NON-BLOCKER remaining: camera↔encoder frame plumbing (0×0 surface)
+
+0 frames encoded — but NOT a service/`--no-art` problem. The camera configures a
+**0×0** stream (`mm-camera: c2d_module_notify_add_stream: width 0 height 0` →
+DEL_STREAM) because the NDK `ACaptureSessionOutput`/`ACameraOutputTarget` derive
+the stream size from the encoder input surface's CONSUMER side (the
+`GraphicBufferSource` behind `AMediaCodec_createInputSurface`), which reports 0×0.
+Producer-side `ANativeWindow_setBuffersGeometry(w,h,fmt)` does NOT fix it (the
+camera sets its own geometry as producer). This is a known NDK camera↔MediaCodec
+zero-copy plumbing wrinkle, independent of `--no-art`.
+
+**For the real integration, sidestep it:** feed the encoder via an `AImageReader`
+(`YUV_420_888`) intermediate (camera → ImageReader → copy/queue into the codec
+input buffers) instead of the zero-copy input Surface — gives explicit dimensions
+and is also what the WIT path wants (the host owns the YUV → VP8 step). The
+zero-copy Surface path can be revisited later as an optimization.
+
+## Net result of task 93 so far
+- Analysis: every native AV service for video calling exists under `--no-art`; HW VP8 present.
+- Spike: camera OPEN + codec CONFIGURE both work `--no-art` after 4 `wart-activityms`
+  stubs (all source-grounded in AOSP); camera streams.
+- Remaining for a working pipeline: (a) camera→encoder frame delivery via ImageReader
+  (above), (b) the decode path, (c) the WIT + wart-call video track (the RTP VP8
+  payloader already exists). None are `--no-art` blockers.
 
 See `wit/task-manager.wit` sibling-package style for `war:video`, `audio_impl.rs`
 (integration pattern), `external/rtc/rtc-rtp/src/codec/vp8` (packetizer).
