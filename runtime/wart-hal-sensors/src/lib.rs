@@ -142,16 +142,24 @@ mod binder_path {
         });
     }
 
-    fn service() -> Option<&'static rsbinder::Strong<dyn ISensorManager>> {
-        static SVC: OnceLock<Option<rsbinder::Strong<dyn ISensorManager>>> = OnceLock::new();
-        SVC.get_or_init(|| {
+    /// Resolve `ISensorManager`, caching only a *successful* lookup. A `None`
+    /// result is NOT cached (unlike a plain `OnceLock`), so a consumer that starts
+    /// before the AIDL endpoint is registered — or survives a `sensorservice`
+    /// restart — reconnects on a later call instead of staying dead forever
+    /// (task 94: the arbiter's `sensor_driver` spawns at boot and must not latch a
+    /// `None` if it races `wart-sensormanager`). `Strong` is a cheap clone.
+    fn service() -> Option<rsbinder::Strong<dyn ISensorManager>> {
+        static SVC: OnceLock<Mutex<Option<rsbinder::Strong<dyn ISensorManager>>>> = OnceLock::new();
+        let cell = SVC.get_or_init(|| Mutex::new(None));
+        let mut guard = cell.lock().ok()?;
+        if guard.is_none() {
             ensure_process_state();
-            rsbinder::hub::get_interface::<dyn ISensorManager>(
+            *guard = rsbinder::hub::get_interface::<dyn ISensorManager>(
                 "android.frameworks.sensorservice.ISensorManager/default",
             )
-            .ok()
-        })
-        .as_ref()
+            .ok();
+        }
+        guard.clone()
     }
 
     fn sample_map() -> SampleMap {
@@ -159,27 +167,27 @@ mod binder_path {
         MAP.get_or_init(|| Arc::new(Mutex::new(HashMap::new()))).clone()
     }
 
-    /// Build the event queue + register the Bn callback exactly once.
-    fn queue() -> Option<&'static rsbinder::Strong<dyn IEventQueue>> {
-        static QUEUE: OnceLock<Option<rsbinder::Strong<dyn IEventQueue>>> = OnceLock::new();
-        QUEUE
-            .get_or_init(|| {
-                let svc = service()?;
-                let collector = EventCollector { latest: sample_map() };
-                let cb: rsbinder::Strong<dyn IEventQueueCallback> =
-                    BnEventQueueCallback::new_async_binder(collector, TokioRuntime);
-                match svc.r#createEventQueue(&cb) {
-                    Ok(q) => {
-                        log::info!("wart-hal-sensors: event queue created");
-                        Some(q)
-                    }
-                    Err(e) => {
-                        log::warn!("wart-hal-sensors: createEventQueue failed: {e:?}");
-                        None
-                    }
+    /// Build the event queue + register the Bn callback. Like [`service`], caches
+    /// only success: if the service wasn't up yet (or `createEventQueue` failed
+    /// transiently) it retries on a later call rather than latching `None`.
+    fn queue() -> Option<rsbinder::Strong<dyn IEventQueue>> {
+        static QUEUE: OnceLock<Mutex<Option<rsbinder::Strong<dyn IEventQueue>>>> = OnceLock::new();
+        let cell = QUEUE.get_or_init(|| Mutex::new(None));
+        let mut guard = cell.lock().ok()?;
+        if guard.is_none() {
+            let svc = service()?;
+            let collector = EventCollector { latest: sample_map() };
+            let cb: rsbinder::Strong<dyn IEventQueueCallback> =
+                BnEventQueueCallback::new_async_binder(collector, TokioRuntime);
+            match svc.r#createEventQueue(&cb) {
+                Ok(q) => {
+                    log::info!("wart-hal-sensors: event queue created");
+                    *guard = Some(q);
                 }
-            })
-            .as_ref()
+                Err(e) => log::warn!("wart-hal-sensors: createEventQueue failed: {e:?}"),
+            }
+        }
+        guard.clone()
     }
 
     pub fn enumerate() -> Vec<HalSensor> {

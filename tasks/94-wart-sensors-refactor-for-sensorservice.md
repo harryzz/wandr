@@ -1,6 +1,41 @@
-# Task 94 — Refactor wart-sensors to consume sensorservice (not the HAL directly)
+# Task 94 — Unify sensors on the native AIDL ISensorManager; delete wart-sensors
 
-> Status: 🔲 TODO. **Prerequisite for task 93** (camera capture under `--no-art`).
+> Status: 🛠️ CODE COMPLETE (pending a-03 build + device verify). **Unblocks task 93**
+> coexistence under `--no-art`.
+
+## Implemented (revised — full unification, not a wart-sensors refactor)
+
+The original plan (below) was to swap `wart-sensors`' data source from the direct
+HAL to a `sensorservice` client. While reading the source we found the arbiter
+**already** has a Rust/AIDL sensor path — `wart-hal-sensors` (task 77) wraps
+`android.frameworks.sensorservice.ISensorManager/default` over rsbinder, and
+`sensor_driver::spawn()` runs unconditionally — inert under `--no-art` only because
+nothing registers that AIDL endpoint. So instead of refactoring `wart-sensors`, we
+**deleted it** and lit up the existing path:
+
+1. **`wart-sensormanager`** now publishes BOTH ISensorManager transports system_server
+   does (`com_android_server_SystemServer.cpp` pattern): HIDL @1.0 (camera EIS, task 93,
+   kept) **+ AIDL** `…ISensorManager/default` (`SensorManagerAidl`, same fakeVM, NDK
+   binder pool). `runtime/wart-sensormanager/cpp/{wart_sensormanager.cpp,Android.bp}`.
+2. **Arbiter sensor-driver** consumes the AIDL endpoint under `--no-art`: proximity
+   (task 78) + light (task 86) work unchanged; added **DEVICE_ORIENTATION (type 27)**
+   always-on → the WM turns each reading into auto-rotation.
+   `wart-arbiter-bin/src/sensor_driver.rs`, `wart-arbiter-wm/src/lib.rs`,
+   `wart-arbiter-core` (`SensorKind::DeviceOrientation`).
+3. **`wart-hal-sensors`** caches only *successful* service/queue lookups (no `None`
+   latch) so a consumer racing the endpoint reconnects.
+4. **Deleted `runtime/wart-sensors/`** (daemon + `libwart_sensors_hal.so` direct-HAL
+   shim + accel orientation math). Bringup (`run-hybrid-stack.sh`) now starts
+   `/system/bin/sensorservice` + `wart-sensormanager` BEFORE the zygote/arbiter.
+
+Result: one Rust/AIDL sensor path for ART-up and `--no-art`; guests get sensors under
+`--no-art` for free. Plan: `~/.claude/plans/cat-task-state-melodic-rabin.md`.
+See `[[project-artless-sensors]]`, `[[project_artless_camera]]`.
+
+---
+
+## Original plan (superseded by the above)
+
 > The camera needs `sensorservice` to own the sensors HAL; wart-sensors currently
 > owns it directly → single-client conflict. Refactor wart-sensors' data source
 > from the HAL to a `sensorservice` client; keep all the policy/arbiter logic.

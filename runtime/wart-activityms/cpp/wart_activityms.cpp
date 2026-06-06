@@ -35,6 +35,7 @@
 #include <utils/String16.h>
 #include <utils/StrongPointer.h>
 #include <log/log.h>
+#include <utils/String8.h>
 
 using namespace android;
 
@@ -64,6 +65,9 @@ public:
 
     status_t onTransact(uint32_t code, const Parcel& data, Parcel* reply,
                         uint32_t flags) override {
+        ALOGI("WARTAMS-TRACE activity code=%u flags=%u callingPid=%d callingUid=%d",
+              code, flags, IPCThreadState::self()->getCallingPid(),
+              IPCThreadState::self()->getCallingUid());
         // Every IActivityManager call writes the interface token first; consume +
         // verify it (the client wrote the same descriptor).
         if (!data.enforceInterface(kDescriptor)) {
@@ -138,8 +142,15 @@ class GenericStub : public BBinder {
 public:
     explicit GenericStub(const char* descriptor) : mDescriptor(descriptor) {}
     const String16& getInterfaceDescriptor() const override { return mDescriptor; }
-    status_t onTransact(uint32_t /*code*/, const Parcel& /*data*/, Parcel* reply,
-                        uint32_t /*flags*/) override {
+    status_t onTransact(uint32_t code, const Parcel& /*data*/, Parcel* reply,
+                        uint32_t flags) override {
+        // TRACE (task 94 dissect): log every call so we can see exactly what the
+        // camera HAL asks each stub during EIS setup, and whether our generic
+        // writeInt32(0) is the wrong answer for any of them.
+        ALOGI("WARTAMS-TRACE %s code=%u flags=%u callingPid=%d callingUid=%d",
+              String8(mDescriptor).c_str(), code, flags,
+              IPCThreadState::self()->getCallingPid(),
+              IPCThreadState::self()->getCallingUid());
         if (reply != nullptr) {
             reply->writeNoException();
             reply->writeInt32(0);
@@ -170,6 +181,9 @@ public:
     const String16& getInterfaceDescriptor() const override { return mDescriptor; }
     status_t onTransact(uint32_t code, const Parcel& data, Parcel* reply,
                         uint32_t flags) override {
+        ALOGI("WARTAMS-TRACE processinfo code=%u flags=%u callingPid=%d callingUid=%d",
+              code, flags, IPCThreadState::self()->getCallingPid(),
+              IPCThreadState::self()->getCallingUid());
         switch (code) {
             case GET_PROCESS_STATES_FROM_PIDS:
             case GET_PROCESS_STATES_AND_OOM_SCORES_FROM_PIDS: {

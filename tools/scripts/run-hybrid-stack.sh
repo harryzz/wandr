@@ -31,7 +31,8 @@ if [[ "${1:-}" == "--stop" ]]; then
     adb shell "su -c 'pkill -9 -f wart-arbiter'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-host'"    >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-inputflinger'" >/dev/null 2>&1 || true
-    adb shell "su -c 'pkill -9 -f wart-sensors'" >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f wart-sensormanager'" >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f /system/bin/sensorservice'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-net'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-activityms'" >/dev/null 2>&1 || true
     adb shell "su -c 'rm -f /data/local/tmp/wart-zygote.sock /data/local/tmp/wart-arbiter.sock'" >/dev/null 2>&1 || true
@@ -48,7 +49,11 @@ fi
 if [[ "${1:-}" == "--restore-art" ]]; then
     echo "▸ stopping wart stack (incl wart-inputflinger) before restoring framework …"
     adb shell "su -c 'pkill -9 -f wart-inputflinger'" >/dev/null 2>&1 || true
-    adb shell "su -c 'pkill -9 -f wart-sensors'" >/dev/null 2>&1 || true
+    # Kill OUR standalone sensorservice + wart-sensormanager so the restored
+    # system_server can re-own the (single-client) sensors HAL with its own
+    # in-process SensorService (task 94).
+    adb shell "su -c 'pkill -9 -f wart-sensormanager'" >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f /system/bin/sensorservice'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-net'" >/dev/null 2>&1 || true
     # Kill our stub system_server (activity/permission/...) BEFORE `start` brings the
     # real system_server back — else our stub shadows the real services.
@@ -106,11 +111,12 @@ SCREEN_BIN="$REPO_ROOT/runtime/wart-arbiter/target/aarch64-linux-android/release
 # Path A (task 80) — the standalone inputflinger service (built on a-03). Only
 # USED under --no-art; the platform libinputflinger.so etc. already live on-device.
 INFL_BIN="$REPO_ROOT/runtime/wart-inputflinger/wart-inputflinger"
-# Task 85 — ART-off sensors / auto-rotation: the wart-sensors daemon (Rust) +
-# its C++ HIDL shim libwart_sensors_hal.so (built on a-03). Reads the sensor HAL
-# directly (the framework SensorService dies with ART) and drives report-orientation.
-SENSORS_BIN="$REPO_ROOT/runtime/wart-sensors/target/aarch64-linux-android/release/wart-sensors"
-SENSORS_LIB="$REPO_ROOT/runtime/wart-sensors/libwart_sensors_hal.so"
+# Task 93/94 — ART-off sensors: wart-sensormanager (C++, built on a-03) registers the
+# frameworks ISensorManager (HIDL for the camera EIS + AIDL for the wart Rust stack)
+# on top of the native /system/bin/sensorservice (the HAL owner). The arbiter's
+# task-77 sensor-driver then consumes the AIDL endpoint for auto-rotation / proximity
+# / auto-brightness — the old `wart-sensors` direct-HAL daemon is retired.
+SENSORMGR_BIN="$REPO_ROOT/runtime/wart-sensormanager/cpp/wart-sensormanager"
 # Task 88 — ART-off connectivity: the wart-net daemon (Rust) brings WiFi-STA up
 # (spawn vendor wpa_supplicant + ctrl-socket associate → pure-Rust DHCPv4 →
 # apply address) as root, then drives netd + dnsresolver over binder AS UID
@@ -161,7 +167,8 @@ restore_ui() {
     adb shell "su -c 'pkill -9 -f wart-arbiter'" >/dev/null 2>&1
     adb shell "su -c 'pkill -9 -f wart-host'"    >/dev/null 2>&1
     adb shell "su -c 'pkill -9 -f wart-inputflinger'" >/dev/null 2>&1
-    adb shell "su -c 'pkill -9 -f wart-sensors'" >/dev/null 2>&1
+    adb shell "su -c 'pkill -9 -f wart-sensormanager'" >/dev/null 2>&1
+    adb shell "su -c 'pkill -9 -f /system/bin/sensorservice'" >/dev/null 2>&1
     adb shell "su -c 'pkill -9 -f wart-net'" >/dev/null 2>&1
     adb shell "su -c 'pkill -9 -f wart-activityms'" >/dev/null 2>&1
     adb shell "su -c 'rm -f /data/local/tmp/wart-zygote.sock /data/local/tmp/wart-arbiter.sock'" >/dev/null 2>&1
@@ -227,15 +234,15 @@ elif [[ "$NO_ART" == "1" ]]; then
     echo "    ssh a-03 'cd ~/android/lineage && source build/envsetup.sh && lunch aosp_arm64-trunk_staging-userdebug && export TARGET_RELEASE=trunk_staging && m wart-inputflinger'" >&2
     exit 1
 fi
-# Task 85 — ART-off sensors / auto-rotation daemon + its HIDL shim. Best-effort:
-# pushed if present (the .so is built on a-03); only launched under --no-art.
-if [[ -f "$SENSORS_BIN" && -f "$SENSORS_LIB" ]]; then
-    push_if_newer "$SENSORS_LIB" "/data/local/tmp/libwart_sensors_hal.so"
-    push_if_newer "$SENSORS_BIN" "/data/local/tmp/wart-sensors"
-    adb shell 'chmod 755 /data/local/tmp/wart-sensors /data/local/tmp/libwart_sensors_hal.so'
+# Task 93/94 — ART-off sensors: the wart-sensormanager service (built on a-03).
+# Best-effort: pushed if present; only launched under --no-art. /system/bin/
+# sensorservice (the HAL owner it sits on top of) is already on-device.
+if [[ -f "$SENSORMGR_BIN" ]]; then
+    push_if_newer "$SENSORMGR_BIN" "/data/local/tmp/wart-sensormanager"
+    adb shell 'chmod 755 /data/local/tmp/wart-sensormanager'
 elif [[ "$NO_ART" == "1" ]]; then
-    echo "  ⚠ wart-sensors / libwart_sensors_hal.so missing — auto-rotation off under --no-art" >&2
-    echo "    build: cargo build --release (in runtime/wart-sensors) + m libwart_sensors_hal on a-03" >&2
+    echo "  ⚠ wart-sensormanager missing — no sensors (auto-rotation/proximity/brightness) under --no-art" >&2
+    echo "    build on a-03: m wart-sensormanager (see runtime/wart-sensormanager/cpp/Android.bp)" >&2
 fi
 # Task 88 — ART-off connectivity daemon. Best-effort: pushed if present; only
 # launched under --no-art (below).
@@ -422,6 +429,47 @@ if [[ "$NO_ART" == "1" ]]; then
         adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/wart-host --init-audio-policy'" >/dev/null 2>&1 || true
     fi
 
+    # Task 93/94 — ART-off sensors: stand up the native /system/bin/sensorservice
+    # (owns the single-client sensors HAL + registers the "sensorservice" binder) and
+    # wart-sensormanager (publishes the frameworks ISensorManager — HIDL for the camera
+    # EIS, AIDL for the wart Rust stack). Done HERE, BEFORE the zygote/arbiter, so the
+    # arbiter's sensor-driver resolves the AIDL endpoint at spawn() (it caches the
+    # successful lookup). Depends on wart-activityms's package_native/activity stubs
+    # (started just above). This REPLACES the old wart-sensors direct-HAL daemon.
+    if adb shell 'ls /data/local/tmp/wart-sensormanager' >/dev/null 2>&1; then
+        echo "▸ --no-art: sensorservice + wart-sensormanager (rotation/proximity/brightness + camera EIS)"
+        # Start each as BARE ROOT (task-93's proven recipe). The single-client ISensors
+        # HAL must be claimed cleanly: uid-system (wart-launch) does NOT cleanly own it,
+        # and a stale/competing client → "Abort due to ISensors … DEAD_OBJECT". The
+        # framework was stopped above, so the HAL is free — claim it ONCE, verify clean
+        # (gyro enumerates + no abort), retry if not. (spawn_detached runs su -c = root.)
+        adb shell "su -c 'pkill -9 -f /system/bin/sensorservice; pkill -9 -f wart-sensormanager; pkill -9 -f wart-sensors'" >/dev/null 2>&1 || true
+        sleep 2
+        for attempt in 1 2 3; do
+            adb shell "su -c 'pkill -9 -f /system/bin/sensorservice'" >/dev/null 2>&1 || true; sleep 1
+            spawn_detached /data/local/tmp/sensorservice.log "/system/bin/sensorservice"
+            sleep 4
+            if adb shell "su -c 'dumpsys sensorservice 2>/dev/null'" 2>/dev/null | grep -qi Gyroscope \
+               && ! adb shell "su -c 'grep -i \"Abort due to ISensors\" /data/local/tmp/sensorservice.log'" 2>/dev/null | grep -qi Abort; then
+                echo "  sensorservice owns the HAL cleanly (attempt $attempt)"; break
+            fi
+            echo "  sensorservice HAL-claim attempt $attempt unclean (DEAD_OBJECT) — retry"
+        done
+        # Then wart-sensormanager (bare root; ISensorManager impls delegate to sensorservice).
+        spawn_detached /data/local/tmp/wart-sensormanager.log \
+            "/data/local/tmp/wart-sensormanager"
+        for _ in $(seq 1 20); do
+            adb shell 'service list 2>/dev/null' 2>/dev/null | grep -q 'frameworks.sensorservice.ISensorManager' && break
+            sleep 0.5
+        done
+        if adb shell 'service list 2>/dev/null' 2>/dev/null | grep -q 'frameworks.sensorservice.ISensorManager'; then
+            echo "  sensors ready (AIDL ISensorManager registered)"
+        else
+            echo "  ⚠ AIDL ISensorManager not registered — see /data/local/tmp/wart-sensormanager.log" >&2
+            adb shell "su -c 'tail -15 /data/local/tmp/wart-sensormanager.log'" 2>&1 | tr -d '\r' >&2
+        fi
+    fi
+
     # Start wart-inputflinger (registers "inputflinger") before the zygote/hosts so
     # their input client path resolves to OUR service. This gives WORKING system-key
     # dedup (POWER/VOLUME → arbiter once, no fan-out flicker). App TOUCH/key routing
@@ -479,20 +527,11 @@ echo "  zygote up (pid $ZPID, socket present)"
 # overlay), and IME keyboard (bottom overlay + set-ime). Each piece is
 # best-effort — only fires if installed. Runs once the arbiter socket exists.
 bring_up_chrome() {
-    # Task 85 — under --no-art, start the sensor daemon (auto-rotation). The
-    # framework SensorService is gone; wart-sensors reads the HAL directly (via
-    # wart-launch → uid system) and drives report-orientation. The arbiter socket
-    # exists by now (caller waited on it).
-    if [[ "$NO_ART" == "1" ]] && adb shell 'ls /data/local/tmp/wart-sensors' >/dev/null 2>&1; then
-        echo "▸ sensor daemon (auto-rotation, path A)"
-        # Respawn loop (task 89): wart-sensors now reconnects to the sensors HAL on a
-        # DEAD_OBJECT drop instead of SIGABRT-ing (the primary fix), but keep a
-        # supervisor as a backstop for any other unexpected exit so auto-brightness /
-        # auto-rotation / proximity don't silently stay dead. Kept quote-free for the
-        # spawn_detached `sh -c "$cmd"` nesting.
-        spawn_detached /data/local/tmp/wart-sensors.log \
-            "while true; do /data/local/tmp/wart-launch /data/local/tmp/wart-sensors; sleep 2; done"
-    fi
+    # Task 94 — sensors now flow through the arbiter's own task-77 sensor-driver
+    # (wart-hal-sensors → the AIDL ISensorManager registered by wart-sensormanager,
+    # stood up before the zygote above). No separate sensor daemon: auto-rotation,
+    # proximity-screen-off, and auto-brightness are arbiter modules. (The old
+    # wart-sensors direct-HAL daemon was deleted.)
     # Task 88 — under --no-art, start the connectivity daemon (WiFi). WifiService /
     # ConnectivityService die with ART; wart-net drives the native survivors
     # (wpa_supplicant + DHCPv4 + ip route + DNS) and reports to the arbiter

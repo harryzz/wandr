@@ -386,6 +386,12 @@ pub enum SensorKind {
     Proximity,
     Accelerometer,
     Light,
+    /// HAL-fused screen-rotation sensor (`android.sensor.device_orientation`,
+    /// type 27): on-change, reports the rotation index 0/1/2/3 in the reading's
+    /// `x`. The arbiter's sensor-driver enables it always-on and the WM turns its
+    /// readings into auto-rotation (the native source the old `wart-sensors`
+    /// daemon + its accel math replaced under `--no-art`; task 94).
+    DeviceOrientation,
 }
 
 impl SensorKind {
@@ -395,6 +401,7 @@ impl SensorKind {
             SensorKind::Proximity => "proximity",
             SensorKind::Accelerometer => "accelerometer",
             SensorKind::Light => "light",
+            SensorKind::DeviceOrientation => "device-orientation",
         }
     }
     /// Parse a wire token; `None` for an unknown kind (the verb rejects it).
@@ -403,6 +410,9 @@ impl SensorKind {
             "proximity" => Some(SensorKind::Proximity),
             "accelerometer" | "accel" => Some(SensorKind::Accelerometer),
             "light" => Some(SensorKind::Light),
+            "device-orientation" | "device_orientation" | "orientation" => {
+                Some(SensorKind::DeviceOrientation)
+            }
             _ => None,
         }
     }

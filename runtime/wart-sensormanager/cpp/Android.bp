@@ -1,6 +1,8 @@
-// cc_binary, built on a-03. Registers android.frameworks.sensorservice@1.0
-// ::ISensorManager (the HIDL wrapper system_server normally publishes) so the
-// camera HAL's EIS can reach the gyro under --no-art. See wart_sensormanager.cpp.
+// cc_binary, built on a-03. Registers the frameworks-layer ISensorManager that
+// system_server normally publishes — HIDL @1.0 (camera EIS, task 93) AND the AIDL
+// android.frameworks.sensorservice.ISensorManager/default (wart Rust stack via
+// wart-hal-sensors, task 94) — so sensors work under --no-art. See
+// wart_sensormanager.cpp.
 cc_binary {
     name: "wart-sensormanager",
     srcs: ["wart_sensormanager.cpp"],
@@ -10,12 +12,18 @@ cc_binary {
     ],
     header_libs: ["jni_headers"],
     shared_libs: [
+        // HIDL endpoint (task 93)
         "libsensorservicehidl",
-        "libsensor",
         "libhidlbase",
+        "android.frameworks.sensorservice@1.0",
+        // AIDL endpoint (task 94)
+        "libsensorserviceaidl",
+        "libbinder_ndk",
+        "android.frameworks.sensorservice-V1-ndk",
+        // shared
+        "libsensor",
         "liblog",
         "libutils",
         "libbase",
-        "android.frameworks.sensorservice@1.0",
     ],
 }

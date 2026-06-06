@@ -37,8 +37,8 @@
 //!   it and pushes a real `orient`; the host applies it on push-back.
 
 use wart_arbiter_core::{
-    ArbiterModule, ChromeAnchor, Ctx, DisplayId, Event, Reply, Role, Store, INSET_HOST_OWNED,
-    ORIENT_HOST_OWNED, PRIMARY_DISPLAY,
+    ArbiterModule, ChromeAnchor, Ctx, DisplayId, Event, Reply, Role, SensorKind, Store,
+    INSET_HOST_OWNED, ORIENT_HOST_OWNED, PRIMARY_DISPLAY,
 };
 
 /// Map the Device Orientation HAL value (`Surface.ROTATION_*` index) to the
@@ -165,6 +165,17 @@ impl WmModule {
         for pid in targets {
             ctx.deliver_to_host(pid, line.clone());
         }
+    }
+
+    /// Translate a raw device rotation (`Surface.ROTATION_*` index 0..3) to the
+    /// content dihedral and emit [`Event::OrientationChanged`] for the primary
+    /// display. Shared by the `report-orientation` verb (desktop/sim + the host
+    /// fallback) and the live device-orientation sensor reading (task 94). Returns
+    /// the content orient for the verb's reply.
+    fn apply_device_rotation(&self, raw: u32, ctx: &mut Ctx) -> u32 {
+        let orient = device_rotation_to_orient(raw);
+        ctx.emit(Event::OrientationChanged { id: PRIMARY_DISPLAY, orient });
+        orient
     }
 
     /// Push the current **system orientation** ([`effective_orient`]) to every
@@ -403,8 +414,7 @@ impl ArbiterModule for WmModule {
                 let Ok(raw) = raw_tok.parse::<u32>() else {
                     return Reply::err(format!("report-orientation-bad-raw {raw_tok:?}"));
                 };
-                let orient = device_rotation_to_orient(raw);
-                ctx.emit(Event::OrientationChanged { id: PRIMARY_DISPLAY, orient });
+                let orient = self.apply_device_rotation(raw, ctx);
                 Reply::ok(format!("orientation raw={raw} orient={orient}"))
             }
             // `set-orientation-lock <0|1>` — the foreground fullscreen app reports
@@ -526,7 +536,21 @@ impl ArbiterModule for WmModule {
                 self.push_system_orientation(ctx, *id);
             }
 
-            // Not geometry-relevant to the WM.
+            // Live HAL device-orientation reading (task 94) → auto-rotation. The
+            // rotation index is in `x` (0/1/2/3). Act only on a CHANGE: the
+            // `OrientationChanged` handler re-pushes geometry to every surface, so
+            // re-emitting on an identical reading would thrash. The native source
+            // that replaced the old `wart-sensors` daemon under `--no-art`.
+            Event::SensorReading { kind: SensorKind::DeviceOrientation, x, .. } => {
+                let raw = (x.round() as i64).rem_euclid(4) as u32;
+                let orient = device_rotation_to_orient(raw);
+                if ctx.store.geometry(PRIMARY_DISPLAY).map(|g| g.orientation) != Some(orient) {
+                    self.apply_device_rotation(raw, ctx);
+                }
+            }
+
+            // Not geometry-relevant to the WM (other sensor kinds handled by their
+            // own modules: proximity → sensors, light → power).
             Event::DisplayAdded { .. }
             | Event::PanelMeasured { .. }
             | Event::InsetsChanged { .. }

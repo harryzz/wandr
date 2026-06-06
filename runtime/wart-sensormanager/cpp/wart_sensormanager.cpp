@@ -1,27 +1,32 @@
-// wart-sensormanager (task 93) — registers android.frameworks.sensorservice@1.0
-// ::ISensorManager under --no-art, which system_server normally does
-// (com_android_server_SystemServer.cpp: `new SensorManager(vm)`). Without it the
-// qcom camera HAL's EIS (video stabilization) waits forever on the gyro via
-// ISensorManager and SIGABRTs in QCamera3HardwareInterface::startChannelLocked
-// (device-confirmed). The impl (libsensorservicehidl `SensorManager`) wraps the C++
-// SensorService (the standalone /system/bin/sensorservice), so run BOTH: sensorservice
-// (owns the sensors HAL + registers "sensorservice") and this (registers the HIDL
-// ISensorManager on top).
+// wart-sensormanager (task 93 + 94) — registers the frameworks-layer
+// android.frameworks.sensorservice ISensorManager that system_server normally
+// publishes (com_android_server_SystemServer.cpp: startSensorManager*Service), but
+// which dies with ART. We publish BOTH transports system_server does:
 //
-// This is a THIN FAÇADE: the impl (libsensorservicehidl SensorManager) delegates
-// everything to ::android::SensorManager::getInstanceForPackage() — i.e. the
-// "sensorservice" binder (SensorManager.cpp:199). So it REQUIRES the standalone
-// /system/bin/sensorservice running (the HAL owner + data source); it is not a
-// replacement for it.
+//   • HIDL  @1.0::ISensorManager  (task 93) — the qcom CAMERA HAL's EIS (video
+//     stabilization) reaches the gyro through this; without it the HAL SIGABRTs in
+//     QCamera3HardwareInterface::startChannelLocked (device-confirmed). HIDL-only:
+//     the vendor HAL is a hwbinder client and can't use the AIDL endpoint.
 //
-// JavaVM: we pass a minimal FAKE JavaVM (kFakeVm above), not nullptr. The VM is only
-// used by createEventQueue's poll thread to AttachCurrentThread (SensorManager.cpp
-// getLooper, no null guard) — passing nullptr would SIGSEGV there. The fake VM's
-// Attach returns JNI_OK with a null JNIEnv the thread never dereferences (no JNI in
-// this native path), so EVERY ISensorManager path (getSensorList / createDirectChannel
-// / createEventQueue) works with no real ART runtime and no platform-lib patch. The
-// camera's EIS uses a direct channel (device-verified 28.8 fps); the fake VM also
-// covers any future createEventQueue client.
+//   • AIDL  android.frameworks.sensorservice.ISensorManager/default (task 94) — the
+//     wart Rust stack consumes THIS via rsbinder (the shared `wart-hal-sensors`
+//     crate, used by the arbiter's sensor-driver + the host's guest-facing sensor
+//     WIT). Registering it under --no-art lets the arbiter's existing task-77 sensor
+//     path light up (auto-rotation / proximity / auto-brightness) and let us delete
+//     the old `wart-sensors` direct-HAL daemon entirely.
+//
+// Both are THIN FAÇADES: each impl delegates to ::android::SensorManager::
+// getInstanceForPackage() — the "sensorservice" binder. So this REQUIRES the
+// standalone /system/bin/sensorservice running (the HAL owner + data source); it is
+// not a replacement for it. SensorService multiplexes both endpoints + every client
+// over the one single-client sensors HAL — exactly its job.
+//
+// JavaVM: we pass a minimal FAKE JavaVM (kFakeVm below), not nullptr — BOTH the HIDL
+// and AIDL impls take a JavaVM* and AttachCurrentThread their createEventQueue poll
+// thread (SensorManager.cpp / SensorManagerAidl.cpp getLooper, no null guard), so
+// nullptr would SIGSEGV. The fake VM's Attach returns JNI_OK with a null JNIEnv the
+// thread never dereferences (no JNI in this native path), so every ISensorManager
+// path works with no real ART runtime and no platform-lib patch.
 //
 // Build: soong cc_binary on a-03 (see Android.bp).
 
@@ -30,6 +35,12 @@
 #include <hidl/HidlTransportSupport.h>
 #include <jni.h>
 #include <log/log.h>
+
+// AIDL (task 94): the NDK SensorManagerAidl impl + the binder_ndk registration API.
+#include <aidl/android/frameworks/sensorservice/ISensorManager.h>
+#include <sensorserviceaidl/SensorManagerAidl.h>
+#include <android/binder_manager.h>
+#include <android/binder_process.h>
 
 namespace {
 // Minimal fake JavaVM. libsensorservicehidl SensorManager only uses the VM to
@@ -62,18 +73,42 @@ using android::frameworks::sensorservice::V1_0::ISensorManager;
 using android::frameworks::sensorservice::V1_0::implementation::SensorManager;
 using android::hardware::configureRpcThreadpool;
 using android::hardware::joinRpcThreadpool;
+// AIDL (task 94) — alias to avoid the HIDL `ISensorManager` name clash above.
+using AidlISensorManager = ::aidl::android::frameworks::sensorservice::ISensorManager;
+using android::frameworks::sensorservice::implementation::SensorManagerAidl;
 
 int main() {
+    // ── HIDL endpoint (camera EIS, task 93) ──────────────────────────────────
     configureRpcThreadpool(4, true /*callerWillJoin*/);
-
-    sp<ISensorManager> manager = new SensorManager(&kFakeVm);
-    status_t st = manager->registerAsService();
+    sp<ISensorManager> hidl = new SensorManager(&kFakeVm);
+    status_t st = hidl->registerAsService();
     if (st != OK) {
-        ALOGE("wart-sensormanager: registerAsService(ISensorManager) failed: %d", st);
+        ALOGE("wart-sensormanager: registerAsService(HIDL ISensorManager) failed: %d", st);
         return 1;
     }
     ALOGI("wart-sensormanager: registered android.frameworks.sensorservice@1.0::ISensorManager");
 
+    // ── AIDL endpoint (wart Rust stack via wart-hal-sensors, task 94) ─────────
+    // Mirrors system_server's startSensorManagerAidlService
+    // (com_android_server_SystemServer.cpp): SharedRefBase::make + addService under
+    // "<descriptor>/default". Runs on its own libbinder_ndk thread pool; the HIDL
+    // hwbinder pool and the AIDL binder pool are independent transports in one
+    // process (as system_server does).
+    ABinderProcess_setThreadPoolMaxThreadCount(4);
+    std::shared_ptr<SensorManagerAidl> aidl =
+            ndk::SharedRefBase::make<SensorManagerAidl>(&kFakeVm);
+    const std::string instance = std::string() + AidlISensorManager::descriptor + "/default";
+    binder_exception_t err =
+            AServiceManager_addService(aidl->asBinder().get(), instance.c_str());
+    if (err != EX_NONE) {
+        ALOGE("wart-sensormanager: AServiceManager_addService(%s) failed: %d",
+              instance.c_str(), err);
+        return 1;
+    }
+    ALOGI("wart-sensormanager: registered AIDL %s", instance.c_str());
+    ABinderProcess_startThreadPool();
+
+    // Block on the HIDL pool (the AIDL pool runs on its own threads). Never returns.
     joinRpcThreadpool();
     return 0;
 }

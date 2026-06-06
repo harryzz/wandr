@@ -35,9 +35,14 @@ fn aidl_type_to_kind(aidl_type: i32) -> Option<SensorKind> {
         1 => Some(SensorKind::Accelerometer),
         5 => Some(SensorKind::Light),
         8 => Some(SensorKind::Proximity),
+        27 => Some(SensorKind::DeviceOrientation), // HAL-fused screen rotation
         _ => None,
     }
 }
+
+/// Sampling rate for the always-on device-orientation sensor. It's on-change
+/// (the rate only bounds latency, not power), so a low rate is plenty.
+const ORIENTATION_RATE_HZ: u32 = 5;
 
 /// `kind → HalSensor` for every recognized sensor, built once at `spawn`.
 fn sensors() -> &'static HashMap<SensorKind, HalSensor> {
@@ -104,6 +109,15 @@ pub fn spawn() {
                 kind.as_wire(), s.handle, s.max_range, s.resolution
             );
         }
+    }
+
+    // Device-orientation is enabled ALWAYS-ON (not ref-counted like proximity/
+    // light): auto-rotation must keep working with no surface "holding" it. This
+    // is the native replacement for the old `wart-sensors` daemon's HAL poll —
+    // the WM turns each `SensorReading { DeviceOrientation }` into a rotation.
+    // (Harmless no-op + warning if the device doesn't expose type 27.)
+    if sensors().contains_key(&SensorKind::DeviceOrientation) {
+        set_sensor(SensorKind::DeviceOrientation, true, ORIENTATION_RATE_HZ);
     }
 
     std::thread::Builder::new()
