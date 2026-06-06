@@ -129,6 +129,18 @@ the libsensorservice poll-thread JNI path, or gate the arbiter to HIDL
 `createDirectChannel`. Until fixed, use the **HIDL-only nullptr wart-sensormanager** for
 camera work (no AIDL consumer → no spin). Tracked alongside `tasks/95-*` (gyro race).
 
+**FIRST STEP for the fix (source-first — `[[feedback_read_source_first]]`):** the
+diagnosis above is from *symptoms* (a busy thread + null-`JNIEnv` reasoning), NOT from
+reading the code — confirm it before patching. The spinning tid was `binder:<pid>_1`
+(a **regular binder** thread, not `HwBinder:` and not an obviously-named poll thread),
+so **first verify which thread actually spins**: the libsensor `SensorEventQueue`
+poll/looper thread (from `createEventQueue → getLooper`) vs. an `ABinderProcess` binder
+pool worker — the fix differs (blocking-looper fix vs. a stuck binder-call handler).
+Read end-to-end: `frameworks/native/services/sensorservice/aidl/SensorManagerAidl.cpp`
+(`createEventQueue`/`EventQueue`) + libsensor `SensorEventQueue` + the `ALooper`/BitTube
+fd path, and compare to how system_server's real (ART) `SensorManagerAidl` avoids the
+spin. Repro: arbiter consuming AIDL → `ls /proc/<sm-pid>/task` + per-tid stat utime/stime.
+
 See `[[project_artless_camera]]` (task 93), `[[project_artless_sensors]]` (task 85),
 `[[project_proximity_screen_off]]` (task 78), `[[project_artless_autobrightness]]`
 (task 86), `runtime/wart-sensors/`, `runtime/wart-sensormanager/`.
