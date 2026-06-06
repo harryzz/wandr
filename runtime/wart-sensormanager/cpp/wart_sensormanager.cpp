@@ -8,11 +8,22 @@
 // (owns the sensors HAL + registers "sensorservice") and this (registers the HIDL
 // ISensorManager on top).
 //
-// JavaVM = nullptr: it's used ONLY to attach createEventQueue's poll thread to the
-// JVM (SensorManager.cpp getLooper). Native clients that use direct sensor channels
-// (typical for camera EIS) never hit it. If a client calls createEventQueue, the
-// poll thread would deref the null VM — handled by the matching SensorManager null
-// guard patch if that path is exercised.
+// This is a THIN FAÇADE: the impl (libsensorservicehidl SensorManager) delegates
+// everything to ::android::SensorManager::getInstanceForPackage() — i.e. the
+// "sensorservice" binder (SensorManager.cpp:199). So it REQUIRES the standalone
+// /system/bin/sensorservice running (the HAL owner + data source); it is not a
+// replacement for it.
+//
+// JavaVM = nullptr RISK: mJavaVm is touched in exactly ONE path — createEventQueue
+// -> getLooper() spawns a poll thread that does javaVm->AttachCurrentThread() with
+// NO null guard (SensorManager.cpp ~166) -> SIGSEGV if vm is null. getSensorList /
+// getDefaultSensor / createDirectChannel never touch it. The camera's EIS uses a
+// DIRECT sensor channel, so null is safe for it (device-verified 28.8 fps). Any
+// client that calls createEventQueue via this HIDL ISensorManager WOULD crash here.
+// To harden: patch SensorManager.cpp getLooper to guard `if (mJavaVm != nullptr)`
+// around Attach/DetachCurrentThread (safe — the poll thread never calls into Java in
+// this native build) + rebuild libsensorservicehidl. wart-sensors (task 94) should
+// use libsensor -> "sensorservice" directly, NOT this HIDL path, so it avoids it.
 //
 // Build: soong cc_binary on a-03 (see Android.bp).
 
