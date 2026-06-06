@@ -7,14 +7,21 @@ metadata:
   originSessionId: 8a79d726-5989-436c-93ca-fceb8f26e051
 ---
 
-When hot-installing a single warpkg with `wart-host --install` on a device whose
-stack was brought up by `run-hybrid-stack.sh`, you MUST pass
-`WART_APPS_ROOT=/data/local/tmp/wart-apps` — that is the `APPS_ROOT` the script
-sets and every running host/zygote loads from. The installer's DEFAULT root is
-`/data/wart/apps`, a DIFFERENT directory the running stack never reads. Installing
-without the env writes the new component to `/data/wart/apps/...` while the live
-launcher keeps loading the old one from `/data/local/tmp/wart-apps/...` — the
-update silently has no effect.
+NORMALIZED 2026-06-06 (commit ec90f10f): `wart-host`'s in-code default
+app-registry root is now `/data/local/tmp/wart-apps` (one resolver
+`app_loader::apps_root()` + `DEFAULT_APPS_ROOT`), matching what every launcher
+uses — so a bare `wart-host --install` (no env) now lands where the running stack
+reads. **With a wart-host older than ec90f10f the default was `/data/wart/apps`**,
+a DIFFERENT directory the stack never reads → installs silently had no effect
+(cost a long detour on the launcher font change). On an old binary you MUST pass
+`WART_APPS_ROOT=/data/local/tmp/wart-apps`. `WART_APPS_ROOT` still overrides for a
+sepolicy'd production root or a test sandbox.
+
+GOTCHA: `adb push` of the wart-host binary resets execute permission → new
+invocations fail `can't execute: Permission denied` (rc 126). Always
+`chmod 755 /data/local/tmp/wart-host` after pushing (run-hybrid-stack does this;
+a manual push must too). Pushing over the live binary is safe — running processes
+keep the old (now-unlinked) inode; only new spawns use the new file.
 
 Correct one-app reinstall (e.g. launcher):
 ```
