@@ -175,20 +175,39 @@ stubbed in `wart-activityms` (the proven task-87 pattern). Progress, layer by la
    → return true`). Stub (GenericStub, `android.hardware.ICameraServiceProxy`;
    `boolean isCameraDisabled(int)` reads `writeInt32(0)`=false → enabled) → policy
    check passes; error moved on.
-3. 🔲 **`processinfo`** (IProcessInfoService) — NOW: `-10000`, cameraserver
-   `getProcessStatesScoresImpl: Could not retrieve process states and scores from
-   ProcessInfoService after 5 retries` → `handleEvictionsLocked: Priority score
-   query failed: -110` (timeout) → `connectHelper: Connection timed out`. The
-   camera eviction logic queries `processinfo`. **Needs a CUSTOM stub** (not the
-   blanket GenericStub): `void getProcessStatesAndOomScoresFromPids(in int[] pids,
-   out int[] states, out int[] scores)` — read the input pids (count N) and reply
-   `writeNoException` + `states[N]` (e.g. PROCESS_STATE_TOP) + `scores[N]` (e.g. 0).
-   Code 2 (FIRST_CALL+1). Descriptor `android.os.IProcessInfoService`.
+3. ✅ **`processinfo`** (IProcessInfoService) — was: `-10000`, cameraserver
+   `Could not retrieve process states and scores from ProcessInfoService after 5
+   retries` → `Priority score query failed: -110` (timeout). The camera eviction
+   logic (`CameraService.cpp:2007` `getProcessStatesScoresFromPids`) queries
+   `processinfo` and FAILS the open if `err != OK`. **Custom stub** (`ProcessInfoStub`
+   — the blanket GenericStub can't serve `out int[]`): read the input pid count N,
+   reply `writeNoException` + `writeInt32(N)` + N×`PROCESS_STATE_TOP` + [scores:
+   `writeInt32(N)` + N×`0`] + trailing `writeInt32(NO_ERROR)`. Marshalling mirrors
+   `BpProcessInfoService` (frameworks/native `IProcessInfoService.cpp`); `N` MUST
+   equal the input count or the client returns `NOT_ENOUGH_DATA`. Codes 1/2,
+   descriptor `android.os.IProcessInfoService`.
 
-Remaining-after-3 unknowns: AppOps (`appops`) for the data-delivery/attribution
-path may surface once open passes; the CODEC `configure` block (pre-reorder) is
-still separately unconfirmed (may share these stubs or need its own). Camera open
-is close — 2 layers down, ≥1 (processinfo) to go.
+### ✅ CAMERA OPEN WORKS under `--no-art` (2026-06-06)
+
+With all three stubs (`permission_checker` + `media.camera.proxy` + `processinfo`)
+in `wart-activityms`, the reordered probe prints
+**`camera OPENED id=0 (status=0) ✓`** — risk #1 RESOLVED. The probe then proceeds
+to the encoder and hangs at **`AMediaCodec_configure`** (the separate, already-known
+codec blocker — `media.codec`'s `omx@1.0-service` stuck in binder), now cleanly
+isolated *after* a good camera open.
+
+## REMAINING BLOCKER: codec `configure` (the last piece for camera→VP8)
+
+The codec `configure` hang is independent of the camera path (it hangs for both HW
+`OMX.qcom.video.encoder.vp8` and SW `c2.android.vp8.encoder`). Same task-87 method:
+trace what `media.codec`/`omx@1.0-service` waits on during configure
+(`cat /sys/kernel/debug/binder/proc/<media.codec-pid>` for its outgoing target +
+`logcat | grep -iE 'Waiting for|MediaCodec|Codec2|resource'`) and stub it. Candidate
+dependencies: `IResourceManagerService` (`media.resource_manager` — present, but the
+*registration* call from configure may need a working reply), `platform_compat`
+(missing), `gpu`/`graphicsstats`, or an AppOps (`appops`, missing) attribution on
+the codec. Once configure passes, `createInputSurface` + `setRepeatingRequest` +
+the encoder drain complete the `camera → HW VP8` proof.
 
 See `wit/task-manager.wit` sibling-package style for `war:video`, `audio_impl.rs`
 (integration pattern), `external/rtc/rtc-rtp/src/codec/vp8` (packetizer).

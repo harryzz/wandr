@@ -150,6 +150,55 @@ private:
     String16 mDescriptor;
 };
 
+// IProcessInfoService stub (task 93 — camera open). cameraserver's
+// handleEvictionsLocked queries `processinfo` for the oom-priority of camera
+// clients; without system_server the query times out (-110) and openCamera fails.
+// The GenericStub can't serve this — the replies are sized int[] arrays the client
+// reads as RAW blocks (frameworks/native/libs/binder/IProcessInfoService.cpp
+// BpProcessInfoService): exception(0), then for each out-array `writeInt32(len)` +
+// `len` int32s, then a trailing status int32 — and `len` MUST equal the input pid
+// count or the client returns NOT_ENOUGH_DATA. We echo `length` back, reporting
+// every pid as PROCESS_STATE_TOP with oom score 0 (single privileged client; the
+// exact priority only matters when arbitrating eviction between camera clients).
+class ProcessInfoStub : public BBinder {
+public:
+    // Codes from IProcessInfoService.h (header-only enum).
+    enum {
+        GET_PROCESS_STATES_FROM_PIDS = IBinder::FIRST_CALL_TRANSACTION,       // 1
+        GET_PROCESS_STATES_AND_OOM_SCORES_FROM_PIDS,                          // 2
+    };
+    const String16& getInterfaceDescriptor() const override { return mDescriptor; }
+    status_t onTransact(uint32_t code, const Parcel& data, Parcel* reply,
+                        uint32_t flags) override {
+        switch (code) {
+            case GET_PROCESS_STATES_FROM_PIDS:
+            case GET_PROCESS_STATES_AND_OOM_SCORES_FROM_PIDS: {
+                if (!data.enforceInterface(getInterfaceDescriptor())) {
+                    return BAD_TYPE;
+                }
+                // writeInt32Array(length, pids) wrote the length first.
+                int32_t length = data.readInt32();
+                if (length < 0) length = 0;
+                reply->writeNoException();
+                // out int[] states
+                reply->writeInt32(length);
+                for (int32_t i = 0; i < length; i++) reply->writeInt32(PROCESS_STATE_TOP);
+                if (code == GET_PROCESS_STATES_AND_OOM_SCORES_FROM_PIDS) {
+                    // out int[] scores
+                    reply->writeInt32(length);
+                    for (int32_t i = 0; i < length; i++) reply->writeInt32(0);
+                }
+                reply->writeInt32(NO_ERROR);  // trailing status the client returns
+                return NO_ERROR;
+            }
+            default:
+                return BBinder::onTransact(code, data, reply, flags);
+        }
+    }
+private:
+    String16 mDescriptor{"android.os.IProcessInfoService"};
+};
+
 }  // namespace
 
 int main() {
@@ -214,6 +263,11 @@ int main() {
         status_t s = sm->addService(String16(g.name), sp<GenericStub>::make(g.descriptor));
         ALOGI("wart-activityms: addService(%s) = %d", g.name, s);
     }
+
+    // IProcessInfoService needs the custom array-marshalling stub (task 93, camera
+    // eviction priority query) — the generic zero-reply can't serve its out int[].
+    status_t pis = sm->addService(String16("processinfo"), sp<ProcessInfoStub>::make());
+    ALOGI("wart-activityms: addService(processinfo) = %d", pis);
 
     ALOGI("wart-activityms: serving");
     IPCThreadState::self()->joinThreadPool();
