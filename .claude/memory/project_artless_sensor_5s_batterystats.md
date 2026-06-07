@@ -62,6 +62,11 @@ Returns MODE_ALLOWED(0) everywhere = permissive (correct for wart). Codes from
 IAppOpsService.h enum (FIRST_CALL=1). Deployed+registered (service check appops=found).
 See [[project_artless_audio]].
 
+**Bonus — likely fixed the task-95 EIS-gyro race too ("battery saves gyro").** The
+camera HAL's EIS gyro-arm is a sensor enable; under --no-art it paid this same 5s
+stall, plausibly losing the ~1/8 EIS startup race. After this fix the camera probe won
+3/3 across raw/SW/HW modes — strong correlation. See [[project_artless_camera]].
+
 Extends [[project_arbiter_sensors]], [[project_proximity_screen_off]],
 [[project_art_shutdown]]. Discipline note: this was found by READING the source
 path end-to-end (CLAUDE.md rule #1) after days of patch-and-cycle — see

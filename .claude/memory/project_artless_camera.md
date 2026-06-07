@@ -1,21 +1,41 @@
 ---
 name: project_artless_camera
-description: Task 93/95 — camera capture works under --no-art (29 fps) but only ~1/8 (EIS-gyro race); 5-piece stub chain + am-spin (solved) + gyro race (task 95)
+description: Task 93/95 ✅ camera capture works under --no-art (29fps raw / 17fps VP8 encode); EIS-gyro race now reliably won — likely the batterystats fix removed the 5s gyro-enable stall
 metadata: 
   node_type: memory
   type: project
   originSessionId: 8a79d726-5989-436c-93ca-fceb8f26e051
 ---
 
-**⚠️ 2026-06-06 CORRECTION (task 95):** the 28.8 fps was **real but
-non-deterministic** — the camera streams full **29 fps (ART parity), stable once
-running**, but only when a **~1-in-8 EIS-gyro startup race is won**; lose → gyro
-unarmed (`msm_stopGyroThread: invalid timer state = 0`) → 0 frames. Two entangled
-bugs: (1) **Magisk `am`-spin** starved the qcam HAL → SIGABRT (the crash-mode) —
-**SOLVED via `adb root`**, see [[reference_artoff_magisk_am_spin]]; (2) the **gyro
-session race** — the real remaining blocker, see **`tasks/95-camera-noart-eis-gyro-session-race.md`**.
-Leading fix theory: a **persistent gyro client** (ART keeps the gyro warm; `--no-art`
-cold-establishes it each open). The 5-piece stub chain below is still correct/required.
+**✅ 2026-06-07 UPDATE (task 95 — reliably works now):** all three `--probe-video`
+modes ran **clean 3/3 today** under `--no-art` (no gyro-race loss):
+- `--probe-video imagereader` (raw YUV delivery, no codec): **29.1 fps** 640×480,
+  first-frame 140 ms — full ART-parity camera delivery.
+- `--probe-video c2.android.vp8.encoder` (SW VP8): **17.3 fps**, ~1830 B/frame, 3 kf,
+  180 ms.
+- `--probe-video` (default HW VP8, `createEncoderByType`): **17.4 fps**, ~792 B/frame,
+  1 kf, 128 ms. HW is the better path (smaller+faster); pick it for video calls.
+- **Raw 29 vs encode 17 split** is the encoder/input-surface pipeline in the probe,
+  NOT the camera and NOT codec choice (both SW+HW = identical 87 frames). Naming: it's
+  `imagereader` (codec-free) — there is NO `imagereaderclear`; "software codec" = the
+  separate `c2.android.vp8.encoder` name-arg.
+
+**Likely WHY the gyro race is now won — the `batterystats` fix (battery saves gyro 🙂).**
+The EIS gyro-arm is a *sensor enable*, which under --no-art was paying the same ~5s
+`BatteryService::checkService` blocking-`getService("batterystats")` stall as proximity
+(see [[project_artless_sensor_5s_batterystats]]). Registering the `batterystats` shim
+stub removed that 5s gyro-enable stall → the EIS startup timing tightened → race won
+3/3 (vs the old ~1/8). Strong correlation, not yet isolated to a controlled A/B (the
+old "persistent gyro client" theory may now be moot). If it ever regresses, re-check
+that `batterystats` (+ `appops`) resolve before the camera opens.
+
+**⚠️ prior (2026-06-06) framing, kept for context:** 28.8 fps was **real but
+non-deterministic** — full 29 fps once running, but only when a **~1-in-8 EIS-gyro
+startup race was won**; lose → gyro unarmed (`msm_stopGyroThread: invalid timer
+state = 0`) → 0 frames. Two entangled bugs: (1) **Magisk `am`-spin** starved the qcam
+HAL → SIGABRT — **SOLVED via `adb root`**, see [[reference_artoff_magisk_am_spin]];
+(2) the **gyro session race** (task 95) — now addressed by the batterystats fix above.
+The 5-piece stub chain below is still correct/required.
 
 Task 93 — **camera CAPTURE works under `--no-art`**: device-verified 28.8 fps /
 640×480 YUV (`wart-host --probe-video imagereader`), matching ART's 29 fps. The
