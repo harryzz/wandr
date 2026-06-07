@@ -1,28 +1,59 @@
-// wart-activityms — a minimal stub "activity" (IActivityManager) binder service for
-// ART-off operation.
+// wart-framework-shim — the designed framework-shim for `--no-art` operation
+// (task 96). Replaces the ad-hoc `wart-activityms` stub.
 //
-// Under --no-art the Java system_server (which hosts ActivityManager) is gone, but
-// native survivors still need it: audioserver (AudioPolicyService::UidPolicy) and
-// cameraserver call defaultServiceManager()->waitForService("activity") and then
-// registerUidObserver / isUidActive / getUidProcessState / checkPermission. With no
-// "activity" service they block forever, wedging audioserver in init so
-// media.audio_flinger/policy/aaudio never register → no audio. This permissive stub
-// registers "activity" and answers those calls so the survivors finish init. It is
-// NOT a real ActivityManager — every uid is reported foreground (PROCESS_STATE_TOP)
-// and every permission granted (fine for wart: single-user, privileged). Later it
+// Under `--no-art` the Java system_server (which hosts ActivityManager,
+// PermissionController, SensorPrivacyManager, the package manager, …) is gone, but
+// the native survivors (audioserver / cameraserver / sensorservice / the codec
+// stack) still resolve a handful of its binder services during bring-up and on the
+// stream/camera start paths. This shim registers exactly that minimal set and
+// answers benignly, so nothing wedges. It is started and confirmed serving BEFORE
+// audioserver / sensorservice / cameraserver are (re)started (run-hybrid-stack.sh
+// native+shim layer) — the "shim-first" half of task 96.
+//
+// ── The service set is DERIVED from the daemon sources (not discovered by hang) ──
+// (vendored under runtime/wart-host/vendor/; verified 2026-06-07.)
+//
+// Hard blockers — `waitForService` (blocks forever until registered; some FATAL):
+//   • "activity"        audioserver AudioPolicyService::UidPolicy ActivityManager via
+//                       BinderProxy::waitServiceOrDie → waitForService, with
+//                       LOG_ALWAYS_FATAL_IF(null) (BinderProxy.h:59). MUST implement
+//                       the IActivityManager interface (descriptor must match) → the
+//                       precise ActivityStub below.
+//   • "sensor_privacy"  SensorPrivacyManager::getService → waitForService
+//                       (frameworks-native libs/sensorprivacy/SensorPrivacyManager.cpp).
+//   • "package_native"  SensorService::enable (SensorService.cpp:144) and
+//                       MediaCodec::connectFormatShaper (MediaCodec.cpp:2681).
+//   • "processinfo"     media/utils/ProcessInfo.cpp:55/90 (codec/camera eviction
+//                       priority). Replies are sized int[] arrays read as RAW blocks
+//                       → the custom ProcessInfoStub below (the generic 0-reply can't
+//                       serve it; the out-array length must echo the input pid count).
+//
+// Soft paths — `checkService`/`getService` (return null immediately, but a wrong/
+// absent answer fail-closes or spins a retry-with-sleep loop):
+//   • "scheduling_policy"  AAudio MMAP start → requestPriority spins on
+//                          checkService("scheduling_policy") when system_server is gone.
+//   • "permission"         MmapThread::start → checkAttributionSourcePackage →
+//                          PermissionController::getService loops checkService 10s.
+//   • "permission_checker" cameraserver AttributionAndPermissionUtils →
+//                          PermissionChecker getService loop.
+//   • "media.camera.proxy" CameraServiceProxyWrapper::isCameraDisabled fail-CLOSES
+//                          (returns true = camera disabled) if the binder is null.
+//
+// Every uid is reported foreground (PROCESS_STATE_TOP) and every permission granted —
+// correct for wart (single-user, privileged). NOT a real ActivityManager; later it
 // can be backed by the arbiter's real foreground/UID state.
 //
 // C++/libbinder (NOT rsbinder): rsbinder's addService can't register with the real
 // Android servicemanager (reply-parse BadParcelable); C++ libbinder addService is
-// proven under --no-art (wart-inputflinger registers wart.windowreg). Built on a-03
-// like wart-inputflinger; launch via wart-launch (uid system) so it can register a
-// system service name. See [[project-artless-audio]].
+// proven under --no-art. Built on a-03; launch via wart-launch (uid system) so it can
+// register a system service name. Set WART_SHIM_TRACE=1 to log every transaction
+// (off by default — the per-call log was task-94 dissection scaffolding that spams
+// the log in steady state). See docs/artless-native-service-model.md, task 96.
 //
 // The transaction codes + parcel layout mirror frameworks/native
 // libs/binder/IActivityManager.{h,cpp} (the native client audioserver uses): binder
-// dispatches by integer code (not method name), so only the descriptor
-// ("android.app.IActivityManager"), the codes, and the per-method parcel format must
-// match — they do.
+// dispatches by integer code (not method name), so only the descriptor, the codes,
+// and the per-method parcel format must match — they do.
 
 #include <binder/Binder.h>  // class BBinder
 #include <binder/IActivityManager.h>
@@ -37,9 +68,16 @@
 #include <log/log.h>
 #include <utils/String8.h>
 
+#include <cstdlib>  // getenv
+
 using namespace android;
 
 namespace {
+
+// Per-transaction tracing — OFF unless WART_SHIM_TRACE is set in the environment.
+// (Task-94 used it to dissect exactly what the camera HAL asks each stub; in steady
+// `--no-art` it is pure log spam.)
+static const bool kTrace = (getenv("WART_SHIM_TRACE") != nullptr);
 
 // ProcessStateEnum.aidl: UNKNOWN=-1, PERSISTENT=0, PERSISTENT_UI=1, TOP=2. Reporting
 // TOP/foreground for every uid means audio focus / record-privacy never restrict a
@@ -65,9 +103,11 @@ public:
 
     status_t onTransact(uint32_t code, const Parcel& data, Parcel* reply,
                         uint32_t flags) override {
-        ALOGI("WARTAMS-TRACE activity code=%u flags=%u callingPid=%d callingUid=%d",
-              code, flags, IPCThreadState::self()->getCallingPid(),
-              IPCThreadState::self()->getCallingUid());
+        if (kTrace) {
+            ALOGI("WART-SHIM-TRACE activity code=%u flags=%u callingPid=%d callingUid=%d",
+                  code, flags, IPCThreadState::self()->getCallingPid(),
+                  IPCThreadState::self()->getCallingUid());
+        }
         // Every IActivityManager call writes the interface token first; consume +
         // verify it (the client wrote the same descriptor).
         if (!data.enforceInterface(kDescriptor)) {
@@ -131,26 +171,25 @@ public:
     }
 };
 
-// Generic permissive stub for the OTHER system_server services native survivors
-// (audioserver/cameraserver) block on under --no-art (sensor_privacy, …). It only
-// needs to (a) exist so their waitForService() returns, and (b) answer benignly: it
-// ignores the request args and replies `noException` + a zero — which a client reads
-// as false / 0 / null for bool/int/object returns (e.g. isSensorPrivacyEnabled →
-// false = privacy OFF = mic allowed), and which void clients ignore. Each instance
-// carries its own descriptor so a client interface_cast resolves.
+// Generic permissive stub for the system_server services native survivors block on /
+// query that only need to (a) exist so their waitForService()/checkService() returns,
+// and (b) answer benignly: it ignores the request args and replies `noException` + a
+// zero — which a client reads as false / 0 / null for bool/int/object returns (e.g.
+// isSensorPrivacyEnabled → false = privacy OFF = mic allowed; isCameraDisabled →
+// false = camera ENABLED), and which void clients ignore. Each instance carries its
+// own descriptor so a client interface_cast resolves.
 class GenericStub : public BBinder {
 public:
     explicit GenericStub(const char* descriptor) : mDescriptor(descriptor) {}
     const String16& getInterfaceDescriptor() const override { return mDescriptor; }
     status_t onTransact(uint32_t code, const Parcel& /*data*/, Parcel* reply,
                         uint32_t flags) override {
-        // TRACE (task 94 dissect): log every call so we can see exactly what the
-        // camera HAL asks each stub during EIS setup, and whether our generic
-        // writeInt32(0) is the wrong answer for any of them.
-        ALOGI("WARTAMS-TRACE %s code=%u flags=%u callingPid=%d callingUid=%d",
-              String8(mDescriptor).c_str(), code, flags,
-              IPCThreadState::self()->getCallingPid(),
-              IPCThreadState::self()->getCallingUid());
+        if (kTrace) {
+            ALOGI("WART-SHIM-TRACE %s code=%u flags=%u callingPid=%d callingUid=%d",
+                  String8(mDescriptor).c_str(), code, flags,
+                  IPCThreadState::self()->getCallingPid(),
+                  IPCThreadState::self()->getCallingUid());
+        }
         if (reply != nullptr) {
             reply->writeNoException();
             reply->writeInt32(0);
@@ -161,16 +200,16 @@ private:
     String16 mDescriptor;
 };
 
-// IProcessInfoService stub (task 93 — camera open). cameraserver's
-// handleEvictionsLocked queries `processinfo` for the oom-priority of camera
-// clients; without system_server the query times out (-110) and openCamera fails.
-// The GenericStub can't serve this — the replies are sized int[] arrays the client
-// reads as RAW blocks (frameworks/native/libs/binder/IProcessInfoService.cpp
-// BpProcessInfoService): exception(0), then for each out-array `writeInt32(len)` +
-// `len` int32s, then a trailing status int32 — and `len` MUST equal the input pid
-// count or the client returns NOT_ENOUGH_DATA. We echo `length` back, reporting
-// every pid as PROCESS_STATE_TOP with oom score 0 (single privileged client; the
-// exact priority only matters when arbitrating eviction between camera clients).
+// IProcessInfoService stub. ProcessInfo (media/utils, codec/camera eviction priority)
+// queries `processinfo` for the oom-priority of clients; without system_server the
+// query times out and the operation fails. The GenericStub can't serve this — the
+// replies are sized int[] arrays the client reads as RAW blocks
+// (frameworks/native/libs/binder/IProcessInfoService.cpp BpProcessInfoService):
+// exception(0), then for each out-array `writeInt32(len)` + `len` int32s, then a
+// trailing status int32 — and `len` MUST equal the input pid count or the client
+// returns NOT_ENOUGH_DATA. We echo `length` back, reporting every pid as
+// PROCESS_STATE_TOP with oom score 0 (single privileged client; the exact priority
+// only matters when arbitrating eviction between camera clients).
 class ProcessInfoStub : public BBinder {
 public:
     // Codes from IProcessInfoService.h (header-only enum).
@@ -181,9 +220,11 @@ public:
     const String16& getInterfaceDescriptor() const override { return mDescriptor; }
     status_t onTransact(uint32_t code, const Parcel& data, Parcel* reply,
                         uint32_t flags) override {
-        ALOGI("WARTAMS-TRACE processinfo code=%u flags=%u callingPid=%d callingUid=%d",
-              code, flags, IPCThreadState::self()->getCallingPid(),
-              IPCThreadState::self()->getCallingUid());
+        if (kTrace) {
+            ALOGI("WART-SHIM-TRACE processinfo code=%u flags=%u callingPid=%d callingUid=%d",
+                  code, flags, IPCThreadState::self()->getCallingPid(),
+                  IPCThreadState::self()->getCallingUid());
+        }
         switch (code) {
             case GET_PROCESS_STATES_FROM_PIDS:
             case GET_PROCESS_STATES_AND_OOM_SCORES_FROM_PIDS: {
@@ -221,79 +262,36 @@ int main() {
 
     sp<IServiceManager> sm = defaultServiceManager();
 
-    // The precise IActivityManager stub.
+    // The precise IActivityManager stub (the audioserver wedge — FATAL if absent).
     status_t st = sm->addService(String16("activity"), sp<ActivityStub>::make());
     if (st != OK) {
-        ALOGE("wart-activityms: addService(activity) failed: %d", st);
+        ALOGE("wart-framework-shim: addService(activity) failed: %d", st);
         return 1;
     }
-    ALOGI("wart-activityms: registered 'activity' (IActivityManager)");
+    ALOGI("wart-framework-shim: registered 'activity' (IActivityManager)");
 
-    // Generic stubs for the other system_server services audioserver/cameraserver
-    // wait on under --no-art. Add names here as more surface in the logs.
+    // The remaining services native survivors block on / query under --no-art.
+    // (Derived from the daemon sources — see the header comment. Add names here only
+    // with a source citation, never by "discover-a-missing-stub-by-hang".)
     struct { const char* name; const char* descriptor; } generics[] = {
         {"sensor_privacy", "android.hardware.ISensorPrivacyManager"},
-        // AAudio MMAP start path: AAudioServiceStreamBase::registerAudioThread ->
-        // android::requestPriority(isForApp=true) -> infinite loop on
-        // checkService("scheduling_policy") when system_server is gone, so the
-        // stream never starts (no PCM, no route) -> silence. GenericStub's
-        // writeNoException()+writeInt32(0) is exactly what BpSchedulingPolicyService
-        // ::requestPriority reads (NO_ERROR). See [[project-artless-audio]].
         {"scheduling_policy", "android.os.ISchedulingPolicyService"},
-        // AAudio MMAP start path (4th stub): MmapThread::start ->
-        // afutils::checkAttributionSourcePackage -> PermissionController::
-        // getPackagesForUid -> getService() loops `checkService("permission");
-        // sleep(1)` for 10s then "giving up" (frameworks-native/libs/binder/
-        // PermissionController.cpp:30) when system_server's IPermissionController
-        // is gone. This 10s block runs ON the audioserver command thread inside
-        // START_CLIENT, so the host's startStream (3s timeout) gives up -> no PCM
-        // -> silence (device-confirmed: "Waiting for permission service" x N).
-        // Registering any binder makes checkService return instantly; GenericStub's
-        // writeNoException()+writeInt32(0) decodes as getPackagesForUid's empty
-        // Vector<String16>, which checkAttributionSourcePackage handles fine.
         {"permission", "android.os.IPermissionController"},
-        // Camera/codec path (task 93): cameraserver's AttributionAndPermissionUtils
-        // -> PermissionChecker (frameworks/native/libs/permission) blocks on
-        // `getService("permission_checker")` when system_server's
-        // PermissionCheckerService is gone (device-confirmed: cameraserver logs
-        // "PermissionChecker: Waiting for permission checker service"). The
-        // IPermissionChecker methods we hit return an int: checkPermission/checkOp
-        // -> PERMISSION_GRANTED (0); finishDataDelivery is void. GenericStub's
-        // writeNoException()+writeInt32(0) is exactly PERMISSION_GRANTED, so a single
-        // generic stub unblocks the camera (and the codec attribution path).
         {"permission_checker", "android.permission.IPermissionChecker"},
-        // Camera open (task 93): CameraService::connectDeviceImpl ->
-        // CameraServiceProxyWrapper::isCameraDisabled does
-        // `checkService("media.camera.proxy")` and FAIL-CLOSES — `if (proxyBinder
-        // == nullptr) return true` (camera DISABLED) — when system_server's
-        // ICameraServiceProxy is gone (device-confirmed: "Camera disabled by device
-        // policy", openCamera -> ACAMERA_ERROR_PERMISSION_DENIED -10012). Registering
-        // a stub makes the proxy non-null; `boolean isCameraDisabled(int)` then
-        // reads GenericStub's writeInt32(0) = false → camera ENABLED. Its other
-        // methods are oneway void (reply ignored).
         {"media.camera.proxy", "android.hardware.ICameraServiceProxy"},
-        // Codec configure (task 93): MediaCodec::connectFormatShaper does
-        // `waitForService("package_native")` (BLOCKS forever until registered) and
-        // then `IPackageManagerNative::hasSystemFeature(name, ver, out bool)` only to
-        // guess if the device is "handheld" for format-shaping — the answer isn't
-        // load-bearing for configure (device-confirmed: AMediaCodec_configure hangs,
-        // probe pid retrying `package_native` 14×, service not found). A GenericStub
-        // unblocks the wait; its writeNoException()+writeInt32(0) reads as Status OK +
-        // hasFeature=false (→ shaper treats us as not-handheld, harmless), so configure
-        // proceeds. (MediaCodec.cpp:2681; descriptor = the stable-AIDL package.name.)
         {"package_native", "android.content.pm.IPackageManagerNative"},
     };
     for (const auto& g : generics) {
         status_t s = sm->addService(String16(g.name), sp<GenericStub>::make(g.descriptor));
-        ALOGI("wart-activityms: addService(%s) = %d", g.name, s);
+        ALOGI("wart-framework-shim: addService(%s) = %d", g.name, s);
     }
 
-    // IProcessInfoService needs the custom array-marshalling stub (task 93, camera
+    // IProcessInfoService needs the custom array-marshalling stub (camera/codec
     // eviction priority query) — the generic zero-reply can't serve its out int[].
     status_t pis = sm->addService(String16("processinfo"), sp<ProcessInfoStub>::make());
-    ALOGI("wart-activityms: addService(processinfo) = %d", pis);
+    ALOGI("wart-framework-shim: addService(processinfo) = %d", pis);
 
-    ALOGI("wart-activityms: serving");
+    ALOGI("wart-framework-shim: serving");
     IPCThreadState::self()->joinThreadPool();
     return 0;
 }

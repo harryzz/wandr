@@ -1,11 +1,38 @@
 # Task 96 — Churn-free, shim-first `--no-art` native-service bringup
 
-> Status: 📐 OPEN — design agreed, not implemented.
-> Supersedes the C3 "patch `aidl/EventQueue.cpp`" proposal
+> Status: ✅ DONE + device-verified (Pixel 2 XL, 2026-06-07). Zero platform-lib
+> patches. Supersedes the C3 "patch `aidl/EventQueue.cpp`" proposal
 > (`docs/sensor-access-conflicts-no-art.md`). Full analysis:
 > `docs/artless-native-service-model.md`.
 > Constraint of record (user, 2026-06-07): **do NOT patch platform libraries —
 > use sensorservice / audioserver / `libsensorserviceaidl` / the HALs as-is.**
+>
+> ## Implementation (device-verified)
+> - **`runtime/wart-framework-shim/`** (new C++ binary; retires `wart-activityms`):
+>   registers the source-derived blocker set, started **shim-first** before
+>   audioserver/sensorservice. `waitForService` blockers (`activity` [FATAL for
+>   audioserver UidPolicy], `sensor_privacy`, `package_native`, `processinfo`) +
+>   `checkService`/`getService` paths (`scheduling_policy`, `permission`,
+>   `permission_checker`, `media.camera.proxy`). Per-call trace gated behind
+>   `WART_SHIM_TRACE`. Build on a-03 (new module → `m` dies in LineageOS dexpreopt
+>   kati; direct-ninja the soong intermediate).
+> - **`tools/scripts/run-hybrid-stack.sh`** split into a **native+shim layer**
+>   (`bring_up_native_shim`, idempotent, skipped when `native_shim_healthy`) and a
+>   restartable **wart layer**; new **`--wart-only`** fast restart (no `--restore-art`
+>   boot); framework-up gate dropped under `--no-art`.
+> - **Key finding:** there is **no real `DEAD_OBJECT` race** on taimen — the single
+>   standalone-sensorservice claim succeeds first try; the qcom SSC HAL just takes
+>   ~13 s to enumerate the gyro (process stays alive). So the claim is **once + patient
+>   poll** (retry only if the process actually dies / FATAL-aborts), not kill-retry churn.
+> - **Verified:** cold `--restore-art`→`--no-art` = exactly one of each service,
+>   once-fresh claim (no `DEAD_OBJECT`), ISensorManager registers, arbiter receives
+>   live sensor data, audio fresh, idle CPU ~6 %, no EventQueue spin — stock libs.
+>   `--wart-only` = **27 s**, native+shim pids unchanged, arbiter fresh, sensors/audio
+>   keep working.
+> - **Gotchas fixed during bring-up** (see `.task-state`): `cmd package
+>   resolve-activity` exit-20 vs `set -e`/pipefail; `pkill -9 -f` self-matching its own
+>   `su -c` cmdline (→ kill by device-side `pidof`); `service list` *pinging* dead
+>   wart-layer services and blocking (→ `service check <name>` for the health probe).
 
 ## TL;DR
 

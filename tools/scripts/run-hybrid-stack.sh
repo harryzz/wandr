@@ -34,7 +34,8 @@ if [[ "${1:-}" == "--stop" ]]; then
     adb shell "su -c 'pkill -9 -f wart-sensormanager'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f /system/bin/sensorservice'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-net'" >/dev/null 2>&1 || true
-    adb shell "su -c 'pkill -9 -f wart-activityms'" >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f wart-framework-shim'" >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f wart-activityms'" >/dev/null 2>&1 || true  # migration: clear stale old stub
     adb shell "su -c 'rm -f /data/local/tmp/wart-zygote.sock /data/local/tmp/wart-arbiter.sock'" >/dev/null 2>&1 || true
     adb shell "su -c 'am start -n com.android.systemui/.SystemUIService'" >/dev/null 2>&1 || true
     adb shell "input keyevent KEYCODE_HOME" >/dev/null 2>&1 || true
@@ -55,9 +56,10 @@ if [[ "${1:-}" == "--restore-art" ]]; then
     adb shell "su -c 'pkill -9 -f wart-sensormanager'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f /system/bin/sensorservice'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-net'" >/dev/null 2>&1 || true
-    # Kill our stub system_server (activity/permission/...) BEFORE `start` brings the
-    # real system_server back — else our stub shadows the real services.
-    adb shell "su -c 'pkill -9 -f wart-activityms'" >/dev/null 2>&1 || true
+    # Kill our framework-shim (activity/permission/...) BEFORE `start` brings the
+    # real system_server back — else our shim shadows the real services.
+    adb shell "su -c 'pkill -9 -f wart-framework-shim'" >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f wart-activityms'" >/dev/null 2>&1 || true  # migration: clear stale old stub
     adb shell "su -c 'pkill -9 -f wart-arbiter'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f wart-host'"    >/dev/null 2>&1 || true
     # Also kill any stuck Magisk su-loggers spinning against the (dead) framework,
@@ -77,8 +79,17 @@ fi
 #             framework (zygote + zygote_secondary → system_server) while keeping
 #             the native survivors (surfaceflinger/audioserver/sensorservice).
 #             Recover with `--restore-art`.
+#   --wart-only  (task 96) implies --no-art. The FAST restart path: assume the
+#             native+shim layer (wart-framework-shim + sensorservice + audioserver +
+#             wart-sensormanager) is ALREADY up and healthy from a prior --no-art
+#             run, leave it untouched, and restart ONLY the wart layer (arbiter /
+#             host zygote+hosts / inputflinger) in place. No framework stop, no
+#             --restore-art boot cycle — completes in seconds. Use after the first
+#             cold entry into --no-art. (Plain --no-art also skips the native+shim
+#             bringup when it detects the layer already healthy — see Step 5.)
 EXTRA_ENV=""
 NO_ART=0
+WART_ONLY=0
 for arg in "$@"; do
     case "$arg" in
         # --evdev = the task-80 BOOTSTRAP path: each host runs its own evdev
@@ -89,6 +100,9 @@ for arg in "$@"; do
         # (focus-based for apps, system keys → arbiter once). Hosts use their normal
         # inputflinger CLIENT path (NO evdev), so EXTRA_ENV stays empty here.
         --no-art) NO_ART=1 ;;
+        # --wart-only (task 96): fast wart-layer-only restart on a live native+shim
+        # layer. Implies --no-art (the layer only exists under --no-art).
+        --wart-only) NO_ART=1; WART_ONLY=1 ;;
     esac
 done
 
@@ -126,12 +140,16 @@ SENSORMGR_BIN="$REPO_ROOT/runtime/wart-sensormanager/cpp/wart-sensormanager"
 # NOTE: assumes the WiFi chip is already powered + STA iface up (WiFi was ON
 # under ART before --no-art); cold chip power-up via the IWifi HAL is M2.
 WART_NET_BIN="$REPO_ROOT/runtime/wart-net/target/aarch64-linux-android/release/wart-net"
-# ART-off audio: a stub "activity" (IActivityManager) + "sensor_privacy" binder
-# service (C++, built on a-03). audioserver/cameraserver block on
-# waitForService("activity")/("sensor_privacy") (those live in the dead system_server)
-# → audioserver wedges in init → media.audio_* never register → no audio. The stub
-# unblocks them. See [[project-artless-audio]].
-ACTIVITYMS_BIN="$REPO_ROOT/runtime/wart-activityms/cpp/wart-activityms"
+# Task 96 — the designed --no-art framework-shim (C++, built on a-03), replacing the
+# ad-hoc wart-activityms stub. Registers the minimal binder service set the native
+# survivors block on / query with the Java system_server stopped — derived from the
+# daemon sources: waitForService blockers `activity` (audioserver UidPolicy, FATAL if
+# absent), `sensor_privacy`, `package_native` (sensorservice + codec), `processinfo`;
+# plus the checkService/getService fail-close/sleep-loop paths `scheduling_policy`,
+# `permission`, `permission_checker`, `media.camera.proxy`. Brought up FIRST in the
+# native+shim layer, before audioserver/sensorservice. See
+# docs/artless-native-service-model.md, runtime/wart-framework-shim/.
+SHIM_BIN="$REPO_ROOT/runtime/wart-framework-shim/cpp/wart-framework-shim"
 APPS_ROOT="/data/local/tmp/wart-apps"
 # Task 57 — the app the arbiter designates as "home": foregrounded at
 # boot, on `go-home`, and as the fall-back when the foreground app dies.
@@ -147,18 +165,31 @@ for bin in "$HOST_BIN" "$ARB_BIN" "$SHIM"; do
     fi
 done
 
-# Resolve home package the same way standalone-launch.sh does.
-HOME_PKG="$(
-    adb shell "cmd package resolve-activity \
-        -a android.intent.action.MAIN \
-        -c android.intent.category.HOME" 2>/dev/null \
-        | awk -F= '/packageName=/ { gsub(/[ \r]/, "", $2); print $2; exit }'
-)"
-if [[ -z "$HOME_PKG" ]]; then
-    echo "✗ could not resolve home (launcher) package — bailing." >&2
-    exit 1
+# Resolve the stock home (launcher) package via the framework — used ONLY under ART
+# (to force-stop SystemUI + the launcher so the runtime owns the screen). Under
+# --no-art the framework is (or will be) stopped and HOME_PKG is NEVER used (the wart
+# launcher is the arbiter-persisted WART_HOME_APP / war.launcher, not the stock one).
+# Task 96 DROPS the framework-up gate under --no-art: skip the `cmd package` call
+# entirely so a wart-only restart never depends on a live framework. (`cmd package
+# resolve-activity` also returns exit 20 in some framework states, which under
+# `set -o pipefail` would kill the assignment before any guard — another reason to
+# skip it rather than tolerate-and-check.)
+HOME_PKG=""
+if [[ "$NO_ART" == "1" ]]; then
+    echo "▸ --no-art: skipping stock-home resolution (not needed; wart home is arbiter-persisted)"
+else
+    HOME_PKG="$(
+        adb shell "cmd package resolve-activity \
+            -a android.intent.action.MAIN \
+            -c android.intent.category.HOME" 2>/dev/null \
+            | awk -F= '/packageName=/ { gsub(/[ \r]/, "", $2); print $2; exit }' || true
+    )"
+    if [[ -z "$HOME_PKG" ]]; then
+        echo "✗ could not resolve home (launcher) package — bailing." >&2
+        exit 1
+    fi
+    echo "▸ home package: $HOME_PKG"
 fi
-echo "▸ home package: $HOME_PKG"
 
 restore_ui() {
     set +e
@@ -170,7 +201,8 @@ restore_ui() {
     adb shell "su -c 'pkill -9 -f wart-sensormanager'" >/dev/null 2>&1
     adb shell "su -c 'pkill -9 -f /system/bin/sensorservice'" >/dev/null 2>&1
     adb shell "su -c 'pkill -9 -f wart-net'" >/dev/null 2>&1
-    adb shell "su -c 'pkill -9 -f wart-activityms'" >/dev/null 2>&1
+    adb shell "su -c 'pkill -9 -f wart-framework-shim'" >/dev/null 2>&1
+    adb shell "su -c 'pkill -9 -f wart-activityms'" >/dev/null 2>&1  # migration: clear stale old stub
     adb shell "su -c 'rm -f /data/local/tmp/wart-zygote.sock /data/local/tmp/wart-arbiter.sock'" >/dev/null 2>&1
     # Path A stops the Java framework EARLY (before the zygote), so a failure here
     # leaves it down — restart it (else `am start` below is a no-op + the device
@@ -254,14 +286,17 @@ elif [[ "$NO_ART" == "1" ]]; then
     echo "    build: (cd runtime/wart-net && cargo build --release)" >&2
 fi
 
-# ART-off audio stub (activity + sensor_privacy). Pushed if present (built on a-03);
-# launched under --no-art (below).
-if [[ -f "$ACTIVITYMS_BIN" ]]; then
-    push_if_newer "$ACTIVITYMS_BIN" "/data/local/tmp/wart-activityms"
-    adb shell 'chmod 755 /data/local/tmp/wart-activityms'
-elif [[ "$NO_ART" == "1" ]]; then
-    echo "  ⚠ wart-activityms missing — audio (audioserver) will wedge under --no-art" >&2
-    echo "    build on a-03: ninja -f out/combined-aosp_arm64.ninja out/soong/.intermediates/external/wart-activityms/..." >&2
+# Task 96 framework-shim (replaces wart-activityms). Pushed if present (built on
+# a-03); started FIRST in the native+shim layer under --no-art (below). On a
+# --wart-only restart the device copy is reused as-is (the layer is left running), so
+# a missing local build is fine.
+if [[ -f "$SHIM_BIN" ]]; then
+    push_if_newer "$SHIM_BIN" "/data/local/tmp/wart-framework-shim"
+    adb shell 'chmod 755 /data/local/tmp/wart-framework-shim'
+elif [[ "$NO_ART" == "1" && "$WART_ONLY" != "1" ]]; then
+    echo "  ⚠ wart-framework-shim missing — audio/camera/sensors will wedge under --no-art" >&2
+    echo "    build on a-03: scp runtime/wart-framework-shim/{cpp/wart_framework_shim.cpp,cpp/Android.bp} a-03:~/android/lineage/external/wart-framework-shim/ && \\" >&2
+    echo "    ssh a-03 'cd ~/android/lineage && source build/envsetup.sh && lunch aosp_arm64-trunk_staging-userdebug && export TARGET_RELEASE=trunk_staging && m wart-framework-shim'" >&2
 fi
 
 # Robustly start a long-lived device process, fully detached from this adb
@@ -323,6 +358,159 @@ wait_for_sock() {
     return 1
 }
 
+# ── Task 96: native+shim layer (brought up ONCE, idempotently) ────────────────────
+# The framework-coupled native services + the framework-shim form a layer that, once
+# healthy, OUTLIVES wart-stack restarts. Restarting the wart layer (arbiter / hosts /
+# inputflinger) on top of a live native+shim layer is the fast `--no-art` restart
+# (no `--restore-art` boot). See docs/artless-native-service-model.md.
+#
+# `native_shim_healthy` — 0 (true) iff every member of the native+shim layer is up and
+# serving: the framework-shim ("activity"), the sensors HAL owner + AIDL bridge
+# (sensorservice gyro + frameworks.sensorservice.ISensorManager), and audio
+# (media.audio_policy). Reads are PLAIN `adb shell` (no `su -c`) — `service`/`dumpsys`
+# are uid-agnostic and every `su -c` under --no-art spawns a Magisk su-log spinner.
+# Retry one device check up to 5×0.6s before giving up — `service`/`dumpsys`/`service
+# list` can momentarily fail right after the wart layer is pkilled (binder churns while
+# servicemanager processes the deaths), which is NOT the native+shim layer being down.
+_health_check() {
+    local label="$1" cmd="$2" pat="$3"
+    for _ in 1 2 3 4 5; do
+        adb shell "$cmd" 2>/dev/null | grep -qi "$pat" && return 0
+        sleep 0.6
+    done
+    echo "  [health] $label FAIL" >&2
+    return 1
+}
+native_shim_healthy() {
+    _health_check activity           'service check activity 2>/dev/null'          'found'        || return 1
+    _health_check media.audio_policy 'service check media.audio_policy 2>/dev/null' 'found'        || return 1
+    # `service check <name>` (servicemanager lookup only) — NOT `service list`, which
+    # PINGS every registered service and blocks on the dead wart-layer services we just
+    # pkilled, so it can't finish within the retry budget → false "unhealthy".
+    _health_check ISensorManager     'service check android.frameworks.sensorservice.ISensorManager/default 2>/dev/null' 'found' || return 1
+    _health_check gyro               'dumpsys sensorservice 2>/dev/null'           'Gyroscope'    || return 1
+    return 0
+}
+
+# `bring_up_native_shim` — stand the layer up ONCE, fresh, in the --no-art context,
+# shim-FIRST so nothing wedges (task 96 steps 1+2). Assumes the Java framework is
+# already stopped (system_server gone) by the caller. Idempotent-safe: each service is
+# single-instance (kill-then-confirm-gone before (re)start) so we never leave two
+# (the duplicate-EventQueue-spin cause).
+bring_up_native_shim() {
+    # ── Step 1: the framework-shim, serving BEFORE audioserver/sensorservice ──
+    # audioserver's UidPolicy waitForService("activity") is FATAL if absent; sensors +
+    # camera block on the others. Start exactly one (kill any stale first — a shadowed
+    # dead shim churns the audioserver permission/attribution path → it restarts →
+    # volumes wiped → silence). Then WAIT until it actually serves "activity".
+    if adb shell 'ls /data/local/tmp/wart-framework-shim' >/dev/null 2>&1; then
+        echo "▸ --no-art: framework-shim (activity/permission/sensor_privacy/package_native/… — shim-first)"
+        adb shell "su -c 'pkill -9 -f wart-framework-shim; pkill -9 -f wart-activityms'" >/dev/null 2>&1 || true
+        spawn_detached /data/local/tmp/wart-framework-shim.log \
+            "/data/local/tmp/wart-launch /data/local/tmp/wart-framework-shim"
+        # Plain `adb shell` polls (no `su -c`) — see native_shim_healthy.
+        for _ in $(seq 1 20); do
+            adb shell 'service check activity 2>/dev/null' 2>/dev/null | grep -q found && break
+            sleep 0.5
+        done
+        if adb shell 'service check activity 2>/dev/null' 2>/dev/null | grep -q found; then
+            echo "  framework-shim serving (activity registered)"
+        else
+            echo "  ⚠ framework-shim not serving 'activity' — see /data/local/tmp/wart-framework-shim.log" >&2
+            adb shell "su -c 'tail -15 /data/local/tmp/wart-framework-shim.log'" 2>&1 | tr -d '\r' >&2
+        fi
+    else
+        echo "  ⚠ wart-framework-shim missing on device — audio/camera/sensors will wedge" >&2
+    fi
+
+    # ── Step 2a: audioserver, ONCE, with the shim already serving ──
+    # audioserver is `class core` (survives `stop`, init-respawns on kill) but lost its
+    # system_server clients when the framework dropped → it wedges on
+    # waitForService("activity") and media.audio_* unregister. With the shim now
+    # serving "activity", a single `pkill` → init respawn re-registers media.audio_*
+    # cleanly in ~1s (vs the ~20s wedge). One deterministic restart — not a cycle.
+    echo "▸ --no-art: audioserver re-init (single, shim-first) + volume boot replica"
+    adb shell "su -c 'pkill -9 audioserver'" >/dev/null 2>&1 || true
+    for _ in $(seq 1 20); do
+        adb shell 'service list 2>/dev/null' 2>/dev/null | grep -q "media.audio_policy:" && { echo "  audio ready (media.audio_policy registered)"; break; }
+        sleep 1
+    done
+    # Replicate AudioService's boot volume/device init (dead with system_server):
+    # without it the policy reports volume range -1 → every stream at -inf dB → silence.
+    adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/wart-host --init-audio-policy'" >/dev/null 2>&1 || true
+
+    # ── Step 2b: sensorservice ONCE-FRESH + wart-sensormanager ──
+    # Our standalone /system/bin/sensorservice claims the single-client HIDL
+    # android.hardware.sensors@1.0 HAL (the framework's sensorservice died with
+    # system_server). Empirically (taimen, framework stopped): the claim succeeds on the
+    # FIRST try — there is no DEAD_OBJECT churn — but the qcom SSC HAL takes ~10–15s to
+    # enumerate the sensor list (measured ~13s, process alive throughout). So claim ONCE
+    # and poll PATIENTLY for gyro enumeration; treat ONLY the process dying as failure,
+    # because sensorservice LOG_ALWAYS_FATAL-aborts on a genuine DEAD_OBJECT
+    # (HidlSensorHalWrapper.cpp:401) — an alive process WILL enumerate. A real abort
+    # (rare; the dead framework client's single-slot not yet released) → wait for the HAL
+    # death-recipient + re-claim, bounded. NO blind kill-retry: we never pkill a live,
+    # slow-to-enumerate instance (the old 4s-snapshot bug). Plain dumpsys/pgrep (no su)
+    # so the ~13s poll doesn't spawn a Magisk su-logger storm. In steady state
+    # native_shim_healthy short-circuits the whole bringup, so this runs only on a cold
+    # --restore-art→--no-art entry — start-once, never churn.
+    if adb shell 'ls /data/local/tmp/wart-sensormanager' >/dev/null 2>&1; then
+        echo "▸ --no-art: sensorservice (once-fresh HAL claim) + wart-sensormanager"
+        # Kill priors by PID via device-side `pidof` (NOT `pkill -9 -f sensorservice`):
+        # `pkill -f` matches the killer's OWN `su -c '…wart-sensormanager…'` cmdline and
+        # races killing its own shell, so a prior wart-sensormanager can SURVIVE → two
+        # instances → orphaned EventQueue CPU spin (the duplicate-instance bug). `pidof`
+        # matches only the executable basename, never the killer — exactly one of each.
+        adb shell "su -c 'kill -9 \$(pidof sensorservice wart-sensormanager wart-sensors) 2>/dev/null'" >/dev/null 2>&1 || true
+        # Confirm the prior instances are actually gone (no competing single-client claim).
+        for _ in $(seq 1 10); do
+            [ -z "$(adb shell 'pidof sensorservice wart-sensormanager' | tr -d '\r')" ] && break
+            sleep 0.5
+        done
+        ss_ok=
+        for attempt in 1 2 3; do
+            spawn_detached /data/local/tmp/sensorservice.log "/system/bin/sensorservice"
+            seen_alive=
+            for _ in $(seq 1 30); do        # up to ~30s (enumeration seen ~13s on taimen)
+                sleep 1
+                n=$(adb shell 'pgrep -f /system/bin/sensorservice' 2>/dev/null | tr -d '\r' | grep -c .)
+                [ "$n" != "0" ] && seen_alive=1
+                if [ -n "$seen_alive" ] && [ "$n" = "0" ]; then
+                    echo "  sensorservice aborted (real DEAD_OBJECT) — waiting for HAL release, re-claim"
+                    break
+                fi
+                if adb shell 'dumpsys sensorservice 2>/dev/null' 2>/dev/null | grep -qi Gyroscope; then
+                    ss_ok=1; break
+                fi
+            done
+            [ -n "$ss_ok" ] && { echo "  sensorservice owns the HAL cleanly (claim $attempt, gyro enumerated)"; break; }
+            # Only here if the process died (FATAL abort) or never enumerated. Clear any
+            # zombie (pidof — no self-match) + let the HAL death-recipient release the
+            # slot before re-claiming.
+            adb shell "su -c 'kill -9 \$(pidof sensorservice) 2>/dev/null'" >/dev/null 2>&1 || true
+            sleep 3
+        done
+        [ -z "$ss_ok" ] && echo "  ⚠ sensorservice did not enumerate after 3 claims — see /data/local/tmp/sensorservice.log" >&2
+        # wart-sensormanager (bare root; ISensorManager impls delegate to sensorservice).
+        # Its ISensorManager registration lags a freshly-enumerated sensorservice while
+        # the HAL settles (measured ~30s on taimen cold), so poll up to ~45s (90×0.5s)
+        # before warning. This is a once-per-cold-entry cost; the --wart-only fast path
+        # skips the whole bringup when native_shim_healthy.
+        spawn_detached /data/local/tmp/wart-sensormanager.log "/data/local/tmp/wart-sensormanager"
+        ism='service check android.frameworks.sensorservice.ISensorManager/default 2>/dev/null'
+        for _ in $(seq 1 90); do
+            adb shell "$ism" 2>/dev/null | grep -q found && break
+            sleep 0.5
+        done
+        if adb shell "$ism" 2>/dev/null | grep -q found; then
+            echo "  sensors ready (AIDL ISensorManager registered)"
+        else
+            echo "  ⚠ AIDL ISensorManager not registered — see /data/local/tmp/wart-sensormanager.log" >&2
+            adb shell "su -c 'tail -15 /data/local/tmp/wart-sensormanager.log'" 2>&1 | tr -d '\r' >&2
+        fi
+    fi
+}
+
 # --no-art high-CPU fix: every `su -c` makes Magisk log/notify the grant via
 # `am`/`content` against the framework; with ART stopped those spawn an app_process
 # that spins ~100%/core retrying ActivityManager forever, and the bringup issues
@@ -339,134 +527,68 @@ else
     adb shell "su -c 'am force-stop $HOME_PKG'"
 fi
 
-# Path A (--no-art): stop the Java framework FIRST, then start wart-inputflinger,
-# BEFORE the zygote/hosts — so the hosts' inputflinger client path
+# Path A (--no-art) — task 96 TWO-LAYER bringup:
+#   • native+shim layer  (wart-framework-shim + sensorservice + audioserver +
+#     wart-sensormanager) — brought up ONCE, idempotently; outlives wart restarts.
+#   • wart layer  (wart-inputflinger here, then the zygote/arbiter below) — restartable
+#     in place on top of a live native+shim layer.
+# wart-inputflinger comes up BEFORE the zygote/hosts so their inputflinger client path
 # (waitForService("inputflinger")) only ever resolves to OUR service, never
-# system_server's (which is now dead). SurfaceFlinger/audioserver are native
-# survivors, so the wart stack still attaches. This ordering avoids any host
-# input-channel "reconnect" mechanism. HOME_PKG was already resolved above (needed
-# the framework). wart-inputflinger runs via wart-launch (uid system + gid input +
-# CAP_BLOCK_SUSPEND) — bare root HANGS on SF's perm check + aborts in EventHub.
+# system_server's (now dead). SurfaceFlinger/audioserver are native survivors, so the
+# wart stack still attaches. wart-inputflinger runs via wart-launch (uid system + gid
+# input + CAP_BLOCK_SUSPEND) — bare root HANGS on SF's perm check + aborts in EventHub.
 if [[ "$NO_ART" == "1" ]]; then
-    echo "▸ --no-art path A: stopping Java framework (zygote + system_server) …"
-    adb shell "su -c 'stop zygote; stop zygote_secondary'" >/dev/null 2>&1 || true
-    # system_server is a forked child of zygote; give it a moment to actually exit
-    # so its "inputflinger" servicemanager registration clears before ours.
-    for _ in $(seq 1 20); do
-        [ -z "$(adb shell "su -c 'pidof system_server'" | tr -d '\r')" ] && break
-        sleep 0.5
-    done
-    # `|| true` INSIDE the substitution: with `set -o pipefail`, a bare
-    # `x=$(… pidof …)` inherits pidof's exit 1 when the process is already gone
-    # (our success case), which `set -e` would treat as fatal.
-    ssp="$(adb shell "su -c 'pidof system_server'" | tr -d '\r' || true)"
-    [ -n "$ssp" ] && { echo "  system_server still up ($ssp) — killing"; adb shell "su -c 'kill -9 $ssp'" >/dev/null 2>&1 || true; sleep 1; }
-
-    # Stop the boot animation: with the framework down init can (re)start
-    # bootanimation, which draws over SurfaceFlinger and covers the wart UI. Ask it
-    # to exit (the canonical setprop), stop the init service, and hard-kill as a
-    # backstop.
-    echo "▸ --no-art: stopping bootanimation (covers the wart UI otherwise)"
-    adb shell "su -c 'setprop service.bootanim.exit 1; stop bootanim; pkill -9 -f bootanimation'" >/dev/null 2>&1 || true
-
-    # Sweep Magisk su-loggers stuck on the boundary grants: the `magisk --sqlite`
-    # disable can't suppress logging of its OWN su grant, and `stop zygote` can race
-    # magiskd's policy reload — both spawn an app_process that spins ~100%/core
-    # retrying the now-dead framework forever. They never respawn, so one kill clears
-    # them; `logging=0` is in effect now, so this sweep isn't itself logged. (The bulk
-    # of bringup su is already quiet from the disable above.)
-    echo "▸ --no-art: sweeping any stuck Magisk su-loggers"
-    adb shell "su -c 'pkill -9 -f com.topjohnwu.magisk'" >/dev/null 2>&1 || true
-
-    # ART-off audio: bring up the stub activity/sensor_privacy service + re-init
-    # audioserver NOW — BEFORE the zygote/apps — and WAIT for the audio services to
-    # register before continuing. audioserver wedges on waitForService("activity")
-    # when the framework drops (→ media.audio_* unregister); the stub unblocks it.
-    # Doing it here (not after apps launch) means audio is ready before any app opens
-    # an audio stream — avoiding the ~20s openStream block an app hits when it races a
-    # late audioserver restart, and letting the HAL settle before streams open. See
-    # [[project-artless-audio]].
-    if adb shell 'ls /data/local/tmp/wart-activityms' >/dev/null 2>&1; then
-        echo "▸ --no-art: audio stub (activity + sensor_privacy) + audioserver re-init"
-        # Kill any prior stub host FIRST — each bringup re-addService's the same
-        # names (activity/permission/sensor_privacy/scheduling_policy), and leaking
-        # old hosts churns those registrations: the audioserver caches binder handles
-        # to them, so a shadowed/dead stub makes the permission/attribution path
-        # (output-stream open, and `dumpsys media.audio_flinger`) wedge → audioserver
-        # restarts → stream volumes wiped → call goes silent. Exactly one must run.
-        adb shell "su -c 'pkill -9 -f wart-activityms'" >/dev/null 2>&1 || true
-        spawn_detached /data/local/tmp/wart-activityms.log \
-            "/data/local/tmp/wart-launch /data/local/tmp/wart-activityms"
-        # The poll loops use PLAIN `adb shell` (NOT `su -c`): `service list` is a
-        # read any uid can do, and crucially every `su -c` under --no-art spawns a
-        # crashing Magisk su-log `am` process — 40 polls × su = a logger storm that
-        # pins the CPU and slows the very audioserver/openStream we're waiting on.
-        #
-        # Wait for the stub to register "activity" BEFORE kicking audioserver: if
-        # activity is up when audioserver restarts it re-registers the audio services
-        # in ~1s; if it restarts wedged (no activity) it stalls ~20s (and apps then
-        # block that long in openStream).
-        for _ in $(seq 1 20); do
-            adb shell 'service list 2>/dev/null' 2>/dev/null | grep -q "activity:" && break
-            sleep 0.5
-        done
-        adb shell "su -c 'pkill -9 audioserver'" >/dev/null 2>&1 || true
-        # Wait for the (non-lazy) audio policy service to re-register — fast now that
-        # activity is up — so apps never block in openStream. (media.aaudio is lazy:
-        # it only appears once a client opens a stream, so don't poll for it here.)
-        for _ in $(seq 1 20); do
-            if adb shell 'service list 2>/dev/null' 2>/dev/null | grep -q "media.audio_policy:"; then
-                echo "  audio ready (media.audio_policy registered)"
-                break
-            fi
-            sleep 1
-        done
-        # Replicate AudioService's boot volume/device init (dead with system_server):
-        # initStreamVolume + per-device index + NORMAL mode. Without it the policy
-        # reports volume range -1 and every stream sits at -inf dB → silence even
-        # though streams open + route. Native Rust stand-in; see audio_policy_impl.rs.
-        echo "  --no-art: initializing audio volumes (AudioService boot replica)"
-        adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/wart-host --init-audio-policy'" >/dev/null 2>&1 || true
-    fi
-
-    # Task 93/94 — ART-off sensors: stand up the native /system/bin/sensorservice
-    # (owns the single-client sensors HAL + registers the "sensorservice" binder) and
-    # wart-sensormanager (publishes the frameworks ISensorManager — HIDL for the camera
-    # EIS, AIDL for the wart Rust stack). Done HERE, BEFORE the zygote/arbiter, so the
-    # arbiter's sensor-driver resolves the AIDL endpoint at spawn() (it caches the
-    # successful lookup). Depends on wart-activityms's package_native/activity stubs
-    # (started just above). This REPLACES the old wart-sensors direct-HAL daemon.
-    if adb shell 'ls /data/local/tmp/wart-sensormanager' >/dev/null 2>&1; then
-        echo "▸ --no-art: sensorservice + wart-sensormanager (rotation/proximity/brightness + camera EIS)"
-        # Start each as BARE ROOT (task-93's proven recipe). The single-client ISensors
-        # HAL must be claimed cleanly: uid-system (wart-launch) does NOT cleanly own it,
-        # and a stale/competing client → "Abort due to ISensors … DEAD_OBJECT". The
-        # framework was stopped above, so the HAL is free — claim it ONCE, verify clean
-        # (gyro enumerates + no abort), retry if not. (spawn_detached runs su -c = root.)
-        adb shell "su -c 'pkill -9 -f /system/bin/sensorservice; pkill -9 -f wart-sensormanager; pkill -9 -f wart-sensors'" >/dev/null 2>&1 || true
-        sleep 2
-        for attempt in 1 2 3; do
-            adb shell "su -c 'pkill -9 -f /system/bin/sensorservice'" >/dev/null 2>&1 || true; sleep 1
-            spawn_detached /data/local/tmp/sensorservice.log "/system/bin/sensorservice"
-            sleep 4
-            if adb shell "su -c 'dumpsys sensorservice 2>/dev/null'" 2>/dev/null | grep -qi Gyroscope \
-               && ! adb shell "su -c 'grep -i \"Abort due to ISensors\" /data/local/tmp/sensorservice.log'" 2>/dev/null | grep -qi Abort; then
-                echo "  sensorservice owns the HAL cleanly (attempt $attempt)"; break
-            fi
-            echo "  sensorservice HAL-claim attempt $attempt unclean (DEAD_OBJECT) — retry"
-        done
-        # Then wart-sensormanager (bare root; ISensorManager impls delegate to sensorservice).
-        spawn_detached /data/local/tmp/wart-sensormanager.log \
-            "/data/local/tmp/wart-sensormanager"
-        for _ in $(seq 1 20); do
-            adb shell 'service list 2>/dev/null' 2>/dev/null | grep -q 'frameworks.sensorservice.ISensorManager' && break
-            sleep 0.5
-        done
-        if adb shell 'service list 2>/dev/null' 2>/dev/null | grep -q 'frameworks.sensorservice.ISensorManager'; then
-            echo "  sensors ready (AIDL ISensorManager registered)"
+    if [[ "$WART_ONLY" == "1" ]]; then
+        # ── FAST PATH: the framework is already stopped and the native+shim layer is
+        # already up from a prior --no-art run. Do NOT stop the framework and do NOT
+        # touch the native+shim layer — just restart the wart layer in place. Seconds,
+        # not the ~1–2 min --restore-art ART-boot cycle.
+        echo "▸ --wart-only: fast wart-layer restart on the live native+shim layer (no framework boot)"
+        if native_shim_healthy; then
+            echo "  native+shim layer healthy (shim + sensors + audio up) — leaving it running"
         else
-            echo "  ⚠ AIDL ISensorManager not registered — see /data/local/tmp/wart-sensormanager.log" >&2
-            adb shell "su -c 'tail -15 /data/local/tmp/wart-sensormanager.log'" 2>&1 | tr -d '\r' >&2
+            echo "  ⚠ --wart-only but the native+shim layer is NOT healthy — bringing it up once" >&2
+            echo "    (use a plain --no-art for a cold entry from ART)" >&2
+            bring_up_native_shim
+        fi
+    else
+        # ── COLD/NORMAL --no-art ENTRY: stop the Java framework, then bring the
+        # native+shim layer up ONCE. If it is somehow already healthy (a plain --no-art
+        # re-run while already in --no-art), skip the bringup — idempotent.
+        echo "▸ --no-art path A: stopping Java framework (zygote + system_server) …"
+        adb shell "su -c 'stop zygote; stop zygote_secondary'" >/dev/null 2>&1 || true
+        # system_server is a forked child of zygote; wait for it to actually exit so its
+        # "inputflinger" registration clears before ours — AND, crucially for task 96,
+        # so the sensors-HAL single-client slot it held is released before our
+        # standalone sensorservice claims it (the DEAD_OBJECT race; see bring_up_native_shim).
+        for _ in $(seq 1 20); do
+            [ -z "$(adb shell "su -c 'pidof system_server'" | tr -d '\r')" ] && break
+            sleep 0.5
+        done
+        # `|| true` INSIDE the substitution: with `set -o pipefail`, a bare
+        # `x=$(… pidof …)` inherits pidof's exit 1 when the process is already gone
+        # (our success case), which `set -e` would treat as fatal.
+        ssp="$(adb shell "su -c 'pidof system_server'" | tr -d '\r' || true)"
+        [ -n "$ssp" ] && { echo "  system_server still up ($ssp) — killing"; adb shell "su -c 'kill -9 $ssp'" >/dev/null 2>&1 || true; sleep 1; }
+
+        # Stop the boot animation: with the framework down init can (re)start
+        # bootanimation, which draws over SurfaceFlinger and covers the wart UI.
+        echo "▸ --no-art: stopping bootanimation (covers the wart UI otherwise)"
+        adb shell "su -c 'setprop service.bootanim.exit 1; stop bootanim; pkill -9 -f bootanimation'" >/dev/null 2>&1 || true
+
+        # Sweep Magisk su-loggers stuck on the boundary grants: the `magisk --sqlite`
+        # disable can't suppress logging of its OWN su grant, and `stop zygote` can race
+        # magiskd's policy reload — both spawn an app_process that spins ~100%/core
+        # retrying the now-dead framework forever. One kill clears them.
+        echo "▸ --no-art: sweeping any stuck Magisk su-loggers"
+        adb shell "su -c 'pkill -9 -f com.topjohnwu.magisk'" >/dev/null 2>&1 || true
+
+        # Native+shim layer — ONCE, skip-if-healthy. On a true cold entry the shim isn't
+        # up yet (→ false → bring up); on a re-run it's already serving (→ skip).
+        if native_shim_healthy; then
+            echo "▸ --no-art: native+shim layer already healthy — skipping bringup (idempotent)"
+        else
+            bring_up_native_shim
         fi
     fi
 
