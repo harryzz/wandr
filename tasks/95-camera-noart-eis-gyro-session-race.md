@@ -1,8 +1,44 @@
 # Task 95 — Camera under `--no-art`: the EIS-gyro session race (the *real* blocker)
 
-> Status: 🔬 OPEN — root-caused to a layer, not yet fixed.
+> Status: ✅ RESOLVED 2026-06-08 — race reliably won after the `batterystats` shim fix
+> (the gyro-enable was paying a ~5s `BatteryService::checkService` stall). See the
+> RESOLUTION block below.
 > Spun out of task 93 (camera capture under `--no-art`). Task 93's "28.8 fps" was
-> **real but non-deterministic**; this task is about making it **reliable**.
+> **real but non-deterministic**; this task was about making it **reliable** — now it is.
+
+## ✅ RESOLUTION (2026-06-08) — the `batterystats` shim stub
+
+**The race is reliably won now.** With the task-96 `wart-framework-shim` carrying a
+`batterystats` stub (see `[[project_artless_sensor_5s_batterystats]]`,
+commit `27f94b4c`), all three `--probe-video` modes streamed **clean 3/3** in one
+sitting, with **no gyro warming active** (`warm_camera_gyro()` was already removed):
+- `--probe-video imagereader` (raw YUV) → **29.1 fps**, first-frame 140 ms
+- `--probe-video c2.android.vp8.encoder` (SW VP8) → 17.3 fps
+- `--probe-video` (default HW VP8) → 17.4 fps
+
+**Why this is the fix (reconciles the "downstream of sensorservice / OIS kernel timer"
+finding below).** This task had measured that the camera's gyro enable returns
+`result=OK` on *every* probe and concluded the race was purely downstream in the kernel
+OIS hrtimer — but it never measured the *latency* of that enable. Under `--no-art` the
+sensor-enable path `SensorService::enable → BatteryService::enableSensor →
+checkService` did a **blocking `getService("batterystats")`** that, with system_server
+gone, spun `sleep(1)`×5 ≈ **5.0 s** (observed `enableSensor()=5.017s`). That 5 s stall in
+establishing the EIS gyro session is what perturbed the timing of the downstream
+`ois_open → msm_startGyroThread` sequence → the OIS hrtimer sometimes never armed
+(`msm_stopGyroThread: invalid timer state = 0`) → 0 frames. Register `batterystats` so
+the lookup resolves instantly → the gyro session establishes promptly → the OIS thread
+arms → frames flow. The OIS-timer observation was a *symptom* of the upstream 5 s
+sensor-enable stall, not an independent kernel bug.
+
+**Confidence.** 3 consecutive wins at the documented ~1/8 baseline (no warming, same
+stack) is ≈ (1/8)³ ≈ 0.2 % by chance — strong, though not a large-N controlled A/B. If
+it ever regresses: run a larger-N win-rate count and confirm `batterystats` (+ `appops`)
+resolve **before** the camera opens. The prior dead-ends below (persistent gyro client,
+OIS-kernel-timer deep-dive) are now explained/superseded and need no further work.
+
+---
+
+### (historical, pre-2026-06-08 — kept for the record)
 
 ## TL;DR
 
