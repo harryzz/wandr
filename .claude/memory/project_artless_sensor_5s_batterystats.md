@@ -28,14 +28,18 @@ null, and because `mBatteryStatService` stays null it **re-blocks on every call*
 Accel/orientation pay the 5s once at bringup so it's invisible; proximity is
 enabled on-demand at call-start + notes every event → the visible symptom.
 
-**Not just proximity — whole-pipeline freeze.** `noteWakeupSensorEvent` (:394) runs
-inside `SensorEventConnection::sendEvents`, which `threadLoop` calls **while holding
-`mLock`** (taken at threadLoop:1154), BEFORE the actual `SensorEventQueue::write()`
-(:405). So the 5s block freezes the entire distribution fan-out → when proximity (any
-wake-up sensor) fires during a call, auto-brightness (light) + auto-rotation (accel)
-ALSO freeze 5s ("auto-brightness stops working in a call" = same bug). `mLock` is also
-held, so concurrent enable/disable/createSensorEventConnection from other clients stall
-behind an in-flight wake event. One batterystats stub fixes ALL of it.
+**Not just proximity — whole-pipeline freeze (one root cause, several symptoms).**
+`noteWakeupSensorEvent` (:394) runs inside `SensorEventConnection::sendEvents`, which
+`threadLoop` calls **while holding `mLock`** (taken at threadLoop:1154), BEFORE the
+actual `SensorEventQueue::write()` (:405). So the 5s block freezes the entire
+distribution fan-out, and `mLock` being held also stalls concurrent
+enable/disable/createSensorEventConnection from other clients. So the *same* batterystats
+stall manifests as proximity lag, slow sensor enables, AND general sensor sluggishness.
+✅FIXED+verified: proximity instant + auto-brightness works (two independent observations
+of the one fixed root cause). **Do NOT try to test "auto-brightness during a call"** — you
+can't: proximity blanks the display in a call (task-78 proximity screen-off), so brightness
+isn't observable there. Proximity-instant + auto-brightness-works already covers it; no
+third in-call test exists. One batterystats stub fixes ALL of it.
 Under ART system_server registers `batterystats` so `getService` resolves
 instantly (this is the entire ART vs --no-art asymmetry, same binary).
 
