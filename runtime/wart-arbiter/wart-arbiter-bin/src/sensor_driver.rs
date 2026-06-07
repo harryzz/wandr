@@ -128,6 +128,11 @@ pub fn spawn() {
                 continue;
             }
             std::thread::sleep(POLL_INTERVAL);
+            // C3 — re-validate the sensor connection each tick (cheap ping when
+            // healthy). If wart-sensormanager/sensorservice restarted, this recreates
+            // the event queue and replays our always-on enables (orientation, etc.),
+            // so sensors recover without a full stack re-bringup.
+            wart_hal_sensors::ensure_connected();
             let samples = wart_hal_sensors::drain_samples();
             if samples.is_empty() {
                 continue;

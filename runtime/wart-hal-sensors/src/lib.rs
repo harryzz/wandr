@@ -152,6 +152,19 @@ mod binder_path {
         static SVC: OnceLock<Mutex<Option<rsbinder::Strong<dyn ISensorManager>>>> = OnceLock::new();
         let cell = SVC.get_or_init(|| Mutex::new(None));
         let mut guard = cell.lock().ok()?;
+        // C3 — re-validate the cached handle: if `wart-sensormanager` restarted, the
+        // cached proxy is a dead binder. `ping_binder` it (the established pattern,
+        // mirror of audio_impl.rs) and re-resolve on death so we don't latch a dead
+        // handle forever. Does NOT touch the queue cache (no cross-lock) — `queue()`
+        // independently pings + rebuilds its own handle.
+        if let Some(svc) = guard.as_ref() {
+            if svc.as_binder().ping_binder().is_ok() {
+                return Some(svc.clone());
+            }
+            log::warn!("wart-hal-sensors: ISensorManager handle dead (wart-sensormanager \
+                        restarted?) — re-resolving");
+            *guard = None;
+        }
         if guard.is_none() {
             ensure_process_state();
             *guard = rsbinder::hub::get_interface::<dyn ISensorManager>(
@@ -167,6 +180,22 @@ mod binder_path {
         MAP.get_or_init(|| Arc::new(Mutex::new(HashMap::new()))).clone()
     }
 
+    /// The desired-enabled sensor set (handle → rate_hz). Tracked so a queue
+    /// rebuilt after a `wart-sensormanager`/`sensorservice` restart (C3,
+    /// docs/sensor-access-conflicts-no-art.md) replays the enables onto the fresh
+    /// queue — otherwise sensors would stay silently dead until something
+    /// re-`enable`d them.
+    fn enabled_sensors() -> &'static Mutex<HashMap<u32, u32>> {
+        static E: OnceLock<Mutex<HashMap<u32, u32>>> = OnceLock::new();
+        E.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    /// Sampling period (µs) for a rate; on-change sensors ignore it but still need
+    /// a non-zero value. 0 Hz = HAL default (1 s).
+    fn period_us(rate_hz: u32) -> i32 {
+        if rate_hz == 0 { 1_000_000 } else { (1_000_000 / rate_hz).max(1) as i32 }
+    }
+
     /// Build the event queue + register the Bn callback. Like [`service`], caches
     /// only success: if the service wasn't up yet (or `createEventQueue` failed
     /// transiently) it retries on a later call rather than latching `None`.
@@ -174,6 +203,19 @@ mod binder_path {
         static QUEUE: OnceLock<Mutex<Option<rsbinder::Strong<dyn IEventQueue>>>> = OnceLock::new();
         let cell = QUEUE.get_or_init(|| Mutex::new(None));
         let mut guard = cell.lock().ok()?;
+        // C3 — drop a dead queue handle so it's recreated. After a wart-sensormanager
+        // restart the cached IEventQueue proxy is dead; after a sensorservice restart
+        // wart-sensormanager's internal BitTube hangs up (the event-queue stops
+        // delivering and its poll thread would busy-loop). `ping_binder` catches the
+        // dead-proxy case; the recreate below also re-points us at a fresh queue,
+        // whose construction destroys the stale server-side EventQueue (removing the
+        // hung fd from the shared looper → stops the spin).
+        if let Some(q) = guard.as_ref() {
+            if q.as_binder().ping_binder().is_err() {
+                log::warn!("wart-hal-sensors: event queue dead — recreating + replaying enables");
+                *guard = None;
+            }
+        }
         if guard.is_none() {
             let svc = service()?;
             let collector = EventCollector { latest: sample_map() };
@@ -181,7 +223,15 @@ mod binder_path {
                 BnEventQueueCallback::new_async_binder(collector, TokioRuntime);
             match svc.r#createEventQueue(&cb) {
                 Ok(q) => {
-                    log::info!("wart-hal-sensors: event queue created");
+                    // Replay the desired-enabled set onto the fresh queue so sensors
+                    // resume after a restart without anyone re-calling enable().
+                    let enabled = enabled_sensors().lock().map(|m| m.clone()).unwrap_or_default();
+                    for (handle, rate_hz) in &enabled {
+                        if let Err(e) = q.r#enableSensor(*handle as i32, period_us(*rate_hz), 0_i64) {
+                            log::warn!("wart-hal-sensors: replay enable({handle}) failed: {e:?}");
+                        }
+                    }
+                    log::info!("wart-hal-sensors: event queue created (replayed {} enables)", enabled.len());
                     *guard = Some(q);
                 }
                 Err(e) => log::warn!("wart-hal-sensors: createEventQueue failed: {e:?}"),
@@ -214,9 +264,13 @@ mod binder_path {
     }
 
     pub fn enable(handle: u32, rate_hz: u32) -> bool {
+        // Record the desired state first so a queue rebuilt later (after a restart)
+        // replays it (C3). Recorded even if the call below fails transiently.
+        if let Ok(mut e) = enabled_sensors().lock() {
+            e.insert(handle, rate_hz);
+        }
         let Some(q) = queue() else { return false };
-        let period_us = if rate_hz == 0 { 1_000_000 } else { (1_000_000 / rate_hz).max(1) };
-        match q.r#enableSensor(handle as i32, period_us as i32, 0_i64) {
+        match q.r#enableSensor(handle as i32, period_us(rate_hz), 0_i64) {
             Ok(_) => true,
             Err(e) => {
                 log::warn!("wart-hal-sensors: enableSensor({handle}, {rate_hz}Hz) err={e:?}");
@@ -226,8 +280,19 @@ mod binder_path {
     }
 
     pub fn disable(handle: u32) {
+        if let Ok(mut e) = enabled_sensors().lock() {
+            e.remove(&handle);
+        }
         let Some(q) = queue() else { return };
         let _ = q.r#disableSensor(handle as i32);
+    }
+
+    /// C3 — re-validate the binder connection, recreating the event queue (and
+    /// replaying the enabled set) if `wart-sensormanager`/`sensorservice` restarted.
+    /// A no-op fast path when healthy (one `ping_binder` round-trip). The arbiter
+    /// sensor-driver calls this each poll tick so sensors recover automatically.
+    pub fn ensure_connected() {
+        let _ = queue();
     }
 
     /// Remove + return the latest sample for `handle`, if a fresh one arrived.
@@ -299,6 +364,19 @@ pub fn disable(handle: u32) {
     #[cfg(not(target_os = "android"))]
     {
         let _ = handle;
+    }
+}
+
+/// Re-validate the sensor binder connection, recreating the event queue and
+/// replaying the enabled sensors if `wart-sensormanager`/`sensorservice` restarted
+/// (C3, docs/sensor-access-conflicts-no-art.md). Cheap when healthy (one
+/// `ping_binder`); call it periodically from a consumer that holds enabled sensors
+/// but doesn't otherwise re-issue enable/disable (e.g. the arbiter sensor-driver).
+/// No-op off-android.
+pub fn ensure_connected() {
+    #[cfg(target_os = "android")]
+    {
+        binder_path::ensure_connected();
     }
 }
 

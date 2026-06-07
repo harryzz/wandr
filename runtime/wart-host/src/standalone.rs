@@ -284,26 +284,12 @@ pub fn run_with_engine(engine: &Engine, app_id: Option<&str>, mode: OverlayMode)
     result
 }
 
-/// Map the Device Orientation HAL value to the renderer's dihedral
-/// `orient` code (task 43).
-///
-/// The HAL reports the rotation the *display* should adopt as a
-/// `Surface.ROTATION_*` index: 0=0°, 1=90° CCW, 2=180°, 3=90° CW. To keep
-/// the UI upright we pre-rotate the *content* by the inverse, which in
-/// the renderer's bitmask is: 0→0 (identity), 1→4 (ROT_90 CW), 2→3
-/// (ROT_180), 3→7 (ROT_270 CCW).
-///
-/// If a given panel turns out to rotate the wrong way (content tilts
-/// opposite the device), swap the `1 => 4` and `3 => 7` arms — that's the
-/// only handedness assumption here, and it's panel-specific.
-fn device_rotation_to_orient(rot: u32) -> u32 {
-    match rot & 3 {
-        0 => 0, // portrait — identity
-        1 => 4, // ROT_90
-        2 => 3, // ROT_180
-        _ => 7, // ROT_270
-    }
-}
+// The Device Orientation HAL value → renderer dihedral `orient` mapping
+// (Surface.ROTATION_* index → 0→0, 1→4, 2→3, 3→7) now lives ONLY in the arbiter
+// WM (`device_rotation_to_orient`, wart-arbiter-wm). Task 94 made the arbiter the
+// sole device-orientation consumer: it reads the HAL sensor itself and pushes the
+// decided content `orient` down via a `geometry` line. The host no longer reads
+// the sensor — it is a pure applier of that push (see `authoritative_orient`).
 
 // Chrome-coherence (Arbiter Increment 3a) — the orientation lock used to be a
 // polled file (`/data/local/tmp/wart-orient-lock`) because the chrome overlays
@@ -315,24 +301,6 @@ fn device_rotation_to_orient(rot: u32) -> u32 {
 /// Task 73 — the arbiter socket (wart-arbiter-wm owns the orientation
 /// decision). Same path the IME/keyboard host clients use.
 // arbiter socket: crate::arbiter_sock::arbiter_sock_path() ($WART_ARBITER_SOCK)
-
-/// Task 73 — report the raw device rotation (`Surface.ROTATION_*` index, 0..3)
-/// up to the arbiter, which decides the content orientation and pushes it back
-/// as a `geometry` line. One-shot connect, mirroring
-/// `keyboard_host_impl::send_oneshot`. `Err` ⇒ the arbiter is unreachable, and
-/// the caller falls back to applying the rotation locally so rotation never
-/// depends on a live arbiter.
-fn report_orientation_to_arbiter(raw_rot: u32) -> std::io::Result<()> {
-    use std::io::{Read, Write};
-    use std::os::unix::net::UnixStream;
-    let mut stream = UnixStream::connect(crate::arbiter_sock::arbiter_sock_path())?;
-    stream.write_all(format!("report-orientation {raw_rot}\n").as_bytes())?;
-    stream.flush()?;
-    let _ = stream.shutdown(std::net::Shutdown::Write);
-    let mut buf = [0u8; 64];
-    let _ = stream.read(&mut buf);
-    Ok(())
-}
 
 /// One-shot arbiter command (connect, write line, drain + drop reply, close) —
 /// the fire-and-forget shape shared by the chrome-coherence reports.
@@ -506,10 +474,10 @@ fn run_cwasm_loop(
     // Task 62 — the surface's anchor (fullscreen vs which overlay edge).
     // Drives the rotated-rect geometry flip for overlays.
     mode: OverlayMode,
-    // Task 43/62 — auto-follow device screen rotation. True for the
-    // fullscreen app (unless locked) and for overlays whose manifest opts
-    // in (`orientation = "auto"`); false otherwise.
-    enable_rotation: bool,
+    // Task 43/62 — auto-follow device screen rotation. Obsolete on the host since
+    // task 94 (the arbiter decides orientation and pushes it down; the host is a
+    // pure applier), kept in the signature for the callers. Prefixed `_` = unused.
+    _enable_rotation: bool,
     // Task 63 — this app explicitly declared `orientation = "locked"`. When
     // it's a foreground fullscreen app it publishes the system orientation
     // lock so the chrome (overlays) stays portrait too.
@@ -640,9 +608,17 @@ fn run_cwasm_loop(
         log::warn!("standalone: on_resize({logical_w}x{logical_h}) failed: {e:#}");
     }
 
-    // Screen on/off → Paused / Resumed. None if the device doesn't surface
-    // the sysprop; the loop then just stays Resumed forever.
-    let screen_rx = crate::lifecycle_standalone::spawn_screen_state_watcher();
+    // Guest Paused/Resumed is driven SOLELY by the arbiter's role transitions
+    // (fg→Resumed / bg→Paused, handled below). The old host-side screen-state
+    // watcher (`spawn_screen_state_watcher`, polling `debug.tracing.screen_state`)
+    // was removed: that sysprop is SurfaceFlinger's debug echo of the last
+    // setPowerMode and goes STALE with ART stopped, AND it can't tell a transient
+    // proximity blank from a real screen-off — so under --no-art it paused the
+    // foreground guest on every cheek-at-the-ear blank during a call (killing its
+    // frame-coupled audio pump + input) and could leave it stuck Paused on a stale
+    // value. The arbiter is the sole power/screen authority; on a REAL screen-off it
+    // demotes the fg app → Background → the role path below pauses us, while a
+    // proximity blank (no role change) correctly leaves the call running.
 
     // Re-request input focus periodically — activity-backed windows AMS
     // resumes (launcher, last app) steal focus despite wart owning the
@@ -679,41 +655,15 @@ fn run_cwasm_loop(
     // creation above — register-chrome's reply gave their strip height. The
     // control socket bound here is for the arbiter's ongoing geometry pushes.)
 
-    // Task 43 — runtime screen orientation. Read the native Device
-    // Orientation HAL sensor (android.sensor.device_orientation, type 27,
-    // on-change) — the SAME source WMS's WindowOrientationListener uses,
-    // but consumed ART-free via the rsbinder sensorservice path. On a
-    // rotation change we recompute the renderer's content-pre-rotation
-    // matrix + swapped logical dims and re-issue on_resize. For the
-    // fullscreen app the physical SurfaceFlinger buffer is never touched
-    // (no shim, no EGL resize); for an overlay (task 62) we additionally
-    // flip the overlay's anchored rect via the shim so a bottom strip
-    // becomes a side strip in landscape (see the rotation block below).
-    //
-    // A manual `WART_ORIENT` override (read once in the renderer ctor)
-    // disables auto-follow — useful for forcing a fixed orientation in a
-    // stationary test. Overlays rotate only when their manifest declares
-    // `orientation = "auto"` (task 62); otherwise they stay portrait.
-    // Chrome-coherence — only fullscreen apps read the device sensor (they report
-    // up + the arbiter decides). Overlays get their orient from arbiter pushes, so
-    // they no longer open a sensor handle.
-    let orient_sensor: Option<u32> =
-        if mode == OverlayMode::None && enable_rotation && std::env::var("WART_ORIENT").is_err() {
-            match crate::sensors_impl::device_orientation_handle() {
-                Some(h) => {
-                    let ok = crate::sensors_impl::enable_sensor(h, 5);
-                    log::info!("standalone: Device Orientation sensor handle={h} enabled={ok} — auto-rotate on");
-                    if ok { Some(h) } else { None }
-                }
-                None => {
-                    log::info!("standalone: no Device Orientation sensor — auto-rotate off");
-                    None
-                }
-            }
-        } else {
-            log::info!("standalone: auto-rotate disabled (overlay or WART_ORIENT set)");
-            None
-        };
+    // Task 94 — runtime screen orientation is now ARBITER-SOURCED. The arbiter's
+    // sensor-driver reads the native Device Orientation HAL sensor itself, the WM
+    // decides the content orient (honoring the foreground lock), and pushes it down
+    // to this host as a `geometry … <orient>` line (applied via `authoritative_orient`
+    // below). The host no longer opens its own device-orientation handle or reports
+    // the raw rotation up — that duplicated the arbiter's sensorservice client and
+    // its rotation pipeline (one HAL reading, one decision authority). Overlays were
+    // already arbiter-push-only; fullscreen apps now match them. A manual `WART_ORIENT`
+    // override still pins a fixed orientation in the renderer ctor for stationary tests.
 
     // ── Render loop — mirrors WindowEvent::RedrawRequested, no winit ─────
     // (Frame pacing is task 64's `next_render_at` gate, set up below.)
@@ -723,23 +673,14 @@ fn run_cwasm_loop(
     // overlay height. Feeds `overlay_rect` so a rotation re-derives the
     // side-strip geometry at the current thickness. Unused for fullscreen.
     let mut strip_t: i32 = sf.height;
-    // Task 63 — the device's latest orientation from the on-change sensor.
-    // Tracked so the target orient can be re-derived when the system lock
-    // toggles (overlays), not only when the device physically turns.
-    let mut last_dev_orient: u32 = 0;
-    // Task 73 — orientation authority moved to the arbiter (wart-arbiter-wm).
-    // A fullscreen app reports the raw sensor rotation up and applies the orient
-    // the arbiter pushes back via `geometry`. `authoritative_orient` is the last
-    // arbiter decision (None until the first push-back, or after the arbiter
-    // goes unreachable → local fallback). `awaiting_orient_since` holds while a
-    // report has been sent and we're waiting for the decision; the timeout
-    // backstop applies the local sensor reading so rotation never stalls if a
-    // push-back is lost. Overlays keep their own local sensor + lock-file path.
+    // Task 73/94 — orientation authority is the arbiter (wart-arbiter-wm).
+    // `authoritative_orient` is the last orient the arbiter pushed down via a
+    // `geometry` line (None until the first push). The host applies it and never
+    // sources rotation itself — task 94 removed the host's device-orientation
+    // read/report, so the arbiter (which reads the HAL sensor + holds the lock
+    // policy) is the single source. Both fullscreen apps and overlays are now
+    // pure appliers of arbiter pushes.
     let mut authoritative_orient: Option<u32> = None;
-    let mut awaiting_orient_since: Option<std::time::Instant> = None;
-    // How long to hold for the arbiter's decision before rotating locally.
-    const ARBITER_ORIENT_TIMEOUT: std::time::Duration =
-        std::time::Duration::from_millis(400);
     // Task 64 — on-demand rendering. The cheap input/IME/scheduler poll
     // still runs every iteration (≤POLL_MS latency), but the expensive
     // render-frame + buffer swap is gated: it fires only when something
@@ -895,92 +836,19 @@ fn run_cwasm_loop(
             }
         }
 
-        // Drain any screen-state transitions accumulated since last frame.
-        // Last one wins — we only care about the final state per frame.
-        if let Some(rx) = screen_rx.as_ref() {
-            let mut latest = None;
-            while let Ok(s) = rx.try_recv() { latest = Some(s); }
-            if let Some(s) = latest {
-                // (Doze is arbiter-decided now; this watcher only drives the guest
-                // lifecycle Paused/Resumed below.)
-                let target = if s.is_live() {
-                    bindings::my::skiko_gfx::lifecycle::State::Resumed
-                } else {
-                    bindings::my::skiko_gfx::lifecycle::State::Paused
-                };
-                if store.data().lifecycle.current != target {
-                    dirty = true; // task 64 — screen on/off lifecycle change
-                    store.data_mut().lifecycle.current = target;
-                    if let Err(e) = skiko
-                        .my_skiko_gfx_renderer()
-                        .call_on_lifecycle_changed(&mut store, target as u32)
-                    {
-                        log::warn!(
-                            "standalone: on_lifecycle_changed({target:?}) failed: {e:#}"
-                        );
-                    }
-                }
-            }
-        }
+        // (Guest Paused/Resumed is driven by arbiter role transitions above — the
+        // host-side screen-state sysprop watcher was removed; see the note at the
+        // `screen_rx` removal site.)
 
-        // Task 43/62/63 — apply any screen-rotation change. The HAL sensor
-        // is on-change, so `poll_device_rotation` returns Some only right
-        // after the device physically rotates; we cache it in
-        // `last_dev_orient`. The TARGET orient is the device orient, except
-        // an overlay honors the system orientation lock (task 63) and stays
-        // portrait while a locked fullscreen app is foreground. Driven by
-        // target-vs-current so it also re-applies when the lock toggles
-        // without the device moving. Fullscreen apps don't read the lock —
-        // they ARE the locker (a locked one has no sensor, stays portrait).
-        // Only the FOREGROUND fullscreen app drives the system orientation: it
-        // owns the screen, so it reports the raw rotation up and holds for the
-        // arbiter's decided orient (a `geometry` push). A backgrounded app skips
-        // the sensor entirely (it isn't visible; reporting from the background
-        // would let an off-screen app drive everyone's orientation) — when it
-        // returns to the foreground the arbiter pushes the current orient via
-        // `ForegroundChanged` and it resumes polling. Chrome-coherence: overlays
-        // have NO sensor — their orient comes only from arbiter `geometry` pushes.
-        if mode == OverlayMode::None
-            && crate::app_role::role() == crate::app_role::AppRole::Foreground
-        {
-            if let Some(h) = orient_sensor {
-                if let Some(rot) = crate::sensors_impl::poll_device_rotation(h) {
-                    last_dev_orient = device_rotation_to_orient(rot);
-                    match report_orientation_to_arbiter(rot) {
-                        Ok(()) => awaiting_orient_since = Some(std::time::Instant::now()),
-                        Err(e) => {
-                            log::debug!(
-                                "standalone: report-orientation failed ({e}); rotating locally"
-                            );
-                            awaiting_orient_since = None;
-                            authoritative_orient = None;
-                        }
-                    }
-                }
-                // Backstop: stop holding once the timeout elapses so a lost
-                // push-back can't stall rotation.
-                if let Some(since) = awaiting_orient_since {
-                    if since.elapsed() > ARBITER_ORIENT_TIMEOUT {
-                        log::info!("standalone: arbiter orient push-back timed out — applying local");
-                        awaiting_orient_since = None;
-                    }
-                }
-            }
-        }
-        // The target orient: fullscreen prefers the arbiter decision (holding the
-        // current orient while a report is in flight, else the local sensor
-        // fallback); an overlay applies only the arbiter's pushed orient and stays
-        // put until one arrives.
+        // Task 94 — apply any screen-rotation change. The host no longer reads the
+        // HAL device-orientation sensor (the arbiter does that and decides the
+        // orient, gating on the foreground lock); it applies whatever orient the
+        // arbiter last pushed down via `geometry` (`authoritative_orient`). This
+        // holds for both fullscreen apps and overlays — all are pure appliers now.
+        // A freshly-foregrounded app stays at its current orient until the arbiter
+        // pushes (via `ForegroundChanged`); a manual `WART_ORIENT` pins it.
         let cur_orient = store.data().renderer.current_orient;
-        let target_orient = if mode == OverlayMode::None {
-            if awaiting_orient_since.is_some() {
-                cur_orient
-            } else {
-                authoritative_orient.unwrap_or(last_dev_orient)
-            }
-        } else {
-            authoritative_orient.unwrap_or(cur_orient)
-        };
+        let target_orient = authoritative_orient.unwrap_or(cur_orient);
         if target_orient != cur_orient {
             dirty = true; // task 64 — rotation needs a frame
             // Task 62 — for an overlay, the anchored rect itself must flip
@@ -1338,13 +1206,12 @@ fn run_cwasm_loop(
                         let content_h = sf.panel_h - inset_top as i32 - inset_bottom as i32;
                         sf.set_input_rect(0, inset_top as i32, sf.panel_w, content_h);
                     }
-                    // Orientation: record the arbiter's decision + release the
-                    // hold; the orientation block above applies it next iteration
-                    // (with the overlay-rect flip / set_orientation path). 255 =
-                    // keep (the arbiter isn't the rotation authority for us yet).
+                    // Orientation: record the arbiter's decision; the orientation
+                    // block above applies it next iteration (with the overlay-rect
+                    // flip / set_orientation path). 255 = keep (no decision pushed
+                    // yet — stay at the current orient).
                     if orient != GEOM_ORIENT_KEEP {
                         authoritative_orient = Some(orient);
-                        awaiting_orient_since = None;
                     }
                     let (lw, lh) = {
                         let r = &store.data().renderer;

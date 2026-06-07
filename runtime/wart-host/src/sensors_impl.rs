@@ -48,37 +48,12 @@ fn hal_to_wit_sample(s: HalSample) -> SensorSample {
     SensorSample { timestamp_ns: s.ts_ns, x: s.x, y: s.y, z: s.z }
 }
 
-// ── Host-internal orientation API (task 43) ───────────────────────────
-//
-// The Device Orientation HAL sensor (android.sensor.device_orientation,
-// type 27, on-change mode) reports screen rotation directly as 0/1/2/3
-// — the SAME native sensor that WMS's WindowOrientationListener reads,
-// but consumed here ART-free via the sensorservice path. The standalone
-// render loop (task 43) enables it once and polls it per frame.
-
-/// `android.sensor.device_orientation` raw AIDL sensor type.
-pub const SENSOR_TYPE_DEVICE_ORIENTATION: i32 = 27;
-
-/// Handle of the Device Orientation sensor, or None if the device lacks it
-/// (fall back to no rotation) or we're off-android.
-pub fn device_orientation_handle() -> Option<u32> {
-    wart_hal_sensors::find_handle_by_type(SENSOR_TYPE_DEVICE_ORIENTATION)
-}
-
-/// Enable a sensor by handle at `rate_hz` (on-change sensors ignore the rate but
-/// still need a non-zero period). Returns false off-android.
-pub fn enable_sensor(handle: u32, rate_hz: u32) -> bool {
-    wart_hal_sensors::enable(handle, rate_hz)
-}
-
-/// Poll the latest screen rotation (0/1/2/3) from the Device Orientation sensor.
-/// `None` = "no fresh on-change event since the last poll" (or off-android) —
-/// callers keep their last known rotation. The HAL delivers the rotation as
-/// value[0], routed to `HalSample.x`.
-pub fn poll_device_rotation(handle: u32) -> Option<u32> {
-    let s = wart_hal_sensors::poll_latest(handle)?;
-    Some((s.x.round() as i64).clamp(0, 3) as u32)
-}
+// Task 94 — the host-internal device-orientation API (task 43:
+// device_orientation_handle / enable_sensor / poll_device_rotation) was REMOVED.
+// The arbiter's sensor-driver is now the sole device-orientation consumer (it
+// reads the HAL sensor and pushes the decided content orient down to the host via
+// `geometry`), so the host no longer reads or reports rotation. The guest-facing
+// `sensors` WIT below stays — apps can still enumerate/enable/poll raw sensors.
 
 impl Host for crate::HostState {
     fn list_sensors(&mut self) -> Vec<SensorInfo> {

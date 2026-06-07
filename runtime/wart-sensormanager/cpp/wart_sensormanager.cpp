@@ -42,6 +42,14 @@
 #include <android/binder_manager.h>
 #include <android/binder_process.h>
 
+// C2 fix (docs/sensor-access-conflicts-no-art.md) — raw capset to drop CAP_SYS_NICE.
+#include <linux/capability.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#include <cerrno>
+#include <cstdint>
+#include <cstring>
+
 namespace {
 // Minimal fake JavaVM. libsensorservicehidl SensorManager only uses the VM to
 // AttachCurrentThread its createEventQueue poll thread "so pollAll doesn't crash if
@@ -64,6 +72,46 @@ const struct JNIInvokeInterface kFakeInvoke = {
     fakeAttach,   // AttachCurrentThreadAsDaemon
 };
 JavaVM kFakeVm = { &kFakeInvoke };
+
+// C2 (docs/sensor-access-conflicts-no-art.md) — neuter the RT escalation of the
+// libsensorservice {hidl,aidl} event-queue poll thread. Both SensorManager façades
+// start ONE poll thread that does `sched_setscheduler(SCHED_FIFO, prio 10)`
+// (frameworks/native/.../sensorservice/{hidl,aidl}/SensorManager.cpp getLooper).
+// Under --no-art that single RT thread fans EVERY AIDL client's events via a
+// synchronous onEvent binder call; if it busy-loops (a dead BitTube, C3) or merely
+// runs hot it preempts the renderer / input / adbd on its core and freezes the
+// device (observed: "100% pins a core", frozen UI). We do not need RT here —
+// orientation/proximity/light are low-rate and the camera EIS uses the HIDL DIRECT
+// channel (no poll thread), so the poll thread's scheduling can't affect gyro
+// timing. Dropping CAP_SYS_NICE up front (Linux caps are per-thread; threads created
+// later inherit the restricted creds) makes the poll thread's
+// sched_setscheduler(SCHED_FIFO) return EPERM — the lib logs a warning and runs the
+// thread at SCHED_OTHER, so a spin/hot loop time-slices fairly and degrades instead
+// of starving the box. Raw capset avoids a libcap dependency (no Android.bp change).
+// Done before any binder/rpc thread pool starts so every poll thread inherits it.
+void drop_rt_scheduling_capability() {
+    __user_cap_header_struct hdr = {};
+    hdr.version = _LINUX_CAPABILITY_VERSION_3;
+    hdr.pid = 0;  // 0 = the calling (main) thread
+    __user_cap_data_struct data[_LINUX_CAPABILITY_U32S_3] = {};
+    if (syscall(SYS_capget, &hdr, &data) != 0) {
+        ALOGW("wart-sensormanager: capget failed (%s) — CAP_SYS_NICE not dropped; "
+              "poll thread may run SCHED_FIFO (C2)", strerror(errno));
+        return;
+    }
+    const unsigned idx = CAP_SYS_NICE >> 5;          // CAP_TO_INDEX
+    const uint32_t bit = 1u << (CAP_SYS_NICE & 31);  // CAP_TO_MASK
+    data[idx].effective   &= ~bit;
+    data[idx].permitted   &= ~bit;
+    data[idx].inheritable &= ~bit;
+    if (syscall(SYS_capset, &hdr, &data) != 0) {
+        ALOGW("wart-sensormanager: capset(drop CAP_SYS_NICE) failed (%s) — poll thread "
+              "may run SCHED_FIFO (C2)", strerror(errno));
+    } else {
+        ALOGI("wart-sensormanager: dropped CAP_SYS_NICE — sensor poll threads run "
+              "SCHED_OTHER (C2)");
+    }
+}
 }  // namespace
 
 using android::OK;
@@ -78,6 +126,11 @@ using AidlISensorManager = ::aidl::android::frameworks::sensorservice::ISensorMa
 using android::frameworks::sensorservice::implementation::SensorManagerAidl;
 
 int main() {
+    // C2 — drop CAP_SYS_NICE BEFORE any thread pool starts so every event-queue
+    // poll thread (spawned later, lazily, by a binder worker) inherits the
+    // restricted creds and can't escalate to SCHED_FIFO. See the helper above.
+    drop_rt_scheduling_capability();
+
     // ── HIDL endpoint (camera EIS, task 93) ──────────────────────────────────
     configureRpcThreadpool(4, true /*callerWillJoin*/);
     sp<ISensorManager> hidl = new SensorManager(&kFakeVm);
