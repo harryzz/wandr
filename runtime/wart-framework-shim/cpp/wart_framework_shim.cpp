@@ -38,6 +38,17 @@
 //                          PermissionChecker getService loop.
 //   • "media.camera.proxy" CameraServiceProxyWrapper::isCameraDisabled fail-CLOSES
 //                          (returns true = camera disabled) if the binder is null.
+//   • "batterystats"       SensorService::enable / disable / each wake-up sensor event →
+//                          BatteryService::checkService (sensorservice/BatteryService.cpp:90)
+//                          does the *blocking* getService("batterystats"), which polls
+//                          sleep(1)×5 ≈ 5.0s and returns null when system_server is gone —
+//                          and since mBatteryStatService stays null it re-blocks EVERY call.
+//                          That is the ~5s proximity enable + per-wake-event delivery lag
+//                          under --no-art (enableSensor()=5.017s observed). Registering the
+//                          name makes getService resolve instantly → checkService caches the
+//                          binder once → 0 lag, exactly as under ART (where system_server
+//                          registers it). The note* transactions are fire-and-forget (the
+//                          void return is ignored), so the benign generic reply is fine.
 //
 // Every uid is reported foreground (PROCESS_STATE_TOP) and every permission granted —
 // correct for wart (single-user, privileged). NOT a real ActivityManager; later it
@@ -280,6 +291,9 @@ int main() {
         {"permission_checker", "android.permission.IPermissionChecker"},
         {"media.camera.proxy", "android.hardware.ICameraServiceProxy"},
         {"package_native", "android.content.pm.IPackageManagerNative"},
+        // SensorService BatteryService::checkService blocking getService — see header.
+        // Absent → ~5s on every sensor enable/disable + every wake-up event (proximity).
+        {"batterystats", "com.android.internal.app.IBatteryStats"},
     };
     for (const auto& g : generics) {
         status_t s = sm->addService(String16(g.name), sp<GenericStub>::make(g.descriptor));
