@@ -73,6 +73,12 @@ const MIN_STEP: f32 = 0.03;
 /// live-tunable `brightness-scale` verb (lower = reaches full sooner / steeper).
 const FULL_SCALE_LUX: f32 = 600.0;
 
+/// Sample rate (Hz) requested for the ambient-light sensor while it's enabled.
+/// The ALS is on-change and ambient light changes slowly, and the curve has its own
+/// `MIN_STEP` hysteresis, so a low rate is plenty — and it's only enabled while the
+/// screen is on ([`PowerModule::reconcile_light`]). One named policy constant.
+const LIGHT_RATE_HZ: u32 = 5;
+
 #[derive(Default)]
 pub struct PowerModule {
     /// When the screen last went non-live (`None` = live). Transient module state.
@@ -124,6 +130,11 @@ pub struct PowerModule {
     /// Screen-off timeout (`None` = never auto-sleep). Live-tunable via
     /// `screen-timeout <ms|off>`; defaults to [`DEFAULT_SCREEN_OFF_TIMEOUT_MS`].
     screen_off_timeout: Option<Duration>,
+    /// Whether we currently hold the ambient-light sensor enabled (task 86 / CPU
+    /// fix). The light sensor is enabled ONLY while auto-brightness can act on it
+    /// (see [`reconcile_light`]); leaving it always-on kept the sensor coprocessor
+    /// sampling the ALS even with the screen off, costing ~5% CPU at idle.
+    light_on: bool,
 }
 
 /// Pure doze decision: given how long the screen has been off (`off_ms`, `None`
@@ -181,6 +192,9 @@ impl PowerModule {
             self.last_activity = Some(Instant::now());
         }
         ctx.emit(Event::ScreenState { live: on });
+        // Enable/disable the ALS immediately on a panel transition (don't wait for the
+        // next idle tick) so auto-brightness is live the moment the screen wakes.
+        self.reconcile_light(ctx);
         log::info!("arbiter: panel {} (power-key/explicit)", if on { "ON" } else { "OFF" });
     }
 
@@ -301,6 +315,29 @@ impl PowerModule {
     /// is meaningless on a powered-off/blanked panel, and a manual level wins.)
     fn auto_brightness_active(&self) -> bool {
         self.panel_on && !self.blanked && self.manual_frac.is_none()
+    }
+
+    /// Enable the ambient-light sensor exactly while auto-brightness can act on it,
+    /// and disable it otherwise. The ALS keeps the sensor coprocessor (SSC/CHRE)
+    /// sampling whenever it's enabled, so leaving it always-on burned ~5% CPU even
+    /// with the screen OFF (device-measured). Gating it to the
+    /// [`auto_brightness_active`] window (screen on, not blanked, not manual) removes
+    /// that idle cost while keeping auto-brightness responsive when it matters.
+    /// Idempotent — only toggles the HAL on a real change. Call after anything that
+    /// changes `panel_on` / `blanked` / `manual_frac`. (Light is on-change and slow,
+    /// so a low rate is plenty.)
+    fn reconcile_light(&mut self, ctx: &mut Ctx) {
+        let want = self.auto_brightness_active();
+        if want != self.light_on {
+            ctx.request(Effect::SetSensor {
+                kind: SensorKind::Light,
+                on: want,
+                rate_hz: LIGHT_RATE_HZ,
+            });
+            self.light_on = want;
+            log::info!("arbiter: auto-brightness light sensor {}",
+                if want { "ENABLED (screen on)" } else { "DISABLED (screen off/manual)" });
+        }
     }
 
     /// A new ambient-light reading (`lux`). Maps it straight through the curve to a
@@ -443,7 +480,23 @@ impl PowerModule {
     /// keyguard auto-locks, doze grace starts, the panel powers off, backlight → 0.
     /// Pure decision is [`idle_should_sleep`]; this wires it to the clock + state.
     fn on_idle_tick(&mut self, ctx: &mut Ctx) {
+        // Reconcile the light-sensor enable to the auto-brightness window every tick
+        // (cheap, idempotent). This runs BEFORE the early returns so it also disables
+        // the ALS once the screen is off, and enables it at boot (panel starts on).
+        self.reconcile_light(ctx);
         if !self.panel_on || self.blanked {
+            return;
+        }
+        // A live call holds the screen awake: never idle-sleep the panel while a
+        // comms session is active. This is the no-ART analogue of FLAG_KEEP_SCREEN_ON
+        // / a call's screen wakelock, and it lives here (the arbiter is the sole power
+        // authority) rather than in the client — the client only signals call
+        // start/end via audio-focus → `Event::CommsActive`. Suppressing the idle
+        // screen-off also suppresses the keyguard auto-lock (it triggers on a real
+        // screen-off), so a video call you're watching without touching never sleeps
+        // or locks mid-call. (At-ear proximity blanking is separate — task 78 — and
+        // still restores on uncover / call-end.)
+        if !self.comms.is_empty() {
             return;
         }
         let Some(timeout) = self.screen_off_timeout else { return };

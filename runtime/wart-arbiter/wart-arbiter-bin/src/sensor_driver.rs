@@ -120,6 +120,12 @@ pub fn spawn() {
         set_sensor(SensorKind::DeviceOrientation, true, ORIENTATION_RATE_HZ);
     }
 
+    // NOTE: the ambient-light sensor (auto-brightness) is NOT enabled here. Keeping
+    // it always-on cost ~5% CPU even with the screen off (the ALS keeps the sensor
+    // coprocessor sampling) — device-measured. Instead the power module enables it
+    // only while auto-brightness can act (screen on, not blanked, not manual) and
+    // disables it when the screen sleeps — see `wart-arbiter-power::reconcile_light`.
+
     std::thread::Builder::new()
         .name("arbiter-sensor-driver".into())
         .spawn(|| loop {

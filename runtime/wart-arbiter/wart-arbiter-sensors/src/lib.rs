@@ -41,12 +41,31 @@ const PROXIMITY_NEAR_FRACTION: f32 = 0.5;
 /// window), so it stays device-independent. Second named policy constant.
 const PROXIMITY_HYST_FRACTION: f32 = 0.1;
 
-/// Requested HAL sample rate when enabling a sensor, Hz. `0` = "no preference"
-/// — the driver/HAL picks the natural cadence (proximity is on-change, so it
-/// reports on a crossing regardless of rate). A future continuous consumer that
-/// needs a specific rate would carry it on `SensorAcquire`; until one exists,
-/// requesting `0` avoids inventing a number.
+/// Requested HAL sample rate when enabling a sensor, Hz. `0` = "no preference".
+/// NOTE the device reality: `wart-hal-sensors::period_us` maps `0` to a **1000 ms**
+/// sampling period, and this qcom sensor HAL honors that period even for on-change
+/// sensors — so `0` is effectively a *slow* 1 Hz cadence, not "report on crossing
+/// ASAP". Fine for sensors where latency doesn't matter; NOT for proximity (see
+/// [`rate_for`]).
 const DEFAULT_RATE_HZ: u32 = 0;
+
+/// Proximity is latency-critical: the screen-off-on-ear blank during a call must
+/// feel near-instant, but at [`DEFAULT_RATE_HZ`] (= 1000 ms period, above) the blank
+/// lagged ~1 s+ (device-observed). The proximity HW is on-change with `minDelay=0`,
+/// so a fast requested period only *bounds* delivery latency — it cannot spam events
+/// (one event per actual crossing). 20 Hz (50 ms) is well under human reaction
+/// (~100 ms). One named policy constant; the rate the screen-off use case needs.
+const PROXIMITY_RATE_HZ: u32 = 20;
+
+/// The HAL sample rate to request for a given kind. Only proximity overrides the
+/// default (its blank latency is user-visible); everything else takes the HAL's
+/// natural cadence.
+fn rate_for(kind: SensorKind) -> u32 {
+    match kind {
+        SensorKind::Proximity => PROXIMITY_RATE_HZ,
+        _ => DEFAULT_RATE_HZ,
+    }
+}
 
 /// Synthetic requester id for the `sensor-hold` test verb (negative so it can
 /// never collide with a real pid).
@@ -76,7 +95,7 @@ impl SensorsModule {
         }
         if was_empty {
             log::info!("sensors: {} enabled (first holder {requester})", kind.as_wire());
-            ctx.request(Effect::SetSensor { kind, on: true, rate_hz: DEFAULT_RATE_HZ });
+            ctx.request(Effect::SetSensor { kind, on: true, rate_hz: rate_for(kind) });
         }
     }
 
@@ -87,7 +106,7 @@ impl SensorsModule {
         holders.retain(|&r| r != requester);
         if holders.is_empty() && before > 0 {
             log::info!("sensors: {} disabled (last holder {requester} released)", kind.as_wire());
-            ctx.request(Effect::SetSensor { kind, on: false, rate_hz: DEFAULT_RATE_HZ });
+            ctx.request(Effect::SetSensor { kind, on: false, rate_hz: rate_for(kind) });
             // Forget the semantic state so the next enable re-classifies from the
             // first fresh reading rather than emitting a stale crossing.
             if kind == SensorKind::Proximity {
