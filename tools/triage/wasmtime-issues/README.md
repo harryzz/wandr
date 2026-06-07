@@ -36,27 +36,29 @@ cache locality as the working set grows.
 
 ## Reproducing locally
 
-The minimal reproducer doesn't need Android. To run the
-`wart-leak-repro.wasm` on a Linux dev box:
+`wart-leak-repro.wasm` is now **self-driving** — `main()` runs the
+`suspendCoroutine` suspend/resume cycle itself in an unbounded loop, so
+a plain `wasmtime run` reproduces the accumulation directly. No
+embedder, no host imports, no component model.
 
 ```bash
-# Driving the wasm directly with wasmtime CLI won't work as-is
-# because the module imports wart-host's `WasiScheduler.schedule`
-# WIT function. Two options:
-
-# Option A — clone the full reproducer harness from codeberg:
-git clone https://codeberg.org/harryzz/wart-leak-repro.git
-# Then drive it from a wart-host-like embedder. The harness in
-# the wart repo (https://codeberg.org/harryzz/wart-host or
-# private until publish) provides this.
-
-# Option B — write a ~50-line wasmtime embedder that imports
-# `WasiScheduler.schedule(delayMs, callbackId)` and calls back
-# via `WasiScheduler.fire(callbackId)` immediately. Source:
-# Main.kt in this directory; the WIT function signature is
-# straightforward. Maintain the loop for >2 minutes to see the
-# WasmGC heap exhaust.
+wasmtime run -Wgc,function-references,exceptions -Ccollector=drc \
+    wart-leak-repro.wasm
 ```
+
+RSS climbs ~100 MB/s as garbage accumulates with no sweep, plateaus at
+the 4 GB wasm32 ceiling within ~50 s, then enters the steady-state
+sweep cycle (the `tick #` counter keeps advancing past the plateau).
+Apply `01-instrumentation.patch` to see the per-sweep `(N, F, dur)`
+trajectory. Let it run a few minutes, then Ctrl-C.
+
+> Earlier revisions of this artifact were a WASI **component** driven
+> by an external `render-frame` export — a plain `wasmtime run` invoked
+> `main()` once, which parked at the first `suspendCoroutine` and
+> returned, so nothing accumulated. That is fixed in this revision.
+
+Source: `Main.kt` in this directory (~70 lines, zero dependencies).
+Project: <https://codeberg.org/harryzz/wart-leak-repro.git>.
 
 ## How the trajectory was captured
 

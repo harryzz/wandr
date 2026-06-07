@@ -75,6 +75,48 @@ Opus·real-UDP·real-mic/speaker, PLUS browser interop.
 devices (exchange SDP + trickle candidates) + app/UX; the wart-arbiter-audio comms
 session ([[project_arbiter_audio]]) already coordinates focus/routing/mode/doze.
 
+**SIGNAL 1:1 CALL — BIDIRECTIONAL AUDIO DEVICE-VERIFIED with a REAL Signal peer
+(2026-06-03, commit 28926d1f).** Both directions now work end-to-end on the Pixel
+2 XL against a real ringrtc client. THE outbound-audio fix: **Opus payload type =
+102** (`OPUS_PAYLOAD_TYPE` in lib.rs), NOT 111. ringrtc/Signal uses PT 102 for
+Opus; libwebrtc (which ringrtc wraps) accepts our *unsignaled* audio SSRC but only
+when the PT matches a registered receive codec — PT 111 (Chrome's default) wasn't
+in ringrtc's receive map so it silently dropped our entire outbound stream (we
+heard them, they heard nothing). Captured from a live call: peer sends
+`peer_pt=102 ssrc=0x7d2`; we send pt=102 ssrc=0xA|0xB (unsignaled SSRC is fine).
+Diag tooling: `MediaSession::rtp_peer_ids()` → (pt, ssrc), surfaced in the Signal
+engine's `/state/calldbg.log` media-stats line (NOT logcat). **Inbound RX-quality
+filter DONE+device-verified (commit 658b929d):** the peer multiplexes streams on
+one port (0x7d2/PT102 audio + 0xd/PT101 telephone-event); `recv()` now skips any
+non-audio-PT packet (empty vec = benign skip, not error) so the decoder + seq/ts
+diag see one coherent stream → rtp gaps 1.4M→0, ts_step steady 2880, decode-err
+~15%→~7.6% (residual = real inbound loss → jitter/PLC follow-up). **The Opus PT is
+now PER-SESSION (not a global const):** WebRTC parses the negotiated SDP rtpmap
+(`Signaling::audio_pt`, from_sdp/to_sdp), `set_remote_signaling` adopts the peer's
+PT; Signal fixes 102 in `params_into`. Correctly scoped across both backends.
+Mic capture: output-first open
+ordering (see Signal call.rs) — on taimen, open the USAGE_MEDIA output BEFORE the
+capture or capture-first leaves the output unable to open (-889); then mmap-record
+HAL captures real full-scale mic (the getInputForAttr EX_ILLEGAL_STATE + MMAP
+"wait for valid timestamps" spin are transient/benign).
+
+**OFF-LAN CALLS WORK — TURN Phase B done+device-verified (WiFi↔cellular, audio
+both ways; commit ae83f719).** Phase A only allocated the relay + advertised the
+candidate; media never traversed it, so calls were LAN-only (direct host↔host).
+Phase B (transport.rs): inbound — drain `rtc_turn` `DataIndicationOrChannelData
+(peer,data)` and re-demux each payload as if direct from `peer` (STUN→ICE so the
+relay-relay connectivity check selects the pair, SRTP→media); outbound — track
+`typ relay` remote candidates (`relay_remotes`) and send any datagram addressed
+to one THROUGH our relay via `Relay::send_to` (the peer's TURN server only accepts
+our permitted relayed address, not raw host/srflx). Media addressing centralized
+in `Transport` (`queue_media`/`poll_transmit`); `add_remote_candidate(addr,
+is_relay)`. **Blocking opus-rs crash fixed along the way (commit c8576a8f):** a
+60ms wideband SILK frame from a low-bitrate off-LAN peer panicked opus-rs 0.1.22's
+hardcoded `w_pcm_i16=640` buffer (needs 960*ch) → SIGILL → dead call guest;
+vendored `external/opus-rs` fork sizes it `5760*channels` like the siblings, and
+wart-call's opus-rs is now a path dep on it. Residual inbound relay loss (~17%
+decode err, rx≪tx) → jitter-buffer/PLC follow-up.
+
 **SIGNAL 1:1 CALLS scoped as `tasks/75-ringrtc-signal-calls.md`** (do in a fresh
 session). Key framing: don't port ringrtc (= Rust orchestration + C++ libwebrtc) —
 graft Signal's 1:1 call protocol onto wart-call (which already replaces libwebrtc,

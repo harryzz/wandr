@@ -77,6 +77,29 @@ unarmed (`msm_stopGyroThread: invalid timer state = 0`).
 | Tangled SLPI firmware / churn | ruled out | **cold power-cycle**, fresh SLPI, exact e7c2a058 binaries → still 0 |
 | task-94 sensor unification | neither helps nor breaks | arbiter consumes via AIDL fine; camera still ~1/8 |
 
+### ‼️ Persistent-gyro-client hypothesis — TESTED 2026-06-06 → FALSIFIED
+Built the persistent gyro warm-keeper into the arbiter sensor-driver
+(`warm_camera_gyro()`: enable raw gyro `SensorType::GYROSCOPE` = 4 at 200 Hz, held
+forever) and measured the win rate on the live `--no-art` stack:
+
+- Warm-keeper verified active: `dumpsys sensorservice` → `0x04 (LSM6DSM Gyroscope)
+  active-count=1, selected=5.00 ms` (200 Hz) with `last 10 events` populated — the raw
+  gyro hardware is genuinely streaming continuously.
+- Provider healthy (53 min uptime, **no** `disable Gyro module` degraded markers).
+- **Result: 0 / 12 probes streamed** (vs the ~1/8 baseline). Warming the raw gyro does
+  **not** improve the camera win rate.
+
+**Why it can't work (the layer mismatch):** the camera's gyro is `Camera Sync 0 - Rear`
+(handle `0x09`, `com.google.sensor.sync`), a *different* virtual sensor from raw gyro
+(`0x04`); and the actual failure — `msm_stopGyroThread: invalid timer state` — is in the
+**kernel CAM_OIS driver's gyro hrtimer**, armed by the camera HAL's `ois_open`/`ois`
+ioctl, NOT by sensorservice. The framework/SSC gyro session establishes fine (the camera
+enables handle `0x09` at 200 Hz, `result=OK`, every probe); the race is **downstream of
+sensorservice**, in the OIS kernel timer. Keeping the framework gyro warm therefore
+cannot move it. → **Abandon the persistent-gyro-client direction; pivot to the OIS
+kernel gyro path** (next steps below). The `warm_camera_gyro()` code is an experiment,
+not a fix — revert unless re-purposed.
+
 ### Leading hypothesis (untested — start here)
 ART wins the race **every** time; `--no-art` ~1/8. The most likely reason: under ART
 **something keeps the gyro continuously active/registered**, so when the camera opens
@@ -89,17 +112,23 @@ opens. (The task-94 arbiter enumerates accel/proximity/light/device-orientation 
 task-94 doesn't move the win rate.)
 
 ## Next steps (source-first, per working rules)
-1. **Read the qcam EIS/gyro session-setup path** (vendor `libmmcamera2_*`, `sensor`
-   module, the `imuOis`/`VscSensor`/QMI client) to find *what the gyro session waits
-   on* and *why it succeeds 1/8* — confirm the cold-establish-vs-warm theory before
-   patching. Compare a **winning** vs **losing** `mm-camera`+`GoogGyro`+SSC trace
-   (capture both; the difference names the race).
-2. **Test the persistent-gyro-client fix:** stand up a client that enables the gyro
-   (type 4) and holds it, then measure the win rate over ~20 opens. If it jumps toward
-   1/1, that's the fix — wire it into the arbiter sensor-driver (it already owns the
-   AIDL `ISensorManager` path) or wart-sensormanager.
-3. **Interim, productionizable:** retry-on-open — reopen the camera until frames flow
+> ~~Persistent-gyro-client (old step 2)~~ — **DONE + FALSIFIED** (see the tested box
+> above). The race is **downstream of sensorservice**, in the kernel OIS gyro hrtimer.
+> New focus = the OIS gyro thread itself.
+
+1. **Find why `msm_startGyroThread` doesn't arm the OIS hrtimer under `--no-art`.** In a
+   losing run the log shows `ois_open` then `ois_close` + `msm_stopGyroThread: invalid
+   timer state` with **no `msm_startGyroThread`** in between — i.e. the camera HAL opens
+   OIS but never (successfully) starts the gyro thread, so the kernel hrtimer is never
+   armed → EIS gets no gyro → 0 frames. Read the qcom **OIS HAL** (vendor
+   `libmmcamera2_sensor_modules` / `actuator`/`ois` module + the `cam_ois` kernel driver
+   `msm_startGyroThread`/`msm_stopGyroThread`) to find **what gates the start** and what
+   differs ART-up vs `--no-art`. Capture a **winning** vs **losing** trace filtered on
+   `OISDBG|ois_|GyroThread|GoogGyro` — the difference names the gate.
+2. **Interim, productionizable:** retry-on-open — reopen the camera until frames flow
    (~handful of tries), then stream stably. Acceptable for the Signal-call use case.
+3. **Revert** the falsified `warm_camera_gyro()` warm-keeper in
+   `wart-arbiter-bin/src/sensor_driver.rs` (battery cost, no benefit) unless re-purposed.
 
 ## Repro (current, deterministic harness)
 - `adb root` (kills am-spam).

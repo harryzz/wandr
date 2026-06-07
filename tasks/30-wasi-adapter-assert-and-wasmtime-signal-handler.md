@@ -435,3 +435,43 @@ the formerly-crashing long-press → `Delay` path and serves as the
 standing regression check.
 
 Step 6 (related-bug audit) remains open and tracked separately.
+
+---
+
+## 2026-05-20 — Step 6 closed (related-bug audit done)
+
+Swept every feedback memory mentioning coroutine suspension / `Delay`
+/ `withTimeout` / `suspendCancellableCoroutine` / SIGILL / freeze, and
+checked each against the KT-86415 root cause (linear-memory
+`ScopedMemoryAllocator` range overlap → WASI adapter `State`
+corruption on the `Delay`→`poll_oneoff` path).
+
+Outcome — **no *additional* bug was retroactively fixed**; the Tooltip
+SIGILL was the only bug with that exact root cause:
+
+- **`tooltip-sigill-wasi`** — WAS the KT-86415 bug. Resolved; memory
+  already marked superseded by [[wasi-adapter-state-corruption]].
+- **`popup-overlay`** (DropdownMenu / AlertDialog expand freeze) — a
+  suspected relative, but task 31 found a *different* root cause
+  (graphicsLayer alpha baked into the parent recording, not adapter
+  corruption) and fixed it. Memory updated.
+- **`kotlin-wasm-suspendcoroutine-leak`** / **`indeterminate-progress-
+  leak`** — not KT-86415. Confirmed = wasmtime DRC GC scheduling
+  (WasmGC heap, a different memory region from the linear-memory
+  corruption). Memories already revised; unchanged by this fix.
+- **`wasi-realloc-allocator`** / **`currentnanotime-pollutes`** — same
+  *family* (linear-memory realloc/scoped-allocator quirks) but
+  distinct manifestations. KT-86415 fixes only `destroy()`'s range
+  propagation; the `freeAll`-at-start-of-every-WIT-import workaround
+  is still required (see CLAUDE.md "Do NOT"). Not obsoleted.
+- `basictextfield-freeze` (100% CPU synchronous-onTap spin),
+  `canvas-stub-noop-traps` (save/restore-invariant SIGILL),
+  `transition-animate-to-bug` (identityHashCode / DerivedState) —
+  unrelated mechanisms, not memory corruption.
+- No other memory describes a `Delay`/`withTimeout`/suspend-driven
+  SIGILL.
+
+Net: the KT-86415 fix resolved exactly one user-visible bug (the
+Tooltip SIGILL). No hidden retroactive fixes; no memory needed a
+status change from this audit (the related ones were already current).
+**Task 30 fully closed** — all 6 steps done.
