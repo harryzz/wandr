@@ -302,6 +302,7 @@ private fun MaterialDemoApp() {
                         // task 57. wart-app is a plain demo app again; no
                         // launcher card here.)
                         CounterCard()
+                        PlayToneCard()
                         CheckboxRadioCard()
                         TextFieldCard()
                         // Task 49 step 2 — Number/Phone fields drive
@@ -420,6 +421,61 @@ private fun CounterCard() {
                 )
                 HapticButton(onClick = { count++ }) { Text("+") }
             }
+        }
+    }
+}
+
+// Audio-output verify (the "right way"): plays a 440 Hz tone, then CLOSES the
+// track ~400 ms later via WasiScheduler so the AAudio MMAP stream is released and
+// audioserver returns to idle — unlike the old startup smoke that leaked the
+// track and kept audioserver pumping at ~8-9% CPU forever.
+private fun playToneAndRelease() {
+    val track = org.jetbrains.skiko.wasi.wit.Audio.Import.createTrack(
+        org.jetbrains.skiko.wasi.wit.Audio.TrackConfig(
+            sampleRate    = 48000u,
+            channelLayout = org.jetbrains.skiko.wasi.wit.Audio.ChannelLayout.STEREO,
+            format        = org.jetbrains.skiko.wasi.wit.Audio.Format.PCM_F32,
+        )
+    )
+    if (track == 0u) {
+        org.jetbrains.skiko.wasi.wit.Canvas.Import.logMessage("play-tone: createTrack failed (media.aaudio unavailable)")
+        return
+    }
+    val sr = 48000
+    val freq = 440.0
+    val frames = 9600          // 200 ms
+    val amp = 0.3f
+    val twoPi = 2.0 * kotlin.math.PI
+    val samples = ArrayList<Float>(frames * 2)
+    for (i in 0 until frames) {
+        val v = (kotlin.math.sin(twoPi * freq * i / sr) * amp).toFloat()
+        samples.add(v); samples.add(v)
+    }
+    val wrote = org.jetbrains.skiko.wasi.wit.Audio.Import.writePcmF32(track, samples)
+    org.jetbrains.skiko.wasi.wit.Audio.Import.start(track)
+    org.jetbrains.skiko.wasi.wit.Canvas.Import.logMessage("play-tone: track=$track wrote=$wrote frames — closing in 400ms")
+    org.jetbrains.skiko.wasi.WasiScheduler.schedule(400u) {
+        org.jetbrains.skiko.wasi.wit.Audio.Import.close(track)
+        org.jetbrains.skiko.wasi.wit.Canvas.Import.logMessage("play-tone: closed track=$track (audioserver should return to idle)")
+    }
+}
+
+@Composable
+private fun PlayToneCard() {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "Audio",
+                fontSize = 18.sp,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            HapticButton(onClick = { playToneAndRelease() }) { Text("▶  Play Tone") }
         }
     }
 }

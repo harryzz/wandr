@@ -23,7 +23,6 @@ import org.jetbrains.skiko.currentSkiaLayer
 import org.jetbrains.skiko.wasi.WasiInput
 import org.jetbrains.skiko.wasi.WasiLifecycle
 import org.jetbrains.skiko.wasi.WasiScheduler
-import org.jetbrains.skiko.wasi.wit.Audio as WitAudio
 import org.jetbrains.skiko.wasi.wit.Canvas as WitCanvas
 import org.jetbrains.skiko.wasi.wit.Clipboard as WitClipboard
 import org.jetbrains.skiko.wasi.wit.Haptics as WitHaptics
@@ -157,58 +156,11 @@ fun main() {
         "android-haptics smoke: perform(TAP)=${tapOk}, vibrateMs(50)=${vibrateOk}"
     )
 
-    // android-audio smoke: open a mono PCM-f32 track at 48 kHz, push a
-    // 200 ms 440 Hz sine into its ring buffer, start playback. Backed by
-    // android.media.IAAudioService ("media.aaudio") via rsbinder (task
-    // 21). Expected: a short beep on the device speaker when the app
-    // launches. createTrack returns 0 if media.aaudio is unavailable
-    // (SELinux denial, or service down) — in that case we log + skip.
-    //
-    // Buffer-capacity caveat: AAudio's down-data ring on a Pixel 2 XL is
-    // typically a few hundred frames (~10 ms). writePcmF32 will return
-    // the number of frames that actually fit, often less than the 9600
-    // we asked for; the rest is dropped silently in this smoke test. A
-    // production path would schedule per-frame top-ups; for "does the
-    // pipeline work?" the partial beep is enough.
-    // Stereo + 48 kHz: the only MMAP-supported config on Pixel 2 XL per the
-    // service's "suggested channel_mask=0x3" hint in earlier attempts. Mono
-    // PCM-f32 was refused without an AudioFlinger fallback; stereo lets the
-    // MMAP path succeed. We duplicate the sine into both channels.
-    val audioTrack = WitAudio.Import.createTrack(WitAudio.TrackConfig(
-        sampleRate     = 48000u,
-        channelLayout  = WitAudio.ChannelLayout.STEREO,
-        format         = WitAudio.Format.PCM_F32,
-    ))
-    if (audioTrack != 0u) {
-        val sr     = 48000
-        val freq   = 440.0
-        val frames = 9600  // 200 ms
-        val amp    = 0.3f  // -10 dBFS — comfortable, not piercing
-        val twoPi  = 2.0 * kotlin.math.PI
-        val samples = ArrayList<Float>(frames * 2)  // interleaved L,R
-        for (i in 0 until frames) {
-            val s = (kotlin.math.sin(twoPi * freq * i / sr) * amp).toFloat()
-            samples.add(s)  // L
-            samples.add(s)  // R
-        }
-        // Standard AAudio order: pre-fill the ring, THEN start playback.
-        // Calling start() first means the HAL's mixer thread races against
-        // us — readCounter advances over an empty ring before we can write,
-        // so w - r wraps to ~u64::MAX and the "ring is full" guard rejects
-        // every write.
-        val written = WitAudio.Import.writePcmF32(audioTrack, samples)
-        val started = WitAudio.Import.start(audioTrack)
-        val pending = WitAudio.Import.pendingFrames(audioTrack)
-        WitCanvas.Import.logMessage(
-            "android-audio smoke: track=${audioTrack} wrote=${written}/${frames} " +
-            "frames started=${started} pending=${pending} (expect a brief beep)"
-        )
-    } else {
-        WitCanvas.Import.logMessage(
-            "android-audio smoke: createTrack returned 0 — media.aaudio " +
-            "unavailable, SELinux denial, or config rejected"
-        )
-    }
+    // (Removed the startup android-audio smoke beep: it leaked an AAudio MMAP
+    // track it never closed — keeping audioserver pumping at ~8-9% CPU for the
+    // life of the app. The audio path is now exercised by the user-triggered
+    // "Play Tone" button in CounterDemo, which plays AND closes the track so
+    // audioserver returns to idle.)
 
     // android-locale smoke: read user's locale, time format, direction.
     val loc       = WitLocale.Import.primaryLocale()
