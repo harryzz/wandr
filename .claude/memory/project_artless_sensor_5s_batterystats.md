@@ -49,14 +49,18 @@ sensorservice restart needed). Register a `batterystats` GenericStub in
 `noteStart/Stop/WakeupSensor` transactions are fire-and-forget (void return
 ignored) so the benign reply is fine. Build on a-03, deploy, no device churn.
 
-**Same-class latent (NOT yet hit by proximity):** `AppOpsManager::getService()`
+**Same-class fix ALSO added — `appops`:** `AppOpsManager::getService()`
 (`aosp-frameworks-native/libs/permission/AppOpsManager.cpp:50-76`) uses
 non-blocking `checkService` but its OWN `sleep(1)` loop up to **10s** when `appops`
 absent — bites any sensor WITH a required appop + audio-record (`checkAudioOpNoThrow`).
-Proximity has no required appop (`perm: n/a`) so `noteOpIfRequired`/`checkCanAccessSensor`
-early-out → AppOps is NOT the proximity culprit. Add `appops` to the shim only if an
-appop-gated sensor or audio-record shows the lag (and verify the GenericStub int reply
-is parcel-correct for IAppOpsService's richer methods first). See [[project_artless_audio]].
+Proximity itself has no required appop (`perm: n/a`) so it wasn't the proximity culprit,
+but the 10s loop is real for those other paths. Added a **dedicated `AppOpsStub`** (NOT
+the GenericStub): `check*` reply = exc+int32(mode) but `note*`/`start*` reply =
+exc+int32+byte+int32 (the modern Java AppOpsService layout BpAppOpsService reads,
+IAppOpsService.cpp:65-69/89-93) — the generic exc+int32 would make the client over-read.
+Returns MODE_ALLOWED(0) everywhere = permissive (correct for wart). Codes from
+IAppOpsService.h enum (FIRST_CALL=1). Deployed+registered (service check appops=found).
+See [[project_artless_audio]].
 
 Extends [[project_arbiter_sensors]], [[project_proximity_screen_off]],
 [[project_art_shutdown]]. Discipline note: this was found by READING the source

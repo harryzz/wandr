@@ -36,6 +36,15 @@
 //                          PermissionController::getService loops checkService 10s.
 //   • "permission_checker" cameraserver AttributionAndPermissionUtils →
 //                          PermissionChecker getService loop.
+//   • "appops"             AppOpsManager::getService (frameworks-native
+//                          libs/permission/AppOpsManager.cpp:50-76) — non-blocking
+//                          checkService BUT its OWN sleep(1) loop up to 10s when absent.
+//                          Hit by audioserver record (checkAudioOperation) + any sensor
+//                          with a required app op (SensorService noteOp/checkOp). Needs a
+//                          TYPED reply (the note*/start* path reads exc+int32+byte+int32,
+//                          not the generic exc+int32) → the dedicated AppOpsStub below.
+//                          Replies MODE_ALLOWED (=0) everywhere = permissive, correct for
+//                          wart (single privileged user).
 //   • "media.camera.proxy" CameraServiceProxyWrapper::isCameraDisabled fail-CLOSES
 //                          (returns true = camera disabled) if the binder is null.
 //   • "batterystats"       SensorService::enable / disable / each wake-up sensor event →
@@ -265,6 +274,98 @@ private:
     String16 mDescriptor{"android.os.IProcessInfoService"};
 };
 
+// IAppOpsService stub. AppOpsManager::getService (frameworks-native
+// libs/permission/AppOpsManager.cpp:50-76) does a non-blocking checkService but spins
+// its OWN sleep(1) loop up to 10s when `appops` is absent — so under --no-art every
+// checkAudioOperation (audioserver record) / noteOp / checkOp on an appop-gated sensor
+// stalls up to 10s. The GenericStub's exc+int32 reply is correct for the check* codes
+// but SHORT for note*/start*: BpAppOpsService reads those as exc + int32 + byte + int32
+// (IAppOpsService.cpp:65-69/89-93 — the modern Java AppOpsService layout), so they need
+// the extra byte + trailing int32 or the client over-reads. We answer MODE_ALLOWED (0)
+// everywhere = permissive (correct for wart, a single privileged user). Codes from
+// IAppOpsService.h (header-only enum, FIRST_CALL_TRANSACTION=1).
+class AppOpsStub : public BBinder {
+public:
+    enum {
+        CHECK_OPERATION = IBinder::FIRST_CALL_TRANSACTION,  // 1
+        NOTE_OPERATION,                                     // 2
+        START_OPERATION,                                    // 3
+        FINISH_OPERATION,                                   // 4
+        START_WATCHING_MODE,                                // 5
+        STOP_WATCHING_MODE,                                 // 6
+        PERMISSION_TO_OP_CODE,                              // 7
+        CHECK_AUDIO_OPERATION,                              // 8
+        SHOULD_COLLECT_NOTES,                               // 9
+        SET_CAMERA_AUDIO_RESTRICTION,                       // 10
+        START_WATCHING_MODE_WITH_FLAGS,                     // 11
+    };
+    static constexpr int32_t MODE_ALLOWED = 0;
+    const String16& getInterfaceDescriptor() const override { return mDescriptor; }
+    status_t onTransact(uint32_t code, const Parcel& data, Parcel* reply,
+                        uint32_t flags) override {
+        if (kTrace) {
+            ALOGI("WART-SHIM-TRACE appops code=%u flags=%u callingPid=%d callingUid=%d",
+                  code, flags, IPCThreadState::self()->getCallingPid(),
+                  IPCThreadState::self()->getCallingUid());
+        }
+        switch (code) {
+            // check*: reply = exc + int32(mode).
+            case CHECK_OPERATION:
+            case CHECK_AUDIO_OPERATION:
+                if (reply != nullptr) {
+                    reply->writeNoException();
+                    reply->writeInt32(MODE_ALLOWED);
+                }
+                return NO_ERROR;
+
+            // note*/start*: reply = exc + int32 + byte + int32(mode) (client discards the
+            // first two; the trailing int32 is the returned mode).
+            case NOTE_OPERATION:
+            case START_OPERATION:
+                if (reply != nullptr) {
+                    reply->writeNoException();
+                    reply->writeInt32(MODE_ALLOWED);
+                    reply->writeByte(0);
+                    reply->writeInt32(MODE_ALLOWED);
+                }
+                return NO_ERROR;
+
+            // permissionToOpCode → int; -1 = no app op maps to this permission (so the
+            // caller treats the access as not appop-gated → permissive).
+            case PERMISSION_TO_OP_CODE:
+                if (reply != nullptr) {
+                    reply->writeNoException();
+                    reply->writeInt32(-1);
+                }
+                return NO_ERROR;
+
+            // shouldCollectNotes → bool; false = don't collect async notes.
+            case SHOULD_COLLECT_NOTES:
+                if (reply != nullptr) {
+                    reply->writeNoException();
+                    reply->writeBool(false);
+                }
+                return NO_ERROR;
+
+            // void methods → exc only.
+            case FINISH_OPERATION:
+            case START_WATCHING_MODE:
+            case STOP_WATCHING_MODE:
+            case SET_CAMERA_AUDIO_RESTRICTION:
+            case START_WATCHING_MODE_WITH_FLAGS:
+                if (reply != nullptr) {
+                    reply->writeNoException();
+                }
+                return NO_ERROR;
+
+            default:
+                return BBinder::onTransact(code, data, reply, flags);
+        }
+    }
+private:
+    String16 mDescriptor{"com.android.internal.app.IAppOpsService"};
+};
+
 }  // namespace
 
 int main() {
@@ -304,6 +405,11 @@ int main() {
     // eviction priority query) — the generic zero-reply can't serve its out int[].
     status_t pis = sm->addService(String16("processinfo"), sp<ProcessInfoStub>::make());
     ALOGI("wart-framework-shim: addService(processinfo) = %d", pis);
+
+    // IAppOpsService needs the typed stub (note*/start* read exc+int32+byte+int32, which
+    // the generic exc+int32 reply can't serve). Absent → AppOpsManager's 10s sleep-loop.
+    status_t aos = sm->addService(String16("appops"), sp<AppOpsStub>::make());
+    ALOGI("wart-framework-shim: addService(appops) = %d", aos);
 
     ALOGI("wart-framework-shim: serving");
     IPCThreadState::self()->joinThreadPool();
