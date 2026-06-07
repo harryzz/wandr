@@ -464,7 +464,10 @@ pub enum Effect {
     /// `setDisplayBrightness` where the HWC supports it). Distinct from
     /// `SetDisplayPower` (panel on/off): brightness only matters while the panel
     /// is on, so the power module gates it on `panel_on && !blanked`.
-    SetBacklight { level: f32 },
+    /// `sensor` tags the source: `true` = auto-brightness (the ambient-light curve)
+    /// → the Lights HAL `BrightnessMode::SENSOR` (the vendor HAL may smooth it);
+    /// `false` = a manual override / on-off default → `BrightnessMode::USER`.
+    SetBacklight { level: f32, sensor: bool },
 }
 
 /// The handle a module uses during a command or event reaction. It exposes

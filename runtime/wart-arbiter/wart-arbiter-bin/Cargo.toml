@@ -34,6 +34,7 @@ wart-arbiter-sensors = { path = "../wart-arbiter-sensors" }
 wart-arbiter-net = { path = "../wart-arbiter-net" }
 wart-hal-sensors = { path = "../../wart-hal-sensors" }
 wart-hal-display = { path = "../../wart-hal-display" }
+wart-hal-lights  = { path = "../../wart-hal-lights" }
 anyhow         = { workspace = true }
 log            = { workspace = true }
 android_logger = { workspace = true }

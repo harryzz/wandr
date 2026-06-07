@@ -1,0 +1,28 @@
+[package]
+name    = "wart-hal-lights"
+version = "0.0.1"
+edition = "2021"
+
+# wart-hal-lights — shared android.hardware.light ILights access. The one binder
+# owner of the Lights HAL `setLightState(BACKLIGHT, …)` path — the *proper* Android
+# brightness endpoint (the vendor HAL owns the write; under --no-art the framework's
+# DisplayPowerController/LightsService that used to drive it are dead, but the HAL is
+# native and survives). Used by the arbiter's auto-brightness applier instead of a
+# raw sysfs poke. Mirrors wart-hal-display/wart-hal-sensors: standalone package, AIDL
+# codegen in build.rs (android only), off-android stubs. The same ILights binding the
+# host's lights_impl.rs already uses (proven on-device), lifted into a shared crate.
+
+[workspace]
+
+[dependencies]
+log = "0.4"
+
+[target.'cfg(target_os = "android")'.dependencies]
+rsbinder    = { git = "https://github.com/hiking90/rsbinder", rev = "5e999e04a", features = ["android_11_plus"] }
+# rsbinder-aidl always emits an async service trait; async-trait makes it
+# dyn-compatible (we only call the sync proxy, but the generated code references it).
+async-trait = "0.1"
+tokio       = { version = "1", features = ["rt"] }
+
+[build-dependencies]
+rsbinder-aidl = { git = "https://github.com/hiking90/rsbinder", rev = "5e999e04a" }

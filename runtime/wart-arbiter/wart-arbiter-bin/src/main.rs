@@ -157,6 +157,8 @@ fn main() {
                     // audio-call-start/end <pid|app-id>, audio-route <pid|app-id>
                     // <speaker|earpiece>.
                     | "audio-call-start" | "audio-call-end" | "audio-route"
+                    // Ringer (incoming call) + ringer policy verbs:
+                    | "audio-ring-start" | "audio-ring-stop" | "audio-ringer-mode"
                     // play-tone [pid|app-id] [ms] [hz] [vol0-1] — arbiter→host tone
                     // (test/warm-up); target optional, defaults to the foreground host.
                     | "play-tone"
@@ -704,11 +706,11 @@ fn execute_effects(effects: Vec<wart_arbiter_core::Effect>) {
                 // observable on the bus.
                 sensor_driver::set_sensor(kind, on, rate_hz);
             }
-            Effect::SetBacklight { level } => {
-                // Task 86 — the power module's auto-brightness (ambient-light curve)
-                // or a manual override. Applied as a normalized fraction; the applier
-                // maps it to the panel's raw range (sysfs) and no-ops under ART-up.
-                apply_backlight(level);
+            Effect::SetBacklight { level, sensor } => {
+                // Task 86 — the power module's auto-brightness (ambient-light curve,
+                // sensor=true → BrightnessMode SENSOR) or a manual override
+                // (sensor=false → USER). Applied via the Lights HAL (sysfs fallback).
+                apply_backlight_mode(level, sensor);
             }
             Effect::Launch { app_id, kind } => {
                 // Arbiter Inc. 3c — the alarm module emits this to wake a dead
@@ -1136,16 +1138,38 @@ fn backlight_max() -> u32 {
 ///
 /// Only under `--no-art` — with the Java framework up, DisplayManager owns the
 /// backlight and we must not fight it. Node + max range env-overridable; best-effort.
+/// Apply a normalized backlight fraction. `sensor` tags the change as
+/// auto-brightness (BrightnessMode SENSOR) vs a manual/on-off USER set.
+///
+/// Prefers the **Lights HAL** (`ILights::setLightState`, wart-hal-lights) — the
+/// proper Android endpoint the dead `LightsService`/`DisplayPowerController` used to
+/// drive; the vendor HAL owns the actual write (and any hardware sensor-aware
+/// handling). Falls back to the raw sysfs node only if the HAL is unavailable
+/// (SELinux-blocked / absent). Caller (the power module) already dedups + debounces
+/// + ramps, so this just applies.
 fn apply_backlight(frac: f32) {
+    // The bare entry is the on/off boot/wake default (a fixed level from
+    // apply_display_power), not a sensor reading → USER mode.
+    apply_backlight_mode(frac, false)
+}
+
+fn apply_backlight_mode(frac: f32, sensor: bool) {
     if !no_art() {
         return; // ART-up: DisplayManager owns the backlight; don't fight it.
     }
     let frac = frac.clamp(0.0, 1.0);
+    // The Lights HAL is the proper path; try it first (cached service handle).
+    if wart_hal_lights::set_backlight(frac, sensor) {
+        log::info!("arbiter: backlight → frac={frac:.3} via ILights (sensor={sensor})");
+        return;
+    }
+    // Fallback: raw sysfs node (what the vendor lights HAL writes anyway), e.g. if
+    // the HAL is SELinux-blocked from this context.
     let max = backlight_max();
     let level = (frac * max as f32).round() as u32;
     let path = std::env::var("WART_BACKLIGHT_PATH").unwrap_or_else(|_| BACKLIGHT_NODE.to_string());
     match std::fs::write(&path, level.to_string()) {
-        Ok(()) => log::info!("arbiter: backlight → {level}/{max} (frac={frac:.3}, {path})"),
+        Ok(()) => log::info!("arbiter: backlight → {level}/{max} (frac={frac:.3}, sysfs {path})"),
         Err(e) => log::debug!("arbiter: backlight {level} → {path} failed: {e}"),
     }
 }

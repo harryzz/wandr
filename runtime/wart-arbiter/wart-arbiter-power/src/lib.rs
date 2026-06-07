@@ -41,6 +41,15 @@ const DOZE_SUSPEND_MS: u64 = 60_000;
 /// `screen-timeout <ms|off>`.
 const DEFAULT_SCREEN_OFF_TIMEOUT_MS: u64 = 60_000;
 
+/// How long to keep the ambient-light sensor enabled (warm) after the screen turns
+/// off. Re-enabling a *cold* sensor pays a ~5 s platform `enableSensor` timeout (the
+/// SLPI powers the sensor down when it has no client, then re-inits it on the next
+/// enable — device-measured), which made auto-brightness lag every screen-on. Keeping
+/// the ALS warm across brief off periods (a glance / quick lock-unlock) makes the wake
+/// instant; only after a longer idle does it go cold (recovering the idle sampling
+/// cost). Mirrors Android keeping the ALS active while the display is in use.
+const ALS_WARM_GRACE_MS: u64 = 120_000;
+
 // ── Auto-brightness (task 86) ────────────────────────────────────────────────
 // Under `--no-art` there is no DisplayManager auto-brightness controller, so the
 // power module — already the display-power/backlight authority — maps the ambient
@@ -317,17 +326,32 @@ impl PowerModule {
         self.panel_on && !self.blanked && self.manual_frac.is_none()
     }
 
-    /// Enable the ambient-light sensor exactly while auto-brightness can act on it,
-    /// and disable it otherwise. The ALS keeps the sensor coprocessor (SSC/CHRE)
-    /// sampling whenever it's enabled, so leaving it always-on burned ~5% CPU even
-    /// with the screen OFF (device-measured). Gating it to the
-    /// [`auto_brightness_active`] window (screen on, not blanked, not manual) removes
-    /// that idle cost while keeping auto-brightness responsive when it matters.
-    /// Idempotent — only toggles the HAL on a real change. Call after anything that
-    /// changes `panel_on` / `blanked` / `manual_frac`. (Light is on-change and slow,
-    /// so a low rate is plenty.)
+    /// Whether the ALS should be ENABLED (kept warm) right now — distinct from
+    /// [`auto_brightness_active`] (whether to APPLY brightness). We keep it warm
+    /// whenever auto-brightness mode is on (no manual override) and the screen is on
+    /// OR was on within [`ALS_WARM_GRACE_MS`] — so a quick lock→unlock finds the
+    /// sensor already warm (no ~5 s cold re-enable). Blanked (proximity, mid-call) does
+    /// NOT disable it: the panel flips off/on rapidly there and we must not thrash the
+    /// sensor. Only a sustained screen-off lets it go cold (recovering idle cost).
+    fn light_should_be_warm(&self) -> bool {
+        if self.manual_frac.is_some() {
+            return false; // manual override: ambient tracking off, no ALS needed
+        }
+        if self.panel_on {
+            return true;
+        }
+        match self.screen_off_at {
+            Some(t) => t.elapsed() < Duration::from_millis(ALS_WARM_GRACE_MS),
+            None => true, // screen-off instant not recorded → treat as recently-on
+        }
+    }
+
+    /// Enable/disable the ambient-light sensor to match [`light_should_be_warm`].
+    /// Idempotent — only toggles the HAL on a real change. Called after anything that
+    /// changes `panel_on` / `manual_frac` AND every idle tick (so the warm grace
+    /// expires the enable once the screen has been off long enough).
     fn reconcile_light(&mut self, ctx: &mut Ctx) {
-        let want = self.auto_brightness_active();
+        let want = self.light_should_be_warm();
         if want != self.light_on {
             ctx.request(Effect::SetSensor {
                 kind: SensorKind::Light,
@@ -336,7 +360,7 @@ impl PowerModule {
             });
             self.light_on = want;
             log::info!("arbiter: auto-brightness light sensor {}",
-                if want { "ENABLED (screen on)" } else { "DISABLED (screen off/manual)" });
+                if want { "ENABLED (warm)" } else { "DISABLED (idle grace elapsed/manual)" });
         }
     }
 
@@ -367,7 +391,7 @@ impl PowerModule {
             }
         }
         self.last_applied_frac = Some(frac);
-        ctx.request(Effect::SetBacklight { level: frac });
+        ctx.request(Effect::SetBacklight { level: frac, sensor: true });
     }
 
     /// Re-assert the correct backlight after a wake / uncover / `brightness auto`,
@@ -381,7 +405,8 @@ impl PowerModule {
         }
         if let Some(frac) = self.manual_frac.or(self.light_frac) {
             self.last_applied_frac = Some(frac);
-            ctx.request(Effect::SetBacklight { level: frac });
+            // SENSOR unless a manual override is in force (then it's a USER level).
+            ctx.request(Effect::SetBacklight { level: frac, sensor: self.manual_frac.is_none() });
         }
     }
 
@@ -401,7 +426,7 @@ impl PowerModule {
                     self.manual_frac = Some(f);
                     if self.panel_on && !self.blanked {
                         self.last_applied_frac = Some(f);
-                        ctx.request(Effect::SetBacklight { level: f });
+                        ctx.request(Effect::SetBacklight { level: f, sensor: false });
                     }
                     log::info!("arbiter: brightness → manual {f}");
                     Reply::ok(format!("brightness {f}"))
@@ -929,7 +954,7 @@ mod tests {
     fn backlight(eff: &[Effect]) -> Vec<f32> {
         eff.iter()
             .filter_map(|e| match e {
-                Effect::SetBacklight { level } => Some(*level),
+                Effect::SetBacklight { level, .. } => Some(*level),
                 _ => None,
             })
             .collect()

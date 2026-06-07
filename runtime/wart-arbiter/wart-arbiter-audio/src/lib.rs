@@ -14,7 +14,7 @@
 //! Focus is runtime-only (it dies with a reboot), so the stack lives in this
 //! module, not the durable core Store.
 
-use wart_arbiter_core::{ArbiterModule, Ctx, Effect, Event, Reply, PRIMARY_DISPLAY};
+use wart_arbiter_core::{ArbiterModule, Ctx, Effect, Event, Reply, SensorKind, PRIMARY_DISPLAY};
 
 /// What a guest requests (Android AUDIOFOCUS_GAIN family).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -314,6 +314,15 @@ impl AudioModule {
             return Reply::err(format!("audio-ring-unknown-owner {token}"));
         };
         self.ringing = Some(pid);
+        // PRE-WARM proximity during the ring (task: the platform `enableSensor` pays a
+        // ~5 s timeout re-activating a COLD sensor — the SLPI powers it down with no
+        // client). Acquiring it now, while the phone rings, means it's already warm by
+        // the time the call is answered (`cmd_call_start` → CommsActive re-acquires the
+        // SAME pid → deduped, so the hold persists into the call). Released on
+        // decline/miss (`cmd_ring_stop`); on answer the ring's hold rides into the call
+        // and is dropped at call-end. (`stop_ring`, shared by answer + decline, does
+        // NOT touch proximity, so answering keeps it warm.)
+        ctx.emit(Event::SensorAcquire { kind: SensorKind::Proximity, requester: pid });
         // The ringtone pauses music; it resumes when the ring stops (Android uses
         // GAIN_TRANSIENT for the ring stream).
         self.grant(pid, app_id.clone(), FocusKind::GainTransient, ctx);
@@ -342,6 +351,10 @@ impl AudioModule {
             return Reply::err(format!("audio-ring-not-ringing pid={pid}"));
         }
         self.stop_ring(pid, &app_id, ctx);
+        // Declined / missed (not answered): release the pre-warm acquired in
+        // cmd_ring_start. (On ANSWER this path isn't taken — cmd_call_start stops the
+        // ring directly + CommsActive holds proximity, so the warm sensor rides in.)
+        ctx.emit(Event::SensorRelease { kind: SensorKind::Proximity, requester: pid });
         self.drop_pid(pid, ctx); // release transient focus → prior owner resumes
         ctx.request(Effect::Persist);
         log::info!("arbiter: audio-ring-stop pid={pid} app={app_id}");

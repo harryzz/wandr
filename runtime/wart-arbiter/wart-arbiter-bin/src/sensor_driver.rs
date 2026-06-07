@@ -13,7 +13,8 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::OnceLock;
+use std::sync::mpsc::{channel, Sender};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use wart_arbiter_core::SensorKind;
@@ -69,10 +70,41 @@ fn handle_to_kind() -> &'static HashMap<u32, SensorKind> {
 /// (and takes no locks) while nothing is enabled.
 static ENABLED: AtomicUsize = AtomicUsize::new(0);
 
-/// Apply the sensors module's enable/disable decision to the HAL (called from
-/// `execute_effects`, which holds `arbiter_lock`). Looks up the handle for
-/// `kind` and toggles it; updates the enabled count that gates the poll loop.
+/// Channel to the sensor-enable worker thread (set in [`spawn`]). `set_sensor`
+/// hands the enable/disable off here so the **slow HAL call runs off the arbiter
+/// lock** — see [`set_sensor`].
+fn enable_tx() -> &'static Mutex<Option<Sender<(SensorKind, bool, u32)>>> {
+    static TX: OnceLock<Mutex<Option<Sender<(SensorKind, bool, u32)>>>> = OnceLock::new();
+    TX.get_or_init(|| Mutex::new(None))
+}
+
+/// Apply the sensors module's enable/disable decision to the HAL — NON-BLOCKING.
+/// Called from `execute_effects`, which holds `arbiter_lock`; the underlying HAL
+/// `enableSensor`/`disableSensor` on the qcom SSC can block ~5 s (the SLPI
+/// activating an on-change sensor like the ALS), and `reconcile_light` toggles the
+/// ALS on EVERY screen on/off — so doing it inline froze the whole arbiter
+/// (keyguard / input / screen-power) for ~5 s on every power-press and proximity
+/// change (device-observed: "panel ON" → "enabled light" 5 s later, with a host
+/// "Broken pipe" from the stall). So we just queue the request to a dedicated
+/// worker thread (ordered FIFO, so rapid on/off applies correctly) and return
+/// immediately, releasing the lock. Auto-brightness lagging a few seconds is
+/// harmless; freezing input is not.
 pub fn set_sensor(kind: SensorKind, on: bool, rate_hz: u32) {
+    let tx = enable_tx().lock().unwrap_or_else(|e| e.into_inner());
+    match tx.as_ref() {
+        Some(tx) => {
+            let _ = tx.send((kind, on, rate_hz));
+        }
+        // Worker not spawned yet (shouldn't happen — spawn() sets it before any
+        // effect runs). Fall back to applying inline so nothing is silently dropped.
+        None => apply_set_sensor(kind, on, rate_hz),
+    }
+}
+
+/// The actual (potentially slow) HAL toggle — runs on the enable-worker thread,
+/// never holding `arbiter_lock`. Looks up the handle for `kind` and toggles it;
+/// updates the enabled count that gates the poll loop.
+fn apply_set_sensor(kind: SensorKind, on: bool, rate_hz: u32) {
     let Some(sensor) = sensors().get(&kind) else {
         log::warn!("sensor_driver: SetSensor {} but no such sensor on this device", kind.as_wire());
         return;
@@ -110,6 +142,20 @@ pub fn spawn() {
             );
         }
     }
+
+    // Enable-worker thread: drains queued SetSensor requests and performs the slow
+    // HAL enable/disable OFF the arbiter lock (see `set_sensor`). Spawned BEFORE the
+    // first `set_sensor` below so that enable is queued, not applied inline.
+    let (tx, rx) = channel::<(SensorKind, bool, u32)>();
+    *enable_tx().lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
+    std::thread::Builder::new()
+        .name("arbiter-sensor-enable".into())
+        .spawn(move || {
+            for (kind, on, rate_hz) in rx {
+                apply_set_sensor(kind, on, rate_hz);
+            }
+        })
+        .expect("spawn sensor-enable worker thread");
 
     // Device-orientation is enabled ALWAYS-ON (not ref-counted like proximity/
     // light): auto-rotation must keep working with no surface "holding" it. This
