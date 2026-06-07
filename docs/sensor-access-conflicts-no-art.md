@@ -185,14 +185,15 @@ spin appears, find the spinning instance (`top -H`, the hot `binder:<pid>_N`) an
 duplicate exists, `kill -9` the orphan; otherwise restart `wart-sensormanager` (drops
 the stale server-side `EventQueue`).
 
-**The real fix (deferred):** guard `EventQueueLooperCallback::handleEvent`
-(`aidl/EventQueue.cpp:37`) — `return 0` (drop the fd) on `events & (ALOOPER_EVENT_HANGUP
-| ALOOPER_EVENT_ERROR)`, on `mQueue.promote()==nullptr`, and on `read()<0` — mirroring
-`SensorEventQueue::waitForEvent`. `libsensorserviceaidl` is a `cc_library`, linked
-**shared** by `wart-sensormanager` (`cpp/Android.bp`), so the fix is either (A) vendor
-the patched `aidl/*.cpp` into our module as a **static** lib (self-contained, no
-platform-lib ship), or (B) rebuild `libsensorserviceaidl.so` on a-03 + side-load via
-`LD_LIBRARY_PATH`. Not doing either now (low urgency post-C2).
+**The real fix — by AVOIDANCE, not a library patch (user decision 2026-06-07).**
+The spin only occurs when a BitTube **hangs up**, which only happens because of our
+**connection churn** (service restarts / duplicate instances / reconnects). With one
+stable `wart-sensormanager` + one stable arbiter event-queue connection, the poll
+threads sleep — no hangup, no spin (device-observed). So the agreed fix is to make
+the `--no-art` native-service bringup **churn-free and shim-first** so the hangup
+never happens — using `libsensorserviceaidl` **as-is, unpatched**. See
+**`docs/artless-native-service-model.md`** and **`tasks/96-artless-native-service-bringup.md`**,
+which supersede the earlier "patch `aidl/EventQueue.cpp`" idea (rejected: no platform-lib patches).
 
 ### C4 — Cross-path HAL perturbation onto the camera — OPEN
 The wart AIDL consumers and the camera's timing-sensitive EIS gyro share the one
