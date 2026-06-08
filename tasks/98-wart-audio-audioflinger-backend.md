@@ -1,4 +1,7 @@
-# Task 98 — `wart-audio`: AudioFlinger-direct audio backend (replace hand-rolled AAudio)
+# Task 98 — `audioclient-rs`: AudioFlinger-direct audio backend (replace hand-rolled AAudio)
+
+> Backend packaged as a standalone reusable crate `crates/audioclient-rs` (lib `audioclient`);
+> `wart-host` keeps only the WIT/wasmtime glue. See "Crate packaging & reuse" below.
 
 > Status: 📐 PLAN OF RECORD (2026-06-08). Design decided; implementation not started.
 > Supersedes the hand-rolled `media.aaudio` client in `audio_impl.rs` as the audio
@@ -73,11 +76,14 @@ android-media / oboe.
 ```
 guest (WIT: audio.create-track / write-pcm / read-pcm; controls; focus)   ← unchanged
         │
-host audio backend (NEW, pure Rust)
+wart-host glue (WIT bindings + wasmtime HostState + StreamClass→attributes)
+        │  uses ↓
+audioclient-rs  (NEW standalone crate — crates/audioclient-rs, lib name `audioclient`)
   ├─ control: rsbinder → IAudioFlingerService.createTrack/createRecord → IAudioTrack/IAudioRecord
   ├─ data:    Rust port of audio_track_cblk_t ClientProxy (write_pcm / read_pcm)
-  └─ attrs:   StreamClass → audio_attributes_t (usage/content) in CreateTrackRequest
-host routing/volume policy (EXISTING, keep)
+  └─ native API: open_output(attrs) / write / open_input(src) / read / start / stop /
+                 close / set_volume / set_output_device / get_timestamp
+host routing/volume policy (EXISTING, keep — separate concern)
   └─ rsbinder → IAudioPolicyService (getDevicesForAttributes, setForceUse,
                 setDevicesRoleForStrategy, volume) — audio_policy_impl.rs
 audioserver: AudioFlinger (createTrack, MixerThread) + AudioPolicyManager   ← survives --no-art
@@ -95,19 +101,51 @@ audioserver: AudioFlinger (createTrack, MixerThread) + AudioPolicyManager   ← 
 - **Robust to guest stalls (task-97 bug #1):** the CBLK proxy + AudioFlinger MixerThread
   underrun-fills with silence; no separate host pump needed.
 
-## AIDL / build changes (`runtime/wart-host/build.rs`)
+## Crate packaging & reuse (`crates/audioclient-rs`)
 
-The rsbinder-aidl `Builder` (`build.rs:668`) gains **one source**; nothing must be dropped
-to make this work:
+The backend ships as a **standalone, reusable crate**, not buried in `wart-host` —
+matching the project's HAL-crate pattern (`wart-hal-sensors`/`-display`/`-net`), but
+**un-wart-branded** so it's usable from any Android-native Rust project (and publishable).
 
-- **Add:** `.source(audioclient_aidl.join("android/media/IAudioFlingerService.aidl"))`
-  (pulls `IAudioTrack`, `IAudioRecord`, `CreateTrack/RecordRequest/Response`,
-  `SharedFileRegion` via the existing include dirs).
-- **Keep:** `IAudioPolicyService` source + all `audioclient`/`audio_common`/`av`/`shmem`
-  include dirs (shared type closure — the new backend reuses them).
-- **Drop LATER (cleanup, only after R is device-verified):** the `IAAudioService` +
-  `IAAudioClient` sources, the `aaudio_aidl` include dir, and the hand-rolled AAudio
-  client in `audio_impl.rs`. Keeping them during bring-up preserves an A/B fallback.
+- **Name:** package `audioclient-rs`, `[lib] name = "audioclient"` → consumers `use audioclient::…`.
+  (crates.io: `audioclient`/`audioclient-rs`/`audioclient-sys` all free; `-rs` chosen over a
+  bare/`-sys` name — it's not a classic `-sys` linker crate. kebab-case per convention.)
+- **Location:** `crates/audioclient-rs` (alongside the reusable `crates/wart-call`), not
+  `runtime/` (which holds wart-internal crates).
+- **In the crate:** the rsbinder `IAudioFlingerService`/`IAudioTrack`/`IAudioRecord` codegen +
+  calls, the `audio_track_cblk_t` `ClientProxy` ring, and the native API above. Optionally a
+  sibling `audio-policy` module/crate for the `IAudioPolicyService` routing/volume helpers.
+- **Out of the crate (stays in `wart-host`):** the WIT bindings, the wasmtime `HostState`
+  wiring, and the wart-specific `StreamClass → audio_attributes` mapping. The crate exposes a
+  pure native Rust API — zero WIT/wasmtime — so the host (and the arbiter, and external
+  projects) all consume the same thing.
+- **`cfg(target_os = "android")`-gated** with a desktop no-op fallback (like the other HAL
+  crates) so dependents compile cross-platform.
+- **Self-containment:** for wart-internal use it may reference the single vendored AIDL copy
+  via a relative path (as `wart-hal-sensors` does → `../wart-host/vendor`); for a *fully
+  external/publishable* build it must **vendor its own minimal AIDL set + the
+  `audio_track_cblk_t` layout** instead of the relative path.
+- **Documented reuse constraints (this is a platform-ABI crate, not a stable-API one):**
+  (1) Android-native only; (2) **version-pinned ABI** — the AAudio AIDL transaction layout and
+  the private `audio_track_cblk_t` struct are tied to the Android version, so the crate is valid
+  across the API range its vendored defs match (state it, e.g. "API 33–35"); (3) needs a
+  **privileged context** (system uid / sepolicy) that AudioFlinger accepts.
+
+## AIDL / build changes (`crates/audioclient-rs/build.rs` + `runtime/wart-host/build.rs`)
+
+The `IAudioFlingerService` codegen lives in **the crate's** `build.rs` (rsbinder-aidl
+`Builder` — `.source(audioclient_aidl.join("android/media/IAudioFlingerService.aidl"))`,
+pulling `IAudioTrack`/`IAudioRecord`/`CreateTrack/RecordRequest/Response`/`SharedFileRegion`
+via its include dirs — modeled on `wart-hal-sensors/build.rs`). The host's `build.rs` is
+**only** trimmed, never blocked:
+
+- **Crate (`crates/audioclient-rs/build.rs`):** codegen `IAudioFlingerService` + closure
+  (vendored-AIDL relative path for wart-internal; vendor-in for a publishable build).
+- **Host (`runtime/wart-host/build.rs:668`) — keep:** `IAudioPolicyService` source + the
+  `audioclient`/`audio_common`/`av`/`shmem` include dirs (routing stays in the host).
+- **Host — drop LATER (cleanup, only after R is device-verified):** the `IAAudioService` +
+  `IAAudioClient` sources, the `aaudio_aidl` include dir, and the hand-rolled AAudio client in
+  `audio_impl.rs`. Keeping them during bring-up preserves an A/B fallback.
 
 Watch: `CreateTrackResponse`/`CreateTrackRequest` carry nested unions/parcelables — confirm
 rsbinder-aidl (pinned git 0.9.0, `[[reference_rsbinder_version]]`) decodes them (it fixed
@@ -129,13 +167,18 @@ Port faithfully from the **vendored reference** (do NOT re-derive):
 
 ## Critical files
 
-- `runtime/wart-host/build.rs` (~668) — add `IAudioFlingerService` source.
-- `runtime/wart-host/src/audio_impl.rs` — replace `binder_path` (AAudio) with the
-  AudioFlinger client + CBLK proxy; keep the module's public API (`create_track`,
-  `write_pcm_f32`, `read_pcm_f32`, `start`/`pause`/`close`, `create_capture`).
-- `runtime/wart-host/src/audio_routing.rs` — `StreamClass`→`audio_attributes_t`
-  (usage/content) for `CreateTrackRequest`; broaden `StreamClass` beyond the call-ish set.
-- `runtime/wart-host/src/audio_policy_impl.rs` — unchanged (routing/volume).
+- **NEW crate `crates/audioclient-rs/`** — `Cargo.toml` (package `audioclient-rs`,
+  `[lib] name = "audioclient"`, own `[workspace]`, cfg-android deps: rsbinder pin +
+  `[build-dependencies] rsbinder-aidl`), `build.rs` (codegen `IAudioFlingerService` closure),
+  `src/` (AudioFlinger client + `audio_track_cblk_t` proxy + native API + desktop no-op).
+- `runtime/wart-host/Cargo.toml` — add the `audioclient` dependency.
+- `runtime/wart-host/src/audio_impl.rs` — replace the hand-rolled `binder_path` (AAudio) with
+  **calls into `audioclient`**; keep the module's public API (`create_track`, `write_pcm_f32`,
+  `read_pcm_f32`, `start`/`pause`/`close`, `create_capture`) so the WIT/wasmtime glue is intact.
+- `runtime/wart-host/src/audio_routing.rs` — `StreamClass`→`audio_attributes_t` mapping passed
+  to `audioclient::open_output`; broaden `StreamClass` beyond the call-ish set.
+- `runtime/wart-host/src/audio_policy_impl.rs` — unchanged (routing/volume stays in the host).
+- `runtime/wart-host/build.rs` — only trim the AAudio sources later (cleanup); routing AIDLs stay.
 - Reference (read-only): `vendor/aosp-frameworks-av/media/libaudioclient/{AudioTrack.cpp,
   AudioTrackShared.cpp}`, `include/private/media/AudioTrackShared.h`,
   `media/libaudioclient/aidl/android/media/{IAudioFlingerService,IAudioTrack,CreateTrackRequest,
@@ -143,14 +186,15 @@ Port faithfully from the **vendored reference** (do NOT re-derive):
 
 ## Migration sequence (no regressions)
 
-1. Add the `IAudioFlingerService` AIDL source; confirm rsbinder codegen + decode build-clean.
-2. Implement the AudioFlinger client + CBLK port behind a new entry (`--probe-af-tone`),
-   leaving the AAudio path in place.
+1. Scaffold `crates/audioclient-rs` (Cargo + build.rs codegen of `IAudioFlingerService`);
+   confirm rsbinder codegen + decode build-clean (standalone `cargo build`).
+2. Implement the AudioFlinger client + CBLK port in the crate, with a crate-level example/test
+   entry; wire a `wart-host --probe-af-tone` that calls `audioclient`, leaving the AAudio path in place.
 3. **Verify on device** (`--no-art`): `--probe-af-tone` plays a tone via AudioFlinger,
    no `-885`/command-timeout (there's no AAudioService in the path). Then `--probe-af-loop`
    (capture+playback).
-4. Switch `create_track`/`write_pcm_f32`/`read_pcm_f32`/`create_capture` to the new
-   backend; device-test a real Signal call (earpiece+speaker, no silence/stall) AND a
+4. Switch `audio_impl.rs` (`create_track`/`write_pcm_f32`/`read_pcm_f32`/`create_capture`) onto
+   `audioclient`; device-test a real Signal call (earpiece+speaker, no silence/stall) AND a
    media playback.
 5. **Then** remove the AAudio sources/include + the hand-rolled AAudio client (cleanup).
 
