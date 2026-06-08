@@ -614,6 +614,15 @@ impl DomRenderer {
                     |known, avail, _id, ctx, _style| match ctx {
                         Some(t) if t.wrap => {
                             let (w, h) = measure_cached(cache, sink, t);
+                            // One line's height — NOT the full text's, which is
+                            // N×line for hard-newline text (→ the box grows huge and
+                            // disagrees with the paint pass). Content-independent probe,
+                            // matching the paint pass.
+                            let line_probe = TextCtx {
+                                text: "Mg".to_string(), family: t.family.clone(),
+                                size: t.size, weight: t.weight, italic: t.italic, wrap: false,
+                            };
+                            let line_h = measure_cached(cache, sink, &line_probe).1;
                             // The width to wrap at. A leaf with a measure fn reports
                             // its own min/max-content, which is how flex learns it
                             // CAN shrink: MinContent ⇒ longest word (the narrowest
@@ -634,7 +643,7 @@ impl DomRenderer {
                                     let (lines, line_w) = wrap_metrics(cache, sink, t, maxw);
                                     return Size {
                                         width: if fixed { maxw } else { line_w },
-                                        height: known.height.unwrap_or(lines as f32 * h),
+                                        height: known.height.unwrap_or(lines as f32 * line_h),
                                     };
                                 }
                             }
@@ -886,7 +895,19 @@ impl DomRenderer {
                     };
                     // Wrap to the laid-out box width — taffy measured this same
                     // leaf at this width, so the line breaks match. One blob/line.
-                    let line_h = measure_cached(&mut self.measure_cache, sink, &ctx).1;
+                    //
+                    // `line_h` must be ONE line's height. Measuring `ctx` (the full
+                    // text) returns N×line_height whenever the text contains a hard
+                    // newline — and the loop below then stacks every wrapped line a
+                    // whole block apart ("extremely large line spacing", esp. Signal
+                    // multi-line messages). Probe a fixed single-line sample for the
+                    // font's natural line height instead (independent of content).
+                    let line_probe = TextCtx {
+                        text: "Mg".to_string(),
+                        family: ctx.family.clone(),
+                        size: ctx.size, weight: ctx.weight, italic: ctx.italic, wrap: false,
+                    };
+                    let line_h = measure_cached(&mut self.measure_cache, sink, &line_probe).1;
                     let lines = wrap_lines(&mut self.measure_cache, sink, &ctx, w);
                     for (i, line) in lines.iter().enumerate() {
                         if line.is_empty() {
