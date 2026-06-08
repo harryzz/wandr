@@ -186,6 +186,12 @@ mod binder_path {
         // and it suspends + closes the stream. `read` = ours, `write` = service's.
         up_msg_read_ptr:  Option<*mut AtomicI64>,
         up_msg_write_ptr: Option<*mut AtomicI64>,
+        // Monotonic ns of the last *guest* `write_pcm_f32` (NOT pump silence).
+        // The call-output silence pump (task 97 bug #1) uses this to tell a live
+        // guest (running the ring near-empty, just-in-time) from a stalled one:
+        // it only injects silence after the guest has been quiet for a while, so
+        // it never fights normal playback. 0 elsewhere (unused for non-call/capture).
+        last_guest_write_ns: AtomicI64,
     }
     // SAFETY: raw pointers reference mmaps owned by this struct (stable
     // for the lifetime of `_mmaps`). Cross-process atomic ops on the
@@ -435,7 +441,7 @@ mod binder_path {
     ///
     /// `secs` = length of the post-pause resume window (watch `wr_ok` climb then
     /// freeze). `speaker` = comms route (false = earpiece pin, the call default).
-    pub fn probe_call_stall(secs: u32, speaker: bool, drain_in_pause: bool) {
+    pub fn probe_call_stall(secs: u32, speaker: bool, drain_in_pause: bool, pump: bool) {
         if let Err(e) = crate::binder::init() {
             log::warn!("probe-call-stall: binder init failed: {e}");
             return;
@@ -447,7 +453,18 @@ mod binder_path {
             format:         super::Format::PcmF32,
             class:          super::StreamClass::VoiceCall,
         };
-        let out = open_routed(cfg, Route::Call { speaker });
+        // `pump=true` opens via the guest `create_track` VoiceCall path, which now
+        // spawns the call silence-pump (the fix) — to A/B that the same underflow
+        // no longer stalls. `pump=false` opens via `open_routed` (no pump = baseline
+        // that reproduces the stall). The pumped path resolves the route from the
+        // comms-route state, so pin it to match `speaker`.
+        let out = if pump {
+            super::set_comms_route(speaker);
+            create_track(cfg)
+        } else {
+            open_routed(cfg, Route::Call { speaker })
+        };
+        log::info!("probe-call-stall: pump={pump} (true=fix path / false=baseline)");
         if out == 0 {
             log::warn!("probe-call-stall: call output open failed (-889?) — aborting");
             return;
@@ -718,12 +735,23 @@ mod binder_path {
         // gain → silent call) before opening the stream. See ensure_initialized.
         crate::audio_policy_impl::ensure_initialized();
         use crate::audio_routing::Route;
+        let is_call = matches!(cfg.class, super::StreamClass::VoiceCall);
+        let (channels, _) = channel_of(&cfg);
         let route = match cfg.class {
             super::StreamClass::Media        => Route::Media,
             super::StreamClass::Notification => Route::Notification,
             super::StreamClass::VoiceCall    => Route::Call { speaker: super::comms_route_speaker() },
         };
-        open_routed(cfg, route)
+        let handle = open_routed(cfg, route);
+        // Call output: run the silence pump so a guest stall can't suspend the
+        // stream (task 97 bug #1). Scoped to VoiceCall — Media/Notification keep
+        // the ring fed themselves and short sounds don't need it. The diagnostic
+        // `--probe-call-stall` path opens via `open_routed` directly (no pump), so
+        // it can still reproduce the bug for A/B.
+        if handle != 0 && is_call {
+            spawn_call_silence_pump(handle, channels);
+        }
+        handle
     }
 
     /// Open a PCM mic-capture stream (AAUDIO_DIRECTION_INPUT). Symmetric to
@@ -1006,6 +1034,9 @@ mod binder_path {
             channels,
             up_msg_read_ptr:  up_msg_read_p,
             up_msg_write_ptr: up_msg_write_p,
+            // Seed to "now" so a freshly opened track isn't instantly treated as a
+            // stalled guest before the first write lands.
+            last_guest_write_ns: AtomicI64::new(now_ns()),
         };
         let id = alloc_handle(state);
         log::info!(
@@ -1014,6 +1045,13 @@ mod binder_path {
             if capture { "capture" } else { "track" },
         );
         id
+    }
+
+    /// Monotonic nanosecond clock (process-relative) for the silence pump's
+    /// guest-staleness check. Monotonic so it never jumps with wall-clock changes.
+    fn now_ns() -> i64 {
+        static BASE: OnceLock<std::time::Instant> = OnceLock::new();
+        BASE.get_or_init(std::time::Instant::now).elapsed().as_nanos() as i64
     }
 
     /// Drain the service→client up-message queue (timestamps / stream events) by
@@ -1028,17 +1066,20 @@ mod binder_path {
         }
     }
 
-    pub fn write_pcm_f32(track: u32, samples: &[f32]) -> u32 {
-        with_track(track, |st| {
-            drain_up_messages(st);
-            // SAFETY: ptrs reference an 8-byte aligned i64 slot inside an
-            // mmap shared with media.aaudio. Cross-process atomic ops
-            // on the counter pair are AAudio's signaling contract.
-            let read_ctr  = unsafe { &*st.read_ctr_ptr };
-            let write_ctr = unsafe { &*st.write_ctr_ptr };
+    /// Core data-ring producer: copy `samples` (or silence if `muted`) into the
+    /// down-data ring and advance the write cursor. Shared by the guest path
+    /// (`write_pcm_f32`) and the call-output silence pump. Returns frames written
+    /// (capped to free space; 0 if the ring is full). Must be called under the
+    /// `track_map` lock (via `with_track`) so the cursor is never raced.
+    fn ring_write(st: &TrackState, samples: &[f32], muted: bool) -> u32 {
+        // SAFETY: ptrs reference an 8-byte aligned i64 slot inside an
+        // mmap shared with media.aaudio. Cross-process atomic ops
+        // on the counter pair are AAudio's signaling contract.
+        let read_ctr  = unsafe { &*st.read_ctr_ptr };
+        let write_ctr = unsafe { &*st.write_ctr_ptr };
 
-            let r = read_ctr.load(Ordering::Acquire) as u64;
-            let mut w = write_ctr.load(Ordering::Relaxed) as u64;
+        let r = read_ctr.load(Ordering::Acquire) as u64;
+        let mut w = write_ctr.load(Ordering::Relaxed) as u64;
             // Underrun resync. The HAL's read cursor advances at the sample clock
             // whether or not we feed it, so on starvation it catches up to / passes
             // our write cursor (r >= w). Computing `w - r` then wraps to a huge
@@ -1068,13 +1109,10 @@ mod binder_path {
             let src_bytes = (to_write as u64 * bpf) as usize;
             let first     = src_bytes.min((cap_bytes - base_off) as usize);
 
-            // Per-app mute (host PCM gate): when this app is muted we write
-            // SILENCE into the ring instead of the samples, but still advance
-            // the write cursor so playback timing is preserved. (f32 0.0 is
-            // all-zero bytes, so write_bytes(0) zeroes the floats.) This is
-            // independent of the global policy mute — audio is audible only if
-            // both gates are open.
-            let muted = super::app_output_muted();
+            // `muted` (caller-supplied): when set we write SILENCE into the ring
+            // instead of `samples`, but still advance the write cursor so playback
+            // timing is preserved (f32 0.0 = all-zero bytes). The guest path passes
+            // the per-app mute; the silence pump passes false (its samples are 0.0).
             // SAFETY: bounds checked above — base_off + first <= cap_bytes;
             // (src_bytes - first) <= base_off; samples has at least
             // to_write*channels f32s, so src_bytes <= samples.len()*4.
@@ -1101,13 +1139,73 @@ mod binder_path {
                 }
             }
 
-            // Publish — Release pairs with the service's Acquire load.
-            write_ctr.store(
-                w.wrapping_add(to_write as u64) as i64,
-                Ordering::Release,
-            );
-            to_write
+        // Publish — Release pairs with the service's Acquire load.
+        write_ctr.store(
+            w.wrapping_add(to_write as u64) as i64,
+            Ordering::Release,
+        );
+        to_write
+    }
+
+    pub fn write_pcm_f32(track: u32, samples: &[f32]) -> u32 {
+        let muted = super::app_output_muted();
+        with_track(track, |st| {
+            drain_up_messages(st);
+            // Mark guest activity so the silence pump can tell a live guest from a
+            // stalled one (the pump's own writes do NOT touch this).
+            st.last_guest_write_ns.store(now_ns(), Ordering::Relaxed);
+            ring_write(st, samples, muted)
         }).unwrap_or(0)
+    }
+
+    // ── Call-output silence pump (task 97 bug #1) ────────────────────────────────
+    // Keep a call's SHARED output ring fed so the AAudio mixer never underflows.
+    // An underflowing SHARED stream gets an UNTHROTTLED XRUN service event every
+    // mixer burst; if the 128-deep up-message FIFO overflows (client stopped
+    // draining for ~0.5 s) the service SUSPENDS the stream → the mixer skips it →
+    // the read cursor freezes → permanent silence (needs host relaunch). The root
+    // trigger is the guest call loop stalling (no `write_pcm_f32` → no data AND no
+    // drain). This host thread runs independently of the guest: every tick it
+    // drains the up-queue (so a suspend can never latch) and, ONLY when the guest
+    // has gone quiet, tops the ring up with silence (so the mixer keeps pulling and
+    // never floods XRUN at the source). When the guest resumes, real audio simply
+    // appends. See `[[project_call_audioserver_crash]]`.
+    const PUMP_TICK_MS: u64 = 5;
+    // Guest considered stalled after this long with no `write_pcm_f32`. Comfortably
+    // above the ~10 ms call cadence so normal just-in-time feeding never trips it.
+    const PUMP_GUEST_STALE_NS: i64 = 25_000_000; // 25 ms
+
+    fn spawn_call_silence_pump(handle: u32, channels: u32) {
+        std::thread::spawn(move || {
+            log::info!("audio: call silence-pump started for track {handle}");
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(PUMP_TICK_MS));
+                let alive = with_track(handle, |st| {
+                    // Always drain — cheap insurance the suspend never latches even
+                    // if the silence logic below writes nothing this tick.
+                    drain_up_messages(st);
+                    let idle = now_ns()
+                        .wrapping_sub(st.last_guest_write_ns.load(Ordering::Relaxed))
+                        > PUMP_GUEST_STALE_NS;
+                    if idle {
+                        // Target a small lead (~1/2 the ring) so a tick's worth of
+                        // mixer consumption can't drain it to underflow, while
+                        // keeping the silence latency on guest-resume small.
+                        let r = unsafe { &*st.read_ctr_ptr }.load(Ordering::Acquire) as u64;
+                        let w = unsafe { &*st.write_ctr_ptr }.load(Ordering::Relaxed) as u64;
+                        let in_flight = w.saturating_sub(r);
+                        let target = (st.capacity_frames / 2).max(1) as u64;
+                        if in_flight < target {
+                            let deficit = (target - in_flight) as usize;
+                            let silence = vec![0.0f32; deficit * channels as usize];
+                            ring_write(st, &silence, false);
+                        }
+                    }
+                }).is_some();
+                if !alive { break; } // track closed → exit
+            }
+            log::info!("audio: call silence-pump exited for track {handle}");
+        });
     }
 
     /// Consumer mirror of write_pcm_f32 for capture streams: drain up to
@@ -1401,11 +1499,11 @@ pub fn play_tone(_ms: u32, _hz: f32, _vol: f32) { log::warn!("play-tone: android
 
 /// Task 97 bug #1 stall repro (`--probe-call-stall`). See `binder_path::probe_call_stall`.
 #[cfg(target_os = "android")]
-pub fn probe_call_stall(secs: u32, speaker: bool, drain_in_pause: bool) {
-    binder_path::probe_call_stall(secs, speaker, drain_in_pause);
+pub fn probe_call_stall(secs: u32, speaker: bool, drain_in_pause: bool, pump: bool) {
+    binder_path::probe_call_stall(secs, speaker, drain_in_pause, pump);
 }
 #[cfg(not(target_os = "android"))]
-pub fn probe_call_stall(_secs: u32, _speaker: bool, _drain_in_pause: bool) {
+pub fn probe_call_stall(_secs: u32, _speaker: bool, _drain_in_pause: bool, _pump: bool) {
     log::warn!("probe-call-stall: android-only build");
 }
 

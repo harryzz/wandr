@@ -144,10 +144,11 @@ fn main() {
     }
 
     // Task 97 bug #1 — reproduce the SHARED-output suspend stall on the call path
-    // and confirm the up-message-queue-overflow → setSuspended → mixer-skip → r-freeze
-    // mechanism. `--probe-call-stall [secs] [speaker0|1] [drain0|1]`. Defaults:
-    // 8s resume window, earpiece (speaker=0), drain-during-underflow OFF (the
-    // permanent-stall case). Drive logcat for AAudio "Suspending stream"/"Queue full".
+    // (and A/B the silence-pump fix). `--probe-call-stall [secs] [speaker0|1]
+    // [drain0|1] [pump0|1]`. Defaults: 8s resume window, earpiece (speaker=0),
+    // drain-during-underflow OFF, pump OFF (the permanent-stall baseline). pump=1
+    // opens via the guest create_track path (spawns the silence-pump fix) → the
+    // same underflow should NOT stall. Drive logcat for "Suspending stream".
     if let Some(i) = args.iter().position(|a| a == "--probe-call-stall") {
         android_logger::init_once(
             android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
@@ -155,7 +156,8 @@ fn main() {
         let secs    = args.get(i + 1).and_then(|s| s.parse::<u32>().ok()).unwrap_or(8);
         let speaker = args.get(i + 2).map(|s| s == "1").unwrap_or(false);
         let drain   = args.get(i + 3).map(|s| s == "1").unwrap_or(false);
-        wasm_android_host::audio_impl::probe_call_stall(secs, speaker, drain);
+        let pump    = args.get(i + 4).map(|s| s == "1").unwrap_or(false);
+        wasm_android_host::audio_impl::probe_call_stall(secs, speaker, drain, pump);
         return;
     }
 

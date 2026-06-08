@@ -91,11 +91,21 @@ drain-OFF-during-underflow → up_fill 0→128, r froze @252 ms, suspend logged;
 up_fill 5–7, no suspend, r advanced. **‼️ bug #1 ⟺ bug #3:** since every `write_pcm_f32`
 drains, a call **self-recovers while the guest keeps calling write** (even when it returns
 0); a *permanent* silent call needing relaunch happens ONLY when the **guest stops calling
-`write_pcm_f32` ~240 ms+** (call loop falls into `hrtimer_nanosleep` idle = bug #3). FIX
-(not yet built): host-side timer-driven up-queue drain independent of guest writes, OR
-host feeds silence on guest underrun (no underflow→no XRUN→no suspend). Repro:
-`--probe-call-stall [secs] [speaker0|1] [drain0|1]` (`audio_impl::probe_call_stall`);
-earpiece pin `[2]` -889s standalone (taimen, =bug #5), reproduced on speaker `[3]`.
+`write_pcm_f32` ~240 ms+** (call loop falls into `hrtimer_nanosleep` idle = bug #3). ✅ **FIXED
++ device-verified (host call-output silence pump):** `spawn_call_silence_pump`
+(`audio_impl.rs`, spawned from the guest `create_track` VoiceCall path) runs a per-track
+thread, every 5 ms: (1) ALWAYS drains the up-queue (suspend can't latch even if guest
+stalls) + (2) ONLY when the guest has been silent >25 ms, tops the ring to ~½ capacity
+with silence (mixer never underflows → no XRUN flood → no suspend at source). Guest-vs-pump
+distinguished by `TrackState.last_guest_write_ns` (set only by the guest's write_pcm_f32),
+so the pump never fights normal near-empty just-in-time feeding; ring-write core extracted
+to `ring_write()` shared by both. A/B (`--probe-call-stall 5 1 0 <pump>`): pump OFF →
+up_fill 0→128, r froze @252 ms, "Suspending stream what=3"; pump ON → up_fill stayed 0, r
+advanced the whole guest-stall window, no suspend, cum_zero=0 on resume. Bug #3 (guest UI
+idle freeze) is SEPARATE — pump keeps the audio stream alive through a stall (no relaunch)
+but the guest still needs its own wake fix. Repro/verify flag now
+`--probe-call-stall [secs] [speaker0|1] [drain0|1] [pump0|1]`; earpiece pin `[2]` -889s
+standalone (taimen, =bug #5), reproduced/verified on speaker `[3]`.
 
 Live recovery used 2026-06-08: `wart-host --init-audio-policy` (restores volume ranges)
 + relaunch Signal host. calldbg.log at

@@ -30,7 +30,7 @@ are fixed, the residual one (the output stream stalling) is the main open bug.
 
 ## 🔬 OPEN BUGS (the investigation)
 
-### 1. The output stream STALLS — `wr_ok` freezes, HAL stops pulling (MAIN) — ✅ ROOT CAUSE CONFIRMED 2026-06-08
+### 1. The output stream STALLS — `wr_ok` freezes, HAL stops pulling (MAIN) — ✅ ROOT CAUSE CONFIRMED + ✅ FIXED 2026-06-08
 **Symptom:** `calldbg.log` shows `peak=1.000` (engine decoded loud audio) but `wr_ok`
 climbs briefly then **freezes** while `wr_zero` climbs (the host output ring fills and
 the HAL output thread stops consuming) → silence. Seen as `wr_ok=1` (stalled at open)
@@ -72,11 +72,23 @@ relaunch) therefore requires the **guest to stop calling `write_pcm_f32` for ~24
 during an underflow** — i.e. the guest call loop falling into the `hrtimer_nanosleep`
 idle of bug #3. The underflow→suspend latch and the guest idle are one failure.
 
-**FIX SPACE (NOT implemented — confirm-only session):** (a) host-side timer-driven
-up-queue drain independent of guest writes (suspend can never latch even if the guest
-stalls); (b) host feeds silence into the ring when the guest underruns (no underflow →
-no XRUN flood → no suspend at the source — cleanest); (c) keep the guest call loop alive
-(also fixes bug #3). Prefer (b) or (a).
+**✅ FIX IMPLEMENTED + device-verified (2026-06-08) — host call-output silence pump.**
+`spawn_call_silence_pump` (`audio_impl.rs`) runs a per-call-output thread (spawned from
+the guest `create_track` VoiceCall path) that, every 5 ms: (1) **always drains** the
+up-message queue (so a suspend can never latch even if the guest stalls — covers fix
+option a), and (2) **only when the guest has been silent > 25 ms**, tops the ring up to
+~½ capacity with silence (so the mixer never underflows → never floods XRUN → no suspend
+at the source — option b). Guest-staleness is tracked via `TrackState.last_guest_write_ns`
+(set by `write_pcm_f32`, NOT by the pump's own writes) so the pump never fights the guest's
+normal near-empty just-in-time feeding. The ring-write core was extracted to `ring_write()`
+and shared by both. Scoped to VoiceCall (Media/Notification feed themselves); the
+`--probe-call-stall` diagnostic opens via `open_routed` (pump-free) so it can still
+reproduce the bug. **A/B proof (`--probe-call-stall 5 1 0 <pump>`):** pump OFF → `up_fill
+0→128`, `r froze @252 ms`, `Suspending stream what=3`; pump ON → `up_fill` stayed 0, `r`
+kept advancing the whole guest-stall window, no suspend, no fighting on resume
+(`cum_zero=0`). NOTE: bug #3 (the guest idle freeze itself) is separate — the pump keeps
+the *audio stream* alive through a guest stall (no relaunch needed), but the guest UI
+still needs its own wake-up fix.
 
 **Repro tooling (committed as permanent `--probe-*`):** `wart-host --probe-call-stall
 [secs] [speaker0|1] [drain0|1]` (`audio_impl::probe_call_stall`) — primes a Call-route
