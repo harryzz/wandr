@@ -78,11 +78,24 @@ mod binder_path {
     ///   3. route the comms device (`setPreferredDevicesForStrategy`) — wart's
     ///      equivalent is [`set_route`] (`setForceUse(COMMUNICATION)`) + the guest's
     ///      per-stream `deviceIds` pin, applied via the arbiter's `audio-route`.
-    /// `comm=true` → IN_COMMUNICATION; `false` → NORMAL. Without step 2, entering
-    /// IN_COMMUNICATION leaves wart's USAGE_MEDIA call stream ducked to ~1%
-    /// (task 75); without step 1 the earpiece output won't open (`-889`).
+    /// `comm=true` → IN_COMMUNICATION; `false` → NORMAL.
+    ///
+    /// ‼️ Step 1 (`setPhoneState`) is DISABLED by default. On this device under
+    /// `--no-art` (no SIM / no telephony), `setPhoneState(IN_COMMUNICATION)` drives the
+    /// vendor audio HAL's `setMode` into the voice-call audio path, which doesn't exist
+    /// → `DeviceHalHidl::setMode` HANGS → audioserver's TimeCheck watchdog (5s) SIGABRTs
+    /// audioserver → `media.audio_policy` dies → the call goes silent on EVERY route
+    /// (and respawns with un-initialized volumes). The earpiece route does NOT need the
+    /// mode switch: it comes from `setForceUse(COMMUNICATION)` + the per-stream
+    /// `deviceIds` pin (`set_route`/`set_comms_route`, the `CommRoute` applier). So we
+    /// skip step 1 and keep only step 2 (the volume re-assert — harmless full-scale
+    /// MUSIC in NORMAL mode). Opt back in with `WART_AUDIO_SETPHONESTATE=1` on a device
+    /// that actually has a working telephony audio path. See
+    /// [[project_call_audioserver_crash]] (supersedes [[project_artless_call_audio]]).
     pub fn on_update_audio_mode(comm: bool) {
-        set_phone_state(comm);
+        if std::env::var_os("WART_AUDIO_SETPHONESTATE").is_some() {
+            set_phone_state(comm);
+        }
         on_update_contextual_volumes(comm);
     }
 
