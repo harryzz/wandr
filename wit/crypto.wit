@@ -1,0 +1,74 @@
+// DRAFT SKETCH (2026-06-08) — war:crypto: host-side, hardware-accelerated AEAD for
+// the call media hot path. NOT YET IMPLEMENTED. See project_crypto_hw_offload.
+//
+// WHY. crates/wart-call runs ringrtc's V4 SRTP IN the wasm guest, where AES-256-GCM
+// is SOFTWARE AES (constant-time bitsliced, ~5-10x slower + more battery) — a wasm
+// guest can't reach the ARMv8 AES/PMULL instructions. This interface moves the
+// per-packet AEAD to the host, where RustCrypto's aes-gcm auto-uses the CPU crypto
+// extensions (/proc/cpuinfo: aes pmull sha2). The guest keeps the SRTP FRAMING (ROC,
+// replay window, X25519+HKDF key derivation in rtc_srtp::Context) and offloads ONLY
+// the AEAD primitive: small WIT, explicit trust boundary (keys + plaintext cross
+// guest->host; acceptable since the runtime owns the device).
+//
+// GRANULARITY. A keyed CONTEXT resource — the AES key schedule is expanded ONCE at
+// creation and reused for every packet (the SRTP hot path seals thousands of packets
+// under one key; re-expanding per call would dominate). Per packet the guest passes
+// only nonce + aad + payload.
+//
+// NAMING. Repo convention is `war:` (cf. war:alarm/notify/connectivity); the design
+// note called it `wart:crypto` — using `war:crypto` to match.
+
+package war:crypto@0.1.0;
+
+interface aead {
+    /// AEAD failures. `auth-failed` = tag mismatch on open (drop the packet).
+    enum crypto-error {
+        invalid-key-length,
+        invalid-nonce-length,
+        auth-failed,
+        buffer-too-large,
+    }
+
+    /// An AES-GCM context with the key schedule precomputed. Key length selects the
+    /// variant: 16 bytes => AES-128-GCM, 32 bytes => AES-256-GCM. Signal / ringrtc V4
+    /// SRTP = AEAD_AES_256_GCM => 32-byte key. Create one per SRTP key (per direction)
+    /// and reuse for every packet.
+    resource gcm {
+        /// (WIT constructors can't return result, so creation is a static func.)
+        /// `key` = 16 or 32 bytes; otherwise `invalid-key-length`.
+        create: static func(key: list<u8>) -> result<gcm, crypto-error>;
+
+        /// Encrypt + authenticate. `nonce` = 12 bytes (the SRTP per-packet IV the
+        /// guest derives from salt ^ (ssrc||roc||seq)). `aad` = the RTP header bytes
+        /// covered by SRTP auth. Returns ciphertext || 16-byte GCM tag.
+        seal: func(nonce: list<u8>, aad: list<u8>, plaintext: list<u8>)
+            -> result<list<u8>, crypto-error>;
+
+        /// Verify + decrypt. `ciphertext` = received ciphertext || 16-byte tag.
+        /// `auth-failed` => forged/corrupt; the guest drops the packet.
+        open: func(nonce: list<u8>, aad: list<u8>, ciphertext: list<u8>)
+            -> result<list<u8>, crypto-error>;
+    }
+}
+
+/// Secondary — the WebRTC-native DTLS-SRTP path uses AES_128_CM_HMAC_SHA1_80
+/// (AES-128 counter-mode + HMAC-SHA1-80), not GCM. Offload its two primitives the
+/// same way if/when that path needs HW acceleration. The Signal path does NOT use
+/// these; sketched for completeness (wart-call's WebRTC-native profile).
+interface legacy-srtp {
+    /// AES-128 counter-mode keystream context (key expanded once). The guest XORs the
+    /// returned keystream over the payload — SRTP CM is a stream cipher.
+    resource aes-ctr {
+        create: static func(key: list<u8>) -> result<aes-ctr, string>;  // key = 16 B
+        /// `length` keystream bytes for the given 16-byte counter block `iv`.
+        keystream: func(iv: list<u8>, length: u32) -> list<u8>;
+    }
+    /// HMAC-SHA1 over the SRTP-authed bytes (caller truncates to 80 bits).
+    hmac-sha1: func(key: list<u8>, data: list<u8>) -> list<u8>;
+}
+
+/// Imported by a call-engine guest (crates/wart-call). The host implements both.
+world crypto-client {
+    import aead;
+    import legacy-srtp;
+}

@@ -1,0 +1,107 @@
+// DRAFT SKETCH (2026-06-08) — war:video: host-side hardware video codec for calls.
+// NOT YET IMPLEMENTED. See project_crypto_hw_offload (offload layer 2), task 93/95.
+//
+// WHY. A wasm guest cannot encode/decode VP8/VP9 in real time and can't reach the
+// hardware codec. This interface drives the device's HW MediaCodec (NDK AMediaCodec
+// -> Codec2 HAL android.hardware.media.c2, which SURVIVES --no-art — proven by
+// `wart-host --probe-video`: camera->HW VP8 encode 17.4 fps). The guest does only RTP
+// framing + SRTP (war:crypto); the pixels never enter the wasm sandbox.
+//
+// BIDIRECTIONAL (both need HW):
+//   * encoder (OUTGOING, our camera): host captures (camera NDK) + HW-encodes; the
+//     guest PULLS encoded frames to RTP-packetize + SRTP-seal + send.
+//   * decoder (INCOMING, peer): the guest PUSHES reassembled encoded frames; the host
+//     HW-decodes and COMPOSITES to a video surface (decode-to-surface — zero per-frame
+//     copy, the right choice at 30 fps; decoded pixels do NOT return to the guest).
+//
+// DEVICE HW (confirmed 2026-06-08, /vendor/etc/media_codecs*.xml): clear HW
+// OMX.qcom.video.decoder.{vp9,vp8} + .encoder.vp8 (avc/hevc too). NOTE: VP9 HW ENCODE
+// is software-only on this SoC (only OMX.google.vp9.encoder) — so OUTGOING should
+// prefer VP8 HW; INCOMING decodes VP9 or VP8 in HW.
+
+package war:video@0.1.0;
+
+interface types {
+    enum codec { vp8, vp9, h264, h265 }
+
+    enum video-error {
+        unsupported-codec,
+        no-hw-codec,         // only a software codec exists (e.g. VP9 encode here)
+        codec-init-failed,
+        bad-frame,
+        surface-unavailable,
+    }
+
+    /// One compressed frame between the guest's RTP layer and the host codec.
+    record encoded-frame {
+        data: list<u8>,
+        timestamp: u32,      // 90 kHz RTP timestamp
+        keyframe: bool,      // true = IDR / VP8 key; decoders need one to start
+    }
+
+    /// Where the host paints INCOMING video, in the arbiter/compositor's display-pixel
+    /// space. (Open: should be an arbiter-owned surface/role, not raw pixels — see the
+    /// world note.)
+    record video-rect { x: u32, y: u32, width: u32, height: u32 }
+
+    record encoder-config {
+        codec: codec,
+        width: u32, height: u32,
+        bitrate-bps: u32,
+        framerate: u32,
+        /// true = camera frames captured host-side (the call self-view), the default.
+        /// false (future) = guest supplies YUV (screen-share).
+        source-camera: bool,
+    }
+
+    record decoder-config {
+        codec: codec,
+        rect: video-rect,    // initial geometry; resizable via set-rect
+    }
+}
+
+interface encoder {
+    use types.{encoder-config, encoded-frame, video-error};
+
+    /// Opens the camera (if source-camera) + a HW encoder. One per outgoing stream.
+    resource video-encoder {
+        open: static func(config: encoder-config) -> result<video-encoder, video-error>;
+        /// Pull the next encoded frame (non-blocking; none if not ready). The guest
+        /// then RTP-packetizes + SRTP-seals (war:crypto) + sends. (A callback export
+        /// is the alternative if polling proves wasteful at the frame cadence.)
+        next-frame: func() -> option<encoded-frame>;
+        /// Force a keyframe (on the receiver's RTCP PLI/FIR).
+        request-keyframe: func();
+        /// Adapt to congestion (the guest drives this from REMB/TWCC).
+        set-bitrate: func(bitrate-bps: u32);
+    }
+}
+
+interface decoder {
+    use types.{decoder-config, encoded-frame, video-rect, video-error};
+
+    /// Opens a HW decoder + a compositing surface at `rect`. Decode-to-surface: the
+    /// host decodes + paints directly; frames do not return to the guest.
+    resource video-decoder {
+        open: static func(config: decoder-config) -> result<video-decoder, video-error>;
+        /// Push a reassembled encoded frame (after SRTP-open + RTP depacketize).
+        submit: func(frame: encoded-frame) -> result<_, video-error>;
+        /// Move/resize the video surface (layout change, rotation).
+        set-rect: func(rect: video-rect);
+        /// true once >=1 keyframe has decoded (UI can drop the placeholder).
+        ready: func() -> bool;
+    }
+}
+
+/// Imported by a call-engine guest (crates/wart-call). The host implements both.
+///
+/// OPEN DESIGN QUESTION: the decoder surface should integrate with the arbiter's
+/// surface/role + compositing model (z-order vs the guest's skia UI, rotation,
+/// occlusion) rather than the guest passing raw rects — i.e. the host allocates an
+/// arbiter `Role::Video` surface and the guest references it by handle. This sketch
+/// uses a rect to show the shape; wire it to the arbiter when building. Same question
+/// for the encoder self-view preview (composite host-side vs draw in the guest UI).
+world video-client {
+    import encoder;
+    import decoder;
+}
