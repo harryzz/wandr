@@ -200,6 +200,19 @@ fn main() {
         return;
     }
 
+    // Task 98 — AudioFlinger-direct CAPTURE smoke test: open a mic record via the
+    // `audioclient` crate (IAudioFlingerService.createRecord → IAudioRecord → cblk
+    // ring), read PCM for `secs`, and report frame count + peak level (so it's clear
+    // real mic audio is flowing). `--probe-audioclient-capture [secs]`.
+    if let Some(i) = args.iter().position(|a| a == "--probe-audioclient-capture") {
+        android_logger::init_once(
+            android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
+        );
+        let secs = args.get(i + 1).and_then(|s| s.parse::<u64>().ok()).unwrap_or(3);
+        probe_audioclient_capture(secs);
+        return;
+    }
+
     // --no-art audio bring-up: replicate AudioService's boot volume/device init
     // (initStreamVolume + setStreamVolumeIndex + mode/force-use) so audio is
     // audible without system_server. Run by run-hybrid-stack after audioserver.
@@ -500,4 +513,44 @@ fn probe_audioclient(secs: u64, hz: f32, vol: f32) {
     audioclient::stop(h);
     audioclient::close(h);
     eprintln!("probe-audioclient: done");
+}
+
+// Task 98 — AudioFlinger-direct capture smoke test (see `--probe-audioclient-capture`).
+// Opens a mic record via the `audioclient` crate, reads PCM for `secs`, reports the
+// frame count + peak level (proves real mic audio is flowing through the cblk ring).
+#[cfg(target_os = "android")]
+fn probe_audioclient_capture(secs: u64) {
+    eprintln!("probe-capture: open_input(MIC, 48k mono)…");
+    let h = audioclient::open_input(audioclient::InputConfig {
+        sample_rate: 48_000,
+        channels: 1,
+        source: 1, // AUDIO_SOURCE_MIC
+    });
+    if h == 0 {
+        eprintln!("probe-capture: open_input FAILED (see logcat tag 'audioclient')");
+        std::process::exit(1);
+    }
+    let ok = audioclient::start(h);
+    eprintln!("probe-capture: handle={h} started (IAudioRecord.start ok={ok}) — reading {secs}s…");
+
+    let mut total = 0usize;
+    let mut peak = 0.0_f32;
+    let mut zero_reads = 0u32;
+    let t0 = std::time::Instant::now();
+    while t0.elapsed().as_secs() < secs {
+        let buf = audioclient::read(h, 480);
+        if buf.is_empty() {
+            zero_reads += 1;
+        } else {
+            total += buf.len();
+            for &s in &buf {
+                peak = peak.max(s.abs());
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    eprintln!("probe-capture: read {total} samples, peak={peak:.4}, zero-reads={zero_reads}; closing");
+    audioclient::stop(h);
+    audioclient::close(h);
+    eprintln!("probe-capture: done");
 }

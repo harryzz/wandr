@@ -69,8 +69,22 @@ Box<T>`. The 2 empty blanket impls (mirroring the `Strong<T>` impls) fix it. **N
 needed for `createTrack` itself (that was the sessionId bug — a forward-decl stub
 `AttributionSourceState` is accepted there).
 
+## Capture (`open_input` → `createRecord` → `IAudioRecord`) — DONE, device-verified
+The symmetric input half. Differs from output: the request is an `AudioConfigBase`
+(no offloadInfo); the **response carries `cblk` + `buffers` as separate
+`SharedFileRegion`s** (no `getCblk` round-trip — mmap both, or `buffers = cblk +
+CBLK_SIZE` when the server omits it); start is `IAudioRecord.start(syncEvent=0,
+triggerSession=0)`. The mic input profile is **16-bit PCM** — F32 is rejected by
+`getInputForAttr` with `-38 (INVALID_OPERATION)` + a *suggested* config — so capture
+requests `INT_16_BIT` and `read()` converts i16→f32 (output stays f32). `Track` is now
+an `Endpoint` enum (`IAudioTrack | IAudioRecord`) with per-region mmaps. Verified:
+129k samples/3s @ 48k mono, live ambient peak. (`ACDB-LOADER -19` = benign HAL
+calibration noise.)
+
 ## Tooling (kept)
 - `wart-host --probe-audioclient [secs] [hz] [vol]` — plays a tone via the backend.
+- `wart-host --probe-audioclient-capture [secs]` — opens the mic via `createRecord`,
+  reads PCM, reports frame count + peak (proves live capture).
 - `wart-host --probe-audioclient-matrix` — request-variant matrix + serialized-request
   hexdump (the diagnostic that isolated the sessionId byte).
 - `external/wart-audioclient-ref` (a-03 AOSP tree) — C++ reference using the device's
@@ -80,12 +94,14 @@ needed for `createTrack` itself (that was the sessionId bug — a forward-decl s
   ninja-direct (no `m`).
 
 ## Remaining / follow-ups
-- Finalize the rsbinder recursive patch into a committable form (in-tree vendor vs a
-  codeberg fork) — currently a `[patch]` to a local clone at
-  `/home/harry/src/rsbinder-patched` (`5e999e04a` + the 2-line patch).
+- rsbinder recursive patch is finalized as the `external/rsbinder` submodule
+  (`harryzz/rsbinder`, branch `wart-recursive` = `5e999e04a` + the 2-line patch);
+  `wart-host` `[patch]`es the hiking90 git source to it. ✅
+- Capture (`createRecord`/`AudioRecord`) ✅.
 - `out_write underrun` warnings = client pacing at start/end; couple the write pump to
   a steady cadence (the task-75 `min_frame_delay` lesson).
-- Wire the backend into the real host audio output path (replace the AAudioService
-  path) + capture (`createRecord`/`AudioRecord`), `set_volume`, `get_timestamp`.
+- Per-track transport/clock: `pause`/`flush`, `get_timestamp`, `set_volume` (cblk
+  `mVolumeLR` or `applyVolumeShaper`), `set_output_device`; track-invalidation restore.
+- Wire the backend into the real host audio output path (replace the AAudioService path).
 - Package/uid should come from the calling guest's identity, not the hardcoded
   `"android"`/`geteuid()` default in `attribution_source()`.
