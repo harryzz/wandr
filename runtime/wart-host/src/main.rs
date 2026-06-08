@@ -172,6 +172,34 @@ fn main() {
         return;
     }
 
+    // Task 98 — native AudioFlinger backend smoke test, run from *inside* wart-host
+    // (which already hosts a binder thread-pool, unlike the standalone af_probe).
+    // Opens an AudioTrack directly via the `audioclient` crate (IAudioFlingerService
+    // .createTrack → cblk ring) and writes a 440 Hz tone. `--probe-audioclient [secs]
+    // [hz] [vol]`. This is the on-device validation that the AudioFlinger-direct path
+    // makes sound without AAudioService.
+    if let Some(i) = args.iter().position(|a| a == "--probe-audioclient") {
+        android_logger::init_once(
+            android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
+        );
+        let secs = args.get(i + 1).and_then(|s| s.parse::<u64>().ok()).unwrap_or(3);
+        let hz   = args.get(i + 2).and_then(|s| s.parse::<f32>().ok()).unwrap_or(440.0);
+        let vol  = args.get(i + 3).and_then(|s| s.parse::<f32>().ok()).unwrap_or(0.3);
+        probe_audioclient(secs, hz, vol);
+        return;
+    }
+
+    // Task 98 — createTrack request-variant matrix: isolate which CreateTrackRequest
+    // field audioserver silently rejects with BAD_VALUE (it logs nothing server-side,
+    // even at VERBOSE, in both ART and --no-art). `--probe-audioclient-matrix`.
+    if args.iter().any(|a| a == "--probe-audioclient-matrix") {
+        android_logger::init_once(
+            android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
+        );
+        audioclient::probe_matrix();
+        return;
+    }
+
     // --no-art audio bring-up: replicate AudioService's boot volume/device init
     // (initStreamVolume + setStreamVolumeIndex + mode/force-use) so audio is
     // audible without system_server. Run by run-hybrid-stack after audioserver.
@@ -416,4 +444,60 @@ fn main() {
 
     let _keep: usize = wasm_android_host::android_main as usize;
     std::hint::black_box(_keep);
+}
+
+// Task 98 — AudioFlinger-direct smoke test (see the `--probe-audioclient` flag).
+// Runs inside wart-host so the local IAudioTrackCallback Bn marshals against a real
+// binder thread-pool (the standalone af_probe couldn't — kernel rejected the
+// oneway-spam ioctl with EINVAL). Opens an output AudioTrack via the `audioclient`
+// crate, writes a `hz` sine at `vol` for `secs`, starting after the first accepted
+// write, then closes.
+#[cfg(target_os = "android")]
+fn probe_audioclient(secs: u64, hz: f32, vol: f32) {
+    eprintln!("probe-audioclient: open_output(MEDIA/MUSIC, 48k stereo)…");
+    let h = audioclient::open_output(audioclient::OutputConfig {
+        sample_rate: 48_000,
+        channels: 2,
+        usage: 1,        // AUDIO_USAGE_MEDIA
+        content_type: 2, // AUDIO_CONTENT_TYPE_MUSIC
+    });
+    if h == 0 {
+        eprintln!("probe-audioclient: open_output FAILED (see logcat tag 'audioclient')");
+        std::process::exit(1);
+    }
+    eprintln!("probe-audioclient: handle={h} — writing {hz} Hz tone for {secs}s…");
+
+    let sr = 48_000.0_f32;
+    let mut phase = 0.0_f32;
+    let mut started = false;
+    let mut total = 0usize;
+    let mut zero_ticks = 0u32;
+    let t0 = std::time::Instant::now();
+    while t0.elapsed().as_secs() < secs {
+        let mut buf: Vec<f32> = Vec::with_capacity(480 * 2);
+        for _ in 0..480 {
+            let s = phase.sin() * vol;
+            phase += 2.0 * std::f32::consts::PI * hz / sr;
+            if phase > 2.0 * std::f32::consts::PI {
+                phase -= 2.0 * std::f32::consts::PI;
+            }
+            buf.push(s);
+            buf.push(s);
+        }
+        let n = audioclient::write(h, &buf);
+        total += n;
+        if n == 0 {
+            zero_ticks += 1;
+        }
+        if !started && n > 0 {
+            let ok = audioclient::start(h);
+            started = true;
+            eprintln!("probe-audioclient: started (IAudioTrack.start ok={ok})");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    eprintln!("probe-audioclient: wrote {total} frames (zero-ticks={zero_ticks}); closing");
+    audioclient::stop(h);
+    audioclient::close(h);
+    eprintln!("probe-audioclient: done");
 }

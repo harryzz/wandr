@@ -57,3 +57,10 @@
 	path = runtime/wart-host/vendor/aosp-packages-modules-connectivity
 	url = https://android.googlesource.com/platform/packages/modules/Connectivity
 	branch = android15-qpr1-release
+[submodule "external/audioclient-rs"]
+	path = external/audioclient-rs
+	url = https://codeberg.org/harryzz/audioclient-rs.git
+[submodule "external/rsbinder"]
+	path = external/rsbinder
+	url = https://codeberg.org/harryzz/rsbinder.git
+	branch = wart-recursive

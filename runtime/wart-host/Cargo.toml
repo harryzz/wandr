@@ -82,6 +82,11 @@ async-trait      = "0.1"
 # A real tokio runtime is needed even when the callback's onEvent never
 # actually awaits anything.
 tokio            = { version = "1", features = ["rt"] }
+# Task 98 — native AudioFlinger backend (AudioTrack/AudioRecord over binder,
+# no AAudioService, no JVM). Decoupled, reusable crate; same rsbinder rev so
+# both share one ProcessState. Path dep during integration; switch to the
+# codeberg git dep once verified audible on-device.
+audioclient      = { package = "audioclient-rs", path = "../../external/audioclient-rs" }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 env_logger = "0.11"
@@ -90,6 +95,16 @@ winit      = { version = "0.30", features = [] }
 [build-dependencies]
 cc = "1"
 rsbinder-aidl = { git = "https://github.com/hiking90/rsbinder", rev = "5e999e04a" }   # task 76 #6 trial
+
+# Task 98 — rsbinder + recursive Box-array support (2 missing SerializeArray/
+# DeserializeArray-for-Box<T> impls on top of 5e999e04a) so the real recursive
+# android.content.AttributionSourceState codegens. Needed to send a non-empty
+# packageName in createTrack — AudioFlinger's OpPlayAudioMonitor mutes any track
+# whose attributionSource.packageName is empty. (Not needed for createTrack itself;
+# that was the sessionId bug.) Applies to the whole graph incl. the audioclient crate.
+[patch."https://github.com/hiking90/rsbinder"]
+rsbinder      = { path = "../../external/rsbinder/rsbinder" }
+rsbinder-aidl = { path = "../../external/rsbinder/rsbinder-aidl" }
 
 [features]
 default = []

@@ -225,6 +225,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
+name = "audioclient-rs"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "libc",
+ "log",
+ "rsbinder",
+ "rsbinder-aidl",
+ "tokio",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2722,7 +2734,6 @@ dependencies = [
 [[package]]
 name = "rsbinder"
 version = "0.9.0"
-source = "git+https://github.com/hiking90/rsbinder?rev=5e999e04a#5e999e04aacc5be355ee9ed9d78cf5fbdabedb54"
 dependencies = [
  "async-trait",
  "downcast-rs 2.0.2",
@@ -2738,7 +2749,6 @@ dependencies = [
 [[package]]
 name = "rsbinder-aidl"
 version = "0.9.0"
-source = "git+https://github.com/hiking90/rsbinder?rev=5e999e04a#5e999e04aacc5be355ee9ed9d78cf5fbdabedb54"
 dependencies = [
  "convert_case",
  "miette",
@@ -3682,6 +3692,7 @@ dependencies = [
  "android_system_properties",
  "anyhow",
  "async-trait",
+ "audioclient-rs",
  "bytes",
  "cc",
  "env_logger",
