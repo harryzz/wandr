@@ -1097,6 +1097,9 @@ fn run_cwasm_loop(
                     // session on us; apply the call-audio mode recipe (the dumb
                     // applier: mirrors AudioService.onUpdateAudioMode).
                     crate::audio_policy_impl::on_update_audio_mode(comm);
+                    // On call-end, drop the MEDIA-strategy route override so
+                    // non-call media returns to the policy default (task 97 bug #5).
+                    if !comm { crate::audio_impl::clear_comms_route(); }
                 }
                 crate::ime_inbound::InboundEvent::VolumeAdjust { up, speaker } => {
                     // Arbiter-decided volume step (task 76 P8): apply on the
@@ -1117,11 +1120,11 @@ fn run_cwasm_loop(
                 }
                 crate::ime_inbound::InboundEvent::CommRoute { speaker } => {
                     // wart-arbiter-audio — apply the arbiter's call route decision.
-                    // Two mechanisms: setForceUse(COMMUNICATION) (legacy lever),
-                    // AND the per-stream deviceIds pin that actually moves our
-                    // USAGE_MEDIA call stream — the latter via set_comms_route,
-                    // applied when the call track (re)opens. See
-                    // [[project_audio_routing_arbiter]].
+                    // The call output is NOT deviceId-pinned (that -889s — task 97
+                    // bug #5); set_comms_route re-routes the shared MEDIA output via
+                    // a strategy device-role, which takes effect MID-CALL with no
+                    // re-open. setForceUse(COMMUNICATION) is kept as the comms-mode
+                    // lever (AEC/SCO). See [[project_audio_routing_arbiter]].
                     crate::audio_policy_impl::set_route(speaker);
                     crate::audio_impl::set_comms_route(speaker);
                 }

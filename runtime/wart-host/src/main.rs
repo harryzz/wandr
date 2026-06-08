@@ -161,6 +161,17 @@ fn main() {
         return;
     }
 
+    // Task 97 bug #5 — verify the earpiece/speaker toggle re-routes the shared
+    // MEDIA output (setDevicesRoleForStrategy) instead of pinning a per-stream
+    // deviceId (which -889s). `--probe-route-toggle`.
+    if args.iter().any(|a| a == "--probe-route-toggle") {
+        android_logger::init_once(
+            android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
+        );
+        wasm_android_host::audio_impl::probe_route_toggle();
+        return;
+    }
+
     // --no-art audio bring-up: replicate AudioService's boot volume/device init
     // (initStreamVolume + setStreamVolumeIndex + mode/force-use) so audio is
     // audible without system_server. Run by run-hybrid-stack after audioserver.

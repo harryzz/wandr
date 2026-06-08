@@ -123,11 +123,31 @@ Worth adding `power`+`audio` GenericStubs (cheap, a-03 rebuild) as hygiene + to 
 them out. (Contrast: `batterystats`/`appops` DID block via getService/sleep-loop —
 those were the proximity/sensor fix.)
 
-### 5. Earpiece/speaker route-switch reliability
-The route re-open (guest closes+reopens the call track on `controls::get_route` change)
-is correct in principle (the deviceId pin moves the route at open), but each re-open
-re-rolls the dice on bug #1 (stream-pull flakiness), and re-opening mid-call has been
-fragile (contributed to bug #3 freezes). Stabilize after #1 is understood.
+### 5. Earpiece/speaker route-switch reliability — ✅ ROOT-CAUSED + ✅ FIXED 2026-06-08
+**Root cause (source + device):** the call output's per-stream `deviceIds` pin made
+AAudio open a SECOND MMAP "direct output" on the pinned device. The taimen
+`mmap_no_irq_out` profile is **`maxOpenCount=1`**, so when another output already holds
+it (e.g. on the speaker) the earpiece pin `[2]` returns **`-889`**
+(`APM_AudioPolicyManager: ... can't open new mmap output maxOpenCount reached`). Speaker
+`[3]` "worked" only because it *reused* the existing MMAP output (`openDirectOutput
+reusing direct output 213`). So the toggle was unreliable: whichever device didn't
+already hold the single MMAP slot failed.
+
+**Fix (committed + device-verified):** the call output **no longer pins a deviceId**
+(`audio_routing.rs` `Route::Call → device_ids = []`) — it shares the existing MMAP
+output (never `-889`s). Routing is done by **re-routing that shared output** via a
+PREFERRED device-role on its product strategy:
+`audio_policy_impl::set_media_strategy_route(speaker)` →
+`setDevicesRoleForStrategy(getProductStrategyFromAudioAttributes(MEDIA), PREFERRED,
+[OUT_SPEAKER | OUT_SPEAKER_EARPIECE])`. Applied from `set_comms_route` (so a
+speakerphone toggle takes effect **mid-call with no re-open**) and at call-track open;
+**cleared on call-end** (`CommMode{comm:false}` → `clear_comms_route`). `setForceUse`
+(no earpiece option for MEDIA) and the deviceId pin (the `-889`) are both retired from
+the routing path. **Verify:** `--probe-route-toggle` — `getDevicesForAttributes(MEDIA)`
+followed `(140) speaker → (141) earpiece → speaker → default` on ONE no-pin stream, no
+`-889`, no re-open; and `--probe-call-stall 3 0 0 1` (guest path, earpiece) now opens
+(`deviceIds=[] … track ready`, was `-889`). Audible earpiece confirm (cover the
+receiver) / real-call A/B still worth a pass.
 
 ## Diagnostic tooling (use these)
 - **Engine media counters:** `/data/local/tmp/wart-apps/apps/war.signal/0.1.0/state/calldbg.log`

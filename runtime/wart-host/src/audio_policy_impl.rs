@@ -26,7 +26,9 @@ mod binder_path {
         AudioPortFw::AudioPortFw,
         AudioPortRole::AudioPortRole,
         AudioPortType::AudioPortType,
+        DeviceRole::DeviceRole,
     };
+    use crate::binder_aidl::android::media::audio::common::AudioDevice::AudioDevice;
     use crate::binder_aidl::android::media::audio::common::Int::Int;
     use crate::binder_aidl::android::media::audio::common::AudioPortExt::AudioPortExt;
     use crate::binder_aidl::android::media::audio::common::{
@@ -142,6 +144,60 @@ mod binder_path {
         match svc.r#setForceUse(AudioPolicyForceUse::COMMUNICATION, cfg) {
             Ok(())  => log::info!("audio-policy: setForceUse COMMUNICATION {}", cfg_name(cfg)),
             Err(e)  => log::warn!("audio-policy: setForceUse {} failed: {e:?}", cfg_name(cfg)),
+        }
+    }
+
+    /// Re-route the MEDIA product strategy (our call/media output rides USAGE_MEDIA)
+    /// to the earpiece or speaker by setting a PREFERRED device-role on the strategy.
+    ///
+    /// This is the correct lever for the call earpiece↔speaker toggle (task 97
+    /// bug #5). The two alternatives both fail on this device:
+    ///   • `setForceUse` has no earpiece option for the MEDIA strategy (only
+    ///     headphones/speaker/none) — it cannot move USAGE_MEDIA to the receiver.
+    ///   • A per-stream `deviceIds` pin forces AAudio to open a SECOND MMAP "direct
+    ///     output" on the pinned device; the `mmap_no_irq_out` profile is
+    ///     `maxOpenCount=1`, so when another output already holds it (e.g. on the
+    ///     speaker) the earpiece pin returns `-889` (AAUDIO_ERROR_UNAVAILABLE).
+    /// `setDevicesRoleForStrategy` instead RE-ROUTES the existing shared output, so
+    /// it never opens a second endpoint and works mid-call without re-opening the
+    /// stream. The strategy id is resolved at runtime from the MEDIA attributes
+    /// (`getProductStrategyFromAudioAttributes`) — no hard-coded strategy number.
+    /// Returns true on success. See [[project_audio_routing_arbiter]].
+    pub fn set_media_strategy_route(speaker: bool) -> bool {
+        let Some(svc) = service() else { return false };
+        let strategy = match svc.r#getProductStrategyFromAudioAttributes(&media_attr(), true) {
+            Ok(s)  => s,
+            Err(e) => { log::warn!("audio-route: getProductStrategyFromAudioAttributes err: {e:?}"); return false; }
+        };
+        let dev = if speaker { AudioDeviceType::OUT_SPEAKER } else { AudioDeviceType::OUT_SPEAKER_EARPIECE };
+        let device = AudioDevice { r#type: dev_desc(dev), r#address: Default::default() };
+        match svc.r#setDevicesRoleForStrategy(strategy, DeviceRole::PREFERRED, &[device]) {
+            Ok(())  => { log::info!("audio-route: strategy {strategy} PREFERRED -> {} ({dev:?})",
+                            if speaker { "speaker" } else { "earpiece" }); true }
+            Err(e)  => { log::warn!("audio-route: setDevicesRoleForStrategy({dev:?}) err: {e:?}"); false }
+        }
+    }
+
+    /// Clear the MEDIA-strategy PREFERRED device-role set by
+    /// [`set_media_strategy_route`] — media returns to the policy default
+    /// (speaker). Call on call-end so non-call media isn't stuck on the earpiece.
+    pub fn clear_media_strategy_route() {
+        let Some(svc) = service() else { return };
+        let Ok(strategy) = svc.r#getProductStrategyFromAudioAttributes(&media_attr(), true) else { return };
+        match svc.r#clearDevicesRoleForStrategy(strategy, DeviceRole::PREFERRED) {
+            Ok(())  => log::info!("audio-route: cleared PREFERRED device-role for strategy {strategy}"),
+            Err(e)  => log::warn!("audio-route: clearDevicesRoleForStrategy err: {e:?}"),
+        }
+    }
+
+    /// Read where the MEDIA strategy currently routes (`getDevicesForAttributes`)
+    /// — used by the route-toggle probe to confirm a re-route actually moved the
+    /// output. Returns the device-type debug strings.
+    pub fn media_route_devices() -> Vec<String> {
+        let Some(svc) = service() else { return Vec::new() };
+        match svc.r#getDevicesForAttributes(&media_attr(), false) {
+            Ok(devs) => devs.iter().map(|d| format!("{:?}", d.r#type.r#type)).collect(),
+            Err(_)   => Vec::new(),
         }
     }
 
@@ -596,6 +652,26 @@ pub fn on_update_audio_mode(_comm: bool) {}
 pub fn set_route(speaker: bool) { binder_path::set_route(speaker); }
 #[cfg(not(target_os = "android"))]
 pub fn set_route(_speaker: bool) {}
+
+/// Task 97 bug #5 — re-route the MEDIA strategy to speaker/earpiece via a
+/// PREFERRED device-role (re-routes the existing shared output; no 2nd MMAP
+/// endpoint → no -889; works mid-call). Returns true on success.
+#[cfg(target_os = "android")]
+pub fn set_media_strategy_route(speaker: bool) -> bool { binder_path::set_media_strategy_route(speaker) }
+#[cfg(not(target_os = "android"))]
+pub fn set_media_strategy_route(_speaker: bool) -> bool { false }
+
+/// Clear the MEDIA-strategy PREFERRED device-role (call-end → media back to default).
+#[cfg(target_os = "android")]
+pub fn clear_media_strategy_route() { binder_path::clear_media_strategy_route(); }
+#[cfg(not(target_os = "android"))]
+pub fn clear_media_strategy_route() {}
+
+/// Where the MEDIA strategy currently routes (device-type strings) — probe/verify.
+#[cfg(target_os = "android")]
+pub fn media_route_devices() -> Vec<String> { binder_path::media_route_devices() }
+#[cfg(not(target_os = "android"))]
+pub fn media_route_devices() -> Vec<String> { Vec::new() }
 
 /// Task-76 P8 — apply a media-volume step on the arbiter-chosen device
 /// (`speaker` = loudspeaker, else earpiece). The host applier.

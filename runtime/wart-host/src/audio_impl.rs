@@ -618,6 +618,79 @@ mod binder_path {
         close(out);
     }
 
+    /// Task 97 bug #5 verify — prove the earpiece↔speaker toggle works by
+    /// RE-ROUTING the shared MEDIA output (`setDevicesRoleForStrategy`) instead of
+    /// pinning a per-stream deviceId (which `-889`s — see
+    /// `audio_policy_impl::set_media_strategy_route`). Opens ONE no-pin USAGE_MEDIA
+    /// SHARED output (shares the existing MMAP — no `-889`), feeds a tone, and
+    /// toggles the route earpiece→speaker→clear, logging where the MEDIA strategy
+    /// resolves at each step (`getDevicesForAttributes`). PASS = the resolved
+    /// device follows each toggle while the SAME stream keeps playing (cover the
+    /// earpiece to hear it move). No second endpoint, no re-open, no stall.
+    pub fn probe_route_toggle() {
+        if let Err(e) = crate::binder::init() {
+            log::warn!("probe-route-toggle: binder init failed: {e}"); return;
+        }
+        crate::audio_policy_impl::ensure_initialized();
+        use crate::audio_routing::Route;
+        let cfg = super::TrackConfig {
+            sample_rate: 48_000, channel_layout: super::ChannelLayout::Stereo,
+            format: super::Format::PcmF32, class: super::StreamClass::Media,
+        };
+        // No-pin MEDIA open → shares the existing MMAP output (no -889).
+        let out = open_routed(cfg, Route::Media);
+        if out == 0 { log::warn!("probe-route-toggle: media open failed — aborting"); return; }
+        if !start(out) { log::warn!("probe-route-toggle: start failed"); close(out); return; }
+        log::info!("probe-route-toggle: opened no-pin MEDIA output handle={out} (shares MMAP, no -889)");
+
+        let sr = 48_000.0_f32;
+        let mut phase = 0.0_f32;
+        // Feed `ms` of tone at the call cadence; returns frames accepted.
+        let mut feed = |t: u32, ms: u32| -> u64 {
+            let (mut ok, t0) = (0u64, std::time::Instant::now());
+            while t0.elapsed().as_millis() < ms as u128 {
+                let mut buf = Vec::with_capacity(960);
+                for _ in 0..480 {
+                    let s = phase.sin() * 0.2;
+                    phase += 2.0 * std::f32::consts::PI * 440.0 / sr;
+                    if phase > 2.0 * std::f32::consts::PI { phase -= 2.0 * std::f32::consts::PI; }
+                    buf.push(s); buf.push(s);
+                }
+                let mut off = 0usize;
+                while off < buf.len() {
+                    let w = write_pcm_f32(t, &buf[off..]) as usize;
+                    if w == 0 { break; }
+                    off += w * 2;
+                }
+                ok += (off / 2) as u64;
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            ok
+        };
+        let route_now = || crate::audio_policy_impl::media_route_devices();
+
+        feed(out, 800);
+        log::info!("probe-route-toggle[baseline]: MEDIA routes to {:?}", route_now());
+
+        log::info!("probe-route-toggle: → EARPIECE");
+        let ok_e = crate::audio_policy_impl::set_media_strategy_route(false);
+        feed(out, 1500);
+        log::info!("probe-route-toggle[earpiece]: set_ok={ok_e} MEDIA routes to {:?} (cover the receiver to hear)", route_now());
+
+        log::info!("probe-route-toggle: → SPEAKER");
+        let ok_s = crate::audio_policy_impl::set_media_strategy_route(true);
+        feed(out, 1500);
+        log::info!("probe-route-toggle[speaker]: set_ok={ok_s} MEDIA routes to {:?}", route_now());
+
+        log::info!("probe-route-toggle: → CLEAR (back to default)");
+        crate::audio_policy_impl::clear_media_strategy_route();
+        feed(out, 800);
+        log::info!("probe-route-toggle[cleared]: MEDIA routes to {:?}", route_now());
+
+        log::info!("probe-route-toggle: DONE — PASS if the device followed earpiece→speaker and the stream never -889'd/stalled.");
+        close(out);
+    }
+
     /// Task 76 P1 — CALL-ORDER full-duplex capture probe. Opens the OUTPUT first
     /// (USAGE_MEDIA → legacy SHARED, like a live call), keeps it active, THEN
     /// opens a CAPTURE with the given `inputPreset` and reads ~4 s. The mic-only
@@ -743,13 +816,18 @@ mod binder_path {
             super::StreamClass::VoiceCall    => Route::Call { speaker: super::comms_route_speaker() },
         };
         let handle = open_routed(cfg, route);
-        // Call output: run the silence pump so a guest stall can't suspend the
-        // stream (task 97 bug #1). Scoped to VoiceCall — Media/Notification keep
-        // the ring fed themselves and short sounds don't need it. The diagnostic
-        // `--probe-call-stall` path opens via `open_routed` directly (no pump), so
-        // it can still reproduce the bug for A/B.
         if handle != 0 && is_call {
+            // Call output: run the silence pump so a guest stall can't suspend the
+            // stream (task 97 bug #1). Scoped to VoiceCall — Media/Notification keep
+            // the ring fed themselves and short sounds don't need it. The diagnostic
+            // `--probe-call-stall` path opens via `open_routed` directly (no pump), so
+            // it can still reproduce the bug for A/B.
             spawn_call_silence_pump(handle, channels);
+            // Apply the current comms route now (the call output isn't deviceId-pinned;
+            // routing comes from the strategy device-role). Ensures the very first
+            // call lands on the earpiece default even if no toggle has been pushed
+            // yet (task 97 bug #5).
+            crate::audio_policy_impl::set_media_strategy_route(super::comms_route_speaker());
         }
         handle
     }
@@ -1316,17 +1394,30 @@ mod binder_path {
 // ── Comms route (arbiter-decided) ────────────────────────────────────────────
 // The arbiter (wart-arbiter-audio) owns the call earpiece↔speaker decision and
 // pushes it down as `audio-policy set-route` (handled in standalone.rs, which
-// calls `set_comms_route`). A guest `create-track` (a call stream) is pinned to
-// the resolved device for this route. Default earpiece (`false`). See
-// [[project_audio_routing_arbiter]]. Live mid-call re-pin (speakerphone toggle
-// after the stream is open) is a follow-up — the route applies at open time.
+// calls `set_comms_route`). The route is applied by RE-ROUTING the shared MEDIA
+// output via a PREFERRED device-role on its product strategy
+// (`set_media_strategy_route`) — NOT by pinning a per-stream deviceId (which
+// `-889`s when the single MMAP output is already held on another device; see
+// task 97 bug #5). Because it re-routes the existing output, a speakerphone
+// toggle takes effect MID-CALL without re-opening the stream. Default earpiece
+// (`false`). See [[project_audio_routing_arbiter]].
 static COMMS_SPEAKER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Apply the arbiter's call route decision (`true` = loudspeaker / speakerphone,
-/// `false` = earpiece). Affects subsequently-opened call streams.
+/// `false` = earpiece). Re-routes the live shared MEDIA output immediately and
+/// records the choice for any subsequently-opened call stream.
 pub fn set_comms_route(speaker: bool) {
     COMMS_SPEAKER.store(speaker, std::sync::atomic::Ordering::Relaxed);
-    log::info!("audio: comms route = {}", if speaker { "speaker" } else { "earpiece" });
+    let ok = crate::audio_policy_impl::set_media_strategy_route(speaker);
+    log::info!("audio: comms route = {} (strategy re-route ok={ok})",
+        if speaker { "speaker" } else { "earpiece" });
+}
+
+/// Clear the comms route override (call-end) so non-call media returns to the
+/// policy default. Resets the recorded route to earpiece (the call default).
+pub fn clear_comms_route() {
+    COMMS_SPEAKER.store(false, std::sync::atomic::Ordering::Relaxed);
+    crate::audio_policy_impl::clear_media_strategy_route();
 }
 /// The arbiter's current call route (`true` = speaker, `false` = earpiece).
 pub fn comms_route_speaker() -> bool {
@@ -1506,6 +1597,13 @@ pub fn probe_call_stall(secs: u32, speaker: bool, drain_in_pause: bool, pump: bo
 pub fn probe_call_stall(_secs: u32, _speaker: bool, _drain_in_pause: bool, _pump: bool) {
     log::warn!("probe-call-stall: android-only build");
 }
+
+/// Task 97 bug #5 route-toggle verify (`--probe-route-toggle`). See
+/// `binder_path::probe_route_toggle`.
+#[cfg(target_os = "android")]
+pub fn probe_route_toggle() { binder_path::probe_route_toggle(); }
+#[cfg(not(target_os = "android"))]
+pub fn probe_route_toggle() { log::warn!("probe-route-toggle: android-only build"); }
 
 /// Task-76 capability-matrix open probe (`--probe-audio-matrix`, via
 /// `audio_caps`): open one fully-specified stream, log the result + granted

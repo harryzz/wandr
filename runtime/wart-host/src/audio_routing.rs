@@ -119,12 +119,23 @@ impl DeviceModel {
     pub fn resolve_output(&self, route: Route) -> StreamPlan {
         // Probe findings → fixed output policy: MEDIA usage, F32, stereo, SHARED.
         // (mono → -889, I16 → -883, VOICE_COMMUNICATION → -889 in every mode.)
-        let device_ids = match route.target() {
-            // Speaker-Safe is avoided; SPEAKER is the loud output. EARPIECE is
-            // the in-ear receiver. Media leaves device_ids empty → policy default.
-            RouteTarget::Speaker  => self.output_port("OUT_SPEAKER").map(|p| vec![p]).unwrap_or_default(),
-            RouteTarget::Earpiece => self.output_port("OUT_EARPIECE").map(|p| vec![p]).unwrap_or_default(),
-            RouteTarget::PolicyDefault => Vec::new(),
+        let device_ids = match route {
+            // A call NEVER pins a per-stream deviceId: AAudio would open a SECOND
+            // MMAP "direct output" on the pinned device, but `mmap_no_irq_out` is
+            // maxOpenCount=1, so the earpiece pin `-889`s whenever another output
+            // already holds it (task 97 bug #5). Instead the call shares the
+            // existing MMAP output and is routed via a PREFERRED device-role on its
+            // strategy (`audio_policy_impl::set_media_strategy_route`, driven by
+            // `set_comms_route`) — which re-routes the existing output and works
+            // mid-call. So leave device_ids empty for calls.
+            Route::Call { .. } => Vec::new(),
+            _ => match route.target() {
+                // Speaker-Safe is avoided; SPEAKER is the loud output. EARPIECE is
+                // the in-ear receiver. Media leaves device_ids empty → policy default.
+                RouteTarget::Speaker  => self.output_port("OUT_SPEAKER").map(|p| vec![p]).unwrap_or_default(),
+                RouteTarget::Earpiece => self.output_port("OUT_EARPIECE").map(|p| vec![p]).unwrap_or_default(),
+                RouteTarget::PolicyDefault => Vec::new(),
+            },
         };
         // Speech content for a call (tunes the policy/DSP); music otherwise.
         let content = if matches!(route, Route::Call { .. }) { aa::CONTENT_SPEECH } else { aa::CONTENT_MUSIC };

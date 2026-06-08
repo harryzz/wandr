@@ -107,6 +107,24 @@ but the guest still needs its own wake fix. Repro/verify flag now
 `--probe-call-stall [secs] [speaker0|1] [drain0|1] [pump0|1]`; earpiece pin `[2]` -889s
 standalone (taimen, =bug #5), reproduced/verified on speaker `[3]`.
 
+✅ **BUG #5 (earpiece/speaker toggle, the `[2]` pin -889) ROOT-CAUSED + FIXED + device-verified
+(2026-06-08).** Root cause: the call output's per-stream `deviceIds` pin makes AAudio open a
+SECOND MMAP "direct output" on the pinned device, but taimen `mmap_no_irq_out` is
+**maxOpenCount=1** → earpiece pin `-889`s when another output holds the slot
+(`APM_AudioPolicyManager: can't open new mmap output maxOpenCount reached`); speaker `[3]`
+only "worked" by REUSING the existing MMAP output (`openDirectOutput reusing direct output
+213`). FIX: call output no longer pins a deviceId (`audio_routing.rs Route::Call → device_ids
+= []`, shares the MMAP, never -889s); route via a PREFERRED device-role on the MEDIA product
+strategy — `audio_policy_impl::set_media_strategy_route(speaker)` →
+`setDevicesRoleForStrategy(getProductStrategyFromAudioAttributes(MEDIA), PREFERRED,
+[OUT_SPEAKER|OUT_SPEAKER_EARPIECE])`, applied from `set_comms_route` (re-routes the EXISTING
+shared output → speakerphone toggle works MID-CALL, no re-open) + at call-track open; cleared
+on call-end (`CommMode{comm:false}`→`clear_comms_route`). setForceUse (no earpiece option for
+MEDIA) + deviceId pin retired from routing. Verify: `--probe-route-toggle`
+(getDevicesForAttributes(MEDIA) followed 140→141→140→default on one no-pin stream, no -889);
+`--probe-call-stall 3 0 0 1` earpiece now opens. earpiece=AudioDeviceType OUT_SPEAKER_EARPIECE(141)
+NOT OUT_EARPIECE; DeviceRole::PREFERRED=1; strategy resolved at runtime (no hardcode).
+
 Live recovery used 2026-06-08: `wart-host --init-audio-policy` (restores volume ranges)
 + relaunch Signal host. calldbg.log at
 `/data/local/tmp/wart-apps/apps/war.signal/0.1.0/state/calldbg.log` (dbg_line →
