@@ -92,9 +92,13 @@ THREE separate things with different host backends:
    - **OUT (our camera→peer):** YUV → HW VP8 **ENCODE** → SRTP. ✅ proven (`--probe-video`
      17.4fps HW VP8 under --no-art, task 93/95).
    - **IN (peer→us):** SRTP-open → RTP depacketize → bitstream → HW **DECODE** → YUV →
-     display. 🔲 NOT built (the "decode path = remaining" piece). Codec nego offers VP9
-     then VP8 (`signal/mod.rs`) → **verify the device's MediaCodec has a HW VP9 decoder**
-     (VP8 certain on msm8998; VP9 to confirm).
+     display. 🔲 NOT built (the "decode path = remaining" piece), but HW support CONFIRMED
+     (device-checked 2026-06-08, `/vendor/etc/media_codecs*.xml`): clear HW decoders
+     **`OMX.qcom.video.decoder.vp9`** (+ `.secure`) AND `OMX.qcom.video.decoder.vp8` both
+     present — so both codecs ringrtc negotiates (VP9 then VP8, `signal/mod.rs`) HW-decode,
+     no SW fallback. Also clear HW avc/hevc. The Codec2/OMX path works under --no-art (encode
+     proven) → `AMediaCodec_createDecoderByType("video/x-vnd.on2.vp9")` should pick the HW
+     decoder host-side. Remaining = build the decode→display wiring, not a HW gap.
    - Architecture decision before the `wart:video` WIT: incoming decoded frame =
      **decode-to-surface** (host composites with guest UI, zero copy, best for 30fps,
      video plane outside guest skia) vs **decode-to-buffer** (host→guest WIT returns
