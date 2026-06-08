@@ -54,6 +54,76 @@ once", wasteful for real-time media. So:
   ephemeral self-signed cert key can stay in normal world (per-session); the
   long-term identity keys are what's worth TEE-protecting.
 
+**`--no-art` SURVIVAL + the Keymaster-3.0 correction (device-checked 2026-06-08).**
+On taimen, in a live `--no-art` stack (system_server gone), ALL crypto AIDL + HAL
+services **survive** — standalone init daemons / vendor hwbinder HALs, none hosted in
+system_server (same reason audioserver/sensorservice survive):
+- AIDL (alive): `android.system.keystore2.IKeystoreService/default` (keystore2,
+  `class early_hal`, pid 745) + companions `android.security.{authorization,compat,
+  legacykeystore,maintenance,metrics}`; `android.security.identity.ICredentialStoreFactory`
+  (credstore 1224); `android.service.gatekeeper.IGateKeeperService` (gatekeeperd 1421);
+  `android.hardware.drm.IDrmFactory/clearkey`.
+- HAL backends (alive): **`android.hardware.keymaster@3.0::IKeymasterDevice/default`**
+  (pid 749 — the TEE/QSEE key root); `android.hardware.gatekeeper@1.0` (748);
+  `android.hardware.drm@1.0–1.3::I{Crypto,Drm}Factory/widevine` (1122, OEMCrypto in TEE).
+- **CORRECTION to the two-tier text above:** this SoC is **Keymaster 3.0 _HIDL_**, NOT
+  KeyMint AIDL (taimen predates KeyMint). Callers use keystore2's AIDL (`IKeystoreService`),
+  which wraps the HIDL keymaster HAL via `android.security.compat` (`IKeystoreCompatService`).
+- **The SRTP hot path needs NONE of the above.** `/proc/cpuinfo` Features =
+  `aes pmull sha1 sha2 crc32` (full ARMv8 Crypto Extensions). Bulk SRTP AES-GCM runs
+  IN-PROCESS in the host (RustCrypto auto-uses these CPU instructions) — no AIDL/HAL/IPC;
+  survives `--no-art` because it's the CPU. Keystore/keymaster is ONLY key protection /
+  attestation / DRM, never bulk media.
+- STILL UNPROVEN: reachability ≠ usable from OUR caller. Under `--no-art` we're root in
+  the `su` SELinux domain; whether that domain can keystore2 `createOperation` is a
+  separate namespace/SELinux question (read-only probe pending). Presence + survival
+  confirmed; a successful key op from our domain is not.
+
+**OFFLOAD ARCHITECTURE — three distinct layers (don't conflate; Signal video+audio).**
+"Offload heavy media to the host, guest imports a WIT" is the right shape, but it's
+THREE separate things with different host backends:
+1. **Crypto (SRTP AES-GCM, DTLS PRF/ECDH)** → host RustCrypto on ARMv8 HW AES. Pure-Rust,
+   NO AIDL, NO HAL — just CPU instructions. ✅ this is the layer where "Rust native, no
+   AIDL, just a WIT the guest imports" is exactly correct (`wart:crypto`, not built).
+2. **Video codec — BIDIRECTIONAL, both need HW offload** (a wasm guest can't do real-time
+   VP8/VP9 either way). Host drives the **hardware MediaCodec** (NDK `AMediaCodec` → Codec2
+   HAL `android.hardware.media.c2`, survives `--no-art`); guest only does crypto + RTP
+   framing. NOT pure-Rust, but from the GUEST's view still just a WIT import.
+   - **OUT (our camera→peer):** YUV → HW VP8 **ENCODE** → SRTP. ✅ proven (`--probe-video`
+     17.4fps HW VP8 under --no-art, task 93/95).
+   - **IN (peer→us):** SRTP-open → RTP depacketize → bitstream → HW **DECODE** → YUV →
+     display. 🔲 NOT built (the "decode path = remaining" piece). Codec nego offers VP9
+     then VP8 (`signal/mod.rs`) → **verify the device's MediaCodec has a HW VP9 decoder**
+     (VP8 certain on msm8998; VP9 to confirm).
+   - Architecture decision before the `wart:video` WIT: incoming decoded frame =
+     **decode-to-surface** (host composites with guest UI, zero copy, best for 30fps,
+     video plane outside guest skia) vs **decode-to-buffer** (host→guest WIT returns
+     pixels, cleaner compositing, per-frame copy at video rates). Decode-to-surface is the
+     usual call winner; it decides whether `decode-frame` returns pixels or just composites.
+3. **Audio codec (Opus)** → already PURE-RUST and fast enough to run **IN the guest**
+   (restsend/opus-rs, ~40× real-time, device-verified); audio I/O (mic + AAudio playback)
+   already host-side. So audio needs NO codec offload — only its SRTP shares layer 1.
+
+WIT direction: the **host implements**, the guest **imports** (component-model: host-provided
+imports — "exported in the guest" = the guest world lists them as imports). Net: crypto =
+pure-Rust HW-AES (no AIDL ✓); video = host MediaCodec/Codec2 HAL (survives --no-art); audio
+codec = stays in-guest.
+
+**SIGNAL IS IN-GUEST (corrected 2026-06-08, user + code-checked) — offload applies NOW.**
+Earlier notes (incl. [[project_wart_call]]) said "Signal = ringrtc, C++, separate." WRONG:
+`crates/wart-call` is a **pure-Rust reimplementation of ringrtc's V4 wire protocol**
+(V4 keying, RTP-data control channel PT101/SSRC 0xD, connection-params protobuf, VP9/VP8
+codec nego) running **in the wasm guest** — wire-compatible with a real ringrtc peer, NOT
+linked libwebrtc/ringrtc C++. So the SRTP encrypt/decrypt runs IN-WASM: Signal calls use
+**`ProtectionProfile::AeadAes256Gcm`** (`transport.rs:468`, `Keying::Signal`; keys from
+X25519-DH + HKDF-SHA256, no DTLS) via `rtc_srtp::Context::{encrypt_rtp,decrypt_rtp}`
+(`media.rs:158/183/195`) = **software AES-256-GCM per RTP packet in the sandbox**. ⇒ the
+layer-1 host crypto offload is REAL and high-value for Signal right now (not hypothetical):
+a `wart:crypto` WIT exposing AES-256-GCM seal/open that the guest imports → host RustCrypto
+on ARMv8 HW AES. Cleanest granularity = per-packet seal/open, keep SRTP framing (ROC/replay/
+key-derivation in `rtc_srtp::Context`) in-guest, offload only the AEAD primitive. (WebRTC-
+native path uses `Aes128CmHmacSha1_80`.) See [[project_wart_call]], [[project_artless_camera]].
+
 **WASM SIMD (simd128) — helps codecs/DSP, NOT AES.** Already supported host-side:
 our wasmtime Config enables gc/function-references/exceptions and `wasm_simd` is
 default-ON (we don't disable it); AOT `wasmtime compile` lowers wasm `v128` →
