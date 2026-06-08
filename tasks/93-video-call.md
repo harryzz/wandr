@@ -1,9 +1,12 @@
 # Task 93 — Video calls (AV gap to a full Signal app)
 
-> Status: ✅ CAMERA CAPTURE WORKS under `--no-art` (2026-06-06, device-verified:
-> **28.8 fps, 640×480 YUV** via `--probe-video imagereader`). Camera open + codec
-> configure + sensor-stream-start all solved. Remaining = pure integration (no
-> `--no-art` blockers): encode-feed, decode, WIT + wart-call video track.
+> Status: ✅ CAMERA CAPTURE RELIABLE under `--no-art` (2026-06-08: 29.1fps raw +
+> HW VP8 encode 17.4fps, 3/3 — the task-95 EIS-gyro race is now reliably won, see
+> `tasks/95-*`/[[project_artless_sensor_5s_batterystats]]). The WIT contracts are
+> ✍️ **DRAFTED + validated**: `wit/video.wit` (`war:video`) + `wit/crypto.wit`
+> (`war:crypto`), commit `697da5de` (steps 5 + risk #2 below). Remaining = pure
+> integration (no `--no-art` blockers): implement those WITs host-side (encode-feed,
+> HW decode→surface, AEAD offload) + wire the wart-call video track + render.
 
 ## ✅ SOLVED: full `--no-art` camera capture chain (2026-06-06)
 
@@ -88,11 +91,24 @@ Native-facing clients (mirror `audio_impl` — rsbinder/NDK + shared-mem):
 Glue (our code):
 4. **wart-call video track** — wire the existing VP8 payloader/depacketizer into a
    video RTP stream over the existing SRTP transport; RTCP PLI/FIR keyframe requests.
-5. **WIT** — `war:video` (or extend the call WIT): guest controls start/stop video +
-   front/back camera + mute; host does capture+encode+decode+render. In-guest call
-   engine → WIT carries **encoded VP8 frames** (KB each; cheap).
+5. **WIT** — ✍️ **DRAFTED 2026-06-08: `wit/video.wit` (`war:video`) + `wit/crypto.wit`
+   (`war:crypto`)**, both wasm-tools-validated (commit `697da5de`); NOT yet implemented.
+   - `war:video` — bidirectional HW codec via host MediaCodec/Codec2: `encoder` (host
+     captures camera + HW-encodes, guest **pulls** `next-frame()`) + `decoder` (guest
+     **pushes** `submit(frame)`, host HW-decodes). Carries **encoded** frames (KB each).
+     Decisions baked in: **decode-to-surface** (host composites; pixels never re-enter
+     the guest — zero-copy, right for 30fps), and **prefer VP8 for OUT** (VP9 HW *encode*
+     is SW-only on this SoC; VP9/VP8 HW *decode* both present — confirmed
+     `/vendor/etc/media_codecs*.xml` 2026-06-08).
+   - `war:crypto` — the SRTP AEAD offload (risk #2 below): `aead.gcm` seal/open per
+     packet, key schedule expanded once. Guest keeps the SRTP framing, offloads only the
+     AES-256-GCM primitive to host RustCrypto on ARMv8 HW AES.
+   - 🔲 STILL OPEN: wire the `war:video` decoder surface to an arbiter **`Role::Video`**
+     surface (z-order vs the guest skia UI, rotation, occlusion) instead of the sketch's
+     raw `video-rect`; same for the self-view preview.
 6. **Render** — decoded YUV → Skia (SkImage-from-YUV / YUV→RGB shader) → local PiP +
-   remote in the call UI.
+   remote in the call UI. (Mostly subsumed by decode-to-surface host compositing per
+   the `war:video` decision above; Skia path applies if decode-to-buffer is chosen.)
 7. **Signal protocol** — in-call video enable/disable + resolution/bitrate adaptation.
 
 ## Two real risks (the spike targets these)
@@ -102,8 +118,12 @@ Glue (our code):
    stub). May need another stub or a root bypass.
 2. **SRTP at video bitrate in wasm** — audio SRTP-in-wasm works, but video is
    ~10–50× the packet rate; [[project_crypto_hw_offload]] already flags SRTP should
-   move host-side. Video may force host-side SRTP/crypto — an architecture fork
-   (keep RTP/SRTP in-guest vs. move the media+crypto pipeline host-side).
+   move host-side. **Direction chosen (2026-06-08, see `wit/crypto.wit`):** keep the
+   SRTP *framing* (ROC/replay/HKDF in `rtc_srtp::Context`) IN the guest, offload only
+   the per-packet **AEAD primitive** (`war:crypto` `aead.gcm` seal/open) to host
+   RustCrypto on ARMv8 HW AES — a small WIT, not a full pipeline-to-host fork. Signal
+   V4 SRTP = `AEAD_AES_256_GCM` (`wart-call transport.rs:468`), software AES in wasm
+   today, so this offload applies to **audio calls too** (task 91), not just video.
 
 ## Spike: `wart-host --probe-video`
 
