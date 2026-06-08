@@ -1,7 +1,10 @@
 # Task 98 — `audioclient-rs`: AudioFlinger-direct audio backend (replace hand-rolled AAudio)
 
-> Backend packaged as a standalone reusable crate `crates/audioclient-rs` (lib `audioclient`);
-> `wart-host` keeps only the WIT/wasmtime glue. See "Crate packaging & reuse" below.
+> Backend packaged as a **standalone repo**, decoupled from wart:
+> **https://codeberg.org/harryzz/audioclient-rs** (package `audioclient-rs`, lib `audioclient`).
+> Self-contained (vendors its own AIDL closure under `aidl/`); `wart-host` consumes it as a
+> **Cargo git dependency** when wired in (step 4) and keeps only the WIT/wasmtime glue.
+> It is no longer in the wart tree. See "Crate packaging & reuse" below.
 
 > Status: 📐 PLAN OF RECORD (2026-06-08). Design decided; implementation not started.
 > Supersedes the hand-rolled `media.aaudio` client in `audio_impl.rs` as the audio
@@ -186,13 +189,15 @@ Port faithfully from the **vendored reference** (do NOT re-derive):
 
 ## Migration sequence (no regressions)
 
-1. ✅ DONE (2026-06-08) — Scaffolded `crates/audioclient-rs` (Cargo + build.rs codegen of
-   `IAudioFlingerService`, public API + cfg-android/no-op split, `vendor-aidl.sh`). **Codegen
-   verified green** for aarch64-android: `IAudioFlingerService`/`IAudioTrack`/`IAudioRecord` +
-   `CreateTrack/RecordRequest/Response` generate AND compile. One stub patch needed —
-   `AudioHalCapRule` is recursive (`nestedRules: AudioHalCapRule[]`, rsbinder can't derive); a
-   non-recursive build.rs stub (it's an unused HAL-config type) resolves it. Desktop build =
-   no-op stubs, clean.
+1. ✅ DONE (2026-06-08) — Scaffolded the crate, **decoupled into its own repo**
+   (https://codeberg.org/harryzz/audioclient-rs, self-contained `aidl/`), removed from the wart
+   tree. **Codegen verified green** for aarch64-android — both inside wart AND standalone
+   (cross-built a copy outside the wart tree, reading its own `aidl/`):
+   `IAudioFlingerService`/`IAudioTrack`/`IAudioRecord` + `CreateTrack/RecordRequest/Response`
+   generate AND compile. One stub patch needed — `AudioHalCapRule` is recursive
+   (`nestedRules: AudioHalCapRule[]`, rsbinder can't derive); a non-recursive build.rs stub
+   (unused HAL-config type) resolves it. Desktop build = no-op stubs, clean. **Next: wart-host
+   adds the Cargo git-dep + implements the CBLK proxy (steps 2–4).**
 2. Implement the AudioFlinger client + CBLK port in the crate, with a crate-level example/test
    entry; wire a `wart-host --probe-af-tone` that calls `audioclient`, leaving the AAudio path in place.
 3. **Verify on device** (`--no-art`): `--probe-af-tone` plays a tone via AudioFlinger,
