@@ -861,6 +861,7 @@ fn app() -> Element {
             div {
                 style: "display:flex; flex-direction:column; height:100%; background:{BG};",
                 CallBar { status: call_status }
+                CallControls { status: call_status }
                 ThreadHeader { title: thread.title.clone(), current, call_status, call_peer: call_peer.clone(), is_self: thread.id == self_id }
                 Conversation { messages: thread_msgs, contacts: contacts.clone(), stick_key: thread.id.clone() }
                 Composer { thread: thread.id.clone() }
@@ -1053,6 +1054,75 @@ fn CallBar(status: chat::CallState) -> Element {
                     onmousedown: move |_| {},
                     onclick: move |_| chat::hangup_call(),
                     "📵"
+                }
+            }
+        }
+    }
+}
+
+/// In-call audio controls panel (Phase 2b-ii) — shown while a call is active
+/// (outgoing/connecting/connected). Mic-mute, earpiece↔loudspeaker route, and a
+/// volume slider, driven by `war:audio-focus/controls` (the host applies; see
+/// project_call_audioserver_crash — routing here does NOT touch setPhoneState). Local
+/// signals seed from the host's current applied state via the `get-*` reads.
+#[component]
+fn CallControls(status: chat::CallState) -> Element {
+    use war::audio_focus::controls as ctl;
+    // Only meaningful during an active call. Ringing shows Accept/Decline in CallBar.
+    if !matches!(
+        status,
+        chat::CallState::Outgoing | chat::CallState::Connecting | chat::CallState::Connected
+    ) {
+        return rsx! {};
+    }
+    let mut mic_muted = use_signal(|| ctl::get_mic_mute());
+    let mut speaker = use_signal(|| matches!(ctl::get_route(), ctl::AudioRoute::Speaker));
+    let mut volume = use_signal(|| ctl::get_volume());
+
+    // Fixed slider-track width (one named UI layout constant): the panel pads the
+    // surface, so the track is content-sized, and `element_coordinates().x` is in this
+    // same layout-px space → level = x / VOL_TRACK_W.
+    const VOL_TRACK_W: f32 = 1000.0;
+    let icon = "display:flex; justify-content:center; align-items:center; width:104px; height:104px; border-radius:26px; font-size:48px; color:#FFFFFF;";
+    let fill_pct = (volume() * 100.0).clamp(0.0, 100.0) as i32;
+
+    rsx! {
+        div {
+            style: "display:flex; flex-direction:column; gap:18px; padding:20px 24px; background:#101418;",
+            // Route label — which output the call audio is on.
+            div {
+                style: "color:#90A4AE; font-size:26px; text-align:center;",
+                if speaker() { "Loudspeaker" } else { "Earpiece" }
+            }
+            // Mic-mute + earpiece/loudspeaker toggle.
+            div {
+                style: "display:flex; flex-direction:row; gap:28px; justify-content:center; align-items:center;",
+                button {
+                    style: format!("{icon} background:{};", if mic_muted() { "#C62828" } else { "#37474F" }),
+                    onmousedown: move |_| {},
+                    onclick: move |_| { let m = !mic_muted(); mic_muted.set(m); ctl::set_mic_mute(m); },
+                    if mic_muted() { "🔇" } else { "🎤" }
+                }
+                button {
+                    style: format!("{icon} background:{};", if speaker() { "#2E7D32" } else { "#37474F" }),
+                    onmousedown: move |_| {},
+                    onclick: move |_| {
+                        let s = !speaker();
+                        speaker.set(s);
+                        ctl::set_route(if s { ctl::AudioRoute::Speaker } else { ctl::AudioRoute::Earpiece });
+                    },
+                    if speaker() { "🔊" } else { "📞" }
+                }
+            }
+            // Volume slider — drag/tap the track (onmousedown + onmousemove).
+            div {
+                style: "display:flex; flex-direction:row; align-items:center; gap:18px;",
+                div { style: "color:#90A4AE; font-size:40px;", "🔉" }
+                div {
+                    style: format!("display:flex; align-items:center; width:{VOL_TRACK_W}px; height:44px; border-radius:22px; background:#37474F;"),
+                    onmousedown: move |e| { let l = (e.element_coordinates().x as f32 / VOL_TRACK_W).clamp(0.0, 1.0); volume.set(l); ctl::set_volume(l); },
+                    onmousemove: move |e| { let l = (e.element_coordinates().x as f32 / VOL_TRACK_W).clamp(0.0, 1.0); volume.set(l); ctl::set_volume(l); },
+                    div { style: format!("height:44px; width:{fill_pct}%; border-radius:22px; background:{ACCENT};") }
                 }
             }
         }

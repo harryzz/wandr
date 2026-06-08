@@ -232,4 +232,7 @@ world signal-engine {
   import my:skiko-gfx/audio@0.1.0;
   /// Drive the ringer + comms session on wart-arbiter-audio (host-forwarded).
   import war:audio-focus/focus@0.1.0;
+  /// Read the current call route (earpiece/speaker) so the call loop can re-open
+  /// the output track when the user toggles it — the route binds at track open.
+  import war:audio-focus/controls@0.1.0;
 }

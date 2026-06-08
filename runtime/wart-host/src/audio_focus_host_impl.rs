@@ -131,10 +131,15 @@ impl ControlsHost for crate::HostState {
             AudioRoute::Speaker   => (1u8, true),
             AudioRoute::Bluetooth => (2u8, false),
         };
-        crate::audio_policy_impl::set_route(speaker);
+        // Do NOT call setForceUse(COMMUNICATION) here: it re-runs
+        // setOutputDevices→installPatch (the same HAL path that SIGABRTs audioserver),
+        // and even when it survives it tears down/re-patches the open output stream so
+        // it stops pulling → silence. The route actually moves via the per-stream
+        // deviceId pin applied when the call track re-opens (the guest's pump_audio
+        // re-opens on this change). See project_call_audioserver_crash.
         crate::audio_impl::set_comms_route(speaker);
         ROUTE.store(code, Ordering::Relaxed);
-        log::info!("audio-controls: set-route {route:?}");
+        log::info!("audio-controls: set-route {route:?} (deviceId pin only, no setForceUse)");
     }
     fn get_route(&mut self) -> AudioRoute {
         match ROUTE.load(Ordering::Relaxed) {

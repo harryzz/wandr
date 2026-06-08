@@ -123,4 +123,6 @@ world signal-ui-app {
     export war:notify/notify-handler@0.1.0;
     import war:alarm/scheduler@0.1.0;
     export war:alarm/alarm-handler@0.1.0;
+    // In-call audio controls (route / volume / mute) — the call-controls panel.
+    import war:audio-focus/controls@0.1.0;
 }

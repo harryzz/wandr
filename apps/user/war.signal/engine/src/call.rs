@@ -26,6 +26,7 @@ use wart_call::signal::{CallSignal, CallState, HangupKind, SignalCall};
 use wart_call::turn::TurnConfig;
 
 use crate::my::skiko_gfx::audio::{self, ChannelLayout, Format, StreamClass, TrackConfig};
+use crate::war::audio_focus::controls;
 
 const SAMPLE_RATE: u32 = wart_call::SAMPLE_RATE;
 /// 20 ms @ 48 kHz mono — the Opus frame + audio tick granularity.
@@ -182,6 +183,9 @@ struct ActiveCall {
     cap: Option<u32>,
     trk: Option<u32>,
     track_started: bool,
+    /// The route (`true`=speaker) the open output track was created with — so a
+    /// mid-call toggle (war:audio-focus/controls) can re-open it on the new device.
+    cur_speaker: bool,
     mic_buf: Vec<f32>,
     play_buf: Vec<f32>, // stereo playout FIFO; carries samples the host ring couldn't take this tick
     last_state: CallState,
@@ -231,7 +235,7 @@ impl ActiveCall {
     fn new(call: SignalCall, sock: UdpSocket, peer_aci: String, outgoing: bool) -> Self {
         let last_state = call.state();
         Self {
-            call, sock, peer_aci, cap: None, trk: None, track_started: false,
+            call, sock, peer_aci, cap: None, trk: None, track_started: false, cur_speaker: false,
             mic_buf: Vec::new(), play_buf: Vec::new(), last_state,
             outgoing, connected: false, accepted: false, last_accepted_sent: None,
             declined: false, busy: false,
@@ -255,6 +259,19 @@ impl ActiveCall {
     /// `recv_audio` → speaker. Capture (mono) + playback (stereo — this device's
     /// MMAP output is stereo-only) are opened lazily on the first connected tick.
     fn pump_audio(&mut self) {
+        // Route switch (earpiece↔loudspeaker): the output route binds at
+        // `create_track` (the host reads its comms-route pin then). The user can
+        // toggle it mid-call via war:audio-focus/controls, so poll the current route
+        // (cheap host-side atomic read) and, if it changed, close the output track —
+        // the open-block below re-opens it on the new device next. `cur_speaker`
+        // avoids a close/re-open every tick.
+        let want_speaker = matches!(controls::get_route(), controls::AudioRoute::Speaker);
+        if self.trk.is_some() && want_speaker != self.cur_speaker {
+            if let Some(t) = self.trk.take() { audio::close(t); }
+            self.track_started = false;
+            self.play_buf.clear();
+            self.cur_speaker = want_speaker;
+        }
         // P1 — full-duplex. ORDER MATTERS on this device (taimen): the output
         // USAGE_MEDIA stream falls back to the legacy SHARED path (MMAP -19), but
         // the mic capture takes an MMAP input endpoint — and you can't acquire an
@@ -271,6 +288,7 @@ impl ActiveCall {
             let h = audio::create_track(cfg);
             if h != 0 {
                 self.trk = Some(h); // started after the first write (write-then-start)
+                self.cur_speaker = want_speaker; // the route this track opened with
             }
         }
         if self.trk.is_some() && self.cap.is_none() {
