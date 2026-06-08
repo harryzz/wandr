@@ -366,6 +366,53 @@ private:
     String16 mDescriptor{"com.android.internal.app.IAppOpsService"};
 };
 
+// IPackageManagerNative stub. audioserver's createTrack logs metrics →
+// ServiceUtilities UidInfo::getCachedInfo(uid) → package_native.getNamesForUids({uid})
+// then dereferences names[0]. The GenericStub replies exc+int32(0), which the client
+// reads as a ZERO-length String[] → names[0] is out-of-bounds → audioserver SIGSEGV
+// (crashes createTrack). We must return a String[] sized to the request. An empty
+// string per uid is enough — the caller treats "" as "unknown" and falls back to
+// getpwuid_r. getNamesForUids is the first method → code FIRST_CALL_TRANSACTION (1).
+// Wire: @utf8InCpp String[] is UTF-16 on the wire (int32 count + count × String16).
+class PackageManagerNativeStub : public BBinder {
+public:
+    enum { GET_NAMES_FOR_UIDS = IBinder::FIRST_CALL_TRANSACTION };  // 1
+    const String16& getInterfaceDescriptor() const override { return mDescriptor; }
+    status_t onTransact(uint32_t code, const Parcel& data, Parcel* reply,
+                        uint32_t flags) override {
+        if (kTrace) {
+            ALOGI("WART-SHIM-TRACE package_native code=%u flags=%u callingPid=%d callingUid=%d",
+                  code, flags, IPCThreadState::self()->getCallingPid(),
+                  IPCThreadState::self()->getCallingUid());
+        }
+        switch (code) {
+            case GET_NAMES_FOR_UIDS: {
+                if (!data.enforceInterface(getInterfaceDescriptor())) {
+                    return BAD_TYPE;
+                }
+                // in int[] uids → writeInt32Array wrote the length first.
+                int32_t n = data.readInt32();
+                if (n < 0) n = 0;
+                reply->writeNoException();
+                reply->writeInt32(n);  // String[] length == requested uid count
+                for (int32_t i = 0; i < n; i++) {
+                    reply->writeString16(String16(""));  // "" → caller falls back to getpwuid_r
+                }
+                return NO_ERROR;
+            }
+            default:
+                // Other methods: benign exc+int32(0), like GenericStub.
+                if (reply != nullptr) {
+                    reply->writeNoException();
+                    reply->writeInt32(0);
+                }
+                return NO_ERROR;
+        }
+    }
+private:
+    String16 mDescriptor{"android.content.pm.IPackageManagerNative"};
+};
+
 }  // namespace
 
 int main() {
@@ -391,7 +438,6 @@ int main() {
         {"permission", "android.os.IPermissionController"},
         {"permission_checker", "android.permission.IPermissionChecker"},
         {"media.camera.proxy", "android.hardware.ICameraServiceProxy"},
-        {"package_native", "android.content.pm.IPackageManagerNative"},
         // SensorService BatteryService::checkService blocking getService — see header.
         // Absent → ~5s on every sensor enable/disable + every wake-up event (proximity).
         {"batterystats", "com.android.internal.app.IBatteryStats"},
@@ -410,6 +456,13 @@ int main() {
     // the generic exc+int32 reply can't serve). Absent → AppOpsManager's 10s sleep-loop.
     status_t aos = sm->addService(String16("appops"), sp<AppOpsStub>::make());
     ALOGI("wart-framework-shim: addService(appops) = %d", aos);
+
+    // IPackageManagerNative needs the typed getNamesForUids stub (sized String[]),
+    // else audioserver's createTrack → UidInfo::getCachedInfo derefs names[0] on an
+    // empty vector → SIGSEGV. Replaces the former package_native GenericStub.
+    status_t pns = sm->addService(String16("package_native"),
+                                  sp<PackageManagerNativeStub>::make());
+    ALOGI("wart-framework-shim: addService(package_native) = %d", pns);
 
     ALOGI("wart-framework-shim: serving");
     IPCThreadState::self()->joinThreadPool();
