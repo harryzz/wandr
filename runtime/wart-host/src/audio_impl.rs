@@ -519,6 +519,9 @@ mod binder_path {
     /// `setForceUse(COMMUNICATION)` does not redirect it). `media`/`notification`
     /// are fixed applier mappings.
     pub fn create_track(cfg: super::TrackConfig) -> u32 {
+        // Self-heal a respawned audioserver's uninitialized volume range (-1 → no
+        // gain → silent call) before opening the stream. See ensure_initialized.
+        crate::audio_policy_impl::ensure_initialized();
         use crate::audio_routing::Route;
         let route = match cfg.class {
             super::StreamClass::Media        => Route::Media,

@@ -282,6 +282,24 @@ mod binder_path {
         let min = svc.r#getMinVolumeIndexForAttributes(&attr).ok()?;
         Some((min, max))
     }
+    /// Self-heal the audio policy after an audioserver (re)start. Under `--no-art`
+    /// system_server normally runs `initStreamVolume` at boot; it is dead, so a
+    /// respawned audioserver comes up with the MUSIC volume range UNINITIALIZED
+    /// (`min=max=-1`) → every index is invalid → the stream plays at no gain → the
+    /// call is SILENT (see project_call_audioserver_crash). Cheap (one binder read);
+    /// if the range is uninitialized (or the service was just unreachable), re-run
+    /// `init_audio_policy`. Called on every track open so a silent call is impossible
+    /// after any audioserver restart.
+    pub fn ensure_initialized() {
+        let needs_init = match media_volume_range() {
+            Some((min, max)) => min < 0 || max < 0,
+            None => true,
+        };
+        if needs_init {
+            log::warn!("audio-init: MUSIC volume range uninitialized — self-healing (init_audio_policy)");
+            init_audio_policy();
+        }
+    }
     /// Current media volume index on `device` (e.g. `OUT_SPEAKER`).
     pub fn get_media_volume(device: AudioDeviceType) -> Option<i32> {
         let svc = service()?;
@@ -524,6 +542,13 @@ pub fn probe() { log::warn!("audio-policy probe: android-only build"); }
 pub fn init_audio_policy() { binder_path::init_audio_policy(); }
 #[cfg(not(target_os = "android"))]
 pub fn init_audio_policy() { log::warn!("audio-init: android-only build"); }
+
+/// Self-heal: re-init the audio policy if its volume range is uninitialized (-1),
+/// which a respawned audioserver has under --no-art. Called on every track open.
+#[cfg(target_os = "android")]
+pub fn ensure_initialized() { binder_path::ensure_initialized(); }
+#[cfg(not(target_os = "android"))]
+pub fn ensure_initialized() {}
 
 /// Task-76 read-only routing probe (`getDevicesForAttributes` per usage).
 #[cfg(target_os = "android")]

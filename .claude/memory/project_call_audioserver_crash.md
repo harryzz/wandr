@@ -48,6 +48,33 @@ IN_COMMUNICATION` as the earpiece fix — it now crashes audioserver under --no-
    NameNotFound→ready and re-run `init_audio_policy()` (re-init volume ranges) so a
    restart never leaves the stream at IllegalArgument/-inf. Safety net regardless of #1.
 
+**SELF-HEAL WIRED (2026-06-08):** the dominant silent-call cause turned out to be the
+audioserver coming up with its **MUSIC volume range UNINITIALIZED (`min=max=-1`)** after
+ANY (re)start — under --no-art system_server's boot `initStreamVolume` is dead, so a
+respawned audioserver has no valid range → every index invalid (`setVolumeIndexForAttributes
+failed ... wrong index 0 min=-1 max=-1`) → stream plays at no gain → silent (engine fine:
+peak=1.0, wr_ok climbs). A manual `--init-audio-policy` right after a restart can RACE the
+audioserver and not apply (saw it: first run no-op, second run `12/12 streams`). Fix:
+`audio_policy_impl::ensure_initialized()` (reads `media_volume_range`; if `min<0||max<0` or
+service unreachable → re-runs `init_audio_policy`), called at the top of
+`audio_impl::create_track` so every call self-heals before the stream opens. Host change,
+needs rebuild+deploy.
+
+‼️ **TWO OPEN FOLLOW-UPS (2026-06-08):**
+1. **WHY does audioserver keep restarting/degrading?** The setPhoneState SIGABRT is fixed,
+   yet audioserver still ended up respawned/uninitialized repeatedly this session. Find the
+   remaining trigger (candidates: the route toggle's `setForceUse`→setOutputDevices→installPatch
+   HAL path — same family as the setPhoneState crash; mediametrics SIGSEGV crash-loop seen in
+   logcat right after init's setPhoneState NORMAL; or the task-96 bringup's deliberate
+   audioserver pkill). NOTE: `init_audio_policy` ITSELF still calls setPhoneState NORMAL at the
+   end (worked at boot, but it's the toxic call — consider gating it too).
+2. **Earpiece/speaker toggle has NO effect mid-call.** `create_track` reads the route ONCE at
+   open (`Route::Call { speaker: comms_route_speaker() }`, audio_impl.rs:526); `set_comms_route`
+   only changes the deviceId pin for the NEXT open, and `setForceUse(COMMUNICATION)` doesn't move
+   the USAGE_MEDIA call stream. So `controls::set_route` mid-call changes nothing audible. FIX =
+   on route change, RE-OPEN the call output track with the new route (guest re-creates the track,
+   or host re-routes the open stream). The deviceId pin works — it's just only applied at open.
+
 Live recovery used 2026-06-08: `wart-host --init-audio-policy` (restores volume ranges)
 + relaunch Signal host. calldbg.log at
 `/data/local/tmp/wart-apps/apps/war.signal/0.1.0/state/calldbg.log` (dbg_line →
