@@ -1,16 +1,107 @@
-// The `focus` interface the engine imports to drive the ring/comms session on
-// wart-arbiter-audio. Mirror of wit/audio-focus.wit's `focus` (the host links it
-// onto every guest; the engine only needs `focus`, not `focus-handler`).
+// war:audio-focus — the audio-focus primitive (wart-arbiter-audio, M2). A guest
+// requests audio focus through the `focus` host import; the host forwards it to
+// the arbiter's audio-focus module, which owns the cross-app focus stack and —
+// when the owner changes — delivers `on-focus-changed(change)` to each affected
+// guest's `focus-handler` export. Separate package (like war:alarm / war:notify)
+// so it carries no skiko-gfx WIT-sync obligation.
+
 package war:audio-focus@0.1.0;
 
 interface focus {
-    enum focus-kind { gain, gain-transient, gain-transient-may-duck }
+    /// What a guest asks for (Android AUDIOFOCUS_GAIN family).
+    enum focus-kind {
+        /// Permanent — evict prior owners (a call / music start).
+        gain,
+        /// Transient — prior owner pauses, resumes when we abandon (a prompt).
+        gain-transient,
+        /// Transient may-duck — prior owner lowers volume, keeps playing.
+        gain-transient-may-duck,
+    }
+    /// Outcome of a request. `delayed` = not granted yet but queued (reserved);
+    /// `failed` = refused.
     enum focus-result { granted, delayed, failed }
+
+    /// Request audio focus of the given kind. The arbiter demotes the previous
+    /// owner per `kind` and makes this guest the owner.
     request: func(kind: focus-kind) -> focus-result;
+    /// Release focus; the prior (transient/duck) owner regains it.
     abandon: func();
-    /// Ringer + comms session (forwarded to the arbiter for this guest's pid).
+
+    // ── Call session + Ringer (wart-arbiter-audio M3 + Ringer) ───────────────
+    // Fire-and-forget: the host forwards each to the arbiter's audio-* command for
+    // this guest's pid. The arbiter owns policy (ringer mode, comms mode); the host
+    // applies (ringtone/vibrate playback, audio policy).
+
+    /// An incoming call is ringing — start the ringtone/vibrate (per ringer mode) +
+    /// pause music. Stop with `ring-stop` (declined/missed) or `call-start` (answered).
     ring-start: func();
+    /// The incoming call was declined / missed / canceled (not answered).
     ring-stop: func();
+    /// Begin a comms session (answered, or an outgoing call connected): stops any
+    /// ring + sets the IN_COMMUNICATION audio mode.
     call-start: func();
+    /// End the comms session: restore the normal audio mode + focus.
     call-end: func();
+}
+
+// ── Audio controls (route / volume / mute) — guest-facing, wart-arbiter-audio ──
+// A call/media guest's control surface for its OWN output: pick the route
+// (earpiece/speaker), set/read output volume, and mute output and/or mic. The host
+// applies via the existing appliers (set_route + per-stream deviceId pin for route;
+// setStreamVolumeIndex for volume; the PCM-gate mutes for output/mic). `get-*` read
+// the host's currently-applied state (the host is the applier, so it is authoritative
+// for what's live). A guest-explicit `set-route` is honored directly (the user tapped
+// speaker) — distinct from the arbiter's AUTOMATIC routing (proximity/comms defaults).
+interface controls {
+    /// Output route for this guest's stream. `bluetooth` reserved (BT_SCO, later).
+    enum audio-route { earpiece, speaker, bluetooth }
+
+    /// Request the output route (e.g. a call UI speaker toggle).
+    set-route: func(route: audio-route);
+    /// The route currently applied to this guest's output.
+    get-route: func() -> audio-route;
+
+    /// Output volume for this guest's stream, clamped to 0.0..=1.0 and mapped to the
+    /// current device's stream index.
+    set-volume: func(level: f32);
+    /// The current output volume, 0.0..=1.0.
+    get-volume: func() -> f32;
+
+    /// Mute / unmute this guest's OUTPUT (what the user hears).
+    set-mute: func(muted: bool);
+    get-mute: func() -> bool;
+
+    /// Mute / unmute this guest's MIC capture (mute-self on a call).
+    set-mic-mute: func(muted: bool);
+    get-mic-mute: func() -> bool;
+}
+
+interface focus-handler {
+    /// What an affected owner is told (Android AUDIOFOCUS_LOSS family).
+    enum focus-change {
+        /// Permanent loss — stop + release.
+        loss,
+        /// Transient loss — pause; a `gain` follows when focus returns.
+        loss-transient,
+        /// Duck — lower volume, keep playing.
+        duck,
+        /// Regained focus — resume / unduck.
+        gain,
+    }
+    /// The arbiter changed this guest's focus. It pauses / ducks / resumes.
+    on-focus-changed: func(change: focus-change);
+}
+
+/// Host-import side — the host implements `focus` (request/abandon → forwarded to
+/// the arbiter) and `add_to_linker`s it onto every guest (harmless for ones that
+/// don't import it).
+world audio-focus-host {
+    import focus;
+    import controls;
+}
+
+/// Export side — typed `on-focus-changed` for guests that export `focus-handler`
+/// (probed with `.ok()` per instance, like `alarm-events`).
+world audio-focus-events {
+    export focus-handler;
 }

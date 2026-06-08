@@ -316,6 +316,25 @@ mod binder_path {
         set_media_volume(device, next);
     }
 
+    /// Absolute output volume (`war:audio-focus/controls.set-volume`): clamp `level`
+    /// to 0.0..=1.0 and map it onto the MEDIA stream index range for the chosen device.
+    pub fn set_media_volume_level(speaker: bool, level: f32) {
+        let device = if speaker { AudioDeviceType::OUT_SPEAKER } else { AudioDeviceType::OUT_SPEAKER_EARPIECE };
+        let (min, max) = media_volume_range().unwrap_or((0, 15));
+        let lvl = level.clamp(0.0, 1.0);
+        let idx = min + (((max - min) as f32) * lvl).round() as i32;
+        set_media_volume(device, idx);
+    }
+    /// Read the current MEDIA volume on the chosen device as 0.0..=1.0 (1.0 if unknown).
+    pub fn get_media_volume_level(speaker: bool) -> f32 {
+        let device = if speaker { AudioDeviceType::OUT_SPEAKER } else { AudioDeviceType::OUT_SPEAKER_EARPIECE };
+        let (min, max) = media_volume_range().unwrap_or((0, 15));
+        match get_media_volume(device) {
+            Some(cur) if max > min => (((cur - min) as f32) / ((max - min) as f32)).clamp(0.0, 1.0),
+            _ => 1.0,
+        }
+    }
+
     /// Apply output mute/unmute on `device` (arbiter-decided). Uses the policy
     /// volume setter's `muted` flag, preserving the current index so unmute
     /// restores the prior level. `speaker` selects OUT_SPEAKER vs earpiece.
@@ -565,6 +584,16 @@ pub fn adjust_volume_on(_speaker: bool, _up: bool) {}
 pub fn set_media_mute(speaker: bool, muted: bool) { binder_path::set_media_mute(speaker, muted); }
 #[cfg(not(target_os = "android"))]
 pub fn set_media_mute(_speaker: bool, _muted: bool) {}
+
+/// `war:audio-focus/controls` — absolute output volume (0.0..=1.0) get/set.
+#[cfg(target_os = "android")]
+pub fn set_media_volume_level(speaker: bool, level: f32) { binder_path::set_media_volume_level(speaker, level); }
+#[cfg(not(target_os = "android"))]
+pub fn set_media_volume_level(_speaker: bool, _level: f32) {}
+#[cfg(target_os = "android")]
+pub fn get_media_volume_level(speaker: bool) -> f32 { binder_path::get_media_volume_level(speaker) }
+#[cfg(not(target_os = "android"))]
+pub fn get_media_volume_level(_speaker: bool) -> f32 { 1.0 }
 
 /// Task-76 P8 — forward a hardware VOLUME_UP(true)/DOWN(false) press to the
 /// arbiter, the single volume decider. The arbiter picks the target device +

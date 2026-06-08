@@ -44,6 +44,38 @@ interface focus {
     call-end: func();
 }
 
+// ── Audio controls (route / volume / mute) — guest-facing, wart-arbiter-audio ──
+// A call/media guest's control surface for its OWN output: pick the route
+// (earpiece/speaker), set/read output volume, and mute output and/or mic. The host
+// applies via the existing appliers (set_route + per-stream deviceId pin for route;
+// setStreamVolumeIndex for volume; the PCM-gate mutes for output/mic). `get-*` read
+// the host's currently-applied state (the host is the applier, so it is authoritative
+// for what's live). A guest-explicit `set-route` is honored directly (the user tapped
+// speaker) — distinct from the arbiter's AUTOMATIC routing (proximity/comms defaults).
+interface controls {
+    /// Output route for this guest's stream. `bluetooth` reserved (BT_SCO, later).
+    enum audio-route { earpiece, speaker, bluetooth }
+
+    /// Request the output route (e.g. a call UI speaker toggle).
+    set-route: func(route: audio-route);
+    /// The route currently applied to this guest's output.
+    get-route: func() -> audio-route;
+
+    /// Output volume for this guest's stream, clamped to 0.0..=1.0 and mapped to the
+    /// current device's stream index.
+    set-volume: func(level: f32);
+    /// The current output volume, 0.0..=1.0.
+    get-volume: func() -> f32;
+
+    /// Mute / unmute this guest's OUTPUT (what the user hears).
+    set-mute: func(muted: bool);
+    get-mute: func() -> bool;
+
+    /// Mute / unmute this guest's MIC capture (mute-self on a call).
+    set-mic-mute: func(muted: bool);
+    get-mic-mute: func() -> bool;
+}
+
 interface focus-handler {
     /// What an affected owner is told (Android AUDIOFOCUS_LOSS family).
     enum focus-change {
@@ -65,6 +97,7 @@ interface focus-handler {
 /// don't import it).
 world audio-focus-host {
     import focus;
+    import controls;
 }
 
 /// Export side — typed `on-focus-changed` for guests that export `focus-handler`

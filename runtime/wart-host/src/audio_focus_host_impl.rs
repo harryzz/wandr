@@ -106,3 +106,61 @@ fn forward(verb: &str) {
         log::warn!("audio-focus-host: {verb} forward failed: {e:#}");
     }
 }
+
+// ── war:audio-focus/controls — route / volume / mute (guest-facing) ──────────
+//
+// The host is the applier, so it is authoritative for the `get-*` reads. Route is
+// cached here (the appliers don't store it); volume reads the live policy index; mute
+// reads the existing PCM-gate flags. A guest-explicit `set-route` is applied directly
+// (the user tapped speaker) via the same appliers the arbiter's CommRoute uses — it
+// does NOT go through the toxic setPhoneState path (see project_call_audioserver_crash).
+use crate::audio_focus_host_bindings::war::audio_focus::controls::{
+    AudioRoute, Host as ControlsHost,
+};
+use std::sync::atomic::{AtomicU8, Ordering};
+
+// Last-applied route: 0=earpiece, 1=speaker, 2=bluetooth.
+static ROUTE: AtomicU8 = AtomicU8::new(0);
+
+impl ControlsHost for crate::HostState {
+    fn set_route(&mut self, route: AudioRoute) {
+        // bluetooth (BT_SCO) isn't wired yet → fall back to earpiece routing but record
+        // the request so get-route reflects the guest's choice.
+        let (code, speaker) = match route {
+            AudioRoute::Earpiece  => (0u8, false),
+            AudioRoute::Speaker   => (1u8, true),
+            AudioRoute::Bluetooth => (2u8, false),
+        };
+        crate::audio_policy_impl::set_route(speaker);
+        crate::audio_impl::set_comms_route(speaker);
+        ROUTE.store(code, Ordering::Relaxed);
+        log::info!("audio-controls: set-route {route:?}");
+    }
+    fn get_route(&mut self) -> AudioRoute {
+        match ROUTE.load(Ordering::Relaxed) {
+            1 => AudioRoute::Speaker,
+            2 => AudioRoute::Bluetooth,
+            _ => AudioRoute::Earpiece,
+        }
+    }
+    fn set_volume(&mut self, level: f32) {
+        let speaker = ROUTE.load(Ordering::Relaxed) == 1;
+        crate::audio_policy_impl::set_media_volume_level(speaker, level);
+    }
+    fn get_volume(&mut self) -> f32 {
+        let speaker = ROUTE.load(Ordering::Relaxed) == 1;
+        crate::audio_policy_impl::get_media_volume_level(speaker)
+    }
+    fn set_mute(&mut self, muted: bool) {
+        crate::audio_impl::set_app_output_muted(muted);
+    }
+    fn get_mute(&mut self) -> bool {
+        crate::audio_impl::app_output_muted()
+    }
+    fn set_mic_mute(&mut self, muted: bool) {
+        crate::audio_impl::set_mic_muted(muted);
+    }
+    fn get_mic_mute(&mut self) -> bool {
+        crate::audio_impl::mic_muted()
+    }
+}
