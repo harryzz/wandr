@@ -75,6 +75,28 @@ needs rebuild+deploy.
    on route change, RE-OPEN the call output track with the new route (guest re-creates the track,
    or host re-routes the open stream). The deviceId pin works — it's just only applied at open.
 
+✅ **OUTPUT-STREAM STALL ROOT CAUSE CONFIRMED (2026-06-08, task 97 bug #1)** — source
+(`vendor/aosp-frameworks-av/services/oboeservice`) + device A/B (`wart-host
+--probe-call-stall`). The silent-call **stall** (`wr_ok` freezes / HAL stops pulling,
+audioserver ALIVE) = **up-message-queue overflow → stream suspended → mixer skips it →
+read counter `r` freezes → `write_pcm_f32` returns 0**. Chain: a SHARED output that
+**underflows** gets an `XRUN` service event (`what=3`) written into its **128-deep**
+up-message FIFO *every mixer burst*, **UNTHROTTLED** (timestamps self-throttle at 0.5
+full; XRUN does not — `AAudioServiceEndpointPlay::callbackLoop`→`incrementXRunCount`).
+The client drains it via `drain_up_messages` (top of `write_pcm_f32`, every call). If the
+client stops draining for ~240 ms of underflow, the FIFO hits 128/128 →
+`writeUpMessageQueue(): Queue full. Did client stop? Suspending stream. what=3, Shared`
+→ `setSuspended(true)` → mixer `continue; // dead stream` → `r` frozen. **A/B proof:**
+drain-OFF-during-underflow → up_fill 0→128, r froze @252 ms, suspend logged; drain-ON →
+up_fill 5–7, no suspend, r advanced. **‼️ bug #1 ⟺ bug #3:** since every `write_pcm_f32`
+drains, a call **self-recovers while the guest keeps calling write** (even when it returns
+0); a *permanent* silent call needing relaunch happens ONLY when the **guest stops calling
+`write_pcm_f32` ~240 ms+** (call loop falls into `hrtimer_nanosleep` idle = bug #3). FIX
+(not yet built): host-side timer-driven up-queue drain independent of guest writes, OR
+host feeds silence on guest underrun (no underflow→no XRUN→no suspend). Repro:
+`--probe-call-stall [secs] [speaker0|1] [drain0|1]` (`audio_impl::probe_call_stall`);
+earpiece pin `[2]` -889s standalone (taimen, =bug #5), reproduced on speaker `[3]`.
+
 Live recovery used 2026-06-08: `wart-host --init-audio-policy` (restores volume ranges)
 + relaunch Signal host. calldbg.log at
 `/data/local/tmp/wart-apps/apps/war.signal/0.1.0/state/calldbg.log` (dbg_line →

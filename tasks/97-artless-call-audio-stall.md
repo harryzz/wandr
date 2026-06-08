@@ -30,18 +30,61 @@ are fixed, the residual one (the output stream stalling) is the main open bug.
 
 ## 🔬 OPEN BUGS (the investigation)
 
-### 1. The output stream STALLS — `wr_ok` freezes, HAL stops pulling (MAIN)
+### 1. The output stream STALLS — `wr_ok` freezes, HAL stops pulling (MAIN) — ✅ ROOT CAUSE CONFIRMED 2026-06-08
 **Symptom:** `calldbg.log` shows `peak=1.000` (engine decoded loud audio) but `wr_ok`
 climbs briefly then **freezes** while `wr_zero` climbs (the host output ring fills and
 the HAL output thread stops consuming) → silence. Seen as `wr_ok=1` (stalled at open)
 and `wr_ok=~284 then frozen` (stalled after a bit). audioserver is ALIVE (no crash).
-**Leading theory (source-grounded):** the audio_impl note (`audio_impl.rs:183-188`):
-*"MUST drain the service→client up-message queue or the service's writeUpMessageQueue
-fills, it decides the client stopped, and it SUSPENDS + closes the stream."* → the
-guest may not be draining that queue (or the legacy SHARED USAGE_MEDIA output path is
-flaky under --no-art). Check: is the up-message queue drained each tick? Does the
-AAudio/AudioFlinger output thread suspend the stream? A/B a stream that pulls (working
-call) vs one that stalls — what differs in the up-message/stream state.
+
+**✅ CONFIRMED MECHANISM (source `vendor/aosp-frameworks-av/services/oboeservice` +
+device A/B via `wart-host --probe-call-stall`):**
+1. A SHARED output stream that **underflows** (client wrote < a full burst) gets an
+   `XRUN` service event written into its up-message FIFO **every mixer cycle**
+   (`AAudioServiceEndpointPlay::callbackLoop` → `incrementXRunCount` → `sendXRunCount`
+   → `writeUpMessageQueue`). Unlike timestamps (gated by `isUpMessageQueueBusy() >= 0.5`),
+   **XRUN events are written UNTHROTTLED**.
+2. The up-message FIFO is **128** deep (`QUEUE_UP_CAPACITY_COMMANDS`). The client drains
+   it via `drain_up_messages` — called at the **top of `write_pcm_f32` on every call**
+   (even the call that returns 0). If the client stops draining for ~240 ms of continuous
+   underflow, the 128-deep FIFO overflows.
+3. Overflow → `writeUpMessageQueue(): Queue full. Did client stop? Suspending stream.
+   what = 3, Shared` (`what=3` = `AAUDIO_SERVICE_EVENT_XRUN`) → `setSuspended(true)`.
+4. A suspended stream is **skipped by the mixer** (`if (clientStream->isSuspended())
+   continue; // dead stream`) → `mMixer.mix()` never advances the client FIFO read
+   counter → **`r` freezes** → `in_flight` pegs at capacity → `write_pcm_f32` returns 0
+   → silence. **This is the stall.**
+5. **Self-recovery:** un-suspend only happens when a later `writeUpMessageQueue`
+   *succeeds*. Since `write_pcm_f32` drains the up-queue on every call, resuming writes
+   empties the FIFO → the next service timestamp write succeeds → `Queue no longer full.
+   Un-suspending the stream.` → the mixer resumes → `r` advances again.
+
+**Device A/B (decisive, `--probe-call-stall 8 1 <drain>`):**
+- **drain OFF during underflow:** `up_fill` climbed `0 → 128`, `r` froze at 252 ms,
+  `Suspending stream what=3` logged; recovered only when Phase-3 writes resumed.
+- **drain ON during underflow:** `up_fill` stayed at **5–7**, `r` kept advancing,
+  **no** suspend — even though the underflow window was *longer*.
+- The **only** variable was whether the client drained the up-queue during underflow.
+
+**‼️ KEY IMPLICATION — bug #1 ⟺ bug #3 are the same event.** Because `write_pcm_f32`
+always drains, a call **self-recovers as long as the guest keeps calling `write_pcm_f32`
+at ~10 ms cadence** (even while it returns 0). A *permanent* silent call (needs host
+relaunch) therefore requires the **guest to stop calling `write_pcm_f32` for ~240 ms+
+during an underflow** — i.e. the guest call loop falling into the `hrtimer_nanosleep`
+idle of bug #3. The underflow→suspend latch and the guest idle are one failure.
+
+**FIX SPACE (NOT implemented — confirm-only session):** (a) host-side timer-driven
+up-queue drain independent of guest writes (suspend can never latch even if the guest
+stalls); (b) host feeds silence into the ring when the guest underruns (no underflow →
+no XRUN flood → no suspend at the source — cleanest); (c) keep the guest call loop alive
+(also fixes bug #3). Prefer (b) or (a).
+
+**Repro tooling (committed as permanent `--probe-*`):** `wart-host --probe-call-stall
+[secs] [speaker0|1] [drain0|1]` (`audio_impl::probe_call_stall`) — primes a Call-route
+SHARED output, forces a sustained underflow, logs ring + up-message cursors per tick;
+A/B `drain` reproduces/​prevents the suspend. `play_tone` never trips it because it writes
+as fast as the ring frees (never underflows). NOTE: the earpiece deviceId pin `[2]`
+`-889`s when opened standalone (taimen quirk → bug #5); the probe reproduces on speaker
+`[3]` (USAGE_MEDIA legacy SHARED — the same mixer/​suspend path).
 
 ### 2. Why does audioserver keep degrading / needing restart?
 Even with setPhoneState gated, audioserver ended up respawned/uninitialized repeatedly.

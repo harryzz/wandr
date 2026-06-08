@@ -143,6 +143,22 @@ fn main() {
         return;
     }
 
+    // Task 97 bug #1 — reproduce the SHARED-output suspend stall on the call path
+    // and confirm the up-message-queue-overflow → setSuspended → mixer-skip → r-freeze
+    // mechanism. `--probe-call-stall [secs] [speaker0|1] [drain0|1]`. Defaults:
+    // 8s resume window, earpiece (speaker=0), drain-during-underflow OFF (the
+    // permanent-stall case). Drive logcat for AAudio "Suspending stream"/"Queue full".
+    if let Some(i) = args.iter().position(|a| a == "--probe-call-stall") {
+        android_logger::init_once(
+            android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
+        );
+        let secs    = args.get(i + 1).and_then(|s| s.parse::<u32>().ok()).unwrap_or(8);
+        let speaker = args.get(i + 2).map(|s| s == "1").unwrap_or(false);
+        let drain   = args.get(i + 3).map(|s| s == "1").unwrap_or(false);
+        wasm_android_host::audio_impl::probe_call_stall(secs, speaker, drain);
+        return;
+    }
+
     // --no-art audio bring-up: replicate AudioService's boot volume/device init
     // (initStreamVolume + setStreamVolumeIndex + mode/force-use) so audio is
     // audible without system_server. Run by run-hybrid-stack after audioserver.

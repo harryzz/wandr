@@ -406,6 +406,201 @@ mod binder_path {
         log::info!("play-tone: done");
     }
 
+    /// Task 97 bug #1 repro — reproduce the SHARED-output **suspend stall** on the
+    /// call path, and confirm the source-grounded mechanism (see
+    /// `[[project_call_audioserver_crash]]` / `tasks/97`).
+    ///
+    /// Source chain (vendored `frameworks/av/services/oboeservice`): a SHARED
+    /// output stream that **underflows** gets an `XRUN` service event written into
+    /// its up-message FIFO *every mixer burst*
+    /// (`AAudioServiceEndpointPlay::callbackLoop` → `incrementXRunCount` →
+    /// `sendXRunCount` → `writeUpMessageQueue`, with **no** `isUpMessageQueueBusy`
+    /// throttle — unlike timestamps). The FIFO is **128** deep
+    /// (`QUEUE_UP_CAPACITY_COMMANDS`). If the client stops draining for ~0.5 s of
+    /// continuous underflow it overflows → `writeUpMessageQueue` logs *"Queue full.
+    /// Did client stop? Suspending stream"* → `setSuspended(true)` → the mixer then
+    /// SKIPS the stream (`if (clientStream->isSuspended()) continue; // dead
+    /// stream`) → the client FIFO read counter **`r` freezes** → `in_flight` pegs at
+    /// capacity → `write_pcm_f32` returns 0 → silence. `play_tone` never trips this
+    /// because it writes as fast as the ring frees (never underflows).
+    ///
+    /// This probe forces the condition: prime the stream (so it is `isFlowing`),
+    /// then **stop feeding** for an underflow window (the mixer floods XRUN), then
+    /// resume. It logs the ring + the up-message cursors each tick so we can see
+    /// exactly when `r` freezes, whether the up-message queue was resolved/drained,
+    /// and whether the stream recovers. `drain_in_pause` keeps draining the
+    /// up-queue during the underflow window — the A/B that tests whether continuous
+    /// draining prevents/recovers the suspend (H1: an unresolved/!drained up-queue
+    /// → permanent stall needing relaunch).
+    ///
+    /// `secs` = length of the post-pause resume window (watch `wr_ok` climb then
+    /// freeze). `speaker` = comms route (false = earpiece pin, the call default).
+    pub fn probe_call_stall(secs: u32, speaker: bool, drain_in_pause: bool) {
+        if let Err(e) = crate::binder::init() {
+            log::warn!("probe-call-stall: binder init failed: {e}");
+            return;
+        }
+        use crate::audio_routing::Route;
+        let cfg = super::TrackConfig {
+            sample_rate:    48_000,
+            channel_layout: super::ChannelLayout::Stereo,
+            format:         super::Format::PcmF32,
+            class:          super::StreamClass::VoiceCall,
+        };
+        let out = open_routed(cfg, Route::Call { speaker });
+        if out == 0 {
+            log::warn!("probe-call-stall: call output open failed (-889?) — aborting");
+            return;
+        }
+        if !start(out) {
+            log::warn!("probe-call-stall: startStream failed");
+            close(out);
+            return;
+        }
+
+        // Snapshot the ring + the *pre-drain* up-message cursors (drain hides the
+        // delta by setting read:=write). Returns (r, w, cap, up:Option<(ur,uw)>).
+        let snap = |t: u32| -> Option<(i64, i64, u32, Option<(i64, i64)>)> {
+            with_track(t, |st| {
+                let r = unsafe { &*st.read_ctr_ptr }.load(Ordering::Acquire);
+                let w = unsafe { &*st.write_ctr_ptr }.load(Ordering::Relaxed);
+                let up = match (st.up_msg_read_ptr, st.up_msg_write_ptr) {
+                    (Some(rp), Some(wp)) => Some((
+                        unsafe { &*rp }.load(Ordering::Acquire),
+                        unsafe { &*wp }.load(Ordering::Acquire),
+                    )),
+                    _ => None,
+                };
+                (r, w, st.capacity_frames, up)
+            })
+        };
+        let drain_only = |t: u32| { let _ = with_track(t, drain_up_messages); };
+        let log_state = |tag: &str, t: u32| {
+            if let Some((r, w, cap, up)) = snap(t) {
+                let in_flight = (w as u64).wrapping_sub(r as u64) as i64;
+                match up {
+                    Some((ur, uw)) => log::info!(
+                        "probe-call-stall[{tag}]: r={r} w={w} in_flight={in_flight}/{cap} \
+                         up_resolved=YES up_fill={} (uw={uw} ur={ur})",
+                        uw - ur,
+                    ),
+                    None => log::info!(
+                        "probe-call-stall[{tag}]: r={r} w={w} in_flight={in_flight}/{cap} \
+                         up_resolved=NO (drain is a no-op → H1)",
+                    ),
+                }
+            }
+        };
+
+        // Quiet stereo tone generator (peak fidelity is irrelevant; ring dynamics
+        // are). 480 frames = ~10 ms @ 48k, the real call cadence.
+        let sr = 48_000.0_f32;
+        let mut phase = 0.0_f32;
+        let mut chunk = |frames: usize| -> Vec<f32> {
+            let mut buf = Vec::with_capacity(frames * 2);
+            for _ in 0..frames {
+                let s = (phase).sin() * 0.2;
+                phase += 2.0 * std::f32::consts::PI * 440.0 / sr;
+                if phase > 2.0 * std::f32::consts::PI { phase -= 2.0 * std::f32::consts::PI; }
+                buf.push(s); buf.push(s);
+            }
+            buf
+        };
+        let mut feed_paced = |t: u32, ms: u32| -> (u64, u64) {
+            // Feed one 10 ms chunk per ~10 ms wall-clock, like a real call producer.
+            let (mut wr_ok, mut wr_zero) = (0u64, 0u64);
+            let t0 = std::time::Instant::now();
+            while t0.elapsed().as_millis() < ms as u128 {
+                let buf = chunk(480);
+                let mut off = 0usize;
+                let mut wrote_any = false;
+                while off < buf.len() {
+                    let w = write_pcm_f32(t, &buf[off..]) as usize;
+                    if w == 0 { break; }
+                    off += w * 2;
+                    wrote_any = true;
+                }
+                if wrote_any && off > 0 { wr_ok += (off / 2) as u64; } else { wr_zero += 1; }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            (wr_ok, wr_zero)
+        };
+
+        log::info!(
+            "probe-call-stall: handle={out} route=Call{{speaker={speaker}}} \
+             drain_in_pause={drain_in_pause} — phases: prime 400ms / underflow 1500ms / resume {secs}s"
+        );
+        log_state("open", out);
+
+        // Phase 1 — PRIME: feed for 400 ms so the mixer marks the stream isFlowing
+        // (underflow XRUN is only counted once data has flowed).
+        let (p1_ok, _) = feed_paced(out, 400);
+        log_state("primed", out);
+        log::info!("probe-call-stall[primed]: wr_ok={p1_ok}");
+
+        // Phase 2 — UNDERFLOW: stop feeding for 1500 ms. The mixer drains the primed
+        // audio, then underflows → floods XRUN into the 128-deep up-queue. Watch r:
+        // it keeps advancing (mixer consuming) until the stream is SUSPENDED, then
+        // freezes. `drain_in_pause` keeps the up-queue drained (the A/B).
+        log::info!("probe-call-stall[underflow]: STOP feeding for 1500ms (drain_in_pause={drain_in_pause})");
+        let mut last_r = snap(out).map(|s| s.0).unwrap_or(0);
+        let mut froze_at_ms: Option<u128> = None;
+        let pause_t0 = std::time::Instant::now();
+        let mut tick = 0u32;
+        while pause_t0.elapsed().as_millis() < 1500 {
+            if drain_in_pause { drain_only(out); }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            tick += 1;
+            if let Some((r, _, _, _)) = snap(out) {
+                if r != last_r { last_r = r; }
+                else if froze_at_ms.is_none() && pause_t0.elapsed().as_millis() > 200 {
+                    // r unchanged across a tick after the primed buffer should be
+                    // draining → first sign the mixer stopped consuming (suspend).
+                    froze_at_ms = Some(pause_t0.elapsed().as_millis());
+                    log::info!("probe-call-stall[underflow]: r FROZE at {} ms into pause (r={r})",
+                        froze_at_ms.unwrap());
+                    log_state("froze", out);
+                }
+            }
+            if tick % 30 == 0 { log_state("underflow", out); }
+        }
+        match froze_at_ms {
+            Some(ms) => log::info!("probe-call-stall[underflow]: r froze {ms} ms into the underflow window"),
+            None     => log::info!("probe-call-stall[underflow]: r kept advancing the whole window (NO suspend)"),
+        }
+        log_state("post-pause", out);
+
+        // Phase 3 — RESUME: feed again at the call cadence. If suspended, r stays
+        // frozen → wr_ok climbs only until in_flight hits capacity, then write
+        // returns 0 forever (= bug #1's "wr_ok≈284 then frozen"). If recovered, the
+        // ring drains and wr_ok climbs continuously.
+        log::info!("probe-call-stall[resume]: feeding {secs}s — watch wr_ok climb then (if stalled) freeze");
+        let resume_t0 = std::time::Instant::now();
+        let (mut total_ok, mut total_zero) = (0u64, 0u64);
+        let mut last_log = std::time::Instant::now();
+        while resume_t0.elapsed().as_secs() < secs as u64 {
+            let (ok, zero) = feed_paced(out, 250);
+            total_ok += ok; total_zero += zero;
+            if last_log.elapsed().as_millis() >= 500 {
+                log::info!("probe-call-stall[resume]: t={}ms wr_ok+={ok} wr_zero+={zero} (cum_ok={total_ok} cum_zero={total_zero})",
+                    resume_t0.elapsed().as_millis());
+                log_state("resume", out);
+                last_log = std::time::Instant::now();
+            }
+        }
+        let stalled = total_zero > 0 && total_ok == 0;
+        log::info!(
+            "probe-call-stall: DONE — froze_in_pause={} resume cum_ok={total_ok} cum_zero={total_zero} → {}",
+            froze_at_ms.is_some(),
+            if stalled { "STALLED (bug #1 reproduced — r frozen, writes rejected)" }
+            else if total_zero > total_ok / 10 { "PARTIAL stall (intermittent rejects)" }
+            else { "healthy (stream kept pulling)" },
+        );
+        log::info!("probe-call-stall: grep logcat for AAudio \"Suspending stream\" / \"Queue full\" to confirm the suspend.");
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        close(out);
+    }
+
     /// Task 76 P1 — CALL-ORDER full-duplex capture probe. Opens the OUTPUT first
     /// (USAGE_MEDIA → legacy SHARED, like a live call), keeps it active, THEN
     /// opens a CAPTURE with the given `inputPreset` and reads ~4 s. The mic-only
@@ -1203,6 +1398,16 @@ pub fn probe_duplex(_preset: i32) { log::warn!("probe-duplex: android-only build
 pub fn play_tone(ms: u32, hz: f32, vol: f32) { binder_path::play_tone(ms, hz, vol); }
 #[cfg(not(target_os = "android"))]
 pub fn play_tone(_ms: u32, _hz: f32, _vol: f32) { log::warn!("play-tone: android-only build"); }
+
+/// Task 97 bug #1 stall repro (`--probe-call-stall`). See `binder_path::probe_call_stall`.
+#[cfg(target_os = "android")]
+pub fn probe_call_stall(secs: u32, speaker: bool, drain_in_pause: bool) {
+    binder_path::probe_call_stall(secs, speaker, drain_in_pause);
+}
+#[cfg(not(target_os = "android"))]
+pub fn probe_call_stall(_secs: u32, _speaker: bool, _drain_in_pause: bool) {
+    log::warn!("probe-call-stall: android-only build");
+}
 
 /// Task-76 capability-matrix open probe (`--probe-audio-matrix`, via
 /// `audio_caps`): open one fully-specified stream, log the result + granted
