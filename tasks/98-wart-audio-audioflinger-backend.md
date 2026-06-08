@@ -186,8 +186,13 @@ Port faithfully from the **vendored reference** (do NOT re-derive):
 
 ## Migration sequence (no regressions)
 
-1. Scaffold `crates/audioclient-rs` (Cargo + build.rs codegen of `IAudioFlingerService`);
-   confirm rsbinder codegen + decode build-clean (standalone `cargo build`).
+1. ✅ DONE (2026-06-08) — Scaffolded `crates/audioclient-rs` (Cargo + build.rs codegen of
+   `IAudioFlingerService`, public API + cfg-android/no-op split, `vendor-aidl.sh`). **Codegen
+   verified green** for aarch64-android: `IAudioFlingerService`/`IAudioTrack`/`IAudioRecord` +
+   `CreateTrack/RecordRequest/Response` generate AND compile. One stub patch needed —
+   `AudioHalCapRule` is recursive (`nestedRules: AudioHalCapRule[]`, rsbinder can't derive); a
+   non-recursive build.rs stub (it's an unused HAL-config type) resolves it. Desktop build =
+   no-op stubs, clean.
 2. Implement the AudioFlinger client + CBLK port in the crate, with a crate-level example/test
    entry; wire a `wart-host --probe-af-tone` that calls `audioclient`, leaving the AAudio path in place.
 3. **Verify on device** (`--no-art`): `--probe-af-tone` plays a tone via AudioFlinger,
