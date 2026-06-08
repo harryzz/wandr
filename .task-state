@@ -1,5 +1,5 @@
-TASK=96
-STEP=verify-done
-STATUS=complete
-LAST_SUCCESS=Task 96 batterystats fix VERIFIED on device — proximity instant under --no-art (was ~5s). Root cause: absent batterystats svc → BatteryService blocking getService (5s, mLock-held, froze whole sensor pipeline incl auto-brightness/rotation in-call). Fix = batterystats GenericStub in wart-framework-shim. Shim-only redeploy, sensorservice untouched.
-NOTES=Source committed-ready (runtime/wart-framework-shim/cpp/wart_framework_shim.cpp modified, untracked binary rebuilt). AppOps = same-class latent (10s loop) but not hit by proximity (no appop). Not yet git-committed — awaiting user.
+TASK=97
+STEP=handoff-fresh-session
+STATUS=in-progress
+LAST_SUCCESS=Pushed (3278c656, main synced). Session fixed: setPhoneState audioserver SIGABRT (gated, 9dbb29d7), volume-range self-heal on create_track (03730627), setForceUse removed from route path, wrapped-paragraph line-spacing (946b8602), exported war:audio-focus/controls + Signal call-UI panel + engine route re-open (d26eac47 + 3278c656). Also: batterystats+appops shims fixed --no-art proximity/sensor 5s lag + resolved task 95 EIS-gyro race; crypto/video HW-offload analysis + war:crypto/war:video WIT sketches; HW VP9/VP8 decoders confirmed.
+NOTES=NEXT = task 97 (tasks/97-artless-call-audio-stall.md) — RESIDUAL --no-art call-audio bugs for a FRESH session: (1) output stream STALLS wr_ok-freeze/HAL stops pulling [MAIN; theory=up-message-queue drain / legacy SHARED flakiness], (2) audioserver keeps degrading, (3) guest UI freeze after call (idle nanosleep, recover=relaunch host), (4) missing shim svcs power/audio (completeness, non-blocking so not direct cause), (5) earpiece/speaker route-switch reliability. Shim CANNOT log missing-svc lookups (they hit servicemanager not the shim) — use broad logging-stub discovery mode + WART_SHIM_TRACE, or logcat client-side "unavailable" lines. Primary memory: project_call_audioserver_crash. Untracked side-artifacts left: tools/triage/proxlog/ (NDK proximity logger), runtime/wart-sensors/.
