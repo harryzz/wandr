@@ -133,13 +133,14 @@ impl ControlsHost for crate::HostState {
         };
         // Do NOT call setForceUse(COMMUNICATION) here: it re-runs
         // setOutputDevices→installPatch (the same HAL path that SIGABRTs audioserver),
-        // and even when it survives it tears down/re-patches the open output stream so
-        // it stops pulling → silence. The route actually moves via the per-stream
-        // deviceId pin applied when the call track re-opens (the guest's pump_audio
-        // re-opens on this change). See project_call_audioserver_crash.
+        // and it has no earpiece option for the MEDIA strategy anyway. The route moves
+        // inside set_comms_route, which re-routes the live shared output via a PREFERRED
+        // device-role on its product strategy (setDevicesRoleForStrategy) — taking
+        // effect MID-CALL with no track re-open, and never -889ing (the call output is
+        // no longer deviceId-pinned). See task 97 bug #5 / project_call_audioserver_crash.
         crate::audio_impl::set_comms_route(speaker);
         ROUTE.store(code, Ordering::Relaxed);
-        log::info!("audio-controls: set-route {route:?} (deviceId pin only, no setForceUse)");
+        log::info!("audio-controls: set-route {route:?} (strategy re-route, mid-call)");
     }
     fn get_route(&mut self) -> AudioRoute {
         match ROUTE.load(Ordering::Relaxed) {
