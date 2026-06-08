@@ -98,10 +98,14 @@ calibration noise.)
   (`harryzz/rsbinder`, branch `wart-recursive` = `5e999e04a` + the 2-line patch);
   `wart-host` `[patch]`es the hiking90 git source to it. ✅
 - Capture (`createRecord`/`AudioRecord`) ✅.
+- Transport + clock: `pause`/`flush` (`IAudioTrack`) + `get_timestamp` ✅ — note
+  `IAudioTrack.getTimestamp` answers only for offload/direct tracks (normal mixed
+  tracks → `INVALID_OPERATION -38`), so position comes from the cblk `mServer` +
+  CLOCK_MONOTONIC (device-verified: advances at the sample rate).
 - `out_write underrun` warnings = client pacing at start/end; couple the write pump to
   a steady cadence (the task-75 `min_frame_delay` lesson).
-- Per-track transport/clock: `pause`/`flush`, `get_timestamp`, `set_volume` (cblk
-  `mVolumeLR` or `applyVolumeShaper`), `set_output_device`; track-invalidation restore.
+- Remaining per-track: `set_volume` (cblk `mVolumeLR` or `applyVolumeShaper`),
+  `set_output_device`; track-invalidation restore (`CBLK_INVALID`/`DISABLED`).
 - Wire the backend into the real host audio output path (replace the AAudioService path).
 - Package/uid should come from the calling guest's identity, not the hardcoded
   `"android"`/`geteuid()` default in `attribution_source()`.

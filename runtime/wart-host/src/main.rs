@@ -485,8 +485,27 @@ fn probe_audioclient(secs: u64, hz: f32, vol: f32) {
     let mut started = false;
     let mut total = 0usize;
     let mut zero_ticks = 0u32;
+    let mut tick = 0u32;
+    let mut paused_test_done = false;
     let t0 = std::time::Instant::now();
     while t0.elapsed().as_secs() < secs {
+        tick += 1;
+        // get_timestamp every ~1s (proves the clock model: position should advance).
+        if started && tick % 100 == 0 {
+            match audioclient::get_timestamp(h) {
+                Some((pos, nt)) => eprintln!("probe-audioclient: t≈{}s getTimestamp pos={pos} nanoTime={nt}", tick / 100),
+                None => eprintln!("probe-audioclient: t≈{}s getTimestamp (none yet)", tick / 100),
+            }
+        }
+        // one pause→resume cycle at ~1.5s (proves pause keeps position, start resumes).
+        if started && !paused_test_done && tick == 150 {
+            paused_test_done = true;
+            let p = audioclient::pause(h);
+            eprintln!("probe-audioclient: pause ok={p} (200ms gap)…");
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let r = audioclient::start(h);
+            eprintln!("probe-audioclient: resumed (start ok={r})");
+        }
         let mut buf: Vec<f32> = Vec::with_capacity(480 * 2);
         for _ in 0..480 {
             let s = phase.sin() * vol;
@@ -509,7 +528,8 @@ fn probe_audioclient(secs: u64, hz: f32, vol: f32) {
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    eprintln!("probe-audioclient: wrote {total} frames (zero-ticks={zero_ticks}); closing");
+    let f = audioclient::flush(h);
+    eprintln!("probe-audioclient: wrote {total} frames (zero-ticks={zero_ticks}); flush ok={f}; closing");
     audioclient::stop(h);
     audioclient::close(h);
     eprintln!("probe-audioclient: done");
