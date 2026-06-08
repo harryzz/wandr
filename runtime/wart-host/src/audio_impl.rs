@@ -474,6 +474,9 @@ mod binder_path {
             close(out);
             return;
         }
+        // The silence pump is probe-only (not in the live call path). Spawn it here
+        // for the pump=1 A/B so the fix mechanism stays exercised/testable.
+        if pump { spawn_call_silence_pump(out, 2); }
 
         // Snapshot the ring + the *pre-drain* up-message cursors (drain hides the
         // delta by setting read:=write). Returns (r, w, cap, up:Option<(ur,uw)>).
@@ -809,7 +812,6 @@ mod binder_path {
         crate::audio_policy_impl::ensure_initialized();
         use crate::audio_routing::Route;
         let is_call = matches!(cfg.class, super::StreamClass::VoiceCall);
-        let (channels, _) = channel_of(&cfg);
         let route = match cfg.class {
             super::StreamClass::Media        => Route::Media,
             super::StreamClass::Notification => Route::Notification,
@@ -817,16 +819,16 @@ mod binder_path {
         };
         let handle = open_routed(cfg, route);
         if handle != 0 && is_call {
-            // Call output: run the silence pump so a guest stall can't suspend the
-            // stream (task 97 bug #1). Scoped to VoiceCall — Media/Notification keep
-            // the ring fed themselves and short sounds don't need it. The diagnostic
-            // `--probe-call-stall` path opens via `open_routed` directly (no pump), so
-            // it can still reproduce the bug for A/B.
-            spawn_call_silence_pump(handle, channels);
             // Apply the current comms route now (the call output isn't deviceId-pinned;
             // routing comes from the strategy device-role). Ensures the very first
             // call lands on the earpiece default even if no toggle has been pushed
             // yet (task 97 bug #5).
+            //
+            // NOTE: the call silence-pump (task 97 bug #1) is deliberately NOT spawned
+            // here. It is verified in isolation (`--probe-call-stall … 1`) but in a live
+            // call it interferes with the guest's write-then-start handshake (it fills
+            // the ring before the first guest write) and is starved by start()'s lock —
+            // so it stays probe-only until that's resolved. See task 97.
             crate::audio_policy_impl::set_media_strategy_route(super::comms_route_speaker());
         }
         handle
@@ -1348,23 +1350,26 @@ mod binder_path {
     }
 
     pub fn start(track: u32) -> bool {
-        with_track(track, |st| match service() {
-            Some(svc) => match svc.r#startStream(st.stream_handle) {
-                Ok(0)  => true,
-                other  => { log::warn!("audio: startStream {other:?}"); false }
-            },
-            None => false,
-        }).unwrap_or(false)
+        // Read the stream handle under the lock, then RELEASE it before the blocking
+        // startStream binder call. Never hold track_map across IPC — startStream can
+        // block for seconds on the AAudio command queue, which would stall every other
+        // track op (write/read/close) and any per-track helper for that whole time.
+        let Some(handle) = with_track(track, |st| st.stream_handle) else { return false };
+        let Some(svc) = service() else { return false };
+        match svc.r#startStream(handle) {
+            Ok(0)  => true,
+            other  => { log::warn!("audio: startStream {other:?}"); false }
+        }
     }
 
     pub fn pause(track: u32) -> bool {
-        with_track(track, |st| match service() {
-            Some(svc) => match svc.r#pauseStream(st.stream_handle) {
-                Ok(0)  => true,
-                other  => { log::warn!("audio: pauseStream {other:?}"); false }
-            },
-            None => false,
-        }).unwrap_or(false)
+        // Same lock discipline as start(): don't hold track_map across the binder call.
+        let Some(handle) = with_track(track, |st| st.stream_handle) else { return false };
+        let Some(svc) = service() else { return false };
+        match svc.r#pauseStream(handle) {
+            Ok(0)  => true,
+            other  => { log::warn!("audio: pauseStream {other:?}"); false }
+        }
     }
 
     pub fn close(track: u32) {
