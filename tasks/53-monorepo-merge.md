@@ -307,7 +307,7 @@ For each of the 13 subtree-imported repos:
    echo "# Archived 2026-XX-XX" > README.md
    echo "" >> README.md
    echo "This repo's history is now part of the wandr monorepo at" >> README.md
-   echo "<https://codeberg.org/harryzz/wart> under the prefix" >> README.md
+   echo "<https://codeberg.org/harryzz/wandr> under the prefix" >> README.md
    echo "\`apps/system/wandr.ime.keyboard/\` (or equivalent — see" >> README.md
    echo "\`docs/repository-layout.md\` in the monorepo)." >> README.md
    git add README.md && git commit -m "archive: moved to wandr monorepo"
@@ -362,7 +362,7 @@ mid-merge.
 
 A fresh contributor will:
 ```
-git clone --recurse-submodules https://codeberg.org/harryzz/wart.git
+git clone --recurse-submodules https://codeberg.org/harryzz/wandr.git
 cd wandr
 # All first-party code is here. Submodules under external/
 # point at the four forks; they're cloned automatically.

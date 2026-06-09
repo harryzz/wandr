@@ -48,9 +48,11 @@ whole stack in one lockstep push (see the rename plan's handoff checklist).
 
 ## Related deferred items (same rename, separate repos)
 
-- **codeberg repo rename** `codeberg.org/harryzz/wart` → `…/wandr` + `git remote set-url`
-  (and the per-app repos `wart-app`, `wart-arbiter`, `wart-host`, `war.*`, `wart-leak-repro`).
-  All `codeberg.org/harryzz/{wart*,war.*}` URLs were intentionally **left as-is** in-tree.
+- **codeberg main repo rename DONE** — `codeberg.org/harryzz/wart` → `…/wandr`; local
+  `origin` `git remote set-url`'d + in-tree main-repo URLs updated. STILL PENDING: the
+  per-app repos `wart-app`, `wart-app-md-smoke`, `wart-arbiter`, `wart-host`,
+  `wart-leak-repro`, `war.ime.keyboard`, `war.lang.{bg,fr}` — those `codeberg.org/harryzz/`
+  URLs are intentionally **left as-is** in-tree until each repo is renamed.
 - **libsignal-service-rs fork** (`external/libsignal-service-rs`, branch
   `wart-wasi-transport`) — `wart-wasi-shims/{wart-step-executor,wart-reqwest-shim,
   wart-reqwest-websocket-shim}` kept their names; in-tree path-deps point at them.

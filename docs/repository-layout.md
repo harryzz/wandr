@@ -145,7 +145,7 @@ git commit -m "external/wasmtime: bump to <sha>"
 Cloning the monorepo:
 
 ```
-git clone --recurse-submodules https://codeberg.org/harryzz/wart.git
+git clone --recurse-submodules https://codeberg.org/harryzz/wandr.git
 # or, after a non-recursive clone:
 git submodule update --init --recursive
 ```

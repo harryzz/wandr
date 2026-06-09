@@ -27,8 +27,10 @@ relocation + gitlink/back-pointer fixups) · 6 tools/repros/scripts
 task/log filenames + final sweep.
 
 **Protected — left as `wart` ON PURPOSE (separate repos / deferred, do NOT "fix"):**
-- All `codeberg.org/harryzz/{wart*,war.*}` repo URLs (main repo + per-app repos) —
-  repo rename is a separate outward-facing step.
+- Per-app `codeberg.org/harryzz/{wart-app,wart-app-md-smoke,wart-arbiter,wart-host,
+  wart-leak-repro,war.ime.keyboard,war.lang.bg,war.lang.fr}` repo URLs — those repos
+  aren't renamed yet. (The MAIN repo `harryzz/wart`→`harryzz/wandr` IS done — remote
+  set-url'd + in-tree URLs updated 2026-06-09.)
 - libsignal-service-rs fork (`external/libsignal-service-rs`): dir `wart-wasi-shims/`,
   crates `wart-step-executor` / `wart-reqwest-shim` / `wart-reqwest-websocket-shim`
   (hyphen + underscore forms), branch `wart-wasi-transport`. In-tree path-deps point at them.
@@ -44,7 +46,8 @@ task/log filenames + final sweep.
    `wart-inputflinger`/`wart-framework-shim`/`wart-sensormanager` modules +
    `libwart_sensors_hal.so` + ninja rebuild — must precede next deploy (socket/.so
    names already `wandr` in-tree). Full instructions: `tasks/99-wandr-rename-a03-followup.md`.
-3. **codeberg repo rename** `…/wart` → `…/wandr` + `git remote set-url` (+ per-app repos).
+3. **codeberg per-app repo renames** — main repo done; per-app repos (wart-app,
+   wart-arbiter, wart-host, wart-leak-repro, war.*) still to rename + URL-update.
 4. The fork branches (libsignal `wart-wasi-transport`, rsbinder `wart-recursive`) if ever
    desired — separate-repo work.
 

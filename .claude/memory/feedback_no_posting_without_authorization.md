@@ -21,7 +21,7 @@ extend to the public-publish step — confirm again at the moment of posting.
 title/body draft) and present it for review, but stop before `gh pr create` /
 `gh repo fork` / `git push <public remote>` / any send. Then ask for explicit
 go-ahead. **Pre-authorized (no per-action confirmation needed):** committing AND pushing
-to the user's OWN codeberg repo (`codeberg.org/harryzz/wart`, `origin`).
+to the user's OWN codeberg repo (`codeberg.org/harryzz/wandr`, `origin`).
 Clarified 2026-05-29 — the explicit-confirmation gate is *only* for
 outward-facing / third-party publishing, not the user's own repo. So push
 task work to `origin` freely (follow normal hygiene: only the task's own files,
