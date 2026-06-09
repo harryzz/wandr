@@ -1593,6 +1593,43 @@ mod audioclient_path {
         });
     }
 
+    // ── Capture drain pump (the input-side jitter buffer) ─────────────────────
+    // The voice-call record ring is small (~60 ms voip use-case). The guest reads a
+    // fixed chunk per call-loop tick, so any tick that runs long can't catch up — the
+    // ring fills and the server logs `RecordThread: buffer overflow`, dropping mic
+    // samples (= pops on the far side). This thread drains the ring every ~10 ms into a
+    // host buffer regardless of the guest's cadence; `read_pcm_f32` then serves from the
+    // buffer. Symmetric to the output pump. (Calls only; other capture reads direct.)
+    const CAP_JITTER_CAP_FRAMES: usize = 9600; // ~200 ms backlog cap (drop-oldest)
+    struct CapState { channels: u32, buf: VecDeque<f32> }
+    fn cap_pump() -> &'static Mutex<HashMap<u32, CapState>> {
+        static R: OnceLock<Mutex<HashMap<u32, CapState>>> = OnceLock::new();
+        R.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+    fn start_cap_pump_thread() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            std::thread::spawn(|| loop {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                let active: Vec<(u32, u32)> = {
+                    let g = cap_pump().lock().unwrap();
+                    g.iter().map(|(h, s)| (*h, s.channels)).collect()
+                };
+                for (h, ch) in active {
+                    // Drain everything the ring holds (up to a generous bound) so a late
+                    // guest tick never leaves the ring to overflow.
+                    let pcm = audioclient::read(h, CAP_JITTER_CAP_FRAMES as u32);
+                    if pcm.is_empty() { continue; }
+                    let mut g = cap_pump().lock().unwrap();
+                    let Some(s) = g.get_mut(&h) else { continue };
+                    s.buf.extend(pcm);
+                    let capn = CAP_JITTER_CAP_FRAMES * ch as usize;
+                    if s.buf.len() > capn { let drop = s.buf.len() - capn; s.buf.drain(0..drop); }
+                }
+            });
+        });
+    }
+
     fn channels(cfg: &TrackConfig) -> u32 {
         match cfg.channel_layout { ChannelLayout::Mono => 1, ChannelLayout::Stereo => 2 }
     }
@@ -1672,6 +1709,7 @@ mod audioclient_path {
     }
     pub fn close(track: u32) {
         pump().lock().unwrap().remove(&track);
+        cap_pump().lock().unwrap().remove(&track);
         audioclient::close(track)
     }
     pub fn pending_frames(track: u32) -> u32 {
@@ -1689,18 +1727,48 @@ mod audioclient_path {
     }
 
     pub fn create_capture(cfg: TrackConfig) -> u32 {
-        // The WIT capture path always opens the mic; class is ignored. AUDIO_SOURCE_MIC
-        // (1). (VOICE_COMMUNICATION/AEC for calls is a follow-up — needs a WIT signal.)
-        audioclient::open_input(audioclient::InputConfig {
+        // Derive the capture source from the guest's stream-class intent. A voice-call
+        // capture opens AUDIO_SOURCE_VOICE_COMMUNICATION (7), which the device's
+        // /vendor/etc/audio_effects.xml <preprocess><stream type="voice_communication">
+        // auto-attaches the platform AEC pre-processing to (Qualcomm libqcomvoiceprocessing) —
+        // echo-cancelled/noise-suppressed mic for free, no manual createEffect. Everything
+        // else opens AUDIO_SOURCE_MIC (1, raw mic).
+        let source = match cfg.class {
+            StreamClass::VoiceCall => 7, // AUDIO_SOURCE_VOICE_COMMUNICATION (AEC/NS preset)
+            _ => 1,                      // AUDIO_SOURCE_MIC
+        };
+        let h = audioclient::open_input(audioclient::InputConfig {
             sample_rate: cfg.sample_rate,
             channels: channels(&cfg),
-            source: 1, // AUDIO_SOURCE_MIC
-        })
+            source,
+        });
+        // Voice-call capture: drain the small voip ring via the capture pump so a
+        // jittery guest read cadence can't overflow it (pops on the far side).
+        if h != 0 && matches!(cfg.class, StreamClass::VoiceCall) {
+            cap_pump().lock().unwrap().insert(h, CapState { channels: channels(&cfg), buf: VecDeque::new() });
+            start_cap_pump_thread();
+        }
+        h
     }
     pub fn read_pcm_f32(capture: u32, max_frames: u32) -> Vec<f32> {
-        let mut out = audioclient::read(capture, max_frames);
-        // Mic-mute gate (input): still DRAIN the ring (keep capture flowing so it
-        // doesn't overrun), but hand the guest silence. Matches the legacy path.
+        // Pumped (call) captures: serve from the host drain buffer (the pump keeps the
+        // ring empty). Non-call captures read the ring directly.
+        let mut out: Vec<f32> = {
+            let mut g = cap_pump().lock().unwrap();
+            match g.get_mut(&capture) {
+                Some(s) => {
+                    let n = (max_frames as usize * s.channels as usize).min(s.buf.len());
+                    s.buf.drain(0..n).collect()
+                }
+                None => return {
+                    let mut o = audioclient::read(capture, max_frames);
+                    if super::mic_muted() { o.iter_mut().for_each(|s| *s = 0.0); }
+                    o
+                },
+            }
+        };
+        // Mic-mute gate (input): the pump still drains the ring (capture keeps flowing),
+        // but the guest gets silence.
         if super::mic_muted() {
             out.iter_mut().for_each(|s| *s = 0.0);
         }

@@ -221,7 +221,9 @@ fn main() {
             android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
         );
         let secs = args.get(i + 1).and_then(|s| s.parse::<u64>().ok()).unwrap_or(3);
-        probe_audioclient_capture(secs);
+        // optional 2nd arg = AUDIO_SOURCE_* (1=MIC default, 7=VOICE_COMMUNICATION/AEC).
+        let source = args.get(i + 2).and_then(|s| s.parse::<i32>().ok()).unwrap_or(1);
+        probe_audioclient_capture(secs, source);
         return;
     }
 
@@ -564,12 +566,14 @@ fn probe_audioclient(secs: u64, hz: f32, vol: f32) {
 // Opens a mic record via the `audioclient` crate, reads PCM for `secs`, reports the
 // frame count + peak level (proves real mic audio is flowing through the cblk ring).
 #[cfg(target_os = "android")]
-fn probe_audioclient_capture(secs: u64) {
-    eprintln!("probe-capture: open_input(MIC, 48k mono)…");
+fn probe_audioclient_capture(secs: u64, source: i32) {
+    // source: AUDIO_SOURCE_* — MIC=1 (default), VOICE_COMMUNICATION=7 (engages the
+    // device's voice pre-processing / AEC via the audio_effects.xml <preprocess> map).
+    eprintln!("probe-capture: open_input(source={source}, 48k mono)…");
     let h = audioclient::open_input(audioclient::InputConfig {
         sample_rate: 48_000,
         channels: 1,
-        source: 1, // AUDIO_SOURCE_MIC
+        source,
     });
     if h == 0 {
         eprintln!("probe-capture: open_input FAILED (see logcat tag 'audioclient')");
