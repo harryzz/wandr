@@ -87,19 +87,26 @@ struct Link {
     status: LinkStatus,
 }
 
-/// Run the full bring-up: associate (if needed) → DHCP → apply → DNS → status.
+/// Run the full bring-up for the first saved network (boot path): associate if
+/// needed → DHCP → apply → DNS → status. Reuses an existing association.
 fn bring_up() -> Result<Link, String> {
-    // 1. Saved creds (first WPA-PSK network).
     let creds = read_saved_creds().map_err(|e| format!("read creds: {e}"))?;
     let creds = creds
         .into_iter()
         .next()
         .ok_or_else(|| "no saved WPA-PSK network in WifiConfigStore.xml".to_string())?;
-    log::info!("wandr-net: bringing up SSID {:?}", creds.ssid);
+    bring_up_with(creds, false)
+}
 
-    // 2. Associate — unless the link already has carrier (a supplicant is up).
+/// Bring the link up on `creds`. `force_assoc` re-associates even when carrier is
+/// present (an explicit `--connect` to a possibly-different SSID); `false` reuses an
+/// existing association (the boot path). DHCP → apply → netd/DNS → catch-all rule.
+fn bring_up_with(creds: WifiCreds, force_assoc: bool) -> Result<Link, String> {
+    log::info!("wandr-net: bringing up SSID {:?} (force={force_assoc})", creds.ssid);
+
+    // Associate — unless the link already has carrier and we're not forcing.
     let mut child = None;
-    if has_carrier(WLAN_IF) {
+    if has_carrier(WLAN_IF) && !force_assoc {
         log::info!("wandr-net: {WLAN_IF} already has carrier — reusing existing association");
     } else {
         // Cold boot: ensure the WiFi chip is powered + a STA iface exists
@@ -336,6 +343,58 @@ fn main() {
         let ok = wandr_hal_net::associate_supplicant(WLAN_IF, &ssid, &psk);
         println!("associate ssid={ssid:?} -> {ok}");
         std::process::exit(if ok { 0 } else { 1 });
+    }
+
+    // `--scan` — M2: trigger a WiFi scan via IWificond (the nl80211 service that
+    // survives `--no-art`) + print the access points, one per line. Read-only (does
+    // not disturb an existing association). Engine half — the WIT `wifi.scan` +
+    // arbiter relay is a later slice.
+    if args.iter().any(|a| a == "--scan") {
+        match wandr_hal_net::scan_networks() {
+            Some(aps) => {
+                println!("scan count={}", aps.len());
+                for ap in &aps {
+                    println!(
+                        "ap ssid={:?} bssid={} rssi={} freq={} sec={} connected={}",
+                        ap.ssid, ap.bssid, ap.rssi_dbm, ap.frequency_mhz, ap.security, ap.connected
+                    );
+                }
+                std::process::exit(0);
+            }
+            None => {
+                eprintln!("scan failed (IWificond unreachable / no client interface)");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // `--connect <ssid> <psk>` — M2: associate to an EXPLICIT network (the
+    // generalized ISupplicant path) + full IP bring-up, then monitor (persist the
+    // link). Forces re-association even if already connected to another SSID. The
+    // engine half of `wifi.connect-new`; the WIT + arbiter relay come later.
+    if let Some(pos) = args.iter().position(|a| a == "--connect") {
+        let rest = &args[pos + 1..];
+        let ssid = rest.first().cloned().unwrap_or_default();
+        let psk = rest.get(1).cloned().unwrap_or_default();
+        if ssid.is_empty() || psk.is_empty() {
+            eprintln!("usage: wandr-net --connect <ssid> <psk>");
+            std::process::exit(2);
+        }
+        match bring_up_with(WifiCreds { ssid: ssid.clone(), psk }, true) {
+            Ok(link) => {
+                report(&link.status);
+                println!(
+                    "connect ONLINE ssid={:?} ip={:?} gw={:?}",
+                    link.status.ssid, link.status.ip, link.status.gateway
+                );
+                monitor(link); // persist (holds the supplicant alive)
+                return;
+            }
+            Err(e) => {
+                eprintln!("connect failed: {e}");
+                std::process::exit(1);
+            }
+        }
     }
 
     let once = args.iter().any(|a| a == "--once");

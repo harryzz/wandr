@@ -428,12 +428,24 @@ fn handle_client(mut stream: UnixStream) -> Result<()> {
         return Err(anyhow!("client closed without sending a command"));
     }
     let line = line.trim_end_matches('\n').trim_end_matches('\r');
-    log::info!("wandr-arbiter: cmd={line:?}");
 
     let (verb, rest) = match line.split_once(' ') {
         Some((v, r)) => (v, r.trim().to_string()),
         None => (line, String::new()),
     };
+
+    // High-frequency read-only polls — chrome/guests query these every render
+    // (~1 Hz each, across statusbar/taskbar/etc.), so logging them at info floods
+    // logcat. Log polls at debug; state-mutating commands stay at info.
+    const QUIET_VERBS: &[&str] = &[
+        "notify-list", "net-status", "task-list", "list", "sensor-state",
+        "audio-focus-list", "status",
+    ];
+    if QUIET_VERBS.contains(&verb) {
+        log::debug!("wandr-arbiter: cmd={line:?}");
+    } else {
+        log::info!("wandr-arbiter: cmd={line:?}");
+    }
 
     // Task 54 — serialize command handling against the death-notification
     // / polling watcher threads. The accept loop is single-threaded so

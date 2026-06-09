@@ -116,6 +116,30 @@ interface IDnsResolver {
         .output(out_dir.join("iwifi_bindings.rs"))
         .generate()
         .expect("rsbinder-aidl IWifi codegen failed");
+
+    // IWificond (M2 — WiFi SCAN via the nl80211 service `wifinl80211`, which
+    // survives `--no-art`). Trimmed + structured AIDL vendored in-tree (the upstream
+    // wificond parcelables are `cpp_header` unstructured — we re-declare the scan
+    // ones as structured AIDL with fields in the exact C++ wire order so rsbinder
+    // marshals them identically; see aidl/.../NativeScanResult.aidl). Interfaces are
+    // trimmed to the methods we call with method order preserved (transaction codes).
+    let wificond = PathBuf::from("aidl");
+    println!("cargo:rerun-if-changed={}", wificond.display());
+    rsbinder_aidl::Builder::new()
+        .source(wificond.join("android/net/wifi/nl80211/IWificond.aidl"))
+        .source(wificond.join("android/net/wifi/nl80211/IClientInterface.aidl"))
+        .source(wificond.join("android/net/wifi/nl80211/IWifiScannerImpl.aidl"))
+        .source(wificond.join("android/net/wifi/nl80211/IScanEvent.aidl"))
+        .source(wificond.join("android/net/wifi/nl80211/NativeScanResult.aidl"))
+        .source(wificond.join("android/net/wifi/nl80211/RadioChainInfo.aidl"))
+        .source(wificond.join("android/net/wifi/nl80211/SingleScanSettings.aidl"))
+        .source(wificond.join("android/net/wifi/nl80211/ChannelSettings.aidl"))
+        .source(wificond.join("android/net/wifi/nl80211/HiddenNetwork.aidl"))
+        .include_dir(&wificond)
+        .set_async_support(true)
+        .output(out_dir.join("iwificond_bindings.rs"))
+        .generate()
+        .expect("rsbinder-aidl IWificond codegen failed");
 }
 
 fn copy(src: &Path, dst: &Path) {

@@ -25,6 +25,35 @@ mod supplicant_hal;
 #[cfg(target_os = "android")]
 mod wifi_chip;
 
+#[cfg(target_os = "android")]
+mod wificond_scan;
+
+/// One scanned access point (the engine-half result; the WIT `scan-result`
+/// mapping is a later slice). `security` is `open|owe|wpa-psk|sae|wpa-eap`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScanEntry {
+    pub ssid: String,
+    pub bssid: String,
+    pub frequency_mhz: u32,
+    pub rssi_dbm: i32,
+    pub security: String,
+    pub connected: bool,
+}
+
+/// Trigger a WiFi scan via `IWificond` (the nl80211 service, survives `--no-art`)
+/// and return the access points. `None` off-android / on binder failure. Read-only
+/// w.r.t. the link (a scan doesn't disturb an existing association).
+pub fn scan_networks() -> Option<Vec<ScanEntry>> {
+    #[cfg(target_os = "android")]
+    {
+        wificond_scan::scan()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        None
+    }
+}
+
 /// Cold-boot chip power-up: drive the `IWifi` HAL to power the chip + create the
 /// STA interface (what WifiService does). Requires uid `system`. Returns the STA
 /// iface name on success. `None` off-android / on failure.
