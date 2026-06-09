@@ -126,6 +126,57 @@ impl crate::ShellModule {
         Reply::ok(format!("cycle-task → {} pid={}", next.app_id, next.pid))
     }
 
+    /// `task-list` (task 92) — machine-parseable running-app snapshot for the
+    /// host's `wandr:task-manager/list-apps` impl. One line per app:
+    /// `app=<id> pid=<n> state=<foreground|background|overlay|headless> uptime_ms=<n>`,
+    /// ordered by app-id (stable across polls so a UI list doesn't jump). The host
+    /// enriches each row with `/proc/<pid>` (CPU/mem) + the install-class `kind` +
+    /// `label`; the arbiter is the authority only for the set + pid + role + uptime.
+    pub(crate) fn cmd_task_list(&mut self, ctx: &mut Ctx) -> Reply {
+        let mut apps = ctx.store.apps_snapshot();
+        apps.sort_by(|a, b| a.app_id.cmp(&b.app_id));
+        let mut body = format!("count={}", apps.len());
+        for app in apps {
+            let uptime_ms = app.launched_mono.elapsed().as_millis();
+            let state = ctx
+                .store
+                .display(PRIMARY_DISPLAY)
+                .and_then(|d| d.role_of(app.pid))
+                .map(role_to_state)
+                .unwrap_or("background");
+            body.push_str(&format!(
+                "\napp={} pid={} state={state} uptime_ms={uptime_ms}",
+                app.app_id, app.pid
+            ));
+        }
+        Reply::ok(body)
+    }
+
+    /// `task-kill <app-id>` (task 92) — the host's `kill-app` path. Distinct error
+    /// tokens the host maps to `kill-error`: `not-found` (not tracked) / `protected`
+    /// (a runtime-managed surface the arbiter would immediately relaunch:
+    /// chrome/keyguard/launcher). Plain `system` apps are killable. On success
+    /// mirrors `cmd_kill` (Effect::Kill + prune the model now so the next poll
+    /// reflects it).
+    pub(crate) fn cmd_task_kill(&mut self, app_id: &str, ctx: &mut Ctx) -> Reply {
+        if app_id.is_empty() {
+            return Reply::err("not-found");
+        }
+        let Some(s) = ctx.store.app(app_id).cloned() else {
+            return Reply::err("not-found");
+        };
+        let is_protected =
+            CHROME_APP_IDS.contains(&app_id) || ctx.store.home() == Some(app_id);
+        if is_protected {
+            return Reply::err("protected");
+        }
+        ctx.request(Effect::Kill { pid: s.pid });
+        ctx.store.remove_app(app_id);
+        ctx.store.display_mut(PRIMARY_DISPLAY).remove_surface(s.pid);
+        log::info!("arbiter: task-kill {app_id} pid={}", s.pid);
+        Reply::ok(format!("killed app={app_id} pid={}", s.pid))
+    }
+
     pub(crate) fn cmd_list(&mut self, ctx: &mut Ctx) -> Reply {
         let mut apps = ctx.store.apps_snapshot();
         apps.sort_by(|a, b| a.app_id.cmp(&b.app_id));
@@ -151,5 +202,18 @@ impl crate::ShellModule {
             ));
         }
         Reply::ok(body)
+    }
+}
+
+/// Flatten the internal [`Role`] to the guest-facing `app-state` token (task 92).
+/// `Foreground`/`OverlayBehind` are both visible app slots → `foreground`;
+/// `Overlay`/`Chrome`/`Lockscreen` are system overlay surfaces → `overlay`;
+/// `Headless` (no SF surface) → `headless`; everything else → `background`.
+fn role_to_state(role: Role) -> &'static str {
+    match role {
+        Role::Foreground | Role::OverlayBehind => "foreground",
+        Role::Overlay | Role::Chrome | Role::Lockscreen => "overlay",
+        Role::Headless => "headless",
+        Role::Background => "background",
     }
 }

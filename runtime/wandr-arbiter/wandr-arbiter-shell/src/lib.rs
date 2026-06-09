@@ -65,6 +65,8 @@ impl ArbiterModule for ShellModule {
             "overlay",
             "overlay-clear",
             "list",
+            "task-list",
+            "task-kill",
         ]
     }
 
@@ -77,6 +79,8 @@ impl ArbiterModule for ShellModule {
             "back" => self.cmd_back(ctx),
             "cycle-task" => self.cmd_cycle_task(ctx),
             "list" => self.cmd_list(ctx),
+            "task-list" => self.cmd_task_list(ctx),
+            "task-kill" => self.cmd_task_kill(args, ctx),
             // IME (see `ime`)
             "set-ime" => self.cmd_set_ime(args, ctx),
             "attach-editor" => self.cmd_attach_editor(args, ctx),
@@ -163,6 +167,46 @@ mod tests {
         // Inert for AM policy: chrome is never the visible app.
         assert_eq!(store.display(PRIMARY_DISPLAY).unwrap().visible_app(), Some(10));
         assert!(store.app("wandr.statusbar").is_some());
+    }
+
+    #[test]
+    fn task_list_reports_role_mapped_state_sorted() {
+        let (mut r, mut store) = reg();
+        seed_app(&mut store, "b.user", 30, Role::Foreground);
+        seed_app(&mut store, "a.bg", 10, Role::Background);
+        seed_app(&mut store, "wandr.statusbar", 50, Role::Chrome);
+        let (reply, _eff) = r.dispatch_command("task-list", "", &mut store).unwrap();
+        let body = reply.render();
+        // Sorted by app-id: a.bg, b.user, wandr.statusbar.
+        let lines: Vec<&str> = body.lines().collect();
+        assert_eq!(lines[0], "OK count=3");
+        assert_eq!(lines[1], "app=a.bg pid=10 state=background uptime_ms=0");
+        assert!(lines[2].starts_with("app=b.user pid=30 state=foreground"));
+        assert!(lines[3].starts_with("app=wandr.statusbar pid=50 state=overlay"));
+    }
+
+    #[test]
+    fn task_kill_protects_chrome_and_home_finds_unknown_kills_user() {
+        let (mut r, mut store) = reg();
+        seed_app(&mut store, "wandr.taskbar", 50, Role::Chrome);
+        seed_app(&mut store, "wandr.launcher", 60, Role::Background);
+        store.set_home(Some("wandr.launcher".to_string()));
+        seed_app(&mut store, "com.example.app", 70, Role::Foreground);
+
+        // chrome → protected
+        let (reply, _eff) = r.dispatch_command("task-kill", "wandr.taskbar", &mut store).unwrap();
+        assert_eq!(reply.render(), "ERR protected");
+        // home (launcher) → protected
+        let (reply, _eff) = r.dispatch_command("task-kill", "wandr.launcher", &mut store).unwrap();
+        assert_eq!(reply.render(), "ERR protected");
+        // not tracked → not-found
+        let (reply, _eff) = r.dispatch_command("task-kill", "no.such.app", &mut store).unwrap();
+        assert_eq!(reply.render(), "ERR not-found");
+        // plain user app → killed + pruned + Effect::Kill emitted
+        let (reply, effects) = r.dispatch_command("task-kill", "com.example.app", &mut store).unwrap();
+        assert!(reply.render().starts_with("OK killed app=com.example.app pid=70"));
+        assert!(effects.iter().any(|e| matches!(e, Effect::Kill { pid: 70 })));
+        assert!(store.app("com.example.app").is_none());
     }
 
     #[test]

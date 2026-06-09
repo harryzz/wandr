@@ -1,8 +1,25 @@
 # Task 92 — wandr:task-manager WIT (running-apps / task manager for guests)
 
-> Status: 🟡 DESIGN COMMITTED (`wit/task-manager.wit`), implementation pending.
-> A guest can enumerate running apps, see kind (system/user) + state + CPU/mem,
-> and kill an app. Polling model (no push events — decided 2026-06-06).
+> Status: ✅ DONE + DEVICE-VERIFIED (2026-06-09). A guest enumerates running apps,
+> sees kind (system/user) + state + CPU/mem, and kills an app. Polling model (no
+> push events — decided 2026-06-06).
+>
+> **Implemented:** arbiter `task-list`/`task-kill` verbs (`wandr-arbiter-shell/src/am.rs`,
+> role→state map + protected guard = CHROME_APP_IDS + home; CLI verbs in
+> `wandr-arbiter-bin/src/main.rs`; 2 unit tests). Host `task_manager_host_impl.rs`
+> (forwards to arbiter, enriches per-pid from `/proc/{stat,status,smaps_rollup}` +
+> `/proc/meminfo`; CPU‰ from a module-static delta map; bindgen `task-manager-host`
+> world + empty `types::Host` impl + `add_to_linker` in both linker paths of
+> `app_loader.rs`). **Decision:** `kind`+`label` derived host-side from the install
+> layout (`apps/` vs `system-apps/` under `apps_root()`), NOT threaded through the
+> arbiter `AppState`. Test guest `apps/user/wandr.taskmanager` = dioxus-canvas
+> (combined `generate!` + `wire!`, polls `list-apps` from `pre_frame`; scale 1.5;
+> `wandr.` stripped + `fg/bg` abbreviations; flex-shrink:0 usage+kill columns so the
+> kill button never clips). Deployed per-app via `wandr-host --install` (NOT the
+> apps-root-wiping build script); stack restarted with `run-hybrid-stack.sh
+> --wandr-only`. Device-verified: rows for all chrome/launcher/keyguard (system) +
+> signal/taskmanager (user), live CPU deltas, PSS<RSS, protected kills refused,
+> user-app kill works.
 
 ## What it is
 

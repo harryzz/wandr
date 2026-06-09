@@ -114,6 +114,11 @@ fn main() {
         Some("launch-overlay") => run_client("launch-overlay", args.get(1).cloned()),
         Some("list") => run_client("list", None),
         Some("kill") => run_client("kill", args.get(1).cloned()),
+        // Task 92 — task-manager wire verbs (host→arbiter; CLI for testing):
+        // task-list (machine-parseable role+uptime snapshot), task-kill <app-id>
+        // (protected/not-found-aware kill).
+        Some("task-list") => run_client("task-list", None),
+        Some("task-kill") => run_client("task-kill", args.get(1).cloned()),
         Some("preload") => run_client("preload", args.get(1).cloned()),
         Some("foreground") => run_client("foreground", args.get(1).cloned()),
         // Task 57 — launcher / home app.
@@ -256,6 +261,7 @@ fn run_client(verb: &str, arg: Option<String>) -> Result<()> {
         verb,
         "launch" | "launch-headless" | "launch-overlay"
         | "kill" | "preload" | "foreground" | "overlay" | "set-home"
+        | "task-kill"
     );
     let line = match (needs_arg, arg) {
         (true, Some(a))  => format!("{verb} {a}\n"),

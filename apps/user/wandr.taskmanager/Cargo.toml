@@ -1,0 +1,36 @@
+# wandr.taskmanager — the task-manager test guest (task 92).
+#
+# A dioxus-canvas guest that imports `wandr:task-manager/task-manager` (an extra
+# host import beyond the skiko-gfx surface), so it does its own combined
+# `generate!` + `dioxus_canvas::wire!(app)` (the Signal-guest pattern) rather than
+# the one-line `launch!`. Polls `list-apps`/`system-mem` from the `pre_frame` hook
+# and renders rows + a kill button.
+#
+#   cargo build --target wasm32-wasip2 --release
+[package]
+name    = "wandr-taskmanager"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Facade for rsx!/use_signal.
+dioxus        = { version = "0.7", default-features = false, features = ["macro", "html", "signals", "hooks"] }
+# The renderer + the `skiko_world!`/`wire!` halves. This guest does its OWN
+# combined generate! (skiko-gfx + task-manager in one) and then calls
+# `dioxus_canvas::wire!(app)`, so it depends on dioxus-canvas for the renderer +
+# the re-exported wit-bindgen (no wit-bindgen dep of its own).
+dioxus-canvas = { path = "../../../crates/dioxus-canvas" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+
+# dioxus 0.7 + wasm32-wasip2 requires the vendored+patched subsecond (task 60) —
+# same [patch] as the other dioxus guests. See external/subsecond/README.md.
+[patch.crates-io]
+subsecond = { path = "../../../external/subsecond" }

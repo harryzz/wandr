@@ -1,5 +1,5 @@
-TASK=wandr-rename
+TASK=92
 STEP=verify-done
 STATUS=complete
-LAST_SUCCESS=WART→WANDR rename + full --no-art device redeploy COMPLETE + device-verified (2026-06-09). Everything on a single `main` branch (pushed to codeberg `wandr` repo; rename-wart-to-wandr + task-94-wip branches deleted). On-device stack live + rendering: wandr-host/arbiter/inputflinger/framework-shim/sensormanager/net/screen + chrome (launcher/statusbar/taskbar/keyguard) + IME — all wandr, input working. All system+user apps published (keyguard + signal + alarm.test were the gaps, now fixed in build-system-wandrpkgs.sh). Signal state migrated old→new (link+history preserved). a-03 lineage modules renamed (0 wart / 4 wandr). See [[project_wandr_rename]] + tasks/99 for the 4 bring-up gotchas.
-NOTES=No task in progress — ready for a NEW task. Do NOT resume the rename (done). Deferred (separate repos, low priority): per-app codeberg repos (user said old/archived), libsignal `wart-wasi-transport` + rsbinder `wart-recursive` fork branches (intentionally kept `wart`). Repo is a single `main` branch.
+LAST_SUCCESS=Task 92 (wandr:task-manager) DONE + device-verified (2026-06-09). Arbiter task-list/task-kill verbs (+CLI, 2 unit tests pass), host task_manager_host_impl (forwards to arbiter + /proc enrichment + CPU-delta map + bindgen + add_to_linker), dioxus test guest apps/user/wandr.taskmanager. Deployed via per-app --install + run-hybrid-stack --wandr-only. Device: all apps listed with kind badges (S/U), live CPU deltas, PSS<RSS, protected kills refused, user-app kill works (OK killed pid). Final UI scale 1.5, wandr.-stripped, fg/bg abbreviations.
+NOTES=
