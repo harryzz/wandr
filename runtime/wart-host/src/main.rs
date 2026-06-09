@@ -189,6 +189,19 @@ fn main() {
         return;
     }
 
+    // Task 98 (Tier 3) — blocking I/O via the cblk futex: blocking-write a tone and
+    // confirm it paces to the server drain (writing N s of audio takes ~N s wall-clock,
+    // NOT instant) instead of busy-polling. `--probe-audioclient-blocking [secs] [hz]`.
+    if let Some(i) = args.iter().position(|a| a == "--probe-audioclient-blocking") {
+        android_logger::init_once(
+            android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
+        );
+        let secs = args.get(i + 1).and_then(|s| s.parse::<u64>().ok()).unwrap_or(4);
+        let hz   = args.get(i + 2).and_then(|s| s.parse::<f32>().ok()).unwrap_or(440.0);
+        probe_audioclient_blocking(secs, hz);
+        return;
+    }
+
     // Task 98 — createTrack request-variant matrix: isolate which CreateTrackRequest
     // field audioserver silently rejects with BAD_VALUE (it logs nothing server-side,
     // even at VERBOSE, in both ART and --no-art). `--probe-audioclient-matrix`.
@@ -560,6 +573,62 @@ fn probe_audioclient(secs: u64, hz: f32, vol: f32) {
     audioclient::stop(h);
     audioclient::close(h);
     eprintln!("probe-audioclient: done");
+}
+
+// Task 98 (Tier 3) — blocking-write smoke test (see `--probe-audioclient-blocking`).
+// Opens an output track, pre-fills + starts it, then drives a tone with the BLOCKING
+// write (futex-paced). The proof: emitting `secs` seconds of audio takes ~`secs`
+// seconds of wall-clock — the writer sleeps on the cblk futex while the ring is full
+// and the server wakes it on drain, rather than busy-spinning on a short write.
+#[cfg(target_os = "android")]
+fn probe_audioclient_blocking(secs: u64, hz: f32) {
+    use std::time::{Duration, Instant};
+    eprintln!("probe-blocking: open_output(MEDIA/MUSIC, 48k stereo)…");
+    let h = audioclient::open_output(audioclient::OutputConfig {
+        sample_rate: 48_000,
+        channels: 2,
+        usage: 1,        // AUDIO_USAGE_MEDIA
+        content_type: 2, // AUDIO_CONTENT_TYPE_MUSIC
+    });
+    if h == 0 {
+        eprintln!("probe-blocking: open_output FAILED (see logcat 'audioclient')");
+        std::process::exit(1);
+    }
+    // Generate `secs` seconds of a stereo tone (interleaved f32).
+    let total_frames = secs as usize * 48_000;
+    let mut tone = Vec::with_capacity(total_frames * 2);
+    let mut phase = 0.0f32;
+    for _ in 0..total_frames {
+        let s = (phase).sin() * 0.3;
+        phase += 2.0 * std::f32::consts::PI * hz / 48_000.0;
+        if phase > 2.0 * std::f32::consts::PI { phase -= 2.0 * std::f32::consts::PI; }
+        tone.push(s); tone.push(s);
+    }
+    // Pre-fill a little (non-blocking) + start so the server is actively draining
+    // before we block on it (a blocking write to an unstarted ring would just time out).
+    let pre = 1920 * 2; // ~40 ms
+    let wrote0 = audioclient::write(h, &tone[..pre.min(tone.len())]);
+    let started = audioclient::start(h);
+    eprintln!("probe-blocking: pre-fill={wrote0} frames, start ok={started}; blocking-writing {secs}s of {hz} Hz…");
+    let t0 = Instant::now();
+    let mut written = wrote0;
+    let mut pos = pre.min(tone.len());
+    while pos < tone.len() {
+        // Block until the ring frees (futex), up to 1 s per call.
+        let n = audioclient::write_blocking(h, &tone[pos..], Duration::from_secs(1));
+        if n == 0 { eprintln!("probe-blocking: write_blocking returned 0 (timeout/error) — stopping"); break; }
+        written += n;
+        pos += n * 2;
+    }
+    let elapsed = t0.elapsed().as_secs_f32();
+    let audio_secs = written as f32 / 48_000.0;
+    eprintln!(
+        "probe-blocking: wrote {written} frames ({audio_secs:.2}s of audio) in {elapsed:.2}s wall-clock — \
+         futex-paced if wall≈audio (busy-poll would finish near-instantly)"
+    );
+    audioclient::stop(h);
+    audioclient::close(h);
+    eprintln!("probe-blocking: done");
 }
 
 // Task 98 — AudioFlinger-direct capture smoke test (see `--probe-audioclient-capture`).
