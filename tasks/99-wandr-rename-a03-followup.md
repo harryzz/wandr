@@ -1,50 +1,50 @@
 # Task 99 — WANDR rename: a-03 lineage-tree follow-up
 
-Status: **OPEN (handoff)** — created by the WART→WANDR rename (2026-06-09).
+Status: **DONE (2026-06-09)** — a-03 lineage modules renamed + rebuilt + redeployed in lockstep.
 
-The whole in-tree project was renamed WART→WANDR. The a-03 native modules that
-live in the **separate LineageOS build tree** (`~/android/lineage`, *not present on
-this machine*) still carry their old `wart-*` / `libwart_*` names. Their in-tree
-*references* (Rust dlopen strings, abstract-socket name, `Android.bp` module names
-under `runtime/wandr-*`, the prebuilt `runtime/wandr-sensors/libwandr_sensors_hal.so`
-filename) were already renamed to `wandr-*` in lockstep. **The lineage-tree sources
-must be renamed + rebuilt to match, before the next on-device deploy** — otherwise
-the host will dlopen / connect to names that the (stale) device binaries don't export.
+The a-03 native modules live in the **separate LineageOS build tree**
+(`~/android/lineage`, reachable as `ssh a-03`). They were renamed to `wandr-*` and
+rebuilt; the resulting binaries (with the renamed `@wandr-inputflinger` socket) were
+pulled into the in-tree deploy slots `runtime/wandr-{inputflinger,framework-shim,sensormanager}/`.
 
-## What to rename in `~/android/lineage` (on the machine that hosts that tree)
+## What was done in `~/android/lineage/external/` (DONE)
 
-External module dirs + their soong/make module names + sources:
+Renamed dirs + soong `cc_binary` module `name:` + sources (case-preserving):
+- `wart-inputflinger/` → **`wandr-inputflinger/`** (modules `wandr-inputflinger`, `wandr_wininfo_probe`; srcs `wandr_inputflinger.cpp`, `wandr_wininfo_probe.cpp`)
+- `wart-framework-shim/` → **`wandr-framework-shim/`** (`wandr-framework-shim`; `wandr_framework_shim.cpp`)
+- `wart-sensormanager/` → **`wandr-sensormanager/`** (`wandr-sensormanager`; `wandr_sensormanager.cpp`)
+- `wart-audioclient-ref/` → **`wandr-audioclient-ref/`** (kept — live C++ byte-diff reference for the audioclient-rs work, task 98)
 
-| Lineage path | Rename to | Module `name:` / artifact |
-|---|---|---|
-| `external/wart-inputflinger/` | `external/wandr-inputflinger/` | `Android.bp` `name: "wart-inputflinger"` → `"wandr-inputflinger"`; `name: "wart_wininfo_probe"` → `"wandr_wininfo_probe"`; srcs `wart_inputflinger.cpp` → `wandr_inputflinger.cpp`, `wart_wininfo_probe.cpp` → `wandr_wininfo_probe.cpp` |
-| `external/wart-framework-shim/` | `external/wandr-framework-shim/` | `name: "wart-framework-shim"` → `"wandr-framework-shim"`; src `wart_framework_shim.cpp` → `wandr_framework_shim.cpp` |
-| `external/wart-sensormanager/` (or wherever it lives) | `external/wandr-sensormanager/` | `name: "wart-sensormanager"` → `"wandr-sensormanager"`; src `wart_sensormanager.cpp` → `wandr_sensormanager.cpp` |
-| `external/sf_surface/` (sensor HAL shim) | (name unchanged — `sf_surface` not wart-named) | produces `libwart_sensors_hal.so` → **`libwandr_sensors_hal.so`**; the standalone sensors HAL C++ shim symbols/strings carrying `wart` → `wandr` |
+**Deleted as dead** (doc-confirmed retired/superseded, NOT renamed):
+- `wart-activityms/` — retired into `wandr-framework-shim` (task 96).
+- `wart-sensors/` (`libwart_sensors_hal`) — the direct-HAL `wandr-sensors` daemon was deleted (task 94); sensors now go via `wandr-sensormanager`'s `ISensorManager`; the `.so` is dlopen'd nowhere. In-tree `runtime/wandr-sensors/` slot also removed.
+- `wart_input_spike/`, `wart_inputflinger_spike/` — experiments that proved path A (task 83), now implemented in `wandr-inputflinger`.
 
-Also grep the lineage tree for any `wart`/`WART`/`Wart` (sources, `.bp`, `.mk`,
-SELinux `.te`, init `.rc`) using the same case-preserving rule as the in-tree rename
-(see the rename helper / commit history on the `rename-wart-to-wandr` branch).
+Result: `external/` has **0 `wart` dirs, 4 `wandr` dirs**.
 
-## The runtime contracts that must stay in lockstep
+`sf_surface/` (module `libsf_surface`, not wart-named) had its sources updated to the
+renamed `Wandr*` identifiers; exported `sf_*` ABI unchanged.
 
-These already say `wandr` in-tree; the lineage binaries must match after rebuild:
+## Runtime contract (verified in lockstep)
 
-- **Abstract socket** `@wandr-inputflinger` — host `runtime/wandr-host/src/arbiter_sock.rs`
-  ↔ the a-03 `wandr-inputflinger` binary. Mismatch = no input under `--no-art`.
-- **dlopen** `libwandr_sensors_hal.so` — host/arbiter sensor driver loads it by this name.
-- **Device paths** `/data/local/tmp/wandr-*` — deploy scripts push the a-03 binaries
-  here under their new names.
+- **Abstract socket** `@wandr-inputflinger` — baked into the rebuilt a-03 binary AND the
+  arbiter default (`wandr-arbiter-bin/src/main.rs`). Verified via `strings`.
 
-## Build
+## Build procedure that worked (a-03, new modules)
 
-After renaming in the lineage tree, rebuild via the fast-ninja path (see
-`reference_a03_ninja_build` memory): only sources changed (plus `Android.bp` module
-names → graph changed → use `m`), e.g.
-`prebuilts/build-tools/linux-x86/bin/ninja -f out/combined-aosp_arm64.ninja wandr-inputflinger`
-(use `m <module>` when the `.bp` module name/graph changed). Re-pull the rebuilt
-`.so`/binaries into `runtime/wandr-*/` (the in-tree prebuilt slots) and redeploy the
-whole stack in one lockstep push (see the rename plan's handoff checklist).
+`m` regenerates the soong analysis (the new modules land in the sharded
+`out/soong/build.aosp_arm64.N.ninja`) but **dies in LineageOS kati** (`dex_preopt_check.mk`
+`$(error)`), leaving the combined ninja a stub. The fix (per `reference_a03_ninja_build` +
+`tasks/33`): build by **soong output path** through the **COMBINED** ninja (it defines
+`highmem_pool` + subninjas the soong shards — the soong ninja standalone fails
+`unknown pool 'highmem_pool'`), with `-k 0` to skip the unrelated `*.lsdump` ABI side-tasks:
+
+```bash
+ssh a-03 'cd ~/android/lineage && prebuilts/build-tools/linux-x86/bin/ninja -k 0 \
+  -f out/combined-aosp_arm64.ninja \
+  out/soong/.intermediates/external/wandr-inputflinger/wandr-inputflinger/android_arm64_armv8-a/wandr-inputflinger'
+```
+Then `scp` the stripped intermediate into `runtime/wandr-<mod>/…` and `adb push`.
 
 ## Related deferred items (same rename, separate repos)
 
