@@ -1560,7 +1560,10 @@ mod audioclient_path {
                     let pending = audioclient::pending_frames(h);
                     let need = (target.saturating_sub(pending)) as usize; // frames to top up
                     if need == 0 {
-                        if cycle % 200 == 0 { log::info!("audio-pump: track {h} ring={pending}/{target} full (idle)"); }
+                        if cycle % 200 == 0 {
+                            let (uf, uc) = audioclient::underruns(h);
+                            log::info!("audio-pump: track {h} ring={pending}/{target} full (idle) xrun_frames={uf} xrun_count={uc}");
+                        }
                         continue;
                     }
                     // Drain real audio from the jitter buffer (under the pump lock); for the
@@ -1585,7 +1588,8 @@ mod audioclient_path {
                         if let Some(s) = pump().lock().unwrap().get_mut(&h) { s.server_started = true; }
                         log::info!("audio-pump: track {h} pre-fill wrote={wrote}/{target} real={real} start_ok={sr}");
                     } else if cycle % 200 == 0 {
-                        log::info!("audio-pump: track {h} ring={pending}/{target} topup need={need} real={real} silence={} wrote={wrote} buf_left={buf_left}", need - real);
+                        let (uf, uc) = audioclient::underruns(h);
+                        log::info!("audio-pump: track {h} ring={pending}/{target} topup need={need} real={real} silence={} wrote={wrote} buf_left={buf_left} xrun_frames={uf} xrun_count={uc}", need - real);
                     }
                 }
                 }
