@@ -26,7 +26,7 @@ webrtc-rs/rtc; apply the patch first.
 [ice] B selected pair: local=127.0.0.1:40002 ↔ remote=127.0.0.1:40001
 ICE OK
 ```
-Device run via `wart-host --run-once war.probe.ice` (Pixel 2 XL). 8 STUN
+Device run via `wandr-host --run-once wandr.probe.ice` (Pixel 2 XL). 8 STUN
 datagrams = the controlling/controlled binding-request/response exchange + the
 nomination. No sans-IO ICE example existed upstream — drove `Agent` via
 add_local/remote_candidate + start_connectivity_checks + the poll_write/handle_read
@@ -37,8 +37,8 @@ pump.
 # apply the rtc-ice mDNS-optional patch to a webrtc-rs/rtc clone first
 cargo build --target wasm32-wasip2 --release
 wasmtime run target/wasm32-wasip2/release/call-ice-connect.wasm   # desktop
-# device: package as wasi:cli/command warpkg (war.probe.ice), then
-wart-host --run-once war.probe.ice
+# device: package as wasi:cli/command wandrpkg (wandr.probe.ice), then
+wandr-host --run-once wandr.probe.ice
 ```
 
 ## Where this sits — the 3-plane assembly

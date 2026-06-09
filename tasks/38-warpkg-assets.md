@@ -1,9 +1,9 @@
-# Task 38 — asset / data wiring for warpkg
+# Task 38 — asset / data wiring for wandrpkg
 
-> **Status:** ✅ device-verified 2026-05-26. wart-app's MarkdownCard
+> **Status:** ✅ device-verified 2026-05-26. wandr-app's MarkdownCard
 > reads `assets/demo.md` from the install dir via the new
 > `my:skiko-gfx/assets.read` host WIT verb, hands it to the cross-app
-> `war:markdown/renderer.render`, displays the 11-block result. Logcat:
+> `wandr:markdown/renderer.render`, displays the 11-block result. Logcat:
 > ```
 > standalone: preopened /data/.../assets → /assets (read-only)
 > assets: read("demo.md") → 1505 bytes
@@ -15,10 +15,10 @@
 
 ## Why this matters
 
-The current warpkg layout is:
+The current wandrpkg layout is:
 
 ```
-warpkg/
+wandrpkg/
   package.toml
   components/<name>.wasm
 ```
@@ -43,7 +43,7 @@ and the host needs to make them reachable from the guest.
 | Approach | Guest reads via | Pros | Cons |
 |---|---|---|---|
 | **(A) WASI filesystem preopen** | `wasi:filesystem/types.open-at` + `read-via-stream` (Kotlin stdlib wraps this) | Standard; already in linker (`add_to_linker_sync`); guest code uses idiomatic Path/File APIs; supports streaming for large files | Couples assets to a real filesystem path; harder to swap source (APK assets, network, …); KT-* wasi-filesystem APIs less battle-tested |
-| **(B) Custom host WIT** (e.g. `wart:assets/store.read(name) -> result<list<u8>>`) | `@WasmImport` call into host | Source-agnostic (disk today, APK / network later); smaller guest surface; aligns with host-driven model; no WASI fs subtleties | Yet another hand-written Kotlin binding; needs explicit list/exists/etc. verbs over time; rebuild host to extend |
+| **(B) Custom host WIT** (e.g. `wandr:assets/store.read(name) -> result<list<u8>>`) | `@WasmImport` call into host | Source-agnostic (disk today, APK / network later); smaller guest surface; aligns with host-driven model; no WASI fs subtleties | Yet another hand-written Kotlin binding; needs explicit list/exists/etc. verbs over time; rebuild host to extend |
 
 **This task initially picked (A) but pivoted mid-implementation to (B).**
 The pivot point: Kotlin/Wasm 2.4 stdlib turns out to ship NO filesystem
@@ -56,20 +56,20 @@ Kotlin to make a 30-line custom-WIT verb redundant didn't pencil out.
   in standalone.rs + run_once.rs) — zero cost when unused, ready for a
   future Kotlin stdlib that grows file APIs.
 - The custom `my:skiko-gfx/assets.read` WIT verb is what guest code
-  actually calls today (`wart-app/src/wasmWasiMain/kotlin/AssetsImports.kt`).
+  actually calls today (`wandr-app/src/wasmWasiMain/kotlin/AssetsImports.kt`).
 
 ## Manifest schema extension
 
 `package.toml` gains an optional `assets` key — a directory path
-relative to the warpkg root:
+relative to the wandrpkg root:
 
 ```toml
 [package]
-app_id      = "com.example.wart-app"
+app_id      = "com.example.wandr-app"
 version     = "0.0.1"
-world       = "wart:app/wart-app"
+world       = "wandr:app/wandr-app"
 composition = "same-store"
-assets      = "assets/"   # ← new; optional; relative to warpkg root
+assets      = "assets/"   # ← new; optional; relative to wandrpkg root
 
 [components]
 ui = "components/ui.wasm"
@@ -82,7 +82,7 @@ install rejects with a clear error. If absent → no assets dir at all
 
 ## Installer changes
 
-`wart-host/src/app_installer.rs`:
+`wandr-host/src/app_installer.rs`:
 1. `parse_manifest` reads `assets` (optional `String`).
 2. Manifest field carries through to install pipeline.
 3. After component copy, if `assets` is set: `fs::create_dir_all` +
@@ -141,10 +141,10 @@ the IOException message instead of the rendered document.
 
 | # | What | Files | Status |
 |---|---|---|---|
-| 1 | Scope doc | `tasks/38-warpkg-assets.md` | ✅ |
-| 2 | Manifest + installer for assets | `wart-host/src/app_installer.rs` | ✅ already wired pre-task (auto-detects `<bundle>/assets/` since task 35) |
-| 3 | LoadedApp surfaces install_dir; WASI preopen + custom WIT impl in both entry points | `wart-host/src/{app_loader,lib,standalone,run_once,assets_impl}.rs`; `wit/skiko-gfx.wit` adds `interface assets` + import to `skiko-ui` world | ✅ |
-| 4 | Move SOURCE → `wart-app/assets/demo.md`; MarkdownCard reads it via new hand-written Kotlin binding | `wart-app/assets/demo.md` (new), `wart-app/src/wasmWasiMain/kotlin/{AssetsImports,MarkdownCard}.kt`, `wart-app/wit/deps/skiko-gfx/skiko-gfx.wit` (synced) | ✅ |
+| 1 | Scope doc | `tasks/38-wandrpkg-assets.md` | ✅ |
+| 2 | Manifest + installer for assets | `wandr-host/src/app_installer.rs` | ✅ already wired pre-task (auto-detects `<bundle>/assets/` since task 35) |
+| 3 | LoadedApp surfaces install_dir; WASI preopen + custom WIT impl in both entry points | `wandr-host/src/{app_loader,lib,standalone,run_once,assets_impl}.rs`; `wit/skiko-gfx.wit` adds `interface assets` + import to `skiko-ui` world | ✅ |
+| 4 | Move SOURCE → `wandr-app/assets/demo.md`; MarkdownCard reads it via new hand-written Kotlin binding | `wandr-app/assets/demo.md` (new), `wandr-app/src/wasmWasiMain/kotlin/{AssetsImports,MarkdownCard}.kt`, `wandr-app/wit/deps/skiko-gfx/skiko-gfx.wit` (synced) | ✅ |
 | 5 | Device verify | manual run + screenshot | ✅ 2026-05-26 |
 
 ## What's out of scope (this task)
@@ -171,4 +171,4 @@ the IOException message instead of the rendered document.
 - `docs/architecture-host-guest-boundary.md` (the host-driven model;
   this task adds a host-driven file-read affordance).
 - Memories: [[task-36-step-7-pending]], [[adb-push-dir-nesting-gotcha]]
-  (will bite asset dirs the same way it bit warpkg dirs).
+  (will bite asset dirs the same way it bit wandrpkg dirs).

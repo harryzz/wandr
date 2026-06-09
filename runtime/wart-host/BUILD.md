@@ -1,11 +1,11 @@
-# wart-host — Build & Deploy
+# wandr-host — Build & Deploy
 
 Cross-compile the Rust host to `aarch64-linux-android`, wrap it in an APK,
 embed the WASM component, install on device.
 
 > **TL;DR for a day-to-day rebuild:**
 > ```bash
-> cd ~/wart/wart-host && \
+> cd ~/wandr/wandr-host && \
 >     ANDROID_HOME=~/android-sdk \
 >     ANDROID_NDK_HOME=~/android-ndk-r27d \
 >     CARGO_BUILD_JOBS=2 \
@@ -85,11 +85,11 @@ either:
 
 ### Produce the .cwasm
 
-Follow [`~/wart/wart-app/BUILD.md`](../wart-app/BUILD.md) — that's the Kotlin
+Follow [`~/wandr/wandr-app/BUILD.md`](../wandr-app/BUILD.md) — that's the Kotlin
 → WASM Component → AOT pipeline. End artifact:
 
 ```
-/tmp/wart-aot/skiko-component.cwasm   (~63 MB)
+/tmp/wandr-aot/skiko-component.cwasm   (~63 MB)
 ```
 
 ### Copy into the host's assets
@@ -98,7 +98,7 @@ To make the next `cargo apk build` ship a new default component baked into
 the APK:
 
 ```bash
-cp /tmp/wart-aot/skiko-component.cwasm ~/wart/wart-host/assets/skiko-component.cwasm
+cp /tmp/wandr-aot/skiko-component.cwasm ~/wandr/wandr-host/assets/skiko-component.cwasm
 ```
 
 `Cargo.toml` declares:
@@ -116,7 +116,7 @@ so cargo-apk picks up everything in that dir and packs it into
 Push a new `.cwasm` to app-private storage and restart the activity:
 
 ```bash
-adb push /tmp/wart-aot/skiko-component.cwasm \
+adb push /tmp/wandr-aot/skiko-component.cwasm \
     /sdcard/Android/data/com.example.wasmruntime/files/skiko-component.cwasm
 adb shell am force-stop com.example.wasmruntime
 adb shell am start -n com.example.wasmruntime/android.app.NativeActivity
@@ -131,7 +131,7 @@ adb shell am start -n com.example.wasmruntime/android.app.NativeActivity
 ## 3. Build the APK
 
 ```bash
-cd ~/wart/wart-host
+cd ~/wandr/wandr-host
 NDK=~/android-ndk-r27d/toolchains/llvm/prebuilt/linux-x86_64
 ANDROID_HOME=~/android-sdk \
 ANDROID_NDK_HOME=~/android-ndk-r27d \
@@ -198,7 +198,7 @@ key_password = "android"
 ## 4. Install on device
 
 ```bash
-adb install -r ~/wart/wart-host/target/release/apk/wasm_android_host.apk
+adb install -r ~/wandr/wandr-host/target/release/apk/wasm_android_host.apk
 ```
 
 `-r` reinstalls keeping app data (the user's `.cwasm` override in
@@ -243,8 +243,8 @@ adb shell input keyevent KEYCODE_A     # types 'a' into the focused TextField
 ## 6. Full end-to-end one-liner (after .cwasm is built)
 
 ```bash
-cd ~/wart/wart-host && \
-    cp /tmp/wart-aot/skiko-component.cwasm assets/skiko-component.cwasm && \
+cd ~/wandr/wandr-host && \
+    cp /tmp/wandr-aot/skiko-component.cwasm assets/skiko-component.cwasm && \
     NDK=~/android-ndk-r27d/toolchains/llvm/prebuilt/linux-x86_64 \
     ANDROID_HOME=~/android-sdk \
     ANDROID_NDK_HOME=~/android-ndk-r27d \
@@ -263,7 +263,7 @@ adb shell am start -n com.example.wasmruntime/android.app.NativeActivity
 ## 7. Desktop build (for unit tests / quick iteration)
 
 ```bash
-cd ~/wart/wart-host
+cd ~/wandr/wandr-host
 cargo build --release --target x86_64-unknown-linux-gnu
 ```
 
@@ -278,8 +278,8 @@ desktop-targeted one with:
 ```bash
 wasmtime compile --target x86_64-unknown-linux-gnu \
     --wasm component-model --wasm gc --wasm function-references --wasm exceptions \
-    -o /tmp/wart-aot/skiko-component.cwasm \
-    /tmp/wart-aot/skiko-component.wasm
+    -o /tmp/wandr-aot/skiko-component.cwasm \
+    /tmp/wandr-aot/skiko-component.wasm
 ```
 
 ---
@@ -293,7 +293,7 @@ wasmtime compile --target x86_64-unknown-linux-gnu \
 | `cargo build` and `cargo apk build` each take 11 min on cold cache | `.cargo/config.toml` linker version ≠ `min_sdk_version` | Make them match — keep the API level in sync, e.g. `aarch64-linux-android29-clang` + `min_sdk_version = 29` |
 | APK installs but app crashes on launch | `.cwasm` mismatch — desktop AOT vs aarch64-android AOT | Recompile with `wasmtime compile --target aarch64-linux-android` |
 | App stuck on splash, no logs | wrong activity name | Use `android.app.NativeActivity` |
-| Skia bindings rebuilds every time | Path changes invalidate cache (e.g. `host` → `wart-host` rename) | One-shot pain; subsequent builds in same dir cache normally |
+| Skia bindings rebuilds every time | Path changes invalidate cache (e.g. `host` → `wandr-host` rename) | One-shot pain; subsequent builds in same dir cache normally |
 | `cargo-apk -j2` not recognized | cargo-apk doesn't forward `-j` | Use `CARGO_BUILD_JOBS=2` env var instead |
 | OOM during linker | Build parallelism too high | `CARGO_BUILD_JOBS=2` (or 1) |
 | App installs but `adb shell input keyevent KEYCODE_A` does nothing | Focus is on a non-TextField | Tap a TextField first; check logcat for `tfstate` after the keystroke |

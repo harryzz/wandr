@@ -2,12 +2,12 @@
 
 The sans-IO `rtc` stack ([`../webrtc-rs-wasip2`](../webrtc-rs-wasip2)) leaves UDP
 IO to the embedder. This probe answers: **can a wasm32-wasip2 guest do UDP
-send/recv through wart-host?** Answer: **yes, via `wasi:sockets` — no custom host
+send/recv through wandr-host?** Answer: **yes, via `wasi:sockets` — no custom host
 interface needed.**
 
 ## Finding
 
-wart-host already wires `wasi:sockets` (`wasmtime_wasi::p2::add_to_linker_sync`,
+wandr-host already wires `wasi:sockets` (`wasmtime_wasi::p2::add_to_linker_sync`,
 v45) and `signal_tls::grant_network()` does `inherit_network()` +
 `allow_ip_name_lookup(true)`. So a guest uses `std::net::UdpSocket` directly; the
 sans-IO `rtc` engine would drive its IO this way (poll_write → send_to,
@@ -33,9 +33,9 @@ cargo build --target wasm32-wasip2 --release
 wasmtime run -S inherit-network -S allow-ip-name-lookup \
     target/wasm32-wasip2/release/wasi-udp-probe.wasm
 
-# on-device through wart-host (package as a wasi:cli/command warpkg, then):
-wart-host --install <warpkg>           # app_id war.probe.udp
-wart-host --run-once war.probe.udp
+# on-device through wandr-host (package as a wasi:cli/command wandrpkg, then):
+wandr-host --install <wandrpkg>           # app_id wandr.probe.udp
+wandr-host --run-once wandr.probe.udp
 ```
 
 ## Result (2026-06-02) — desktop AND device, both green
@@ -44,7 +44,7 @@ UDP LOOPBACK OK — wasi-sockets UDP works for the guest
 STUN response: 32 bytes from 74.125.250.129:19302
 UDP OUTBOUND OK — STUN server-reflexive address = 77.70.64.156:46182
 ```
-Device run via `wart-host --run-once war.probe.udp` (Pixel 2 XL, WiFi);
+Device run via `wandr-host --run-once wandr.probe.udp` (Pixel 2 XL, WiFi);
 `run_once: call_run returned Ok — guest exited cleanly`.
 
 ## Implication for the call engine — UDP glue is essentially done

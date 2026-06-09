@@ -12,13 +12,13 @@
   and `recompute_transform()` = `physical − inset_top − inset_bottom`
   (`canvas_impl.rs:629`). So `set_insets(top, base_bottom + kb)` + re-issue
   `on_resize(lw,lh)` makes a bottom composer rise — zero app constant.
-- Base insets seeded from `WART_INSET_TOP/BOTTOM` at startup (`standalone.rs:163`);
+- Base insets seeded from `WANDR_INSET_TOP/BOTTOM` at startup (`standalone.rs:163`);
   the keyboard adds ON TOP of the base bottom → must track base (top,bottom).
 - Per-host control socket `ime_inbound.rs` (`InboundEvent` enum + queue, drained in
   `standalone.rs:801`) is the arbiter→host channel. Add `KeyboardInset{px}` + a
   `keyboard-inset <px>` wire line, mirroring `KeyEvent`.
 - IME already sets its own overlay height: `requestOverlayHeight(1200)`
-  (`war.ime.keyboard RealComposeApp.kt:126,132`) → `keyboard_host_impl.rs:50` →
+  (`wandr.ime.keyboard RealComposeApp.kt:126,132`) → `keyboard_host_impl.rs:50` →
   `sf_surface::request_overlay_resize` (sizes the IME's OWN surface only — not
   propagated to the foreground app; that's the gap).
 
@@ -69,20 +69,20 @@ auto-recomputes on rotation, so rotating with the keyboard up self-corrects.
 
 ## Problem
 
-When the soft keyboard (war.ime.keyboard overlay) is shown over a foreground
+When the soft keyboard (wandr.ime.keyboard overlay) is shown over a foreground
 app, it occludes the bottom of the app's surface, but the app is **not resized
 and not told the keyboard's height**. So a bottom bar (e.g. signal-ui's message
 composer, a Compose text field) sits *behind* the keyboard while typing.
 
 The wrong fix (rejected): have each app reserve a hard-coded fraction of the
 surface for the keyboard. The overlay is `INITIAL_OVERLAY_PX = 1200` physical px
-today (`runtime/wart-host/src/standalone.rs`) **and is resizable at runtime** via
+today (`runtime/wandr-host/src/standalone.rs`) **and is resizable at runtime** via
 `my:skiko-gfx/keyboard.request-overlay-height` — so any app that hard-codes a
 height/fraction would need rebuilding whenever the keyboard size changes. The
 height must come from the host, not the app.
 
 Second gap: the **⌄ Hide key** (`KeyAction.Hide`,
-`apps/system/war.ime.keyboard/.../ImeKeyboard.kt`) hides the IME's *own* overlay
+`apps/system/wandr.ime.keyboard/.../ImeKeyboard.kt`) hides the IME's *own* overlay
 but sends **no key/detach to the foreground app** (verified: no `on-key` /
 `detach-editor` in logcat when pressed). So the app's editor stays focused and any
 keyboard-driven layout change lingers after the keyboard is gone.
@@ -116,7 +116,7 @@ Pieces:
 - signal-ui composer (`repros/signal-ui`) rides just above the keyboard on focus
   and drops to the bottom when the keyboard is dismissed — **with no app-side
   keyboard-height constant** (revert the task-67 guest-side spacer/`KB_FRACTION`).
-- A Compose text field (war.dioxus.demo's TextPanel, or a Compose app) gets the
+- A Compose text field (wandr.dioxus.demo's TextPanel, or a Compose app) gets the
   same behavior for free via `on-resize`.
 - Temporarily change `INITIAL_OVERLAY_PX` (or `request-overlay-height`) and
   confirm both adapt without rebuilding the apps.
@@ -127,7 +127,7 @@ Pieces:
   the missing half is the host *driving* it (or driving `set_insets` so the
   surface shrinks and `on-resize` does the rest).
 - Insets today: `canvas_impl::set_insets(top, bottom)`, seeded in `standalone.rs`
-  from `WART_INSET_TOP/BOTTOM` (status bar / taskbar). The keyboard inset is an
+  from `WANDR_INSET_TOP/BOTTOM` (status bar / taskbar). The keyboard inset is an
   additional, dynamic bottom reservation on top of the taskbar.
 - See [[reference_dioxus_taffy_rust_ui]] (edit-field + `min-height:0` notes),
   `tasks/67` Phase 2 item (2)/(3).

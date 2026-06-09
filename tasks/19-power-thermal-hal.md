@@ -12,7 +12,7 @@ Two small additions to the host's HAL surface, both useful immediately:
 
 Both bound at WIT layer in domain terms — the guest never sees AIDL `PowerHint` enums or `TemperatureType` ints.
 
-Reference: `~/wart/post-art-roadmap.md` §3, follows tasks 15 (pipeline) + 16 (vibrator pattern).
+Reference: `~/wandr/post-art-roadmap.md` §3, follows tasks 15 (pipeline) + 16 (vibrator pattern).
 
 ---
 
@@ -92,7 +92,7 @@ Both enums (`hint`/`mode`/`kind`/`throttle`) map 1:1 to AIDL ordinal positions i
 ### 1. Expand sparse-checkout for power + thermal AIDL
 
 ```bash
-cd ~/wart/wart-host/vendor/aosp-hardware-interfaces
+cd ~/wandr/wandr-host/vendor/aosp-hardware-interfaces
 git sparse-checkout set vibrator/aidl light/aidl power/aidl thermal/aidl
 ls power/aidl/android/hardware/power/IPower.aidl
 ls thermal/aidl/android/hardware/thermal/IThermal.aidl
@@ -107,16 +107,16 @@ In the existing `if target_os == "android"` block:
 - IPower has parcelables `IPowerCallback` (unused for read-only) and supporting types — `include_dir` already covers them
 - IThermal has parcelables `Temperature`, `TemperatureType`, `ThrottlingSeverity`, `CoolingDevice`, `CoolingType` + callback `IThermalChangedCallback` (unused for read-only)
 
-### 3. New file `wart-host/src/power_impl.rs`
+### 3. New file `wandr-host/src/power_impl.rs`
 
 - `binder_path::hint(kind, duration_ms)` → `svc.r#sendHint(aidl_hint, duration_ms as i32)`
 - `binder_path::set_mode(kind, enabled)` → `svc.r#setMode(aidl_mode, enabled)`
 - `OnceLock<Option<Strong<dyn IPower>>>` for service handle (one binder lookup per process)
 - WIT→AIDL enum mapping in explicit `match` (same pattern as task 17 lights)
 
-`wart-host/src/lib.rs` — add `mod power_impl;`
+`wandr-host/src/lib.rs` — add `mod power_impl;`
 
-### 4. New file `wart-host/src/thermal_impl.rs`
+### 4. New file `wandr-host/src/thermal_impl.rs`
 
 - `binder_path::list_temperatures(filter)` → `svc.r#getCurrentTemperatures(matches_filter_flag, kind_or_0)` returns `Vec<Temperature>` → map to WIT records
 - `binder_path::overall_throttle()` → iterate `getCurrentTemperatures` filter=all, return max `throttlingStatus`

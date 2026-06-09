@@ -6,7 +6,7 @@
 > **Outcome (2026-05-21):** Option B shipped as specified. Kotlin stdlib
 > `2.4.258-SNAPSHOT` (root `ScopedMemoryAllocator` starts at
 > `RESERVED_BASE=0x20000`, `destroy()` stock); adapter fork `State::new`
-> pins `State` at `STATE_BASE=0x10000`. Pre-flight confirmed `wart-app.wasm`
+> pins `State` at `STATE_BASE=0x10000`. Pre-flight confirmed `wandr-app.wasm`
 > has zero static linear data (`(memory 0)`, no `(data)` segments) so
 > `[0,0x20000)` is free — constants used unchanged. Win 1: DatePicker
 > chevrons + Tooltip long-press → 0 SIGILL / 0 corruption, verified on a
@@ -17,14 +17,14 @@
 > override kept (points at 2.4.258) until KT-86415 lands upstream; the
 > superseded 2.4.255/256/257 stdlib snapshots were deleted from mavenLocal.
 >
-> **Commits & patches:** the wart repo carries this doc + CLAUDE.md +
+> **Commits & patches:** the wandr repo carries this doc + CLAUDE.md +
 > the triage agents (`main` @ `e074b51e`). The two upstream-repo halves
 > can't be pushed (detached checkouts of `bytecodealliance/wasmtime` and
 > `JetBrains/kotlin`) — they sit on local `kt-86415-option-b` branches
-> (`~/wart/wasmtime-src` @ `058822330`, `~/xl/kotlin` @ `1ab69ee7dc4d`)
-> and are archived as reappliable `git am` patches in the wart repo:
-> - `~/wart/patches/kt-86415/kotlin-stdlib-reserved-base.patch`
-> - `~/wart/patches/kt-86415/wasmtime-adapter-state-fixed-address.patch`
+> (`~/wandr/wasmtime-src` @ `058822330`, `~/xl/kotlin` @ `1ab69ee7dc4d`)
+> and are archived as reappliable `git am` patches in the wandr repo:
+> - `~/wandr/patches/kt-86415/kotlin-stdlib-reserved-base.patch`
+> - `~/wandr/patches/kt-86415/wasmtime-adapter-state-fixed-address.patch`
 
 ---
 
@@ -152,8 +152,8 @@ must be agreed/documented. They live in two repos — drift = corruption.
 
 **Verify before committing the constants:** confirm the Kotlin module's
 static linear data fits below `STATE_BASE`. Inspect the built
-`wart-app.wasm` data segments / `__data_end` with `wasm-tools print` (or
-`wasm-tools objdump`). wart-app's static linear data is expected to be
+`wandr-app.wasm` data segments / `__data_end` with `wasm-tools print` (or
+`wasm-tools objdump`). wandr-app's static linear data is expected to be
 small (WasmGC keeps objects off linear memory), but if it exceeds
 `STATE_BASE`, raise `STATE_BASE` (and `RESERVED`) to the next page above
 `__data_end`.
@@ -178,7 +178,7 @@ above `RESERVED`. **Keep `destroy()` STOCK** — Option B does not need
 (and must not include) the 2.4.255 parent-bump; the allocator stays
 LIFO, so per-call memory is reclaimed and there is **no leak**.
 
-### Adapter change (`~/wart/wasmtime-src/crates/wasi-preview1-component-adapter/src/lib.rs`)
+### Adapter change (`~/wandr/wasmtime-src/crates/wasi-preview1-component-adapter/src/lib.rs`)
 
 `State::new()` (≈ lib.rs:2845) currently calls the imported
 `cabi_realloc`. Change it to place `State` at the fixed `STATE_BASE`:
@@ -216,7 +216,7 @@ existing idiom.)
 
 The `State::with` self-heal added in task 30 becomes dead code under
 Option B (State can no longer be corrupted). **Keep it during bring-up**
-as a tripwire — if `wart fork: wasi adapter State corruption — recovered`
+as a tripwire — if `wandr fork: wasi adapter State corruption — recovered`
 ever appears in logcat under an Option-B build, the partition is wrong.
 Remove it only after B is device-verified.
 
@@ -243,19 +243,19 @@ Point the override at it:
 
 Adapter fork:
 ```bash
-cd ~/wart/wasmtime-src
+cd ~/wandr/wasmtime-src
 cargo build -p wasi-preview1-component-adapter --target wasm32-unknown-unknown --release
 ```
 
-wart-app + pipeline (per `CLAUDE.md`): `compileProductionExecutableKotlinWasmWasi`
+wandr-app + pipeline (per `CLAUDE.md`): `compileProductionExecutableKotlinWasmWasi`
 → `wasm-tools component embed` → `component new --adapt <fork adapter>`
 → `wasmtime compile` (aarch64) → `adb push` the cwasm → restart.
 
 The skiko / 31 compose-*-wasi klibs do **not** need rebuilding for a
 stdlib swap — `withScopedMemoryAllocator` is `@DoNotInlineOnFirstStage`,
-so its body is re-lowered at the final wart-app link; the
+so its body is re-lowered at the final wandr-app link; the
 `createAllocatorInTheNewScope` change is a non-inline callee resolved at
-that link. (Confirmed during the Tier 2 attempt.) Relink wart-app only.
+that link. (Confirmed during the Tier 2 attempt.) Relink wandr-app only.
 
 ---
 
@@ -266,7 +266,7 @@ whose stdlib has **no `destroy()` patch**:
 
 1. **No use-after-free.** Interact with TooltipBox / DatePicker chevrons
    (the task-30 SIGILL triggers). No SIGILL, no crash, and **no**
-   `wart fork: wasi adapter State corruption — recovered` line in
+   `wandr fork: wasi adapter State corruption — recovered` line in
    logcat. (If that line appears, the partition constants are wrong.)
 2. **No leak.** Sustained interaction does not grow wasm linear memory
    unboundedly. With a stock LIFO allocator (no parent-bump), per-call
@@ -292,11 +292,11 @@ override entirely once the change lands upstream/clean, drop the
   `kotlin-stdlib-wasm-wasi` → `2.4.257-SNAPSHOT` for all builds.
 - **`~/xl/kotlin`:** working tree clean (stock 2.4.0-RC). This is where
   the Option B stdlib edit goes.
-- **Adapter fork:** `~/wart/wasmtime-src/crates/wasi-preview1-component-adapter/`
+- **Adapter fork:** `~/wandr/wasmtime-src/crates/wasi-preview1-component-adapter/`
   — has the task-30 `State::with` self-heal; otherwise upstream. Built
   release artifact at
   `target/wasm32-unknown-unknown/release/wasi_snapshot_preview1.wasm`.
-- **Standalone repro:** `~/wart/kt-memalloc-repro/` (Codeberg) — models
+- **Standalone repro:** `~/wandr/kt-memalloc-repro/` (Codeberg) — models
   the realloc/freeAll/scope sequence. NOTE: it under-modeled reality
   (missed realloc-during-open-scope) and gave Tier 2 a false PASS. If
   used to pre-validate Option B, first extend it to allocate at a fixed
@@ -308,8 +308,8 @@ override entirely once the change lands upstream/clean, drop the
 ## First actions for a fresh session
 
 1. Read `feedback_kotlin_wasm_scopedmemory_destroy_bug.md` and task 30.
-2. `wasm-tools print` the current `wart-app.wasm` — confirm static
+2. `wasm-tools print` the current `wandr-app.wasm` — confirm static
    linear data fits below `STATE_BASE = 0x10000`; adjust constants if not.
 3. Make the two changes (Kotlin `RESERVED_BASE`, adapter `State::new`).
-4. Build stdlib `2.4.258-SNAPSHOT`, adapter fork, wart-app; deploy.
+4. Build stdlib `2.4.258-SNAPSHOT`, adapter fork, wandr-app; deploy.
 5. Verify both win conditions on device.

@@ -9,28 +9,28 @@
 ## What we verified (so this isn't re-litigated)
 
 Auto-brightness **works** — device-confirmed by a cover/uncover light-sensor test
-while watching `wart-arbiter sensor-state` (lux) + `/sys/class/leds/lcd-backlight/
+while watching `wandr-arbiter sensor-state` (lux) + `/sys/class/leds/lcd-backlight/
 brightness`. Across 4 cover/uncover cycles: **covered → lux 0 → backlight ~10–16;
 uncovered → lux 5 → backlight ~63–67.** The curve + applier are correct. What
 undermines the *experience* are the reliability bugs below.
 
-## Issue 1 (primary) — `wart-sensors` aborts on HAL `DEAD_OBJECT`, no auto-restart — ✅ DONE + device-verified (2026-06-05)
+## Issue 1 (primary) — `wandr-sensors` aborts on HAL `DEAD_OBJECT`, no auto-restart — ✅ DONE + device-verified (2026-06-05)
 
-**Verified:** `pkill` the sensors HAL → `wart-sensors` **survived** (same pid, **no new
+**Verified:** `pkill` the sensors HAL → `wandr-sensors` **survived** (same pid, **no new
 tombstone** vs the old SIGABRT) + logged `transport error (-2) → reconnected, 3 sensors
 re-enabled` + the light feed recovered (6.488 lux). All three sub-fixes below landed:
-the C++ shim checks every HIDL `Return<>` (`wart_sensors_hal.cpp`, a-03 rebuilt),
+the C++ shim checks every HIDL `Return<>` (`wandr_sensors_hal.cpp`, a-03 rebuilt),
 `SensorHal::reopen()` + a `reconnect()` loop re-enable the tracked sensors
 (`hal.rs`/`main.rs`), and `run-hybrid-stack.sh` adds a respawn backstop.
 
 
 **Symptom:** sensors (light → auto-brightness, proximity → screen-off, accel →
-auto-rotation) all silently stop; `wart-arbiter sensor-state` shows
+auto-rotation) all silently stop; `wandr-arbiter sensor-state` shows
 `light[holders=0 (no reading)]`; backlight frozen at its last value.
 
-**Root cause (tombstones 27/28/29/40/41, 2026-06-05):** `wart-sensors`
+**Root cause (tombstones 27/28/29/40/41, 2026-06-05):** `wandr-sensors`
 **`SIGABRT`** — `Abort message: 'Failed HIDL return status not checked … 
-Status(EX_TRANSACTION_FAILED): DEAD_OBJECT'`, backtrace `wart_sensors_poll+128`
+Status(EX_TRANSACTION_FAILED): DEAD_OBJECT'`, backtrace `wandr_sensors_poll+128`
 (`libwart_sensors_hal.so`) → `libhidlbase return_status::~return_status` →
 `__android_log_default_aborter` → `abort`. I.e. when the sensors HAL
 (`android.hardware.sensors@1.0-service`) connection drops — HAL churn across a
@@ -39,28 +39,28 @@ shim's **unchecked `Return<>`** triggers `libhidlbase`'s abort-in-destructor. Th
 daemon dies and **nothing respawns it**.
 
 **Fix:**
-1. **C++ shim (`cpp/`, built on a-03):** in `wart_sensors_poll` (and any other
+1. **C++ shim (`cpp/`, built on a-03):** in `wandr_sensors_poll` (and any other
    HAL call), **check the HIDL `Return<>` status** (`.isOk()` / `.description()`)
    and return an error code to the Rust caller on `DEAD_OBJECT`/transport failure
    instead of letting the `Return` destructor abort.
-2. **Rust (`runtime/wart-sensors`):** on a poll error, **re-acquire the HAL**
+2. **Rust (`runtime/wandr-sensors`):** on a poll error, **re-acquire the HAL**
    (re-`getService`, re-subscribe the enabled sensors) with backoff, rather than
    exiting. (Mirror the host's `media.aaudio` re-resolve-on-dead pattern from
    `[[project-artless-audio]]`.)
 3. **Belt-and-suspenders (`run-hybrid-stack.sh`):** supervise/respawn
-   `wart-sensors` if it exits under `--no-art` (today it's a one-shot
+   `wandr-sensors` if it exits under `--no-art` (today it's a one-shot
    `spawn_detached`; add a small respawn loop or a watchdog).
 
 ## Issue 2 — `panel_on` not synced to the power-button wake — ⛔ REASSESSED: NOT a real bug (2026-06-05)
 
 **Investigated on-device and could not reproduce a desync.** The power-key path works
-end to end: `wart-arbiter power-key` toggles the panel and applies the ambient
-backlight (`0 → 91 → 0`), and a physical power press drove `wart-screen:
+end to end: `wandr-arbiter power-key` toggles the panel and applies the ambient
+backlight (`0 → 91 → 0`), and a physical power press drove `wandr-screen:
 set_display_power(true)`. The earlier "the key never reaches the arbiter" was a
 **logging artifact** — the arbiter's own `log::info` ("arbiter: panel ON …") does not
-land in `/data/local/tmp/wart-arbiter.log` (only the `wart-screen:` applier lines do),
+land in `/data/local/tmp/wandr-arbiter.log` (only the `wandr-screen:` applier lines do),
 so a grep for it returned 0 and misled me. The user's original "had to send a command
-to get sensors working" was **Issue 1** (dead `wart-sensors` → no light feed), now
+to get sensors working" was **Issue 1** (dead `wandr-sensors` → no light feed), now
 fixed. The one *real* sub-finding here is minor and separate: **the arbiter's
 `log::info` is not captured in its logfile** (a debugging annoyance, broader than this
 task — `[[project_artless_autobrightness]]` already notes "arbiter log::info → STDERR").
@@ -76,24 +76,24 @@ sync, so the (panel-on-ref-counted) light sensor isn't re-enabled on a power-key
 wake alone.
 
 **Fix:** the power-key path (host intercepts `KEYCODE_POWER` → arbiter, task 81)
-must flip `panel_on` → on wake, `wart-arbiter-power` re-acquires the light enable
+must flip `panel_on` → on wake, `wandr-arbiter-power` re-acquires the light enable
 (and applies the current auto value) in the same step that powers the panel. Make
 the power-key wake and the `SetDisplayPower(on)` + `panel_on=true` atomic so a
 button press alone fully restores auto-brightness. Also surface a clean panel
-state query (today `wart-arbiter power-state` = "unknown command"; the stale
+state query (today `wandr-arbiter power-state` = "unknown command"; the stale
 `debug.tracing.screen_state` sysprop reads `1` while `backlight=0`).
 
 ## Issue 3 (secondary) — screen idles off too fast / coarse sensor — ⛔ REASSESSED: mostly a non-issue
 
 `DEFAULT_SCREEN_OFF_TIMEOUT_MS = 60_000` (60 s) and it resets on real input
-(`user-activity`, poked by wart-inputflinger) — a reasonable default, not aggressive.
+(`user-activity`, poked by wandr-inputflinger) — a reasonable default, not aggressive.
 What looked aggressive in testing was the test not generating input. The light sensor's
 coarseness (0/5 indoors) is hardware. **No action needed** beyond leaving the
 `screen-timeout <ms|off>` knob available. (Original notes below.)
 
 - The panel blanks aggressively (observed: backlight `0` for ~9 s mid-test while
   lit) → no auto-brightness while off (correct gating, but the short timeout makes
-  it *look* dead). Verify/tune the `--no-art` `screen-timeout` (`wart-arbiter
+  it *look* dead). Verify/tune the `--no-art` `screen-timeout` (`wandr-arbiter
   screen-timeout`) — likely just needs a saner default, or this is intended.
 - The light sensor is **coarse** (reports only `0.0` / `5.0` indoors) — hardware
   quantization, not fixable; consider a light **smoothing/hysteresis** only if it
@@ -102,17 +102,17 @@ coarseness (0/5 indoors) is hardware. **No action needed** beyond leaving the
 
 ## Files
 
-- `runtime/wart-sensors/cpp/*` (the `wart_sensors_poll` HIDL shim → check `Return`)
+- `runtime/wandr-sensors/cpp/*` (the `wandr_sensors_poll` HIDL shim → check `Return`)
   — built on a-03 (`m libwart_sensors_hal` / ninja the soong intermediate).
-- `runtime/wart-sensors/src/*` (Rust: re-acquire HAL on poll error + reconnect loop).
-- `runtime/wart-arbiter/wart-arbiter-power/*` (panel_on ↔ power-key wake; light
+- `runtime/wandr-sensors/src/*` (Rust: re-acquire HAL on poll error + reconnect loop).
+- `runtime/wandr-arbiter/wandr-arbiter-power/*` (panel_on ↔ power-key wake; light
   enable on wake; panel-state query verb).
-- `tools/scripts/run-hybrid-stack.sh` (respawn `wart-sensors` under `--no-art`).
+- `tools/scripts/run-hybrid-stack.sh` (respawn `wandr-sensors` under `--no-art`).
 
 ## Verification
 
-1. **Crash resilience:** run `wart-sensors`, then kill/restart the sensors HAL
-   (or do a `--restore-art`→`--no-art` cycle) → `wart-sensors` must **survive /
+1. **Crash resilience:** run `wandr-sensors`, then kill/restart the sensors HAL
+   (or do a `--restore-art`→`--no-art` cycle) → `wandr-sensors` must **survive /
    re-acquire** (no tombstone, `sensor-state` light recovers a reading).
 2. **Panel sync:** screen idle off → press power button ONLY → light sensor
    re-enables + backlight applies the auto value (no separate arbiter command).
@@ -122,6 +122,6 @@ coarseness (0/5 indoors) is hardware. **No action needed** beyond leaving the
 ## References
 
 - `[[project_artless_autobrightness]]` (the reliability-bug note + curve),
-  `[[project_artless_sensors]]` (the shared `wart-hal-sensors` / wart-sensors +
+  `[[project_artless_sensors]]` (the shared `wandr-hal-sensors` / wandr-sensors +
   HIDL shim), `[[project_art_shutdown]]`, `[[project-artless-audio]]`
   (re-resolve-on-dead-handle pattern to mirror), tasks 81/85/86.

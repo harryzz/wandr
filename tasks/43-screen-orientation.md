@@ -6,7 +6,7 @@
 > **The "needs a-03" premise was wrong.** The task was scoped assuming
 > visible rotation requires a SurfaceFlinger buffer-transform shim
 > (`Surface::setTransform`, needing the a-03 build host). It does not:
-> the host-side `WART_ORIENT` machinery in `canvas_impl.rs` already does
+> the host-side `WANDR_ORIENT` machinery in `canvas_impl.rs` already does
 > **content pre-rotation** into a fixed portrait buffer via a Skia
 > `base_matrix` (the full 8-orientation dihedral group). Runtime rotation
 > = make that dynamic. No a-03, no SF buffer transform, no EGL resize.
@@ -31,9 +31,9 @@
 >   inverse-transform pointer coords by `base_matrix.invert()` so taps
 >   land when rotated; `device_rotation_to_orient` mapping
 >   (0→0, 1→4, 2→3, 3→7 — handedness device-confirmed correct);
->   gated to the fullscreen app (not IME overlay); `WART_ORIENT` env
+>   gated to the fullscreen app (not IME overlay); `WANDR_ORIENT` env
 >   forces a fixed orient (disables auto-follow).
-> - **wart-app** (`Main.kt` + `RealComposeApp.kt`) — the render delegate
+> - **wandr-app** (`Main.kt` + `RealComposeApp.kt`) — the render delegate
 >   was discarding the per-frame `w/h` from `doFrame`, so the
 >   `CanvasLayersComposeScene` stayed sized at the startup (portrait)
 >   geometry and `base_matrix` rotated portrait content into the
@@ -54,9 +54,9 @@
 
 ## Why this matters
 
-wart-host's standalone path acquires a SurfaceFlinger surface at fixed
+wandr-host's standalone path acquires a SurfaceFlinger surface at fixed
 1440×2880 portrait dimensions. SurfaceFlinger doesn't auto-rotate
-surfaces that aren't owned by an Activity, so wart-app stays in
+surfaces that aren't owned by an Activity, so wandr-app stays in
 portrait even when the device is physically landscape. Material
 widgets, lists, and the markdown card all assume portrait reading.
 
@@ -72,9 +72,9 @@ A correct rotation handler would:
 
 | Step | Where | Notes |
 |---|---|---|
-| 1. Sensor / settings poll | `wart-host/src/standalone.rs` | Every ~500ms read `user_rotation` (manual lock) AND `dumpsys window` (auto-rotated). Cheap; only act on change. |
+| 1. Sensor / settings poll | `wandr-host/src/standalone.rs` | Every ~500ms read `user_rotation` (manual lock) AND `dumpsys window` (auto-rotated). Cheap; only act on change. |
 | 2. Buffer transform | `cpp/sf_surface.{cpp,h}` + new soong build | Add `sf_set_rotation(rotation)` that calls `nativeWindow->perform(window, NATIVE_WINDOW_SET_BUFFERS_TRANSFORM, transform)` and/or `SurfaceControl::setTransform`. **Requires AOSP a-03 tree** for the libgui rebuild. |
-| 3. EGL / Skia resize | `wart-host/src/canvas_impl.rs` | Re-create the EGL surface (or resize) at swapped dimensions; rebuild Skia `gr_context` surface. Inheritance of caches (text blobs, paragraphs) — pattern in lib.rs warm-resume. |
+| 3. EGL / Skia resize | `wandr-host/src/canvas_impl.rs` | Re-create the EGL surface (or resize) at swapped dimensions; rebuild Skia `gr_context` surface. Inheritance of caches (text blobs, paragraphs) — pattern in lib.rs warm-resume. |
 | 4. Compose on-resize | already exists | Call `skiko.my_skiko_gfx_renderer().call_on_resize(w, h)`; Compose re-lays out. |
 | 5. State preservation | similar to lib.rs warm-resume | Take the existing warm-resume code's "inherit_caches_from" mechanism, generalize for the runtime-dimension-change case. |
 

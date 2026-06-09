@@ -1,7 +1,7 @@
-# Task 46 — wart-arbiter MVP (Hybrid runtime production prep)
+# Task 46 — wandr-arbiter MVP (Hybrid runtime production prep)
 
 > **Status:** 🔲 scoped 2026-05-27, not started. Sequel to task 45
-> (the wart-zygote MVP spike). Goal: take the technical Hybrid path
+> (the wandr-zygote MVP spike). Goal: take the technical Hybrid path
 > the spike validated and turn it into a production-ready
 > two-daemon model.
 
@@ -27,27 +27,27 @@ This task lands all five.
 
 ## Pre-task design decisions (proposed; D1 locked, others open)
 
-**D1 (LOCKED 2026-05-27). Two-binary split: `wart-host` + `wart-arbiter`.**
+**D1 (LOCKED 2026-05-27). Two-binary split: `wandr-host` + `wandr-arbiter`.**
 
 After explicit discussion with the user post-task-45 close-out,
 the production model is:
 
-- **`wart-host`** = zygote-mode (parent) + app-mode (forked
+- **`wandr-host`** = zygote-mode (parent) + app-mode (forked
   child). Stays as one binary because fork+COW requires the
   parent and child to share the same address space at fork
   time. Same binary, two entry points — exactly the AOSP
   `app_process` pattern (`ZygoteInit.main()` vs
   `ActivityThread.main()`).
-- **`wart-arbiter`** = NEW separate binary. Policy daemon.
+- **`wandr-arbiter`** = NEW separate binary. Policy daemon.
   Owns: which app gets foreground SF z-order, who has
   InputFlinger focus, OOM kill priorities, app reuse policy.
-  Talks to `wart-host --zygote` over its UNIX socket (plus a
+  Talks to `wandr-host --zygote` over its UNIX socket (plus a
   new arbiter↔zygote channel for richer commands). Doesn't
   fork anything itself.
 
 Rejected alternatives:
-- *Three binaries* (carve a thin `wart-zygote-launcher` out of
-  `wart-host` that exec()s app-mode children): defeats COW,
+- *Three binaries* (carve a thin `wandr-zygote-launcher` out of
+  `wandr-host` that exec()s app-mode children): defeats COW,
   exec destroys preload pages.
 - *One binary, no arbiter yet*: doesn't validate production
   architecture end-to-end; deferring the policy layer means
@@ -55,16 +55,16 @@ Rejected alternatives:
 
 In init.rc, both daemons start independently:
 ```
-service wart_zygote  /system/bin/wart-host --zygote --preload <…>
+service wandr_zygote  /system/bin/wandr-host --zygote --preload <…>
     user root
-    seclabel u:r:wart_zygote:s0
-    socket wart_zygote stream 0660 root system
+    seclabel u:r:wandr_zygote:s0
+    socket wandr_zygote stream 0660 root system
     oneshot false
 
-service wart_arbiter /system/bin/wart-arbiter
+service wandr_arbiter /system/bin/wandr-arbiter
     user root
-    seclabel u:r:wart_arbiter:s0
-    socket wart_arbiter stream 0660 root system
+    seclabel u:r:wandr_arbiter:s0
+    socket wandr_arbiter stream 0660 root system
     oneshot false
 ```
 
@@ -81,8 +81,8 @@ Three options:
   `STATUS` commands. Cheapest; one socket for all callers
   (user CLI + arbiter).
 - **D2b.** Separate AF_UNIX socket for arbiter-only commands
-  (`/dev/socket/wart_zygote_priv`, sepolicy-gated to
-  `wart_arbiter` domain only). Keeps the user CLI socket
+  (`/dev/socket/wandr_zygote_priv`, sepolicy-gated to
+  `wandr_arbiter` domain only). Keeps the user CLI socket
   semantics simple; arbiter gets a privileged channel.
 - **D2c.** Binary protocol (postcard / serde) on a single
   socket. More code than D2a, schema'd evolution.
@@ -91,11 +91,11 @@ Lean: **D2a** at MVP. The arbiter is the only realistic
 heavy caller; the user CLI mostly disappears once the arbiter
 ships. Revisit if commands grow beyond ~10.
 
-**D3 (proposed). Where does `wart-arbiter` listen for app-launch
+**D3 (proposed). Where does `wandr-arbiter` listen for app-launch
 requests from the user / OS?**
 
-- Same UNIX socket pattern: `/data/local/tmp/wart-arbiter.sock`
-  (dev) → `/dev/socket/wart_arbiter` (production).
+- Same UNIX socket pattern: `/data/local/tmp/wandr-arbiter.sock`
+  (dev) → `/dev/socket/wandr_arbiter` (production).
 - Commands TBD. Minimum: `LAUNCH_APP <app-id>` (foreground),
   `LIST_APPS`, `KILL_APP <app-id>`. Possibly `SWITCH_APP
   <app-id>` for foreground/background transitions.
@@ -130,7 +130,7 @@ Requires `CAP_SYS_RESOURCE` or root.
 
 ### Step 1 — SIGCHLD reaper + KILL command (~1 day)
 
-Two small cleanups in `wart-host/src/zygote.rs`:
+Two small cleanups in `wandr-host/src/zygote.rs`:
 
 - **SIGCHLD reaper.** Install a SIGCHLD handler in the zygote
   parent that signals a self-pipe; the accept loop drains
@@ -143,7 +143,7 @@ Two small cleanups in `wart-host/src/zygote.rs`:
   `SIGKILL`.
 
 Success criterion: `ps -A` after running and killing N apps
-shows no `[wart-host]` zombies; `KILL <pid>` works against an
+shows no `[wandr-host]` zombies; `KILL <pid>` works against an
 own child but `ERR`s on an unrelated pid.
 
 #### Step 1 results (2026-05-27)
@@ -182,7 +182,7 @@ forked pid=7970 → reaped (exit=0, tracked=true)   [229 ms]
 forked pid=7991 → reaped (exit=0, tracked=true)   [227 ms]
 ```
 
-`ps -A | grep -c 'Z.*wart-host'` returns 0. The MVP zombie
+`ps -A | grep -c 'Z.*wandr-host'` returns 0. The MVP zombie
 piling-up limitation is closed.
 
 **Smoke 2** — GUI child + KILL validation:
@@ -194,7 +194,7 @@ $ --zygote-kill 8068      → OK 8068  (sig=15 sent)
                           → reaper: pid 8068 reaped (exit=0, tracked=true)  [3.5 s later]
 ```
 
-The 3.5 s delay between SIGTERM and reap is the wart-app
+The 3.5 s delay between SIGTERM and reap is the wandr-app
 standalone render loop's clean-shutdown drain (lifecycle
 Destroyed → 3 final frames → exit), inherited from task 33
 step 5. SIGTERM hits the handler that flips the shutdown
@@ -203,13 +203,13 @@ bug.
 
 **Files touched (committed in this step):**
 
-- `wart-host/src/zygote.rs` — `child_pids()` tracking,
+- `wandr-host/src/zygote.rs` — `child_pids()` tracking,
   `spawn_reaper()` thread, `handle_kill()` shared logic,
   `kill_client()` for the client side, KILL/KILL_FORCE
   parsing in `handle_one`, child-pid insert at fork.
-- `wart-host/src/main.rs` — `--zygote-kill <pid>` and
+- `wandr-host/src/main.rs` — `--zygote-kill <pid>` and
   `--zygote-kill-force <pid>` CLI flags.
-- `tasks/46-wart-arbiter-mvp.md` — this section.
+- `tasks/46-wandr-arbiter-mvp.md` — this section.
 
 ### Step 2 — Component preload registry (~2 days)
 
@@ -282,7 +282,7 @@ src/zygote.rs:
   serve():
     1. preload Engine (existing)
     2. spawn reaper (existing)
-    3. preload_all_system_apps(engine, WART_APPS_ROOT)
+    3. preload_all_system_apps(engine, WANDR_APPS_ROOT)
     4. bind listen socket
   handle_one():
     accept LAUNCH/LAUNCH_GUI/KILL/KILL_FORCE/PRELOAD <app-id>
@@ -295,19 +295,19 @@ src/main.rs:
 **Run + measurement** on Pixel 2 XL:
 
 ```
-$ wart-host --zygote (with 3 system bundles installed)
+$ wandr-host --zygote (with 3 system bundles installed)
  ...
- preload: + .../system-apps/war.emoji.picker/0.1.0/cache/picker.cwasm
- preload: + .../system-apps/war.markdown.renderer/0.1.0/cache/renderer.cwasm
- preload: + .../system-apps/war.fonts.loader/0.1.0/cache/loader.cwasm
+ preload: + .../system-apps/wandr.emoji.picker/0.1.0/cache/picker.cwasm
+ preload: + .../system-apps/wandr.markdown.renderer/0.1.0/cache/renderer.cwasm
+ preload: + .../system-apps/wandr.fonts.loader/0.1.0/cache/loader.cwasm
  startup preload — 3 system component(s)
- listening on /data/local/tmp/wart-zygote.sock
+ listening on /data/local/tmp/wandr-zygote.sock
 
-$ wart-host --zygote-preload com.example.wart-app
- PRELOAD com.example.wart-app → OK apps 1
+$ wandr-host --zygote-preload com.example.wandr-app
+ PRELOAD com.example.wandr-app → OK apps 1
 
-$ wart-host --zygote-launch-gui com.example.wart-app  (WART_ZYGOTE_HOLD_SECS=30)
- launched com.example.wart-app → pid 8493
+$ wandr-host --zygote-launch-gui com.example.wandr-app  (WANDR_ZYGOTE_HOLD_SECS=30)
+ launched com.example.wandr-app → pid 8493
 ```
 
 **Held child (post-fork, pre-render)** — pure COW baseline:
@@ -393,49 +393,49 @@ concurrent-app ceiling from ~22 (step 1) to ~40+ (step 2).
 
 **Files touched (committed in this step):**
 
-- `wart-host/src/preload.rs` — new module with registry +
+- `wandr-host/src/preload.rs` — new module with registry +
   `preload_app` + `preload_all_system_apps` + `preload_either`.
-- `wart-host/src/app_loader.rs` — preload registry lookup at
+- `wandr-host/src/app_loader.rs` — preload registry lookup at
   both `Component::deserialize_file` sites
   (`load_installed` and `load_dep_components`).
-- `wart-host/src/zygote.rs` — startup walk of `system-apps/`;
+- `wandr-host/src/zygote.rs` — startup walk of `system-apps/`;
   `PRELOAD <app-id>` socket command + `handle_preload`;
   `preload_client` for the CLI.
-- `wart-host/src/lib.rs` — `mod preload;`.
-- `wart-host/src/main.rs` — `--zygote-preload <app-id>` CLI
+- `wandr-host/src/lib.rs` — `mod preload;`.
+- `wandr-host/src/main.rs` — `--zygote-preload <app-id>` CLI
   flag.
-- `tasks/46-wart-arbiter-mvp.md` — this section.
+- `tasks/46-wandr-arbiter-mvp.md` — this section.
 
-### Step 3 — `wart-arbiter` skeleton crate + LAUNCH plumbing (~2-3 days)
+### Step 3 — `wandr-arbiter` skeleton crate + LAUNCH plumbing (~2-3 days)
 
-New `wart-arbiter/` Cargo crate. Workspace member alongside
-`wart-host/`.
+New `wandr-arbiter/` Cargo crate. Workspace member alongside
+`wandr-host/`.
 
 - `Cargo.toml`: minimal deps — `tokio` (for async socket), `anyhow`,
   `clap` or hand-rolled CLI, `log` + `android_logger`. **No
   wasmtime, no skia, no libgui** — the arbiter is a thin policy
   process.
-- `src/main.rs`: bind `/data/local/tmp/wart-arbiter.sock`,
+- `src/main.rs`: bind `/data/local/tmp/wandr-arbiter.sock`,
   parse commands, dispatch.
-- `src/zygote_client.rs`: wraps the wart-host socket protocol.
+- `src/zygote_client.rs`: wraps the wandr-host socket protocol.
   `LaunchGui(app_id)` → `LAUNCH_GUI <app-id>` text command +
   parse `OK <pid>` / `ERR <reason>`. Reuses the existing
   protocol from task 45.
 - `src/state.rs`: track running apps (HashMap<app_id, pid>),
   per-app metadata.
-- CLI: `wart-arbiter launch <app-id>`, `wart-arbiter list`,
-  `wart-arbiter kill <app-id>` (client-mode, connects to the
-  arbiter socket — same one-shot pattern as wart-host's
+- CLI: `wandr-arbiter launch <app-id>`, `wandr-arbiter list`,
+  `wandr-arbiter kill <app-id>` (client-mode, connects to the
+  arbiter socket — same one-shot pattern as wandr-host's
   `--zygote-launch`).
 
 Build target: aarch64-linux-android, same toolchain as
-wart-host. Update `scripts/build-host-android.sh` (or new
+wandr-host. Update `scripts/build-host-android.sh` (or new
 sibling) to build both.
 
-Success criterion: `wart-arbiter launch wart-app` from the
+Success criterion: `wandr-arbiter launch wandr-app` from the
 device shell triggers the zygote to fork a child running
-wart-app; `wart-arbiter list` shows the running app + pid;
-`wart-arbiter kill wart-app` cleans it up via `KILL <pid>`.
+wandr-app; `wandr-arbiter list` shows the running app + pid;
+`wandr-arbiter kill wandr-app` cleans it up via `KILL <pid>`.
 
 #### Step 3 results (2026-05-27)
 
@@ -446,23 +446,23 @@ D1 split is real and shippable.
 **Final shape**:
 
 ```
-wart-arbiter/                       (new top-level crate)
+wandr-arbiter/                       (new top-level crate)
   Cargo.toml          deps: anyhow + log + android_logger + libc
                       no wasmtime, no skia, no libgui
-  .cargo/config.toml  mirrors wart-host's NDK r27d + sysroot setup
+  .cargo/config.toml  mirrors wandr-host's NDK r27d + sysroot setup
   src/main.rs         daemon mode + client dispatch
-  src/zygote_client.rs  text-protocol wrapper around wart-host's
+  src/zygote_client.rs  text-protocol wrapper around wandr-host's
                         UNIX socket (LAUNCH/LAUNCH_GUI/KILL/PRELOAD)
   src/state.rs        OnceLock<Mutex<HashMap<String, AppState>>>
                       tracking app-id → pid + launched_at metadata
 ```
 
-Binary size: **777 KB** (vs wart-host's 52 MB — 67× smaller). Clean
-crate boundary: no shared code; the arbiter knows the wart-host
+Binary size: **777 KB** (vs wandr-host's 52 MB — 67× smaller). Clean
+crate boundary: no shared code; the arbiter knows the wandr-host
 socket protocol but nothing about wasmtime or rendering.
 
 **Commands implemented** (arbiter ↔ client over
-`/data/local/tmp/wart-arbiter.sock`):
+`/data/local/tmp/wandr-arbiter.sock`):
 
 | Verb            | Action |
 |-----------------|--------|
@@ -475,17 +475,17 @@ socket protocol but nothing about wasmtime or rendering.
 **Smoke run** (device-verified):
 
 ```
-$ wart-arbiter list                          → OK count=0
-$ wart-arbiter launch com.example.wart-app   → OK pid=9117 app=com.example.wart-app
-                                              (wart-app renders at 60 fps via zygote
+$ wandr-arbiter list                          → OK count=0
+$ wandr-arbiter launch com.example.wandr-app   → OK pid=9117 app=com.example.wandr-app
+                                              (wandr-app renders at 60 fps via zygote
                                                fork+COW; LD_LIBRARY_PATH inherited)
-$ wart-arbiter list                          → OK count=1
-                                                  app=com.example.wart-app pid=9117 elapsed_ms=4157
-$ wart-arbiter kill com.example.wart-app     → OK killed app=… pid=9117
-$ wart-arbiter list                          → OK count=0
-$ wart-arbiter kill com.bogus.app            → ERR not-tracked com.bogus.app
-$ wart-arbiter preload com.example.wart-app  → OK apps 1
-$ wart-arbiter preload com.bogus.app         → ERR preload-failed com.bogus.app: …
+$ wandr-arbiter list                          → OK count=1
+                                                  app=com.example.wandr-app pid=9117 elapsed_ms=4157
+$ wandr-arbiter kill com.example.wandr-app     → OK killed app=… pid=9117
+$ wandr-arbiter list                          → OK count=0
+$ wandr-arbiter kill com.bogus.app            → ERR not-tracked com.bogus.app
+$ wandr-arbiter preload com.example.wandr-app  → OK apps 1
+$ wandr-arbiter preload com.bogus.app         → ERR preload-failed com.bogus.app: …
 ```
 
 State map is authoritative for the arbiter — the zygote's own
@@ -499,9 +499,9 @@ directly.
 **Scripts**:
 
 - `scripts/build-host-android.sh` extended to also build
-  `wart-arbiter` (same NDK r27d toolchain, same sysroot config).
+  `wandr-arbiter` (same NDK r27d toolchain, same sysroot config).
 - `scripts/run-hybrid-stack.sh` (new) — dev convenience that
-  launches `wart-host --zygote` and `wart-arbiter --daemon`
+  launches `wandr-host --zygote` and `wandr-arbiter --daemon`
   side-by-side, with SystemUI + launcher force-stopped and an
   EXIT trap to restore. Mirrors `standalone-launch.sh` shape.
 
@@ -511,14 +511,14 @@ Step 3 is the wiring + state shape; step 4 puts policy on top.
 
 **Files added (committed in this step):**
 
-- `wart-arbiter/Cargo.toml` (new crate)
-- `wart-arbiter/.cargo/config.toml`
-- `wart-arbiter/src/main.rs`
-- `wart-arbiter/src/zygote_client.rs`
-- `wart-arbiter/src/state.rs`
+- `wandr-arbiter/Cargo.toml` (new crate)
+- `wandr-arbiter/.cargo/config.toml`
+- `wandr-arbiter/src/main.rs`
+- `wandr-arbiter/src/zygote_client.rs`
+- `wandr-arbiter/src/state.rs`
 - `scripts/build-host-android.sh` — extended
 - `scripts/run-hybrid-stack.sh` — new
-- `tasks/46-wart-arbiter-mvp.md` — this section
+- `tasks/46-wandr-arbiter-mvp.md` — this section
 
 ### Step 4 — Arbiter policy: foreground/background + focus (~3-4 days)
 
@@ -544,7 +544,7 @@ to existing socket: `FOREGROUND <pid>`, `BACKGROUND <pid>`,
 `STATUS` (returns list of child pids + foreground status).
 
 Success criterion: launching two apps via the arbiter, switching
-foreground between them via `wart-arbiter switch <app-id>`,
+foreground between them via `wandr-arbiter switch <app-id>`,
 shows visual swap on screen + lifecycle Paused/Resumed events
 in logcat, with InputFlinger focus following the foreground.
 
@@ -586,7 +586,7 @@ arbiter            (in parallel)
                    demoted: 500 ; promoted: 0
 ```
 
-**Child-side** (`wart-host`):
+**Child-side** (`wandr-host`):
 
 - New `src/app_role.rs` — `AppRole { Foreground=0, Background=1 }`,
   static `AtomicI32`, `extern "C" role_handler` that stores via
@@ -610,7 +610,7 @@ arbiter            (in parallel)
   `is_foreground()` — background apps no longer fight the
   launcher for focus.
 
-**Arbiter-side** (`wart-arbiter`):
+**Arbiter-side** (`wandr-arbiter`):
 
 - `state.rs` extended with a single global `Mutex<Option<String>>`
   for current foreground app-id. `set_foreground(new)` returns
@@ -622,7 +622,7 @@ arbiter            (in parallel)
   demote prev fg via `kill(prev_pid, SIGUSR1)` +
   `oom_score_adj = 500`; promote target via
   `kill(pid, SIGUSR2)` + `oom_score_adj = 0`. Used by:
-  - **`cmd_foreground`** (new) — explicit `wart-arbiter
+  - **`cmd_foreground`** (new) — explicit `wandr-arbiter
     foreground <app-id>` user command.
   - **`cmd_launch`** — GUI launches auto-promote to fg
     (matches the Android "new activity comes forward"
@@ -636,34 +636,34 @@ arbiter            (in parallel)
 (it's root in the dev path). Foreground = 0 (normal),
 background = 500 (front of OOM kill queue, but not first —
 `oom_score_adj` is `-1000..1000`, 1000 means kill-this-first).
-Constants `OOM_FG` / `OOM_BG` in `wart-arbiter/src/main.rs` —
+Constants `OOM_FG` / `OOM_BG` in `wandr-arbiter/src/main.rs` —
 trivial to tune.
 
 **Smoke run** (device-verified on Pixel 2 XL):
 
 ```
-$ wart-arbiter launch com.example.wart-app    → OK pid=11502
+$ wandr-arbiter launch com.example.wandr-app    → OK pid=11502
   log: promoting foreground app=… pid=11502
   log: wrote /proc/11502/oom_score_adj = 0
   child log: role transition None → Foreground
 
-$ wart-arbiter launch com.example.wart-app2   → OK pid=11710
-  log: demoting prior foreground app=com.example.wart-app pid=11502
+$ wandr-arbiter launch com.example.wandr-app2   → OK pid=11710
+  log: demoting prior foreground app=com.example.wandr-app pid=11502
   log: wrote /proc/11502/oom_score_adj = 500
-  log: promoting foreground app=com.example.wart-app2 pid=11710
+  log: promoting foreground app=com.example.wandr-app2 pid=11710
   log: wrote /proc/11710/oom_score_adj = 0
   child 11502 log: role transition Some(Foreground) → Background
   child 11710 log: role transition None → Foreground
 
-$ wart-arbiter list
+$ wandr-arbiter list
   OK count=2
-    app=com.example.wart-app  pid=11502 elapsed_ms=…
-    app=com.example.wart-app2 pid=11710 elapsed_ms=… [fg]
+    app=com.example.wandr-app  pid=11502 elapsed_ms=…
+    app=com.example.wandr-app2 pid=11710 elapsed_ms=… [fg]
 $ cat /proc/11502/oom_score_adj  → 500
 $ cat /proc/11710/oom_score_adj  → 0
 
-$ wart-arbiter foreground com.example.wart-app
-  → OK fg=com.example.wart-app prev=com.example.wart-app2 pid=11502
+$ wandr-arbiter foreground com.example.wandr-app
+  → OK fg=com.example.wandr-app prev=com.example.wandr-app2 pid=11502
 $ cat /proc/11502/oom_score_adj  → 0
 $ cat /proc/11710/oom_score_adj  → 500
   child 11710 log: role transition Some(Foreground) → Background
@@ -677,7 +677,7 @@ app switching.
 
 **Bug found + fixed during smoke**:
 
-The initial wart-app launch landed but immediately died. Root
+The initial wandr-app launch landed but immediately died. Root
 cause: SIGUSR2 from the arbiter's auto-promote raced ahead of
 the child's `install_signal_handlers()` call. Default kernel
 action for SIGUSR2 is `Term` — child got SIGKILL'd before it
@@ -692,22 +692,22 @@ closed.
 
 **Files changed (this step):**
 
-- `wart-host/src/app_role.rs` — new module.
-- `wart-host/src/lib.rs` — `mod app_role;` (android-only).
-- `wart-host/src/zygote.rs` — install handlers in parent.
-- `wart-host/src/standalone.rs` — install handlers in child
+- `wandr-host/src/app_role.rs` — new module.
+- `wandr-host/src/lib.rs` — `mod app_role;` (android-only).
+- `wandr-host/src/zygote.rs` — install handlers in parent.
+- `wandr-host/src/standalone.rs` — install handlers in child
   (redundant safety net) + react to role transitions in
   render loop + gate `request_focus` on `is_foreground`.
-- `wart-arbiter/src/state.rs` — foreground tracking +
+- `wandr-arbiter/src/state.rs` — foreground tracking +
   `set_foreground` + `current_foreground` + `remove` clears
   fg slot.
-- `wart-arbiter/src/main.rs` — `cmd_foreground`,
+- `wandr-arbiter/src/main.rs` — `cmd_foreground`,
   `promote_to_foreground`, oom + signal helpers, LIST `[fg]`
   marker, `launch` auto-promote.
 
 **Still open from step 5 (a-03 host):**
 
-- init.rc service definitions for `wart_zygote` + `wart_arbiter`.
+- init.rc service definitions for `wandr_zygote` + `wandr_arbiter`.
 - SELinux policy for both domains (oom_score_adj write
   permission is the headline policy item now that the rest
   is wired).
@@ -724,36 +724,36 @@ handled reversibly without an AOSP rebuild. Shipped a Magisk
 module that replaces the "init.rc service" need:
 
 ```
-wart-stack-magisk/           ← module source (in-tree)
+wandr-stack-magisk/           ← module source (in-tree)
   module.prop                ← Magisk metadata
   service.sh                 ← runs in late_start_service stage
   uninstall.sh               ← runs on module removal
   README.md                  ← user-facing docs
-scripts/install-wart-stack-magisk.sh
-scripts/uninstall-wart-stack-magisk.sh
+scripts/install-wandr-stack-magisk.sh
+scripts/uninstall-wandr-stack-magisk.sh
 ```
 
 **`service.sh`**:
 
-- Sanity-checks `/data/local/tmp/{wart-host,wart-arbiter,libsf_surface.so}`.
+- Sanity-checks `/data/local/tmp/{wandr-host,wandr-arbiter,libsf_surface.so}`.
 - (Commented-out placeholder) `magiskpolicy --live` for SELinux
   rules; uncomment when denials show up. Task 46 step 4
   smoke produced none.
-- Starts `wart-host --zygote` + waits for `/data/local/tmp/wart-zygote.sock`.
-- Starts `wart-arbiter --daemon` + waits for the arbiter socket.
-- Everything logged to `/data/local/tmp/wart-stack.log`.
+- Starts `wandr-host --zygote` + waits for `/data/local/tmp/wandr-zygote.sock`.
+- Starts `wandr-arbiter --daemon` + waits for the arbiter socket.
+- Everything logged to `/data/local/tmp/wandr-stack.log`.
 
 **Backup-to-restore mechanism (built into Magisk):**
 
 | Goal               | How                                                |
 |--------------------|----------------------------------------------------|
-| Skip on next boot  | `touch /data/adb/modules/wart-stack/disable`       |
-| Re-enable          | `rm /data/adb/modules/wart-stack/disable`          |
-| Remove on next boot | `touch /data/adb/modules/wart-stack/remove`       |
-| Stop daemons now   | `killall -9 wart-arbiter wart-host`                |
+| Skip on next boot  | `touch /data/adb/modules/wandr-stack/disable`       |
+| Re-enable          | `rm /data/adb/modules/wandr-stack/disable`          |
+| Remove on next boot | `touch /data/adb/modules/wandr-stack/remove`       |
+| Stop daemons now   | `killall -9 wandr-arbiter wandr-host`                |
 
 No `/system` files modified — the module is self-contained under
-`/data/adb/modules/wart-stack/`. Live SELinux rules added by
+`/data/adb/modules/wandr-stack/`. Live SELinux rules added by
 `magiskpolicy --live` are session-only and reset to baseline on
 reboot-without-this-module. There's nothing to back up because
 nothing was destructively changed.
@@ -761,25 +761,25 @@ nothing was destructively changed.
 **Device-verified on Pixel 2 XL** — install + reboot + auto-start:
 
 ```
-$ scripts/install-wart-stack-magisk.sh
-  pushed wart-stack to /data/adb/modules/wart-stack/
+$ scripts/install-wandr-stack-magisk.sh
+  pushed wandr-stack to /data/adb/modules/wandr-stack/
 $ adb reboot
 $ # ~30s later, on the rebooted device:
-$ cat /data/local/tmp/wart-stack.log
-  16:49:58 wart-stack: service.sh starting (module /data/adb/modules/wart-stack)
-  16:49:58 wart-stack: starting wart-host --zygote (APPS_ROOT=/data/local/tmp/wart-apps)
-  16:49:58 wart-stack: zygote up (pid=1501)
-  16:49:58 wart-stack: starting wart-arbiter --daemon
-  16:49:59 wart-stack: arbiter up (pid=1642)
-  16:49:59 wart-stack: ✓ stack up — zygote=1501 arbiter=1642
-$ su -c '/data/local/tmp/wart-arbiter list'
+$ cat /data/local/tmp/wandr-stack.log
+  16:49:58 wandr-stack: service.sh starting (module /data/adb/modules/wandr-stack)
+  16:49:58 wandr-stack: starting wandr-host --zygote (APPS_ROOT=/data/local/tmp/wandr-apps)
+  16:49:58 wandr-stack: zygote up (pid=1501)
+  16:49:58 wandr-stack: starting wandr-arbiter --daemon
+  16:49:59 wandr-stack: arbiter up (pid=1642)
+  16:49:59 wandr-stack: ✓ stack up — zygote=1501 arbiter=1642
+$ su -c '/data/local/tmp/wandr-arbiter list'
   OK count=0
-$ su -c '/data/local/tmp/wart-arbiter launch com.example.wart-app'
-  OK pid=4293 app=com.example.wart-app
-  (wart-app renders at 60 fps via zygote-fork+COW)
-$ su -c '/data/local/tmp/wart-arbiter list'
+$ su -c '/data/local/tmp/wandr-arbiter launch com.example.wandr-app'
+  OK pid=4293 app=com.example.wandr-app
+  (wandr-app renders at 60 fps via zygote-fork+COW)
+$ su -c '/data/local/tmp/wandr-arbiter list'
   OK count=1
-    app=com.example.wart-app pid=4293 elapsed_ms=5220 [fg]
+    app=com.example.wandr-app pid=4293 elapsed_ms=5220 [fg]
 ```
 
 **Caveat noted**: the arbiter socket is mode 666 but inherits
@@ -797,7 +797,7 @@ daemons or a `magiskpolicy --live` rule would lift this.
 - ✅ SELinux rules (none needed today; placeholder in
   `service.sh` for when denials show up).
 - 🟡 Arbiter crash-marker (still on the todo list; not Magisk-
-  specific — a few lines in `wart-arbiter/src/main.rs` to
+  specific — a few lines in `wandr-arbiter/src/main.rs` to
   persist last-known-running-apps to a JSON file the next
   arbiter restart reads on startup).
 
@@ -815,7 +815,7 @@ parented to the zygote, not the arbiter), so the arbiter dying
 + restarting normally leaves them orphaned from the arbiter's
 view of the world. State persistence reattaches them.
 
-`wart-arbiter/src/state.rs`:
+`wandr-arbiter/src/state.rs`:
 
 - `save_to(path)` — writes a hand-rolled JSON (no serde dep —
   keeps the arbiter binary at ~800 KB). Atomic `.tmp` → rename.
@@ -824,9 +824,9 @@ view of the world. State persistence reattaches them.
   ```json
   { "version": 1,
     "saved_at_unix": 1779890478,
-    "foreground": "com.example.wart-app",   // or null
+    "foreground": "com.example.wandr-app",   // or null
     "apps": [
-      {"app_id":"com.example.wart-app","pid":4750,"launched_at_unix":1779890478}
+      {"app_id":"com.example.wandr-app","pid":4750,"launched_at_unix":1779890478}
     ] }
   ```
 
@@ -837,10 +837,10 @@ view of the world. State persistence reattaches them.
   with original `app_id`/`pid`/`launched_at`. Dead ones dropped
   + logged. Foreground cleared if its pid didn't survive.
 
-`wart-arbiter/src/main.rs`:
+`wandr-arbiter/src/main.rs`:
 
 - `install_panic_hook()` mirrors `lifecycle_standalone`'s
-  shape — writes `/data/local/tmp/wart-arbiter-crash.json` on
+  shape — writes `/data/local/tmp/wandr-arbiter-crash.json` on
   the way out.
 - `drain_prior_crash_marker()` at daemon start logs +
   removes a prior marker (so the next startup surfaces why).
@@ -854,25 +854,25 @@ view of the world. State persistence reattaches them.
 **Device-verified on Pixel 2 XL**:
 
 ```
-$ wart-arbiter launch com.example.wart-app  → OK pid=4750 [fg]
-$ cat /data/local/tmp/wart-arbiter-state.json
-  { "version": 1, ..., "foreground": "com.example.wart-app",
+$ wandr-arbiter launch com.example.wandr-app  → OK pid=4750 [fg]
+$ cat /data/local/tmp/wandr-arbiter-state.json
+  { "version": 1, ..., "foreground": "com.example.wandr-app",
     "apps": [{"app_id": "...", "pid": 4750, ...}] }
 
-$ killall -9 wart-arbiter      (children survive)
-$ wart-arbiter --daemon &      (re-start)
+$ killall -9 wandr-arbiter      (children survive)
+$ wandr-arbiter --daemon &      (re-start)
   log: state restore — 1 alive app(s) re-attached, 0 dropped
-$ wart-arbiter list
+$ wandr-arbiter list
   OK count=1
-    app=com.example.wart-app pid=4750 elapsed_ms=3189 [fg]
+    app=com.example.wandr-app pid=4750 elapsed_ms=3189 [fg]
                                     ↑ same pid as before crash
 
 $ kill -KILL 4750              (kill the child)
-$ killall -9 wart-arbiter ; wart-arbiter --daemon &
+$ killall -9 wandr-arbiter ; wandr-arbiter --daemon &
   log: pid 4750 for app "..." is dead, dropping
   log: foreground app "..." not alive, fg cleared
   log: state restore — 0 alive app(s) re-attached, 1 dropped
-$ wart-arbiter list            → OK count=0
+$ wandr-arbiter list            → OK count=0
 ```
 
 **Task 46 status: 5/5 steps + crash-marker shipped, all
@@ -885,20 +885,20 @@ module replaces both reversibly on a rooted device).
 The "make it real on the device" step. Some of this is
 deferred per its own complexity.
 
-- **init.rc service definitions.** `wart_zygote` and
-  `wart_arbiter` services on production builds. Requires
+- **init.rc service definitions.** `wandr_zygote` and
+  `wandr_arbiter` services on production builds. Requires
   AOSP-build access (per [[project-boot-model-libgui-build]]
   this needs the a-03 build host).
-- **SELinux policy.** New domains `wart_zygote`, `wart_arbiter`.
-  Policy for: read of `/data/wart/apps/...`, write of
+- **SELinux policy.** New domains `wandr_zygote`, `wandr_arbiter`.
+  Policy for: read of `/data/wandr/apps/...`, write of
   `/proc/<pid>/oom_score_adj`, socket connect/accept,
   fork/exec. Same caveat re: build host.
-- **`scripts/build-system-warpkgs.sh`** — automate the one-shot
+- **`scripts/build-system-wandrpkgs.sh`** — automate the one-shot
   packaging task-45 step 4 did by hand. Builds markdown,
-  emoji, fonts system bundles + wart-app warpkg, pushes,
+  emoji, fonts system bundles + wandr-app wandrpkg, pushes,
   installs.
 - **`scripts/run-hybrid-stack.sh`** — dev convenience that
-  starts wart-zygote + wart-arbiter, like task-33's
+  starts wandr-zygote + wandr-arbiter, like task-33's
   `standalone-launch.sh` but for the Hybrid model.
 - **Crash-marker / lifecycle plumbing.** Carry over from task
   33 step 5 — arbiter logs which apps crashed, the next
@@ -947,18 +947,18 @@ buildable from a regular dev machine. The AOSP-a-03-host parts
   on `set_layer`/`set_visible` are expected — step 4 will
   consume them.
 
-- **`scripts/build-system-warpkgs.sh` (new)** — automates the
+- **`scripts/build-system-wandrpkgs.sh` (new)** — automates the
   task-45-step-4 manual packaging:
   ```
-  $ scripts/build-system-warpkgs.sh
+  $ scripts/build-system-wandrpkgs.sh
   ```
   Builds `markdown-renderer`, `emoji-picker`, `system-fonts`
-  for wasm32-wasip2; packages each as a `.warpkg`; packages
-  wart-app from `/tmp/skiko-component.wasm` (Kotlin pipeline
+  for wasm32-wasip2; packages each as a `.wandrpkg`; packages
+  wandr-app from `/tmp/skiko-component.wasm` (Kotlin pipeline
   expected to have produced this); pushes all four; installs
-  via `wart-host --install` under `$APPS_ROOT`
-  (default `/data/local/tmp/wart-apps`).
-  Override `APPS_ROOT=/data/wart` for production layout.
+  via `wandr-host --install` under `$APPS_ROOT`
+  (default `/data/local/tmp/wandr-apps`).
+  Override `APPS_ROOT=/data/wandr` for production layout.
 
 - **`scripts/run-hybrid-stack.sh`** — shipped in step 3, so
   this step 5 item is already done.
@@ -970,10 +970,10 @@ buildable from a regular dev machine. The AOSP-a-03-host parts
   actually present at dlsym time. Push to
   `/data/local/tmp/libsf_surface.so`. Verify with
   `nm -D libsf_surface.so | grep sf_set_`.
-- `init.rc` service definitions for `wart_zygote` +
-  `wart_arbiter` under `/system/etc/init/`.
-- SELinux policy: domains `wart_zygote` + `wart_arbiter`,
-  rules for `/data/wart/apps/...` read,
+- `init.rc` service definitions for `wandr_zygote` +
+  `wandr_arbiter` under `/system/etc/init/`.
+- SELinux policy: domains `wandr_zygote` + `wandr_arbiter`,
+  rules for `/data/wandr/apps/...` read,
   `/proc/<pid>/oom_score_adj` write, socket bind/accept,
   fork/exec.
 - Crash-marker plumbing for the arbiter (carry over from
@@ -984,7 +984,7 @@ buildable from a regular dev machine. The AOSP-a-03-host parts
 
 When you next have the AOSP a-03 build host:
 
-1. Build `libsf_surface.so` from `wart-host/cpp/sf_surface.{cpp,bp}`
+1. Build `libsf_surface.so` from `wandr-host/cpp/sf_surface.{cpp,bp}`
    (the `.bp` is unchanged; just rebuild against the new `.cpp`).
 2. `adb push libsf_surface.so /data/local/tmp/libsf_surface.so`.
 3. Verify symbols: `adb shell 'nm -D /data/local/tmp/libsf_surface.so | grep sf_set_'`.
@@ -1019,9 +1019,9 @@ sf_set_layer    (FUNC GLOBAL DEFAULT)
 sf_set_visible  (FUNC GLOBAL DEFAULT)
 ```
 
-Pushed `.so` to device + rebuilt wart-host with a new dlsym
-diagnostic line (commit `8f9e8e9` in wart-host). LAUNCH_GUI a
-fresh wart-app, logcat now shows:
+Pushed `.so` to device + rebuilt wandr-host with a new dlsym
+diagnostic line (commit `8f9e8e9` in wandr-host). LAUNCH_GUI a
+fresh wandr-app, logcat now shows:
 
 ```
 sf_surface: dlsym summary — input_poll=true query_hint=true
@@ -1029,11 +1029,11 @@ sf_surface: dlsym summary — input_poll=true query_hint=true
 ```
 
 All five optional symbols resolved. Existing render path
-unaffected — wart-app renders identically. The new entry points
+unaffected — wandr-app renders identically. The new entry points
 aren't called yet (step 4 consumes them) but they're live and
 ready.
 
-`.so` stashed at `wart-host/cpp/build/libsf_surface.so` (the
+`.so` stashed at `wandr-host/cpp/build/libsf_surface.so` (the
 path `scripts/standalone-launch.sh` / `scripts/run-hybrid-stack.sh`
 push from).
 
@@ -1069,19 +1069,19 @@ shim work).
 
 ## File-touch map (anticipated)
 
-- `wart-host/src/zygote.rs` — SIGCHLD reaper, KILL command,
+- `wandr-host/src/zygote.rs` — SIGCHLD reaper, KILL command,
   preload registry hookup.
-- `wart-host/src/app_loader.rs` — preload registry lookup
+- `wandr-host/src/app_loader.rs` — preload registry lookup
   before deserialize.
-- `wart-host/src/main.rs` — `--preload <app-id>` CLI.
-- `wart-arbiter/` (new crate) — full skeleton + policy.
+- `wandr-host/src/main.rs` — `--preload <app-id>` CLI.
+- `wandr-arbiter/` (new crate) — full skeleton + policy.
 - `Cargo.toml` (workspace root, if it exists; else
-  `wart-host/Cargo.toml` extended with workspace).
+  `wandr-host/Cargo.toml` extended with workspace).
 - `scripts/build-host-android.sh` — extend to build both
   binaries.
-- `scripts/build-system-warpkgs.sh` (new).
+- `scripts/build-system-wandrpkgs.sh` (new).
 - `scripts/run-hybrid-stack.sh` (new).
-- `tasks/46-wart-arbiter-mvp.md` — this doc; update per-step.
+- `tasks/46-wandr-arbiter-mvp.md` — this doc; update per-step.
 - `CLAUDE.md` — status table row when started; close-out row
   on completion.
 
@@ -1089,7 +1089,7 @@ shim work).
 
 1. `cat .task-state` — TASK=46 STEP=N tells you where to pick
    up.
-2. Read `tasks/45-wart-zygote-spike.md` "What we learned" and
+2. Read `tasks/45-wandr-zygote-spike.md` "What we learned" and
    "Recommended task 46 scope" sections first. The whole point
    of this task is operationalizing that recommendation.
 3. The big architectural decision (two binaries, D1) is locked
@@ -1102,12 +1102,12 @@ shim work).
 
 ## Related
 
-- `tasks/45-wart-zygote-spike.md` — the spike this task
+- `tasks/45-wandr-zygote-spike.md` — the spike this task
   productionizes.
 - `MEMORY.md` → [[project-app-lifecycle-and-packaging]] —
   the locked §9 architecture this task implements one slice
   of.
-- `MEMORY.md` → [[wart-zygote-fork-survival]] — empirical
+- `MEMORY.md` → [[wandr-zygote-fork-survival]] — empirical
   baseline of what's COW-safe / what's not.
 - `tasks/33-boot-model-bringup.md` — the standalone path the
   zygote's forked children re-use; lifecycle / signal handling

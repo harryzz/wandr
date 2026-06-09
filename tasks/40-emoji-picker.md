@@ -24,7 +24,7 @@ Emoji picker is the cleanest second choice:
 `wit/emoji.wit`:
 
 ```wit
-package war:emoji@0.1.0;
+package wandr:emoji@0.1.0;
 
 interface picker {
     /// One emoji with display metadata.
@@ -55,7 +55,7 @@ world picker-world {
 - Curated `static EMOJI: &[...]` table embedded in the binary.
 - ~60-80 emojis across Smileys/People/Animals/Food/Activities/Objects.
 
-## Consumer changes (wart-app)
+## Consumer changes (wandr-app)
 
 - `src/wasmWasiMain/kotlin/EmojiImports.kt` (new) — hand-written
   Kotlin/Wasm canonical-ABI lift for `list-all`. Each emoji is a
@@ -64,25 +64,25 @@ world picker-world {
 - `src/wasmWasiMain/kotlin/EmojiCard.kt` (new) — Compose card that
   calls `listAllEmojis()` at composition, renders a grid of N emojis
   per row.
-- `wit/wart-app.wit` adds `import war:emoji/picker@0.1.0;`.
-- `wit/deps/emoji/emoji.wit` (new, copy of `~/wart/wit/emoji.wit`).
+- `wit/wandr-app.wit` adds `import wandr:emoji/picker@0.1.0;`.
+- `wit/deps/emoji/emoji.wit` (new, copy of `~/wandr/wit/emoji.wit`).
 - `RealComposeApp.kt` adds `EmojiCard()` adjacent to `MarkdownCard()`.
 
 ## Package + install
 
-- New warpkg: `emoji.warpkg` with `kind = "system"` + composition
+- New wandrpkg: `emoji.wandrpkg` with `kind = "system"` + composition
   `same-store`.
-- wart-app's `package.toml` gains a second `[dependencies.emoji]`
+- wandr-app's `package.toml` gains a second `[dependencies.emoji]`
   entry → resolver picks up the new system bundle, wires it in
   alongside markdown via the (now-generic) `wire_dep_into_linker`.
 
 ## Verification
 
 1. `cargo build` clean across all repos.
-2. Install: `wart-host --install` succeeds for the new emoji bundle.
-3. `cache-key.toml` for wart-app shows BOTH `markdown` and `emoji`
+2. Install: `wandr-host --install` succeeds for the new emoji bundle.
+3. `cache-key.toml` for wandr-app shows BOTH `markdown` and `emoji`
    under `[dependencies_resolved]`.
-4. `wart-host --standalone --app com.example.wart-app` boots; logcat
+4. `wandr-host --standalone --app com.example.wandr-app` boots; logcat
    shows both deps loaded + instantiated + wired.
 5. Screenshot: EmojiCard rendered alongside MarkdownCard.
 

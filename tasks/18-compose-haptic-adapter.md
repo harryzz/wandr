@@ -33,7 +33,7 @@ WasiHapticFeedback())` at the scene root in `RealComposeApp.kt`.
 
 ## Implementation
 
-**`wart-app/src/wasmWasiMain/kotlin/WasiHapticFeedback.kt`** — new file.
+**`wandr-app/src/wasmWasiMain/kotlin/WasiHapticFeedback.kt`** — new file.
 `class WasiHapticFeedback : HapticFeedback` maps each of Compose's
 13 `HapticFeedbackType` ordinals to one of our WIT `Feedback` enum
 variants:
@@ -62,7 +62,7 @@ Match on `HapticFeedbackType.<Name>` references (not on the int
 ordinal) so a future upstream reorder doesn't silently invert the
 mapping.
 
-**`wart-app/src/wasmWasiMain/kotlin/RealComposeApp.kt`** —
+**`wandr-app/src/wasmWasiMain/kotlin/RealComposeApp.kt`** —
 `buildRealComposeScene` now installs the bridge alongside
 `LocalLifecycleOwner`:
 
@@ -98,7 +98,7 @@ confirming the chain:
 Compose LocalHapticFeedback.current.performHapticFeedback(type)
   → WasiHapticFeedback.performHapticFeedback(type)
   → WitHaptics.Import.perform(WitHaptics.Feedback.X)
-  → wart-host haptics_impl.rs
+  → wandr-host haptics_impl.rs
   → rsbinder → IVibrator.perform(Effect.X, Strength.Y, null)
   → vendor HAL → motor
 ```
@@ -111,7 +111,7 @@ through `LocalHapticFeedback` automatically.
 
 The original task only installed the bridge. To get haptic on every
 tappable widget without per-call boilerplate, a small wrapper layer
-landed in `wart-app/src/wasmWasiMain/kotlin/HapticWidgets.kt`:
+landed in `wandr-app/src/wasmWasiMain/kotlin/HapticWidgets.kt`:
 
 ### Composition locals
 
@@ -168,7 +168,7 @@ fires the haptic itself.
 
 ### Demo use
 
-`wart-app/src/wasmWasiMain/kotlin/RealComposeApp.kt`:
+`wandr-app/src/wasmWasiMain/kotlin/RealComposeApp.kt`:
 `MaterialDemoApp` holds `var hapticEnabled by remember { ... }`,
 wraps all demo content in `HapticScope(enabled = hapticEnabled)`,
 and provides the toggle Switch labeled "Enable haptic". The

@@ -25,14 +25,14 @@ a=candidate:1 1 udp 2130706431 192.168.1.5 50000 typ host
 ```
 …then `SessionDescription::unmarshal` parses it back and extracts every field
 (`ice-ufrag`, `fingerprint`, `setup`, Opus PT 111, `rtpmap opus/48000/2`,
-`candidate`). Device run via `wart-host --run-once war.probe.sdp` (Pixel 2 XL).
+`candidate`). Device run via `wandr-host --run-once wandr.probe.sdp` (Pixel 2 XL).
 
 ## Run
 ```bash
 cargo build --target wasm32-wasip2 --release
 wasmtime run target/wasm32-wasip2/release/call-signaling-sdp.wasm   # desktop
-# device: package as wasi:cli/command warpkg (war.probe.sdp), then
-wart-host --run-once war.probe.sdp
+# device: package as wasi:cli/command wandrpkg (wandr.probe.sdp), then
+wandr-host --run-once wandr.probe.sdp
 ```
 
 ## Where this sits — the 3-plane assembly is now COMPLETE

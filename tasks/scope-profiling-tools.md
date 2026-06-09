@@ -49,7 +49,7 @@ attribution. Both before any further perf work is worth doing.
 | Tool | What it answers | Notes |
 |---|---|---|
 | **Firefox Profiler** (`https://profiler.firefox.com`) | Visualization of GuestProfiler output. Drag-and-drop. Best wasm profile viewer that exists. | No setup; ingests the JSON we emit. |
-| **`twiggy`** | "Why is wart-app.wasm 11 MB?" Static .wasm size breakdown. | Not useful for the runtime leak; cheap to run when codegen size matters. |
+| **`twiggy`** | "Why is wandr-app.wasm 11 MB?" Static .wasm size breakdown. | Not useful for the runtime leak; cheap to run when codegen size matters. |
 | **`dhat-rs`** | Rust heap profiler for the host side. Catches retain cycles in rsbinder, EGL surface leaks, ndk handles. | NOT useful for guest linear-memory leak; that's wasm-side. |
 | **`adb shell dumpsys meminfo com.example.wasmruntime`** | Total process memory split by category. Tells us whether growth is in `Other dev mmap` (wasm linear memory typically), GPU VRAM (Skia GL), or native heap (host code). | Already available; should be the first measurement. |
 | **Kotlin/Wasm intrinsics** (kotlinx-coroutines-debug) | Inspect continuation retention itself. | Doesn't currently work on wasmWasi target. Forking kotlinx-coroutines = weeks of upstream work; not happening. |
@@ -101,7 +101,7 @@ Likely high-value findings ahead of any optimization work:
 
 ## Plan summary (what task 23 does)
 
-Wire up a small `wart-host/src/profiling.rs` behind a `profile`
+Wire up a small `wandr-host/src/profiling.rs` behind a `profile`
 cargo feature flag. Estimated 2–4 hours total:
 
 1. **ResourceLimiter** logging `memory.grow` events with wall-clock
@@ -110,7 +110,7 @@ cargo feature flag. Estimated 2–4 hours total:
    frames
 3. **`Store::call_hook`** counting WIT host calls per frame
 4. **GuestProfiler** sampling a 10-second window after first render,
-   dumping JSON to `/sdcard/Download/wart-profile.json` for Firefox
+   dumping JSON to `/sdcard/Download/wandr-profile.json` for Firefox
    Profiler ingestion
 5. **`Config::profiler(JitDump)`** on desktop dev only (Android
    doesn't have `perf` ready)

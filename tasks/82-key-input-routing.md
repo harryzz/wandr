@@ -30,7 +30,7 @@ Lean: arbiter-side dedup for volume/power now (un-break the volume jump), host-s
 key-focus as the proper follow-on alongside task-80 Step-2 routing.
 
 ## Files (first cut)
-- `runtime/wart-arbiter/wart-arbiter-audio/src/lib.rs` (volume) — dedup window; or a
+- `runtime/wandr-arbiter/wandr-arbiter-audio/src/lib.rs` (volume) — dedup window; or a
   shared dedup in the binary's command dispatch.
 - Reuse task-80 Step-2 input-focus concepts for the host-gating follow-on.
 

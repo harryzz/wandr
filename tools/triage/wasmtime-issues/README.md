@@ -9,11 +9,11 @@ Companion artifacts for the upstream issue at
 |---|---|
 | `01-instrumentation.patch` | The diagnostic patch against wasmtime 44.0.1 — adds two accessor methods on `FreeList` and one `log::info!` call at the end of `DrcHeap::sweep` reporting `(N, F, sweep_dur, freed_bytes)`. ~40 lines. No semantic changes. Off-by-default. |
 | `02-negative-result-first-fit-size-indexed.patch` | The size-indexed `BTreeSet` optimization for `first_fit` we tested. Made our workload measurably worse. Documented so reviewers know why allocator-side speedups alone don't help here, and so the wasmtime team can evaluate it for *other* workloads if useful. Applies on top of patch 01. |
-| `wart-leak-repro.wasm` | A ~200 KB Kotlin/Wasm module that exercises the leaked allocation pattern: a bare `suspendCoroutine` loop with no Compose, no kotlinx-coroutines, no UI. The minimum-possible reproducer for the underlying SafeContinuation accumulation. |
-| `Main.kt` | The ~60-line Kotlin source that compiles to `wart-leak-repro.wasm`. Self-contained; reviewers can read it inline. |
+| `wandr-leak-repro.wasm` | A ~200 KB Kotlin/Wasm module that exercises the leaked allocation pattern: a bare `suspendCoroutine` loop with no Compose, no kotlinx-coroutines, no UI. The minimum-possible reproducer for the underlying SafeContinuation accumulation. |
+| `Main.kt` | The ~60-line Kotlin source that compiles to `wandr-leak-repro.wasm`. Self-contained; reviewers can read it inline. |
 | `logcat-full-2026-05-18.log` | Full Android logcat from a soak that produced three sweep events. Captured for raw provenance. |
-| `logcat-wart-only-2026-05-18.log` | Subset filtered to `wart-drc-sweep`, `wart-profile`, `InputDispatcher` mentions of our app, and `ANR` events. ~4400 lines; the parts useful for triage. |
-| `sweep-trajectory-2026-05-18.log` | Just the three `wart-drc-sweep` events (one line each) — the trajectory data table in the upstream issue is derived from this. |
+| `logcat-wandr-only-2026-05-18.log` | Subset filtered to `wandr-drc-sweep`, `wandr-profile`, `InputDispatcher` mentions of our app, and `ANR` events. ~4400 lines; the parts useful for triage. |
+| `sweep-trajectory-2026-05-18.log` | Just the three `wandr-drc-sweep` events (one line each) — the trajectory data table in the upstream issue is derived from this. |
 
 ## Trajectory data (matches the issue body)
 
@@ -36,14 +36,14 @@ cache locality as the working set grows.
 
 ## Reproducing locally
 
-`wart-leak-repro.wasm` is now **self-driving** — `main()` runs the
+`wandr-leak-repro.wasm` is now **self-driving** — `main()` runs the
 `suspendCoroutine` suspend/resume cycle itself in an unbounded loop, so
 a plain `wasmtime run` reproduces the accumulation directly. No
 embedder, no host imports, no component model.
 
 ```bash
 wasmtime run -Wgc,function-references,exceptions -Ccollector=drc \
-    wart-leak-repro.wasm
+    wandr-leak-repro.wasm
 ```
 
 RSS climbs ~100 MB/s as garbage accumulates with no sweep, plateaus at
@@ -64,10 +64,10 @@ Project: <https://codeberg.org/harryzz/wart-leak-repro.git>.
 
 Apply `01-instrumentation.patch` to a local copy of wasmtime
 44.0.1 (e.g. via `[patch.crates-io]`). Build, deploy. The
-`wart-drc-sweep:` log line fires once per sweep. Plot duration
+`wandr-drc-sweep:` log line fires once per sweep. Plot duration
 vs N over time.
 
 The Android-specific cascade-to-ANR symptom requires running
-the full Compose UI under the same instrumentation; the wart-app
+the full Compose UI under the same instrumentation; the wandr-app
 (not included here) plus an active 5–10 minute interaction
 session reproduces the >5 s sweep cascade.

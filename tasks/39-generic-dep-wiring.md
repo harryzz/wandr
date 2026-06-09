@@ -7,19 +7,19 @@
 
 ## Why
 
-`wart-host/src/app_loader.rs` currently dispatches dep wiring via a
+`wandr-host/src/app_loader.rs` currently dispatches dep wiring via a
 hardcoded match:
 
 ```rust
 fn wire_dep_into_linker(...) {
     match dep.interface.as_str() {
-        "war:markdown/renderer@0.1.0" => wire_markdown_dep(linker, store, dep),
-        other => bail!("...not yet wired in wart-host..."),
+        "wandr:markdown/renderer@0.1.0" => wire_markdown_dep(linker, store, dep),
+        other => bail!("...not yet wired in wandr-host..."),
     }
 }
 ```
 
-Every new system component → edit wart-host, regenerate bindgen module,
+Every new system component → edit wandr-host, regenerate bindgen module,
 rebuild + deploy host. That defeats the cross-app dep package boundary
 (which task 36 built).
 
@@ -40,13 +40,13 @@ introspection APIs:
    `Func::call(store, params, results)` + `Func::post_return(store)`.
 
 The dep's component carries its full WIT type info — no `.wit` file
-needs to ship in the warpkg. The host introspects the binary at load
+needs to ship in the wandrpkg. The host introspects the binary at load
 time.
 
 ## Trade-offs
 
 - **Pro:** truly extensible. New system components install + run with
-  zero wart-host changes.
+  zero wandr-host changes.
 - **Pro:** decouples package distribution from host distribution.
 - **Pro:** one code path instead of N hardcoded match arms.
 - **Con:** dynamic `Val`-based dispatch instead of typed bindgen. For
@@ -57,9 +57,9 @@ time.
 
 ## Files affected
 
-- `wart-host/src/app_loader.rs` — `wire_dep_into_linker` becomes
+- `wandr-host/src/app_loader.rs` — `wire_dep_into_linker` becomes
   generic; `wire_markdown_dep` deleted.
-- `wart-host/src/lib.rs` — `markdown_bindings` module deleted.
+- `wandr-host/src/lib.rs` — `markdown_bindings` module deleted.
 - No new files. No installer changes. No manifest schema changes.
 
 ## Verification
@@ -70,13 +70,13 @@ time.
    blocks correctly after the refactor — proves backwards-compat.
 3. Emoji smoke (task 40 driver): new `EmojiCard` renders a grid via
    the generic path — proves it works for a NEW dep with zero added
-   wiring code in wart-host.
+   wiring code in wandr-host.
 
 ## Out of scope
 
 - Resource type handling (`Linker::resource(...)`) — neither markdown
   nor emoji has WIT resources. Add when a dep needs one.
-- Async dep dispatch — wart-host is sync today; deferred when needed.
+- Async dep dispatch — wandr-host is sync today; deferred when needed.
 - Lazy / on-demand dep instantiation — separate-Store + OnceCell, see
   `tasks/36-cross-app-deps.md` "Where true lazy linking *would* have
   helped".

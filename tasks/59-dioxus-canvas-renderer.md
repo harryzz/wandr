@@ -4,14 +4,14 @@
 > 2026-05-29 feasibility spike (`repos/dioxus-spike/`,
 > [[reference_dioxus_taffy_rust_ui]]) — which already proved the
 > *foundation* is viable. This task is the **one-time framework work the
-> spike explicitly did NOT do**: the custom renderer that drives the wart
+> spike explicitly did NOT do**: the custom renderer that drives the wandr
 > canvas WIT from a dioxus VirtualDom, plus a real interactive dioxus
 > guest rendering on the Pixel 2 XL.
 
 ## Why
 
-wart needs a *light reactive* UI option for guests more complex than a
-hand-rolled canvas painter (`war.launcher` ~70 KB, `war.taskbar` ~48 KB
+wandr needs a *light reactive* UI option for guests more complex than a
+hand-rolled canvas painter (`wandr.launcher` ~70 KB, `wandr.taskbar` ~48 KB
 are hand-rolled and fine for trivial UI), but without Kotlin/Compose's
 15.7 MB binary, continuation leak, and ~180 MB working set
 ([[feedback_indeterminate_progress_leak]], [[feedback_wart_zygote_fork_survival]]).
@@ -41,10 +41,10 @@ a viability question.
 ## Goal / deliverable
 
 1. A reusable **`dioxus-canvas` renderer crate** (the "tiny Blitz for the
-   wart canvas WIT") — consumes a dioxus `VirtualDom`, lays out with
+   wandr canvas WIT") — consumes a dioxus `VirtualDom`, lays out with
    `taffy`, paints via the trimmed `my:skiko-gfx` canvas WIT, and routes
    pointer/key input back as dioxus events.
-2. A **concrete dioxus guest warpkg** (`war.dioxus.demo` or similar) that
+2. A **concrete dioxus guest wandrpkg** (`wandr.dioxus.demo` or similar) that
    uses it — a small reactive UI (counter, a list, a button that mutates
    a signal) exported as `my:skiko-gfx/renderer`, installed + launched via
    the arbiter, **rendering + interactive on device**.
@@ -52,7 +52,7 @@ a viability question.
 ## The renderer (the 4 steps from the spike README)
 
 A loop driven by the host's `renderer` export (the same export
-`war.launcher` / `war.taskbar` implement):
+`wandr.launcher` / `wandr.taskbar` implement):
 
 1. **VirtualDom → node arena.** On `render_frame` (or on a dirty flag),
    `vdom.rebuild_to_vec()` once at start, then `vdom.render_immediate()`
@@ -71,7 +71,7 @@ A loop driven by the host's `renderer` export (the same export
 3. **Walk laid-out tree → canvas WIT.** Depth-first over the taffy tree;
    for each node emit `draw-rrect`/`draw-rect` (background, border-radius),
    `create-text-blob`+`draw-text-blob` (text, host fonts — the same path
-   `war.statusbar` uses), `draw-path`/`draw-oval` as needed. Use absolute
+   `wandr.statusbar` uses), `draw-path`/`draw-oval` as needed. Use absolute
    coords from taffy's computed layout.
 4. **Route input → dioxus events.** On `on-pointer-event-v2`, hit-test the
    laid-out tree (top-most node whose rect contains the point), find its
@@ -94,26 +94,26 @@ launcher's "layout once, replay" discipline).
   existing host `paragraph` interface (NOT a new verb — see "Dependency notes").
 - **No DOM/WebView/GPU** — canvas WIT only ([[feedback_no_art_layer_dependencies]]).
 - Single component, `same-store`, leak-immune (no Kotlin) — installs +
-  launches with **zero wart-host WIT additions** (task 39 generic loader; text
+  launches with **zero wandr-host WIT additions** (task 39 generic loader; text
   measured via the pre-existing `paragraph` interface).
 
 ## Steps
 
 | # | Step | Where |
 |---|------|-------|
-| 1 | Promote `repos/dioxus-spike/` learnings into a renderer crate skeleton; trimmed `my:skiko-gfx` WIT (canvas subset, as `war.launcher` has) | new `apps/system/.../` or `crates/dioxus-canvas/` |
+| 1 | Promote `repos/dioxus-spike/` learnings into a renderer crate skeleton; trimmed `my:skiko-gfx` WIT (canvas subset, as `wandr.launcher` has) | new `apps/system/.../` or `crates/dioxus-canvas/` |
 | 2 | Mutation-applier: VirtualDom mutations → node arena | renderer crate |
 | 3 | `measure-text` host WIT verb + impl (Skia metrics) + taffy leaf measure | `wit/skiko-gfx.wit`, `canvas_impl.rs`, renderer |
 | 4 | tag/attr → `taffy::Style` mapper + `compute_layout` | renderer crate |
 | 5 | Tree-walk painter → canvas-WIT draw verbs | renderer crate |
 | 6 | Hit-test + `on-pointer-event-v2`/key → dioxus event → re-render | renderer crate |
-| 7 | Demo guest warpkg (`war.dioxus.demo`): counter + list + button; pack via build-system-warpkgs.sh; install; launch via arbiter | `apps/.../war.dioxus.demo/`, build script |
+| 7 | Demo guest wandrpkg (`wandr.dioxus.demo`): counter + list + button; pack via build-system-wandrpkgs.sh; install; launch via arbiter | `apps/.../wandr.dioxus.demo/`, build script |
 | 8 | Device-verify: renders, taps mutate state + repaint, scrolls (if list), measures text correctly; capture binary size (expect < ~600 KB) | device |
 
 ## Open questions
 
 1. **Crate home / shape:** a shared library crate (`crates/dioxus-canvas/`)
-   that guest warpkgs depend on, vs a copy-paste starter? A shared crate is
+   that guest wandrpkgs depend on, vs a copy-paste starter? A shared crate is
    better long-term (one renderer, many guests) but the guests are separate
    `cdylib` components — the renderer compiles *into* each guest, so a
    normal Rust path/git dep works.
@@ -166,10 +166,10 @@ All 8 steps landed; the demo renders + reacts on the Pixel 2 XL.
   `get-max-intrinsic-width` + `get-height`, then drops it (cached in-guest). An
   earlier `measure-text` verb was added then **removed** in favour of this — see
   the dependency note below.
-- `apps/user/war.dioxus.demo/` — the demo guest cdylib (trimmed WIT like
-  war.launcher; `HostSink` wires `canvas::*` → `CanvasSink`; thread-local
+- `apps/user/wandr.dioxus.demo/` — the demo guest cdylib (trimmed WIT like
+  wandr.launcher; `HostSink` wires `canvas::*` → `CanvasSink`; thread-local
   `DomRenderer`; counter + button + 4-item list). **516 KB** (< 600 KB target).
-- `tools/scripts/build-system-warpkgs.sh` — builds/packs/pushes/installs it
+- `tools/scripts/build-system-wandrpkgs.sh` — builds/packs/pushes/installs it
   under `apps/` (user app; launcher lists it).
 
 **On device:** flexbox column (bold title + count line + blue rounded button +
@@ -229,12 +229,12 @@ leak/SIGILL; ~1440×2880 fullscreen.
 - `repos/dioxus-spike/` — the feasibility probe (README has the exact
   crate/feature set + the 4 renderer steps).
 - [[reference_dioxus_taffy_rust_ui]] — the spike-result memory.
-- `tasks/57-launcher.md`, `apps/system/war.launcher/` — the first
+- `tasks/57-launcher.md`, `apps/system/wandr.launcher/` — the first
   non-Kotlin canvas-WIT renderer guest (hand-rolled; the precedent this
   generalizes), and the trimmed-WIT pattern (`matrix-3x3` rejected by
   guest wit-bindgen 0.46 → hand-author a canvas subset).
 - `tasks/39-generic-dep-wiring.md` — generic loader: a new canvas-WIT
-  guest installs/launches with zero wart-host changes (modulo the one
+  guest installs/launches with zero wandr-host changes (modulo the one
   `measure-text` verb).
 - [[feedback_no_art_layer_dependencies]], [[feedback_indeterminate_progress_leak]],
   [[feedback_android_fonts]].

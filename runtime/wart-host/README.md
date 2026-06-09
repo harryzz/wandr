@@ -1,18 +1,18 @@
-# wart-host
+# wandr-host
 
 The Rust + wasmtime + skia-safe host that **replaces Android's ART runtime**
 with a WebAssembly Component runtime. It loads a Kotlin/Compose application
-compiled to WASM (the `.cwasm` file produced by [wart-app](../wart-app/))
+compiled to WASM (the `.cwasm` file produced by [wandr-app](../wandr-app/))
 and renders it on real GPU hardware via Skia + EGL.
 
 ## What this app is for
 
-The full design goal of the `wart` project is:
+The full design goal of the `wandr` project is:
 
 > *Run Kotlin/Compose apps on Android **without ART** — compile them to WASM
 > components and execute them under wasmtime, rendering with native Skia.*
 
-`wart-host` is the part that runs **on** the Android device:
+`wandr-host` is the part that runs **on** the Android device:
 
 - A `cdylib` (`libwasm_android_host.so`) packaged into an APK with a
   `NativeActivity` entry point — no Java / no ART for app logic.
@@ -29,8 +29,8 @@ The full design goal of the `wart` project is:
 ┌─────────────────────────────────────────────────────────────┐
 │  Android device (Pixel 2 XL, Android 15 / API 35)           │
 │                                                             │
-│  ┌──────────────── wart-host APK ───────────────────────┐   │
-│  │  NativeActivity → android_main (wart-host cdylib)    │   │
+│  ┌──────────────── wandr-host APK ───────────────────────┐   │
+│  │  NativeActivity → android_main (wandr-host cdylib)    │   │
 │  │     │                                                │   │
 │  │     ├─ winit event loop  (window, input, lifecycle)  │   │
 │  │     ├─ EGL context       (egl.rs)                    │   │
@@ -83,7 +83,7 @@ The full design goal of the `wart` project is:
 | `cpp/wasi_drawable.cpp` | `SkDrawable` subclass with a *mutable* `sk_sp<SkPicture>` so child layers swap pictures without invalidating parent recordings |
 | `cpp/wasi_drawable.h` | C ABI for the C++ shim |
 | `build.rs` | Builds `wasi_drawable.cpp` against vendored Skia headers, links against skia-bindings' static lib |
-| `assets/skiko-component.cwasm` | The AOT-compiled WASM component (built from [wart-app](../wart-app/)). Embedded into the APK; also overridable from app-private external storage |
+| `assets/skiko-component.cwasm` | The AOT-compiled WASM component (built from [wandr-app](../wandr-app/)). Embedded into the APK; also overridable from app-private external storage |
 | `vendor/skia-src/` | Vendored Skia headers (at the skia-bindings 0.93.1 commit) for the C++ shim's `#include`s |
 | `.cargo/config.toml` | Cross-compile config — sets aarch64-linux-android target, NDK linker, sysroot |
 
@@ -106,14 +106,14 @@ The full design goal of the `wart` project is:
 build time. To override on a running device (no APK rebuild):
 
 ```bash
-adb push /tmp/wart-aot/skiko-component.cwasm \
+adb push /tmp/wandr-aot/skiko-component.cwasm \
     /sdcard/Android/data/com.example.wasmruntime/files/skiko-component.cwasm
 ```
 
 The host checks app-private external storage first; if a `.cwasm` is there it
 wins over the embedded asset. Hot-reload cycle is ~5 seconds.
 
-See `wart-app/BUILD.md` for how to produce `skiko-component.cwasm` from the
+See `wandr-app/BUILD.md` for how to produce `skiko-component.cwasm` from the
 Kotlin/Compose source.
 
 ## Build & install

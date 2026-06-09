@@ -30,7 +30,7 @@
 
 ## What this task is and isn't
 
-**Is:** an architectural refactor of `wart-host/src/lib.rs` that
+**Is:** an architectural refactor of `wandr-host/src/lib.rs` that
 moves the wasmtime `Store<HostState>`, `bindings::SkikoUi`, and
 `SkiaRenderer` (incl. EGL/GL context) off the Android main thread
 onto a dedicated worker thread. Main thread becomes a thin event
@@ -111,7 +111,7 @@ be coarser; if that bites we revisit. (`PointerDown` and
 
 ### Step 1 — Worker module + channel types (~1 h)
 
-New file: `wart-host/src/worker.rs`.
+New file: `wandr-host/src/worker.rs`.
 
 - Define `WorkerCmd`, `UserEvent`, `WorkerHandle`.
 - `WorkerHandle::spawn(engine: Engine, proxy: EventLoopProxy<UserEvent>) -> Self`
@@ -199,7 +199,7 @@ Update `.task-state` to TASK=26 STEP=verify-done STATUS=complete.
 - Making rendering async/parallel — single-threaded inside the
   worker is fine for now; the goal is ANR avoidance, not
   throughput.
-- Profile feature changes — the existing `wart-profile: frame N`
+- Profile feature changes — the existing `wandr-profile: frame N`
   per-frame logger keeps working on the worker thread.
 
 ## Known risks
@@ -235,7 +235,7 @@ Update `.task-state` to TASK=26 STEP=verify-done STATUS=complete.
 - [ ] Pointer interaction (scroll, tap) feels equivalent to
       unpatched in steady state (between sweeps)
 - [ ] During a sweep cascade, UI freezes but app does NOT ANR;
-      logcat shows `wart-drc-sweep: dur=N ms` but no
+      logcat shows `wandr-drc-sweep: dur=N ms` but no
       `WindowManager: ANR`
 - [ ] Audio + haptic still fire (tasks 21/18 unaffected)
 - [ ] No `signal 11` / panic in adb logcat across a 10-min soak
@@ -332,7 +332,7 @@ with extra hops.
 ### What's worth keeping from the attempt
 
 - The wasmtime instrumentation patches (saved at
-  `/home/harry/wart/wasmtime-issue-artifacts/`) and the upstream
+  `/home/harry/wandr/wasmtime-issue-artifacts/`) and the upstream
   issue (#13403) — these are independent of the worker-thread
   approach and remain valuable.
 - The skiko `CharProperties.wasi.kt` stub — added because the

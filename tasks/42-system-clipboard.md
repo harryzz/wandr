@@ -7,11 +7,11 @@
 
 ## Why
 
-`wart-host/src/clipboard_impl.rs` currently maintains
+`wandr-host/src/clipboard_impl.rs` currently maintains
 `HostState::clipboard: Option<String>` — intra-app only. Copying in
-wart-app works (TextField selections survive across cards within the
+wandr-app works (TextField selections survive across cards within the
 process), but pasting from another Android app (browser, messenger,
-etc.) returns whatever wart-app last set, not the actual system
+etc.) returns whatever wandr-app last set, not the actual system
 clipboard. Same direction the other way.
 
 Real sync to the system clipboard requires talking to Android's
@@ -35,7 +35,7 @@ no JVM), JNI is unavailable; the only path is **rsbinder to the
    foundation).
 3. **rsbinder-aidl codegen** — `clipboard.rsbinder` build step. May
    need exclusion list for the recursive parcelables (manual encoding).
-4. **wart-host/src/clipboard_impl.rs** — drop the HashMap; replace
+4. **wandr-host/src/clipboard_impl.rs** — drop the HashMap; replace
    getText/setText with binder calls to `IClipboard::getPrimaryClip()`
    / `setPrimaryClip()`. ClipData ↔ String conversion (extract first
    text item; build ClipData from text on set).
@@ -56,7 +56,7 @@ successfully); just bigger surface than e.g. vibrator.
 
 ## Why deferred
 
-- In-app clipboard already works (Material3 TextField selection survives across cards within wart-app).
+- In-app clipboard already works (Material3 TextField selection survives across cards within wandr-app).
 - No demo today *needs* cross-app paste.
 - Theme + IME are both higher per-hour visibility wins. IME especially.
 - ~half-session of work; better tackled when there's a concrete user-facing trigger ("I want to paste from Chrome").
@@ -68,4 +68,4 @@ successfully); just bigger surface than e.g. vibrator.
 - [[feedback_rsbinder_nullable_callback]] — earlier rsbinder pattern
   reference.
 - `tasks/15-rsbinder-pipeline.md` — submodule + codegen foundation.
-- `wart-host/src/clipboard_impl.rs` — the stub being replaced.
+- `wandr-host/src/clipboard_impl.rs` — the stub being replaced.

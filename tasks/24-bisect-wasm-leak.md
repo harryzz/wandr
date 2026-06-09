@@ -50,8 +50,8 @@ with a bare `suspendCoroutine` loop. App OOM'd in 6 min 37 s; the
 device's lowmemorykiller started picking off other apps from
 T+3 min onwards and killed us at adj=0 (foreground) at T+6:37.**
 
-Reproducer at `wart-leak-repro/` — sibling gradle project to
-wart-app. Absolute minimum deps: `skiko-wasm-wasi` only (no
+Reproducer at `wandr-leak-repro/` — sibling gradle project to
+wandr-app. Absolute minimum deps: `skiko-wasm-wasi` only (no
 Compose runtime, no Compose UI, **no kotlinx-coroutines**).
 `Main.kt` runs:
 
@@ -73,7 +73,7 @@ fun main() {
 }
 ```
 
-Driven by `WasiScheduler.schedule(1u, …)` → wart-host's scheduler
+Driven by `WasiScheduler.schedule(1u, …)` → wandr-host's scheduler
 fires back through `Renderer.onScheduledCallback` →
 `WasiScheduler.fire` → `resumeLambda` → `cont.resume(Unit)`.
 
@@ -182,9 +182,9 @@ count instances by class. wasmtime exposes some of this via the
 `gc_heap_inspect` feature (rust feature flag on the crate; may
 require a custom wasmtime build). Plumbing:
 
-- Enable the feature in `wart-host/Cargo.toml`.
+- Enable the feature in `wandr-host/Cargo.toml`.
 - Wire a host-WIT call that dumps `(class_name → instance_count)`
-  pairs to logcat or to `/sdcard/Download/wart-heapdump.txt`.
+  pairs to logcat or to `/sdcard/Download/wandr-heapdump.txt`.
 - Take a snapshot at T+1 min and T+15 min; diff. Whichever class
   has the most new instances is the prime suspect.
 
@@ -227,7 +227,7 @@ Pick whichever applies:
 ## Estimate
 
 - Step 1: ~1 day (mostly gradle config for a non-Compose
-  wart-app variant).
+  wandr-app variant).
 - Steps 2–4: ~0.5 day each if previous step narrowed the location.
 - Step 5 (heap inspection): ~3 days if needed.
 - Step 6: 1–2 hours parallelisable.

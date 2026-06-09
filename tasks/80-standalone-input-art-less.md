@@ -4,7 +4,7 @@
 > Android's C++ `InputReader` standalone) after proving it has no blocking cases.
 > **Step 0** (spike): `createInputReader` runs with no system_server; injected
 > touch decodes 1:1. **Step 1** (shim): `sf_surface.cpp` runs the InputReader +
-> feeds `sf_input_poll` (evdev mode, gated by `WART_EVDEV_INPUT`); built on a-03.
+> feeds `sf_input_poll` (evdev mode, gated by `WANDR_EVDEV_INPUT`); built on a-03.
 > **Step 3** (harness): `run-hybrid-stack.sh --no-art`/`--restore-art`/`--evdev`.
 > **Capstone verified:** with `system_server` + both zygotes stopped (SF/audioserver/
 > sensorservice/adbd survive, adb alive), a `sendevent` swipe-up on `/dev/input/event1`
@@ -23,7 +23,7 @@
 ## Why
 
 The post-ART end goal is to shut off `system_server` and all ART/Java services and
-run the wart stack on the surviving native layer (SurfaceFlinger, audioserver,
+run the wandr stack on the surviving native layer (SurfaceFlinger, audioserver,
 sensorservice, HALs, servicemanager — all proven to survive `adb shell stop`; see
 `[[project_art_shutdown]]`). The **one hard blocker** is input: `InputDispatcher` /
 `InputManagerService` (the `input` / `inputflinger` binder services) are **hosted
@@ -37,7 +37,7 @@ service lives in system_server and dies with it. We need our OWN input source.
 
 ## Goal
 
-A standalone input source that delivers touch + keys to the wart host with NO
+A standalone input source that delivers touch + keys to the wandr host with NO
 dependency on system_server, so the stack is fully interactive with ART off.
 
 ## Approach to evaluate (read source first)
@@ -77,7 +77,7 @@ post-ART design wants (no ART-layer dependency — `[[feedback_no_art_layer_depe
 
 ## Verification (eventual)
 - With `run-hybrid-stack --no-art` (ART stopped, native survivors + our stack up),
-  touch + keys drive the wart UI end-to-end — fully interactive with system_server
+  touch + keys drive the wandr UI end-to-end — fully interactive with system_server
   dead. adb stays alive throughout (recovery via `start`).
 
 ---
@@ -92,18 +92,18 @@ post-ART design wants (no ART-layer dependency — `[[feedback_no_art_layer_depe
 > Android architecture: **ONE input source, host = applier.**
 
 **Architecture.** Run Android's real `InputManager` (`InputReader` + `InputDispatcher`)
-standalone as the `inputflinger` binder service (`runtime/wart-inputflinger/`,
+standalone as the `inputflinger` binder service (`runtime/wandr-inputflinger/`,
 soong cc_binary on a-03). One dispatcher reads `/dev/input` once and routes:
 - **app keys/touches → the FOCUSED window only** (focus-based dispatch). The hosts
   connect via their EXISTING inputflinger client path (`sf_surface.cpp:309-352`
   `waitForService("inputflinger") → createInputChannel → InputConsumer →
   setInputWindowInfo`) — i.e. host = applier by simply **not** setting
-  `WART_EVDEV_INPUT`. No fan-out, no per-host region filter needed.
+  `WANDR_EVDEV_INPUT`. No fan-out, no per-host region filter needed.
 - **system keys (POWER 26 / VOLUME 24,25) → the arbiter, ONCE.** Intercepted in our
   dispatcher policy `interceptKeyBeforeQueueing`: forward to the arbiter socket
   (`power-key` / `volume up|down`) and DON'T set `POLICY_FLAG_PASS_TO_USER`, so the
   dispatcher drops them from window dispatch (`InputDispatcher.cpp:1191` →
-  `DropReason::POLICY`). This is the wart PhoneWindowManager role.
+  `DropReason::POLICY`). This is the wandr PhoneWindowManager role.
 
 **Key source finding (why this is small).** `InputDispatcher`'s constructor
 **self-registers as a SurfaceFlinger `WindowInfosListener`**
@@ -117,16 +117,16 @@ the hosts start. SurfaceFlinger survives a framework stop, so:
 1. resolve HOME_PKG (`cmd package …`, needs ART) — *while ART up*;
 2. force-stop SystemUI + launcher; **stop the Java framework** (zygote +
    zygote_secondary → system_server); SF/audioserver survive;
-3. **start `wart-inputflinger` via `wart-launch`** (uid system + gid input +
+3. **start `wandr-inputflinger` via `wandr-launch`** (uid system + gid input +
    CAP_BLOCK_SUSPEND) — registers `inputflinger`;
-4. start zygote + arbiter + hosts + chrome **without** `WART_EVDEV_INPUT` → each
-   host's client path connects to `wart-inputflinger`.
+4. start zygote + arbiter + hosts + chrome **without** `WANDR_EVDEV_INPUT` → each
+   host's client path connects to `wandr-inputflinger`.
 This avoids any "reconnect-input" mechanism: hosts only ever see our service.
 
-**Status:** service written + API-verified (`runtime/wart-inputflinger/`,
-`wart_inputflinger.cpp` + `Android.bp`); building on a-03. Remaining: copy binary
+**Status:** service written + API-verified (`runtime/wandr-inputflinger/`,
+`wandr_inputflinger.cpp` + `Android.bp`); building on a-03. Remaining: copy binary
 back + deploy; reorder `run-hybrid-stack --no-art` per above; device-verify under
 ART-off (focused window gets touch/keys; one POWER press = one toggle, no flicker;
 volume once). The task-81 display-power code (power module `power-key`/`panel` +
-`wart-screen`) stays — the arbiter is still the power owner, now fed by the
+`wandr-screen`) stays — the arbiter is still the power owner, now fed by the
 dispatcher policy instead of N hosts.

@@ -1,4 +1,4 @@
-# Call engine (wart-call)
+# Call engine (wandr-call)
 
 A secure real-time audio call from a `wasm32-wasip2` guest. WebRTC is the first
 backend; the design keeps the reusable parts (media, ICE) protocol-agnostic so
@@ -11,7 +11,7 @@ and composed into a **live call carrying real mic audio to the speaker over real
 UDP with real DTLS-SRTP keys** (`repros/call-live` → "live call: mic →
 ICE/DTLS-SRTP/UDP → speaker"). It also interoperates with a real browser
 (libwebrtc) — connection + audio (`repros/call-browser`). The library form is
-`crates/wart-call` (the `PeerSession` two-peer test reproduces it).
+`crates/wandr-call` (the `PeerSession` two-peer test reproduces it).
 
 ## The three planes
 
@@ -22,10 +22,10 @@ ICE/DTLS-SRTP/UDP → speaker"). It also interoperates with a real browser
 | **signaling** | SDP offer/answer + ICE candidates | WebRTC only (SIP/Jingle differ) |
 
 The media plane and the ICE transport are protocol-agnostic; only signaling and
-key-exchange are WebRTC-specific — which is why the crate is `wart-call`, not
-`wart-webrtc`.
+key-exchange are WebRTC-specific — which is why the crate is `wandr-call`, not
+`wandr-webrtc`.
 
-## crates/wart-call
+## crates/wandr-call
 
 WIT-agnostic (like `dioxus-canvas`): it deals only in **PCM f32 frames** and
 **opaque datagrams**. The consuming guest wires the PCM ends to the host audio
@@ -33,7 +33,7 @@ interface and the datagram ends to a UDP socket, and carries the SDP over its ow
 signaling channel.
 
 ```
-crates/wart-call/src/
+crates/wandr-call/src/
   media.rs       MediaSession  — Opus + RTP + SRTP, send(pcm)→srtp / recv(srtp)→pcm
   transport.rs   Transport     — ICE + DTLS, STUN/DTLS/SRTP demux, SRTP key export
   signaling.rs   Signaling     — SDP to_sdp() / from_sdp()
@@ -67,37 +67,37 @@ already comfortably real-time (the media pipeline is 38× real-time).
 
 ## De-risk record (repros/)
 
-Each is a `wasi:cli/command` warpkg, device-verified via `wart-host --run-once`:
+Each is a `wasi:cli/command` wandrpkg, device-verified via `wandr-host --run-once`:
 
 | repro | proves | probe |
 |---|---|---|
-| `wasi-udp-probe` | wasi-sockets UDP + STUN srflx | `war.probe.udp` |
-| `opus-wasip2` | pure-Rust Opus, 40× real-time | `war.probe.opus` |
-| `call-media-pipeline` | media plane, 38× real-time | `war.probe.callmedia` |
-| `call-dtls-handshake` | DTLS-SRTP keys (agree) | `war.probe.dtls` |
-| `call-ice-connect` | ICE connectivity | `war.probe.ice` |
-| `call-signaling-sdp` | WebRTC SDP | `war.probe.sdp` |
-| `call-capstone` | end-to-end call | `war.probe.call` |
-| `call-udp-loopback` | a call over real wasi:sockets UDP (LAN IP) | `war.probe.calludp` |
-| `call-audio-wire` | **PCM ends wired to real mic/AAudio** (mic→engine→speaker) | `war.probe.callaudio` |
-| `call-live` | **the capstone** — live call: mic→DTLS-SRTP/UDP→speaker | `war.probe.calllive` |
+| `wasi-udp-probe` | wasi-sockets UDP + STUN srflx | `wandr.probe.udp` |
+| `opus-wasip2` | pure-Rust Opus, 40× real-time | `wandr.probe.opus` |
+| `call-media-pipeline` | media plane, 38× real-time | `wandr.probe.callmedia` |
+| `call-dtls-handshake` | DTLS-SRTP keys (agree) | `wandr.probe.dtls` |
+| `call-ice-connect` | ICE connectivity | `wandr.probe.ice` |
+| `call-signaling-sdp` | WebRTC SDP | `wandr.probe.sdp` |
+| `call-capstone` | end-to-end call | `wandr.probe.call` |
+| `call-udp-loopback` | a call over real wasi:sockets UDP (LAN IP) | `wandr.probe.calludp` |
+| `call-audio-wire` | **PCM ends wired to real mic/AAudio** (mic→engine→speaker) | `wandr.probe.callaudio` |
+| `call-live` | **the capstone** — live call: mic→DTLS-SRTP/UDP→speaker | `wandr.probe.calllive` |
 | `call-interop` | **interop with an independent WebRTC stack** (native) | — |
 | `webrtc-rs-wasip2` | the rtc-ice mDNS-optional patch + spike notes | — |
 
 **Interop is proven against real WebRTC — including a real browser.**
-- `repros/call-interop` (headless): wart-call connects to the webrtc-rs **async**
+- `repros/call-interop` (headless): wandr-call connects to the webrtc-rs **async**
   `webrtc` crate — a separate codebase (its own webrtc-ice/webrtc-dtls). Both
   reach `Connected` (ICE + DTLS-SRTP over real UDP).
 - `repros/call-browser` (a real browser): **Chrome/Firefox = Google libwebrtc**
-  offers a recvonly audio call; wart-call answers, connects, and **streams an Opus
-  tone the browser plays** — confirmed `CONNECTED — wart-call ↔ browser ✓` with
-  audio. So wart-call's SDP/ICE/DTLS-SRTP/Opus interoperate with the actual
+  offers a recvonly audio call; wandr-call answers, connects, and **streams an Opus
+  tone the browser plays** — confirmed `CONNECTED — wandr-call ↔ browser ✓` with
+  audio. So wandr-call's SDP/ICE/DTLS-SRTP/Opus interoperate with the actual
   reference WebRTC implementation, media included.
 
 The only fix the browser demanded was mirroring the offer's media **direction**
 in the answer (a `recvonly` offer needs a `sendonly` answer — RFC 3264). Two
 environment notes for `call-browser`: disable the browser's mDNS host-candidate
-obfuscation (wart-call can't resolve `.local`), and run the harness where the
+obfuscation (wandr-call can't resolve `.local`), and run the harness where the
 browser can reach it over UDP (not WSL).
 
 ## From here to a shippable call
@@ -108,11 +108,11 @@ The `PeerSession` API is the engine; what remains is integration:
    socket address; `poll_transmit()` yields `(dest, bytes)` to `send_to`,
    `handle_datagram(src, bytes)` takes what `recv_from` got; candidates carry the
    real addresses via SDP. Device-verified: `repros/call-udp-loopback`
-   (`war.probe.calludp`) runs a full call between two `wasi:sockets` UDP sockets
+   (`wandr.probe.calludp`) runs a full call between two `wasi:sockets` UDP sockets
    in a guest on the Pixel 2 XL — over the device's real LAN IP via
-   `wart_call::local_lan_ip()` (device-verified: the guest discovers the Pixel's
+   `wandr_call::local_lan_ip()` (device-verified: the guest discovers the Pixel's
    WiFi IP, e.g. `192.168.1.173`, the address a peer on the same network reaches).
-2. **Real audio** — DONE. `repros/call-audio-wire` (`war.probe.callaudio`) wires
+2. **Real audio** — DONE. `repros/call-audio-wire` (`wandr.probe.callaudio`) wires
    `MediaSession`'s PCM ends to the host `audio` WIT — mic `open-capture`/
    `read-pcm-f32` in, AAudio `create-track`/`write-pcm-f32` out — and round-trips
    the live mic through Opus+SRTP back to the speaker on a Pixel 2 XL —
@@ -130,7 +130,7 @@ The `PeerSession` API is the engine; what remains is integration:
    SDP, and verifies the peer's handshake cert against it — mutual-auth MITM
    prevention, the WebRTC trust model. `mismatched_fingerprint_rejected` proves
    a swapped cert is refused.)
-4. **Coordination** — `wart-arbiter-audio` already provides the comms session
+4. **Coordination** — `wandr-arbiter-audio` already provides the comms session
    (focus / routing / mode / doze-exemption); a call app calls `audio-call-start`
    when a `PeerSession` connects.
 
@@ -138,4 +138,4 @@ The `PeerSession` API is the engine; what remains is integration:
 
 This is a **generic/custom** WebRTC call. A real **Signal** call uses **ringrtc**
 (Signal's libwebrtc wrapper) + Signal's calling service — a separate
-protocol-interop problem, out of scope for wart-call's first backend.
+protocol-interop problem, out of scope for wandr-call's first backend.

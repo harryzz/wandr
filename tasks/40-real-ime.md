@@ -17,7 +17,7 @@ surface is **the largest of any system service we'd vendor**:
   Android 12, 13, 14, 15 each reshape it. Re-vendor per upgrade.
 - `IRemoteInputConnection` alone is ~30 calls (the full editor model).
 - The framework expects an **Activity-style WindowToken** to track
-  focus. Non-Activity clients (standalone wart-host) need to fake
+  focus. Non-Activity clients (standalone wandr-host) need to fake
   an IBinder identity that round-trips opaquely through IMMS.
 - The IME runs in a separate process with its own SurfaceFlinger
   layer; z-order, ime-on-top, insets handling are all hand-roll-able
@@ -30,10 +30,10 @@ roadmap but not next" specifically because of these costs. The user's
 ## The five actors
 
 ```
-wart-app (Compose) ─PlatformContext.startInputMethod──► RootNodeOwner
+wandr-app (Compose) ─PlatformContext.startInputMethod──► RootNodeOwner
    │                                                       │
    │                                                       ▼
-   │  ┌──────────────── wart-host ─────────────────────────────┐
+   │  ┌──────────────── wandr-host ─────────────────────────────┐
    │  │  IInputMethodClient (we serve)  ◄── system_server (IMMS)
    │  │  IRemoteInputConnection (we serve)                      ▼
    │  └─────────────IInputMethodManager (we call) ──► IInputMethodSession
@@ -66,7 +66,7 @@ slippage:
 
 ### Session 2 — client registration + WindowToken fakery
 
-- Implement `IInputMethodClient` as a binder receiver in wart-host.
+- Implement `IInputMethodClient` as a binder receiver in wandr-host.
 - Fake an IBinder identity that IMMS will accept as a focus key.
 - Call `startInputOrWindowGainedFocus` and observe the
   `InputBindResult` it returns.
@@ -212,13 +212,13 @@ Session 2 first-call milestone reached.
 ### Deliverables
 
 1. **`vendor/aosp-frameworks-base` submodule** added at
-   `wart-host/vendor/aosp-frameworks-base`, pinned to
+   `wandr-host/vendor/aosp-frameworks-base`, pinned to
    `android-15.0.0_r36` (same tag as the other AOSP submodules).
    Sparse-checkout reduces the working tree from ~1.9 GB (full shallow
    clone) to ~17 MB. The sparse-checkout config is per-clone (not in
    the repo) — re-establish on a fresh checkout via:
    ```bash
-   cd wart-host/vendor/aosp-frameworks-base
+   cd wandr-host/vendor/aosp-frameworks-base
    git sparse-checkout init --cone
    git sparse-checkout set \
      core/java/com/android/internal/inputmethod \
@@ -228,7 +228,7 @@ Session 2 first-call milestone reached.
      core/java/com/android/internal/os
    ```
 
-2. **Stripped `IInputMethodManager.aidl` stub** in `wart-host/build.rs`
+2. **Stripped `IInputMethodManager.aidl` stub** in `wandr-host/build.rs`
    — matches the task-22 `ISurfaceComposer.aidl` self-healing pattern.
    Drops all 15 transitive AIDL imports (IInputMethodClient, EditorInfo,
    ResultReceiver, ImeTracker, …) by stubbing 25 preceding methods as
@@ -247,10 +247,10 @@ Session 2 first-call milestone reached.
    validation rather than a "parse error proves transport" muddy
    signal.
 
-4. **`wart-host/src/ime_impl.rs`** mirrors `display_impl.rs` (the
+4. **`wandr-host/src/ime_impl.rs`** mirrors `display_impl.rs` (the
    task-22 SurfaceFlinger probe): `rsbinder::hub::get_interface("input_method")`
    → `Strong<dyn IInputMethodManager>` → `isImeTraceEnabled()` → log.
-   Wired behind a new `wart-host --probe-ime` CLI flag in `main.rs`
+   Wired behind a new `wandr-host --probe-ime` CLI flag in `main.rs`
    (one-shot, no display, no wasm component loaded).
 
 ### What we learned
@@ -295,8 +295,8 @@ ClientState{a425746 mUid=0 mPid=4404 mSelfReportedDisplayId=0}:
   pid=4404
 ```
 
-`pid=4404` is our wart-host probe process (`adb shell ps` correlation).
-`mUid=0` because the probe ran via `su`; production wart-host running
+`pid=4404` is our wandr-host probe process (`adb shell ps` correlation).
+`mUid=0` because the probe ran via `su`; production wandr-host running
 as a normal app would show its app uid.
 
 ### Deliverables
@@ -305,7 +305,7 @@ as a normal app would show its app uid.
    methods, no transitive imports) — auto-patched into the vendored
    submodule on every build, same self-healing pattern as the
    IInputMethodManager stub. Bn-side server (`ImeClient`) in
-   `wart-host/src/ime_impl.rs` logs each dispatch and returns Ok.
+   `wandr-host/src/ime_impl.rs` logs each dispatch and returns Ok.
    IMMS may fire `setActive` / `setInteractive` etc. asynchronously
    after registration; oneway means our stubs swallow the calls
    without breaking the protocol.
@@ -317,13 +317,13 @@ as a normal app would show its app uid.
 3. **Un-stubbed `addClient(client, inputConn, displayId)`** in the
    IInputMethodManager AIDL stub. Real signature, transaction code
    FIRST_CALL_TRANSACTION + 0 (matches IMMS's dispatch).
-4. **`probe_addclient()`** in `wart-host/src/ime_impl.rs` — wraps
+4. **`probe_addclient()`** in `wandr-host/src/ime_impl.rs` — wraps
    both server impls in `BnInputMethodClient::new_async_binder` /
    `BnRemoteInputConnection::new_async_binder` (with a tokio
    current-thread runtime adapter copied from `sensors_impl.rs`),
    calls `addClient(&client, &input_conn, 0)`, holds the binders
    alive for 5 s so `dumpsys input_method` shows the entry.
-5. **`wart-host --probe-ime-addclient` CLI flag** in `main.rs`.
+5. **`wandr-host --probe-ime-addclient` CLI flag** in `main.rs`.
 
 ### What we learned
 
@@ -392,7 +392,7 @@ ime: attempt-B windowToken=Some  OK — IMMS returned a null InputBindResult ...
 ### Deliverables
 
 1. **Two more stubs** auto-patched into the vendored submodule by
-   `wart-host/build.rs`:
+   `wandr-host/build.rs`:
    - `IRemoteAccessibilityInputConnection.aidl` — 1 placeholder oneway
      method (we pass null for the corresponding @nullable parameter).
    - The IMM AIDL `import` list grew to pick up `EditorInfo`,
@@ -403,7 +403,7 @@ ime: attempt-B windowToken=Some  OK — IMMS returned a null InputBindResult ...
 2. **Un-stubbed `slot_11_startInputOrWindowGainedFocus`** in the IMM
    AIDL stub. Full 12-arg signature, transaction code
    FIRST_CALL_TRANSACTION + 11.
-3. **`probe_startinput()`** in `wart-host/src/ime_impl.rs`:
+3. **`probe_startinput()`** in `wandr-host/src/ime_impl.rs`:
    - Calls `addClient` first (session-3 pre-req for `startInputOrWindowGainedFocus`).
    - Constructs a windowToken carrier (`BnRemoteInputConnection` with a
      stub server), extracts its IBinder via `as_binder()`. IMMS treats
@@ -417,7 +417,7 @@ ime: attempt-B windowToken=Some  OK — IMMS returned a null InputBindResult ...
      returns `UnexpectedNull` whenever the wire data carries the
      null-parcelable flag (which is exactly what IMMS sends for a
      non-bind response).
-4. **`wart-host --probe-ime-startinput` CLI flag** in `main.rs`.
+4. **`wandr-host --probe-ime-startinput` CLI flag** in `main.rs`.
 
 ### What we learned
 
@@ -494,7 +494,7 @@ ime: (3/3) showSoftInput returned false.
    readFromParcel doesn't care about the client-side type name).
 2. **Un-stubbed `slot_08_showSoftInput`** in the IMM AIDL stub with
    the full 8-arg signature (transaction code FIRST_CALL_TRANSACTION + 8).
-3. **`probe_showsoftinput()`** in `wart-host/src/ime_impl.rs`:
+3. **`probe_showsoftinput()`** in `wandr-host/src/ime_impl.rs`:
    - Runs the three-step `addClient → startInputOrWindowGainedFocus →
      showSoftInput` sequence end-to-end in one probe.
    - Uses `SHOW_FORCED` flag to override any "implicit" suppression
@@ -505,7 +505,7 @@ ime: (3/3) showSoftInput returned false.
      tag, which is fine for the stats path (only affects metrics).
    - Holds binders alive 8 s after the call for dumpsys / IME
      observation.
-4. **`wart-host --probe-ime-showsoft` CLI flag** in `main.rs`.
+4. **`wandr-host --probe-ime-showsoft` CLI flag** in `main.rs`.
 
 ### What we learned
 
@@ -527,22 +527,22 @@ ime: (3/3) showSoftInput returned false.
 
 - **Registering with WMS as a focusable window.** This is the
   remaining gap. Paths:
-  1. **Hijack task-33's standalone surface.** wart-host's standalone
+  1. **Hijack task-33's standalone surface.** wandr-host's standalone
      mode (task 33) acquires a real `SurfaceControl` from
      SurfaceFlinger via libgui. That surface IS registered with WMS
      (otherwise input events wouldn't reach it). The surface's
      associated IBinder windowToken — if we can extract it — is what
-     IMMS would accept. Investigate the wart-host standalone code
+     IMMS would accept. Investigate the wandr-host standalone code
      path for the window-token plumbing.
   2. **Use the WMS `addWindow` AIDL directly.** Adds more vendoring
      (IWindowManager, IWindowSession, LayoutParams, …) but gives us
      a freshly-registered window token. Heavier but more flexible
      than (1).
-  3. **Run wart-host AS the focused activity** via the
-     wart-app NativeActivity (the normal mode, not standalone).
+  3. **Run wandr-host AS the focused activity** via the
+     wandr-app NativeActivity (the normal mode, not standalone).
      The Activity already has a WMS-registered window — we could
      wire `IInputMethodClient` into the NativeActivity's lifecycle
-     so wart's Compose UI gets the real IME via the existing
+     so wandr's Compose UI gets the real IME via the existing
      WMS-focused window.
 - **Hand-rolled `EditorInfo` parceling.** Even with WMS focus, we'd
   still need a real EditorInfo to summon Gboard with a usable text
@@ -584,18 +584,18 @@ Session 6 was a scoping + decision session — no new code shipped.
    `InsetsSourceControl`, `MergedConfiguration`, `ClientWindowFrames`,
    `InputTransferToken`, ...
 3. **Task-33's standalone window IS visible to InputDispatcher** —
-   `dumpsys input` shows `Window: wart - wart` with
+   `dumpsys input` shows `Window: wandr - wandr` with
    `applicationInfo.token=...` and `token=...` (the input
    channel's connection token). But it's registered via
    `IInputFlinger.createInputChannel` + `gui::WindowInfoHandle` +
    `SurfaceComposerClient::Transaction::setInputWindowInfo` —
    **completely bypassing WindowManagerService**.
 4. **IMMS does NOT see InputDispatcher's focus** — empirically
-   verified by launching wart-host standalone (which gets
+   verified by launching wandr-host standalone (which gets
    InputDispatcher focus via `gui::FocusRequest`) and running
    `dumpsys input_method` concurrently. `mFocusedWindowClient`
    stayed pinned to the launcher (`mUid=10167`) even while
-   InputDispatcher said `'wart'` was focused. IMMS gets focus
+   InputDispatcher said `'wandr'` was focused. IMMS gets focus
    updates from WMS via JVM-internal calls (not AIDL); WMS doesn't
    know about non-WMS-registered windows like task-33's.
 5. **No `SHOW_FORCED`, no permission, no spoofed token bypasses
@@ -615,14 +615,14 @@ Session 6 was a scoping + decision session — no new code shipped.
   not naturally part of task 40's "IMMS via rsbinder" scope.
 
 **Path B: NativeActivity wrapper (the "cheating" answer).**
-- wart-app already runs as a NativeActivity. The Activity's
+- wandr-app already runs as a NativeActivity. The Activity's
   window IS WMS-registered + focused when the app is foreground.
-- From inside wart-host (running as the Activity's native process),
+- From inside wandr-host (running as the Activity's native process),
   call our rsbinder IMMS pipeline using the Activity's windowToken.
 - Requires extracting the IBinder windowToken from the NativeActivity
   without Java — possibly via `ANativeWindow` internals or a small
   JNI helper.
-- Pragmatic for "wart Compose UI gets a real IME today", less
+- Pragmatic for "wandr Compose UI gets a real IME today", less
   satisfying as a no-Java goal.
 
 **Path C: Park task 40 as-is.**
@@ -678,7 +678,7 @@ larger AIDL surface:
   (PR #121 dirty-fix) — could matter for WMS parcelables with
   interface fields
 
-Breaking-change cost in our tree: 3 lines in `wart-host/src/binder.rs`
+Breaking-change cost in our tree: 3 lines in `wandr-host/src/binder.rs`
 (replaced `catch_unwind` shim with direct `Result` handling, since
 `ProcessState::init_default()` now returns
 `Result<&'static ProcessState, Box<dyn Error>>`).

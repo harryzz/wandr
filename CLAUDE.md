@@ -121,18 +121,18 @@ Single git repo (`https://codeberg.org/harryzz/wart`), post-monorepo-merge.
 Canonical map: **`docs/repository-layout.md`**. Top level:
 
 ```
-apps/{system,user}/   warpkgs (system chrome + user apps); native = wart-*, warpkg = war.*
-runtime/              native Rust host stack — wart-host (wasmtime+skia+EGL), wart-arbiter
+apps/{system,user}/   wandrpkgs (system chrome + user apps); native = wandr-*, wandrpkg = wandr.*
+runtime/              native Rust host stack — wandr-host (wasmtime+skia+EGL), wandr-arbiter
 wit/                  canonical WIT (skiko-gfx.wit is the runtime contract)
 crates/               shared guest-side Rust libs (dioxus-canvas)
 external/             submodules: skiko, wasmtime, compose-multiplatform-core, kotlin, subsecond
-tools/scripts/        build-system-warpkgs.sh, run-hybrid-stack.sh, build-host-android.sh, …
+tools/scripts/        build-system-wandrpkgs.sh, run-hybrid-stack.sh, build-host-android.sh, …
 docs/ tasks/ repros/  architecture docs · task narrative · focused reproducers
 .task-state           checkpoint — NEVER delete
 .claude/memory/       project memory (this index loads each session)
 ```
 
-**Naming:** native binaries `wart-<kebab>`; warpkgs `war.<dot-id>` matching their
+**Naming:** native binaries `wandr-<kebab>`; wandrpkgs `wandr.<dot-id>` matching their
 `app_id`; external forks keep their upstream name (no `-src`).
 
 Fresh clone: `git clone --recurse-submodules …` (skip `external/kotlin` unless
@@ -165,7 +165,7 @@ the user asks or names one):
 - **Remove the leading `freeAllComponentModelReallocAllocatedMemory()`** from any
   WIT binding — required forever (the `reallocAllocator`-must-be-null nesting
   constraint, bigger than KT-86415). See `[[wasi-realloc-allocator-pollution]]`.
-- **Mismatch the WASI adapter + stdlib halves** — use the wart-fork adapter
+- **Mismatch the WASI adapter + stdlib halves** — use the wandr-fork adapter
   (KT-86415 State-pin, now on wasmtime 45) paired with the `2.4.258` stdlib
   override; mismatched = State corruption / SIGILL. See `docs/build-pipeline.md`,
   `[[kotlin-wasm-scopedmemory-destroy-bug]]`.
@@ -174,7 +174,7 @@ the user asks or names one):
 - **Link Compose guests against the discarded `compose-*-wasi:0.0.0-wasi-local`
   bundles** — use the in-tree `*-wasm-wasi:9999.0.0-SNAPSHOT` modules. See `[[reference-compose-wasi-consumption]]`.
 - **Push cwasm to Downloads** (scoped storage) — use the app-specific external dir.
-- **Build wart on ART-layer services** (system_server/WMS/AMS/launcher) — they're
+- **Build wandr on ART-layer services** (system_server/WMS/AMS/launcher) — they're
   dropped post-ART; use HAL/binder signals that survive. See `[[feedback_no_art_layer_dependencies]]`.
 
 ---

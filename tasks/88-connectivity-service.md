@@ -1,10 +1,10 @@
-# Task 88 — wart connectivity service (ART-off networking, productized)
+# Task 88 — wandr connectivity service (ART-off networking, productized)
 
 > Status: 🚧 M1 — full IP **+ DNS** DEVICE-VERIFIED + productized (`--no-art`).
 > Follow-on to the `--no-art` networking analysis + live demo in
 > `[[project_artless_network]]` (WiFi+internet brought up by hand: ping 8.8.8.8
 > 0% loss, TCP 443 open). This task turns that one-off recipe into a first-class
-> wart subsystem. Binder analysis: `[[project_artless_network]]` + the session
+> wandr subsystem. Binder analysis: `[[project_artless_network]]` + the session
 > that found `connectivity`/`wifi` are dead system_server binders while
 > `netd`/`dnsresolver`/`IWifi`/`ISupplicant` survive natively.
 
@@ -14,30 +14,30 @@ Thinnest end-to-end slice (decisions: ctrl-socket associate now / ISupplicant
 AIDL later; **pure-Rust DHCPv4 up front**; DNS mechanism = on-device
 investigation). Built + builds clean (desktop tests + aarch64-android cross):
 
-- **`runtime/wart-hal-net`** (pure-Rust, no binder in M1) — `dhcp.rs` (DHCPv4
+- **`runtime/wandr-hal-net`** (pure-Rust, no binder in M1) — `dhcp.rs` (DHCPv4
   DISCOVER/OFFER/REQUEST/ACK, the one missing native binary; unit-tested parse),
   `supplicant.rs` (write conf + spawn vendor `wpa_supplicant` + ctrl-socket
   `SELECT_NETWORK`/`REASSOCIATE` nudge), `lib.rs` (WifiConfigStore.xml cred
   parse + `ip`-based addr/route applier). 6 unit tests pass.
-- **`runtime/wart-net`** (daemon) — orchestrates associate→DHCP→apply→DNS, reports
+- **`runtime/wandr-net`** (daemon) — orchestrates associate→DHCP→apply→DNS, reports
   `report-net-state` to the arbiter, monitors carrier + re-associates. `--once`
   mode = on-device bring-up/DNS investigation harness. `dns.rs` tries
   resolv.conf / `net.dns*` props / `ndc resolver setnetdns` (best-effort, logged).
-- **`runtime/wart-arbiter/wart-arbiter-net`** (module) — status of record
+- **`runtime/wandr-arbiter/wandr-arbiter-net`** (module) — status of record
   (`report-net-state` / `net-status`) + `on-connectivity-change` fan-out to
   subscribed guests (`net-subscribe`). 5 unit tests pass; wired into the arbiter
   binary (one line) + cross-compiles clean.
-- **`wit/connectivity.wit`** (`war:connectivity`) — `get-status` import +
+- **`wit/connectivity.wit`** (`wandr:connectivity`) — `get-status` import +
   `on-connectivity-change` export contract. **Host bindgen/linker wiring + a
   guest that exports the handler = the immediate next step (M1b)**; not yet wired
-  into wart-host this session.
-- **`tools/scripts/run-hybrid-stack.sh`** — pushes + launches `wart-net` under
-  `--no-art` (respawn-supervised, as root via `su`) next to `wart-sensors`;
+  into wandr-host this session.
+- **`tools/scripts/run-hybrid-stack.sh`** — pushes + launches `wandr-net` under
+  `--no-art` (respawn-supervised, as root via `su`) next to `wandr-sensors`;
   teardown/restore paths stop it so WifiService can reclaim `wlan0`.
 
 ### Device verification (2026-06-05, Pixel 2 XL, live `--no-art` session)
 
-✅ **IP path fully verified, end-to-end automated.** `wart-net` (run as root)
+✅ **IP path fully verified, end-to-end automated.** `wandr-net` (run as root)
 brought WiFi up with zero manual steps: associate to `zah004` via the ctrl-socket
 nudge → **pure-Rust DHCPv4 lease** (`192.168.1.179/22` gw `192.168.1.1` dns
 `192.168.1.1`, 600s) → applied addr + `default via … onlink` + the
@@ -61,10 +61,10 @@ dnsresolver special-case `AID_SYSTEM` (uid 1000), not root**. Driving them as ui
 system works: `ndc network create` and the binder calls all succeed. So:
 - Vendored `android.net.INetd` (`packages/modules/Connectivity`) +
   `android.net.IDnsResolver` (`packages/modules/DnsResolver`) AIDLs as submodules.
-- `wart-hal-net` codegens both via rsbinder (the full real INetd parses/compiles
+- `wandr-hal-net` codegens both via rsbinder (the full real INetd parses/compiles
   as-is in async mode; IDnsResolver needs a trimmed copy — its listener callbacks
   break codegen).
-- `wart-net` (root: link/DHCP/address) re-execs `--netd-config` under `su 1000`
+- `wandr-net` (root: link/DHCP/address) re-execs `--netd-config` under `su 1000`
   to drive, over binder: **INetd** `networkCreatePhysical`/`networkAddInterface`/
   `networkAddRoute` (connected + default)/`networkSetDefault`, then **IDnsResolver**
   `createNetworkCache` + `setResolverConfiguration`. One catch-all `ip rule from
@@ -74,11 +74,11 @@ system works: `ndc network create` and the binder calls all succeed. So:
   `http://example.com` HTTP 200, **`https://codeberg.org` HTTP 200** (DNS+TLS).
 
 ### Remaining for M1 done
-1. **`war:connectivity` host wiring + the `wifi` management impl** → spun out to
+1. **`wandr:connectivity` host wiring + the `wifi` management impl** → spun out to
    **`tasks/90-connectivity-wit-implementation.md`** (bindgen the worlds into
-   wart-host, forward to the arbiter, deliver `on-connectivity-change`, implement
+   wandr-host, forward to the arbiter, deliver `on-connectivity-change`, implement
    `scan`/`connect`/saved-networks; a test/Settings guest). The arbiter
-   `wart-arbiter-net` module is built + unit-tested. Deferred so we can return to
+   `wandr-arbiter-net` module is built + unit-tested. Deferred so we can return to
    task 87 (ART-off audio bugs) first.
 2. **Cold chip power-up** (M2 proper, but blocks a clean-boot M1): the verify
    reused a powered chip (WiFi was on under ART before `--no-art`). A cold
@@ -92,7 +92,7 @@ driving `android.hardware.wifi.supplicant.ISupplicant` over binder (what
 `WifiNative` does), as uid `system`. Device-verified under `--no-art`: the daemon
 spawns the supplicant **HAL-managed** (`supplicant::spawn_hal`:
 `-O<dir> -dd -g@android:wpa_wlan0`, no `-i/-c` — the vendor init form) and
-re-execs `wart-net --associate <ssid> <psk>` under `su 1000`, which does
+re-execs `wandr-net --associate <ssid> <psk>` under `su 1000`, which does
 `addStaInterface("wlan0") → addNetwork() → setSsid/setKeyMgmt(WPA_PSK)/
 setPskPassphrase/setScanSsid(true) → select()`. Association confirmed via
 **carrier** (`/sys/class/net/wlan0/carrier`) — `select()` triggered it with **no
@@ -103,7 +103,7 @@ probe only because the legacy `-i` mode never HAL-creates the iface;
 `addStaInterface` in HAL mode does.)
 
 **Cold chip power-up ✅ DONE + device-verified** — a `--no-art` boot where WiFi was
-never on (chip unpowered) now works. `wart-hal-net::wifi_chip` drives the `IWifi`
+never on (chip unpowered) now works. `wandr-hal-net::wifi_chip` drives the `IWifi`
 HAL over binder as uid system: `isStarted()` (the canonical power signal) →
 `start()` (poll) → `getChip` → `configureChip(<STA mode derived from the chip's
 reported concurrency combinations>)` → `createStaIface()`. Idempotent /
@@ -130,8 +130,8 @@ is already retired (M2 association commit).
   under `--no-art`); **no SELinux/AVC denial**; `listInterfaces()` returns `wlan0`
   (STA). `IWifi/default` is likewise registered (the cold chip power-up path).
 - Vendored AIDL is already present (`aosp-hardware-interfaces/wifi/supplicant`).
-- Scaffolding landed: `wart-hal-net` codegens ISupplicant + `supplicant_hal::probe`;
-  `wart-net --probe-supplicant` (run as `su 1000`).
+- Scaffolding landed: `wandr-hal-net` codegens ISupplicant + `supplicant_hal::probe`;
+  `wandr-net --probe-supplicant` (run as `su 1000`).
 - Nuance (not a blocker): `getStaInterface("wlan0")` → `ServiceSpecific(1)` because
   our supplicant created the iface via legacy `-i/-c` config, not the HAL's
   `addStaInterface()`; M2 either calls `addStaInterface` or starts it HAL-managed.
@@ -141,7 +141,7 @@ M2 remaining: drive associate via `ISupplicantStaIface` (`addNetwork` →
 
 ## Goal
 
-A wart-native connectivity layer that replaces Android's `ConnectivityService` +
+A wandr-native connectivity layer that replaces Android's `ConnectivityService` +
 `WifiService` + per-transport managers (all Java, in `system_server`, dead under
 `--no-art`) by driving the **surviving native binders** — `ISupplicant`,
 `INetd`, `IDnsResolver`, `IWifi`, `wificond`, `rild`. It must:
@@ -156,34 +156,34 @@ A wart-native connectivity layer that replaces Android's `ConnectivityService` +
    move data over WASI sockets → kernel directly; this layer is control/monitor,
    NOT a data path — see "Why not a data path" below).
 
-## Architecture (the wart triad, mirrors audio/sensors)
+## Architecture (the wandr triad, mirrors audio/sensors)
 
 ```
-guest (WASI sockets = data path)            guest (war:connectivity WIT = control/status)
+guest (WASI sockets = data path)            guest (wandr:connectivity WIT = control/status)
         │                                            │
         ▼                                            ▼
-   kernel ──────── netd (INetd, routes/iptables) ── wart-arbiter-net  ← DECIDES (policy brain)
+   kernel ──────── netd (INetd, routes/iptables) ── wandr-arbiter-net  ← DECIDES (policy brain)
                    dnsresolver (IDnsResolver)              │  transport registry, default-net
                    (native survivors)                      │  selection, validation, metered
                                                            ▼
-                                              wart-hal-net  ← APPLIES (drives survivors)
+                                              wandr-hal-net  ← APPLIES (drives survivors)
                                               ISupplicant / INetd / IDnsResolver /
                                               IWifi / wificond / rild  +  DHCP client
 ```
 
-- **`runtime/wart-hal-net`** (shared HAL crate, like `wart-hal-sensors`): thin
+- **`runtime/wandr-hal-net`** (shared HAL crate, like `wandr-hal-sensors`): thin
   rsbinder clients to the native survivors + a bundled **DHCPv4 client** (the one
   genuinely-missing native binary — Android did DHCP in NetworkStack/Java). The
   per-transport "drivers" live here (associate, get-ip, set-route, set-dns).
-- **`runtime/wart-arbiter/wart-arbiter-net`** (arbiter module, the
+- **`runtime/wandr-arbiter/wandr-arbiter-net`** (arbiter module, the
   ConnectivityService brain): transport registry + availability, network-selection
   policy, default-network/route/DNS orchestration, reachability validation,
   metered/cost policy, persistence/auto-reconnect, status aggregation. Decides;
   HAL applies (same "arbiter decides, host/HAL applies" contract as audio).
-- **`wit/war-connectivity.wit`** + guest bindings (`war:connectivity`): status,
+- **`wit/wandr-connectivity.wit`** + guest bindings (`wandr:connectivity`): status,
   enumerate, connect/disconnect (privileged), and an `on-change` export callback.
 - Launched by `run-hybrid-stack --no-art` (after netd/wifi HAL are up), like
-  `wart-sensors`. May reuse the `permission` stub from task 87 (netd's privileged
+  `wandr-sensors`. May reuse the `permission` stub from task 87 (netd's privileged
   ops — createNetwork/setResolver — do an `IPermissionController` check).
 
 ## The per-transport interface (setup + monitor)
@@ -202,7 +202,7 @@ A common `Transport` abstraction, implemented per medium:
 `state` enum: `disconnected → scanning → associating → obtaining-ip → connected →
 {validated | captive-portal | no-internet} | failed`.
 
-## Orchestrator (`wart-arbiter-net`) responsibilities
+## Orchestrator (`wandr-arbiter-net`) responsibilities
 
 - **Transport registry + availability** = "enumerate available connection methods".
 - **Network-selection policy**: priority (ethernet > wifi > cellular default; or
@@ -216,10 +216,10 @@ A common `Transport` abstraction, implemented per medium:
 - **Metered / data-saver** awareness (cellular = metered).
 - **Persistence + auto-reconnect** under `--no-art` (remember known nets + creds;
   reconnect at bring-up — replaces WifiConfigManager + framework auto-connect).
-- **Status aggregation** → guests (`on-change`) + the wart status bar (wifi/signal
+- **Status aggregation** → guests (`on-change`) + the wandr status bar (wifi/signal
   icon, like the existing chrome).
 
-## WIT — `war:connectivity` (control/status/monitor, NOT data)
+## WIT — `wandr:connectivity` (control/status/monitor, NOT data)
 
 - `get-status() -> network-status` — online?, active-transport, metered, captive
 - `list-transports() -> list<transport-info>` — kind + availability + status
@@ -233,7 +233,7 @@ A common `Transport` abstraction, implemented per medium:
 
 `ConnectivityService`'s `connectivity`/`IConnectivityManager` binder is the
 **app-facing control/policy API**, not the packet path — packets go kernel↔netd.
-wart guests use **WASI sockets → kernel directly**, so they never touch
+wandr guests use **WASI sockets → kernel directly**, so they never touch
 `IConnectivityManager`; the live demo proved a plain default route gives full
 internet with no ConnectivityService at all. So we do **not** stub/reimplement
 the connectivity binder — we drive the native survivors and expose our own thin
@@ -242,9 +242,9 @@ bypass with a single default route in the main table.)
 
 ## Suggested phasing
 
-- **M1 — WiFi-STA end to end** (productize the demo): `wart-hal-net` ISupplicant
+- **M1 — WiFi-STA end to end** (productize the demo): `wandr-hal-net` ISupplicant
   associate + the bundled DHCP client + `INetd`/`IDnsResolver` route+DNS;
-  `wart-arbiter-net` minimal (one transport, connect/status/`on-change`);
+  `wandr-arbiter-net` minimal (one transport, connect/status/`on-change`);
   captive-portal validation; `run-hybrid-stack --no-art` auto-connects a known net.
   DoD: phone boots `--no-art`, auto-joins wifi, DNS resolves, a guest gets online.
 - **M2 — multi-transport + policy**: ethernet (USB-C dock), selection priority +
@@ -256,17 +256,17 @@ bypass with a single default route in the main table.)
 
 1. **Change notifications are the priority feature**, not connect UX — apps mostly
    just need online/offline + metered (`registerDefaultNetworkCallback`).
-2. **Airplane mode / radio power** control (battery; ties to `wart-arbiter-power`).
+2. **Airplane mode / radio power** control (battery; ties to `wandr-arbiter-power`).
 3. **Keep-wifi-alive during background work / screen-off** (mirror the audio comms
-   keep-alive in `wart-arbiter-power`; otherwise idle may drop the link).
+   keep-alive in `wandr-arbiter-power`; otherwise idle may drop the link).
 4. **Security/permissions**: status = any guest; scan/connect = privileged.
 5. **Credential storage**: where do known-network creds live ART-off? (keystore2
-   survives; or a wart-owned store). Today: plaintext in `WifiConfigStore.xml`.
+   survives; or a wandr-owned store). Today: plaintext in `WifiConfigStore.xml`.
 6. **IPv6** is basically free (already saw global v6 addrs) — include in `status()`.
-7. **A wifi-picker chrome app** (war.settings.wifi) for first-time connect UX —
+7. **A wifi-picker chrome app** (wandr.settings.wifi) for first-time connect UX —
    separate guest, later.
 8. **DHCP client choice**: bundle a static `udhcpc`/`dhcpcd`, or a small pure-Rust
-   DHCPv4 in `wart-hal-net` (no extra binary, fits the WASI/rust-everywhere ethos).
+   DHCPv4 in `wandr-hal-net` (no extra binary, fits the WASI/rust-everywhere ethos).
 
 ## Risks / unknowns
 
@@ -276,7 +276,7 @@ bypass with a single default route in the main table.)
 - netd privileged-op permission checks (the `permission`/`IPermissionController`
   tie-in from task 87) — confirm whether the stub or a privileged uid is needed.
 - The supplicant won't auto-connect standalone (needs the ISupplicant trigger) —
-  `wart-hal-net` must drive `selectNetwork`/`reassociate` (demo used a ctrl-socket
+  `wandr-hal-net` must drive `selectNetwork`/`reassociate` (demo used a ctrl-socket
   `wpanudge`; the AIDL call replaces it).
 
 ## References

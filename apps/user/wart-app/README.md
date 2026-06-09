@@ -1,9 +1,9 @@
-# wart-app
+# wandr-app
 
 The reference Compose Multiplatform application for the **wasi-android-runtime**
 (WAR) host. Built as a Kotlin/Wasm-WASI executable, packaged as a WebAssembly
 Component, AOT-compiled for `aarch64-linux-android`, and executed inside the
-custom wasmtime host that lives in `~/wart/wart-host/`.
+custom wasmtime host that lives in `~/wandr/wandr-host/`.
 
 ## Screenshots
 
@@ -37,7 +37,7 @@ piece of the runtime:
 - Host-side `WasiDrawable` transforms (translation/scale/rotation/clip/alpha)
 - Warm-resume of the wasmtime store across activity suspend/resume
 
-When something breaks on the runtime side, `wart-app` is where the breakage
+When something breaks on the runtime side, `wandr-app` is where the breakage
 shows up first.
 
 ## Code layout
@@ -62,11 +62,11 @@ src/wasmWasiMain/kotlin/
 Smoke-test files probe one Compose module each, so a compile failure points
 straight at the offending ported klib.
 
-## Relationship to the rest of `~/wart/`
+## Relationship to the rest of `~/wandr/`
 
 | Path | Role |
 |------|------|
-| `wart-app/` (this) | The guest WASM Component / Compose UI |
+| `wandr-app/` (this) | The guest WASM Component / Compose UI |
 | `host/` | The Rust wasmtime host — opens `skiko-component.cwasm`, owns the GPU surface, implements the WIT canvas/input/lifecycle imports |
 | `wit/skiko-gfx.wit` | Source-of-truth WIT interface (mirrored in `skiko/skiko/wit/`) |
 | `skiko/` (symlinked to `~/skiko`) | wasmWasi Skiko stubs + WIT-Kotlin bindings |

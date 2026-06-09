@@ -1,6 +1,6 @@
 # Architecture: the host/guest boundary
 
-This doc clarifies how the wart-host (Rust) and a wart guest (Kotlin/Wasm,
+This doc clarifies how the wandr-host (Rust) and a wandr guest (Kotlin/Wasm,
 or any other WASM Component-Model guest) call into each other, what
 "host-driven" means in practice, and why the design is shaped that way.
 
@@ -21,7 +21,7 @@ live?" The short answers are below; the long answers follow.
 - **"Host-driven" means:** the host owns the render loop, vsync timing,
   input draining, lifecycle dispatch, and the scheduler. The guest is
   reactive — it provides function bodies the host invokes on its
-  schedule. The loop lives in `wart-host/src/standalone.rs`, not in any
+  schedule. The loop lives in `wandr-host/src/standalone.rs`, not in any
   guest.
 - **wasip2 ≠ "anything WASM Component-Model".** wasip2 is a specific
   set of standardized WIT interfaces (`wasi:io`, `wasi:filesystem`,
@@ -36,11 +36,11 @@ exported interface. The host invokes it via wasmtime's
 `Func::call`/`call_render_frame`:
 
 ```
-[ host loop owns timing — wart-host/src/standalone.rs ]
+[ host loop owns timing — wandr-host/src/standalone.rs ]
     ↓ (host invokes via wasmtime; canonical-ABI lowering of `nanos`)
 [ guest's renderFrame body runs — Compose recomposition + draw calls ]
     ↓ (guest, while running, calls host imports like draw_rect, draw_text)
-[ host implements those imports in wart-host/src/canvas_impl.rs —
+[ host implements those imports in wandr-host/src/canvas_impl.rs —
   skia-safe draws to GPU ]
     ↓ (control returns up through the import calls;
        eventually renderFrame returns; canonical-ABI lifting; void result)
@@ -83,13 +83,13 @@ Our skiko-gfx interface (`my:skiko-gfx/canvas`, `.../window`,
 Component-Model machinery, but a separate namespace, designed and
 implemented by us. It is NOT part of wasip2.
 
-Our cross-app dep interface (`war:markdown/renderer`,
-`war:emoji/shaper`, …) is also custom WIT, defined by the app/system
+Our cross-app dep interface (`wandr:markdown/renderer`,
+`wandr:emoji/shaper`, …) is also custom WIT, defined by the app/system
 component authors.
 
 This matters because:
 
-- When wart-host calls `wasmtime_wasi::p2::add_to_linker_sync(&mut linker)`,
+- When wandr-host calls `wasmtime_wasi::p2::add_to_linker_sync(&mut linker)`,
   it's registering the wasip2 set in the Linker — but NOT skiko-gfx, and
   NOT any custom app interfaces. Those have to be added separately.
 - A consumer can import any mix: some wasip2 (e.g. for stdio), some
@@ -98,7 +98,7 @@ This matters because:
 
 ## The host-driven design
 
-The wart-host design rule: **timing, orchestration, and resource
+The wandr-host design rule: **timing, orchestration, and resource
 lifetimes live in the host. The guest provides function bodies; nothing
 more.**
 
@@ -168,7 +168,7 @@ onLifecycleChanged + ...). The host calls them on its own schedule.
 
 ## One-shot consumers (CLI/smoke) fit the host-driven model with cardinality 1
 
-A wasi:cli/run consumer like `wart-app-md-smoke` doesn't have a render
+A wasi:cli/run consumer like `wandr-app-md-smoke` doesn't have a render
 loop. Its program is:
 
 ```kotlin
@@ -184,8 +184,8 @@ The host invokes `wasi:cli/run.run()` **once** — same primitive as one
 The guest still doesn't drive a loop; it just runs to completion. The
 "host drives" rule holds.
 
-The `wart-host --run-once <app-id>` mode is the entry for this shape.
-It uses the same `WartLoader::load` + same `wire_markdown_dep` proxy
+The `wandr-host --run-once <app-id>` mode is the entry for this shape.
+It uses the same `WandrLoader::load` + same `wire_markdown_dep` proxy
 setup as the Compose path — only the final instantiate-and-invoke call
 differs (`Command::instantiate` + `call_run` instead of
 `SkikoUi::instantiate` + the render loop).
@@ -200,10 +200,10 @@ consumer is Compose or CLI. It:
    — the dep lands in the consumer's Store.
 3. Clones the dep's `Guest` accessor (a wasmtime Func handle).
 4. Registers the dep's `render` export as a proxy entry in the
-   consumer's Linker via `linker.instance("war:markdown/renderer@0.1.0").func_wrap("render", ...)`.
+   consumer's Linker via `linker.instance("wandr:markdown/renderer@0.1.0").func_wrap("render", ...)`.
 
 When the consumer later instantiates (either as SkikoUi or Command), its
-import of `war:markdown/renderer@0.1.0` is satisfied by that proxy. Each
+import of `wandr:markdown/renderer@0.1.0` is satisfied by that proxy. Each
 call from the consumer goes: consumer → proxy closure → dep instance's
 `call_render` → dep body → return back through proxy → consumer.
 
@@ -213,11 +213,11 @@ binding code.
 
 ## See also
 
-- `wart-host/src/app_loader.rs` — `load_dep_components` + `wire_dep_into_linker`
+- `wandr-host/src/app_loader.rs` — `load_dep_components` + `wire_dep_into_linker`
   + `wire_markdown_dep`.
-- `wart-host/src/standalone.rs` — the canonical host-driven loop for
+- `wandr-host/src/standalone.rs` — the canonical host-driven loop for
   Compose consumers.
-- `wart-host/src/run_once.rs` — the host-driven one-shot for CLI
+- `wandr-host/src/run_once.rs` — the host-driven one-shot for CLI
   consumers (task 36 step 7).
 - `tasks/36-cross-app-deps.md` — scope + status of the cross-app dep work.
 - `post-art-roadmap.md` §7 + §9 — packaging + isolation model.

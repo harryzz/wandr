@@ -1,7 +1,7 @@
 # dioxus-spike — feasibility probe (task 57 follow-up)
 
 **Question:** is `dioxus-core` + `taffy` a viable *light* reactive Rust UI
-framework for wart guests (a Compose alternative), given our rendering
+framework for wandr guests (a Compose alternative), given our rendering
 boundary — the guest has no DOM / no WebView / no GPU, only the
 high-level host-Skia **canvas WIT**?
 
@@ -41,7 +41,7 @@ path is `dioxus-core` + `taffy` + our own canvas-WIT painter.
 ## Recommendation
 
 This is the leading candidate for a general light reactive Rust UI
-framework on wart, for when a *complex* Rust guest is needed (rich status
+framework on wandr, for when a *complex* Rust guest is needed (rich status
 bar, settings app). For simple system UI (the launcher, a basic taskbar),
-hand-rolled canvas-WIT drawing stays lighter (see `war.launcher`, ~70 KB).
+hand-rolled canvas-WIT drawing stays lighter (see `wandr.launcher`, ~70 KB).
 See `tasks/57-launcher.md` and [[feedback_no_art_layer_dependencies]].

@@ -18,9 +18,9 @@ app now rotate coherently.
   AOT cache-key — pure policy, so toggling it doesn't invalidate the `.cwasm`.
 - `standalone.rs` gate: `let rotates = loaded.rotation_policy() || mode == None;`
   — fullscreen always rotates (task 43), overlays rotate iff their manifest opts
-  in. The flag is fully generic: any warpkg enables rotation the same way.
-- Opted in: `war.ime.keyboard` (`pack-ime-keyboard.sh`), `war.statusbar`,
-  `war.taskbar` (`build-system-warpkgs.sh`).
+  in. The flag is fully generic: any wandrpkg enables rotation the same way.
+- Opted in: `wandr.ime.keyboard` (`pack-ime-keyboard.sh`), `wandr.statusbar`,
+  `wandr.taskbar` (`build-system-wandrpkgs.sh`).
 
 ### 2. Generic shim geometry (a-03 `libsf_surface.so` rebuild)
 
@@ -53,10 +53,10 @@ keyboard sits above the taskbar in portrait as well.
 
 ### 4. IME guest resize fix (the plan's wrong assumption)
 
-The plan assumed the IME guest needed no changes. **Wrong** — `war.ime.keyboard`'s
+The plan assumed the IME guest needed no changes. **Wrong** — `wandr.ime.keyboard`'s
 `Main.kt` render delegate discarded the per-frame `w/h`, so the `ComposeScene`
 stayed at its startup (portrait 1200-px) size and overflowed/clipped the rotated
-surface (rows ran off-panel). Applied the same fix wart-app got in task 43:
+surface (rows ran off-panel). Applied the same fix wandr-app got in task 43:
 delegate now updates `realScene.size` + a new `MutableSceneWindowInfo.containerSize`
 on change. The keyboard's `weight(1f)` rows then fill whatever depth they're given.
 (The Rust canvas bar guests already adapt via their `on_resize` handlers.)
@@ -70,16 +70,16 @@ on change. The keyboard's `weight(1f)` rows then fill whatever depth they're giv
 4. Keyboard rows clipped → root cause was the IME guest scene-size bug (#4 above).
 5. Keyboard covered the taskbar → safe-area / `off = tb` inset.
 6. Repeated redeploys left **stale stacked overlay processes** (3 of each) which
-   corrupted the visible keyboard. `pkill -f wart-host` is unreliable through the
-   Magisk `su` wrapper — use `pkill -x wart-host` + kill the zygote (it reaps its
+   corrupted the visible keyboard. `pkill -f wandr-host` is unreliable through the
+   Magisk `su` wrapper — use `pkill -x wandr-host` + kill the zygote (it reaps its
    forked children). Bring the stack up with a single clean sequence.
 
 ## Files
 
-- `runtime/wart-host/src/{app_installer,app_loader,standalone,canvas_impl}.rs`
-- `runtime/wart-host/cpp/sf_surface.{cpp,h}` + `src/sf_surface.rs` (a-03 rebuild)
-- `apps/system/war.ime.keyboard/src/wasmWasiMain/kotlin/{Main,RealComposeApp}.kt`
-- `tools/scripts/{pack-ime-keyboard,build-system-warpkgs}.sh`
+- `runtime/wandr-host/src/{app_installer,app_loader,standalone,canvas_impl}.rs`
+- `runtime/wandr-host/cpp/sf_surface.{cpp,h}` + `src/sf_surface.rs` (a-03 rebuild)
+- `apps/system/wandr.ime.keyboard/src/wasmWasiMain/kotlin/{Main,RealComposeApp}.kt`
+- `tools/scripts/{pack-ime-keyboard,build-system-wandrpkgs}.sh`
 
 ## Follow-up — app-driven orientation LOCK propagates to chrome
 

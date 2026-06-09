@@ -23,7 +23,7 @@ uses the mDNS-optional fork (`../webrtc-rs-wasip2`).
 CALL ESTABLISHED — signaling → ICE → DTLS-SRTP → encrypted Opus media,
 end-to-end on wasm32-wasip2
 ```
-Device run via `wart-host --run-once war.probe.call` (Pixel 2 XL). A's 440 Hz
+Device run via `wandr-host --run-once wandr.probe.call` (Pixel 2 XL). A's 440 Hz
 tone reaches B through ICE-negotiated connectivity, DTLS-derived SRTP encryption,
 and the Opus codec — B decodes non-silent audio (rms 0.077; the SILK
 tone-attenuation seen throughout, real speech preserved).
@@ -33,8 +33,8 @@ tone-attenuation seen throughout, real speech preserved).
 # apply the rtc-ice mDNS-optional patch to a webrtc-rs/rtc clone first
 cargo build --target wasm32-wasip2 --release
 wasmtime run target/wasm32-wasip2/release/call-capstone.wasm   # desktop
-# device: package as wasi:cli/command warpkg (war.probe.call), then
-wart-host --run-once war.probe.call
+# device: package as wasi:cli/command wandrpkg (wandr.probe.call), then
+wandr-host --run-once wandr.probe.call
 ```
 
 ## What this means
@@ -53,7 +53,7 @@ device-verified individually, then composed here.
 - **Signaling channel**: exchange the SDP (`../call-signaling-sdp`) + trickled
   candidates over a signaling server.
 - **Arbiter**: the comms session / focus / routing / doze-exemption
-  (`wart-arbiter-audio`) already coordinate it.
+  (`wandr-arbiter-audio`) already coordinate it.
 
 Caveat unchanged: this is a generic/custom WebRTC call. A real **Signal** call
 uses **ringrtc** + Signal's calling service — a separate protocol-interop problem.

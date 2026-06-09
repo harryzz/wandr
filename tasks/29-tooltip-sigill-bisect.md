@@ -11,7 +11,7 @@ wasm ~5 s after the first tap. **Wasmtime's signal handler does NOT
 intercept this** — the process aborts straight to debuggerd without any
 Kotlin exception message recoverable from the wasmtime store, so no
 `render_frame fatal` log appears. A 16-layer bisect (committed as
-`wart-app/src/wasmWasiMain/kotlin/TooltipInspectionCard.kt`) narrowed
+`wandr-app/src/wasmWasiMain/kotlin/TooltipInspectionCard.kt`) narrowed
 the trigger to **the modern `Modifier.clickable` (ClickableElement
 Modifier.Node) interacting with `BasicTooltipBox`'s wrapper
 machinery**. Neither alone crashes; the combination does. This task
@@ -39,7 +39,7 @@ crash.
 - `tasks/28-skiko-abstract-canvas.md` — the bisect was triggered by
   task 28's DatePicker re-enablement; bc-* dispatch is verified
   innocent (host tables stable, no leaks).
-- `wart-app/src/wasmWasiMain/kotlin/TooltipInspectionCard.kt` — the
+- `wandr-app/src/wasmWasiMain/kotlin/TooltipInspectionCard.kt` — the
   16-layer bisect harness. Currently set to a non-crashing layer
   (test #16) so the demo boots clean; swap the body to test #11 to
   reproduce the crash deterministically.
@@ -173,15 +173,15 @@ wrapper + clickable → ✅). The only difference between those two
 trees is the state-machine inside `BasicTooltipState` — whatever
 fires on ClickableNode that's unique to #11 is the closest signal.
 
-**Preference: try wart-app-side observation first** (per
-[[prefer-wart-app-edits]]). Options to explore before any
+**Preference: try wandr-app-side observation first** (per
+[[prefer-wandr-app-edits]]). Options to explore before any
 compose-multiplatform-core edit:
 1. Wrap the inner Box with a custom `Modifier.Node` defined in
-   wart-app that logs its own `onAttach/onDetach/update` lifecycle —
+   wandr-app that logs its own `onAttach/onDetach/update` lifecycle —
    if its lifecycle differs between #11 and #17, infer ClickableNode
    is being similarly affected.
 2. Replace `Modifier.clickable` with a hand-rolled equivalent in
-   wart-app (gestureDetector + semantics + focusable) that has
+   wandr-app (gestureDetector + semantics + focusable) that has
    logMessage instrumentation built in, then check whether that
    variant inside real TooltipBox crashes. If yes → the
    instrumented version IS our diagnostic. If no → there's something
@@ -198,7 +198,7 @@ onPointerEvent` (republishing `compose-foundation-wasi` to pick up
 the change, ~15-25 min).
 
 **Step 2 outcome (2026-05-19):**
-Six wart-app-side sub-bisects added to `TooltipInspectionCard.kt`
+Six wandr-app-side sub-bisects added to `TooltipInspectionCard.kt`
 (tests #23-#28). The common path of every crashing variant has been
 identified as **`BasicTooltipState.show()`** in `Tooltip.kt:1055-1078` —
 specifically the `suspendCancellableCoroutine` inside `mutatorMutex.mutate`.
@@ -217,7 +217,7 @@ primitive, harder failure mode.
 Full sub-bisect table + per-test data → see
 `feedback_tooltip_sigill_wasi.md` §"Step 2 sub-bisect".
 
-### Step 2 — Inside-clickable instrumentation (superseded by the wart-app-side sub-bisect above)
+### Step 2 — Inside-clickable instrumentation (superseded by the wandr-app-side sub-bisect above)
 
 Add `WitCanvas.Import.logMessage(...)` calls inside
 `ClickableElement.update(node)`, `ClickableNode.onAttach()`,
@@ -243,7 +243,7 @@ labels it as `trap: UnreachableCodeReached`. So Step 3 hypothesis #1
 ("cranelift emits a UDF whose PC isn't registered") is FALSE.
 
 **Wasmtime's signal handler is failing to catch a properly-registered
-trap on this Android build.** Likely cause: wart-host's winit/NDK
+trap on this Android build.** Likely cause: wandr-host's winit/NDK
 sigaction setup shadowing wasmtime's. Needs a separate task.
 
 **Most-likely caller of `assert_fail`: `poll_oneoff`** — 6 of 16
@@ -296,7 +296,7 @@ override is heavier than the bug warrants right now:
   "Redeclaration").
 - **Edit commonMain `BasicTooltip.kt` directly to no-op the three
   modifiers**: single-file diff but breaks Tooltip on every target in
-  our fork (jvm/native/js + wasi). Even though wart only ships wasi,
+  our fork (jvm/native/js + wasi). Even though wandr only ships wasi,
   diverging the fork that way is bigger than the symptom.
 - **Convert the three modifiers to `expect`/`actual`**: clean KMP but
   requires actuals in 5-7 target source sets (jvmAndAndroidMain,
@@ -305,7 +305,7 @@ override is heavier than the bug warrants right now:
 
 **Current mitigation (already in place from task 28 closeout):**
 disable Material3 widgets that internally wrap their anchor in
-`TooltipBox` on the wart-app side. DatePicker chevrons + Tooltip-
+`TooltipBox` on the wandr-app side. DatePicker chevrons + Tooltip-
 wrapped IconButton-style widgets are off the smoke-card menu until
 this is revisited. Plain DatePicker (no chevrons) + non-Tooltip
 widgets continue to work fine. `TooltipInspectionCard` stays at the
@@ -348,7 +348,7 @@ conditional `expect/actual` on wasi.
 # The currently-pushed cwasm has the bisect harness in non-crashing
 # mode (test #16). To repro the SIGILL:
 
-# 1. Edit wart-app/src/wasmWasiMain/kotlin/TooltipInspectionCard.kt:
+# 1. Edit wandr-app/src/wasmWasiMain/kotlin/TooltipInspectionCard.kt:
 #    change the @Composable fun TooltipInspectionCard body to the
 #    test #11 layer:
 #       TooltipBox(positionProvider = …, tooltip = { Text("hello") },
@@ -358,11 +358,11 @@ conditional `expect/actual` on wasi.
 #       }
 
 # 2. Recompile + AOT + push:
-cd ~/wart/wart-app && ./gradlew compileProductionExecutableKotlinWasmWasi --console=plain --no-daemon
-wasm-tools component embed --world my:skiko-gfx/skiko-ui ~/wart/wit/skiko-gfx.wit \
-    build/compileSync/wasmWasi/main/productionExecutable/kotlin/wart-app.wasm -o /tmp/embedded.wasm
+cd ~/wandr/wandr-app && ./gradlew compileProductionExecutableKotlinWasmWasi --console=plain --no-daemon
+wasm-tools component embed --world my:skiko-gfx/skiko-ui ~/wandr/wit/skiko-gfx.wit \
+    build/compileSync/wasmWasi/main/productionExecutable/kotlin/wandr-app.wasm -o /tmp/embedded.wasm
 wasm-tools component new /tmp/embedded.wasm \
-    --adapt ~/wart/skiko/wasi_snapshot_preview1.reactor.wasm -o /tmp/skiko-component.wasm
+    --adapt ~/wandr/skiko/wasi_snapshot_preview1.reactor.wasm -o /tmp/skiko-component.wasm
 wasmtime compile --target aarch64-linux-android --wasm component-model --wasm gc \
     --wasm function-references --wasm exceptions -o /tmp/skiko-component.cwasm /tmp/skiko-component.wasm
 adb shell am force-stop com.example.wasmruntime
@@ -383,7 +383,7 @@ chevrons in the DatePicker card. Same crash, same signature.
   (the test #1 result definitively ruled out shared root). Track in
   its own task if anyone picks it up.
 - Bumping wasmtime version — the host is on wasmtime 44 (see
-  `wart-host/Cargo.toml`); upgrading may incidentally fix the trap
+  `wandr-host/Cargo.toml`); upgrading may incidentally fix the trap
   visibility but doesn't help diagnose if the trap stays.
 - Compose Multiplatform version bump — the upstream Tooltip code is
   reasonably stable across recent versions; behaviour likely
@@ -422,7 +422,7 @@ chevrons in the DatePicker card. Same crash, same signature.
       handler doesn't intercept it at runtime — separate host-side
       bug. Full details in feedback_tooltip_sigill_wasi memory.)
 - [ ] Step 4 deferred — see "Step 4 decision" section. Current
-      mitigation is wart-app-side disablement of TooltipBox-wrapped
+      mitigation is wandr-app-side disablement of TooltipBox-wrapped
       widgets, already in place from task 28.
 - [ ] At least one ClickableNode instrumentation cycle landed,
       `logMessage` output captured

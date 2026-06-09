@@ -15,7 +15,7 @@ are fixed, the residual one (the output stream stalling) is the main open bug.
 ## ✅ FIXED this session (committed, do NOT re-litigate)
 
 - **`setPhoneState` SIGABRTs audioserver** → `9dbb29d7`: gated behind
-  `WART_AUDIO_SETPHONESTATE=1` (default off). It hung the vendor HAL `setMode` (no
+  `WANDR_AUDIO_SETPHONESTATE=1` (default off). It hung the vendor HAL `setMode` (no
   telephony path under --no-art) → audioserver TimeCheck 5s watchdog → SIGABRT.
 - **Uninitialized volume range after audioserver (re)start** (`min=max=-1` → no gain →
   silent) → `03730627`: `audio_policy_impl::ensure_initialized()` self-heals on every
@@ -37,7 +37,7 @@ the HAL output thread stops consuming) → silence. Seen as `wr_ok=1` (stalled a
 and `wr_ok=~284 then frozen` (stalled after a bit). audioserver is ALIVE (no crash).
 
 **✅ CONFIRMED MECHANISM (source `vendor/aosp-frameworks-av/services/oboeservice` +
-device A/B via `wart-host --probe-call-stall`):**
+device A/B via `wandr-host --probe-call-stall`):**
 1. A SHARED output stream that **underflows** (client wrote < a full burst) gets an
    `XRUN` service event written into its up-message FIFO **every mixer cycle**
    (`AAudioServiceEndpointPlay::callbackLoop` → `incrementXRunCount` → `sendXRunCount`
@@ -90,7 +90,7 @@ kept advancing the whole guest-stall window, no suspend, no fighting on resume
 the *audio stream* alive through a guest stall (no relaunch needed), but the guest UI
 still needs its own wake-up fix.
 
-**Repro tooling (committed as permanent `--probe-*`):** `wart-host --probe-call-stall
+**Repro tooling (committed as permanent `--probe-*`):** `wandr-host --probe-call-stall
 [secs] [speaker0|1] [drain0|1]` (`audio_impl::probe_call_stall`) — primes a Call-route
 SHARED output, forces a sustained underflow, logs ring + up-message cursors per tick;
 A/B `drain` reproduces/​prevents the suspend. `play_tone` never trips it because it writes
@@ -108,12 +108,12 @@ deliberate audioserver pkill.
 ### 3. Guest UI freezes after call-audio trouble
 After a stalled/broken call, the Signal UI goes unresponsive — guest main thread in
 `hrtimer_nanosleep`, flat CPU (idle, NOT binder-blocked, NOT spinning); input doesn't
-wake it. Recover = relaunch host (`wart-arbiter kill war.signal; launch war.signal`);
+wake it. Recover = relaunch host (`wandr-arbiter kill wandr.signal; launch wandr.signal`);
 bg→fg does NOT fix it. Find why the guest falls into a non-waking idle after the call
 loop hits errors (frame-pacing next-delay computed too long? the call loop stalling the
 single-threaded guest?). On-demand-render: `[[reference_on_demand_rendering]]`.
 
-### 4. Missing system_server services in wart-framework-shim (completeness)
+### 4. Missing system_server services in wandr-framework-shim (completeness)
 audioserver/AudioFlinger look up `power` (IPowerManager) + `audio` (IAudioService),
 neither in the shim. BOTH via non-blocking `checkService` (Threads.cpp:1261 for power;
 PlayerBase/AudioRecord for audio) → they degrade gracefully (no playback wakelock, no
@@ -150,15 +150,15 @@ followed `(140) speaker → (141) earpiece → speaker → default` on ONE no-pi
 receiver) / real-call A/B still worth a pass.
 
 ## Diagnostic tooling (use these)
-- **Engine media counters:** `/data/local/tmp/wart-apps/apps/war.signal/0.1.0/state/calldbg.log`
+- **Engine media counters:** `/data/local/tmp/wandr-apps/apps/wandr.signal/0.1.0/state/calldbg.log`
   (dbg_line → `/state/calldbg.log`). Key fields: `peak` (decoded amplitude, 0=silent),
   `wr_ok`/`wr_zero` (output ring accepted vs full), `audio rx` (decoded frames),
   `srtp ok/err`. `wr_ok` climbing = stream pulling; frozen = stalled.
 - **Host logs:** android_logger → logcat, tag `wasm_android_host::au..`
   (setPhoneState/onUpdateContextualVolumes/ensure_initialized/create_track route=).
-- **Volume range:** `wart-host --probe-audio-volume` (logs `media volume range min/max`;
+- **Volume range:** `wandr-host --probe-audio-volume` (logs `media volume range min/max`;
   -1 = uninitialized). **Audio caps A/B:** ART-up vs --no-art (the high-signal tool).
-- **Shim trace:** `WART_SHIM_TRACE=1` on `wart-framework-shim` logs every transaction to
+- **Shim trace:** `WANDR_SHIM_TRACE=1` on `wandr-framework-shim` logs every transaction to
   the services it DOES host (see the missing-service-logging note below).
 
 ## How to verify (done when)

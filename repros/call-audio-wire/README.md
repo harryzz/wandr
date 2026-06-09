@@ -1,12 +1,12 @@
-# call-audio-wire — wart-call's PCM ends wired to real mic/AAudio
+# call-audio-wire — wandr-call's PCM ends wired to real mic/AAudio
 
-The final call-engine integration: connect `wart_call::MediaSession`'s PCM in/out
+The final call-engine integration: connect `wandr_call::MediaSession`'s PCM in/out
 to the host `audio` WIT — **mic capture** in, **AAudio playback** out — and run it
 through the real codec+crypto pipeline on real hardware.
 
 ## What it does
 
-A `wasi:cli/command` guest (`war.probe.callaudio`) that:
+A `wasi:cli/command` guest (`wandr.probe.callaudio`) that:
 1. **Captures** ~3 s of the device mic via `audio.open-capture` / `read-pcm-f32`.
 2. **Runs each 20 ms frame through `MediaSession`** — Opus encode → RTP → SRTP →
    SRTP⁻¹ → RTP → Opus decode (loopback keys, the same media plane a live call
@@ -28,22 +28,22 @@ speaker ←write-pcm-f32─ PCM ←MediaSession.recv─ SRTP/RTP/Opus┘
 ```bash
 cargo build --target wasm32-wasip2 --release        # already a wasi:cli/command
 cp target/wasm32-wasip2/release/call-audio-wire.wasm components/probe.wasm
-# warpkg = this dir's package.toml + components/probe.wasm; push it, then:
-wart-host --install <warpkg>                         # app_id war.probe.callaudio
-wart-host --run-once war.probe.callaudio             # speak during "capturing…"
+# wandrpkg = this dir's package.toml + components/probe.wasm; push it, then:
+wandr-host --install <wandrpkg>                         # app_id wandr.probe.callaudio
+wandr-host --run-once wandr.probe.callaudio             # speak during "capturing…"
 ```
 
 ## Result (2026-06-02) — audibly device-verified ✅
 
 ```
-[callaudio] capturing ~3 s of mic → wart-call (Opus + SRTP loopback) — speak now…
-[callaudio] 150 frames through wart-call (144000 samples out); mic_rms=… out_rms=…
+[callaudio] capturing ~3 s of mic → wandr-call (Opus + SRTP loopback) — speak now…
+[callaudio] 150 frames through wandr-call (144000 samples out); mic_rms=… out_rms=…
 [callaudio] playing 1.5 s reference tone + your captured mic ×30.0 (peak …)…
-[callaudio] DONE — mic → wart-call (Opus + SRTP) → AAudio, end-to-end on real hardware
+[callaudio] DONE — mic → wandr-call (Opus + SRTP) → AAudio, end-to-end on real hardware
 ```
 
 **Confirmed on a Pixel 2 XL: the reference tone and the captured voice both play
-out the speaker** — the mic feeds wart-call's encoder and wart-call's decoder
+out the speaker** — the mic feeds wandr-call's encoder and wandr-call's decoder
 feeds the speaker, the full audio plane of a call, on real hardware. (The mic
 plays back amplified because this device's mic sits near the noise floor — a gain
 question, not a wiring one.)

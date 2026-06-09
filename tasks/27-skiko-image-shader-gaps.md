@@ -53,7 +53,7 @@
 > - `wit/skiko-gfx.wit` — current WIT source of truth (mirror in
 >   `skiko/skiko/wit/skiko-gfx.wit` after every edit per CLAUDE.md's
 >   WIT-sync rule).
-> - `wart-host/src/canvas_impl.rs` — Rust host implementations of
+> - `wandr-host/src/canvas_impl.rs` — Rust host implementations of
 >   existing canvas/shader WIT functions (the pattern to copy).
 > - `skiko/skiko/src/wasmWasiMain/kotlin/generated/SkikoUi.kt` and
 >   `InternalSkikoUi.kt` — generated WIT bindings (hand-edit to add
@@ -86,7 +86,7 @@ Listed in priority order (most-asked-for first):
 ### 1. `Image.makeFromEncoded(encoded: ByteArray): Image`
 
 **Current state:** `SkiaTypes.wasi.kt:548` throws.
-**Why we want it:** any wart-app that wants to load a PNG/JPEG from
+**Why we want it:** any wandr-app that wants to load a PNG/JPEG from
 bytes (asset, network, clipboard image-paste, decoded camera frame)
 needs this. Currently impossible.
 
@@ -227,13 +227,13 @@ what we need or add variants.
 Smallest useful win, separate from shader work.
 
 1. Add WIT verb (and bump `skiko/skiko/wit/skiko-gfx.wit` mirror).
-2. Implement in `wart-host/src/canvas_impl.rs` — `from_encoded`
+2. Implement in `wandr-host/src/canvas_impl.rs` — `from_encoded`
    path. Add a `last_image_id` counter if not already there.
 3. Kotlin side: edit `SkiaTypes.wasi.kt:548` to call the new WIT
    import. Regenerate / hand-edit `generated/SkikoUi.kt` and
    `InternalSkikoUi.kt`.
 4. Republish skiko klib.
-5. Smoke test: load a tiny PNG from wart-app assets, draw it via
+5. Smoke test: load a tiny PNG from wandr-app assets, draw it via
    the existing `drawImageRect` path.
 
 ### Step 3 — Sweep gradient + Shader.makeBlend (~3 h)
@@ -260,7 +260,7 @@ Five-line bodies in SkiaTypes.wasi.kt for the linear/radial
    compose-*-wasi rebuild is needed. Most of these new WIT verbs
    are pure additions, so probably not — but verify via mtime
    check.
-3. Rebuild wart-app + repackage cwasm + deploy.
+3. Rebuild wandr-app + repackage cwasm + deploy.
 4. Add a small smoke-test card to `RealComposeApp.kt` that
    exercises: an image loaded from encoded bytes, a sweep
    gradient, an image-shader fill, a blend shader. Visual
@@ -268,8 +268,8 @@ Five-line bodies in SkiaTypes.wasi.kt for the linear/radial
 
 ### Step 7 — Commit + update task doc + memory (~30 min)
 
-Single commit per skiko + wart commit per skiko-bindings + a
-wart-app commit if we add the smoke card. Update this task doc's
+Single commit per skiko + wandr commit per skiko-bindings + a
+wandr-app commit if we add the smoke card. Update this task doc's
 status to `✅ device-verified`. No new memory needed unless
 something surprising came up.
 
@@ -326,7 +326,7 @@ something surprising came up.
 - [ ] skiko klib republished, mtime newer than compose-*-wasi
       klibs (or compose-*-wasi rebuilt if needed per Step 5
       of `BUILD-wasmWasi.md`)
-- [ ] wart-app cwasm builds without errors
+- [ ] wandr-app cwasm builds without errors
 - [ ] cold start renders without `Image.X / Shader.X: not
       implemented` exceptions
 - [ ] smoke-test card visible on device, all four fills (encoded

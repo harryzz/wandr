@@ -18,54 +18,54 @@ incompatible with the §9 model (see
 [[project-app-lifecycle-and-packaging]] and the discussion that
 led to this task).
 
-The architecture is one wart-native IME app per language /
+The architecture is one wandr-native IME app per language /
 feature, all sharing one WIT contract, all switchable via the
-arbiter. First-party `war.ime.keyboard` ships first; voice and
-emoji and CJK come as separate `.warpkg`s sharing the same
+arbiter. First-party `wandr.ime.keyboard` ships first; voice and
+emoji and CJK come as separate `.wandrpkg`s sharing the same
 contract.
 
 Structurally close to Android — every Android IME component has
-a wart counterpart (see "Mapping to Android" below) — but uses
+a wandr counterpart (see "Mapping to Android" below) — but uses
 our own arbiter + WIT instead of system_server + binder. No ART,
 no WMS, no IMMS.
 
 ## Mapping to Android (for orientation)
 
-| Android | wart task-47 deliverable |
+| Android | wandr task-47 deliverable |
 |---|---|
-| IMMS (Java in system_server) | wart-arbiter gains an IME-routing module |
-| InputMethodService (Java base class) | `war.ime.keyboard` warpkg — a real wart guest, just another `.warpkg`. Same shape as any Compose app |
-| Gboard | First-party `war.ime.keyboard`. Architecture supports N IMEs as `.warpkg`s (voice, emoji, CJK each one) |
+| IMMS (Java in system_server) | wandr-arbiter gains an IME-routing module |
+| InputMethodService (Java base class) | `wandr.ime.keyboard` wandrpkg — a real wandr guest, just another `.wandrpkg`. Same shape as any Compose app |
+| Gboard | First-party `wandr.ime.keyboard`. Architecture supports N IMEs as `.wandrpkg`s (voice, emoji, CJK each one) |
 | InputMethodManager (per-app Java facade) | `WasiInputMethod` in skiko-wasi — `imm.showSoftInput(...)` style API exposed to guests via the new WIT interface |
-| IInputMethodClient + IInputConnection (binder IPC) | WIT `war:ime/client` interface — `commit-text`, `send-key-event`, `set-selection`, `get-text-before-cursor`, etc. Arbiter routes via the generic dep-wiring proxy (task 39) |
+| IInputMethodClient + IInputConnection (binder IPC) | WIT `wandr:ime/client` interface — `commit-text`, `send-key-event`, `set-selection`, `get-text-before-cursor`, etc. Arbiter routes via the generic dep-wiring proxy (task 39) |
 | EditorInfo (input type, hint metadata) | Same record passed through the WIT verb |
 | WMS focus gate | Arbiter foreground tracking (task 46 step 4) — already shipped |
 
 ## Pre-task design decisions
 
-**D1. IME process model: own zygote-forked guest.** Same as wart-
-app. Forked from the wart-host zygote, COW-shares preloaded
+**D1. IME process model: own zygote-forked guest.** Same as wandr-
+app. Forked from the wandr-host zygote, COW-shares preloaded
 engine + skia + system bundles. Distinct process, distinct SF
 surface, distinct InputDispatcher focus slot.
 
-**D2. WIT, not binder.** The `war:ime/client` WIT interface
+**D2. WIT, not binder.** The `wandr:ime/client` WIT interface
 replaces Android's `IInputMethodClient` + `IInputConnection`
 binders. Calls routed by the arbiter's generic dep-wiring
 proxy (task 39). Net win: capability gating becomes the
 component's WIT-imports list (Android's `<uses-permission>`
 XML drift is gone).
 
-**D3. IME app is a regular `.warpkg`.** No special install path,
+**D3. IME app is a regular `.wandrpkg`.** No special install path,
 no special launch path. The arbiter picks which installed IME
 app is "active" via a `set-ime <app-id>` socket command;
-default is `war.ime.keyboard`. Switching is just an arbiter
+default is `wandr.ime.keyboard`. Switching is just an arbiter
 state change.
 
-**D4. First-party + extensible.** `war.ime.keyboard` is shipped
-in the wart project — same status as `war.markdown.renderer`
+**D4. First-party + extensible.** `wandr.ime.keyboard` is shipped
+in the wandr project — same status as `wandr.markdown.renderer`
 and the other system bundles. Future IMEs (voice, emoji, CJK)
-are additional `.warpkg`s, NOT modifications to
-`war.ime.keyboard`. Multiple IMEs can be installed; the user
+are additional `.wandrpkg`s, NOT modifications to
+`wandr.ime.keyboard`. Multiple IMEs can be installed; the user
 picks the active one.
 
 **D5. Focus mechanic.** Arbiter tracks `(focused_app_pid,
@@ -98,7 +98,7 @@ step 5 shipped). The IME app starts at MAX-1 + invisible; only
 
 The protocol shape, no UI yet.
 
-- **`wit/ime-client.wit`** (new) — package `war:ime`, world
+- **`wit/ime-client.wit`** (new) — package `wandr:ime`, world
   `ime-client-world` (exported by IME apps), world
   `ime-host-world` (imported by editor-bearing apps).
   - `record editor-info { input-type: input-type, hint: string,
@@ -129,11 +129,11 @@ The protocol shape, no UI yet.
   - `ime-commit-text <text>` — called by the IME app. Arbiter
     relays to the focused app.
 
-- New module `wart-host/src/ime_impl.rs` (already exists for
+- New module `wandr-host/src/ime_impl.rs` (already exists for
   task 40 IMMS probes — REPLACE with a new ime_router_impl.rs
   or rename the old one to ime_imms_probe.rs to free the name).
 
-Success criterion: `wart-arbiter attach-editor <pid> '<json>'`
+Success criterion: `wandr-arbiter attach-editor <pid> '<json>'`
 from the shell triggers a logged route in the arbiter to a
 dummy IME-pid (no UI yet). Pure protocol smoke.
 
@@ -144,7 +144,7 @@ on device, state is maintained, error cases return structured
 ERR responses. Cross-process delivery is the step-2 add-on; step
 1 nails the protocol shape + arbiter-side bookkeeping.
 
-**`wit/ime.wit`** (new) — `package war:ime@0.1.0`. Defines:
+**`wit/ime.wit`** (new) — `package wandr:ime@0.1.0`. Defines:
 
 - `enum input-type` (text / number / phone / email / url /
   password / multiline-text)
@@ -163,9 +163,9 @@ ERR responses. Cross-process delivery is the step-2 add-on; step
 - `interface ime` — exported by IME apps. Two methods:
   `on-editor-attached(info)` + `on-editor-detached()`.
 - `world ime-client-world` — `import input-connection;
-  export ime;`. The shape every IME `.warpkg` implements.
+  export ime;`. The shape every IME `.wandrpkg` implements.
 
-**`wart-arbiter/src/state.rs`** — two new globals:
+**`wandr-arbiter/src/state.rs`** — two new globals:
 
 - `Mutex<Option<ActiveIme>>` (`ActiveIme { app_id, pid }`).
 - `Mutex<Option<EditorFocus>>` (`EditorFocus { pid, editor_info }`).
@@ -175,7 +175,7 @@ returning the prior value. `remove(app_id)` now also clears
 both if the removed app was the active IME or owned the
 focused editor.
 
-**`wart-arbiter/src/main.rs`** — eight new socket-command
+**`wandr-arbiter/src/main.rs`** — eight new socket-command
 handlers + `run_client_multi` for multi-arg CLI passthrough:
 
 - `set-ime <app-id>` — validates the app is running, swaps the
@@ -199,32 +199,32 @@ handlers + `run_client_multi` for multi-arg CLI passthrough:
 **Device-verified on Pixel 2 XL:**
 
 ```
-$ wart-arbiter list                                → OK count=0
+$ wandr-arbiter list                                → OK count=0
 
-$ wart-arbiter launch com.example.wart-app         → pid=5584
-$ wart-arbiter launch com.example.wart-app2        → pid=5667
+$ wandr-arbiter launch com.example.wandr-app         → pid=5584
+$ wandr-arbiter launch com.example.wandr-app2        → pid=5667
 
-$ wart-arbiter set-ime com.example.wart-app2       → OK ime=… prev=(none)
-$ wart-arbiter set-ime com.bogus                   → ERR not-running
+$ wandr-arbiter set-ime com.example.wandr-app2       → OK ime=… prev=(none)
+$ wandr-arbiter set-ime com.bogus                   → ERR not-running
 
-$ wart-arbiter attach-editor 5584 text Type-here Hello
-  → OK attached editor pid=5584 app=com.example.wart-app input-type=text
-       prev-pid=- route→com.example.wart-app2 (pid=5667)
-$ wart-arbiter attach-editor 99999                 → ERR attach-editor-unknown-pid
+$ wandr-arbiter attach-editor 5584 text Type-here Hello
+  → OK attached editor pid=5584 app=com.example.wandr-app input-type=text
+       prev-pid=- route→com.example.wandr-app2 (pid=5667)
+$ wandr-arbiter attach-editor 99999                 → ERR attach-editor-unknown-pid
 
-$ wart-arbiter ime-commit-text hello               → OK route→pid=5584 …
-$ wart-arbiter ime-send-key-event 0 67 down        → OK route→pid=5584 …
-$ wart-arbiter ime-set-composing-text ni           → OK route→pid=5584 …
-$ wart-arbiter ime-finish-composing-text           → OK route→pid=5584 …
+$ wandr-arbiter ime-commit-text hello               → OK route→pid=5584 …
+$ wandr-arbiter ime-send-key-event 0 67 down        → OK route→pid=5584 …
+$ wandr-arbiter ime-set-composing-text ni           → OK route→pid=5584 …
+$ wandr-arbiter ime-finish-composing-text           → OK route→pid=5584 …
 
-$ wart-arbiter list
+$ wandr-arbiter list
   OK count=2
-    app=com.example.wart-app   pid=5584 elapsed=…  [editor:text]
-    app=com.example.wart-app2  pid=5667 elapsed=…  [fg] [ime]
+    app=com.example.wandr-app   pid=5584 elapsed=…  [editor:text]
+    app=com.example.wandr-app2  pid=5667 elapsed=…  [fg] [ime]
 
-$ wart-arbiter detach-editor 5584                  → OK detached …
-$ wart-arbiter ime-commit-text orphan              → ERR no-focused-editor
-$ wart-arbiter set-ime -                           → OK cleared prev=com.example.wart-app2
+$ wandr-arbiter detach-editor 5584                  → OK detached …
+$ wandr-arbiter ime-commit-text orphan              → ERR no-focused-editor
+$ wandr-arbiter set-ime -                           → OK cleared prev=com.example.wandr-app2
 ```
 
 Logcat captures structured `arbiter: ime-<verb> → editor pid=X
@@ -234,10 +234,10 @@ delivery once per-host control sockets exist.
 **Files added/changed (this step):**
 
 - `wit/ime.wit` — new protocol definition
-- `wart-arbiter/src/state.rs` — `ActiveIme`, `EditorInfo`,
+- `wandr-arbiter/src/state.rs` — `ActiveIme`, `EditorInfo`,
   `EditorFocus` types + getters/setters; `remove` clears both
   fields on app death
-- `wart-arbiter/src/main.rs` — eight new socket commands +
+- `wandr-arbiter/src/main.rs` — eight new socket commands +
   `run_client_multi` CLI passthrough + `cmd_list` markers
 - `tasks/47-ime-via-guest-app.md` — this section
 
@@ -266,15 +266,15 @@ skiko-wasi actual for this calls the new WIT verb to
 
 - New `skiko/src/wasmWasiMain/kotlin/org/jetbrains/skiko/wasi/WasiInputMethod.kt`
   — Compose `PlatformTextInputMethodRequest` actual.
-- New WIT imports on the wart-app side: the input-connection
+- New WIT imports on the wandr-app side: the input-connection
   interface (host-driven calls from the IME → guest's editor).
 - `compose-multiplatform-core/.../wasmWasiMain/...` actuals for
   the `PlatformTextInputMethodRequest` extension points.
-- Replace `WasiSoftKeyboard` registration in wart-app with the
+- Replace `WasiSoftKeyboard` registration in wandr-app with the
   new external-IME path; the in-canvas keyboard's code stays in
   tree as the fallback for when no IME app is installed.
 
-Success criterion: tapping a `BasicTextField` in wart-app logs
+Success criterion: tapping a `BasicTextField` in wandr-app logs
 `attach-editor` reaching the arbiter; tapping out logs
 `detach-editor`. No UI swap yet — keyboard is still in-canvas.
 
@@ -288,7 +288,7 @@ co-existence promise from the scope doc was kept).
 
 **WIT extension** — added an `ime` interface to
 `wit/skiko-gfx.wit` (mirrored to `skiko/skiko/wit/skiko-gfx.wit`
-and `wart-app/wit/deps/skiko-gfx/skiko-gfx.wit`) and added it
+and `wandr-app/wit/deps/skiko-gfx/skiko-gfx.wit`) and added it
 to the `skiko-ui` world's imports:
 
 ```wit
@@ -304,14 +304,14 @@ interface ime {
 `input-type` is stringly-typed at this layer (matches the values
 in `wit/ime.wit`'s enum) to avoid a cross-package import; if
 more typed IME verbs land on this interface, the right move is
-to promote `war:ime/types` to its own importable package.
+to promote `wandr:ime/types` to its own importable package.
 
 **Host impl** — new
-`wart-host/src/ime_host_impl.rs` implements
+`wandr-host/src/ime_host_impl.rs` implements
 `my::skiko_gfx::ime::Host for HostState`:
 
 - `notify_editor_attached` opens a one-shot UNIX socket to
-  `/data/local/tmp/wart-arbiter.sock`, writes
+  `/data/local/tmp/wandr-arbiter.sock`, writes
   `attach-editor <getpid()> <input-type> <hint> <initial-text>\n`
   (spaces in hint/initial-text replaced with `_` for the
   positional CLI parser — step 4's per-host control socket can
@@ -330,7 +330,7 @@ following the `logMessage` / `Haptics.perform` pattern: two
 (ptr, len each); 2 u32 selection bounds → 8 ints total in the
 attach signature.
 
-**Wart-app integration** — `WasiKeyboardController.show()` /
+**Wandr-app integration** — `WasiKeyboardController.show()` /
 `.hide()` now ALSO call `Ime.Import.notifyEditorAttached(...)`
 / `notifyEditorDetached()` alongside flipping
 `isVisible.value` (which still drives the in-canvas keyboard).
@@ -338,14 +338,14 @@ Try/catch defensive — if the arbiter is down, the in-canvas
 keyboard still works.
 
 **Build pipeline gotcha caught + fixed during smoke** —
-wart-app's `package.toml` (in `scripts/build-system-warpkgs.sh`)
+wandr-app's `package.toml` (in `scripts/build-system-wandrpkgs.sh`)
 was missing `[dependencies]` declarations for the three system
 bundles (markdown/emoji/fonts). The installer auto-detects
 component imports for the "missing dep — refuse install" gate
 but DOES NOT populate `[dependencies_resolved]` in
 cache-key.toml without an explicit `[dependencies]` block — so
 the loader's `load_dep_components` walked an empty table and
-instantiation failed with "war:markdown/renderer.render has
+instantiation failed with "wandr:markdown/renderer.render has
 the wrong type: function implementation is missing". The fix is
 mechanical: declare the three deps in the script's manifest
 template (same shape as md-smoke-rust does it).
@@ -359,10 +359,10 @@ along with the path. Redirected the diagnostics to stderr.
 rebuilt + reinstalled stack):
 
 ```
-$ wart-arbiter launch com.example.wart-app
-  OK pid=7265 app=com.example.wart-app
-  log: loader: loaded dep `fonts` (war:fonts/loader@0.1.0) from …
-  log: loader: loaded dep `markdown` (war:markdown/renderer@0.1.0) from …
+$ wandr-arbiter launch com.example.wandr-app
+  OK pid=7265 app=com.example.wandr-app
+  log: loader: loaded dep `fonts` (wandr:fonts/loader@0.1.0) from …
+  log: loader: loaded dep `markdown` (wandr:markdown/renderer@0.1.0) from …
   log: loader: dep `emoji` instantiated; wired 1 fn(s) across 1 interface(s)
   log: loader: dep `fonts` instantiated; wired 2 fn(s) across 1 interface(s)
   log: loader: dep `markdown` instantiated; wired 1 fn(s) across 1 interface(s)
@@ -371,7 +371,7 @@ $ wart-arbiter launch com.example.wart-app
 # tap on the BasicTextField in TextFieldCard …
   log: ime-host: forwarded attach-editor pid=7265 input-type="text" hint-len=0
        text-len=0 selection=[0..0]
-  log: arbiter: attach-editor pid=7265 app=com.example.wart-app input-type=text
+  log: arbiter: attach-editor pid=7265 app=com.example.wandr-app input-type=text
        hint="" initial-text-len=0 → route to (no active IME — set-ime first)
        (step 2 delivers on-editor-attached)
 
@@ -382,19 +382,19 @@ $ wart-arbiter launch com.example.wart-app
 ```
 
 Step 2 success criterion met by construction:
-"tapping a `BasicTextField` in wart-app logs `attach-editor`
+"tapping a `BasicTextField` in wandr-app logs `attach-editor`
 reaching the arbiter; tapping out logs `detach-editor`."
 
 **Out of scope** (lands in step 3 — the actual IME app):
 
 - Inbound delivery — IME app's `commit-text` / `send-key-event`
   arriving in the focused guest's editor. Needs a per-host
-  control socket (wart-host child opens connection to the
+  control socket (wandr-host child opens connection to the
   arbiter at startup; arbiter pushes events down it). Will
-  land in step 3 alongside the first-party `war.ime.keyboard`
-  warpkg, since the two pieces are needed together to actually
+  land in step 3 alongside the first-party `wandr.ime.keyboard`
+  wandrpkg, since the two pieces are needed together to actually
   type a character end-to-end.
-- Real `EditorInfo` fields. wart-app's `WasiKeyboardController`
+- Real `EditorInfo` fields. wandr-app's `WasiKeyboardController`
   hard-codes `input-type="text"`, `hint=""`, `initial-text=""`,
   `selection=[0..0]`. Threading the BasicTextField's actual
   `KeyboardOptions.keyboardType` + the textfield's current
@@ -405,33 +405,33 @@ reaching the arbiter; tapping out logs `detach-editor`."
 
 - `wit/skiko-gfx.wit` + mirrors — new `ime` interface added
   to skiko-ui imports.
-- `wart-host/src/ime_host_impl.rs` (new) — WIT impl that
+- `wandr-host/src/ime_host_impl.rs` (new) — WIT impl that
   forwards to the arbiter socket.
-- `wart-host/src/lib.rs` — `mod ime_host_impl;`.
+- `wandr-host/src/lib.rs` — `mod ime_host_impl;`.
 - `skiko/skiko/src/wasmWasiMain/kotlin/generated/{Internal,}SkikoUi.kt`
   — hand-added `Ime` bindings.
-- `wart-app/src/wasmWasiMain/kotlin/WasiKeyboardController.kt`
+- `wandr-app/src/wasmWasiMain/kotlin/WasiKeyboardController.kt`
   — `show()` / `hide()` also call the new WIT verb.
-- `scripts/build-system-warpkgs.sh` — declares wart-app's
+- `scripts/build-system-wandrpkgs.sh` — declares wandr-app's
   cross-app deps in its package.toml template + redirects
   build_system_wasm's diagnostics to stderr.
 - `tasks/47-ime-via-guest-app.md` — this section.
 
-### Step 3 — `war.ime.keyboard` first-party warpkg (~1 week)
+### Step 3 — `wandr.ime.keyboard` first-party wandrpkg (~1 week)
 
-The actual keyboard UI. New repo `war.ime.keyboard/` (sibling
-to `wart-arbiter` / `markdown-renderer` / etc).
+The actual keyboard UI. New repo `wandr.ime.keyboard/` (sibling
+to `wandr-arbiter` / `markdown-renderer` / etc).
 
 - Compose Material3 UI, fullwidth at the bottom of the screen.
 - QWERTY layout, shift/caps lock, basic punctuation, numbers
   via secondary layer, backspace, enter, space.
-- WIT imports: `war:ime/input-connection` (calls `commit-text`,
+- WIT imports: `wandr:ime/input-connection` (calls `commit-text`,
   `send-key-event`, etc).
-- WIT exports: `war:ime/ime` (receives `on-editor-attached`,
+- WIT exports: `wandr:ime/ime` (receives `on-editor-attached`,
   shows the keyboard; `on-editor-detached`, hides).
-- Build pipeline: same as wart-app (Kotlin/Compose → wasm →
-  component embed → component new → .warpkg).
-- Package: `app_id = "war.ime.keyboard"`, `kind = "system"`
+- Build pipeline: same as wandr-app (Kotlin/Compose → wasm →
+  component embed → component new → .wandrpkg).
+- Package: `app_id = "wandr.ime.keyboard"`, `kind = "system"`
   (it's the IME-ecosystem equivalent of the markdown/emoji/fonts
   system bundles), `version = "0.1.0"`.
 
@@ -444,7 +444,7 @@ taps → tapped letters appear in the focused TextField via
 Split step 3 into two sub-steps for tractable commits. **Step 3a
 ships the protocol path that delivers events from the arbiter
 INTO a running guest** — the missing inbound half of the IME
-loop. Step 3b is the actual `war.ime.keyboard` Compose UI, which
+loop. Step 3b is the actual `wandr.ime.keyboard` Compose UI, which
 sits on top of this infra and can iterate independently.
 
 **Architecture decision**: route IME taps through the existing
@@ -457,7 +457,7 @@ that's what step 3a uses. `commit-text` / `set-composing-text`
 become future work (needed for autocorrect, CJK, emoji); the
 keyboard MVP doesn't need them.
 
-**`wart-host/src/ime_inbound.rs` (new)**:
+**`wandr-host/src/ime_inbound.rs` (new)**:
 
 ```
 accept thread (background)         render loop (main thread)
@@ -469,7 +469,7 @@ queue.push_back(KeyEvent {...})       dispatch_key_v2(skiko, store, …)
                                     (re-uses task 33 step 3)
 ```
 
-Per-host socket path: `/data/local/tmp/wart-host-<pid>.sock`.
+Per-host socket path: `/data/local/tmp/wandr-host-<pid>.sock`.
 Bound by the forked child after EGL is up. Mode 666. The
 arbiter derives the path from `EditorFocus.pid` — no
 registration handshake needed.
@@ -479,18 +479,18 @@ render-loop thread can call into the wasm guest. The accept
 thread just parses + queues; the render loop drains +
 dispatches. Same separation the InputFlinger drain uses.
 
-**`wart-host/src/standalone.rs`**:
+**`wandr-host/src/standalone.rs`**:
 
 - After EGL setup: `crate::ime_inbound::spawn_listener()`.
 - Per-frame, alongside the InputFlinger drain:
   `for ev in crate::ime_inbound::drain_queue() { ...
   dispatch_key_v2(skiko, &mut store, action, code_point, key_id) ... }`
 
-**`wart-arbiter/src/main.rs`** — `cmd_ime_route` for the
+**`wandr-arbiter/src/main.rs`** — `cmd_ime_route` for the
 `send-key-event` verb now actually delivers:
 
 ```rust
-let host_sock = format!("/data/local/tmp/wart-host-{}.sock", focus.pid);
+let host_sock = format!("/data/local/tmp/wandr-host-{}.sock", focus.pid);
 let line = format!("key-event {cp} {kid} {act}\n");
 deliver_to_host(&host_sock, &line)?;
 ```
@@ -506,19 +506,19 @@ from shell-injected `ime-send-key-event` to BasicTextField
 state mutation:
 
 ```
-$ wart-arbiter launch com.example.wart-app  → OK pid=7989
+$ wandr-arbiter launch com.example.wandr-app  → OK pid=7989
   log: standalone: ime-inbound listening on
-       /data/local/tmp/wart-host-7989.sock
+       /data/local/tmp/wandr-host-7989.sock
 
 # (user taps the TextField in TextFieldCard)
-  log: arbiter: attach-editor pid=7989 app=com.example.wart-app
+  log: arbiter: attach-editor pid=7989 app=com.example.wandr-app
        input-type=text … → route to (no active IME — set-ime first)
 
 # inject 'a' (code-point 97 = 'a', key-id 29 = AKEYCODE_A)
-$ wart-arbiter ime-send-key-event 97 29 down  → OK route→pid=7989
-$ wart-arbiter ime-send-key-event 97 29 up    → OK route→pid=7989
+$ wandr-arbiter ime-send-key-event 97 29 down  → OK route→pid=7989
+$ wandr-arbiter ime-send-key-event 97 29 up    → OK route→pid=7989
   log: arbiter: ime-send-key-event → pid=7989 (97 29 down)
-       delivered via /data/local/tmp/wart-host-7989.sock
+       delivered via /data/local/tmp/wandr-host-7989.sock
   log: [wasm] tfstate text="hello worlda" sel=TextRange(12, 12)
                               ^^^^^^^^^^^^
                               the 'a' arrived in the BasicTextField
@@ -538,7 +538,7 @@ deferred — see step 3b results below):
   Compose-side handling that mutates the focused TextFieldState.
   Step 3a's send-key-event-only path is sufficient for ASCII
   typing.
-- The `war.ime.keyboard` warpkg itself. Now unblocked — the
+- The `wandr.ime.keyboard` wandrpkg itself. Now unblocked — the
   IME UI just needs to call `Ime.Import.notifyEditorAttached`
   / `sendKeyEvent` style WIT verbs (which the IME-side adapter
   routes back to the arbiter's `ime-send-key-event` socket
@@ -551,42 +551,42 @@ deferred — see step 3b results below):
 
 **Files added/changed (this step):**
 
-- `wart-host/src/ime_inbound.rs` — new module: per-host socket
+- `wandr-host/src/ime_inbound.rs` — new module: per-host socket
   listener thread + queue + drain.
-- `wart-host/src/lib.rs` — `mod ime_inbound;` (android-only).
-- `wart-host/src/standalone.rs` — spawn_listener after EGL +
+- `wandr-host/src/lib.rs` — `mod ime_inbound;` (android-only).
+- `wandr-host/src/standalone.rs` — spawn_listener after EGL +
   per-frame drain calling `dispatch_key_v2`.
-- `wart-arbiter/src/main.rs` — `cmd_ime_route` for
+- `wandr-arbiter/src/main.rs` — `cmd_ime_route` for
   send-key-event actually delivers; added `deliver_to_host`
   one-shot helper.
 - `tasks/47-ime-via-guest-app.md` — this section.
 
-#### Step 3b — first-party `war.ime.keyboard` warpkg (2026-05-27)
+#### Step 3b — first-party `wandr.ime.keyboard` wandrpkg (2026-05-27)
 
 **Outcome:** ✅ end-to-end on Pixel 2 XL across two concurrent
 processes. Tapping a key in the IME app delivers a synthetic
-`KeyEvent` to the focused `BasicTextField` in wart-app via the
+`KeyEvent` to the focused `BasicTextField` in wandr-app via the
 new IME-side WIT verb + the step-3a inbound delivery path.
 
 **The full loop, verified live:**
 
 ```
-[user taps "a" button in war.ime.keyboard's Compose UI]
+[user taps "a" button in wandr.ime.keyboard's Compose UI]
        │
        ▼
 [IME pid=12105] ime-key tap: label=a codePoint=97 keyId=29
 [IME] keyboard-host: forwarded ime-send-key-event 97 29 down
-       │  (UNIX socket: war.ime.keyboard → arbiter)
+       │  (UNIX socket: wandr.ime.keyboard → arbiter)
        ▼
 [arbiter] ime-send-key-event → pid=9819 (97 29 down) delivered
-          via /data/local/tmp/wart-host-9819.sock
-       │  (UNIX socket: arbiter → wart-app's per-host control socket)
+          via /data/local/tmp/wandr-host-9819.sock
+       │  (UNIX socket: arbiter → wandr-app's per-host control socket)
        ▼
-[wart-app pid=9819] ime_inbound accept thread → queue → render-
+[wandr-app pid=9819] ime_inbound accept thread → queue → render-
                     loop drain → dispatch_key_v2
        │
        ▼
-[wart-app] tfstate text="hello worldabcd lowa" sel=TextRange(20, 20)
+[wandr-app] tfstate text="hello worldabcd lowa" sel=TextRange(20, 20)
                               ↑↑↑↑↑↑↑↑↑↑↑↑
                               keys from the IME accumulated here
 ```
@@ -601,23 +601,23 @@ interface keyboard {
 }
 ```
 
-Added to `world skiko-ui` imports. The wart-host impl
+Added to `world skiko-ui` imports. The wandr-host impl
 (`keyboard_host_impl.rs`) forwards each call to the arbiter as
 `ime-send-key-event <cp> <kid> <down|up>`; the arbiter then
 routes via the focused-pid's per-host control socket (step 3a).
 Step 3b ships `send-key-event` only — `commit-text` etc. need
 new editor-side WIT exports + Compose-side handling, deferred.
 
-**`war.ime.keyboard` repo (new sibling)** — Kotlin/Compose
-first-party IME, bootstrapped from `wart-app/` template:
+**`wandr.ime.keyboard` repo (new sibling)** — Kotlin/Compose
+first-party IME, bootstrapped from `wandr-app/` template:
 
 ```
-war.ime.keyboard/
-  build.gradle.kts       (copied from wart-app, renamed artifact)
-  settings.gradle.kts    rootProject.name = "war-ime-keyboard"
+wandr.ime.keyboard/
+  build.gradle.kts       (copied from wandr-app, renamed artifact)
+  settings.gradle.kts    rootProject.name = "wandr-ime-keyboard"
   src/wasmWasiMain/
     kotlin/
-      Main.kt            (kept as-is from wart-app — same
+      Main.kt            (kept as-is from wandr-app — same
                           @WasmExport renderer surface, smoke
                           test calls stripped)
       RealComposeApp.kt  (rewritten — 200 LoC Compose UI: 13
@@ -626,12 +626,12 @@ war.ime.keyboard/
                           Keyboard.Import.sendKeyEvent.)
       WasiHapticFeedback.kt
       WasiLifecycleOwnerBridge.kt
-      compose/ generated/  (boilerplate from wart-app — minor
+      compose/ generated/  (boilerplate from wandr-app — minor
                             unused-symbol drag, will trim if it
                             becomes annoying)
   wit/
-    war-ime-keyboard.wit
-      package war:ime-keyboard@0.1.0;
+    wandr-ime-keyboard.wit
+      package wandr:ime-keyboard@0.1.0;
       world ime-keyboard { include my:skiko-gfx/skiko-ui@0.1.0; }
     deps/skiko-gfx/skiko-gfx.wit   (mirror)
 ```
@@ -646,47 +646,47 @@ QWERTY); bottom row `space ⌫ ⏎`. Bottom-anchor via
 `Box(fillMaxSize, contentAlignment = BottomCenter)`. The upper
 ~75% of the IME's surface is the dark panel background — once
 step 3c lifts the libgui shim's `eLayerOpaque` flag, the upper
-area can be transparent and wart-app will show through above
+area can be transparent and wandr-app will show through above
 the keyboard (the proper Android-IME UX).
 
 **Package**:
 
 ```toml
-app_id      = "war.ime.keyboard"
+app_id      = "wandr.ime.keyboard"
 version     = "0.1.0"
-world       = "war:ime-keyboard/ime-keyboard"
+world       = "wandr:ime-keyboard/ime-keyboard"
 composition = "same-store"
 
 [components]
 ui = "components/ui.wasm"
 ```
 
-Installed under `<APPS_ROOT>/apps/war.ime.keyboard/0.1.0/` —
+Installed under `<APPS_ROOT>/apps/wandr.ime.keyboard/0.1.0/` —
 treated as a regular user app at MVP. (`kind = "system"` is a
 future polish for when multiple IMEs ship and the user picks
 one — for now there's just the one.)
 
-**Smoke transcript** (Pixel 2 XL, with wart-app + war.ime.keyboard
+**Smoke transcript** (Pixel 2 XL, with wandr-app + wandr.ime.keyboard
 concurrent):
 
 ```
-$ wart-arbiter launch com.example.wart-app  → pid=9819
-# user taps a BasicTextField in wart-app → attach-editor fires
-$ wart-arbiter list
-  com.example.wart-app  pid=9819 [fg] [editor:text]
+$ wandr-arbiter launch com.example.wandr-app  → pid=9819
+# user taps a BasicTextField in wandr-app → attach-editor fires
+$ wandr-arbiter list
+  com.example.wandr-app  pid=9819 [fg] [editor:text]
 
-$ wart-arbiter launch war.ime.keyboard      → pid=12105
-$ wart-arbiter foreground war.ime.keyboard  → IME surface on top
-$ wart-arbiter set-ime war.ime.keyboard
-$ wart-arbiter list
-  com.example.wart-app  pid=9819            [editor:text]
-  war.ime.keyboard      pid=12105 [fg] [ime]
+$ wandr-arbiter launch wandr.ime.keyboard      → pid=12105
+$ wandr-arbiter foreground wandr.ime.keyboard  → IME surface on top
+$ wandr-arbiter set-ime wandr.ime.keyboard
+$ wandr-arbiter list
+  com.example.wandr-app  pid=9819            [editor:text]
+  wandr.ime.keyboard      pid=12105 [fg] [ime]
 
 # user taps the IME's "a" button:
   log: [ime] ime-key tap: label=a codePoint=97 keyId=29
   log: [arbiter] ime-send-key-event → pid=9819 (97 29 down)
-       delivered via /data/local/tmp/wart-host-9819.sock
-  log: [wart-app] tfstate text="hello worlda"
+       delivered via /data/local/tmp/wandr-host-9819.sock
+  log: [wandr-app] tfstate text="hello worlda"
 
 # multiple keys accumulated through the smoke:
   tfstate text="hello worldabcd lowa"
@@ -714,14 +714,14 @@ forget when bootstrapping a new sibling project.
 
 - `wit/skiko-gfx.wit` + mirrors — new `keyboard` interface;
   added to `world skiko-ui` imports.
-- `wart-host/src/keyboard_host_impl.rs` (new) — Host trait
+- `wandr-host/src/keyboard_host_impl.rs` (new) — Host trait
   forwards `send_key_event` to arbiter's
   `ime-send-key-event` socket cmd.
-- `wart-host/src/lib.rs` — `mod keyboard_host_impl;`.
+- `wandr-host/src/lib.rs` — `mod keyboard_host_impl;`.
 - `skiko/.../generated/SkikoUi.kt` + `InternalSkikoUi.kt`
   — hand-added `Keyboard` interface + Import companion.
-- `war.ime.keyboard/` — new sibling repo (full Kotlin/Compose
-  project bootstrapped from `wart-app/`, stripped to a
+- `wandr.ime.keyboard/` — new sibling repo (full Kotlin/Compose
+  project bootstrapped from `wandr-app/`, stripped to a
   single-purpose IME).
 - `tasks/47-ime-via-guest-app.md` — this section.
 
@@ -735,7 +735,7 @@ forget when bootstrapping a new sibling project.
   blocks CJK / autocorrect / emoji codepoints).
 - Multi-surface visibility: IME's surface is opaque (libgui
   shim hardcodes `eLayerOpaque`), so when the IME is foreground
-  wart-app is hidden entirely. Real Android-IME UX has the IME
+  wandr-app is hidden entirely. Real Android-IME UX has the IME
   as a partial-screen overlay with the focused app visible
   above. Needs both shim changes (lift `eLayerOpaque`,
   potentially set per-surface) and arbiter changes (visible-
@@ -756,11 +756,11 @@ forget when bootstrapping a new sibling project.
 
 **Symptom** (verified post-rebuild 2026-05-27): when the IME is
 promoted to foreground, its SurfaceControl covers the screen
-opaquely and wart-app is invisible — even though wart-app's
+opaquely and wandr-app is invisible — even though wandr-app's
 process is alive and rendering frames. Confirmed by screenshot
 + logcat: both `begin_frame: logical=1440x2880` lines present;
 arbiter promoted IME via SIGUSR2 (→ `set_layer(MAX)`,
-`set_visible(true)`) and demoted wart-app via SIGUSR1 (→
+`set_visible(true)`) and demoted wandr-app via SIGUSR1 (→
 `set_layer(0)`, **`set_visible(false)`**, lifecycle Paused).
 This is the user-visible "keyboard hides the real app" issue.
 
@@ -769,7 +769,7 @@ This is the user-visible "keyboard hides the real app" issue.
 1. `cpp/sf_surface.cpp` hardcodes `t.setFlags(g_control,
    eLayerOpaque, eLayerOpaque)` at lines 224-225. Even if both
    surfaces were visible, the IME's would opaquely occlude
-   wart-app's because SF doesn't blend opaque layers.
+   wandr-app's because SF doesn't blend opaque layers.
 2. `standalone.rs:240-242` calls `sf.set_visible(false)` on
    any process that receives SIGUSR1 (Background role). The
    arbiter's `promote_to_foreground` SIGUSR1's the previous fg
@@ -780,7 +780,7 @@ This is the user-visible "keyboard hides the real app" issue.
 **Decision — Approach A (partial-surface overlay, no alpha)**:
 the IME's SurfaceControl is sized to just the bottom strip of
 the screen (e.g. 1440×1100) and positioned at y=PH-1100.
-SurfaceFlinger composites IT and wart-app as two opaque
+SurfaceFlinger composites IT and wandr-app as two opaque
 non-overlapping rects. No transparency, no `eLayerOpaque`
 lift, no per-frame transparent-clear — both surfaces stay
 opaque, the IME just doesn't span the full screen. This
@@ -815,12 +815,12 @@ strict-only on the keyboard area — fragile under recompose.
    Implementation: parameterize the existing function's
    `createSurface(name, W, H, ..., 0)` + `setSize` /
    `setPosition` transaction. Keep `eLayerOpaque` (the IME
-   panel IS fully opaque within its bounds — wart-app shows
+   panel IS fully opaque within its bounds — wandr-app shows
    ABOVE the keyboard, not THROUGH it). Input window must
    register at (0, PH-H) → (PW, PH) so InputFlinger routes
    only taps inside the keyboard's rect to the IME process.
 
-2. **Wart-host** (`wart-host/src/sf_surface.rs` +
+2. **Wandr-host** (`wandr-host/src/sf_surface.rs` +
    `standalone.rs`):
 
    - `sf_surface::create_overlay(height_px) -> Result<...>`
@@ -834,12 +834,12 @@ strict-only on the keyboard area — fragile under recompose.
      fg is an overlay. Cleanest plumbing: introduce a third
      `AppRole::OverlayBehind` and signal it via SIGRTMIN+1 (or
      via the arbiter writing the previous fg's pid to a state
-     file the wart-host watches). Action under
+     file the wandr-host watches). Action under
      `OverlayBehind`: keep visible, demote layer, lifecycle
      stays `Resumed` (the editor must keep rendering so the
      user sees the cursor blink).
 
-3. **Arbiter** (`wart-arbiter/src/main.rs`):
+3. **Arbiter** (`wandr-arbiter/src/main.rs`):
 
    - New cmd `overlay <app-id>`: promotes `<app-id>` as an
      OVERLAY foreground. Signals the IME with SIGUSR2 (normal
@@ -857,13 +857,13 @@ strict-only on the keyboard area — fragile under recompose.
      `detach-editor` in the IME's render loop (overlay = on
      while editor focused).
 
-4. **Compose** (`war.ime.keyboard/.../RealComposeApp.kt`):
+4. **Compose** (`wandr.ime.keyboard/.../RealComposeApp.kt`):
 
    The current `Box(fillMaxSize)` keeps working as-is —
    `fillMaxSize` adapts to whatever surface size we give the
    guest at composition. The dark background continues to be
    the IME panel; with the smaller surface it occupies the
-   bottom strip only, so wart-app shows above it naturally.
+   bottom strip only, so wandr-app shows above it naturally.
    The `BottomCenter` anchor becomes redundant but is
    harmless.
 
@@ -884,16 +884,16 @@ strict-only on the keyboard area — fragile under recompose.
   will fail with `dlsym` returning null, and we'll log + bail.
   Catches any plumbing typos early.
 
-**Smoke**: `wart-arbiter overlay war.ime.keyboard` while
-wart-app is fg → wart-app visible above the keyboard,
+**Smoke**: `wandr-arbiter overlay wandr.ime.keyboard` while
+wandr-app is fg → wandr-app visible above the keyboard,
 keyboard visible at the bottom, taps in the keyboard area
 route to the IME process via InputFlinger (its input window
-registered for the bottom rect), taps above route to wart-app.
+registered for the bottom rect), taps above route to wandr-app.
 
 #### Step 3c results (2026-05-27)
 
-**Outcome:** ✅ device-verified end-to-end on Pixel 2 XL. wart-app
-renders fullscreen at the top half of the panel; the IME (war.ime.keyboard)
+**Outcome:** ✅ device-verified end-to-end on Pixel 2 XL. wandr-app
+renders fullscreen at the top half of the panel; the IME (wandr.ime.keyboard)
 renders as a 1100-px overlay at the bottom. Both surfaces opaque,
 SurfaceFlinger composes them as non-overlapping rects. Auto-tie via
 `attach-editor` / `detach-editor` works; manual `overlay` /
@@ -937,14 +937,14 @@ the overlay path needs the indirection.
 
 | Repo | File(s) |
 |---|---|
-| wart (top) | `wit/skiko-gfx.wit` — new `request-overlay-height` verb on `keyboard` interface |
-| wart-host | `cpp/sf_surface.{cpp,h}` (parent-container + `sf_create_overlay_surface` + `sf_resize_overlay`), `src/sf_surface.rs` (create_overlay + resize_overlay + `ANativeWindow_setBuffersGeometry` FFI), `src/app_role.rs` (`OverlayBehind=2` + SIGRTMIN+1 handler), `src/standalone.rs` (`--standalone-overlay` branch + OverlayBehind arm + per-frame overlay-resize drain), `src/keyboard_host_impl.rs` (`request_overlay_height` via static-atomic bridge), `src/zygote.rs` (`LAUNCH_GUI_OVERLAY` + `ChildAction::Gui{overlay}`), `src/main.rs` (`--standalone-overlay` CLI flag) |
-| wart-arbiter | `src/state.rs` (`OverlayState`), `src/main.rs` (`cmd_overlay` / `overlay-clear` / `launch-overlay` + `promote_to_overlay` / `demote_from_overlay` + auto-tie in `cmd_attach_editor` / `cmd_detach_editor`), `src/zygote_client.rs` (`launch_gui_overlay`) |
+| wandr (top) | `wit/skiko-gfx.wit` — new `request-overlay-height` verb on `keyboard` interface |
+| wandr-host | `cpp/sf_surface.{cpp,h}` (parent-container + `sf_create_overlay_surface` + `sf_resize_overlay`), `src/sf_surface.rs` (create_overlay + resize_overlay + `ANativeWindow_setBuffersGeometry` FFI), `src/app_role.rs` (`OverlayBehind=2` + SIGRTMIN+1 handler), `src/standalone.rs` (`--standalone-overlay` branch + OverlayBehind arm + per-frame overlay-resize drain), `src/keyboard_host_impl.rs` (`request_overlay_height` via static-atomic bridge), `src/zygote.rs` (`LAUNCH_GUI_OVERLAY` + `ChildAction::Gui{overlay}`), `src/main.rs` (`--standalone-overlay` CLI flag) |
+| wandr-arbiter | `src/state.rs` (`OverlayState`), `src/main.rs` (`cmd_overlay` / `overlay-clear` / `launch-overlay` + `promote_to_overlay` / `demote_from_overlay` + auto-tie in `cmd_attach_editor` / `cmd_detach_editor`), `src/zygote_client.rs` (`launch_gui_overlay`) |
 | skiko | `skiko/wit/skiko-gfx.wit` (mirror), `skiko/src/wasmWasiMain/kotlin/generated/{Internal,}SkikoUi.kt` (hand-added `Keyboard.Import.requestOverlayHeight`) |
-| war.ime.keyboard | `src/wasmWasiMain/kotlin/RealComposeApp.kt` (`LaunchedEffect { requestOverlayHeight(1100u) }` at composition root) |
-| wart-app | `wit/deps/skiko-gfx/skiko-gfx.wit` (mirror) |
+| wandr.ime.keyboard | `src/wasmWasiMain/kotlin/RealComposeApp.kt` (`LaunchedEffect { requestOverlayHeight(1100u) }` at composition root) |
+| wandr-app | `wit/deps/skiko-gfx/skiko-gfx.wit` (mirror) |
 
-**New socket commands** (`wart-arbiter`):
+**New socket commands** (`wandr-arbiter`):
 - `launch-overlay <app-id>` — like `launch` but the child acquires a
   bottom-strip overlay surface via the new `LAUNCH_GUI_OVERLAY`
   zygote cmd.
@@ -960,25 +960,25 @@ the overlay path needs the indirection.
 **Device-verified smoke transcript:**
 
 ```
-$ wart-arbiter launch com.example.wart-app           → pid=21228
-$ wart-arbiter launch-overlay war.ime.keyboard       → pid=21235
+$ wandr-arbiter launch com.example.wandr-app           → pid=21228
+$ wandr-arbiter launch-overlay wandr.ime.keyboard       → pid=21235
                                                        (created at
                                                         Disp Frame
                                                         0 1780 1440 2880)
-$ wart-arbiter overlay war.ime.keyboard
-  OK overlay=war.ime.keyboard pid=21235 prev-fg=com.example.wart-app
+$ wandr-arbiter overlay wandr.ime.keyboard
+  OK overlay=wandr.ime.keyboard pid=21235 prev-fg=com.example.wandr-app
      behind-pid=21228
   # SurfaceFlinger now shows two layers composed as non-overlapping
   # rects:
-  #   wart#... at        Disp Frame=0    0 1440 1780
-  #   wart-ime-overlay#... at Disp Frame=0 1780 1440 2880
-  #   wart-ime-overlay-parent#... — child of which the buffer surface
+  #   wandr#... at        Disp Frame=0    0 1440 1780
+  #   wandr-ime-overlay#... at Disp Frame=0 1780 1440 2880
+  #   wandr-ime-overlay-parent#... — child of which the buffer surface
   #                                hangs (the BlastInputSurface pattern)
-$ wart-arbiter overlay-clear
-$ wart-arbiter set-ime war.ime.keyboard
-$ wart-arbiter attach-editor 21228 text
+$ wandr-arbiter overlay-clear
+$ wandr-arbiter set-ime wandr.ime.keyboard
+$ wandr-arbiter attach-editor 21228 text
   OK ... overlay=engaged    # ← auto-tie fires
-$ wart-arbiter detach-editor 21228
+$ wandr-arbiter detach-editor 21228
   OK ... overlay=cleared    # ← auto-tie reverses
 ```
 
@@ -988,7 +988,7 @@ $ wart-arbiter detach-editor 21228
   in the bottom 1100 px route to the IME via InputFlinger's
   per-window touchableRegion match (confirmed in dump:
   `touchableRegion={0,1780,2880,1440}` for the IME's input window);
-  taps above route to wart-app's fullscreen window. Whether key events
+  taps above route to wandr-app's fullscreen window. Whether key events
   go to the focused window vs the IME's input channel is step-4
   business. Auto-hide on tap-outside is also step 4.
 
@@ -1015,7 +1015,7 @@ $ wart-arbiter detach-editor 21228
 ### Step 4 — InputFlinger focus arbitration + auto-hide (~2-3 days)
 
 **Forward reference (task 49):** task 49's inbound socket
-(`/data/local/tmp/wart-host-<pid>.sock`, written + drained by the
+(`/data/local/tmp/wandr-host-<pid>.sock`, written + drained by the
 host's `ime_inbound` queue) is the same per-host control channel
 step 4 will reuse for `request-hide` / tap-outside-to-hide / focus
 changes. Step 4 doesn't need new transport, just new message
@@ -1038,9 +1038,9 @@ to the app. Auto-hide when the user taps outside the keyboard.
   IME is up — it needs to render the cursor moving as text
   arrives.
 
-Success criterion: type text into wart-app via the new IME;
+Success criterion: type text into wandr-app via the new IME;
 tap outside the keyboard → keyboard hides + focus returns to
-wart-app; tap the text field again → keyboard back. No focus
+wandr-app; tap the text field again → keyboard back. No focus
 flapping.
 
 ### Step 5 — Polish + future-IME framing (~2-3 days)
@@ -1060,10 +1060,10 @@ are pluggable but not present yet.
 
 ## Future IMEs — voice / emoji / CJK
 
-The `war:ime/client` WIT contract is the stability gate. Each
+The `wandr:ime/client` WIT contract is the stability gate. Each
 future IME is:
 
-- **`war.ime.voice`** — Compose UI is a microphone button +
+- **`wandr.ime.voice`** — Compose UI is a microphone button +
   transcription preview. On press: starts an audio recording
   via our audio HAL (task 21 IAAudioService); transcription is
   *another* future system bundle (speech-recognition WIT
@@ -1075,25 +1075,25 @@ future IME is:
   small whisper.cpp port. Multi-pass effort, but the IME UI
   itself is ~200 lines of Compose.
 
-- **`war.ime.emoji`** — reuses `war.emoji.picker` (task 40,
+- **`wandr.ime.emoji`** — reuses `wandr.emoji.picker` (task 40,
   already a system bundle). Compose UI is the emoji grid
-  itself (`EmojiCard.kt` already implemented in wart-app — the
+  itself (`EmojiCard.kt` already implemented in wandr-app — the
   rendering code carries straight over). Tap → `commit-text(emoji_codepoint)`.
   Implementation cost: small. Could be ~1 week.
 
-- **`war.ime.zh`** / `war.ime.ja` / `war.ime.ko` / `war.ime.in.*` —
+- **`wandr.ime.zh`** / `wandr.ime.ja` / `wandr.ime.ko` / `wandr.ime.in.*` —
   CJK / Indic IMEs. The WIT side is unchanged; the hard part
   is the input-method dictionary + composition (pinyin →
   candidates, kana → kanji conversion). Could ship as one
-  warpkg per language, or one multi-language warpkg with a
+  wandrpkg per language, or one multi-language wandrpkg with a
   user-selected mode. Per-IME effort is months, but the
   arbiter/protocol side doesn't change.
 
 The crucial property: **each future IME is a vendor-independent
-`.warpkg`**, installable via the existing warpkg installer (task
+`.wandrpkg`**, installable via the existing wandrpkg installer (task
 35), discoverable via the arbiter's `list-imes` command (TBD,
 introspects `<APPS_ROOT>/apps/*` for app_ids starting with
-`war.ime.`), switchable at runtime. The Android-equivalent
+`wandr.ime.`), switchable at runtime. The Android-equivalent
 distinction between "default keyboard" (Settings → Languages
 & Input) and "active IME" carries directly.
 
@@ -1124,22 +1124,22 @@ distinction between "default keyboard" (Settings → Languages
 ## File-touch map
 
 - `wit/ime.wit` (new) — the protocol.
-- `wart-arbiter/src/main.rs` — new `cmd_attach_editor`,
+- `wandr-arbiter/src/main.rs` — new `cmd_attach_editor`,
   `cmd_detach_editor`, `cmd_set_ime`, `cmd_ime_commit_text`.
-- `wart-arbiter/src/state.rs` — `EditorFocus`, `ActiveIme`
+- `wandr-arbiter/src/state.rs` — `EditorFocus`, `ActiveIme`
   state.
-- `wart-host/src/ime_imms_probe.rs` (rename from `ime_impl.rs`)
+- `wandr-host/src/ime_imms_probe.rs` (rename from `ime_impl.rs`)
   — the task 40 probe code, kept for historical reference.
-- `wart-host/src/ime_router_impl.rs` (new) — host side of the
+- `wandr-host/src/ime_router_impl.rs` (new) — host side of the
   WIT plumbing for the focused-app's `attach-editor` outbound
   + `commit-text` inbound.
-- `wart-host/src/lib.rs` — `pub mod ime_router_impl;`.
+- `wandr-host/src/lib.rs` — `pub mod ime_router_impl;`.
 - `skiko/src/wasmWasiMain/kotlin/org/jetbrains/skiko/wasi/WasiInputMethod.kt`
   (new) — skiko-side actual.
 - `compose-multiplatform-core/.../wasmWasiMain/.../PlatformTextInputMethodRequest.wasi.kt`
   (new or update) — Compose actual.
-- `war.ime.keyboard/` (new sibling repo) — the IME guest itself.
-- `scripts/build-system-warpkgs.sh` — packages `war.ime.keyboard`
+- `wandr.ime.keyboard/` (new sibling repo) — the IME guest itself.
+- `scripts/build-system-wandrpkgs.sh` — packages `wandr.ime.keyboard`
   alongside markdown/emoji/fonts.
 - `tasks/47-ime-via-guest-app.md` — this doc; update per-step.
 - `CLAUDE.md` — status table row.
@@ -1158,23 +1158,23 @@ distinction between "default keyboard" (Settings → Languages
    everything else. Land it cleanly with composing-text +
    set-composing-text + finish-composing-text primitives even
    though step 3's English keyboard doesn't exercise them.
-4. The first-party `war.ime.keyboard` is the GROUND TRUTH for
+4. The first-party `wandr.ime.keyboard` is the GROUND TRUTH for
    the IME-side of the WIT contract. If a contract change
    makes it impossible to write a sensible keyboard, the
    contract is wrong; iterate on the WIT.
 5. Voice / emoji / CJK are explicit out-of-scope for this
-   task — they're future `.warpkg`s, not modifications to
-   `war.ime.keyboard`. The contract should support them
+   task — they're future `.wandrpkg`s, not modifications to
+   `wandr.ime.keyboard`. The contract should support them
    without changes.
 
 ## Related
 
 - `tasks/40-real-ime.md` — the abandoned IMMS-via-rsbinder
-  path. Code (commit `09782f5` in wart-host, the AIDL probes
+  path. Code (commit `09782f5` in wandr-host, the AIDL probes
   in `src/ime_impl.rs`) kept in tree for historical reference.
 - `tasks/44-wms-window-registration.md` — the abandoned
   vendor-WMS path. Same reason.
-- `tasks/46-wart-arbiter-mvp.md` — the arbiter machinery this
+- `tasks/46-wandr-arbiter-mvp.md` — the arbiter machinery this
   task extends. Specifically step 4 (app_role signaling, SF
   z-order via libsf_surface, oom_score_adj) and the crash-marker
   state persistence are reused.

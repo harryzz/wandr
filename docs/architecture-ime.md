@@ -1,12 +1,12 @@
-# Architecture: the IME (war.ime.keyboard)
+# Architecture: the IME (wandr.ime.keyboard)
 
-This doc explains how soft-keyboard input is delivered in the wart
+This doc explains how soft-keyboard input is delivered in the wandr
 runtime: which processes are involved, what crosses which boundary,
 how the language-plugin system works today, and what's TODO to make
 plugin loading fully dynamic.
 
 It exists because the IME has three concurrent processes (the
-focused app, the IME guest, wart-arbiter), four control transports
+focused app, the IME guest, wandr-arbiter), four control transports
 (arbiter↔host UNIX sockets, host↔guest WIT calls, SurfaceFlinger
 overlay, InputFlinger input window), and a hand-rolled plugin
 contract — non-obvious how it all fits together when you only see
@@ -18,11 +18,11 @@ process / signal / socket transports on top.
 
 ## TL;DR
 
-- **war.ime.keyboard** is a regular `.warpkg` guest app — Compose
-  Multiplatform on wasmWasi, runs in its own `wart-host` child of
+- **wandr.ime.keyboard** is a regular `.wandrpkg` guest app — Compose
+  Multiplatform on wasmWasi, runs in its own `wandr-host` child of
   the zygote, owns a `SurfaceFlinger` overlay surface positioned at
   the bottom of the display.
-- **wart-arbiter** is the policy daemon: it tracks which app holds
+- **wandr-arbiter** is the policy daemon: it tracks which app holds
   editor focus, signals SurfaceFlinger z-order via `SIGUSR1` /
   `SIGUSR2` / `SIGRTMIN+1` to its host children, and routes inbound
   events (attach-editor, key events) over per-host UNIX control
@@ -36,7 +36,7 @@ process / signal / socket transports on top.
      arbiter routes via the focused-app pid's control socket →
      app's render loop drains and dispatches as a Compose KeyEvent.
   3. Layout plugins (currently): IME has hard-coded
-     `[dependencies]` for `war.lang.bg` + `war.lang.fr`; the
+     `[dependencies]` for `wandr.lang.bg` + `wandr.lang.fr`; the
      wasmtime loader wires them as same-Store deps at IME
      instantiation. TODO: replace with host-mediated dynamic
      loading (task 51).
@@ -47,17 +47,17 @@ process / signal / socket transports on top.
    ┌──────────────────────────────────────────────────────────┐
    │                    Linux kernel                          │
    │                                                          │
-   │   wart-host --zygote   wart-arbiter --daemon             │
+   │   wandr-host --zygote   wandr-arbiter --daemon             │
    │         │                    │                           │
    │         │  fork()             │                          │
    │         ├──────────────────┐  │                          │
    │         │                  │  │                          │
    │  ┌──────▼──────┐    ┌──────▼──┴───┐                      │
-   │  │  wart-host  │    │  wart-host  │                      │
+   │  │  wandr-host  │    │  wandr-host  │                      │
    │  │ pid=APP_PID │    │ pid=IME_PID │                      │
    │  │             │    │             │                      │
    │  │ Compose:    │    │ Compose:    │                      │
-   │  │ wart-app    │    │ war.ime.kbd │                      │
+   │  │ wandr-app    │    │ wandr.ime.kbd │                      │
    │  │             │    │             │                      │
    │  │ owns SF     │    │ owns SF     │                      │
    │  │ fullscreen  │    │ overlay     │                      │
@@ -70,25 +70,25 @@ process / signal / socket transports on top.
    └──────────────────────────────────────────────────────────┘
 ```
 
-- `wart-host --zygote` is a long-lived parent that preloads the
+- `wandr-host --zygote` is a long-lived parent that preloads the
   `wasmtime::Engine` (~5 MB of code/JIT setup) and `fork()`s on
   every `LAUNCH` / `LAUNCH_GUI` socket command. Children inherit
-  the engine via COW. See `tasks/45-wart-zygote-spike.md`.
-- `wart-arbiter` is a sibling daemon at `wart-arbiter --daemon`. It
-  listens on `/data/local/tmp/wart-arbiter.sock` for the user's
+  the engine via COW. See `tasks/45-wandr-zygote-spike.md`.
+- `wandr-arbiter` is a sibling daemon at `wandr-arbiter --daemon`. It
+  listens on `/data/local/tmp/wandr-arbiter.sock` for the user's
   CLI commands (`launch` / `set-ime` / `kill` / `attach-editor` /
-  …) and on `/data/local/tmp/wart-zygote.sock` to ask the zygote
+  …) and on `/data/local/tmp/wandr-zygote.sock` to ask the zygote
   to fork.
-- Each forked `wart-host` child exposes a **per-host UNIX
-  control socket** at `/data/local/tmp/wart-host-<pid>.sock` —
+- Each forked `wandr-host` child exposes a **per-host UNIX
+  control socket** at `/data/local/tmp/wandr-host-<pid>.sock` —
   the channel the arbiter uses to push inbound events into a
   running child (attach-editor, key events, etc.). The child's
   `ime_inbound` module drains it once per frame.
 
 ## Surface + input ownership
 
-The wart-host child owns a **SurfaceFlinger surface** acquired
-through the `libsf_surface.so` shim (`wart-host/cpp/sf_surface.cpp`,
+The wandr-host child owns a **SurfaceFlinger surface** acquired
+through the `libsf_surface.so` shim (`wandr-host/cpp/sf_surface.cpp`,
 built in-tree on the AOSP a-03 host — see
 [[project-boot-model-libgui-build]]).
 
@@ -106,7 +106,7 @@ SurfaceFlinger adds the layer position to compute display-coord
 touchable region. MotionEvents arrive at the input channel in
 **window-local** coordinates (no manual offset subtraction
 required — this was a step-3c bug: see
-`tasks/47-ime-via-guest-app.md` step 3c fix in `wart-host` commit
+`tasks/47-ime-via-guest-app.md` step 3c fix in `wandr-host` commit
 `0de1da2`).
 
 InputFlinger uses **z-order from the `Windows:` list**, not the
@@ -116,7 +116,7 @@ channel, taps above route to the app's.
 
 ## Foreground / overlay z policy
 
-`wart-arbiter` signals each host child via UNIX signals to inform it
+`wandr-arbiter` signals each host child via UNIX signals to inform it
 of its current role:
 
 | Signal      | Role           | Host action                                           |
@@ -126,21 +126,21 @@ of its current role:
 | `SIGRTMIN+1`| OverlayBehind  | `sf_set_layer(0)` + `sf_set_visible(true)` + lifecycle stays Resumed |
 
 When the user taps a TextField:
-1. wart-app's Compose layer fires `requestKeyboardController().show()`.
-2. wart-app calls `Ime.Import.notifyEditorAttached(input-type, …)`
+1. wandr-app's Compose layer fires `requestKeyboardController().show()`.
+2. wandr-app calls `Ime.Import.notifyEditorAttached(input-type, …)`
    — a guest→host WIT call.
-3. The host implementation in `wart-host/src/keyboard_host_impl.rs`
+3. The host implementation in `wandr-host/src/keyboard_host_impl.rs`
    forwards via the **arbiter socket** as `attach-editor <pid>
    <input-type>`.
 4. The arbiter looks up which app is "the IME" (set via
-   `wart-arbiter set-ime war.ime.keyboard`), promotes the IME's
+   `wandr-arbiter set-ime wandr.ime.keyboard`), promotes the IME's
    host child to `Foreground` (SIGUSR2), demotes the focused-app
    child to `OverlayBehind` (SIGRTMIN+1).
 5. The arbiter delivers `editor-attached <input-type>` to the IME
    child over its per-host control socket.
 6. The IME child's `ime_inbound` module drains the queue once per
-   frame in `wart-host/src/standalone.rs`, then calls the IME
-   guest's exported `war:ime/ime.on-editor-attached(input-type)`.
+   frame in `wandr-host/src/standalone.rs`, then calls the IME
+   guest's exported `wandr:ime/ime.on-editor-attached(input-type)`.
 7. The IME guest's `ImeEventsImpl` updates a `MutableState`;
    `pickLayout` recomposes the keyboard with the matching
    editor-driven layout (Numeric / Phone / …).
@@ -152,7 +152,7 @@ When the user taps a TextField:
        │
        │ (InputFlinger routes to IME's input channel via hit-test)
        ▼
-   wart-host child (IME process) — sf_input_poll() drains the
+   wandr-host child (IME process) — sf_input_poll() drains the
        channel, dispatches as Compose pointer event
        │
        │ (Compose recomposition; KeyButton onClick fires)
@@ -162,17 +162,17 @@ When the user taps a TextField:
        │
        │ (canonical-ABI lowering; guest→host WIT call)
        ▼
-   wart-host/src/keyboard_host_impl.rs::send_key_event
+   wandr-host/src/keyboard_host_impl.rs::send_key_event
        │
-       │ (write "ime-send-key-event 97 29 down" to /tmp/wart-arbiter.sock)
+       │ (write "ime-send-key-event 97 29 down" to /tmp/wandr-arbiter.sock)
        ▼
-   wart-arbiter cmd_ime_route — looks up "focused-app pid"
+   wandr-arbiter cmd_ime_route — looks up "focused-app pid"
    from its persistent state, opens
-   /data/local/tmp/wart-host-<focused-pid>.sock, writes
+   /data/local/tmp/wandr-host-<focused-pid>.sock, writes
    "key-event 97 29 down\n"
        │
        ▼
-   wart-host child (focused-app process) — ime_inbound thread
+   wandr-host child (focused-app process) — ime_inbound thread
    reads the line, parses, pushes onto a per-frame InboundEvent
    queue
        │
@@ -183,11 +183,11 @@ When the user taps a TextField:
        │
        │ (host→guest WIT call; lowers code-point+key-id+action)
        ▼
-   wart-app guest's skiko renderer thread synthesizes a Compose
+   wandr-app guest's skiko renderer thread synthesizes a Compose
    KeyEvent; routes to the focused BasicTextField; "a" appears
 ```
 
-Two `wart-host` processes, two SF surfaces, two input windows,
+Two `wandr-host` processes, two SF surfaces, two input windows,
 two control sockets, three signals — all coordinated by the
 arbiter.
 
@@ -196,7 +196,7 @@ arbiter.
 The IME ships a built-in English QWERTY plus editor-driven layouts
 (Numeric / Phone / Email / Url / Password / Symbols / Emoji). All
 the other languages — currently Bulgarian + French — are separate
-`.warpkg` system components.
+`.wandrpkg` system components.
 
 ### Plugin contract
 
@@ -204,7 +204,7 @@ Each lang plugin is a Rust cdylib targeting `wasm32-wasip2`,
 ~60 LoC, exporting:
 
 ```wit
-package war:keyboard-lang-<id>@0.1.0;
+package wandr:keyboard-lang-<id>@0.1.0;
 interface lang {
     record info {
         name: string, locale: string, is-rtl: bool,
@@ -219,23 +219,23 @@ interface lang {
 world lang-world { export lang; }
 ```
 
-The canonical schema lives at `wart/wit/keyboard-lang.wit`; each
-plugin has a local copy at `war.lang.<id>/wit/keyboard-lang-<id>.wit`
+The canonical schema lives at `wandr/wit/keyboard-lang.wit`; each
+plugin has a local copy at `wandr.lang.<id>/wit/keyboard-lang-<id>.wit`
 with a renamed package. Plugins only supply the language's letter
 rows — the IME injects digit / shift / utility rows uniformly.
 
 ### Why per-plugin packages
 
-The "obvious" design — one shared `war:keyboard-lang/lang@0.1.0`
-package exported by every plugin — **doesn't work**. wart-host's
-`wire_dep_into_linker` (`wart-host/src/app_loader.rs`) registers
+The "obvious" design — one shared `wandr:keyboard-lang/lang@0.1.0`
+package exported by every plugin — **doesn't work**. wandr-host's
+`wire_dep_into_linker` (`wandr-host/src/app_loader.rs`) registers
 each dep under `linker.instance(interface_name)`. Two deps under
 the same name collide: the second `linker.instance(name)` call
 returns the existing one and overwrites the funcs; only one plugin
 survives.
 
-So each plugin uses its own package name (`war:keyboard-lang-bg`,
-`war:keyboard-lang-fr`, …). The downside: the IME hard-codes its
+So each plugin uses its own package name (`wandr:keyboard-lang-bg`,
+`wandr:keyboard-lang-fr`, …). The downside: the IME hard-codes its
 known plugin set.
 
 ### Loading + invocation
@@ -244,14 +244,14 @@ At IME `package.toml` install time:
 
 ```toml
 [dependencies]
-bg = { system = "war.lang.bg", version = "0.1.0",
-       interface = "war:keyboard-lang-bg/lang@0.1.0" }
-fr = { system = "war.lang.fr", version = "0.1.0",
-       interface = "war:keyboard-lang-fr/lang@0.1.0" }
+bg = { system = "wandr.lang.bg", version = "0.1.0",
+       interface = "wandr:keyboard-lang-bg/lang@0.1.0" }
+fr = { system = "wandr.lang.fr", version = "0.1.0",
+       interface = "wandr:keyboard-lang-fr/lang@0.1.0" }
 ```
 
-The installer (`wart-host/src/app_installer.rs`) records both deps
-in the cache-key. At launch time (`wart-host/src/app_loader.rs`),
+The installer (`wandr-host/src/app_installer.rs`) records both deps
+in the cache-key. At launch time (`wandr-host/src/app_loader.rs`),
 `load_dep_components` deserializes each `.cwasm`, and
 `wire_dep_into_linker` instantiates each dep in the IME's `Store`
 and registers each export as a proxy closure in the IME's linker
@@ -261,9 +261,9 @@ under the dep's interface name. Same-Store composition — see
 The IME calls each plugin once at composition time:
 
 ```
-[ wart-host child for the IME launches ]
+[ wandr-host child for the IME launches ]
   → wasmtime loads + instantiates the IME component
-  → load_dep_components loads + instantiates war.lang.bg + war.lang.fr
+  → load_dep_components loads + instantiates wandr.lang.bg + wandr.lang.fr
   → wire_dep_into_linker registers each plugin's get-info /
     get-layout as proxy closures in the IME's linker
   → wasmtime instantiates the IME with the linker
@@ -290,7 +290,7 @@ wit-bindgen 0.53.1 has no Kotlin generator
 Spun out as **`tasks/51-dynamic-lang-plugins.md`** (🔲 scoped).
 
 The current design works but the IME owns the plugin registry. To
-add a new language (`war.lang.de`) the IME needs:
+add a new language (`wandr.lang.de`) the IME needs:
 - an entry in `[dependencies]` of `package.toml`,
 - a per-plugin `@WasmImport` block in `LangAdapter.kt`,
 - an entry in the static `LangAdapter.plugins` registry,
@@ -300,8 +300,8 @@ The dynamic design inverts the relationship: **the host owns the
 plugin registry**.
 
 ```
-[ wart-host --zygote startup ]
-  → scan <APPS_ROOT>/system-apps/war.lang.*/0.1.0/cache/lang.cwasm
+[ wandr-host --zygote startup ]
+  → scan <APPS_ROOT>/system-apps/wandr.lang.*/0.1.0/cache/lang.cwasm
   → for each: deserialize, cache (id, instance, get-info,
     get-layout) in HostState
   → expose new host WIT verbs on a fresh `my:skiko-gfx/lang-plugins`
@@ -339,14 +339,14 @@ Costs:
 Trigger conditions documented in `tasks/51-dynamic-lang-plugins.md`:
 do this when a 3rd language is concretely needed, when retiring
 the cabi_realloc hand-rolled lifts becomes a priority, or when
-distributing wart externally where third-party plugins shouldn't
+distributing wandr externally where third-party plugins shouldn't
 require a custom IME build.
 
 ## Related tasks + memories
 
-- `tasks/45-wart-zygote-spike.md` — zygote model and fork
+- `tasks/45-wandr-zygote-spike.md` — zygote model and fork
   semantics (Adreno EGL survives fork).
-- `tasks/46-wart-arbiter-mvp.md` — arbiter daemon, role
+- `tasks/46-wandr-arbiter-mvp.md` — arbiter daemon, role
   signalling, control sockets, crash-marker.
 - `tasks/47-ime-via-guest-app.md` — IME-as-guest-app design,
   multi-surface visibility, step 3c overlay surface, IME-routing

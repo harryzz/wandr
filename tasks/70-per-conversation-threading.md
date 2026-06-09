@@ -65,7 +65,7 @@ land in the right thread. Back returns to the list; threads persist across resta
 
 ## Repository move (2026-05-31)
 
-The Signal app was promoted out of `repros/` into `apps/user/war.signal/`:
+The Signal app was promoted out of `repros/` into `apps/user/wandr.signal/`:
 `engine/` (was `repros/signal-engine`) + `ui/` (was `repros/signal-ui`), joining the
 `package.toml` already there. A `build.sh` (`./build.sh [--deploy]`) replaces the
 manual wac-plug-into-`/tmp` pipeline. The genuine de-risk spikes

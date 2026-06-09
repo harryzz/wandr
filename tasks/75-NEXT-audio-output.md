@@ -7,7 +7,7 @@
 ## 1. Where we are
 
 Signal 1:1 calls now work end-to-end **through signaling and crypto** with a real
-Signal peer (tested wart ⇄ a real Signal Desktop on account `5b649304`):
+Signal peer (tested wandr ⇄ a real Signal Desktop on account `5b649304`):
 
 - ✅ **Signaling both directions** (offer/answer/ICE/hangup) — `receive_video_codecs`
   + `max_bitrate` fix (`cdeebb16`), ICE-before-Answer fix (`d282c87c`).
@@ -15,7 +15,7 @@ Signal peer (tested wart ⇄ a real Signal Desktop on account `5b649304`):
 - ✅ **SRTP decrypt + Opus decode interop** — the hard part. ringrtc feeds the
   **32-byte raw** identity key to the KDF (strips the `0x05` DJB prefix); we sent
   33-byte `serialize()`. Fixed in `e0eed1fb` (`raw_identity_key()` in
-  `crates/wart-call/src/transport.rs`). On device: `srtp ok` climbs, `peak=1.000`
+  `crates/wandr-call/src/transport.rs`). On device: `srtp ok` climbs, `peak=1.000`
   (real decoded voice).
 - ❌ **Audio OUTPUT to the speaker** — still silent. THIS is the remaining work.
 
@@ -31,7 +31,7 @@ Fixed along the way (real bugs, committed):
   `writeUpMessageQueue(): Queue full. Did client stop? Suspending stream` and
   closing the stream ~0.4 s after open, because we never drained the endpoint's
   `upMessageQueueParcelable` (server→client events). Now drained in
-  `write_pcm_f32`/`read_pcm_f32` (`runtime/wart-host/src/audio_impl.rs`). That
+  `write_pcm_f32`/`read_pcm_f32` (`runtime/wandr-host/src/audio_impl.rs`). That
   warning is GONE, but the stream still isn't mixed.
 - **Underrun resync** (`181e6d2e`) in `write_pcm_f32`.
 
@@ -53,7 +53,7 @@ Open leads from the teardown trace (`AAudioServiceEndpoint*`):
 ## 3. FIRST STEP — run the repro on-device and compare (decisive)
 
 `repros/call-live` (real mic → real speaker, full crypto) was **device-verified
-today** via `wart-host --run-once` — a **direct/standalone** run, NOT the
+today** via `wandr-host --run-once` — a **direct/standalone** run, NOT the
 zygote-forked path the Signal app uses. So the prime hypothesis is
 **standalone `--run-once` works, zygote-forked child does not.** Confirm it:
 
@@ -62,7 +62,7 @@ cd repros/call-live
 cargo build --target wasm32-wasip2 --release
 cp target/wasm32-wasip2/release/call-live.wasm components/probe.wasm
 # pack + install however the README shows; then:
-wart-host --run-once war.probe.calllive      # speak during "on the call"; LISTEN
+wandr-host --run-once wandr.probe.calllive      # speak during "on the call"; LISTEN
 ```
 
 - **If call-live PLAYS audio now** → the device/audio stack is fine; the bug is
@@ -74,7 +74,7 @@ wart-host --run-once war.probe.calllive      # speak during "on the call"; LISTE
   - concurrency: call-live plays in a dedicated phase; the app plays under the
     wasm executor alongside the call loop + other stack components.
   - To test the fork hypothesis: get the same playback running in a zygote-forked
-    child (e.g. a tiny probe launched via `wart-arbiter launch`, not `--run-once`).
+    child (e.g. a tiny probe launched via `wandr-arbiter launch`, not `--run-once`).
 - **If call-live is ALSO silent now** → the device state drifted tonight
   (audioserver bounces, `aaudio.mmap_policy` churn — now back to AUTO=2). It's
   environmental: reboot the device or fully reset audio, re-verify call-live,
@@ -93,7 +93,7 @@ adb shell 'su -c "logcat -d"' | grep -iE 'AAudioServiceEndpoint|EndpointShared|E
   coexistence. `repros/call-live` sidesteps it (record → close mic → play,
   sequential); a real call needs true full-duplex. Likely same root as the output
   issue; revisit once output plays.
-- **Inbound ICE never nominates** — wart as the *answerer* (controlled agent)
+- **Inbound ICE never nominates** — wandr as the *answerer* (controlled agent)
   reaches `Connecting` but not `Connected`; outbound (controlling) connects fine.
   rtc-ice controlled-side nomination and/or the relay path (deferred Phase B).
 - **Relay media (Phase B)** — when media arrives via the TURN relay it isn't
@@ -101,7 +101,7 @@ adb shell 'su -c "logcat -d"' | grep -iE 'AAudioServiceEndpoint|EndpointShared|E
 
 ## 5. Cleanup before finishing (currently in tree for debugging)
 
-- `apps/user/war.signal/engine/src/call.rs`: **`RX_ONLY = true`** in `pump_audio`
+- `apps/user/wandr.signal/engine/src/call.rs`: **`RX_ONLY = true`** in `pump_audio`
   (receive-only experiment) — flip to `false` for full duplex once output plays.
 - Remove the engine diagnostic logs once done: `RX OFFER/ANSWER opaque[..]` hex
   dump, the per-second `media …` line (udp/audio/peak/wr/srtp counters), and the
@@ -113,12 +113,12 @@ adb shell 'su -c "logcat -d"' | grep -iE 'AAudioServiceEndpoint|EndpointShared|E
 
 ## 6. Key files
 
-- `runtime/wart-host/src/audio_impl.rs` — AAudio binder-direct path
+- `runtime/wandr-host/src/audio_impl.rs` — AAudio binder-direct path
   (`open_pcm_stream`, `write_pcm_f32`, `drain_up_messages`, `start`).
-- `apps/user/war.signal/engine/src/call.rs` — `pump_audio`, `MediaStats`, the
+- `apps/user/wandr.signal/engine/src/call.rs` — `pump_audio`, `MediaStats`, the
   call engine adapter.
-- `apps/user/war.signal/engine/src/engine.rs` — call run-loop, media/state logging.
-- `crates/wart-call/src/{transport.rs,session.rs,signal/}` — SRTP keying, media.
+- `apps/user/wandr.signal/engine/src/engine.rs` — call run-loop, media/state logging.
+- `crates/wandr-call/src/{transport.rs,session.rs,signal/}` — SRTP keying, media.
 - `repros/call-live/` — the working standalone mic→speaker reference.
 
 ## Follow-up: durable audio API foundation (→ task 76)
@@ -127,7 +127,7 @@ The audio subsystem was built on hand-rolled raw binder to `media.aaudio` /
 `media.audio_policy` — fast to reach but the most ABI-fragile path. Before
 extending it further, **research the stable / officially-recommended audio API
 that fits and will long-live in this framework** (NDK AAudio vs Oboe vs
-NDK AudioTrack/AudioRecord vs pinned-@VintfStability binder vs a wart audio-HAL
+NDK AudioTrack/AudioRecord vs pinned-@VintfStability binder vs a wandr audio-HAL
 abstraction where the WIT contract outlives the backend). This is point **G** of
 `tasks/76-audio-subsystem-refactor.md` (with internet sources) — the audio
 subsystem refactor should pick the long-lived foundation deliberately, not stay

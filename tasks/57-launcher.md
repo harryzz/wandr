@@ -1,12 +1,12 @@
 # Task 57 — system launcher / home (proposal)
 
 > **Status:** ✅ device-verified 2026-05-29 (Proposal A). Steps 1–6 done
-> AND the dedicated `war.launcher` warpkg shipped — as a **light Rust
+> AND the dedicated `wandr.launcher` wandrpkg shipped — as a **light Rust
 > canvas guest**, not Kotlin/Compose.
 >
 > ## Dedicated launcher (2026-05-29) — the light Rust canvas guest
 >
-> Built `apps/system/war.launcher/` as a Rust `wasm32-wasip2` component
+> Built `apps/system/wandr.launcher/` as a Rust `wasm32-wasip2` component
 > (~70 KB) that **exports `my:skiko-gfx/renderer`** and draws the app
 > grid directly via the canvas WIT — **no Kotlin/Wasm runtime, no
 > Compose**, so it's immune to the continuation leak
@@ -34,18 +34,18 @@
 > letter tiles + labels via host fonts; tapping the "Demo" tile chained
 > Rust `on-pointer-event-v2` hit-test → `launch-app` → host
 > `forwarded launch` → arbiter `launched → pid / promoting foreground`.
-> Wired into `build-system-warpkgs.sh` (builds/packs/installs it) and set
-> as the **default boot home** (`WART_HOME_APP`, default `war.launcher`)
+> Wired into `build-system-wandrpkgs.sh` (builds/packs/installs it) and set
+> as the **default boot home** (`WANDR_HOME_APP`, default `wandr.launcher`)
 > in `run-hybrid-stack.sh` + the Magisk module — the device now boots
 > straight to the Rust launcher.
 >
-> wart-app keeps its `LauncherCard` as a Kotlin-side demo of the same WIT
-> (harmless; the Rust `war.launcher` is the actual home).
+> wandr-app keeps its `LauncherCard` as a Kotlin-side demo of the same WIT
+> (harmless; the Rust `wandr.launcher` is the actual home).
 >
 > **Step 6 — boot to the launcher** (device-verified): both the dev
 > entry point (`run-hybrid-stack.sh`) and the Magisk module
 > (`service.sh`) now `set-home $HOME_APP` (default
-> `com.example.wart-app`, `WART_HOME_APP=""` to disable) once the arbiter
+> `com.example.wandr-app`, `WANDR_HOME_APP=""` to disable) once the arbiter
 > socket is up — the dev script does it from a background waiter since
 > the arbiter runs foreground; the Magisk module does it inline after its
 > socket-wait. Verified by replaying the startup flow with fresh state
@@ -55,7 +55,7 @@
 > ## Results (2026-05-29)
 >
 > Built Proposal A. Per [[feedback_prefer_wart_app_edits]] the launcher
-> UI was proven inside wart-app (a `LauncherCard` at the top of the
+> UI was proven inside wandr-app (a `LauncherCard` at the top of the
 > showcase) rather than spinning up a brand-new Kotlin module first.
 >
 > - **Step 1 — arbiter home-app concept** (committed `7d6575f3`):
@@ -67,19 +67,19 @@
 >   restart restores home from `state.json` + foregrounds the survivor.
 > - **Steps 2–4 — host data/plumbing:** new `my:skiko-gfx/launcher` WIT
 >   (`list-apps -> string` newline/TAB-delimited; `launch-app(app-id)`);
->   `wart-host/src/launcher_impl.rs` scans `<APPS_ROOT>/apps/*` for the
+>   `wandr-host/src/launcher_impl.rs` scans `<APPS_ROOT>/apps/*` for the
 >   id + top-level `label` from each `package.toml` (the manifest is
 >   **flat**, not `[package]`-nested — note vs the proposal text), and
 >   forwards `launch-app` to the arbiter socket (one-shot, mirrors
 >   `ime_host_impl`). No installer change (package.toml copied verbatim;
 >   serde ignores the unknown `label`).
-> - **Step 5 — launcher UI in wart-app:** hand-written canonical-ABI
+> - **Step 5 — launcher UI in wandr-app:** hand-written canonical-ABI
 >   bindings `LauncherImports.kt` (modeled on `AssetsImports.kt` — string
 >   param + caller-allocated 8-byte return area for the string return);
 >   `LauncherCard.kt` renders a `FlowRow` of letter-tile icons (first
 >   label char on a hash-derived color) over a theme-gradient backdrop,
->   tap → `launchApp`. wart-app's `package.toml` gains `label = "Demo"`.
-> - **Device-verified:** `set-home com.example.wart-app` → boots to the
+>   tap → `launchApp`. wandr-app's `package.toml` gains `label = "Demo"`.
+> - **Device-verified:** `set-home com.example.wandr-app` → boots to the
 >   launcher card; tile renders **"D" / "Demo"** (label resolved); tapping
 >   it logs the full chain guest `tap → launch` → host `forwarded launch`
 >   → arbiter `launched → pid … / promoting foreground`.
@@ -87,7 +87,7 @@
 > **Remaining (small follow-ups):** Step 6 — `run-hybrid-stack.sh` /
 > Magisk auto-`set-home` at boot (the home concept + persistence already
 > make boot-to-home work once set). And a dedicated full-screen
-> `war.launcher` warpkg (the wart-app card proves the path; a real
+> `wandr.launcher` wandrpkg (the wandr-app card proves the path; a real
 > launcher app is the clean spin-out — its richer demo value is gated on
 > having ≥2 GUI apps to launch anyway). Letter-tile icons + theme
 > gradient shipped as the v1 choices.
@@ -98,11 +98,11 @@
 
 ## Why this matters
 
-Right now a standalone wart device boots to **nothing usable** — the
+Right now a standalone wandr device boots to **nothing usable** — the
 Hybrid stack comes up (zygote + arbiter) but no app is foreground until
-someone runs `wart-arbiter launch <app-id>` from an adb shell. There is
+someone runs `wandr-arbiter launch <app-id>` from an adb shell. There is
 no home screen, no app grid, and no "home" to return to when an app
-exits or is killed. The launcher is what makes wart a *usable device*
+exits or is killed. The launcher is what makes wandr a *usable device*
 rather than a dev harness:
 
 - the **boot target** (what shows when the stack starts),
@@ -110,20 +110,20 @@ rather than a dev harness:
 - the **app grid / drawer** to launch installed apps without adb.
 
 The roadmap frames this as part of "runtime draws everything" (§6.3,
-SystemUI/launcher dropped) — wart provides its own.
+SystemUI/launcher dropped) — wandr provides its own.
 
 ## Launcher vs taskbar (task 56) — they're different things
 
-Android (and wart) have two distinct surfaces; don't conflate them:
+Android (and wandr) have two distinct surfaces; don't conflate them:
 
 | | Launcher (this task, 57) | Taskbar / nav (task 56) |
 |---|---|---|
 | Surface | **Fullscreen** app, takes the foreground like any app | **Overlay** strip, always composited on top |
 | Visibility | Visible only when it's foreground (boot / home) | Persistent across apps |
 | Role | App grid + wallpaper + "home" | Switcher + quick dock + back/home affordances |
-| Process | A normal fg warpkg (`war.launcher`) | An overlay warpkg (`war.taskbar`) |
+| Process | A normal fg wandrpkg (`wandr.launcher`) | An overlay wandrpkg (`wandr.taskbar`) |
 
-They **share** the app-enumeration + `war:shell/launcher` WIT + the
+They **share** the app-enumeration + `wandr:shell/launcher` WIT + the
 manifest `label`/`icon` fields (defined in task 56). The launcher is the
 full home experience; the taskbar is the persistent quick bar. You can
 ship either first — the launcher has no overlay/insets dependency, so
@@ -144,18 +144,18 @@ The launcher forces the arbiter to learn one new idea — a designated
    already fires when the fg app dies; it just needs to foreground the
    home app afterward instead of clearing fg to nothing.
 
-New arbiter state: `home_app_id` (set via `wart-arbiter set-home
-<app-id>`, persisted in `wart-arbiter-state.json`).
+New arbiter state: `home_app_id` (set via `wandr-arbiter set-home
+<app-id>`, persisted in `wandr-arbiter-state.json`).
 
 ## Proposals
 
 ### Proposal A — full-screen home app (recommended)
 
-A first-party `war.launcher` warpkg (Kotlin/Compose), a normal
+A first-party `wandr.launcher` wandrpkg (Kotlin/Compose), a normal
 **fullscreen** foreground app the arbiter designates as home. It renders:
 
 - an **app grid** of installed apps (icons + labels), tap → launch /
-  foreground via the shared `war:shell/launcher` WIT (task 56);
+  foreground via the shared `wandr:shell/launcher` WIT (task 56);
 - a **clock** (host wall-clock, same source as the status bar);
 - a **wallpaper** — a static image asset or solid/gradient (WallpaperManager
   is dropped per roadmap §6.3; a live/extracted wallpaper is out of scope).
@@ -163,7 +163,7 @@ A first-party `war.launcher` warpkg (Kotlin/Compose), a normal
 - **Pros:** the real thing; uses the existing fullscreen surface path
   (no overlay/insets/shim work — unlike 55/56); reuses skiko + the app
   enumeration; the natural boot target.
-- **Cons:** another warpkg; needs the arbiter home-app concept (but that
+- **Cons:** another wandrpkg; needs the arbiter home-app concept (but that
   synergizes with task 54).
 
 ### Proposal B — app-drawer overlay (no dedicated home)
@@ -189,7 +189,7 @@ Make the taskbar dock the only app-launching surface; no separate home.
 
 **Recommendation:** **Proposal A.** It's the cheapest of the three
 shell tasks to build (no overlay/insets/a-03 shim work — it's a plain
-fullscreen warpkg) and the highest user payoff (the device becomes
+fullscreen wandrpkg) and the highest user payoff (the device becomes
 usable without adb). The arbiter home-app concept is small and dovetails
 with task 54's death-notification hook.
 
@@ -197,11 +197,11 @@ with task 54's death-notification hook.
 
 | # | Step | Where |
 |---|------|-------|
-| 1 | Arbiter `home_app_id` state + `set-home <app-id>` command + persist in state.json | `wart-arbiter/src/{state,main}.rs` |
-| 2 | Arbiter foregrounds home at startup; `go-home` command; **fallback-to-home in `handle_child_exit`** (task 54 hook) when fg app dies | `wart-arbiter` |
+| 1 | Arbiter `home_app_id` state + `set-home <app-id>` command + persist in state.json | `wandr-arbiter/src/{state,main}.rs` |
+| 2 | Arbiter foregrounds home at startup; `go-home` command; **fallback-to-home in `handle_child_exit`** (task 54 hook) when fg app dies | `wandr-arbiter` |
 | 3 | `package.toml` `label`+`icon` manifest fields + installed-app enumeration (shared with task 56; build here if 56 hasn't) | `app_installer.rs`, `app_loader.rs` |
-| 4 | `war:shell/launcher` WIT host impl forwarding to the arbiter (shared with task 56) | `wit/shell.wit`, `wart-host/src/launcher_impl.rs` |
-| 5 | `war.launcher` warpkg — Compose app grid + clock + static wallpaper; icons from assets (task 38); letter-tile fallback when no icon | `apps/system/war.launcher/` |
+| 4 | `wandr:shell/launcher` WIT host impl forwarding to the arbiter (shared with task 56) | `wit/shell.wit`, `wandr-host/src/launcher_impl.rs` |
+| 5 | `wandr.launcher` wandrpkg — Compose app grid + clock + static wallpaper; icons from assets (task 38); letter-tile fallback when no icon | `apps/system/wandr.launcher/` |
 | 6 | `run-hybrid-stack.sh` / Magisk module sets home + foregrounds it at boot | `tools/scripts/`, `magisk-module/` |
 | 7 | Device-verify: boots to home; tap launches an app; that app exits/killed → returns to home (not black); rotation re-lays the grid (task 43) | device |
 
@@ -228,13 +228,13 @@ with task 54's death-notification hook.
 ## Related
 
 - [`tasks/56-taskbar.md`](56-taskbar.md) — the persistent bottom bar;
-  shares the `war:shell/launcher` WIT + `label`/`icon` manifest + app
+  shares the `wandr:shell/launcher` WIT + `label`/`icon` manifest + app
   enumeration. Launcher = home screen; taskbar = persistent strip.
 - [`tasks/55-status-bar.md`](55-status-bar.md) — top strip; shares the
   clock source + theme.
 - [`tasks/54-arbiter-death-notification.md`](54-arbiter-death-notification.md)
   — `handle_child_exit` is the hook for "fg app died → fall back to home."
-- [`tasks/46-wart-arbiter-mvp.md`](46-wart-arbiter-mvp.md) — arbiter
+- [`tasks/46-wandr-arbiter-mvp.md`](46-wandr-arbiter-mvp.md) — arbiter
   registry + foreground command + state persistence the home-app concept
   extends.
 - `post-art-roadmap.md` §6.3 — launcher/SystemUI/WallpaperManager dropped,

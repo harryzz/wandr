@@ -1,8 +1,8 @@
 # Task 35 — app installer (+ thin loader) — the multi-component package boundary
 
 > **Status:** ✅ device-verified 2026-05-26. All six steps landed.
-> CLI: `wart-host --install <warpkg>` AOT-precompiles + stamps
-> `cache-key.toml`; `wart-host --standalone --app <id>` loads via
+> CLI: `wandr-host --install <wandrpkg>` AOT-precompiles + stamps
+> `cache-key.toml`; `wandr-host --standalone --app <id>` loads via
 > `AppRef::Installed`. Both halves device-tested on Pixel 2 XL:
 > install writes the spec-shaped layout
 > (`/<root>/<app_id>/<version>/{package.toml, components/, cache/,
@@ -10,9 +10,9 @@
 > + Compose frames render; drift self-heal verified by deleting the
 > cached cwasm — loader re-precompiles + re-stamps + boots normally
 > (~42 s on-device Cranelift AOT for the 15 MB component → 92 MB cwasm).
-> `WART_APPS_ROOT` env override on both `default_for_target()` keeps
-> `/data/wart/` sepolicy out of the smoke loop; production root unchanged.
-> Smoke fixture script: `scripts/smoke-warpkg.sh`. Possible follow-ups
+> `WANDR_APPS_ROOT` env override on both `default_for_target()` keeps
+> `/data/wandr/` sepolicy out of the smoke loop; production root unchanged.
+> Smoke fixture script: `scripts/smoke-wandrpkg.sh`. Possible follow-ups
 > (not required): wkg / Warg transport, Q5b signing, update/rollback
 > policy, cross-app deps task.
 > **Why now:** carves the **installer** and **loader** boundaries that
@@ -76,8 +76,8 @@ searches:
 
 | File | What it does |
 |---|---|
-| `wart-host/src/lib.rs:117–141` (NativeActivity / winit path) | Tries cwasm filesystem candidates (`/sdcard/Download/...`, app-external-files dir), falls back to APK asset `skiko-component.cwasm`. Calls `Component::deserialize_file` or `Component::deserialize(bytes)`. Calls `SkikoUi::instantiate(&store, &component, &linker)`. |
-| `wart-host/src/standalone.rs:55–70` (post-ART standalone path) | Calls `Component::deserialize_file(&engine, "/data/local/tmp/skiko-component.cwasm")` directly; falls back to `run_test_loop` if absent. Calls `SkikoUi::instantiate`. |
+| `wandr-host/src/lib.rs:117–141` (NativeActivity / winit path) | Tries cwasm filesystem candidates (`/sdcard/Download/...`, app-external-files dir), falls back to APK asset `skiko-component.cwasm`. Calls `Component::deserialize_file` or `Component::deserialize(bytes)`. Calls `SkikoUi::instantiate(&store, &component, &linker)`. |
+| `wandr-host/src/standalone.rs:55–70` (post-ART standalone path) | Calls `Component::deserialize_file(&engine, "/data/local/tmp/skiko-component.cwasm")` directly; falls back to `run_test_loop` if absent. Calls `SkikoUi::instantiate`. |
 
 Both also build `HostState` inline and run
 `wasmtime_wasi::p2::add_to_linker_sync` + `SkikoUi::add_to_linker`.
@@ -114,8 +114,8 @@ workflow still works without touching it.
 ## Module + type sketch
 
 ```rust
-// wart-host/src/app_installer.rs
-pub struct PackageBundle<'a> { pub dir: &'a Path }   // shipped .warpkg
+// wandr-host/src/app_installer.rs
+pub struct PackageBundle<'a> { pub dir: &'a Path }   // shipped .wandrpkg
 pub struct InstalledApp {
     pub app_id: String, pub version: String,
     pub install_dir: PathBuf,
@@ -123,12 +123,12 @@ pub struct InstalledApp {
 pub trait AppInstaller {
     fn install(&self, engine: &Engine, p: PackageBundle<'_>) -> Result<InstalledApp>;
 }
-pub struct WartInstaller { pub root: PathBuf }   // default /data/wart/apps
-impl AppInstaller for WartInstaller { /* §7.2 steps 1..6 */ }
+pub struct WandrInstaller { pub root: PathBuf }   // default /data/wandr/apps
+impl AppInstaller for WandrInstaller { /* §7.2 steps 1..6 */ }
 
-// wart-host/src/app_loader.rs
+// wandr-host/src/app_loader.rs
 pub enum AppRef<'a> {
-    Installed { app_id: &'a str, version: Option<&'a str> },  // → /data/wart/apps/<id>/<v>/
+    Installed { app_id: &'a str, version: Option<&'a str> },  // → /data/wandr/apps/<id>/<v>/
     DevCwasm  { candidates: &'a [&'a Path] },                  // today's path
     DevAsset  { bytes: &'a [u8] },                             // APK-embedded today
 }
@@ -143,11 +143,11 @@ impl LoadedApp {
 pub trait AppLoader {
     fn load(&self, engine: &Engine, r: AppRef<'_>) -> Result<LoadedApp>;
 }
-pub struct WartLoader { pub root: PathBuf }
-impl AppLoader for WartLoader { /* §7.2 loader steps */ }
+pub struct WandrLoader { pub root: PathBuf }
+impl AppLoader for WandrLoader { /* §7.2 loader steps */ }
 ```
 
-Two new files: `wart-host/src/app_installer.rs`, `wart-host/src/app_loader.rs`.
+Two new files: `wandr-host/src/app_installer.rs`, `wandr-host/src/app_loader.rs`.
 
 ## Cache key + invalidation
 
@@ -187,11 +187,11 @@ These would inflate scope past "carve the boundary":
 - **Signing (Q5b).** Open. Hook in the installer
   (`fn verify_signature(bundle: &Bundle) -> Result<()>`) returns
   `Ok(())` until the format is picked.
-- **A real package DB.** A flat directory `/data/wart/apps/<app-id>/`
+- **A real package DB.** A flat directory `/data/wandr/apps/<app-id>/`
   is the registry; no SQLite, no index file. Listing the dir is
   enough until multi-app makes that painful.
 - **Update / rollback.** Side-by-side install
-  (`/data/wart/apps/com.example.demo/{1.2.0,1.2.1}/`) is naturally
+  (`/data/wandr/apps/com.example.demo/{1.2.0,1.2.1}/`) is naturally
   supported by the layout; *atomic switch* + *rollback policy* is
   separate work.
 - **Hot reload.** None.
@@ -202,21 +202,21 @@ These would inflate scope past "carve the boundary":
 ## Steps
 
 1. **Add `src/app_loader.rs`** with the trait + `LoadedApp` + `AppRef`
-   enum + `WartLoader` (Installed path stubbed, Dev paths implemented).
+   enum + `WandrLoader` (Installed path stubbed, Dev paths implemented).
    No callers touched.
 2. **Refactor `standalone.rs`** to use the loader (only `AppRef::DevCwasm`).
    Smallest blast radius. Device-verify.
 3. **Refactor `lib.rs`** (NativeActivity) to use the loader (DevCwasm +
    DevAsset). Verify APK still boots.
-4. **Add `src/app_installer.rs`** with `AppInstaller` trait + `WartInstaller`
+4. **Add `src/app_installer.rs`** with `AppInstaller` trait + `WandrInstaller`
    skeleton: directory walk, copy `.wasm`s, call
    `Engine::precompile_component` per component, write
    `cache/<name>.cwasm` + `cache-key.toml`.
-5. **Hook `AppRef::Installed`** in `WartLoader`: cache-key re-verify,
+5. **Hook `AppRef::Installed`** in `WandrLoader`: cache-key re-verify,
    re-precompile-if-stale, deserialize. Now we can install a synthetic
    single-component package and load it through the real path.
-6. **Smoke**: a tiny synthetic `.warpkg` (one component, no link.wac)
-   installs to `/data/wart/apps/_smoke_/0.0.1/`, loads, renders.
+6. **Smoke**: a tiny synthetic `.wandrpkg` (one component, no link.wac)
+   installs to `/data/wandr/apps/_smoke_/0.0.1/`, loads, renders.
    Doesn't replace the dev workflow — just proves the real path
    compiles + runs end-to-end.
 
@@ -232,10 +232,10 @@ Total ~2–3 days.
   UI renders + types as before. Loader path exercised; installer
   bypassed.
 - `bash scripts/deploy.sh` (NativeActivity APK) still boots.
-- Smoke install: shipping a one-component `.warpkg`,
-  `wart-host --install /tmp/foo.warpkg` writes
-  `/data/wart/apps/com.example.foo/0.0.1/`; running
-  `wart-host --standalone --app com.example.foo` loads via
+- Smoke install: shipping a one-component `.wandrpkg`,
+  `wandr-host --install /tmp/foo.wandrpkg` writes
+  `/data/wandr/apps/com.example.foo/0.0.1/`; running
+  `wandr-host --standalone --app com.example.foo` loads via
   `AppRef::Installed` and renders.
 - Re-running the install with a manifest mtime bump triggers
   cwasm regeneration (verify by mtime on `cache/*.cwasm`).
@@ -248,8 +248,8 @@ Total ~2–3 days.
 1. Read this task + `post-art-roadmap.md` §7 (revised) + §9
    (resolved 2026-05-26) + the `wasmtime::Engine::precompile_component`
    docs (`wasmtime-src/crates/wasmtime/src/engine.rs:709`).
-2. Add `wart-host/src/app_loader.rs` per the proposed types (step 1
-   above). Register in `wart-host/src/lib.rs` (`mod app_loader;`).
+2. Add `wandr-host/src/app_loader.rs` per the proposed types (step 1
+   above). Register in `wandr-host/src/lib.rs` (`mod app_loader;`).
 3. Refactor `standalone.rs` (step 2 above); device-verify before
    touching `lib.rs`.
 4. Save `app_installer.rs` for after the loader half is green.

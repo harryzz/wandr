@@ -5,7 +5,7 @@ over binder (`IAudioFlingerService.createTrack` → `IAudioTrack` → the shared
 `audio_track_cblk_t` ring), **without AAudioService and without the JVM**. The
 call-audio path was only the trigger (task 97); this is the player/recorder
 substrate (Spotify-like + VoIP). Lives in its own decoupled crate
-`audioclient-rs` (codeberg.org/harryzz/audioclient-rs), consumed by wart-host.
+`audioclient-rs` (codeberg.org/harryzz/audioclient-rs), consumed by wandr-host.
 
 > **Feature roadmap (canonical):** the tiered done/open ledger for the crate lives in
 > [`external/audioclient-rs/README.md`](../external/audioclient-rs/README.md#tiered-roadmap)
@@ -17,7 +17,7 @@ substrate (Spotify-like + VoIP). Lives in its own decoupled crate
 
 The full output path works on the Pixel 2 XL: `createTrack` → mmap the cblk ring →
 write PCM → the AudioFlinger MixerThread drains it to the HAL, **unmuted**. Proven
-with `wart-host --probe-audioclient` (a 440 Hz tone) and the
+with `wandr-host --probe-audioclient` (a 440 Hz tone) and the
 `--probe-audioclient-matrix` diagnostic.
 
 ## Architecture
@@ -27,7 +27,7 @@ with `wart-host --probe-audioclient` (a 440 Hz tone) and the
   (`obtainBuffer`/`releaseBuffer`/`write`/`read`), ported from
   `AudioTrackShared.{h,cpp}`.
 - **Off-Android**: every call is a no-op stub so dependents build cross-platform.
-- rsbinder = wart-host's pinned `5e999e04a` **+ a 2-line recursive Box-array
+- rsbinder = wandr-host's pinned `5e999e04a` **+ a 2-line recursive Box-array
   patch** (see below).
 
 ## The three bugs that stood between "compiles" and "audible"
@@ -39,7 +39,7 @@ with `wart-host --probe-audioclient` (a 440 Hz tone) and the
 != USE_SESSION) { lStatus = BAD_VALUE; goto Exit; }` — a **silent** reject (no
 ALOGE) for `-1`. This is why audioserver logged nothing (even at VERBOSE), why it
 was identical under ART and `--no-art`, and why no request-field variant fixed it.
-**Found by** building a C++ reference (`external/wart-audioclient-ref` on a-03) that
+**Found by** building a C++ reference (`external/wandr-audioclient-ref` on a-03) that
 calls `createTrack` with our exact values via the device's own libaudioclient — it
 **succeeded sending `sessionId=0`** — then byte-diffing its serialized request vs
 ours (only the last 4 bytes differed: `ffffffff` vs `00000000`). A
@@ -61,7 +61,7 @@ After the fix the tone writes ~120k–220k frames (`zero-ticks≈1`) and reaches
 `Tracks.cpp checkPlayAudioForUsage`:
 `hasAppOps = mPackageName.size() && checkAudioOp(OP_PLAY_AUDIO,…)==MODE_ALLOWED`,
 and `mPackageName = attributionSource.packageName` (client-supplied — **not** from
-`getPackagesForUid`, so the wart shim can't inject it). Our empty/stub
+`getPackagesForUid`, so the wandr shim can't inject it). Our empty/stub
 `AttributionSourceState` → empty package → muted. **Fix**: send a valid
 `attributionSource` (uid = `geteuid()`, a `packageName`). For the probe (root,
 uid 0) AudioFlinger takes the `isServiceUid && empty-packages → not muting` path;
@@ -88,21 +88,21 @@ an `Endpoint` enum (`IAudioTrack | IAudioRecord`) with per-region mmaps. Verifie
 calibration noise.)
 
 ## Tooling (kept)
-- `wart-host --probe-audioclient [secs] [hz] [vol]` — plays a tone via the backend.
-- `wart-host --probe-audioclient-capture [secs]` — opens the mic via `createRecord`,
+- `wandr-host --probe-audioclient [secs] [hz] [vol]` — plays a tone via the backend.
+- `wandr-host --probe-audioclient-capture [secs]` — opens the mic via `createRecord`,
   reads PCM, reports frame count + peak (proves live capture).
-- `wart-host --probe-audioclient-matrix` — request-variant matrix + serialized-request
+- `wandr-host --probe-audioclient-matrix` — request-variant matrix + serialized-request
   hexdump (the diagnostic that isolated the sessionId byte).
-- `external/wart-audioclient-ref` (a-03 AOSP tree) — C++ reference using the device's
+- `external/wandr-audioclient-ref` (a-03 AOSP tree) — C++ reference using the device's
   libaudioclient: real `AudioTrack`, `createTrack(our values)`, `offsetof` dump, and
-  byte-level hexdump for diffing. Build: `m wart-audioclient-ref` (dies in kati — OK)
+  byte-level hexdump for diffing. Build: `m wandr-audioclient-ref` (dies in kati — OK)
   then `ninja -f out/combined-aosp_arm64.ninja <intermediate>`; source-only edits use
   ninja-direct (no `m`).
 
 ## Remaining / follow-ups
 - rsbinder recursive patch is finalized as the `external/rsbinder` submodule
   (`harryzz/rsbinder`, branch `wart-recursive` = `5e999e04a` + the 2-line patch);
-  `wart-host` `[patch]`es the hiking90 git source to it. ✅
+  `wandr-host` `[patch]`es the hiking90 git source to it. ✅
 - Capture (`createRecord`/`AudioRecord`) ✅.
 - Transport + clock: `pause`/`flush` (`IAudioTrack`) + `get_timestamp` ✅ — note
   `IAudioTrack.getTimestamp` answers only for offload/direct tracks (normal mixed
@@ -122,7 +122,7 @@ calibration noise.)
   "write what fits"; the probe demonstrates the correct pump.)
 - Wired into the real host output path ✅ — `audio_impl` now has a backend-dispatch
   layer (the WIT `Host` trait + the module-level functions both route through it):
-  **audioclient (AudioFlinger-direct) is the default**, `WART_AUDIO_BACKEND=aaudio`
+  **audioclient (AudioFlinger-direct) is the default**, `WANDR_AUDIO_BACKEND=aaudio`
   falls back to the legacy AAudioService path. Routing/volume policy
   (`ensure_initialized`, `set_media_strategy_route`, comms route) is backend-independent
   and unchanged. `--probe-audio-backend` exercises the dispatch (both backends verified

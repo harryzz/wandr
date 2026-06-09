@@ -57,7 +57,7 @@ visible symptom.
 - `feedback_popup_overlay.md` — DropdownMenu animation freeze.
   Different mechanism (test #1 in the task 29 bisect ruled out shared
   root) but in the same Compose popup family.
-- `wart-app/src/wasmWasiMain/kotlin/TooltipInspectionCard.kt` —
+- `wandr-app/src/wasmWasiMain/kotlin/TooltipInspectionCard.kt` —
   preserved through task 29 closeout at test #28 deployed body.
   Short tap is a clean ✅, long tap is the quick repro. Use this as
   the test surface for any patch — see "Verification" below.
@@ -124,13 +124,13 @@ BasicTooltipBox  (commonMain BasicTooltip.kt)
 stderr) and `eprint_u32` (writes a u32 — likely the source line
 number) before the `unreachable`. Both writes go through the wasi
 adapter's `fd_write` to stderr. We have NOT seen this output in
-logcat — wart-host probably discards or doesn't route the wasi
+logcat — wandr-host probably discards or doesn't route the wasi
 stderr stream.
 
 Sub-steps:
-1.1. Trace where wart-host wires the wasi stderr. Find the
+1.1. Trace where wandr-host wires the wasi stderr. Find the
      `Wasi*Builder.stderr(...)` call (or equivalent) in
-     `wart-host/src/main.rs` / `lib.rs` / wherever the
+     `wandr-host/src/main.rs` / `lib.rs` / wherever the
      `WasiCtxBuilder` is constructed.
 1.2. Replace its destination with a pipe / channel that flushes
      each line to `android_log_sys` (or the host's existing logger).
@@ -143,7 +143,7 @@ line). That directly localizes which Rust check fires.
 
 ### Step 2 — Rebuild the adapter from source with debug info
 
-The current `~/wart/skiko/wasi_snapshot_preview1.reactor.wasm` is a
+The current `~/wandr/skiko/wasi_snapshot_preview1.reactor.wasm` is a
 prebuilt blob. We don't have source-line/file mappings (only function
 symbols) in `wasmtime objdump`. To diagnose the assert at source
 level we need a source-built adapter.
@@ -158,7 +158,7 @@ Sub-steps:
      equivalent cargo profile so DWARF line tables ship in the
      resulting `.wasm`.
 2.3. Re-run wasm-tools component new with the new adapter, recompile
-     the wart-app cwasm.
+     the wandr-app cwasm.
 2.4. Re-trigger the crash; cross-check the fault offset against
      adapter source line numbers using `addr2line` (or
      `wasmtime objdump --bytes --source` if it supports DWARF).
@@ -191,7 +191,7 @@ Independently of Step 3, figure out why a registered trap doesn't
 get caught at runtime on Android.
 
 Sub-steps:
-4.1. Add a sigaction inspection to wart-host's startup: after engine
+4.1. Add a sigaction inspection to wandr-host's startup: after engine
      init, read back `sigaction(SIGILL, NULL, &old)` and log the
      `sa_sigaction` / `sa_handler` pointer. Compare to wasmtime's
      known handler symbol.
@@ -208,7 +208,7 @@ Sub-steps:
      manually `sigaction` after engine init), OR file an upstream
      wasmtime bug about Android signal-handler chaining.
 4.4. As a defense-in-depth fallback: install a project-side SIGILL
-     handler in wart-host that, when SIGILL fires inside the JIT
+     handler in wandr-host that, when SIGILL fires inside the JIT
      code region, logs PC + offset + a few registers and aborts with
      a recognizable header (instead of letting debuggerd be the only
      responder). This doesn't fix the crash but makes it diagnosable
@@ -224,7 +224,7 @@ Step 3 / Step 4 fix lands:
   times over 5 minutes.
 - Swap the body to test #11 (real TooltipBox + `Box.clickable{}`) —
   short tap must NOT crash. Repeat 100+ short taps.
-- Re-enable Material3 DatePicker chevrons in wart-app (the affected
+- Re-enable Material3 DatePicker chevrons in wandr-app (the affected
   `IconButtonWithTooltip` widgets) — chevron taps must navigate the
   calendar without crashing.
 - Soak: 10-minute interaction session that exercises tooltips +
@@ -255,7 +255,7 @@ Document any retroactively-fixed bugs in their respective memories.
 
 ## Reproducer
 
-The `wart-app/src/wasmWasiMain/kotlin/TooltipInspectionCard.kt`
+The `wandr-app/src/wasmWasiMain/kotlin/TooltipInspectionCard.kt`
 harness is left in place from task 29 step 2/3 closeout precisely so
 this task can pick it up cheaply.
 
@@ -301,7 +301,7 @@ wasmtime objdump --addresses /tmp/skiko-component.cwasm \
 - Re-running task 29's bisect — already done, results in
   `feedback_tooltip_sigill_wasi.md`. This task starts from the
   conclusion.
-- Re-implementing `BasicTooltipBox` on the wart-app side, or any
+- Re-implementing `BasicTooltipBox` on the wandr-app side, or any
   wasi override that just skips `state.show()`. Task 29 step 4
   considered those and they were declined; the goal here is the
   underlying fix.
@@ -327,12 +327,12 @@ wasmtime objdump --addresses /tmp/skiko-component.cwasm \
    `[[kotlin-wasm-suspendcoroutine-leak]]`** — if we make
    poll_oneoff/Delay "work correctly" but the underlying wasm-GC
    suspension pattern still leaks structrefs slowly, we trade SIGILL
-   for OOM-in-7-minutes. Run the leak-repro from `wart-leak-repro/`
+   for OOM-in-7-minutes. Run the leak-repro from `wandr-leak-repro/`
    after the fix to confirm.
 
 4. **kotlinx-coroutines wasi `Delay` lives outside our easy reach** —
    the implementation may be inside the kotlinx-coroutines published
-   klib, not in skiko / wart sources. If so, an override needs an
+   klib, not in skiko / wandr sources. If so, an override needs an
    expect/actual or a custom CoroutineDispatcher in
    `WasiScheduler`. Task 23 / `WasiFrameDispatcher` already touches
    adjacent territory.
@@ -385,18 +385,18 @@ parent-bump) was carried all the way into the on-device build:
   against it. (`graphics-shapes/build.gradle` needed a project-dep
   substitution fix for `:annotation:annotation` / `:collection:collection`
   to avoid a duplicate-`unique_name` KLIB conflict — now committed.)
-- `wart-app` recompiled; the whole-world link re-lowers all klib IR
+- `wandr-app` recompiled; the whole-world link re-lowers all klib IR
   against the patched stdlib. Component built + AOT'd + deployed.
 
 **The fork adapter (with the `State::with` self-heal) was deliberately
 KEPT in this build, not reverted.** Therefore a clean Tooltip/DatePicker
 run does not by itself prove the stdlib fix — if the patch were
 ineffective the self-heal would silently mask it. The verification
-signal is the logcat line `wart fork: wasi adapter State corruption —
+signal is the logcat line `wandr fork: wasi adapter State corruption —
 recovered`: **absent = stdlib fix proven; present = patch incomplete.**
 
 A definitive isolated test (rebuild the component with the *stock*
-adapter `~/wart/skiko/wasi_snapshot_preview1.reactor.wasm`, where a
+adapter `~/wandr/skiko/wasi_snapshot_preview1.reactor.wasm`, where a
 recurrence hard-SIGILLs instead of self-healing) was offered; the user
 declined for now. **Stock-adapter verification remains outstanding** —
 the Step 5 checklist item (100+ taps + 5-min soak on test #28) is not
@@ -430,7 +430,7 @@ is a real but currently-unexercised issue.
 **Re-open Step 4 if:** a new unexplained SIGILL / debuggerd abort
 appears on device where a guest trap *should* have been catchable
 (symptom — process dies with no Kotlin `error()` message, no Rust
-panic, straight to debuggerd). The `TooltipCard` in wart-app exercises
+panic, straight to debuggerd). The `TooltipCard` in wandr-app exercises
 the formerly-crashing long-press → `Delay` path and serves as the
 standing regression check.
 

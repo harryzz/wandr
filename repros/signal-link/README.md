@@ -17,12 +17,12 @@ transport swapped to wasi:tls in `wart-wasi-shims/`).
   or your own `Note to Self` sync transcript).
 
 Store is in-memory (v1) ⇒ link + receive happen in one run, and each run orphans a
-linked device (prune old "wart" devices in Signal → Linked Devices).
+linked device (prune old "wandr" devices in Signal → Linked Devices).
 
 ## Proven live (2026-05-30)
 - **Desktop** via the Signal-CA runner (`../wasi-tls-runner`): linked, decrypted a
-  real 1:1 text ("How are you wart") + the typing indicator.
-- **On device** (Pixel 2 XL) through the production **wart-host** as a warpkg:
+  real 1:1 text ("How are you wandr") + the typing indicator.
+- **On device** (Pixel 2 XL) through the production **wandr-host** as a wandrpkg:
   forked, linked (`LINKED ✓`), opened the message socket, decrypted an incoming
   message (`MESSAGE ✓`) — entirely on aarch64-android, transport over the device's
   network + Signal CA.
@@ -36,15 +36,15 @@ PROTOC=~/tools/protoc/bin/protoc cargo build --target wasm32-wasip2 --release
     ../signal-link/target/wasm32-wasip2/release/signal-link.wasm)
 ```
 
-On device (warpkg through wart-host):
+On device (wandrpkg through wandr-host):
 ```bash
-PKG=/tmp/signal-link.warpkg; rm -rf "$PKG"; mkdir -p "$PKG/components"
+PKG=/tmp/signal-link.wandrpkg; rm -rf "$PKG"; mkdir -p "$PKG/components"
 cp package.toml "$PKG/package.toml"
 cp target/wasm32-wasip2/release/signal-link.wasm "$PKG/components/signal-link.wasm"
-adb push "$PKG" /data/local/tmp/signal-link.warpkg
-adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=/data/local/tmp/wart-apps /data/local/tmp/wart-host --install /data/local/tmp/signal-link.warpkg'"
+adb push "$PKG" /data/local/tmp/signal-link.wandrpkg
+adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp WANDR_APPS_ROOT=/data/local/tmp/wandr-apps /data/local/tmp/wandr-host --install /data/local/tmp/signal-link.wandrpkg'"
 adb logcat -c
-adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=/data/local/tmp/wart-apps /data/local/tmp/wart-host --zygote-launch war.signal.link'"
+adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp WANDR_APPS_ROOT=/data/local/tmp/wandr-apps /data/local/tmp/wandr-host --zygote-launch wandr.signal.link'"
 adb logcat -d | grep signal-link    # grab the sgnl:// URL
 ```
 

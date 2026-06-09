@@ -23,7 +23,7 @@ ASYNC TRANSPORT PROVEN: wstd reactor drove wasi:tls HTTP/1.1
 The whole DNS → TCP → TLS-handshake → HTTP-write → HTTP-read pipeline ran under
 `#[wstd::main]`'s async executor, awaiting each step via the `wasi:io/poll`
 reactor. `chat.signal.org` reachability matches task 66 exactly (blocked only on
-cert pinning, which wart-host already fixes via its custom `TlsProvider`).
+cert pinning, which wandr-host already fixes via its custom `TlsProvider`).
 
 ## Key integration facts (carry into the transport swap)
 - **Bindings split that works:** `wstd 0.6.6` (executor, built on the

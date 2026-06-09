@@ -22,7 +22,7 @@ upgrade with one small new component.
 `wit/system-fonts.wit`:
 
 ```wit
-package war:fonts@0.1.0;
+package wandr:fonts@0.1.0;
 
 interface loader {
     /// Lightweight metadata for one installed font.
@@ -55,10 +55,10 @@ world loader-world {
 - Rust cdylib, `wasm32-wasip2` target.
 - Reads `/system/fonts/` via WASI preopen.
   - **Open question:** wasm32-wasip2 modules need a `/system/fonts/`
-    preopen to read it. wart-host's WasiCtxBuilder for the DEP would
+    preopen to read it. wandr-host's WasiCtxBuilder for the DEP would
     need to preopen this dir specifically. Two implementation paths:
     - **(a)** Hard-code the preopen for any dep whose WIT exports
-      `war:fonts/*` — special-case in app_loader's dep instantiation.
+      `wandr:fonts/*` — special-case in app_loader's dep instantiation.
     - **(b)** Add a manifest declaration in the dep's `package.toml`
       saying "I need read access to /system/fonts/" — installer copies
       perms into cache-key; loader honors it at dep-instantiate time.
@@ -71,10 +71,10 @@ world loader-world {
     deps having arbitrary filesystem access; the dep just calls into
     the host. Recommended for v1.
 
-## Consumer changes (wart-app)
+## Consumer changes (wandr-app)
 
 - `wit/deps/system-fonts/system-fonts.wit` (new).
-- `wit/wart-app.wit` adds `import war:fonts/loader@0.1.0;`.
+- `wit/wandr-app.wit` adds `import wandr:fonts/loader@0.1.0;`.
 - `src/wasmWasiMain/kotlin/FontsImports.kt` (new) — hand-written
   bindings for `list` + `load`.
 - `MarkdownCard.kt` extension: at composition time, `load("NotoSerif",
@@ -85,7 +85,7 @@ world loader-world {
 
 ## Verification
 
-1. Install all three deps + wart-app.
+1. Install all three deps + wandr-app.
 2. Screenshot: MarkdownCard with serif headings + serif body +
    monospace code — visibly different typography from today's default.
 3. Logcat: `system-fonts: list() → N families`, `system-fonts:
@@ -97,14 +97,14 @@ world loader-world {
 - Custom font formats beyond TTF/OTF.
 - Font hot-reload (user installs a font → live re-render). Restart on
   font change.
-- Per-app embedded fonts in the warpkg — the warpkg already supports
+- Per-app embedded fonts in the wandrpkg — the wandrpkg already supports
   `assets/`; that's where bundled fonts go. This task is specifically
   for SYSTEM fonts on the device.
 
 ## Related
 
 - `tasks/40-emoji-picker.md` — predecessor; same shipping pattern.
-- `tasks/39-generic-dep-wiring.md` — must be in place; no new wart-host
+- `tasks/39-generic-dep-wiring.md` — must be in place; no new wandr-host
   wiring code needed for system-fonts itself.
-- `tasks/36-cross-app-deps.md`, `tasks/38-warpkg-assets.md` — the
+- `tasks/36-cross-app-deps.md`, `tasks/38-wandrpkg-assets.md` — the
   architecture this rides on.

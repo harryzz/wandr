@@ -13,7 +13,7 @@ whole C-to-wasm toolchain problem.
   `decode(&[u8], frame, &mut [f32])` — same PCM-f32 as mic capture + AAudio.
 - **Round-trip works** (48 kHz mono, 20 ms = 960 samples): 960 f32 → ~160-byte
   packet (~64 kbps) → 960 samples, on desktop wasmtime 45 AND on-device via
-  `wart-host --run-once war.probe.opus` (deterministic, identical output).
+  `wandr-host --run-once wandr.probe.opus` (deterministic, identical output).
 - **Real-time with huge headroom (the key number), Pixel 2 XL, scalar:**
   ```
   encode 0.384 ms + decode 0.117 ms = 0.501 ms  per 20 ms frame
@@ -33,8 +33,8 @@ a defect — real speech is preserved well. The assertion checks *functionality*
 ```bash
 cargo build --target wasm32-wasip2 --release
 wasmtime run target/wasm32-wasip2/release/opus-wasip2-probe.wasm   # desktop
-# device: package as wasi:cli/command warpkg (war.probe.opus), then
-wart-host --run-once war.probe.opus
+# device: package as wasi:cli/command wandrpkg (wandr.probe.opus), then
+wandr-host --run-once wandr.probe.opus
 ```
 
 ## Conclusion

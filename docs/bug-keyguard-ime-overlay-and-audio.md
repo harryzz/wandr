@@ -1,20 +1,20 @@
-# Bug note — keyguard/IME overlay corruption + wart-app audio UI-block + IME audio leak
+# Bug note — keyguard/IME overlay corruption + wandr-app audio UI-block + IME audio leak
 
 > Found 2026-06-07 during device verification of the C1/C2/C3 sensor fixes
 > (`docs/sensor-access-conflicts-no-art.md`), Pixel 2 XL, `--no-art`. All three
 > bugs below are **independent of C1/C2/C3** — they live in the keyguard/IME/overlay
-> and wart-app audio paths, none of which the sensor fixes touched. The user's
-> reported "wart-app freezes after hours" decomposed into these.
+> and wandr-app audio paths, none of which the sensor fixes touched. The user's
+> reported "wandr-app freezes after hours" decomposed into these.
 
 ## Ruled out first (what the "freeze" is NOT)
-- **Memory leak** — wart-app host RSS is flat (~222 MB, plateaus after warmup; a
+- **Memory leak** — wandr-app host RSS is flat (~222 MB, plateaus after warmup; a
   2-min sampler over the lead-up showed no upward slope). `SwapFree` constant.
 - **OOM** — no `lowmemorykiller`/OOM in `dmesg`.
-- **Hang/wedge** — when "unresponsive," the wart-app process is alive, threads idle
+- **Hang/wedge** — when "unresponsive," the wandr-app process is alive, threads idle
   (`hrtimer_nanosleep`), main thread NOT stuck in `binder_ioctl`, ~0–8 % CPU. It's
   sleeping waiting for input, not deadlocked.
 - **C1/C2/C3** — exonerated (see each bug). The pre-C1 revert "fixed" the press-freeze
-  only because the reverted wart-app has **no Play button** (bug 2).
+  only because the reverted wandr-app has **no Play button** (bug 2).
 
 ---
 
@@ -22,21 +22,21 @@
 **Symptoms**
 - (A) IME keyboard renders **on top of the lockscreen** (screenshot: keyguard clock
   visible with a full QWERTY drawn over it, no "swipe up to unlock").
-- (B) After unlock, the foreground app (wart-app) has **no touch/scroll**; a *fresh
+- (B) After unlock, the foreground app (wandr-app) has **no touch/scroll**; a *fresh
   launch* fixes it, a full Background→Foreground round-trip does **not** (the role
   transition fires + the host re-sets its `sf_surface` input region, but touch stays
   dead). Other apps (Signal, dioxus) are unaffected.
 
 **Evidence (arbiter `list` after an idle keyguard lock):**
 ```
-com.example.wart-app … [editor:text]        ← editor still focused, but NOT [fg] (demoted)
-war.ime.keyboard     … [fg] [ime]           ← IME marked FOREGROUND (wrong → draws on top)
-war.keyguard         …                       ← present, NOT [fg]
+com.example.wandr-app … [editor:text]        ← editor still focused, but NOT [fg] (demoted)
+wandr.ime.keyboard     … [fg] [ime]           ← IME marked FOREGROUND (wrong → draws on top)
+wandr.keyguard         …                       ← present, NOT [fg]
 ```
 Stable across re-lists. (SF z-order couldn't be dumped — the hosts own SurfaceControls
 directly; the arbiter state is authoritative here.)
 
-**Root cause:** the keyguard lock handler (`wart-arbiter-keyguard`) demotes the
+**Root cause:** the keyguard lock handler (`wandr-arbiter-keyguard`) demotes the
 foreground **app** → Background and shows the keyguard surface, but does **not**
 (a) hide the **active IME overlay** or (b) clear the **editor focus**. The IME overlay
 is left `[fg]`/visible (its render layer sits above the keyguard → keyboard over
@@ -48,17 +48,17 @@ hence the touch-loss that only a fresh process resets.
 clear or suspend the focused editor, and make the keyguard the top foreground surface
 (it must supersede the IME in the fg/visibility model). On unlock — restore the prior
 app→Foreground and re-resolve its editor/IME/input cleanly. Confirm next repro with
-wart-inputflinger logging turned up (window block + pid→token resolution at dead-touch).
+wandr-inputflinger logging turned up (window block + pid→token resolution at dead-touch).
 
 ---
 
-## BUG 2 — wart-app "Play Tone" button blocks the render/UI thread (synchronous audio) — OPEN
+## BUG 2 — wandr-app "Play Tone" button blocks the render/UI thread (synchronous audio) — OPEN
 This button is the **audio-output verification aid added during this session**
-(`apps/user/wart-app/.../RealComposeApp.kt`, `playToneAndRelease()` + `PlayToneCard`,
-in the un-landed wart-app change), **not** a C1/C2/C3 fix.
+(`apps/user/wandr-app/.../RealComposeApp.kt`, `playToneAndRelease()` + `PlayToneCard`,
+in the un-landed wandr-app change), **not** a C1/C2/C3 fix.
 
 **Symptoms:** each Play press freezes the UI **2–3 s**; pressing it **twice** wedges
-wart-app input (unresponsive, only fresh launch recovers); sometimes no sound.
+wandr-app input (unresponsive, only fresh launch recovers); sometimes no sound.
 
 **Root cause:** `playToneAndRelease()` runs `createTrack` / `writePcmF32` / `start`
 (and the deferred `close`) **synchronously on the Compose render/UI thread** (the
@@ -80,11 +80,11 @@ so it's the *blocking*, not a stuck stream.
 the **exclusive MMAP endpoint** (which aggravates bug 2).
 
 **Evidence:** `dumpsys media.aaudio` AAudioClientTracker shows the **IME** (its pid)
-owning 1 MMAP stream; wart-app owns 0. The IME's leftover task-21 `android-audio smoke`
+owning 1 MMAP stream; wandr-app owns 0. The IME's leftover task-21 `android-audio smoke`
 does `createTrack` + `start` and **never closes** the track.
 
 **Root cause:** leftover startup audio-smoke in the IME guest (`Main.kt`), same as the
-one removed from wart-app — but it **cannot be removed from the IME**: any source edit
+one removed from wandr-app — but it **cannot be removed from the IME**: any source edit
 to that guest trips the **task-30 wasi-adapter State corruption** (SIGILL in
 `kotlin.wasm.internal.KProperty1ImplBase.get`), so only the byte-for-byte pristine IME
 runs. See `docs/sensor-access-conflicts-no-art.md` history / task 30.
@@ -96,7 +96,7 @@ keyboard), or live with the ~8 % pump.
 ---
 
 ## Relationship
-Bugs 2 and 3 are an **audio cluster** (IME hogs the HW endpoint → wart-app's blocking
+Bugs 2 and 3 are an **audio cluster** (IME hogs the HW endpoint → wandr-app's blocking
 Play-button stalls worse). Bug 1 is the **keyguard/IME/editor state** corruption and is
 the real cause of the "unresponsive after idle" the user chased. The two presented
 together because the test app had a focused text field (IME up) when the device idle-locked.

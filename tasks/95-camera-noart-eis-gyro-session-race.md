@@ -8,7 +8,7 @@
 
 ## ✅ RESOLUTION (2026-06-08) — the `batterystats` shim stub
 
-**The race is reliably won now.** With the task-96 `wart-framework-shim` carrying a
+**The race is reliably won now.** With the task-96 `wandr-framework-shim` carrying a
 `batterystats` stub (see `[[project_artless_sensor_5s_batterystats]]`,
 commit `27f94b4c`), all three `--probe-video` modes streamed **clean 3/3** in one
 sitting, with **no gyro warming active** (`warm_camera_gyro()` was already removed):
@@ -58,10 +58,10 @@ Two **separate** problems were entangled in task 93 and the long debug session:
 
 - `adb root` (this is a `userdebug` build, `ro.debuggable=1`) → root commands never
   invoke Magisk `su` → **zero `am`-spinners**. Run the whole probe via root adbd.
-- Sensor stack: `/system/bin/sensorservice` + `wart-sensormanager` (HIDL `ISensorManager`
+- Sensor stack: `/system/bin/sensorservice` + `wandr-sensormanager` (HIDL `ISensorManager`
   for the camera EIS gyro). The HAL bridge (`vendor.sensors-hal-1-0`) must be restarted
   to clear any stale single-client claim before sensorservice can own it.
-- Then probe: `LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/wart-host --probe-video imagereader`.
+- Then probe: `LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/wandr-host --probe-video imagereader`.
 - **Outcome: ~1/8 probes hit `captured frames: ~145 in 5.0s = 29 fps`; the rest 0.**
   When it streams it is rock-solid for the whole window.
 
@@ -95,7 +95,7 @@ This belongs in `[[project_art_shutdown]]` / `[[reference_artoff_magisk_am_spin]
 The Pixel 2 XL rear pipeline hard-wires **`goog_eis`** (`pproc` topology:
 `tmod → goog_eis → goog_llv → ppeiscore → c2d → cpp`). EIS needs a **high-rate gyro
 feed** (the `GoogGyro` "tripod" module). The gyro session is a chain of single-client
-QMI/binder sessions: **camera HAL → `ISensorManager` (wart-sensormanager) → libsensor →
+QMI/binder sessions: **camera HAL → `ISensorManager` (wandr-sensormanager) → libsensor →
 sensorservice → SSC/SLPI**. Under `--no-art` this session **establishes only ~1/8 of
 the time**; the failing 7/8 leave `GoogGyro` with no feed and the OIS gyro thread
 unarmed (`msm_stopGyroThread: invalid timer state = 0`).
@@ -105,8 +105,8 @@ unarmed (`msm_stopGyroThread: invalid timer state = 0`).
 |---|---|---|
 | Magisk `am`-spin (CPU/HAL starvation) | real but **separate**, fixed via `adb root` | crash-mode only; race persists at am=0 |
 | Camera provider degraded state | contributing (post-crash), not the race | `ctl.restart vendor.camera-provider-2-4`; still ~1/8 |
-| `wart-sensormanager` JVM: `nullptr` vs fakeVM | not it | both ~1/8; camera uses direct channel |
-| `wart-sensormanager` **binder thread pool** missing | **not it** | task-94 build adds `ABinderProcess_startThreadPool()` → "Thread Pool max=0" warning gone, still 0/8 |
+| `wandr-sensormanager` JVM: `nullptr` vs fakeVM | not it | both ~1/8; camera uses direct channel |
+| `wandr-sensormanager` **binder thread pool** missing | **not it** | task-94 build adds `ABinderProcess_startThreadPool()` → "Thread Pool max=0" warning gone, still 0/8 |
 | Sensor stack cold vs warm | not it | same warm stack wins then loses |
 | Consecutive probes (warm-up trend) | no trend | 1 win at probe #3 of 8, none after |
 | SELinux | ruled out | `setenforce 0` (already permissive) still 0 |
@@ -164,14 +164,14 @@ task-94 doesn't move the win rate.)
 2. **Interim, productionizable:** retry-on-open — reopen the camera until frames flow
    (~handful of tries), then stream stably. Acceptable for the Signal-call use case.
 3. **Revert** the falsified `warm_camera_gyro()` warm-keeper in
-   `wart-arbiter-bin/src/sensor_driver.rs` (battery cost, no benefit) unless re-purposed.
+   `wandr-arbiter-bin/src/sensor_driver.rs` (battery cost, no benefit) unless re-purposed.
 
 ## Repro (current, deterministic harness)
 - `adb root` (kills am-spam).
 - HAL bridge restart → `setsid /system/bin/sensorservice` → `setsid
-  /data/local/tmp/wart-sensormanager` (task-94, HIDL+AIDL, threadpool).
+  /data/local/tmp/wandr-sensormanager` (task-94, HIDL+AIDL, threadpool).
 - Loop the probe ~8–16×, restarting `vendor.camera-provider-2-4` only if it died.
 - Scripts left on device: `/data/local/tmp/{warmgyro,fullreset,freshprov}.sh`.
 
 See `[[project_artless_camera]]` (task 93), `tasks/94-*` (sensor unification, validated),
-`[[project_art_shutdown]]` (the `am`-spin), `runtime/wart-sensormanager/`.
+`[[project_art_shutdown]]` (the `am`-spin), `runtime/wandr-sensormanager/`.

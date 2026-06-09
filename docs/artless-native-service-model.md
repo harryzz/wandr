@@ -14,7 +14,7 @@
 Under `--no-art` (Java framework stopped) the bringup has accreted these
 workarounds, each addressing a different surface symptom:
 
-- **`wart-activityms` stubs** — re-implement the system_server binder services that
+- **`wandr-activityms` stubs** — re-implement the system_server binder services that
   native services block on (`activity` / `permission` / `sensor_privacy` /
   `scheduling_policy` / `package_native` / `media.camera.proxy`).
 - **audioserver restart cycle** — start the stub, wait for `"activity"`, then
@@ -23,10 +23,10 @@ workarounds, each addressing a different surface symptom:
 - **sensorservice kill-claim-retry** — `pkill` + `spawn_detached /system/bin/sensorservice`,
   retry up to 3× until the gyro enumerates without `"Abort due to ISensors … DEAD_OBJECT"`.
 - **manual single-instance recovery** — when the 3 retries give up, hand-restart
-  sensorservice + `wart-sensormanager`, being careful to leave exactly one of each.
+  sensorservice + `wandr-sensormanager`, being careful to leave exactly one of each.
 - **the EventQueue busy-spin** (C3) — an orphaned AIDL event-queue poll thread pins
   a core; "fix" proposed was to patch `libsensorserviceaidl`.
-- **the duplicate-instance CPU spin** — accidentally running >1 `wart-sensormanager`
+- **the duplicate-instance CPU spin** — accidentally running >1 `wandr-sensormanager`
   → orphaned EventQueues spin → +CPU.
 
 ## These are NOT one mechanism — but they ARE one root
@@ -59,7 +59,7 @@ The **EventQueue spin is itself a churn symptom.** `EventQueueLooperCallback::ha
 lacks an `ALOOPER_EVENT_HANGUP` guard, but that only bites when a BitTube **hangs
 up**, which only happens because we **restart / duplicate / reconnect**. With **one
 stable connection** the poll threads sleep — observed directly: after settling to a
-single `wart-sensormanager` with a single arbiter event-queue connection, no thread
+single `wandr-sensormanager` with a single arbiter event-queue connection, no thread
 spun. **The upstream library is fine as-is; the churn is ours.**
 
 ## Why patching the library is the wrong fix
@@ -80,7 +80,7 @@ The stubs are **not** hacks to remove: providing the binder services that native
 services depend on is *literally what replacing system_server means*. The hack is
 that they're stood up **ad-hoc, after the fact, with kill-restart timing dances**.
 The clean form is a **first-class shim** (the arbiter, or a dedicated
-`wart-framework-shim`) that registers the minimal service set (`activity`,
+`wandr-framework-shim`) that registers the minimal service set (`activity`,
 `permission`, `sensor_privacy`, `scheduling_policy`, `package_native`,
 `media.camera.proxy`, …) and is **already serving before** audioserver /
 sensorservice / cameraserver come up — so nothing ever wedges or needs a
@@ -118,11 +118,11 @@ orphaned.
 | duplicate-instance CPU spin | exactly one of each, no respawn races |
 | EventQueue HANGUP busy-spin (C3) | stable connection → no hangup (no lib patch) |
 
-**Plus the day-to-day win: a fast `--no-art` wart-only restart, no `--restore-art`
+**Plus the day-to-day win: a fast `--no-art` wandr-only restart, no `--restore-art`
 cycle.** Once the native+shim layer is churn-free and idempotent, the bringup splits
 into a **native+shim layer** (brought up once; skip-if-healthy on a restart) and a
-**wart layer** (arbiter / hosts / inputflinger, restartable in place). Restarting the
-stack then leaves the native+shim layer running and restarts only the wart layer —
+**wandr layer** (arbiter / hosts / inputflinger, restartable in place). Restarting the
+stack then leaves the native+shim layer running and restarts only the wandr layer —
 **no full-framework boot** (the `--restore-art` → `--no-art` cycle is only needed for
 the *first* entry into `--no-art`, not for restarts). See task 96 step 5.
 

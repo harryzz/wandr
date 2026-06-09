@@ -1,6 +1,6 @@
 # Task 61 — dioxus-canvas component showcase + renderer capability expansion
 
-> **Status:** ✅ all 3 phases device-verified 2026-05-29. `war.dioxus.demo` is
+> **Status:** ✅ all 3 phases device-verified 2026-05-29. `wandr.dioxus.demo` is
 > now a 5-tab Compose-style gallery (Inputs / Pickers / Calendar / Color / Text)
 > covering checkbox, switch, radio, stepper, progress, dropdown, color swatches,
 > calendar, **slider (drag)**, **HSV color picker (drag)**, and a **text edit box
@@ -32,8 +32,8 @@ gallery needs three expansions:
 2. **Keyboard + focus + IME** (edit box): track a focused element; implement
    `convert_keyboard_data`; route `on_key_event_v2` → dioxus `onkeydown` on the
    focused node. For the on-screen keyboard, the guest participates in the
-   `war:ime` editor-attached protocol (signal editor focus to the host →
-   war.ime.keyboard overlay shows → keys route back via the host socket →
+   `wandr:ime` editor-attached protocol (signal editor focus to the host →
+   wandr.ime.keyboard overlay shows → keys route back via the host socket →
    `on_key_event_v2`). Mirrors the Kotlin app's IME path (tasks 47/49).
 3. **Gradients / extra draws** (HSV picker): add `draw-oval` + the gradient
    create verbs to the trimmed WIT, and a gradient-fill path in the renderer's
@@ -46,7 +46,7 @@ gallery needs three expansions:
 |---|-------|-----------|---------------|
 | 1 | Click-only gallery + tab nav | checkbox, radio, switch, tabs/segmented, stepper, progress bar, dropdown (inline-expand), color **swatch** grid, calendar | none (proven: conditional rendering works, `tests/render.rs::conditional_rendering_toggles`) |
 | 2 | Drag inputs | slider (drag), HSV color picker | pointer move/up + capture; `draw-oval`; gradient fill |
-| 3 | Text input | edit box (focus, cursor, backspace) + soft keyboard | `convert_keyboard_data`; focus; `on_key_event_v2` routing; `war:ime` editor-attached integration |
+| 3 | Text input | edit box (focus, cursor, backspace) + soft keyboard | `convert_keyboard_data`; focus; `on_key_event_v2` routing; `wandr:ime` editor-attached integration |
 
 ## Design notes / decisions
 
@@ -91,7 +91,7 @@ gallery needs three expansions:
   strip moved the selection blue→magenta (preview + hex + grid recolor all
   updated) — confirming the full InputFlinger → `on_pointer_event_v2` →
   capture → element-relative → re-render path. (InputDispatcher focus is on
-  wart even when WMS `mCurrentFocus` shows the launcher, so injected pointer
+  wandr even when WMS `mCurrentFocus` shows the launcher, so injected pointer
   events reach the guest.) Renderer change: `border-radius:50%` percent handling
   (phase 1) covers the round thumbs/dots. 592 KB.
 - **Phase 3 ✅ device-verified 2026-05-29.** Text edit box + soft keyboard.
@@ -102,10 +102,10 @@ gallery needs three expansions:
   New host test `keyboard_types_into_focused_field` (focus → type → backspace).
   Guest: a `TextPanel` whose field tap calls `ime::notify_editor_attached` (the
   guest imports the host `ime` interface — same one the Kotlin app uses; the host
-  forwards to the arbiter which shows `war.ime.keyboard`) and whose `onkeydown`
+  forwards to the arbiter which shows `wandr.ime.keyboard`) and whose `onkeydown`
   edits the String (Character/Backspace/Enter); a Done button calls
   `notify_editor_detached`. **Full loop device-verified**: tap the dioxus field →
-  arbiter logs `attach-editor … → route to war.ime.keyboard delivered=true` →
+  arbiter logs `attach-editor … → route to wandr.ime.keyboard delivered=true` →
   the QWERTY overlay appears → tapping keys routes `ime-send-key-event <cp> 0` →
   the demo's per-host socket → `on_key_event_v2` → `on_key` → field updated
   ("edit me" → "edit mewart"). 624 KB. Note: raw `adb input text` (hardware-key
@@ -183,7 +183,7 @@ anchor + a shared `active: Signal<i32>` so only one field is focused at a time),
 and the Text tab now hosts four fields — `text` / `number` / `phone` / `email`:
 
 - **Per-type IME layouts.** Each field passes its `input-type` string to
-  `ime::notify_editor_attached`; the host maps it to the `war:ime` enum and the
+  `ime::notify_editor_attached`; the host maps it to the `wandr:ime` enum and the
   IME swaps layout. Device-verified: Number → numeric keypad (`. , -`), Phone →
   ITU-T dial pad (`+ * #`), Email → QWERTY with the `@` / `.com` row. Typing
   routes into the field for all of them (`"42"` → `"4256"`).
@@ -210,7 +210,7 @@ Locked by `keyboard_avoidance_scrolls_focused_field_then_blurs` (host test).
 1. **No text selection of the IME's own composing region / autocorrect** — input
    is direct key insertion; there's no composing-text / suggestion-bar path. Fine
    for the English/dial-pad layouts here.
-2. **Overlay surfaces don't rotate with device orientation** — a *general* wart
+2. **Overlay surfaces don't rotate with device orientation** — a *general* wandr
    limitation, not dioxus-specific: task 43 rotates only the fullscreen app
    (`enable_rotation` gated to `OverlayMode::None` in `standalone.rs:352`), so in
    landscape the IME keyboard (and status bar / taskbar) stay portrait. Scoped as
@@ -233,7 +233,7 @@ Locked by `keyboard_avoidance_scrolls_focused_field_then_blurs` (host test).
 ## Related
 
 - `tasks/59-dioxus-canvas-renderer.md` (the renderer), `crates/dioxus-canvas/`,
-  `apps/user/war.dioxus.demo/`.
+  `apps/user/wandr.dioxus.demo/`.
 - `tasks/47-ime-via-guest-app.md`, `tasks/49-ime-content-control.md`,
   `wit/ime.wit` — the IME protocol phase 3 plugs into.
 - [[reference_dioxus_taffy_rust_ui]].

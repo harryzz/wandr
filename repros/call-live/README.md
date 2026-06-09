@@ -1,6 +1,6 @@
 # call-live — the call-engine capstone (live call, real mic → real speaker)
 
-Every plane of `wart-call` composed at once: a **live call** between two
+Every plane of `wandr-call` composed at once: a **live call** between two
 `PeerSession`s over a **real UDP socket** with **real DTLS-SRTP keys**, carrying
 **real microphone audio** to a **real speaker**.
 
@@ -24,8 +24,8 @@ across two phones that limit vanishes (each captures *or* plays).
 ```bash
 cargo build --target wasm32-wasip2 --release
 cp target/wasm32-wasip2/release/call-live.wasm components/probe.wasm
-wart-host --install <warpkg>                 # app_id war.probe.calllive
-wart-host --run-once war.probe.calllive      # speak during "on the call"
+wandr-host --install <wandrpkg>                 # app_id wandr.probe.calllive
+wandr-host --run-once wandr.probe.calllive      # speak during "on the call"
 ```
 
 ## Result (2026-06-02) — device-verified ✅
@@ -47,7 +47,7 @@ floor.)
 
 ## What this completes
 
-`wart-call` is now proven as a full call engine end-to-end on real hardware:
+`wandr-call` is now proven as a full call engine end-to-end on real hardware:
 signaling · ICE · DTLS-SRTP · RTP/SRTP · Opus · real UDP · real mic/speaker — and
 separately interoperable with a real browser (`../call-browser`). The remaining
 work to a product is a **signaling channel** between two real devices (exchange

@@ -14,15 +14,15 @@ fail-safes (so it can never get stuck on).
 
 ## Implementation (reuses existing per-host push plumbing; no new crate, no core change)
 
-- **Host gate** (`wart-host/src/input.rs`): a process-global `TOUCH_SUPPRESSED`
+- **Host gate** (`wandr-host/src/input.rs`): a process-global `TOUCH_SUPPRESSED`
   atomic + `set_touch_suppressed(on)`; `dispatch_pointer`/`dispatch_pointer_v2`
   (the single touch choke point — standalone + winit loops both route through it)
   return early when set. A first-drop-per-episode log makes a real intercepted
   touch visible. Keys (`dispatch_android_key`) are untouched.
-- **Host control verb** (`wart-host/src/ime_inbound.rs`): parse `input-suppress
+- **Host control verb** (`wandr-host/src/ime_inbound.rs`): parse `input-suppress
   <0|1>` → `input::set_touch_suppressed` (applied directly — the gate is a global
   atomic read on the render thread, no InboundEvent plumbing).
-- **Arbiter** (`wart-arbiter-power/src/lib.rs`): `set_panel_blanked(blank, ctx)`
+- **Arbiter** (`wandr-arbiter-power/src/lib.rs`): `set_panel_blanked(blank, ctx)`
   folds the panel-power effect + the suppress fan so they move together — requests
   `Effect::SetDisplayPower{on:!blank}` and fans `input-suppress <0|1>` to **every**
   tracked host (`apps_snapshot()`; a cheek can land on chrome too). Used by the

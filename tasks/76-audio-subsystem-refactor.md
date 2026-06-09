@@ -24,7 +24,7 @@ channels / volume, and stop hard-coding magic values.
 
 **Architecture of record:** arbiter decides, host applies, guest expresses
 intent ([[project_audio_routing_arbiter]]). Routing/volume/mute policy lives in
-`wart-arbiter-audio`; the host owns the AAudio/policy binding + capability model.
+`wandr-arbiter-audio`; the host owns the AAudio/policy binding + capability model.
 Mute is two orthogonal gates — `audible = !global_mute && !app_mute`.
 
 Full mute matrix shipped — output {global, per-app} + input/mic {global,
@@ -51,7 +51,7 @@ against a hard-coded `audio_impl.rs`, leaving landmines:
 - **Magic constants:** `USAGE_MEDIA` hard-coded (voice-comm → `-889`); earpiece
   pinned to `deviceIds=[2]` (the *audio-policy port id* read once from
   `dumpsys`, NOT necessarily the AAudio device id — different namespace);
-  `WART_EARPIECE` env hack; stereo-vs-mono chosen by guesswork.
+  `WANDR_EARPIECE` env hack; stereo-vs-mono chosen by guesswork.
 - **No model of device capability:** we never enumerate output/input devices,
   their ids, supported channel masks / formats / sample rates. We discover
   `-889` (UNAVAILABLE) at runtime by crashing into it.
@@ -73,7 +73,7 @@ mic, and future video all sit on one coherent, device-independent layer (per the
 ### A. Enumerate what the binder/service layer exposes
 
 For each audio service we can reach over rsbinder, list its methods and what
-capability/state each yields. Write a read-only probe (`wart-host
+capability/state each yields. Write a read-only probe (`wandr-host
 --probe-audio-caps`) that dumps everything to logcat. Services:
 
 - **`media.aaudio`** (`IAAudioService`) — `openStream`/`getStreamDescription`
@@ -175,7 +175,7 @@ write up the trade-offs, then pick:
      introspection (which we'd still get from a thin `IAudioPolicyService` read).
   2. **Keep raw binder but pin to @VintfStability / @stable AIDLs only** — note
      which audio AIDLs are actually stability-tagged vs internal.
-  3. **A wart audio HAL abstraction** — define our own stable internal API
+  3. **A wandr audio HAL abstraction** — define our own stable internal API
      (the WIT + a host trait) and let the *backend* (binder today, NDK later)
      swap underneath without touching guests. (This is the long-lived shape
      regardless — the WIT contract outlives any one backend.)
@@ -212,9 +212,9 @@ frame_size). See [[project_call_audio_output]].
 
 ## Probe results — session 1 (steps 1–3, device-verified 2026-06-03)
 
-Implemented `wart-host --probe-audio-caps` (dump + typed model) and
+Implemented `wandr-host --probe-audio-caps` (dump + typed model) and
 `--probe-audio-matrix` (state matrix), both read-only. Run on the Pixel 2 XL.
-Code: `runtime/wart-host/src/audio_caps.rs` (+ `audio_impl::probe_open`/
+Code: `runtime/wandr-host/src/audio_caps.rs` (+ `audio_impl::probe_open`/
 `probe_coexist`, `audio_policy_impl::probe_devices_for_attributes`, slot-25
 `getDevicesForAttributes` in the policy AIDL stub).
 
@@ -282,7 +282,7 @@ volume stub (above); routing core / volume writes / mic-TX / AEC (steps 4+).
 2. **A routing API** that takes intent (media / call-speaker / call-earpiece /
    call-headset / ringtone) and picks the right device + force-use + stream
    params from the model — replacing the `USAGE_MEDIA`/`deviceIds=[2]`/
-   `WART_EARPIECE`/`COMMS_MODE`/`NO_TURN` hacks.
+   `WANDR_EARPIECE`/`COMMS_MODE`/`NO_TURN` hacks.
 3. **Clean WIT** for the guest: express intent (usage/route preference), not
    plumbing. Mono/stereo/format chosen host-side from device capability.
 4. **Volume** as a first-class capability (get/set/keys).

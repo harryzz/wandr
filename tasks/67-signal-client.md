@@ -6,7 +6,7 @@
 guest, **zero crypto/networking compiled in** (all transport over host `wasi:tls`):
 link-as-secondary-device, receive+decrypt, **send**, and pure-Rust file
 persistence (resume w/o re-link + message history). Verified on desktop AND
-on-device (Pixel 2 XL via wart-host).
+on-device (Pixel 2 XL via wandr-host).
 
 - **Working code:** `repros/signal-link/` — the full client as a `wasi:cli/command`
   (`src/main.rs` link/receive/send, `src/store.rs` ProtocolStore, `src/persist.rs`
@@ -20,11 +20,11 @@ on-device (Pixel 2 XL via wart-host).
   (`qrencode -s 12 -m 4`); terminal QRs don't scan; scan fast (~30-60s window).
 - **NEXT = Phase 2** (architecture decided; see "Phase 2 architecture" + "Next
   action" below): split into WIT-decoupled `signal-engine` (exports
-  `wart:signal/chat`) + `signal-ui` (dioxus over skiko-gfx). The engine needs a
+  `wandr:signal/chat`) + `signal-ui` (dioxus over skiko-gfx). The engine needs a
   small **persistent step-executor** (the gating finding below). Start with the
   engine.
 - Detail/gotchas: `[[project_signal_wasip2_transport_swap]]`,
-  `[[project_signal_client_architecture]]`. Housekeeping: prune orphaned "wart"
+  `[[project_signal_client_architecture]]`. Housekeeping: prune orphaned "wandr"
   linked devices in Signal (in-memory test runs left several; persistence ends it).
 
 ---
@@ -33,7 +33,7 @@ on-device (Pixel 2 XL via wart-host).
 
 ## Goal & scope (v1 = "simple")
 
-A working Signal Messenger client as a wart app. Deliberately minimal:
+A working Signal Messenger client as a wandr app. Deliberately minimal:
 - **Text chat only** — no voice/video, no media/attachments, no groups, no
   stories. 1:1 text conversations.
 - **Link as a secondary device** (scan a QR from an existing Signal phone) — not
@@ -44,13 +44,13 @@ A working Signal Messenger client as a wart app. Deliberately minimal:
 ## Architecture (corrected 2026-05-30 — guest-side)
 
 **The Signal client is a single `wasm32-wasip2` guest component. All client logic
-lives in the guest.** It is just another wart app: it uses the *generic* host
+lives in the guest.** It is just another wandr app: it uses the *generic* host
 capabilities every app shares — `skiko-gfx` to render, **`wasi:tls`/`wasi:sockets`
 (task 66) to reach Signal's servers**, WASI fs (or a future generic host store
 capability) to persist Signal-protocol state + messages.
 
 > **Rejected: the native-host-daemon design.** An earlier scaffold put the
-> connection in a bespoke native daemon (`wart-signal`, presage-based). That was
+> connection in a bespoke native daemon (`wandr-signal`, presage-based). That was
 > discarded. **App logic belongs in the app**; the host stays generic. Building a
 > per-app native host extension doesn't scale and breaks the host/guest boundary
 > the whole project is built on. **Task 66 wired `wasi:tls` precisely so a guest
@@ -100,7 +100,7 @@ specific daemon. That is a separate future task, deliberately not in scope here.
      device provisioning handshake (surface the `sgnl://` URI / QR; **user scans
      from their real Signal phone** — pause + ask before this live step) and
      receives + decrypts one inbound 1:1 text message, on device, through
-     `wart-host`, packaged as a warpkg like `repros/wasi-tls-probe` (task-66
+     `wandr-host`, packaged as a wandrpkg like `repros/wasi-tls-probe` (task-66
      commit `69714827`).
   A hard wall (un-decouplable tokio/hyper, or a crypto crate that won't build for
   wasip2) is itself the Phase-0 finding → stop, report options. **No fallback to
@@ -177,7 +177,7 @@ TLS stream.
   `repros/signal-phase0/` first to de-risk the executor↔wasi:tls integration under
   wasmtime, then drop that code into the transport module.)
 - **(2) wasi WebSocket** (Stream+Sink of `Message`); map the 3 tokio sites to wstd.
-- **(3) link + receive** one 1:1 text message, on device via wart-host (warpkg,
+- **(3) link + receive** one 1:1 text message, on device via wandr-host (wandrpkg,
   like `repros/wasi-tls-probe`, commit `69714827`). User scans the QR.
 
 ### Increment (1)-spike — DONE 2026-05-30 (`repros/wstd-wasitls-spike/`)
@@ -195,11 +195,11 @@ Built the transport as **drop-in shim crates** swapped via cargo `package =`
 rename (NOT an import rewrite — cargo forbids per-target sources for one dep name,
 so each shim is the single source and cfg-dispatches: real crate on native,
 wasi:tls impl on wasm). Location: `external/libsignal-service-rs/wart-wasi-shims/`:
-- `reqwest/` (`wart-reqwest-shim`) — `Client`/`ClientBuilder`/`RequestBuilder`/
+- `reqwest/` (`wandr-reqwest-shim`) — `Client`/`ClientBuilder`/`RequestBuilder`/
   `Response`/`Certificate`/`Error`/`multipart` over HTTP/1.1 on the shared
   `tls::TlsStream` (wasi:tls + wstd, from the spike). Exposes `random_bytes` +
   `tls` for the ws shim.
-- `reqwest-websocket/` (`wart-reqwest-websocket-shim`) — RFC6455 `WebSocket`
+- `reqwest-websocket/` (`wandr-reqwest-websocket-shim`) — RFC6455 `WebSocket`
   (inherent async `send`/`next`/`close`, `next()` boxed→Unpin for the fork's
   `select!`), `Message`/`CloseCode`, `RequestBuilderExt::upgrade`.
 - Fork edits: `Cargo.toml` deps point at the shims (+ wstd wasm-only); 3 tokio
@@ -227,7 +227,7 @@ the fork's `examples/storage.rs`; `mark_kyber_pre_key_used` takes 4 params) +
 reaches the QR + parks at "waiting for you to scan…". Everything past the scan
 (decrypt `ProvisionMessage` → `replenish_pre_keys` → `push_service.link_device`
 REST register → `NewDeviceRegistration`) is implemented and runs on scan. RNG =
-ChaCha20 from getrandom; random device password; device name "wart".
+ChaCha20 from getrandom; random device password; device name "wandr".
 
 **3b LIVE-VERIFIED 2026-05-30:** user scanned → `LINKED ✓ device_id=4`, "link flow
 finished OK". A wasm guest linked as a real Signal secondary device, all transport
@@ -242,20 +242,20 @@ set the provisioned ACI identity into the store → `do_receive` (`PushService` 
 → `ServiceCipher::open_envelope`). `store.rs` grew to a full `ProtocolStore`
 (`SessionStore` + `SenderKeyStore` + `SessionStoreExt` + all prekey traits) as
 `Rc<Inner>` so `Clone` is a shared handle (the cipher clones it). **Live result:**
-linked as device_id=5, then decrypted a real E2EE 1:1 text ("How are you wart") +
+linked as device_id=5, then decrypted a real E2EE 1:1 text ("How are you wandr") +
 the typing indicator. Accepts an incoming `DataMessage` or your own sync
 sent-transcript (Note-to-Self works as a test).
 
 **PHASE 0 IS FULLY DE-RISKED** — crypto→wasip2, transport over wasi:tls, link, and
 receive+decrypt all proven live. Operational notes: render the QR as a PNG
 (`qrencode`; terminal QRs don't scan) and scan FAST (provisioning window ~30-60s);
-the in-memory store orphans each linked device on exit (prune old "wart" devices).
+the in-memory store orphans each linked device on exit (prune old "wandr" devices).
 
 ### Increment (4) — DONE + ON-DEVICE-VERIFIED 2026-05-30
-Packaged `signal-link` as a warpkg (`package.toml`, `app_id = war.signal.link`,
-`wasi:cli/command`) and ran it through the production **wart-host** on the Pixel 2
+Packaged `signal-link` as a wandrpkg (`package.toml`, `app_id = wandr.signal.link`,
+`wasi:cli/command`) and ran it through the production **wandr-host** on the Pixel 2
 XL: `--install` (precompiled the libsignal-sized component to aarch64 cwasm) →
-`--zygote-launch war.signal.link`. On-device logcat: forked pid 17582 → `LINKED ✓`
+`--zygote-launch wandr.signal.link`. On-device logcat: forked pid 17582 → `LINKED ✓`
 → message socket open → `MESSAGE ✓` (received + decrypted an incoming message
 entirely on aarch64-android, transport over the device network + Signal CA). Capture
 the `sgnl://` URL from logcat, render a PNG host-side (`qrencode`), scan. Fixed the
@@ -294,16 +294,16 @@ notes-to-self (Cyrillic incl.) → `SENT ✓`, persisted outgoing. The client is
 The Signal client is **two composed components** with a WIT contract between them,
 NOT one monolith and NOT a host daemon:
 - **signal-engine** — imports `wasi:tls`/sockets/fs/random/clocks; **exports
-  `wart:signal/chat`**. Owns link/resume + the persistent connection + store +
+  `wandr:signal/chat`**. Owns link/resume + the persistent connection + store +
   history (all the work we built in `repros/signal-link`).
-- **signal-ui** — **imports `wart:signal/chat`** + the `my:skiko-gfx` world;
+- **signal-ui** — **imports `wandr:signal/chat`** + the `my:skiko-gfx` world;
   exports `renderer`. A thin dioxus (later Compose) view. Toolkit-agnostic because
   the contract is the only coupling.
 - Composed via WAC (`link.wac`, like task 36) into one app component.
 
-The `wart:signal/chat` contract:
+The `wandr:signal/chat` contract:
 ```wit
-package wart:signal@0.1.0;
+package wandr:signal@0.1.0;
 interface chat {
     record message { id: u64, from: string, text: string, ts: u64, outgoing: bool }
     variant event { message(message), link-url(string), linked(string), connected, disconnected }
@@ -328,11 +328,11 @@ roll a minimal executor (futures + task queue + a non-blocking `wasi:io/poll` wi
 0-timeout pollable). Contained in the engine; UI/contract unaffected.
 
 ## Next action (Phase 2 build order)
-1. ✅ **DONE 2026-05-30** — `repros/signal-engine/` exports `wart:signal/chat`
+1. ✅ **DONE 2026-05-30** — `repros/signal-engine/` exports `wandr:signal/chat`
    over a persistent step-executor. See "Phase 2 item (1) result" below.
 2. ✅ **DONE 2026-05-30** — `repros/signal-ui/` dioxus-canvas guest importing
    `chat`; conversation + composer + send. See "Phase 2 item (2) result" below.
-3. ✅ **DONE 2026-05-30** — composed via `wac plug`, packaged as `war.signal`,
+3. ✅ **DONE 2026-05-30** — composed via `wac plug`, packaged as `wandr.signal`,
    running **fully on the Pixel**: in-canvas QR → link → connect → live receive.
    See "Phase 2 item (3) result" below.
 
@@ -344,7 +344,7 @@ Type::Contacts)` to the primary; the primary replies with a `SyncMessage` whose
 downloads + decrypts it into `Contact { uuid, name, phone_number(E164),
 inbox_position }`; the engine persists them to **`/state/contacts.json`**
 (`persist::StoredContact`) and emits a `contacts-updated(count)` event. New on the
-`wart:signal/chat` contract: `record contact { id, name, phone: option<string>,
+`wandr:signal/chat` contract: `record contact { id, name, phone: option<string>,
 inbox-position }`, `event contacts-updated(u32)`, `contacts() -> list<contact>`,
 `sync-contacts()` (auto on connect; re-fetch on demand via a `resync` flag drained
 in the send-tick). **Avatars too:** `contact.avatar: option<list<u8>>` (the bytes
@@ -356,17 +356,17 @@ This added **`<img>` support to dioxus-canvas** (the canvas guest has no network
 and Signal avatars are encrypted bytes, not URLs — so `img { src: "https://…" }`
 can't work; the dioxus `asset!` macro also doesn't apply, no dioxus bundler). The
 renderer resolves `img { src }` for `data:…;base64,…` (engine bytes) and a file
-path like `/assets/icon.png` (the warpkg bundle, read via the task-38 `/assets`
+path like `/assets/icon.png` (the wandrpkg bundle, read via the task-38 `/assets`
 preopen); content-cached, decoded + blitted scaled via the host's
 `create-image-from-encoded` + `draw-image-rect` (CanvasSink `create_image` +
 `draw_image_rect`). See [[reference_dioxus_taffy_rust_ui]]. Follow-on: use contact
 names to replace raw ACIs in the conversation (deferred display-name resolution).
 
 ### Phase 2 item (3) result (2026-05-30) — Signal live on device
-`apps/user/war.signal/package.toml` (`world = my:skiko-gfx/skiko-ui`) bundles the
+`apps/user/wandr.signal/package.toml` (`world = my:skiko-gfx/skiko-ui`) bundles the
 `wac plug`'d `app.wasm` (signal-ui + signal-engine fused) as a single `ui`
-component. Installed (`wart-host --install`, AOT-precompiled on device) and
-launched via the hybrid stack (`wart-arbiter launch war.signal`). **Verified
+component. Installed (`wandr-host --install`, AOT-precompiled on device) and
+launched via the hybrid stack (`wandr-arbiter launch wandr.signal`). **Verified
 visually on the Pixel 2 XL:** the engine fetched a live provisioning URL from
 Signal, the UI drew it as an **in-canvas QR** (run-length-merged divs, no image
 primitive), the user scanned it off the panel → `LINKED` → `connected` → a phone
@@ -386,7 +386,7 @@ laid out **once** (the engine emits `link-url` a single time → no per-frame
 relayout). Reused the `qrcode` crate (matrix only).
 
 **Send direction verified (2026-05-30):** typed a message on the on-device IME
-(war.ime.keyboard) → Enter → `chat::send` → engine → **arrived on the phone's
+(wandr.ime.keyboard) → Enter → `chat::send` → engine → **arrived on the phone's
 Signal (Note to Self)**. Full bidirectional loop proven on-device (phone→device
 receive *and* device→phone send).
 
@@ -407,8 +407,8 @@ from the `focused` attr) but never fires `onmousedown`, so the IME never attache
 Fix: give any composer/edit field an `onmousemove` (the demo's `EditField` has one
 for drag-select; mine had dropped it). See [[reference_dioxus_taffy_rust_ui]].
 
-**Other gotchas hit:** `adb push <dir> <existing-dir>` **nests** (`signal.warpkg/
-signal.warpkg/…`) so the installer kept reading the first-pushed warpkg — `rm -rf`
+**Other gotchas hit:** `adb push <dir> <existing-dir>` **nests** (`signal.wandrpkg/
+signal.wandrpkg/…`) so the installer kept reading the first-pushed wandrpkg — `rm -rf`
 the device dir before each push (see [[feedback_adb_push_dir_nesting]]). The host
 *is* AOT-cache-correct (loader self-heals on `wasm_sha256` drift); the staleness
 was purely the push nesting. Install needs `LD_LIBRARY_PATH=/data/local/tmp`
@@ -416,7 +416,7 @@ was purely the push nesting. Install needs `LD_LIBRARY_PATH=/data/local/tmp`
 
 ### Phase 2 item (2) result (2026-05-30)
 `repros/signal-ui` is a dioxus-canvas guest that drives the engine purely through
-`wart:signal/chat`: title bar + connection `state`, a scrollable conversation
+`wandr:signal/chat`: title bar + connection `state`, a scrollable conversation
 (history backfill + live `poll-events`, outgoing right / incoming left, senders as
 raw ACIs per the v1 decision), and a `data-input` composer whose Send/Enter calls
 `chat::send`. `LinkPanel` shows the `link-url` as **text** (an in-canvas QR needs
@@ -438,11 +438,11 @@ tests still pass):
   armed. Idle cost is a cheap poll/tick (no relayout unless something arrived).
 
 **Verified (build + shape):** signal-ui imports `my:skiko-gfx/{canvas,paragraph,
-ime}` + `wart:signal/chat`, exports `renderer`/`frame-pacing`. `wac plug
+ime}` + `wandr:signal/chat`, exports `renderer`/`frame-pacing`. `wac plug
 signal-ui.wasm --plug signal_engine.wasm -o app.wasm` → a deployable app importing
 `my:skiko-gfx/{canvas,paragraph,ime}` + `wasi:tls/sockets` and exporting
 `renderer`/`frame-pacing` (chat satisfied internally). Full **visual** run is
-item (3) — needs wart-host (skiko/EGL canvas host) + network/Signal-CA (task 66,
+item (3) — needs wandr-host (skiko/EGL canvas host) + network/Signal-CA (task 66,
 wired) + a **writable** `/state` preopen (still pending — task 38 wired only
 `/assets` read).
 
@@ -491,14 +491,14 @@ human-readable. Display-name resolution (profile-name via profile key, or
 username) is a deferred follow-up: keep ACI as the stable id, just populate
 `sender` with a resolved name later. No engine change needed now.
 
-Also pending: on-device **writable** `/state` preopen in wart-host (task 38 wired
+Also pending: on-device **writable** `/state` preopen in wandr-host (task 38 wired
 only `/assets` read).
 - **Sending:** wire `MessageSender` (outgoing 1:1 text).
 - **UI:** dioxus guest rendering a conversation over a thin in-guest API to the
   link/receive engine; `skiko-gfx` for rendering.
 - **Background delivery:** a *generic* host keep-alive capability for all apps
   (never a per-app daemon).
-- Cleanup: prune the orphaned "wart" linked devices in Signal.
+- Cleanup: prune the orphaned "wandr" linked devices in Signal.
 
 ## Key references
 - Transport (load-bearing): `tasks/66`, `repros/wasi-tls-{probe,runner}`,

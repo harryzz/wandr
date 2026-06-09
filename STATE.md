@@ -1,4 +1,4 @@
-# ~/wart — Project state on session handoff
+# ~/wandr — Project state on session handoff
 
 > **2026-05-15 — RESOLVED.** The "Option A port" described in this document
 > has shipped. Full Compose-on-WASM PoC works end-to-end on device. This
@@ -8,8 +8,8 @@
 > - `CLAUDE.md` — overall guide + task table (all ✅)
 > - `docs/repository-layout.md` — canonical "where does X live" reference (post-monorepo-merge, task 52 + 53)
 > - `docs/architecture-runtime.md`, `architecture-ime.md`, `architecture-host-guest-boundary.md` — design docs
-> - `runtime/wart-host/README.md` + `BUILD.md` — Rust host
-> - `apps/user/wart-app/README.md` + `BUILD.md` — Kotlin/Compose guest
+> - `runtime/wandr-host/README.md` + `BUILD.md` — Rust host
+> - `apps/user/wandr-app/README.md` + `BUILD.md` — Kotlin/Compose guest
 > - `external/skiko/README-wasmWasi.md` + `BUILD-wasmWasi.md` — skiko fork (submodule)
 > - `external/compose-multiplatform-core/README-wasmWasi.md` + `BUILD-wasmWasi.md` — the port itself (submodule)
 > - `.task-state` — last checkpoint
@@ -136,7 +136,7 @@ They are no longer current. Documented post-hoc:
 
 - **Skiko fork.** Still publishes `org.jetbrains.skiko:skiko-wasm-wasi`
   to `~/.m2/`. Now lives as a submodule at `external/skiko/`
-  (was `~/wart/skiko/`, then a clone of
+  (was `~/wandr/skiko/`, then a clone of
   `codeberg.org/harryzz/skiko`).
 - **Sibling wasi modules (Option B fallback).** Abandoned. The
   11 `compose-*-wasi/` bundler dirs are not used anymore — the
@@ -146,6 +146,6 @@ They are no longer current. Documented post-hoc:
   bundlers have been gone since the monorepo reorg (task 52 +
   53, 2026-05-28).
 - **Host, WIT, scripts, test-app.** All since touched many times.
-  Current locations: `runtime/wart-host/`, `wit/`,
-  `tools/scripts/`, `apps/user/wart-app/`. See
+  Current locations: `runtime/wandr-host/`, `wit/`,
+  `tools/scripts/`, `apps/user/wandr-app/`. See
   `docs/repository-layout.md`.

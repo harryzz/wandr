@@ -1,9 +1,9 @@
-# Task 77 — `wart-arbiter-sensors` (the arbiter's SensorService)
+# Task 77 — `wandr-arbiter-sensors` (the arbiter's SensorService)
 
 > Status: ✅ DONE — device-verified on Pixel 2 XL (2026-06-04). Service + 1
-> consumer proof shipped: `wart-arbiter-sensors` (pure policy) + shared
-> `wart-hal-sensors` crate (rsbinder `ISensorManager`, also adopted by wart-host)
-> + binary sensor-driver thread; `wart-arbiter-power` ref-counts proximity on
+> consumer proof shipped: `wandr-arbiter-sensors` (pure policy) + shared
+> `wandr-hal-sensors` crate (rsbinder `ISensorManager`, also adopted by wandr-host)
+> + binary sensor-driver thread; `wandr-arbiter-power` ref-counts proximity on
 > `CommsActive` and reacts to `ProximityChanged` (log-only — applier is the
 > follow-on). Real cover/uncover gives clean debounced near/far transitions; the
 > sensor enables/disables on demand (vendor HAL `Enabling/Disabling proximity` —
@@ -23,29 +23,29 @@
 ## Why now (not a power-module patch)
 
 A proximity-screen-off-during-call feature *could* be hacked straight into
-`wart-arbiter-power`. But the moment a second sensor consumer appears
+`wandr-arbiter-power`. But the moment a second sensor consumer appears
 (orientation from the accelerometer — today still a `report-orientation` push,
 not a live read; auto-brightness from the light sensor; etc.) we'd be reading
 the HAL from multiple places with no enable/disable arbitration (battery) and no
 single owner. Build the owner first. After this lands, proximity-screen-off is a
-**separate, tiny follow-on** in `wart-arbiter-power` that just reacts to
+**separate, tiny follow-on** in `wandr-arbiter-power` that just reacts to
 `Event::ProximityChanged` (see "Out of scope").
 
 ## Current state (verified)
 
 - The arbiter reads **no sensor HAL**. Orientation enters via the
-  `report-orientation <raw>` verb (`wart-arbiter-wm`), which converts it and
+  `report-orientation <raw>` verb (`wandr-arbiter-wm`), which converts it and
   emits `Event::OrientationChanged`. So there is no HAL polling, no battery
   arbitration, no sensor lifecycle today.
 - The **host** already reads sensors for *guests* via the `skiko-gfx`
-  `sensors` WIT interface → `runtime/wart-host/src/sensors_impl.rs` →
+  `sensors` WIT interface → `runtime/wandr-host/src/sensors_impl.rs` →
   `android.frameworks.sensorservice.ISensorManager` (stable AIDL, Android 11+).
   **That is the reference for the AIDL + event-channel mechanism** — but it's the
   *guest-facing* path; the arbiter needs its **own** rsbinder access (the arbiter
   is the persistent system coordinator; host children are per-app + ephemeral).
-- Module pattern (core, `runtime/wart-arbiter/wart-arbiter-core/src/lib.rs`):
+- Module pattern (core, `runtime/wandr-arbiter/wandr-arbiter-core/src/lib.rs`):
   modules are **pure** — `verbs()`, `on_command()`, `on_event()`; they `emit`
-  `Event`s + `request` `Effect`s. The **binary** (`wart-arbiter-bin`) owns IO and
+  `Event`s + `request` `Effect`s. The **binary** (`wandr-arbiter-bin`) owns IO and
   runs hardware threads — the **screen poller** `bus_emit`s `Event::ScreenState`
   and the **alarm timer** emits `Event::AlarmTick`. The sensor HAL driver is the
   same shape.
@@ -55,9 +55,9 @@ single owner. Build the owner first. After this lands, proximity-screen-off is a
 ```
    ISensorManager (HAL, rsbinder)
         │  poll / event channel        ┌──────────────────────────────┐
-        ▼                              │  wart-arbiter-sensors (pure)  │
+        ▼                              │  wandr-arbiter-sensors (pure)  │
    binary sensor-driver thread  ──bus_emit Event::SensorReading──▶     │
-   (wart-arbiter-bin)           ◀──Effect::SetSensor{kind,on,rate}── policy:
+   (wandr-arbiter-bin)           ◀──Effect::SetSensor{kind,on,rate}── policy:
         │ enable/disable per Effect     │  - ref-count enable-on-demand │
         ▼                              │  - raw → semantic events      │
    (only-enabled sensors draw power)   │  - Store: live sensor state   │
@@ -69,7 +69,7 @@ single owner. Build the owner first. After this lands, proximity-screen-off is a
                               power → screen-off (follow-on), wm → orientation, …
 ```
 
-- **`wart-arbiter-sensors` module (pure policy):**
+- **`wandr-arbiter-sensors` module (pure policy):**
   - **Enable-on-demand arbitration** — ref-count consumers per sensor `kind`;
     `request(Effect::SetSensor{kind, on:true})` on the first consumer,
     `on:false` when the last drops. This is the battery contract and the whole
@@ -85,7 +85,7 @@ single owner. Build the owner first. After this lands, proximity-screen-off is a
     `sensor-state`, and a `report-sensor <kind> <x> [y z]` sim verb that injects
     a reading so the policy + consumers can be exercised on a desktop / before the
     HAL path is wired.
-- **Binary sensor-driver thread (`wart-arbiter-bin`):** the only place that
+- **Binary sensor-driver thread (`wandr-arbiter-bin`):** the only place that
   touches the HAL. Model on `spawn_alarm_timer` / the screen poller. Applies
   `Effect::SetSensor` (enable/disable a sensor on `ISensorManager` at the
   requested rate), reads samples off the sensor event channel, and `bus_emit`s
@@ -101,13 +101,13 @@ single owner. Build the owner first. After this lands, proximity-screen-off is a
 ## Steps
 
 1. **Core seam.** Add `SensorKind`, `Effect::SetSensor`, `Event::SensorReading`,
-   `Event::ProximityChanged` to `wart-arbiter-core`. (No behaviour yet — just the
+   `Event::ProximityChanged` to `wandr-arbiter-core`. (No behaviour yet — just the
    vocabulary so the rest is `+1 reaction`.)
-2. **Scaffold the crate.** `runtime/wart-arbiter/wart-arbiter-sensors`
-   (Cargo.toml dep on `-core` + `log`, like `wart-arbiter-audio`); `SensorsModule`
+2. **Scaffold the crate.** `runtime/wandr-arbiter/wandr-arbiter-sensors`
+   (Cargo.toml dep on `-core` + `log`, like `wandr-arbiter-audio`); `SensorsModule`
    impl of `ArbiterModule` with `verbs() = ["sensor-state","report-sensor"]`,
    ref-count map, raw→semantic translation, Store writes. Register it in
-   `wart-arbiter-bin/src/main.rs` (`reg.register(Box::new(SensorsModule::new()))`).
+   `wandr-arbiter-bin/src/main.rs` (`reg.register(Box::new(SensorsModule::new()))`).
    **Drive it end-to-end with the `report-sensor` SIM verb first** (no HAL) — prove
    proximity near/far events + debounce on the bus before touching binder.
 3. **Binary HAL driver.** Wire `ISensorManager` via rsbinder (vendor the AIDL if
@@ -115,7 +115,7 @@ single owner. Build the owner first. After this lands, proximity-screen-off is a
    enumerate + event-channel mechanism). Spawn the driver thread; apply
    `Effect::SetSensor`; `bus_emit` real `Event::SensorReading`. Device-verify
    proximity readings flow.
-4. **First real consumer (proof the seam works).** Wire `wart-arbiter-power` to
+4. **First real consumer (proof the seam works).** Wire `wandr-arbiter-power` to
    ref-count proximity **while a call is active** (`Event::CommsActive` →
    acquire; end → release) so the sensor is only on during calls, and have it
    react to `Event::ProximityChanged`. Stop at *logging* "would blank now" — the
@@ -125,7 +125,7 @@ single owner. Build the owner first. After this lands, proximity-screen-off is a
 ## Out of scope (deliberately — these are CONSUMERS, follow-on tasks)
 
 - **Proximity-screen-off-during-call policy** + the **host screen-blank /
-  panel-power applier** — a separate `wart-arbiter-power` task that *reacts to*
+  panel-power applier** — a separate `wandr-arbiter-power` task that *reacts to*
   `Event::ProximityChanged`. The host still lacks an active panel-blank op
   (`power`'s `doze 0` only keeps the process alive with the screen off); that
   applier is the real build-gap there.
@@ -153,14 +153,14 @@ single owner. Build the owner first. After this lands, proximity-screen-off is a
 
 ## Where it lands in code
 
-- `runtime/wart-arbiter/wart-arbiter-core/src/lib.rs` — `SensorKind`,
+- `runtime/wandr-arbiter/wandr-arbiter-core/src/lib.rs` — `SensorKind`,
   `Effect::SetSensor`, `Event::SensorReading` + `Event::ProximityChanged`.
-- `runtime/wart-arbiter/wart-arbiter-sensors/` — new crate (the module).
-- `runtime/wart-arbiter/wart-arbiter-bin/src/main.rs` — register the module +
+- `runtime/wandr-arbiter/wandr-arbiter-sensors/` — new crate (the module).
+- `runtime/wandr-arbiter/wandr-arbiter-bin/src/main.rs` — register the module +
   the sensor-driver thread + `Effect::SetSensor` in `execute_effects`.
-- Reference (don't duplicate the policy): `runtime/wart-host/src/sensors_impl.rs`
-  (AIDL + event channel), `wart-arbiter-audio` (`Event::CommsActive` producer),
-  `wart-arbiter-power` (the first consumer + the doze/screen precedent).
+- Reference (don't duplicate the policy): `runtime/wandr-host/src/sensors_impl.rs`
+  (AIDL + event channel), `wandr-arbiter-audio` (`Event::CommsActive` producer),
+  `wandr-arbiter-power` (the first consumer + the doze/screen precedent).
 
 ## Verification
 

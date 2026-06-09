@@ -1,7 +1,7 @@
 # Task 25 — Diagnose the Kotlin/Wasm `suspend` state-machine leak
 
 > **Status: 🔲 scoped, step 1 starting 2026-05-17.** Successor to
-> task 24. Step 1's repro (`wart-leak-repro/`) confirmed the leak is
+> task 24. Step 1's repro (`wandr-leak-repro/`) confirmed the leak is
 > in Kotlin/Wasm `suspendCoroutine` state-machine codegen at the
 > source-language level. This task narrows from "in `suspendCoroutine`"
 > to "in this specific allocation site emitted by this specific
@@ -13,7 +13,7 @@
 > - `feedback_kotlin_wasm_suspendcoroutine_leak.md` (memory) — symptom
 >   + measurements from task 24 step 1.
 > - `tasks/24-bisect-wasm-leak.md` — bisect plan that landed step 1.
-> - `wart-leak-repro/` (codeberg: harryzz/wart-leak-repro) — the
+> - `wandr-leak-repro/` (codeberg: harryzz/wart-leak-repro) — the
 >   minimum-possible reproducer this task tightens further.
 
 ## What this task is and isn't
@@ -47,7 +47,7 @@ Measurements (Pixel 2 XL, 30-second run):
 | Net leak rate | ~9 MB/s | **~10 MB/s** |
 | Components in cycle | suspendCoroutine + WasiScheduler + HashMap + `()->Unit` lambda | **`suspendCoroutine` ONLY** |
 
-The 80-byte/tick figure is the smoking gun: the wart-side
+The 80-byte/tick figure is the smoking gun: the wandr-side
 HashMap-based callback and per-tick `() -> Unit` lambda accounted
 for ~9 KB of the original per-tick leak (transient allocations
 that DID get reclaimed eventually); the underlying retained
@@ -69,7 +69,7 @@ instead of `RendererImpl.renderFrame(...)`. The suspend cycle now is:
 4. `tick()` drains `pendingNextFrame`, calls `cont.resume(Unit)`.
 5. Step 1 repeats.
 
-ZERO wart-side allocation in the cycle. No HashMap, no `() -> Unit`
+ZERO wandr-side allocation in the cycle. No HashMap, no `() -> Unit`
 lambda, no WasiScheduler ID generation. Just `suspendCoroutine`.
 
 ### Native Heap stayed flat
@@ -103,7 +103,7 @@ allocated without slot-clear.
 **Goal: provably 100% Kotlin/Wasm. Eliminate WasiScheduler.**
 
 The task-24 reproducer uses `WasiScheduler.schedule(1u, lambda)` to
-park-and-wake the continuation. `WasiScheduler` is wart-side code
+park-and-wake the continuation. `WasiScheduler` is wandr-side code
 (skiko-wasi); even though we read it and it looks clean, an upstream
 report should not have to take our word for it.
 
@@ -125,7 +125,7 @@ internal object LeakReproDriver {
 
 private suspend fun awaitNextScheduledTick(): Unit = suspendCoroutine { cont ->
     pendingNextFrame = cont
-    // NOTHING ELSE. The wart-host already calls our @WasmExport
+    // NOTHING ELSE. The wandr-host already calls our @WasmExport
     // renderFrame every frame; that's our wake.
 }
 ```
@@ -158,7 +158,7 @@ kotlin.coroutines.SafeContinuation.<init>"` called from
 SafeContinuation allocated per `awaitNextFrame()` call. Size +
 DRC heap header matches our ~80-byte/tick measurement.**
 
-Process: `wasm-tools print wart-leak-repro.wasm > /tmp/leak-repro.wat`
+Process: `wasm-tools print wandr-leak-repro.wasm > /tmp/leak-repro.wat`
 gave a 24,929-line WAT decompilation. Filtered to:
 
 | Type | Type-id | Fields | Est. size | `struct.new` sites | Allocated per |
@@ -358,7 +358,7 @@ impl<T> Store<T> {
 }
 ```
 
-`wart-host` already pulls wasmtime via cargo registry. To use our
+`wandr-host` already pulls wasmtime via cargo registry. To use our
 patched version, point `[dependencies] wasmtime = { path = "..." }`
 at a local checkout. Easy revert after the experiment.
 
@@ -410,7 +410,7 @@ isn't trivially applicable, and here's the design alternative."
   vs wasm-postprocess is a separate decision informed by this task's
   output.
 - **GC-heap inspection in production.** The wasmtime patch is for
-  diagnosis only — not shipped in the default `wart-host` build.
+  diagnosis only — not shipped in the default `wandr-host` build.
 - **General-purpose Kotlin/Wasm profiler.** We're using just enough
   tooling to identify this one leak; not building a permanent
   profiler infrastructure.

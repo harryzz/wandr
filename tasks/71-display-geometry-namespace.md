@@ -99,7 +99,7 @@ the *geometry* (overlay sizing + the dims) lives here.
   `SkikoUi` so every guest gets it.
 - Task 68 cleanup: drop the px-scaling in `overlay_rect` + `recompute_transform`;
   store a **percent** (or honor px directly), recompute `kb = percent × content_h`.
-- IME (`war.ime.keyboard`): replace fixed `requestOverlayHeight(864)` with
+- IME (`wandr.ime.keyboard`): replace fixed `requestOverlayHeight(864)` with
   per-orientation `request-overlay-percent(30|42)`.
 - `surface-width/height` can stay (alias of `safe-size`) for back-compat, or be
   redirected.

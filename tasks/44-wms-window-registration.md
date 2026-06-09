@@ -40,10 +40,10 @@ reference + the slim chance task 44 is unparked):
 - All four WMS AIDLs are vendored via the build.rs self-healing
   slot-stub pattern. Reusable if the WMS path ever becomes
   necessary again.
-- `wart-host/src/wms_impl.rs` is a working binder probe template;
+- `wandr-host/src/wms_impl.rs` is a working binder probe template;
   the openSession round-trip works at the transport layer.
 - The exact gate location is documented (this file + commit
-  `09782f5` in wart-host).
+  `09782f5` in wandr-host).
 
 **Conditions to resume task 44**: only if a concrete short-term
 need (before Hybrid ships) emerges that the in-canvas Compose
@@ -51,7 +51,7 @@ keyboard can't cover — e.g. specific user pain around English-only
 typing, voice input, emoji picker, CJK languages. Even then,
 **Path B from task 40 session 6** (NativeActivity wrapper +
 JNI-extract activity windowToken) is a much cheaper alternative
-than continuing task 44, because the NativeActivity wart-app IS
+than continuing task 44, because the NativeActivity wandr-app IS
 in `ATMS.mProcessMap` (AMS spawned it). Try Path B first.
 
 ---
@@ -81,12 +81,12 @@ I ImeTracker: null: onFailed at PHASE_SERVER_CLIENT_FOCUSED
 IMMS gates `showSoftInput` on `mCurFocusedWindowClient == callingClient`.
 That field is set by WMS pushing focus updates to IMMS (via
 JVM-internal calls, not AIDL). WMS only knows about windows that
-came through its `addWindow` flow. Standalone wart-host (task 33)
+came through its `addWindow` flow. Standalone wandr-host (task 33)
 bypasses WMS — it talks directly to SurfaceFlinger
 (`SurfaceComposerClient::createSurface`) and InputFlinger
 (`IInputFlinger.createInputChannel` + `gui::WindowInfoHandle` +
 `setInputWindowInfo`). Result: we appear in `dumpsys input` as
-`Window: wart - wart` and even get InputDispatcher focus, but
+`Window: wandr - wandr` and even get InputDispatcher focus, but
 remain invisible to WMS → invisible to IMMS's focus check.
 
 **No rsbinder-only or InputFlinger-only path bypasses this**;
@@ -98,7 +98,7 @@ a window with WMS through the proper `IWindowManager.openSession`
 ## Goal
 
 Stand up a WMS-registered window from a non-Activity process
-(wart-host running standalone, root via `su`). Specifically:
+(wandr-host running standalone, root via `su`). Specifically:
 
 1. Open a session with WMS via `IWindowManager.openSession`.
 2. Serve an `IWindow` Bn-side binder (the per-window callback
@@ -129,7 +129,7 @@ that). Once task 44 ships, task 40 resumes with session 7:
 - **rsbinder 0.8.0** (committed 2026-05-27): pre-Path-A
   maintenance upgrade. FD-UB / deadlock / UAF / obituary fixes
   matter more with the larger AIDL surface this task introduces.
-- **Vendored submodule** `wart-host/vendor/aosp-frameworks-base`
+- **Vendored submodule** `wandr-host/vendor/aosp-frameworks-base`
   (committed in task 40 session 2): pinned to `android-15.0.0_r36`.
   All AIDL files mentioned below are already in the sparse-checkout
   (verified 2026-05-27 — `IWindowManager.aidl`, `IWindow.aidl`,
@@ -207,7 +207,7 @@ parcel-shape mismatches:
   - Call `openSession(callback)`.
   - Log the returned `IWindowSession` (just `Strong<dyn IWindowSession>`
     presence is enough for session 7).
-- Device-verify: `wart-host --probe-wms-opensession` returns OK.
+- Device-verify: `wandr-host --probe-wms-opensession` returns OK.
 
 Success criterion: a real `IWindowSession` binder arrives back from
 WMS. (Even if we have no permission for `addToDisplay`, openSession
@@ -272,17 +272,17 @@ next.
 
 **Files touched** (commit-ready):
 
-- `wart-host/build.rs` — added WMS AIDL stub block (~170 lines:
+- `wandr-host/build.rs` — added WMS AIDL stub block (~170 lines:
   three programmatic-stub generators for IWindowManager/
   IWindowSession/IWindow) + 4 `.source(...)` calls in the
   rsbinder-aidl Builder chain. IWindowSessionCallback used
   as-is (no patch).
-- `wart-host/src/wms_impl.rs` — new (~140 lines). Mirrors
+- `wandr-host/src/wms_impl.rs` — new (~140 lines). Mirrors
   `ime_impl.rs::session3` shape. `IWindowSessionCallback` Bn
   server, tokio runtime, openSession call with
   UnexpectedNull-as-success branching.
-- `wart-host/src/lib.rs` — `pub mod wms_impl;`.
-- `wart-host/src/main.rs` — `--probe-wms-opensession` CLI flag.
+- `wandr-host/src/lib.rs` — `pub mod wms_impl;`.
+- `wandr-host/src/main.rs` — `--probe-wms-opensession` CLI flag.
 - `.task-state` → TASK=44 STEP=verify-done STATUS=complete.
 
 **Time spent:** ~1h end-to-end (estimate said 4-6h — the
@@ -354,7 +354,7 @@ Success criterion: Gboard pops up. (`dumpsys input_method` shows
 ### Session 12+ — productionize (~unscoped)
 
 - Wire WMS registration into the standalone path so task 33's
-  standalone wart-host is always a WMS window when running. Hand
+  standalone wandr-host is always a WMS window when running. Hand
   the windowToken to the Compose-side text input integration.
 - Real `EditorInfo` parceling (task 40 carryover, ~30 fields, same
   shape as LayoutParams session 9).
@@ -395,14 +395,14 @@ Success criterion: Gboard pops up. (`dumpsys input_method` shows
 
 ## File-touch map (anticipated)
 
-- `wart-host/Cargo.toml` — no new deps (rsbinder 0.8.0 already in)
-- `wart-host/build.rs` — add WMS AIDL stubs in the existing
+- `wandr-host/Cargo.toml` — no new deps (rsbinder 0.8.0 already in)
+- `wandr-host/build.rs` — add WMS AIDL stubs in the existing
   self-healing pattern; extend the `rsbinder_aidl::Builder` chain
-- `wart-host/src/wms_impl.rs` (new) — modeled on `ime_impl.rs`.
+- `wandr-host/src/wms_impl.rs` (new) — modeled on `ime_impl.rs`.
   Sessions 7-11 add `probe_wms_*` functions incrementally.
-- `wart-host/src/main.rs` — new `--probe-wms-*` CLI flags
-- `wart-host/src/lib.rs` — `pub mod wms_impl;`
-- `wart-host/src/standalone.rs` — session 12+, wire WMS registration
+- `wandr-host/src/main.rs` — new `--probe-wms-*` CLI flags
+- `wandr-host/src/lib.rs` — `pub mod wms_impl;`
+- `wandr-host/src/standalone.rs` — session 12+, wire WMS registration
   into the standalone bring-up sequence
 - `tasks/44-wms-window-registration.md` — this doc; update with
   per-session results
@@ -422,7 +422,7 @@ If picking this up cold:
 3. Read **task 33 step 1** + `cpp/sf_surface.cpp` for prior art on
    non-Activity input window registration via the InputFlinger
    path (which task 44 sits on top of).
-4. Read **the existing `wart-host/src/ime_impl.rs`** for the
+4. Read **the existing `wandr-host/src/ime_impl.rs`** for the
    Bn-side server + probe pattern that this task replicates for the
    WMS surface.
 5. Read **task 40 session 3** for how slot_NN stubbing works on a
@@ -437,7 +437,7 @@ If picking this up cold:
   `feedback_softkeyboard`) works for current user needs (English
   typing, autocorrect-free).
 - **Start when one of these becomes true:**
-  - The standalone-mode wart-host (task 33) becomes the primary
+  - The standalone-mode wandr-host (task 33) becomes the primary
     deployment target (vs the NativeActivity-wrapped APK).
   - The in-canvas keyboard's limitations (no voice input, no emoji
     picker, English-only practical) become real user pain.

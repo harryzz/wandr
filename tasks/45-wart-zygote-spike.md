@@ -1,4 +1,4 @@
-# Task 45 — wart-zygote MVP spike (Hybrid runtime model, native)
+# Task 45 — wandr-zygote MVP spike (Hybrid runtime model, native)
 
 > **Status:** 🔲 scoped 2026-05-27, not started. Spun out of the task
 > 44 postponement + the §9 Hybrid-zygote architectural lock. Goal:
@@ -13,7 +13,7 @@ Java-coupled AMS/ATMS/WMS to register a non-Activity process, the
 §9 plan is to *replace* those layers entirely with our own arbiter +
 zygote pair. The native services we depend on (SurfaceFlinger,
 InputFlinger, audio, HAL daemons) don't care who calls them — they
-already work for standalone wart-host today (task 33).
+already work for standalone wandr-host today (task 33).
 
 Building Hybrid was originally gated on "≥2 concrete apps + DRC
 fix." Re-thought 2026-05-27: that trigger was conservative,
@@ -30,7 +30,7 @@ sepolicy domains, USAP pool, OOM/lifecycle policy) is task 46+.
 
 ## Goal (MVP success criterion)
 
-`wart-zygote` is a native Rust process that:
+`wandr-zygote` is a native Rust process that:
 
 1. Preloads `wasmtime::Engine` + one `.cwasm` at startup.
 2. Listens on a UNIX domain socket for launch commands.
@@ -52,8 +52,8 @@ production multi-app routing is task 46+.
 
 ## Pre-spike design decisions (proposed, push back if you disagree)
 
-**D1. Form factor: new binary mode of `wart-host`, not a separate
-crate.** Add `wart-host --zygote` and `wart-host --zygote-launch <app-id>`
+**D1. Form factor: new binary mode of `wandr-host`, not a separate
+crate.** Add `wandr-host --zygote` and `wandr-host --zygote-launch <app-id>`
 (client). Rationale: reuses build, deploy, bionic_compat, libgui
 shim, and the existing standalone render loop verbatim. The "child"
 in the zygote design is structurally identical to what
@@ -61,8 +61,8 @@ in the zygote design is structurally identical to what
 this task adds.
 
 **D2. Launch socket protocol: UNIX domain socket + newline-delimited
-text. LOCKED 2026-05-27.** Path: `/data/local/tmp/wart-zygote.sock`
-(later `/dev/socket/wart-zygote` once init.rc-integrated). Commands
+text. LOCKED 2026-05-27.** Path: `/data/local/tmp/wandr-zygote.sock`
+(later `/dev/socket/wandr-zygote` once init.rc-integrated). Commands
 (MVP):
 
 ```
@@ -134,7 +134,7 @@ ever calls binder::init even for diagnostics).
 
 ### Step 1 — Fork + headless cwasm (1-2 days)
 
-- New `wart-host/src/zygote.rs`: opens the listen socket, accepts
+- New `wandr-host/src/zygote.rs`: opens the listen socket, accepts
   one connection at a time, parses `LAUNCH <app-id>`, calls
   `fork()`. Parent: close the connection FD, loop. Child: close
   the listen FD, dispatch to the existing `run_once::run(app_id)`
@@ -158,8 +158,8 @@ calls complete OK; `pmap` shows shared engine pages.
 
 **Outcome:** ✅ both criteria met. Device-verified on Pixel 2 XL.
 
-**Run** (after building and packaging `md-smoke-rust` as a `.warpkg`
-— the on-disk `/tmp/md-smoke.warpkg` from `smoke-markdown.sh` is the
+**Run** (after building and packaging `md-smoke-rust` as a `.wandrpkg`
+— the on-disk `/tmp/md-smoke.wandrpkg` from `smoke-markdown.sh` is the
 Kotlin variant which hits the orthogonal task-37 command-adapter
 throw):
 
@@ -175,7 +175,7 @@ and exiting cleanly. Total time per launch: ~25 ms from fork to
 `call_run returned Ok` (faster than `--run-once` direct because the
 Cranelift / type-registry state was already populated in the parent).
 
-**COW analysis** (with `WART_ZYGOTE_HOLD_SECS=30` to freeze children
+**COW analysis** (with `WANDR_ZYGOTE_HOLD_SECS=30` to freeze children
 right after fork for `/proc/<pid>/smaps_rollup` sampling):
 
 |                | Parent    | Child #1  | Child #2  |
@@ -197,7 +197,7 @@ What this shows:
   pre-fork dirty pages, exactly as expected.
 - **The 18 MB Rss gap (parent's 24 vs child's 6) is unmapped
   (lazy-paged) file-backed code** — children haven't faulted in
-  most of the wart-host binary / libc / libskia yet. When children
+  most of the wandr-host binary / libc / libskia yet. When children
   run real code they'll page in shared-clean pages from the page
   cache (still cheap, no copy).
 - **`Private_Clean=0` in both children** confirms the kernel hasn't
@@ -215,29 +215,29 @@ fire on this code path.**
 
 **What broke / what we noted:**
 
-- `/tmp/md-smoke.warpkg` from `smoke-markdown.sh` packages the
+- `/tmp/md-smoke.wandrpkg` from `smoke-markdown.sh` packages the
   Kotlin variant, which hits the orthogonal task-37 command-adapter
   throw. Used the Rust variant (`md-smoke-rust/`) instead by
-  hand-packaging it into `/tmp/md-smoke-rust.warpkg`. Suggestion
+  hand-packaging it into `/tmp/md-smoke-rust.wandrpkg`. Suggestion
   for `smoke-markdown.sh` to also package + install the Rust
   variant as `com.example.md-smoke-rust` for forward smoke tests.
 - Zombie children pile up after exit because the zygote parent
   doesn't `waitpid()` them. SIGCHLD-handler-driven reap should be
   step 2 polish.
-- The smoke socket is `/data/local/tmp/wart-zygote.sock` (D2 dev
-  path); production move to `/dev/socket/wart-zygote` deferred to
+- The smoke socket is `/data/local/tmp/wandr-zygote.sock` (D2 dev
+  path); production move to `/dev/socket/wandr-zygote` deferred to
   task 46 (init.rc + sepolicy).
 
 **Files touched (committed in this step):**
 
-- `wart-host/src/zygote.rs` (new) — fork loop + UNIX socket +
+- `wandr-host/src/zygote.rs` (new) — fork loop + UNIX socket +
   child dispatch.
-- `wart-host/src/run_once.rs` — refactored `run` to wrap a new
+- `wandr-host/src/run_once.rs` — refactored `run` to wrap a new
   `run_with_engine` that takes a caller-supplied `Engine`.
-- `wart-host/src/lib.rs` — `pub mod zygote;` (Android-only).
-- `wart-host/src/main.rs` — `--zygote` and `--zygote-launch
+- `wandr-host/src/lib.rs` — `pub mod zygote;` (Android-only).
+- `wandr-host/src/main.rs` — `--zygote` and `--zygote-launch
   <app-id>` CLI flags.
-- `tasks/45-wart-zygote-spike.md` — this section.
+- `tasks/45-wandr-zygote-spike.md` — this section.
 
 ### Step 2 — EGL re-init in child + SF surface (2-3 days)
 
@@ -247,11 +247,11 @@ fire on this code path.**
 - Forked child runs this sequence, gets its own SurfaceControl
   via the libgui shim, EGL-initializes against it, runs the full
   Compose render loop for the requested app.
-- Smoke test: `--zygote-launch wart-app` produces an on-screen
-  Compose UI identical to `--standalone --app wart-app`.
+- Smoke test: `--zygote-launch wandr-app` produces an on-screen
+  Compose UI identical to `--standalone --app wandr-app`.
 
-Success criterion: zygote-launched wart-app renders + accepts
-touch identical to direct standalone-launched wart-app.
+Success criterion: zygote-launched wandr-app renders + accepts
+touch identical to direct standalone-launched wandr-app.
 
 #### Step 2 results (2026-05-27)
 
@@ -272,16 +272,16 @@ need was already there).
 in addition to `LAUNCH <app-id>`. Empty arg on `LAUNCH_GUI` falls
 through to the dev cwasm at `/data/local/tmp/skiko-component.cwasm`
 — same behavior as direct `--standalone` with no `--app`. New
-`wart-host --zygote-launch-gui [app-id]` CLI flag. The CLI-vs-GUI
+`wandr-host --zygote-launch-gui [app-id]` CLI flag. The CLI-vs-GUI
 choice is explicit at the client side at MVP; auto-detection from
 the app's package.toml is a polish step for later.
 
 **Run** (logcat condensed):
 
 ```
-I wart-zygote: cmd="LAUNCH_GUI"
-I wart-zygote: forked pid=6507 for app_id=""
-I wart-zygote/client: response="OK 6507"
+I wandr-zygote: cmd="LAUNCH_GUI"
+I wandr-zygote: forked pid=6507 for app_id=""
+I wandr-zygote/client: response="OK 6507"
 I standalone: starting — no NativeActivity
 I sf_surface: input window registered (channel fd 10)
 I sf_surface: surface created: portrait 1440x2880 logical
@@ -316,7 +316,7 @@ What this shows:
   stays COW-shared through the entire render lifecycle — neither
   side dirties those pages.
 - **`Shared_Clean=6948 kB`** is the file-backed code pages
-  (wart-host binary + libc + libskia + libEGL + …) that the child
+  (wandr-host binary + libc + libskia + libEGL + …) that the child
   has paged in and the page cache shares with parent.
 - **Child's Private_Dirty (100 MB) is the wasm guest's linear
   memory + Skia caches + GPU buffer mirrors + SkiaRenderer state.**
@@ -328,7 +328,7 @@ What this shows:
 
 **What broke / what we noted:**
 
-- Pre-existing: `pkill -f wart-host` from the host script doesn't
+- Pre-existing: `pkill -f wandr-host` from the host script doesn't
   reliably reap a render-loop child (its SIGTERM handler in
   `lifecycle_standalone` flips a flag and lets the loop drain a
   few frames; pkill returns success but the child runs on briefly
@@ -348,14 +348,14 @@ What this shows:
 
 **Files touched (committed in this step):**
 
-- `wart-host/src/standalone.rs` — extracted `run_with_engine`;
+- `wandr-host/src/standalone.rs` — extracted `run_with_engine`;
   `run_cwasm_loop` now takes `&Engine`.
-- `wart-host/src/zygote.rs` — `ChildAction` enum (`RunOnce` vs
+- `wandr-host/src/zygote.rs` — `ChildAction` enum (`RunOnce` vs
   `Gui`); `LAUNCH_GUI [app-id]` command parsing; `launch_client`
   gains a `gui: bool` arg.
-- `wart-host/src/main.rs` — `--zygote-launch-gui [app-id]` CLI
+- `wandr-host/src/main.rs` — `--zygote-launch-gui [app-id]` CLI
   flag.
-- `tasks/45-wart-zygote-spike.md` — this section.
+- `tasks/45-wandr-zygote-spike.md` — this section.
 
 ### Step 3 — COW measurement (1 day)
 
@@ -381,8 +381,8 @@ with each other (which is 0 by definition).
 Component / Skia preload (deferred follow-up). At the engine-
 only MVP scope, per-child savings are ~5 MB.
 
-**Method**: ran `wart-host --standalone` directly (no zygote) as
-the baseline; then `wart-host --zygote` + `--zygote-launch-gui`
+**Method**: ran `wandr-host --standalone` directly (no zygote) as
+the baseline; then `wandr-host --zygote` + `--zygote-launch-gui`
 for the test condition. Captured `/proc/<pid>/smaps_rollup` for
 each, plus per-VMA categorization via `awk` over `/proc/<pid>/smaps`.
 
@@ -417,7 +417,7 @@ doesn't change.
 
 | Category                     | Shared_Dirty |
 |------------------------------|--------------|
-| `file:/…` (wart-host + libs `.data/.bss`) |  4 656 kB |
+| `file:/…` (wandr-host + libs `.data/.bss`) |  4 656 kB |
 | `[anon:scudo:primary]` (heap) |    208 kB |
 | `[anon:linker]`              |    192 kB |
 | anon-other                   |    472 kB |
@@ -464,23 +464,23 @@ MVP — requires Component + Skia preload (follow-up).
 
 **What broke / what we noted:**
 
-- `pkill -KILL -f wart-host` followed by an `am force-stop`
+- `pkill -KILL -f wandr-host` followed by an `am force-stop`
   restore-script was the only reliable way to clear the device.
   Render-loop children with the lifecycle-standalone signal
   handler installed don't die quickly on plain SIGTERM (they
   drain frames first).
 - The numbers above are steady-state; pre-render numbers
-  (held by `WART_ZYGOTE_HOLD_SECS`) are ~6 MB Rss because the
+  (held by `WANDR_ZYGOTE_HOLD_SECS`) are ~6 MB Rss because the
   child hasn't paged anything in yet (see step 1 results).
 
 ### Step 4 — Two apps concurrent (1-2 days)
 
-- Build a real second `.warpkg` for this purpose. Suggested: a
+- Build a real second `.wandrpkg` for this purpose. Suggested: a
   trivial markdown reader (reuses the existing `markdown-renderer`
   system dep, validates cross-app deps in the multi-app scenario).
-  Could be ~50 lines of Compose. App-id `com.wart.mdview`.
-- Install both wart-app and com.wart.mdview via `--install`.
-- Smoke: launch wart-app and com.wart.mdview concurrently via two
+  Could be ~50 lines of Compose. App-id `com.wandr.mdview`.
+- Install both wandr-app and com.wandr.mdview via `--install`.
+- Smoke: launch wandr-app and com.wandr.mdview concurrently via two
   zygote launches. Verify both render simultaneously on screen.
   Input goes to whoever the SF/InputFlinger arbitration decides
   (MVP: last-touched wins via InputFlinger's z-order; arbitration
@@ -497,8 +497,8 @@ their own EGL context, their own render loop — independent and
 parallel.
 
 **Method**: per user pick (option C from the step-3 close-out
-discussion), packaged the existing wart-app build as a real
-`.warpkg` with app-id `com.example.wart-app` (rather than building
+discussion), packaged the existing wandr-app build as a real
+`.wandrpkg` with app-id `com.example.wandr-app` (rather than building
 a new app), then ran it alongside the dev-cwasm GUI launch.
 Same code in both children but two distinct install slots, two
 distinct process trees from the zygote.
@@ -506,11 +506,11 @@ distinct process trees from the zygote.
 **Packaging steps (one-shot work, not committed to scripts/)**:
 
 ```bash
-# wart-app: use the existing post-adapt component
-mkdir -p /tmp/wart-app.warpkg/components
-cp /tmp/skiko-component.wasm /tmp/wart-app.warpkg/components/ui.wasm
-cat > /tmp/wart-app.warpkg/package.toml <<'EOF'
-app_id      = "com.example.wart-app"
+# wandr-app: use the existing post-adapt component
+mkdir -p /tmp/wandr-app.wandrpkg/components
+cp /tmp/skiko-component.wasm /tmp/wandr-app.wandrpkg/components/ui.wasm
+cat > /tmp/wandr-app.wandrpkg/package.toml <<'EOF'
+app_id      = "com.example.wandr-app"
 version     = "0.1.0"
 world       = "my:skiko-gfx/skiko-ui"
 composition = "same-store"
@@ -519,13 +519,13 @@ composition = "same-store"
 ui = "components/ui.wasm"
 EOF
 
-# System deps wart-app imports — installer auto-detects from the
+# System deps wandr-app imports — installer auto-detects from the
 # component's WIT imports and refuses install if any are missing.
 # Three needed: emoji-picker, system-fonts, markdown-renderer
 # (already-installed markdown-renderer system bundle satisfied
 # the markdown import).
-# Built locally + wrapped in `.warpkg` directories with kind=system
-# manifests. Installed via `wart-host --install`.
+# Built locally + wrapped in `.wandrpkg` directories with kind=system
+# manifests. Installed via `wandr-host --install`.
 ```
 
 The `system-fonts` Rust crate wasn't pre-built; `cargo build
@@ -534,14 +534,14 @@ The `system-fonts` Rust crate wasn't pre-built; `cargo build
 **Run** (logcat trimmed to the per-child render confirmation):
 
 ```
-I wart-zygote: cmd="LAUNCH_GUI com.example.wart-app"
-I wart-zygote: forked pid=7394 for app_id=com.example.wart-app
+I wandr-zygote: cmd="LAUNCH_GUI com.example.wandr-app"
+I wandr-zygote: forked pid=7394 for app_id=com.example.wandr-app
 I standalone[7394]: surface 1440x2880 ...
-I standalone[7394]: loaded installed:com.example.wart-app:0.1.0:ui
+I standalone[7394]: loaded installed:com.example.wandr-app:0.1.0:ui
 I standalone[7394]: rendered frame 1, 2, 3 ...
 
-I wart-zygote: cmd="LAUNCH_GUI"
-I wart-zygote: forked pid=7443 for app_id=
+I wandr-zygote: cmd="LAUNCH_GUI"
+I wandr-zygote: forked pid=7443 for app_id=
 I standalone[7443]: surface 1440x2880 ...
 I standalone[7443]: loaded cwasm:/data/local/tmp/skiko-component.cwasm
 I standalone[7443]: rendered frame 1, 2, 3 ...
@@ -566,10 +566,10 @@ I standalone[7443]: rendered frame 1200
 
 - **`Shared_Clean` jumped from ~7 MB → ~25 MB per child** when
   the second child came online. Both children now have the
-  wart-host binary + Skia + libEGL + libgui mapped, and the
+  wandr-host binary + Skia + libEGL + libgui mapped, and the
   kernel attributes those file-backed pages as "shared" because
   ≥2 processes hold them. This is natural page-cache sharing,
-  not zygote-specific, but it shows the wart-host process model
+  not zygote-specific, but it shows the wandr-host process model
   has good code-sharing properties out of the gate.
 - **`Shared_Dirty` per child stays at ~5.6 MB.** That's the
   zygote-specific COW with the parent — unchanged by adding a
@@ -593,7 +593,7 @@ I standalone[7443]: rendered frame 1200
   "topmost wins" SF behavior means only the latest-allocated
   is visually on top; the other renders to an obscured surface
   but the process+EGL+Skia work continues. Z-order arbitration
-  is task-46 work (a real wart-arbiter).
+  is task-46 work (a real wandr-arbiter).
 - **No fork-time landmines fired with two concurrent children**
   in flight (the second `LAUNCH_GUI` arrives while the first
   child is mid-render). The zygote's single-threaded accept
@@ -612,11 +612,11 @@ I standalone[7443]: rendered frame 1200
 
 **Files touched (this step had no source-code changes):**
 
-- `tasks/45-wart-zygote-spike.md` — this section.
-- (one-shot packaging work for `/tmp/wart-app.warpkg`,
-  `/tmp/emoji.warpkg`, `/tmp/fonts.warpkg` left in `/tmp/`
+- `tasks/45-wandr-zygote-spike.md` — this section.
+- (one-shot packaging work for `/tmp/wandr-app.wandrpkg`,
+  `/tmp/emoji.wandrpkg`, `/tmp/fonts.wandrpkg` left in `/tmp/`
   on the dev machine; not version-controlled. A future
-  `scripts/build-system-warpkgs.sh` would automate this.)
+  `scripts/build-system-wandrpkgs.sh` would automate this.)
 
 ### Step 5 — Spike close-out (0.5 day)
 
@@ -675,7 +675,7 @@ sharing actually comes from:
 
 | Category | Shared with parent |
 |---|---|
-| Binary `.data/.bss` (wart-host + libs) | 4 656 kB |
+| Binary `.data/.bss` (wandr-host + libs) | 4 656 kB |
 | wasmtime Engine heap (`scudo:primary`) | 208 kB |
 | linker_alloc (dynamic loader state) | 192 kB |
 | other anonymous | 472 kB |
@@ -758,7 +758,7 @@ N≥3 the limiters in order of likelihood:
 
 In rough priority order:
 
-1. **wart-arbiter** — a separate process (or zygote-internal
+1. **wandr-arbiter** — a separate process (or zygote-internal
    thread) that owns the policy decisions: which app gets the
    foreground SF z-order, who gets InputFlinger focus, what
    happens on SIGCHLD, OOM kill priorities, app reuse (USAP
@@ -773,12 +773,12 @@ In rough priority order:
    item.
 4. **Shutdown protocol** — `KILL <app-id>` or `STOP <pid>`
    command. Currently external-kill-only.
-5. **init.rc + sepolicy** — `/dev/socket/wart-zygote` UNIX
-   socket, `wart_zygote` SELinux domain, ProcessControl group.
+5. **init.rc + sepolicy** — `/dev/socket/wandr-zygote` UNIX
+   socket, `wandr_zygote` SELinux domain, ProcessControl group.
    Production-only; dev path stays at `/data/local/tmp`.
-6. **scripts/build-system-warpkgs.sh** — automate the one-shot
+6. **scripts/build-system-wandrpkgs.sh** — automate the one-shot
    packaging step 4 did by hand. Three system bundles
-   (markdown / emoji / fonts) + wart-app itself.
+   (markdown / emoji / fonts) + wandr-app itself.
 
 ## Recommended task 46 scope (next milestone)
 
@@ -786,7 +786,7 @@ Spinning out the production work into a sequel task. Rough
 estimate: 1-2 weeks for the MVP arbiter; longer for the full
 production polish.
 
-Suggested name: **task 46 — wart-arbiter MVP (Hybrid runtime
+Suggested name: **task 46 — wandr-arbiter MVP (Hybrid runtime
 production prep)**.
 
 5-step plan:
@@ -802,13 +802,13 @@ production prep)**.
    keyed by app-id. Children consult the registry; cache miss
    → child does its own `Component::deserialize_file` (graceful
    degrade). Re-measure COW savings; target ≥20 MB per child.
-4. **wart-arbiter as a separate process** (~3-5 days). Owns
+4. **wandr-arbiter as a separate process** (~3-5 days). Owns
    policy: foreground/background, z-order, input focus, OOM
    priority. Talks to zygote via the existing socket plus a
    new arbiter↔zygote channel for "spawn for me with these
    capabilities."
 5. **Production deployment polish** (~1 week). init.rc
-   integration, sepolicy domain, build-system-warpkgs.sh,
+   integration, sepolicy domain, build-system-wandrpkgs.sh,
    ProcessControl group for OOM tuning.
 
 Step 3 is the highest-leverage; it's where the spike's "COW
@@ -838,24 +838,24 @@ testable end-to-end.
   free. Parent stays Store-less; each child creates its own.
 - **/data/local/tmp socket path SELinux**: untrusted_app domain
   probably can't bind to a socket there. We're root via `su`
-  for the MVP; production needs sepolicy for the wart-zygote
+  for the MVP; production needs sepolicy for the wandr-zygote
   domain. Out of scope for spike.
 
 ## File-touch map (anticipated)
 
-- `wart-host/src/zygote.rs` (new) — fork loop, socket protocol,
+- `wandr-host/src/zygote.rs` (new) — fork loop, socket protocol,
   child dispatch.
-- `wart-host/src/main.rs` — `--zygote` and `--zygote-launch
+- `wandr-host/src/main.rs` — `--zygote` and `--zygote-launch
   <app-id>` CLI flags.
-- `wart-host/src/lib.rs` — `pub mod zygote;` (Android-only).
-- `wart-host/src/standalone.rs` — refactor the "acquire SF +
+- `wandr-host/src/lib.rs` — `pub mod zygote;` (Android-only).
+- `wandr-host/src/standalone.rs` — refactor the "acquire SF +
   init EGL + render loop" out of the main function into a
   callable.
-- `wart-host/Cargo.toml` — likely `libc` (`fork`, `dup2`,
+- `wandr-host/Cargo.toml` — likely `libc` (`fork`, `dup2`,
   `setsid`, `waitpid` syscalls). Already in tree probably.
-- `wart-host/cpp/sf_surface.cpp` — no changes expected; the
+- `wandr-host/cpp/sf_surface.cpp` — no changes expected; the
   shim is already child-side-safe.
-- `tasks/45-wart-zygote-spike.md` — this doc; update per-step.
+- `tasks/45-wandr-zygote-spike.md` — this doc; update per-step.
 - `CLAUDE.md` — status table row.
 - New `apps/mdview/` (step 4) — minimal Compose markdown reader
   for the multi-app concurrency test.
@@ -873,10 +873,10 @@ testable end-to-end.
 
 ## Related
 
-- `tasks/33-boot-model-bringup.md` — the standalone wart-host
+- `tasks/33-boot-model-bringup.md` — the standalone wandr-host
   binary that the forked child IS. The render loop, libgui shim,
   EGL setup all carry directly.
-- `tasks/35-app-install.md` — `wart-host/src/app_installer.rs`
+- `tasks/35-app-install.md` — `wandr-host/src/app_installer.rs`
   + `app_loader.rs` — what the child uses to find the requested
   `.cwasm`.
 - `tasks/36-cross-app-deps.md` — cross-app dep wiring used by

@@ -2,9 +2,9 @@
 
 > Status: 🔲 scoped, not started — 2026-05-28
 >
-> The ~/wart tree has grown organically over 50+ tasks. There are
+> The ~/wandr tree has grown organically over 50+ tasks. There are
 > now 30+ top-level entries with no visible category boundary
-> between native runtime, system warpkgs, user apps, vendored
+> between native runtime, system wandrpkgs, user apps, vendored
 > forks, reproducers, and meta directories. This task proposes a
 > reorganization grounded in cross-industry precedent (AOSP,
 > Cargo, wasmCloud, monorepo conventions) and a one-shot
@@ -15,18 +15,18 @@
 Before the third lang plugin / fourth system component / fifth
 demo app gets added we should pick conventions, because:
 
-- **Categories are blurred.** `markdown-renderer/`, `wart-app/`,
-  `wart-host/`, `wart-leak-repro/`, `wasmtime-src/` all sit at
+- **Categories are blurred.** `markdown-renderer/`, `wandr-app/`,
+  `wandr-host/`, `wandr-leak-repro/`, `wasmtime-src/` all sit at
   the same level — but they're a system component, a user app,
   a runtime binary, a one-shot reproducer, and a vendored fork
   respectively. A reader can't tell from `ls`.
-- **Naming is inconsistent.** `wart-host` (dash) coexists with
-  `war.lang.bg` (dot), with `wart-stack-magisk` (dash) — both for
+- **Naming is inconsistent.** `wandr-host` (dash) coexists with
+  `wandr.lang.bg` (dot), with `wandr-stack-magisk` (dash) — both for
   things shipped to the device. The session-7 user choice
-  ("war.lang.xx for plugins, leave wart-host alone") is a working
+  ("wandr.lang.xx for plugins, leave wandr-host alone") is a working
   rule but isn't documented.
 - **New things have nowhere obvious to land.** Where does a
-  shared Kotlin helper library go? A non-Compose warpkg utility?
+  shared Kotlin helper library go? A non-Compose wandrpkg utility?
   An on-device sysprop daemon? Today: top-level. Tomorrow: not
   scalable.
 
@@ -40,13 +40,13 @@ AOSP separates concerns into top-level categories that mirror
 ours:
 
 - **`frameworks/`** — core APIs (Java + native services).
-  Parallel: our `runtime/wart-host/` (Rust host + canvas /
+  Parallel: our `runtime/wandr-host/` (Rust host + canvas /
   paragraph / keyboard / etc. WIT impls).
 - **`system/`** — low-level libs + init + sepolicy.
   Parallel: our zygote + arbiter + Magisk module.
 - **`packages/`** — bundled-with-OS apps (Phone, Contacts,
-  Settings). Parallel: our system warpkgs (markdown-renderer,
-  emoji-picker, war.ime.keyboard, war.lang.*).
+  Settings). Parallel: our system wandrpkgs (markdown-renderer,
+  emoji-picker, wandr.ime.keyboard, wandr.lang.*).
 - **`hardware/`** — HALs. Parallel: our libgui shim (the only
   C++ piece). Could fold into runtime/.
 - **`external/`** — third-party / vendored source.
@@ -59,8 +59,8 @@ For repos with 10K–1M lines of code, rust-analyzer-style flat
 layout is the consensus: one `crates/` directory at the root.
 Published crates split off into `libs/` to enforce a "no
 upward dep" boundary. ([matklad blog][1] is the canonical
-write-up.) Our equivalent is: native binaries (wart-host,
-wart-arbiter) under one umbrella; system warpkgs under another.
+write-up.) Our equivalent is: native binaries (wandr-host,
+wandr-arbiter) under one umbrella; system wandrpkgs under another.
 
 ### wasmCloud (the multi-component WCM stack)
 
@@ -84,23 +84,23 @@ one directory; be explicit about ownership boundaries.
 ## Proposed layout
 
 ```
-~/wart/
-├── apps/                           # warpkgs shipped to device
+~/wandr/
+├── apps/                           # wandrpkgs shipped to device
 │   ├── system/                     # bundled with the runtime
 │   │   ├── markdown-renderer/
 │   │   ├── emoji-picker/
 │   │   ├── system-fonts/
-│   │   ├── war.ime.keyboard/       # the IME (system but Compose-shaped)
+│   │   ├── wandr.ime.keyboard/       # the IME (system but Compose-shaped)
 │   │   └── lang/                   # IME language plugins
-│   │       ├── war.lang.bg/
-│   │       └── war.lang.fr/
+│   │       ├── wandr.lang.bg/
+│   │       └── wandr.lang.fr/
 │   └── user/                       # first-party reference apps
-│       └── wart-app/               # the Compose demo
+│       └── wandr-app/               # the Compose demo
 │
 ├── runtime/                        # native Rust binaries
-│   ├── wart-host/
-│   ├── wart-arbiter/
-│   └── magisk-module/              # wart-stack-magisk/, renamed
+│   ├── wandr-host/
+│   ├── wandr-arbiter/
+│   └── magisk-module/              # wandr-stack-magisk/, renamed
 │
 ├── wit/                            # canonical WIT — single source of truth
 │   ├── skiko-gfx.wit
@@ -111,10 +111,10 @@ one directory; be explicit about ownership boundaries.
 │   └── system-fonts.wit
 │
 ├── external/                       # vendored / forked upstreams (huge)
-│   ├── skiko/                      # was ~/wart/skiko/
-│   ├── wasmtime/                   # was ~/wart/wasmtime-src/, suffix dropped
+│   ├── skiko/                      # was ~/wandr/skiko/
+│   ├── wasmtime/                   # was ~/wandr/wasmtime-src/, suffix dropped
 │   ├── compose-multiplatform-core/
-│   └── kotlin/                     # was ~/wart/kotlin-src/, suffix dropped
+│   └── kotlin/                     # was ~/wandr/kotlin-src/, suffix dropped
 │
 ├── tools/                          # build helpers + diagnostic harnesses
 │   ├── scripts/                    # existing scripts/
@@ -122,10 +122,10 @@ one directory; be explicit about ownership boundaries.
 │   └── triage/                     # wasmtime-issue-artifacts/, renamed
 │
 ├── repros/                         # focused reproducers
-│   ├── wart-leak-repro/
+│   ├── wandr-leak-repro/
 │   ├── kt-memalloc-repro/
 │   ├── md-smoke-rust/
-│   └── wart-app-md-smoke/
+│   └── wandr-app-md-smoke/
 │
 ├── tasks/                          # task narrative (unchanged)
 ├── docs/                           # architecture docs (unchanged)
@@ -140,27 +140,27 @@ one directory; be explicit about ownership boundaries.
 
 | Class                                    | Pattern             | Example                |
 |------------------------------------------|---------------------|------------------------|
-| Native binary (Rust, ship in /data/local/tmp) | `wart-<kebab>` | `wart-host`, `wart-arbiter` |
-| Warpkg / app (Compose or cdylib, ships as `.warpkg`) | `war.<dot-id>` | `war.ime.keyboard`, `war.lang.bg`, `war.markdown.renderer` |
+| Native binary (Rust, ship in /data/local/tmp) | `wandr-<kebab>` | `wandr-host`, `wandr-arbiter` |
+| Warpkg / app (Compose or cdylib, ships as `.wandrpkg`) | `wandr.<dot-id>` | `wandr.ime.keyboard`, `wandr.lang.bg`, `wandr.markdown.renderer` |
 | Vendored fork / external                 | upstream name, no `-src` suffix | `skiko`, `wasmtime`, `compose-multiplatform-core`, `kotlin` |
-| Repro / dev artifact                     | `<thing>-repro` or `<thing>-smoke` | `wart-leak-repro`, `md-smoke-rust` |
+| Repro / dev artifact                     | `<thing>-repro` or `<thing>-smoke` | `wandr-leak-repro`, `md-smoke-rust` |
 | Tooling subdir                           | descriptive         | `scripts`, `patches`, `triage` |
 
 Note: the existing `markdown-renderer/`, `emoji-picker/`, and
 `system-fonts/` directories use dash-separated descriptive names
-even though they're warpkgs. They predate the war.* convention.
-**Migration: rename to `war.markdown.renderer/`, `war.emoji.picker/`,
-`war.fonts.loader/`** so the directory matches the app_id. Saves
-the next reader a head-scratch about why one warpkg has a `war.`
+even though they're wandrpkgs. They predate the wandr.* convention.
+**Migration: rename to `wandr.markdown.renderer/`, `wandr.emoji.picker/`,
+`wandr.fonts.loader/`** so the directory matches the app_id. Saves
+the next reader a head-scratch about why one wandrpkg has a `wandr.`
 prefix and another doesn't.
 
 ### Aliases / shortcuts to keep working
 
-- `wart-app` (the demo) stays — it's a Cargo/Gradle project name
-  that's deeply wired. Move under `apps/user/wart-app/` but keep
+- `wandr-app` (the demo) stays — it's a Cargo/Gradle project name
+  that's deeply wired. Move under `apps/user/wandr-app/` but keep
   the directory name.
-- The wart repo itself is the **outer** monorepo containing apps,
-  runtime, docs, etc. — keep `~/wart` as the parent name.
+- The wandr repo itself is the **outer** monorepo containing apps,
+  runtime, docs, etc. — keep `~/wandr` as the parent name.
 
 ## Migration plan
 
@@ -187,16 +187,16 @@ codeberg origin. Specifically:
 
 | From                          | To                                  |
 |-------------------------------|-------------------------------------|
-| `wart-host/`                  | `runtime/wart-host/`                |
-| `wart-arbiter/`               | `runtime/wart-arbiter/`             |
-| `wart-stack-magisk/`          | `runtime/magisk-module/`            |
-| `wart-app/`                   | `apps/user/wart-app/`               |
-| `war.ime.keyboard/`           | `apps/system/war.ime.keyboard/`     |
-| `markdown-renderer/`          | `apps/system/war.markdown.renderer/`|
-| `emoji-picker/`               | `apps/system/war.emoji.picker/`     |
-| `system-fonts/`               | `apps/system/war.fonts.loader/`     |
-| `war.lang.bg/`                | `apps/system/lang/war.lang.bg/`     |
-| `war.lang.fr/`                | `apps/system/lang/war.lang.fr/`     |
+| `wandr-host/`                  | `runtime/wandr-host/`                |
+| `wandr-arbiter/`               | `runtime/wandr-arbiter/`             |
+| `wandr-stack-magisk/`          | `runtime/magisk-module/`            |
+| `wandr-app/`                   | `apps/user/wandr-app/`               |
+| `wandr.ime.keyboard/`           | `apps/system/wandr.ime.keyboard/`     |
+| `markdown-renderer/`          | `apps/system/wandr.markdown.renderer/`|
+| `emoji-picker/`               | `apps/system/wandr.emoji.picker/`     |
+| `system-fonts/`               | `apps/system/wandr.fonts.loader/`     |
+| `wandr.lang.bg/`                | `apps/system/lang/wandr.lang.bg/`     |
+| `wandr.lang.fr/`                | `apps/system/lang/wandr.lang.fr/`     |
 | `skiko/`                      | `external/skiko/` (still a symlink) |
 | `wasmtime-src/`               | `external/wasmtime/`                |
 | `compose-multiplatform-core/` | `external/compose-multiplatform-core/`|
@@ -204,21 +204,21 @@ codeberg origin. Specifically:
 | `scripts/`                    | `tools/scripts/`                    |
 | `patches/`                    | `tools/patches/`                    |
 | `wasmtime-issue-artifacts/`   | `tools/triage/wasmtime-issues/`     |
-| `wart-leak-repro/`            | `repros/wart-leak-repro/`           |
+| `wandr-leak-repro/`            | `repros/wandr-leak-repro/`           |
 | `kt-memalloc-repro/`          | `repros/kt-memalloc-repro/`         |
 | `md-smoke-rust/`              | `repros/md-smoke-rust/`             |
-| `wart-app-md-smoke/`          | `repros/wart-app-md-smoke/`         |
+| `wandr-app-md-smoke/`          | `repros/wandr-app-md-smoke/`         |
 
 Dir renames at the same time (in steps 3 + 4 batched):
-- `markdown-renderer` → `war.markdown.renderer`
-- `emoji-picker` → `war.emoji.picker`
-- `system-fonts` → `war.fonts.loader`
-- `wart-stack-magisk` → `magisk-module`
+- `markdown-renderer` → `wandr.markdown.renderer`
+- `emoji-picker` → `wandr.emoji.picker`
+- `system-fonts` → `wandr.fonts.loader`
+- `wandr-stack-magisk` → `magisk-module`
 
 ### Step 4 — Update `.gitignore` (~5 min)
 
-Replace the flat `wart-*/`, `compose-*/`, etc. globs with paths
-matching the new layout (`runtime/wart-*/`, `external/skiko/`,
+Replace the flat `wandr-*/`, `compose-*/`, etc. globs with paths
+matching the new layout (`runtime/wandr-*/`, `external/skiko/`,
 …). The exception for the now-renamed `magisk-module` stays
 tracked from the top.
 
@@ -227,41 +227,41 @@ tracked from the top.
 Grep + sed pass for every old-path reference:
 
 ```
-grep -rEn '(wart-host|wart-arbiter|wart-app|war\.ime\.keyboard|war\.lang\.bg|war\.lang\.fr|markdown-renderer|emoji-picker|system-fonts|wart-stack-magisk|compose-multiplatform-core|wasmtime-src|skiko|scripts/|patches/|wart-app-md-smoke|md-smoke-rust|wart-leak-repro|kt-memalloc-repro)' --include=*.{sh,toml,kts,gradle,rs,md} | …
+grep -rEn '(wandr-host|wandr-arbiter|wandr-app|wandr\.ime\.keyboard|wandr\.lang\.bg|wandr\.lang\.fr|markdown-renderer|emoji-picker|system-fonts|wandr-stack-magisk|compose-multiplatform-core|wasmtime-src|skiko|scripts/|patches/|wandr-app-md-smoke|md-smoke-rust|wandr-leak-repro|kt-memalloc-repro)' --include=*.{sh,toml,kts,gradle,rs,md} | …
 ```
 
 Files most affected:
 - `tools/scripts/*.sh` (every script that references the old
   paths)
-- `runtime/wart-host/Cargo.toml` (any `path = "../wasmtime-src/…"` → `path = "../../external/wasmtime/…"`)
-- `runtime/wart-host/build.rs` (vendor paths)
-- `apps/system/war.markdown.renderer/src/lib.rs` (`wit_bindgen::generate!({ path: "../wit/markdown.wit", … })` → `path: "../../../wit/markdown.wit"`)
+- `runtime/wandr-host/Cargo.toml` (any `path = "../wasmtime-src/…"` → `path = "../../external/wasmtime/…"`)
+- `runtime/wandr-host/build.rs` (vendor paths)
+- `apps/system/wandr.markdown.renderer/src/lib.rs` (`wit_bindgen::generate!({ path: "../wit/markdown.wit", … })` → `path: "../../../wit/markdown.wit"`)
 - `apps/*/build.gradle.kts` (skiko + compose-multiplatform-core paths)
 - Every `wit/deps/` symlink or copy of the canonical WIT
 - `CLAUDE.md` (the Repository layout section)
 
 ### Step 6 — Update wit/deps mirrors (~30 min)
 
-Each warpkg has `wit/deps/<dep-name>/<dep>.wit` mirrors of the
-canonical `wart/wit/<dep>.wit`. Re-derive each based on the new
+Each wandrpkg has `wit/deps/<dep-name>/<dep>.wit` mirrors of the
+canonical `wandr/wit/<dep>.wit`. Re-derive each based on the new
 relative paths (or convert to symlinks pointing at the canonical
 file — task 53 candidate).
 
 ### Step 7 — Rebuild everything from scratch + smoke (~2 h)
 
-- `cd runtime/wart-host && cargo build --target aarch64-linux-android --release` — Rust host rebuild.
-- `cd runtime/wart-arbiter && cargo build --target aarch64-linux-android --release` — arbiter rebuild.
-- `cd apps/user/wart-app && ./gradlew compileProductionExecutableKotlinWasmWasi` — Kotlin/Wasm rebuild.
-- `cd apps/system/war.ime.keyboard && ./gradlew compileProductionExecutableKotlinWasmWasi` — IME rebuild.
-- Each `apps/system/{war.markdown.renderer,war.emoji.picker,war.fonts.loader,lang/war.lang.bg,lang/war.lang.fr} && cargo build --target wasm32-wasip2 --release`.
-- `bash tools/scripts/build-system-warpkgs.sh` — packs + installs all warpkgs.
-- `bash tools/scripts/pack-ime-keyboard.sh` — IME warpkg.
+- `cd runtime/wandr-host && cargo build --target aarch64-linux-android --release` — Rust host rebuild.
+- `cd runtime/wandr-arbiter && cargo build --target aarch64-linux-android --release` — arbiter rebuild.
+- `cd apps/user/wandr-app && ./gradlew compileProductionExecutableKotlinWasmWasi` — Kotlin/Wasm rebuild.
+- `cd apps/system/wandr.ime.keyboard && ./gradlew compileProductionExecutableKotlinWasmWasi` — IME rebuild.
+- Each `apps/system/{wandr.markdown.renderer,wandr.emoji.picker,wandr.fonts.loader,lang/wandr.lang.bg,lang/wandr.lang.fr} && cargo build --target wasm32-wasip2 --release`.
+- `bash tools/scripts/build-system-wandrpkgs.sh` — packs + installs all wandrpkgs.
+- `bash tools/scripts/pack-ime-keyboard.sh` — IME wandrpkg.
 - Hybrid stack relaunch + IME 🌐 cycle smoke (the task-49 step-6
   scenario).
 
 ### Step 8 — Commit + push + close-out (~30 min)
 
-Single commit per repo (the parent `wart` repo, each sibling
+Single commit per repo (the parent `wandr` repo, each sibling
 repo's path-constant updates if any). Update CLAUDE.md status
 row. Memory `feedback_repo_layout.md` captures the convention.
 
@@ -275,8 +275,8 @@ row. Memory `feedback_repo_layout.md` captures the convention.
 - **Onboarding.** A new contributor can read `docs/repository-layout.md`
   and `apps/<x>/<y>/README.md` and know where to add a new
   thing. Today: read CLAUDE.md, read 5 tasks, infer.
-- **Naming consistency.** Every warpkg matches its app_id. Every
-  native binary uses `wart-`.
+- **Naming consistency.** Every wandrpkg matches its app_id. Every
+  native binary uses `wandr-`.
 - **Future-proofing.** `apps/system/lang/` already groups
   language plugins; task-49 / task-51 follow-ups slot in
   obviously.
@@ -288,18 +288,18 @@ row. Memory `feedback_repo_layout.md` captures the convention.
 - **External git history disruption.** Each sibling repo's
   codeberg origin is unchanged, but the working-tree LOCATION
   shifts. Any open branches / WIP / scripts that hard-coded
-  `~/wart/wart-host/` need updating.
-- **Doc churn.** All `tasks/*.md` references like `wart-host/cpp/sf_surface.cpp`
+  `~/wandr/wandr-host/` need updating.
+- **Doc churn.** All `tasks/*.md` references like `wandr-host/cpp/sf_surface.cpp`
   point to old paths. Either bulk-update or leave as historical;
   the latter is fine (tasks are point-in-time).
-- **Re-push of renamed sibling repos.** war.markdown.renderer etc.
+- **Re-push of renamed sibling repos.** wandr.markdown.renderer etc.
   need a new codeberg URL OR a rename on codeberg (the latter is
   free + keeps history). Same for emoji-picker, system-fonts,
-  wart-stack-magisk if they keep their old remote names.
+  wandr-stack-magisk if they keep their old remote names.
 
 ### What this doesn't address
 
-- WIT mirroring. Each warpkg copies the canonical WIT into
+- WIT mirroring. Each wandrpkg copies the canonical WIT into
   `wit/deps/`. Could replace with symlinks (task 53 candidate)
   but not in scope here.
 - `tasks/` history. Old task docs reference old paths. Leave
@@ -316,7 +316,7 @@ companion task (53) that has to land before / alongside 52.
 
 - **First-party = single monorepo.** Everything in
   `apps/`, `runtime/`, `wit/`, `tools/`, `repros/`, `docs/`,
-  `tasks/` lives in **one** git repo (the wart repo itself).
+  `tasks/` lives in **one** git repo (the wandr repo itself).
 - **External forks = submodules.** Everything in `external/`
   is a git submodule pointing at our fork (or upstream).
 
@@ -328,7 +328,7 @@ Why hybrid:
   take 4 separate commits across 4 repos that couldn't be
   bisected together.
 - Shared `Cargo.lock` dedups Rust deps across host, arbiter,
-  and every system warpkg.
+  and every system wandrpkg.
 - Discoverability — `git clone` gets all first-party code.
 - External forks are slow-moving + huge — submodules amortize
   the size cost and make upstream-rebase a single explicit
@@ -340,18 +340,18 @@ Why hybrid:
 
 | Sibling repo (codeberg.org/harryzz/…)   | Target prefix in monorepo            |
 |----------------------------------------|--------------------------------------|
-| `wart-host.git`                        | `runtime/wart-host/`                 |
-| `wart-arbiter.git`                     | `runtime/wart-arbiter/`              |
-| `wart-app.git`                         | `apps/user/wart-app/`                |
-| `war.ime.keyboard.git`                 | `apps/system/war.ime.keyboard/`      |
-| `war.lang.bg.git`                      | `apps/system/lang/war.lang.bg/`      |
-| `war.lang.fr.git`                      | `apps/system/lang/war.lang.fr/`      |
-| `markdown-renderer.git`                | `apps/system/war.markdown.renderer/` |
-| `emoji-picker.git`                     | `apps/system/war.emoji.picker/`      |
-| `system-fonts.git`                     | `apps/system/war.fonts.loader/`      |
+| `wandr-host.git`                        | `runtime/wandr-host/`                 |
+| `wandr-arbiter.git`                     | `runtime/wandr-arbiter/`              |
+| `wandr-app.git`                         | `apps/user/wandr-app/`                |
+| `wandr.ime.keyboard.git`                 | `apps/system/wandr.ime.keyboard/`      |
+| `wandr.lang.bg.git`                      | `apps/system/lang/wandr.lang.bg/`      |
+| `wandr.lang.fr.git`                      | `apps/system/lang/wandr.lang.fr/`      |
+| `markdown-renderer.git`                | `apps/system/wandr.markdown.renderer/` |
+| `emoji-picker.git`                     | `apps/system/wandr.emoji.picker/`      |
+| `system-fonts.git`                     | `apps/system/wandr.fonts.loader/`      |
 | `md-smoke-rust.git`                    | `repros/md-smoke-rust/`              |
-| `wart-app-md-smoke.git`                | `repros/wart-app-md-smoke/`          |
-| `wart-leak-repro.git`                  | `repros/wart-leak-repro/`            |
+| `wandr-app-md-smoke.git`                | `repros/wandr-app-md-smoke/`          |
+| `wandr-leak-repro.git`                  | `repros/wandr-leak-repro/`            |
 | `kt-memalloc-repro.git`                | `repros/kt-memalloc-repro/`          |
 
 Subtree-import preserves each repo's full history under the
@@ -383,9 +383,9 @@ patches arrive.
 ### What stays multi-repo (the parent + submodules)
 
 Just two layers of git tracking:
-1. `~/wart/.git` — the parent monorepo (Layer 1 + submodule
+1. `~/wandr/.git` — the parent monorepo (Layer 1 + submodule
    pointers).
-2. `~/wart/external/<fork>/.git` — each submodule's working
+2. `~/wandr/external/<fork>/.git` — each submodule's working
    tree, points at its own remote.
 
 No git in `apps/`, `runtime/`, `repros/`, etc. — those are
@@ -416,8 +416,8 @@ tasks slot into the right place from day one.
 
 ## Open questions
 
-- **Q1: Should `apps/system/war.ime.keyboard/` move into a
-  per-class subdir like `apps/system/ime/war.ime.keyboard/`?**
+- **Q1: Should `apps/system/wandr.ime.keyboard/` move into a
+  per-class subdir like `apps/system/ime/wandr.ime.keyboard/`?**
   Probably not — there's only one IME today. If voice IME +
   emoji IME ship later, then yes.
 - **Q2: Should `runtime/magisk-module/` stay at runtime/ level or
@@ -426,15 +426,15 @@ tasks slot into the right place from day one.
 - **Q3: Should the canonical `wit/` live under `runtime/wit/`
   (since the runtime is the primary implementor)?** No — it's
   the cross-cutting contract; top-level is right.
-- **Q4: Do we rename `wart-app` to `war.example.demo` (matching
-  the codeberg+device app_id `com.example.wart-app`)?** Tempting
+- **Q4: Do we rename `wandr-app` to `wandr.example.demo` (matching
+  the codeberg+device app_id `com.example.wandr-app`)?** Tempting
   but disruptive. Defer to a follow-up rename pass.
 
 ## Sources / precedents
 
 - [WebAssembly Component Model 2026 cheat sheet](https://techbytes.app/posts/wasm-component-model-cheat-sheet/) — current state of WCM polyglot composition.
 - [The Ultimate Guide to Building a Monorepo (Medium)](https://medium.com/@sanjaytomar717/the-ultimate-guide-to-building-a-monorepo-in-2025-sharing-code-like-the-pros-ee4d6d56abaa) — apps/ + packages/ pattern, language-agnostic monorepo conventions.
-- [Decoding AOSP Folder Structure (Embien)](https://www.embien.com/blog/decoding-aosp-folder-structure-for-developers) — frameworks/ vs system/ vs packages/ vs hardware/ vs vendor/ separation that wart parallels.
+- [Decoding AOSP Folder Structure (Embien)](https://www.embien.com/blog/decoding-aosp-folder-structure-for-developers) — frameworks/ vs system/ vs packages/ vs hardware/ vs vendor/ separation that wandr parallels.
 - [Large Rust Workspaces (matklad)](https://matklad.github.io/2021/08/22/large-rust-workspaces.html) — flat `crates/` vs `crates/`+`libs/` boundary at 10K–1M LoC scale.
 - [Managing multiple languages in a monorepo (Graphite)](https://graphite.com/guides/managing-multiple-languages-in-a-monorepo) — polyglot organization, avoid mixing unrelated services per directory.
 - [wasmCloud Runtime](https://wasmcloud.com/docs/runtime/) — single-binary host + extensions pattern; WIT contract location.

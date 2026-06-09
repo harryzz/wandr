@@ -39,7 +39,7 @@ step of the broader arc, not this task.
 
 ## Current host architecture (what a fresh session must know)
 
-`wart-host/` — a Rust binary, also a C++ shim layer in `cpp/`.
+`wandr-host/` — a Rust binary, also a C++ shim layer in `cpp/`.
 
 - **Entry:** `android_main(app: AndroidApp)` (`src/lib.rs:639`). The
   `android-activity` crate calls it. It builds a winit
@@ -89,7 +89,7 @@ The single biggest unproven assumption: **can the runtime get a
 display surface without an Activity?** Prove it minimally before
 anything else.
 
-- A standalone binary (or a `--standalone` launch mode of wart-host)
+- A standalone binary (or a `--standalone` launch mode of wandr-host)
   with a plain `main()`, launched via `adb shell su -c …` — **not** a
   `NativeActivity`.
 - Create a fullscreen `SurfaceControl` directly from SurfaceFlinger
@@ -106,8 +106,8 @@ anything else.
 that was never a `NativeActivity`. If this fails, the showstopper is
 found at the cheapest possible point.
 
-**✅ DONE — device-verified 2026-05-21.** `cpp/sf_probe.cpp` (in the wart
-repo at `wart-host/cpp/sf_probe.cpp` + `sf_probe.bp`) runs clean on the
+**✅ DONE — device-verified 2026-05-21.** `cpp/sf_probe.cpp` (in the wandr
+repo at `wandr-host/cpp/sf_probe.cpp` + `sf_probe.bp`) runs clean on the
 Pixel 2 XL: `SurfaceComposerClient initCheck=0` → `createSurface ok` →
 transaction (top z-order, shown) → EGL → `eglSwapBuffers` → **solid blue
 frame fills the whole panel** for 10 s, from a non-`NativeActivity`
@@ -120,7 +120,7 @@ in an AOSP source tree):
 
 - Build host `a-03` (128 GB / 72 core) holds a LineageOS 22.2 tree at
   `~/android/lineage`. `sf_probe` is a soong `cc_binary` at
-  `external/sf_probe/` (`Android.bp` = `wart-host/cpp/sf_probe.bp`).
+  `external/sf_probe/` (`Android.bp` = `wandr-host/cpp/sf_probe.bp`).
 - Lunched **generic `aosp_arm64-trunk_staging-userdebug`** (not
   `lineage_taimen` — that needs proprietary vendor blobs). A generic lunch
   on a LineageOS tree needs three fixes:
@@ -143,11 +143,11 @@ in an AOSP source tree):
 ### Step 2 — Decouple the host from `NativeActivity` / winit-Android
 
 **🟡 partially done 2026-05-22** — the standalone scaffold landed together
-with Step 1's wart-host integration: `wart-host --standalone` is a plain
+with Step 1's wandr-host integration: `wandr-host --standalone` is a plain
 `main()` path (no `android-activity`, no winit `EventLoop`) that acquires
 its surface from the `libsf_surface` shim and runs a render+pace loop —
 **device-verified drawing the renderer test frame on the Pixel 2 XL**.
-Files: `wart-host/src/standalone.rs`, `src/sf_surface.rs` (dlopen wrapper
+Files: `wandr-host/src/standalone.rs`, `src/sf_surface.rs` (dlopen wrapper
 for `libsf_surface.so`), `SkiaRenderer::from_native_window`
 (`canvas_impl.rs`), `main.rs` `--standalone` dispatch. The `libgui` shim is
 `cpp/sf_surface.{cpp,bp}`, built in-tree as a soong `cc_library_shared`.
@@ -171,7 +171,7 @@ mismatches the portrait panel. `setBuffersGeometry` cannot override it.
 - **`setDisplayProjection(ROTATION_90)` + landscape layer stack** — rotates
   correctly, but `setDisplayProjection` is a **global** display change: it
   rotates the launcher / SystemUI too. Wrong mechanism for a guest layer.
-- The earlier 4-way `WART_ORIENT` base-matrix render-rotate — only ever
+- The earlier 4-way `WANDR_ORIENT` base-matrix render-rotate — only ever
   reaches ±90° / mirrored, never upright (confirmed again).
 
 *The fix (shipped).* Exploit the transpose instead of fighting it:
@@ -193,7 +193,7 @@ matrix + `begin_frame` clears to opaque black).
 
 **🟡 Still open in Step 2 (deferred — belongs with Steps 4–5 "own the
 display"):**
-- *Transparent lower region.* Where Compose doesn't paint, the `wart`
+- *Transparent lower region.* Where Compose doesn't paint, the `wandr`
   `SurfaceControl` is transparent and the launcher composites through.
   `eLayerOpaque` is now set via `Transaction::setFlags` and `begin_frame`
   clears to black, but the launcher still bled through in testing — HWC
@@ -204,7 +204,7 @@ display"):**
   correctly `1440×2880`. Cannot verify other states — no standalone input
   until Step 3 (InputFlinger).
 - *App rotates with the OS.* When another app + the accelerometer rotate
-  the display, the `wart` layer rotates too — because we are a guest layer
+  the display, the `wandr` layer rotates too — because we are a guest layer
   in the OS-owned display, not the display owner. Expected at this stage;
   resolved when the runtime owns the display (Steps 4–5).
 
@@ -254,13 +254,13 @@ the `inputflinger` binder or the input-channel socket.
 
 New in-tree C++ shim `cpp/sf_input.{cpp,bp}` (soong `cc_library_shared`
 `libsf_input`, alongside `libsf_surface` in `external/sf_input/` on a-03;
-`shared_libs: libgui libinput libutils libbinder liblog`). `wart-host`
+`shared_libs: libgui libinput libutils libbinder liblog`). `wandr-host`
 `dlopen`s it like `sf_surface`. The shim, given the `SurfaceControl` the
 `sf_surface` shim already created:
 
 1. `sp<IInputFlinger> if = interface_cast<IInputFlinger>(
    defaultServiceManager()->waitForService(String16("inputflinger")))`.
-2. `if->createInputChannel("wart channel", &channelCore)` →
+2. `if->createInputChannel("wandr channel", &channelCore)` →
    `InputChannel::create(std::move(channelCore))` → the client channel.
 3. Build `sp<gui::WindowInfoHandle>`: `token =
    channel->getConnectionToken()`, `name`, `dispatchingTimeout = 5s`,
@@ -317,7 +317,7 @@ Input geometry was initially empty (`frame=[0,0][0,0]` → taps dropped as
 as a side-effect of the display fix below: `g_control` now carries the
 buffer directly, so SurfaceFlinger derives the input window geometry from
 the buffer (`frame=[0,0][1440,2880]`). `dumpsys input` shows
-`channelName='wart input', status=NORMAL`, the window `[TOUCHED]`, no AVC
+`channelName='wandr input', status=NORMAL`, the window `[TOUCHED]`, no AVC
 denials. Touch routes to the guest; coordinates pass straight through
 (portrait `1440×2880`, identity) — verified by the user (scrolling works).
 
@@ -334,10 +334,10 @@ overlap.
 
 Fix shipped in `cpp/sf_surface.cpp` (device-verified): attach the
 `BLASTBufferQueue` **directly to `g_control`** instead of calling
-`getSurface()` — `sp<BLASTBufferQueue>::make("wart", g_control, PW, PH, fmt)`
+`getSurface()` — `sp<BLASTBufferQueue>::make("wandr", g_control, PW, PH, fmt)`
 then `g_bbq->getSurface(true)`. One layer, no parent/child clip. Plus
 `setFixedTransformHint(g_control, 0)` so SurfaceFlinger composites the layer
-full-portrait. Result: `dumpsys SurfaceFlinger` shows one `wart` layer, HWC
+full-portrait. Result: `dumpsys SurfaceFlinger` shows one `wandr` layer, HWC
 composites `0 0 1440 2880` — **full screen, no clip**.
 
 ##### ✅ Display orientation — fixed (device-verified 2026-05-22)
@@ -352,7 +352,7 @@ portrait buffer.** The renderer believed the surface was landscape, built a
 The orientation was *not* a rotation-matrix problem. Confirmed by adding an
 `ANativeWindow_getWidth/getHeight` probe in `egl.rs`: `eglQuerySurface`
 reported `2880×1440` while `ANativeWindow` reported the true `1440×2880`.
-An exhaustive `WART_ORIENT 0..7` sweep also confirmed no rotation matrix
+An exhaustive `WANDR_ORIENT 0..7` sweep also confirmed no rotation matrix
 yields upright-portrait — every transposing matrix gives a rotated or
 mirrored result, because the buffer was never actually transposed.
 
@@ -369,36 +369,36 @@ mirrored result, because the buffer was never actually transposed.
 
 **Also shipped (kept as a manual override, not load-bearing):** the shim
 exports `sf_query_transform_hint()` (queries `NATIVE_WINDOW_TRANSFORM_HINT`
-post-EGL-connect) and `from_native_window` decodes the `WART_ORIENT` /
+post-EGL-connect) and `from_native_window` decodes the `WANDR_ORIENT` /
 hint as a full 0..7 dihedral bitmask (`FLIP_H=1, FLIP_V=2, ROT_90=4`). On
 taimen the hint reads 0 (uninformative — as expected, the transpose is a
 driver-internal `eglQuerySurface` quirk, not a real layer transform), so
 this path stays inert; it is an escape hatch for a panel that genuinely
 needs a rotation. The shim no longer pins `setFixedTransformHint(0)` by
-default — `WART_SF_HINT=<0..7>` re-pins it for iteration.
+default — `WANDR_SF_HINT=<0..7>` re-pins it for iteration.
 
 **Build / deploy / test:**
 ```
 # Host (local cross-compile — the only build the rotation fix needs):
 bash scripts/build-host-android.sh
-adb shell "su -c 'pkill -f wart-host'"
-adb push wart-host/target/aarch64-linux-android/release/wasm-android-host \
-    /data/local/tmp/wart-host
-adb shell "su -c 'chmod 755 /data/local/tmp/wart-host'"
-adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/wart-host --standalone'"
+adb shell "su -c 'pkill -f wandr-host'"
+adb push wandr-host/target/aarch64-linux-android/release/wasm-android-host \
+    /data/local/tmp/wandr-host
+adb shell "su -c 'chmod 755 /data/local/tmp/wandr-host'"
+adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/wandr-host --standalone'"
 adb shell screencap -p /sdcard/s.png && adb pull /sdcard/s.png
 
 # Shim (only if cpp/sf_surface.cpp changes — build host a-03):
 ssh -i ~/.ssh/id_rsa.my -o ControlMaster=auto -o ControlPath=/tmp/cm-a03-%r \
     -o ControlPersist=30m harry@a-03 'echo up'
-scp wart-host/cpp/sf_surface.cpp harry@a-03:~/android/lineage/external/sf_surface/sf_surface.cpp
+scp wandr-host/cpp/sf_surface.cpp harry@a-03:~/android/lineage/external/sf_surface/sf_surface.cpp
 ssh harry@a-03 'cd ~/android/lineage && \
   SO=out/soong/.intermediates/external/sf_surface/libsf_surface/android_arm64_armv8-a_shared/libsf_surface.so && \
   prebuilts/build-tools/linux-x86/bin/ninja -f out/combined-aosp_arm64.ninja "$SO"'
 #   (must be the COMBINED ninja — build.aosp_arm64.ninja alone fails: unknown pool highmem_pool)
 scp harry@a-03:~/android/lineage/$SO /tmp/libsf_surface.so
 adb push /tmp/libsf_surface.so /data/local/tmp/libsf_surface.so
-# Override knobs: WART_ORIENT=<0-7> (host base-matrix), WART_SF_HINT=<0-7> (shim pin)
+# Override knobs: WANDR_ORIENT=<0-7> (host base-matrix), WANDR_SF_HINT=<0-7> (shim pin)
 ```
 
 ### Step 4 — Launch mechanism + SystemUI coexistence
@@ -407,8 +407,8 @@ adb push /tmp/libsf_surface.so /data/local/tmp/libsf_surface.so
   to iterate. The launch is wrapped in `scripts/standalone-launch.sh`:
   preflight (device/root/binary/shim/cwasm) → push artifacts (newer-mtime
   only) → `am force-stop com.android.systemui` + the resolved home
-  package → install an EXIT trap → run wart-host in the foreground via
-  `adb shell -t`. Ctrl-C / normal exit / wart-host crash all fire the
+  package → install an EXIT trap → run wandr-host in the foreground via
+  `adb shell -t`. Ctrl-C / normal exit / wandr-host crash all fire the
   trap and restore the UI.
 - **Production:** an `init.rc` service entry (later — needs a sepolicy
   domain).
@@ -423,13 +423,13 @@ adb push /tmp/libsf_surface.so /data/local/tmp/libsf_surface.so
   `am start` or reboot — exactly the safety profile we want. **Do not
   use `pm disable`** — that persists across reboots and would wedge the
   device. Also avoid `stop` of init services (`stop zygote`,
-  `stop surfaceflinger`) — too nuclear, and surfaceflinger is what wart
+  `stop surfaceflinger`) — too nuclear, and surfaceflinger is what wandr
   talks to.
 
 - **Restore** (what the EXIT trap and `scripts/standalone-recover.sh` run):
 
   ```
-  adb shell "su -c 'pkill -9 -f wart-host'"
+  adb shell "su -c 'pkill -9 -f wandr-host'"
   adb shell "su -c 'am start -n com.android.systemui/.SystemUIService'"
   adb shell "input keyevent KEYCODE_HOME"
   ```
@@ -474,7 +474,7 @@ adb push /tmp/libsf_surface.so /data/local/tmp/libsf_surface.so
   `Ok(())`. The launcher script's `adb shell -t` exit status sees the
   clean exit and the EXIT trap restores SystemUI normally.
 - **Crash resilience** — `std::panic::set_hook` chains a writer that
-  drops a small JSON marker at `/data/local/tmp/wart-host-crash.json`
+  drops a small JSON marker at `/data/local/tmp/wandr-host-crash.json`
   (`{ ts, panic }`). `record_clean_exit` removes it on normal return;
   `drain_prior_crash_marker` logs+removes it at startup. SIGABRT /
   SIGSEGV bypass the hook (uncatchable from Rust); use the launcher's
@@ -552,7 +552,7 @@ adb push /tmp/libsf_surface.so /data/local/tmp/libsf_surface.so
       callbacks. ✅ device-verified 2026-05-26 — SIGTERM fires clean
       Destroyed → drain → exit; screen On↔Doze drives Paused/Resumed
       via `debug.tracing.screen_state` watcher; crash marker
-      `/data/local/tmp/wart-host-crash.json` round-trips
+      `/data/local/tmp/wandr-host-crash.json` round-trips
       (`src/lifecycle_standalone.rs`).
 - [x] No regression — NativeActivity APK still boots and renders
       (device-verified 2026-05-22, post orientation fix).
@@ -577,7 +577,7 @@ bash scripts/standalone-launch.sh
 ```
 
 It preflights, pushes whatever's newer, stops SystemUI + the launcher,
-runs wart-host in the foreground, and restores SystemUI + the launcher
+runs wandr-host in the foreground, and restores SystemUI + the launcher
 on any exit. If the trap doesn't fire (script killed, ssh dropped):
 `bash scripts/standalone-recover.sh`. Step 2's checklist (formally
 decouple from `android-activity` at the dependency level) is the last

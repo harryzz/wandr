@@ -45,18 +45,18 @@ attribution (proc `utime+stime` deltas over 12 s):
 
 ## Already shipped (render side — do NOT redo)
 
-- Adaptive foreground idle cadence (`war.signal` pre_frame: 120→250→500 ms via an
+- Adaptive foreground idle cadence (`wandr.signal` pre_frame: 120→250→500 ms via an
   `IDLE_FRAMES` counter reset on engine activity). See [[reference_dioxus_taffy_rust_ui]].
 - `dioxus-canvas` lifecycle plumbing: `on-lifecycle-changed` → `lifecycle_paused`
   (`is_paused()`); **`render_frame` early-returns when paused** (no relayout /
   draw-op replay / `eglSwapBuffers` to a hidden buffer); `pre_frame` still runs so
   a polling guest keeps ticking.
-- `war.signal` throttles its poll cadence when `is_paused()` (host clamps to its
+- `wandr.signal` throttles its poll cadence when `is_paused()` (host clamps to its
   `IDLE_CAP_MS = 1000` → ~1/s background poll).
 
 ## Why the host can't currently go below ~1/s in background
 
-`runtime/wart-host/src/standalone.rs`: the render gate is
+`runtime/wandr-host/src/standalone.rs`: the render gate is
 `frame < 3 || now >= next_render_at || dirty` — **not gated on visibility**. The
 next-frame delay is `guest_delay.min(IDLE_CAP_MS).max(frame_interval)`, and
 `IDLE_CAP_MS = 1000`, so even a guest asking for 2 s is rendered (→ `pre_frame`

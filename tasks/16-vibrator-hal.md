@@ -6,7 +6,7 @@
 
 Make `Haptics.perform(feedback)` and `Haptics.vibrate_ms(ms)` reach a working vibrator on a stock Android 11+ device (with `setenforce 0` for the rooted-dev case). Until this task, the Rust host wrote to `/sys/class/timed_output/vibrator/enable` and `/sys/class/leds/vibrator/*`, both of which `EACCES` on stock Android — so `perform()` always returned `false` and the phone never buzzed even when Compose called the WIT interface.
 
-Reference: `~/wart/post-art-roadmap.md` §3 (Boundary B / Pattern 5) and Task 15 (pipeline).
+Reference: `~/wandr/post-art-roadmap.md` §3 (Boundary B / Pattern 5) and Task 15 (pipeline).
 
 ---
 
@@ -95,7 +95,7 @@ Confirm the trait signatures, enum constants, and module paths from the rsbinder
 - `crate::binder_aidl::android::hardware::vibrator::EffectStrength::EffectStrength` (newtype `pub struct EffectStrength(pub i8)` with `LIGHT`, `MEDIUM`, `STRONG`)
 - `crate::binder_aidl::android::hardware::vibrator::IVibratorCallback::{IVibratorCallback, IVibratorCallbackAsyncService, BnVibratorCallback}`
 
-### 2. Rewrite `wart-host/src/haptics_impl.rs`
+### 2. Rewrite `wandr-host/src/haptics_impl.rs`
 
 - Keep the existing `try_vibrate_sysfs` function (was `try_vibrate`) and `feedback_duration` table.
 - Add `#[cfg(target_os = "android")] mod binder_path` with: `NopCallback`, `TrivialRuntime`, two `OnceLock`s (`VIB`, `CB`), `service()`, `callback()`, `vibrate_ms()`, `perform()`, `map_feedback()`.
@@ -112,7 +112,7 @@ export ANDROID_NDK_HOME=$NDK PATH=$TC/bin:$PATH \
        CXX_aarch64_linux_android=$TC/bin/aarch64-linux-android30-clang++ \
        AR_aarch64_linux_android=$TC/bin/llvm-ar \
        CC_aarch64_linux_android_RANLIB=$TC/bin/llvm-ranlib
-cd ~/wart/wart-host && cargo build --target aarch64-linux-android --release
+cd ~/wandr/wandr-host && cargo build --target aarch64-linux-android --release
 ```
 
 Expected: succeeds in ~40s incremental, 5 benign warnings (all pre-existing dead code). `libwasm_android_host.so` ~50.7 MB.
@@ -128,17 +128,17 @@ adb shell service list | grep vibrator
 ```
 
 Build + deploy + restart pipeline (CLAUDE.md "Build pipeline" §):
-1. `cd ~/wart/wart-host && cargo apk build --release` — produces `target/release/apk/wasm_android_host.apk` (~32 MB)
+1. `cd ~/wandr/wandr-host && cargo apk build --release` — produces `target/release/apk/wasm_android_host.apk` (~32 MB)
 2. `adb install -r <apk>`
-3. `cd ~/wart/wart-app && ./gradlew compileProductionExecutableKotlinWasmWasi` — produces guest .wasm
-4. `wasm-tools component embed --world my:skiko-gfx/skiko-ui ~/wart/wit/skiko-gfx.wit <.wasm> -o /tmp/embedded.wasm`
-5. `wasm-tools component new /tmp/embedded.wasm --adapt ~/wart/skiko/wasi_snapshot_preview1.reactor.wasm -o /tmp/skiko-component.wasm`
+3. `cd ~/wandr/wandr-app && ./gradlew compileProductionExecutableKotlinWasmWasi` — produces guest .wasm
+4. `wasm-tools component embed --world my:skiko-gfx/skiko-ui ~/wandr/wit/skiko-gfx.wit <.wasm> -o /tmp/embedded.wasm`
+5. `wasm-tools component new /tmp/embedded.wasm --adapt ~/wandr/skiko/wasi_snapshot_preview1.reactor.wasm -o /tmp/skiko-component.wasm`
 6. `wasmtime compile --target aarch64-linux-android -W component-model -W gc -W function-references -W exceptions -o /tmp/skiko-component.cwasm /tmp/skiko-component.wasm` (~65 MB)
 7. `adb shell am force-stop com.example.wasmruntime`
 8. `adb push /tmp/skiko-component.cwasm /sdcard/Android/data/com.example.wasmruntime/files/skiko-component.cwasm`
 9. `adb shell am start -n com.example.wasmruntime/android.app.NativeActivity`
 
-Existing `android-haptics smoke` block in `wart-app/src/wasmWasiMain/kotlin/Main.kt:109` already exercises the WIT — no temporary test code needed. Expected logcat lines (verified):
+Existing `android-haptics smoke` block in `wandr-app/src/wasmWasiMain/kotlin/Main.kt:109` already exercises the WIT — no temporary test code needed. Expected logcat lines (verified):
 
 ```
 I wasm_android_host::ha..: haptics: IVibrator.perform(Effect(2),EffectStrength(0),null) → ok

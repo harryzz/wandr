@@ -19,11 +19,11 @@ Idle CPU on Pixel 2 XL (`top -b`, foreground guest + bars):
 
 | Process | Baseline | After |
 |---|---|---|
-| war.launcher | 23% | ~5% |
-| war.statusbar | 20% | ~8% |
-| war.taskbar | 15% | ~6% |
-| war.dioxus.demo (idle) | 55% | ~6% |
-| **Compose wart-app (regression gate)** | ~45% | **~45% (unchanged — None path)** |
+| wandr.launcher | 23% | ~5% |
+| wandr.statusbar | 20% | ~8% |
+| wandr.taskbar | 15% | ~6% |
+| wandr.dioxus.demo (idle) | 55% | ~6% |
+| **Compose wandr-app (regression gate)** | ~45% | **~45% (unchanged — None path)** |
 
 The full chrome stack idle dropped from ~140% user to ~25% total. Residual ~5–8%
 per process is the documented 60 Hz cheap-poll; the `poll()`/epoll refinement to
@@ -50,7 +50,7 @@ crucially, it is enforced **entirely host-side**, so it caps **every** app
 works on the legacy/None path, so it throttles **Compose apps now**, before
 step 4.
 
-Mechanism: `standalone.rs` resolves a `target_fps` (env `WART_MAX_FPS` > the
+Mechanism: `standalone.rs` resolves a `target_fps` (env `WANDR_MAX_FPS` > the
 installed `package.toml` `max_fps` > 60) into a `frame_interval = 1000/fps` floor
 on the render rate. The render gate becomes `frame < 3 || now >= next_render_at ||
 (dirty && cap_ok)` where `cap_ok = (now - last_render) >= frame_interval`, and the
@@ -61,11 +61,11 @@ cache-key). Files: `app_loader.rs` (`max_fps()`), `standalone.rs` (resolve +
 `frame_interval` + `last_render` + gate). No `wit/` or guest changes.
 
 Device results (Pixel 2 XL): manifest path confirmed (launcher no field →
-`render cap 60 fps`; dioxus `max_fps=30` → `render cap 30 fps`). Compose wart-app
+`render cap 60 fps`; dioxus `max_fps=30` → `render cap 30 fps`). Compose wandr-app
 scales **45% (uncapped, ~40 fps-bound) → 37% (30 fps) → 26% (15 fps)**. Caveat:
 the device already renders Compose at only ~40 fps (a frame is ~25 ms), so a
 30 fps cap trims only ~25%; the cap helps most for fast-but-frequent renderers,
-while the bigger Compose idle win remains step 4 (idle-skip). `war.dioxus.demo`
+while the bigger Compose idle win remains step 4 (idle-skip). `wandr.dioxus.demo`
 ships `max_fps = 30` as a sensible default for a reactive UI.
 
 ## Architecture note: where on-demand logic belongs
@@ -76,9 +76,9 @@ belongs in the shared libraries, not per app: **Compose → skiko** (`RendererIm
 `hasInvalidations()`; the `frame-pacing` export goes in skiko's *generated*
 bindings, so every Compose app inherits it free — that's step 4), **dioxus →
 `crates/dioxus-canvas`** (the `next_frame_delay()` brains already live there; the
-~6-line forwarding export in `war.dioxus.demo` should be collapsed into a
-`dioxus_canvas::export_app!()` macro). Only the hand-rolled `war.launcher` /
-`war.statusbar` / `war.taskbar` guests are genuinely per-app (no shared library).
+~6-line forwarding export in `wandr.dioxus.demo` should be collapsed into a
+`dioxus_canvas::export_app!()` macro). Only the hand-rolled `wandr.launcher` /
+`wandr.statusbar` / `wandr.taskbar` guests are genuinely per-app (no shared library).
 
 ### Follow-on: `dioxus_canvas::launch!` — dioxus guest = pure dioxus + one line
 
@@ -92,7 +92,7 @@ library stays WIT-agnostic; the macro expands in the guest cdylib (where
 component exports must live) and emits one `generate!` over the full
 `my:skiko-gfx` world + the `CanvasSink` adapter + `measure_text`/`editor_*`
 helpers + the renderer/frame-pacing Guest impls. wit-bindgen bumped 0.46→0.57.1;
-the guest reaches it via a re-export + `runtime_path`. `war.dioxus.demo` is now
+the guest reaches it via a re-export + `runtime_path`. `wandr.dioxus.demo` is now
 pure dioxus. Details + traps (single-generate!-only; delete the stale `wit/`
 dir; `pub_export_macro`) in [[reference_dioxus_taffy_rust_ui]].
 
@@ -108,13 +108,13 @@ user + 57% sys:
 
 | Process | CPU | State |
 |---|---|---|
-| war.dioxus.demo (fg) | ~55% | **not animating** — pure render-loop tax |
-| war.ime.keyboard | ~30% | **hidden / idle** |
-| war.launcher | ~23% | **static** home screen |
-| war.statusbar | ~20% | ~1 Hz content (clock) |
-| war.taskbar | ~15% | **static** |
+| wandr.dioxus.demo (fg) | ~55% | **not animating** — pure render-loop tax |
+| wandr.ime.keyboard | ~30% | **hidden / idle** |
+| wandr.launcher | ~23% | **static** home screen |
+| wandr.statusbar | ~20% | ~1 Hz content (clock) |
+| wandr.taskbar | ~15% | **static** |
 
-Root cause: `runtime/wart-host/src/standalone.rs` render loop calls
+Root cause: `runtime/wandr-host/src/standalone.rs` render loop calls
 `call_render_frame` + `eglSwapBuffers` every 16 ms regardless of whether
 anything changed. Not a task-62/63 regression — the loop always rendered
 unconditionally; it became costly as each chrome surface got its own process +
@@ -185,7 +185,7 @@ typed func.
 ## Execution order (start here — Rust first, Compose last)
 
 The Compose path needs the heavy skiko republish + 11 compose-*-wasi rebuilds +
-wart-app/IME recompile (see `feedback_rebuild_compose_after_skiko`), so do it
+wandr-app/IME recompile (see `feedback_rebuild_compose_after_skiko`), so do it
 last. The Rust guests are quick and deliver the biggest chunk (launcher + bars +
 dioxus ≈ the bulk of the waste).
 
@@ -196,37 +196,37 @@ dioxus ≈ the bulk of the waste).
    (60 fps) — verify no regression. Also handle the `run_once.rs` / `lib.rs`
    call sites (they can keep calling render-frame directly; throttle only the
    standalone loop).
-2. **Canvas guests** (`apps/system/war.launcher`, `war.statusbar`, `war.taskbar`):
+2. **Canvas guests** (`apps/system/wandr.launcher`, `wandr.statusbar`, `wandr.taskbar`):
    add `frame-pacing` to each trimmed WIT (`*/wit/*.wit`) + world export, implement
    `next_frame_delay()` (launcher/taskbar → IDLE; statusbar → 1000). Rebuild via
-   `build-system-warpkgs.sh` (Rust wasm32-wasip2, fast). **Device-verify CPU drop**
+   `build-system-wandrpkgs.sh` (Rust wasm32-wasip2, fast). **Device-verify CPU drop**
    for these three (expect ~58% → ~3% combined).
-3. **dioxus** (`crates/dioxus-canvas` + `apps/user/war.dioxus.demo`): add
-   `frame-pacing` to `war.dioxus.demo/wit/skiko-gfx.wit` + world; `dioxus-canvas`
+3. **dioxus** (`crates/dioxus-canvas` + `apps/user/wandr.dioxus.demo`): add
+   `frame-pacing` to `wandr.dioxus.demo/wit/skiko-gfx.wit` + world; `dioxus-canvas`
    exposes a `next_frame_delay()` from VirtualDom pending state; demo's
    `render_frame` sibling exports it. Rebuild. **Device-verify** dioxus idle CPU
    drops (~55% → low single digits) and interaction still 60 fps.
 4. **Compose** (skiko + compose-wasi) — LAST, heavy: `RendererImpl`/`SkiaLayerWasi`
    compute the delay from `ComposeScene.hasInvalidations()` + `WasiFrameDispatcher`
    pending deadline; add the `frame-pacing` export to the generated bindings +
-   `skiko-gfx.wit` deps mirrors (wart-app + IME). Republish skiko, rebuild the 11
-   compose-*-wasi modules, recompile wart-app + IME. **Device-verify** idle wart-app
+   `skiko-gfx.wit` deps mirrors (wandr-app + IME). Republish skiko, rebuild the 11
+   compose-*-wasi modules, recompile wandr-app + IME. **Device-verify** idle wandr-app
    + hidden IME drop to near-0 while animations/cursor-blink still work.
 
 ## Surface (exact files)
 
 - **WIT** (add `frame-pacing`): `wit/skiko-gfx.wit` (canonical) + mirror to
-  `external/skiko/skiko/wit/skiko-gfx.wit`, `apps/user/wart-app/wit/deps/skiko-gfx/`,
-  `apps/system/war.ime.keyboard/wit/deps/skiko-gfx/`; trimmed:
-  `apps/system/war.{launcher,statusbar,taskbar}/wit/*.wit`,
-  `apps/user/war.dioxus.demo/wit/skiko-gfx.wit`. (See the WIT-sync rule in CLAUDE.md.)
-- **Host**: `runtime/wart-host/src/standalone.rs` (loop @ ~707–883, the
+  `external/skiko/skiko/wit/skiko-gfx.wit`, `apps/user/wandr-app/wit/deps/skiko-gfx/`,
+  `apps/system/wandr.ime.keyboard/wit/deps/skiko-gfx/`; trimmed:
+  `apps/system/wandr.{launcher,statusbar,taskbar}/wit/*.wit`,
+  `apps/user/wandr.dioxus.demo/wit/skiko-gfx.wit`. (See the WIT-sync rule in CLAUDE.md.)
+- **Host**: `runtime/wandr-host/src/standalone.rs` (loop @ ~707–883, the
   `call_render_frame` @ 843 + a second @ ~906; `frame_target`/sleep @ ~879).
   Call sites also in `lib.rs:340` (NativeActivity) + `run_once.rs` (one-shot — leave).
-- **Canvas guests**: `apps/system/war.launcher/src/lib.rs:163`,
-  `war.statusbar/src/lib.rs:71`, `war.taskbar/src/lib.rs:100`.
+- **Canvas guests**: `apps/system/wandr.launcher/src/lib.rs:163`,
+  `wandr.statusbar/src/lib.rs:71`, `wandr.taskbar/src/lib.rs:100`.
 - **dioxus**: `crates/dioxus-canvas/src/lib.rs:187` (`render_frame`),
-  `apps/user/war.dioxus.demo/src/lib.rs:138`.
+  `apps/user/wandr.dioxus.demo/src/lib.rs:138`.
 - **Compose**: `external/skiko/skiko/src/wasmWasiMain/kotlin/org/jetbrains/skiko/wasi/RendererImpl.kt`,
   `.../SkiaLayerWasi.kt`, `.../generated/` exports;
   `external/compose-multiplatform-core/.../WasiFrameDispatcher.kt` (expose pending-deadline).
@@ -250,7 +250,7 @@ dioxus ≈ the bulk of the waste).
 
 ## Verify
 
-`adb shell top -b -n 2 -d 3 -o PID,%CPU,RES,CMD | grep wart-host` before/after each
+`adb shell top -b -n 2 -d 3 -o PID,%CPU,RES,CMD | grep wandr-host` before/after each
 step. Targets: static launcher/taskbar ≈0–2%, status bar ≈1–2%, hidden IME ≈0%,
-idle dioxus/wart-app ≈ low single digits; interaction stays 60 fps; Compose
+idle dioxus/wandr-app ≈ low single digits; interaction stays 60 fps; Compose
 cursor-blink + animations still work; status-bar clock still updates ~1 Hz.

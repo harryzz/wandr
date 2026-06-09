@@ -1,25 +1,25 @@
 # Guest-language support for WASI components (language neutrality)
 
 > Survey of which source languages can produce **WASI Preview 2 / Component
-> Model** components today — the contract wart uses for every guest. Captured
+> Model** components today — the contract wandr uses for every guest. Captured
 > 2026-05-31 to back the "language neutrality + multi-language coexistence"
 > demonstration. Moves fast; re-check the sources before quoting.
 
-## Why this matters for wart
+## Why this matters for wandr
 
-wart's entire host↔guest boundary is **WIT + the Component Model** (see
+wandr's entire host↔guest boundary is **WIT + the Component Model** (see
 `docs/architecture-host-guest-boundary.md`). The host exposes interfaces
 (`my:skiko-gfx/*` — canvas, paragraph, display, keyboard, …) and links them into
 any guest via `SkikoUi::add_to_linker`; a guest only has to **export the
 `renderer` world** and import what it needs. Nothing in that contract is
 Kotlin-specific. So **any language that can emit a component for our world is a
 candidate guest**, and components from different languages **coexist** behind the
-same WIT — exactly how the Rust chrome guests (`war.launcher`, `war.statusbar`,
-`war.taskbar`, `war.dioxus.demo`) already run alongside the Kotlin/Compose
-`wart-app` and `war.ime.keyboard` today, and how cross-app deps compose via
+same WIT — exactly how the Rust chrome guests (`wandr.launcher`, `wandr.statusbar`,
+`wandr.taskbar`, `wandr.dioxus.demo`) already run alongside the Kotlin/Compose
+`wandr-app` and `wandr.ime.keyboard` today, and how cross-app deps compose via
 `link.wac` / the host's component-type walk (`wire_dep_into_linker`).
 
-**The bar** for a real wart guest is stricter than "hello world": produce a
+**The bar** for a real wandr guest is stricter than "hello world": produce a
 component for a **custom world with exports** (our `skiko-ui` / `renderer`), not
 just the stock `wasi:cli/command`. The table below is graded on that bar.
 
@@ -32,7 +32,7 @@ just the stock `wasi:cli/command`. The table below is graded on that bar.
 | **Go (TinyGo)** | ✅ yes | `tinygo build -target=wasip2 --wit-package … --wit-world …` (shells out to wasm-tools embed+new) | ⚠️ yes, with friction¹ | hidden by toolchain | v0.34+ (use ≥0.39) |
 | **Zig** | 🟡 manual only | wit-bindgen **C** generator + Zig C-interop → wasm32-wasip1 → `wasm-tools component new` w/ adapter | ✅ but hand-wired | **explicit** (std is P1) | DIY |
 | **Java (JVM)** | 🟡 fork only | Fermyon **teavm-wasi** fork (bytecode → wasm + CM bindings; Maven `com.fermyon`) | ✅ via the fork | hidden by fork | Niche, not upstream |
-| **Kotlin/Wasm** *(what wart uses)* | 🟡 via hand-rolled pipeline | KGP `compileProductionExecutableKotlinWasmWasi` → `wasm-tools component embed` → `component new --adapt` | ✅ (our `skiko-ui`) | **explicit** (wart-fork reactor adapter, KT-86415) | Shipping in wart |
+| **Kotlin/Wasm** *(what wandr uses)* | 🟡 via hand-rolled pipeline | KGP `compileProductionExecutableKotlinWasmWasi` → `wasm-tools component embed` → `component new --adapt` | ✅ (our `skiko-ui`) | **explicit** (wandr-fork reactor adapter, KT-86415) | Shipping in wandr |
 
 ¹ TinyGo's `wasip2` target is hardwired to `wasi:cli/command`; a non-CLI world
 needs an explicit `--wit-world` plus `include wasi:cli/imports@0.2.0`. Cleaner
@@ -41,7 +41,7 @@ arbitrary-world support is tracked in tinygo-org/tinygo#4843.
 ## Per-language notes
 
 - **Rust** — the reference. Native `wasm32-wasip2`, no adapter, cleanest WIT
-  ergonomics. This is why wart's light chrome guests are Rust.
+  ergonomics. This is why wandr's light chrome guests are Rust.
 - **C# / .NET** — `componentize-dotnet` gives a Rust/TinyGo-comparable
   experience from a single NuGet reference: AOT (NativeAOT-LLVM), real WIT
   import/export, custom worlds. Needs .NET 9/10. Still preview but functional —
@@ -52,21 +52,21 @@ arbitrary-world support is tracked in tinygo-org/tinygo#4843.
   component; you must route through TinyGo (or wasm-tools by hand).
 - **Zig** — no native Component Model and **no Zig generator in wit-bindgen**.
   You use the C generator + Zig's C interop, build to wasip1, then adapt to P2 —
-  i.e. essentially the same hand-rolled route wart uses for Kotlin. Viable,
+  i.e. essentially the same hand-rolled route wandr uses for Kotlin. Viable,
   lightest runtime, but all plumbing is manual.
 - **Java** — no official support; Fermyon's `teavm-wasi` fork can emit
   components but isn't merged upstream. **Key gotcha for the WasmGC question:**
   TeaVM has *two separate* wasm backends — a **WasmGC** backend (browser-targeted,
   talks to JS/DOM) and the **linear-memory** backend that the Fermyon **WASI**
   fork builds on. They are **not combined**: there is **no Java → WasmGC + WASI**
-  toolchain today. So a Java guest in a WASI host (like wart) is **linear-memory**
+  toolchain today. So a Java guest in a WASI host (like wandr) is **linear-memory**
   TeaVM + the *stock* P1→P2 adapter — not WasmGC. The only JVM-family language
-  that ships **WasmGC + WASI together is Kotlin/Wasm** (what wart uses). Important
+  that ships **WasmGC + WASI together is Kotlin/Wasm** (what wandr uses). Important
   because Java and Kotlin "both make JVM bytecode" does **not** imply a shared
   wasm path: Kotlin/Wasm compiles Kotlin *source* → WasmGC directly (never via
   bytecode), while the Java route goes bytecode → TeaVM → linear-memory wasm.
 - **Kotlin/Wasm** (context) — our path: WasmGC output + a P1→P2 **reactor
-  adapter** (wart fork, the KT-86415 State-pin), hand-written `@WasmImport`/
+  adapter** (wandr fork, the KT-86415 State-pin), hand-written `@WasmImport`/
   `@WasmExport` bindings. No native P2 target yet (watch KT-64568). Listed here
   so the survey shows where our own stack sits relative to the others.
 
@@ -76,7 +76,7 @@ Compiled languages turn *your code* into wasm. Interpreters instead **embed the
 whole language runtime inside the component** and snapshot your script into it
 (usually via **Wizer** pre-initialization). So a "Python component" is CPython +
 your `.py` baked in; a "JS component" is a JS engine + your module. That has two
-consequences for wart: the per-component footprint is **megabytes of VM** (heavy
+consequences for wandr: the per-component footprint is **megabytes of VM** (heavy
 against our ~180 MB/app working-set finding — two Python guests = two CPython
 copies unless shared), and execution is **interpreter-speed** — fine for
 logic/plugin/automation guests, poor for a 60 fps render hot path.
@@ -93,7 +93,7 @@ logic/plugin/automation guests, poor for a 60 fps render hot path.
 `ComponentizeJS` and `componentize-py`), with the same "implement the WIT world,
 get a component" experience as Rust/Go — the engine embedding is hidden. Ruby is
 P1-only, Lua and Perl have no first-class P2 story (you embed them inside a host
-or a Rust component instead). For wart, a JS or Python guest exporting our
+or a Rust component instead). For wandr, a JS or Python guest exporting our
 `renderer` world is technically possible but better suited to **non-GUI logic /
 plugin components** than the Compose-style render loop, because of the embedded-VM
 size and interpreter speed.
@@ -102,11 +102,11 @@ size and interpreter speed.
 
 Almost every non-Rust path still runs **`wasm-tools component embed` + a P1→P2
 reactor adapter** under the hood — the exact pipeline (and adapter dependency)
-wart already lives with for Kotlin/Wasm. Nobody but Rust has truly *escaped* the
+wandr already lives with for Kotlin/Wasm. Nobody but Rust has truly *escaped* the
 adapter; the better toolchains just **hide** it behind one build command. So the
 language-neutrality story is real and already proven in-tree:
 
-- **Today, in wart:** Rust guests + Kotlin/Compose guests coexist behind one WIT,
+- **Today, in wandr:** Rust guests + Kotlin/Compose guests coexist behind one WIT,
   composed by the same host linker and cross-app `link.wac`.
 - **Drop-in next:** a **TinyGo** or **C#/.NET** guest exporting our `renderer`
   world would slot in with no host change — same `add_to_linker`, same install +
@@ -119,11 +119,11 @@ language-neutrality story is real and already proven in-tree:
 ## Roadmap signals to watch
 
 - **WASI 0.2** stabilized late 2024, broadly adopted through 2025 (wasmtime 30+,
-  Spin, wasmCloud). This is what wart targets.
+  Spin, wasmCloud). This is what wandr targets.
 - **WASI 0.3 / Preview 3** — native async I/O via the Component Model; first RC
   support landed in tooling late 2025. **WASI 1.0** planned for 2026.
 - **Kotlin** — KT-64568 (native WASI Preview 2 target) is the only thing that
-  would retire wart's adapter; still Planned. See
+  would retire wandr's adapter; still Planned. See
   `[[reference_kotlin_wasm_component_model_status]]`.
 
 ## Sources

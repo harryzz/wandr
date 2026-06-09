@@ -28,7 +28,7 @@ package straddles those two directories — most parcelables under
 sibling `android/gui/`. Zero imports leave the package once both
 are included.
 
-**`wart-host/build.rs`** — two new include_dirs (`libs/gui/aidl/` +
+**`wandr-host/build.rs`** — two new include_dirs (`libs/gui/aidl/` +
 `libs/gui/`) and one new source (`ISurfaceComposer.aidl`). Two
 self-heal patches to the in-tree submodule files, mirroring the
 `IDirectReportChannel.aidl` pattern from task 20:
@@ -58,13 +58,13 @@ interface ISurfaceComposer {
 `getPhysicalDisplayIds` lands at `FIRST_CALL_TRANSACTION + 3`
 (= 4) matching upstream and the service-side dispatch.
 
-**`wart-host/src/display_impl.rs`** — new ~25-line module with
+**`wandr-host/src/display_impl.rs`** — new ~25-line module with
 one `pub fn probe()`. Looks up `SurfaceFlingerAIDL` via
 `rsbinder::hub::get_interface`, calls `getPhysicalDisplayIds()`,
 logs the outcome. Returns regardless of result — this is a probe,
 not a feature.
 
-**`wart-host/src/lib.rs`** — `mod display_impl;` + a single
+**`wandr-host/src/lib.rs`** — `mod display_impl;` + a single
 `display_impl::probe()` call inside the cold-start branch of
 `resumed()` (after `binder::init()`). Warm-resume skips it; the
 probe is a one-shot per-process.

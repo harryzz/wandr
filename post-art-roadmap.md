@@ -143,7 +143,7 @@ Runtime requirements:
 To be implemented when this roadmap moves to execution. Sketch:
 
 ```
-wart-host/
+wandr-host/
   aidl/android/hardware/vibrator/
     IVibrator.aidl
     IVibratorCallback.aidl
@@ -366,7 +366,7 @@ SCOPE** (§6.4) toward the full-functional-Android goal — each a KEEP-style HA
 binding, not done yet. Don't read "core done" as "most of Android done."
 
 **Key realization — the bottleneck is a shared *security context*, not per-service work.**
-Under ART-off, system_server's permission service is gone, so a wart native process
+Under ART-off, system_server's permission service is gone, so a wandr native process
 can use the surviving native daemons only if it runs in roughly system_server's
 context. The spike pinned the exact requirements for the inputflinger process:
 - **uid `system` (1000)** — else SurfaceFlinger's `ACCESS_SURFACE_FLINGER` check
@@ -383,7 +383,7 @@ op. So the reusable investment is **the security context**, not path A as a
 
 **Easy way (dev) vs right way (image).** All of the above (uid/gid/caps/sepolicy) is
 *build-time config* in our own flashable image: `init.rc` `user`/`group`/
-`capabilities`/`seclabel` stanzas + a wart sepolicy module, ART services simply not
+`capabilities`/`seclabel` stanzas + a wandr sepolicy module, ART services simply not
 started — runs enforcing, no `setenforce 0`, no `su`, no `stop zygote`. The problems
 we hit are artifacts of running as an uninvited root process **on top of** a stock
 image. **Decision (2026-06-04): keep the dev scaffold** (rooted device + `su`/
@@ -406,7 +406,7 @@ not be baked into the runtime's loader interface.
 ### 7.1 Shipped package shape (the artifact)
 
 ```
-<app-id>-<version>.warpkg/        ← portable; same bytes for every device
+<app-id>-<version>.wandrpkg/        ← portable; same bytes for every device
   package.toml                    ← metadata + entry + declared world
   link.wac                        ← composition script (or inline)
   components/
@@ -429,7 +429,7 @@ under `/data/dalvik-cache/`.
 ### 7.1b On-device cache layout (per install)
 
 ```
-/data/wart/apps/<app-id>/<version>/
+/data/wandr/apps/<app-id>/<version>/
   package.toml                    ← copy of the shipped manifest
   link.wac                        ← copy of the shipped script
   components/                     ← .wasm bytes
@@ -453,7 +453,7 @@ upgrade, engine-config change, component bytes change) flips a key in
 2. Resolve `link.wac` to a concrete component graph (which exports
    satisfy which imports, including host-provided WIT).
 3. Verify signatures (Q5b — format pending).
-4. Copy `.wasm`s + assets to `/data/wart/apps/<app-id>/<version>/`.
+4. Copy `.wasm`s + assets to `/data/wandr/apps/<app-id>/<version>/`.
 5. For each component: `engine.precompile_component(&wasm_bytes)` →
    write to `cache/<name>.cwasm`. Stamp `cache-key.toml`.
 6. Register in the on-device package db (whatever
@@ -471,7 +471,7 @@ runtime's per-process class-loader (launch-time bytecode → class).
 
 ### 7.3 Why this is nicer than APK semantics
 
-- **Ship is portable.** One `.warpkg` runs on any device with a
+- **Ship is portable.** One `.wandrpkg` runs on any device with a
   compatible wasmtime + WIT-world set. No per-arch builds, no
   splits-by-density, no signing-per-track gymnastics.
 - **Per-device native cache is auto.** Like dex2oat but with a
@@ -496,7 +496,7 @@ runtime's per-process class-loader (launch-time bytecode → class).
   load time, which covers "install an app, run it."
 - Cross-component resource/handle delegation — works, rough edges.
 - **`Engine::precompile_component(bytes) -> Result<Vec<u8>>`** —
-  stable in wasmtime 44 (already pinned in `wart-host/Cargo.toml`).
+  stable in wasmtime 44 (already pinned in `wandr-host/Cargo.toml`).
   Same compilation path as the `wasmtime compile` CLI; on-device
   Cranelift AOT works today.
 
@@ -507,7 +507,7 @@ runtime's per-process class-loader (launch-time bytecode → class).
 name    = "com.example.demo"
 version = "1.2.0"
 entry   = "ui"
-world   = "war:app/main@1.0.0"
+world   = "wandr:app/main@1.0.0"
 
 [components]
 ui     = { path = "components/ui.wasm" }
@@ -560,7 +560,7 @@ DB entry, no `cache-key.toml`. It exists for fast iteration; a 5-min
 Kotlin compile is followed by a sub-second push + relaunch.
 
 The dev path stays as is. The installer (when built) is the
-non-developer path: receive a `.warpkg`, do steps 7.2-1..6, register
+non-developer path: receive a `.wandrpkg`, do steps 7.2-1..6, register
 with the package db. Either path produces a `.cwasm` the loader can
 deserialize; the dev path just sidesteps every check.
 
@@ -853,7 +853,7 @@ Ordered by reversibility / cost:
    the POC limp along in the meantime.
 
 2. **Compile to Android-native via Kotlin/JVM (least dramatic
-   refactor).** Drop the WASM layer on Android only. wart-app
+   refactor).** Drop the WASM layer on Android only. wandr-app
    targets `androidTarget()` instead of `wasmWasi`, runs directly
    on ART. Lose: cross-platform-via-WIT story, security sandbox,
    the whole reason for the PoC. Gain: sub-frame tap latency, no

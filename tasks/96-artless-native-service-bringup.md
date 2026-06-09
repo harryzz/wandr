@@ -8,17 +8,17 @@
 > use sensorservice / audioserver / `libsensorserviceaidl` / the HALs as-is.**
 >
 > ## Implementation (device-verified)
-> - **`runtime/wart-framework-shim/`** (new C++ binary; retires `wart-activityms`):
+> - **`runtime/wandr-framework-shim/`** (new C++ binary; retires `wandr-activityms`):
 >   registers the source-derived blocker set, started **shim-first** before
 >   audioserver/sensorservice. `waitForService` blockers (`activity` [FATAL for
 >   audioserver UidPolicy], `sensor_privacy`, `package_native`, `processinfo`) +
 >   `checkService`/`getService` paths (`scheduling_policy`, `permission`,
 >   `permission_checker`, `media.camera.proxy`). Per-call trace gated behind
->   `WART_SHIM_TRACE`. Build on a-03 (new module → `m` dies in LineageOS dexpreopt
+>   `WANDR_SHIM_TRACE`. Build on a-03 (new module → `m` dies in LineageOS dexpreopt
 >   kati; direct-ninja the soong intermediate).
 > - **`tools/scripts/run-hybrid-stack.sh`** split into a **native+shim layer**
 >   (`bring_up_native_shim`, idempotent, skipped when `native_shim_healthy`) and a
->   restartable **wart layer**; new **`--wart-only`** fast restart (no `--restore-art`
+>   restartable **wandr layer**; new **`--wandr-only`** fast restart (no `--restore-art`
 >   boot); framework-up gate dropped under `--no-art`.
 > - **Key finding:** there is **no real `DEAD_OBJECT` race** on taimen — the single
 >   standalone-sensorservice claim succeeds first try; the qcom SSC HAL just takes
@@ -27,12 +27,12 @@
 > - **Verified:** cold `--restore-art`→`--no-art` = exactly one of each service,
 >   once-fresh claim (no `DEAD_OBJECT`), ISensorManager registers, arbiter receives
 >   live sensor data, audio fresh, idle CPU ~6 %, no EventQueue spin — stock libs.
->   `--wart-only` = **27 s**, native+shim pids unchanged, arbiter fresh, sensors/audio
+>   `--wandr-only` = **27 s**, native+shim pids unchanged, arbiter fresh, sensors/audio
 >   keep working.
 > - **Gotchas fixed during bring-up** (see `.task-state`): `cmd package
 >   resolve-activity` exit-20 vs `set -e`/pipefail; `pkill -9 -f` self-matching its own
 >   `su -c` cmdline (→ kill by device-side `pidof`); `service list` *pinging* dead
->   wart-layer services and blocking (→ `service check <name>` for the health probe).
+>   wandr-layer services and blocking (→ `service check <name>` for the health probe).
 
 ## TL;DR
 
@@ -67,12 +67,12 @@ A `--no-art` native-service bringup that is **deterministic and idempotent**:
 - no EventQueue busy-spin (stable single connection → no BitTube hangup);
 - **zero platform-library patches.**
 
-**And the day-to-day payoff — a fast `--no-art` wart-only restart, NO `--restore-art`
+**And the day-to-day payoff — a fast `--no-art` wandr-only restart, NO `--restore-art`
 cycle.** Today, restarting the stack means `--restore-art` (boot the full Java
 framework, ~1–2 min) → wait → `--no-art` (restart everything + stop the framework
 again), because the script gates on the framework being up and re-boots it to "reset"
 the native services. Once the native+shim layer is churn-free and idempotent, a stack
-restart should be: **leave the native+shim layer running, restart only the wart layer
+restart should be: **leave the native+shim layer running, restart only the wandr layer
 (arbiter / hosts / inputflinger) in place** — no framework boot. (The *first* entry
 into `--no-art` from a cold ART-up boot still needs the one framework-stop; only
 subsequent restarts become the fast path.)
@@ -80,13 +80,13 @@ subsequent restarts become the fast path.)
 ## Approach (model → steps)
 
 1. **First-class framework-shim, serving before native services start.**
-   Promote the ad-hoc `wart-activityms` stubs into a designed shim (the arbiter, or a
-   dedicated `wart-framework-shim`) that registers the *minimal* binder service set
+   Promote the ad-hoc `wandr-activityms` stubs into a designed shim (the arbiter, or a
+   dedicated `wandr-framework-shim`) that registers the *minimal* binder service set
    native daemons block on / query (`activity`, `permission`, `sensor_privacy`,
    `scheduling_policy`, `package_native`, `media.camera.proxy`, …) and is **up and
    serving before** audioserver / sensorservice / cameraserver are (re)started.
    - Verify the exact `waitForService` / `checkService` set each daemon needs
-     (read the daemon sources in `runtime/wart-host/vendor/aosp-frameworks-*`), so
+     (read the daemon sources in `runtime/wandr-host/vendor/aosp-frameworks-*`), so
      the shim is minimal and complete — no more "discover-a-missing-stub-by-hang."
 
 2. **Start each native service ONCE, fresh, in the `--no-art` context.**
@@ -102,7 +102,7 @@ subsequent restarts become the fast path.)
      without having wedged. Confirm which on-device.
 
 3. **One stable arbiter sensor connection — never churn it.**
-   The arbiter's event-queue connection to `wart-sensormanager` must be established
+   The arbiter's event-queue connection to `wandr-sensormanager` must be established
    once and kept; the C3 reconnect path stays as a *recovery* mechanism but must not
    be exercised in steady state. Stable connection ⇒ no BitTube hangup ⇒ the
    unguarded `EventQueueLooperCallback::handleEvent` never busy-loops. **No
@@ -115,25 +115,25 @@ subsequent restarts become the fast path.)
    `--restore-art` may remain a dev convenience, but the native-service bringup must
    be churn-free regardless of how we reached `--no-art`.
 
-5. **Split the bringup into two layers → enable a fast wart-only restart (no
+5. **Split the bringup into two layers → enable a fast wandr-only restart (no
    `--restore-art`).** This is the mechanism for the restart goal above.
    - **Native + shim layer** — sensorservice, audioserver, the framework-shim
-     (step 1), `wart-sensormanager`. Brought up **once, idempotently**; on a restart,
+     (step 1), `wandr-sensormanager`. Brought up **once, idempotently**; on a restart,
      **detect-and-skip if already healthy** (`service check` / `dumpsys`), never
-     kill/respawn. This layer outlives wart-stack restarts.
-   - **Wart layer** — arbiter, host zygote + hosts, inputflinger. Freely
+     kill/respawn. This layer outlives wandr-stack restarts.
+   - **Wandr layer** — arbiter, host zygote + hosts, inputflinger. Freely
      **restartable in place on top** of a live native+shim layer.
    - **Drop the framework-up gate.** The script currently requires the framework up
      to resolve the launcher via `cmd package resolve-activity` (bails exit-20
-     otherwise). Cache/persist that (the arbiter already persists home) so the wart
+     otherwise). Cache/persist that (the arbiter already persists home) so the wandr
      layer can be (re)started while already in `--no-art`, with no `--restore-art`.
-   - **Clean teardown on restart.** A wart-layer restart still drops the arbiter's
+   - **Clean teardown on restart.** A wandr-layer restart still drops the arbiter's
      sensor event-queue connection — that's **bounded, clean churn** (arbiter process
-     dies → its binder ref drops → `wart-sensormanager` tears that EventQueue down →
+     dies → its binder ref drops → `wandr-sensormanager` tears that EventQueue down →
      new arbiter makes a fresh one), NOT the persistent spin (which needs an
      *orphaned* queue from a duplicate re-`addService` / sensorservice restart). Also
      re-establish chrome/input registration on the arbiter reconnect (the bare-arbiter-
-     restart drops Chrome surface + `wart.windowreg` regs today) so the wart-only
+     restart drops Chrome surface + `wandr.windowreg` regs today) so the wandr-only
      restart is actually clean.
 
 ## How to verify
@@ -144,14 +144,14 @@ subsequent restarts become the fast path.)
   - `dumpsys media.audio_policy` registered without an audioserver re-cycle (or with
     at most one deterministic restart).
   - `dumpsys sensorservice` shows **one** open event connection; `top -H` on
-    `wart-sensormanager` shows **no** thread above a few % at idle (no spin).
-  - exactly one `sensorservice` and one `wart-sensormanager`.
+    `wandr-sensormanager` shows **no** thread above a few % at idle (no spin).
+  - exactly one `sensorservice` and one `wandr-sensormanager`.
   - idle CPU at the task-86/CPU-fix baseline (~10%), held across a screen-off period.
 - All of the above **with stock platform libraries** (diff `libsensorserviceaidl`
   against the device's — unchanged).
-- **Fast wart-only restart:** while already in `--no-art`, restart the wart layer
+- **Fast wandr-only restart:** while already in `--no-art`, restart the wandr layer
   **without** `--restore-art` / a framework boot — the native+shim layer stays up
-  (same sensorservice / audioserver / `wart-sensormanager` pids), sensors + audio
+  (same sensorservice / audioserver / `wandr-sensormanager` pids), sensors + audio
   keep working, no `DEAD_OBJECT`, no spin, and the UI (chrome + input) comes back
   registered. Restart completes in seconds, not the ~1–2 min ART-boot cycle.
 

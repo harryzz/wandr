@@ -7,7 +7,7 @@
 > `render()` through proxy → dep returns Document → consumer exits 0.
 >
 > **Step 7 deliverables (this session, 2026-05-26):**
-> - `wart-host/src/run_once.rs` — new entry point that drives one-shot
+> - `wandr-host/src/run_once.rs` — new entry point that drives one-shot
 >   `wasi:cli/command` consumers via `Command::instantiate` +
 >   `call_run`. Sets up the same SF surface + HostState + WASI ctx as
 >   `standalone.rs` (renderer-Option refactor deferred — see below).
@@ -16,12 +16,12 @@
 >   `wasmtime_wasi::p2::bindings::sync::Command::instantiate`.
 >   Crucially, `wire_dep_into_linker` runs identically — the proxy
 >   registration is consumer-shape-agnostic.
-> - `wart-host --run-once <app-id>` CLI in `main.rs`, adjacent to
+> - `wandr-host --run-once <app-id>` CLI in `main.rs`, adjacent to
 >   `--install` / `--standalone`.
 > - `md-smoke-rust/` — new Rust-side smoke consumer. Built because the
->   Kotlin smoke (`wart-app-md-smoke/`) hits a pre-existing Kotlin/Wasm
+>   Kotlin smoke (`wandr-app-md-smoke/`) hits a pre-existing Kotlin/Wasm
 >   + WASI-command-adapter throw at module init (confirmed on-device
->   2026-05-26 — wart-host's `wasi_stderr` doesn't help). Rust on
+>   2026-05-26 — wandr-host's `wasi_stderr` doesn't help). Rust on
 >   `wasm32-wasip2` produces a clean wasi:cli/command shape with no
 >   such bug.
 > - `scripts/smoke-markdown.sh` — full device pipeline (build → install
@@ -33,9 +33,9 @@
 > **Device evidence (2026-05-26):**
 > ```
 > loader: cache fresh for com.example.md-smoke-rust 0.0.1
-> loader: loaded dep `markdown` (war:markdown/renderer@0.1.0) from
->   .../system-apps/war.markdown.renderer/0.1.0/cache/renderer.cwasm
-> loader: dep `markdown` instantiated; wiring war:markdown/renderer@0.1.0
+> loader: loaded dep `markdown` (wandr:markdown/renderer@0.1.0) from
+>   .../system-apps/wandr.markdown.renderer/0.1.0/cache/renderer.cwasm
+> loader: dep `markdown` instantiated; wiring wandr:markdown/renderer@0.1.0
 >   → consumer linker
 > run_once: command instantiated — calling wasi:cli/run.run()
 > md-smoke-rust: render() returned [N block(s)]
@@ -45,12 +45,12 @@
 > layer up to `Command::instantiate` (same logs minus the last two);
 > the Rust smoke proves the actual call-through-proxy path.
 >
-> **Compose consumer also verified (visuals v1, 2026-05-26):** wart-app
-> installed via the installer path (new `wart-app/wit/` defines a world
-> `wart:app/wart-app` that `include`s `my:skiko-gfx/skiko-ui` and
-> imports `war:markdown/renderer@0.1.0`), new `MarkdownCard.kt` /
+> **Compose consumer also verified (visuals v1, 2026-05-26):** wandr-app
+> installed via the installer path (new `wandr-app/wit/` defines a world
+> `wandr:app/wandr-app` that `include`s `my:skiko-gfx/skiko-ui` and
+> imports `wandr:markdown/renderer@0.1.0`), new `MarkdownCard.kt` /
 > `MarkdownImports.kt` call `render()` once at composition time.
-> `wart-host --standalone --app com.example.wart-app` rendered:
+> `wandr-host --standalone --app com.example.wandr-app` rendered:
 > ```
 > [wasm] markdown-card: render() → 5 blocks parsed by external component ✓
 > ```
@@ -127,7 +127,7 @@ When A imports `acme:notes/store` and B exports it, where does B
 | Mode | A and B share | Wiring | Crash domain |
 |---|---|---|---|
 | **Same Store (library-like)** | One wasmtime `Store<HostState>`; one GC heap; one HostState | Linker composes B's exports → A's imports at instantiation time. Resource handles pass directly. | A and B die together. One's panic / OOM hits the other. |
-| **Separate Store (service-like)** | Same wart-host process; separate `Store`s; separate GC heaps; separate HostStates | Host provides A a *proxy* implementation of B's WIT that marshals calls (and resources) across Stores via channels / `Mutex`. B has its own render loop / event loop. | Independent: B can panic without killing A. |
+| **Separate Store (service-like)** | Same wandr-host process; separate `Store`s; separate GC heaps; separate HostStates | Host provides A a *proxy* implementation of B's WIT that marshals calls (and resources) across Stores via channels / `Mutex`. B has its own render loop / event loop. | Independent: B can panic without killing A. |
 | **Separate process (Hybrid future)** | Different OS processes (Hybrid/zygote per §9). | Host provides a proxy that marshals over binder. | Full OS isolation; oom-killer can take one without the other. |
 
 Concretely:
@@ -149,13 +149,13 @@ The user's "system components that can be resolved runtime" splits
 cleanly into two:
 
 1. **Host-provided WIT (what we have today).** Implemented in the
-   wart-host Rust binary; bound into every Linker via
+   wandr-host Rust binary; bound into every Linker via
    `add_to_linker_sync` / `SkikoUi::add_to_linker`. Examples:
    `my:skiko-gfx/*`, lifecycle, clipboard, scheduler, haptics, audio,
    sensors, power, thermal. Always available; updated with the host.
 2. **Runtime-bundled components.** `.wasm` files shipped *with* the
-   wart-host install — pre-installed under
-   `/data/wart/system-apps/<id>/<v>/`. Same install layout as a
+   wandr-host install — pre-installed under
+   `/data/wandr/system-apps/<id>/<v>/`. Same install layout as a
    regular app (§7.1b), but installed atomically with the runtime
    itself (not by a user). Useful for things that don't have to be
    native Rust — emoji-shaper, settings-store, notification-center,
@@ -166,7 +166,7 @@ These are the same to the *consumer*: both just appear as
 `Linker::instance("acme:notes/store")` from A's point of view.
 Different to the *installer*: host-WIT is always satisfiable;
 runtime-bundled is checked against the system-apps registry; user-app
-deps are checked against `/data/wart/apps/`.
+deps are checked against `/data/wandr/apps/`.
 
 ## Manifest extension — `[dependencies]`
 
@@ -175,16 +175,16 @@ deps are checked against `/data/wart/apps/`.
 name    = "com.acme.editor"
 version = "2.0.0"
 entry   = "ui"
-world   = "war:app/main@1.0.0"
+world   = "wandr:app/main@1.0.0"
 
 [dependencies]
-# A user app this installer must find under /data/wart/apps/. Refuse install
+# A user app this installer must find under /data/wandr/apps/. Refuse install
 # if absent. Compose at install time (or first launch — see §Cache).
 notes-store = { app = "com.acme.notes", version = "^1.0", interface = "acme:notes/store" }
 
 # A runtime-bundled system component. Same lookup, different root:
-# /data/wart/system-apps/.
-emoji = { system = "war:emoji/shaper", version = "*", interface = "war:emoji/shaper" }
+# /data/wandr/system-apps/.
+emoji = { system = "wandr:emoji/shaper", version = "*", interface = "wandr:emoji/shaper" }
 
 # A host-provided WIT. Optional to list — every world implicitly imports
 # host WIT — but useful for explicit version pinning.
@@ -196,7 +196,7 @@ ui = { path = "components/ui.wasm" }
 
 The installer's resolver walks `[dependencies]`, resolves each to a
 concrete `.wasm` (host-provided is a no-op; system-bundled looks up
-`/data/wart/system-apps/`; app-typed looks up `/data/wart/apps/`),
+`/data/wandr/system-apps/`; app-typed looks up `/data/wandr/apps/`),
 and either generates a `link.wac` or composes at load time via the
 Linker.
 
@@ -206,9 +206,9 @@ Linker.
 for each dep in package.dependencies:
     match dep.kind:
         host:   assert runtime offers WIT @ version; record in cache-key
-        system: locate /data/wart/system-apps/<dep.system>/<resolved-version>/
+        system: locate /data/wandr/system-apps/<dep.system>/<resolved-version>/
                 ensure installed; refuse if missing
-        app:    locate /data/wart/apps/<dep.app>/<resolved-version>/
+        app:    locate /data/wandr/apps/<dep.app>/<resolved-version>/
                 ensure installed; refuse if missing
                 determine composition mode (from dep's package.toml)
 
@@ -241,7 +241,7 @@ engine_config_hash = "sha256:…"
 ui = { wasm_sha256 = "…", cwasm_sha256 = "…" }
 [dependencies_resolved]
 notes-store = { kind = "app",    app = "com.acme.notes",      version = "1.4.2", wasm_sha256 = "…" }
-emoji       = { kind = "system", id  = "war:emoji/shaper",    version = "0.9.1", wasm_sha256 = "…" }
+emoji       = { kind = "system", id  = "wandr:emoji/shaper",    version = "0.9.1", wasm_sha256 = "…" }
 haptics     = { kind = "host",   wit = "my:skiko-gfx/haptics", version = "1" }
 ```
 
@@ -298,8 +298,8 @@ proceed without it.
 
 ## How this layers on `tasks/35-app-install.md`
 
-Task 35 (single-app install) shipped 2026-05-26 — `WartInstaller` +
-`WartLoader` + on-device AOT cache + drift self-heal are all live and
+Task 35 (single-app install) shipped 2026-05-26 — `WandrInstaller` +
+`WandrLoader` + on-device AOT cache + drift self-heal are all live and
 device-verified. Task 36 extends that surface incrementally:
 
 1. **Task 35** (done): installer + loader, single-app, no deps.
@@ -309,8 +309,8 @@ device-verified. Task 36 extends that surface incrementally:
    host-proxy generator for separate-Store deps; cache-key extension.
 
 System-component bundling (runtime-bundled `.wasm`s shipped with
-wart-host) is a separable third task — needs build-time tooling to
-package them into wart-host's installed asset set. Out of scope of
+wandr-host) is a separable third task — needs build-time tooling to
+package them into wandr-host's installed asset set. Out of scope of
 this doc.
 
 ## Composition strategy — Q6 resolved 2026-05-26
@@ -324,9 +324,9 @@ author is forced to think. Consumers cannot override.
 ```toml
 # producer (markdown-renderer's package.toml):
 [package]
-name        = "war:markdown/renderer"
+name        = "wandr:markdown/renderer"
 version     = "0.1.0"
-world       = "war:markdown/renderer-world"
+world       = "wandr:markdown/renderer-world"
 composition = "same-store"   # required; "same-store" | "separate-store"
 ```
 
@@ -339,24 +339,24 @@ alongside the first real use sidesteps that.
 
 Now that Q6 is settled and the driver is the markdown renderer, the
 work breaks into seven steps. End-to-end goal: a tiny smoke consumer
-imports `war:markdown/renderer` and calls its `render` export at
+imports `wandr:markdown/renderer` and calls its `render` export at
 startup; output reaches WASI stderr via logcat.
 
 | # | What | New files / surface |
 |---|---|---|
 | 1 | **WIT contract** — `wit/markdown.wit` defines `world renderer-world` with one export interface `markdown { render: func(source: string) -> document; ... }`. `document = record { blocks: list<block> }`, `block = variant { paragraph(list<inline>), heading(heading-block), code-block(code-block), list(...), quote, rule }`. Compose-friendly shape (drops into LazyColumn). | `wit/markdown.wit` |
-| 2 | **Renderer component** — Rust crate; `comrak` parser → WIT document; exports `markdown`. Builds to `markdown-renderer.wasm` (target `wasm32-wasip2`). Standalone-testable via `wasmtime run`. | `markdown-renderer/` (new Rust crate; sibling of `wart-host/`) |
-| 3 | **Manifest schema extension** — extend `app_installer`'s `parse_manifest` to read `[package].composition` (required for system components) and `[dependencies]` table (three flavours: host / system / app). Validation: reject if producer omits `composition`; reject if a dep uses a flavour the installer can't resolve. | `wart-host/src/app_installer.rs` |
-| 4 | **Installer resolver** — walk `[dependencies]`, for each dep locate `<root>/{system-apps,apps}/<id>/<resolved-version>/` (refuse install if missing), record dep's wasm sha256 + resolved-version in `cache-key.toml`'s new `[dependencies_resolved]` section. Add a `--root system\|user` CLI flag (or `kind = "system"` in package.toml) so the installer writes system bundles under `/data/wart/system-apps/`. | `wart-host/src/app_installer.rs`, `wart-host/src/main.rs` |
-| 5 | **Loader composition** — `WartLoader::load_installed` reads `[dependencies_resolved]`, looks up each dep's cwasm, loads them all into the same `Store`, wires dep exports → consumer imports via `Linker::instance(name)`. Single composition mode for this iteration: **same-Store** (which is what markdown declares). | `wart-host/src/app_loader.rs` |
-| 6 | **Smoke consumer** — `wart-app-md-smoke/`: tiny Kotlin/Wasm app that imports `markdown.render`, calls it once at startup with a hardcoded source, prints the document via WASI stderr. No Compose UI; just validates dep resolution + same-Store composition. | `wart-app-md-smoke/` (new; sibling of `wart-app/`) |
-| 7 | **Device smoke** — install markdown system-bundle, install smoke consumer (which declares `dependencies.markdown = { system = "war:markdown/renderer", … }`), run `wart-host --standalone --app com.example.md-smoke`, observe logcat for "loaded installed:…" + the rendered document printed. | `scripts/smoke-markdown.sh` |
+| 2 | **Renderer component** — Rust crate; `comrak` parser → WIT document; exports `markdown`. Builds to `markdown-renderer.wasm` (target `wasm32-wasip2`). Standalone-testable via `wasmtime run`. | `markdown-renderer/` (new Rust crate; sibling of `wandr-host/`) |
+| 3 | **Manifest schema extension** — extend `app_installer`'s `parse_manifest` to read `[package].composition` (required for system components) and `[dependencies]` table (three flavours: host / system / app). Validation: reject if producer omits `composition`; reject if a dep uses a flavour the installer can't resolve. | `wandr-host/src/app_installer.rs` |
+| 4 | **Installer resolver** — walk `[dependencies]`, for each dep locate `<root>/{system-apps,apps}/<id>/<resolved-version>/` (refuse install if missing), record dep's wasm sha256 + resolved-version in `cache-key.toml`'s new `[dependencies_resolved]` section. Add a `--root system\|user` CLI flag (or `kind = "system"` in package.toml) so the installer writes system bundles under `/data/wandr/system-apps/`. | `wandr-host/src/app_installer.rs`, `wandr-host/src/main.rs` |
+| 5 | **Loader composition** — `WandrLoader::load_installed` reads `[dependencies_resolved]`, looks up each dep's cwasm, loads them all into the same `Store`, wires dep exports → consumer imports via `Linker::instance(name)`. Single composition mode for this iteration: **same-Store** (which is what markdown declares). | `wandr-host/src/app_loader.rs` |
+| 6 | **Smoke consumer** — `wandr-app-md-smoke/`: tiny Kotlin/Wasm app that imports `markdown.render`, calls it once at startup with a hardcoded source, prints the document via WASI stderr. No Compose UI; just validates dep resolution + same-Store composition. | `wandr-app-md-smoke/` (new; sibling of `wandr-app/`) |
+| 7 | **Device smoke** — install markdown system-bundle, install smoke consumer (which declares `dependencies.markdown = { system = "wandr:markdown/renderer", … }`), run `wandr-host --standalone --app com.example.md-smoke`, observe logcat for "loaded installed:…" + the rendered document printed. | `scripts/smoke-markdown.sh` |
 
 Out of scope this iteration (each could be a follow-up task):
 - **Separate-Store mode + host-proxy generator** — wait until a
   service-shaped dep (e.g. notes store) actually exists.
 - **System-component bundling** (shipping `markdown-renderer.wasm` *with*
-  wart-host's APK / standalone install rather than via separate `--install`).
+  wandr-host's APK / standalone install rather than via separate `--install`).
 - **Multi-version coexistence** in one consumer (A wants B@1 AND B@2).
 - **Reverse-dep tracking** for uninstall safety.
 
@@ -371,7 +371,7 @@ Pre-implementation gates closed 2026-05-26:
 - Driver chosen — markdown renderer (system-bundled, library-like,
   same-Store) ✓
 - WIT return shape chosen — structured spans record ✓
-- Smoke-consumer shape — tiny new `wart-app-md-smoke/` (WASI-stderr only,
+- Smoke-consumer shape — tiny new `wandr-app-md-smoke/` (WASI-stderr only,
   no Compose UI) ✓
 
 **Next chunk:** step 1 in the implementation-plan table above — author

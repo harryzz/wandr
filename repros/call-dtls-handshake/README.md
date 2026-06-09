@@ -29,7 +29,7 @@ of the public `rtc_shared::crypto::KeyingMaterialExporter` trait (just import it
 [dtls] SRTP protect/unprotect with the DTLS-derived keys: OK (33→43 bytes)
 DTLS-SRTP OK
 ```
-Device run via `wart-host --run-once war.probe.dtls` (Pixel 2 XL). The full DTLS
+Device run via `wandr-host --run-once wandr.probe.dtls` (Pixel 2 XL). The full DTLS
 crypto — ECDHE, certificate sign/verify, the PRF — runs on aarch64. Keys differ
 each run (fresh ephemeral handshake), as they should.
 
@@ -37,8 +37,8 @@ each run (fresh ephemeral handshake), as they should.
 ```bash
 cargo build --target wasm32-wasip2 --release
 wasmtime run target/wasm32-wasip2/release/call-dtls-handshake.wasm   # desktop
-# device: package as wasi:cli/command warpkg (war.probe.dtls), then
-wart-host --run-once war.probe.dtls
+# device: package as wasi:cli/command wandrpkg (wandr.probe.dtls), then
+wandr-host --run-once wandr.probe.dtls
 ```
 
 ## Where this sits — the 3-plane assembly

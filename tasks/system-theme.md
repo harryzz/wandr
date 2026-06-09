@@ -1,6 +1,6 @@
 # System theme — Compose MaterialTheme follows Android night-mode
 
-> **Status:** ✅ device-verified 2026-05-26. wart-app's MaterialTheme
+> **Status:** ✅ device-verified 2026-05-26. wandr-app's MaterialTheme
 > branches dark/light at composition time based on the host's
 > `my:skiko-gfx/theme.get-night-mode` (backed by `cmd uimode night`).
 > No clipboard companion — that's task 42, deferred.
@@ -12,12 +12,12 @@ Tiny-WIT addition + small Compose plumbing:
 - `wit/skiko-gfx.wit` — new `interface theme { get-night-mode -> enum
   { auto, off, on }; get-accent-color -> u32 }`. Added to skiko-ui
   world.
-- `wart-host/src/theme_impl.rs` (new, ~50 LoC) — `impl Host for HostState`
+- `wandr-host/src/theme_impl.rs` (new, ~50 LoC) — `impl Host for HostState`
   shells out to `cmd uimode night`, parses "yes"/"no"/"auto".
   Accent returns 0 (Pixel 2 XL is pre-Material-You; defer).
-- `wart-app/src/wasmWasiMain/kotlin/ThemeImports.kt` (new, ~30 LoC) —
+- `wandr-app/src/wasmWasiMain/kotlin/ThemeImports.kt` (new, ~30 LoC) —
   hand-written Kotlin bindings.
-- `wart-app/src/wasmWasiMain/kotlin/RealComposeApp.kt` — replaces
+- `wandr-app/src/wasmWasiMain/kotlin/RealComposeApp.kt` — replaces
   hardcoded `MaterialTheme(colorScheme = darkColorScheme())` with a
   `remember` block reading night-mode + picking dark/light scheme.
   Auto → dark (historical default).

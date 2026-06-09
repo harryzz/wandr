@@ -4,7 +4,7 @@
 > thing `system_server` does that's missing under `--no-art`; the last (Layer 4)
 > was the missing `permission` binder. See "Layer 4 — RESOLVED" below.
 > Follow-on to task 85 (ART-off sensors) / 86 (ART-off auto-brightness) / the
-> ART-off audio-stub work (`wart-activityms`). Detail + history:
+> ART-off audio-stub work (`wandr-activityms`). Detail + history:
 > `[[project-artless-audio]]`. Written as a fresh-head handoff — everything needed
 > to resume is here; you should NOT have to re-derive the chain below.
 
@@ -29,10 +29,10 @@ the vendor HAL) survives and is fine.
 
 | Layer | Symptom when missing | Fix | State |
 |---|---|---|---|
-| 1. `activity` / `sensor_privacy` binders | audioserver wedges in init, `media.audio_*` never register | `wart-activityms` stub (C++/libbinder, a-03) | ✅ shipped (pre-87) |
+| 1. `activity` / `sensor_privacy` binders | audioserver wedges in init, `media.audio_*` never register | `wandr-activityms` stub (C++/libbinder, a-03) | ✅ shipped (pre-87) |
 | 2. stream volume init | policy volume range `-1`, every stream `-inf dB` | `audio_policy_impl::init_audio_policy()` (Rust) | ✅ this task |
-| 3. `scheduling_policy` binder | `Command 6 REGISTER_AUDIO_THREAD` infinite-loops → stream never `STARTED` | add to `wart-activityms` generics[] | ✅ this task |
-| 4. **stream actually starts the PCM** | reaches `STARTED` but `Command 7` times out, MMAP PCM not RUNNING, `QUAT_MI2S_RX` Off → **SILENT** | `permission` (`IPermissionController`) binder stub in `wart-activityms` | ✅ this task |
+| 3. `scheduling_policy` binder | `Command 6 REGISTER_AUDIO_THREAD` infinite-loops → stream never `STARTED` | add to `wandr-activityms` generics[] | ✅ this task |
+| 4. **stream actually starts the PCM** | reaches `STARTED` but `Command 7` times out, MMAP PCM not RUNNING, `QUAT_MI2S_RX` Off → **SILENT** | `permission` (`IPermissionController`) binder stub in `wandr-activityms` | ✅ this task |
 
 ---
 
@@ -51,8 +51,8 @@ audioserver command thread inside START_CLIENT**, so the host's `startStream`
 `"Waiting for permission service"` / `"Waiting too long … giving up"` ×N during a tone.
 
 **Fix:** add a 4th generic stub binder — `{"permission",
-"android.os.IPermissionController"}` — to `wart-activityms` `generics[]`
-(`runtime/wart-activityms/cpp/wart_activityms.cpp`), alongside `activity` /
+"android.os.IPermissionController"}` — to `wandr-activityms` `generics[]`
+(`runtime/wandr-activityms/cpp/wandr_activityms.cpp`), alongside `activity` /
 `sensor_privacy` / `scheduling_policy`. Registering any binder makes
 `checkService("permission")` return instantly (no block); `GenericStub`'s
 `writeNoException()+writeInt32(0)` decodes as `getPackagesForUid`'s empty
@@ -71,20 +71,20 @@ a-03 (ninja-direct the soong intermediate — source-only change), redeployed.
 - *"Could not set MMAP stream volume: no volume callback!"* — appears under **ART-up
   too** (where audio is audible), so it's an irrelevant symptom, not the cause. The
   `MmapStreamCallback` is the in-process `AAudioServiceEndpointMMAP` (passes `this`),
-  not anything `system_server` registers — nothing for wart to supply.
+  not anything `system_server` registers — nothing for wandr to supply.
 
 ---
 
 ## What is DONE + device-verified (do not redo)
 
 ### Layer 2 — native volume init (Rust)
-`runtime/wart-host/src/audio_policy_impl.rs::init_audio_policy()` replicates the
+`runtime/wandr-host/src/audio_policy_impl.rs::init_audio_policy()` replicates the
 slice of `AudioService.onReinitVolumes()` we need: for the 12 public streams,
 `initStreamVolume(stream, MIN, MAX)` (values copied verbatim from
 `AudioService.MIN_/MAX_STREAM_VOLUME`) + `setStreamVolumeIndex` per device
 (`OUT_DEFAULT/SPEAKER/EARPIECE/HEADPHONE/HEADSET`; MUSIC full-scale, rest ~80%) +
 `setPhoneState(NORMAL)` + `setForceUse(COMMUNICATION, NONE)`.
-- CLI: `wart-host --init-audio-policy` (`main.rs`). Needs
+- CLI: `wandr-host --init-audio-policy` (`main.rs`). Needs
   `LD_LIBRARY_PATH=/data/local/tmp` or libc++_shared.so won't link.
 - Wired into `run-hybrid-stack.sh` right after `media.audio_policy` registers.
 - VERIFIED: speaker volume range went `[-1..-1]` → `[0..15]` idx 15, and the
@@ -92,23 +92,23 @@ slice of `AudioService.onReinitVolumes()` we need: for the 12 public streams,
 
 ### Layer 3 — `scheduling_policy` stub (C++, a-03)
 Added `{"scheduling_policy","android.os.ISchedulingPolicyService"}` to
-`runtime/wart-activityms/cpp/wart_activityms.cpp` `generics[]`. The existing
+`runtime/wandr-activityms/cpp/wandr_activityms.cpp` `generics[]`. The existing
 `GenericStub` replies `writeNoException()+writeInt32(0)` — exactly what
 `BpSchedulingPolicyService::requestPriority` reads (`readExceptionCode()==0`,
 `readInt32()`→0 = `NO_ERROR`; `REQUEST_PRIORITY_TRANSACTION=FIRST_CALL=1`, non-oneway).
 - Built on a-03 ninja-direct (source-only change, no `.bp` edit):
   `prebuilts/build-tools/linux-x86/bin/ninja -f out/combined-aosp_arm64.ninja
-  out/soong/.intermediates/external/wart-activityms/wart-activityms/android_arm64_armv8-a/wart-activityms`
-  then `scp` back to `runtime/wart-activityms/cpp/wart-activityms`.
+  out/soong/.intermediates/external/wandr-activityms/wandr-activityms/android_arm64_armv8-a/wandr-activityms`
+  then `scp` back to `runtime/wandr-activityms/cpp/wandr-activityms`.
 - VERIFIED: `scheduling_policy: []` registers; **the `Command 6` infinite-loop is
   gone** — the AAudio stream now advances `START→REGISTER→START_CLIENT→setState→4
   (STARTED)`, which it NEVER reached before.
 
 ### Diagnostic tooling added this task
-- `wart-host --play-tone [ms] [hz] [vol]` — standalone tone via the *exact* host
+- `wandr-host --play-tone [ms] [hz] [vol]` — standalone tone via the *exact* host
   `media.aaudio` MMAP path; used for the ART-up vs `--no-art` A/B (no arbiter needed,
   so it runs under ART-up too).
-- `wart-arbiter play-tone [pid|app] [ms] [hz] [vol]` — arbiter→host tone (target
+- `wandr-arbiter play-tone [pid|app] [ms] [hz] [vol]` — arbiter→host tone (target
   optional, defaults to foreground host).
 - Cross-built `tinymix` (from github.com/tinyalsa, NDK clang, dynamic + `-ldl`) at
   `/data/local/tmp/tinymix` for live ALSA-mixer inspection.
@@ -182,9 +182,9 @@ bash tools/scripts/run-hybrid-stack.sh --restore-art      # then wait for boot
 bash tools/scripts/run-hybrid-stack.sh --no-art
 
 # play the host's exact MMAP path, 30s so it survives the ~20s MMAP cold-start
-adb shell 'su -c "/data/local/tmp/wart-arbiter unlock"'
-adb shell 'su -c "/data/local/tmp/wart-arbiter foreground war.launcher"'
-adb shell 'su -c "/data/local/tmp/wart-arbiter play-tone war.launcher 30000 440 0.6"' &
+adb shell 'su -c "/data/local/tmp/wandr-arbiter unlock"'
+adb shell 'su -c "/data/local/tmp/wandr-arbiter foreground wandr.launcher"'
+adb shell 'su -c "/data/local/tmp/wandr-arbiter play-tone wandr.launcher 30000 440 0.6"' &
 sleep 24      # MUST wait past cold-start, then check DURING the playing window
 
 # did the route + PCM come up?  (the pass/fail signal)
@@ -210,7 +210,7 @@ during a tone, and the user CONFIRMS they hear it (audible output needs the user
 Same host Rust code, same `media.aaudio` MMAP path in both modes. Under ART-up,
 `AudioService` (Java, `system_server`) supplies the orchestration: stream volume init,
 `scheduling_policy` for thread-priority boosts, the MMAP volume callback, etc. Under
-`--no-art` those are gone; we re-supply them natively (the wart pattern). So "fix" =
+`--no-art` those are gone; we re-supply them natively (the wandr pattern). So "fix" =
 keep finding the specific native calls/services `AudioService` provides for the MMAP
 *start* path and replicate them — NOT rewrite to the AudioTrack path and NOT a bigger
 device/routing init (the audio_policy device config + the 6 output→SPEAKER patches are
@@ -253,5 +253,5 @@ already IDENTICAL to ART-up under `--no-art`; verified via `dumpsys media.audio_
 - Don't thrash the device — read the source path before each new probe
   (`[[feedback_read_source_first]]`). The A/B (ART-up vs `--no-art` diff) is the
   high-signal tool; use it.
-- a-03 rebuild of `wart-activityms` only needed if you change the C++ stub; the
+- a-03 rebuild of `wandr-activityms` only needed if you change the C++ stub; the
   Layer-4 hypotheses (1)/(2) are host-Rust-only (no a-03).

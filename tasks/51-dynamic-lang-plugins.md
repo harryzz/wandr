@@ -3,18 +3,18 @@
 > Status: 🔲 scoped, not started — 2026-05-28
 >
 > Polish follow-up to task 49 step 5. Removes the IME's hardcoded
-> plugin registry; new languages drop in as `war.lang.<id>.warpkg`
+> plugin registry; new languages drop in as `wandr.lang.<id>.wandrpkg`
 > with zero IME-side changes.
 
 ## Why
 
 Task 49 step 5 shipped per-plugin WIT package names because two
-deps cannot share a `linker.instance(name)` entry in wart-host's
+deps cannot share a `linker.instance(name)` entry in wandr-host's
 `wire_dep_into_linker`. The cost: the IME hard-codes its known
 plugins in `LangAdapter.kt` (one `@WasmImport` block per plugin,
 one entry in the static `plugins: List<Loader>` registry). Adding
 a new language requires editing the IME *and* re-shipping its
-warpkg.
+wandrpkg.
 
 Goal: invert the relationship. The IME asks the host for the list
 of installed lang plugins; the host enumerates them and proxies
@@ -22,7 +22,7 @@ the calls. New languages install + work without touching the IME.
 
 ## Design (sketch)
 
-**Host side** (`wart-host`):
+**Host side** (`wandr-host`):
 - New WIT verbs on the existing `my:skiko-gfx/keyboard` interface
   (or a new `my:skiko-gfx/lang-plugins` interface):
   ```wit
@@ -38,7 +38,7 @@ the calls. New languages install + work without touching the IME.
   get-lang-layout: func(lang-id: string, shifted: bool)
       -> list<list<key-def>>;
   ```
-- Host startup scans `<APPS_ROOT>/system-apps/war.lang.*/`. For
+- Host startup scans `<APPS_ROOT>/system-apps/wandr.lang.*/`. For
   each, eagerly `Engine::deserialize_file` the cwasm + cache
   `wasmtime::component::Instance` + the two `Func` handles
   (`get-info`, `get-layout`). Map keyed by lang-id.
@@ -48,7 +48,7 @@ the calls. New languages install + work without touching the IME.
   layout-variant out of the dep's linear memory, and re-lowers it
   into the consumer's typed return area.
 
-**IME side** (`war.ime.keyboard`):
+**IME side** (`wandr.ime.keyboard`):
 - `LangAdapter.kt` collapses to ~30 LoC: one `@WasmImport` for
   each new host verb; one `loadAllLangPlugins()` that calls
   `enumerate-lang-plugins`, then for each id calls
@@ -58,10 +58,10 @@ the calls. New languages install + work without touching the IME.
 - `[dependencies]` block in `package.toml` deleted (host owns
   plugin lifecycle, not the IME's installer manifest).
 
-**Plugin contract** (war.lang.\*):
-- Each plugin still exports `war:keyboard-lang-<id>/lang@0.1.0`
+**Plugin contract** (wandr.lang.\*):
+- Each plugin still exports `wandr:keyboard-lang-<id>/lang@0.1.0`
   (the per-plugin package convention stays — keeps the contract
-  visible at the warpkg layer + makes plugins individually
+  visible at the wandrpkg layer + makes plugins individually
   introspectable with `wasm-tools component wit`).
 - The HOST is responsible for instantiating each plugin into its
   own `Store` and calling its exports; the IME no longer directly
@@ -89,15 +89,15 @@ the calls. New languages install + work without touching the IME.
 
 ## Steps
 
-1. **Host scan.** New `wart-host/src/lang_plugins.rs` —
-   directory-scan of `<APPS_ROOT>/system-apps/war.lang.*/0.1.0/cache/lang.cwasm`,
+1. **Host scan.** New `wandr-host/src/lang_plugins.rs` —
+   directory-scan of `<APPS_ROOT>/system-apps/wandr.lang.*/0.1.0/cache/lang.cwasm`,
    `Engine::deserialize_file` per plugin, store
    `Vec<{ id, instance, get_info_func, get_layout_func }>` in a
    `HostState` field.
 2. **New WIT verbs.** Add `enumerate-lang-plugins` +
    `get-lang-layout` to `wit/skiko-gfx.wit` under a new
-   `interface lang-plugins`. Mirror to wart-app/IME deps.
-3. **Host impl.** `wart-host/src/lang_plugins_impl.rs` — proxy
+   `interface lang-plugins`. Mirror to wandr-app/IME deps.
+3. **Host impl.** `wandr-host/src/lang_plugins_impl.rs` — proxy
    `get-lang-layout(id, shifted)` to the cached Func, lift +
    re-lower the layout-variant. Use wasmtime typed function APIs
    (define a local Rust struct matching the lang-variant shape
@@ -109,7 +109,7 @@ the calls. New languages install + work without touching the IME.
    `package.toml` `[dependencies]` block removed.
 5. **Smoke.** Install bg + fr as before, IME picks them up via
    the new host enumeration. Add a third throwaway plugin
-   (war.lang.de mock) to prove zero-touch: install warpkg,
+   (wandr.lang.de mock) to prove zero-touch: install wandrpkg,
    IME shows German on next launch with no code change.
 
 ## Estimated effort
@@ -127,5 +127,5 @@ Wait until:
   `feedback_wasi_cabi_realloc_export_block`) becomes more pressing
   and we want to retire the hand-written Kotlin canonical-ABI
   lifts in `LangAdapter.kt`, OR
-- Distributing wart externally — third-party language plugins
+- Distributing wandr externally — third-party language plugins
   shouldn't require shipping a custom IME build.

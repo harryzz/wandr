@@ -1,14 +1,14 @@
-# Scope: Camera + Codec2 on wart
+# Scope: Camera + Codec2 on wandr
 
 > Preparatory analysis, not yet a numbered task. Written 2026-05-17 with
 > device-confirmed service shapes from a live Pixel 2 XL (LineageOS,
-> Android 15 / API 35 base). Captures whether wart's existing rsbinder
+> Android 15 / API 35 base). Captures whether wandr's existing rsbinder
 > pipeline + the task-21 primitives extend to camera and video codec
 > work, and at what cost.
 >
 > The "primitives" referenced throughout are A2
-> (`wart-host/src/binder_shared_memory.rs`) and A3
-> (`wart-host/src/eventfd_signal.rs`) from task 21.
+> (`wandr-host/src/binder_shared_memory.rs`) and A3
+> (`wandr-host/src/eventfd_signal.rs`) from task 21.
 
 ## Device probe (Pixel 2 XL, 2026-05-17)
 
@@ -48,9 +48,9 @@ only camera HAL declared on this device.
 
 **The vendor HAL being HIDL-only is not our problem.** CameraService
 (`media.camera`) is stable AIDL on this device and bridges to the
-HIDL HAL internally. wart-host talks to `media.camera` via rsbinder
+HIDL HAL internally. wandr-host talks to `media.camera` via rsbinder
 exactly the same way task 21 talked to `media.aaudio` — no HIDL
-plumbing in wart.
+plumbing in wandr.
 
 Permissions: `android.permission.CAMERA` is runtime-prompted, NOT a
 SELinux-only check. We'd declare it in `Cargo.toml` and either survive
@@ -163,7 +163,7 @@ frames`). Lighter than camera because:
    buffer transport. The primitive's shape is right.
 
 3. **Both services reach us via stable AIDL.** No HIDL plumbing in
-   wart for either, despite the vendor camera HAL being HIDL-only
+   wandr for either, despite the vendor camera HAL being HIDL-only
    on this device. The HIDL boundary is internal to CameraService
    and Codec2 broker.
 
@@ -192,7 +192,7 @@ spike, not architecture unblockers.
 
 - Do we want to extend our WIT surface with `camera` and `codec2`
   interfaces at all? They're orthogonal to "replace ART", and a
-  Compose app on wart can ship perfectly well with no camera or
+  Compose app on wandr can ship perfectly well with no camera or
   video-decode access for v1.
 - If yes, which first? See recommendation above; codec2 is
   technically easier, camera is more user-visible.

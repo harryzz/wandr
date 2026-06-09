@@ -30,11 +30,11 @@ and the skiko wasmWasiMain file map. Read for canvas_impl / skiko / rendering wo
 ## Architecture: how the layers connect
 
 ```
-Kotlin wart-app (wasmWasiMain)
+Kotlin wandr-app (wasmWasiMain)
   └─ calls: org.jetbrains.skia.Canvas / Paint / Path / Shader / ...
        └─ WasiCanvas.kt delegates to → WIT imports (generated/SkikoUi.kt)
             └─ WIT interface: wit/skiko-gfx.wit
-                 └─ Rust host: runtime/wart-host/src/canvas_impl.rs implements WIT trait
+                 └─ Rust host: runtime/wandr-host/src/canvas_impl.rs implements WIT trait
                       └─ calls: skia_safe::Canvas / Paint / Path / Shader / ...
 ```
 

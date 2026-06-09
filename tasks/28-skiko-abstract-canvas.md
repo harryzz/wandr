@@ -7,7 +7,7 @@
 > visible). DatePicker renders + swipe + year-pick all work; chevron
 > `< >` taps are blocked by an orthogonal Material3 TooltipBox bug on
 > wasi — bisected to `feedback_tooltip_sigill_wasi` and NOT a task 28
-> regression. Smoke card in wart-app exercises all 30+ bc-* verbs at
+> regression. Smoke card in wandr-app exercises all 30+ bc-* verbs at
 > cold start. Earlier sections of this doc are the original scoping
 > plan; the implementation is summarised under "Closeout (2026-05-19)"
 > at the bottom.
@@ -35,7 +35,7 @@
 >   Compose layers. Partly explains why we got away without
 >   implementing the main canvas's `translate/scale/rotate` for so
 >   long.
-> - `wart-host/src/canvas_impl.rs` — Rust host implementation of
+> - `wandr-host/src/canvas_impl.rs` — Rust host implementation of
 >   the main canvas WIT. The intermediate canvases this task adds
 >   will need parallel host-side state.
 > - `tasks/18-compose-haptic-adapter.md` — "Widgets that hit
@@ -187,7 +187,7 @@ accepts it.
 
 ### Step 2 — Host-side implementation (~2 days)
 
-In `wart-host/src/canvas_impl.rs`:
+In `wandr-host/src/canvas_impl.rs`:
 - New `intermediate_canvases: HashMap<u32, IntermediateCanvas>`
   on `HostState`
 - `IntermediateCanvas` enum:
@@ -266,9 +266,9 @@ showing the same `intermediate_canvases.len()` as cold start
 
 - Commit skiko changes (WIT mirror + SkiaTypes wiring +
   generated bindings).
-- Commit wart-host changes (canvas_impl extensions, ResourceTable
+- Commit wandr-host changes (canvas_impl extensions, ResourceTable
   entries).
-- Commit wart-app changes (re-enable DatePicker /
+- Commit wandr-app changes (re-enable DatePicker /
   SegmentedButton, smoke test for both).
 - Update `feedback_canvas_stub_noop_traps` memory: "RESOLVED
   YYYY-MM-DD — proper save/restore plumbing landed via task 28."
@@ -304,7 +304,7 @@ showing the same `intermediate_canvases.len()` as cold start
   those are independent and don't need this task to land first.
 - `ComponentSupport.MALLOC` (the `TODO()` at line 28 of
   `skiko/skiko/src/wasmWasiMain/kotlin/generated/ComponentSupport.kt`)
-  — separate component-model concern; matters only if wart-app is
+  — separate component-model concern; matters only if wandr-app is
   ever called *as* a component (we're currently the embedder, not
   embedded). Defer indefinitely.
 
@@ -346,7 +346,7 @@ showing the same `intermediate_canvases.len()` as cold start
 - [ ] All 42 stubs in `SkiaTypes.wasi.kt`'s `Canvas` no longer
       throw — either real impl or explicit deferral comment
 - [ ] DatePicker re-enabled in
-      `wart-app/src/wasmWasiMain/kotlin/RealComposeApp.kt`,
+      `wandr-app/src/wasmWasiMain/kotlin/RealComposeApp.kt`,
       renders cold-start without crash
 - [ ] SegmentedButton re-enabled, renders, click works
 - [ ] TimePicker tested (will likely need testing alongside above)
@@ -618,7 +618,7 @@ Canvas — caught zero signature mismatches at device-verify time.
   `bitmap-canvas-snapshot`) + 35 `bc-*` forwarding verbs covering every
   open method on `org.jetbrains.skia.Canvas`. New `clip-mode` enum.
   Mirrored byte-identically to `skiko/skiko/wit/skiko-gfx.wit`.
-- **Host (`wart-host/src/canvas_impl.rs`):** `bitmap_canvases: HashMap<
+- **Host (`wandr-host/src/canvas_impl.rs`):** `bitmap_canvases: HashMap<
   u32, Surface>` + LRU `VecDeque` with a soft cap of 128 surfaces, since
   Compose never calls `Canvas.close` on wasi (would otherwise leak host
   memory; in practice the steady state is ≤4 surfaces for the current
@@ -651,7 +651,7 @@ Canvas — caught zero signature mismatches at device-verify time.
   `drawVertices` (no-op). `witAttrs()` Paint helper made `internal` so
   `SkiaTypes.wasi.kt`'s base Canvas can use it for bitmap-canvas
   dispatch.
-- **wart-app:** `Task28SmokeCard` exercises every bc-* method on a
+- **wandr-app:** `Task28SmokeCard` exercises every bc-* method on a
   32×32 bitmap-backed Canvas at composition time, with a runCatching
   wrapper that reports per-method status as text — a signature mismatch
   surfaces as a FAIL line, not a SIGILL. `ChevronBisectCard` (Layers
@@ -707,14 +707,14 @@ demo so the bug stays visible.
 ```
 wit/skiko-gfx.wit                                              +38 verbs
 skiko/skiko/wit/skiko-gfx.wit                                  mirror
-wart-host/src/canvas_impl.rs                                   +bitmap canvases impl + LRU cap
-wart-host/src/lib.rs                                           +periodic Store::gc, always-on exn extract
+wandr-host/src/canvas_impl.rs                                   +bitmap canvases impl + LRU cap
+wandr-host/src/lib.rs                                           +periodic Store::gc, always-on exn extract
 skiko/skiko/src/wasmWasiMain/kotlin/generated/InternalSkikoUi.kt  +externs
 skiko/skiko/src/wasmWasiMain/kotlin/generated/SkikoUi.kt          +wrappers + writePaintAttrs helper + ClipMode
 skiko/skiko/src/wasmWasiMain/kotlin/org/jetbrains/skia/SkiaTypes.wasi.kt    Canvas rewrite
 skiko/skiko/src/wasmWasiMain/kotlin/org/jetbrains/skia/SkiaTypes2.wasi.kt   Bitmap.surfaceId + allocPixels capture
 skiko/skiko/src/wasmWasiMain/kotlin/org/jetbrains/skiko/WasiCanvas.kt       new overrides; witAttrs internal
-wart-app/src/wasmWasiMain/kotlin/Task28SmokeCard.kt            new
-wart-app/src/wasmWasiMain/kotlin/ChevronBisectCard.kt          new (post-closeout investigation harness)
-wart-app/src/wasmWasiMain/kotlin/RealComposeApp.kt             re-enabled DatePickerCard + SegmentedButtonCard + new cards
+wandr-app/src/wasmWasiMain/kotlin/Task28SmokeCard.kt            new
+wandr-app/src/wasmWasiMain/kotlin/ChevronBisectCard.kt          new (post-closeout investigation harness)
+wandr-app/src/wasmWasiMain/kotlin/RealComposeApp.kt             re-enabled DatePickerCard + SegmentedButtonCard + new cards
 ```

@@ -1,14 +1,14 @@
 ---
 name: app-installer-triage
-description: Diagnose failures in the wart project's app-installer / app-loader path (task 35) — `wasmtime::Engine::precompile_component` errors, `Component::deserialize_file` cache-key mismatches, `package.toml` parse / world-mismatch, install-dir layout drift, AOT-cache invalidation bugs, and `SkikoUi::instantiate` failures from per-app HostState wiring. Complements cargo-triage (Rust compile) and wasm-component-build (dev-machine pipeline) by covering the on-device install + load runtime path. Returns a one-paragraph diagnosis with evidence + exactly one suggested next action. Use when the installer or loader fails at runtime.
+description: Diagnose failures in the wandr project's app-installer / app-loader path (task 35) — `wasmtime::Engine::precompile_component` errors, `Component::deserialize_file` cache-key mismatches, `package.toml` parse / world-mismatch, install-dir layout drift, AOT-cache invalidation bugs, and `SkikoUi::instantiate` failures from per-app HostState wiring. Complements cargo-triage (Rust compile) and wasm-component-build (dev-machine pipeline) by covering the on-device install + load runtime path. Returns a one-paragraph diagnosis with evidence + exactly one suggested next action. Use when the installer or loader fails at runtime.
 tools: Bash, Read, Grep
 ---
 
-You are a runtime triage agent for the wart project's app-installer + thin-loader
-boundary (task 35). The implementation lives in `wart-host/src/app_loader.rs` (loader)
-and `wart-host/src/app_installer.rs` (installer); both are consumed from
-`wart-host/src/lib.rs:117–141` (NativeActivity / winit path) and
-`wart-host/src/standalone.rs:55–70` (post-ART standalone path). Scope contract:
+You are a runtime triage agent for the wandr project's app-installer + thin-loader
+boundary (task 35). The implementation lives in `wandr-host/src/app_loader.rs` (loader)
+and `wandr-host/src/app_installer.rs` (installer); both are consumed from
+`wandr-host/src/lib.rs:117–141` (NativeActivity / winit path) and
+`wandr-host/src/standalone.rs:55–70` (post-ART standalone path). Scope contract:
 `tasks/35-app-install.md`.
 
 ## What can fail
@@ -28,7 +28,7 @@ and `wart-host/src/app_installer.rs` (installer); both are consumed from
 - **`package.toml`** — installer reads it to discover components + world; failures
   are parse error, world-mismatch vs `wit/skiko-gfx.wit`, or missing asset paths.
 - **Install-dir layout** — installer writes
-  `/data/local/tmp/wart-apps/<app-id>/<version>/{components/,assets/,cache-key.toml}`
+  `/data/local/tmp/wandr-apps/<app-id>/<version>/{components/,assets/,cache-key.toml}`
   (or app-external-files dir on rooted-Activity path). Loader must read the same
   layout. Drift between the two ends is a silent class of bug.
 - **`SkikoUi::instantiate`** — per-app `HostState` must be built before instantiate;
@@ -40,8 +40,8 @@ and `wart-host/src/app_installer.rs` (installer); both are consumed from
 ## How to triage
 
 1. Identify the failing call site. Likely surfaces:
-   - `adb logcat | grep wart-host` for runtime traps / `anyhow` chains
-   - `/data/local/tmp/wart-host-crash.json` (drained on next launch; written by
+   - `adb logcat | grep wandr-host` for runtime traps / `anyhow` chains
+   - `/data/local/tmp/wandr-host-crash.json` (drained on next launch; written by
      `src/lifecycle_standalone.rs` panic hook)
    - `cargo run`-time errors on the dev-machine NativeActivity path
 2. Read the FIRST error in the chain — wasmtime nests `anyhow::Error` deeply; the

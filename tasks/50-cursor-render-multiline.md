@@ -12,7 +12,7 @@
 Device-verified on Pixel 2 XL after the task-49 Enter fix landed.
 Repro:
 
-1. Launch wart-app + war.ime.keyboard via the hybrid stack.
+1. Launch wandr-app + wandr.ime.keyboard via the hybrid stack.
 2. Tap a `BasicTextField` with `KeyboardOptions(singleLine = false)`
    (or `TextFieldState` with the multi-line default) containing
    `"hello world"`.
@@ -92,7 +92,7 @@ match the project's pattern.
 
 ### Step 3 — Compare with the in-canvas keyboard (~30 min)
 
-The in-canvas keyboard (`wart-app/.../WasiSoftKeyboard.kt`,
+The in-canvas keyboard (`wandr-app/.../WasiSoftKeyboard.kt`,
 retired but still in tree) used the same code path. Verify whether
 this same bug was present back then by inserting a `\n` via the
 in-canvas keyboard in a multi-line TextField. If yes, this bug
@@ -138,7 +138,7 @@ cursor positioning; the missing piece is now this task.
 | File | Why |
 |---|---|
 | `skiko/skiko/src/wasmWasiMain/kotlin/org/jetbrains/skia/paragraph/...` | wasi actual for cursor-rect-by-offset, likely the fix site |
-| `wart-host/src/paragraph_impl.rs` | Possible host-side adjustment if the existing API doesn't expose what skiko-wasi needs |
+| `wandr-host/src/paragraph_impl.rs` | Possible host-side adjustment if the existing API doesn't expose what skiko-wasi needs |
 | `compose-multiplatform-core/.../wasmWasiMain/...` | If `MultiParagraph` itself needs a wasi-side implementation, that lives here |
 | `tasks/50-cursor-render-multiline.md` | This doc; append results section on close |
 | `MEMORY.md` → append to `feedback_softkeyboard` | Capture the multi-line gap |
@@ -192,7 +192,7 @@ paths.
 
 **Diagnosis:** Step 1 confirmed the bug was NOT IME-specific —
 hardware-keyboard Enter (`adb shell input keyevent KEYCODE_ENTER`)
-into wart-app's `BasicTextField` produced the same symptom: text
+into wandr-app's `BasicTextField` produced the same symptom: text
 correctly multi-line in the model (`tfstate` log shows
 `"hello world\nhhhvbbhellohardware\nline2vb"` with selection
 TextRange at end of line 3), but cursor blink stuck on line 1.
@@ -213,7 +213,7 @@ line 1 regardless of offset.
 **Fix:** 14 new WIT verbs on `my:skiko-gfx/paragraph` — one
 `prepare-line-metrics` + 13 per-field getters mirroring the
 existing `prepare-rects-for-range` two-stage cache pattern.
-Implemented host-side in `wart-host/src/paragraph_impl.rs`
+Implemented host-side in `wandr-host/src/paragraph_impl.rs`
 (reading `skia_safe::textlayout::Paragraph::get_line_metrics()`,
 which natively handles `\n`); wired through skiko-wasi's
 `Paragraph.kt` so `lineMetrics` now returns a real
@@ -234,9 +234,9 @@ matching offset 34 (= 11 + 1 + 6 + 1 + 9 + 1 + 5).
 **Files changed:**
 
 - `wit/skiko-gfx.wit` + 3 mirrors — 14 new paragraph verbs.
-- `wart-host/src/canvas_impl.rs` — `CachedLineMetrics` struct +
+- `wandr-host/src/canvas_impl.rs` — `CachedLineMetrics` struct +
   `para_line_metrics_cache: Vec<CachedLineMetrics>` field.
-- `wart-host/src/paragraph_impl.rs` — 14 new Host trait methods
+- `wandr-host/src/paragraph_impl.rs` — 14 new Host trait methods
   (`prepare_line_metrics` + 13 `get_cached_line_*` getters).
 - `skiko/.../generated/{Internal,}SkikoUi.kt` — 14
   `@WasmImport` extern fun declarations + Import companion
@@ -244,8 +244,8 @@ matching offset 34 (= 11 + 1 + 6 + 1 + 9 + 1 + 5).
 - `skiko/.../paragraph/Paragraph.kt:71` — replaced
   `emptyArray()` stub with the real lookup.
 
-**Commits:** wart-host `8b16ab9`, skiko `09ab3d53`, wart-app
-`b3a73be`, war.ime.keyboard `4ccb590`, wart (top) (this).
+**Commits:** wandr-host `8b16ab9`, skiko `09ab3d53`, wandr-app
+`b3a73be`, wandr.ime.keyboard `4ccb590`, wandr (top) (this).
 
 **Out of scope (lands later if observed):**
 
@@ -267,9 +267,9 @@ matching offset 34 (= 11 + 1 + 6 + 1 + 9 + 1 + 5).
 ## Resume hints for fresh sessions
 
 1. **Reproducer is in task 49's smoke flow.** Run
-   `scripts/run-hybrid-stack.sh`; `wart-arbiter launch
-   com.example.wart-app && launch-overlay war.ime.keyboard &&
-   overlay war.ime.keyboard`; tap a TextField; press Enter on the
+   `scripts/run-hybrid-stack.sh`; `wandr-arbiter launch
+   com.example.wandr-app && launch-overlay wandr.ime.keyboard &&
+   overlay wandr.ime.keyboard`; tap a TextField; press Enter on the
    IME; type a letter.
 2. **Compare with hardware Enter first** (step 1). If hardware
    Enter has the same bug, the wider rendering path is broken

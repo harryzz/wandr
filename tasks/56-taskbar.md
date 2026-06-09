@@ -2,7 +2,7 @@
 
 > **Status:** ✅ device-verified 2026-05-29 — see **Results** below. The
 > original proposal (full Compose dock + app switcher) was descoped: the
-> dock/launcher role is already filled by the separate `war.launcher`
+> dock/launcher role is already filled by the separate `wandr.launcher`
 > (task 57), so task 56 shipped as the **navigation half** only — a
 > minimal Android-style Back/Home/Recents nav bar as a LIGHT Rust canvas
 > guest (the user's "3 icons only, rust app, like android" directive).
@@ -11,16 +11,16 @@
 ## Results (v1 — device-verified 2026-05-29)
 
 Shipped a three-button nav bar — **Back (◀) · Home (●) · Recents (■)** —
-as `apps/system/war.taskbar/`, a ~68 KB Rust `wasm32-wasip2` canvas guest
-(no Kotlin/Compose → leak-immune + tiny, mirroring `war.launcher` /
-`war.statusbar`). It runs on a thin always-visible **bottom-strip overlay**
+as `apps/system/wandr.taskbar/`, a ~68 KB Rust `wasm32-wasip2` canvas guest
+(no Kotlin/Compose → leak-immune + tiny, mirroring `wandr.launcher` /
+`wandr.statusbar`). It runs on a thin always-visible **bottom-strip overlay**
 and forwards taps to the arbiter.
 
 **Architecture (reused the status-bar pattern):**
 - New `OverlayMode::BottomBar` in `standalone.rs` — bottom-anchored, fixed
-  height `WART_TASKBAR_PX` (default 150 px, env-tunable), launched as a
-  **direct standalone process** (`wart-host --standalone-overlay-bottom-bar
-  --app war.taskbar`), exactly like the status bar's top overlay. No zygote
+  height `WANDR_TASKBAR_PX` (default 150 px, env-tunable), launched as a
+  **direct standalone process** (`wandr-host --standalone-overlay-bottom-bar
+  --app wandr.taskbar`), exactly like the status bar's top overlay. No zygote
   command needed.
 - **Z-stack reservation:** fullscreen apps at `0x40000000`, the taskbar at
   `0x60000000` (above apps, below chrome), the IME + status bar at
@@ -30,7 +30,7 @@ and forwards taps to the arbiter.
   interface with `go-home` / `go-back` / `recents`; `launcher_impl.rs`
   forwards each to the arbiter socket. Two new arbiter commands:
   - `cycle-task` — foreground the next running user app (chrome overlays
-    `war.statusbar` / `war.taskbar` / `war.ime.keyboard` excluded from the
+    `wandr.statusbar` / `wandr.taskbar` / `wandr.ime.keyboard` excluded from the
     ring; the launcher participates so cycling wraps through home).
   - `back` — route an ESC key (Compose key-id 27) to the foreground app's
     control socket (apps treat it as dismiss/escape; full Android
@@ -45,17 +45,17 @@ and forwards taps to the arbiter.
 **Device-verified:** all three buttons work end-to-end via real
 `input tap` on the bottom strip → taskbar guest `on_pointer_event_v2`
 hit-test → `launcher::{go_back,go_home,recents}` → host forwarder →
-arbiter action. Logs confirm `cycle-task → fg=war.launcher (ring of 2)`,
-`back → ESC delivered to fg`, and `go-home`. The complete wart shell now
+arbiter action. Logs confirm `cycle-task → fg=wandr.launcher (ring of 2)`,
+`back → ESC delivered to fg`, and `go-home`. The complete wandr shell now
 runs with no ART SystemUI/launcher: status bar (top) + launcher + taskbar
 (bottom) + IME, all light Rust canvas guests plus the Compose demo app.
 
-**Files:** `apps/system/war.taskbar/{Cargo.toml,wit/taskbar.wit,src/lib.rs}`;
-`runtime/wart-host/src/standalone.rs` (`BottomBar` mode + `taskbar_height_px`
-+ z-layer), `runtime/wart-host/src/main.rs` (`--standalone-overlay-bottom-bar`),
-`runtime/wart-host/src/launcher_impl.rs` (nav verbs → arbiter),
-`runtime/wart-arbiter/src/main.rs` (`back` + `cycle-task` cmds),
-`wit/skiko-gfx.wit` (launcher nav verbs), `tools/scripts/{build-system-warpkgs,
+**Files:** `apps/system/wandr.taskbar/{Cargo.toml,wit/taskbar.wit,src/lib.rs}`;
+`runtime/wandr-host/src/standalone.rs` (`BottomBar` mode + `taskbar_height_px`
++ z-layer), `runtime/wandr-host/src/main.rs` (`--standalone-overlay-bottom-bar`),
+`runtime/wandr-host/src/launcher_impl.rs` (nav verbs → arbiter),
+`runtime/wandr-arbiter/src/main.rs` (`back` + `cycle-task` cmds),
+`wit/skiko-gfx.wit` (launcher nav verbs), `tools/scripts/{build-system-wandrpkgs,
 run-hybrid-stack}.sh`.
 
 **Deferred (v1 follow-ups):**
@@ -80,19 +80,19 @@ run-hybrid-stack}.sh`.
 With SystemUI and the launcher force-stopped (tasks 33, 46), there is
 **no way for the user to switch apps, go home, or go back** once an app
 is foreground. The arbiter can launch/foreground/kill apps over its
-socket (`wart-arbiter launch <id>` etc.), but only from an adb shell —
-the on-device user has no UI for it. The taskbar is that UI: the wart
-equivalent of Android's navigation bar **+** taskbar/dock, since wart
+socket (`wandr-arbiter launch <id>` etc.), but only from an adb shell —
+the on-device user has no UI for it. The taskbar is that UI: the wandr
+equivalent of Android's navigation bar **+** taskbar/dock, since wandr
 has no separate launcher.
 
 This is the bottom-strip sibling of [`tasks/55-status-bar.md`](55-status-bar.md)
-and shares its foundation (overlay surface + insets + `war:shell` WIT +
+and shares its foundation (overlay surface + insets + `wandr:shell` WIT +
 arbiter routing — see task 55's **Shared foundation**).
 
 ## What it is (scope of "taskbar, like Android")
 
 Android splits this across the nav bar (back/home/recents) and, on
-tablets/desktop mode, a taskbar (app dock + running apps). wart has one
+tablets/desktop mode, a taskbar (app dock + running apps). wandr has one
 bottom strip and no launcher, so propose **one combined bar**:
 
 - **Launcher/dock:** icons for installed apps → tap launches /
@@ -111,7 +111,7 @@ taskbar is a *view + controller* over the arbiter. Two new data needs:
 | Need | Source (ART-free) |
 |------|-------------------|
 | Installed apps (id, label, icon) | scan `<APPS_ROOT>/apps/*` + `system-apps/*`, read `package.toml` — needs a manifest extension for `label` + `icon` (see below). The installer/loader already enumerates these. |
-| Running apps (id, pid, fg) | `wart-arbiter list` / the `state.rs` registry — already exists. |
+| Running apps (id, pid, fg) | `wandr-arbiter list` / the `state.rs` registry — already exists. |
 | Launch / switch / kill | arbiter socket commands — already exist (`launch`, `foreground`, `kill`). |
 
 No `system_server`, no PackageManager — consistent with
@@ -120,17 +120,17 @@ dropped, replaced by the component-graph loader, which is exactly our
 `app_installer.rs` install-dir layout).
 
 **Manifest extension:** add optional `label` + `icon` (path to a PNG in
-the warpkg's `assets/`, reusing task 38 asset bundling) to `package.toml`.
+the wandrpkg's `assets/`, reusing task 38 asset bundling) to `package.toml`.
 The taskbar reads them via a new host verb.
 
 ## Proposals
 
-### Proposal A — taskbar as a guest warpkg (recommended)
+### Proposal A — taskbar as a guest wandrpkg (recommended)
 
-A first-party `war.taskbar` warpkg (Kotlin/Compose) on a **bottom-strip
+A first-party `wandr.taskbar` wandrpkg (Kotlin/Compose) on a **bottom-strip
 overlay SF surface**, launched by the arbiter at startup. It renders the
 dock + running row in Compose and drives the arbiter via a new
-`war:shell/launcher` host interface:
+`wandr:shell/launcher` host interface:
 
 ```wit
 interface launcher {
@@ -155,7 +155,7 @@ in task 47/49.
 ### Proposal B — host-drawn taskbar (MVP / fallback)
 
 Draw a minimal bar (text labels of running apps + tap targets) directly
-in `wart-host`. No guest.
+in `wandr-host`. No guest.
 
 - **Pros:** tiny, no extra process, fast to prototype the
   switch-foreground flow.
@@ -196,11 +196,11 @@ the keyboard can't both own the bottom strip at full height. Policy
 |---|------|-------|
 | 1 | Bottom-strip overlay reuse (task 47 already has this) + a fixed taskbar height + bottom inset to the fg app (shared with task 55) | `sf_surface.*`, arbiter |
 | 2 | `package.toml` `label` + `icon` manifest fields; installer records them; loader exposes them | `app_installer.rs`, `app_loader.rs` |
-| 3 | `war:shell/launcher` WIT + host impl forwarding to the arbiter socket | `wit/shell.wit`, `wart-host/src/launcher_impl.rs` |
-| 4 | Arbiter: `list-apps` (merge installed-scan + running registry), and have launch/switch/close reachable from the host forwarder | `wart-arbiter/src/{state,main}.rs` |
-| 5 | `war.taskbar` warpkg — Compose dock + running row, icons from assets, on-change redraw | `apps/system/war.taskbar/` |
-| 6 | Arbiter auto-launches the taskbar at startup; coexistence policy with the IME overlay | `wart-arbiter` |
-| 7 | (fast-follow) home/back/recents edge gestures via the InputFlinger drain | `wart-host/src/standalone.rs`, `input.rs` |
+| 3 | `wandr:shell/launcher` WIT + host impl forwarding to the arbiter socket | `wit/shell.wit`, `wandr-host/src/launcher_impl.rs` |
+| 4 | Arbiter: `list-apps` (merge installed-scan + running registry), and have launch/switch/close reachable from the host forwarder | `wandr-arbiter/src/{state,main}.rs` |
+| 5 | `wandr.taskbar` wandrpkg — Compose dock + running row, icons from assets, on-change redraw | `apps/system/wandr.taskbar/` |
+| 6 | Arbiter auto-launches the taskbar at startup; coexistence policy with the IME overlay | `wandr-arbiter` |
+| 7 | (fast-follow) home/back/recents edge gestures via the InputFlinger drain | `wandr-host/src/standalone.rs`, `input.rs` |
 | 8 | Device-verify: tap launches/switches/closes apps; IME and taskbar don't fight for the bottom; rotation re-lays it | device |
 
 ## Out of scope
@@ -225,13 +225,13 @@ the keyboard can't both own the bottom strip at full height. Policy
 ## Related
 
 - [`tasks/55-status-bar.md`](55-status-bar.md) — top strip; shares the
-  overlay + insets + `war:shell` foundation.
+  overlay + insets + `wandr:shell` foundation.
 - [`tasks/47-ime-via-guest-app.md`](47-ime-via-guest-app.md) — bottom
   overlay surface + arbiter input routing (the pattern reused here).
-- [`tasks/46-wart-arbiter-mvp.md`](46-wart-arbiter-mvp.md) — the arbiter
+- [`tasks/46-wandr-arbiter-mvp.md`](46-wandr-arbiter-mvp.md) — the arbiter
   registry + launch/foreground/kill commands the taskbar drives.
 - [`tasks/35-app-install.md`](35-app-install.md) /
-  [`tasks/38-warpkg-assets.md`](38-warpkg-assets.md) — install-dir
+  [`tasks/38-wandrpkg-assets.md`](38-wandrpkg-assets.md) — install-dir
   enumeration + asset bundling (icons).
 - `post-art-roadmap.md` §6.3 — PackageManager dropped → component-graph
   loader (our install dir is the app list).

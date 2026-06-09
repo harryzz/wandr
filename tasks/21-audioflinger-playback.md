@@ -1,6 +1,6 @@
 # Task 21 — Audio playback via rsbinder (IAAudioService)
 
-> **Status: ✅ device-verified 2026-05-17 — 440 Hz beep audible on Pixel 2 XL speaker at app launch.** Full Path B-AAudio pipeline working end-to-end (WIT `audio` → Kotlin bindings → wasm guest → wart-host `audio_impl.rs` → rsbinder → `media.aaudio` → AAudioFlowGraph → MMAP HAL → speaker). All sub-tasks A1–B5 complete.
+> **Status: ✅ device-verified 2026-05-17 — 440 Hz beep audible on Pixel 2 XL speaker at app launch.** Full Path B-AAudio pipeline working end-to-end (WIT `audio` → Kotlin bindings → wasm guest → wandr-host `audio_impl.rs` → rsbinder → `media.aaudio` → AAudioFlowGraph → MMAP HAL → speaker). All sub-tasks A1–B5 complete.
 
 ## Path decision (resolved 2026-05-17)
 
@@ -53,7 +53,7 @@ The ~630 lines of AAudio C++ binding code in `frameworks/av/media/libaaudio/src/
 - `vendor/aidl-stubs/android/content/AttributionSourceState.aidl` — stub
 
 ### ✅ A2 — `binder_shared_memory` Rust primitive (done 2026-05-17)
-`wart-host/src/binder_shared_memory.rs`. Cross-platform (memmap2 +
+`wandr-host/src/binder_shared_memory.rs`. Cross-platform (memmap2 +
 libc memfd test) — slight deviation from the original spec, which put
 memmap2 under `[target.'cfg(target_os = "android")'.dependencies]`. The
 core mmap step has no Android-specific dependencies; keeping it
@@ -76,7 +76,7 @@ produces.
   new pub fns (A3/B3 will consume them).
 
 ### ✅ A3 — `eventfd_signal` Rust primitive (done 2026-05-17)
-`wart-host/src/eventfd_signal.rs`. Cross-platform (libc) — not nix, to
+`wandr-host/src/eventfd_signal.rs`. Cross-platform (libc) — not nix, to
 match A2's host-testable shape; libc was already pulled transitively and
 is now an explicit dep covering both A2's memfd tests and A3's eventfd
 syscalls. The `ParcelFileDescriptor → OwnedFd` extraction stays at the
@@ -148,7 +148,7 @@ A1**. The whack-a-mole risk didn't materialize for this AIDL surface
   Format + ChannelLayout enums; `create-track`, `write-pcm-f32`,
   `start`, `pause`, `close`, `pending-frames`); `import audio;` added
   to world. Mirrored to `skiko/skiko/wit/skiko-gfx.wit` per CLAUDE.md.
-- `wart-host/src/audio_impl.rs`: stub `Host` impl returning 0/false on
+- `wandr-host/src/audio_impl.rs`: stub `Host` impl returning 0/false on
   every method so the bindgen-generated trait is satisfied. B3 fills
   it in.
 - Build verify: Android cross-compile 49s; desktop x86_64 8m 26s
@@ -329,7 +329,7 @@ helper.
 
 ## Appendix: AAudio protocol (B1, 2026-05-17)
 
-Read of `wart-host/vendor/aosp-frameworks-av/media/libaaudio/src/binding/`
+Read of `wandr-host/vendor/aosp-frameworks-av/media/libaaudio/src/binding/`
 + the AAudio AIDL package. Vendor sparse-checkout only includes
 `src/binding/`, not `src/core/AudioStreamInternal.cpp` (which carries the
 client-side write-frames loop with atomic ordering); below uses the

@@ -8,10 +8,10 @@
 >
 > **Adopted (B):** vendored `external/subsecond/` (patched copy of upstream
 > 0.7.9 + README) + `[patch.crates-io] subsecond = { path = … }` in
-> `crates/dioxus-canvas` and `apps/user/war.dioxus.demo`; both bumped to dioxus
+> `crates/dioxus-canvas` and `apps/user/wandr.dioxus.demo`; both bumped to dioxus
 > **0.7**; `events.rs` got the 0.7 tweaks (`convert_cancel_data` + `Modifiers`
 > import). Verified: `cargo test -p dioxus-canvas` (render + click) passes;
-> `war.dioxus.demo` builds for `wasm32-wasip2` at **516 KB with zero
+> `wandr.dioxus.demo` builds for `wasm32-wasip2` at **516 KB with zero
 > wasm-bindgen**; reinstalled + relaunched on the Pixel 2 XL — **renders the
 > full flexbox UI with host fonts** (measure-text resolves). On-device
 > tap-to-increment for the 0.7 build is covered by the host test + the prior
@@ -22,7 +22,7 @@
 
 ## Why this matters
 
-dioxus-canvas (task 59) is wart's *light reactive UI framework* for system
+dioxus-canvas (task 59) is wandr's *light reactive UI framework* for system
 components — the real alternative to Kotlin/Compose given (a) the unsolved
 wasmtime DRC GC leak ([[wasmtime-drc-no-autoschedule]]) and (b) the slow
 evolution of the Kotlin/Wasm `wasm32-wasip2` toolchain. Being **stuck on dioxus
@@ -117,18 +117,18 @@ doesn't unblock us until released — pair with A or B meanwhile.
 Recommended: **B now** (leanest unblock) + **C** in parallel (so we can drop the
 vendor once it lands upstream). `[patch]` is per-build-root and our guests are
 standalone crates, so the patch line lives in each dioxus guest's Cargo.toml
-(today: `apps/user/war.dioxus.demo` + the `crates/dioxus-canvas` dev-dep build).
+(today: `apps/user/wandr.dioxus.demo` + the `crates/dioxus-canvas` dev-dep build).
 
 ## Migration steps (when adopted)
 
 1. Land the patched subsecond per the chosen option above.
-2. Bump `crates/dioxus-canvas` + `apps/user/war.dioxus.demo` deps 0.6 → 0.7;
+2. Bump `crates/dioxus-canvas` + `apps/user/wandr.dioxus.demo` deps 0.6 → 0.7;
    add the `[patch.crates-io] subsecond` line to the guest(s).
 3. Re-apply the `events.rs` 0.7 tweaks (`convert_cancel_data` + `Modifiers`
    import — both were already validated during this investigation).
 4. `cargo test -p dioxus-canvas` (host) — render + click pipeline.
-5. Rebuild the demo warpkg, reinstall, relaunch via the arbiter, re-screenshot
-   (host unchanged — no wart-host rebuild needed; guest-only change).
+5. Rebuild the demo wandrpkg, reinstall, relaunch via the arbiter, re-screenshot
+   (host unchanged — no wandr-host rebuild needed; guest-only change).
 6. Remove the "PINNED to 0.6" comment in `crates/dioxus-canvas/Cargo.toml`.
 
 ## Related

@@ -26,7 +26,7 @@ three states — `"auto"`, `"locked"`, absent:
   preserving task-43); `orientation_locked()` is true only for explicit `locked`.
 - **overlay**: rotates only on explicit `"auto"` (`rotation_policy()`), unchanged.
 
-**Global lock signal** — a plain file `/data/local/tmp/wart-orient-lock` (`1` =
+**Global lock signal** — a plain file `/data/local/tmp/wandr-orient-lock` (`1` =
 portrait-locked). The status bar / taskbar are launched directly (not
 arbiter-tracked), so a per-socket push can't reach them; a global file they all
 poll is the simplest reliable channel.
@@ -42,15 +42,15 @@ poll is the simplest reliable channel.
 
 ## Files
 
-- `runtime/wart-host/src/app_loader.rs` — `orientation_locked()` + `orientation_field()`.
-- `runtime/wart-host/src/standalone.rs` — gate (fullscreen respects locked),
+- `runtime/wandr-host/src/app_loader.rs` — `orientation_locked()` + `orientation_field()`.
+- `runtime/wandr-host/src/standalone.rs` — gate (fullscreen respects locked),
   `run_cwasm_loop(orientation_locked)`, `publish_orientation_lock` /
   `orientation_lock_active` helpers, lock write on Foreground, lock-aware poll.
 
 ## Verify
 
 Set a fullscreen app to `orientation = "locked"` (e.g. edit the installed
-`com.example.wart-app` package.toml), foreground it, rotate the device →
+`com.example.wandr-app` package.toml), foreground it, rotate the device →
 the app AND the status bar / taskbar / IME all stay portrait. Switch to the
 launcher (auto) → chrome follows the device again.
 

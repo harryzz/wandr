@@ -1,13 +1,13 @@
-# wart-call
+# wandr-call
 
 A guest-side Rust library that establishes a **secure real-time audio call** from a
 `wasm32-wasip2` component. WebRTC is the first (and current) backend: ICE + DTLS-SRTP
-+ RTP/SRTP + Opus + SDP. It runs in the wart runtime's Signal app today and interops
++ RTP/SRTP + Opus + SDP. It runs in the wandr runtime's Signal app today and interops
 with a real browser (libwebrtc) — `CONNECTED` + audio, device-verified on a Pixel 2 XL.
 
 ## WIT-agnostic
 
-Like `dioxus-canvas`, wart-call touches **no host WIT**. It deals only in:
+Like `dioxus-canvas`, wandr-call touches **no host WIT**. It deals only in:
 - **PCM f32 frames** — the consumer wires these to the host audio interface
   (capture → `send_audio`, `recv_audio` → playback).
 - **opaque UDP datagrams** — the consumer pumps these to/from a socket

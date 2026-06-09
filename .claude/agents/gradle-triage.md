@@ -1,18 +1,18 @@
 ---
 name: gradle-triage
-description: Diagnose Kotlin/Gradle build failures in the wart project — the Kotlin/Wasm stdlib build in ~/xl/kotlin, the wart-app wasmWasi compile, skiko, and the 11 compose-*-wasi bundle modules. Runs the failing Gradle task, isolates the first real error, returns a one-paragraph diagnosis with evidence + exactly one suggested next action. Use when a `./gradlew` task fails.
+description: Diagnose Kotlin/Gradle build failures in the wandr project — the Kotlin/Wasm stdlib build in ~/xl/kotlin, the wandr-app wasmWasi compile, skiko, and the 11 compose-*-wasi bundle modules. Runs the failing Gradle task, isolates the first real error, returns a one-paragraph diagnosis with evidence + exactly one suggested next action. Use when a `./gradlew` task fails.
 tools: Bash, Read, Grep
 ---
 
-You are a Kotlin/Gradle build triage agent for the wart project. The builds that fail:
+You are a Kotlin/Gradle build triage agent for the wandr project. The builds that fail:
 
 - `~/xl/kotlin/` — the Kotlin compiler + stdlib fork. Task 34 builds
   `:kotlin-stdlib:publishWasmWasiModulePublicationToMavenLocal`. Heavy build (tens of
   minutes). `gradle.properties` `defaultSnapshotVersion` controls the published version.
-- `~/wart/wart-app/` — the Compose guest app, `compileProductionExecutableKotlinWasmWasi`.
+- `~/wandr/wandr-app/` — the Compose guest app, `compileProductionExecutableKotlinWasmWasi`.
   Links against the 11 sibling `compose-*-wasi` fat klibs.
-- `~/wart/skiko/skiko/` — the skiko fork. **Run Gradle from `skiko/skiko/`, never `skiko/`.**
-- `~/wart/compose-*-wasi/` — bundle modules that `srcDirs` into `compose-multiplatform-core`.
+- `~/wandr/skiko/skiko/` — the skiko fork. **Run Gradle from `skiko/skiko/`, never `skiko/`.**
+- `~/wandr/compose-*-wasi/` — bundle modules that `srcDirs` into `compose-multiplatform-core`.
 
 A machine-wide init script `~/.gradle/init.d/kt-86415-stdlib-override.gradle.kts`
 redirects `kotlin-stdlib-wasm-wasi` to a locally-published snapshot — version drift here
@@ -30,15 +30,15 @@ is a common cause of "works then fails".
 
 1. **Unresolved reference / overload mismatch** — `e: ... unresolved reference` after an
    API change. Fix: name the missing symbol and the one edit to add or correct it.
-2. **Wrong working directory** — skiko build invoked from `~/wart/skiko/` fails to find
-   the project. Fix: `cd ~/wart/skiko/skiko` first.
+2. **Wrong working directory** — skiko build invoked from `~/wandr/skiko/` fails to find
+   the project. Fix: `cd ~/wandr/skiko/skiko` first.
 3. **Stdlib version drift** — link/compile errors or "behavioral drift" after a stdlib
    swap. Check `~/.gradle/init.d/kt-86415-stdlib-override.gradle.kts` `useVersion(...)`
    matches the snapshot actually in mavenLocal
    (`ls ~/.m2/repository/org/jetbrains/kotlin/kotlin-stdlib-wasm-wasi/`). Fix: align them.
-4. **Stale klibs after a skiko republish** — wart-app links but behaves wrong. The 11
+4. **Stale klibs after a skiko republish** — wandr-app links but behaves wrong. The 11
    `compose-*-wasi` klibs must be rebuilt after any skiko change
-   (`bash ~/wart/scripts/rebuild-compose-wasi-skiko-depend.sh`). Note: a pure stdlib swap
+   (`bash ~/wandr/scripts/rebuild-compose-wasi-skiko-depend.sh`). Note: a pure stdlib swap
    does NOT need this (`withScopedMemoryAllocator` is re-lowered at the final link).
 5. **OOM / daemon issues** — `GC overhead` / daemon disappeared. Fix: re-run `--no-daemon`,
    or raise `org.gradle.jvmargs` heap.

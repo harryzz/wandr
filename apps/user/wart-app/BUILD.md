@@ -1,12 +1,12 @@
-# wart-app — Build & Deploy
+# wandr-app — Build & Deploy
 
 End-to-end pipeline: Kotlin source → `.wasm` → WASM Component → AOT
 `.cwasm` for `aarch64-linux-android` → push to device → run.
 
 > **TL;DR for an impatient day-to-day build:**
 > ```bash
-> cd ~/wart/wart-app && ./gradlew compileProductionExecutableKotlinWasmWasi
-> bash ~/wart/scripts/build-aot.sh   # if it exists; otherwise see §3
+> cd ~/wandr/wandr-app && ./gradlew compileProductionExecutableKotlinWasmWasi
+> bash ~/wandr/scripts/build-aot.sh   # if it exists; otherwise see §3
 > ```
 
 ---
@@ -20,7 +20,7 @@ End-to-end pipeline: Kotlin source → `.wasm` → WASM Component → AOT
 | `wasmtime` CLI | recent (component-model + gc + function-references + exceptions) |
 | WASI Preview 2 reactor adapter | `~/skiko/wasi_snapshot_preview1.reactor.wasm` |
 | `adb` | connected to a rooted Android device (arm64, API 29+) |
-| Compose-MP klibs in `~/.m2` | published from `~/wart/compose-multiplatform-core/` and the 11 sibling dirs |
+| Compose-MP klibs in `~/.m2` | published from `~/wandr/compose-multiplatform-core/` and the 11 sibling dirs |
 | skiko-wasm-wasi klib in `~/.m2` | published from `~/skiko/` |
 
 ---
@@ -38,7 +38,7 @@ androidx.compose.ui:ui-text-wasm-wasi:9999.0.0-SNAPSHOT
 ... (29 more)
 ```
 
-These come straight out of `~/wart/compose-multiplatform-core/`'s
+These come straight out of `~/wandr/compose-multiplatform-core/`'s
 own publish tasks. They are correct, granular, and reusable as upstream-style
 libraries — **but linking against them takes ~2 hours.**
 
@@ -49,22 +49,22 @@ symbol resolution** during whole-world IR lowering. With N=32 you wait hours.
 
 Located in:
 ```
-~/wart/compose-runtime-wasi/
-~/wart/compose-ui-base-wasi/
-~/wart/compose-ui-graphics-wasi/
-~/wart/compose-ui-text-wasi/
-~/wart/compose-ui-wasi/
-~/wart/compose-foundation-layout-wasi/
-~/wart/compose-foundation-wasi/
-~/wart/compose-animation-core-wasi/
-~/wart/compose-animation-wasi/
-~/wart/compose-material-ripple-wasi/
-~/wart/compose-material3-wasi/
+~/wandr/compose-runtime-wasi/
+~/wandr/compose-ui-base-wasi/
+~/wandr/compose-ui-graphics-wasi/
+~/wandr/compose-ui-text-wasi/
+~/wandr/compose-ui-wasi/
+~/wandr/compose-foundation-layout-wasi/
+~/wandr/compose-foundation-wasi/
+~/wandr/compose-animation-core-wasi/
+~/wandr/compose-animation-wasi/
+~/wandr/compose-material-ripple-wasi/
+~/wandr/compose-material3-wasi/
 ```
 
 Each of these dirs has a `build.gradle.kts` that bundles **multiple upstream
 modules' source dirs** via `srcDirs` pointing back into
-`~/wart/compose-multiplatform-core/`. The sources are the same; the
+`~/wandr/compose-multiplatform-core/`. The sources are the same; the
 packaging is different. Each one publishes:
 
 ```
@@ -74,7 +74,7 @@ androidx.compose.<group>:compose-<group>[-base|-layout|-...]-wasi:0.0.0-wasi-loc
 With **N=11**, link time drops to **~5 minutes** ((32/11)³ ≈ 24× faster, which
 matches what we measured: 5 min vs 2 h+).
 
-`wart-app/build.gradle.kts` is wired against this flavour. **Do not** add
+`wandr-app/build.gradle.kts` is wired against this flavour. **Do not** add
 direct dependencies on the 32 granular klibs.
 
 ### How they coexist
@@ -104,11 +104,11 @@ touches the configurations we actually consume.
 ## 2. Compile Kotlin → `.wasm`
 
 ```bash
-cd ~/wart/wart-app
+cd ~/wandr/wandr-app
 ./gradlew compileProductionExecutableKotlinWasmWasi --console=plain --no-daemon
 ```
 
-Output: `build/compileSync/wasmWasi/main/productionExecutable/kotlin/wart-app.wasm`
+Output: `build/compileSync/wasmWasi/main/productionExecutable/kotlin/wandr-app.wasm`
 (~11 MB).
 
 Cold link: ~55 s. Incremental (single-file change in `Main.kt`): ~15 s.
@@ -130,10 +130,10 @@ The raw `.wasm` is a WASI Preview 1 core module. We need a **Component** that
 exports the `my:skiko-gfx/skiko-ui` world and adapts P1 imports to P2.
 
 ```bash
-WIT=~/wart/wit/skiko-gfx.wit
-WASM_IN=~/wart/wart-app/build/compileSync/wasmWasi/main/productionExecutable/kotlin/wart-app.wasm
+WIT=~/wandr/wit/skiko-gfx.wit
+WASM_IN=~/wandr/wandr-app/build/compileSync/wasmWasi/main/productionExecutable/kotlin/wandr-app.wasm
 ADAPTER=~/skiko/wasi_snapshot_preview1.reactor.wasm
-OUT_DIR=/tmp/wart-aot
+OUT_DIR=/tmp/wandr-aot
 mkdir -p "$OUT_DIR"
 
 # 1) Embed the WIT into the core module so `component new` knows the world.
@@ -239,23 +239,23 @@ focused field and watch the `tfstate` log line.
 Once you have the prerequisites, the whole cycle is:
 
 ```bash
-cd ~/wart/wart-app && \
+cd ~/wandr/wandr-app && \
     ./gradlew compileProductionExecutableKotlinWasmWasi --console=plain --no-daemon && \
-mkdir -p /tmp/wart-aot && \
+mkdir -p /tmp/wandr-aot && \
 wasm-tools component embed \
     --world my:skiko-gfx/skiko-ui \
-    ~/wart/wit/skiko-gfx.wit \
-    build/compileSync/wasmWasi/main/productionExecutable/kotlin/wart-app.wasm \
-    -o /tmp/wart-aot/embedded.wasm && \
-wasm-tools component new /tmp/wart-aot/embedded.wasm \
+    ~/wandr/wit/skiko-gfx.wit \
+    build/compileSync/wasmWasi/main/productionExecutable/kotlin/wandr-app.wasm \
+    -o /tmp/wandr-aot/embedded.wasm && \
+wasm-tools component new /tmp/wandr-aot/embedded.wasm \
     --adapt ~/skiko/wasi_snapshot_preview1.reactor.wasm \
-    -o /tmp/wart-aot/skiko-component.wasm && \
+    -o /tmp/wandr-aot/skiko-component.wasm && \
 wasmtime compile --target aarch64-linux-android \
     --wasm component-model --wasm gc --wasm function-references --wasm exceptions \
-    -o /tmp/wart-aot/skiko-component.cwasm \
-    /tmp/wart-aot/skiko-component.wasm && \
+    -o /tmp/wandr-aot/skiko-component.cwasm \
+    /tmp/wandr-aot/skiko-component.wasm && \
 adb shell am force-stop com.example.wasmruntime && \
-adb push /tmp/wart-aot/skiko-component.cwasm \
+adb push /tmp/wandr-aot/skiko-component.cwasm \
     /sdcard/Android/data/com.example.wasmruntime/files/skiko-component.cwasm && \
 adb shell am start -n com.example.wasmruntime/android.app.NativeActivity
 ```
@@ -280,11 +280,11 @@ adb shell am start -n com.example.wasmruntime/android.app.NativeActivity
 
 ## When you need to rebuild the sibling klibs
 
-If you change a source file under `~/wart/compose-multiplatform-core/`,
+If you change a source file under `~/wandr/compose-multiplatform-core/`,
 the sibling klib that includes it via `srcDirs` needs to be republished:
 
 ```bash
-cd ~/wart/compose-ui-wasi   # or whichever sibling owns the changed file
+cd ~/wandr/compose-ui-wasi   # or whichever sibling owns the changed file
 ./gradlew publishToMavenLocal -Dorg.gradle.configureondemand=false
 ```
 

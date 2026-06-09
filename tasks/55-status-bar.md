@@ -3,13 +3,13 @@
 > **Status:** 🟢 device-verified 2026-05-29 (Proposal A — top-overlay
 > guest). v1 ships clock + battery. Known v1 limitations: no content
 > insets (the strip floats over the top ~88 px of apps), and
-> `war.statusbar` currently installs under `apps/` so the launcher lists
+> `wandr.statusbar` currently installs under `apps/` so the launcher lists
 > it (move to `system-apps/` + an installed-load path for it).
 >
 > ## Results (2026-05-29)
 >
 > Built as a **light Rust canvas guest** on a **top-anchored overlay
-> surface** — same shape as `war.launcher`/the IME, no Kotlin/Compose.
+> surface** — same shape as `wandr.launcher`/the IME, no Kotlin/Compose.
 >
 > **Surface abstraction (per an on-device design discussion):** instead
 > of per-anchor shim functions, the libgui shim's overlay create is now
@@ -26,19 +26,19 @@
 > `system_server`) + `battery-text()` (sysfs
 > `/sys/class/power_supply/battery/capacity`). `status_impl.rs`.
 >
-> **Guest:** `apps/system/war.statusbar/` (~48 KB Rust `wasm32-wasip2`,
-> trimmed `my:skiko-gfx` WIT). Draws `wart` (left) · clock (center) ·
+> **Guest:** `apps/system/wandr.statusbar/` (~48 KB Rust `wasm32-wasip2`,
+> trimmed `my:skiko-gfx` WIT). Draws `wandr` (left) · clock (center) ·
 > battery (right) on an 88 px strip; polls the status verbs ~1 Hz and
 > rebuilds text blobs only on change (no animation loop).
 >
 > **Plumbing:** `sf_surface.rs` `create_overlay(x,y,w,h)`; `standalone`
 > `OverlayMode` + `STATUS_BAR_PX`; `zygote` `LAUNCH_GUI_OVERLAY_TOP`;
 > `main` `--standalone-overlay-top`. Launched directly as a top-overlay
-> daemon for v1 (`wart-host --standalone-overlay-top --app war.statusbar`)
+> daemon for v1 (`wandr-host --standalone-overlay-top --app wandr.statusbar`)
 > alongside the launcher stack; composites above the fullscreen app
 > (equal `i32::MAX` layer, created later → on top).
 >
-> **Device-verified:** top strip shows `wart · 11:58 · 100%` over the
+> **Device-verified:** top strip shows `wandr · 11:58 · 100%` over the
 > launcher. Follow-ups: content insets (`on-insets-changed` → guests lay
 > out below the bar), `system-apps/` placement, arbiter `launch-overlay-top`
 > + boot integration, notification area, explicit chrome z-layer reservation.
@@ -49,7 +49,7 @@
 
 ## Why this matters
 
-Post-ART, wart force-stops SystemUI and owns the whole screen
+Post-ART, wandr force-stops SystemUI and owns the whole screen
 (tasks 33, 46). There is currently **no clock, no battery indicator,
 nothing** at the top of the screen — the foreground app draws edge to
 edge. The roadmap already calls this out:
@@ -58,7 +58,7 @@ edge. The roadmap already calls this out:
 > everything.* §6.3: *NotificationManager — replaced by WIT
 > `post-notification` into a runtime-owned compositor row.*
 
-So the status bar is part of the wart "system shell" we now have to
+So the status bar is part of the wandr "system shell" we now have to
 provide ourselves. This task is the top strip; the bottom strip
 (taskbar / nav) is [`tasks/56-taskbar.md`](56-taskbar.md). They share a
 foundation (see **Shared foundation** below).
@@ -72,7 +72,7 @@ NOT come from `system_server`. Source map:
 |------|-------------------|-----------|
 | Clock | wall-clock time in the host | trivial |
 | Battery % + charging | sysfs `/sys/class/power_supply/battery/{capacity,status}` (or IPower/health HAL via rsbinder) | easy |
-| Notifications | wart-native `post-notification` WIT verb → arbiter → status bar (the roadmap's "compositor row") — NO NotificationManagerService | medium (new subsystem) |
+| Notifications | wandr-native `post-notification` WIT verb → arbiter → status bar (the roadmap's "compositor row") — NO NotificationManagerService | medium (new subsystem) |
 | Wifi | `wpa_supplicant` control socket (roadmap §6.4, deferred) | medium-hard |
 | Cellular / signal | **out of scope** — telephony dropped (roadmap §6.3, "not a phone replacement") | n/a |
 
@@ -101,20 +101,20 @@ foreground app. Three pieces of shared plumbing should be built once
    The arbiter computes insets from which system strips are visible and
    pushes them to the foreground app over its per-host control socket
    (same channel as task 49's editor events).
-3. **`war:shell` WIT surface + arbiter routing.** A small shell
-   interface the system warpkgs import, host-implemented, with the
+3. **`wandr:shell` WIT surface + arbiter routing.** A small shell
+   interface the system wandrpkgs import, host-implemented, with the
    arbiter as the policy owner (mirrors `keyboard_host_impl.rs` →
    arbiter routing from task 47/49).
 
 ## Proposals
 
-### Proposal A — status bar as a guest warpkg (recommended)
+### Proposal A — status bar as a guest wandrpkg (recommended)
 
-A first-party warpkg `war.statusbar` (Kotlin/Compose, like
-`war.ime.keyboard`) on a **top-strip overlay SF surface**. The arbiter
+A first-party wandrpkg `wandr.statusbar` (Kotlin/Compose, like
+`wandr.ime.keyboard`) on a **top-strip overlay SF surface**. The arbiter
 launches it via `launch-overlay` (extended with a top anchor). It draws
 the clock/battery/notification row in Compose and reads data via a new
-`war:shell/status` host interface:
+`wandr:shell/status` host interface:
 
 ```wit
 interface status {
@@ -129,19 +129,19 @@ interface status {
 ```
 
 - **Pros:** rich/themeable (Material3), consistent with the IME pattern,
-  hot-reloadable as a warpkg, reuses the whole skiko render path.
+  hot-reloadable as a wandrpkg, reuses the whole skiko render path.
 - **Cons:** a second always-on Compose process (~80–180 MB working set
   per the zygote spike); on-change redraw discipline needed so it isn't
   burning a render loop at 60 fps for a clock that ticks once a second.
 
 ### Proposal B — host-drawn status bar (MVP / fallback)
 
-Draw the bar directly in `wart-host` (Rust + skia-safe) into a top-strip
+Draw the bar directly in `wandr-host` (Rust + skia-safe) into a top-strip
 overlay surface — no guest, no Compose. Just clock + battery text +
 icons.
 
 - **Pros:** tiny footprint, no extra process, dead simple for
-  clock+battery, no warpkg build.
+  clock+battery, no wandrpkg build.
 - **Cons:** not Compose (hand-rolled skia layout), awkward to grow into
   notifications/quick-settings, duplicates text/layout logic the guest
   path already has.
@@ -174,11 +174,11 @@ notifications/theming are wanted.
 | # | Step | Where |
 |---|------|-------|
 | 1 | Top-anchored overlay surface (anchor arg) — a-03 shim build | `cpp/sf_surface.cpp`, `sf_surface.rs` |
-| 2 | `war:shell/status` WIT + host impl (`now-millis`, `get-battery` via sysfs) | `wit/shell.wit`, `wart-host/src/status_impl.rs` |
-| 3 | `on-insets-changed` host→guest export + arbiter inset computation + push over per-host socket | `wit/skiko-gfx.wit`, `ime_inbound.rs`, `wart-arbiter` |
-| 4 | Compose `WindowInsets` provider in wart-app consuming `on-insets-changed` | `apps/user/wart-app` |
-| 5 | `war.statusbar` warpkg (Compose top row, on-change redraw) | `apps/system/war.statusbar/` |
-| 6 | Arbiter auto-launches the status bar at startup, top layer, never demoted | `wart-arbiter` |
+| 2 | `wandr:shell/status` WIT + host impl (`now-millis`, `get-battery` via sysfs) | `wit/shell.wit`, `wandr-host/src/status_impl.rs` |
+| 3 | `on-insets-changed` host→guest export + arbiter inset computation + push over per-host socket | `wit/skiko-gfx.wit`, `ime_inbound.rs`, `wandr-arbiter` |
+| 4 | Compose `WindowInsets` provider in wandr-app consuming `on-insets-changed` | `apps/user/wandr-app` |
+| 5 | `wandr.statusbar` wandrpkg (Compose top row, on-change redraw) | `apps/system/wandr.statusbar/` |
+| 6 | Arbiter auto-launches the status bar at startup, top layer, never demoted | `wandr-arbiter` |
 | 7 | Device-verify: bar shows correct time + live battery; app content insets below it; rotation re-lays the bar (task 43 interplay) | device |
 
 ## Out of scope
@@ -190,7 +190,7 @@ notifications/theming are wanted.
 
 ## Open questions (decide before implementing)
 
-1. **v1 surface:** Proposal A (guest warpkg) or B (host-drawn MVP)?
+1. **v1 surface:** Proposal A (guest wandrpkg) or B (host-drawn MVP)?
 2. **Battery source:** sysfs (simplest, may vary by device) vs the
    IPower/health HAL via rsbinder (more portable, more code)?
 3. **Notifications in v1 or deferred?** (Drives whether the
@@ -202,7 +202,7 @@ notifications/theming are wanted.
 ## Related
 
 - [`tasks/56-taskbar.md`](56-taskbar.md) — bottom strip; shares the
-  overlay-surface + insets + `war:shell` foundation.
+  overlay-surface + insets + `wandr:shell` foundation.
 - [`tasks/47-ime-via-guest-app.md`](47-ime-via-guest-app.md) — the
   overlay-surface + arbiter-routing pattern this reuses.
 - [`tasks/43-screen-orientation.md`](43-screen-orientation.md) — the bar

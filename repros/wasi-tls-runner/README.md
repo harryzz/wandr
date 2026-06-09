@@ -5,7 +5,7 @@ Closes the loop left open by [`../wasi-tls-probe`](../wasi-tls-probe): the stock
 `chat.signal.org` handshake fails `UnknownIssuer` (Signal pins its own CA). This
 runner instantiates the **same probe component** on wasmtime 45 with a custom
 `wasmtime_wasi_tls::TlsProvider` whose trust store is **webpki public roots +
-Signal's pinned CA** — the exact, minimal host-side change wart-host would make.
+Signal's pinned CA** — the exact, minimal host-side change wandr-host would make.
 
 TLS stays entirely host-delegated; nothing in the guest changes.
 
@@ -23,10 +23,10 @@ cargo run --release -- \
 
 - `certs/signal-messenger-ca.pem` — Signal's self-signed service CA
   (`O=Signal Messenger, LLC, CN=Signal Messenger`), as served in the
-  `chat.signal.org` chain. **Production wart should pin this from Signal's own
+  `chat.signal.org` chain. **Production wandr should pin this from Signal's own
   source**, not the live server.
 - Builds `rustls::ClientConfig` with `webpki_roots::TLS_SERVER_ROOTS` + that CA.
-- Grants the guest network the way wart-host would need to:
+- Grants the guest network the way wandr-host would need to:
   `WasiCtxBuilder::inherit_network().allow_ip_name_lookup(true)`.
 - Wires `wasmtime_wasi_tls::p2::add_to_linker` (`opts.tls(true)`) and runs the
   probe's `wasi:cli/run`.

@@ -67,7 +67,7 @@ Sketch:
    **group state** from the groups server (`groups_v2`) → title, members
    (ACIs → resolve against the contact list from Phase 3), avatar, etc.
 4. Persist to `/state` (e.g. `groups.json`, mirroring `contacts.json`), expose on
-   the `wart:signal/chat` contract (a `group` record + `groups()` +
+   the `wandr:signal/chat` contract (a `group` record + `groups()` +
    `groups-updated` event), and add a **Groups** section/tab to signal-ui
    (reuse the avatar `<img>` support from Phase 3).
 

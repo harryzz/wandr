@@ -37,8 +37,8 @@ but it's confirmed *not a blocker*.
 ```bash
 cargo build --target wasm32-wasip2 --release
 wasmtime run target/wasm32-wasip2/release/call-media-pipeline.wasm   # desktop
-# device: package as wasi:cli/command warpkg (war.probe.callmedia), then
-wart-host --run-once war.probe.callmedia
+# device: package as wasi:cli/command wandrpkg (wandr.probe.callmedia), then
+wandr-host --run-once wandr.probe.callmedia
 ```
 
 ## Where this sits — the 3-plane assembly

@@ -51,7 +51,7 @@ because the Signal engine calls `focus::call_start()` **nowhere** (only
 `call_end`). It was dropped on purpose: the arbiter coupled `call_start` to
 `setPhoneState(IN_COMMUNICATION)`, which ducks the `USAGE_MEDIA` call audio to ~1%
 on this device (task 75). **FIX (this task, code done):** decouple them —
-`wart-arbiter-audio` `cmd_call_start`/`end` no longer send `audio-policy
+`wandr-arbiter-audio` `cmd_call_start`/`end` no longer send `audio-policy
 set-mode comm`/`normal` (keep `CommsActive`, transient focus, badge); the guest
 (`engine.rs`) calls `focus::call_start()` at both connect sites (incoming Accept +
 outgoing Connected), symmetric to `call_end`. 16 audio tests pass; engine builds.
@@ -75,7 +75,7 @@ task-87-class `-889`/`-895` + `pcm_sync_ptr FD in bad state`). Needs an A/B over
 
 ## Symptom (user-reported)
 
-The wart **Signal** guest makes/receives calls fine under **ART** with working
+The wandr **Signal** guest makes/receives calls fine under **ART** with working
 voice. Under **`--no-art`**: a call can be placed, an incoming call **rings**
 (audible), but the call itself has **no speech audio either direction** — the
 other side hears nothing from the mic, and we hear nothing from them.
@@ -89,7 +89,7 @@ the device (Pixel 2 XL / taimen) has a hard constraint here.
 
 ## The mechanism (current code — grounded, not from stale memory)
 
-Full-duplex pump in `apps/user/war.signal/engine/src/call.rs::pump_audio`
+Full-duplex pump in `apps/user/wandr.signal/engine/src/call.rs::pump_audio`
 (~L257–333). **Order is load-bearing** (the in+out MMAP constraint):
 1. Open **OUTPUT first** — `audio::create_track(StreamClass::VoiceCall, stereo,
    USAGE_MEDIA)`. On this device `USAGE_VOICE_COMMUNICATION` output is unopenable
@@ -101,10 +101,10 @@ Full-duplex pump in `apps/user/war.signal/engine/src/call.rs::pump_audio`
 3. Pump: `read_pcm_f32` → `call.send_audio` (mic→peer); `recv_audio` →
    `play_buf` FIFO → `write_pcm_f32` (peer→speaker).
 
-Host side (`runtime/wart-host/src/audio_impl.rs`): always requests
+Host side (`runtime/wandr-host/src/audio_impl.rs`): always requests
 `AAUDIO_SHARING_MODE_SHARED`; the *service* decides MMAP-vs-legacy. There is
 already a **coexistence probe** mirroring exactly this scenario —
-`wart-host --probe-audio-loopback` (audio_impl.rs ~L410–468): opens output
+`wandr-host --probe-audio-loopback` (audio_impl.rs ~L410–468): opens output
 (USAGE_MEDIA legacy) then capture and reports **"LEGACY/coexists ✓"** vs
 **"MMAP-spin/no-data ✗"**. This is the high-signal diagnostic tool.
 
@@ -136,7 +136,7 @@ simultaneous capture and (b) a continuous SHARED output.
 
 ## Diagnosis plan (source-first, then A/B — no blind patching)
 
-1. **Run the coexistence probe** `wart-host --probe-audio-loopback` under
+1. **Run the coexistence probe** `wandr-host --probe-audio-loopback` under
    `--no-art` vs ART-up. If `--no-art` reports "MMAP-spin/no-data ✗" while ART is
    "LEGACY/coexists ✓", H1 is confirmed — the output went MMAP.
 2. **A/B a real call** (ART vs `--no-art`): capture host audio logs — `create_track`
@@ -167,10 +167,10 @@ simultaneous capture and (b) a continuous SHARED output.
   output needs the user to confirm).
 
 ## Source pointers
-- `apps/user/war.signal/engine/src/call.rs::pump_audio` (the full-duplex pump).
-- `runtime/wart-host/src/audio_impl.rs`: `open_pcm_stream` / `create_track` /
+- `apps/user/wandr.signal/engine/src/call.rs::pump_audio` (the full-duplex pump).
+- `runtime/wandr-host/src/audio_impl.rs`: `open_pcm_stream` / `create_track` /
   `create_capture`; `--probe-audio-loopback` (~L410), `--probe-audio-capture`.
-- `runtime/wart-host/src/audio_routing.rs` (route → deviceIds pin).
+- `runtime/wandr-host/src/audio_routing.rs` (route → deviceIds pin).
 - Task 87 (`tasks/87-artless-audio-output.md`) — the MMAP-START fixes (the 4
   binder stubs) that may have moved the call output onto MMAP (H1).
-- `crates/wart-call/src/{signal/call.rs,session.rs}` (send_audio/recv_audio).
+- `crates/wandr-call/src/{signal/call.rs,session.rs}` (send_audio/recv_audio).

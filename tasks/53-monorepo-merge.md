@@ -7,24 +7,24 @@
 > Companion to [task 52](52-monorepo-reorg.md). Task 52 decides
 > the target directory layout; task 53 carries out the git-side
 > consolidation: subtree-merge all first-party sibling repos
-> into the parent wart repo (history preserved) and wire the
+> into the parent wandr repo (history preserved) and wire the
 > four upstream forks as submodules.
 
 ## Prerequisites
 
 - Task 52 step 1 (decision + docs) landed.
 - All sibling repos pushed to codeberg at their current state
-  (`wart-host`, `wart-arbiter`, `wart-app`, `war.ime.keyboard`,
-  `war.lang.bg`, `war.lang.fr`, `markdown-renderer`, `emoji-picker`,
-  `system-fonts`, `md-smoke-rust`, `wart-app-md-smoke`,
-  `wart-leak-repro`, `kt-memalloc-repro`).
+  (`wandr-host`, `wandr-arbiter`, `wandr-app`, `wandr.ime.keyboard`,
+  `wandr.lang.bg`, `wandr.lang.fr`, `markdown-renderer`, `emoji-picker`,
+  `system-fonts`, `md-smoke-rust`, `wandr-app-md-smoke`,
+  `wandr-leak-repro`, `kt-memalloc-repro`).
 - Codeberg accounts authorized to archive repos when done.
 - A backup tag pushed on each sibling repo before the merge
   (`pre-monorepo-merge`).
 
 ## Step 0 — Push wasmtime fork to codeberg
 
-`~/wart/wasmtime-src/` carries a local commit beyond upstream
+`~/wandr/wasmtime-src/` carries a local commit beyond upstream
 (`058822330 wasi-preview1 adapter: pin State at a fixed linear-
 memory address (KT-86415)` — the partition trick from task 34).
 That commit needs to live on a codeberg fork before we can
@@ -32,7 +32,7 @@ submodule it.
 
 Action:
 ```
-cd ~/wart/wasmtime-src
+cd ~/wandr/wasmtime-src
 git remote add codeberg https://codeberg.org/harryzz/wasmtime.git
 
 # wasmtime-src may be a shallow clone — unshallow first, codeberg
@@ -58,7 +58,7 @@ unchecked).
 **Done 2026-05-28** — verified pushed; tip `058822330a` on
 `codeberg.org/harryzz/wasmtime/main`.
 
-**Note (decision 2026-05-28)**: `~/wart/kotlin-src/` is
+**Note (decision 2026-05-28)**: `~/wandr/kotlin-src/` is
 **deferred**. It's a partial clone (`blob:none`) and has
 **zero local commits** beyond upstream — pushing it would
 backfill several GB of blobs from JetBrains and re-upload to
@@ -73,11 +73,11 @@ the local tree + swap the submodule URL in one commit.
 Safety net for the irreversible-feeling steps below.
 
 ```
-for repo in wart-host wart-arbiter wart-app war.ime.keyboard \
-            war.lang.bg war.lang.fr markdown-renderer emoji-picker \
-            system-fonts md-smoke-rust wart-app-md-smoke \
-            wart-leak-repro kt-memalloc-repro; do
-    ( cd "$HOME/wart/$repo" && \
+for repo in wandr-host wandr-arbiter wandr-app wandr.ime.keyboard \
+            wandr.lang.bg wandr.lang.fr markdown-renderer emoji-picker \
+            system-fonts md-smoke-rust wandr-app-md-smoke \
+            wandr-leak-repro kt-memalloc-repro; do
+    ( cd "$HOME/wandr/$repo" && \
         git tag -a pre-monorepo-merge -m "snapshot before task 53 monorepo merge" && \
         git push origin pre-monorepo-merge )
 done
@@ -90,7 +90,7 @@ the tag's snapshot stays useful. This session caught one
 unpushed commit in `kt-memalloc-repro` (`4946435..eee981e` on
 main) — pushed before tagging proceeded.)
 
-## Step 2 — Move existing sibling repos out of ~/wart
+## Step 2 — Move existing sibling repos out of ~/wandr
 
 Subtree-merge **adds** the sibling repo's content under a
 prefix; the existing working-tree at the sibling location has
@@ -98,25 +98,25 @@ to be out of the way first. Move (don't delete) so we can
 roll back if needed.
 
 ```
-mkdir -p ~/wart-premerge-backup
-for repo in wart-host wart-arbiter wart-app war.ime.keyboard \
-            war.lang.bg war.lang.fr markdown-renderer emoji-picker \
-            system-fonts md-smoke-rust wart-app-md-smoke \
-            wart-leak-repro kt-memalloc-repro; do
-    mv "$HOME/wart/$repo" "$HOME/wart-premerge-backup/"
+mkdir -p ~/wandr-premerge-backup
+for repo in wandr-host wandr-arbiter wandr-app wandr.ime.keyboard \
+            wandr.lang.bg wandr.lang.fr markdown-renderer emoji-picker \
+            system-fonts md-smoke-rust wandr-app-md-smoke \
+            wandr-leak-repro kt-memalloc-repro; do
+    mv "$HOME/wandr/$repo" "$HOME/wandr-premerge-backup/"
 done
 
 # Forks too — about to become submodules
-mv ~/wart/skiko                       ~/wart-premerge-backup/
-mv ~/wart/wasmtime-src                ~/wart-premerge-backup/  # → external/wasmtime
-mv ~/wart/kotlin-src                  ~/wart-premerge-backup/  # → external/kotlin
-mv ~/wart/compose-multiplatform-core  ~/wart-premerge-backup/
+mv ~/wandr/skiko                       ~/wandr-premerge-backup/
+mv ~/wandr/wasmtime-src                ~/wandr-premerge-backup/  # → external/wasmtime
+mv ~/wandr/kotlin-src                  ~/wandr-premerge-backup/  # → external/kotlin
+mv ~/wandr/compose-multiplatform-core  ~/wandr-premerge-backup/
 ```
 
 ## Step 3 — Create the new directory shape
 
 ```
-cd ~/wart
+cd ~/wandr
 mkdir -p apps/system/lang apps/user runtime external tools repros
 ```
 
@@ -125,7 +125,7 @@ Move existing tracked directories into the new tree:
 git mv scripts                        tools/scripts
 git mv patches                        tools/patches
 git mv wasmtime-issue-artifacts       tools/triage/wasmtime-issues
-git mv wart-stack-magisk              runtime/magisk-module
+git mv wandr-stack-magisk              runtime/magisk-module
 git commit -m "task 52: lay out apps/ runtime/ external/ tools/ repros/"
 ```
 
@@ -138,56 +138,56 @@ commit (bigger, full bisect across repos). Default: **omit
 `--squash`** — full history wins for the project's debugging
 patterns.
 
-All 13 sibling repos plus the parent wart repo have been
+All 13 sibling repos plus the parent wandr repo have been
 fast-forwarded so `main` is the dev tip (2026-05-28). Subtree-
 add uses `main` uniformly.
 
 ```
-cd ~/wart
+cd ~/wandr
 
 # Native runtime
 git remote add -f tmp-host    https://codeberg.org/harryzz/wart-host.git
-git subtree add --prefix=runtime/wart-host    tmp-host    main
+git subtree add --prefix=runtime/wandr-host    tmp-host    main
 git remote remove tmp-host
 
 git remote add -f tmp-arb     https://codeberg.org/harryzz/wart-arbiter.git
-git subtree add --prefix=runtime/wart-arbiter tmp-arb     main
+git subtree add --prefix=runtime/wandr-arbiter tmp-arb     main
 git remote remove tmp-arb
 
 # User apps
 git remote add -f tmp-app     https://codeberg.org/harryzz/wart-app.git
-git subtree add --prefix=apps/user/wart-app   tmp-app     main
+git subtree add --prefix=apps/user/wandr-app   tmp-app     main
 git remote remove tmp-app
 
 # System apps
 git remote add -f tmp-ime     https://codeberg.org/harryzz/war.ime.keyboard.git
-git subtree add --prefix=apps/system/war.ime.keyboard tmp-ime main
+git subtree add --prefix=apps/system/wandr.ime.keyboard tmp-ime main
 git remote remove tmp-ime
 
 git remote add -f tmp-md      https://codeberg.org/harryzz/markdown-renderer.git
-git subtree add --prefix=apps/system/war.markdown.renderer tmp-md main
+git subtree add --prefix=apps/system/wandr.markdown.renderer tmp-md main
 git remote remove tmp-md
 
 git remote add -f tmp-em      https://codeberg.org/harryzz/emoji-picker.git
-git subtree add --prefix=apps/system/war.emoji.picker tmp-em main
+git subtree add --prefix=apps/system/wandr.emoji.picker tmp-em main
 git remote remove tmp-em
 
 git remote add -f tmp-ft      https://codeberg.org/harryzz/system-fonts.git
-git subtree add --prefix=apps/system/war.fonts.loader tmp-ft main
+git subtree add --prefix=apps/system/wandr.fonts.loader tmp-ft main
 git remote remove tmp-ft
 
 # Language plugins
 git remote add -f tmp-bg      https://codeberg.org/harryzz/war.lang.bg.git
-git subtree add --prefix=apps/system/lang/war.lang.bg tmp-bg main
+git subtree add --prefix=apps/system/lang/wandr.lang.bg tmp-bg main
 git remote remove tmp-bg
 
 git remote add -f tmp-fr      https://codeberg.org/harryzz/war.lang.fr.git
-git subtree add --prefix=apps/system/lang/war.lang.fr tmp-fr main
+git subtree add --prefix=apps/system/lang/wandr.lang.fr tmp-fr main
 git remote remove tmp-fr
 
 # Repros + smokes
 git remote add -f tmp-leak    https://codeberg.org/harryzz/wart-leak-repro.git
-git subtree add --prefix=repros/wart-leak-repro tmp-leak main
+git subtree add --prefix=repros/wandr-leak-repro tmp-leak main
 git remote remove tmp-leak
 
 git remote add -f tmp-mem     https://codeberg.org/harryzz/kt-memalloc-repro.git
@@ -199,7 +199,7 @@ git subtree add --prefix=repros/md-smoke-rust tmp-mdr main
 git remote remove tmp-mdr
 
 git remote add -f tmp-mdk     https://codeberg.org/harryzz/wart-app-md-smoke.git
-git subtree add --prefix=repros/wart-app-md-smoke tmp-mdk main
+git subtree add --prefix=repros/wandr-app-md-smoke tmp-mdk main
 git remote remove tmp-mdk
 ```
 
@@ -209,7 +209,7 @@ and `ls apps/system/`.
 ## Step 5 — Wire the four external forks as submodules
 
 ```
-cd ~/wart
+cd ~/wandr
 git submodule add https://codeberg.org/harryzz/skiko.git                        external/skiko
 git submodule add https://codeberg.org/harryzz/wasmtime.git                     external/wasmtime
 git submodule add https://codeberg.org/harryzz/compose-multiplatform-core.git   external/compose-multiplatform-core
@@ -238,7 +238,7 @@ git commit -m "task 53: wire upstream forks as submodules"
 
 ## Step 6 — Update `.gitignore`
 
-Old globs (`wart-*/`, `compose-*/`, `skiko/`, `markdown-renderer/`,
+Old globs (`wandr-*/`, `compose-*/`, `skiko/`, `markdown-renderer/`,
 `emoji-picker/`, `system-fonts/`, `md-smoke-rust/`, `kotlin-src/`,
 `wasmtime-src/`, `kt-memalloc-repro/`) all become obsolete.
 Replace with:
@@ -263,7 +263,7 @@ merge so the grep targets are in their final locations.
 
 ```
 grep -rEn \
-    '(wart-host|wart-arbiter|wart-app|war\.ime\.keyboard|war\.lang\.bg|war\.lang\.fr|markdown-renderer|emoji-picker|system-fonts|wart-stack-magisk|compose-multiplatform-core|wasmtime-src|skiko/|kotlin-src|wart-app-md-smoke|md-smoke-rust|wart-leak-repro|kt-memalloc-repro|scripts/|patches/)' \
+    '(wandr-host|wandr-arbiter|wandr-app|wandr\.ime\.keyboard|wandr\.lang\.bg|wandr\.lang\.fr|markdown-renderer|emoji-picker|system-fonts|wandr-stack-magisk|compose-multiplatform-core|wasmtime-src|skiko/|kotlin-src|wandr-app-md-smoke|md-smoke-rust|wandr-leak-repro|kt-memalloc-repro|scripts/|patches/)' \
     --include='*.sh' --include='*.toml' --include='*.kts' --include='*.gradle' \
     --include='*.rs' --include='*.md' \
     tools/ runtime/ apps/ repros/ docs/ wit/ CLAUDE.md \
@@ -272,8 +272,8 @@ grep -rEn \
 
 Update each match. Most common patterns:
 - `path = "../wit/<x>.wit"` → relative paths shift by the depth change
-- `~/wart/wart-host/...` → `~/wart/runtime/wart-host/...`
-- `markdown-renderer` → `apps/system/war.markdown.renderer` (or app_id `war.markdown.renderer` unchanged — only the build dir changes)
+- `~/wandr/wandr-host/...` → `~/wandr/runtime/wandr-host/...`
+- `markdown-renderer` → `apps/system/wandr.markdown.renderer` (or app_id `wandr.markdown.renderer` unchanged — only the build dir changes)
 
 `build.gradle.kts` in apps/ likely have hard-coded relative
 paths to `../../../skiko` or `../../../compose-multiplatform-core`
@@ -284,18 +284,18 @@ for tools/, etc.) so the diff stays bisectable.
 
 ## Step 8 — Reconfigure on-device installer paths
 
-If the build-system-warpkgs.sh script sourcing the
+If the build-system-wandrpkgs.sh script sourcing the
 `markdown-renderer/` dir is changed to source
-`apps/system/war.markdown.renderer/`, the dev pipeline rebuilds.
-On-device `app_id` strings stay identical — `war.markdown.renderer`
+`apps/system/wandr.markdown.renderer/`, the dev pipeline rebuilds.
+On-device `app_id` strings stay identical — `wandr.markdown.renderer`
 is the app_id whether the source dir is `markdown-renderer/` or
-`war.markdown.renderer/`. Same for emoji-picker → `war.emoji.picker`,
-system-fonts → `war.fonts.loader`.
+`wandr.markdown.renderer/`. Same for emoji-picker → `wandr.emoji.picker`,
+system-fonts → `wandr.fonts.loader`.
 
 ## Step 9 — Full rebuild + smoke
 
 Same as task 52 step 7 — every Cargo crate, every Gradle
-project, every warpkg packs + installs, then run the IME 🌐
+project, every wandrpkg packs + installs, then run the IME 🌐
 cycle smoke (task 49 step 6).
 
 ## Step 10 — Archive sibling repos on codeberg
@@ -306,11 +306,11 @@ For each of the 13 subtree-imported repos:
    git checkout --orphan archived
    echo "# Archived 2026-XX-XX" > README.md
    echo "" >> README.md
-   echo "This repo's history is now part of the wart monorepo at" >> README.md
+   echo "This repo's history is now part of the wandr monorepo at" >> README.md
    echo "<https://codeberg.org/harryzz/wart> under the prefix" >> README.md
-   echo "\`apps/system/war.ime.keyboard/\` (or equivalent — see" >> README.md
+   echo "\`apps/system/wandr.ime.keyboard/\` (or equivalent — see" >> README.md
    echo "\`docs/repository-layout.md\` in the monorepo)." >> README.md
-   git add README.md && git commit -m "archive: moved to wart monorepo"
+   git add README.md && git commit -m "archive: moved to wandr monorepo"
    git push -f origin archived:main
    ```
 2. Mark the repo "Archived" via codeberg web UI (Repository
@@ -320,14 +320,14 @@ The `pre-monorepo-merge` tag from step 1 stays as the last
 non-archive commit on each repo, in case anyone needs to
 recover the pre-merge state.
 
-## Step 11 — Delete `~/wart-premerge-backup` (only when smoke passes)
+## Step 11 — Delete `~/wandr-premerge-backup` (only when smoke passes)
 
 Don't `rm -rf` until everything builds, the device-side smoke
 passes, and one full clone-from-scratch test confirms the
 monorepo + submodules clone cleanly. Then remove:
 
 ```
-rm -rf ~/wart-premerge-backup
+rm -rf ~/wandr-premerge-backup
 ```
 
 ## Effort estimate
@@ -349,13 +349,13 @@ Every step has a clear undo:
   commits. Sibling repos still exist with all history.
 - Step 6: revert .gitignore.
 - Step 7: revert path-reference commits.
-- Step 9: device-side undo is `bash tools/scripts/build-system-warpkgs.sh`
+- Step 9: device-side undo is `bash tools/scripts/build-system-wandrpkgs.sh`
   again from the pre-merge tree.
 - Step 10: codeberg "Unarchive" works for archived repos.
 - Step 11: don't delete the backup until everything's verified.
 
 If any step fails halfway, the rule is: bail, restore from
-`~/wart-premerge-backup`, file a follow-up. Don't try to fix
+`~/wandr-premerge-backup`, file a follow-up. Don't try to fix
 mid-merge.
 
 ## After: clone instructions
@@ -363,7 +363,7 @@ mid-merge.
 A fresh contributor will:
 ```
 git clone --recurse-submodules https://codeberg.org/harryzz/wart.git
-cd wart
+cd wandr
 # All first-party code is here. Submodules under external/
 # point at the four forks; they're cloned automatically.
 ```
@@ -395,20 +395,20 @@ post-reorg.
 
 | Step | Outcome | Commit / notes |
 |---|---|---|
-| 0 | Wasmtime fork pushed to `codeberg.org/harryzz/wasmtime` tip `058822330a`. Kotlin fork **deferred** (zero local commits + partial clone). | wart `db98be9c` |
-| 1 | 13 sibling repos tagged `pre-monorepo-merge` + pushed. Caught 1 unpushed commit in `kt-memalloc-repro` mid-flight. | wart `a1cda1f7` |
-| 1.5 | Pre-step: fast-forwarded `main` to dev-tip in 4 repos that were on `task-33-boot-model` (wart-host, wart-arbiter, markdown-renderer, wart-app-md-smoke). All 13 sibling repos + parent wart now have remote `main` = dev tip. | wart `a2b229fb` |
-| 2 | 13 sibling repos + 4 fork clones moved to `~/wart-premerge-backup/`. | (no commit — gitignored) |
-| 3 | New tree (`apps/`, `runtime/`, `external/`, `tools/`, `repros/`) created; `scripts/` → `tools/scripts/`, `patches/` → `tools/patches/`, `wart-stack-magisk/` → `runtime/magisk-module/`, `wasmtime-issue-artifacts/` → `tools/triage/wasmtime-issues/`. | wart `9d923311` |
-| 4 | 13 `git subtree add` commits (history preserved). Stashed pre-existing WIP first (subtree-add refuses dirty tree). | wart `f768e144` (last subtree add) |
-| 5 | 4 submodules wired under `external/`. Manual `update-index --add --cacheinfo 160000,…` to avoid re-cloning ~5 GB; `submodule absorbgitdirs` + `init` to register .git/ properly. | wart `ca853d08` |
-| 5-fix | 7 nested gitlinks from wart-host's `vendor/` (the abandoned out-of-tree compile) — folded into the top-level `.gitmodules`; nested `runtime/wart-host/.gitmodules` removed. | wart `f649821f` |
-| 6 | Old sibling-repo `.gitignore` rules removed; collapsed to `**/build/`, `**/target/`, `**/.gradle/`. | wart `6499ce18` |
-| 7 | ~30 path-reference edits across `tools/scripts/*.sh`, Rust `wit_bindgen!` paths, gradle skiko/compose paths. | wart `637ea071` |
+| 0 | Wasmtime fork pushed to `codeberg.org/harryzz/wasmtime` tip `058822330a`. Kotlin fork **deferred** (zero local commits + partial clone). | wandr `db98be9c` |
+| 1 | 13 sibling repos tagged `pre-monorepo-merge` + pushed. Caught 1 unpushed commit in `kt-memalloc-repro` mid-flight. | wandr `a1cda1f7` |
+| 1.5 | Pre-step: fast-forwarded `main` to dev-tip in 4 repos that were on `task-33-boot-model` (wandr-host, wandr-arbiter, markdown-renderer, wandr-app-md-smoke). All 13 sibling repos + parent wandr now have remote `main` = dev tip. | wandr `a2b229fb` |
+| 2 | 13 sibling repos + 4 fork clones moved to `~/wandr-premerge-backup/`. | (no commit — gitignored) |
+| 3 | New tree (`apps/`, `runtime/`, `external/`, `tools/`, `repros/`) created; `scripts/` → `tools/scripts/`, `patches/` → `tools/patches/`, `wandr-stack-magisk/` → `runtime/magisk-module/`, `wasmtime-issue-artifacts/` → `tools/triage/wasmtime-issues/`. | wandr `9d923311` |
+| 4 | 13 `git subtree add` commits (history preserved). Stashed pre-existing WIP first (subtree-add refuses dirty tree). | wandr `f768e144` (last subtree add) |
+| 5 | 4 submodules wired under `external/`. Manual `update-index --add --cacheinfo 160000,…` to avoid re-cloning ~5 GB; `submodule absorbgitdirs` + `init` to register .git/ properly. | wandr `ca853d08` |
+| 5-fix | 7 nested gitlinks from wandr-host's `vendor/` (the abandoned out-of-tree compile) — folded into the top-level `.gitmodules`; nested `runtime/wandr-host/.gitmodules` removed. | wandr `f649821f` |
+| 6 | Old sibling-repo `.gitignore` rules removed; collapsed to `**/build/`, `**/target/`, `**/.gradle/`. | wandr `6499ce18` |
+| 7 | ~30 path-reference edits across `tools/scripts/*.sh`, Rust `wit_bindgen!` paths, gradle skiko/compose paths. | wandr `637ea071` |
 | 8 | No-op — `app_id` strings unchanged across reorg; on-device install paths reuse the same identifiers. | (folded into step 7) |
-| 9 | All 11 builds green (`cargo check` for 6 cdylibs + wart-host + wart-arbiter; gradle `compileProductionExecutableKotlinWasmWasi` for wart-app + IME). Device smoke: IME 🌐 cycle rotates English → Български → Français → English cleanly. Hit 3 mid-flight bugs (see "Lessons" below). | wart `24c3c0c1`, `f321fa15` |
-| 10 | 13 obsolete sibling repos now show an "Archived 2026-05-28 — moved to wart monorepo at `<prefix>/`" README on their `main` branch (orphan force-push). `pre-monorepo-merge` tag still points at the pre-merge tip. **Codeberg "Archived" flag set on all 13 via web UI.** | per-repo force-push (not in wart history) |
-| 11 | `~/wart-premerge-backup/` (~28 GB) deleted after clone-from-scratch + `cargo check` verification on a fresh `/tmp/clone-test/wart` checkout. | (cleanup) |
+| 9 | All 11 builds green (`cargo check` for 6 cdylibs + wandr-host + wandr-arbiter; gradle `compileProductionExecutableKotlinWasmWasi` for wandr-app + IME). Device smoke: IME 🌐 cycle rotates English → Български → Français → English cleanly. Hit 3 mid-flight bugs (see "Lessons" below). | wandr `24c3c0c1`, `f321fa15` |
+| 10 | 13 obsolete sibling repos now show an "Archived 2026-05-28 — moved to wandr monorepo at `<prefix>/`" README on their `main` branch (orphan force-push). `pre-monorepo-merge` tag still points at the pre-merge tip. **Codeberg "Archived" flag set on all 13 via web UI.** | per-repo force-push (not in wandr history) |
+| 11 | `~/wandr-premerge-backup/` (~28 GB) deleted after clone-from-scratch + `cargo check` verification on a fresh `/tmp/clone-test/wandr` checkout. | (cleanup) |
 
 ### Lessons / mid-flight bugs
 
@@ -419,7 +419,7 @@ post-reorg.
    `v44`, then HEAD). The same recipe applied later for the
    *monorepo* push but the monorepo's 42 MB pack went through
    in one shot — the threshold seems to be around 100 MB.
-2. **`git submodule absorbgitdirs` emptied the wart-host vendor
+2. **`git submodule absorbgitdirs` emptied the wandr-host vendor
    working trees.** Cause: the AOSP sub-vendor dirs (skia-src,
    aosp-frameworks-*) were moved in from backup with their .git
    intact; absorbgitdirs migrated the .git but didn't preserve
@@ -434,15 +434,15 @@ post-reorg.
    from `scripts/` to `tools/scripts/`; the
    `$(dirname "$0")/..` idiom still resolved to one level up,
    landing in `tools/` instead of the repo root. Symptom:
-   `cd: /home/harry/wart/tools/runtime/wart-host/…: No such
+   `cd: /home/harry/wandr/tools/runtime/wandr-host/…: No such
    file or directory`. **Fix**: bulk-edit all REPO_ROOT
    computations to `…/../..`.
 4. **IME's `.gitignore` blocked the gradle wrapper.** Cause:
-   The IME (formerly `war.ime.keyboard/` standalone repo)
+   The IME (formerly `wandr.ime.keyboard/` standalone repo)
    gitignored `/gradlew*` and `/gradle/` — fine when the
-   wrapper was shared via filesystem proximity with wart-app,
+   wrapper was shared via filesystem proximity with wandr-app,
    broken in the monorepo where each project needs its own.
-   **Fix**: copy wart-app's wrapper into the IME + narrow the
+   **Fix**: copy wandr-app's wrapper into the IME + narrow the
    ignore rules.
 5. **Subtree-add refuses dirty trees.** Caught early via
    `git stash push -u` before the 13-step subtree loop.
@@ -467,6 +467,6 @@ post-reorg.
   via web UI).
 - `.task-state` file at repo root is stale (refers to
   pre-reorg paths). Refresh when next task starts.
-- `~/wart` working tree was switched from `task-33-boot-model`
+- `~/wandr` working tree was switched from `task-33-boot-model`
   to `main` during the migration. Future tasks should start
   branches from `main`.

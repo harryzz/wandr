@@ -1,8 +1,8 @@
-# Visual sizing — design patterns, and where wart differs
+# Visual sizing — design patterns, and where wandr differs
 
 > One-page note. The problem (non-hardcoded, runtime-scalable sizing across
 > density / orientation / multiple surfaces) is a **solved design-pattern
-> problem**, not a WASM/C++/wart problem. This captures the proven patterns and
+> problem**, not a WASM/C++/wandr problem. This captures the proven patterns and
 > — the important part — where our setup genuinely deviates from them.
 
 ## The problem
@@ -27,18 +27,18 @@ orientation, available space, and the presence of other surfaces (chrome, IME).
   **intrinsic** size; the *container* supplies **constraints** (the available
   space); neither hardcodes. This is the spine of all the above.
 
-## Where wart differs (why we can't copy Android/Compose verbatim)
+## Where wandr differs (why we can't copy Android/Compose verbatim)
 1. **The producer is a separate process, not a view in one layout tree.** In
    Android/Compose a single measure pass over one tree sizes everything. Here the
    IME, each app, and each overlay are *separate WASM guests with separate
    surfaces*. → Negotiated sizing must happen **across the WIT / IPC boundary**,
    not inside a shared measure pass.
 2. **An overlay can't see the screen.** A normal container knows its full space; a
-   wart overlay guest sees only *its own strip surface*. → The available-space
+   wandr overlay guest sees only *its own strip surface*. → The available-space
    constraint must be **pushed to the guest over WIT** (the `display` interface) —
    otherwise it sizes blind (this is exactly why the IME couldn't compute %).
 3. **Split authority.** Android has one WindowManager/InsetsController that
-   computes *and* dispatches insets. wart splits it three ways: **host** owns
+   computes *and* dispatches insets. wandr splits it three ways: **host** owns
    surfaces/geometry, **arbiter** owns roles + the overlay split, each **guest**
    owns its own layout. → The "system" in the pattern is *multiple processes*;
    insets/constraints become a **contract between them**, not a library call.
@@ -50,7 +50,7 @@ orientation, available space, and the presence of other surfaces (chrome, IME).
 5. **Multi-language dp.** Compose has `dp` built in; our **Rust** guests don't. →
    dp must be a **WIT contract** (`window` reports density; every guest converts
    itself), not an assumed framework primitive.
-6. **Layout ≠ render.** Standard toolkits repaint on layout invalidation. wart
+6. **Layout ≠ render.** Standard toolkits repaint on layout invalidation. wandr
    **gates rendering** on frame-pacing / `dirty`. → "Reactive recompute" must also
    **force a render**, or you get the present-but-empty-surface bug we hit
    (recompute happened; the paint didn't).
@@ -75,7 +75,7 @@ function of a measured input, named once where it's genuinely a policy.
 
 The coordinator Android put in `system_server` (WMS + IMMS + AMS) was dropped with
 ART and never replaced — its responsibilities scattered across the per-app
-**wart-host**, the **wart-arbiter**, and the **guests**. That scatter is why
+**wandr-host**, the **wandr-arbiter**, and the **guests**. That scatter is why
 geometry/inset state disagrees between processes (empty keyboard, stale overlay).
 The fix is not more peer coordination — it is to **re-centralize that authority
 into the arbiter**, reborn as the lean, native equivalent of system_server's
@@ -97,7 +97,7 @@ the Java or binder protocols):
 **Keep Android's own policy/mechanism split** — this is the proof the design isn't
 exotic; it's Android with `system_server` replaced by a native arbiter:
 
-| Responsibility | Android | wart |
+| Responsibility | Android | wandr |
 |---|---|---|
 | decide layout / insets / z-order / focus | WMS·AMS·IMMS (`system_server`, Java) | **arbiter** (native, lean) |
 | composite surfaces | SurfaceFlinger | SurfaceFlinger (unchanged) |
@@ -139,7 +139,7 @@ clipboard, keyguard/wallpaper, multi-display — see *Foreseen responsibilities*
 It must grow by **adding a crate and wiring one line**, never by digging into
 working code (Open/Closed).
 
-**Shape.** A thin **`wart-arbiter-core`** kernel owns only:
+**Shape.** A thin **`wandr-arbiter-core`** kernel owns only:
 1. the **event loop + socket transport** (verbs in, replies out);
 2. a typed **shared-state store** — the single source of truth (displays,
    surfaces, focus, roles);
@@ -154,7 +154,7 @@ trait ArbiterModule {
     fn on_event(&mut self, e: &Event, ctx: &mut Ctx);    // react to others' changes
 }
 ```
-Each responsibility is its own crate (`wart-arbiter-wm`, `-ime`, `-am`,
+Each responsibility is its own crate (`wandr-arbiter-wm`, `-ime`, `-am`,
 `-notify`, `-alarm`, `-audiofocus`, …); the binary only:
 ```rust
 reg.register(WmModule::new());
@@ -175,7 +175,7 @@ those right → responsibilities are additive crates forever; get them wrong →
 still edit the core. So design effort belongs in the **core**, not the modules.
 
 **Migration without rewriting the working arbiter (strangler):**
-1. Add `wart-arbiter-core` (bus + store + trait + registry) *alongside* today's code.
+1. Add `wandr-arbiter-core` (bus + store + trait + registry) *alongside* today's code.
 2. Wire **new** responsibilities (WM-geometry, notifications, alarms, audio-focus)
    as modules from day one.
 3. Migrate **existing** logic (roles, overlay-split, ime-routing) into modules
@@ -191,7 +191,7 @@ battery sysfs.
 
 `system_server` **policy** the arbiter will inherit as modules:
 
-| Responsibility | Note for wart |
+| Responsibility | Note for wandr |
 |---|---|
 | **DisplayManager** | **Bake in now** — key all geometry *per-display*; "one panel" is a hardcode. |
 | **Audio focus** | Same shape as window/IME focus → arbiter is a **resource-focus arbiter**, generalize now. |

@@ -26,7 +26,7 @@ instruments.
 
 ## Scope
 
-Add a `wart-host/src/profiling.rs` module gated by a `profile` cargo
+Add a `wandr-host/src/profiling.rs` module gated by a `profile` cargo
 feature. Production APK builds (no `--features profile`) stay
 unaffected. With the feature enabled, four hooks turn on:
 
@@ -58,7 +58,7 @@ N+1 patterns à la `feedback_currentnanotime_pollutes.md`.
 Driven by `Config::epoch_interruption(true)` + a thread that ticks
 `Engine::increment_epoch()` every ~1 ms. Profile starts on the first
 `render_frame` call; runs for 10 seconds (configurable); dumps JSON
-to `/sdcard/Download/wart-profile-<unix-ms>.json` for Firefox
+to `/sdcard/Download/wandr-profile-<unix-ms>.json` for Firefox
 Profiler ingestion.
 
 Optional bells:
@@ -69,7 +69,7 @@ Optional bells:
 ## Implementation sketch
 
 ```
-wart-host/
+wandr-host/
   Cargo.toml                 (+ [features]   profile = [])
   src/
     profiling.rs             (new — ResourceLimiter, call-hook
@@ -130,7 +130,7 @@ behavior change when the feature is off.
 
 1. Deploy the `--features profile` APK to Pixel 2 XL.
 2. Run with the demo's ProgressIndicator route active for 60 seconds.
-3. `adb pull /sdcard/Download/wart-profile-<unix-ms>.json`,
+3. `adb pull /sdcard/Download/wandr-profile-<unix-ms>.json`,
    drag-and-drop into `https://profiler.firefox.com`.
 4. Snapshot:
    - Memory growth log: roughly 60 s × 0.4 MB/s ≈ 24 MB growth
@@ -179,7 +179,7 @@ After install + cold-start with `--features profile`:
 
 - **Fixing the ProgressIndicator leak.** The root cause is in
   Kotlin/Wasm's generated continuation classes; can't be fixed from
-  wart-host. This task only characterizes the leak; mitigation
+  wandr-host. This task only characterizes the leak; mitigation
   remains "use static widgets" until upstream Kotlin/Wasm changes.
 - **Continuous always-on profiling.** The `profile` feature is for
   debugging sessions; production APKs build without it.

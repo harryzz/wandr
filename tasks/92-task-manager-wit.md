@@ -1,4 +1,4 @@
-# Task 92 — war:task-manager WIT (running-apps / task manager for guests)
+# Task 92 — wandr:task-manager WIT (running-apps / task manager for guests)
 
 > Status: 🟡 DESIGN COMMITTED (`wit/task-manager.wit`), implementation pending.
 > A guest can enumerate running apps, see kind (system/user) + state + CPU/mem,
@@ -6,12 +6,12 @@
 
 ## What it is
 
-`war:task-manager@0.1.0` (`wit/task-manager.wit`) — a separate package (like
-`war:alarm`/`war:connectivity`, so no `my:skiko-gfx` sync churn). One import
+`wandr:task-manager@0.1.0` (`wit/task-manager.wit`) — a separate package (like
+`wandr:alarm`/`wandr:connectivity`, so no `my:skiko-gfx` sync churn). One import
 interface `task-manager`:
 
 - `list-apps() -> list<app-info>` — every running app, enriched.
-- `system-mem() -> system-memory` — device RAM (total / available / wart PSS sum).
+- `system-mem() -> system-memory` — device RAM (total / available / wandr PSS sum).
 - `kill-app(app-id) -> result<_, kill-error>`.
 
 `app-info` = `app-id`, `label`, `pid`, `kind` (`system|user`), `state`
@@ -26,7 +26,7 @@ launcher/keyguard/chrome the arbiter would relaunch). Worlds: `task-manager-clie
 
 Mirror the alarm/connectivity host-forwards-to-arbiter pattern:
 
-1. **Arbiter** — extend the existing `cmd_list` (`wart-arbiter-shell/src/am.rs:129`)
+1. **Arbiter** — extend the existing `cmd_list` (`wandr-arbiter-shell/src/am.rs:129`)
    or add a `task-list` verb that emits, per app, the fields the WIT needs:
    `app_id`, `pid`, `kind`, `state` (from `Role`), `uptime_ms`. Source: the
    `AppState` registry + the surface `Role`. `kind` from the install class
@@ -43,7 +43,7 @@ Mirror the alarm/connectivity host-forwards-to-arbiter pattern:
    `app_loader.rs`. (Host runs as root → can read any `/proc/<pid>`.)
 3. **WIT-sync** — mirror `wit/task-manager.wit` into the test guest's `wit/deps/`
    per the sync rule (it's a separate package, so no skiko-gfx mirror needed).
-4. **Test guest** — a small `apps/user/war.taskmanager` GUI guest (dioxus-canvas
+4. **Test guest** — a small `apps/user/wandr.taskmanager` GUI guest (dioxus-canvas
    or rust-canvas) that polls `list-apps` every ~1.5 s and renders rows
    (label, kind badge, state, CPU‰, mem) + a kill button; device-verify under
    `--no-art` (the arbiter/host already run there).
@@ -52,10 +52,10 @@ Mirror the alarm/connectivity host-forwards-to-arbiter pattern:
 - **Polling, not push** (user choice 2026-06-06): the guest refreshes on a timer;
   `cpu-permille` is 0 on the first poll for a freshly seen pid (needs two samples).
   A push `on-apps-changed` events world can be added later if wanted (mirror
-  `war:connectivity`'s handler) — out of scope here.
+  `wandr:connectivity`'s handler) — out of scope here.
 - `kill` by `app-id` (the arbiter's key), not pid.
 - PSS is the honest per-app number under the zygote COW model (RSS overcounts the
   ~180 MB shared working set); sample it but allow `0` when skipped for cost.
 
-See `wit/task-manager.wit`, `wit/alarm.wit` (pattern), `wart-arbiter-shell/src/am.rs`
+See `wit/task-manager.wit`, `wit/alarm.wit` (pattern), `wandr-arbiter-shell/src/am.rs`
 (`cmd_list`/`kill`), `[[feedback_wart_zygote_fork_survival]]` (PSS vs RSS).

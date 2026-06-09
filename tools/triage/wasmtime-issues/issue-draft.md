@@ -181,7 +181,7 @@ logcat:
 
 ```
 last frame log
-+0.0 s   wart-profile: frame N t+X ms  win[N=60 ... ]
++0.0 s   wandr-profile: frame N t+X ms  win[N=60 ... ]
 +0.0 s   InputDispatcher: "spent 2005 ms processing MotionEvent"
 +1.0 s   InputDispatcher: "spent 2350 ms processing MotionEvent"
 +4.0 s   InputDispatcher: "spent 2247 ms processing MotionEvent"
@@ -270,8 +270,8 @@ issue's linked gist for the patches and logs):
 
 - **`01-instrumentation.patch`** — the diagnostic patch that produced
   the trajectory above. ~40 lines against wasmtime 44.0.1. Two
-  accessor methods on `FreeList` (`wart_instr_free_block_count`,
-  `wart_instr_total_free_bytes`) and one `log::info!` at the end of
+  accessor methods on `FreeList` (`wandr_instr_free_block_count`,
+  `wandr_instr_total_free_bytes`) and one `log::info!` at the end of
   `DrcHeap::sweep`. No semantic changes; 12 existing `FreeList` unit
   tests pass. Happy to PR if useful as a feature-gated diagnostic.
 
@@ -280,14 +280,14 @@ issue's linked gist for the patches and logs):
   worse for the reasons described in "What we tried that did NOT
   work." Included as a benchmark fixture, not as a proposed fix.
 
-- **`wart-leak-repro.wasm`** + **`Main.kt`** — ~200 KB Kotlin/Wasm
+- **`wandr-leak-repro.wasm`** + **`Main.kt`** — ~200 KB Kotlin/Wasm
   module exhibiting the bare `suspendCoroutine` allocation pattern.
   ~60-line source. No Compose, no kotlinx-coroutines, no UI.
 
 - **`logcat-full-2026-05-18.log`** + filtered subsets — Android
   logcat from a soak that produced the three sweep events above.
 
-A separate AOT `.cwasm` for the full Compose wart-app (which
+A separate AOT `.cwasm` for the full Compose wandr-app (which
 exhibits the cascade-to-ANR symptom) is also available but ~30 MB
 and not particularly informative without the matching host-side
 embedder; happy to share on request.

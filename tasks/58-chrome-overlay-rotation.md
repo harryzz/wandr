@@ -10,8 +10,8 @@
 
 ## Problem
 
-The status bar (`war.statusbar`, `OverlayMode::Top`) and taskbar
-(`war.taskbar`, `OverlayMode::BottomBar`) are created as fixed
+The status bar (`wandr.statusbar`, `OverlayMode::Top`) and taskbar
+(`wandr.taskbar`, `OverlayMode::BottomBar`) are created as fixed
 SurfaceFlinger overlay strips on the **physical** panel edges:
 
 - status bar: physical `[0,0][PW,SB]` (top).
@@ -68,7 +68,7 @@ fullscreen path does — but for a strip:
 4. **Keep the content-insets in sync.** The fullscreen app's insets are
    currently `top=SB, bottom=TB` on the physical frame (task 56). When the
    chrome moves to the side edges in landscape, the app's inset must move
-   correspondingly. Today the host derives insets from `WART_INSET_TOP/
+   correspondingly. Today the host derives insets from `WANDR_INSET_TOP/
    BOTTOM` env (physical top/bottom) and the dihedral maps them to the
    right logical edge *assuming the chrome stays on the physical top/
    bottom*. Once the chrome moves to physical side edges in landscape,
@@ -78,18 +78,18 @@ fullscreen path does — but for a strip:
 
 ## Key files
 
-- `runtime/wart-host/src/standalone.rs` — overlay launch (`OverlayMode`),
+- `runtime/wandr-host/src/standalone.rs` — overlay launch (`OverlayMode`),
   `enable_rotation` gating, the sensor poll loop.
-- `runtime/wart-host/src/sf_surface.rs` + `cpp/sf_surface.cpp` — overlay
+- `runtime/wandr-host/src/sf_surface.rs` + `cpp/sf_surface.cpp` — overlay
   surface geometry (`sf_create_overlay_surface(x,y,w,h)`); a landscape
   strip needs different geometry, possibly a surface
   resize/reposition on rotation (new shim entry or recreate). **Building
   the shim needs the a-03 AOSP host** (see [[project-boot-model-libgui-build]]).
-- `runtime/wart-host/src/canvas_impl.rs` — `recompute_transform` inset
+- `runtime/wandr-host/src/canvas_impl.rs` — `recompute_transform` inset
   math (must track which physical edge the chrome is on per orientation).
-- `runtime/wart-arbiter/src/main.rs` — (option 1) broadcast orientation to
+- `runtime/wandr-arbiter/src/main.rs` — (option 1) broadcast orientation to
   overlay control sockets.
-- `apps/system/war.statusbar/`, `apps/system/war.taskbar/` — guests
+- `apps/system/wandr.statusbar/`, `apps/system/wandr.taskbar/` — guests
   re-lay-out on `on_resize` (already handle resize; verify the strip-major
   axis swap looks right).
 
@@ -115,7 +115,7 @@ fullscreen path does — but for a strip:
 
 If full landscape chrome is not worth the a-03 surface-reposition work
 yet: **hide the chrome overlays in landscape** (the arbiter demotes
-`war.statusbar` + `war.taskbar` on a landscape orientation event and
+`wandr.statusbar` + `wandr.taskbar` on a landscape orientation event and
 restores them on portrait), and have the host drop the app insets to 0
 in landscape (immersive). One orientation signal + two demote/promote
 calls + an inset toggle — no shim rebuild. Document as the v1 behavior

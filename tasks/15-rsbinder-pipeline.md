@@ -4,9 +4,9 @@
 
 ## Goal
 
-Make `rsbinder` callable from `wart-host` so subsequent tasks can call stable AIDL HAL services (`android.hardware.vibrator.IVibrator`, `android.hardware.light.ILights`) over binder instead of poking sysfs. After this task lands, the build still works exactly as before; nothing yet uses binder. The verification is **negative**: existing PoC features still work; binder init succeeds (or fails gracefully) without panicking the host.
+Make `rsbinder` callable from `wandr-host` so subsequent tasks can call stable AIDL HAL services (`android.hardware.vibrator.IVibrator`, `android.hardware.light.ILights`) over binder instead of poking sysfs. After this task lands, the build still works exactly as before; nothing yet uses binder. The verification is **negative**: existing PoC features still work; binder init succeeds (or fails gracefully) without panicking the host.
 
-Reference: `~/wart/post-art-roadmap.md` §3 (Boundary B / Pattern 5).
+Reference: `~/wandr/post-art-roadmap.md` §3 (Boundary B / Pattern 5).
 
 ---
 
@@ -46,7 +46,7 @@ Service lookup uses `rsbinder::hub::get_interface::<dyn IVibrator>("android.hard
 ### 1. Vendor AOSP hardware-interfaces submodule
 
 ```bash
-cd ~/wart/wart-host
+cd ~/wandr/wandr-host
 git submodule add --depth 1 https://android.googlesource.com/platform/hardware/interfaces vendor/aosp-hardware-interfaces
 cd vendor/aosp-hardware-interfaces
 git fetch --depth 1 origin refs/tags/android-11.0.0_r48:refs/tags/android-11.0.0_r48
@@ -88,7 +88,7 @@ Both versions pinned exactly because generated bindings are not source-stable ac
 
 ### 4. ProcessState init helper
 
-New file `wart-host/src/binder.rs`. Single-shot `pub fn init() -> Result<(), &'static str>` using `std::sync::OnceLock`:
+New file `wandr-host/src/binder.rs`. Single-shot `pub fn init() -> Result<(), &'static str>` using `std::sync::OnceLock`:
 - Checks `/dev/binder` exists first (avoids panic in `init_default()` when device has no binder).
 - Wraps `init_default()` in `catch_unwind` because rsbinder's API panics on internal failure.
 - Calls `start_thread_pool()` after init succeeds.
@@ -117,7 +117,7 @@ In `build.rs`, inside the existing `if target_os == "android"` link block (after
 
 Concrete sources for this task: `IVibrator.aidl` and `ILights.aidl` only. `IVibratorCallback.aidl` is pulled in automatically via `IVibrator`'s import.
 
-New file `wart-host/src/binder_aidl.rs`:
+New file `wandr-host/src/binder_aidl.rs`:
 
 ```rust
 #[cfg(target_os = "android")]
@@ -142,10 +142,10 @@ New file `.claude/agents/rsbinder-triage.md` covering five common failure patter
 Suggested commit boundaries (one commit per sub-step for clean bisect):
 
 1. `vendor: shallow submodule for AOSP hardware-interfaces (android-11.0.0_r48)`
-2. `wart-host: bump min_sdk_version 29→30, add VIBRATE permission`
-3. `wart-host: add rsbinder + rsbinder-aidl deps`
-4. `wart-host: binder ProcessState init helper`
-5. `wart-host: rsbinder-aidl codegen pipeline + binder_aidl.rs wrapper`
+2. `wandr-host: bump min_sdk_version 29→30, add VIBRATE permission`
+3. `wandr-host: add rsbinder + rsbinder-aidl deps`
+4. `wandr-host: binder ProcessState init helper`
+5. `wandr-host: rsbinder-aidl codegen pipeline + binder_aidl.rs wrapper`
 6. `agent: rsbinder-triage for binder runtime failures`
 
 **End-to-end verify:**

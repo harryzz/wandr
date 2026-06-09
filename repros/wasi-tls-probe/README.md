@@ -1,6 +1,6 @@
 # wasi-tls reachability probe
 
-De-risks the **transport layer** for a possible Signal-messenger wart app: can a
+De-risks the **transport layer** for a possible Signal-messenger wandr app: can a
 `wasm32-wasip2` guest reach a TLS server using only **host-delegated**
 `wasi:sockets` + `wasi:tls@0.2.0-draft` — i.e. with **no TLS/crypto compiled into
 the guest**?
@@ -35,33 +35,33 @@ public bundle (`webpki_roots::TLS_SERVER_ROOTS`, `wasi-tls/src/providers/rustls.
 
 ## What this means / next step
 
-Not a wart or wasi-tls limitation — it's Signal's pinning. `wasi:tls`'s
+Not a wandr or wasi-tls limitation — it's Signal's pinning. `wasi:tls`'s
 `ClientHandshake::new(server-name, in, out)` has **no** way for the guest to pass
 a custom CA; the trust store lives entirely in the host provider. Fix is
 **host-side and small**: `wasmtime_wasi_tls::TlsProvider` is a public trait
-(`wasi-tls/src/lib.rs:174`) — wart-host supplies a provider whose `RootCertStore`
+(`wasi-tls/src/lib.rs:174`) — wandr-host supplies a provider whose `RootCertStore`
 = public roots **+ Signal's pinned CA** (the same PEMs presage/libsignal-service-rs
 bundle). TLS stays host-delegated; no crypto in the guest.
 
 **Loop closed** by [`../wasi-tls-runner`](../wasi-tls-runner) (desktop, custom
-provider) and by **wart-host itself** (task 66 — Signal's CA wired into the
+provider) and by **wandr-host itself** (task 66 — Signal's CA wired into the
 production host).
 
-## Running it through wart-host on-device (warpkg)
+## Running it through wandr-host on-device (wandrpkg)
 
-`package.toml` packages this as a `wasi:cli/command` system warpkg. Build →
+`package.toml` packages this as a `wasi:cli/command` system wandrpkg. Build →
 install → launch headless via the zygote:
 
 ```bash
 cargo build --target wasm32-wasip2 --release
-PKG=/tmp/probe.warpkg; rm -rf "$PKG"; mkdir -p "$PKG/components"
+PKG=/tmp/probe.wandrpkg; rm -rf "$PKG"; mkdir -p "$PKG/components"
 cp package.toml "$PKG/package.toml"
 cp target/wasm32-wasip2/release/wasi-tls-probe.wasm "$PKG/components/probe.wasm"
-adb push "$PKG" /data/local/tmp/probe.warpkg
-adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=/data/local/tmp/wart-apps \
-    /data/local/tmp/wart-host --install /data/local/tmp/probe.warpkg'"
-adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=/data/local/tmp/wart-apps \
-    /data/local/tmp/wart-host --zygote-launch war.probe.wasitls'"
+adb push "$PKG" /data/local/tmp/probe.wandrpkg
+adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp WANDR_APPS_ROOT=/data/local/tmp/wandr-apps \
+    /data/local/tmp/wandr-host --install /data/local/tmp/probe.wandrpkg'"
+adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp WANDR_APPS_ROOT=/data/local/tmp/wandr-apps \
+    /data/local/tmp/wandr-host --zygote-launch wandr.probe.wasitls'"
 adb logcat -d | grep wasi-tls-probe
 ```
 
@@ -74,9 +74,9 @@ signal_tls: trust store = 119 public roots + 1 Signal CA
 [wasi-tls-probe] TRANSPORT PROVEN ...
 ```
 
-`chat.signal.org` handshakes through wart-host's Signal-aware trust store; the
+`chat.signal.org` handshakes through wandr-host's Signal-aware trust store; the
 404 is the wrong path (`GET /`), irrelevant — the trusted handshake is the proof.
 
-Note: the probe writes results to **stderr** as one `write()` per line — wart's
+Note: the probe writes results to **stderr** as one `write()` per line — wandr's
 LogcatStderr sink only surfaces the first `write()` of a multi-write line, so
 `eprintln!` with `{}` args truncates after the literal prefix.

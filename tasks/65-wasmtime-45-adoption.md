@@ -26,9 +26,9 @@ Three things changed since:
 
 | Test | wasmtime 44 | **45.0.0** |
 |---|---|---|
-| Desktop `wart-leak-repro` (`wasmtime run -Wgc,… -Ccollector=drc`), max churn | RSS 71→568 MB+ climbing (→ 4 GB ceiling) | **flat 39 MB** |
+| Desktop `wandr-leak-repro` (`wasmtime run -Wgc,… -Ccollector=drc`), max churn | RSS 71→568 MB+ climbing (→ 4 GB ceiling) | **flat 39 MB** |
 | Host `cargo` bump 44→45 | — | **zero API breaks** |
-| Device idle wart-app | — | flat ~253 MB, ~7% CPU (no regression) |
+| Device idle wandr-app | — | flat ~253 MB, ~7% CPU (no regression) |
 | Device 60 fps + active scrolling, 3 min (frame-pacing forced to 0) | unbounded | **RSS flat ~220 MB, no ANR, smooth (minor glitches)** |
 
 The May-21 render-thread-blocking ANR is gone. There is **no active `Store::gc`
@@ -37,8 +37,8 @@ mitigation to remove** — the deferred-gc trigger was always `#[cfg(feature =
 
 ## Changes
 
-- `runtime/wart-host/Cargo.toml` + `Cargo.lock`: `wasmtime`/`wasmtime-wasi` 44 → 45.
-- `runtime/wart-host/src/app_loader.rs`: **dependency-cwasm self-heal** — the
+- `runtime/wandr-host/Cargo.toml` + `Cargo.lock`: `wasmtime`/`wasmtime-wasi` 44 → 45.
+- `runtime/wandr-host/src/app_loader.rs`: **dependency-cwasm self-heal** — the
   blocker found during this work. `load_installed` re-precompiles the app's own
   component on engine drift, but `load_dep_components` only `deserialize_file`d
   the dep cwasms, so a runtime bump left them AOT'd by an incompatible engine →
@@ -63,7 +63,7 @@ mitigation to remove** — the deferred-gc trigger was always `#[cfg(feature =
   **State-pin is still required** — it fixes a guest-side use-after-free between
   the WASI-P1 adapter `State` and Kotlin's `freeAllComponentModelReallocAllocatedMemory`
   (KT-86415), orthogonal to wasmtime's host-runtime GC; stays until KT-86415 lands
-  in the Kotlin stdlib. Adapter rebuilt + a re-adapted wart-app validates. The
+  in the Kotlin stdlib. Adapter rebuilt + a re-adapted wandr-app validates. The
   rebase **rewrote the fork's history**, so publishing it needs a force-push to
   `codeberg/harryzz/wasmtime` (held for explicit go-ahead). Device guests keep
   their existing 44-built adapter (ABI version-independent, runs under host 45);

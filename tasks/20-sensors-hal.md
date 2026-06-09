@@ -6,7 +6,7 @@
 
 Expose Android sensors to WASM Compose apps. Most-wanted use cases: orientation-aware UIs (compass rose, AR overlays), motion-triggered actions (shake-to-undo), ambient-light-driven dark mode, proximity-based screen sleep.
 
-Reference: `~/wart/post-art-roadmap.md` §3. Builds on the rsbinder pipeline (task 15) and the lessons from task 16 (callback-server-side infrastructure).
+Reference: `~/wandr/post-art-roadmap.md` §3. Builds on the rsbinder pipeline (task 15) and the lessons from task 16 (callback-server-side infrastructure).
 
 ---
 
@@ -97,7 +97,7 @@ interface sensors {
 `android.frameworks.sensorservice` lives in `platform/frameworks/hardware/interfaces`, **NOT** the existing `platform/hardware/interfaces`. Add a sibling submodule:
 
 ```bash
-cd ~/wart/wart-host
+cd ~/wandr/wandr-host
 git submodule add --depth 1 \
     https://android.googlesource.com/platform/frameworks/hardware/interfaces \
     vendor/aosp-frameworks-hardware-interfaces
@@ -154,7 +154,7 @@ impl IEventQueueCallbackAsyncService for EventCollector {
 }
 ```
 
-### 4. New file `wart-host/src/sensors_impl.rs`
+### 4. New file `wandr-host/src/sensors_impl.rs`
 
 - `OnceLock<Strong<dyn ISensorManager>>` for service
 - One `Strong<dyn IEventQueue>` per process (or per enabled sensor — TBD; ISensorManager.createEventQueue() returns one queue we can multiplex sensors onto)

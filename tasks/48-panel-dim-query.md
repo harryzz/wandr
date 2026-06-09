@@ -19,7 +19,7 @@ constexpr uint32_t PANEL_H = 2880;
 Pinned to Pixel 2 XL (taimen) portrait dimensions. The original TODO
 sits in the same file (look for the `// TODO(task33): query the mode
 instead of hardcoding.` comment inside `sf_create_fullscreen_surface`).
-Until this is fixed, the wart standalone path will compose at
+Until this is fixed, the wandr standalone path will compose at
 1440×2880 on any device — wrong for everything except taimen.
 
 Not currently blocking anything (the whole boot-model stack is
@@ -70,7 +70,7 @@ helper before referencing `PANEL_W`/`PANEL_H`.
 - **Cache the query.** Both create paths in `sf_surface.cpp` repeat
   the display-token resolution. Once dimensions are queried, store
   them so the resize path (`sf_resize_overlay`) doesn't re-query.
-- **Rust side.** `wart-host/src/sf_surface.rs` receives the
+- **Rust side.** `wandr-host/src/sf_surface.rs` receives the
   dimensions back via the existing `out_w` / `out_h` out-params. No
   Rust changes needed.
 
@@ -100,9 +100,9 @@ helper before referencing `PANEL_W`/`PANEL_H`.
    resolved, before any size-dependent transactions.
 
 5. **Build + smoke** (~30 min). Build on a-03, push, run the task-47
-   step-3c smoke (`scripts/run-hybrid-stack.sh` + `wart-arbiter
-   launch com.example.wart-app` + `launch-overlay war.ime.keyboard`
-   + `overlay war.ime.keyboard`). Confirm the IME still lands at
+   step-3c smoke (`scripts/run-hybrid-stack.sh` + `wandr-arbiter
+   launch com.example.wandr-app` + `launch-overlay wandr.ime.keyboard`
+   + `overlay wandr.ime.keyboard`). Confirm the IME still lands at
    the bottom of the screen at the right size.
 
 6. **Update memory + remove the original TODO** (~10 min). Mark the
@@ -113,7 +113,7 @@ Total: ~2 hours focused work, all on the a-03 host.
 
 ## File-touch map
 
-- `wart-host/cpp/sf_surface.cpp` — replace `PANEL_W`/`PANEL_H`
+- `wandr-host/cpp/sf_surface.cpp` — replace `PANEL_W`/`PANEL_H`
   constants, add `init_panel_dims`, wire into create paths.
 - `tasks/48-panel-dim-query.md` — this doc; add a results section
   on completion.
@@ -186,7 +186,7 @@ Both paths fire `init_panel_dims` — idempotent and cheap. The
 fallback defaults are still the taimen 1440×2880; no smoke runs
 through the fallback path on a working device.
 
-**Commits:** wart-host commit (pending), wart top-level commit
+**Commits:** wandr-host commit (pending), wandr top-level commit
 (pending — task doc + .task-state update).
 
 **Out of scope (not done):**

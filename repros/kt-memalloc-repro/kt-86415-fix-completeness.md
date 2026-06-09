@@ -180,7 +180,7 @@ with a separate, non-scoped allocator pool entirely.
 ## Why our project's self-heal works regardless
 
 Independent of any upstream fix, our downstream WASI preview1
-adapter fork (`~/wart/wasmtime-src/crates/wasi-preview1-component-adapter/`)
+adapter fork (`~/wandr/wasmtime-src/crates/wasi-preview1-component-adapter/`)
 ships a self-heal in `State::with`: when the magic sentinels at the
 start/end of the adapter's State block don't match `MAGIC` (= "ugh!"),
 it re-initializes the State in place before the assert fires. That

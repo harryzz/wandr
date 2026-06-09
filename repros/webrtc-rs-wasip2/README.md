@@ -1,7 +1,7 @@
 # webrtc-rs (`rtc`) on wasm32-wasip2 — de-risk spike + rtc-ice mDNS-optional fork
 
 Evaluating the **sans-IO** webrtc-rs crate (https://github.com/webrtc-rs/rtc) as
-the call-engine for a wart guest (Signal VoIP / generic WebRTC). Date: 2026-06-02,
+the call-engine for a wandr guest (Signal VoIP / generic WebRTC). Date: 2026-06-02,
 `rtc` master, rustc 1.95, target `wasm32-wasip2`. Full design context:
 `.claude/memory/project_crypto_hw_offload.md`.
 

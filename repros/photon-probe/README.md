@@ -1,4 +1,4 @@
-# photon-probe — does `photon-rs` fit the wart component model?
+# photon-probe — does `photon-rs` fit the wandr component model?
 
 De-risk probe (like `signal-phase0`). **Verdict: YES.** `photon-rs` 0.3.3 builds
 *and runs* on `wasm32-wasip2` (our component-model target) and processes images
@@ -30,7 +30,7 @@ wasmtime run target/wasm32-wasip2/release/photon-probe.wasm
   tested don't use it; rand-based ones (e.g. noise) may need a getrandom backend
   configured for wasip2 — verify before relying on them.
 
-## To make it a real wart component (next step, not done here)
+## To make it a real wandr component (next step, not done here)
 
 Wrap with a WIT interface, e.g.:
 

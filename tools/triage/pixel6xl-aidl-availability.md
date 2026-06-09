@@ -1,7 +1,7 @@
 # Pixel 6 Pro — AIDL vs HIDL service availability for rsbinder
 
 **Device:** Pixel 6 Pro (`raven`, codename gs101), Android 16. Non-rooted;
-the wart-host app runs in the `untrusted_app` SELinux domain.
+the wandr-host app runs in the `untrusted_app` SELinux domain.
 **Date:** 2026-05-20.
 **Purpose:** rsbinder talks to the regular binder (`/dev/binder`) +
 `servicemanager` — i.e. **AIDL** services. It cannot talk to HIDL HALs,

@@ -3,21 +3,21 @@
 > Status: ✅ CAMERA CAPTURE RELIABLE under `--no-art` (2026-06-08: 29.1fps raw +
 > HW VP8 encode 17.4fps, 3/3 — the task-95 EIS-gyro race is now reliably won, see
 > `tasks/95-*`/[[project_artless_sensor_5s_batterystats]]). The WIT contracts are
-> ✍️ **DRAFTED + validated**: `wit/video.wit` (`war:video`) + `wit/crypto.wit`
-> (`war:crypto`), commit `697da5de` (steps 5 + risk #2 below). Remaining = pure
+> ✍️ **DRAFTED + validated**: `wit/video.wit` (`wandr:video`) + `wit/crypto.wit`
+> (`wandr:crypto`), commit `697da5de` (steps 5 + risk #2 below). Remaining = pure
 > integration (no `--no-art` blockers): implement those WITs host-side (encode-feed,
-> HW decode→surface, AEAD offload) + wire the wart-call video track + render.
+> HW decode→surface, AEAD offload) + wire the wandr-call video track + render.
 
 ## ✅ SOLVED: full `--no-art` camera capture chain (2026-06-06)
 
 Five new pieces, all device-verified, take the camera from "can't open" to
 **28.8 fps capture** with the Java framework stopped (matches ART's 29 fps):
 
-1. **`permission_checker`** stub (wart-activityms) — camera-open permission gate.
+1. **`permission_checker`** stub (wandr-activityms) — camera-open permission gate.
 2. **`media.camera.proxy`** stub — `isCameraDisabled` fail-closed → device-policy.
 3. **`processinfo`** custom stub — camera eviction priority query.
 4. **`package_native`** stub — codec `configure` (`connectFormatShaper`).
-5. **`wart-sensormanager`** (NEW C++ service, `runtime/wart-sensormanager/`) —
+5. **`wandr-sensormanager`** (NEW C++ service, `runtime/wandr-sensormanager/`) —
    registers `android.frameworks.sensorservice@1.0::ISensorManager`, which
    system_server normally publishes (`new SensorManager(vm)`). The qcom camera
    HAL's **EIS** (video stabilization) needs the gyro via `ISensorManager`;
@@ -27,25 +27,25 @@ Five new pieces, all device-verified, take the camera from "can't open" to
    task-85 blocker). `SensorManager(nullptr)` JavaVM is fine (only `createEventQueue`
    touches it; EIS uses direct channels).
 
-**Runtime recipe (camera under `--no-art`):** the 4 stubs (wart-activityms) +
+**Runtime recipe (camera under `--no-art`):** the 4 stubs (wandr-activityms) +
 `sensorservice` (owns the sensors HAL, registers `sensorservice`) +
-`wart-sensormanager` (registers the HIDL `ISensorManager` on top).
+`wandr-sensormanager` (registers the HIDL `ISensorManager` on top).
 
-> ‼️ **PREREQUISITE — `tasks/94-wart-sensors-refactor-for-sensorservice.md`.** The
+> ‼️ **PREREQUISITE — `tasks/94-wandr-sensors-refactor-for-sensorservice.md`.** The
 > sensors HAL (`ISensors@1.0`) is single-client. `sensorservice` MUST own it (only
-> it provides the `ISensorManager` the camera needs), but the task-85 `wart-sensors`
+> it provides the `ISensorManager` the camera needs), but the task-85 `wandr-sensors`
 > daemon currently opens that HAL DIRECTLY → they can't coexist (device-confirmed
-> `DEAD_OBJECT` abort). **Task 94 refactors `wart-sensors` to read sensors *through*
+> `DEAD_OBJECT` abort). **Task 94 refactors `wandr-sensors` to read sensors *through*
 > `sensorservice` (libsensor client) instead of the HAL** — required before the
-> camera path can run alongside wart's auto-rotation / proximity / auto-brightness.
-> Until then, the camera helpers + wart-sensors are mutually exclusive (the probe
-> ran with wart-sensors stopped).
+> camera path can run alongside wandr's auto-rotation / proximity / auto-brightness.
+> Until then, the camera helpers + wandr-sensors are mutually exclusive (the probe
+> ran with wandr-sensors stopped).
 
 > (Original analysis + spike narrative follows.)
 
 > Earlier status: 🟡 ANALYSIS + SPIKE. Audio calls work (tasks 75/87/91); video is the
 > remaining AV gap. This task scopes what's needed and de-risks it with a
-> `wart-host --probe-video` camera→HW-VP8 spike. Analysis 2026-06-06.
+> `wandr-host --probe-video` camera→HW-VP8 spike. Analysis 2026-06-06.
 
 ## Headline (verified live on device, `--no-art`)
 
@@ -89,26 +89,26 @@ Native-facing clients (mirror `audio_impl` — rsbinder/NDK + shared-mem):
    decoder→display; zero-copy ideal (camera output surface == encoder input surface).
 
 Glue (our code):
-4. **wart-call video track** — wire the existing VP8 payloader/depacketizer into a
+4. **wandr-call video track** — wire the existing VP8 payloader/depacketizer into a
    video RTP stream over the existing SRTP transport; RTCP PLI/FIR keyframe requests.
-5. **WIT** — ✍️ **DRAFTED 2026-06-08: `wit/video.wit` (`war:video`) + `wit/crypto.wit`
-   (`war:crypto`)**, both wasm-tools-validated (commit `697da5de`); NOT yet implemented.
-   - `war:video` — bidirectional HW codec via host MediaCodec/Codec2: `encoder` (host
+5. **WIT** — ✍️ **DRAFTED 2026-06-08: `wit/video.wit` (`wandr:video`) + `wit/crypto.wit`
+   (`wandr:crypto`)**, both wasm-tools-validated (commit `697da5de`); NOT yet implemented.
+   - `wandr:video` — bidirectional HW codec via host MediaCodec/Codec2: `encoder` (host
      captures camera + HW-encodes, guest **pulls** `next-frame()`) + `decoder` (guest
      **pushes** `submit(frame)`, host HW-decodes). Carries **encoded** frames (KB each).
      Decisions baked in: **decode-to-surface** (host composites; pixels never re-enter
      the guest — zero-copy, right for 30fps), and **prefer VP8 for OUT** (VP9 HW *encode*
      is SW-only on this SoC; VP9/VP8 HW *decode* both present — confirmed
      `/vendor/etc/media_codecs*.xml` 2026-06-08).
-   - `war:crypto` — the SRTP AEAD offload (risk #2 below): `aead.gcm` seal/open per
+   - `wandr:crypto` — the SRTP AEAD offload (risk #2 below): `aead.gcm` seal/open per
      packet, key schedule expanded once. Guest keeps the SRTP framing, offloads only the
      AES-256-GCM primitive to host RustCrypto on ARMv8 HW AES.
-   - 🔲 STILL OPEN: wire the `war:video` decoder surface to an arbiter **`Role::Video`**
+   - 🔲 STILL OPEN: wire the `wandr:video` decoder surface to an arbiter **`Role::Video`**
      surface (z-order vs the guest skia UI, rotation, occlusion) instead of the sketch's
      raw `video-rect`; same for the self-view preview.
 6. **Render** — decoded YUV → Skia (SkImage-from-YUV / YUV→RGB shader) → local PiP +
    remote in the call UI. (Mostly subsumed by decode-to-surface host compositing per
-   the `war:video` decision above; Skia path applies if decode-to-buffer is chosen.)
+   the `wandr:video` decision above; Skia path applies if decode-to-buffer is chosen.)
 7. **Signal protocol** — in-call video enable/disable + resolution/bitrate adaptation.
 
 ## Two real risks (the spike targets these)
@@ -120,12 +120,12 @@ Glue (our code):
    ~10–50× the packet rate; [[project_crypto_hw_offload]] already flags SRTP should
    move host-side. **Direction chosen (2026-06-08, see `wit/crypto.wit`):** keep the
    SRTP *framing* (ROC/replay/HKDF in `rtc_srtp::Context`) IN the guest, offload only
-   the per-packet **AEAD primitive** (`war:crypto` `aead.gcm` seal/open) to host
+   the per-packet **AEAD primitive** (`wandr:crypto` `aead.gcm` seal/open) to host
    RustCrypto on ARMv8 HW AES — a small WIT, not a full pipeline-to-host fork. Signal
-   V4 SRTP = `AEAD_AES_256_GCM` (`wart-call transport.rs:468`), software AES in wasm
+   V4 SRTP = `AEAD_AES_256_GCM` (`wandr-call transport.rs:468`), software AES in wasm
    today, so this offload applies to **audio calls too** (task 91), not just video.
 
-## Spike: `wart-host --probe-video`
+## Spike: `wandr-host --probe-video`
 
 Prove camera → HW VP8 encode end-to-end under `--no-art`, minimal code, via the
 **Surface path** (camera writes frames straight into the encoder's input surface —
@@ -138,12 +138,12 @@ no manual YUV buffer copies):
 5. Report: camera-opened? encoded-frames/fps/avg-size/first-frame-ms + any error.
 
 Answers risk #1 (open under ART-off) + encoder throughput in one shot. Module
-`runtime/wart-host/src/video_probe.rs`, flag `--probe-video`, links `camera2ndk` +
-`mediandk`. Next after green: decode-path probe, then the WIT + wart-call video track.
+`runtime/wandr-host/src/video_probe.rs`, flag `--probe-video`, links `camera2ndk` +
+`mediandk`. Next after green: decode-path probe, then the WIT + wandr-call video track.
 
 ## SPIKE RESULTS (2026-06-06, device, `--no-art`)
 
-`wart-host --probe-video [codec-name]` built + run. Findings:
+`wandr-host --probe-video [codec-name]` built + run. Findings:
 
 1. **Binder threadpool is required (infra).** The NDK camera/codec libs use C++
    `libbinder` (not `libbinder_ndk`); our process must run the C++ libbinder
@@ -171,7 +171,7 @@ HW VP8 is present, the camera enumerates, and the binder-threadpool path works. 
 remaining blocker is the **codec `configure` binder block**, a focused task-87-style
 investigation: read the CCodec/Codec2 `configure` path (frameworks/av
 `media/codec2` + `MediaCodec.cpp`), find which service it waits on without
-`system_server`, and stub it (extend the `wart-activityms` stub set) — OR decide
+`system_server`, and stub it (extend the `wandr-activityms` stub set) — OR decide
 SW-encode-in-guest/host as a fallback. Camera `open()` permission (risk #1) is
 still unconfirmed (blocked behind the encoder in the probe order); swap the probe
 to open-camera-first to isolate it next.
@@ -192,10 +192,10 @@ under `--no-art` (and NOT in our task-87 stub set):
 | `appops` (IAppOpsService) | **missing** | camera/mic op gating (noteOp/checkOp CAMERA) |
 | `platform_compat` (IPlatformCompat) | **missing** | MediaCodec/Codec2 compat-change checks |
 | `device_policy` (IDevicePolicyManager) | missing | admin camera-disable (likely not critical) |
-| `permission`,`sensor_privacy`,`activity`,`scheduling_policy` | present | already stubbed (task 87, `wart-activityms`) |
+| `permission`,`sensor_privacy`,`activity`,`scheduling_policy` | present | already stubbed (task 87, `wandr-activityms`) |
 
 **Fixes to try, in priority order** (each = a new binder stub in
-`runtime/wart-activityms/cpp/wart_activityms.cpp`, the proven task-87 pattern —
+`runtime/wandr-activityms/cpp/wandr_activityms.cpp`, the proven task-87 pattern —
 `addService` a `BnX` returning the allow/granted answer; built on a-03):
 
 1. **`permission_checker` / `IPermissionChecker`** — the directly-observed blocker.
@@ -223,7 +223,7 @@ between runs). Trace blockers via `cat /sys/kernel/debug/binder/proc/<pid>` +
 
 Probe reordered **open-camera-first** (`video_probe.rs`) to isolate the camera-open
 gate from the codec. Each `system_server` service cameraserver needs is being
-stubbed in `wart-activityms` (the proven task-87 pattern). Progress, layer by layer
+stubbed in `wandr-activityms` (the proven task-87 pattern). Progress, layer by layer
 (each verified on device by the error CHANGING):
 
 1. ✅ **`permission_checker`** (IPermissionChecker) — was: `openCamera` HANGS
@@ -250,7 +250,7 @@ stubbed in `wart-activityms` (the proven task-87 pattern). Progress, layer by la
 ### ✅ CAMERA OPEN WORKS under `--no-art` (2026-06-06)
 
 With all three stubs (`permission_checker` + `media.camera.proxy` + `processinfo`)
-in `wart-activityms`, the reordered probe prints
+in `wandr-activityms`, the reordered probe prints
 **`camera OPENED id=0 (status=0) ✓`** — risk #1 RESOLVED. The probe then proceeds
 to the encoder and hangs at **`AMediaCodec_configure`** (the separate, already-known
 codec blocker — `media.codec`'s `omx@1.0-service` stuck in binder), now cleanly
@@ -265,7 +265,7 @@ to guess "handheld" for format-shaping (not load-bearing), so a GenericStub
 unblocks it. `MediaCodec.cpp:2681`.
 
 **Full `--no-art` camera→HW-VP8 service chain is now resolved** — 4 stubs in
-`wart-activityms` (`permission_checker`, `media.camera.proxy`, `processinfo`,
+`wandr-activityms` (`permission_checker`, `media.camera.proxy`, `processinfo`,
 `package_native`). Device-verified end of the binder-blocker hunt: the reordered
 `--probe-video` runs the WHOLE setup clean — camera OPEN ✓, encoder configure ✓,
 start ✓, input surface ✓, repeating capture ✓ — and the camera HAL streams
@@ -332,11 +332,11 @@ Method: under `--no-art`, capture the provider@2.4 tombstone **Abort message** +
 
 ## Net result of task 93 so far
 - Analysis: every native AV service for video calling exists under `--no-art`; HW VP8 present.
-- Spike: camera OPEN + codec CONFIGURE both work `--no-art` after 4 `wart-activityms`
+- Spike: camera OPEN + codec CONFIGURE both work `--no-art` after 4 `wandr-activityms`
   stubs (all source-grounded in AOSP); camera streams.
 - Remaining for a working pipeline: (a) camera→encoder frame delivery via ImageReader
-  (above), (b) the decode path, (c) the WIT + wart-call video track (the RTP VP8
+  (above), (b) the decode path, (c) the WIT + wandr-call video track (the RTP VP8
   payloader already exists). None are `--no-art` blockers.
 
-See `wit/task-manager.wit` sibling-package style for `war:video`, `audio_impl.rs`
+See `wit/task-manager.wit` sibling-package style for `wandr:video`, `audio_impl.rs`
 (integration pattern), `external/rtc/rtc-rtp/src/codec/vp8` (packetizer).
