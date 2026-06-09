@@ -92,6 +92,12 @@ const ARBITER_STATE_PATH: &str = "/data/local/tmp/wandr-arbiter-state.json";
 /// trail visible on the next startup.
 const ARBITER_CRASH_PATH: &str = "/data/local/tmp/wandr-arbiter-crash.json";
 
+/// The WifiConfigManager saved-network store (task 90 M3). Root-only JSON (0600)
+/// holding `{id, ssid, security, psk, auto-connect, hidden}` — wandr-owned, no
+/// framework/keystore dependency (decided 2026-06-09). The `wandr-arbiter-net`
+/// module loads/persists it.
+const WIFI_STORE_PATH: &str = "/data/local/tmp/wandr-wifi-networks.json";
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     // Initialize logger up front — both daemon and client modes log
@@ -205,6 +211,11 @@ fn main() {
                     // `wifi-set-enabled <0|1>`, `wifi-is-enabled`. The host sends the
                     // same verbs over the raw socket from its wifi-host impl.
                     | "wifi-scan" | "wifi-connect" | "wifi-set-enabled" | "wifi-is-enabled"
+                    // Task 90 M3 — WifiConfigManager saved-network store + connect-by-id
+                    // (CLI test forms; the host sends these from its wifi-host impl).
+                    | "wifi-saved-list" | "wifi-saved-add" | "wifi-saved-update"
+                    | "wifi-saved-remove" | "wifi-saved-auto-connect" | "wifi-saved-creds"
+                    | "wifi-auto-network" | "wifi-connect-saved"
                     // Task 90 — generic event bus verbs. The host's wandr:events
                     // producer + the wandr-net daemon send evt-publish; the host
                     // sends evt-subscribe (host-config from package.toml). CLI forms
@@ -492,6 +503,11 @@ fn handle_client(mut stream: UnixStream) -> Result<()> {
         "wifi-connect"     => relay_wifi(&mut stream, &format!("connect {rest}")),
         "wifi-set-enabled" => relay_wifi(&mut stream, &format!("set-enabled {rest}")),
         "wifi-is-enabled"  => relay_wifi(&mut stream, "is-enabled"),
+        // Task 90 M3 — connect to a SAVED network by id: resolve the id to creds
+        // via the WifiConfigManager module (pure), then relay `connect` to the
+        // daemon. Combines a module query + a daemon relay, so it lives in the bin
+        // (the orchestrator) rather than the pure module or the daemon.
+        "wifi-connect-saved" => cmd_wifi_connect_saved(&mut stream, &rest),
         other => {
             writeln!(stream, "ERR unknown-command {other}")?;
             Ok(())
@@ -583,6 +599,38 @@ fn relay_wifi(stream: &mut UnixStream, daemon_line: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// `wifi-connect-saved <id>` — resolve the saved id to creds via the
+/// WifiConfigManager module, then relay `connect <b64ssid> <b64psk>` to the daemon.
+/// Caller holds `arbiter_lock` (so `run_module` is safe). The module's
+/// `wifi-saved-creds` reply is `ssid=<b64> psk=<b64> sec=<s>`.
+fn cmd_wifi_connect_saved(stream: &mut UnixStream, rest: &str) -> Result<()> {
+    let creds = match run_module("wifi-saved-creds", rest) {
+        Some((Reply::Ok(body), _)) => body,
+        Some((Reply::Err(e), _)) => {
+            writeln!(stream, "err {e}")?;
+            return Ok(());
+        }
+        None => {
+            writeln!(stream, "err wifi-config-manager-missing")?;
+            return Ok(());
+        }
+    };
+    // Extract the b64 ssid + psk tokens from `ssid=<b64> psk=<b64> sec=<s>`.
+    let field = |k: &str| {
+        creds
+            .split_whitespace()
+            .find_map(|kv| kv.strip_prefix(k))
+            .unwrap_or("")
+            .to_string()
+    };
+    let (ssid, psk) = (field("ssid="), field("psk="));
+    if ssid.is_empty() {
+        writeln!(stream, "err saved-creds-malformed")?;
+        return Ok(());
+    }
+    relay_wifi(stream, &format!("connect {ssid} {psk}"))
 }
 
 // ─── Crash marker (task 46 crash-marker) ──────────────────────────────
@@ -678,7 +726,9 @@ fn build_registry() -> Registry {
     // ConnectivityService role (task 88 M1) — link status of record + guest
     // on-connectivity-change fan-out. The wandr-net daemon feeds it
     // report-net-state; it emits Effect::HostLine to subscribers. One line.
-    reg.register(Box::new(NetModule::new()));
+    // Task 90 M3 — the module is also the WifiConfigManager; give it the persisted
+    // saved-network store path so it loads + persists the registry.
+    reg.register(Box::new(NetModule::with_store(std::path::PathBuf::from(WIFI_STORE_PATH))));
     // Generic event broker (task 90) — topic→subscribers + retained value. The
     // host's wandr:events/producer + the wandr-net daemon publish here; guests
     // subscribe (host-config from package.toml) and receive Effect::HostLine

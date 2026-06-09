@@ -13,7 +13,7 @@
 //!   * `--once` — one bring-up, print status, exit (the on-device investigation
 //!     harness; also handy for `--no-art` smoke tests).
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::{Child, Command};
@@ -42,6 +42,41 @@ fn arbiter_sock_path() -> String {
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "/data/local/tmp/wandr-arbiter.sock".to_string())
+}
+
+/// Query the arbiter: one-shot connect+write, then read the full reply. `None`
+/// if the arbiter is unreachable. Used at bring-up to fetch the auto-connect
+/// network from the WifiConfigManager store (task 90 M3).
+fn query_arbiter(line: &str) -> Option<String> {
+    let sock = arbiter_sock_path();
+    let mut s = UnixStream::connect(&sock).ok()?;
+    writeln!(s, "{line}").ok()?;
+    s.flush().ok()?;
+    let _ = s.shutdown(std::net::Shutdown::Write);
+    let mut buf = String::new();
+    s.read_to_string(&mut buf).ok()?;
+    Some(buf)
+}
+
+/// Ask the arbiter's WifiConfigManager for the auto-connect network's creds
+/// (`wifi-auto-network` → `OK ssid=<b64> psk=<b64> sec=<s>` / `OK none`). The
+/// wandr-owned saved-network store (task 90 M3) supersedes the single
+/// WifiConfigStore.xml read; falls through to the file when the arbiter has no
+/// auto-connect network (or is unreachable).
+fn saved_creds_from_arbiter() -> Option<WifiCreds> {
+    let reply = query_arbiter("wifi-auto-network")?;
+    let body = reply.trim().strip_prefix("OK ")?;
+    if body.trim() == "none" {
+        return None;
+    }
+    let field = |k: &str| body.split_whitespace().find_map(|kv| kv.strip_prefix(k));
+    let ssid = String::from_utf8_lossy(&b64_decode(field("ssid=")?)).into_owned();
+    let psk = String::from_utf8_lossy(&b64_decode(field("psk=")?)).into_owned();
+    if ssid.is_empty() {
+        return None;
+    }
+    log::info!("wandr-net: auto-connect network {ssid:?} from arbiter store");
+    Some(WifiCreds { ssid, psk })
 }
 
 /// Push one command line to the arbiter (one-shot connect+write+close, like
@@ -133,11 +168,20 @@ struct Link {
 /// Run the full bring-up for the first saved network (boot path): associate if
 /// needed → DHCP → apply → DNS → status. Reuses an existing association.
 fn bring_up() -> Result<Link, String> {
-    let creds = read_saved_creds().map_err(|e| format!("read creds: {e}"))?;
-    let creds = creds
-        .into_iter()
-        .next()
-        .ok_or_else(|| "no saved WPA-PSK network in WifiConfigStore.xml".to_string())?;
+    // Prefer the wandr-owned saved-network store (task 90 M3, via the arbiter
+    // WifiConfigManager); fall back to the framework's WifiConfigStore.xml when the
+    // arbiter has no auto-connect network or is unreachable (boot ordering).
+    let creds = match saved_creds_from_arbiter() {
+        Some(c) => c,
+        None => read_saved_creds()
+            .map_err(|e| format!("read creds: {e}"))?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                "no auto-connect network (arbiter store empty + WifiConfigStore.xml has none)"
+                    .to_string()
+            })?,
+    };
     bring_up_with(creds, false)
 }
 

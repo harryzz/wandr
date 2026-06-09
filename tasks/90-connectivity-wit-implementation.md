@@ -1,10 +1,13 @@
 # Task 90 — implement the `wandr:connectivity` WIT (guest-facing connectivity)
 
-> Status: 🟢 M1 DONE + DEVICE-VERIFIED (2026-06-09) — but redesigned: connectivity
-> change-notification ships over a NEW GENERIC EVENT BUS (`wandr:events`), not the
-> bespoke `wandr:connectivity/network` handler. The connectivity **subsystem**
-> (task 88) + the `wifi`-management **contract** (`wit/connectivity.wit`) still
-> stand; M2–M4 (wifi scan/connect/saved-networks/settings) are unchanged + pending.
+> Status: 🟢 M1+M2+M3 DONE + DEVICE-VERIFIED (M3 2026-06-09). M1 connectivity
+> change-notification ships over the GENERIC EVENT BUS (`wandr:events`). M2 = the
+> privileged wifi control plane (scan/connect/radio via host→arbiter→wandr-net.sock
+> + privilege gate). M3 = the WifiConfigManager (wandr-owned 0600 JSON saved-network
+> store + auto-connect, in `wandr-arbiter-net`; `wandr-net` auto-joins from it).
+> **M4 pending:** the `wandr.settings.wifi` picker app + manual static-IP.
+> Follow-up: a daemon supplicant-disconnect verb to un-stub `disconnect`/
+> `forget-current`.
 >
 > **Why the redesign:** rather than add a bespoke `connectivity-handler` export
 > (yet another `*-events` world + bindgen + InboundEvent variant + drain arm), we
@@ -105,24 +108,49 @@ DoD: a guest's `on-connectivity-change` fires when wandr-net flips the link.
    - Guest consumer = M4 (`wandr.settings.wifi`). Until then the relay path is
      device-verifiable via `wandr-arbiter wifi-scan` / `wifi-connect …`.
 
-### M3 — saved-network store + auto-connect
-1. **Credential storage decision** (Open question below) — a wandr-owned store vs
-   the framework's `WifiConfigStore.xml`. Build the chosen store.
-2. `wandr-arbiter-net` becomes the **WifiConfigManager**: saved-network registry,
-   `auto-connect` policy, selection/failover (pick which known net to join).
-   `list-saved`/`add`/`remove`/`update`/`set-auto-connect` land here.
-3. `wandr-net` auto-joins a known network at bring-up from the store (replacing the
-   single-`WifiConfigStore.xml`-entry read it does today).
+### M3 — saved-network store + auto-connect — 🟢 DONE + device-verified
+1. **Credential storage** — ✅ DECIDED: **wandr-owned JSON store**
+   (`/data/local/tmp/wandr-wifi-networks.json`, root-only **0600**; `ssid`/`psk`
+   base64'd so values are JSON-safe + the hand-rolled no-serde writer is trivially
+   correct). keystore2-wrapping is a noted hardening follow-up (2026-06-09).
+2. **`wandr-arbiter-net` = the WifiConfigManager** — ✅ verbs `wifi-saved-list` /
+   `wifi-saved-add` / `wifi-saved-update` / `wifi-saved-remove` /
+   `wifi-saved-auto-connect` / `wifi-saved-creds` / `wifi-auto-network`. Pure module
+   (registry + persistence via an injected `store_path`; `None` = in-memory for
+   tests); monotonic ids; add keys a net by (ssid, security) so a re-add updates.
+   6 unit tests (CRUD, dup-update, creds, auto-network, JSON round-trip incl.
+   special chars). The bin registers `NetModule::with_store(WIFI_STORE_PATH)` and
+   adds a `wifi-connect-saved <id>` handler (module resolves id→creds, bin relays
+   `connect` to the daemon — the orchestration step).
+3. **`wandr-net` auto-joins from the store** — ✅ `bring_up` now queries the arbiter
+   `wifi-auto-network` first (the wandr store), falling back to
+   `WifiConfigStore.xml` when the store has no auto-connect net or the arbiter is
+   unreachable (boot ordering).
+4. **Host** — ✅ un-stubbed `list-saved`/`add-network`/`update-network`/
+   `remove-network`/`set-auto-connect`/`connect(id)` forwarding to the arbiter.
+   `disconnect`/`forget-current` remain stubbed (need a daemon supplicant-disconnect
+   verb — a small follow-up; `set-enabled false` is too blunt).
+
+   **Device-verified (CLI, `--no-art`):** add → `id=1`/`id=2`; `wifi-saved-list`
+   shows both with b64 ssid + flags; `wifi-auto-network` returns the auto net's
+   creds; toggle moves the auto selection; `wifi-saved-creds`/`update`/`remove`
+   correct (`not-found` on a bad id); JSON persisted **0600**; a PSK with
+   space/comma/quote round-trips through b64. Live `connect(id)` + auto-join restart
+   were skipped (they trigger associations) — both ride M2-verified relay/engine
+   paths and the resolve/read halves are CLI-verified.
 
 ### M4 — `ip-config` manual (static IP) + a Settings/wifi-picker chrome app
 - `manual(static-ip)`: `apply_address` + `configure_netd` already take the same
   fields; thread a static config from the WIT instead of the DHCP lease.
 - A `wandr.settings.wifi` guest (separate wandrpkg) consuming `wifi-settings`.
 
-## Open questions (decide before M3)
-1. **Credential storage** (`--no-art`): wandr-owned encrypted store, vs reuse
-   `keystore2` (survives), vs read/write the framework `WifiConfigStore.xml`.
-   Today the daemon reads ONE plaintext PSK entry from `WifiConfigStore.xml`.
+## Open questions
+1. ✅ RESOLVED (2026-06-09): **Credential storage** = a **wandr-owned JSON store**
+   (root-only 0600, ssid/psk base64'd). Chosen over keystore2-wrapping (needs
+   keystore2 AIDL + key mgmt, and "keystore from su domain" is unproven `--no-art`)
+   and over read/writing the framework `WifiConfigStore.xml` (fragile internal
+   schema, framework not managing it under `--no-art`). No worse than the device's
+   already-plaintext `WifiConfigStore.xml`; keystore2-wrap = a hardening follow-up.
 2. **Privilege model for `wifi`**: how the host decides a guest is "the Settings
    app" (manifest capability flag? a `package.toml` field? app-id allowlist?).
    `network` is open to all; `wifi` must be gated.
