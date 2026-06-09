@@ -3,7 +3,7 @@
 > Status: ✅ DONE + device-verified (auto-rotation, Pixel 2 XL, 2026-06-04). Under
 > `--no-art` no sensors worked — `ISensorManager` is served by the C++ `SensorService`
 > instantiated inside `system_server`, which dies with ART. Fix: a thin C++ HIDL shim
-> (`libwart_sensors_hal.so`) reads `android.hardware.sensors@1.0::ISensors` directly
+> (`libwandr_sensors_hal.so`) reads `android.hardware.sensors@1.0::ISensors` directly
 > (the HAL survives ART-off) + a Rust `wandr-sensors` daemon that prefers the HAL-fused
 > `DEVICE_ORIENTATION` (no Fusion port needed — the HAL fuses on the SSC core) and
 > pushes `report-orientation` to the arbiter. **Verified: physically rotating the phone
@@ -82,7 +82,7 @@ reports 0/1/2/3) → `report-orientation`. The accel→orientation Rust calc
 HALs without type 27. This is strictly better than a port — the vendor fusion is tuned.
 
 ## Build artifacts (this is the shipped design)
-- `runtime/wandr-sensors/cpp/wandr_sensors_hal.cpp` → **`libwart_sensors_hal.so`** — thin
+- `runtime/wandr-sensors/cpp/wandr_sensors_hal.cpp` → **`libwandr_sensors_hal.so`** — thin
   C-ABI HIDL shim (open / enable-by-type / poll), `dlopen`'d by the daemon (HIDL = hwbinder,
   unreachable from rsbinder). Built on a-03.
 - `runtime/wandr-sensors/` Rust **`wandr-sensors`** daemon — `dlopen`s the shim, prefers
@@ -93,7 +93,7 @@ HALs without type 27. This is strictly better than a port — the vendor fusion 
 ## How to run / test
 
 - Build the C++ HIDL shim on a-03 (against `android.hardware.sensors@1.0`, libhidlbase)
-  → `libwart_sensors.so` (or a small `wandr-sensors` reader binary), deploy to device.
+  → `libwandr_sensors.so` (or a small `wandr-sensors` reader binary), deploy to device.
 - Wire the Rust side (`wandr-hal-sensors`/`wandr-arbiter-sensors`) to the shim; add the
   accel→orientation calc + `report-orientation` emit. Launch under `--no-art` (start
   before/with the hosts in `run-hybrid-stack.sh`).

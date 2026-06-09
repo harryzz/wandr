@@ -24,7 +24,7 @@ nothing registers that AIDL endpoint. So instead of refactoring `wandr-sensors`,
    `wandr-arbiter-core` (`SensorKind::DeviceOrientation`).
 3. **`wandr-hal-sensors`** caches only *successful* service/queue lookups (no `None`
    latch) so a consumer racing the endpoint reconnects.
-4. **Deleted `runtime/wandr-sensors/`** (daemon + `libwart_sensors_hal.so` direct-HAL
+4. **Deleted `runtime/wandr-sensors/`** (daemon + `libwandr_sensors_hal.so` direct-HAL
    shim + accel orientation math). Bringup (`run-hybrid-stack.sh`) now starts
    `/system/bin/sensorservice` + `wandr-sensormanager` BEFORE the zygote/arbiter.
 
@@ -46,7 +46,7 @@ The HIDL sensors HAL `android.hardware.sensors@1.0::ISensors` is **single-client
 
 - **Task 85 `wandr-sensors`** opens it DIRECTLY: the C++ shim
   `runtime/wandr-sensors/cpp/wandr_sensors_hal.cpp` does `ISensors::getService()` +
-  `activate(handle, …)` + `poll(…)` (libwart_sensors_hal.so), and `src/main.rs`
+  `activate(handle, …)` + `poll(…)` (libwandr_sensors_hal.so), and `src/main.rs`
   enables DEVICE_ORIENTATION(27)/accel, proximity(8), light(5), computes
   orientation, and pushes `report-orientation` / `report-sensor` to the arbiter
   (auto-rotation, proximity-screen-off task 78, auto-brightness task 86).
@@ -101,7 +101,7 @@ So **wandr-sensors stops touching the HAL** and reads sensors *through* sensorse
   only the transport under it changes.
 
 ## Build / test
-- C++ shim builds on a-03 (cc_library, like today's libwart_sensors_hal.so). The
+- C++ shim builds on a-03 (cc_library, like today's libwandr_sensors_hal.so). The
   `libsensor` headers/lib are on-device + in the AOSP tree.
 - Device A/B as in task 93: rotate / cover-proximity / lux-change while
   `--probe-video imagereader` streams — both must work together.

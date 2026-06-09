@@ -16,19 +16,19 @@ export ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$NDK_HOME_DEFAULT}"
 export ANDROID_NDK_ROOT="${ANDROID_NDK_ROOT:-$ANDROID_NDK_HOME}"
 export ANDROID_HOME="${ANDROID_HOME:-$SDK_HOME_DEFAULT}"
 
-_WART_TC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
-_WART_API="${ANDROID_API_LEVEL:-$ANDROID_API_DEFAULT}"
+_WANDR_TC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+_WANDR_API="${ANDROID_API_LEVEL:-$ANDROID_API_DEFAULT}"
 
-export CC_aarch64_linux_android="${CC_aarch64_linux_android:-$_WART_TC/aarch64-linux-android${_WART_API}-clang}"
-export CXX_aarch64_linux_android="${CXX_aarch64_linux_android:-$_WART_TC/aarch64-linux-android${_WART_API}-clang++}"
-export AR_aarch64_linux_android="${AR_aarch64_linux_android:-$_WART_TC/llvm-ar}"
+export CC_aarch64_linux_android="${CC_aarch64_linux_android:-$_WANDR_TC/aarch64-linux-android${_WANDR_API}-clang}"
+export CXX_aarch64_linux_android="${CXX_aarch64_linux_android:-$_WANDR_TC/aarch64-linux-android${_WANDR_API}-clang++}"
+export AR_aarch64_linux_android="${AR_aarch64_linux_android:-$_WANDR_TC/llvm-ar}"
 
 case ":$PATH:" in
-    *":$_WART_TC:"*) ;;
-    *) export PATH="$_WART_TC:$PATH" ;;
+    *":$_WANDR_TC:"*) ;;
+    *) export PATH="$_WANDR_TC:$PATH" ;;
 esac
 
-unset _WART_TC _WART_API NDK_HOME_DEFAULT SDK_HOME_DEFAULT ANDROID_API_DEFAULT
+unset _WANDR_TC _WANDR_API NDK_HOME_DEFAULT SDK_HOME_DEFAULT ANDROID_API_DEFAULT
 
 # Smoke-check the toolchain exists. Cheap; gives a clearer error than
 # cc-rs's "tool not found" deep inside the build.

@@ -63,7 +63,7 @@ root write). Is there a binder way? Both exist, with caveats:
    (LIGHT_ID_BACKLIGHT) — which itself writes the **same sysfs node**. wandr has an
    `ILights` path (task 17, `lights_impl.rs`) but it targets the AIDL lights interface;
    the device's is **HIDL @2.0**, which rsbinder can't speak → would need a small C++
-   shim (like `libwart_sensors_hal`).
+   shim (like `libwandr_sensors_hal`).
 3. **sysfs** (current) — the lowest layer the Lights HAL ultimately writes on this
    device. Raw (0–`max_brightness`, no nits/curve), root, device-specific node, but
    simple and known-working.

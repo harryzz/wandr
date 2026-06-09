@@ -31,7 +31,7 @@ auto-rotation) all silently stop; `wandr-arbiter sensor-state` shows
 **Root cause (tombstones 27/28/29/40/41, 2026-06-05):** `wandr-sensors`
 **`SIGABRT`** — `Abort message: 'Failed HIDL return status not checked … 
 Status(EX_TRANSACTION_FAILED): DEAD_OBJECT'`, backtrace `wandr_sensors_poll+128`
-(`libwart_sensors_hal.so`) → `libhidlbase return_status::~return_status` →
+(`libwandr_sensors_hal.so`) → `libhidlbase return_status::~return_status` →
 `__android_log_default_aborter` → `abort`. I.e. when the sensors HAL
 (`android.hardware.sensors@1.0-service`) connection drops — HAL churn across a
 `--restore-art`→`--no-art` cycle, or SensorService re-grabbing it — the C++ HIDL
@@ -103,7 +103,7 @@ coarseness (0/5 indoors) is hardware. **No action needed** beyond leaving the
 ## Files
 
 - `runtime/wandr-sensors/cpp/*` (the `wandr_sensors_poll` HIDL shim → check `Return`)
-  — built on a-03 (`m libwart_sensors_hal` / ninja the soong intermediate).
+  — built on a-03 (`m libwandr_sensors_hal` / ninja the soong intermediate).
 - `runtime/wandr-sensors/src/*` (Rust: re-acquire HAL on poll error + reconnect loop).
 - `runtime/wandr-arbiter/wandr-arbiter-power/*` (panel_on ↔ power-key wake; light
   enable on wake; panel-state query verb).

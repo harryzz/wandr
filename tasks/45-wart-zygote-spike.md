@@ -76,7 +76,7 @@ matching AOSP zygote's pattern.
 **Rationale** (the real argument, not just style):
 
 - **rsbinder is structurally ruled out by D7.** To serve
-  `IWartZygote` over binder, the zygote parent has to call
+  `IWandrZygote` over binder, the zygote parent has to call
   `ProcessState::init_default` to register the service — that
   initializes the per-process binder state which is then COW'd
   into every `fork()`'d child. fork()+binder is a known Android
@@ -410,7 +410,7 @@ each, plus per-VMA categorization via `awk` over `/proc/<pid>/smaps`.
 
 `Shared_Clean` is similar (~7-9 MB) in all three — that's the
 kernel page cache deduplicating file-backed mmaps (libc, libEGL,
-libgui, libwart-host code). That's natural sharing the zygote
+libgui, libwandr-host code). That's natural sharing the zygote
 doesn't change.
 
 **Per-VMA attribution of the parent's 5 600 kB Shared_Dirty:**
