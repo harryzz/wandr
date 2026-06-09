@@ -1529,10 +1529,17 @@ mod audioclient_path {
         match cfg.channel_layout { ChannelLayout::Mono => 1, ChannelLayout::Stereo => 2 }
     }
     // stream-class → (AUDIO_USAGE_*, AUDIO_CONTENT_TYPE_*).
+    //
+    // VoiceCall uses USAGE_MEDIA (NOT VOICE_COMMUNICATION): on the Pixel 2 XL only the
+    // USAGE_MEDIA output opens (voice-comm → -889, task 75), and earpiece/speaker
+    // routing is steered by re-routing the MEDIA strategy's preferred device
+    // (set_media_strategy_route → setDevicesRoleForStrategy, task 97 #5). A VOICE_COMMUNICATION
+    // track lands on the phone strategy that re-route doesn't touch → routing no-ops.
+    // The host still knows it's a call via cfg.class (gates the comms route + keep-alive pump).
     fn usage_content(class: StreamClass) -> (i32, i32) {
         match class {
             StreamClass::Media        => (1, 2), // MEDIA / MUSIC
-            StreamClass::VoiceCall    => (2, 1), // VOICE_COMMUNICATION / SPEECH
+            StreamClass::VoiceCall    => (1, 1), // MEDIA / SPEECH (routed via the media strategy)
             StreamClass::Notification => (5, 4), // NOTIFICATION / SONIFICATION
         }
     }
