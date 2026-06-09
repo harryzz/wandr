@@ -126,6 +126,27 @@ fn netd_service() -> Option<rsbinder::Strong<dyn INetd>> {
     }
 }
 
+/// Apply the leased IPv4 address to `iface` via `INetd` (the binder replacement
+/// for `ip addr flush` + `ip addr add`). Clears existing addresses first, then
+/// adds `ip/prefix`. MUST be called as uid `system` (netd rejects root for
+/// interface config). `false` on failure.
+pub fn apply_address(iface: &str, ip: Ipv4Addr, prefix: u8) -> bool {
+    let Some(svc) = netd_service() else { return false };
+    if let Err(e) = svc.r#interfaceClearAddrs(iface) {
+        log::debug!("netd: interfaceClearAddrs({iface}) -> {e:?} (ok if none)");
+    }
+    match svc.r#interfaceAddAddress(iface, &ip.to_string(), prefix as i32) {
+        Ok(_) => {
+            log::info!("netd: interfaceAddAddress {ip}/{prefix} on {iface}");
+            true
+        }
+        Err(e) => {
+            log::warn!("netd: interfaceAddAddress {ip}/{prefix} on {iface} -> {e:?}");
+            false
+        }
+    }
+}
+
 /// Create (if needed) a physical network `netid` over `iface`, install the
 /// connected route for `subnet_cidr` plus the default route via `gateway`, and
 /// make it the system default network — the netd-native equivalent of the `ip

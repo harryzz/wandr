@@ -152,6 +152,21 @@ pub fn setup_network(netid: i32, iface: &str, subnet_cidr: &str, gateway: Ipv4Ad
     }
 }
 
+/// Apply the leased IPv4 address to `iface` via `INetd` (binder — replaces the
+/// `ip addr flush`/`ip addr add` shell-outs). **Must be called as uid `system`**
+/// (netd rejects root for interface config). No-op / `false` off-android.
+pub fn apply_address_netd(iface: &str, ip: Ipv4Addr, prefix: u8) -> bool {
+    #[cfg(target_os = "android")]
+    {
+        netd::apply_address(iface, ip, prefix)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (iface, ip, prefix);
+        false
+    }
+}
+
 /// Configure the netd DNS resolver for `netid` (binding it to `iface`) with the
 /// given IPv4 servers. The only way to make `getaddrinfo` resolve under
 /// `--no-art` (the resolver moved to the `dnsresolver` binder; no `ndc` command).

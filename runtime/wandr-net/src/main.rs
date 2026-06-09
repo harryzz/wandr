@@ -19,8 +19,8 @@ use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
 use wandr_hal_net::{
-    apply_address, dhcp, has_carrier, install_default_rule, read_saved_creds, supplicant,
-    DhcpLease, LinkStatus, WifiCreds, WANDR_NETID, WLAN_IF,
+    dhcp, has_carrier, install_default_rule, read_saved_creds, supplicant, DhcpLease, LinkStatus,
+    WifiCreds, WANDR_NETID, WLAN_IF,
 };
 
 fn arbiter_sock_path() -> String {
@@ -130,20 +130,22 @@ fn bring_up_with(creds: WifiCreds, force_assoc: bool) -> Result<Link, String> {
         log::info!("wandr-net: associated to {:?} (via ISupplicant AIDL)", creds.ssid);
     }
 
-    // 3. DHCP lease.
+    // 3. DHCP lease (root — raw socket). The link is already up from association.
     let lease = dhcp::acquire(WLAN_IF, 4).map_err(|e| format!("dhcp: {e}"))?;
 
-    // 4. Configure the leased address on the link (root).
-    apply_address(WLAN_IF, &lease).map_err(|e| format!("apply address: {e}"))?;
-
-    // 5. Drive netd + dnsresolver over binder — but they accept uid `system`, not
-    //    root (this daemon runs as root for the link bring-up), so re-exec the
-    //    `--netd-config` path as uid 1000. It creates the netd network + routes
-    //    and configures the DNS resolver.
+    // 4. M1 binder rewrite — address + network + routes + DNS all over binder as
+    //    uid `system` (netd/dnsresolver reject root), via the `--netd-config`
+    //    re-exec: the leased address now goes through INetd.interfaceAddAddress
+    //    (replacing the root `ip addr` shell-out), alongside the network create /
+    //    routes / setDefault / resolver config already on binder.
     configure_netd(&lease)?;
 
-    // 6. Catch-all rule so unmarked traffic uses netd's per-network table (root;
-    //    bridges the per-UID fwmark gap left by the dead ConnectivityService).
+    // 5. The ONE irreducible rtnetlink op: the catch-all `from all lookup <iface>`
+    //    rule (root). It bridges the per-UID fwmark gap left by the dead
+    //    ConnectivityService — unmarked (`--no-art`) sockets carry fwmark 0, which
+    //    netd's per-network fwmark rules don't match. INetd exposes ONLY fwmark-based
+    //    rules (networkAddUidRanges etc.), NOT an arbitrary `from all lookup` rule,
+    //    so there is no binder equivalent; this stays rtnetlink by necessity.
     install_default_rule(WLAN_IF).map_err(|e| format!("install rule: {e}"))?;
 
     let status = LinkStatus {
@@ -295,12 +297,16 @@ fn main() {
             eprintln!("usage: wandr-net --netd-config <netid> <iface> <ip/prefix> <gw-ipv4> <dns-ipv4>...");
             std::process::exit(2);
         };
+        // M1 binder rewrite: apply the leased address via INetd FIRST (uid system),
+        // replacing the root `ip addr` shell-out — so the connected route seeds
+        // correctly before setup_network.
+        let addr_ok = wandr_hal_net::apply_address_netd(&iface, local_ip, prefix);
         let subnet = wandr_hal_net::subnet_cidr(local_ip, prefix);
         let net_ok = wandr_hal_net::setup_network(netid, &iface, &subnet, gw);
         let dns_ok = !servers.is_empty()
             && wandr_hal_net::configure_resolver(netid, &iface, &servers, &[]);
-        println!("netd-config netid={netid} iface={iface} subnet={subnet} gw={gw} net={net_ok} dns={dns_ok}");
-        std::process::exit(if net_ok && dns_ok { 0 } else { 1 });
+        println!("netd-config netid={netid} iface={iface} subnet={subnet} gw={gw} addr={addr_ok} net={net_ok} dns={dns_ok}");
+        std::process::exit(if addr_ok && net_ok && dns_ok { 0 } else { 1 });
     }
 
     // `--probe-supplicant` — M2 reconnaissance: try to reach the ISupplicant HAL
