@@ -122,8 +122,18 @@ calibration noise.)
   and unchanged. `--probe-audio-backend` exercises the dispatch (both backends verified
   routing + writing frames through the WIT path). Stream-class→usage map: media→MEDIA/
   MUSIC, voice-call→VOICE_COMMUNICATION/SPEECH, notification→NOTIFICATION/SONIFICATION.
-  TODO validate with a live Signal call; capture uses AUDIO_SOURCE_MIC (VOICE_COMMUNICATION
-  /AEC for calls needs a WIT signal — follow-up).
+  Validated with a live Signal call ✅ — playback + mic + earpiece/speaker routing +
+  proximity + call-lifecycle all run through audioclient. Capture uses AUDIO_SOURCE_MIC
+  (VOICE_COMMUNICATION/AEC for calls needs a WIT signal — follow-up).
+- Call-output keep-alive pump ✅ — AudioFlinger removes a normal track from the mixer on
+  sustained underrun (BUFFER TIMEOUT); once removed it stops draining → the ring fills →
+  guest writes return 0 → the guest re-creates the track (big repeated glitch). A
+  real-time VoIP guest can't keep the small ring full through jitter. The pump
+  (audioclient_path, voice-call tracks) keeps each call ring fed with a ~15 ms silence
+  bridge when the guest falls behind, so the track stays on the active list. Live Signal
+  call: BUFFER TIMEOUT 101→0, HAL underruns 4→0, track re-creates 10→3, audible-usable.
+  (A real host-side jitter buffer is the richer follow-up; silence-bridge is the
+  AAudioService-equivalent minimum.)
 - Remaining per-track: `set_output_device` (route via `IAudioPolicyService`, host
   policy path); `applyVolumeShaper` (ramps/fades); blocking `write`/`read` (futex) so
   consumers needn't hand-pace; the cblk underrun counters for telemetry.

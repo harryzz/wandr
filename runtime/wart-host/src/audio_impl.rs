@@ -1477,6 +1477,53 @@ fn use_audioclient() -> bool {
 #[cfg(target_os = "android")]
 mod audioclient_path {
     use super::{ChannelLayout, StreamClass, TrackConfig};
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    // ── Call-output keep-alive pump ──────────────────────────────────────────
+    // AudioFlinger removes a normal track from the mixer on a sustained underrun
+    // (BUFFER TIMEOUT); once removed it stops draining, the ring fills, the guest's
+    // writes return 0, and the guest re-creates the track — a big glitch, repeated.
+    // A real-time VoIP guest can't keep the small ring full through network jitter.
+    // This pump keeps each *voice-call* output ring fed with a small silence bridge
+    // when the guest falls behind, so the track stays on the active list (never
+    // removed/re-created) — the AAudioService-equivalent the audioclient path lacks.
+    // (Scoped to calls; media/notification keep the direct path.)
+    struct OutState { started: bool, guest_wrote: bool, channels: u32 }
+    fn pump() -> &'static Mutex<HashMap<u32, OutState>> {
+        static R: OnceLock<Mutex<HashMap<u32, OutState>>> = OnceLock::new();
+        R.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+    fn start_pump_thread() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            std::thread::spawn(|| {
+                // ~15 ms cushion: low enough for call latency, high enough to bridge a
+                // pump cycle of jitter. The fill is silence (a real jitter buffer is a
+                // follow-up); it keeps the track alive when the guest stalls.
+                const WATERMARK: u32 = 720; // 15 ms @ 48k
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    let active: Vec<(u32, u32)> = {
+                        let g = pump().lock().unwrap();
+                        g.iter()
+                            .filter(|(_, s)| s.started && s.guest_wrote)
+                            .map(|(h, s)| (*h, s.channels))
+                            .collect()
+                    };
+                    for (h, ch) in active {
+                        let pending = audioclient::pending_frames(h);
+                        if pending < WATERMARK {
+                            // write() also re-starts a track AudioFlinger disabled after
+                            // underrun (CBLK_DISABLED), so this both feeds and revives it.
+                            let silence = vec![0.0f32; (WATERMARK - pending) as usize * ch as usize];
+                            audioclient::write(h, &silence);
+                        }
+                    }
+                }
+            });
+        });
+    }
 
     fn channels(cfg: &TrackConfig) -> u32 {
         match cfg.channel_layout { ChannelLayout::Mono => 1, ChannelLayout::Stereo => 2 }
@@ -1503,16 +1550,31 @@ mod audioclient_path {
         });
         if h != 0 && matches!(cfg.class, StreamClass::VoiceCall) {
             crate::audio_policy_impl::set_media_strategy_route(super::comms_route_speaker());
+            // Register with the keep-alive pump so the call output ring never underruns.
+            pump().lock().unwrap().insert(h, OutState {
+                started: false, guest_wrote: false, channels: channels(&cfg),
+            });
+            start_pump_thread();
         }
         h
     }
 
     pub fn write_pcm_f32(track: u32, samples: &[f32]) -> u32 {
+        if let Some(s) = pump().lock().unwrap().get_mut(&track) { s.guest_wrote = true; }
         audioclient::write(track, samples) as u32
     }
-    pub fn start(track: u32) -> bool { audioclient::start(track) }
-    pub fn pause(track: u32) -> bool { audioclient::pause(track) }
-    pub fn close(track: u32) { audioclient::close(track) }
+    pub fn start(track: u32) -> bool {
+        if let Some(s) = pump().lock().unwrap().get_mut(&track) { s.started = true; }
+        audioclient::start(track)
+    }
+    pub fn pause(track: u32) -> bool {
+        if let Some(s) = pump().lock().unwrap().get_mut(&track) { s.started = false; }
+        audioclient::pause(track)
+    }
+    pub fn close(track: u32) {
+        pump().lock().unwrap().remove(&track);
+        audioclient::close(track)
+    }
     pub fn pending_frames(track: u32) -> u32 { audioclient::pending_frames(track) }
 
     pub fn create_capture(cfg: TrackConfig) -> u32 {
