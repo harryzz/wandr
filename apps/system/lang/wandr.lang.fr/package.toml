@@ -1,0 +1,8 @@
+app_id      = "wandr.lang.fr"
+version     = "0.1.0"
+world       = "wandr:keyboard-lang-fr/lang-world"
+kind        = "system"
+composition = "same-store"
+
+[components]
+lang = "components/lang.wasm"

@@ -1,0 +1,22 @@
+[package]
+name    = "wandr-taskbar"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Task 56 — the Android-style nav bar (Back / Home / Recents) as a LIGHT
+# Rust canvas guest on a thin always-visible bottom-strip overlay. Exports
+# my:skiko-gfx/renderer; draws three icon buttons via the canvas WIT and
+# forwards taps to the arbiter through the my:skiko-gfx/launcher nav verbs
+# (go-home / go-back / recents). No Kotlin/Compose → leak-immune + tiny.
+#   cargo build --target wasm32-wasip2 --release
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

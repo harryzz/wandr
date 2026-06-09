@@ -1,8 +1,0 @@
-app_id      = "war.fonts.loader"
-version     = "0.1.0"
-world       = "war:fonts/loader-world"
-kind        = "system"
-composition = "same-store"
-
-[components]
-loader = "components/loader.wasm"

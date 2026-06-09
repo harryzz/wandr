@@ -1,0 +1,22 @@
+[package]
+name    = "wandr-alarm-test"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Arbiter Inc. 3c — minimal test guest for the wandr:alarm timed-wake primitive.
+# A light Rust canvas guest (like wandr.statusbar): imports wandr:alarm/scheduler,
+# exports wandr:alarm/alarm-handler. On first frame it schedules a repeating
+# alarm; on-alarm bumps a counter drawn as a growing bar (visible proof). The
+# host also logs "dispatched on-alarm". Kill it → the arbiter relaunches it.
+#   cargo build --target wasm32-wasip2 --release
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

@@ -1,0 +1,8 @@
+app_id      = "wandr.lang.bg"
+version     = "0.1.0"
+world       = "wandr:keyboard-lang-bg/lang-world"
+kind        = "system"
+composition = "same-store"
+
+[components]
+lang = "components/lang.wasm"

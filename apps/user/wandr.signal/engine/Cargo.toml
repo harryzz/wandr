@@ -1,0 +1,40 @@
+[package]
+name = "signal-engine"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Task-67 Phase 2 item (1): the Signal engine as a wasm32-wasip2 reactor
+# component exporting `wandr:signal/chat`. Refactors the proven signal-link CLI
+# (link + receive + send + persist) onto the persistent wart-step-executor so the
+# background tasks survive across `chat.poll-events` calls. Reuses signal-link's
+# store.rs / persist.rs verbatim.
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+libsignal-service = { path = "../../../../external/libsignal-service-rs", default-features = false }
+wart-step-executor = { path = "../../../../external/libsignal-service-rs/wart-wasi-shims/wart-step-executor" }
+# The call engine (Phase 2b-ii): Signal 1:1 voice calls. `signal` pulls the opaque
+# codec + X25519-DH/GCM keying + the SignalCall driver.
+wandr-call = { path = "../../../../crates/wandr-call", features = ["signal"] }
+wit-bindgen = "0.53"
+futures = "0.3"
+rand = "0.9"
+rand_chacha = "0.9"
+getrandom = "0.3"
+async-trait = "0.1"
+chrono = { version = "0.4", default-features = false }
+base64 = "0.22"
+uuid = { version = "1", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+
+# libsignal forces its constant-time curve25519 fork; consumers must replicate.
+[patch.crates-io]
+curve25519-dalek = { git = "https://github.com/signalapp/curve25519-dalek", tag = "signal-curve25519-4.1.3" }

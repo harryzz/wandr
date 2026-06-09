@@ -1,0 +1,8 @@
+app_id      = "wandr.emoji.picker"
+version     = "0.1.0"
+world       = "wandr:emoji/picker-world"
+kind        = "system"
+composition = "same-store"
+
+[components]
+picker = "components/picker.wasm"

@@ -1,0 +1,17 @@
+app_id      = "wandr.ime.keyboard"
+version     = "0.1.0"
+world       = "wandr:ime-keyboard/ime-keyboard"
+kind        = "system"
+composition = "same-store"
+orientation = "auto"
+
+[components]
+ui = "components/ui.wasm"
+
+# Task 49 step 5 — language plugins. Each uses its own WIT package
+# because two deps cannot share a `linker.instance(name)` entry.
+# Adding a new language → install wandr.lang.<id>.wandrpkg, append an
+# entry here, append matching @WasmImport in LangAdapter.kt.
+[dependencies]
+bg = { system = "wandr.lang.bg", version = "0.1.0", interface = "wandr:keyboard-lang-bg/lang@0.1.0" }
+fr = { system = "wandr.lang.fr", version = "0.1.0", interface = "wandr:keyboard-lang-fr/lang@0.1.0" }
