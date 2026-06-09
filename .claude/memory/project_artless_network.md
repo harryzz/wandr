@@ -29,7 +29,7 @@ HAL (power chip, STA iface) + IWificond (scan) + start wpa_supplicant→ISupplic
 NetworkStack.IpClient→DhcpClient (DHCP→IPv4) → netd (createNetwork/addRoute/setDefaultNetwork
 + DnsResolver.setResolverConfig). Cellular: telephony(system_server)→rild→rmnet→netd.
 
-**WORKING `--no-art` bring-up recipe (device-proven, the manual version of a future wart-net):**
+**WORKING `--no-art` bring-up recipe (device-proven, the manual version of a future wandr-net):**
 1. Start supplicant from the surviving vendor binary: `/vendor/bin/hw/wpa_supplicant -i wlan0
    -Dnl80211 -c <conf> -O /data/vendor/wifi/wpa/sockets`. nl80211/driver access works fine via
    `su` — **SELinux did NOT block it** (the early failures were a config-file perm bug, below).
@@ -59,9 +59,9 @@ IPermissionController service we stubbed for audio ([[project-artless-audio]]) �
 relevant here too.
 
 **NATIVE C++ WE KEEP (no reimplementation):** netd, DnsResolver, wificond, wpa_supplicant,
-IWifi + ISupplicant HALs, rild. Same "drive the surviving HALs" pattern as wart-sensors.
+IWifi + ISupplicant HALs, rild. Same "drive the surviving HALs" pattern as wandr-sensors.
 
-**PROPOSED `wart-net` (mirrors wart-sensors; not built yet — scoping deferred to user):** an
+**PROPOSED `wandr-net` (mirrors wandr-sensors; not built yet — scoping deferred to user):** an
 rsbinder client driving `ISupplicant` AIDL to associate (replacing the wpanudge ctrl-socket
 hack) + a small bundled **DHCP client** (the one genuinely-missing binary; or renew the lease)
 + `INetd` AIDL to createNetwork/addRoute and **set the DNS resolver** (the DNS piece, with
@@ -73,30 +73,30 @@ added); plaintext-PSK conf removed; wpanudge left at /data/local/tmp. A run-hybr
 --restore-art → --no-art cycle resets all of this.
 
 **TASK 88 M1 PRODUCTIZATION (2026-06-05, code-complete, pending --no-art device verify):**
-Built the wart triad mirroring sensors/audio. Decisions: ctrl-socket associate NOW (ISupplicant
+Built the wandr triad mirroring sensors/audio. Decisions: ctrl-socket associate NOW (ISupplicant
 AIDL later), **pure-Rust DHCPv4 up front** (no lease-reuse stopgap), thinnest slice.
-- `runtime/wart-hal-net` (pure-Rust, NO binder in M1): `dhcp.rs` DHCPv4 DISCOVER/OFFER/REQUEST/ACK
+- `runtime/wandr-hal-net` (pure-Rust, NO binder in M1): `dhcp.rs` DHCPv4 DISCOVER/OFFER/REQUEST/ACK
   (UDP 0.0.0.0:68 + SO_BINDTODEVICE + broadcast; unit-tested parse) + `supplicant.rs` (write
   world-readable conf, spawn `/vendor/bin/hw/wpa_supplicant -i wlan0 -Dnl80211 -c <conf> -O
   /data/vendor/wifi/wpa/sockets`, AF_UNIX SOCK_DGRAM ctrl SELECT_NETWORK 0/REASSOCIATE/STATUS) +
   `lib.rs` (WifiConfigStore.xml cred parse, `ip addr/route` applier). 6 tests pass.
-- `runtime/wart-net` daemon: associate→DHCP→apply→DNS→`report-net-state`; `--once` investigation
+- `runtime/wandr-net` daemon: associate→DHCP→apply→DNS→`report-net-state`; `--once` investigation
   mode; respawn-supervised via run-hybrid-stack --no-art (runs as ROOT via su — nl80211/route/port68).
-- `runtime/wart-arbiter/wart-arbiter-net` module: `report-net-state`/`net-status`/`net-subscribe`
+- `runtime/wandr-arbiter/wandr-arbiter-net` module: `report-net-state`/`net-status`/`net-subscribe`
   verbs + `on-connectivity-change` fan-out (Effect::HostLine `net-changed …`). Wired 1-line. 5 tests.
-- `wit/connectivity.wit` (war:connectivity): get-status import + on-connectivity-change export.
-  Host bindgen wiring + test guest = M1b (NOT wired into wart-host yet).
+- `wit/connectivity.wit` (wandr:connectivity): get-status import + on-connectivity-change export.
+  Host bindgen wiring + test guest = M1b (NOT wired into wandr-host yet).
 KEY CAVEATS for device verify: (a) **chip must be POWERED first** — WiFi ON under ART before
 --no-art (IWifi HAL powers chip + creates STA iface; cold power-up = M2). Device recon: wlan0 exists
 but DOWN when wifi off. (b) **DNS still the open gap** — `dns.rs` tries resolv.conf/net.dns*/ndc
 best-effort; the device run decides what makes guest getaddrinfo resolve (host inherit_network →
 bionic → netd dnsproxyd). Fallback if none work: vendor `android.net.INetd`+`android.net.IDnsResolver`
 (NOT vendored — only the OEM-subset `android.system.net.netd.INetd` is) + call as privileged uid +
-create a netId + set default network. ISupplicant AIDL tree IS already vendored under wart-host/vendor.
+create a netId + set default network. ISupplicant AIDL tree IS already vendored under wandr-host/vendor.
 
-**M1 DEVICE-VERIFIED 2026-06-05 (Pixel 2 XL, live --no-art session):** wart-net auto-brought-up
+**M1 DEVICE-VERIFIED 2026-06-05 (Pixel 2 XL, live --no-art session):** wandr-net auto-brought-up
 WiFi end-to-end: associate zah004 → pure-Rust DHCP lease 192.168.1.179/22 gw .1.1 → applied →
-**ping 8.8.8.8 3/3 0% loss**. TWO on-device fixes baked into wart-hal-net: (1) leaked supplicants
+**ping 8.8.8.8 3/3 0% loss**. TWO on-device fixes baked into wandr-hal-net: (1) leaked supplicants
 (std Child drop does NOT kill child!) + stale ctrl socket → `cleanup_stale` (pkill wpa_supplicant +
 rm socket) + connect-retry-on-ECONNREFUSED with PING/PONG probe. (2) **THE ROUTING GOTCHA**: a
 default route in `main` is IGNORED — Android's `ip rule`s (set by the dead ConnectivityService) send
@@ -109,16 +109,16 @@ netd dnsproxyd — `ANDROID_DNS_MODE=local` is GONE (tested, dead), /etc/resolv.
 /system, net.dns* props ignored. netd has no resolver bc `ndc network create`/createPhysicalNetwork
 is PERMISSION-REJECTED EVEN AS ROOT (400 failed — netd's IPermissionController check fails --no-art).
 M1b DNS paths: (a) task-87 permission stub → INetd networkCreatePhysical+networkSetDefault +
-IDnsResolver.setResolverConfiguration as privileged caller; (b) custom UDP resolver in wart-host
+IDnsResolver.setResolverConfiguration as privileged caller; (b) custom UDP resolver in wandr-host
 wasi:sockets/ip-name-lookup (bypass bionic/netd). Also: `from all lookup main` rule lingers after
 restore-art (could interfere w/ framework routing) — clean it on teardown (TODO).
 
 **DNS SOLVED + PRODUCTIZED 2026-06-05 (netd over binder as uid SYSTEM):** the demo + my first
 attempts failed bc run as ROOT — **netd AND dnsresolver special-case AID_SYSTEM (uid 1000), not
 root** (checkAnyPermission special-cases AID_SYSTEM). As `su 1000`: ndc network create + the INetd
-binder calls + IDnsResolver.setResolverConfiguration ALL succeed. Productized in wart-net:
+binder calls + IDnsResolver.setResolverConfiguration ALL succeed. Productized in wandr-net:
 - root (link): associate + DHCP + `ip addr add` (address only).
-- re-exec `su 1000 wart-net --netd-config`: drive over binder INetd networkCreatePhysical(netId,
+- re-exec `su 1000 wandr-net --netd-config`: drive over binder INetd networkCreatePhysical(netId,
   PERMISSION_NONE=0)/networkAddInterface/networkAddRoute(connected subnet THEN default via gw)/
   networkSetDefault + IDnsResolver createNetworkCache + setResolverConfiguration(ResolverParamsParcel
   {netId,servers,interfaceNames=[wlan0],transportTypes=[WIFI]}).

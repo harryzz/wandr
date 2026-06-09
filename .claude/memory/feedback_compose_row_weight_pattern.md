@@ -30,4 +30,4 @@ Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
 
 **Adjacent gotcha:** if the parent of your Row is a `Column { ... }` inside a `Card { ... }` that already has padding/width constraints, the Row's `fillMaxWidth()` is bounded by that — fine, that's what you want.
 
-Related: this is wart-app/`src/wasmWasiMain/kotlin/MarkdownCard.kt`'s `RenderBulletList`/`RenderOrderedList`/`RenderBlockQuote`.
+Related: this is wandr-app/`src/wasmWasiMain/kotlin/MarkdownCard.kt`'s `RenderBulletList`/`RenderOrderedList`/`RenderBlockQuote`.

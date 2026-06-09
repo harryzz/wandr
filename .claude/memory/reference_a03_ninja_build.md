@@ -17,15 +17,15 @@ relinks the one module:
 
 ```bash
 cd ~/android/lineage
-prebuilts/build-tools/linux-x86/bin/ninja -f out/combined-aosp_arm64.ninja wart-inputflinger
+prebuilts/build-tools/linux-x86/bin/ninja -f out/combined-aosp_arm64.ninja wandr-inputflinger
 ```
 
 - Combined ninja file = `out/combined-<TARGET_PRODUCT>.ninja` (here
   `out/combined-aosp_arm64.ninja`, from `lunch aosp_arm64-trunk_staging-userdebug`).
 - Ninja binary = `prebuilts/build-tools/linux-x86/bin/ninja` (don't rely on a
   system ninja). No `source build/envsetup.sh` / `lunch` needed for the direct call.
-- The ninja target is the module name (a phony), e.g. `wart-inputflinger`,
-  `libwart_sensors_hal`, `libsf_surface`.
+- The ninja target is the module name (a phony), e.g. `wandr-inputflinger`,
+  `libwandr_sensors_hal`, `libsf_surface`.
 - Output lands in the usual `out/.../<module>` path; `adb push` it like after `m`.
 
 **Use `m` (full pipeline) when the graph DID change:** added/removed a module, edited

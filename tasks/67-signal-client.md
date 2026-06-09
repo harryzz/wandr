@@ -502,7 +502,7 @@ only `/assets` read).
 
 ## Key references
 - Transport (load-bearing): `tasks/66`, `repros/wasi-tls-{probe,runner}`,
-  [[reference_wart_wasi_tls_transport]]. Network grant: `inherit_network` +
+  [[reference_wandr_wasi_tls_transport]]. Network grant: `inherit_network` +
   `allow_ip_name_lookup`.
 - Signal: github.com/whisperfish/presage · github.com/whisperfish/libsignal-service-rs
   · github.com/signalapp/libsignal (has a wasm build).

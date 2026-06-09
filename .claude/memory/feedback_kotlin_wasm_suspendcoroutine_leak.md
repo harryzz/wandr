@@ -1,6 +1,6 @@
 ---
 name: kotlin-wasm-suspendcoroutine-state-machine-leak
-description: "wart-leak-repro shows ~9 MB/s WasmGC-heap growth from a bare `suspendCoroutine` loop, OOM in 6:37 on Pixel 2 XL. REVISED 2026-05-18: root cause is NOT Kotlin/Wasm codegen — same code runs fine on wasmJs because browsers self-schedule GC. Real cause is wasmtime DRC has no automatic sweep trigger; see [[wasmtime-drc-no-autoschedule]]."
+description: "wandr-leak-repro shows ~9 MB/s WasmGC-heap growth from a bare `suspendCoroutine` loop, OOM in 6:37 on Pixel 2 XL. REVISED 2026-05-18: root cause is NOT Kotlin/Wasm codegen — same code runs fine on wasmJs because browsers self-schedule GC. Real cause is wasmtime DRC has no automatic sweep trigger; see [[wasmtime-drc-no-autoschedule]]."
 metadata: 
   node_type: memory
   type: feedback
@@ -23,7 +23,7 @@ just doesn't collect them.
 This was confirmed by patching wasmtime to log over-approximation list
 size N and sweep duration (2026-05-18). Full chain documented in
 [[wasmtime-drc-no-autoschedule]]; on-device measurements + code
-analysis at `/home/harry/wart/wasmtime-issue-draft.md`. Do NOT file
+analysis at `/home/harry/wandr/wasmtime-issue-draft.md`. Do NOT file
 upstream against Kotlin — file against wasmtime (issue draft ready).
 
 Keep the original analysis below for historical reference of how we
@@ -42,7 +42,7 @@ resumed and the source-level call frame is gone.
 
 ## Minimum reproducer
 
-`wart-leak-repro/` in the repo. Build deps: only
+`wandr-leak-repro/` in the repo. Build deps: only
 `org.jetbrains.skiko:skiko-wasm-wasi:0.0.0-SNAPSHOT`. No
 Compose runtime, no Compose UI, **no kotlinx-coroutines**. The
 `Main.kt` (≈ 60 LOC):
@@ -77,7 +77,7 @@ fun main() {
 }
 ```
 
-`WasiScheduler.schedule(delayMs, block)` is wart-side: stores the
+`WasiScheduler.schedule(delayMs, block)` is wandr-side: stores the
 lambda in a `HashMap<UInt, () -> Unit>`, calls a host import to
 ask for a wake `delayMs` ms later. When the host fires back,
 `WasiScheduler.fire(id)` does `callbacks.remove(id)?.invoke()`.
@@ -92,14 +92,14 @@ Two variants tested:
 | Fresh `() -> Unit` lambda per tick | 146 MB | (died first) | ~9 MB/s | T+6:37 (LMK adj=0) |
 | Single reused lambda | 144 MB | 1.22 GB | ~9 MB/s | killed at T+2:43 |
 
-Tick rate: ~985 ticks/sec (no vsync — the wart-host scheduler fires
+Tick rate: ~985 ticks/sec (no vsync — the wandr-host scheduler fires
 immediately when `delayMs=1`).
 
 **Per-tick growth: ~9 MB / 985 ticks ≈ 9 KB per `suspendCoroutine`
 call.** That's the size of one Kotlin/Wasm `Continuation`-shaped
 GC object plus its captures.
 
-Native Heap stayed flat at ~8.7 MB across the entire run. `wart-host`'s
+Native Heap stayed flat at ~8.7 MB across the entire run. `wandr-host`'s
 `ResourceLimiter` saw **zero** `memory.grow` events after cold start —
 the WASM linear memory does NOT grow; the leaked structref objects
 are entirely in the WasmGC heap (dumpsys "Unknown" category, anonymous
@@ -137,10 +137,10 @@ Kotlin/Wasm intrinsics / codegen are still maturing on this target.
 The repro uses `WasiScheduler.schedule()` to drive the wakes. If
 the suspend state-machine isn't leaked but instead some other
 internal reference held by the wasmtime GC keeps it alive (e.g.,
-the wart-host's binding-import argument vec), the symptom would
+the wandr-host's binding-import argument vec), the symptom would
 look identical from outside.
 
-To rule out the wart-side scheduler 100%, the next narrowing would
+To rule out the wandr-side scheduler 100%, the next narrowing would
 be: bypass `WasiScheduler` entirely; wire a new dedicated WIT
 import that the host calls with a raw transaction code each frame,
 and have our Kotlin side just block on a different continuation
@@ -153,7 +153,7 @@ before filing upstream so the bug report is clean.
   `withFrameNanos` runs a `suspendCancellableCoroutine` per frame
   that bottoms out in the same kind of state-machine codegen.
   Every wasmWasi Compose app with continuous animation is hitting
-  this leak — the wart task-23 numbers (~8 MB/min on a static
+  this leak — the wandr task-23 numbers (~8 MB/min on a static
   Material3 demo, faster with PI on screen) are this bug
   multiplied by Compose's per-frame allocation pressure.
 - **Tasks 21's audio impl** uses kotlinx-coroutines internally; the
@@ -178,7 +178,7 @@ LOC, reproducible OOM on a real device. Suitable for KT- /
 KotlinLang YouTrack ticket with the `wasm` and `wasm-wasi`
 labels. Bug class is "memory" / "GC".
 
-Reproducer location: `wart-leak-repro/` in the wart repo.
+Reproducer location: `wandr-leak-repro/` in the wandr repo.
 Task spec: `tasks/24-bisect-wasm-leak.md`.
 
 ## When to revisit

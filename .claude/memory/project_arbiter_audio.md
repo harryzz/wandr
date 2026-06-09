@@ -1,14 +1,14 @@
 ---
 name: project_arbiter_audio
-description: "wart-arbiter-audio — the AudioService arbiter module (audio focus, comms mode, routing). M1 (focus stack) done; M2 WIT + M3 comms/routing pending."
+description: "wandr-arbiter-audio — the AudioService arbiter module (audio focus, comms mode, routing). M1 (focus stack) done; M2 WIT + M3 comms/routing pending."
 metadata: 
   node_type: memory
   type: project
   originSessionId: 981b38b9-858e-4c22-b30d-89c53be34749
 ---
 
-**wart-arbiter-audio — arbiter module #7, the AudioService role** (decided over
-[[reference_audio_policy_calls]]; distinct from a future `wart-arbiter-media` =
+**wandr-arbiter-audio — arbiter module #7, the AudioService role** (decided over
+[[reference_audio_policy_calls]]; distinct from a future `wandr-arbiter-media` =
 MediaSessionService/now-playing/transport). Driven by call audio (Signal VoIP).
 
 **M1 — audio-focus stack: DONE + device-verified (commits `8543b125` +
@@ -35,11 +35,11 @@ owner + restores next. Each transition = `on-focus-changed <kind>` push via
   session disruption. GOTCHA: a module verb must ALSO be added to the binary's
   client-side argv allow-list (run_client_multi match, main.rs ~line 134) or the
   CLI prints "unknown command" before forwarding to the daemon (fixed cc470049).
-  Daemon restart: `setsid sh -c "LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=
-  /data/local/tmp/wart-apps /data/local/tmp/wart-arbiter --daemon" </dev/null &`.
+  Daemon restart: `setsid sh -c "LD_LIBRARY_PATH=/data/local/tmp WANDR_APPS_ROOT=
+  /data/local/tmp/wandr-apps /data/local/tmp/wandr-arbiter --daemon" </dev/null &`.
 
-**M2 — `war:audio-focus` WIT + host wiring: DONE + device-verified (commit
-`ef4986e8`).** Package `war:audio-focus` (no skiko-gfx WIT-sync, like alarm/
+**M2 — `wandr:audio-focus` WIT + host wiring: DONE + device-verified (commit
+`ef4986e8`).** Package `wandr:audio-focus` (no skiko-gfx WIT-sync, like alarm/
 notify): interface `focus` (request(focus-kind)->focus-result + abandon),
 interface `focus-handler` (on-focus-changed(focus-change)), worlds
 audio-focus-host/audio-focus-events. Host: `audio_focus_host_impl` forwards
@@ -47,19 +47,19 @@ request→`audio-focus-request <pid> <kind>` (reads reply: OK granted/delayed �
 Granted/Delayed) + abandon→fire-and-forget; 2 bindgen worlds + add_to_linker on
 BOTH linker sites (app_loader.rs); `InboundEvent::FocusChanged` parses
 `on-focus-changed <token>` (loss/loss-transient/duck/gain→0..3); standalone drain
-calls the guest's focus-handler export (.ok()-probed). Test guest = war.alarm.test
+calls the guest's focus-handler export (.ok()-probed). Test guest = wandr.alarm.test
 (focus request on first frame + bar recolour). Device-verified via a STANDALONE
 host (new binary, avoids restarting the live zygote): guest request(gain)→OK
 granted; a competing `audio-focus-request 99999 gain` evicted it → host logged
 `focus-inbound: dispatched on-focus-changed(0)` reaching the guest. Round-trip
-both directions. (Verify trick: `wart-host --standalone --app <id>` runs the new
+both directions. (Verify trick: `wandr-host --standalone --app <id>` runs the new
 binary in isolation; the live app-hosts are zygote-forked from the OLD binary, so
 a zygote/stack restart would otherwise be needed. **SIDE-EFFECT GOTCHA:** a
-standalone `orientation=auto` guest (war.alarm.test IS auto) enables the
+standalone `orientation=auto` guest (wandr.alarm.test IS auto) enables the
 device-orientation sensor + issues `set-orientation-lock 0`, which UNLOCKS the
 GLOBAL orientation and fans the accelerometer reading to EVERY surface — left the
 locked launcher stuck landscape after the guest was killed. Restore with
-`wart-arbiter report-orientation 0` + `set-orientation-lock 1`, or use an
+`wandr-arbiter report-orientation 0` + `set-orientation-lock 1`, or use an
 `orientation=locked` test guest. 2026-06-02.)
 
 **M3 — comms session + routing: DONE + device-verified (commit `24b3fcfe`), 10
@@ -92,10 +92,10 @@ starts/ends mid-doze; cleaned on SurfaceRemoved. WM exhaustive Event match neede
 the ignore arm (recurring gotcha when adding a core Event). 5 power + 10 audio
 tests green. Device-verify gated (needs a real call = setPhoneState + screen-off).
 
-**wart-arbiter-audio is COMPLETE: M1 focus + M2 WIT + M3 comms/routing + M3b
+**wandr-arbiter-audio is COMPLETE: M1 focus + M2 WIT + M3 comms/routing + M3b
 doze-exemption.** Remaining downstream = the WebRTC/ringrtc call engine in the
 Signal guest (the real consumer). [[reference_audio_policy_calls]] has the policy
-surface. `wart-arbiter-media` (MediaSessionService) is the future sibling.
+surface. `wandr-arbiter-media` (MediaSessionService) is the future sibling.
 
 **OPERATIONAL GOTCHA (cost ~20min this session): repeated arbiter restarts DROP
 runtime surface/role state.** The statusbar/taskbar self-register as Role::Chrome

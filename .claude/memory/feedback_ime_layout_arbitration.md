@@ -1,20 +1,20 @@
 ---
 name: feedback-ime-layout-arbitration
-description: war.ime.keyboard picks layouts from two orthogonal sources — editor-type override (host) and user 🌐 cycle — plus a built-in vs plugin split for what the cycle iterates over
+description: wandr.ime.keyboard picks layouts from two orthogonal sources — editor-type override (host) and user 🌐 cycle — plus a built-in vs plugin split for what the cycle iterates over
 metadata: 
   node_type: memory
   type: feedback
   originSessionId: c7a4384f-c3b0-4cdf-98cb-aa514fa75079
 ---
 
-The IME's `pickLayout` (war.ime.keyboard/src/wasmWasiMain/kotlin/ImeKeyboard.kt)
+The IME's `pickLayout` (wandr.ime.keyboard/src/wasmWasiMain/kotlin/ImeKeyboard.kt)
 arbitrates between **two orthogonal layout selectors** and feeds them
 from **two orthogonal layout sources**.
 
 **Two selectors:**
 - Editor-type override (host-driven): when the focused field is
   `KeyboardType.Number` / `Phone` / `Email` / `Url` / `Password`, the
-  host calls `war:ime/ime.on-editor-attached(input-type)` and
+  host calls `wandr:ime/ime.on-editor-attached(input-type)` and
   `pickLayout` returns the matching specialized layout. The 🌐 key
   is disabled in this state (cycle would defeat the override).
 - User-cycle (guest-driven): when no editor-type override is active
@@ -26,8 +26,8 @@ from **two orthogonal layout sources**.
 - Built-in layouts (compiled into `ImeKeyboardDefaults`): English
   QWERTY, Numeric, Phone, Email, Url, Password, Symbols, Symbols2,
   Emoji. Live in `ImeKeyboard.kt`.
-- Plugin layouts (loaded at composition time): `war.lang.*` warpkgs
-  each export `war:keyboard-lang-<id>/lang@0.1.0`. The IME calls
+- Plugin layouts (loaded at composition time): `wandr.lang.*` wandrpkgs
+  each export `wandr:keyboard-lang-<id>/lang@0.1.0`. The IME calls
   `lang.get-info` + `lang.get-layout(false/true)` for each declared
   plugin, wraps the returned letter rows with the IME's uniform
   digit/shift/utility rows (`ImeKeyboardDefaults.wrapLanguageLayout`),
@@ -41,17 +41,17 @@ plugins without touching the IME's core.
 **How to apply:** when adding a feature that influences which layout
 shows, decide which selector it modifies. Adding a new editor-type
 override → extend `pickLayout`'s editor-type branch. Adding a new
-input language → ship a war.lang.* warpkg + add an entry to
-`LangAdapter.plugins` + an import line in `wit/war-ime-keyboard.wit`.
+input language → ship a wandr.lang.* wandrpkg + add an entry to
+`LangAdapter.plugins` + an import line in `wit/wandr-ime-keyboard.wit`.
 The two paths don't interact.
 
 **Pitfall (task 49 step 5 design discovery):** two deps cannot share
-the same WIT package name — wart-host's `wire_dep_into_linker`
+the same WIT package name — wandr-host's `wire_dep_into_linker`
 collides on the second `linker.instance(name)` call. Each lang
 plugin therefore uses its own WIT package
-(`war:keyboard-lang-bg`, `war:keyboard-lang-fr`), and the IME
+(`wandr:keyboard-lang-bg`, `wandr:keyboard-lang-fr`), and the IME
 hard-codes its known plugin set. Future polish: host-mediated
-dynamic loading where wart-host scans `system-apps/war.lang.*` and
+dynamic loading where wandr-host scans `system-apps/wandr.lang.*` and
 exposes a single `enumerate-langs` / `get-layout(lang-id, ...)` host
 verb — plugins truly zero-touch then. Out of scope for the MVP.
 

@@ -31,7 +31,7 @@ Rust guests (signal, dioxus; Compose unaffected). Fixed with non-inverting
 host floor.
 
 **Overlay lifecycle = derived state (the real design win):** IME visibility is
-reconciled in ONE place, `reconcile_overlay()` in wart-arbiter `main.rs`:
+reconciled in ONE place, `reconcile_overlay()` in wandr-arbiter `main.rs`:
 `desired = active_ime && editor_focus && focus.pid == visible_app && ime != app`.
 Every transition (attach/detach/cycle/launch/foreground) just updates state then
 calls it. Killed the scattered imperative promote/demote/re-engage that caused
@@ -53,7 +53,7 @@ of WMS moving into the arbiter (see [[project_arbiter_window_server_design]]).
 content fills down (no blank strip); re-tap a field → keyboard returns. Not a bug
 — that's how Android works.
 
-**Deploy discipline learned the hard way:** per-app `wart-host --install` only;
-NEVER `build-system-warpkgs.sh` (wipes APPS_ROOT — destroyed user Signal state
+**Deploy discipline learned the hard way:** per-app `wandr-host --install` only;
+NEVER `build-system-wandrpkgs.sh` (wipes APPS_ROOT — destroyed user Signal state
 once) and NEVER `rm -rf` an app's `cache/` dir. See
-[[feedback_build_system_warpkgs_wipes_apps_root]], [[feedback_dont_delete_app_cache_dir]].
+[[feedback_build_system_wandrpkgs_wipes_apps_root]], [[feedback_dont_delete_app_cache_dir]].

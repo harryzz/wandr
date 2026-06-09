@@ -1,13 +1,13 @@
 ---
 name: project-ime-options
-description: "Soft-keyboard / IME options for wart given the \"total remove Java\" constraint — how Android IME actually works and which path fits"
+description: "Soft-keyboard / IME options for wandr given the \"total remove Java\" constraint — how Android IME actually works and which path fits"
 metadata: 
   node_type: memory
   type: project
   originSessionId: be47cfff-188f-4f12-989d-c09046736d6a
 ---
 
-Context for the IME / soft-keyboard question in the post-ART wart
+Context for the IME / soft-keyboard question in the post-ART wandr
 runtime. User constraint: **total remove Java** → no JNI to
 `android.view.inputmethod.InputMethodManager`. Standing decision
 (2026-05-26): **lean on the in-canvas Compose keyboard; treat real-IME
@@ -37,7 +37,7 @@ layer named `InputMethod` — visible in `dumpsys input`); commits come
 back into the app as `IRemoteInputConnection.commitText("a")` /
 `sendKeyEvent(...)`, **not** as InputFlinger events.
 
-## Four options for wart
+## Four options for wandr
 
 | Option | Java-free | Effort | Outcome |
 |---|---|---|---|

@@ -62,7 +62,7 @@ quick stub.
 
 When a Material3 widget hits this in the future:
   1. Add it to the disabled list in
-     `wart-app/src/wasmWasiMain/kotlin/RealComposeApp.kt`'s
+     `wandr-app/src/wasmWasiMain/kotlin/RealComposeApp.kt`'s
      `MaterialDemoApp`, with a comment pointing at this memory.
   2. Don't even try the no-op shortcut.
 

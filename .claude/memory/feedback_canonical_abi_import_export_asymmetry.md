@@ -30,6 +30,6 @@ Fixed by switching to 3 i32 params + caller-allocated 8-byte return area (docume
 - Check the producer's compiled wasm signature via `wasm-tools print <wasm> | grep '$<interface>#<name>'` to confirm the export shape, then derive the importer signature: **prepend** a return-area-pointer param, **drop** the return slot.
 - The matching `cabi_post_<interface>#<name>` export is the cleanup hook the caller can invoke after reading the result. One-shot consumers can skip it (process exit frees everything).
 
-Working example: `wart-app-md-smoke/src/wasmWasiMain/kotlin/generated/MarkdownImports.kt` documents the symmetry inline alongside the call.
+Working example: `wandr-app-md-smoke/src/wasmWasiMain/kotlin/generated/MarkdownImports.kt` documents the symmetry inline alongside the call.
 
 Related: [[wit-bindgen-no-kotlin-generator]] (the reason these bindings were hand-written), [[task-36-step-7-pending]].

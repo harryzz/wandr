@@ -16,7 +16,7 @@ a timing-sensitive native HAL past a hard timeout. Confirmed culprit for the
 `mct_controller_proc_serv_msg: Timedout type=1` → SIGABRT of
 `camera.provider@2.4-service` (which then respawns degraded: `gyro_module_init:
 disabled`). A *single* `am` worker (40% on one core, 600%+ idle elsewhere) was enough
-— likely binder-thread saturation of `wart-activityms` (the `am` hammers its `activity`
+— likely binder-thread saturation of `wandr-activityms` (the `am` hammers its `activity`
 stub, "Mixing copies of libbinder / Expecting header 0x53595354"), which the camera
 also calls.
 

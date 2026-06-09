@@ -1,6 +1,6 @@
 ---
 name: project-patha-inputflinger
-description: "Path A (standalone wart-inputflinger as the inputflinger service, ART-off) — what works, the SF window-infos blocker, and the arbiter-feeds-dispatcher fix direction"
+description: "Path A (standalone wandr-inputflinger as the inputflinger service, ART-off) — what works, the SF window-infos blocker, and the arbiter-feeds-dispatcher fix direction"
 metadata: 
   node_type: memory
   type: project
@@ -8,18 +8,18 @@ metadata:
 ---
 
 **✅ RESOLVED (task 84, device-verified 2026-06-04):** app touch/keys now route under
-ART-off. The SF-push blocker (below) was sidestepped, NOT fixed: the **wart-arbiter
-(the WMS) authors the ordered window list and pushes it to wart-inputflinger**, which
+ART-off. The SF-push blocker (below) was sidestepped, NOT fixed: the **wandr-arbiter
+(the WMS) authors the ordered window list and pushes it to wandr-inputflinger**, which
 feeds the standalone dispatcher via `InputDispatcher::onWindowInfosChanged` (the
-unit-test entry). Key pieces: (1) `wart-arbiter-wm::input_window_block` derives rects
+unit-test entry). Key pieces: (1) `wandr-arbiter-wm::input_window_block` derives rects
 from the surface/role model + insets/orient/keyboard (chrome strips from a new
 `Surface.anchor`); binary diff-pushes `win-begin/win/win-focus/win-commit` to the
-**abstract** socket `@wart-inputflinger` (uid-system can't bind a file in /data/local/tmp)
-after every command/child-exit, gated `--no-art`. (2) wart-inputflinger reaches the
+**abstract** socket `@wandr-inputflinger` (uid-system can't bind a file in /data/local/tmp)
+after every command/child-exit, gated `--no-art`. (2) wandr-inputflinger reaches the
 concrete `onWindowInfosChanged` WITHOUT the heavy private InputDispatcher.h: a one-method
 decl in `namespace android::inputdispatcher` (single-inherit from InputDispatcherInterface
 → getDispatcher() is the object at offset 0; resolves vs libinputflinger.so's exported
-symbol). (3) host registers `(pid,channel-token)` with the `wart.windowreg` binder svc
+symbol). (3) host registers `(pid,channel-token)` with the `wandr.windowreg` binder svc
 after createInputChannel (token is a kernel object — can't ride the socket; this one hop
 is binder, never through the Rust arbiter); arbiter refers to windows by pid. Gotchas (all fixed):
 `sf_surface.cpp`→`libsf_surface.so` (a-03 build, NOT Rust host); dispatcher FATAL-asserts
@@ -33,15 +33,15 @@ strip, taskbar) handed the guest RAW DISPLAY coords → keys dead, while fullscr
 anchored ABOVE the taskbar: `[h-inset_bottom-keyboard_px, h-inset_bottom]`. Backlight=0
 under ART-off (no DisplayManager) — panel renders but invisible (cost a full debug round)
 → arbiter drives `/sys/class/leds/lcd-backlight/brightness` in apply_display_power
-(WART_BACKLIGHT_{PATH,LEVEL} overridable; boot force-on lights it). VERIFIED PORTRAIT + LANDSCAPE:
+(WANDR_BACKLIGHT_{PATH,LEVEL} overridable; boot force-on lights it). VERIFIED PORTRAIT + LANDSCAPE:
 swipe-unlock, launcher, app-switch, IME typing, taskbar-with-keyboard, system-key dedup,
 landscape chrome/IME + app + keyboard. LANDSCAPE fix: the fullscreen app/keyguard already
 worked any orientation (host inverse-maps touch via renderer base_matrix, standalone.rs
 :1035); only chrome/IME strips were wrong (authored portrait top/bottom while host renders
-them on the physical SIDES). Fix = `wart-arbiter-wm::strip_rect` mirrors the host's
+them on the physical SIDES). Fix = `wandr-arbiter-wm::strip_rect` mirrors the host's
 `overlay_rect` (handedness 0→S/3→N/4→W/7→E; strip th-thick off-inward from the user's
 edge) so the input region follows the bars. PURE arbiter change — reader stays portrait
-(panel buffer is physically portrait; host owns content rotation), NO wart-inputflinger/
+(panel buffer is physically portrait; host owns content rotation), NO wandr-inputflinger/
 viewport change. Portrait rects byte-identical (no regression). The blocker write-up below
 is the diagnosis record.
 
@@ -50,10 +50,10 @@ is the diagnosis record.
 Path A (task 80) = run AOSP's real `InputManager` (InputReader+InputDispatcher) as
 the standalone `inputflinger` binder service so ONE dispatcher reads input once and
 routes it (vs the task-80 per-host evdev bootstrap, which fanned global keys to every
-host → power-key flicker). Code: `runtime/wart-inputflinger/` (soong cc_binary, built
-on a-03 `external/wart-inputflinger`; deploy `/data/local/tmp/wart-inputflinger`, run
-via `wart-launch` = uid system+gid input+CAP_BLOCK_SUSPEND). `run-hybrid-stack --no-art`
-wires it. Build fast path (a-03): direct-ninja, NOT `m` — `prebuilts/build-tools/linux-x86/bin/ninja -f out/combined-aosp_arm64.ninja out/target/product/generic_arm64/system/bin/wart-inputflinger`.
+host → power-key flicker). Code: `runtime/wandr-inputflinger/` (soong cc_binary, built
+on a-03 `external/wandr-inputflinger`; deploy `/data/local/tmp/wandr-inputflinger`, run
+via `wandr-launch` = uid system+gid input+CAP_BLOCK_SUSPEND). `run-hybrid-stack --no-art`
+wires it. Build fast path (a-03): direct-ninja, NOT `m` — `prebuilts/build-tools/linux-x86/bin/ninja -f out/combined-aosp_arm64.ninja out/target/product/generic_arm64/system/bin/wandr-inputflinger`.
 
 **WORKS (device-verified, ART off):** system-key dedup. The dispatcher policy
 `interceptKeyBeforeQueueing` forwards POWER(26)/VOL(24,25) to the arbiter socket ONCE
@@ -61,7 +61,7 @@ wires it. Build fast path (a-03): direct-ninja, NOT `m` — `prebuilts/build-too
 InputDispatcher.cpp:1191). One physical press = one toggle, no flicker. Needed
 `setInputDispatchMode(true,false)` after start() (boots disabled → "Dropped event
 because input dispatch is disabled"). Hosts use their existing inputflinger client path
-(`sf_surface.cpp:309` createInputChannel/InputConsumer) by NOT setting WART_EVDEV_INPUT.
+(`sf_surface.cpp:309` createInputChannel/InputConsumer) by NOT setting WANDR_EVDEV_INPUT.
 
 **BLOCKER (touch never routes — "no touchable window"):** the dispatcher has ZERO
 windows because **SurfaceFlinger never pushes WindowInfos to our process under ART-off**:
@@ -71,7 +71,7 @@ windows because **SurfaceFlinger never pushes WindowInfos to our process under A
 - `SurfaceFlinger::updateInputFlinger` EARLY-RETURNS if `mInputFlinger` is null
   (SurfaceFlinger.cpp:4104) → pushes WindowInfos to NOBODY (dispatcher self-registers
   a listener in its ctor: InputDispatcher.cpp:962, but gets nothing).
-- Restarting SF after registering wart-inputflinger (so init re-binds ours) was tried
+- Restarting SF after registering wandr-inputflinger (so init re-binds ours) was tried
   and STILL no push (a binding race as system_server's `inputflinger` servicemanager
   entry hands over to ours; mInputFlinger ends up null/stale). SF composites fine +
   holds visible touchable windows (`dumpsys SurfaceFlinger` shows `input{(0x0)
@@ -82,17 +82,17 @@ windows because **SurfaceFlinger never pushes WindowInfos to our process under A
 
 **Also found:** the taimen layer transform transposes input touchableRegions to
 2880×1440 (host registers portrait 1440×2880, SF reports landscape) — a SECOND coord
-issue that only matters once windows actually reach the dispatcher. wart-inputflinger
-viewport is env-tunable (`WART_VP_LOGICAL_W/H`, `WART_VP_DEVICE_W/H`, `WART_VP_ORIENT`)
+issue that only matters once windows actually reach the dispatcher. wandr-inputflinger
+viewport is env-tunable (`WANDR_VP_LOGICAL_W/H`, `WANDR_VP_DEVICE_W/H`, `WANDR_VP_ORIENT`)
 to dial in once delivery works; forwarded by run-hybrid-stack.
 
-**DECISIVE DIAGNOSIS (2026-06-04, wart_wininfo_probe):** a plain root process that
+**DECISIVE DIAGNOSIS (2026-06-04, wandr_wininfo_probe):** a plain root process that
 registers a `gui::WindowInfosListener` (NO addService) and runs UNDER NORMAL ART
 RECEIVES SF pushes fine — `onWindowInfosChanged: 11 windows` (StatusBar/Taskbar/launcher),
 PORTRAIT frames (e.g. StatusBar [0,0,1440,98]). So: (a) SF's push is NOT permission-gated
 against our process; the ART-off failure is CONCLUSIVELY `mInputFlinger==null`; (b) the
 2880×1440 transpose is OUR hosts' pre-rotated surfaces, a SEPARATE issue (ART-up frames
-are portrait). Probe binary = runtime/wart-inputflinger/wart_wininfo_probe.cpp.
+are portrait). Probe binary = runtime/wandr-inputflinger/wandr_wininfo_probe.cpp.
 
 **BYPASS RULED OUT:** `onWindowInfosChanged` is only on the CONCRETE `InputDispatcher`
 (42 internal dispatcher headers — not includable in our cc_binary); `IInputFlinger` has
@@ -100,9 +100,9 @@ no window-inject API; the client "pull" (`outInitialInfo`) is just the reporter'
 of the last push. So SF's push is the ONLY way to get windows in → must make SF push →
 need `mInputFlinger` bound to our service.
 
-**FIX ATTEMPT (fragile, NOT working yet):** start wart-inputflinger FIRST (so SF init's
+**FIX ATTEMPT (fragile, NOT working yet):** start wandr-inputflinger FIRST (so SF init's
 waitForService binds mInputFlinger=ours), THEN restart SF; + a reconnect-poke thread in
-wart-inputflinger (`getPhysicalDisplayIds()` → `ComposerServiceAIDL::getComposerService()`
+wandr-inputflinger (`getPhysicalDisplayIds()` → `ComposerServiceAIDL::getComposerService()`
 → `WindowInfosListenerReporter::reconnect`) to move the dispatcher's listener to the new
 SF. The poke DOES fire ("ComposerServiceAIDL reconnected" after restart) and SF-new shows
 no "Failed to link" + holds the windows — yet STILL no push to our listener (SF only

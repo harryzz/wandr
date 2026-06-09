@@ -46,7 +46,7 @@ Long-press dwell threshold: 500ms (`viewConfiguration.longPressTimeoutMillis`). 
 The keyboard is no longer always visible — it auto-shows on TextField
 focus, auto-hides on blur, has a ⌄ key + responds to ESC.
 
-- **`WasiKeyboardController`** (wart-app side, implements
+- **`WasiKeyboardController`** (wandr-app side, implements
   `SoftwareKeyboardController`): holds a `MutableState<Boolean> isVisible`;
   `show()`/`hide()` toggle it. Provided via
   `CompositionLocalProvider(LocalSoftwareKeyboardController provides ...)`

@@ -1,13 +1,13 @@
 ---
 name: reference_rsbinder_version
-description: "wart-host uses rsbinder + rsbinder-aidl pinned to git master 0.9.0 (rev 5e999e04a), NOT crates.io 0.8.0 — required to decode AudioPortFw; supersedes stale \"0.7.0/0.8.0\" notes."
+description: "wandr-host uses rsbinder + rsbinder-aidl pinned to git master 0.9.0 (rev 5e999e04a), NOT crates.io 0.8.0 — required to decode AudioPortFw; supersedes stale \"0.7.0/0.8.0\" notes."
 metadata: 
   node_type: memory
   type: reference
   originSessionId: 60a5ba7d-3852-4a04-bc9b-dc30175ddbfb
 ---
 
-`runtime/wart-host/Cargo.toml` pins **rsbinder + rsbinder-aidl to git master,
+`runtime/wandr-host/Cargo.toml` pins **rsbinder + rsbinder-aidl to git master,
 rev `5e999e04a` (version 0.9.0)** — not the crates.io `0.8.0`. Adopted 2026-06-03
 (task 76 #6, commit 1b20c1cb).
 
@@ -40,7 +40,7 @@ Docs read: <https://moru.rs/rsbinder/> (overview, parcelable, enum-union,
 print.html). See [[project_audio_capability_model]], [[project_audio_routing_arbiter]].
 
 
-**Stub cleanup (30c984ab):** wart-host now generates from the **real**
+**Stub cleanup (30c984ab):** wandr-host now generates from the **real**
 `libaudioclient/aidl/IAudioPolicyService.aidl` (all 106 methods, codegen-derived
 indices) — the brittle hand-maintained positional slot-stub
 (`vendor/aidl-stubs/android/media/IAudioPolicyService.aidl` + AudioPolicyForceUse

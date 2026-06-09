@@ -48,11 +48,11 @@ end-to-end. Boot-model bring-up (task 33) all landed monolithic.
 
 **Hybrid empirical update (2026-05-27, task 45 spike — commits
 ad82c11/353f690/1c5a6927/462d53a5):** spiked a working
-wart-zygote (native Rust, preloads `wasmtime::Engine`, fork()s
+wandr-zygote (native Rust, preloads `wasmtime::Engine`, fork()s
 on UNIX socket LAUNCH commands, children run either
 `wasi:cli/command` or full Compose render loop). 5 steps device-
 verified end-to-end. The technical path is real, no fork-time
-landmines on this stack (see [[wart-zygote-fork-survival]] for
+landmines on this stack (see [[wandr-zygote-fork-survival]] for
 the empirical findings). **But the memory math came in lower
 than the scope-doc target**: ~5.6 MB Shared_Dirty per child, not
 the ≥30 MB target. Per-app working set ~180 MB dominates the
@@ -60,8 +60,8 @@ COW savings. The Hybrid win is therefore **about three-tier
 isolation, not memory** — same lesson stock Android learned.
 This doesn't change the §9 lock; it sharpens it. Production
 work (preload registry to grow COW savings to ~25-40 MB, real
-wart-arbiter, SIGCHLD reap, init.rc/sepolicy) spun out as
-recommended task 46 in `tasks/45-wart-zygote-spike.md`.
+wandr-arbiter, SIGCHLD reap, init.rc/sepolicy) spun out as
+recommended task 46 in `tasks/45-wandr-zygote-spike.md`.
 
 **Caveat — monolithic is a single point of failure:** a host crash
 takes down every app + arbiter. Strictly worse isolation than stock
@@ -94,10 +94,10 @@ starting most threads for exactly this reason.
 Roadmap §7 (revised 2026-05-26). **Ship `.wasm`, cache `.cwasm`** —
 direct parallel to Android's APK → dex2oat → `/data/dalvik-cache/`.
 
-Shipped artifact (`.warpkg`, same bytes for every device):
+Shipped artifact (`.wandrpkg`, same bytes for every device):
 
 ```
-<app-id>-<version>.warpkg/
+<app-id>-<version>.wandrpkg/
   package.toml           ← metadata + entry + declared world
   link.wac               ← composition script
   components/
@@ -109,7 +109,7 @@ Shipped artifact (`.warpkg`, same bytes for every device):
 On-device cache (per install dir, regeneratable):
 
 ```
-/data/wart/apps/<app-id>/<version>/
+/data/wandr/apps/<app-id>/<version>/
   package.toml + link.wac + components/ + assets/   (copies of shipped)
   cache/
     ui.cwasm   logic.cwasm   persist.cwasm         (Engine::precompile_component output)
@@ -128,7 +128,7 @@ Minimum manifest (§7.5, subject to revision):
 name    = "com.example.demo"
 version = "1.2.0"
 entry   = "ui"
-world   = "war:app/main@1.0.0"
+world   = "wandr:app/main@1.0.0"
 
 [components]
 ui     = { path = "components/ui.wasm",     aot = "ui.cwasm" }
@@ -143,12 +143,12 @@ dir    = "assets"
 
 **Two-module split** (revised 2026-05-26 — see `tasks/35-app-install.md`):
 
-- **Installer** (`wart-host/src/app_installer.rs`, new): replaces
+- **Installer** (`wandr-host/src/app_installer.rs`, new): replaces
   `PackageManagerService` + `dex2oat`. Reads `package.toml`, verifies
   world + signature, copies `.wasm`s + assets to install dir,
   calls `Engine::precompile_component` per component, writes cache +
   `cache-key.toml`, registers in package db.
-- **Loader** (`wart-host/src/app_loader.rs`, new — thin): looks up
+- **Loader** (`wandr-host/src/app_loader.rs`, new — thin): looks up
   app-id → re-verifies cache-key (re-precompile if stale) →
   `Component::deserialize_file` → returns `LoadedApp`. Caller
   unchanged: still `Store::new` + `app.instantiate(&mut store)`.
@@ -218,7 +218,7 @@ forward-compatible with multi-component packages.
   override. Defer until a concrete second component drives the call.
 
 **Out-of-scope-of-§9-but-also-open:** on-device package location
-(`/data/wart/apps/<pkg>/<version>/` plausible) + update/rollback
+(`/data/wandr/apps/<pkg>/<version>/` plausible) + update/rollback
 semantics. Pair with Q5b when installable packages get serious.
 
 Related: [[wasmtime-drc-no-autoschedule]] (one app's GC stall would

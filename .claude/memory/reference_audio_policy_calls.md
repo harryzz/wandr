@@ -71,11 +71,11 @@ are positional, so the count MUST be exact.
   speaker` → prev=NONE → `setForceUse(COMMUNICATION, SPEAKER)` OK (no perm/
   SELinux denial) → read-back=SPEAKER(1) → restored to NONE. Proves write access
   AND that the read is genuine (read-back=1, not the status header). So root
-  wart can DRIVE call routing. `setPhoneState` (index 4) not separately run (most
+  wandr can DRIVE call routing. `setPhoneState` (index 4) not separately run (most
   intrusive — puts device IN_COMMUNICATION) but same service/perm class as the
   verified setForceUse → expected to work; confirm when building the call path.
 
-**Bottom line: media.audio_policy is fully reachable (R+W) from root wart.** The
+**Bottom line: media.audio_policy is fully reachable (R+W) from root wandr.** The
 audio side of calls is de-risked. SIM note: this device has NO SIM → a cellular
 Phone app (IN_CALL + modem/RIL) isn't testable here anyway; Signal/VoIP
 (IN_COMMUNICATION) is SIM-independent and the real target. Next concrete build:
@@ -84,5 +84,5 @@ VOICE_COMMUNICATION, setPhoneState(IN_COMMUNICATION) on call start, the
 setForceUse speaker toggle, and the WebRTC/ringrtc media engine guest-side.
 
 **Audio-focus** (pause-others-when-call-starts) is NOT AudioPolicyService — it
-was system_server's AudioService.java (gone post-ART) → it's the wart-arbiter's
+was system_server's AudioService.java (gone post-ART) → it's the wandr-arbiter's
 job (the audio-focus-arbiter slice; mic capture now gives it a real driver).

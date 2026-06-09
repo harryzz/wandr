@@ -13,7 +13,7 @@ of 2026-05-22.** Full resume detail is in `.task-state` and
 
 **Approach chosen: A — InputFlinger input channel** (not direct evdev).
 Confirmed viable on device: the input channel registers cleanly
-(`dumpsys input` → `channelName='wart input', status=NORMAL`) with **no
+(`dumpsys input` → `channelName='wandr input', status=NORMAL`) with **no
 SELinux AVC denials**. The AOSP reference is
 `frameworks/native/libs/gui/tests/EndToEndNativeInputTest.cpp`.
 
@@ -24,7 +24,7 @@ folded into the `sf_surface` shim — `register_input_window()`
 `InputConsumer`; `src/sf_surface.rs` `poll_input()`; `standalone.rs`'s loop
 dispatches via `input::dispatch_pointer_v2`.
 
-**Blocker — touch does not route.** `dumpsys input` shows the wart input
+**Blocker — touch does not route.** `dumpsys input` shows the wandr input
 window with `frame=[0,0][0,0], touchableRegion=<empty>` → InputDispatcher
 drops injected taps as `ACTION_OUTSIDE`. Root cause: `setInputWindowInfo`
 was applied to `g_control` — the *parent* `SurfaceControl` — but the buffer

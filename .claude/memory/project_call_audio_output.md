@@ -7,7 +7,7 @@ metadata:
   originSessionId: 917f8d71-aa61-49a1-a703-e5103ad6af82
 ---
 
-Task 75 — call-audio **output** path SOLVED + device-verified (silent → continuous audio) 2026-06-02, UNCOMMITTED. Four independent root causes, all on the Pixel 2 XL (taimen, API 35). See `[[project_wart_call]]`, `[[project_arbiter_audio]]`, `[[reference_audio_policy_calls]]`.
+Task 75 — call-audio **output** path SOLVED + device-verified (silent → continuous audio) 2026-06-02, UNCOMMITTED. Four independent root causes, all on the Pixel 2 XL (taimen, API 35). See `[[project_wandr_call]]`, `[[project_arbiter_audio]]`, `[[reference_audio_policy_calls]]`.
 
 1. **`USAGE_VOICE_COMMUNICATION` output is UNOPENABLE on this device.** The audio policy routes it to a voice/telephony output with no AAudio mixer profile → MMAP open returns `-19` (ENODEV) for every format, **no legacy fallback** → `openStream -889`, in *every* phone mode. Only `USAGE_MEDIA` opens (primary mixer → Shared/legacy fallback succeeds). So call audio MUST go out as `USAGE_MEDIA`/`CONTENT_TYPE_MUSIC` (`audio_impl.rs` `create_track`).
 2. **`USAGE_MEDIA` + `IN_COMMUNICATION` mode = ducked to ~1%** (`onVolumeChanged 0.01`) and parked (service readCounter frozen, mixer won't pull). Fix: DON'T enter comms mode — guest flag `COMMS_MODE=false` (`engine.rs`) gates both `focus::call_start()` sites. Then `onVolumeChanged=0.555` (full). Trade-off: no hardware AEC / earpiece routing (speakerphone-MEDIA path).
@@ -21,7 +21,7 @@ Task 75 — call-audio **output** path SOLVED + device-verified (silent → cont
 **Pump rate FIXED → REAL VOICE (device-verified 2026-06-02).** Root: the host **fps-caps the foreground render loop** (`min_frame_delay=10ms` floored by `frame_interval`), so the engine pump (which rode inside `render_frame`) ran only ~20/s and the ~32 ms ring underran → glitches. Fix: made `bg_tick` **render-independent** — host (`standalone.rs`) now calls `call_bg_tick` in **all** roles on its own `next_bg_tick_at` timer (render stays foreground-only), and the guest `bg_tick` returns `10` ms during a call (host clamps to ~16 ms ≈ 60/s). `ticks/s` 20→48, `peak` settled 0.81, glitches gone. (This is the render-independent pump the user predicted.)
 
 **POLISH LIST (user-noted, PAUSED here — RX voice works, these are follow-ups):**
-- **(P1) Mic/TX** — `RX_ONLY=true` (`call.rs`) disables the wart mic, so the desktop hears nothing from wart. Flip false + wire mic→`send_audio`; watch in+out MMAP `-889` (`[[project_audio_mic_capture]]`).
+- **(P1) Mic/TX** — `RX_ONLY=true` (`call.rs`) disables the wandr mic, so the desktop hears nothing from wandr. Flip false + wire mic→`send_audio`; watch in+out MMAP `-889` (`[[project_audio_mic_capture]]`).
 - **(P2) Echo/"microphony"** — speakerphone (USAGE_MEDIA→speaker, no HW AEC since we avoid comms mode) feeds the mic back. Need software AEC or earpiece/headset routing.
 - **(P3) Audio routing** — earpiece / wired headset / BT (speaker is the default). The comms/voice route is unopenable here, so routing must work on the MEDIA path.
 - **(P4) TURN test** — re-test with `NO_TURN=false` over the Signal relay (confirm rate/quality hold off-LAN).

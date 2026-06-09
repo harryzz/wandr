@@ -15,7 +15,7 @@ we've been using. Worth knowing for the next time we need to bisect a
 
 | Precision | API | Cost |
 |---|---|---|
-| Per host-call boundary | `Store::call_hook(closure)` — fires on CallingHost / ReturningFromHost / CallingWasm / ReturningFromWasm | negligible; already wired in wart-host under `profile` cargo feature |
+| Per host-call boundary | `Store::call_hook(closure)` — fires on CallingHost / ReturningFromHost / CallingWasm / ReturningFromWasm | negligible; already wired in wandr-host under `profile` cargo feature |
 | Per wasm function entry/exit | `Store::edit_breakpoints()` → `BreakpointEdit::add_breakpoint(module, pc)` at function-entry PCs | negligible at break cost; needs `Config::debug_info(true)` |
 | Per wasm instruction | `BreakpointEdit::single_step(true)` | 100×–1000× slowdown when engaged; gate to suspect windows |
 
@@ -112,7 +112,7 @@ disable.
 ## Cost / setup notes
 
 - `call_hook` needs `wasmtime/call-hook` feature enabled. We have it
-  on under the `profile` cargo feature in wart-host already.
+  on under the `profile` cargo feature in wandr-host already.
 - `debug_info(true)` and `edit_breakpoints()` need wasmtime built with
   debug instrumentation. May affect AOT cwasm contract — verify that
   our existing `.cwasm` was compiled with matching flags, or recompile.
@@ -120,7 +120,7 @@ disable.
   debugging, but we can't easily use that on-device.
 - Components: `instance.debug_memory(MemoryIndex(0))` works on the
   inner module instance of a component. Need to enumerate via
-  `debug_all_instances()` and pick the wart-app instance (not the
+  `debug_all_instances()` and pick the wandr-app instance (not the
   adapter, which imports memory).
 
 ## What does NOT exist (as of v44)

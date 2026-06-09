@@ -7,7 +7,7 @@ metadata:
   originSessionId: 81538868-ab9d-48a4-8de3-a56739b11c3e
 ---
 
-Need image manipulation (filters, resize, crop, color ops) in a wart guest/component?
+Need image manipulation (filters, resize, crop, color ops) in a wandr guest/component?
 Use **`photon-rs`** — proven to build AND run on `wasm32-wasip2` (our component
 model) under wasmtime.
 

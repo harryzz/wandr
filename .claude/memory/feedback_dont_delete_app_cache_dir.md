@@ -7,14 +7,14 @@ metadata:
   originSessionId: b4642c38-ac22-459b-92dd-7b4430418889
 ---
 
-Do **not** `rm -rf` an installed warpkg's `cache/` directory
+Do **not** `rm -rf` an installed wandrpkg's `cache/` directory
 (`$APPS_ROOT/.../<app>/<ver>/cache/`) to "force a fresh AOT recompile". The host
 precompiles the component (cranelift JIT visible in logcat) and then tries to
 **write** `cache/ui.cwasm`; if the parent `cache/` dir is gone, the write fails
 with `load failed (write .../cache/ui.cwasm: No such file or directory (os error
 2)) — falling back to test-frame loop` (standalone.rs ~1033). The guest never
 runs, the host draws "standalone: test frame N" forever, and **no per-host
-control socket** (`wart-host-<pid>.sock`) is created → editor-attach delivery
+control socket** (`wandr-host-<pid>.sock`) is created → editor-attach delivery
 fails → the IME shows nothing.
 
 **Why:** this looks exactly like a guest instantiation crash, a poisoned store
@@ -23,7 +23,7 @@ you chase the wrong cause. The real cause is the missing directory; the cwasm
 write is the only thing failing. (Burned ~an hour on task 71 mistaking it for
 ABI skew.)
 
-**How to apply:** to refresh a cwasm, **reinstall** the warpkg
+**How to apply:** to refresh a cwasm, **reinstall** the wandrpkg
 (`pack-ime-keyboard.sh` / `--install`) — install recreates `cache/` *and*
 precompiles `ui.cwasm`. If you must clear just the cwasm, delete the **file**
 (`cache/ui.cwasm`), not the dir, or `mkdir` it back. First launch after a real

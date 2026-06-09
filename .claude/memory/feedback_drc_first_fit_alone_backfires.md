@@ -1,6 +1,6 @@
 ---
 name: drc-first-fit-alone-backfires
-description: "Don't fix wasmtime's FreeList::first_fit O(F) scan alone — tested it, made the wart-app workload measurably worse. Sweep got slower and the leak rate went UP."
+description: "Don't fix wasmtime's FreeList::first_fit O(F) scan alone — tested it, made the wandr-app workload measurably worse. Sweep got slower and the leak rate went UP."
 metadata: 
   node_type: memory
   type: feedback
@@ -9,7 +9,7 @@ metadata:
 
 Replacing wasmtime's `FreeList::first_fit` O(F) linear scan with an
 O(log F) size-indexed `BTreeSet` lookup, on its own, makes the
-wart-app workload **worse**, not better.
+wandr-app workload **worse**, not better.
 
 Measured on device 2026-05-18 (Pixel 2 XL, three sweeps over ~6
 minutes of active interaction):
@@ -41,6 +41,6 @@ them without the scheduling fix accelerates the pathology. Don't
 reach for `first_fit` as our fix.
 
 The negative-result patch + trajectory data is recorded in
-`/home/harry/wart/wasmtime-issue-draft.md` "What we tried that did NOT
+`/home/harry/wandr/wasmtime-issue-draft.md` "What we tried that did NOT
 work" — useful as a benchmark fixture if anyone wants to evaluate
 future allocator changes against this workload.

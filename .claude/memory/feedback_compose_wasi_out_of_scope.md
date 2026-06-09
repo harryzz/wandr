@@ -7,7 +7,7 @@ metadata:
   originSessionId: 3d303796-d18c-429f-816f-2a415ff40ff3
 ---
 
-The 11 `compose-*-wasi/` directories at `/home/harry/wart/` are
+The 11 `compose-*-wasi/` directories at `/home/harry/wandr/` are
 transient build-glue that bundles `compose-multiplatform-core` source
 into fat klibs for fast linking. The user plans to **delete them
 after the current task finishes**. They have noticed I keep looking
@@ -35,8 +35,8 @@ home.
   wasmWasiMain/kotlin/androidx/compose/material3/internal/
   BasicTooltip.wasi.kt`.
 
-- For **tests, repros, smoke harnesses**: still wart-app per
-  [[prefer-wart-app-edits]]. compose-*-wasi is not the right home
+- For **tests, repros, smoke harnesses**: still wandr-app per
+  [[prefer-wandr-app-edits]]. compose-*-wasi is not the right home
   for those either.
 
 - For **build wiring** that points to upstream `wasmWasiMain/`

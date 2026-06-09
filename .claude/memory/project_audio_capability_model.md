@@ -11,7 +11,7 @@ Task 76 probe phase (steps 1–3) DONE + device-verified on Pixel 2 XL 2026-06-0
 Read-only investigation that lands the device's real audio picture before the
 capability-driven refactor. Builds on [[project_call_audio_output]] (task 75).
 
-**Code (uncommitted):** `runtime/wart-host/src/audio_caps.rs` — `--probe-audio-caps`
+**Code (uncommitted):** `runtime/wandr-host/src/audio_caps.rs` — `--probe-audio-caps`
 (dumpsys parse → typed `AudioDeviceCaps` model + binder reachability) and
 `--probe-audio-matrix` (state matrix). Helpers: `audio_impl::probe_open` /
 `probe_coexist`, `audio_policy_impl::probe_devices_for_attributes`, and slot-25

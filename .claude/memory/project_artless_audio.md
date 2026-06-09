@@ -1,6 +1,6 @@
 ---
 name: project-artless-audio
-description: "ART-off audio FULLY SOLVED (audible): audioserver needs 4 system_server binder stubs in wart-activityms — activity, sensor_privacy, scheduling_policy, AND permission (IPermissionController). The last unblocks MMAP playback START."
+description: "ART-off audio FULLY SOLVED (audible): audioserver needs 4 system_server binder stubs in wandr-activityms — activity, sensor_privacy, scheduling_policy, AND permission (IPermissionController). The last unblocks MMAP playback START."
 metadata: 
   node_type: memory
   type: project
@@ -9,7 +9,7 @@ metadata:
 
 **✅ TASK 87 FULLY SOLVED + USER-CONFIRMED AUDIBLE (2026-06-05).** ART-off audio output
 works: a `--no-art` play-tone is heard on the Pixel 2 XL speaker. The complete recipe is
-**4 system_server binder stubs in `wart-activityms` generics[]** + native volume init:
+**4 system_server binder stubs in `wandr-activityms` generics[]** + native volume init:
 `activity` + `sensor_privacy` (audioserver init un-wedge), `scheduling_policy`
 (REGISTER_AUDIO_THREAD requestPriority loop), **`permission` =
 `android.os.IPermissionController` (LAYER 4, the final blocker)**, plus
@@ -43,27 +43,27 @@ the generic-stub reply shape are the reusable bits if a 5th audioserver stub sur
 
 ---
 
-**✅ SOLVED + device-verified (2026-06-05): C++ stub `wart-activityms`.** Registers a
+**✅ SOLVED + device-verified (2026-06-05): C++ stub `wandr-activityms`.** Registers a
 precise `activity` (IActivityManager) + a generic `sensor_privacy` binder; audioserver
 un-wedges through both `waitForService`s and re-registers media.audio_flinger/policy/
 aaudio; an output stream opens (loopback probe: `media.audio_policy ready` +
 `media.aaudio ready` + AAudioService `openWithConfig … MMAP stream`). Built on a-03
-(`runtime/wart-activityms/cpp/`), launched by run-hybrid-stack `--no-art` (via
-wart-launch → uid system) which then restarts audioserver so it re-inits with the
+(`runtime/wandr-activityms/cpp/`), launched by run-hybrid-stack `--no-art` (via
+wandr-launch → uid system) which then restarts audioserver so it re-inits with the
 stubs present. KEY: C++/libbinder `addService` WORKS where rsbinder's FAILED (below); a
 plain BBinder defaults to Local stability (no VINTF requirement). The stub hardcodes
 the descriptor `"android.app.IActivityManager"` (a-03 libbinder doesn't export
 `IActivityManager::descriptor` / compile IActivityManager.cpp) + uses the header's
 transaction-code enum (header-only, no link). audioserver needs a CHAIN of
 system_server stubs (activity → sensor_privacy → …); add more names to the
-`generics[]` array in wart_activityms.cpp as logcat `Waited one second for <svc>`
+`generics[]` array in wandr_activityms.cpp as logcat `Waited one second for <svc>`
 reveals them. a-03 build gotchas: new module → `m` dies in kati but soong regenerates
 → ninja the soong intermediate
-`out/soong/.intermediates/external/wart-activityms/.../wart-activityms`
+`out/soong/.intermediates/external/wandr-activityms/.../wandr-activityms`
 ([[reference-a03-ninja-build]]); class BBinder is in `<binder/Binder.h>` (no
 BBinder.h); add `include_dirs:["frameworks/native/libs/binder/include_activitymanager"]`
 for IActivityManager.h. The dormant Rust crate
-(runtime/wart-activityms/{src,build.rs,aidl}) is kept for if rsbinder ever gains
+(runtime/wandr-activityms/{src,build.rs,aidl}) is kept for if rsbinder ever gains
 real-servicemanager register support.
 
 **FOLLOW-UP BUGS from the audioserver restart (2026-06-05, device-observed, NOT yet
@@ -119,7 +119,7 @@ state. Without it the policy returns volume index range **-1** and streams sit a
 for the 12 public streams (MIN/MAX copied verbatim from `AudioService.MIN_/MAX_
 STREAM_VOLUME`; MUSIC full-scale, rest ~80%) on OUT_DEFAULT/SPEAKER/EARPIECE/HEADPHONE/
 HEADSET, then `setPhoneState(NORMAL)`+`setForceUse(COMMUNICATION,NONE)`. CLI flag
-`wart-host --init-audio-policy` (run by run-hybrid-stack right after `media.audio_policy`
+`wandr-host --init-audio-policy` (run by run-hybrid-stack right after `media.audio_policy`
 registers; needs `LD_LIBRARY_PATH=/data/local/tmp` or libc++_shared.so won't link).
 VERIFIED: speaker (AudioDeviceType 140) range went **[-1..-1] → [0..15] idx 15**, and
 the arbiter `volume up/down` keys now work (were no-ops). AudioStreamType MUSIC=3,
@@ -139,7 +139,7 @@ media.audio_policy index API (which init_audio_policy now sets up).
 
 **🎯 ROOT CAUSE FOUND via ART-up vs --no-art A/B (2026-06-05) — it's a MISSING
 system_server binder `scheduling_policy`, NOT volume/routing/MMAP-rewrite.** Ran the
-SAME host MMAP tone (`wart-host --play-tone`, new CLI) under ART-up vs --no-art and
+SAME host MMAP tone (`wandr-host --play-tone`, new CLI) under ART-up vs --no-art and
 diffed audioserver state. IDENTICAL on both: audio_policy device config, the 6 audio
 patches (outputs→AUDIO_DEVICE_OUT_SPEAKER), phone state NORMAL, force-use NONE,
 `Output devices: 0x2 SPEAKER`. The ONLY difference is the **stream START**: ART-up
@@ -160,11 +160,11 @@ hangs forever → MMAP stream never starts the PCM → HAL route never applied �
 Under ART-up the service exists → returns instantly → stream starts. SAME host code,
 only the environment differs (= why "works under ART"). **FIX (one line, established
 pattern):** add `{"scheduling_policy","android.os.ISchedulingPolicyService"}` to
-wart-activityms's `generics[]` (wart_activityms.cpp:171) — its `GenericStub` already
+wandr-activityms's `generics[]` (wandr_activityms.cpp:171) — its `GenericStub` already
 replies `writeNoException()+writeInt32(0)`, which is EXACTLY what
 `BpSchedulingPolicyService::requestPriority` reads (`readExceptionCode()==0` then
 `readInt32()` → 0 = NO_ERROR; REQUEST_PRIORITY_TRANSACTION=FIRST_CALL=1, non-oneway).
-Rebuild wart-activityms on a-03, redeploy. This is the 3rd system_server binder a
+Rebuild wandr-activityms on a-03, redeploy. This is the 3rd system_server binder a
 native audio survivor consumes (after `activity`, `sensor_privacy`). NOTE: the volume
 init ([[project-artless-audio]] above) is STILL needed for level; scheduling_policy is
 needed for the stream to START at all. So NEITHER earlier option (rewrite to AudioTrack
@@ -172,11 +172,11 @@ needed for the stream to START at all. So NEITHER earlier option (rewrite to Aud
 
 **⏳ scheduling_policy stub BUILT+DEPLOYED+WORKS for its purpose, but a 2ND blocker
 remains (2026-06-05).** Added `{"scheduling_policy","android.os.ISchedulingPolicyService"}`
-to wart-activityms generics[], rebuilt on a-03 (ninja-direct the soong intermediate —
+to wandr-activityms generics[], rebuilt on a-03 (ninja-direct the soong intermediate —
 source-only change, no .bp edit: `prebuilts/build-tools/linux-x86/bin/ninja -f
-out/combined-aosp_arm64.ninja out/soong/.intermediates/external/wart-activityms/
-wart-activityms/android_arm64_armv8-a/wart-activityms`), scp'd back to
-runtime/wart-activityms/cpp/wart-activityms, deployed via run-hybrid (push_if_newer).
+out/combined-aosp_arm64.ninja out/soong/.intermediates/external/wandr-activityms/
+wandr-activityms/android_arm64_armv8-a/wandr-activityms`), scp'd back to
+runtime/wandr-activityms/cpp/wandr-activityms, deployed via run-hybrid (push_if_newer).
 CONFIRMED WORKING: `scheduling_policy: []` registers, and the **Command 6
 (REGISTER_AUDIO_THREAD) infinite-loop is GONE** — the AAudio stream now advances
 START→REGISTER→START_CLIENT→`setState ...→4 (STARTED)` (it never reached STARTED
@@ -200,13 +200,13 @@ a `--play-tone [ms] [hz] [vol]` CLI for A/B testing (same media.aaudio path).
 **STATUS: diagnosed, NOT yet fixed (2026-06-05). Corrects an earlier wrong assumption
 that audio "survives --no-art cleanly."**
 
-**Symptom (user-reported):** the 1–2 s sound at wart-host startup played before
+**Symptom (user-reported):** the 1–2 s sound at wandr-host startup played before
 `--no-art` but not after. Audio is dead under `--no-art`.
 
 **Root cause (device + AOSP-source confirmed):** `audioserver` (AudioFlinger +
 AudioPolicyService + AAudioService, frameworks/av) IS a native, standalone process
 (`class core`, survives ART-off like surfaceflinger) — UNLIKE InputDispatcher (which
-was inside system_server and needed the path-A `wart-inputflinger`). BUT audioserver
+was inside system_server and needed the path-A `wandr-inputflinger`). BUT audioserver
 has a runtime dependency on **ActivityManager**: `AudioPolicyService`'s `UidPolicy`
 registers a UID observer via the native `ActivityManager` client
 (`frameworks/native/libs/binder/ActivityManager.cpp:40`) →
@@ -225,20 +225,20 @@ briefly into `--no-art`; then it restarted and the new instance wedged.
 from system_server.** The `'activity'` client is a hand-rolled C++ `IActivityManager`
 (`DECLARE_META_INTERFACE(ActivityManager)`; header
 `libs/binder/include_activitymanager/binder/IActivityManager.h` is in the vendored
-AOSP tree → buildable on a-03 like wart-inputflinger, but far simpler). A stub
+AOSP tree → buildable on a-03 like wandr-inputflinger, but far simpler). A stub
 subclasses `BnActivityManager`, registers the binder name `"activity"`, and implements
 ~9 trivial methods: `registerUidObserver`/`registerUidObserverForUids`/
 `unregisterUidObserver` (no-op OK), `isUidActive`→true, `getUidProcessState`→a
 foreground/"top" state, `checkPermission`→granted, `openContentUri`/`logFgsApiBegin`/
 `logFgsApiEnd` no-op. That one stub unblocks BOTH audioserver AND cameraserver (both
-wait on `activity`). Launch via `wart-launch` (uid-system + sepolicy context, same as
-how wart-inputflinger registers its binder name; bare root can't register under
+wait on `activity`). Launch via `wandr-launch` (uid-system + sepolicy context, same as
+how wandr-inputflinger registers its binder name; bare root can't register under
 --no-art). Later it can be backed by the arbiter's real foreground/UID knowledge
-(wart IS the AMS — [[project_task74_surface_role_model]]) for proper audio focus /
+(wandr IS the AMS — [[project_task74_surface_role_model]]) for proper audio focus /
 ducking / mic-privacy; a permissive no-op stub is enough to get audio WORKING first.
 
 **BUILD ATTEMPT 1 — pure-Rust rsbinder stub (2026-06-05): built + correct but
-BLOCKED on registration.** Created `runtime/wart-activityms` (standalone crate):
+BLOCKED on registration.** Created `runtime/wandr-activityms` (standalone crate):
 minimal `aidl/android/app/IActivityManager.aidl` (the ~12 methods the native client
 calls, declared IN the native transaction-code-enum order so AIDL codes match;
 `IBinder` for the IUidObserver params), rsbinder-aidl codegen (needs
@@ -254,20 +254,20 @@ path (ServiceManager.cpp:528 → `Stability::requiresVintfDeclaration(binder)`):
 binder's **stability** is read as needing a VINTF declaration. rsbinder's generated
 `BnActivityManager::new_binder` bakes in `Stability::default()` = **System**
 (binder.rs `#[default] System`); C++ libbinder uses **Local** (=0) for a plain
-addService — which is why C++ `wart-inputflinger` addService("wart.windowreg") WORKS
-from the identical wart-launch/uid-system/Permissive context but rsbinder's doesn't.
+addService — which is why C++ `wandr-inputflinger` addService("wandr.windowreg") WORKS
+from the identical wandr-launch/uid-system/Permissive context but rsbinder's doesn't.
 rsbinder's stability WIRE-encoding (`From<Stability> for i32`) also only
 special-cases Android 12 (sdk 31/32); its add/register path is validated against
 rsbinder's own `rsb_hub`, NOT the real servicemanager. NEXT: either force the binder
 to `Stability::Local` (needs an rsbinder patch/fork — the generated new_binder
 hardcodes default System, no public Local knob) OR fall back to a small C++
-registrar (BBinder + onTransact, ~12 codes) built on a-03 like wart-inputflinger
-(proven addService under --no-art). Binary/crate kept at runtime/wart-activityms.
+registrar (BBinder + onTransact, ~12 codes) built on a-03 like wandr-inputflinger
+(proven addService under --no-art). Binary/crate kept at runtime/wandr-activityms.
 
 **UPDATE (2026-06-05): forcing Stability::Local did NOT fix it — deeper rsbinder
 wire-incompat.** Patched build.rs to rewrite the generated
 `Stability::default()`→`Stability::Local` (post-codegen string replace, like
-wart-hal-display's float fix) — verified applied — but addService STILL fails. Calling
+wandr-hal-display's float fix) — verified applied — but addService STILL fails. Calling
 `rsbinder::hub::add_service` directly (returns full `Status`) reveals the real error:
 **`BadParcelable: "Parcel data not fully consumed, unread size: 36"`** (exception=
 BadParcelable, txn_err=Ok). So servicemanager replied with a real exception whose
@@ -280,8 +280,8 @@ registration via rsbinder needs real rsbinder fixes (proper servicemanager-reply
 exception parsing, likely an android_15 SM variant) — non-trivial and uncertain. The
 RELIABLE path is the C++ registrar (BBinder + onTransact, the ~12 IActivityManager
 codes from libs/binder/IActivityManager.h, addService via libbinder) built on a-03
-like wart-inputflinger — C++ libbinder addService is PROVEN under --no-art
-(wart.windowreg). Keep the rsbinder crate (runtime/wart-activityms) for if rsbinder
+like wandr-inputflinger — C++ libbinder addService is PROVEN under --no-art
+(wandr.windowreg). Keep the rsbinder crate (runtime/wandr-activityms) for if rsbinder
 gains real-SM register support; build the C++ one for now.
 
 Audio POLICY (volume/route/focus/mode) is already reimplemented as

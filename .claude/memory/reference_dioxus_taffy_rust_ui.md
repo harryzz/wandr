@@ -1,6 +1,6 @@
 ---
 name: reference_dioxus_taffy_rust_ui
-description: "dioxus-core + taffy LIGHT reactive Rust UI framework on wasm32-wasip2 — the Compose alternative for complex wart guests. SHIPPED as crates/dioxus-canvas/ (task 59, device-verified); demo apps/user/war.dioxus.demo/."
+description: "dioxus-core + taffy LIGHT reactive Rust UI framework on wasm32-wasip2 — the Compose alternative for complex wandr guests. SHIPPED as crates/dioxus-canvas/ (task 59, device-verified); demo apps/user/wandr.dioxus.demo/."
 metadata: 
   node_type: memory
   type: reference
@@ -10,7 +10,7 @@ metadata:
 **SHIPPED 2026-05-29 (task 59) — the renderer is now real + device-verified.**
 `crates/dioxus-canvas/` is the "tiny Blitz" (VirtualDom → node arena → taffy
 flexbox → canvas WIT draw verbs → pointer hit-test → dioxus event → re-render).
-First reactive dioxus guest on device: `apps/user/war.dioxus.demo/` — a 5-tab
+First reactive dioxus guest on device: `apps/user/wandr.dioxus.demo/` — a 5-tab
 Compose-style component gallery (task 61): checkbox, switch, radio, stepper,
 progress, dropdown, color swatches, calendar, slider (drag), HSV color picker
 (drag), and a text edit box with the real soft keyboard (IME). The renderer
@@ -20,7 +20,7 @@ verbs** (reuses `paragraph` for text measure, `ime` for editor-attach, and
 `renderer.on-key-event-v2` for key delivery). Circles/pills via `border-radius:50%`
 (rrect clamp); HSV gradients discretized into solid cells (no gradient primitive).
 Reach for `dioxus-canvas` (path dep) for any rich Rust guest; hand-rolled
-canvas (war.launcher ~70 KB) stays lighter for trivial UI. Impl gotchas baked
+canvas (wandr.launcher ~70 KB) stays lighter for trivial UI. Impl gotchas baked
 in: implement `WriteMutations` (NOT `rebuild_to_vec`, which drops the
 `Template` payload); `replace_placeholder` paths are template-root-relative so
 pop the `m` nodes first; install the global dioxus-html `HtmlEventConverter`
@@ -55,7 +55,7 @@ declaring the package. Reference generated modules as `crate::my::skiko_gfx::*`
 [[feedback_clean_library_usage]].
 
 **Engine-backed guest (extra host import) — `launch!` split (2026-05-30, task 67
-item 2).** A guest that needs an EXTRA host import (e.g. `wart:signal/chat`)
+item 2).** A guest that needs an EXTRA host import (e.g. `wandr:signal/chat`)
 **can't** use `launch!`: a second `generate!` for the extra import conflicts on
 `_rt` / `cabi_realloc` / `__WIT_BINDGEN_COMPONENT_TYPE` / the component-type
 section. So `launch!` is now split into composable halves (backward-compat —
@@ -67,7 +67,7 @@ dir, the extra package under `deps/`, with `generate_all` + `pub_export_macro` +
 `export_macro_name: "__dioxus_canvas_export"` + `runtime_path:
 "::dioxus_canvas::__wit_bindgen::rt"` — then calls `dioxus_canvas::wire!(app)`.
 Inline multi-package (`package a { } package b { }`) is REJECTED by the inline
-parser → use the `path:"wit"` + `deps/` layout. Example: `apps/user/war.signal/ui`
+parser → use the `path:"wit"` + `deps/` layout. Example: `apps/user/wandr.signal/ui`
 (imports chat, exports renderer/frame-pacing; `wac plug`s onto signal-engine).
 **Polling an external source** (engine `poll-events`, which only advances when
 called): `DomRenderer::set_min_frame_delay(ms)` lowers the on-demand idle floor so
@@ -87,7 +87,7 @@ runs and the soft keyboard never appears (symptom: "tap field → caret shows bu
 frozen, no keyboard"). Fix: every composer/edit field needs an `onmousemove`
 (the demo's `EditField` has one for drag-select; reuse `caret_at`-style tap→caret
 positioning via the `measure_text` helper). Confirmed via logcat:
-`arbiter: attach-editor … → route to war.ime.keyboard … delivered=true` only
+`arbiter: attach-editor … → route to wandr.ime.keyboard … delivered=true` only
 appears once the field is draggable.
 
 **`display:none` now actually hides (2026-05-30 fix).** It WAS a no-op visually:
@@ -108,7 +108,7 @@ and blits scaled into the element box via the host image verbs
 (`create-image-from-encoded` + `draw-image-rect`; `CanvasSink::create_image` +
 `draw_image_rect`). Supported `src`: `data:…;base64,…` (bytes the guest already
 has — e.g. an engine-provided avatar) and a **file path** like `/assets/icon.png`
-(the warpkg bundle, mounted read-only at `/assets` by the host — task 38; the
+(the wandrpkg bundle, mounted read-only at `/assets` by the host — task 38; the
 renderer `std::fs::read`s it). NOT supported: `http(s)://…` URLs — the canvas
 guest has no network (only the engine has `wasi:tls`), so remote images must be
 fetched by the engine and passed as bytes. The dioxus `asset!`/manganis macro
@@ -147,7 +147,7 @@ signal-ui chat polish; commit be923f7f, +4 render tests).** Three renderer fixes
   text-metric caret math must use the sentinel trick, not raw intrinsic width.
 
 Spike result (2026-05-29, `repos/dioxus-spike/`): **`dioxus-core` +
-`taffy` is a viable light reactive Rust UI framework for wart guests** —
+`taffy` is a viable light reactive Rust UI framework for wandr guests** —
 the leading Compose alternative for when a *complex* Rust guest UI is
 needed (rich status bar, settings app, etc.).
 
@@ -175,5 +175,5 @@ because its VirtualDom is renderer-agnostic.
 
 **When to reach for it:** first genuinely complex Rust guest. For simple
 system UI (launcher, basic taskbar) hand-rolled canvas-WIT drawing is
-lighter — see the ~70 KB Rust `war.launcher` (the first non-Kotlin
-renderer guest, `apps/system/war.launcher/`, task 57).
+lighter — see the ~70 KB Rust `wandr.launcher` (the first non-Kotlin
+renderer guest, `apps/system/wandr.launcher/`, task 57).

@@ -58,4 +58,4 @@ Mirror the alarm/connectivity host-forwards-to-arbiter pattern:
   ~180 MB shared working set); sample it but allow `0` when skipped for cost.
 
 See `wit/task-manager.wit`, `wit/alarm.wit` (pattern), `wandr-arbiter-shell/src/am.rs`
-(`cmd_list`/`kill`), `[[feedback_wart_zygote_fork_survival]]` (PSS vs RSS).
+(`cmd_list`/`kill`), `[[feedback_wandr_zygote_fork_survival]]` (PSS vs RSS).

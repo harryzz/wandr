@@ -1,20 +1,20 @@
 ---
-name: project_wart_call
-description: "wart-call — the WebRTC call engine crate (pure-Rust, wasm32-wasip2). Device-verified + interops with a real browser (libwebrtc). The big build of 2026-06."
+name: project_wandr_call
+description: "wandr-call — the WebRTC call engine crate (pure-Rust, wasm32-wasip2). Device-verified + interops with a real browser (libwebrtc). The big build of 2026-06."
 metadata: 
   node_type: memory
   type: project
   originSessionId: 981b38b9-858e-4c22-b30d-89c53be34749
 ---
 
-**wart-call — a WebRTC call engine that runs in a wasm32-wasip2 guest, proven
-against a real browser.** `crates/wart-call/` (modules: media/transport/
+**wandr-call — a WebRTC call engine that runs in a wasm32-wasip2 guest, proven
+against a real browser.** `crates/wandr-call/` (modules: media/transport/
 signaling/session; `PeerSession` API). WIT-agnostic like dioxus-canvas — deals
 in PCM f32 frames + opaque `(addr,bytes)` datagrams; the guest wires the PCM ends
 to the audio WIT and the datagram ends to `wasi:sockets` UDP. Built on the
 pure-Rust webrtc-rs sans-IO `rtc-*` crates ([[reference_audio_policy_calls]],
-[[project_crypto_hw_offload]] has the de-risk record). Named wart-call (general),
-NOT wart-webrtc — the media core (RTP/SRTP/Opus) + ICE are protocol-agnostic so
+[[project_crypto_hw_offload]] has the de-risk record). Named wandr-call (general),
+NOT wandr-webrtc — the media core (RTP/SRTP/Opus) + ICE are protocol-agnostic so
 SIP/Jingle can reuse them.
 
 **Infrastructure:** `external/rtc` = webrtc-rs/rtc pinned submodule (aae46b7,
@@ -26,13 +26,13 @@ the full design doc.
 
 **Verified, increasingly hard:**
 - All layers device-verified individually + the full call end-to-end on the Pixel
-  2 XL (`repros/call-*`, `war.probe.{udp,opus,callmedia,dtls,ice,sdp,call,calludp}`).
+  2 XL (`repros/call-*`, `wandr.probe.{udp,opus,callmedia,dtls,ice,sdp,call,calludp}`).
 - Real wasi:sockets UDP + LAN-IP candidate (`local_lan_ip()`) — device-verified.
 - DTLS-SRTP fingerprint MITM check (mutual auth, positive+negative tests).
 - Cross-impl interop headless vs the webrtc-rs ASYNC `webrtc` crate (separate
   codebase) — `repros/call-interop`.
 - **REAL BROWSER (Google libwebrtc): CONNECTED + audio played** (`repros/call-browser`,
-  a tiny HTTP harness; user-run). wart-call answers a recvonly offer, connects
+  a tiny HTTP harness; user-run). wandr-call answers a recvonly offer, connects
   (ICE+DTLS-SRTP), streams an Opus tone Chrome plays. THE definitive proof.
 
 **Gotchas surfaced by real interop (all fixed):** grab ALL SDP candidates not
@@ -43,7 +43,7 @@ sendonly answer, RFC 3264 — libwebrtc rejects sendrecv). Browser env: disable
 mDNS host-candidate obfuscation (.local unresolvable); UDP reachability (not WSL).
 
 **Real audio wiring DONE + AUDIBLY device-verified** (`repros/call-audio-wire`,
-`war.probe.callaudio`): a command guest wires MediaSession's PCM ends to the host
+`wandr.probe.callaudio`): a command guest wires MediaSession's PCM ends to the host
 `audio` WIT — mic open-capture/read-pcm-f32 in, AAudio create-track/write-pcm-f32
 out — and round-trips the live mic through Opus+SRTP back to the speaker on the
 Pixel 2 XL. User confirmed: reference tone + their captured VOICE both play out
@@ -61,7 +61,7 @@ with PCM first, THEN start ([[feedback_aaudio_gotchas]] flagged this). Mic on th
 device sits near the noise floor (peak ~0.008) — a gain question, not wiring.
 
 **CAPSTONE DONE — live call device-verified** (`repros/call-live`,
-`war.probe.calllive`): two PeerSessions (A caller, B callee) connect over real
+`wandr.probe.calllive`): two PeerSessions (A caller, B callee) connect over real
 wasi:sockets UDP (ICE + DTLS-SRTP, fingerprint verified); the device MIC feeds
 A.send_audio → encrypted RTP crosses the socket → B.recv_audio decrypts+decodes →
 plays out the speaker. Real DTLS-derived SRTP keys + real UDP (not loopback keys
@@ -72,7 +72,7 @@ engine is proven end-to-end on real hardware: signaling·ICE·DTLS-SRTP·RTP/SRT
 Opus·real-UDP·real-mic/speaker, PLUS browser interop.
 
 **Remaining to a product** (NOT engine work): a signaling channel between two real
-devices (exchange SDP + trickle candidates) + app/UX; the wart-arbiter-audio comms
+devices (exchange SDP + trickle candidates) + app/UX; the wandr-arbiter-audio comms
 session ([[project_arbiter_audio]]) already coordinates focus/routing/mode/doze.
 
 **SIGNAL 1:1 CALL — BIDIRECTIONAL AUDIO DEVICE-VERIFIED with a REAL Signal peer
@@ -115,7 +115,7 @@ is_relay)`. **Blocking opus-rs crash fixed along the way (commit c8576a8f):** a
 60ms wideband SILK frame from a low-bitrate off-LAN peer panicked opus-rs 0.1.22's
 hardcoded `w_pcm_i16=640` buffer (needs 960*ch) → SIGILL → dead call guest;
 vendored `external/opus-rs` fork sizes it `5760*channels` like the siblings, and
-wart-call's opus-rs is now a path dep on it. **The "residual inbound loss" was
+wandr-call's opus-rs is now a path dep on it. **The "residual inbound loss" was
 NOT loss** — FIXED 2026-06-09 (commit 8133ef91): it was an opus-rs **Code 3
 (multi-frame) parser bug**. A libopus peer packs 3×20ms Hybrid frames into one
 60ms RTP packet (toc=0x7b); the parser (a) branched on the PADDING bit (0x40) to
@@ -143,12 +143,12 @@ a fixed chunk, when the tick rate is below the media frame rate.
 
 **SIGNAL 1:1 CALLS scoped as `tasks/75-ringrtc-signal-calls.md`** (do in a fresh
 session). Key framing: don't port ringrtc (= Rust orchestration + C++ libwebrtc) —
-graft Signal's 1:1 call protocol onto wart-call (which already replaces libwebrtc,
+graft Signal's 1:1 call protocol onto wandr-call (which already replaces libwebrtc,
 interop-proven). Head start: the `CallMessage`(Offer/Answer/IceUpdate/Hangup/Busy +
 `opaque`) envelope is already vendored in SignalService.proto + rides the existing
 E2E channel (task 67). Crux = the `opaque` ConnectionParameters blob (ringrtc
-`signaling.proto`) ⇄ `wart_call::Signaling`. Recommended approach B (reimplement on
-wart-call, ringrtc=spec; AGPL caveat). v1 audio-only + 1:1-only (video/group
+`signaling.proto`) ⇄ `wandr_call::Signaling`. Recommended approach B (reimplement on
+wandr-call, ringrtc=spec; AGPL caveat). v1 audio-only + 1:1-only (video/group
 deferred). See the task doc for the 4-phase plan + risks. CAVEAT: a real SIGNAL call = ringrtc (a Rust wrapper
 over C++ libwebrtc, NOT wasm-viable) + Signal's calling service — separate. SIP/
 Jingle would reuse media+transport with a different signaling module.

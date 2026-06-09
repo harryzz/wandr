@@ -7,7 +7,7 @@ metadata:
   originSessionId: a6ba002c-9c9c-4673-9e97-6c4e1c3eba6d
 ---
 
-Toward the post-ART end goal (run the wart stack with ALL ART/Java services off).
+Toward the post-ART end goal (run the wandr stack with ALL ART/Java services off).
 Device-experiment findings (Pixel 2 XL, 2026-06-04):
 
 **Mechanism: `adb shell stop` / `adb shell start`** halts / restores the Android
@@ -20,7 +20,7 @@ framework stop. The device is on **USB** (serial `804KPSL1724590`, not a wifi IP
 which also survives. So adb stays up throughout → `adb shell start` always recovers.
 
 **✅ Proven: our stack is ART/zygote-independent.** With the framework stopped,
-EVERY wart process survived (`wart-arbiter` + all `wart-host` zygote children) plus
+EVERY wandr process survived (`wandr-arbiter` + all `wandr-host` zygote children) plus
 `adbd`. Gone: `system_server`, `zygote`, `zygote_secondary`/`zygote64`,
 `webview_zygote`. Our procs are plain root processes (setsid), not init services
 and not children of the Android zygote, so `stop` doesn't touch them.
@@ -39,7 +39,7 @@ actually brings system_server down (it's a forked child) — may need an explici
 system_server kill — while leaving surfaceflinger up.
 
 **Recovery cycle:** `adb shell start` restarts the full framework (+ SF + zygotes;
-~boot time). Our surviving wart procs lose their SurfaceControl/EGL surfaces when
+~boot time). Our surviving wandr procs lose their SurfaceControl/EGL surfaces when
 SF restarts (they were bound to the old SF instance), so after `start` re-run
 `tools/scripts/run-hybrid-stack.sh` to re-attach our stack to the fresh SF.
 
@@ -48,8 +48,8 @@ power owner with ART off → device wedges** (black screen; power button dead be
 power-key→wake is a PMS function; touch dead because the panel is off; the arbiter's
 screen poller reads the now-stale `debug.tracing.screen_state` → spurious doze/auto-
 lock). Recover with `adb shell input keyevent 224` after restoring ART. → **task 81**:
-wart owns display power (power-key→`SetDisplayPower` toggle via task-78 wart-hal-display;
-arbiter drives screen state from its own `panel_on` under `WART_NO_ART`; force-on at
+wandr owns display power (power-key→`SetDisplayPower` toggle via task-78 wandr-hal-display;
+arbiter drives screen state from its own `panel_on` under `WANDR_NO_ART`; force-on at
 boot). (2) **Keys not routed** — task-80 Step-2 routed touch only, so every host's
 InputReader reads hardware keys → one volume press fanned to 6 pids (volume ×6). →
 **task 82** (key dedup/focus).
@@ -59,13 +59,13 @@ native daemons: SF/audioserver/sensorservice/HALs — done), REIMPLEMENT (Java p
 arbiter modules: AMS/WMS/PMS/alarm/notify/audio/keyguard/sensors/pkg — done), PATH A
 (run a system_server-hosted C++ service standalone + register its binder name — only
 candidate = InputFlinger; spike proved it runs). The bottleneck is a shared **security
-context**, not per-service work: a wart native proc needs **uid system + gid input +
+context**, not per-service work: a wandr native proc needs **uid system + gid input +
 CAP_BLOCK_SUSPEND + a sepolicy domain** to use the survivors with ART off (bare root
 hangs on SF's ACCESS_SURFACE_FLINGER check + aborts in EventHub:894). Same context
 task 81 setPowerMode needs. **The right way = our flashable image** (init.rc
-user/group/capabilities/seclabel + wart sepolicy, ART services not started, enforcing)
+user/group/capabilities/seclabel + wandr sepolicy, ART services not started, enforcing)
 — DEFERRED (needs lineage_taimen device build + vendor blobs). **Decision 2026-06-04:
-keep the dev scaffold** (rooted + su/setenforce 0 + a setuid+caps `wart-launch`
+keep the dev scaffold** (rooted + su/setenforce 0 + a setuid+caps `wandr-launch`
 launcher mimicking the init.rc context) → **task 83**; flashable image later.
 
 **⚠️ HIGH-CPU under --no-art = Magisk su-log workers (CORRECTED 2026-06-05; the
@@ -88,7 +88,7 @@ no new grant) catches the worker the sweep's OWN `su -c` spawns. Verified: ~260%
 ~14%. Manual one-shot: `pgrep -f com.android.commands.am.Am` → kill PPIDs (≠1) +
 `pkill -f com.android.commands.am.Am`, twice. NOTE: any later manual `adb shell su
 -c` re-creates one worker; re-run the sweep. (Steady-state the stack uses the setuid
-`wart-launch`, NOT magisk su, so no new workers form on its own.)
+`wandr-launch`, NOT magisk su, so no new workers form on its own.)
 
 **The blocker for true ART-less operation = INPUT.** `InputDispatcher` /
 `InputManagerService` (the `input`/`inputflinger` binder services) are **hosted

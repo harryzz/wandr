@@ -1,6 +1,6 @@
 ---
 name: project_alarm_manager
-description: "Arbiter Inc. 3c — AlarmManager/JobScheduler timed-wake primitive. Guest schedules via war:alarm; arbiter fires on a timer, delivering on-alarm (alive) or relaunching (dead). Done + device-verified with a test guest."
+description: "Arbiter Inc. 3c — AlarmManager/JobScheduler timed-wake primitive. Guest schedules via wandr:alarm; arbiter fires on a timer, delivering on-alarm (alive) or relaunching (dead). Done + device-verified with a test guest."
 metadata: 
   node_type: memory
   type: project
@@ -13,21 +13,21 @@ device-verified (Pixel 2 XL, 2026-06-01).** The design doc's flagged "real gap"
 background message receipt**. A guest asks to be woken later/periodically; the
 arbiter fires it on a timer and delivers via the guest's `on-alarm` export —
 whether it's alive (callback) or dead (relaunch). New `ArbiterModule` + the
-`war:alarm` WIT, mirroring `war:ime` throughout.
+`wandr:alarm` WIT, mirroring `wandr:ime` throughout.
 
 **Commits (codeberg main, after foreground-only-orient a8ff578a):**
 `af39a1ad` (arbiter side), `2f125869` (WIT + pid-resolution), `3256da1a` (host
 wiring), + the test guest (this session). Pushed through 3256da1a.
 
 **Architecture:**
-- `wit/alarm.wit` (`war:alarm@0.1.0`, separate package — no skiko-gfx WIT-sync
+- `wit/alarm.wit` (`wandr:alarm@0.1.0`, separate package — no skiko-gfx WIT-sync
   churn): `scheduler` import `schedule(id, delay-ms, repeat-ms)`/`cancel(id)` +
   `alarm-handler` export `on-alarm(id)`; worlds `alarm-client`/`alarm-host`/
   `alarm-events`.
 - core `alarm.rs`: `Alarm{app_id, alarm_id, next_fire_ms, repeat_ms, wake_kind,
   pending_deliver}` on `Store.alarms` + persistence (`to_json`/`restore_from_json`
   — survives arbiter restart). `Event::AlarmTick`. `LaunchKind::as_wire/from_wire`.
-- `wart-arbiter-alarm` crate: `schedule-alarm <owner> <id> <when-unix-ms>
+- `wandr-arbiter-alarm` crate: `schedule-alarm <owner> <id> <when-unix-ms>
   <repeat-ms> [kind]` / `cancel-alarm <owner> <id>` (owner = a bare-int pid →
   resolved via the registry, OR an app-id for the CLI). `on_event(AlarmTick)`
   fires due alarms — **alive** owner → `Effect::HostLine "alarm-fired <id>"`;
@@ -50,14 +50,14 @@ relaunch uses `wake_kind=gui` (relaunch as a Background GUI guest → its render
 loop drains the delivered `alarm-fired` → `on-alarm`). A headless poll kind for
 Signal is the follow-up.
 
-**Test guest `apps/user/war.alarm.test`** (minimal Rust wasm32-wasip2 canvas
-guest, like war.statusbar): imports scheduler + exports alarm-handler; trimmed
-`my:skiko-gfx` in `wit/world.wit` + `war:alarm` in `wit/deps/alarm/`; on first
+**Test guest `apps/user/wandr.alarm.test`** (minimal Rust wasm32-wasip2 canvas
+guest, like wandr.statusbar): imports scheduler + exports alarm-handler; trimmed
+`my:skiko-gfx` in `wit/world.wit` + `wandr:alarm` in `wit/deps/alarm/`; on first
 frame `schedule(1, 5000, 5000)`; `on-alarm` bumps a counter drawn as a bar.
 `wit_bindgen::generate!` needs `generate_all` for the cross-package import. Build
-`cargo build --target wasm32-wasip2 --release`; pack a warpkg (components/ui.wasm
+`cargo build --target wasm32-wasip2 --release`; pack a wandrpkg (components/ui.wasm
 + package.toml, `kind` OMITTED = user app); install `LD_LIBRARY_PATH=/data/local/tmp
-WART_APPS_ROOT=… wart-host --install <warpkg>` (per-app — NEVER build-system-warpkgs.sh).
+WANDR_APPS_ROOT=… wandr-host --install <wandrpkg>` (per-app — NEVER build-system-wandrpkgs.sh).
 
 **Device proof (all 5):** schedule (guest→arbiter, pid 13480→app resolved);
 alive-deliver (`on-alarm(1)` at 5 s + 10 s); dead-relaunch (kill→`alarm waking

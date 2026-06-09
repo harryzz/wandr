@@ -19,7 +19,7 @@ thrown Wasm exception
                      realloc-allocated memory is not freed
 ```
 
-Reproducer (task 49 step 1b, war.ime.keyboard):
+Reproducer (task 49 step 1b, wandr.ime.keyboard):
 
 - WIT: `interface ime { on-editor-attached: func(info: editor-info); }`
   where `editor-info` is a record containing two strings

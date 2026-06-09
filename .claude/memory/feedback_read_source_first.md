@@ -17,17 +17,17 @@ black-box instrumenting rtc-ice and stacking assumption-patches while CYCLING. T
 actual fixes were plainly in ringrtc's source and took minutes to find once read:
 - `connection.rs` — a 1:1 *caller* sits in `ConnectingBeforeAccepted` and streams
   NO media until the *callee* sends an `accepted` message over RTP-data (PT 101 /
-  SSRC 0xD, `rtp_data.proto`). wart never sent it → no audio. [[project_wart_call]]
+  SSRC 0xD, `rtp_data.proto`). wandr never sent it → no audio. [[project_wandr_call]]
 - The multi-device `Hangup{type=Accepted, device_id=N}` is coordination: ringrtc
-  IGNORES a hangup whose `device_id` is its own. wart was hanging up on itself the
-  instant it answered (wart = device_id 4).
+  IGNORES a hangup whose `device_id` is its own. wandr was hanging up on itself the
+  instant it answered (wandr = device_id 4).
 - SRTP KDF was IDENTICAL to ours (verified by reading `negotiate_srtp_keys`) — so
   the hours I spent suspecting keys were wasted; reading would have ruled it out.
 
 The user said this is in CLAUDE.md / their memory rules already ("check latest
 versions / official sources") and that it matters a lot to them. It does.
 
-**Why it matters THIS much here: wart is an OS runtime** (replacing Android's ART),
+**Why it matters THIS much here: wandr is an OS runtime** (replacing Android's ART),
 i.e. the foundation everything else stands on. A wrong assumption baked low
 (SRTP key direction, ICE role model, a hardcoded inset) does not stay a local bug —
 it propagates up and the only honest fix becomes a ground-up rebuild. The project

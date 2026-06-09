@@ -1,6 +1,6 @@
 ---
 name: project_true_dp_geometry
-description: "Arbiter Increment 3b — the arbiter authors chrome heights/insets in dp (dp×density), host reports panel+density up, all physical-px env hardcodes (132/150/1200, WART_INSET_*) removed. Done + device-verified."
+description: "Arbiter Increment 3b — the arbiter authors chrome heights/insets in dp (dp×density), host reports panel+density up, all physical-px env hardcodes (132/150/1200, WANDR_INSET_*) removed. Done + device-verified."
 metadata: 
   node_type: memory
   type: project
@@ -13,11 +13,11 @@ no-hardcoding rule ([[feedback_no_hardcoding]]) for chrome geometry; the
 arbiter-as-window-server direction ([[project_arbiter_window_server_design]]).
 
 **Problem:** chrome heights were physical-px hardcodes — status bar 132, taskbar
-150, keyboard default 1200 — env-tunable (`WART_INSET_*`/`WART_STATUSBAR_PX`/
-`WART_TASKBAR_PX`) and resolution-dependent.
+150, keyboard default 1200 — env-tunable (`WANDR_INSET_*`/`WANDR_STATUSBAR_PX`/
+`WANDR_TASKBAR_PX`) and resolution-dependent.
 
 **What shipped — the arbiter is the geometry authority:**
-- **dp constants are the ONE source** (`wart-arbiter-core`): `STATUS_BAR_DP=38`,
+- **dp constants are the ONE source** (`wandr-arbiter-core`): `STATUS_BAR_DP=38`,
   `TASKBAR_DP=43`, `KEYBOARD_DEFAULT_DP=343` (back-derived from the tuned px at
   density 3.5 to preserve the look; scale on other densities). `DisplayGeometry::
   dp_to_px(dp)` = `(dp×density).round()`; `chrome_insets()`; `density_known()`.
@@ -33,13 +33,13 @@ arbiter-as-window-server direction ([[project_arbiter_window_server_design]]).
   strip `height` (`dp_to_px` by anchor: top→SB, bottom-bar→TB) so the overlay
   sizes its surface to the arbiter value. `WmModule` is now stateless (insets from
   the store, not env).
-- **Host** (`wart-host`): fullscreen sends report-panel at startup + applies reply
+- **Host** (`wandr-host`): fullscreen sends report-panel at startup + applies reply
   insets; chrome registers-with-anchor + creates its overlay at the reply height;
   the geometry line's inset fields are cached host-side (`CHROME_SB/TB_PX` in
   standalone.rs) for `overlay_rect`; `status_bar_height_px()`/`taskbar_height_px()`
   return the cached arbiter value with a `dp×read_dpi` fallback (fallback dp consts
   MIRROR core's — keep in lockstep; arbiter is authoritative). `window_impl::read_dpi`
-  made pub. `run-hybrid-stack.sh` drops all the WART_*_PX/WART_INSET_* env.
+  made pub. `run-hybrid-stack.sh` drops all the WANDR_*_PX/WANDR_INSET_* env.
 
 **Device proof:** density 560→3.5 reported up; arbiter authored insets `(133,151)`
 (≈ old 132/150, 1px from rounding); statusbar/taskbar surfaces `1440x133` / `1440x151`;

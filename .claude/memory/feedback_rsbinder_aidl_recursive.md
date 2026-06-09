@@ -24,7 +24,7 @@ AttributionSourceState to its real shape (to set `packageName` for the
 AAudio policy lookup).
 
 **How to apply:** When stubbing AOSP AIDL types under
-`wart-host/vendor/aidl-stubs/` for rsbinder-aidl 0.7.0:
+`wandr-host/vendor/aidl-stubs/` for rsbinder-aidl 0.7.0:
 
 1. If the upstream type is non-recursive: declare the real fields.
 2. If recursive (`SelfType[] next` etc.): one of —

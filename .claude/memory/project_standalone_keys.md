@@ -1,13 +1,13 @@
 ---
 name: project-standalone-keys
-description: "Hardware-key events into standalone (no-NativeActivity) wart-host — RESOLVED 2026-05-26, device-verified"
+description: "Hardware-key events into standalone (no-NativeActivity) wandr-host — RESOLVED 2026-05-26, device-verified"
 metadata: 
   node_type: memory
   type: project
   originSessionId: be47cfff-188f-4f12-989d-c09046736d6a
 ---
 
-Hardware-key delivery into `wart-host --standalone` — **RESOLVED 2026-05-26**,
+Hardware-key delivery into `wandr-host --standalone` — **RESOLVED 2026-05-26**,
 device-verified: `adb shell input keyevent KEYCODE_{A,B,C}` types `abc` into
 the focused BasicTextField; `KEYCODE_DEL` backspaces; `KEYCODE_DPAD_LEFT/…`
 moves the cursor. Touch already worked from task 33 Step 3.
@@ -31,11 +31,11 @@ moves the cursor. Touch already worked from task 33 Step 3.
 2. **Focus retention.** Standalone has no `Activity`, so any
    activity-backed window AMS resumes (`com.android.launcher3`,
    Messaging, the last app) immediately steals InputDispatcher focus
-   even though wart owns the z-top SurfaceFlinger layer. Fix: new
+   even though wandr owns the z-top SurfaceFlinger layer. Fix: new
    `sf_request_focus()` shim export that re-applies
-   `setFocusedWindow(wart)`; `standalone.rs` calls it every 60 frames
+   `setFocusedWindow(wandr)`; `standalone.rs` calls it every 60 frames
    (~once/second). With this, `dumpsys input | grep FocusedWindows`
-   stays pinned on `name='wart'` for the session.
+   stays pinned on `name='wandr'` for the session.
 
 **Out of scope (deferred):**
 - KeyCharacterMap for non-ASCII / dead keys / IME — the host-side

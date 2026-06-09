@@ -33,7 +33,7 @@ Commits 47cde354 (guest `engine.rs`) + 3f75ddb0 (host+arbiter). Builds on
 (task 87 MMAP stubs), [[project_proximity_screen_off]] (task 78 chain).
 
 **STABILITY ROOT CAUSE (2026-06-05, commit c0feef34): run exactly ONE
-wart-activityms.** That binary hosts the stub system_server binder services
+wandr-activityms.** That binary hosts the stub system_server binder services
 (activity/permission/sensor_privacy/scheduling_policy) the audioserver needs under
 --no-art. It was spawned by every --no-art bringup but killed by NO teardown →
 instances accumulated (16 found live). Each re-addService'd the same names,
@@ -41,7 +41,7 @@ churning the registrations the audioserver caches handles to; the
 permission/attribution path (output/RX stream open) then hit a shadowed/dead stub
 → audioserver wedged → restarted (NEW tid each time) → stream volumes wiped to
 -inf → earpiece silent + live capture torn down (mic stops). FIX = pkill old
-wart-activityms before the spawn + in all teardowns (--restore-art critical: else
+wandr-activityms before the spawn + in all teardowns (--restore-art critical: else
 the stub shadows the REAL system_server when ART returns). Verified: 1 instance,
 audioserver pid STABLE through a full call, two-way audio.
 
@@ -52,8 +52,8 @@ NOT a passive read here. Check audioserver health with `ps -o ELAPSED` / pgrep p
 stability instead (a changed pid = restart = the bug). Audioserver restart wipes
 all stream volumes to -inf (no onAudioServerDied recovery under --no-art) → silence.
 
-GOTCHA: arbiter `log::info` → STDERR, NOT the logfile — `wart-arbiter.log` only
-shows the wart-screen subprocess `set_display_power` lines, not call-start/set-mode
+GOTCHA: arbiter `log::info` → STDERR, NOT the logfile — `wandr-arbiter.log` only
+shows the wandr-screen subprocess `set_display_power` lines, not call-start/set-mode
 decisions. Confirm via `ps`/pgrep + the user's ear, NOT dumpsys media.audio_flinger.
 
 GOTCHA: the recurring --no-art DNS breakage was the **Intra DoH VPN app**
@@ -62,7 +62,7 @@ internal resolver. Uninstalled 2026-06-05 — DNS now clean across --no-art cycl
 
 DNS-on-`--no-art`-entry breakage (task-88 teardown gap): a stale VPN netId (101)
 resolver from the ART→`--no-art` transition points app/guest DNS at the dead VPN
-DNS. Manual self-heal: `adb shell "su 1000 -c '/data/local/tmp/wart-net
+DNS. Manual self-heal: `adb shell "su 1000 -c '/data/local/tmp/wandr-net
 --netd-config 101 wlan0 <ip>/<prefix> <gw> <gw> 8.8.8.8'"` (uid system; route part
 errors harmless — `15000: from all lookup wlan0` catch-all already routes). Durable
-fix = wart-net re-asserts the live-netId resolver at bring-up. See [[project_artless_network]].
+fix = wandr-net re-asserts the live-netId resolver at bring-up. See [[project_artless_network]].

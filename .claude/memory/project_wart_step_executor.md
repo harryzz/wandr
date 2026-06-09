@@ -10,7 +10,7 @@ metadata:
 `wstd::runtime::block_on` builds a reactor, runs a future to completion, then
 clears it — so spawned tasks die between calls and **no guest code runs between
 component-export invocations**. For an export-driven engine (the Signal
-`wart:signal/chat` engine: each `poll-events` is a separate call that must let a
+`wandr:signal/chat` engine: each `poll-events` is a separate call that must let a
 background receive loop / websocket keepalive make progress), that's fatal. wstd's
 stepping methods (`block_on_pollables`, `nonblock_check_pollables`,
 `pop_ready_list`) are `pub(crate)`, so you can't drive its reactor yourself.
@@ -30,10 +30,10 @@ The libsignal fork's three wstd touchpoints were rebound onto it (off wstd):
 (background ws-process `spawn().detach()`), `src/websocket/mod.rs` (keepalive
 `sleep`); `wstd` dep replaced in both shim Cargo.tomls + the fork's wasm32 deps.
 
-Engine pattern (`apps/user/war.signal/engine`, promoted out of repros 2026-05-31): `init` spawns+**detaches** one root task
+Engine pattern (`apps/user/wandr.signal/engine`, promoted out of repros 2026-05-31): `init` spawns+**detaches** one root task
 (spawn returns `async_task::Task` which **cancels on drop** — must `.detach()`);
 `poll-events` = `step()` then drain a shared `Rc<RefCell<VecDeque<event>>>`. Driven
 by `repros/signal-engine-smoke` (Rust CLI importing chat) `wac plug`'d onto the
 engine, run under `repros/wasi-tls-runner`: produced a real Signal `link-url` QR
 across repeated `poll-events`. See [[project_signal_client_architecture]],
-[[reference_wart_wasi_tls_transport]], [[feedback_wasi_threading]].
+[[reference_wandr_wasi_tls_transport]], [[feedback_wasi_threading]].

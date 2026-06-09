@@ -9,7 +9,7 @@ metadata:
 
 When you need a one-shot `wasi:cli/command`-shaped guest to smoke-test host-side WASM plumbing (cross-app dep wiring, `Command::instantiate` paths, anything that invokes `wasi_cli_run().call_run(store)`), write the consumer as a Rust binary on `wasm32-wasip2`, not Kotlin/Wasm.
 
-**Why:** Kotlin/Wasm 2.4.0-RC + the WASI command adapter throws "thrown Wasm exception" at module init unconditionally. Confirmed on-device in task 36 step 7 (2026-05-26): even `fun main() {}` (empty body) throws under `wart-host --run-once`. wart-host's `wasi_stderr` routing to logcat doesn't make a difference vs `wasmtime run` — the throw isn't stderr-related, it's at module init before `main()` runs. See [[kotlin-wasm-println-throws-under-wasmtime]].
+**Why:** Kotlin/Wasm 2.4.0-RC + the WASI command adapter throws "thrown Wasm exception" at module init unconditionally. Confirmed on-device in task 36 step 7 (2026-05-26): even `fun main() {}` (empty body) throws under `wandr-host --run-once`. wandr-host's `wasi_stderr` routing to logcat doesn't make a difference vs `wasmtime run` — the throw isn't stderr-related, it's at module init before `main()` runs. See [[kotlin-wasm-println-throws-under-wasmtime]].
 
 Rust on `wasm32-wasip2`:
 
@@ -18,7 +18,7 @@ Rust on `wasm32-wasip2`:
 - Build with `cargo build --target wasm32-wasip2 --release` — output is already a component, no `wasm-tools component embed`/`new` needed.
 - `wasmtime compile --target aarch64-linux-android --wasm component-model --wasm gc --wasm function-references --wasm exceptions` for the device cwasm.
 
-The reference implementation lives at `md-smoke-rust/` in the wart repo — copy that crate as the starting template.
+The reference implementation lives at `md-smoke-rust/` in the wandr repo — copy that crate as the starting template.
 
 **Concrete shape:**
 

@@ -23,7 +23,7 @@ authoritative doc:
   (new public method, not inline) needs ONLY that module — downstream klibs
   reference unchanged symbols and link fine; the consumer recompiles fresh.
 
-**TRAP (cost me a long detour 2026-05-30):** `wart-app` + `war.ime.keyboard`
+**TRAP (cost me a long detour 2026-05-30):** `wandr-app` + `wandr.ime.keyboard`
 `build.gradle.kts` were still depending on the **OLD DISCARDED out-of-tree fat
 bundles** `androidx.compose.*:compose-*-wasi:0.0.0-wasi-local` (produced by
 `/home/harry/wasm-android-runtime/compose-*-wasi`, which srcDirs a stale

@@ -17,7 +17,7 @@ size (`2880×1440`) for a buffer that is really `1440×2880` portrait.
 had built a `2880×1440` Skia GL surface (+ `glViewport`) over the real
 `1440×2880` framebuffer → content rendered rotated/clipped.
 
-**The fix (host-only):** `wart-host/src/egl.rs` `EglContext::new` now takes
+**The fix (host-only):** `wandr-host/src/egl.rs` `EglContext::new` now takes
 the GL buffer geometry from `ANativeWindow_getWidth/getHeight`, preferring it
 over the `eglQuerySurface` report. With correct dims `from_native_window`
 sees `physical == intended == 1440×2880`, `base_matrix` is identity, the
@@ -27,7 +27,7 @@ frame). The shim (`cpp/sf_surface.cpp`) creates the surface portrait
 `1440×2880` with a BLASTBufferQueue attached directly to `g_control`.
 
 **Rejected — do not retry:**
-- A host-side `base_matrix` rotation: a `WART_ORIENT 0..7` device sweep
+- A host-side `base_matrix` rotation: a `WANDR_ORIENT 0..7` device sweep
   (full dihedral group) confirmed *no* rotation/mirror matrix yields upright
   portrait — the buffer was never actually transposed, so any transposing
   matrix just rotates/mirrors the result. It was a buffer-size bug.
@@ -38,8 +38,8 @@ frame). The shim (`cpp/sf_surface.cpp`) creates the surface portrait
   2 dead ends (per-buffer transform not honoured as composition rotation;
   display projection is a global change that rotates the launcher too).
 
-**Inert override left in place:** `WART_ORIENT=<0..7>` (host base-matrix,
-`FLIP_H=1 FLIP_V=2 ROT_90=4` dihedral bitmask) + `WART_SF_HINT=<0..7>`
+**Inert override left in place:** `WANDR_ORIENT=<0..7>` (host base-matrix,
+`FLIP_H=1 FLIP_V=2 ROT_90=4` dihedral bitmask) + `WANDR_SF_HINT=<0..7>`
 (shim transform-hint pin) — escape hatches for a panel that genuinely needs
 a rotation; default (unset) = identity, the correct path.
 

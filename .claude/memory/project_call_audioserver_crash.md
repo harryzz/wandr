@@ -32,8 +32,8 @@ and writes it. Silence is DOWNSTREAM, in the host audio policy.
    **silent everywhere** (stream still renders → wr_ok climbs, but at no gain).
 6. Downstream: the guest's call loop hits the audio chaos and can fall idle (main
    thread `hrtimer_nanosleep`, flat CPU — NOT blocked on binder, NOT spinning); input
-   doesn't wake it → **frozen UI** (recover: relaunch the host `wart-arbiter kill
-   war.signal; launch war.signal` — bg→fg does NOT fix it; session persists in state/).
+   doesn't wake it → **frozen UI** (recover: relaunch the host `wandr-arbiter kill
+   wandr.signal; launch wandr.signal` — bg→fg does NOT fix it; session persists in state/).
 
 **This SUPERSEDES [[project_artless_call_audio]]** which used `setPhoneState
 IN_COMMUNICATION` as the earpiece fix — it now crashes audioserver under --no-art.
@@ -76,7 +76,7 @@ needs rebuild+deploy.
    or host re-routes the open stream). The deviceId pin works — it's just only applied at open.
 
 ✅ **OUTPUT-STREAM STALL ROOT CAUSE CONFIRMED (2026-06-08, task 97 bug #1)** — source
-(`vendor/aosp-frameworks-av/services/oboeservice`) + device A/B (`wart-host
+(`vendor/aosp-frameworks-av/services/oboeservice`) + device A/B (`wandr-host
 --probe-call-stall`). The silent-call **stall** (`wr_ok` freezes / HAL stops pulling,
 audioserver ALIVE) = **up-message-queue overflow → stream suspended → mixer skips it →
 read counter `r` freezes → `write_pcm_f32` returns 0**. Chain: a SHARED output that
@@ -125,8 +125,8 @@ MEDIA) + deviceId pin retired from routing. Verify: `--probe-route-toggle`
 `--probe-call-stall 3 0 0 1` earpiece now opens. earpiece=AudioDeviceType OUT_SPEAKER_EARPIECE(141)
 NOT OUT_EARPIECE; DeviceRole::PREFERRED=1; strategy resolved at runtime (no hardcode).
 
-Live recovery used 2026-06-08: `wart-host --init-audio-policy` (restores volume ranges)
+Live recovery used 2026-06-08: `wandr-host --init-audio-policy` (restores volume ranges)
 + relaunch Signal host. calldbg.log at
-`/data/local/tmp/wart-apps/apps/war.signal/0.1.0/state/calldbg.log` (dbg_line →
+`/data/local/tmp/wandr-apps/apps/wandr.signal/0.1.0/state/calldbg.log` (dbg_line →
 `/state/calldbg.log`). Host logs via android_logger → logcat (tag
 `wasm_android_host::au..`). See [[project_call_audio_output]], [[project_arbiter_audio]].

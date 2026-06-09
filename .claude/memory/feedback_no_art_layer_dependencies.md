@@ -1,6 +1,6 @@
 ---
 name: feedback_no_art_layer_dependencies
-description: "Don't design wart features to depend on ART-layer infrastructure (system_server, WindowManager, ActivityManager, the launcher) — it's being removed. Use HAL/binder signals that survive post-ART."
+description: "Don't design wandr features to depend on ART-layer infrastructure (system_server, WindowManager, ActivityManager, the launcher) — it's being removed. Use HAL/binder signals that survive post-ART."
 metadata: 
   node_type: memory
   type: feedback
@@ -10,7 +10,7 @@ metadata:
 The project's north star is to **drop ART and everything that depends on
 it** — `system_server`, `ActivityManager`, `WindowManager`, and very
 likely the launcher/SystemUI too (anything that doesn't comply with the
-wart plan). So when wiring a runtime feature, do NOT build it on top of
+wandr plan). So when wiring a runtime feature, do NOT build it on top of
 an ART-layer signal that won't exist post-ART.
 
 **Concrete trap (task 43, 2026-05-29):** for standalone screen
@@ -19,7 +19,7 @@ orientation I first reached for `dumpsys window mCurrentRotation` /
 `mCurrentRotation` is computed by WindowManager from the *foreground
 activity's* orientation policy, and with the launcher
 (`SCREEN_ORIENTATION_NOSENSOR`) as the source it stays `ROTATION_0` no
-matter how the device is physically held. When wart owns the screen
+matter how the device is physically held. When wandr owns the screen
 (SystemUI + launcher force-stopped) there is no Activity driving
 rotation at all. The correct, ART-independent source is the **raw
 accelerometer read directly via our rsbinder sensors HAL** (task 20,

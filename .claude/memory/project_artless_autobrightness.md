@@ -1,6 +1,6 @@
 ---
 name: project-artless-autobrightness
-description: "ART-off auto-brightness (task 86): light sensor → backlight in wart-arbiter-power; why no SensorAcquire + sysfs-only applier"
+description: "ART-off auto-brightness (task 86): light sensor → backlight in wandr-arbiter-power; why no SensorAcquire + sysfs-only applier"
 metadata: 
   node_type: memory
   type: project
@@ -9,24 +9,24 @@ metadata:
 
 **⚠️ RELIABILITY BUG (2026-06-05, found verifying a user doubt that auto-brightness
 "doesn't work"):** the curve/applier are fine (live: 5 lux → backlight 63, a sensible
-dim value; manual `wart-arbiter brightness 0..1` applies when the panel is on), BUT
-auto-brightness **silently dies whenever `wart-sensors` crashes**, which it does
-repeatedly. Tombstones (27/28/29/40/41) show `wart-sensors` **SIGABRT: "Failed HIDL
+dim value; manual `wandr-arbiter brightness 0..1` applies when the panel is on), BUT
+auto-brightness **silently dies whenever `wandr-sensors` crashes**, which it does
+repeatedly. Tombstones (27/28/29/40/41) show `wandr-sensors` **SIGABRT: "Failed HIDL
 return status not checked … Status(EX_TRANSACTION_FAILED): DEAD_OBJECT"** in
-`wart_sensors_poll+128` (`libwart_sensors_hal.so`). I.e. when the sensors HAL
+`wandr_sensors_poll+128` (`libwandr_sensors_hal.so`). I.e. when the sensors HAL
 (`android.hardware.sensors@1.0-service`) connection drops — e.g. HAL churn across a
 `--restore-art`→`--no-art` cycle, or SensorService re-grabbing it — the C++ HIDL shim's
 **unchecked `Return<>`** forces a `libhidlbase` abort → the daemon dies. There is **no
-auto-restart**, so the light feed stops (`wart-arbiter sensor-state` → `light[holders=0
+auto-restart**, so the light feed stops (`wandr-arbiter sensor-state` → `light[holders=0
 (no reading)]`) and the backlight freezes at its last value → "auto-brightness doesn't
 work". This also kills auto-ROTATION + proximity (same daemon). ✅ **FIXED +
 device-verified (task 89 Issue 1, 2026-06-05):** the C++ shim now CHECKS every HIDL
 `Return<>` (`poll`/`enable`/`open` — capture + `.isOk()`, null the handle + return a
-negative rc instead of letting the destructor abort); `wart_sensors_open` is idempotent
+negative rc instead of letting the destructor abort); `wandr_sensors_open` is idempotent
 (reusable as reopen); Rust `SensorHal::reopen()` + a `reconnect()` loop re-`getService`s
 and re-enables the tracked sensors (light/proximity/orientation) with backoff on a poll
 `Err`; run-hybrid-stack supervises with a respawn loop. VERIFIED: `pkill` the sensors
-HAL → `wart-sensors` survived (same pid, NO new tombstone vs the old SIGABRT) + logged
+HAL → `wandr-sensors` survived (same pid, NO new tombstone vs the old SIGABRT) + logged
 `transport error (-2) → reconnected, 3 sensors re-enabled` + light feed recovered. To
 re-verify the brightness itself, keep the screen awake (backlight only applies panel-on,
 and the screen idles off fast). Commit: see task 89. Issues 2 (panel_on↔power-button
@@ -34,12 +34,12 @@ sync) + 3 (screen-timeout) still open.
 
 **✅ DONE + device-verified (task 86, 2026-06-04).** Under `--no-art` there is no
 DisplayManager auto-brightness, so the ambient light sensor → backlight policy lives
-in **`wart-arbiter-power`** (it already owns `panel_on`/`blanked` + is the
+in **`wandr-arbiter-power`** (it already owns `panel_on`/`blanked` + is the
 display-power/backlight authority — single source of truth, no duplicated screen
-state). The 3rd `wart-arbiter-sensors` consumer the task-77 design anticipated, after
+state). The 3rd `wandr-arbiter-sensors` consumer the task-77 design anticipated, after
 proximity (task 78) + accel→orientation (task 85).
 
-**Pipeline:** `wart-sensors` enables light (android type 5; `hal.rs TYPE_LIGHT`),
+**Pipeline:** `wandr-sensors` enables light (android type 5; `hal.rs TYPE_LIGHT`),
 pushes `report-sensor-descriptor light <max_range> <res>` once (taimen ALS
 max_range=32767 lux) + streams `report-sensor light <lux>` (de-duped, debug-logged) →
 arbiter `Event::SensorReading{Light}` → power module `on_light` → new
@@ -48,7 +48,7 @@ maps fraction→raw via cached `max_brightness` (255) → sysfs
 `/sys/class/leds/lcd-backlight/brightness`. No C++/shim change (the HIDL shim already
 polls all enabled sensors + exposes max_range/resolution).
 
-**Policy (no-hardcoding — named consts in wart-arbiter-power):** curve
+**Policy (no-hardcoding — named consts in wandr-arbiter-power):** curve
 `lux_to_fraction = clamp(MIN_FRACTION, 1.0, log10(lux+1)/log10(full_scale_lux+1))` —
 log (perceptual). **CEILING = `FULL_SCALE_LUX=600` (a PERCEPTUAL full-brightness
 reference, NOT the sensor's max_range).** First cut used the ALS max_range (32767 =
@@ -74,30 +74,30 @@ immediately — dial in the feel with no rebuild). Both in the CLI passthrough a
    `sensor_driver` only emits `SensorReading` for sensors enabled via a `SetSensor`
    effect (gated by `ENABLED`), so NOT acquiring = no light readings = auto-brightness
    silent = the framework's own auto-brightness is never fought. Under `--no-art`
-   `wart-sensors` force-enables the ALS directly (the `sensor_driver` is dead — it uses
+   `wandr-sensors` force-enables the ALS directly (the `sensor_driver` is dead — it uses
    the framework SensorManager), so the acquire would be vestigial anyway. Acquiring
    would have powered the ALS + fought the framework under ART-up = a regression.
 2. **sysfs-only applier (NOT inline SF `setDisplayBrightness` try-first).** The arbiter
    runs as PLAIN ROOT and a bare-root SurfaceFlinger call HANGS on the permission check
-   under `--no-art` (same reason `apply_display_power` shells to `wart-launch
-   wart-screen` as uid system). Per-reading `wart-launch` spawns would be far too heavy
+   under `--no-art` (same reason `apply_display_power` shells to `wandr-launch
+   wandr-screen` as uid system). Per-reading `wandr-launch` spawns would be far too heavy
    for a brightness stream. And on taimen SF `setDisplayBrightness` is `IllegalState`
    regardless (HWC unsupported, task-86 device-confirmed). So the hot path writes sysfs
    (exactly what the Lights HAL writes here — same endpoint, not a hack). SF stays
-   reachable/tested via `wart-screen brightness <f>` (uid system) for a future device
+   reachable/tested via `wandr-screen brightness <f>` (uid system) for a future device
    whose HWC supports it. `apply_backlight` is also gated to `no_art()` (ART-up =
    DisplayManager owns the backlight).
 
-**Verify / live-log (no rebuild):** poll `wart-arbiter sensor-state` (caches last
+**Verify / live-log (no rebuild):** poll `wandr-arbiter sensor-state` (caches last
 light `x=<lux>` in the Store) + `cat /sys/class/leds/lcd-backlight/brightness` in a
 loop → live lux↔backlight. Device-measured (full-scale 600, snap): covered ~0.4
 lux→node 15, ~100 lux→183, ~246 lux→219 — strong, immediate swing. Manual:
-`wart-arbiter brightness 0.9`→230 / `0.1`→25 / inject-while-manual stays put / `auto`
-re-tracks / `9`→ERR. Inject without a device: `wart-arbiter report-sensor light <lux>`
+`wandr-arbiter brightness 0.9`→230 / `0.1`→25 / inject-while-manual stays put / `auto`
+re-tracks / `9`→ERR. Inject without a device: `wandr-arbiter report-sensor light <lux>`
 (interleaves with REAL ambient so injected values get pulled back). NOTE: the ALS is
 on-change, so when lux is STEADY no new event flows — `sensor-state` shows the last
 value + backlight holds (correct, not stuck). Arbiter `log::info!` goes to STDERR, NOT
-the spawn_detached logfile (arbiter.log only shows child stdout like `wart-screen:
+the spawn_detached logfile (arbiter.log only shows child stdout like `wandr-screen:
 set_display_power`). 35 arbiter unit tests green. Subjective smooth/no-flicker = user's
 visual call ([[feedback_visual_verification]]).
 
@@ -107,17 +107,17 @@ visual call ([[feedback_visual_verification]]).
 dispatcher pokes activity, the arbiter decides the timeout — mirroring
 `InputDispatcher::pokeUserActivity → PowerManagerService.userActivity`. NOT the host
 (each host sees only its own window; the dispatcher sees all). Wiring:
-`wart-inputflinger`'s `pokeUserActivity` policy hook (the exact AOSP spot; was an empty
-override) → `arbiter_send("user-activity")` throttled ~1/s; `wart-arbiter-power` tracks
+`wandr-inputflinger`'s `pokeUserActivity` policy hook (the exact AOSP spot; was an empty
+override) → `arbiter_send("user-activity")` throttled ~1/s; `wandr-arbiter-power` tracks
 `last_activity`, a 5 s `Event::IdleTick` ticker (binary, `--no-art` only) checks idle vs
 `screen_off_timeout` (default 60 s, live `screen-timeout <ms|off>`) → `set_panel_on(false)`
 which already cascades to keyguard auto-lock + panel-off + backlight-0. Wake (POWER)
 resets the clock. Device-verified: idle→backlight 0 + keyguard up, power-key→restored,
-no immediate re-sleep. `wart-inputflinger` rebuilt via NINJA-DIRECT (`m` died in kati
+no immediate re-sleep. `wandr-inputflinger` rebuilt via NINJA-DIRECT (`m` died in kati
 dexpreopt) — see [[reference-a03-ninja-build]]. Also: run-hybrid-stack `--no-art` now
-kills `bootanimation` (init restarts it framework-down → it covers the wart UI).
+kills `bootanimation` (init restarts it framework-down → it covers the wandr UI).
 
-See [[project_artless_sensors]] (task 85 — the wart-sensors+arbiter feed pattern
+See [[project_artless_sensors]] (task 85 — the wandr-sensors+arbiter feed pattern
 mirrored here), [[project_proximity_screen_off]] (task 78 — the blank that
 auto-brightness must not fight), [[feedback_no_hardcoding]],
 [[feedback_no_art_layer_dependencies]].

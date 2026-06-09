@@ -1,6 +1,6 @@
 ---
 name: project_audio_routing_arbiter
-description: Task 76 routing — DECISION of record — audio routing policy lives in wart-arbiter-audio (arbiter decides); host = capability model + applier; guest expresses intent. dumpsys port-enum is a tracked follow-up.
+description: Task 76 routing — DECISION of record — audio routing policy lives in wandr-arbiter-audio (arbiter decides); host = capability model + applier; guest expresses intent. dumpsys port-enum is a tracked follow-up.
 metadata: 
   node_type: memory
   type: project
@@ -11,12 +11,12 @@ Architecture decision (user-confirmed 2026-06-03) for task 76 audio routing,
 consistent with the project-wide arbiter split ([[project_arbiter_window_server_design]],
 [[project_arbiter_audio]]): **the arbiter decides, the host applies.**
 
-- **Guest** expresses *intent only* — via the arbiter (`war:audio-focus`:
+- **Guest** expresses *intent only* — via the arbiter (`wandr:audio-focus`:
   request/abandon, ring-start/stop, **call-start/call-end**) + a **coarse stream
   class** on `create-track` (media / voice-call / ringtone) so the host knows
   which streams follow the comms route. NO routing-policy enum interpreted by
   the host.
-- **wart-arbiter-audio DECIDES** the route (earpiece↔speaker, comms mode,
+- **wandr-arbiter-audio DECIDES** the route (earpiece↔speaker, comms mode,
   ducking) — it's stateful (depends on focus stack, user speaker toggle, comms
   session). It already owns `audio-route <pid> <speaker|earpiece>` +
   `audio-call-start/end`. Extends to **push the per-pid device route to the
@@ -28,7 +28,7 @@ consistent with the project-wide arbiter split ([[project_arbiter_window_server_
   the shared vocabulary; the host no longer *picks* the route for calls — the
   arbiter does.
 
-**Why deviceIds (not just setForceUse):** wart's call streams are `USAGE_MEDIA`
+**Why deviceIds (not just setForceUse):** wandr's call streams are `USAGE_MEDIA`
 (voice-comm → -889; see [[project_audio_capability_model]]), and
 `setForceUse(COMMUNICATION,…)` does NOT redirect a MEDIA stream — which is why
 task-75 hand-pinned `deviceIds=[2]`. So the arbiter's route decision must reach
@@ -54,12 +54,12 @@ get/set/max/min media volume via IAudioPolicyService attributes API (slots 20-23
 indices parsed from the vendored real AIDL; device-verified range 0..25,
 speaker22/earpiece8 matching dumpsys). Flow: host VOLUME_UP/DOWN intercept →
 forward_volume_key sends `volume <dir> <pid>` to the arbiter socket →
-wart-arbiter-audio::cmd_volume decides target (comms owner on the call route
+wandr-arbiter-audio::cmd_volume decides target (comms owner on the call route
 while a call is up, else foreground app, else the forwarding host — covers
 keyguard-locked = no Foreground slot) → pushes `audio-policy volume <dir> <dev>`
 to ONE host → adjust_volume_on steps media volume on speaker/earpiece. Dedups the
-key (framework delivers a press to several wart surfaces). KEY INPUT FINDING:
-real hardware volume keys DO reach wart's InputConsumer channel (intercept fires);
+key (framework delivers a press to several wandr surfaces). KEY INPUT FINDING:
+real hardware volume keys DO reach wandr's InputConsumer channel (intercept fires);
 injected `input keyevent 24/25` do NOT (policy-intercepted by PhoneWindowManager) —
 so evdev capture is unnecessary. OPEN: if a single physical press is delivered to
 multiple surfaces, each forwards → multiple steps; add a debounce in cmd_volume if

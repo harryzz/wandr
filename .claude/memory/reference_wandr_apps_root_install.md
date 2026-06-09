@@ -1,0 +1,41 @@
+---
+name: reference_wandr_apps_root_install
+description: Manual wandr-host --install must set WANDR_APPS_ROOT to match the running stack root
+metadata: 
+  node_type: memory
+  type: reference
+  originSessionId: 8a79d726-5989-436c-93ca-fceb8f26e051
+---
+
+NORMALIZED 2026-06-06 (commit ec90f10f): `wandr-host`'s in-code default
+app-registry root is now `/data/local/tmp/wandr-apps` (one resolver
+`app_loader::apps_root()` + `DEFAULT_APPS_ROOT`), matching what every launcher
+uses — so a bare `wandr-host --install` (no env) now lands where the running stack
+reads. **With a wandr-host older than ec90f10f the default was `/data/wandr/apps`**,
+a DIFFERENT directory the stack never reads → installs silently had no effect
+(cost a long detour on the launcher font change). On an old binary you MUST pass
+`WANDR_APPS_ROOT=/data/local/tmp/wandr-apps`. `WANDR_APPS_ROOT` still overrides for a
+sepolicy'd production root or a test sandbox.
+
+GOTCHA: `adb push` of the wandr-host binary resets execute permission → new
+invocations fail `can't execute: Permission denied` (rc 126). Always
+`chmod 755 /data/local/tmp/wandr-host` after pushing (run-hybrid-stack does this;
+a manual push must too). Pushing over the live binary is safe — running processes
+keep the old (now-unlinked) inode; only new spawns use the new file.
+
+Correct one-app reinstall (e.g. launcher):
+```
+adb shell "su -c 'WANDR_APPS_ROOT=/data/local/tmp/wandr-apps \
+  LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/wandr-host --install \
+  /data/local/tmp/<pkg>.wandrpkg'"
+adb shell "su -c '/data/local/tmp/wandr-arbiter kill <app-id>'"
+adb shell "su -c '/data/local/tmp/wandr-arbiter preload <app-id>'"   # re-preload new disk
+adb shell "su -c '/data/local/tmp/wandr-arbiter launch <app-id>'"
+```
+Diagnose a "my change didn't show" by reading `/proc/<pid>/maps` of the running
+guest host — the mapped `.cwasm` path reveals BOTH the root AND the version
+actually loaded (it showed `/data/local/tmp/wandr-apps/...` while I'd installed to
+`/data/wandr/apps/...`). `preload` re-reads disk + the kill→preload→launch cycle
+hot-reloads WITHOUT a full ART restart, as long as the correct root is updated
+first. `adb push <dir> <existing-dir>` NESTS (push into a stale target dir creates
+`x/x/...`) — `rm -rf` the remote target before pushing. See [[reference_a03_ninja_build]].

@@ -19,7 +19,7 @@ time bitsliced, ~5–10× slower + more battery than hardware). For SRTP that's 
 hot path (AES-GCM per RTP packet, ~50 audio pkt/s now, far more with video) — the
 worst place for in-wasm crypto.
 
-**Mechanism: a host WIT interface the guest imports** (e.g. `wart:crypto` —
+**Mechanism: a host WIT interface the guest imports** (e.g. `wandr:crypto` —
 AES-GCM seal/open, AES-CTR, SHA-256, HMAC, P-256 ECDH/ECDSA). The host does the
 native crypto; on our aarch64 host RustCrypto's `aes` auto-detects + uses the
 ARMv8 Crypto Extensions at runtime (so do aws-lc-rs/ring) — so "offload to
@@ -43,7 +43,7 @@ pkt/s through the TEE would dominate). Its op API IS streaming (createOperation�
 update→finish) but each update still hops to the TEE → fine for "decrypt a file
 once", wasteful for real-time media. So:
 - **Media/bulk symmetric (SRTP AES-GCM)** → ARMv8 AES in-process (the host
-  `wart:crypto` interface). No IPC, hardware instructions. WINS the media path.
+  `wandr:crypto` interface). No IPC, hardware instructions. WINS the media path.
 - **Key protection** → `IKeystoreService` over rsbinder (like AAudio/AudioPolicy):
   Signal long-term identity keys, the DTLS long-term key, signing, attestation,
   key-wrapping — keys that benefit from TEE isolation. Caveats: keystore
@@ -84,7 +84,7 @@ system_server (same reason audioserver/sensorservice survive):
 THREE separate things with different host backends:
 1. **Crypto (SRTP AES-GCM, DTLS PRF/ECDH)** → host RustCrypto on ARMv8 HW AES. Pure-Rust,
    NO AIDL, NO HAL — just CPU instructions. ✅ this is the layer where "Rust native, no
-   AIDL, just a WIT the guest imports" is exactly correct (`wart:crypto`, not built).
+   AIDL, just a WIT the guest imports" is exactly correct (`wandr:crypto`, not built).
 2. **Video codec — BIDIRECTIONAL, both need HW offload** (a wasm guest can't do real-time
    VP8/VP9 either way). Host drives the **hardware MediaCodec** (NDK `AMediaCodec` → Codec2
    HAL `android.hardware.media.c2`, survives `--no-art`); guest only does crypto + RTP
@@ -99,7 +99,7 @@ THREE separate things with different host backends:
      no SW fallback. Also clear HW avc/hevc. The Codec2/OMX path works under --no-art (encode
      proven) → `AMediaCodec_createDecoderByType("video/x-vnd.on2.vp9")` should pick the HW
      decoder host-side. Remaining = build the decode→display wiring, not a HW gap.
-   - Architecture decision before the `wart:video` WIT: incoming decoded frame =
+   - Architecture decision before the `wandr:video` WIT: incoming decoded frame =
      **decode-to-surface** (host composites with guest UI, zero copy, best for 30fps,
      video plane outside guest skia) vs **decode-to-buffer** (host→guest WIT returns
      pixels, cleaner compositing, per-frame copy at video rates). Decode-to-surface is the
@@ -114,8 +114,8 @@ pure-Rust HW-AES (no AIDL ✓); video = host MediaCodec/Codec2 HAL (survives --n
 codec = stays in-guest.
 
 **SIGNAL IS IN-GUEST (corrected 2026-06-08, user + code-checked) — offload applies NOW.**
-Earlier notes (incl. [[project_wart_call]]) said "Signal = ringrtc, C++, separate." WRONG:
-`crates/wart-call` is a **pure-Rust reimplementation of ringrtc's V4 wire protocol**
+Earlier notes (incl. [[project_wandr_call]]) said "Signal = ringrtc, C++, separate." WRONG:
+`crates/wandr-call` is a **pure-Rust reimplementation of ringrtc's V4 wire protocol**
 (V4 keying, RTP-data control channel PT101/SSRC 0xD, connection-params protobuf, VP9/VP8
 codec nego) running **in the wasm guest** — wire-compatible with a real ringrtc peer, NOT
 linked libwebrtc/ringrtc C++. So the SRTP encrypt/decrypt runs IN-WASM: Signal calls use
@@ -123,10 +123,10 @@ linked libwebrtc/ringrtc C++. So the SRTP encrypt/decrypt runs IN-WASM: Signal c
 X25519-DH + HKDF-SHA256, no DTLS) via `rtc_srtp::Context::{encrypt_rtp,decrypt_rtp}`
 (`media.rs:158/183/195`) = **software AES-256-GCM per RTP packet in the sandbox**. ⇒ the
 layer-1 host crypto offload is REAL and high-value for Signal right now (not hypothetical):
-a `wart:crypto` WIT exposing AES-256-GCM seal/open that the guest imports → host RustCrypto
+a `wandr:crypto` WIT exposing AES-256-GCM seal/open that the guest imports → host RustCrypto
 on ARMv8 HW AES. Cleanest granularity = per-packet seal/open, keep SRTP framing (ROC/replay/
 key-derivation in `rtc_srtp::Context`) in-guest, offload only the AEAD primitive. (WebRTC-
-native path uses `Aes128CmHmacSha1_80`.) See [[project_wart_call]], [[project_artless_camera]].
+native path uses `Aes128CmHmacSha1_80`.) See [[project_wandr_call]], [[project_artless_camera]].
 
 **WASM SIMD (simd128) — helps codecs/DSP, NOT AES.** Already supported host-side:
 our wasmtime Config enables gc/function-references/exceptions and `wasm_simd` is
@@ -186,16 +186,16 @@ generic/custom call feature better than drop-in Signal-peer interop.
   default (mDNS unbroken). **The entire WebRTC protocol/crypto core now builds for
   our wasm32-wasip2 guest.** Patch + README saved: `repros/webrtc-rs-wasip2/`.
   Remaining = host UDP+candidates glue + Opus (libopus→wasip2). NOT committed to
-  the wart repo as code — it's an upstream-fork patch in repros/.
+  the wandr repo as code — it's an upstream-fork patch in repros/.
 - **UDP TRANSPORT GLUE: DONE/de-risked (2026-06-02, device-verified).** TURNS OUT
-  THERE'S NO CUSTOM UDP HOST CODE TO BUILD — wart-host already wires wasi:sockets
+  THERE'S NO CUSTOM UDP HOST CODE TO BUILD — wandr-host already wires wasi:sockets
   (wasmtime-wasi p2 v45) + `signal_tls::grant_network()` does inherit_network() +
   allow_ip_name_lookup(true). A wasm32-wasip2 guest uses `std::net::UdpSocket`
   directly; the sans-IO rtc engine drives IO via set_nonblocking+poll (wasip2 std
   has NO set_read_timeout/SO_RCVTIMEO → ENOPROTOOPT; use non-blocking+poll). Probe
-  `repros/wasi-udp-probe` (wasi:cli/command warpkg war.probe.udp): loopback +
+  `repros/wasi-udp-probe` (wasi:cli/command wandrpkg wandr.probe.udp): loopback +
   outbound STUN to stun.l.google.com → srflx address. GREEN on desktop wasmtime AND
-  on-device via `wart-host --run-once war.probe.udp` (Pixel 2 XL WiFi). Host
+  on-device via `wandr-host --run-once wandr.probe.udp` (Pixel 2 XL WiFi). Host
   candidates need no iface-enum either (bind+connect a UDP sock to a public IP,
   read local_addr). So sans-IO rtc + std UdpSocket = complete guest transport.
   Remaining call-engine work: Opus (libopus→wasip2) + wire engine↔audio + host
@@ -205,7 +205,7 @@ generic/custom call feature better than drop-in Signal-peer interop.
   ported from libopus 1.6, zero runtime deps). Builds for wasm32-wasip2 trivially;
   f32 encode/decode API matches our PCM-f32 pipeline (mic capture + AAudio).
   Round-trip (48k mono 20ms): 960 f32 → ~160B (~64kbps) → 960 samples, desktop +
-  on-device (`wart-host --run-once war.probe.opus`). PERF on Pixel 2 XL (scalar,
+  on-device (`wandr-host --run-once wandr.probe.opus`). PERF on Pixel 2 XL (scalar,
   no SIMD): encode 0.384ms + decode 0.117ms = 0.501ms per 20ms frame = ~40x
   real-time (~2.5% budget) → comfortably real-time; +simd128 optional. Gotcha:
   Application::Voip (SILK) attenuates a pure TONE ~13dB (speech-tuned, expected;

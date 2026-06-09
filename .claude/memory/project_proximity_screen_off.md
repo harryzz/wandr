@@ -11,8 +11,8 @@ Task 78 — the task-77 follow-on: proximity sensor blanks the panel during a ca
 DONE + device-verified (Pixel 2 XL, 2026-06-04). The applier task 77 deferred.
 
 **Mechanism: SurfaceFlinger `setPowerMode`** (proper HWC panel-off, not backlight).
-Reached over rsbinder via a new shared crate `runtime/wart-hal-display/`
-(mirrors [[project_arbiter_sensors]]'s wart-hal-sensors). De-risked on-device
+Reached over rsbinder via a new shared crate `runtime/wandr-hal-display/`
+(mirrors [[project_arbiter_sensors]]'s wandr-hal-sensors). De-risked on-device
 BEFORE building:
 - `SurfaceFlingerAIDL` (`android.gui.ISurfaceComposer`) transaction order matches
   the full upstream extract: getPhysicalDisplayIds=6, getPhysicalDisplayToken=7,
@@ -35,14 +35,14 @@ parcelables via rsbinder `impl_serialize/deserialize_for_parcelable!`,
 `unimplemented!()` bodies — AOSP's own gui_aidl_types_rs is likewise stubs). None
 of those types are on the setPowerMode path.
 
-**Arbiter wiring:** core `Effect::SetDisplayPower{on}`; `wart-arbiter-power` tracks
+**Arbiter wiring:** core `Effect::SetDisplayPower{on}`; `wandr-arbiter-power` tracks
 `blanked`, blanks only while a call is active (`!comms.is_empty()`), toggles on the
 debounced ProximityChanged transition; **3 fail-safes** force the panel back on
 (far reading, CommsActive{false} with no calls left, SurfaceRemoved of last call) —
 a stuck-off panel must never happen. `execute_effects` arm →
-`wart_hal_display::set_display_power`.
+`wandr_hal_display::set_display_power`.
 
-**Device test path (no real call needed):** `wart-arbiter audio-call-start <pid>`
+**Device test path (no real call needed):** `wandr-arbiter audio-call-start <pid>`
 emits CommsActive → proximity auto-enabled (task-77 wiring) → cover sensor → panel
 OFF → uncover → ON → `audio-call-end <pid>` while covered → panel ON (fail-safe) +
 sensor disabled. All verified; `setPowerMode applied=true`.
@@ -50,7 +50,7 @@ sensor disabled. All verified; `setPowerMode applied=true`.
 **Task 79 (touch suppression, DONE+device-verified)** closed the cheek-touch
 follow-on: host `input.rs` TOUCH_SUPPRESSED atomic gates `dispatch_pointer*` (the
 single touch choke point); `ime_inbound.rs` parses `input-suppress <0|1>`;
-`wart-arbiter-power::set_panel_blanked` fans the suppress flag to ALL hosts
+`wandr-arbiter-power::set_panel_blanked` fans the suppress flag to ALL hosts
 alongside SetDisplayPower, riding the same blank trigger + 3 fail-safes (never
 stuck). Touch-only (keys live). Verified self-driven via report-sensor sim:
 cover→all hosts suppressed + injected tap dropped; uncover/call-end→resumed.

@@ -7,8 +7,8 @@ metadata:
   originSessionId: 3d303796-d18c-429f-816f-2a415ff40ff3
 ---
 
-When editing Compose source on the wart project, the source-of-truth
-is `/home/harry/wart/compose-multiplatform-core/`. The sibling
+When editing Compose source on the wandr project, the source-of-truth
+is `/home/harry/wandr/compose-multiplatform-core/`. The sibling
 `compose-*-wasi/` directories (compose-runtime-wasi,
 compose-foundation-wasi, compose-ui-wasi, compose-material3-wasi,
 etc., 11 in total) do NOT hold copies of the source — their
@@ -23,7 +23,7 @@ WRONG — `compose-foundation-wasi/src/` contains only
 `Clickable.kt`. The real `Clickable.kt` lives at:
 
 ```
-/home/harry/wart/compose-multiplatform-core/compose/foundation/foundation/
+/home/harry/wandr/compose-multiplatform-core/compose/foundation/foundation/
   src/commonMain/kotlin/androidx/compose/foundation/Clickable.kt
 ```
 

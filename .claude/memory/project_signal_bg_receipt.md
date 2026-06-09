@@ -18,23 +18,23 @@ Plan: `~/.claude/plans/cat-task-state-steady-stallman.md`.
   `apply_role(Background)` right after launch → the relaunched GUI guest comes up HIDDEN
   (SIGUSR1, no foreground steal). Fixes the foreground-steal bug from the alarm increment.
 - **M2 — background-execution primitive** (`8ff96df6`): `wit/background.wit`
-  (`war:background/background.bg-tick: func()->u32`) + manifest `background = true`
+  (`wandr:background/background.bg-tick: func()->u32`) + manifest `background = true`
   (`app_loader::background_service()`). `run_cwasm_loop` calls `bg-tick` IN PLACE of
   render_frame while the guest is a backgrounded background-service (no hidden-surface
   render; guest-authored cadence, host-clamped 16..=IDLE_CAP). This is the ONLY guest entry
   for a wake-from-dead service relaunched straight into Background. Verified: bg-tick pumps
   continuously while backgrounded, no renders, resumes on foreground.
 - **M3a — notification primitive** (`2fef4244`): `wit/notify.wit` (`notifier` import,
-  `notify-handler` export); `wart-arbiter-notify` module (post/cancel/list/click verbs,
+  `notify-handler` export); `wandr-arbiter-notify` module (post/cancel/list/click verbs,
   in-memory Store list, percent-decodes title/body off the control line); `Effect::Foreground`
   (binary re-enters the `foreground` verb); host `notify_host_impl` forwards posts;
   conditional `notify_events` `.ok()` binding → `on-notification-click`.
 - **M3b — status-bar surfacing** (`5d366567`): `notify-feed` interface (`list-active`,
   `click`) the host answers by querying the arbiter LIVE (`notify-list`) — no host cache.
-  war.statusbar imports it, draws a `● N` badge between clock+battery, tap → `notify-feed.click`
+  wandr.statusbar imports it, draws a `● N` badge between clock+battery, tap → `notify-feed.click`
   → arbiter foregrounds owner + delivers on-notification-click. Verified with a real `input tap`.
 
-**Test harness:** `apps/user/war.alarm.test` is now the kitchen-sink guest — exports
+**Test harness:** `apps/user/wandr.alarm.test` is now the kitchen-sink guest — exports
 alarm-handler + bg-tick + notify-handler, imports scheduler + notifier (`background=true`).
 
 **M4 — Signal wiring** (`b18a3198`): DONE + **fully device-verified by the user 2026-06-01**
@@ -54,7 +54,7 @@ alarm only does real work when Signal is dead, so a long interval saves wakeups)
 background-pumped via render@1Hz when paused (post-task-64 on-demand) — M4 adds the
 notification ALERT + clean bg-tick pump + wake-from-dead, the actual new value.
 
-**Doze (PowerManager):** now a proper **`wart-arbiter-power` module** (`5aa52868`,
+**Doze (PowerManager):** now a proper **`wandr-arbiter-power` module** (`5aa52868`,
 refactored from the v0 host-local `351394a8` after the user flagged that host-side
 policy diverged from "arbiter decides, host applies"). The arbiter polls
 `debug.tracing.screen_state` (`spawn_screen_poller`, 2s) → `Event::ScreenState` →
@@ -88,7 +88,7 @@ LineageOS): on power-press/timeout it goes to AOD/Doze (`screen_state`=3, SF
 `is_live()` (On|Vr only) treats Doze as not-live, so doze engages correctly —
 verified end-to-end with a REAL power-key screen-off (not just a faked setprop):
 doze ENTER ~65s after power-off, EXIT on wake.** The user's "screen never goes
-off" was a 30-min `screen_off_timeout` + AOD-not-black, not a doze bug. A `wart-arbiter-power`
+off" was a 30-min `screen_off_timeout` + AOD-not-black, not a doze bug. A `wandr-arbiter-power`
 module is deferred until richer policy (wakelocks, idle stages, SoC-wakelock deep
 doze) needs it (same discipline as audio-focus).
 
@@ -101,8 +101,8 @@ doze) needs it (same discipline as audio-focus).
 - `adb push <dir> <target>` NESTS into `<target>/<dir>` if target exists → installer reads a
   stale manifest. `rm -rf` the device dir first.
 - A guest `wit/` dir importing a cross-package dep needs the VERSIONED import
-  (`war:notify/notify-feed@0.1.0`) + `generate_all` in `wit_bindgen::generate!`.
+  (`wandr:notify/notify-feed@0.1.0`) + `generate_all` in `wit_bindgen::generate!`.
 - Build host with `tools/scripts/build-host-android.sh` (sources env-android.sh); a bare
   `cargo build` lacks the NDK clang env (zstd-sys fails). Arbiter: `cargo build --release`.
   Deploy zygote+arbiter restart keeps chrome alive; statusbar is a `--standalone-overlay-top`
-  process (not a zygote child) — relaunch it separately. NEVER build-system-warpkgs.sh.
+  process (not a zygote child) — relaunch it separately. NEVER build-system-wandrpkgs.sh.

@@ -1,13 +1,13 @@
 ---
 name: wasmtime-drc-no-autoschedule
-description: "Wasmtime DRC had no auto-sweep — the wart-app \"memory leak\" is GC scheduling, not Kotlin/Compose. RESOLVED 2026-05-30: wasmtime 45.0.0 (#13422 auto-GC + #13450 array.copy fix + heuristics) bounds the leak AND — combined with task 64 cutting Compose render 60→1fps — no longer ANRs. Re-tested device 60fps+scroll: RSS flat ~220MB, smooth, no ANR. ADOPT 45. (Earlier May-21 #13422-only test ANR'd; superseded.)"
+description: "Wasmtime DRC had no auto-sweep — the wandr-app \"memory leak\" is GC scheduling, not Kotlin/Compose. RESOLVED 2026-05-30: wasmtime 45.0.0 (#13422 auto-GC + #13450 array.copy fix + heuristics) bounds the leak AND — combined with task 64 cutting Compose render 60→1fps — no longer ANRs. Re-tested device 60fps+scroll: RSS flat ~220MB, smooth, no ANR. ADOPT 45. (Earlier May-21 #13422-only test ANR'd; superseded.)"
 metadata: 
   node_type: memory
   type: feedback
   originSessionId: ade59596-71ca-44d3-bc3e-26f4f4ba5671
 ---
 
-The wart-app "memory leak" is not in Kotlin codegen and not in Compose
+The wandr-app "memory leak" is not in Kotlin codegen and not in Compose
 retained state. It is in wasmtime DRC scheduling.
 
 Causation chain (top to bottom):
@@ -39,8 +39,8 @@ allocation pattern runs fine on wasmJs in browsers because V8's
 tracing GC self-schedules. Upstream issue filed as
 [bytecodealliance/wasmtime#13403](https://github.com/bytecodealliance/wasmtime/issues/13403);
 full trajectory data + code analysis at
-`/home/harry/wart/wasmtime-issue-draft.md`; artifacts (patch diffs,
-logcat, reproducer) at `/home/harry/wart/wasmtime-issue-artifacts/`.
+`/home/harry/wandr/wasmtime-issue-draft.md`; artifacts (patch diffs,
+logcat, reproducer) at `/home/harry/wandr/wasmtime-issue-artifacts/`.
 
 **How to apply:** treat any "Kotlin/Wasm leaks memory" report as a
 scheduling problem first, not a Kotlin or Compose bug. The mitigation
@@ -66,10 +66,10 @@ stack-roots (OASR) list reaches 2× its size after the last GC (floor
 1024). Tested in two stages.
 
 - **Stage 1 (desktop, wasmtime CLI):** fixes the leak cleanly. The
-  standalone `wart-leak-repro.wasm` goes from the 4 GB-ceiling climb to
+  standalone `wandr-leak-repro.wasm` goes from the 4 GB-ceiling climb to
   RSS flat at ~43 MB. Sweeps stay tiny.
-- **Stage 2 (device — wart-host rebuilt on wasmtime 46 + #13422; the
-  44→46 bump needed zero wart-host code changes):** fixes the *original*
+- **Stage 2 (device — wandr-host rebuilt on wasmtime 46 + #13422; the
+  44→46 bump needed zero wandr-host code changes):** fixes the *original*
   ANR (sweep-duration growth — sweeps stay flat at ~1 ms) **but
   reintroduces an ANR via a new mechanism.** The PR emits an inline
   `force_gc` call in the wasm codegen; on the Kotlin/Wasm+Compose guest
@@ -114,10 +114,10 @@ product that caused the May-21 ANR.
 
 Results (branch `wasmtime-45-test`; host `wasmtime`/`wasmtime-wasi` 44→45,
 **zero API breaks**):
-- **Desktop** `wart-leak-repro.wasm` (`wasmtime run -Wgc,... -Ccollector=drc`):
+- **Desktop** `wandr-leak-repro.wasm` (`wasmtime run -Wgc,... -Ccollector=drc`):
   RSS **flat 39 MB** on 45 vs **568 MB+ and climbing** on 44 — leak bounded
   at max churn.
-- **Device idle** wart-app: flat ~253 MB, ~7% CPU — no regression.
+- **Device idle** wandr-app: flat ~253 MB, ~7% CPU — no regression.
 - **Device 60 fps + active scrolling, 3 min** (frame-pacing temporarily
   forced to 0 to recreate the May-21 condition): **RSS flat ~220 MB**, frames
   steadily advancing, **no ANR/crash**, user reports **smooth scroll with

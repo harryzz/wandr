@@ -120,7 +120,7 @@ Two fixes were explored after the upstream correction:
   instead of `0`. One constant each side (stdlib `RESERVED_BASE` +
   adapter `State::new`), no heuristic — kills the UAF *and* the leak.
   Full design + build/verify steps in
-  `~/wart/tasks/34-kt86415-fixed-partition.md`.
+  `~/wandr/tasks/34-kt86415-fixed-partition.md`.
 
 Repro caveat: `kt-memalloc-repro` under-modeled reality (it never
 exercised `componentModelRealloc` interleaved with an open scope) and so
@@ -162,7 +162,7 @@ If parent had advanced, B would have been ~`76808`. It wasn't. Hypothesis confir
 
 **Filed upstream:** [KT-86415](https://youtrack.jetbrains.com/issue/KT-86415/) — track here for status. Standalone reproducer published at <https://codeberg.org/harryzz/kt-memalloc-repro>.
 
-**Patch validated locally 2026-05-20**: built patched Kotlin stdlib from `~/xl/kotlin` (v2.4.0-RC tag with the `destroy()` parent-bump diff), published to mavenLocal as `kotlin-stdlib-wasm-wasi:2.4.255-SNAPSHOT`, ran the second-version repro against stock + patched stdlibs side by side. Stock: long-lived block overlapped by `newScope.allocate`. Patched: high-water mark propagated; no overlap. **Residual edge case** noted in `~/wart/kt-memalloc-repro/kt-86415-fix-completeness.md` (also published in the Codeberg repro repo): if `componentModelRealloc` is ever called with no active outer `withScopedMemoryAllocator` scope, the patch is a no-op (parent is null). Doesn't manifest in current Kotlin/Wasm code paths but worth flagging on the YouTrack issue.
+**Patch validated locally 2026-05-20**: built patched Kotlin stdlib from `~/xl/kotlin` (v2.4.0-RC tag with the `destroy()` parent-bump diff), published to mavenLocal as `kotlin-stdlib-wasm-wasi:2.4.255-SNAPSHOT`, ran the second-version repro against stock + patched stdlibs side by side. Stock: long-lived block overlapped by `newScope.allocate`. Patched: high-water mark propagated; no overlap. **Residual edge case** noted in `~/wandr/kt-memalloc-repro/kt-86415-fix-completeness.md` (also published in the Codeberg repro repo): if `componentModelRealloc` is ever called with no active outer `withScopedMemoryAllocator` scope, the patch is a no-op (parent is null). Doesn't manifest in current Kotlin/Wasm code paths but worth flagging on the YouTrack issue.
 
 **Related upstream issues:**
 - `KT-65030` "K/Wasm: memory allocator for Component Model ABI" — Fixed in 2.4.0-Beta1, added `componentModelRealloc` etc. But the underlying `ScopedMemoryAllocator` semantics weren't changed, so the bug persists for adapter-style long-lived allocations.
@@ -170,20 +170,20 @@ If parent had advanced, B would have been ~`76808`. It wasn't. Hypothesis confir
 
 **Workaround in our project:** the WASI preview1 adapter fork at `wasmtime-src/crates/wasi-preview1-component-adapter/` has a self-heal in `State::with` that re-`init`s State when magic1/magic2 are corrupted. See [[wasi-adapter-state-corruption]].
 
-**Deployed-build state (2026-05-20):** the patched stdlib (`2.4.255-SNAPSHOT`) is now wired into the on-device build — skiko + all 31 compose-multiplatform-core wasm-wasi klibs republished against it, and wart-app's final whole-world link re-lowers all IR against it via the `~/.gradle/init.d/kt-86415-stdlib-override.gradle.kts` redirect. **The fork adapter (with the `State::with` self-heal) was deliberately KEPT in this build**, not removed. Consequence for verification: a clean Tooltip/DatePicker run with this build does NOT by itself prove the stdlib fix — if the patch were ineffective, the self-heal would silently re-init State and the only signal would be the logcat line `wart fork: wasi adapter State corruption — recovered`. **Watch for that message: absent = stdlib fix proven; present = patch incomplete.** A definitive isolated test (rebuild the component with the *stock* adapter `~/wart/skiko/wasi_snapshot_preview1.reactor.wasm`, where a recurrence hard-SIGILLs) was offered but the user declined for now — so the stock-adapter verification remains outstanding. Boot + scripted interaction on 2026-05-20 showed no self-heal message and no crash, but did not precisely exercise the TooltipBox long-press path.
+**Deployed-build state (2026-05-20):** the patched stdlib (`2.4.255-SNAPSHOT`) is now wired into the on-device build — skiko + all 31 compose-multiplatform-core wasm-wasi klibs republished against it, and wandr-app's final whole-world link re-lowers all IR against it via the `~/.gradle/init.d/kt-86415-stdlib-override.gradle.kts` redirect. **The fork adapter (with the `State::with` self-heal) was deliberately KEPT in this build**, not removed. Consequence for verification: a clean Tooltip/DatePicker run with this build does NOT by itself prove the stdlib fix — if the patch were ineffective, the self-heal would silently re-init State and the only signal would be the logcat line `wandr fork: wasi adapter State corruption — recovered`. **Watch for that message: absent = stdlib fix proven; present = patch incomplete.** A definitive isolated test (rebuild the component with the *stock* adapter `~/wandr/skiko/wasi_snapshot_preview1.reactor.wasm`, where a recurrence hard-SIGILLs) was offered but the user declined for now — so the stock-adapter verification remains outstanding. Boot + scripted interaction on 2026-05-20 showed no self-heal message and no crash, but did not precisely exercise the TooltipBox long-press path.
 
 **File this upstream as a Kotlin/Wasm bug.** Minimum standalone repro lives at
-`/home/harry/wart/kt-memalloc-repro/` — runs end-to-end with Kotlin 2.4.0-RC,
+`/home/harry/wandr/kt-memalloc-repro/` — runs end-to-end with Kotlin 2.4.0-RC,
 wasm-tools component new + wasmtime run. No skiko, no Compose, no Android.
 Output demonstrates that every `withScopedMemoryAllocator` reuses address 0
 regardless of what prior scopes wrote — including the bytes Kotlin's *own*
 internal `println` buffer scope leaves behind. Build + run with:
 
 ```bash
-cd /home/harry/wart/kt-memalloc-repro
+cd /home/harry/wandr/kt-memalloc-repro
 ./gradlew compileProductionExecutableKotlinWasmWasi
 wasm-tools component new build/.../kt-memalloc-repro.wasm \
-  --adapt /home/harry/wart/wasmtime-src/target/wasm32-unknown-unknown/debug/wasi_snapshot_preview1.wasm \
+  --adapt /home/harry/wandr/wasmtime-src/target/wasm32-unknown-unknown/debug/wasi_snapshot_preview1.wasm \
   -o /tmp/repro.wasm
 wasmtime run --wasm gc=y --wasm function-references=y --wasm exceptions=y \
   --wasi preview2 /tmp/repro.wasm

@@ -92,7 +92,7 @@ temporary lifetime — bind to a local first.
 is `Copy`, `IdentityChange::{NewOrUnchanged,ReplacedExisting}`) +
 `provisioning::link_device` over a channel. Reaches the QR + parks at the scan;
 post-scan path (decrypt→replenish→REST register) implemented. **PENDING: user scans
-the QR to complete the live link (registers a real "wart" linked device).**
+the QR to complete the live link (registers a real "wandr" linked device).**
 
 **3b LIVE-VERIFIED 2026-05-30:** user scanned the QR → `LINKED ✓ device_id=4`,
 "link flow finished OK". A wasm32-wasip2 guest linked as a REAL Signal secondary
@@ -115,10 +115,10 @@ Operational: render QR as PNG (`qrencode`; terminal QR won't scan); scan FAST
 (provisioning window ~30-60s); in-memory store orphans each linked device on exit.
 
 **4 DONE + ON-DEVICE-VERIFIED 2026-05-30 — TASK 67 v1 CORE COMPLETE ON HARDWARE.**
-signal-link packaged as a warpkg (`package.toml`, app_id `war.signal.link`,
-`wasi:cli/command`), ran through production wart-host on the Pixel 2 XL: `--install`
+signal-link packaged as a wandrpkg (`package.toml`, app_id `wandr.signal.link`,
+`wasi:cli/command`), ran through production wandr-host on the Pixel 2 XL: `--install`
 (precompiled libsignal-sized component to aarch64 cwasm) → `--zygote-launch
-war.signal.link` → `LINKED ✓` (pid 17582) → `MESSAGE ✓` (received+decrypted
+wandr.signal.link` → `LINKED ✓` (pid 17582) → `MESSAGE ✓` (received+decrypted
 on-device). Capture the `sgnl://` URL from logcat, render PNG host-side (`qrencode`),
 scan FAST. logcat gotcha: host sink emits one line per newline-terminated write —
 `eprintln!` multi-arg splits + only the first surfaces; use a single
@@ -126,8 +126,8 @@ scan FAST. logcat gotcha: host sink emits one line per newline-terminated write 
 `MESSAGE ✓ from <ACI:…>: Мараба` (Cyrillic UTF-8 round-tripped).** DEPLOY GOTCHA
 (cost 2 stale runs): `adb push <dir> /data/local/tmp/X` when X exists NESTS the new
 files inside → installer keeps reading the stale top-level `package.toml`/wasm, so
-"redeploys" run old code. Always `rm -rf` the device warpkg dir **and** the install
-dir (`/data/local/tmp/wart-apps/system-apps/<app_id>`) before re-push, and bump
+"redeploys" run old code. Always `rm -rf` the device wandrpkg dir **and** the install
+dir (`/data/local/tmp/wandr-apps/system-apps/<app_id>`) before re-push, and bump
 `package.toml` version (the installer caches the cwasm by app_id+version). All hard
 risk retired.
 
@@ -153,7 +153,7 @@ FIX: `SessionStoreExt::get_sub_device_sessions` MUST return real per-device sess
 converges → "max retries" + a 600s server rate-limit. Sent 2 texts (Cyrillic) →
 `SENT ✓`.
 
-**NEXT — Phase 1 cont. (no novel risk):** (a) on-device: wart-host must grant a
+**NEXT — Phase 1 cont. (no novel risk):** (a) on-device: wandr-host must grant a
 WRITABLE per-app `/state` preopen (task 38 wired only `/assets` read) — a generic
 capability — then verify resume+send on device; (b) dioxus UI over `skiko-gfx`;
 (c) background via a GENERIC host keep-alive capability (never a per-app daemon).

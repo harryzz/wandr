@@ -82,7 +82,7 @@ adapter's `State::with` to self-heal — when `state_ref.magic1 != MAGIC
 || state_ref.magic2 != MAGIC`, call `State::init(get_state_ptr())`
 in place before the assert. This re-initializes the State at the same
 linear-memory address (preserving the get_state_ptr-stored pointer).
-File descriptors held by State get reset, which is fine for wart-app
+File descriptors held by State get reset, which is fine for wandr-app
 (no persistent fd I/O through the adapter). End-to-end test: Tooltip
 test #28 long-press completes cleanly, DatePicker chevrons `<` `>`
 work; small lag after long-press (State::init cost), then normal.
@@ -101,7 +101,7 @@ chevron interactions, ~3 min):**
 Workaround is a fork of upstream wasi-preview1-component-adapter.
 Lives at `wasmtime-src/crates/wasi-preview1-component-adapter/src/lib.rs`
 (v44.0.1 tag + diagnostic + self-heal in State::with). Must be
-re-embedded into every wart-app cwasm via
+re-embedded into every wandr-app cwasm via
 `wasm-tools component new --adapt`.
 
 **Candidate "proper" fixes (not yet pursued):**
@@ -113,7 +113,7 @@ re-embedded into every wart-app cwasm via
   (upstream adapter change).
 
 **Diagnostic plumbing** that captured this (kept in tree):
-- `wart-host/src/wasi_stderr.rs`: synchronous `LogcatStderr StdoutStream`
+- `wandr-host/src/wasi_stderr.rs`: synchronous `LogcatStderr StdoutStream`
   routes guest stderr to `log::warn!(target: "wasi_stderr")` from inside
   the wasi `fd_write` host call — needed because wasmtime-wasi's default
   inherit_stderr buffers async and SIGILL aborts before the worker flushes.

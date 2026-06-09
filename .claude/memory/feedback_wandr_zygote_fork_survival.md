@@ -1,13 +1,13 @@
 ---
-name: feedback-wart-zygote-fork-survival
-description: "Empirical fork() survival of wart's full native stack on Pixel 2 XL — what's safe to share parent→child via COW, what must first-init in the child, and where the COW savings actually come from"
+name: feedback-wandr-zygote-fork-survival
+description: "Empirical fork() survival of wandr's full native stack on Pixel 2 XL — what's safe to share parent→child via COW, what must first-init in the child, and where the COW savings actually come from"
 metadata: 
   node_type: memory
   type: feedback
   originSessionId: 0d7555bf-c89f-4a03-a1f7-af183b8bb90f
 ---
 
-Tested 2026-05-27 in task 45 (wart-zygote spike, commits ad82c11
+Tested 2026-05-27 in task 45 (wandr-zygote spike, commits ad82c11
 + 353f690 + 1c5a6927 + 462d53a5). Native Rust zygote that
 preloads `wasmtime::Engine` and `fork()`s on each LAUNCH request.
 Run on Pixel 2 XL (Adreno 540, Android 15) device-verified.
@@ -18,7 +18,7 @@ direction. Spiking the technical path before committing to it
 answered the "what breaks across fork" question empirically.
 
 **How to apply:** when planning future zygote-shaped work (the
-real wart-arbiter spin-out / task 46), trust these empirical
+real wandr-arbiter spin-out / task 46), trust these empirical
 findings rather than re-investigating from scratch. When stuck
 on fork-related debugging, this is the baseline of "what
 should work."
@@ -68,7 +68,7 @@ Of the 5 600 kB Shared_Dirty per child:
 
 | Category | Size |
 |---|---|
-| Binary `.data/.bss` (wart-host + libs initialized globals) | 4 656 kB |
+| Binary `.data/.bss` (wandr-host + libs initialized globals) | 4 656 kB |
 | `[anon:scudo:primary]` (wasmtime engine heap) | 208 kB |
 | `[anon:linker]` (dynamic loader state) | 192 kB |
 | other anon | 472 kB |

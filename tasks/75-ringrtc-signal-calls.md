@@ -2,7 +2,7 @@
 
 **Status:** SCOPED, not started (filed 2026-06-02). A fresh-session task — this
 doc is self-contained. Builds directly on the **completed** wandr-call engine
-([[project_wart_call]]) and the working text Signal client (task 67,
+([[project_wandr_call]]) and the working text Signal client (task 67,
 [[project_signal_wasip2_transport_swap]]).
 
 ## Goal
@@ -233,7 +233,7 @@ opaque/state-machine surface proves larger than reimplementing.
 ## References
 
 - Engine: `crates/wandr-call`, `docs/call-engine.md`, `repros/call-{live,browser,
-  audio-wire,udp-loopback}`, [[project_wart_call]].
+  audio-wire,udp-loopback}`, [[project_wandr_call]].
 - Signal client: task 67 `tasks/67-signal-client.md`, `apps/user/wandr.signal/`
   (engine + ui), `external/libsignal-service-rs/` (fork), `protobuf/
   SignalService.proto` (`CallMessage`), [[project_signal_wasip2_transport_swap]],

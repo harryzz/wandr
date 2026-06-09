@@ -8,13 +8,13 @@ metadata:
 ---
 
 **Root cause of high idle CPU on device (found 2026-05-30):** the host render
-loop (`runtime/wart-host/src/standalone.rs`) calls `call_render_frame` +
+loop (`runtime/wandr-host/src/standalone.rs`) calls `call_render_frame` +
 `eglSwapBuffers` **every 16 ms unconditionally** — a game-engine loop, not the
 on-demand model UI toolkits use. Each surface is its own process with its own
 60 fps loop, so static chrome wastes CPU re-rasterizing unchanged frames:
 launcher ~23%, taskbar ~15%, hidden IME ~30%, status bar ~20%, idle (NOT
 animating) dioxus ~55% → ~140% user + 57% sys across 5 processes. Measure with
-`adb shell top -b -n 2 -d 3 -o PID,%CPU,RES,CMD | grep wart-host`.
+`adb shell top -b -n 2 -d 3 -o PID,%CPU,RES,CMD | grep wandr-host`.
 
 **Best practice (Android/Compose), confirmed by research:** render only when
 content invalidated, an animation wants the next frame, a timer is due, or input
@@ -46,7 +46,7 @@ no breaking change).
 - Step 3 dioxus: `DomRenderer::next_frame_delay()` = `if self.dirty {0} else
   {60000}` (event-driven, no async/timers); demo exports it.
 - Results: launcher 23→5%, statusbar 20→8%, taskbar 15→6%, dioxus 55→6%; Compose
-  wart-app unchanged 45%/60fps (None path = regression gate passed). Logcat proof:
+  wandr-app unchanged 45%/60fps (None path = regression gate passed). Logcat proof:
   `loader: app exports my:skiko-gfx/frame-pacing — on-demand rendering enabled`.
   Residual ~5–8%/proc is the 60 Hz cheap poll (epoll refinement out of scope).
 
@@ -54,11 +54,11 @@ no breaking change).
 complementary to frame-pacing (cap = "no faster than X"; idle-skip = "nothing
 when static"). Enforced entirely in `standalone.rs` → caps EVERY app
 (Compose/dioxus/canvas) with ZERO app/library code, incl. the legacy None path
-(so it throttles Compose NOW, before step 4). Resolution: `WART_MAX_FPS` env >
+(so it throttles Compose NOW, before step 4). Resolution: `WANDR_MAX_FPS` env >
 `package.toml max_fps` (read like `orientation` via `LoadedApp::max_fps()`, NOT in
 cache-key) > 60. Gate: `frame<3 || now>=next_render_at || (dirty && (now-last_render)>=frame_interval)`;
 post-render delay `max(guest_delay, frame_interval=1000/fps)`; input still polled
-at POLL_MS=16. Scales: Compose wart-app 45%→37%(30fps)→26%(15fps). Caveat: Pixel
+at POLL_MS=16. Scales: Compose wandr-app 45%→37%(30fps)→26%(15fps). Caveat: Pixel
 2 XL already renders Compose at only ~40 fps (~25 ms/frame), so 30-cap trims only
 ~25% — cap helps fast-but-frequent renderers; idle-skip is the bigger Compose win.
 **Architecture rule (user-confirmed):** FPS cap = host-only; idle-skip signal must
@@ -81,7 +81,7 @@ guests (Compose None-path). So `max_fps` on a reactive guest does little — it'
 Compose/animation knob.
 
 **STEP 4 DONE — Compose frame-pacing (device-verified 2026-05-30, mechanism):**
-idle wart-app 45%→~7%, hidden IME 30%→~8.5% — every guest (Rust + Compose) now in
+idle wandr-app 45%→~7%, hidden IME 30%→~8.5% — every guest (Rust + Compose) now in
 the ~7–11% cheap-poll band. **No skiko change needed** (logic is in Compose + the
 app export glue): `WasiFrameDispatcher.nextDeadlineMillis(now)` (0 if work
 queued/due, else nearest delay/blink deadline, else MAX) + a top-level
@@ -89,7 +89,7 @@ queued/due, else nearest delay/blink deadline, else MAX) + a top-level
 `scene.hasInvalidations()`, else dispatcher deadline, else IDLE=100000) + a
 `@WasmExport("my:skiko-gfx/frame-pacing@0.1.0#next-frame-delay")` in
 `RendererExports.kt` + `export my:skiko-gfx/frame-pacing` in each `.wit` world —
-in BOTH wart-app and war.ime.keyboard. Rebuild = `:compose:ui:ui`
+in BOTH wandr-app and wandr.ime.keyboard. Rebuild = `:compose:ui:ui`
 republish only (additive method) + recompile each guest. The `flush()`-heartbeat
 gotcha is honored (deadline included). **Build trap that ate hours:** the guests
 were linking discarded out-of-tree fat bundles, not the in-tree modules — see

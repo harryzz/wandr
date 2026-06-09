@@ -14,7 +14,7 @@ wandr needs a *light reactive* UI option for guests more complex than a
 hand-rolled canvas painter (`wandr.launcher` ~70 KB, `wandr.taskbar` ~48 KB
 are hand-rolled and fine for trivial UI), but without Kotlin/Compose's
 15.7 MB binary, continuation leak, and ~180 MB working set
-([[feedback_indeterminate_progress_leak]], [[feedback_wart_zygote_fork_survival]]).
+([[feedback_indeterminate_progress_leak]], [[feedback_wandr_zygote_fork_survival]]).
 A rich status bar, a settings app, a notification shade, a file picker —
 those want reactivity + flexbox layout, not 300 lines of manual
 `draw_rect` math.

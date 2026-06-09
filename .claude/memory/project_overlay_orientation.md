@@ -8,7 +8,7 @@ metadata:
 ---
 
 **SUPERSEDED 2026-06-01 for the orient-lock + overlay-rotation source — see
-[[project_chrome_coherence]] (commit 1da7adb0).** The `wart-orient-lock` FILE is
+[[project_chrome_coherence]] (commit 1da7adb0).** The `wandr-orient-lock` FILE is
 RETIRED; chrome/IME overlays no longer poll a sensor or the file — the arbiter is
 the single orientation authority and pushes orient via `geometry`. The
 anchor-aware `overlay_rect` handedness below is STILL current (the host applies it
@@ -26,7 +26,7 @@ Builds on task-43 fullscreen rotation ([[project-standalone-orientation]],
 like `assets_dir()`). NOT in the AOT cache-key — toggling doesn't invalidate the
 .cwasm, so you can even edit the installed package.toml in place to flip it.
 `standalone.rs`: `rotates = rotation_policy() || mode==None` (fullscreen always
-rotates; overlays opt in). Fully generic — any warpkg uses the same flag.
+rotates; overlays opt in). Fully generic — any wandrpkg uses the same flag.
 
 **Anchor-aware placement** (`standalone.rs::overlay_rect`): the panel buffer is
 fixed portrait; each chrome strip is placed at its USER-space edge. Device-verified
@@ -40,19 +40,19 @@ lands on the wrong side, swap the 4/7 arms — host-only, no shim rebuild.
 `sf_resize_overlay`, which now calls it) + `sf_panel_dims(*w,*h)` (host needs
 PANEL_H to size a vertical side strip; the overlay buffer is only strip-thick).
 
-**IME guest needed a fix (plan was wrong that it didn't):** `war.ime.keyboard`'s
+**IME guest needed a fix (plan was wrong that it didn't):** `wandr.ime.keyboard`'s
 `Main.kt` render delegate discarded the per-frame `w/h` → ComposeScene stayed
 portrait-1200 size → landscape overflow/clipped rows. Fix = the SAME task-43
-wart-app fix: delegate updates `realScene.size` + `MutableSceneWindowInfo.containerSize`
+wandr-app fix: delegate updates `realScene.size` + `MutableSceneWindowInfo.containerSize`
 on change. **Every Compose wasi guest that can rotate needs this** — see
 [[feedback-host-side-transforms]]. Rust canvas guests (statusbar/taskbar) already
 adapt via their `on_resize` handlers. Also: `canvas_impl.rs::resize()` now calls
 `recompute_transform()` so logical dims track a buffer change without an orient change.
 
-**Redeploy gotcha:** `pkill -f wart-host` is UNRELIABLE through the Magisk `su`
+**Redeploy gotcha:** `pkill -f wandr-host` is UNRELIABLE through the Magisk `su`
 wrapper — repeated redeploys left 3 generations of every overlay stacked, which
-visually corrupted the keyboard. Use `pkill -x wart-host` (exact name) + kill the
-zygote (PPID 1 daemon; it reaps its forked children). The Magisk wart-stack module
+visually corrupted the keyboard. Use `pkill -x wandr-host` (exact name) + kill the
+zygote (PPID 1 daemon; it reaps its forked children). The Magisk wandr-stack module
 is disabled (no runtime respawner). Bring the stack up with one clean manual
 sequence (zygote → arbiter → set-home → statusbar/taskbar overlays → launch-overlay
 IME → set-ime), not the blocking `run-hybrid-stack.sh` (its final `adb shell -t`
@@ -62,7 +62,7 @@ daemon hangs when backgrounded and its waiter relaunches overlays → duplicates
 app's `orientation = "locked"` now (a) keeps the app portrait — the gate is
 `mode==None ? !orientation_locked() : rotation_policy()` (fullscreen rotates UNLESS
 explicitly locked; absent still rotates, no task-43 regression), and (b) publishes a
-global lock file `/data/local/tmp/wart-orient-lock` (`1`=portrait) from the FOREGROUND
+global lock file `/data/local/tmp/wandr-orient-lock` (`1`=portrait) from the FOREGROUND
 fullscreen app on its `AppRole::Foreground` transition. Overlays read it each frame and
 force portrait while set (tracking `last_dev_orient` so they re-apply when the lock
 toggles without the device moving). A file (not a socket) because the status bar /

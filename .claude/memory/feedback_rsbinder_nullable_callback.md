@@ -20,7 +20,7 @@ When calling a stable AIDL HAL method that declares an `@nullable IFooCallback` 
 5. `proxy.submit_transact(TXN_CODE, &data, 0)` — `flags = 0` for normal sync calls; `FLAG_ONEWAY | FLAG_CLEAR_BUF` for oneway.
 6. Don't read the reply parcel unless you need the return value — `submit_transact` returns `Result<Option<Parcel>>` and you can drop the inner `Parcel`.
 
-Concrete worked example in [[project-wasm-runtime]] at `wart-host/src/haptics_impl.rs` — module `binder_path`, functions `transact_on` and `transact_perform`. ~90 lines total replace the entire previously-planned NopCallback / TrivialRuntime / new_async_binder path.
+Concrete worked example in [[project-wasm-runtime]] at `wandr-host/src/haptics_impl.rs` — module `binder_path`, functions `transact_on` and `transact_perform`. ~90 lines total replace the entire previously-planned NopCallback / TrivialRuntime / new_async_binder path.
 
 **Related: rsbinder Android SDK version dispatch.** Same task 16 device verification surfaced that rsbinder 0.7.0's `hub::get_interface` panics with `default: Unsupported Android SDK version: 35` if the corresponding `android_NN` feature isn't compiled in. rsbinder groups SDK 34 + 35 under `android_14`. Use `features = ["android_11_plus"]` (which includes `android_11..android_14, android_16`) rather than a single-version feature to cover the runtime SDK dispatch table. See [[project-wasm-runtime]] §current-status.
 

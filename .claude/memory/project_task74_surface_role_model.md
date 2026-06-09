@@ -1,6 +1,6 @@
 ---
 name: project_task74_surface_role_model
-description: Task 74 — per-display surface/role + resource-focus model in wart-arbiter-core, now the SOLE arbiter state; orchestration extracted to a wart-arbiter-shell module; WM reads the Store. COMPLETE + device-verified.
+description: Task 74 — per-display surface/role + resource-focus model in wandr-arbiter-core, now the SOLE arbiter state; orchestration extracted to a wandr-arbiter-shell module; WM reads the Store. COMPLETE + device-verified.
 metadata:
   node_type: memory
   type: project
@@ -11,7 +11,7 @@ metadata:
 Built the load-bearing core schema the design doc
 ([[project_arbiter_window_server_design]]) flagged as where design effort belongs
 — the per-display **surface/role model + generalized resource-focus** in
-`wart-arbiter-core` — then collapsed the legacy state onto it and reaped the
+`wandr-arbiter-core` — then collapsed the legacy state onto it and reaped the
 Open/Closed payoff. The overlay↔foreground knot is dissolved: the IME is a
 `Role::Overlay` surface, the app a `Role::OverlayBehind`; "what's visible" is the
 pure derivation `visible_app()`, not a foreground slot that lies.
@@ -26,12 +26,12 @@ pure derivation `visible_app()`, not a foreground slot that lies.
   write helpers onto the model; `seed_surface_model` at boot. Model is **sole**
   arbiter state.
 - `c8d00643` **(C1)** — moved app-registry + home + ime-height + hand-rolled-JSON
-  persistence into the core `Store` (`wart-arbiter-core/registry.rs`); `state.rs`
+  persistence into the core `Store` (`wandr-arbiter-core/registry.rs`); `state.rs`
   became a thin shim. **Caught a reentrant-lock deadlock**: a fn holding the
   `core_store` lock must NOT call `state::*` (now Store-backed → re-locks); fixed
   `seed_surface_model` to read `store.apps_snapshot()` from the held guard.
 - `4272848b` **(C)** — extracted the AMS+IMMS orchestration into a new
-  `wart-arbiter-shell` `ArbiterModule` (foreground/kill/set-ime/attach/detach/
+  `wandr-arbiter-shell` `ArbiterModule` (foreground/kill/set-ime/attach/detach/
   ime-*/back/cycle-task/overlay/overlay-clear/list + promote/demote/reconcile/
   drop-editor-focus + `on_event(SurfaceRemoved)` pruning), emitting
   `Effect::SetRole`/`HostLine`/`Kill`. **Registered with one line.** Zygote-coupled
@@ -50,9 +50,9 @@ pure derivation `visible_app()`, not a foreground slot that lies.
   WM no-op (the co-emitted `ImeHeightChanged` does the inset push), avoiding a
   double-push on attach.
 
-**Architecture now:** `wart-arbiter-core` = Store (per-display surface/role +
+**Architecture now:** `wandr-arbiter-core` = Store (per-display surface/role +
 resource-focus + registry/home/ime-height) + Event/Effect/Ctx + Registry +
-ArbiterModule. Modules: `wart-arbiter-wm` (geometry) + `wart-arbiter-shell`
+ArbiterModule. Modules: `wandr-arbiter-wm` (geometry) + `wandr-arbiter-shell`
 (AMS+IMMS). The binary owns only transport + mechanism (`execute_effects`/
 `apply_role` = the one place Role→signal/oom/present lives) + zygote calls +
 death-watcher threads + persistence file IO. Adding a responsibility = +1 crate,
@@ -61,19 +61,19 @@ death-watcher threads + persistence file IO. Adding a responsibility = +1 crate,
 **Device proof:** knot resolves (visible_app = behind app, never the IME); overlay
 engage/disengage, cycle-task off the visible app, launch bridge, kill
 (`Effect::Kill`→zygote), and death-watcher home-fallback all correct; logs tagged
-`wart_arbiter_shell`; no panic/drift/dispatch-miss. Keyboard: attach → exactly ONE
+`wandr_arbiter_shell`; no panic/drift/dispatch-miss. Keyboard: attach → exactly ONE
 geometry push (`kb=1200`, no double); detach → `kb=0` (host logical height
 restored); cycle-away-with-keyboard → the backgrounded editor (not the launcher)
 gets `kb=0`. Host wire unchanged throughout.
 
 **Tests:** 17 unit tests (core 9 + shell 3 + wm 5, incl. `blur_targets_carried_pid`
 regression). Build `tools/scripts/build-host-android.sh`; deploy `run-hybrid-stack.sh`
-or an arbiter-only restart (push binary + `pkill -9 -f wart-arbiter` + restart
+or an arbiter-only restart (push binary + `pkill -9 -f wandr-arbiter` + restart
 detached — re-attaches running apps from `state.json`); **NEVER**
-`build-system-warpkgs.sh`. Host is arbiter-only across all of task 74.
+`build-system-wandrpkgs.sh`. Host is arbiter-only across all of task 74.
 
 **`-am`/`-ime` split (2026-06-01, `1878936a`):** done as an INTERNAL submodule
-split of `wart-arbiter-shell` (`am.rs`/`ime.rs`/`shared.rs`), NOT separate crates.
+split of `wandr-arbiter-shell` (`am.rs`/`ime.rs`/`shared.rs`), NOT separate crates.
 Decision: a full crate split would re-express focus-follows-foreground
 (`finishInput()`) — where an AM foreground change drives IME overlay/editor
 teardown in ONE synchronous pass inside `promote_to_foreground` — as an event
@@ -88,13 +88,13 @@ concrete driver (e.g. a swappable real-IME backend, [[project_ime_options]]).
 ResourceFocus>` map is generalized; `ResourceKind::ImeEditor` is the only live
 variant. Of the old "audio-focus / notifications" proposal:
 - **Notifications: DONE, but NOT as a resource-focus** — shipped as M3
-  ([[project_signal_bg_receipt]]): a notification LIST (`war:notify` +
-  `wart-arbiter-notify`), the correct shape since many notifications coexist (a
+  ([[project_signal_bg_receipt]]): a notification LIST (`wandr:notify` +
+  `wandr-arbiter-notify`), the correct shape since many notifications coexist (a
   notification isn't a single-holder focus). Do not re-model it into the focus map.
 - **Audio focus: DEFERRED until a driver (user decision 2026-06-01).** A clean fit
   (single holder, focus-follows-grant → prior holder ducks/pauses, mirrors the IME
   editor) and an alarm-sized add (`ResourceKind::Audio` + `ResourceFocus::Audio(pid)`
-  + request/abandon verbs + revoke push), but NO wart app currently arbitrates audio
+  + request/abandon verbs + revoke push), but NO wandr app currently arbitrates audio
   (AAudio plumbing exists from task 21; nothing requests focus). Build it only when a
   consumer needs it (Signal voice-note playback, a media app) — don't build a
   primitive without a driver.

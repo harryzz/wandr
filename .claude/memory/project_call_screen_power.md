@@ -12,7 +12,7 @@ full screen-power-during-a-call picture so it's built coherently, not patched
 piecemeal. Decided after the task-86 screen-off-timeout follow-on
 ([[project-artless-autobrightness]]).
 
-**The model: one authority (`wart-arbiter-power`) arbitrates screen power by call
+**The model: one authority (`wandr-arbiter-power`) arbitrates screen power by call
 MODE.** Today it only knows `CommsActive{pid, active}` — NOT the route (earpiece vs
 speaker) nor whether it's video. The correct policy is mode-aware; priority is
 **video > proximity > idle**, and proximity is NOT a blanket winner/loser — only
@@ -31,11 +31,11 @@ blanks on a hand-wave**. Route-aware gating fixes it (proximity blank only for
 earpiece voice).
 
 **Missing signals to build it:**
-1. **Route → power.** `wart-arbiter-audio` already decides earpiece/speaker
+1. **Route → power.** `wandr-arbiter-audio` already decides earpiece/speaker
    (`comms_speaker`, set by the `audio-route` verb) but it's PRIVATE to that module.
-   It must reach `wart-arbiter-power` — carry route on `Event::CommsActive`, or add an
+   It must reach `wandr-arbiter-power` — carry route on `Event::CommsActive`, or add an
    `Event::CommsRouteChanged`.
-2. **Video flag.** Nothing knows about video. The call app (Signal / `wart-call`) is
+2. **Video flag.** Nothing knows about video. The call app (Signal / `wandr-call`) is
    the only authority and it can toggle mid-call → add a guest verb `comms-video <pid>
    <on|off>`. (No camera-in-use signal exists to derive it; coarse fallback = treat
    speaker-route as "screen likely in use", but that can't tell speaker-voice from
@@ -53,7 +53,7 @@ video on. Decide before building.
   roughly yes for audio-only, no for video.)
 - Video signal source: guest verb (authoritative, recommended) vs derive-from-route.
 
-Touches: `wart-arbiter-power` (mode-aware gating), `wart-arbiter-audio` (emit
-route/video), `wart-arbiter-core` (Event fields), the call guest (video verb). See
+Touches: `wandr-arbiter-power` (mode-aware gating), `wandr-arbiter-audio` (emit
+route/video), `wandr-arbiter-core` (Event fields), the call guest (video verb). See
 [[project_proximity_screen_off]] (task 78), [[project_arbiter_audio]] (route/comms),
 [[project-artless-autobrightness]] (the idle-timeout this extends).

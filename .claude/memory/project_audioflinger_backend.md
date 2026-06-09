@@ -10,8 +10,8 @@ metadata:
 **Task 98: `audioclient-rs`** — pure-Rust backend that drives Android **AudioFlinger
 directly** (`IAudioFlingerService.createTrack` → `IAudioTrack` → `audio_track_cblk_t`
 ring), no AAudioService, no JVM. Decoupled crate (codeberg.org/harryzz/audioclient-rs),
-consumed by wart-host. **END-TO-END AUDIBLE under `--no-art`, device-verified** (Pixel 2
-XL) via `wart-host --probe-audioclient`. General player/recorder substrate (call audio
+consumed by wandr-host. **END-TO-END AUDIBLE under `--no-art`, device-verified** (Pixel 2
+XL) via `wandr-host --probe-audioclient`. General player/recorder substrate (call audio
 in task 97 was just the trigger). See `tasks/98-*.md`.
 
 THREE bugs between "compiles" and "audible":
@@ -28,7 +28,7 @@ THREE bugs between "compiles" and "audible":
 3. **track appops-MUTED** — `Tracks.cpp checkPlayAudioForUsage`: `hasAppOps =
    mPackageName.size() && checkAudioOp(OP_PLAY_AUDIO)==MODE_ALLOWED`, and
    `mPackageName = attributionSource.packageName` (CLIENT-supplied, NOT getPackagesForUid
-   → the wart shim CANNOT inject it). Empty package → muted. Fix = valid attributionSource
+   → the wandr shim CANNOT inject it). Empty package → muted. Fix = valid attributionSource
    (uid=geteuid, packageName); root uid takes `isServiceUid && empty → not muting`, app
    uids pass via non-empty package + shim AppOps MODE_ALLOWED.
 
@@ -36,7 +36,7 @@ THREE bugs between "compiles" and "audible":
 Box<T>` impls, on `5e999e04a`) is needed ONLY for bug #3 (structured recursive
 `AttributionSourceState.next[]` → `Vec<Box<Self>>`), NOT for createTrack. Currently a
 `[patch]` to `/home/harry/src/rsbinder-patched`; finalize as in-tree vendor or codeberg
-fork. Diagnostics kept: `--probe-audioclient[-matrix]`; C++ ref `external/wart-audioclient-ref`
+fork. Diagnostics kept: `--probe-audioclient[-matrix]`; C++ ref `external/wandr-audioclient-ref`
 on a-03 (real AudioTrack + offsetof dump + request hexdump). Supersedes the AAudioService
 path for output. Follow-ups: wire into host output path, createRecord, volume/timestamp,
 pacing (out_write underruns), guest-derived package/uid.
@@ -55,7 +55,7 @@ pre-fills the whole ring (real+silence) then `IAudioTrack.start`, steady-state t
 frameCount each 10ms cycle (real from a bounded host VecDeque + silence pad). Evidence of
 health: logcat `audio-pump: track N ring=3844/3844 full (idle)`, 0 BUFFER TIMEOUT (vs the
 broken `ring=960 full (idle)` forever). Supersedes the silence-bridge (WATERMARK=720) for
-voice-call output. Commits: audioclient-rs e6175fb (frame_count) + wart 9beaf0f0→18d913b8.
-GOTCHA: `git add -A` here swept untracked build binaries (wart-launch/wart-sensormanager/
-wart-inputflinger/wart-framework-shim + a leak-repro tgz) into the commit — `git add` the
+voice-call output. Commits: audioclient-rs e6175fb (frame_count) + wandr 9beaf0f0→18d913b8.
+GOTCHA: `git add -A` here swept untracked build binaries (wandr-launch/wandr-sensormanager/
+wandr-inputflinger/wandr-framework-shim + a leak-repro tgz) into the commit — `git add` the
 specific paths instead.

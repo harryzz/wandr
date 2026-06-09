@@ -45,7 +45,7 @@ hot-path work to a worker thread for ANR mitigation:
    redraws faster than complex Compose recomposition can consume
    them when retained-state is high.
 
-For the wart-app POC specifically: stick with the main-thread
+For the wandr-app POC specifically: stick with the main-thread
 Store, accept the ANR risk, wait for upstream wasmtime
 (#13403) to ship a tracing collector, or take one of the
 architecture pivots in `post-art-roadmap.md` §12.

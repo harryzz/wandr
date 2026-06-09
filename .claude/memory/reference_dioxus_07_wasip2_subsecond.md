@@ -36,7 +36,7 @@ dioxus-canvas renderer core is otherwise 0.7-compatible — only `events.rs` nee
 
 **ADOPTED 2026-05-29 (task 60, option B):** the patched crate is vendored at
 `external/subsecond/` (+ README); `crates/dioxus-canvas` and
-`apps/user/war.dioxus.demo` are on dioxus **0.7** with
+`apps/user/wandr.dioxus.demo` are on dioxus **0.7** with
 `[patch.crates-io] subsecond = { path = … }` (the `[patch]` line is repeated in
 each guest — it's per build-root). Device-verified on 0.7.9 (renders; 516 KB; no
 wasm-bindgen). **How to apply to a NEW dioxus guest:** depend on dioxus 0.7 +

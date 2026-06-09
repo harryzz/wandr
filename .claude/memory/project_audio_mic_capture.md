@@ -12,7 +12,7 @@ metadata:
 Builds the input half of the AAudio stack on top of task-21's output half
 (see [[project_wasm_runtime]]). Symmetric to playback.
 
-**Permission de-risk first (`--probe-audio-capture`):** a root/su wart caller
+**Permission de-risk first (`--probe-audio-capture`):** a root/su wandr caller
 CAN `openStream(AAUDIO_DIRECTION_INPUT)` — the empty-stub `AttributionSource`
 suffices (service fills pid/uid from the binder caller); no `RECORD_AUDIO` /
 AttributionSource-recursion block. The AVC denial in the log is the audio HAL
@@ -22,7 +22,7 @@ reading a sysprop (`hal_audio_default` domain), not us.
 - WIT `interface audio` (skiko-gfx.wit): `open-capture(cfg)->track-handle` +
   `read-pcm-f32(capture, max-frames)->list<f32>`. Capture SHARES the
   track-handle space — `start`/`pause`/`pending-frames`/`close` work on a
-  capture handle unchanged. Synced to war.ime.keyboard + wart-app mirrors +
+  capture handle unchanged. Synced to wandr.ime.keyboard + wandr-app mirrors +
   external/skiko working tree (WIT-sync rule).
 - host `audio_impl.rs`: factored `create_track` + `create_capture` into a shared
   `open_pcm_stream(params, channels, capture)`. `create_capture` =

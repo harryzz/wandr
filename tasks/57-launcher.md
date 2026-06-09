@@ -54,7 +54,7 @@
 >
 > ## Results (2026-05-29)
 >
-> Built Proposal A. Per [[feedback_prefer_wart_app_edits]] the launcher
+> Built Proposal A. Per [[feedback_prefer_wandr_app_edits]] the launcher
 > UI was proven inside wandr-app (a `LauncherCard` at the top of the
 > showcase) rather than spinning up a brand-new Kotlin module first.
 >

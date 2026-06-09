@@ -1,6 +1,6 @@
 ---
 name: WASM Android Runtime project status
-description: Goals, tech stack, and current milestone status for the wart project. Full Compose-on-WASM PoC is working end-to-end on device.
+description: Goals, tech stack, and current milestone status for the wandr project. Full Compose-on-WASM PoC is working end-to-end on device.
 type: project
 originSessionId: ca7f3a70-2c6e-4c65-baae-454dc44933b5
 ---
@@ -22,26 +22,26 @@ What's verified on device:
 - Host-side WasiDrawable transforms (translation/scale/rotation/clip/alpha/shadow) for Compose layer model
 
 **Key paths (post-rename, 2026-05-15):**
-- Host: `~/wart/wart-host/` (Rust cdylib + APK, was `~/wart/host/`)
-- App: `~/wart/wart-app/` (Kotlin/Compose guest, was `~/wart/skiko/test-app/`)
-- Skiko fork: `~/wart/skiko/skiko/` (KMP `wasmWasi` target → `skiko-wasm-wasi.klib`)
-- Compose port: `~/wart/compose-multiplatform-core/` (32 wasi klibs in mavenLocal)
-- Compose siblings: `~/wart/compose-{runtime,ui-base,ui-graphics,ui-text,ui,foundation-layout,foundation,animation-core,animation,material-ripple,material3}-wasi/` (11 fat klibs in mavenLocal)
-- WIT source-of-truth: `~/wart/wit/skiko-gfx.wit` (mirrored to `~/wart/skiko/skiko/wit/skiko-gfx.wit`)
+- Host: `~/wandr/wandr-host/` (Rust cdylib + APK, was `~/wandr/host/`)
+- App: `~/wandr/wandr-app/` (Kotlin/Compose guest, was `~/wandr/skiko/test-app/`)
+- Skiko fork: `~/wandr/skiko/skiko/` (KMP `wasmWasi` target → `skiko-wasm-wasi.klib`)
+- Compose port: `~/wandr/compose-multiplatform-core/` (32 wasi klibs in mavenLocal)
+- Compose siblings: `~/wandr/compose-{runtime,ui-base,ui-graphics,ui-text,ui,foundation-layout,foundation,animation-core,animation,material-ripple,material3}-wasi/` (11 fat klibs in mavenLocal)
+- WIT source-of-truth: `~/wandr/wit/skiko-gfx.wit` (mirrored to `~/wandr/skiko/skiko/wit/skiko-gfx.wit`)
 - NDK: `~/android-ndk-r27d/`
 - SDK: `~/android-sdk/`
-- Checkpoint: `~/wart/.task-state`
+- Checkpoint: `~/wandr/.task-state`
 
 **Reproduce-the-PoC docs (all in repo, all use `~` paths, all cross-link cleanly):**
-- `~/wart/wart-app/README.md` + `BUILD.md`
-- `~/wart/wart-host/README.md` + `BUILD.md`
-- `~/wart/skiko/README-wasmWasi.md` + `BUILD-wasmWasi.md`
-- `~/wart/compose-multiplatform-core/README-wasmWasi.md` + `BUILD-wasmWasi.md`
-- `~/wart/CLAUDE.md` (overall guide, references the others)
+- `~/wandr/wandr-app/README.md` + `BUILD.md`
+- `~/wandr/wandr-host/README.md` + `BUILD.md`
+- `~/wandr/skiko/README-wasmWasi.md` + `BUILD-wasmWasi.md`
+- `~/wandr/compose-multiplatform-core/README-wasmWasi.md` + `BUILD-wasmWasi.md`
+- `~/wandr/CLAUDE.md` (overall guide, references the others)
 
 **Build cycle (host APK):**
 ```
-cd ~/wart/wart-host
+cd ~/wandr/wandr-host
 NDK=~/android-ndk-r27d/toolchains/llvm/prebuilt/linux-x86_64
 ANDROID_HOME=~/android-sdk ANDROID_NDK_HOME=~/android-ndk-r27d \
 CC_aarch64_linux_android=$NDK/bin/aarch64-linux-android29-clang \
@@ -53,7 +53,7 @@ adb install -r target/release/apk/wasm_android_host.apk
 ```
 After cold build (~11 min for skia-bindings), incremental APK rebuild <1 min.
 
-**Build cycle (guest cwasm):** See `~/wart/wart-app/BUILD.md` — Kotlin → 11 MB .wasm → wasm-tools embed/new → wasmtime AOT → 63 MB .cwasm → adb push to `/sdcard/Android/data/com.example.wasmruntime/files/skiko-component.cwasm` → app force-stop + start.
+**Build cycle (guest cwasm):** See `~/wandr/wandr-app/BUILD.md` — Kotlin → 11 MB .wasm → wasm-tools embed/new → wasmtime AOT → 63 MB .cwasm → adb push to `/sdcard/Android/data/com.example.wasmruntime/files/skiko-component.cwasm` → app force-stop + start.
 
 **Linker version note:** `.cargo/config.toml` linker API level must match `Cargo.toml`'s `min_sdk_version` (currently both = 29). Mismatch → cargo invalidates cache, full rebuild every switch.
 

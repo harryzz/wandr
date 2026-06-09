@@ -18,7 +18,7 @@ When a task needs a libgui shim rebuild (e.g. task 43's
 via a 43 s direct-ninja path), the plan is "ssh to a-03, edit, `m`,
 copy the .so back, deploy" — proceed with it. Do NOT write "blocked /
 deferred because it needs a-03." (Separately: many things framed as
-"needs a-03" may not even need it — e.g. the `WART_ORIENT` host-side
+"needs a-03" may not even need it — e.g. the `WANDR_ORIENT` host-side
 Skia transform already does content rotation with no shim. Check the
 Rust/Skia path first.)
 
@@ -57,7 +57,7 @@ across a long task-33 Step 1 session.
 **How to apply:** for any new boot-model C++ shim, add it as a soong
 `cc_binary`/`cc_library` in the a-03 tree and `m` it; copy the artifact
 back and deploy with adb. Don't attempt to vendor AOSP headers into
-`wart-host/build.rs`. See `tasks/33-boot-model-bringup.md` Step 1.
+`wandr-host/build.rs`. See `tasks/33-boot-model-bringup.md` Step 1.
 Related: [[feedback-bionic-compat]].
 
 **WORKING RECIPE (verified 2026-06-04, task 80 spike) — non-interactive ssh:**

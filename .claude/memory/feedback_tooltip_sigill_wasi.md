@@ -18,7 +18,7 @@ triggers a SIGILL in JIT'd wasm ~5 s after the tap. Crash signature:
 - No exception message extractable from wasmtime store (the trap bypasses
   the wasm exception path that `Engine::wasm_exceptions(true)` would catch)
 
-**Bisect chain (`wart-app/.../ChevronBisectCard.kt`):**
+**Bisect chain (`wandr-app/.../ChevronBisectCard.kt`):**
 | Layer | + Component | Crash? |
 |------|------------|--------|
 | A | plain TextButton + state | ✅ |
@@ -90,7 +90,7 @@ eventually trips a wasm-GC trap wasmtime can't surface.
 
 ## Deeper bisect (2026-05-19, follow-up session)
 
-Continued the bisect via `TooltipInspectionCard` in wart-app. Results
+Continued the bisect via `TooltipInspectionCard` in wandr-app. Results
 of 16 layered tests (after Layers A-E above):
 
 | Test | Setup | Crash? |
@@ -193,7 +193,7 @@ uniquely in #11 is most likely an update() or rebind triggered by
 something BasicTooltipState reads/writes during a long-press timeout
 that clickable's gesture detector races with.
 
-**Approach order (per [[prefer-wart-app-edits]]):** try wart-app-side
+**Approach order (per [[prefer-wandr-app-edits]]):** try wandr-app-side
 diagnostics first — a custom logging Modifier.Node wrapped around the
 clickable, a hand-rolled clickable equivalent with built-in logging,
 or `SideEffect`/`DisposableEffect`-based per-recompose counters. Only
@@ -208,7 +208,7 @@ for the bundler vs. source distinction.
 
 ## Step 2 sub-bisect (2026-05-19, task 29 step 2)
 
-Six new tests added to `TooltipInspectionCard.kt`, all wart-app-side
+Six new tests added to `TooltipInspectionCard.kt`, all wandr-app-side
 (no compose-multiplatform-core edits):
 
 | Test | Setup | Crash | Note |
@@ -267,7 +267,7 @@ repro case.
   itself). Lands either in `compose-material3-wasi/src/wasmWasiActuals`
   (override) or as a local patch in `compose-multiplatform-core/.../
   BasicTooltip.kt`. Strongly prefer the override path per
-  [[prefer-wart-app-edits]] — keeps upstream clean.
+  [[prefer-wandr-app-edits]] — keeps upstream clean.
 
 ---
 
@@ -298,7 +298,7 @@ All three fault offsets land inside one wasi-adapter function:
 The trap is the **`unreachable` instruction at the end of
 `wasi_snapshot_preview1::macros::assert_fail`** — Rust's `panic!`/
 `assert!` lowering inside the WASI P1→P2 reactor adapter
-(`~/wart/skiko/wasi_snapshot_preview1.reactor.wasm`).
+(`~/wandr/skiko/wasi_snapshot_preview1.reactor.wasm`).
 
 **Important:** wasmtime knows about this trap site — `wasmtime
 objdump` correctly labels it as `trap: UnreachableCodeReached`. So
@@ -307,7 +307,7 @@ registered in wasmtime's trap table") is FALSE — the trap is
 registered. wasmtime's signal handler simply **isn't catching it at
 runtime** on this Android build, even though tid is `android_main`
 where the handler should be installed. Likely cause: signal-handler
-shadowing between wart-host's winit/Android NDK setup and wasmtime's
+shadowing between wandr-host's winit/Android NDK setup and wasmtime's
 sigaction registration. Needs deeper poking at `sigaction` on the
 process.
 
@@ -356,7 +356,7 @@ bug is fully characterized; the workaround paths considered:
    "Conflicting overloads" + "Redeclaration" on every public symbol.
 3. **Edit commonMain `BasicTooltip.kt` directly** — single-file
    change but breaks tooltips on every target (jvm/native/js + wasi).
-   Even though wart only ships wasi, diverging the fork that broadly
+   Even though wandr only ships wasi, diverging the fork that broadly
    was rejected by the user.
 4. **Convert the 3 modifier extensions to `expect`/`actual`** — clean
    KMP but needs 5-7 per-target actuals (jvmAndAndroid, desktop,
@@ -364,7 +364,7 @@ bug is fully characterized; the workaround paths considered:
    heavy for the symptom.
 
 **Current mitigation** (already in place from task 28 closeout):
-wart-app smoke-card menu omits widgets that internally wrap their
+wandr-app smoke-card menu omits widgets that internally wrap their
 anchor in `TooltipBox` — DatePicker chevrons and friends are off the
 UI. Plain DatePicker (calendar grid, swipe, year-pick) + non-Tooltip
 Material3 widgets continue to work fine.
@@ -374,7 +374,7 @@ Material3 widgets continue to work fine.
   (turning the trap into a recoverable `Err`).
 - OR a wasi-clean `Delay` implementation that bypasses the
   `poll_oneoff` assertion lands in kotlinx-coroutines or in our
-  wart-host's WASI adapter glue.
+  wandr-host's WASI adapter glue.
 - OR the cost-benefit shifts (e.g. someone needs a working Tooltip
   on wasi for a shippable feature, justifying the per-target actual
   set or a commonMain patch).

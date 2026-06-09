@@ -1,6 +1,6 @@
 ---
 name: project_artless_sensor_5s_batterystats
-description: ✅FIXED+device-verified — ~5s --no-art sensor/proximity lag was absent batterystats service → BatteryService blocking getService; fix = batterystats stub in wart-framework-shim
+description: ✅FIXED+device-verified — ~5s --no-art sensor/proximity lag was absent batterystats service → BatteryService blocking getService; fix = batterystats stub in wandr-framework-shim
 metadata: 
   node_type: memory
   type: project
@@ -8,7 +8,7 @@ metadata:
 ---
 
 **The ~5s `--no-art` proximity (in-call) + sensor-enable lag is `batterystats`.**
-Observed: `wart-hal-sensors TIMING enable(6) ... enableSensor()=5.017373937s` (the
+Observed: `wandr-hal-sensors TIMING enable(6) ... enableSensor()=5.017373937s` (the
 *enable* call blocks ~5.0s, not delivery; 5.0s = libbinder blocking `getService`
 doing `sleep(1)`×5). NOT the wake-up/ACK path (user correctly ruled that out: the
 event registers at the HAL immediately, it's the host-side enable/note that stalls).
@@ -44,10 +44,10 @@ Under ART system_server registers `batterystats` so `getService` resolves
 instantly (this is the entire ART vs --no-art asymmetry, same binary).
 
 **FIX ✅device-verified 2026-06-07 (user: "proximity instant now"):** deployed shim-only
-(push binary + kill/relaunch wart-framework-shim via wart-launch; sensorservice left
+(push binary + kill/relaunch wandr-framework-shim via wandr-launch; sensorservice left
 running unchanged — BatteryService re-getServices until success then caches, so no
 sensorservice restart needed). Register a `batterystats` GenericStub in
-`runtime/wart-framework-shim/cpp/wart_framework_shim.cpp` (descriptor
+`runtime/wandr-framework-shim/cpp/wandr_framework_shim.cpp` (descriptor
 `com.android.internal.app.IBatteryStats`). Only the NAME needs to resolve —
 `checkService` then caches the binder non-null and never blocks again; the
 `noteStart/Stop/WakeupSensor` transactions are fire-and-forget (void return
@@ -62,7 +62,7 @@ but the 10s loop is real for those other paths. Added a **dedicated `AppOpsStub`
 the GenericStub): `check*` reply = exc+int32(mode) but `note*`/`start*` reply =
 exc+int32+byte+int32 (the modern Java AppOpsService layout BpAppOpsService reads,
 IAppOpsService.cpp:65-69/89-93) — the generic exc+int32 would make the client over-read.
-Returns MODE_ALLOWED(0) everywhere = permissive (correct for wart). Codes from
+Returns MODE_ALLOWED(0) everywhere = permissive (correct for wandr). Codes from
 IAppOpsService.h enum (FIRST_CALL=1). Deployed+registered (service check appops=found).
 See [[project_artless_audio]].
 

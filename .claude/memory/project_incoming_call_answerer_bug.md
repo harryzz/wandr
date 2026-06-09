@@ -1,6 +1,6 @@
 ---
 name: project_incoming_call_answerer_bug
-description: "OPEN BUG: wart-signal INCOMING calls (answerer role) never connect media — ICE stuck Checking/pair=none even after relay both-ways works. Outgoing works. Plus multi-ring coordination missing."
+description: "OPEN BUG: wandr-signal INCOMING calls (answerer role) never connect media — ICE stuck Checking/pair=none even after relay both-ways works. Outgoing works. Plus multi-ring coordination missing."
 metadata: 
   node_type: memory
   type: project
@@ -8,10 +8,10 @@ metadata:
 ---
 
 **OPEN BUG (2026-06-03): incoming Signal calls don't connect.** Outgoing calls
-work fully (incl. off-LAN via TURN, [[project_wart_call]]). Incoming has been
+work fully (incl. off-LAN via TURN, [[project_wandr_call]]). Incoming has been
 broken ~1-2 sessions (pre-existing, not caused by the task-76/Phase-B work).
 
-**Symptom:** peer calls wart → wart rings + answers → "TX Answer OK" (caller
+**Symptom:** peer calls wandr → wandr rings + answers → "TX Answer OK" (caller
 receives it; reject/Hangup also works → signaling delivery is fine) → but the
 call never connects media; caller UI sits at "ringing" forever. Diagnosed via the
 `conn:` line in `/state/calldbg.log` (added this session): the answerer's ICE
@@ -27,7 +27,7 @@ candidates (privacy) — even same-WiFi has no host pair — so incoming is alwa
 relay-to-relay.
 
 **Fixes landed this session (real, partial — relay transport now works both ways
-for the answerer, but ICE still won't complete):** in `crates/wart-call/src/transport.rs`
+for the answerer, but ICE still won't complete):** in `crates/wandr-call/src/transport.rs`
 `handle_datagram` TURN branch + `RelayState::drain_events`, for every address we
 receive a relayed packet FROM (the peer's *actual* relay sending addr X, which
 differs from the advertised relay candidates Y1-3 — TURN permissions are per-IP so
@@ -88,20 +88,20 @@ controlled answerer never selected a pair; `rtc-ice Agent::self_select_best_pair
 (2) **`accepted` RTP-data** — a ringrtc *caller* sits in `ConnectingBeforeAccepted`
 and streams NO media until the *callee* sends `rtp_data.Message{accepted}` over
 RTP PT 101 / SSRC 0xD (SRTP-encrypted, resent ~1 Hz); the answerer now sends it on
-accept. (3) **self-hangup fix** — wart (device_id 4) was hanging up on itself: the
+accept. (3) **self-hangup fix** — wandr (device_id 4) was hanging up on itself: the
 caller's multi-device `Hangup{type=Accepted, device_id=4}` is coordination echoing
-wart's OWN accept; ringrtc ignores a hangup whose device_id is its own, so the
+wandr's OWN accept; ringrtc ignores a hangup whose device_id is its own, so the
 engine now drops a coordination hangup (Accepted/Declined/Busy) whose device_id ==
 ours. SRTP KDF verified byte-identical to ringrtc `negotiate_srtp_keys` (NOT the
-bug). Files: rtc-ice (submodule) + crates/wart-call {transport,media,session,
-signal/{mod,call}} + apps/user/war.signal/engine {call,engine}.rs. UNCOMMITTED;
+bug). Files: rtc-ice (submodule) + crates/wandr-call {transport,media,session,
+signal/{mod,call}} + apps/user/wandr.signal/engine {call,engine}.rs. UNCOMMITTED;
 rtc-ice delta should fold into tools/scripts/patch-rtc.sh. OPEN follow-ups:
 diagnostics (counters/wire-log) can be trimmed; verify self-select still needed
 (one call connected just before its grace fired — peer may nominate post-accept).
 **MULTI-RING fully working both ways (device-verified 2026-06-04):** answer on
-wart → other devices stop; answer on another device → wart stops. The CALLER
+wandr → other devices stop; answer on another device → wandr stops. The CALLER
 relays the coordination `Hangup{Accepted, device_id=winner}` to all the user's
-devices, so wart needs NO send-side change — just the device_id filter (ignore
+devices, so wandr needs NO send-side change — just the device_id filter (ignore
 when winner == our device_id, stop when it's a different device). Process lesson:
 [[feedback_read_source_first]].
 
@@ -110,13 +110,13 @@ inside WSL behind Tailscale** — a triple-NAT (WSL→Windows→router) + VPN ov
 PROOF = the candidates it advertised every call: `100.64.0.10` (Tailscale CGNAT
 range), `172.20.40.244` (WSL2 internal net), `192.168.1.175` (Windows host LAN),
 `77.70.64.156` (public srflx), `104.30.145.x` (Signal TURN). This topology
-*alone* reproduces every symptom below: wart's replies to the caller's
+*alone* reproduces every symptom below: wandr's replies to the caller's
 WSL/Windows-host address don't route back into WSL → the caller's pair never
 becomes "writable" → it NEVER nominates (`usecand=0`) while it presume-writable-
 relays a few SRTP packets (`seen=43`). User reports incoming likely WORKS when
 the caller is a real Android Signal phone (normal network). **So the long-standing
 "incoming calls don't connect" bug may be largely/entirely a TEST-RIG artifact,
-not a wart defect.** VALIDATE FIRST with a non-WSL caller before changing connect
+not a wandr defect.** VALIDATE FIRST with a non-WSL caller before changing connect
 logic. The candidate self-nominate / presume-writable fix is DEFERRED pending that.
 
 **DEFINITIVE DIAGNOSIS (2026-06-03, instrumented rtc-ice + 2 live incoming
@@ -161,10 +161,10 @@ Succeeding / USE-CANDIDATE not arriving / discarded} is the break. Best done in 
 fresh focused session.
 
 **SEPARATE bug (also open): multi-ring coordination missing.** User has 3 devices
-on one account; all ring; answering on wart stops wart's ring but the other phone
-+ desktop KEEP ringing. wart never sends the ringrtc `Hangup{type=Accepted,
+on one account; all ring; answering on wandr stops wandr's ring but the other phone
++ desktop KEEP ringing. wandr never sends the ringrtc `Hangup{type=Accepted,
 device_id=self}` to the user's own other devices (and to the caller). In
-`apps/user/war.signal/engine/src/call.rs` `signal_to_call_message`, `Hangup.device_id`
+`apps/user/wandr.signal/engine/src/call.rs` `signal_to_call_message`, `Hangup.device_id`
 is hardcoded `None`; there's no Accepted-hangup-to-self path. Fix after the connect
 bug.
 

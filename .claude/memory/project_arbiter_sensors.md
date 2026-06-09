@@ -1,6 +1,6 @@
 ---
 name: project_arbiter_sensors
-description: wart-arbiter-sensors SensorService (task 77) + shared wart-hal-sensors crate — DONE+device-verified
+description: wandr-arbiter-sensors SensorService (task 77) + shared wandr-hal-sensors crate — DONE+device-verified
 metadata: 
   node_type: memory
   type: project
@@ -11,16 +11,16 @@ Task 77 — the arbiter's **SensorService**, built FIRST as the home for all sen
 consumers. DONE + device-verified (Pixel 2 XL, 2026-06-04). UNCOMMITTED.
 
 **Three pieces:**
-- `runtime/wart-hal-sensors/` — NEW shared crate: the ONE binder-touching owner of
+- `runtime/wandr-hal-sensors/` — NEW shared crate: the ONE binder-touching owner of
   `android.frameworks.sensorservice.ISensorManager` (rsbinder, event-queue `Bn`
   callback). Neutral structs (`HalSensor`/`HalSample`). Used by BOTH the arbiter
-  driver AND wart-host (`sensors_impl.rs` refactored to a thin WIT adapter; the 3
-  sensorservice `.source()` lines removed from `wart-host/build.rs`). Standalone
-  package (own `[workspace]`), AIDL vendored once under `wart-host/vendor`,
+  driver AND wandr-host (`sensors_impl.rs` refactored to a thin WIT adapter; the 3
+  sensorservice `.source()` lines removed from `wandr-host/build.rs`). Standalone
+  package (own `[workspace]`), AIDL vendored once under `wandr-host/vendor`,
   codegen'd in its own build.rs (android-only). `ensure_process_state()` lazily
   inits rsbinder ProcessState + thread pool — the arbiter had NO binder before, so
   this was required (panic "ProcessState is not initialized" without it).
-- `wart-arbiter-sensors` — pure module: enable-on-demand ref-count (battery), raw→
+- `wandr-arbiter-sensors` — pure module: enable-on-demand ref-count (battery), raw→
   semantic proximity with hysteresis DERIVED from HAL `max_range` (mid = max_range
   × 0.5, band × 0.1 — no hardcode; resolution is useless on binary prox sensors
   that report resolution==max_range). Verbs: `report-sensor <kind> <x>` (sim),
@@ -32,7 +32,7 @@ consumers. DONE + device-verified (Pixel 2 XL, 2026-06-04). UNCOMMITTED.
 **Consumer protocol (decoupling):** consumers emit `Event::SensorAcquire/Release`;
 the sensors module ref-counts + drives `Effect::SetSensor`; readings come back as
 `Event::SensorReading`→translated to `Event::ProximityChanged`. Modules never call
-each other. Proof consumer: `wart-arbiter-power` acquires proximity on
+each other. Proof consumer: `wandr-arbiter-power` acquires proximity on
 `CommsActive`, logs on `ProximityChanged` ("would blank now").
 
 **Core seam:** `SensorKind`, `Effect::SetSensor`, `Event::{SensorAcquire,

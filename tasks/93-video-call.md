@@ -71,7 +71,7 @@ Signal/WebRTC negotiate. No SW-codec compromise.
 - **RTP video done**: `external/rtc/rtc-rtp/src/codec/{vp8,vp9,h264}` payloaders +
   depacketizers.
 - **Transport proven**: SRTP/DTLS/ICE/TURN — audio call connects + interops with a
-  real browser ([[project_wart_call]]).
+  real browser ([[project_wandr_call]]).
 - **Signaling advertises VP8/VP9** already (ringrtc requires it; `signal/mod.rs`).
 - **Native-AV integration pattern**: `audio_impl.rs` = rsbinder to `media.aaudio` +
   `binder_shared_memory.rs` + `eventfd_signal.rs` — whose comments already pre-plan
