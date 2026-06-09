@@ -1,5 +1,5 @@
 TASK=98
-STEP=verify-done
-STATUS=complete
-LAST_SUCCESS=Task 98 host-side jitter buffer verified OK — live Signal call audible+smooth; ring stays full (3844/3844), 0 BUFFER TIMEOUT. Fix = derive ring target from real frameCount (was hardcoded 960).
-NOTES=
+STEP=aec-ns-capture-verified
+STATUS=in-progress
+LAST_SUCCESS=Task 98 AEC/NS for calls: voice-call capture opens AUDIO_SOURCE_VOICE_COMMUNICATION(7) → device auto-attaches+enables AEC (uuid b4398408) + Noise Suppression to the record session (dumpsys media.audio_flinger confirmed; A/B vs source=1/MIC = no effects). Deployed to live stack.
+NOTES=Source-grounded: /vendor/etc/audio_effects.xml <preprocess><stream type=voice_communication><apply effect=aec> → AudioPolicyEffects auto-attaches on startInput. NO manual createEffect, NO WIT change (Signal guest call.rs:297 already passes StreamClass::VoiceCall on open_capture; host was discarding it). Fix = create_capture derives source from class (VoiceCall→7 else MIC=1). Probe: --probe-audioclient-capture [secs] [source]. AWAITING live Signal call echo/noise validation, then commit. UNCOMMITTED: audio_impl.rs create_capture, main.rs probe source arg.
