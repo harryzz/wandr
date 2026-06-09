@@ -7,6 +7,12 @@ call-audio path was only the trigger (task 97); this is the player/recorder
 substrate (Spotify-like + VoIP). Lives in its own decoupled crate
 `audioclient-rs` (codeberg.org/harryzz/audioclient-rs), consumed by wart-host.
 
+> **Feature roadmap (canonical):** the tiered done/open ledger for the crate lives in
+> [`external/audioclient-rs/README.md`](../external/audioclient-rs/README.md#tiered-roadmap)
+> (Tier 1 core data plane ✅, Tier 2 media-framework ⏳, Tier 3 robustness ✅ mostly,
+> Tier 4 effects/AEC ⏳, + the policy-stays-out boundary). The per-feature notes below are
+> the implementation detail; the README is the at-a-glance status.
+
 ## Status — END-TO-END AUDIBLE under `--no-art` (device-verified)
 
 The full output path works on the Pixel 2 XL: `createTrack` → mmap the cblk ring →
