@@ -200,6 +200,11 @@ fn main() {
                     // (net-status dumps the current link, e.g. `wandr-arbiter
                     // net-status`).
                     | "report-net-state" | "net-status" | "net-subscribe"
+                    // Task 90 M2 — privileged wifi management (CLI test forms):
+                    // `wandr-arbiter wifi-scan`, `wifi-connect <b64ssid> <b64psk>`,
+                    // `wifi-set-enabled <0|1>`, `wifi-is-enabled`. The host sends the
+                    // same verbs over the raw socket from its wifi-host impl.
+                    | "wifi-scan" | "wifi-connect" | "wifi-set-enabled" | "wifi-is-enabled"
                     // Task 90 — generic event bus verbs. The host's wandr:events
                     // producer + the wandr-net daemon send evt-publish; the host
                     // sends evt-subscribe (host-config from package.toml). CLI forms
@@ -478,6 +483,15 @@ fn handle_client(mut stream: UnixStream) -> Result<()> {
         // Task 57 — launcher / home app (may relaunch home → zygote-coupled).
         "set-home"        => cmd_set_home(&mut stream, &rest),
         "go-home"         => cmd_go_home(&mut stream),
+        // Task 90 M2 — privileged wifi management. The host's wifi-host impl
+        // (and `wandr-arbiter wifi-*` for testing) sends these; the arbiter
+        // relays to the wandr-net daemon's control socket (the single live
+        // link owner) and pipes the reply back. `rest` carries the daemon
+        // args verbatim (base64'd ssid/psk for connect, 0|1 for set-enabled).
+        "wifi-scan"        => relay_wifi(&mut stream, "scan"),
+        "wifi-connect"     => relay_wifi(&mut stream, &format!("connect {rest}")),
+        "wifi-set-enabled" => relay_wifi(&mut stream, &format!("set-enabled {rest}")),
+        "wifi-is-enabled"  => relay_wifi(&mut stream, "is-enabled"),
         other => {
             writeln!(stream, "ERR unknown-command {other}")?;
             Ok(())
@@ -524,6 +538,50 @@ fn deliver_to_host(sock_path: &str, line: &str) -> std::io::Result<()> {
     // No reply expected; drain anyway in case the host echoes.
     let mut buf = [0u8; 64];
     let _ = stream.read(&mut buf);
+    Ok(())
+}
+
+// ─── wifi management relay (task 90 M2) ───────────────────────────────
+
+/// The wandr-net control socket the wifi-management verbs relay to. The arbiter
+/// is the single coordinator on the host→arbiter→daemon path (it can intercept
+/// connect for the M3 WifiConfigManager); the daemon owns the live link.
+fn wandr_net_sock_path() -> String {
+    std::env::var("WANDR_NET_SOCK")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "/data/local/tmp/wandr-net.sock".to_string())
+}
+
+/// Relay one command line to the `wandr-net` control socket and return its full
+/// reply (read to EOF). Pure pass-through — the daemon owns the mechanism.
+fn relay_to_wandr_net(line: &str) -> std::io::Result<String> {
+    use std::io::Read;
+    let sock = wandr_net_sock_path();
+    let mut stream = UnixStream::connect(&sock)?;
+    stream.write_all(line.as_bytes())?;
+    if !line.ends_with('\n') {
+        stream.write_all(b"\n")?;
+    }
+    stream.flush()?;
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    let mut buf = String::new();
+    stream.read_to_string(&mut buf)?;
+    Ok(buf)
+}
+
+/// Relay a `wifi-*` verb to the daemon and write the reply back to the arbiter
+/// client (the host's `connectivity_wifi_impl` or a CLI test). `daemon_line` is the
+/// daemon-side verb (`scan` / `connect …` / `set-enabled …` / `is-enabled`).
+fn relay_wifi(stream: &mut UnixStream, daemon_line: &str) -> Result<()> {
+    match relay_to_wandr_net(daemon_line) {
+        Ok(reply) => {
+            stream.write_all(reply.as_bytes())?;
+        }
+        Err(e) => {
+            writeln!(stream, "err wifi-relay {e} (wandr-net daemon down?)")?;
+        }
+    }
     Ok(())
 }
 

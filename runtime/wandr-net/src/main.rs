@@ -13,15 +13,29 @@
 //!   * `--once` — one bring-up, print status, exit (the on-device investigation
 //!     harness; also handy for `--no-art` smoke tests).
 
-use std::io::Write;
-use std::os::unix::net::UnixStream;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::{Child, Command};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use wandr_hal_net::{
     dhcp, has_carrier, read_saved_creds, supplicant, DhcpLease, LinkStatus, WifiCreds,
     WANDR_NETID, WLAN_IF,
 };
+
+/// The wandr-net control socket — the host→arbiter→daemon wifi-management relay
+/// (task 90 M2) lands here. The single live daemon owns the supplicant, so scan /
+/// connect / radio go *through* this socket rather than spawning a competing
+/// `wandr-net` process. Path overridable via `WANDR_NET_SOCK` (matches the
+/// arbiter's `relay_to_wandr_net`).
+fn control_sock_path() -> String {
+    std::env::var("WANDR_NET_SOCK")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "/data/local/tmp/wandr-net.sock".to_string())
+}
 
 fn arbiter_sock_path() -> String {
     std::env::var("WANDR_ARBITER_SOCK")
@@ -57,6 +71,35 @@ fn b64_encode(data: &[u8]) -> String {
         out.push(A[(n >> 12 & 63) as usize] as char);
         out.push(if chunk.len() > 1 { A[(n >> 6 & 63) as usize] as char } else { '=' });
         out.push(if chunk.len() > 2 { A[(n & 63) as usize] as char } else { '=' });
+    }
+    out
+}
+
+/// base64 decode (standard alphabet) — the inverse of [`b64_encode`]. Skips `=`
+/// padding + any whitespace. The control-socket protocol base64s the SSID/PSK so
+/// they tokenise cleanly across the host→arbiter→daemon hops regardless of spaces.
+fn b64_decode(s: &str) -> Vec<u8> {
+    fn val(c: u8) -> Option<u8> {
+        match c {
+            b'A'..=b'Z' => Some(c - b'A'),
+            b'a'..=b'z' => Some(c - b'a' + 26),
+            b'0'..=b'9' => Some(c - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let mut out = Vec::new();
+    let mut buf = 0u32;
+    let mut bits = 0u32;
+    for &c in s.as_bytes() {
+        let Some(v) = val(c) else { continue };
+        buf = (buf << 6) | v as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+        }
     }
     out
 }
@@ -189,25 +232,32 @@ fn associate_via_hal(creds: &WifiCreds) -> Result<(), String> {
     Ok(())
 }
 
-/// Drive the IWifi HAL chip power-up as uid `system` (the HAL rejects root):
-/// re-exec `--power-chip` under `su 1000`.
-fn power_chip_via_hal() -> Result<(), String> {
+/// Re-exec this binary with `flag` under `su 1000` (the HAL ops — chip power,
+/// associate — reject root, and the daemon proper runs as root). Returns the
+/// trimmed stdout on success. The single uid-system re-exec primitive.
+fn run_self_su1000(flag: &str) -> Result<String, String> {
     let self_exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
-    let inner = format!("{} --power-chip", self_exe.to_string_lossy());
+    let inner = format!("{} {flag}", self_exe.to_string_lossy());
     let out = Command::new("su")
         .args(["1000", "-c", &inner])
         .output()
         .map_err(|e| format!("su 1000 spawn: {e}"))?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    log::info!("wandr-net: power-chip (uid system) -> {}", stdout.trim());
-    if !out.status.success() {
-        return Err(format!(
-            "power-chip failed: {} {}",
-            stdout.trim(),
+    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    log::info!("wandr-net: {flag} (uid system) -> {stdout}");
+    if out.status.success() {
+        Ok(stdout)
+    } else {
+        Err(format!(
+            "{flag} failed: {stdout} {}",
             String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        ))
     }
-    Ok(())
+}
+
+/// Drive the IWifi HAL chip power-up as uid `system` (the HAL rejects root):
+/// re-exec `--power-chip` under `su 1000`.
+fn power_chip_via_hal() -> Result<(), String> {
+    run_self_su1000("--power-chip").map(|_| ())
 }
 
 /// Poll the interface's L2 carrier until up or the deadline.
@@ -261,6 +311,128 @@ fn configure_netd(lease: &DhcpLease) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// True if the WiFi radio (STA interface) is up. `set-enabled false` (stop-chip)
+/// tears the iface down, so its presence is the honest radio-on signal.
+fn radio_enabled() -> bool {
+    std::path::Path::new(&format!("/sys/class/net/{WLAN_IF}")).exists()
+}
+
+/// Serve the control socket: one line per connection (`scan` / `connect <b64ssid>
+/// <b64psk>` / `set-enabled <0|1>` / `is-enabled`), reply written back to EOF. The
+/// arbiter relays the host's `wifi-*` verbs here (task 90 M2). Runs in its own
+/// thread; the shared [`Link`] is the live association the daemon owns.
+fn serve_control(link: Arc<Mutex<Link>>) {
+    let path = control_sock_path();
+    let _ = std::fs::remove_file(&path);
+    let listener = match UnixListener::bind(&path) {
+        Ok(l) => l,
+        Err(e) => {
+            log::warn!("wandr-net: control socket bind {path} failed: {e} — wifi relay unavailable");
+            return;
+        }
+    };
+    // World-rw so the arbiter can always reach it (both are root today; future-proof).
+    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666));
+    log::info!("wandr-net: control socket listening at {path}");
+    for conn in listener.incoming() {
+        match conn {
+            Ok(mut s) => {
+                if let Err(e) = handle_control_conn(&mut s, &link) {
+                    log::debug!("wandr-net: control conn error: {e}");
+                }
+            }
+            Err(e) => log::debug!("wandr-net: control accept failed: {e}"),
+        }
+    }
+}
+
+fn handle_control_conn(s: &mut UnixStream, link: &Arc<Mutex<Link>>) -> std::io::Result<()> {
+    let mut reader = BufReader::new(s.try_clone()?);
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    let reply = dispatch_control(line.trim(), link);
+    s.write_all(reply.as_bytes())?;
+    s.flush()?;
+    Ok(())
+}
+
+/// Route one control line to its handler, returning the reply text (newline-
+/// terminated lines). Unknown verbs get an `err` line so the relay surfaces it.
+fn dispatch_control(line: &str, link: &Arc<Mutex<Link>>) -> String {
+    let (verb, rest) = line.split_once(' ').unwrap_or((line, ""));
+    match verb {
+        "scan" => control_scan(),
+        "connect" => control_connect(rest.trim(), link),
+        "set-enabled" => control_set_enabled(rest.trim()),
+        "is-enabled" => format!("ok enabled={}\n", radio_enabled() as u8),
+        "" => String::new(),
+        other => format!("err unknown-verb {other}\n"),
+    }
+}
+
+/// `scan` → IWificond scan; emit one `ap …` line per AP (SSID base64'd) + a final
+/// `ok count=<n>`. Read-only w.r.t. the live association.
+fn control_scan() -> String {
+    match wandr_hal_net::scan_networks() {
+        Some(aps) => {
+            let mut out = String::new();
+            for ap in &aps {
+                out.push_str(&format!(
+                    "ap ssid={} bssid={} rssi={} freq={} sec={} connected={}\n",
+                    b64_encode(ap.ssid.as_bytes()),
+                    ap.bssid,
+                    ap.rssi_dbm,
+                    ap.frequency_mhz,
+                    ap.security,
+                    ap.connected as u8,
+                ));
+            }
+            out.push_str(&format!("ok count={}\n", aps.len()));
+            out
+        }
+        None => "err scan-failed\n".to_string(),
+    }
+}
+
+/// `connect <b64ssid> <b64psk>` → re-associate the live link to an explicit
+/// network (`bring_up_with(force=true)`), swap it in as the daemon's owned link,
+/// and report the new state up. Holds the link lock for the bring-up so the
+/// monitor thread doesn't race a re-associate (low-frequency, user-initiated).
+fn control_connect(rest: &str, link: &Arc<Mutex<Link>>) -> String {
+    let mut it = rest.split_whitespace();
+    let (Some(bs), Some(bp)) = (it.next(), it.next()) else {
+        return "err connect-usage <b64ssid> <b64psk>\n".to_string();
+    };
+    let ssid = String::from_utf8_lossy(&b64_decode(bs)).into_owned();
+    let psk = String::from_utf8_lossy(&b64_decode(bp)).into_owned();
+    if ssid.is_empty() {
+        return "err connect empty-ssid\n".to_string();
+    }
+    let mut guard = link.lock().unwrap_or_else(|e| e.into_inner());
+    match bring_up_with(WifiCreds { ssid: ssid.clone(), psk }, true) {
+        Ok(new) => {
+            let status = new.status.clone();
+            *guard = new;
+            drop(guard);
+            report(&status);
+            let ip = status.ip.map(|i| i.to_string()).unwrap_or_else(|| "-".into());
+            format!("ok online ssid={} ip={ip}\n", b64_encode(ssid.as_bytes()))
+        }
+        Err(e) => format!("err connect {e}\n"),
+    }
+}
+
+/// `set-enabled <0|1>` → power the WiFi chip up (`--power-chip`) / down
+/// (`--stop-chip`) via the uid-system re-exec (the IWifi HAL rejects root).
+fn control_set_enabled(rest: &str) -> String {
+    let on = matches!(rest, "1" | "true" | "on");
+    let flag = if on { "--power-chip" } else { "--stop-chip" };
+    match run_self_su1000(flag) {
+        Ok(_) => format!("ok enabled={}\n", on as u8),
+        Err(e) => format!("err set-enabled {e}\n"),
+    }
 }
 
 fn main() {
@@ -391,7 +563,10 @@ fn main() {
                     "connect ONLINE ssid={:?} ip={:?} gw={:?}",
                     link.status.ssid, link.status.ip, link.status.gateway
                 );
-                monitor(link); // persist (holds the supplicant alive)
+                // Manual `--connect` test path: persist (hold the supplicant alive).
+                // It does NOT serve the control socket — the persistent daemon owns
+                // that; this is a one-off bring-up tool.
+                monitor(Arc::new(Mutex::new(link)));
                 return;
             }
             Err(e) => {
@@ -415,7 +590,14 @@ fn main() {
                 // child is dropped → killed, but the kernel keeps the lease/route).
                 return;
             }
-            monitor(link);
+            // The persistent daemon owns the link; share it with the control-socket
+            // server (task 90 M2 wifi relay) and the monitor loop.
+            let shared = Arc::new(Mutex::new(link));
+            {
+                let s = shared.clone();
+                std::thread::spawn(move || serve_control(s));
+            }
+            monitor(shared);
         }
         Err(e) => {
             log::error!("wandr-net: bring-up failed: {e}");
@@ -428,8 +610,9 @@ fn main() {
 
 /// Steady state: hold the supplicant alive and watch carrier; on a drop, re-run
 /// the full bring-up. Periodically re-report so a freshly-(re)started arbiter
-/// learns the current state.
-fn monitor(mut link: Link) {
+/// learns the current state. Shares the live [`Link`] with the control-socket
+/// server (an explicit `connect` swaps it under the same lock).
+fn monitor(link: Arc<Mutex<Link>>) {
     let mut ticks: u32 = 0;
     loop {
         std::thread::sleep(Duration::from_secs(5));
@@ -440,8 +623,9 @@ fn monitor(mut link: Link) {
             report(&LinkStatus::default());
             match bring_up() {
                 Ok(new) => {
-                    link = new;
-                    report(&link.status);
+                    let status = new.status.clone();
+                    *link.lock().unwrap_or_else(|e| e.into_inner()) = new;
+                    report(&status);
                 }
                 Err(e) => {
                     log::error!("wandr-net: re-bring-up failed: {e} — retrying next tick");
@@ -452,7 +636,8 @@ fn monitor(mut link: Link) {
 
         // Re-announce roughly every 30s so arbiter restarts pick us up.
         if ticks % 6 == 0 {
-            report(&link.status);
+            let status = link.lock().unwrap_or_else(|e| e.into_inner()).status.clone();
+            report(&status);
         }
     }
 }

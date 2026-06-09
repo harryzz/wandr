@@ -75,18 +75,35 @@ The differentiated product surface (`registerDefaultNetworkCallback`):
 4. A tiny test guest (or wire an existing one) that logs online↔offline.
 DoD: a guest's `on-connectivity-change` fires when wandr-net flips the link.
 
-### M2 — `wifi` scan + connect (privileged)
-1. **`scan`** — bind **`IWificond`** (`android.net.wifi.nl80211.IWificond`,
-   service `wifinl80211`, survives `--no-art`) in `wandr-hal-net` (same rsbinder
-   pattern as `IWifi`/`ISupplicant`); trigger a scan + return `scan-result`s.
-   New daemon verb / `wandr-net --scan`; arbiter relays.
-2. **`connect`/`connect-new`** — generalize the built `supplicant_hal::associate`
-   to take an arbitrary `wifi-config` (not just the one saved cred), driven from
-   the WIT through the arbiter → daemon.
-3. **`set-enabled`** — `wifi_chip::ensure_chip_up` / `stop_chip` (built).
-4. Host: `bindgen!` `wifi-host`; `connectivity_wifi_impl.rs` forwarding to the
-   arbiter; **privilege-gate** `add_to_linker` for `wifi` (trusted guests only —
-   the Settings/wifi-picker chrome; see Open questions).
+### M2 — `wifi` scan + connect (privileged) — 🟢 DONE (host half wired)
+1. **`scan`** — ✅ bound **`IWificond`** (`android.net.wifi.nl80211.IWificond`,
+   `wifinl80211`, survives `--no-art`) in `wandr-hal-net::wificond_scan`; engine
+   verb `wandr-net --scan` returns 14 neighbour APs (IScanEvent callback fires).
+   Key gotcha: the parcelable arg needs a leading `int32(1)` presence marker
+   (else `EX_NULL_POINTER`). Device-verified.
+2. **`connect`/`connect-new`** — ✅ `wandr-net --connect <ssid> <psk>` generalizes
+   `supplicant_hal::associate` + full IP bring-up (force re-associate).
+3. **`set-enabled`** — ✅ `--power-chip`/`--stop-chip` (IWifi HAL, uid system).
+4. **Host half (FULL, the chosen scope)** — ✅ wired:
+   - **`wandr-net` control socket** (`/data/local/tmp/wandr-net.sock`, env
+     `WANDR_NET_SOCK`): the single live daemon serves `scan` / `connect <b64ssid>
+     <b64psk>` / `set-enabled <0|1>` / `is-enabled` (so connect goes *through* the
+     supplicant owner, not a competing process). SSID/PSK base64'd on the wire.
+   - **Arbiter relay** (`wandr-arbiter-bin`): `wifi-scan` / `wifi-connect` /
+     `wifi-set-enabled` / `wifi-is-enabled` verbs pass through to the daemon socket
+     and pipe the reply back (CLI test forms + the host's raw-socket path). The
+     arbiter is the coordinator so M3's WifiConfigManager can intercept `connect`.
+   - **Host WIT** (`wandr-host`): `bindgen!` `wifi-host` + `connectivity_wifi_impl.rs`
+     (forwards `scan`/`connect-new`/`set-enabled`/`is-enabled` to the arbiter;
+     `list-saved`/`add`/`update`/`remove`/`set-auto-connect`/`connect(id)`/
+     `disconnect`/`forget-current` return an explicit "M3" error / no-op).
+   - **Privilege gate** (`LoadedApp::wifi_privileged`): `wifi` is `add_to_linker`d
+     ONLY for a guest that is BOTH system-install class (`system-apps/`) AND opts
+     in via `wifi-control = true` in `package.toml` (least-privilege; no hardcoded
+     app-id list). A non-privileged guest importing `wifi` fails to instantiate —
+     that *is* the denial.
+   - Guest consumer = M4 (`wandr.settings.wifi`). Until then the relay path is
+     device-verifiable via `wandr-arbiter wifi-scan` / `wifi-connect …`.
 
 ### M3 — saved-network store + auto-connect
 1. **Credential storage decision** (Open question below) — a wandr-owned store vs
