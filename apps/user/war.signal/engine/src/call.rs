@@ -306,10 +306,19 @@ impl ActiveCall {
             }
         }
         if let Some(cap) = self.cap {
-            let chunk = audio::read_pcm_f32(cap, FRAME as u32);
-            if !chunk.is_empty() {
+            // Drain ALL captured audio each tick, not one frame: the engine ticks at
+            // ~35/s (>20 ms apart), but the mic produces 50×20 ms frames/s. A single
+            // FRAME read per tick falls behind real-time, the host capture buffer fills
+            // and drops the surplus → we send ~26% less than real-time and the far
+            // side's jitter buffer starves (interruptions/pops). Loop until the
+            // capture ring/buffer is empty (a short read = drained).
+            loop {
+                let chunk = audio::read_pcm_f32(cap, FRAME as u32);
+                let n = chunk.len();
+                if n == 0 { break; }
                 for &s in &chunk { let a = s.abs(); if a > self.mic_peak { self.mic_peak = a; } }
                 self.mic_buf.extend_from_slice(&chunk);
+                if n < FRAME { break; } // fewer than requested ⇒ buffer drained
             }
             while self.mic_buf.len() >= FRAME {
                 let frame: Vec<f32> = self.mic_buf.drain(..FRAME).collect();
