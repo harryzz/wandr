@@ -1,4 +1,4 @@
-//! The `launch!` macro — makes a wart guest from a dioxus app with one line —
+//! The `launch!` macro — makes a wandr guest from a dioxus app with one line —
 //! plus its two composable halves, `skiko_world!` and `wire!`.
 //!
 //! `dioxus-canvas` stays WIT-agnostic (talks to the host only through
@@ -9,7 +9,7 @@
 //! source stays pure dioxus: components + one call.
 //!
 //! Two halves so a guest can add **extra host imports** (e.g. an engine contract
-//! like `wart:signal/chat`) without a second `generate!` (which would conflict on
+//! like `wandr:signal/chat`) without a second `generate!` (which would conflict on
 //! `_rt` / `cabi_realloc` / the component-type section):
 //!   * [`skiko_world!`] — the single `wit_bindgen::generate!` over the
 //!     `my:skiko-gfx` world (imports + exports), emitting `crate::my::skiko_gfx::*`
@@ -27,7 +27,7 @@
 //! world *plus* its extra import, in one `generate!`, with
 //! `export_macro_name: "__dioxus_canvas_export"` + `runtime_path:
 //! "::dioxus_canvas::__wit_bindgen::rt"`) and then calls `dioxus_canvas::wire!(app)`.
-//! See `apps/user/war.signal/ui` for an example.
+//! See `apps/user/wandr.signal/ui` for an example.
 
 /// The `my:skiko-gfx` `generate!` (imports `canvas`/`paragraph`/`ime`, exports
 /// `renderer`/`frame-pacing`). Pairs with [`wire!`]; together they are [`launch!`].
@@ -341,7 +341,7 @@ macro_rules! wire {
 /// // dioxus_canvas::launch!(app, pre_frame: |r| r.set_scale(scale()));
 /// ```
 /// For a guest that also imports an engine contract, do your own combined
-/// `generate!` then call [`wire!`] — see the module docs and `apps/user/war.signal/ui`.
+/// `generate!` then call [`wire!`] — see the module docs and `apps/user/wandr.signal/ui`.
 #[macro_export]
 macro_rules! launch {
     ($root:path $(,)?) => {

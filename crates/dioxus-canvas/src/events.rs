@@ -155,9 +155,9 @@ pub fn focus_event() -> Rc<dyn Any> {
     Rc::new(PlatformEventData::new(Box::new(FocusEvt)))
 }
 
-struct WartEventConverter;
+struct WandrEventConverter;
 
-impl HtmlEventConverter for WartEventConverter {
+impl HtmlEventConverter for WandrEventConverter {
     fn convert_mouse_data(&self, event: &PlatformEventData) -> MouseData {
         match event.downcast::<ClickData>() {
             Some(c) => MouseData::new(ClickData { x: c.x, y: c.y, ex: c.ex, ey: c.ey }),
@@ -232,5 +232,5 @@ impl HtmlEventConverter for WartEventConverter {
 
 /// Install the global converter. Idempotent-safe to call once at renderer init.
 pub fn install() {
-    set_event_converter(Box::new(WartEventConverter));
+    set_event_converter(Box::new(WandrEventConverter));
 }

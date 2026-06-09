@@ -1,0 +1,49 @@
+[package]
+name    = "wandr-call"
+version = "0.1.0"
+edition = "2021"
+
+# wandr-call — the wandr call engine: a guest-side Rust library that establishes a
+# secure real-time audio call from a wasm32-wasip2 component. WebRTC is the first
+# backend (ICE + DTLS-SRTP + RTP/SRTP + Opus + SDP signaling); the media core
+# (RTP/SRTP/Opus) and the ICE transport are protocol-agnostic, so SIP/Jingle
+# backends can reuse them later without a rewrite.
+#
+# WIT-agnostic (like dioxus-canvas): wandr-call deals in PCM f32 frames + opaque
+# datagrams. The consuming guest wires the PCM ends to the host audio WIT
+# (capture/playback) and the datagram ends to a UDP socket (wasi:sockets), and
+# carries the SDP over its own signaling channel.
+#
+# The rtc-* deps come from the external/rtc submodule with the mDNS-optional
+# patch applied — run `tools/scripts/patch-rtc.sh` first. rtc-ice is
+# default-features=false (drops rtc-mdns → socket2/tokio, which don't build for
+# wasip2). Proven end-to-end in repros/call-capstone.
+
+# The `signal` feature adds the Signal 1:1 call protocol: the `opaque` ⇄ Signaling
+# codec (src/signal/) that lets a Signal guest place/receive calls on this engine.
+# It's the only thing that pulls prost; the WebRTC-native path + repros/call-* build
+# without it.
+[features]
+# `signal` adds Signal's 1:1 call protocol: the `opaque` codec (src/signal/) AND
+# the X25519-DH SRTP keying (ringrtc V4) in transport.rs. Pulls prost + the DH/HKDF
+# crypto; the WebRTC-native path + repros/call-* build without it.
+signal = ["dep:prost", "dep:x25519-dalek", "dep:hkdf", "dep:rand_core", "dep:rtc-turn"]
+
+[dependencies]
+bytes      = "1"
+# Vendored fork of opus-rs 0.1.22 with the SILK `w_pcm_i16` buffer-size fix (a
+# 60 ms wideband frame from a low-bitrate peer panicked the stock crate → SIGILL).
+opus-rs    = { path = "../../external/opus-rs" }
+sansio     = "1"
+sha2       = "0.10"   # DTLS cert fingerprint + HKDF-SHA256 for Signal DH
+prost        = { version = "0.14", optional = true }                          # Signal `opaque` blob codec
+x25519-dalek = { version = "2", optional = true, features = ["static_secrets"] } # Signal DH keying
+hkdf         = { version = "0.12", optional = true }                          # SRTP key derivation
+rand_core    = { version = "0.6", optional = true, features = ["getrandom"] } # OsRng for X25519 keygen
+rtc-ice    = { path = "../../external/rtc/rtc-ice", default-features = false }
+rtc-dtls   = { path = "../../external/rtc/rtc-dtls" }
+rtc-srtp   = { path = "../../external/rtc/rtc-srtp" }
+rtc-rtp    = { path = "../../external/rtc/rtc-rtp" }
+rtc-sdp    = { path = "../../external/rtc/rtc-sdp" }
+rtc-shared = { path = "../../external/rtc/rtc-shared", default-features = false }
+rtc-turn   = { path = "../../external/rtc/rtc-turn", optional = true }  # TURN relay (feature = "signal")

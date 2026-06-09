@@ -1,0 +1,23 @@
+// wandr-framework-shim — the designed `--no-art` framework-shim (task 96), replacing
+// the ad-hoc wandr-activityms stub. Registers the minimal binder service set the
+// native survivors (audioserver / cameraserver / sensorservice / codec stack) block
+// on / query with the Java system_server stopped, so they finish init and the
+// stream/camera paths don't fail-close. soong cc_binary, built on a-03 against the
+// platform libbinder (which exports include_activitymanager → binder/IActivityManager.h).
+// Deploy to /data/local/tmp/wandr-framework-shim and launch via wandr-launch (uid
+// system). See the header comment in wandr_framework_shim.cpp + task 96.
+cc_binary {
+    name: "wandr-framework-shim",
+    srcs: ["wandr_framework_shim.cpp"],
+    shared_libs: [
+        "libbinder",
+        "libutils",
+        "liblog",
+        "libbase",
+        "libcutils",
+    ],
+    // a-03's libbinder doesn't re-export include_activitymanager to consumers, so
+    // add it for <binder/IActivityManager.h>.
+    include_dirs: ["frameworks/native/libs/binder/include_activitymanager"],
+    cflags: ["-Wall", "-Wextra", "-Wno-unused-parameter"],
+}

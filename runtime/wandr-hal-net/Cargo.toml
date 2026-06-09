@@ -1,0 +1,37 @@
+[package]
+name    = "wandr-hal-net"
+version = "0.0.1"
+edition = "2021"
+
+# wandr-hal-net — ART-off WiFi/IP bring-up primitives (task 88, M1).
+#
+# Drives the native survivors that outlive `stop zygote`: spawns the vendor
+# `wpa_supplicant`, nudges its control socket to associate (the proven
+# ctrl-socket recipe — see [[project_artless_network]]), runs a small pure-Rust
+# DHCPv4 client to lease an IPv4 address (the one genuinely-missing native
+# binary; Android did DHCP in NetworkStack/Java), and applies the address +
+# default route. Pure Rust + the on-device `ip` tool — NO binder/AIDL in M1
+# (route went via rtnetlink/`ip` in the demo; DNS is handled by the daemon).
+#
+# Standalone package (own [workspace] table) so it can be path-depended from the
+# wandr-net daemon (and, later, the arbiter / wandr-host) without being absorbed
+# into either virtual workspace — mirrors wandr-hal-sensors.
+
+[workspace]
+
+[dependencies]
+log  = "0.4"
+libc = "0.2"
+
+[target.'cfg(target_os = "android")'.dependencies]
+# The netd/dnsresolver binder path (android.net.IDnsResolver — configure the DNS
+# resolver, which has no `ndc` command). Same rsbinder pin as the rest of the
+# stack ([[reference_rsbinder_version]]).
+rsbinder = { git = "https://github.com/hiking90/rsbinder", rev = "5e999e04a", features = ["android_11_plus"] }
+# The generated bindings reference `async_trait` (async codegen — sync is broken
+# in this rsbinder); we still call the proxy synchronously.
+async-trait = "0.1"
+
+[build-dependencies]
+# Codegen the IDnsResolver AIDL (android only; build.rs no-ops off-android).
+rsbinder-aidl = { git = "https://github.com/hiking90/rsbinder", rev = "5e999e04a" }

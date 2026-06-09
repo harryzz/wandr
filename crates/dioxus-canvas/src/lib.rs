@@ -1,6 +1,6 @@
-//! dioxus-canvas — a "tiny Blitz" that drives the wart canvas WIT from a dioxus
+//! dioxus-canvas — a "tiny Blitz" that drives the wandr canvas WIT from a dioxus
 //! `VirtualDom` (task 59). The reactive, flexbox-laid-out alternative to a
-//! hand-rolled canvas painter (`war.launcher`) for richer Rust guests, without
+//! hand-rolled canvas painter (`wandr.launcher`) for richer Rust guests, without
 //! Kotlin/Compose's binary size / leak / working-set cost.
 //!
 //! Pipeline (the four steps from the spike README):
@@ -381,7 +381,7 @@ impl DomRenderer {
     }
 
     /// Bottom inset (physical px) occluded by the soft keyboard — only while an
-    /// input is focused. Defaults to 0.45 × surface height (the wart IME overlay
+    /// input is focused. Defaults to 0.45 × surface height (the wandr IME overlay
     /// covers ~40% of the panel) when not explicitly set.
     fn kb_inset_px(&self) -> f32 {
         if self.focused.is_none() {
@@ -981,7 +981,7 @@ impl DomRenderer {
     /// Resolve an `<img src>` to a host image id, cached by `src` so the bytes are
     /// decoded once (not per layout). `data:…;base64,…` decodes the payload;
     /// `http(s)://…` is unsupported (the canvas guest has no network); anything
-    /// else is read as a file path (e.g. `/assets/icon.png` from the warpkg
+    /// else is read as a file path (e.g. `/assets/icon.png` from the wandrpkg
     /// bundle, mounted read-only by the host — task 38). Returns `0` on failure.
     fn get_or_create_image<S: CanvasSink>(&mut self, sink: &mut S, src: &str) -> u32 {
         if let Some(&id) = self.image_cache.get(src) {

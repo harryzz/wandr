@@ -1,0 +1,37 @@
+// wandr-screen — `wandr-screen on|off` (task 81, ART-less display power).
+//
+// Toggles the primary panel via the shared wandr-hal-display setPowerMode path. Run
+// by the arbiter's power module through `wandr-launch` (uid system) so the
+// SurfaceFlinger permission check short-circuits with the Java framework stopped —
+// the arbiter itself is plain root, which HANGS on that check under ART-off.
+//
+// Exit 0 = panel set, 1 = setPowerMode failed, 2 = bad usage.
+
+fn main() {
+    let arg = std::env::args().nth(1).unwrap_or_default();
+    // `wandr-screen brightness <0.0..1.0>` — task 86 probe of SurfaceFlinger
+    // setDisplayBrightness (binder) vs the sysfs backlight write.
+    if arg == "brightness" {
+        let level: f32 = match std::env::args().nth(2).and_then(|s| s.parse().ok()) {
+            Some(v) => v,
+            None => {
+                eprintln!("usage: wandr-screen brightness <0.0..1.0>");
+                std::process::exit(2);
+            }
+        };
+        let ok = wandr_hal_display::set_display_brightness(level);
+        println!("wandr-screen: set_display_brightness({level}) = {ok}");
+        std::process::exit(if ok { 0 } else { 1 });
+    }
+    let on = match arg.as_str() {
+        "on" | "1" | "wake" => true,
+        "off" | "0" | "sleep" => false,
+        _ => {
+            eprintln!("usage: wandr-screen on|off | brightness <0.0..1.0>");
+            std::process::exit(2);
+        }
+    };
+    let ok = wandr_hal_display::set_display_power(on);
+    println!("wandr-screen: set_display_power({on}) = {ok}");
+    std::process::exit(if ok { 0 } else { 1 });
+}

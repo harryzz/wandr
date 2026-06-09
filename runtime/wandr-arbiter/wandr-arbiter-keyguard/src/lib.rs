@@ -1,0 +1,190 @@
+//! wandr-arbiter-keyguard — the Keyguard/lockscreen module (v1: swipe-to-unlock).
+//!
+//! Owns the lock state + policy. Auto-locks on screen-off (reacts to
+//! [`Event::ScreenState`] `{ live: false }`, the same signal the power module
+//! consumes) and exposes `lock` / `unlock` verbs (boot locks via `lock`; the
+//! `unlock` verb is driven by the keyguard guest's swipe gesture → host → arbiter).
+//!
+//! Locking **demotes the visible app to `Background`** (so it stops fighting for
+//! focus via the host's `focus_refresh` gate, and goes lifecycle-Paused) and shows
+//! the keyguard surface as [`Role::Lockscreen`] (the binary maps that to the
+//! foreground mechanism — show + focus + present — at the keyguard's high launch
+//! layer). Unlocking hides the keyguard and restores the covered app to the
+//! foreground via [`Effect::Foreground`] (the proper shell promote). The keyguard
+//! is excluded from `visible_app`/the task-cycle ring (it's not a switchable app).
+
+use wandr_arbiter_core::{ArbiterModule, Ctx, Effect, Event, Reply, Role, PRIMARY_DISPLAY};
+
+/// The keyguard guest's app-id (launched as a `--standalone-overlay-lock` overlay).
+const KEYGUARD_APP_ID: &str = "wandr.keyguard";
+
+#[derive(Default)]
+pub struct KeyguardModule {
+    locked: bool,
+    /// The app-id covered by the keyguard (to restore on unlock). `None` if
+    /// nothing was foreground at lock time.
+    saved_fg: Option<String>,
+    /// Task 80 Step 2 — the covered app's pid, suppressed for input while locked
+    /// so the keyguard is modal (a fullscreen lock overlay shares the content
+    /// region with the app behind it; rect-filtering alone wouldn't exclude it).
+    /// Re-enabled on unlock.
+    suppressed_pid: Option<i32>,
+}
+
+impl KeyguardModule {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn keyguard_pid(ctx: &Ctx) -> Option<i32> {
+        ctx.store.app(KEYGUARD_APP_ID).map(|a| a.pid)
+    }
+
+    fn do_lock(&mut self, ctx: &mut Ctx) -> Reply {
+        if self.locked {
+            return Reply::ok("already-locked");
+        }
+        let Some(kg) = Self::keyguard_pid(ctx) else {
+            return Reply::err("keyguard-not-running (launch wandr.keyguard first)");
+        };
+        // Record + demote the visible app so it stops fighting for focus (Paused).
+        let vis = ctx.store.display(PRIMARY_DISPLAY).and_then(|d| d.visible_app());
+        self.saved_fg = vis.and_then(|pid| ctx.store.app_by_pid(pid).map(|a| a.app_id.clone()));
+        if let Some(pid) = vis {
+            ctx.request(Effect::SetRole { pid, role: Role::Background });
+            ctx.store.display_mut(PRIMARY_DISPLAY).set_role(pid, Role::Background);
+            // Task 80 Step 2 — suppress the covered app's touch so the keyguard is
+            // modal (it overlaps the app's content region; rect-filtering can't
+            // exclude a fullscreen overlay). Re-enabled on unlock.
+            ctx.deliver_to_host(pid, "input-suppress 1\n");
+            self.suppressed_pid = Some(pid);
+        }
+        // Show the keyguard topmost + focused (the binary maps Lockscreen → the
+        // foreground mechanism). put_surface create-or-updates it.
+        ctx.request(Effect::SetRole { pid: kg, role: Role::Lockscreen });
+        ctx.store
+            .display_mut(PRIMARY_DISPLAY)
+            .put_surface(kg, KEYGUARD_APP_ID, Role::Lockscreen);
+        self.locked = true;
+        log::info!("arbiter: keyguard LOCKED (covering {:?}, kg pid={kg})", self.saved_fg);
+        Reply::ok(format!("locked covering={:?}", self.saved_fg))
+    }
+
+    fn do_unlock(&mut self, ctx: &mut Ctx) -> Reply {
+        if !self.locked {
+            return Reply::ok("already-unlocked");
+        }
+        if let Some(kg) = Self::keyguard_pid(ctx) {
+            ctx.request(Effect::SetRole { pid: kg, role: Role::Background });
+            ctx.store.display_mut(PRIMARY_DISPLAY).set_role(kg, Role::Background);
+        }
+        // Task 80 Step 2 — re-enable the covered app's touch (it was suppressed for
+        // modality while locked).
+        if let Some(pid) = self.suppressed_pid.take() {
+            ctx.deliver_to_host(pid, "input-suppress 0\n");
+        }
+        // Restore the covered app to foreground (proper shell promote: demotes
+        // others, reconciles overlay, emits ForegroundChanged). No-op if it died.
+        if let Some(app_id) = self.saved_fg.take() {
+            ctx.request(Effect::Foreground { app_id });
+        }
+        self.locked = false;
+        log::info!("arbiter: keyguard UNLOCKED");
+        Reply::ok("unlocked")
+    }
+}
+
+impl ArbiterModule for KeyguardModule {
+    fn verbs(&self) -> &[&'static str] {
+        &["lock", "unlock"]
+    }
+
+    fn on_command(&mut self, verb: &str, _args: &str, ctx: &mut Ctx) -> Reply {
+        match verb {
+            "lock" => self.do_lock(ctx),
+            "unlock" => self.do_unlock(ctx),
+            other => Reply::err(format!("keyguard-unknown-verb {other}")),
+        }
+    }
+
+    fn on_event(&mut self, ev: &Event, ctx: &mut Ctx) {
+        match ev {
+            // Auto-lock the moment the screen turns off.
+            Event::ScreenState { live: false } => {
+                self.do_lock(ctx);
+            }
+            // The covered app exited while locked → unlock reveals home, not it.
+            Event::SurfaceRemoved { pid } => {
+                if self.saved_fg.is_some()
+                    && ctx.store.app_by_pid(*pid).map(|a| &a.app_id) == self.saved_fg.as_ref()
+                {
+                    self.saved_fg = None;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Instant, SystemTime};
+    use wandr_arbiter_core::{AppState, Registry, Store};
+
+    fn seed(s: &mut Store, id: &str, pid: i32, role: Role) {
+        s.insert_app(AppState {
+            app_id: id.to_string(),
+            pid,
+            launched_at: SystemTime::now(),
+            launched_mono: Instant::now(),
+        });
+        s.display_mut(PRIMARY_DISPLAY).put_surface(pid, id, role);
+    }
+
+    fn reg() -> (Registry, Store) {
+        let mut r = Registry::new();
+        r.register(Box::new(KeyguardModule::new()));
+        (r, Store::new())
+    }
+
+    #[test]
+    fn lock_demotes_app_and_shows_keyguard() {
+        let (mut r, mut store) = reg();
+        seed(&mut store, "wandr.dioxus.demo", 10, Role::Foreground);
+        seed(&mut store, KEYGUARD_APP_ID, 99, Role::Background);
+
+        let (reply, eff) = r.dispatch_command("lock", "", &mut store).unwrap();
+        assert!(matches!(reply, Reply::Ok(_)));
+        // App demoted, keyguard shown.
+        assert!(eff.iter().any(|e| matches!(e, Effect::SetRole { pid: 10, role: Role::Background })));
+        assert!(eff.iter().any(|e| matches!(e, Effect::SetRole { pid: 99, role: Role::Lockscreen })));
+        assert_eq!(store.display(PRIMARY_DISPLAY).unwrap().role_of(99), Some(Role::Lockscreen));
+        // visible_app excludes the keyguard (not a switchable surface).
+        assert_eq!(store.display(PRIMARY_DISPLAY).unwrap().visible_app(), None);
+    }
+
+    #[test]
+    fn unlock_restores_the_covered_app() {
+        let (mut r, mut store) = reg();
+        seed(&mut store, "wandr.dioxus.demo", 10, Role::Foreground);
+        seed(&mut store, KEYGUARD_APP_ID, 99, Role::Background);
+        r.dispatch_command("lock", "", &mut store).unwrap();
+        let (_reply, eff) = r.dispatch_command("unlock", "", &mut store).unwrap();
+        // Keyguard hidden + the covered app re-foregrounded (via the shell verb).
+        assert!(eff.iter().any(|e| matches!(e, Effect::SetRole { pid: 99, role: Role::Background })));
+        assert!(eff.iter().any(|e| matches!(e, Effect::Foreground { app_id } if app_id == "wandr.dioxus.demo")));
+    }
+
+    #[test]
+    fn screen_off_auto_locks() {
+        let (mut r, mut store) = reg();
+        seed(&mut store, "wandr.dioxus.demo", 10, Role::Foreground);
+        seed(&mut store, KEYGUARD_APP_ID, 99, Role::Background);
+        let eff = r.dispatch_event(Event::ScreenState { live: false }, &mut store);
+        assert!(eff.iter().any(|e| matches!(e, Effect::SetRole { pid: 99, role: Role::Lockscreen })));
+        // Idempotent — a second off tick doesn't re-lock/re-demote.
+        let eff2 = r.dispatch_event(Event::ScreenState { live: false }, &mut store);
+        assert!(eff2.is_empty());
+    }
+}

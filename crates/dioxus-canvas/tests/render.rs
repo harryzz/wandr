@@ -73,7 +73,7 @@ fn counter_app() -> Element {
     let mut count = use_signal(|| 0);
     rsx! {
         div { style: "display:flex; flex-direction:column; padding:20px; gap:12px; background:#1A1A2E;",
-            div { "Dioxus on wart" }
+            div { "Dioxus on wandr" }
             div { "count: {count}" }
             button { style: "background:#4285F4; padding:16px;", onclick: move |_| count += 1, "tap" }
         }
@@ -91,7 +91,7 @@ fn renders_and_reacts_to_click() {
 
     {
         let rd = rec.borrow();
-        assert!(rd.drawn_text.iter().any(|t| t == "Dioxus on wart"), "title text drawn: {:?}", rd.drawn_text);
+        assert!(rd.drawn_text.iter().any(|t| t == "Dioxus on wandr"), "title text drawn: {:?}", rd.drawn_text);
         assert!(rd.drawn_text.iter().any(|t| t == "count: 0"), "initial count drawn: {:?}", rd.drawn_text);
         assert!(rd.drawn_text.iter().any(|t| t == "tap"), "button label drawn");
         assert!(rd.rrects >= 1, "at least the column + button backgrounds filled");

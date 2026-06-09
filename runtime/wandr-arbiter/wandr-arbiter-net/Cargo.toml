@@ -1,0 +1,16 @@
+[package]
+name    = "wandr-arbiter-net"
+version = "0.0.1"
+edition = "2021"
+
+# wandr-arbiter-net — the ConnectivityService role (Arbiter Inc., task 88 M1). The
+# pure policy/status half of the arbiter's connectivity stack: holds the current
+# link state (online?, transport, ssid, ip) reported by the wandr-net daemon, and
+# fans an `on-connectivity-change` push to subscribed guests when it flips. The
+# mechanism (associate / DHCP / route / DNS) lives in the wandr-net daemon +
+# wandr-hal-net; this module never touches the link — it ingests `report-net-state`
+# and emits `Effect::HostLine`. Wired in with one line in build_registry().
+
+[dependencies]
+wandr-arbiter-core = { path = "../wandr-arbiter-core" }
+log = { workspace = true }

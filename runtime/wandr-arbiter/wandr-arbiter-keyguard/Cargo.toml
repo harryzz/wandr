@@ -1,0 +1,14 @@
+[package]
+name    = "wandr-arbiter-keyguard"
+version = "0.0.1"
+edition = "2021"
+
+# wandr-arbiter-keyguard — the Keyguard/lockscreen module. Owns the lock state +
+# policy: auto-lock on screen-off (reacts to Event::ScreenState, like the power
+# module), `lock`/`unlock` verbs. On lock it demotes the visible app to Background
+# (stops it fighting for focus + Paused) and shows the keyguard surface
+# (Role::Lockscreen, topmost + focused); unlock reverses it. Wired in with one line.
+
+[dependencies]
+wandr-arbiter-core = { path = "../wandr-arbiter-core" }
+log = { workspace = true }

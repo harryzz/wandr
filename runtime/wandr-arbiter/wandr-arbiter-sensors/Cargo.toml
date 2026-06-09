@@ -1,0 +1,16 @@
+[package]
+name    = "wandr-arbiter-sensors"
+version = "0.0.1"
+edition = "2021"
+
+# wandr-arbiter-sensors — the SensorService role (Arbiter Inc., task 77). The pure
+# policy half of the arbiter's sensor stack: enable-on-demand ref-counting (the
+# battery contract), raw→semantic translation with descriptor-derived hysteresis
+# (e.g. proximity near/far), and the last-reading Store cache. The HAL mechanism
+# (rsbinder ISensorManager) lives in the binary's sensor-driver thread + the
+# shared `wandr-hal-sensors` crate; this module never touches binder — it emits
+# `Effect::SetSensor` and reacts to `Event::SensorReading`. Wired in with one line.
+
+[dependencies]
+wandr-arbiter-core = { path = "../wandr-arbiter-core" }
+log = { workspace = true }

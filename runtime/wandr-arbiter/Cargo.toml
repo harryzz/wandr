@@ -1,0 +1,43 @@
+# wandr-arbiter — virtual workspace (task 73 / "task A").
+#
+# The arbiter is being modularized into a thin binary + a core kernel +
+# one responsibility crate per system_server role (WMS·IMMS·AMS over
+# time), per docs/visual-sizing-design-patterns.md ("a core + crates,
+# not a monolith"). Strangler migration: the binary keeps the legacy
+# match for every un-migrated verb; new responsibilities arrive as
+# modules wired into the registry.
+#
+#   wandr-arbiter-bin   — the daemon/client binary (artifact: wandr-arbiter)
+#   wandr-arbiter-core  — kernel: per-display Store, event bus, ArbiterModule
+#                        trait + Registry, Ctx. No surfaces, no I/O policy.
+#   wandr-arbiter-wm    — first module: WindowManager geometry (insets,
+#                        keyboard depth, orientation) → pushed to hosts.
+#
+# Deliberately tiny: no wasmtime, no skia, no libgui, no serde.
+# `.cargo/config.toml` (NDK r27d, aarch64-linux-android) lives at this
+# workspace root so every member cross-compiles identically; the build
+# script (tools/scripts/build-host-android.sh) still `cd`s here and the
+# binary still lands at target/aarch64-linux-android/release/wandr-arbiter.
+
+[workspace]
+resolver = "2"
+members = [
+    "wandr-arbiter-bin",
+    "wandr-arbiter-core",
+    "wandr-arbiter-wm",
+    "wandr-arbiter-shell",
+    "wandr-arbiter-alarm",
+    "wandr-arbiter-notify",
+    "wandr-arbiter-power",
+    "wandr-arbiter-keyguard",
+    "wandr-arbiter-audio",
+    "wandr-arbiter-sensors",
+    "wandr-arbiter-net",
+    "wandr-screen",
+]
+
+[workspace.dependencies]
+anyhow         = "1"
+log            = "0.4"
+android_logger = "0.14"
+libc           = "0.2"

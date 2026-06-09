@@ -21,13 +21,13 @@ mod stubs {
                 fn write_to_parcel(&self, _parcel: &mut Parcel) -> Result<()> {
                     unimplemented!(concat!(
                         stringify!($name),
-                        ": gui_aidl_types_rs shim parcelable is not marshallable (wart task 78)"
+                        ": gui_aidl_types_rs shim parcelable is not marshallable (wandr task 78)"
                     ))
                 }
                 fn read_from_parcel(&mut self, _parcel: &mut Parcel) -> Result<()> {
                     unimplemented!(concat!(
                         stringify!($name),
-                        ": gui_aidl_types_rs shim parcelable is not marshallable (wart task 78)"
+                        ": gui_aidl_types_rs shim parcelable is not marshallable (wandr task 78)"
                     ))
                 }
             }

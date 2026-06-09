@@ -1,0 +1,41 @@
+[package]
+name    = "wandr-arbiter"
+version = "0.0.1"
+edition = "2021"
+
+# wandr-arbiter — Hybrid runtime policy daemon (task 46 step 3; modularized
+# task 73). The thin binary: socket transport + the legacy command match
+# for verbs not yet migrated to a core module, plus the registry that
+# routes migrated verbs (e.g. WM geometry) to their module.
+#
+# Talks to wandr-host's zygote over its UNIX socket
+# (/data/local/tmp/wandr-zygote.sock) to launch / kill / preload apps.
+# Owns /data/local/tmp/wandr-arbiter.sock for client commands
+# (`wandr-arbiter launch <app-id>` etc.). Tracks running apps in-memory.
+#
+# Deliberately tiny: no wasmtime, no skia, no libgui. The arbiter never
+# forks an app itself — that's the zygote's job. The arbiter just decides
+# which app gets forked when.
+
+[[bin]]
+name = "wandr-arbiter"
+path = "src/main.rs"
+
+[dependencies]
+wandr-arbiter-core  = { path = "../wandr-arbiter-core" }
+wandr-arbiter-wm    = { path = "../wandr-arbiter-wm" }
+wandr-arbiter-shell = { path = "../wandr-arbiter-shell" }
+wandr-arbiter-alarm = { path = "../wandr-arbiter-alarm" }
+wandr-arbiter-notify = { path = "../wandr-arbiter-notify" }
+wandr-arbiter-power = { path = "../wandr-arbiter-power" }
+wandr-arbiter-keyguard = { path = "../wandr-arbiter-keyguard" }
+wandr-arbiter-audio = { path = "../wandr-arbiter-audio" }
+wandr-arbiter-sensors = { path = "../wandr-arbiter-sensors" }
+wandr-arbiter-net = { path = "../wandr-arbiter-net" }
+wandr-hal-sensors = { path = "../../wandr-hal-sensors" }
+wandr-hal-display = { path = "../../wandr-hal-display" }
+wandr-hal-lights  = { path = "../../wandr-hal-lights" }
+anyhow         = { workspace = true }
+log            = { workspace = true }
+android_logger = { workspace = true }
+libc           = { workspace = true }

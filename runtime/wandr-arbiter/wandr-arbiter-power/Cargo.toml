@@ -1,0 +1,15 @@
+[package]
+name    = "wandr-arbiter-power"
+version = "0.0.1"
+edition = "2021"
+
+# wandr-arbiter-power — the PowerManager module. Owns the doze POLICY: it consumes
+# Event::ScreenState (the binary's screen poller), applies a screen-off grace, and
+# on a doze transition fans a `doze <cadence-ms>` push to every tracked host —
+# which then applies the coarse cadence (the host is a dumb applier, mirroring
+# geometry/orientation). The home for future power policy (wakelocks, idle stages,
+# maintenance-window alarm batching). Wired in with one line.
+
+[dependencies]
+wandr-arbiter-core = { path = "../wandr-arbiter-core" }
+log = { workspace = true }

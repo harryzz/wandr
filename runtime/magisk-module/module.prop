@@ -1,6 +1,6 @@
-id=wart-stack
-name=wart Hybrid runtime stack
+id=wandr-stack
+name=wandr Hybrid runtime stack
 version=v0.1.0
 versionCode=1
 author=harry
-description=Starts wart-host --zygote + wart-arbiter --daemon at boot (Hybrid runtime model, task 46). Reversible: touch /data/adb/modules/wart-stack/disable to skip, or .../remove to uninstall on next reboot.
+description=Starts wandr-host --zygote + wandr-arbiter --daemon at boot (Hybrid runtime model, task 46). Reversible: touch /data/adb/modules/wandr-stack/disable to skip, or .../remove to uninstall on next reboot.

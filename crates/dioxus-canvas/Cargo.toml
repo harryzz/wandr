@@ -1,7 +1,7 @@
-# dioxus-canvas — a "tiny Blitz" renderer that drives the wart canvas WIT from a
+# dioxus-canvas — a "tiny Blitz" renderer that drives the wandr canvas WIT from a
 # dioxus VirtualDom (task 59). WIT-agnostic: the renderer talks to the host only
-# through the `CanvasSink` trait, so a guest warpkg owns its own trimmed
-# `my:skiko-gfx` WIT + `wit_bindgen::generate!`/`export!` (matching war.launcher)
+# through the `CanvasSink` trait, so a guest wandrpkg owns its own trimmed
+# `my:skiko-gfx` WIT + `wit_bindgen::generate!`/`export!` (matching wandr.launcher)
 # and wires the generated `canvas::*` bindings to `CanvasSink`. This keeps the
 # renderer host-testable (mock sink) and free of wit-bindgen macro hygiene.
 #

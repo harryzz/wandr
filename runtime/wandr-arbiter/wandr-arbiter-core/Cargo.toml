@@ -1,0 +1,23 @@
+[package]
+name    = "wandr-arbiter-core"
+version = "0.0.1"
+edition = "2021"
+
+# wandr-arbiter-core — the arbiter kernel (task 73).
+#
+# Owns four things and nothing else (the doc's "design effort belongs in
+# the core, not the modules"):
+#   1. a typed, per-display shared-state Store (the single source of truth);
+#   2. an Event vocabulary + bus;
+#   3. the ArbiterModule trait;
+#   4. the Registry that routes verbs/events to modules.
+#
+# No surfaces, no rendering, no socket ownership — modules emit/observe
+# events and queue host pushes via Ctx; the binary owns the transport.
+# No serde (hand-rolled where needed), no android_logger (the binary
+# inits logcat).
+
+[dependencies]
+anyhow = { workspace = true }
+log    = { workspace = true }
+libc   = { workspace = true }

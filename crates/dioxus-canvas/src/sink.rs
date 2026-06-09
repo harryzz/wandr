@@ -1,7 +1,7 @@
 //! The host boundary. `dioxus-canvas` never touches WIT directly — it emits
-//! paint commands through this trait. A guest warpkg implements it by forwarding
+//! paint commands through this trait. A guest wandrpkg implements it by forwarding
 //! to its own `wit_bindgen`-generated `my:skiko-gfx/canvas` imports (the same
-//! verbs `war.launcher` uses, plus `measure-text`).
+//! verbs `wandr.launcher` uses, plus `measure-text`).
 //!
 //! Keeping the renderer WIT-agnostic means it builds + unit-tests on the host
 //! against a mock sink, and a guest can swap in a trimmed WIT without the

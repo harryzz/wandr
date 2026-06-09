@@ -1,0 +1,29 @@
+// cc_binary, built on a-03. Registers the frameworks-layer ISensorManager that
+// system_server normally publishes — HIDL @1.0 (camera EIS, task 93) AND the AIDL
+// android.frameworks.sensorservice.ISensorManager/default (wandr Rust stack via
+// wandr-hal-sensors, task 94) — so sensors work under --no-art. See
+// wandr_sensormanager.cpp.
+cc_binary {
+    name: "wandr-sensormanager",
+    srcs: ["wandr_sensormanager.cpp"],
+    cflags: [
+        "-Wall",
+        "-Werror",
+    ],
+    header_libs: ["jni_headers"],
+    shared_libs: [
+        // HIDL endpoint (task 93)
+        "libsensorservicehidl",
+        "libhidlbase",
+        "android.frameworks.sensorservice@1.0",
+        // AIDL endpoint (task 94)
+        "libsensorserviceaidl",
+        "libbinder_ndk",
+        "android.frameworks.sensorservice-V1-ndk",
+        // shared
+        "libsensor",
+        "liblog",
+        "libutils",
+        "libbase",
+    ],
+}
