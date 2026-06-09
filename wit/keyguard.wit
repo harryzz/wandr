@@ -1,9 +1,9 @@
-// war:keyguard — the lockscreen guest's channel to the arbiter (M3). The keyguard
+// wandr:keyguard — the lockscreen guest's channel to the arbiter (M3). The keyguard
 // guest, on the unlock gesture (swipe up), calls `unlock`; the host forwards it to
 // the arbiter's `unlock` verb (the keyguard module hides the lock screen + restores
-// the covered app). Separate package (like war:alarm / war:notify).
+// the covered app). Separate package (like wandr:alarm / wandr:notify).
 
-package war:keyguard@0.1.0;
+package wandr:keyguard@0.1.0;
 
 interface keyguard {
     /// The user performed the unlock gesture on the lock screen. The host forwards

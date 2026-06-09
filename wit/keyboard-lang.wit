@@ -1,7 +1,7 @@
-package war:keyboard-lang@0.1.0;
+package wandr:keyboard-lang@0.1.0;
 
-/// Language plugin contract for war.ime.keyboard. Each language warpkg
-/// (war.lang.bg, war.lang.fr, …) is a `kind = "system"` cdylib that
+/// Language plugin contract for wandr.ime.keyboard. Each language wandrpkg
+/// (wandr.lang.bg, wandr.lang.fr, …) is a `kind = "system"` cdylib that
 /// exports this `lang` interface. The IME enumerates declared lang
 /// dependencies at startup, calls `get-info` + `get-layout(false/true)`
 /// once each, and merges the returned KeyboardLayouts into the
@@ -20,7 +20,7 @@ interface lang {
         is-rtl: bool,
     }
 
-    /// One key in a row. Mirrors `war.ime.keyboard`'s `KeyDef` for the
+    /// One key in a row. Mirrors `wandr.ime.keyboard`'s `KeyDef` for the
     /// text-emitting case (no `KeyAction` variants — the IME owns those).
     /// `code-point` is the Unicode scalar to emit on tap; `key-id` is
     /// the Compose `Key` constant (0 if not applicable); `width` is the

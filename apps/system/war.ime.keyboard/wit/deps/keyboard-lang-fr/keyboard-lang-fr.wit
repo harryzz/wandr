@@ -1,9 +1,9 @@
 // Per-plugin WIT for the French AZERTY language plugin. Shape
-// identical to `wart/wit/keyboard-lang.wit` (the canonical reference);
+// identical to `wandr/wit/keyboard-lang.wit` (the canonical reference);
 // only the package name is per-plugin so two plugins can coexist in
 // the IME's linker.
 
-package war:keyboard-lang-fr@0.1.0;
+package wandr:keyboard-lang-fr@0.1.0;
 
 interface lang {
     record info {

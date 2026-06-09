@@ -1,4 +1,4 @@
-package war:markdown@0.1.0;
+package wandr:markdown@0.1.0;
 
 /// Compose-friendly structured markdown — `render` parses CommonMark
 /// source into a flat tree the consumer drops into a LazyColumn /
@@ -102,7 +102,7 @@ interface renderer {
 }
 
 /// World exported by the markdown-renderer component. Consumers import
-/// `war:markdown/renderer@0.1.0` to call `render`.
+/// `wandr:markdown/renderer@0.1.0` to call `render`.
 world renderer-world {
     export renderer;
 }

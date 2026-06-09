@@ -1,13 +1,13 @@
-// Task 88 (M1) — ConnectivityService surface (war:connectivity).
+// Task 88 (M1) — ConnectivityService surface (wandr:connectivity).
 //
-// The guest-facing control/status/monitor API for the wart connectivity stack
-// (the `wart-arbiter-net` module + the `wart-net` daemon). It is NOT a data path
+// The guest-facing control/status/monitor API for the wandr connectivity stack
+// (the `wandr-arbiter-net` module + the `wandr-net` daemon). It is NOT a data path
 // — guests move packets over `wasi:sockets` → kernel directly; this interface is
 // the app-facing equivalent of Android's `ConnectivityManager`: "am I online?"
 // and "tell me when that changes" (`registerDefaultNetworkCallback`, the single
 // most-used feature — Signal/apps reconnect on it).
 //
-// Separate package (like `war:alarm`) so adding it doesn't touch the shared
+// Separate package (like `wandr:alarm`) so adding it doesn't touch the shared
 // `my:skiko-gfx` contract (no WIT-sync churn across every guest). A guest that
 // cares about connectivity imports `network` + exports `connectivity-handler`
 // (`connectivity-client`); the host links `network` (`connectivity-host`,
@@ -21,10 +21,10 @@
 //     DESIGN CONTRACT — drafted ahead of implementation. Backing per function:
 //     scan = `IWificond` (`wifinl80211`); connect = `ISupplicant` (built, M2);
 //     radio on/off = `IWifi` HAL (built, M2); saved-network store + auto-connect
-//     = the `wart-arbiter-net` registry + a wart-owned credential store (the
+//     = the `wandr-arbiter-net` registry + a wandr-owned credential store (the
 //     open storage question). `ip-config` (DHCP vs manual) is per saved network.
 
-package war:connectivity@0.1.0;
+package wandr:connectivity@0.1.0;
 
 /// Shared types (WIT requires types to live in an interface, not top-level).
 interface types {
@@ -154,7 +154,7 @@ interface connectivity-handler {
 }
 
 /// World a guest implements to use connectivity: import status, export the
-/// change handler. A regular wart `.warpkg` whose own world also `include`s the
+/// change handler. A regular wandr `.wandrpkg` whose own world also `include`s the
 /// `my:skiko-gfx` surface for a GUI guest.
 world connectivity-client {
     import network;
@@ -169,7 +169,7 @@ world connectivity-host {
 
 /// Host-side export world — the runtime bindgen's this to get a typed
 /// `call_on_connectivity_change`, bound conditionally per instance (like
-/// `war:alarm/alarm-events`): guests that export `connectivity-handler` get the
+/// `wandr:alarm/alarm-events`): guests that export `connectivity-handler` get the
 /// binding, others yield `None`.
 world connectivity-events {
     export connectivity-handler;
@@ -177,7 +177,7 @@ world connectivity-events {
 
 /// World the **privileged** Settings / wifi-picker guest implements: management +
 /// status + change events. The host only links `wifi` for guests it trusts
-/// (the system wifi-picker chrome), so an ordinary `.warpkg` cannot import this.
+/// (the system wifi-picker chrome), so an ordinary `.wandrpkg` cannot import this.
 world wifi-settings {
     import wifi;
     import network;
@@ -185,7 +185,7 @@ world wifi-settings {
 }
 
 /// Host-side import world — the runtime `add_to_linker`s `wifi` (forwarding to
-/// the arbiter + the `wart-net` daemon) onto a privileged guest's linker only.
+/// the arbiter + the `wandr-net` daemon) onto a privileged guest's linker only.
 world wifi-host {
     import wifi;
 }

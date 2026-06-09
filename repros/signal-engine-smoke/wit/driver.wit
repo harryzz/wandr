@@ -1,10 +1,10 @@
-package wart:signal-smoke@0.1.0;
+package wandr:signal-smoke@0.1.0;
 
 // A wasi:cli/command that drives the Signal engine purely through the
-// `wart:signal/chat` contract — the exact surface a real UI uses. WAC-plugged
+// `wandr:signal/chat` contract — the exact surface a real UI uses. WAC-plugged
 // onto signal-engine (which exports chat); the remaining wasi imports are
 // satisfied by the host runner. Proves the engine links/receives/sends across
 // repeated `poll-events` with no block_on.
 world driver {
-  import wart:signal/chat@0.1.0;
+  import wandr:signal/chat@0.1.0;
 }

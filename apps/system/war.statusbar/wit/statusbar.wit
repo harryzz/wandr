@@ -1,5 +1,5 @@
 // Trimmed `my:skiko-gfx` WIT for the Rust status-bar guest (task 55).
-// Same rationale as war.launcher's: the guest wit-bindgen rejects the
+// Same rationale as wandr.launcher's: the guest wit-bindgen rejects the
 // canonical skiko-gfx.wit (matrix-3x3), so we redeclare just the subset
 // used. `paint-attrs` + enums copied verbatim for structural matching.
 
@@ -71,9 +71,9 @@ world statusbar-app {
     import canvas;
     import status;
     // M3b — the notification feed (host-implemented; answered from the arbiter).
-    // The interface lives in wit/deps/notify/ (package war:notify); the host
+    // The interface lives in wit/deps/notify/ (package wandr:notify); the host
     // provides it via NotifyHost::add_to_linker.
-    import war:notify/notify-feed@0.1.0;
+    import wandr:notify/notify-feed@0.1.0;
     export renderer;
     export frame-pacing;
 }

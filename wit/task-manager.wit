@@ -1,4 +1,4 @@
-// war:task-manager — a guest-facing "running apps" / task-manager interface.
+// wandr:task-manager — a guest-facing "running apps" / task-manager interface.
 //
 // Lets a guest (a Task Manager / System Monitor app) enumerate the apps the
 // runtime is currently running, see each one's kind (system vs user) and runtime
@@ -8,14 +8,14 @@
 // `kill` to the arbiter and enriching each entry with a `/proc/<pid>` sample
 // (CPU jiffies, RSS/PSS, thread count) — the arbiter already touches `/proc`
 // (oom_score_adj, smaps_rollup), so nothing new is exposed to the guest beyond
-// what `wart-arbiter list` + a proc read already know.
+// what `wandr-arbiter list` + a proc read already know.
 //
-// Separate package (like `war:alarm`, `war:connectivity`) so it doesn't touch the
+// Separate package (like `wandr:alarm`, `wandr:connectivity`) so it doesn't touch the
 // shared `my:skiko-gfx` contract — no WIT-sync churn across every guest. A GUI
 // task-manager guest imports `task-manager` and also `include`s the `my:skiko-gfx`
 // surface world for rendering.
 
-package war:task-manager@0.1.0;
+package wandr:task-manager@0.1.0;
 
 /// Shared value types.
 interface types {
@@ -67,7 +67,7 @@ interface types {
 
     /// One running app, as the task manager should display it.
     record app-info {
-        /// Stable identity (e.g. `war.signal`, `com.example.wart-app`). The key
+        /// Stable identity (e.g. `wandr.signal`, `com.example.wandr-app`). The key
         /// `kill-app` takes.
         app-id: string,
         /// Human-readable name from the app's `package.toml [package].label`,
@@ -92,9 +92,9 @@ interface types {
         total-kb: u64,
         /// RAM available for new allocations without swapping (`MemAvailable`).
         available-kb: u64,
-        /// Sum of PSS across all wart app processes — how much the running app
+        /// Sum of PSS across all wandr app processes — how much the running app
         /// set actually costs (0 if PSS wasn't sampled this snapshot).
-        wart-pss-kb: u64,
+        wandr-pss-kb: u64,
     }
 
     /// Why a kill request didn't take.
@@ -128,7 +128,7 @@ interface task-manager {
 
     /// Request that the app with `app-id` be terminated. Forwarded to the
     /// arbiter, which kills the process and cleans up its surfaces/registrations
-    /// (the same path as `wart-arbiter kill`). Returns `ok` once requested;
+    /// (the same path as `wandr-arbiter kill`). Returns `ok` once requested;
     /// `protected` for a runtime-managed system surface, `not-found` if it isn't
     /// running.
     kill-app: func(app-id: string) -> result<_, kill-error>;

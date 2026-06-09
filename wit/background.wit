@@ -1,12 +1,12 @@
-// war:background — generic background-execution primitive (Signal background-
+// wandr:background — generic background-execution primitive (Signal background-
 // receipt subsystem, M2). A guest that declares itself a background-service
 // (manifest `background = true`) and exports `bg-tick` keeps doing work while it
 // is backgrounded: the host calls `bg-tick` on a timer IN PLACE of render-frame
 // (the hidden surface is never rendered), letting the guest pump its engine /
 // keep a network socket alive without burning the render path. Separate package
-// (like war:alarm) so it carries no skiko-gfx WIT-sync obligation.
+// (like wandr:alarm) so it carries no skiko-gfx WIT-sync obligation.
 
-package war:background@0.1.0;
+package wandr:background@0.1.0;
 
 interface background {
     /// Called by the host while the guest is a backgrounded background-service,
@@ -19,7 +19,7 @@ interface background {
 }
 
 /// Host-side bindgen target: the export the host calls. A guest opts in by adding
-/// `export war:background/background;` to its own world.
+/// `export wandr:background/background;` to its own world.
 world background-events {
     export background;
 }

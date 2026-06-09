@@ -1,7 +1,7 @@
 // Trimmed `my:skiko-gfx` for the Rust keyguard guest — same rationale as
-// war.statusbar (the guest wit-parser rejects the canonical skiko-gfx.wit's
+// wandr.statusbar (the guest wit-parser rejects the canonical skiko-gfx.wit's
 // matrix-3x3, so redeclare just the subset used). canvas + status + renderer +
-// frame-pacing. The unlock gesture (war:keyguard import) is added in M3.
+// frame-pacing. The unlock gesture (wandr:keyguard import) is added in M3.
 
 package my:skiko-gfx@0.1.0;
 
@@ -66,7 +66,7 @@ world keyguard-app {
     import canvas;
     import status;
     // M3 — the unlock channel to the arbiter (dep under wit/deps/keyguard/).
-    import war:keyguard/keyguard@0.1.0;
+    import wandr:keyguard/keyguard@0.1.0;
     export renderer;
     export frame-pacing;
 }

@@ -2,7 +2,7 @@
 // NO exports — `#[wstd::main]` provides the wasi:cli/run export; this world only
 // needs to pull in the import bindings. `generate_all` emits sockets/io/clocks
 // regardless of explicit world membership.
-package wart:wstd-wasitls-spike;
+package wandr:wstd-wasitls-spike;
 
 world spike {
     // cli/imports is imports-only (no `run` export -> no clash with wstd's), and

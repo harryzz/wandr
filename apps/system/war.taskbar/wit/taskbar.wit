@@ -1,5 +1,5 @@
 // Trimmed `my:skiko-gfx` WIT for the Rust taskbar guest (task 56).
-// Same rationale as war.statusbar / war.launcher: the guest wit-bindgen
+// Same rationale as wandr.statusbar / wandr.launcher: the guest wit-bindgen
 // rejects the canonical skiko-gfx.wit (matrix-3x3), so we redeclare just
 // the subset used. `paint-attrs` + enums copied verbatim for structural
 // type-matching against the host's full interface.

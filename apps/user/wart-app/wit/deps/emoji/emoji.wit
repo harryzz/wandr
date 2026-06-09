@@ -1,11 +1,11 @@
-package war:emoji@0.1.0;
+package wandr:emoji@0.1.0;
 
 /// Second cross-app dep system component (task 40). Static curated
 /// emoji table — repeats the cross-app dep pattern with a non-markdown
 /// driver and forces the generic dep wiring refactor (task 39).
 ///
 /// Producer: `emoji-picker/` Rust component, `composition = "same-store"`.
-/// Consumers (currently wart-app's `EmojiCard`) call `list-all` once at
+/// Consumers (currently wandr-app's `EmojiCard`) call `list-all` once at
 /// composition time and render the grid.
 ///
 /// Curated subset (~60-80 emojis) — full Unicode emoji set is overkill

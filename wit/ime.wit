@@ -1,21 +1,21 @@
 // Task 47 — IME via dedicated guest app (Path B).
 //
 // Protocol contract between the runtime + IME apps + editor-bearing
-// guests. The IME app (e.g. `war.ime.keyboard`, future `war.ime.voice`,
-// `war.ime.emoji`, `war.ime.zh`) IMPORTS `input-connection` to deliver
+// guests. The IME app (e.g. `wandr.ime.keyboard`, future `wandr.ime.voice`,
+// `wandr.ime.emoji`, `wandr.ime.zh`) IMPORTS `input-connection` to deliver
 // text + keys, and EXPORTS `ime` to receive lifecycle events.
 //
 // The arbiter is the routing layer (analogous to Android's IMMS): it
 // holds the active-IME + focused-editor state and relays calls between
 // IME and focused-app processes. Editor-bearing guests don't import
-// from `war:ime` directly — their skiko-wasi adapter reaches the
+// from `wandr:ime` directly — their skiko-wasi adapter reaches the
 // arbiter through the existing host bindings.
 //
 // Future IMEs (voice, emoji, CJK / Indic) plug in via the SAME
 // contract — no protocol changes. See tasks/47-ime-via-guest-app.md
 // "Future IMEs" section.
 
-package war:ime@0.1.0;
+package wandr:ime@0.1.0;
 
 
 /// Shared type definitions — moved into a dedicated interface (task 49
@@ -165,24 +165,24 @@ interface ime {
 /// surface (what the IME calls into the focused app via the arbiter),
 /// exports the ime surface (what the runtime calls into the IME app).
 ///
-/// IME apps are regular wart `.warpkg`s installed under
+/// IME apps are regular wandr `.wandrpkg`s installed under
 /// `<APPS_ROOT>/apps/`. The arbiter's `set-ime <app-id>` command picks
 /// which installed app is the currently-active IME; the user can
-/// install many (war.ime.keyboard / war.ime.voice / war.ime.zh / ...)
+/// install many (wandr.ime.keyboard / wandr.ime.voice / wandr.ime.zh / ...)
 /// and switch between them at runtime.
 world ime-client-world {
     import input-connection;
     export ime;
 }
 
-/// Stripped sibling world for IMEs that don't use war:ime/input-connection
-/// directly (e.g. war.ime.keyboard, which routes key events through
+/// Stripped sibling world for IMEs that don't use wandr:ime/input-connection
+/// directly (e.g. wandr.ime.keyboard, which routes key events through
 /// the existing my:skiko-gfx/keyboard interface introduced in
 /// task 47 step 3b). Same `ime` export so the host can call into
 /// `on-editor-attached` / `on-editor-detached` uniformly; no
 /// `input-connection` import to satisfy.
 ///
-/// Used by task 49 step 1b — wart-host bindgen's against this world
+/// Used by task 49 step 1b — wandr-host bindgen's against this world
 /// to get a typed `EditorInfo` + `call_on_editor_attached` without
 /// needing to provide Host impls for the 7 input-connection verbs.
 world ime-events {

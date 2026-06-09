@@ -1,12 +1,12 @@
-// war:notify — generic user-notification primitive (Signal background-receipt
+// wandr:notify — generic user-notification primitive (Signal background-receipt
 // subsystem, M3). An app raises a notification via the `notifier` host import;
 // the host forwards it to the arbiter, which owns the active list, surfaces it
 // in the status bar, and — when the user taps one — foregrounds the owner and
 // delivers `on-notification-click(id)` to its `notify-handler` export. Separate
-// package (like war:alarm / war:background) so it carries no skiko-gfx WIT-sync
+// package (like wandr:alarm / wandr:background) so it carries no skiko-gfx WIT-sync
 // obligation. The status-bar read side (`notify-feed`) is added in M3b.
 
-package war:notify@0.1.0;
+package wandr:notify@0.1.0;
 
 interface notifier {
     /// Raise or replace a notification. `id` is app-assigned; re-posting the same

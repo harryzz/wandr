@@ -864,7 +864,7 @@ interface theme {
 }
 
 /// Task 38 — read-only access to assets shipped inside the installed
-/// warpkg. The host reads from `<install_dir>/assets/<name>`; the guest
+/// wandrpkg. The host reads from `<install_dir>/assets/<name>`; the guest
 /// just hands a relative path. Standard Kotlin/Wasm 2.4 stdlib doesn't
 /// expose WASI filesystem calls (no fd_read / path_open wrappers), so
 /// this host verb is the practical way for Kotlin guests to load
@@ -889,7 +889,7 @@ interface assets {
 }
 
 /// Task 47 step 2 — editor-focus reporting from the guest to the
-/// host (wart-host), which forwards to the arbiter's `attach-editor`
+/// host (wandr-host), which forwards to the arbiter's `attach-editor`
 /// / `detach-editor` socket commands. These are the outbound half
 /// of the IME protocol: any guest with a focused text field calls
 /// these so the runtime (and through it, the active IME app) can
@@ -905,7 +905,7 @@ interface assets {
 /// `email`, `url`, `password`, `multiline-text`). Passing them as
 /// strings rather than a typed enum here avoids a cross-WIT-package
 /// import while we keep things simple; if more IME-typed verbs land
-/// on this interface, promoting `war:ime/types` to its own package
+/// on this interface, promoting `wandr:ime/types` to its own package
 /// is the right move.
 interface ime {
     /// A text field gained focus in this guest. The host forwards
@@ -929,8 +929,8 @@ interface ime {
 /// Task 47 step 3b — IME-side outbound. The mirror of `ime` for the
 /// other half of the IME protocol: where `ime` is used by EDITOR-
 /// bearing guests to report focus changes, `keyboard` is used by
-/// IME guests (e.g. `war.ime.keyboard`) to push keystrokes back to
-/// the focused editor. The wart-host impl forwards each call to
+/// IME guests (e.g. `wandr.ime.keyboard`) to push keystrokes back to
+/// the focused editor. The wandr-host impl forwards each call to
 /// the arbiter's `ime-send-key-event` socket cmd; the arbiter
 /// routes via the focused-pid's per-host socket (task 47 step 3a).
 ///
@@ -947,7 +947,7 @@ interface keyboard {
     ///
     /// `key-id` is a COMPOSE-Key-compatible numeric ID — NOT an
     /// Android AKEYCODE_*. Specifically the same values the host's
-    /// winit branch sends (wart-host `lib.rs:512-528`):
+    /// winit branch sends (wandr-host `lib.rs:512-528`):
     ///   Backspace = 8, Tab = 9, Enter = 13, Escape = 27, Space = 32,
     ///   PageUp = 33, PageDown = 34, End = 35, Home = 36,
     ///   ArrowLeft/Up/Right/Down = 37/38/39/40, Insert = 45, Delete = 46.
@@ -1045,7 +1045,7 @@ interface status {
     battery-text: func() -> string;
     /// Status-bar strip height in physical px — the single source of
     /// truth for both the overlay surface and any consumer's top inset
-    /// (task 55). Tunable via WART_STATUSBAR_PX.
+    /// (task 55). Tunable via WANDR_STATUSBAR_PX.
     bar-height: func() -> u32;
 }
 

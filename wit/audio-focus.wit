@@ -1,11 +1,11 @@
-// war:audio-focus — the audio-focus primitive (wart-arbiter-audio, M2). A guest
+// wandr:audio-focus — the audio-focus primitive (wandr-arbiter-audio, M2). A guest
 // requests audio focus through the `focus` host import; the host forwards it to
 // the arbiter's audio-focus module, which owns the cross-app focus stack and —
 // when the owner changes — delivers `on-focus-changed(change)` to each affected
-// guest's `focus-handler` export. Separate package (like war:alarm / war:notify)
+// guest's `focus-handler` export. Separate package (like wandr:alarm / wandr:notify)
 // so it carries no skiko-gfx WIT-sync obligation.
 
-package war:audio-focus@0.1.0;
+package wandr:audio-focus@0.1.0;
 
 interface focus {
     /// What a guest asks for (Android AUDIOFOCUS_GAIN family).
@@ -27,7 +27,7 @@ interface focus {
     /// Release focus; the prior (transient/duck) owner regains it.
     abandon: func();
 
-    // ── Call session + Ringer (wart-arbiter-audio M3 + Ringer) ───────────────
+    // ── Call session + Ringer (wandr-arbiter-audio M3 + Ringer) ───────────────
     // Fire-and-forget: the host forwards each to the arbiter's audio-* command for
     // this guest's pid. The arbiter owns policy (ringer mode, comms mode); the host
     // applies (ringtone/vibrate playback, audio policy).
@@ -44,7 +44,7 @@ interface focus {
     call-end: func();
 }
 
-// ── Audio controls (route / volume / mute) — guest-facing, wart-arbiter-audio ──
+// ── Audio controls (route / volume / mute) — guest-facing, wandr-arbiter-audio ──
 // A call/media guest's control surface for its OWN output: pick the route
 // (earpiece/speaker), set/read output volume, and mute output and/or mic. The host
 // applies the route by re-routing the shared output via a PREFERRED device-role on its

@@ -1,8 +1,8 @@
-// war:alarm interfaces (Arbiter Inc. 3c) — dep for the alarm test guest. The
+// wandr:alarm interfaces (Arbiter Inc. 3c) — dep for the alarm test guest. The
 // canonical copy is wit/alarm.wit; only the interfaces are needed here (the
 // guest's `alarm-test-app` world imports `scheduler` + exports `alarm-handler`).
 
-package war:alarm@0.1.0;
+package wandr:alarm@0.1.0;
 
 interface scheduler {
     schedule: func(id: u64, delay-ms: u64, repeat-ms: u64);

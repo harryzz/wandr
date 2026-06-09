@@ -1,8 +1,8 @@
 // Trimmed `my:skiko-gfx` (canvas + renderer + frame-pacing subset) for the Rust
-// alarm test guest — same rationale as war.statusbar's: the guest wit-bindgen
+// alarm test guest — same rationale as wandr.statusbar's: the guest wit-bindgen
 // rejects the canonical skiko-gfx.wit (matrix-3x3), so redeclare just the subset
-// used. The world additionally imports `war:alarm/scheduler` + exports
-// `war:alarm/alarm-handler` (the package under wit/deps/alarm).
+// used. The world additionally imports `wandr:alarm/scheduler` + exports
+// `wandr:alarm/alarm-handler` (the package under wit/deps/alarm).
 
 package my:skiko-gfx@0.1.0;
 
@@ -58,18 +58,18 @@ interface frame-pacing {
 
 world alarm-test-app {
     import canvas;
-    import war:alarm/scheduler@0.1.0;
+    import wandr:alarm/scheduler@0.1.0;
     export renderer;
     export frame-pacing;
-    export war:alarm/alarm-handler@0.1.0;
+    export wandr:alarm/alarm-handler@0.1.0;
     // M2 — also a background-service: the host calls bg-tick while we're
     // backgrounded (in place of render-frame) so we can verify the pump fires.
-    export war:background/background@0.1.0;
+    export wandr:background/background@0.1.0;
     // M3 — notifications: post one + receive taps (on-notification-click).
-    import war:notify/notifier@0.1.0;
-    export war:notify/notify-handler@0.1.0;
-    // wart-arbiter-audio M2 — audio focus: request gain on first frame, receive
+    import wandr:notify/notifier@0.1.0;
+    export wandr:notify/notify-handler@0.1.0;
+    // wandr-arbiter-audio M2 — audio focus: request gain on first frame, receive
     // on-focus-changed when another app takes focus.
-    import war:audio-focus/focus@0.1.0;
-    export war:audio-focus/focus-handler@0.1.0;
+    import wandr:audio-focus/focus@0.1.0;
+    export wandr:audio-focus/focus-handler@0.1.0;
 }

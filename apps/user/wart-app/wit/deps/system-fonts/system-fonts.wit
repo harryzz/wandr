@@ -1,11 +1,11 @@
-package war:fonts@0.1.0;
+package wandr:fonts@0.1.0;
 
 /// Third cross-app dep system component (task 41). Enumerates and reads
 /// fonts from the host's `/system/fonts/` directory, surfaced to the
 /// dep via a WASI preopen at `/system-fonts` (read-only).
 ///
 /// Producer: `system-fonts/` Rust component, `composition = "same-store"`.
-/// Consumer: wart-app's MarkdownCard pairs the list with proper
+/// Consumer: wandr-app's MarkdownCard pairs the list with proper
 /// FontFamily.Serif / FontFamily.Monospace usage — host's get_typeface
 /// extended (canvas_impl.rs) to resolve the Compose-standard family
 /// names against real Android paths.

@@ -1,4 +1,4 @@
-package wart:signal@0.1.0;
+package wandr:signal@0.1.0;
 
 /// The toolkit-agnostic contract between the Signal engine (this component, which
 /// owns the network/protocol/persistence) and any UI that drives it. The UI calls
@@ -230,9 +230,9 @@ world signal-engine {
   /// Mic capture + AAudio playback for live calls (Phase 2b-ii). Host-provided
   /// (skiko-gfx); after `wac plug`, this remains a host import of the composite.
   import my:skiko-gfx/audio@0.1.0;
-  /// Drive the ringer + comms session on wart-arbiter-audio (host-forwarded).
-  import war:audio-focus/focus@0.1.0;
+  /// Drive the ringer + comms session on wandr-arbiter-audio (host-forwarded).
+  import wandr:audio-focus/focus@0.1.0;
   /// Read the current call route (earpiece/speaker) so the call loop can re-open
   /// the output track when the user toggles it — the route binds at track open.
-  import war:audio-focus/controls@0.1.0;
+  import wandr:audio-focus/controls@0.1.0;
 }

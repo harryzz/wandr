@@ -1,6 +1,6 @@
-// war:notify — M4. Signal imports `notifier` (raise/clear on inbound) + exports
+// wandr:notify — M4. Signal imports `notifier` (raise/clear on inbound) + exports
 // `notify-handler` (open the thread on tap).
-package war:notify@0.1.0;
+package wandr:notify@0.1.0;
 
 interface notifier {
     post: func(id: u64, title: string, body: string);

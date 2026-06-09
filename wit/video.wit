@@ -1,11 +1,11 @@
-// DRAFT SKETCH (2026-06-08) — war:video: host-side hardware video codec for calls.
+// DRAFT SKETCH (2026-06-08) — wandr:video: host-side hardware video codec for calls.
 // NOT YET IMPLEMENTED. See project_crypto_hw_offload (offload layer 2), task 93/95.
 //
 // WHY. A wasm guest cannot encode/decode VP8/VP9 in real time and can't reach the
 // hardware codec. This interface drives the device's HW MediaCodec (NDK AMediaCodec
 // -> Codec2 HAL android.hardware.media.c2, which SURVIVES --no-art — proven by
-// `wart-host --probe-video`: camera->HW VP8 encode 17.4 fps). The guest does only RTP
-// framing + SRTP (war:crypto); the pixels never enter the wasm sandbox.
+// `wandr-host --probe-video`: camera->HW VP8 encode 17.4 fps). The guest does only RTP
+// framing + SRTP (wandr:crypto); the pixels never enter the wasm sandbox.
 //
 // BIDIRECTIONAL (both need HW):
 //   * encoder (OUTGOING, our camera): host captures (camera NDK) + HW-encodes; the
@@ -19,7 +19,7 @@
 // is software-only on this SoC (only OMX.google.vp9.encoder) — so OUTGOING should
 // prefer VP8 HW; INCOMING decodes VP9 or VP8 in HW.
 
-package war:video@0.1.0;
+package wandr:video@0.1.0;
 
 interface types {
     enum codec { vp8, vp9, h264, h265 }
@@ -67,7 +67,7 @@ interface encoder {
     resource video-encoder {
         open: static func(config: encoder-config) -> result<video-encoder, video-error>;
         /// Pull the next encoded frame (non-blocking; none if not ready). The guest
-        /// then RTP-packetizes + SRTP-seals (war:crypto) + sends. (A callback export
+        /// then RTP-packetizes + SRTP-seals (wandr:crypto) + sends. (A callback export
         /// is the alternative if polling proves wasteful at the frame cadence.)
         next-frame: func() -> option<encoded-frame>;
         /// Force a keyframe (on the receiver's RTCP PLI/FIR).
@@ -93,7 +93,7 @@ interface decoder {
     }
 }
 
-/// Imported by a call-engine guest (crates/wart-call). The host implements both.
+/// Imported by a call-engine guest (crates/wandr-call). The host implements both.
 ///
 /// OPEN DESIGN QUESTION: the decoder surface should integrate with the arbiter's
 /// surface/role + compositing model (z-order vs the guest's skia UI, rotation,

@@ -1,23 +1,23 @@
-package war:ime-keyboard@0.1.0;
+package wandr:ime-keyboard@0.1.0;
 
-/// war.ime.keyboard's world. Includes the canonical skiko-ui imports
+/// wandr.ime.keyboard's world. Includes the canonical skiko-ui imports
 /// (Canvas / Paragraph / Keyboard.sendKeyEvent / ...) plus the
-/// IME-events export (`war:ime/ime` — `on-editor-attached` /
+/// IME-events export (`wandr:ime/ime` — `on-editor-attached` /
 /// `on-editor-detached`) the host calls when focus changes.
 ///
-/// `include war:ime/ime-events` (stripped sibling of `ime-client-world`
+/// `include wandr:ime/ime-events` (stripped sibling of `ime-client-world`
 /// that omits the input-connection import) — see wit/ime.wit. We don't
-/// use war:ime/input-connection; key events go through the existing
+/// use wandr:ime/input-connection; key events go through the existing
 /// my:skiko-gfx/keyboard outbound path (task 47 step 3b).
 world ime-keyboard {
     include my:skiko-gfx/skiko-ui@0.1.0;
-    include war:ime/ime-events@0.1.0;
+    include wandr:ime/ime-events@0.1.0;
     // Step 5 — declared language plugins. One import per plugin
     // (each plugin uses its own WIT package because two deps cannot
     // share the same `linker.instance(name)` entry); adding a new
     // language requires an entry here + an @WasmImport in LangAdapter.
-    import war:keyboard-lang-bg/lang@0.1.0;
-    import war:keyboard-lang-fr/lang@0.1.0;
+    import wandr:keyboard-lang-bg/lang@0.1.0;
+    import wandr:keyboard-lang-fr/lang@0.1.0;
     // Task 64 — optional on-demand-render hint; a hidden/idle keyboard returns
     // IDLE so the host stops rendering it 60 fps. See RendererExports.kt.
     export my:skiko-gfx/frame-pacing@0.1.0;

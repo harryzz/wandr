@@ -1,6 +1,6 @@
 // The signal-ui guest world: the trimmed `my:skiko-gfx` contract (verbatim from
 // dioxus-canvas's `skiko_world!` — the canonical WIT's `matrix-3x3` is rejected
-// by the guest wit-parser) PLUS the engine's `wart:signal/chat` import (a dep
+// by the guest wit-parser) PLUS the engine's `wandr:signal/chat` import (a dep
 // under deps/signal/). One world → one generate! → no `_rt`/`cabi_realloc`
 // conflict. `wire!` binds the renderer/sink/IME over the skiko half.
 package my:skiko-gfx@0.1.0;
@@ -112,17 +112,17 @@ world signal-ui-app {
     import paragraph;
     import ime;
     import status;
-    import wart:signal/chat@0.1.0;
+    import wandr:signal/chat@0.1.0;
     export renderer;
     export frame-pacing;
     // M4 (Signal background-receipt) — keep the engine pumping while backgrounded
     // (bg-tick instead of render), raise notifications on inbound, re-wake if
     // killed (keep-alive alarm), and open the right thread on a notification tap.
-    export war:background/background@0.1.0;
-    import war:notify/notifier@0.1.0;
-    export war:notify/notify-handler@0.1.0;
-    import war:alarm/scheduler@0.1.0;
-    export war:alarm/alarm-handler@0.1.0;
+    export wandr:background/background@0.1.0;
+    import wandr:notify/notifier@0.1.0;
+    export wandr:notify/notify-handler@0.1.0;
+    import wandr:alarm/scheduler@0.1.0;
+    export wandr:alarm/alarm-handler@0.1.0;
     // In-call audio controls (route / volume / mute) — the call-controls panel.
-    import war:audio-focus/controls@0.1.0;
+    import wandr:audio-focus/controls@0.1.0;
 }

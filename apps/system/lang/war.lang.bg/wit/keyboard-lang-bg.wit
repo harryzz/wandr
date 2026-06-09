@@ -1,12 +1,12 @@
 // Per-plugin WIT for the Bulgarian language plugin. Shape identical
-// to `wart/wit/keyboard-lang.wit` (the canonical reference); only the
+// to `wandr/wit/keyboard-lang.wit` (the canonical reference); only the
 // package name is per-plugin so two plugins can coexist in the IME's
 // linker without colliding on `LinkerInstance::instance(name)`.
 //
-// Convention: war:keyboard-lang-<lang-id>@0.1.0 — `<lang-id>` matches
-// the BCP-47 short tag and the `war.lang.<id>/` directory name.
+// Convention: wandr:keyboard-lang-<lang-id>@0.1.0 — `<lang-id>` matches
+// the BCP-47 short tag and the `wandr.lang.<id>/` directory name.
 
-package war:keyboard-lang-bg@0.1.0;
+package wandr:keyboard-lang-bg@0.1.0;
 
 interface lang {
     record info {

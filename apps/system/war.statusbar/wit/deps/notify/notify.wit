@@ -1,8 +1,8 @@
-// war:notify/notify-feed — the notification read side for the status bar (M3b).
+// wandr:notify/notify-feed — the notification read side for the status bar (M3b).
 // Host-implemented (answered from the arbiter); mirrors the `notify-feed`
 // interface + `notification` record in the canonical wit/notify.wit.
 
-package war:notify@0.1.0;
+package wandr:notify@0.1.0;
 
 interface notify-feed {
     record notification {

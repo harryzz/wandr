@@ -1,14 +1,14 @@
-package wart:app@0.1.0;
+package wandr:app@0.1.0;
 
-/// wart-app's world — adds the cross-app `war:markdown/renderer`
+/// wandr-app's world — adds the cross-app `wandr:markdown/renderer`
 /// import on top of the canonical skiko-ui interfaces. Including
 /// `skiko-ui` brings the full Compose render contract; we just add
 /// the markdown import on top.
-world wart-app {
+world wandr-app {
     include my:skiko-gfx/skiko-ui@0.1.0;
-    import war:markdown/renderer@0.1.0;
-    import war:emoji/picker@0.1.0;
-    import war:fonts/loader@0.1.0;
+    import wandr:markdown/renderer@0.1.0;
+    import wandr:emoji/picker@0.1.0;
+    import wandr:fonts/loader@0.1.0;
     // Task 64 — optional on-demand-render hint. Opt-in export (not part of
     // skiko-ui) so the host can gate render-frame; see frame-pacing in the
     // skiko-gfx deps + RendererExports.kt's @WasmExport.

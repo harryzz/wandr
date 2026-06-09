@@ -1,5 +1,5 @@
-// The engine contract this consumer imports (mirror of apps/user/war.signal/engine/wit).
-package wart:signal@0.1.0;
+// The engine contract this consumer imports (mirror of apps/user/wandr.signal/engine/wit).
+package wandr:signal@0.1.0;
 
 interface chat {
   enum delivery { sending, sent, delivered, read }

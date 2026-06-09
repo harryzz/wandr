@@ -5,15 +5,15 @@
 // whether the guest is still alive (callback) or has exited (the arbiter
 // relaunches it, then delivers). The arbiter is the scheduling authority
 // (analogous to Android's AlarmManager/JobScheduler); see the
-// `wart-arbiter-alarm` module.
+// `wandr-arbiter-alarm` module.
 //
-// Separate package (like `war:ime`) so adding it doesn't touch the shared
+// Separate package (like `wandr:ime`) so adding it doesn't touch the shared
 // `my:skiko-gfx` contract (no WIT-sync churn across every guest). A guest that
 // wants timed wakes imports `scheduler` + exports `alarm-handler`
 // (`alarm-client`); the host links `scheduler` (`alarm-host`) and calls the
 // guest's export (`alarm-events`).
 
-package war:alarm@0.1.0;
+package wandr:alarm@0.1.0;
 
 /// Imported by a guest that wants to be woken. The runtime forwards `schedule`
 /// to the arbiter, which stores the alarm (keyed by `(app, id)`) and fires it.
@@ -37,7 +37,7 @@ interface alarm-handler {
 }
 
 /// World a guest implements to use alarms: import the scheduler, export the
-/// handler. A regular wart `.warpkg` whose own world also `include`s the
+/// handler. A regular wandr `.wandrpkg` whose own world also `include`s the
 /// `my:skiko-gfx` surface for a GUI guest.
 world alarm-client {
     import scheduler;
@@ -51,7 +51,7 @@ world alarm-host {
 }
 
 /// Host-side export world — the runtime bindgen's this to get a typed
-/// `call_on_alarm`, bound conditionally per instance (like `war:ime/ime-events`):
+/// `call_on_alarm`, bound conditionally per instance (like `wandr:ime/ime-events`):
 /// guests that export `alarm-handler` get the binding, others yield `None`.
 world alarm-events {
     export alarm-handler;
