@@ -7,7 +7,7 @@ publish = false
 # Desktop host runner that instantiates the wasi-tls-probe component with a
 # custom `wasmtime_wasi_tls::TlsProvider` whose root store = webpki public roots
 # + Signal's pinned CA. Proves the Signal handshake succeeds once the host trusts
-# Signal's CA — exactly the small host-side change wart-host would make.
+# Signal's CA — exactly the small host-side change wandr-host would make.
 #
 #   cargo run --release -- ../wasi-tls-probe/target/wasm32-wasip2/release/wasi-tls-probe.wasm
 #

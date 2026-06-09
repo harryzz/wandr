@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch the Hybrid runtime stack on-device: wart-host --zygote + wart-arbiter
+# Launch the Hybrid runtime stack on-device: wandr-host --zygote + wandr-arbiter
 # --daemon, side by side, with SystemUI + the launcher stopped so the runtime
 # owns the screen. Restores both on exit. Task 46 step 3.
 #
@@ -7,14 +7,14 @@
 #   scripts/run-hybrid-stack.sh
 #
 # Inputs (must already exist on the dev machine):
-#   wart-host/target/aarch64-linux-android/release/wasm-android-host
-#   wart-arbiter/target/aarch64-linux-android/release/wart-arbiter
-#   wart-host/cpp/.../libsf_surface.so   (built via standalone-launch.sh helper)
+#   wandr-host/target/aarch64-linux-android/release/wasm-android-host
+#   wandr-arbiter/target/aarch64-linux-android/release/wandr-arbiter
+#   wandr-host/cpp/.../libsf_surface.so   (built via standalone-launch.sh helper)
 #
 # Once the stack is up, drive it from another shell:
-#   adb shell '/data/local/tmp/wart-arbiter launch com.example.wart-app'
-#   adb shell '/data/local/tmp/wart-arbiter list'
-#   adb shell '/data/local/tmp/wart-arbiter kill com.example.wart-app'
+#   adb shell '/data/local/tmp/wandr-arbiter launch com.example.wandr-app'
+#   adb shell '/data/local/tmp/wandr-arbiter list'
+#   adb shell '/data/local/tmp/wandr-arbiter kill com.example.wandr-app'
 #
 # Stop the stack: Ctrl-C in this script's terminal (interactive), or — when run
 # detached / backgrounded / from CI (no TTY) — `run-hybrid-stack.sh --stop`.
@@ -27,16 +27,16 @@ set -euo pipefail
 
 # Detached stop path: tear the stack down and restore SystemUI, then exit.
 if [[ "${1:-}" == "--stop" ]]; then
-    echo "▸ stopping wart-arbiter + wart-host + wart-inputflinger …"
-    adb shell "su -c 'pkill -9 -f wart-arbiter'" >/dev/null 2>&1 || true
-    adb shell "su -c 'pkill -9 -f wart-host'"    >/dev/null 2>&1 || true
-    adb shell "su -c 'pkill -9 -f wart-inputflinger'" >/dev/null 2>&1 || true
-    adb shell "su -c 'pkill -9 -f wart-sensormanager'" >/dev/null 2>&1 || true
+    echo "▸ stopping wandr-arbiter + wandr-host + wandr-inputflinger …"
+    adb shell "su -c 'pkill -9 -f wandr-arbiter'" >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f wandr-host'"    >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f wandr-inputflinger'" >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f wandr-sensormanager'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f /system/bin/sensorservice'" >/dev/null 2>&1 || true
-    adb shell "su -c 'pkill -9 -f wart-net'" >/dev/null 2>&1 || true
-    adb shell "su -c 'pkill -9 -f wart-framework-shim'" >/dev/null 2>&1 || true
-    adb shell "su -c 'pkill -9 -f wart-activityms'" >/dev/null 2>&1 || true  # migration: clear stale old stub
-    adb shell "su -c 'rm -f /data/local/tmp/wart-zygote.sock /data/local/tmp/wart-arbiter.sock'" >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f wandr-net'" >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f wandr-framework-shim'" >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f wandr-activityms'" >/dev/null 2>&1 || true  # migration: clear stale old stub
+    adb shell "su -c 'rm -f /data/local/tmp/wandr-zygote.sock /data/local/tmp/wandr-arbiter.sock'" >/dev/null 2>&1 || true
     adb shell "su -c 'am start -n com.android.systemui/.SystemUIService'" >/dev/null 2>&1 || true
     adb shell "input keyevent KEYCODE_HOME" >/dev/null 2>&1 || true
     echo "▸ stack stopped, SystemUI restored."
@@ -45,23 +45,23 @@ fi
 
 # Restore the Android Java framework after a --no-art run (task 80). adbd
 # (class core, USB) survives the framework stop, so this always recovers. Path A:
-# kill wart-inputflinger first so the restarting system_server re-registers the
+# kill wandr-inputflinger first so the restarting system_server re-registers the
 # real platform inputflinger (else our dead service name lingers).
 if [[ "${1:-}" == "--restore-art" ]]; then
-    echo "▸ stopping wart stack (incl wart-inputflinger) before restoring framework …"
-    adb shell "su -c 'pkill -9 -f wart-inputflinger'" >/dev/null 2>&1 || true
-    # Kill OUR standalone sensorservice + wart-sensormanager so the restored
+    echo "▸ stopping wandr stack (incl wandr-inputflinger) before restoring framework …"
+    adb shell "su -c 'pkill -9 -f wandr-inputflinger'" >/dev/null 2>&1 || true
+    # Kill OUR standalone sensorservice + wandr-sensormanager so the restored
     # system_server can re-own the (single-client) sensors HAL with its own
     # in-process SensorService (task 94).
-    adb shell "su -c 'pkill -9 -f wart-sensormanager'" >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f wandr-sensormanager'" >/dev/null 2>&1 || true
     adb shell "su -c 'pkill -9 -f /system/bin/sensorservice'" >/dev/null 2>&1 || true
-    adb shell "su -c 'pkill -9 -f wart-net'" >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f wandr-net'" >/dev/null 2>&1 || true
     # Kill our framework-shim (activity/permission/...) BEFORE `start` brings the
     # real system_server back — else our shim shadows the real services.
-    adb shell "su -c 'pkill -9 -f wart-framework-shim'" >/dev/null 2>&1 || true
-    adb shell "su -c 'pkill -9 -f wart-activityms'" >/dev/null 2>&1 || true  # migration: clear stale old stub
-    adb shell "su -c 'pkill -9 -f wart-arbiter'" >/dev/null 2>&1 || true
-    adb shell "su -c 'pkill -9 -f wart-host'"    >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f wandr-framework-shim'" >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f wandr-activityms'" >/dev/null 2>&1 || true  # migration: clear stale old stub
+    adb shell "su -c 'pkill -9 -f wandr-arbiter'" >/dev/null 2>&1 || true
+    adb shell "su -c 'pkill -9 -f wandr-host'"    >/dev/null 2>&1 || true
     # Also kill any stuck Magisk su-loggers spinning against the (dead) framework,
     # then restore Magisk su logging/notification (disabled on --no-art entry).
     adb shell "su -c 'pkill -9 -f \"com.topjohnwu.magisk\"'" >/dev/null 2>&1 || true
@@ -73,65 +73,65 @@ if [[ "${1:-}" == "--restore-art" ]]; then
 fi
 
 # Flags (task 80):
-#   --evdev   run hosts with WART_EVDEV_INPUT=1 (input via our standalone
+#   --evdev   run hosts with WANDR_EVDEV_INPUT=1 (input via our standalone
 #             InputReader reading /dev/input directly, not system_server).
 #   --no-art  implies --evdev, and after the stack is up, stop ONLY the Java
 #             framework (zygote + zygote_secondary → system_server) while keeping
 #             the native survivors (surfaceflinger/audioserver/sensorservice).
 #             Recover with `--restore-art`.
-#   --wart-only  (task 96) implies --no-art. The FAST restart path: assume the
-#             native+shim layer (wart-framework-shim + sensorservice + audioserver +
-#             wart-sensormanager) is ALREADY up and healthy from a prior --no-art
-#             run, leave it untouched, and restart ONLY the wart layer (arbiter /
+#   --wandr-only  (task 96) implies --no-art. The FAST restart path: assume the
+#             native+shim layer (wandr-framework-shim + sensorservice + audioserver +
+#             wandr-sensormanager) is ALREADY up and healthy from a prior --no-art
+#             run, leave it untouched, and restart ONLY the wandr layer (arbiter /
 #             host zygote+hosts / inputflinger) in place. No framework stop, no
 #             --restore-art boot cycle — completes in seconds. Use after the first
 #             cold entry into --no-art. (Plain --no-art also skips the native+shim
 #             bringup when it detects the layer already healthy — see Step 5.)
 EXTRA_ENV=""
 NO_ART=0
-WART_ONLY=0
+WANDR_ONLY=0
 for arg in "$@"; do
     case "$arg" in
         # --evdev = the task-80 BOOTSTRAP path: each host runs its own evdev
         # InputReader (proves ART-less input, but global keys fan out to every host
         # → power-key flicker). Kept as a fallback / for the per-host experiment.
-        --evdev)  EXTRA_ENV="WART_EVDEV_INPUT=1 " ;;
-        # --no-art = PATH A: ONE wart-inputflinger service reads input + routes it
+        --evdev)  EXTRA_ENV="WANDR_EVDEV_INPUT=1 " ;;
+        # --no-art = PATH A: ONE wandr-inputflinger service reads input + routes it
         # (focus-based for apps, system keys → arbiter once). Hosts use their normal
         # inputflinger CLIENT path (NO evdev), so EXTRA_ENV stays empty here.
         --no-art) NO_ART=1 ;;
-        # --wart-only (task 96): fast wart-layer-only restart on a live native+shim
+        # --wandr-only (task 96): fast wandr-layer-only restart on a live native+shim
         # layer. Implies --no-art (the layer only exists under --no-art).
-        --wart-only) NO_ART=1; WART_ONLY=1 ;;
+        --wandr-only) NO_ART=1; WANDR_ONLY=1 ;;
     esac
 done
 
-# Task 81 — with ART off the arbiter owns display power (no PMS): WART_NO_ART makes
+# Task 81 — with ART off the arbiter owns display power (no PMS): WANDR_NO_ART makes
 # it drive screen state from its own panel_on, force-on the panel at boot, and run
-# setPowerMode as uid system via `wart-launch wart-screen` (bare root HANGS on SF's
+# setPowerMode as uid system via `wandr-launch wandr-screen` (bare root HANGS on SF's
 # permission check once system_server is gone). Only the --daemon invocation needs it.
 ARB_ENV=""
-[[ "$NO_ART" == "1" ]] && ARB_ENV="WART_NO_ART=1 "
+[[ "$NO_ART" == "1" ]] && ARB_ENV="WANDR_NO_ART=1 "
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
-HOST_BIN="$REPO_ROOT/runtime/wart-host/target/aarch64-linux-android/release/wasm-android-host"
-ARB_BIN="$REPO_ROOT/runtime/wart-arbiter/target/aarch64-linux-android/release/wart-arbiter"
-SHIM="$REPO_ROOT/runtime/wart-host/cpp/build/libsf_surface.so"
-# Task 81/83 — ART-off display power: wart-launch (uid-system launcher) + wart-screen
+HOST_BIN="$REPO_ROOT/runtime/wandr-host/target/aarch64-linux-android/release/wasm-android-host"
+ARB_BIN="$REPO_ROOT/runtime/wandr-arbiter/target/aarch64-linux-android/release/wandr-arbiter"
+SHIM="$REPO_ROOT/runtime/wandr-host/cpp/build/libsf_surface.so"
+# Task 81/83 — ART-off display power: wandr-launch (uid-system launcher) + wandr-screen
 # (setPowerMode helper). Best-effort: pushed if present, only USED under --no-art.
-LAUNCH_BIN="$REPO_ROOT/tools/wart-launch/wart-launch"
-SCREEN_BIN="$REPO_ROOT/runtime/wart-arbiter/target/aarch64-linux-android/release/wart-screen"
+LAUNCH_BIN="$REPO_ROOT/tools/wandr-launch/wandr-launch"
+SCREEN_BIN="$REPO_ROOT/runtime/wandr-arbiter/target/aarch64-linux-android/release/wandr-screen"
 # Path A (task 80) — the standalone inputflinger service (built on a-03). Only
 # USED under --no-art; the platform libinputflinger.so etc. already live on-device.
-INFL_BIN="$REPO_ROOT/runtime/wart-inputflinger/wart-inputflinger"
-# Task 93/94 — ART-off sensors: wart-sensormanager (C++, built on a-03) registers the
-# frameworks ISensorManager (HIDL for the camera EIS + AIDL for the wart Rust stack)
+INFL_BIN="$REPO_ROOT/runtime/wandr-inputflinger/wandr-inputflinger"
+# Task 93/94 — ART-off sensors: wandr-sensormanager (C++, built on a-03) registers the
+# frameworks ISensorManager (HIDL for the camera EIS + AIDL for the wandr Rust stack)
 # on top of the native /system/bin/sensorservice (the HAL owner). The arbiter's
 # task-77 sensor-driver then consumes the AIDL endpoint for auto-rotation / proximity
-# / auto-brightness — the old `wart-sensors` direct-HAL daemon is retired.
-SENSORMGR_BIN="$REPO_ROOT/runtime/wart-sensormanager/cpp/wart-sensormanager"
-# Task 88 — ART-off connectivity: the wart-net daemon (Rust) brings WiFi-STA up
+# / auto-brightness — the old `wandr-sensors` direct-HAL daemon is retired.
+SENSORMGR_BIN="$REPO_ROOT/runtime/wandr-sensormanager/cpp/wandr-sensormanager"
+# Task 88 — ART-off connectivity: the wandr-net daemon (Rust) brings WiFi-STA up
 # (spawn vendor wpa_supplicant + ctrl-socket associate → pure-Rust DHCPv4 →
 # apply address) as root, then drives netd + dnsresolver over binder AS UID
 # SYSTEM (INetd networkCreate/AddRoute/SetDefault + IDnsResolver
@@ -139,22 +139,22 @@ SENSORMGR_BIN="$REPO_ROOT/runtime/wart-sensormanager/cpp/wart-sensormanager"
 # link state to the arbiter. Only launched under --no-art.
 # NOTE: assumes the WiFi chip is already powered + STA iface up (WiFi was ON
 # under ART before --no-art); cold chip power-up via the IWifi HAL is M2.
-WART_NET_BIN="$REPO_ROOT/runtime/wart-net/target/aarch64-linux-android/release/wart-net"
+WANDR_NET_BIN="$REPO_ROOT/runtime/wandr-net/target/aarch64-linux-android/release/wandr-net"
 # Task 96 — the designed --no-art framework-shim (C++, built on a-03), replacing the
-# ad-hoc wart-activityms stub. Registers the minimal binder service set the native
+# ad-hoc wandr-activityms stub. Registers the minimal binder service set the native
 # survivors block on / query with the Java system_server stopped — derived from the
 # daemon sources: waitForService blockers `activity` (audioserver UidPolicy, FATAL if
 # absent), `sensor_privacy`, `package_native` (sensorservice + codec), `processinfo`;
 # plus the checkService/getService fail-close/sleep-loop paths `scheduling_policy`,
 # `permission`, `permission_checker`, `media.camera.proxy`. Brought up FIRST in the
 # native+shim layer, before audioserver/sensorservice. See
-# docs/artless-native-service-model.md, runtime/wart-framework-shim/.
-SHIM_BIN="$REPO_ROOT/runtime/wart-framework-shim/cpp/wart-framework-shim"
-APPS_ROOT="/data/local/tmp/wart-apps"
+# docs/artless-native-service-model.md, runtime/wandr-framework-shim/.
+SHIM_BIN="$REPO_ROOT/runtime/wandr-framework-shim/cpp/wandr-framework-shim"
+APPS_ROOT="/data/local/tmp/wandr-apps"
 # Task 57 — the app the arbiter designates as "home": foregrounded at
 # boot, on `go-home`, and as the fall-back when the foreground app dies.
-# Set WART_HOME_APP="" to disable boot-to-launcher.
-HOME_APP="${WART_HOME_APP-war.launcher}"
+# Set WANDR_HOME_APP="" to disable boot-to-launcher.
+HOME_APP="${WANDR_HOME_APP-wandr.launcher}"
 
 for bin in "$HOST_BIN" "$ARB_BIN" "$SHIM"; do
     if [[ ! -f "$bin" ]]; then
@@ -167,16 +167,16 @@ done
 
 # Resolve the stock home (launcher) package via the framework — used ONLY under ART
 # (to force-stop SystemUI + the launcher so the runtime owns the screen). Under
-# --no-art the framework is (or will be) stopped and HOME_PKG is NEVER used (the wart
-# launcher is the arbiter-persisted WART_HOME_APP / war.launcher, not the stock one).
+# --no-art the framework is (or will be) stopped and HOME_PKG is NEVER used (the wandr
+# launcher is the arbiter-persisted WANDR_HOME_APP / wandr.launcher, not the stock one).
 # Task 96 DROPS the framework-up gate under --no-art: skip the `cmd package` call
-# entirely so a wart-only restart never depends on a live framework. (`cmd package
+# entirely so a wandr-only restart never depends on a live framework. (`cmd package
 # resolve-activity` also returns exit 20 in some framework states, which under
 # `set -o pipefail` would kill the assignment before any guard — another reason to
 # skip it rather than tolerate-and-check.)
 HOME_PKG=""
 if [[ "$NO_ART" == "1" ]]; then
-    echo "▸ --no-art: skipping stock-home resolution (not needed; wart home is arbiter-persisted)"
+    echo "▸ --no-art: skipping stock-home resolution (not needed; wandr home is arbiter-persisted)"
 else
     HOME_PKG="$(
         adb shell "cmd package resolve-activity \
@@ -194,16 +194,16 @@ fi
 restore_ui() {
     set +e
     echo ""
-    echo "▸ stopping wart-arbiter + wart-host …"
-    adb shell "su -c 'pkill -9 -f wart-arbiter'" >/dev/null 2>&1
-    adb shell "su -c 'pkill -9 -f wart-host'"    >/dev/null 2>&1
-    adb shell "su -c 'pkill -9 -f wart-inputflinger'" >/dev/null 2>&1
-    adb shell "su -c 'pkill -9 -f wart-sensormanager'" >/dev/null 2>&1
+    echo "▸ stopping wandr-arbiter + wandr-host …"
+    adb shell "su -c 'pkill -9 -f wandr-arbiter'" >/dev/null 2>&1
+    adb shell "su -c 'pkill -9 -f wandr-host'"    >/dev/null 2>&1
+    adb shell "su -c 'pkill -9 -f wandr-inputflinger'" >/dev/null 2>&1
+    adb shell "su -c 'pkill -9 -f wandr-sensormanager'" >/dev/null 2>&1
     adb shell "su -c 'pkill -9 -f /system/bin/sensorservice'" >/dev/null 2>&1
-    adb shell "su -c 'pkill -9 -f wart-net'" >/dev/null 2>&1
-    adb shell "su -c 'pkill -9 -f wart-framework-shim'" >/dev/null 2>&1
-    adb shell "su -c 'pkill -9 -f wart-activityms'" >/dev/null 2>&1  # migration: clear stale old stub
-    adb shell "su -c 'rm -f /data/local/tmp/wart-zygote.sock /data/local/tmp/wart-arbiter.sock'" >/dev/null 2>&1
+    adb shell "su -c 'pkill -9 -f wandr-net'" >/dev/null 2>&1
+    adb shell "su -c 'pkill -9 -f wandr-framework-shim'" >/dev/null 2>&1
+    adb shell "su -c 'pkill -9 -f wandr-activityms'" >/dev/null 2>&1  # migration: clear stale old stub
+    adb shell "su -c 'rm -f /data/local/tmp/wandr-zygote.sock /data/local/tmp/wandr-arbiter.sock'" >/dev/null 2>&1
     # Path A stops the Java framework EARLY (before the zygote), so a failure here
     # leaves it down — restart it (else `am start` below is a no-op + the device
     # has no UI owner at all). adbd survives, so this recovers.
@@ -233,70 +233,70 @@ push_if_newer() {
     fi
 }
 
-echo "▸ killing any existing wart-host / wart-arbiter / wart-inputflinger …"
-adb shell "su -c 'pkill -9 -f wart-arbiter'" >/dev/null 2>&1 || true
-adb shell "su -c 'pkill -9 -f wart-host'"    >/dev/null 2>&1 || true
-adb shell "su -c 'pkill -9 -f wart-inputflinger'" >/dev/null 2>&1 || true
-adb shell "su -c 'pkill -9 -f wart-net'" >/dev/null 2>&1 || true
-adb shell "su -c 'rm -f /data/local/tmp/wart-zygote.sock /data/local/tmp/wart-arbiter.sock'" >/dev/null 2>&1
+echo "▸ killing any existing wandr-host / wandr-arbiter / wandr-inputflinger …"
+adb shell "su -c 'pkill -9 -f wandr-arbiter'" >/dev/null 2>&1 || true
+adb shell "su -c 'pkill -9 -f wandr-host'"    >/dev/null 2>&1 || true
+adb shell "su -c 'pkill -9 -f wandr-inputflinger'" >/dev/null 2>&1 || true
+adb shell "su -c 'pkill -9 -f wandr-net'" >/dev/null 2>&1 || true
+adb shell "su -c 'rm -f /data/local/tmp/wandr-zygote.sock /data/local/tmp/wandr-arbiter.sock'" >/dev/null 2>&1
 
 echo "▸ pushing artifacts …"
 push_if_newer "$SHIM"     "/data/local/tmp/libsf_surface.so"
-push_if_newer "$HOST_BIN" "/data/local/tmp/wart-host"
-push_if_newer "$ARB_BIN"  "/data/local/tmp/wart-arbiter"
-adb shell 'chmod 755 /data/local/tmp/wart-host /data/local/tmp/wart-arbiter'
+push_if_newer "$HOST_BIN" "/data/local/tmp/wandr-host"
+push_if_newer "$ARB_BIN"  "/data/local/tmp/wandr-arbiter"
+adb shell 'chmod 755 /data/local/tmp/wandr-host /data/local/tmp/wandr-arbiter'
 # Task 81/83 — display-power helpers (uid-system launcher + setPowerMode bin).
 if [[ -f "$LAUNCH_BIN" && -f "$SCREEN_BIN" ]]; then
-    push_if_newer "$LAUNCH_BIN" "/data/local/tmp/wart-launch"
-    push_if_newer "$SCREEN_BIN" "/data/local/tmp/wart-screen"
-    adb shell 'chmod 755 /data/local/tmp/wart-launch /data/local/tmp/wart-screen'
+    push_if_newer "$LAUNCH_BIN" "/data/local/tmp/wandr-launch"
+    push_if_newer "$SCREEN_BIN" "/data/local/tmp/wandr-screen"
+    adb shell 'chmod 755 /data/local/tmp/wandr-launch /data/local/tmp/wandr-screen'
 elif [[ "$NO_ART" == "1" ]]; then
-    echo "✗ --no-art needs wart-launch + wart-screen (display power); build them:" >&2
-    echo "    (cd tools/wart-launch && \$CC_aarch64_linux_android -O2 -o wart-launch wart-launch.c)" >&2
-    echo "    (cd runtime/wart-arbiter && cargo build --release -p wart-screen)" >&2
+    echo "✗ --no-art needs wandr-launch + wandr-screen (display power); build them:" >&2
+    echo "    (cd tools/wandr-launch && \$CC_aarch64_linux_android -O2 -o wandr-launch wandr-launch.c)" >&2
+    echo "    (cd runtime/wandr-arbiter && cargo build --release -p wandr-screen)" >&2
     exit 1
 fi
 # Path A — the standalone inputflinger service.
 if [[ -f "$INFL_BIN" ]]; then
-    push_if_newer "$INFL_BIN" "/data/local/tmp/wart-inputflinger"
-    adb shell 'chmod 755 /data/local/tmp/wart-inputflinger'
+    push_if_newer "$INFL_BIN" "/data/local/tmp/wandr-inputflinger"
+    adb shell 'chmod 755 /data/local/tmp/wandr-inputflinger'
 elif [[ "$NO_ART" == "1" ]]; then
-    echo "✗ --no-art (path A) needs wart-inputflinger; build it on a-03:" >&2
-    echo "    scp runtime/wart-inputflinger/{wart_inputflinger.cpp,Android.bp} a-03:~/android/lineage/external/wart-inputflinger/" >&2
-    echo "    ssh a-03 'cd ~/android/lineage && source build/envsetup.sh && lunch aosp_arm64-trunk_staging-userdebug && export TARGET_RELEASE=trunk_staging && m wart-inputflinger'" >&2
+    echo "✗ --no-art (path A) needs wandr-inputflinger; build it on a-03:" >&2
+    echo "    scp runtime/wandr-inputflinger/{wandr_inputflinger.cpp,Android.bp} a-03:~/android/lineage/external/wandr-inputflinger/" >&2
+    echo "    ssh a-03 'cd ~/android/lineage && source build/envsetup.sh && lunch aosp_arm64-trunk_staging-userdebug && export TARGET_RELEASE=trunk_staging && m wandr-inputflinger'" >&2
     exit 1
 fi
-# Task 93/94 — ART-off sensors: the wart-sensormanager service (built on a-03).
+# Task 93/94 — ART-off sensors: the wandr-sensormanager service (built on a-03).
 # Best-effort: pushed if present; only launched under --no-art. /system/bin/
 # sensorservice (the HAL owner it sits on top of) is already on-device.
 if [[ -f "$SENSORMGR_BIN" ]]; then
-    push_if_newer "$SENSORMGR_BIN" "/data/local/tmp/wart-sensormanager"
-    adb shell 'chmod 755 /data/local/tmp/wart-sensormanager'
+    push_if_newer "$SENSORMGR_BIN" "/data/local/tmp/wandr-sensormanager"
+    adb shell 'chmod 755 /data/local/tmp/wandr-sensormanager'
 elif [[ "$NO_ART" == "1" ]]; then
-    echo "  ⚠ wart-sensormanager missing — no sensors (auto-rotation/proximity/brightness) under --no-art" >&2
-    echo "    build on a-03: m wart-sensormanager (see runtime/wart-sensormanager/cpp/Android.bp)" >&2
+    echo "  ⚠ wandr-sensormanager missing — no sensors (auto-rotation/proximity/brightness) under --no-art" >&2
+    echo "    build on a-03: m wandr-sensormanager (see runtime/wandr-sensormanager/cpp/Android.bp)" >&2
 fi
 # Task 88 — ART-off connectivity daemon. Best-effort: pushed if present; only
 # launched under --no-art (below).
-if [[ -f "$WART_NET_BIN" ]]; then
-    push_if_newer "$WART_NET_BIN" "/data/local/tmp/wart-net"
-    adb shell 'chmod 755 /data/local/tmp/wart-net'
+if [[ -f "$WANDR_NET_BIN" ]]; then
+    push_if_newer "$WANDR_NET_BIN" "/data/local/tmp/wandr-net"
+    adb shell 'chmod 755 /data/local/tmp/wandr-net'
 elif [[ "$NO_ART" == "1" ]]; then
-    echo "  ⚠ wart-net missing — no WiFi under --no-art" >&2
-    echo "    build: (cd runtime/wart-net && cargo build --release)" >&2
+    echo "  ⚠ wandr-net missing — no WiFi under --no-art" >&2
+    echo "    build: (cd runtime/wandr-net && cargo build --release)" >&2
 fi
 
-# Task 96 framework-shim (replaces wart-activityms). Pushed if present (built on
+# Task 96 framework-shim (replaces wandr-activityms). Pushed if present (built on
 # a-03); started FIRST in the native+shim layer under --no-art (below). On a
-# --wart-only restart the device copy is reused as-is (the layer is left running), so
+# --wandr-only restart the device copy is reused as-is (the layer is left running), so
 # a missing local build is fine.
 if [[ -f "$SHIM_BIN" ]]; then
-    push_if_newer "$SHIM_BIN" "/data/local/tmp/wart-framework-shim"
-    adb shell 'chmod 755 /data/local/tmp/wart-framework-shim'
-elif [[ "$NO_ART" == "1" && "$WART_ONLY" != "1" ]]; then
-    echo "  ⚠ wart-framework-shim missing — audio/camera/sensors will wedge under --no-art" >&2
-    echo "    build on a-03: scp runtime/wart-framework-shim/{cpp/wart_framework_shim.cpp,cpp/Android.bp} a-03:~/android/lineage/external/wart-framework-shim/ && \\" >&2
-    echo "    ssh a-03 'cd ~/android/lineage && source build/envsetup.sh && lunch aosp_arm64-trunk_staging-userdebug && export TARGET_RELEASE=trunk_staging && m wart-framework-shim'" >&2
+    push_if_newer "$SHIM_BIN" "/data/local/tmp/wandr-framework-shim"
+    adb shell 'chmod 755 /data/local/tmp/wandr-framework-shim'
+elif [[ "$NO_ART" == "1" && "$WANDR_ONLY" != "1" ]]; then
+    echo "  ⚠ wandr-framework-shim missing — audio/camera/sensors will wedge under --no-art" >&2
+    echo "    build on a-03: scp runtime/wandr-framework-shim/{cpp/wandr_framework_shim.cpp,cpp/Android.bp} a-03:~/android/lineage/external/wandr-framework-shim/ && \\" >&2
+    echo "    ssh a-03 'cd ~/android/lineage && source build/envsetup.sh && lunch aosp_arm64-trunk_staging-userdebug && export TARGET_RELEASE=trunk_staging && m wandr-framework-shim'" >&2
 fi
 
 # Robustly start a long-lived device process, fully detached from this adb
@@ -334,7 +334,7 @@ magisk_su_logging() {
 # so it survives and `su` keeps working. MUST run AFTER all bringup `su -c`; a 2nd
 # pass (same su session, no new grant) catches the worker this sweep itself spawns.
 magisk_worker_sweep() {
-    adb shell 'cat > /data/local/tmp/wart-magisk-sweep.sh' <<'SWEEP' 2>/dev/null || true
+    adb shell 'cat > /data/local/tmp/wandr-magisk-sweep.sh' <<'SWEEP' 2>/dev/null || true
 #!/system/bin/sh
 kw() {
   for am in $(pgrep -f com.android.commands.am.Am 2>/dev/null); do
@@ -345,7 +345,7 @@ kw() {
 }
 kw; sleep 4; kw
 SWEEP
-    adb shell "su -c 'sh /data/local/tmp/wart-magisk-sweep.sh'" >/dev/null 2>&1 || true
+    adb shell "su -c 'sh /data/local/tmp/wandr-magisk-sweep.sh'" >/dev/null 2>&1 || true
 }
 
 # Poll up to tries×0.5 s for a device unix socket to appear. 0 = it showed up.
@@ -360,7 +360,7 @@ wait_for_sock() {
 
 # ── Task 96: native+shim layer (brought up ONCE, idempotently) ────────────────────
 # The framework-coupled native services + the framework-shim form a layer that, once
-# healthy, OUTLIVES wart-stack restarts. Restarting the wart layer (arbiter / hosts /
+# healthy, OUTLIVES wandr-stack restarts. Restarting the wandr layer (arbiter / hosts /
 # inputflinger) on top of a live native+shim layer is the fast `--no-art` restart
 # (no `--restore-art` boot). See docs/artless-native-service-model.md.
 #
@@ -370,7 +370,7 @@ wait_for_sock() {
 # (media.audio_policy). Reads are PLAIN `adb shell` (no `su -c`) — `service`/`dumpsys`
 # are uid-agnostic and every `su -c` under --no-art spawns a Magisk su-log spinner.
 # Retry one device check up to 5×0.6s before giving up — `service`/`dumpsys`/`service
-# list` can momentarily fail right after the wart layer is pkilled (binder churns while
+# list` can momentarily fail right after the wandr layer is pkilled (binder churns while
 # servicemanager processes the deaths), which is NOT the native+shim layer being down.
 _health_check() {
     local label="$1" cmd="$2" pat="$3"
@@ -385,7 +385,7 @@ native_shim_healthy() {
     _health_check activity           'service check activity 2>/dev/null'          'found'        || return 1
     _health_check media.audio_policy 'service check media.audio_policy 2>/dev/null' 'found'        || return 1
     # `service check <name>` (servicemanager lookup only) — NOT `service list`, which
-    # PINGS every registered service and blocks on the dead wart-layer services we just
+    # PINGS every registered service and blocks on the dead wandr-layer services we just
     # pkilled, so it can't finish within the retry budget → false "unhealthy".
     _health_check ISensorManager     'service check android.frameworks.sensorservice.ISensorManager/default 2>/dev/null' 'found' || return 1
     _health_check gyro               'dumpsys sensorservice 2>/dev/null'           'Gyroscope'    || return 1
@@ -403,11 +403,11 @@ bring_up_native_shim() {
     # camera block on the others. Start exactly one (kill any stale first — a shadowed
     # dead shim churns the audioserver permission/attribution path → it restarts →
     # volumes wiped → silence). Then WAIT until it actually serves "activity".
-    if adb shell 'ls /data/local/tmp/wart-framework-shim' >/dev/null 2>&1; then
+    if adb shell 'ls /data/local/tmp/wandr-framework-shim' >/dev/null 2>&1; then
         echo "▸ --no-art: framework-shim (activity/permission/sensor_privacy/package_native/… — shim-first)"
-        adb shell "su -c 'pkill -9 -f wart-framework-shim; pkill -9 -f wart-activityms'" >/dev/null 2>&1 || true
-        spawn_detached /data/local/tmp/wart-framework-shim.log \
-            "/data/local/tmp/wart-launch /data/local/tmp/wart-framework-shim"
+        adb shell "su -c 'pkill -9 -f wandr-framework-shim; pkill -9 -f wandr-activityms'" >/dev/null 2>&1 || true
+        spawn_detached /data/local/tmp/wandr-framework-shim.log \
+            "/data/local/tmp/wandr-launch /data/local/tmp/wandr-framework-shim"
         # Plain `adb shell` polls (no `su -c`) — see native_shim_healthy.
         for _ in $(seq 1 20); do
             adb shell 'service check activity 2>/dev/null' 2>/dev/null | grep -q found && break
@@ -416,11 +416,11 @@ bring_up_native_shim() {
         if adb shell 'service check activity 2>/dev/null' 2>/dev/null | grep -q found; then
             echo "  framework-shim serving (activity registered)"
         else
-            echo "  ⚠ framework-shim not serving 'activity' — see /data/local/tmp/wart-framework-shim.log" >&2
-            adb shell "su -c 'tail -15 /data/local/tmp/wart-framework-shim.log'" 2>&1 | tr -d '\r' >&2
+            echo "  ⚠ framework-shim not serving 'activity' — see /data/local/tmp/wandr-framework-shim.log" >&2
+            adb shell "su -c 'tail -15 /data/local/tmp/wandr-framework-shim.log'" 2>&1 | tr -d '\r' >&2
         fi
     else
-        echo "  ⚠ wart-framework-shim missing on device — audio/camera/sensors will wedge" >&2
+        echo "  ⚠ wandr-framework-shim missing on device — audio/camera/sensors will wedge" >&2
     fi
 
     # ── Step 2a: audioserver, ONCE, with the shim already serving ──
@@ -437,9 +437,9 @@ bring_up_native_shim() {
     done
     # Replicate AudioService's boot volume/device init (dead with system_server):
     # without it the policy reports volume range -1 → every stream at -inf dB → silence.
-    adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/wart-host --init-audio-policy'" >/dev/null 2>&1 || true
+    adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/wandr-host --init-audio-policy'" >/dev/null 2>&1 || true
 
-    # ── Step 2b: sensorservice ONCE-FRESH + wart-sensormanager ──
+    # ── Step 2b: sensorservice ONCE-FRESH + wandr-sensormanager ──
     # Our standalone /system/bin/sensorservice claims the single-client HIDL
     # android.hardware.sensors@1.0 HAL (the framework's sensorservice died with
     # system_server). Empirically (taimen, framework stopped): the claim succeeds on the
@@ -454,17 +454,17 @@ bring_up_native_shim() {
     # so the ~13s poll doesn't spawn a Magisk su-logger storm. In steady state
     # native_shim_healthy short-circuits the whole bringup, so this runs only on a cold
     # --restore-art→--no-art entry — start-once, never churn.
-    if adb shell 'ls /data/local/tmp/wart-sensormanager' >/dev/null 2>&1; then
-        echo "▸ --no-art: sensorservice (once-fresh HAL claim) + wart-sensormanager"
+    if adb shell 'ls /data/local/tmp/wandr-sensormanager' >/dev/null 2>&1; then
+        echo "▸ --no-art: sensorservice (once-fresh HAL claim) + wandr-sensormanager"
         # Kill priors by PID via device-side `pidof` (NOT `pkill -9 -f sensorservice`):
-        # `pkill -f` matches the killer's OWN `su -c '…wart-sensormanager…'` cmdline and
-        # races killing its own shell, so a prior wart-sensormanager can SURVIVE → two
+        # `pkill -f` matches the killer's OWN `su -c '…wandr-sensormanager…'` cmdline and
+        # races killing its own shell, so a prior wandr-sensormanager can SURVIVE → two
         # instances → orphaned EventQueue CPU spin (the duplicate-instance bug). `pidof`
         # matches only the executable basename, never the killer — exactly one of each.
-        adb shell "su -c 'kill -9 \$(pidof sensorservice wart-sensormanager wart-sensors) 2>/dev/null'" >/dev/null 2>&1 || true
+        adb shell "su -c 'kill -9 \$(pidof sensorservice wandr-sensormanager wandr-sensors) 2>/dev/null'" >/dev/null 2>&1 || true
         # Confirm the prior instances are actually gone (no competing single-client claim).
         for _ in $(seq 1 10); do
-            [ -z "$(adb shell 'pidof sensorservice wart-sensormanager' | tr -d '\r')" ] && break
+            [ -z "$(adb shell 'pidof sensorservice wandr-sensormanager' | tr -d '\r')" ] && break
             sleep 0.5
         done
         ss_ok=
@@ -491,12 +491,12 @@ bring_up_native_shim() {
             sleep 3
         done
         [ -z "$ss_ok" ] && echo "  ⚠ sensorservice did not enumerate after 3 claims — see /data/local/tmp/sensorservice.log" >&2
-        # wart-sensormanager (bare root; ISensorManager impls delegate to sensorservice).
+        # wandr-sensormanager (bare root; ISensorManager impls delegate to sensorservice).
         # Its ISensorManager registration lags a freshly-enumerated sensorservice while
         # the HAL settles (measured ~30s on taimen cold), so poll up to ~45s (90×0.5s)
-        # before warning. This is a once-per-cold-entry cost; the --wart-only fast path
+        # before warning. This is a once-per-cold-entry cost; the --wandr-only fast path
         # skips the whole bringup when native_shim_healthy.
-        spawn_detached /data/local/tmp/wart-sensormanager.log "/data/local/tmp/wart-sensormanager"
+        spawn_detached /data/local/tmp/wandr-sensormanager.log "/data/local/tmp/wandr-sensormanager"
         ism='service check android.frameworks.sensorservice.ISensorManager/default 2>/dev/null'
         for _ in $(seq 1 90); do
             adb shell "$ism" 2>/dev/null | grep -q found && break
@@ -505,8 +505,8 @@ bring_up_native_shim() {
         if adb shell "$ism" 2>/dev/null | grep -q found; then
             echo "  sensors ready (AIDL ISensorManager registered)"
         else
-            echo "  ⚠ AIDL ISensorManager not registered — see /data/local/tmp/wart-sensormanager.log" >&2
-            adb shell "su -c 'tail -15 /data/local/tmp/wart-sensormanager.log'" 2>&1 | tr -d '\r' >&2
+            echo "  ⚠ AIDL ISensorManager not registered — see /data/local/tmp/wandr-sensormanager.log" >&2
+            adb shell "su -c 'tail -15 /data/local/tmp/wandr-sensormanager.log'" 2>&1 | tr -d '\r' >&2
         fi
     fi
 }
@@ -528,26 +528,26 @@ else
 fi
 
 # Path A (--no-art) — task 96 TWO-LAYER bringup:
-#   • native+shim layer  (wart-framework-shim + sensorservice + audioserver +
-#     wart-sensormanager) — brought up ONCE, idempotently; outlives wart restarts.
-#   • wart layer  (wart-inputflinger here, then the zygote/arbiter below) — restartable
+#   • native+shim layer  (wandr-framework-shim + sensorservice + audioserver +
+#     wandr-sensormanager) — brought up ONCE, idempotently; outlives wandr restarts.
+#   • wandr layer  (wandr-inputflinger here, then the zygote/arbiter below) — restartable
 #     in place on top of a live native+shim layer.
-# wart-inputflinger comes up BEFORE the zygote/hosts so their inputflinger client path
+# wandr-inputflinger comes up BEFORE the zygote/hosts so their inputflinger client path
 # (waitForService("inputflinger")) only ever resolves to OUR service, never
 # system_server's (now dead). SurfaceFlinger/audioserver are native survivors, so the
-# wart stack still attaches. wart-inputflinger runs via wart-launch (uid system + gid
+# wandr stack still attaches. wandr-inputflinger runs via wandr-launch (uid system + gid
 # input + CAP_BLOCK_SUSPEND) — bare root HANGS on SF's perm check + aborts in EventHub.
 if [[ "$NO_ART" == "1" ]]; then
-    if [[ "$WART_ONLY" == "1" ]]; then
+    if [[ "$WANDR_ONLY" == "1" ]]; then
         # ── FAST PATH: the framework is already stopped and the native+shim layer is
         # already up from a prior --no-art run. Do NOT stop the framework and do NOT
-        # touch the native+shim layer — just restart the wart layer in place. Seconds,
+        # touch the native+shim layer — just restart the wandr layer in place. Seconds,
         # not the ~1–2 min --restore-art ART-boot cycle.
-        echo "▸ --wart-only: fast wart-layer restart on the live native+shim layer (no framework boot)"
+        echo "▸ --wandr-only: fast wandr-layer restart on the live native+shim layer (no framework boot)"
         if native_shim_healthy; then
             echo "  native+shim layer healthy (shim + sensors + audio up) — leaving it running"
         else
-            echo "  ⚠ --wart-only but the native+shim layer is NOT healthy — bringing it up once" >&2
+            echo "  ⚠ --wandr-only but the native+shim layer is NOT healthy — bringing it up once" >&2
             echo "    (use a plain --no-art for a cold entry from ART)" >&2
             bring_up_native_shim
         fi
@@ -572,8 +572,8 @@ if [[ "$NO_ART" == "1" ]]; then
         [ -n "$ssp" ] && { echo "  system_server still up ($ssp) — killing"; adb shell "su -c 'kill -9 $ssp'" >/dev/null 2>&1 || true; sleep 1; }
 
         # Stop the boot animation: with the framework down init can (re)start
-        # bootanimation, which draws over SurfaceFlinger and covers the wart UI.
-        echo "▸ --no-art: stopping bootanimation (covers the wart UI otherwise)"
+        # bootanimation, which draws over SurfaceFlinger and covers the wandr UI.
+        echo "▸ --no-art: stopping bootanimation (covers the wandr UI otherwise)"
         adb shell "su -c 'setprop service.bootanim.exit 1; stop bootanim; pkill -9 -f bootanimation'" >/dev/null 2>&1 || true
 
         # Sweep Magisk su-loggers stuck on the boundary grants: the `magisk --sqlite`
@@ -592,56 +592,56 @@ if [[ "$NO_ART" == "1" ]]; then
         fi
     fi
 
-    # Start wart-inputflinger (registers "inputflinger") before the zygote/hosts so
+    # Start wandr-inputflinger (registers "inputflinger") before the zygote/hosts so
     # their input client path resolves to OUR service. This gives WORKING system-key
     # dedup (POWER/VOLUME → arbiter once, no fan-out flicker). App TOUCH/key routing
     # (task 84): SurfaceFlinger can't push WindowInfos to our dispatcher under ART-off
     # (it bound the inputflinger service once at its own init / mInputFlinger, cleared
     # when system_server died, and updateInputFlinger early-returns), so instead the
-    # wart-arbiter (the window manager) authors the window list and pushes it to
-    # wart-inputflinger's abstract socket (@wart-inputflinger), which feeds the
+    # wandr-arbiter (the window manager) authors the window list and pushes it to
+    # wandr-inputflinger's abstract socket (@wandr-inputflinger), which feeds the
     # dispatcher via onWindowInfosChanged. Hosts register their channel token with the
-    # "wart.windowreg" binder service so the arbiter's per-pid windows resolve. See
+    # "wandr.windowreg" binder service so the arbiter's per-pid windows resolve. See
     # memory project_pathA_inputflinger + tasks/84-pathA-touch-windowinfos.md.
-    echo "▸ starting wart-inputflinger (path A, via wart-launch → uid system) …"
-    # Forward any WART_VP_* viewport-tuning vars set in THIS script's environment so
+    echo "▸ starting wandr-inputflinger (path A, via wandr-launch → uid system) …"
+    # Forward any WANDR_VP_* viewport-tuning vars set in THIS script's environment so
     # the InputReader's display viewport can be aligned to SF's window coordinate
     # space on rotated panels without rebuilding the service (env inherited across
-    # wart-launch's exec). Default (unset) = the service's portrait default.
+    # wandr-launch's exec). Default (unset) = the service's portrait default.
     INFL_VP_ENV=""
-    for v in WART_VP_LOGICAL_W WART_VP_LOGICAL_H WART_VP_DEVICE_W WART_VP_DEVICE_H WART_VP_ORIENT; do
+    for v in WANDR_VP_LOGICAL_W WANDR_VP_LOGICAL_H WANDR_VP_DEVICE_W WANDR_VP_DEVICE_H WANDR_VP_ORIENT; do
         [ -n "${!v:-}" ] && INFL_VP_ENV="${INFL_VP_ENV}${v}=${!v} "
     done
     [ -n "$INFL_VP_ENV" ] && echo "  viewport env: $INFL_VP_ENV"
-    spawn_detached /data/local/tmp/wart-inputflinger.log \
-        "${INFL_VP_ENV}/data/local/tmp/wart-launch /data/local/tmp/wart-inputflinger"
+    spawn_detached /data/local/tmp/wandr-inputflinger.log \
+        "${INFL_VP_ENV}/data/local/tmp/wandr-launch /data/local/tmp/wandr-inputflinger"
     for _ in $(seq 1 20); do
         adb shell "su -c 'service check inputflinger'" 2>/dev/null | grep -q found && break
         sleep 0.5
     done
     if adb shell "su -c 'service check inputflinger'" 2>/dev/null | grep -q found; then
-        echo "  inputflinger registered (wart-inputflinger) — system-key dedup active"
+        echo "  inputflinger registered (wandr-inputflinger) — system-key dedup active"
     else
-        echo "  ⚠ inputflinger not registered — see /data/local/tmp/wart-inputflinger.log:" >&2
-        adb shell "su -c 'tail -15 /data/local/tmp/wart-inputflinger.log'" 2>&1 | tr -d '\r' >&2
+        echo "  ⚠ inputflinger not registered — see /data/local/tmp/wandr-inputflinger.log:" >&2
+        adb shell "su -c 'tail -15 /data/local/tmp/wandr-inputflinger.log'" 2>&1 | tr -d '\r' >&2
     fi
 fi
 
 # True-dp (Arbiter Inc. 3b): chrome heights / content insets are authored by the
-# arbiter (dp×density) and reported/pushed to the hosts — no WART_INSET_* /
-# WART_STATUSBAR_PX / WART_TASKBAR_PX env hardcodes. Fullscreen apps pull their
+# arbiter (dp×density) and reported/pushed to the hosts — no WANDR_INSET_* /
+# WANDR_STATUSBAR_PX / WANDR_TASKBAR_PX env hardcodes. Fullscreen apps pull their
 # insets via report-panel at startup; chrome overlays size their strip from the
 # register-chrome reply.
 
-echo "▸ starting wart-host --zygote (detached; insets arbiter-authored) …"
-spawn_detached /data/local/tmp/wart-zygote.log \
-    "${EXTRA_ENV}LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-host --zygote"
-if ! wait_for_sock /data/local/tmp/wart-zygote.sock 30; then
-    echo "✗ zygote socket never appeared — see /data/local/tmp/wart-zygote.log:" >&2
-    adb shell "su -c 'tail -20 /data/local/tmp/wart-zygote.log'" 2>&1 | tr -d '\r' >&2
+echo "▸ starting wandr-host --zygote (detached; insets arbiter-authored) …"
+spawn_detached /data/local/tmp/wandr-zygote.log \
+    "${EXTRA_ENV}LD_LIBRARY_PATH=/data/local/tmp WANDR_APPS_ROOT=$APPS_ROOT /data/local/tmp/wandr-host --zygote"
+if ! wait_for_sock /data/local/tmp/wandr-zygote.sock 30; then
+    echo "✗ zygote socket never appeared — see /data/local/tmp/wandr-zygote.log:" >&2
+    adb shell "su -c 'tail -20 /data/local/tmp/wandr-zygote.log'" 2>&1 | tr -d '\r' >&2
     exit 1
 fi
-ZPID="$(adb shell 'pgrep -f "wart-host --zygote" | head -1' | tr -d '\r')"
+ZPID="$(adb shell 'pgrep -f "wandr-host --zygote" | head -1' | tr -d '\r')"
 echo "  zygote up (pid $ZPID, socket present)"
 
 # Task 57 — boot straight to the launcher: `set-home $HOME_APP` designates the
@@ -650,40 +650,40 @@ echo "  zygote up (pid $ZPID, socket present)"
 # best-effort — only fires if installed. Runs once the arbiter socket exists.
 bring_up_chrome() {
     # Task 94 — sensors now flow through the arbiter's own task-77 sensor-driver
-    # (wart-hal-sensors → the AIDL ISensorManager registered by wart-sensormanager,
+    # (wandr-hal-sensors → the AIDL ISensorManager registered by wandr-sensormanager,
     # stood up before the zygote above). No separate sensor daemon: auto-rotation,
     # proximity-screen-off, and auto-brightness are arbiter modules. (The old
-    # wart-sensors direct-HAL daemon was deleted.)
+    # wandr-sensors direct-HAL daemon was deleted.)
     # Task 88 — under --no-art, start the connectivity daemon (WiFi). WifiService /
-    # ConnectivityService die with ART; wart-net drives the native survivors
+    # ConnectivityService die with ART; wandr-net drives the native survivors
     # (wpa_supplicant + DHCPv4 + ip route + DNS) and reports to the arbiter
     # (report-net-state). Runs as root via spawn_detached's `su -c` (nl80211 /
-    # route / port 68 need it). Respawn-supervised like wart-sensors: on a link
+    # route / port 68 need it). Respawn-supervised like wandr-sensors: on a link
     # drop or bring-up failure the daemon exits non-zero and the loop retries.
-    if [[ "$NO_ART" == "1" ]] && adb shell 'ls /data/local/tmp/wart-net' >/dev/null 2>&1; then
+    if [[ "$NO_ART" == "1" ]] && adb shell 'ls /data/local/tmp/wandr-net' >/dev/null 2>&1; then
         echo "▸ connectivity daemon (WiFi, --no-art)"
-        spawn_detached /data/local/tmp/wart-net.log \
-            "while true; do /data/local/tmp/wart-net; sleep 3; done"
+        spawn_detached /data/local/tmp/wandr-net.log \
+            "while true; do /data/local/tmp/wandr-net; sleep 3; done"
     fi
     # (ART-off audio stub + audioserver re-init now runs EARLY, before the zygote —
     # see the framework-stop section — so audio is ready before any app launches.)
     if [[ -n "$HOME_APP" ]]; then
         echo "▸ boot-to-home: set-home $HOME_APP"
-        adb shell "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter set-home $HOME_APP'" 2>&1 | tr -d '\r'
+        adb shell "su -c 'WANDR_APPS_ROOT=$APPS_ROOT /data/local/tmp/wandr-arbiter set-home $HOME_APP'" 2>&1 | tr -d '\r'
     fi
     echo "▸ status bar (top overlay)"
-    spawn_detached /dev/null "${EXTRA_ENV}LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-host --standalone-overlay-top --app war.statusbar"
+    spawn_detached /dev/null "${EXTRA_ENV}LD_LIBRARY_PATH=/data/local/tmp WANDR_APPS_ROOT=$APPS_ROOT /data/local/tmp/wandr-host --standalone-overlay-top --app wandr.statusbar"
     echo "▸ taskbar (bottom nav overlay)"
-    spawn_detached /dev/null "${EXTRA_ENV}LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-host --standalone-overlay-bottom-bar --app war.taskbar"
+    spawn_detached /dev/null "${EXTRA_ENV}LD_LIBRARY_PATH=/data/local/tmp WANDR_APPS_ROOT=$APPS_ROOT /data/local/tmp/wandr-host --standalone-overlay-bottom-bar --app wandr.taskbar"
     echo "▸ IME keyboard (bottom overlay) + set-ime"
-    adb shell "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter launch-overlay war.ime.keyboard'" 2>&1 | tr -d '\r'
+    adb shell "su -c 'WANDR_APPS_ROOT=$APPS_ROOT /data/local/tmp/wandr-arbiter launch-overlay wandr.ime.keyboard'" 2>&1 | tr -d '\r'
     sleep 1
-    adb shell "su -c 'WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter set-ime war.ime.keyboard'" 2>&1 | tr -d '\r'
+    adb shell "su -c 'WANDR_APPS_ROOT=$APPS_ROOT /data/local/tmp/wandr-arbiter set-ime wandr.ime.keyboard'" 2>&1 | tr -d '\r'
     echo "▸ keyguard (lock overlay) + boot-lock"
-    spawn_detached /dev/null "${EXTRA_ENV}LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-host --standalone-overlay-lock --app war.keyguard"
+    spawn_detached /dev/null "${EXTRA_ENV}LD_LIBRARY_PATH=/data/local/tmp WANDR_APPS_ROOT=$APPS_ROOT /data/local/tmp/wandr-host --standalone-overlay-lock --app wandr.keyguard"
     sleep 1
     # Boot = locked: the keyguard module shows the lock screen + demotes the app.
-    adb shell "su -c '/data/local/tmp/wart-arbiter lock'" 2>&1 | tr -d '\r'
+    adb shell "su -c '/data/local/tmp/wandr-arbiter lock'" 2>&1 | tr -d '\r'
 
     # --no-art high-CPU fix: clear the Magisk su-log workers accumulated across ALL
     # the `su -c` of bringup (the mid-bringup sweep above runs before zygote/chrome,
@@ -700,38 +700,38 @@ if [[ -t 1 ]]; then
     # Interactive terminal: bring chrome up in the background once the arbiter
     # socket exists, then run the arbiter in the FOREGROUND so this script blocks
     # and Ctrl-C tears the whole stack down via the EXIT/INT trap.
-    ( wait_for_sock /data/local/tmp/wart-arbiter.sock 40 && bring_up_chrome ) &
-    echo "▸ starting wart-arbiter --daemon in foreground (Ctrl-C to stop) …"
-    adb shell -t "su -c '${ARB_ENV}WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter --daemon'"
+    ( wait_for_sock /data/local/tmp/wandr-arbiter.sock 40 && bring_up_chrome ) &
+    echo "▸ starting wandr-arbiter --daemon in foreground (Ctrl-C to stop) …"
+    adb shell -t "su -c '${ARB_ENV}WANDR_APPS_ROOT=$APPS_ROOT /data/local/tmp/wandr-arbiter --daemon'"
 else
     # No controlling TTY (backgrounded / nohup / CI): start the arbiter detached
     # and VERIFY its socket appears, retrying the start if it doesn't — that
     # silent miss was the "wedges after zygote, stock Android reclaims the
     # screen" bug. Then bring chrome up INLINE (no background-waiter race), and
     # exit WITHOUT firing the teardown trap so the stack keeps running.
-    echo "▸ starting wart-arbiter --daemon (detached) …"
+    echo "▸ starting wandr-arbiter --daemon (detached) …"
     arbiter_up=
     for attempt in 1 2 3; do
-        spawn_detached /data/local/tmp/wart-arbiter.log \
-            "${ARB_ENV}LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT /data/local/tmp/wart-arbiter --daemon"
-        if wait_for_sock /data/local/tmp/wart-arbiter.sock 20; then arbiter_up=1; break; fi
+        spawn_detached /data/local/tmp/wandr-arbiter.log \
+            "${ARB_ENV}LD_LIBRARY_PATH=/data/local/tmp WANDR_APPS_ROOT=$APPS_ROOT /data/local/tmp/wandr-arbiter --daemon"
+        if wait_for_sock /data/local/tmp/wandr-arbiter.sock 20; then arbiter_up=1; break; fi
         echo "  arbiter socket not up after 10 s (attempt $attempt/3) — retrying …"
-        adb shell "su -c 'pkill -9 -f wart-arbiter'" >/dev/null 2>&1
+        adb shell "su -c 'pkill -9 -f wandr-arbiter'" >/dev/null 2>&1
     done
     if [[ -z "$arbiter_up" ]]; then
-        echo "✗ wart-arbiter failed to come up after 3 attempts — see log:" >&2
-        adb shell "su -c 'tail -20 /data/local/tmp/wart-arbiter.log'" 2>&1 | tr -d '\r' >&2
+        echo "✗ wandr-arbiter failed to come up after 3 attempts — see log:" >&2
+        adb shell "su -c 'tail -20 /data/local/tmp/wandr-arbiter.log'" 2>&1 | tr -d '\r' >&2
         exit 1   # trap restores SystemUI; a clear failure beats a silent wedge
     fi
     echo "  arbiter up (socket present)"
     bring_up_chrome
     trap - EXIT INT TERM       # don't tear the stack down on this script's exit
     if [[ "$NO_ART" == "1" ]]; then
-        # Path A — the Java framework was already stopped + wart-inputflinger started
+        # Path A — the Java framework was already stopped + wandr-inputflinger started
         # BEFORE the zygote (above), so the hosts connected to OUR inputflinger. The
         # native survivors (surfaceflinger/audioserver/sensorservice, class core) +
-        # adbd are up; input + display power are wart-owned. Recover with --restore-art.
-        echo "  --no-art path A: framework already stopped; wart-inputflinger owns input."
+        # adbd are up; input + display power are wandr-owned. Recover with --restore-art.
+        echo "  --no-art path A: framework already stopped; wandr-inputflinger owns input."
         echo "  Recover with: $0 --restore-art"
     fi
     echo "▸ stack up (detached). Stop with: $0 --stop"

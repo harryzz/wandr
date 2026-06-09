@@ -1,7 +1,7 @@
-# wasi-tls reachability probe, packaged as a system warpkg so it runs through
-# the production wart-host (task 66 on-device proof). A wasi:cli/command — the
+# wasi-tls reachability probe, packaged as a system wandrpkg so it runs through
+# the production wandr-host (task 66 on-device proof). A wasi:cli/command — the
 # loader instantiates it via instantiate_command and call_run.
-app_id      = "war.probe.wasitls"
+app_id      = "wandr.probe.wasitls"
 version     = "0.1.0"
 world       = "wasi:cli/command"
 kind        = "system"

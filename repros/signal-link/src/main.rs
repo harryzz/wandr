@@ -79,12 +79,12 @@ async fn do_link(
     password: String,
 ) -> Result<NewDeviceRegistration, String> {
     let push =
-        PushService::new(SignalServers::Production, None, "wart-signal-link");
+        PushService::new(SignalServers::Production, None, "wandr-signal-link");
     let (tx, mut rx) = futures::channel::mpsc::channel(1);
     let task = wart_step_executor::spawn(async move {
         let mut csprng = seed_rng();
         link_device(
-            &mut aci, &mut pni, &mut csprng, push, &password, "wart", tx,
+            &mut aci, &mut pni, &mut csprng, push, &password, "wandr", tx,
         )
         .await
     });
@@ -203,7 +203,7 @@ async fn do_receive(
     let push = PushService::new(
         SignalServers::Production,
         Some(credentials.clone()),
-        "wart-signal-link",
+        "wandr-signal-link",
     );
     let mut receiver = MessageReceiver::new(push.clone());
     let pipe = receiver

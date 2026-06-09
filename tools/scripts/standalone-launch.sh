@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Launch wart-host --standalone on the device with SystemUI + the
+# Launch wandr-host --standalone on the device with SystemUI + the
 # launcher stopped so the runtime owns the screen. Restores both on
-# exit (Ctrl-C, normal exit, wart-host crash) via an EXIT trap.
+# exit (Ctrl-C, normal exit, wandr-host crash) via an EXIT trap.
 #
 # Usage:
 #   bash scripts/standalone-launch.sh [--shim <path>] [--cwasm <path>]
@@ -32,7 +32,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-HOST_BIN="$REPO_ROOT/runtime/wart-host/target/aarch64-linux-android/release/wasm-android-host"
+HOST_BIN="$REPO_ROOT/runtime/wandr-host/target/aarch64-linux-android/release/wasm-android-host"
 
 # ── pre-flight ───────────────────────────────────────────────────────
 
@@ -58,7 +58,7 @@ if [[ ! -f "$SHIM" ]]; then
 ✗ libsf_surface.so missing at: $SHIM
 
 Build it on the AOSP host (a-03) per tasks/33-boot-model-bringup.md:
-  scp wart-host/cpp/sf_surface.cpp \\
+  scp wandr-host/cpp/sf_surface.cpp \\
       harry@a-03:~/android/lineage/external/sf_surface/sf_surface.cpp
   ssh harry@a-03 'cd ~/android/lineage && \\
       SO=out/soong/.intermediates/external/sf_surface/libsf_surface/android_arm64_armv8-a_shared/libsf_surface.so && \\
@@ -73,13 +73,13 @@ if [[ ! -f "$CWASM" ]]; then
 ✗ skiko-component.cwasm missing at: $CWASM
 
 Build per CLAUDE.md "Build pipeline" (Kotlin → wasm → component → cwasm):
-  cd $REPO_ROOT/apps/user/wart-app
+  cd $REPO_ROOT/apps/user/wandr-app
   ./gradlew compileProductionExecutableKotlinWasmWasi --console=plain --no-daemon
 
   wasm-tools component embed \\
       --world my:skiko-gfx/skiko-ui \\
       $REPO_ROOT/wit/skiko-gfx.wit \\
-      build/compileSync/wasmWasi/main/productionExecutable/kotlin/wart-app.wasm \\
+      build/compileSync/wasmWasi/main/productionExecutable/kotlin/wandr-app.wasm \\
       -o /tmp/embedded.wasm
 
   wasm-tools component new /tmp/embedded.wasm \\
@@ -114,7 +114,7 @@ echo "▸ home package: $HOME_PKG"
 restore_ui() {
     # Idempotent — safe to run twice. Mirrors scripts/standalone-recover.sh.
     set +e
-    adb shell "su -c 'pkill -9 -f wart-host'" >/dev/null 2>&1
+    adb shell "su -c 'pkill -9 -f wandr-host'" >/dev/null 2>&1
     adb shell "su -c 'am start -n com.android.systemui/.SystemUIService'" >/dev/null 2>&1
     adb shell "input keyevent KEYCODE_HOME" >/dev/null 2>&1
     set -e
@@ -122,10 +122,10 @@ restore_ui() {
 }
 trap restore_ui EXIT INT TERM
 
-# ── kill old wart-host + push artifacts ─────────────────────────────
+# ── kill old wandr-host + push artifacts ─────────────────────────────
 
-echo "▸ killing any existing wart-host …"
-adb shell "su -c 'pkill -f wart-host'" >/dev/null 2>&1 || true
+echo "▸ killing any existing wandr-host …"
+adb shell "su -c 'pkill -f wandr-host'" >/dev/null 2>&1 || true
 
 push_if_newer() {
     local local_path="$1" remote_path="$2"
@@ -145,9 +145,9 @@ push_if_newer() {
 
 echo "▸ pushing artifacts …"
 push_if_newer "$SHIM"     "/data/local/tmp/libsf_surface.so"
-push_if_newer "$HOST_BIN" "/data/local/tmp/wart-host"
+push_if_newer "$HOST_BIN" "/data/local/tmp/wandr-host"
 push_if_newer "$CWASM"    "/data/local/tmp/skiko-component.cwasm"
-adb shell "su -c 'chmod 755 /data/local/tmp/wart-host'"
+adb shell "su -c 'chmod 755 /data/local/tmp/wandr-host'"
 
 # ── stop SystemUI + launcher (non-persistent, am force-stop) ────────
 
@@ -155,8 +155,8 @@ echo "▸ stopping SystemUI + launcher ($HOME_PKG) …"
 adb shell "su -c 'am force-stop com.android.systemui'"
 adb shell "su -c 'am force-stop $HOME_PKG'"
 
-# ── launch wart-host in the foreground ──────────────────────────────
+# ── launch wandr-host in the foreground ──────────────────────────────
 
-echo "▸ launching wart-host --standalone (Ctrl-C to stop and restore UI)"
+echo "▸ launching wandr-host --standalone (Ctrl-C to stop and restore UI)"
 echo "──────────────────────────────────────────────────────────────────"
-adb shell -t "su -c 'LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/wart-host --standalone'"
+adb shell -t "su -c 'LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/wandr-host --standalone'"

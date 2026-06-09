@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Task 36 step 7 — full device end-to-end validation of cross-app dep
 # wiring: install the markdown system bundle, install the smoke
-# consumer (which declares a dependency on markdown), run `wart-host
+# consumer (which declares a dependency on markdown), run `wandr-host
 # --run-once com.example.md-smoke`, observe logcat for the loader's
 # dep-wiring log lines + a clean exit.
 #
@@ -16,10 +16,10 @@
 #      component.wasm.
 #   5. AOT-compile consumer for aarch64-android.
 #   6. Push host binary + libsf_surface.so (skip if mtimes match).
-#   7. Push two warpkg dirs to /data/local/tmp.
-#   8. wart-host --install both packages (system bundle first; consumer
+#   7. Push two wandrpkg dirs to /data/local/tmp.
+#   8. wandr-host --install both packages (system bundle first; consumer
 #      second so its resolver finds the dep).
-#   9. wart-host --run-once com.example.md-smoke.
+#   9. wandr-host --run-once com.example.md-smoke.
 #   10. Print logcat tail (run_once: + loader: lines).
 #
 # Logs everything to /tmp/smoke-markdown-<timestamp>.log for post-mortem.
@@ -34,9 +34,9 @@ exec > >(tee -a "$LOG") 2>&1
 
 # ── 1. markdown-renderer wasm ────────────────────────────────────────────
 echo "▸ [1/10] Building markdown-renderer for wasm32-wasip2 …"
-( cd "$REPO_ROOT/apps/system/war.markdown.renderer" \
+( cd "$REPO_ROOT/apps/system/wandr.markdown.renderer" \
   && cargo build --target wasm32-wasip2 --release --quiet )
-MD_WASM="$REPO_ROOT/apps/system/war.markdown.renderer/target/wasm32-wasip2/release/markdown_renderer.wasm"
+MD_WASM="$REPO_ROOT/apps/system/wandr.markdown.renderer/target/wasm32-wasip2/release/markdown_renderer.wasm"
 ls -la "$MD_WASM"
 
 # ── 2. markdown-renderer cwasm (aarch64-android) ─────────────────────────
@@ -49,11 +49,11 @@ wasmtime compile \
 ls -la "$MD_CWASM"
 
 # ── 3. smoke consumer Kotlin/Wasm ────────────────────────────────────────
-echo "▸ [3/10] Building wart-app-md-smoke (Kotlin/Wasm) …"
-( cd "$REPO_ROOT/repros/wart-app-md-smoke" \
+echo "▸ [3/10] Building wandr-app-md-smoke (Kotlin/Wasm) …"
+( cd "$REPO_ROOT/repros/wandr-app-md-smoke" \
   && ./gradlew compileProductionExecutableKotlinWasmWasi \
        --console=plain --no-daemon )
-SMOKE_KOTLIN_WASM="$REPO_ROOT/repros/wart-app-md-smoke/build/compileSync/wasmWasi/main/productionExecutable/kotlin/wart-app-md-smoke.wasm"
+SMOKE_KOTLIN_WASM="$REPO_ROOT/repros/wandr-app-md-smoke/build/compileSync/wasmWasi/main/productionExecutable/kotlin/wandr-app-md-smoke.wasm"
 ls -la "$SMOKE_KOTLIN_WASM"
 
 # ── 4. embed + adapt → component ─────────────────────────────────────────
@@ -70,7 +70,7 @@ fi
 
 wasm-tools component embed \
     --world md-smoke \
-    "$REPO_ROOT/repros/wart-app-md-smoke/wit" \
+    "$REPO_ROOT/repros/wandr-app-md-smoke/wit" \
     "$SMOKE_KOTLIN_WASM" \
     -o "$SMOKE_EMBED"
 wasm-tools component new "$SMOKE_EMBED" \
@@ -87,25 +87,25 @@ wasmtime compile \
     -o "$SMOKE_CWASM" "$SMOKE_COMPONENT"
 ls -la "$SMOKE_CWASM"
 
-# ── 6. push host binary if newer (wart-host already deployed from task 33) ─
-echo "▸ [6/10] Pushing wart-host binary …"
-HOST_BIN="$REPO_ROOT/runtime/wart-host/target/aarch64-linux-android/release/wasm-android-host"
-adb push "$HOST_BIN" /data/local/tmp/wart-host >/dev/null
-adb shell "chmod 0755 /data/local/tmp/wart-host"
+# ── 6. push host binary if newer (wandr-host already deployed from task 33) ─
+echo "▸ [6/10] Pushing wandr-host binary …"
+HOST_BIN="$REPO_ROOT/runtime/wandr-host/target/aarch64-linux-android/release/wasm-android-host"
+adb push "$HOST_BIN" /data/local/tmp/wandr-host >/dev/null
+adb shell "chmod 0755 /data/local/tmp/wandr-host"
 
-# ── 7. construct warpkg dirs ─────────────────────────────────────────────
-echo "▸ [7/10] Building warpkg dirs …"
-MD_PKG="/tmp/markdown.warpkg"
-SMOKE_PKG="/tmp/md-smoke.warpkg"
+# ── 7. construct wandrpkg dirs ─────────────────────────────────────────────
+echo "▸ [7/10] Building wandrpkg dirs …"
+MD_PKG="/tmp/markdown.wandrpkg"
+SMOKE_PKG="/tmp/md-smoke.wandrpkg"
 
 rm -rf "$MD_PKG" "$SMOKE_PKG"
 mkdir -p "$MD_PKG/components" "$SMOKE_PKG/components"
 
 cp "$MD_WASM" "$MD_PKG/components/renderer.wasm"
 cat > "$MD_PKG/package.toml" <<'EOF'
-app_id      = "war.markdown.renderer"
+app_id      = "wandr.markdown.renderer"
 version     = "0.1.0"
-world       = "war:markdown/renderer-world"
+world       = "wandr:markdown/renderer-world"
 kind        = "system"
 composition = "same-store"
 
@@ -124,27 +124,27 @@ composition = "same-store"
 ui = "components/ui.wasm"
 
 [dependencies]
-markdown = { system = "war.markdown.renderer", version = "0.1.0", interface = "war:markdown/renderer@0.1.0" }
+markdown = { system = "wandr.markdown.renderer", version = "0.1.0", interface = "wandr:markdown/renderer@0.1.0" }
 EOF
 
-# Push both warpkgs.
-adb push "$MD_PKG"    /data/local/tmp/markdown.warpkg >/dev/null
-adb push "$SMOKE_PKG" /data/local/tmp/md-smoke.warpkg >/dev/null
+# Push both wandrpkgs.
+adb push "$MD_PKG"    /data/local/tmp/markdown.wandrpkg >/dev/null
+adb push "$SMOKE_PKG" /data/local/tmp/md-smoke.wandrpkg >/dev/null
 
 # ── 8. install both packages on device ───────────────────────────────────
 echo "▸ [8/10] Installing markdown system bundle + smoke consumer …"
-APPS_ROOT="/data/local/tmp/wart-apps"
+APPS_ROOT="/data/local/tmp/wandr-apps"
 adb shell "su -c 'rm -rf $APPS_ROOT && mkdir -p $APPS_ROOT'"
 
-WART_ENV="LD_LIBRARY_PATH=/data/local/tmp WART_APPS_ROOT=$APPS_ROOT"
+WANDR_ENV="LD_LIBRARY_PATH=/data/local/tmp WANDR_APPS_ROOT=$APPS_ROOT"
 set +e
-echo "  - markdown.warpkg →"
-adb shell "su -c '$WART_ENV /data/local/tmp/wart-host --install /data/local/tmp/markdown.warpkg'"
+echo "  - markdown.wandrpkg →"
+adb shell "su -c '$WANDR_ENV /data/local/tmp/wandr-host --install /data/local/tmp/markdown.wandrpkg'"
 RC=$?
 if [[ $RC -ne 0 ]]; then echo "✗ install markdown failed (rc=$RC)"; exit 1; fi
 
-echo "  - md-smoke.warpkg →"
-adb shell "su -c '$WART_ENV /data/local/tmp/wart-host --install /data/local/tmp/md-smoke.warpkg'"
+echo "  - md-smoke.wandrpkg →"
+adb shell "su -c '$WANDR_ENV /data/local/tmp/wandr-host --install /data/local/tmp/md-smoke.wandrpkg'"
 RC=$?
 if [[ $RC -ne 0 ]]; then echo "✗ install md-smoke failed (rc=$RC)"; exit 1; fi
 set -e
@@ -157,14 +157,14 @@ adb shell "cat $APPS_ROOT/apps/com.example.md-smoke/0.0.1/cache-key.toml"
 
 # ── 9. run smoke via --run-once ─────────────────────────────────────────
 echo
-echo "▸ [9/10] Starting logcat tail + running wart-host --run-once …"
+echo "▸ [9/10] Starting logcat tail + running wandr-host --run-once …"
 adb logcat -c
-adb logcat -v time wart-host:V wasm-android-host:V '*:S' > /tmp/smoke-markdown-logcat.log &
+adb logcat -v time wandr-host:V wasm-android-host:V '*:S' > /tmp/smoke-markdown-logcat.log &
 LOGCAT_PID=$!
 trap "kill $LOGCAT_PID 2>/dev/null || true" EXIT
 
 set +e
-adb shell "su -c '$WART_ENV /data/local/tmp/wart-host --run-once com.example.md-smoke'"
+adb shell "su -c '$WANDR_ENV /data/local/tmp/wandr-host --run-once com.example.md-smoke'"
 RC=$?
 set -e
 
@@ -181,9 +181,9 @@ echo "── Captured logcat (loader: + run_once: lines) ──"
 grep -E "loader:|run_once:|standalone:|install:" /tmp/smoke-markdown-logcat.log || echo "(no matching lines)"
 echo
 if [[ $RC -eq 0 ]]; then
-    echo "✓ SUCCESS — wart-host --run-once com.example.md-smoke exited 0"
+    echo "✓ SUCCESS — wandr-host --run-once com.example.md-smoke exited 0"
 else
-    echo "✗ FAILURE — wart-host --run-once exited $RC"
+    echo "✗ FAILURE — wandr-host --run-once exited $RC"
     echo
     echo "── Full logcat tail (last 80 lines) ──"
     tail -80 /tmp/smoke-markdown-logcat.log

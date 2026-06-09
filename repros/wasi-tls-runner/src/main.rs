@@ -6,7 +6,7 @@
 //! stock `wasmtime` CLI trusts only public roots, so `chat.signal.org` fails
 //! `UnknownIssuer`; with Signal's CA added here, the handshake must succeed.
 //!
-//! This is the exact, minimal host-side change wart-host would make to let a
+//! This is the exact, minimal host-side change wandr-host would make to let a
 //! Signal guest reach the service over host-delegated wasi-sockets + wasi-tls.
 
 use std::future::Future;
@@ -28,7 +28,7 @@ use wasmtime_wasi_tls::{
 };
 
 /// Signal's self-signed service CA (`O=Signal Messenger, LLC, CN=Signal
-/// Messenger`), as served in the `chat.signal.org` chain. Production wart should
+/// Messenger`), as served in the `chat.signal.org` chain. Production wandr should
 /// pin this from Signal's own source rather than the live server.
 const SIGNAL_CA_PEM: &[u8] = include_bytes!("../certs/signal-messenger-ca.pem");
 

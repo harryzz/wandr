@@ -1,4 +1,4 @@
-//! call-audio-wire — wire wart-call's PCM ends to the real audio hardware.
+//! call-audio-wire — wire wandr-call's PCM ends to the real audio hardware.
 //!
 //! The final piece of the call engine: connect `MediaSession`'s PCM in/out to the
 //! host `audio` WIT (mic capture + AAudio playback). To keep it verifiable on a
@@ -12,7 +12,7 @@
 //! uses. In a real two-device call the same wiring runs, but each device only
 //! captures (→ peer) or plays (← peer), so the MMAP limit never bites.
 //!
-//!   wart-host --run-once war.probe.callaudio
+//!   wandr-host --run-once wandr.probe.callaudio
 
 wit_bindgen::generate!({
     world: "callaudio",
@@ -22,7 +22,7 @@ wit_bindgen::generate!({
 
 use std::time::{Duration, Instant};
 
-use wart_call::{MediaSession, SrtpKeys, OPUS_PAYLOAD_TYPE, SAMPLE_RATE};
+use wandr_call::{MediaSession, SrtpKeys, OPUS_PAYLOAD_TYPE, SAMPLE_RATE};
 
 use crate::my::skiko_gfx::audio::{self, ChannelLayout, Format, TrackConfig};
 
@@ -57,14 +57,14 @@ fn main() {
     let mut media = MediaSession::new(SAMPLE_RATE, 1, OPUS_PAYLOAD_TYPE, 0xA, &keys, &keys)
         .expect("MediaSession");
 
-    // ---- Phase 1: mic → wart-call media pipeline → buffer ----
+    // ---- Phase 1: mic → wandr-call media pipeline → buffer ----
     let cap = audio::open_capture(cfg);
     if cap == 0 {
         println!("[callaudio] open-capture failed (service unavailable / RECORD_AUDIO / SELinux)");
         std::process::exit(1);
     }
     audio::start(cap);
-    println!("[callaudio] capturing ~3 s of mic → wart-call (Opus + SRTP loopback) — speak now…");
+    println!("[callaudio] capturing ~3 s of mic → wandr-call (Opus + SRTP loopback) — speak now…");
 
     let mut pending: Vec<f32> = Vec::new();
     let mut out: Vec<f32> = Vec::new();
@@ -92,7 +92,7 @@ fn main() {
 
     let in_rms = if in_frames > 0 { in_rms_acc / in_frames as f64 } else { 0.0 };
     println!(
-        "[callaudio] {in_frames} frames through wart-call ({} samples out); mic_rms={in_rms:.4} out_rms={:.4}",
+        "[callaudio] {in_frames} frames through wandr-call ({} samples out); mic_rms={in_rms:.4} out_rms={:.4}",
         out.len(),
         rms(&out)
     );
@@ -165,5 +165,5 @@ fn main() {
     }
     audio::close(trk);
 
-    println!("[callaudio] DONE — mic → wart-call (Opus + SRTP) → AAudio, end-to-end on real hardware");
+    println!("[callaudio] DONE — mic → wandr-call (Opus + SRTP) → AAudio, end-to-end on real hardware");
 }

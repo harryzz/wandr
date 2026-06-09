@@ -1,4 +1,4 @@
-// wart_input_spike — task 80 Step 0 (the go/no-go gate).
+// wandr_input_spike — task 80 Step 0 (the go/no-go gate).
 //
 // Proves Android's C++ InputReader runs STANDALONE (no system_server): a minimal
 // InputReaderPolicyInterface + an InputListenerInterface that just logs, driven by
@@ -7,7 +7,7 @@
 // B) is validated: ABI match, EventHub evdev read, statsd best-effort, policy
 // sufficiency — all at once. Build as a soong cc_binary on the AOSP host (a-03).
 
-#define LOG_TAG "wart_input_spike"
+#define LOG_TAG "wandr_input_spike"
 #include <log/log.h>
 
 #include <utils/RefBase.h>

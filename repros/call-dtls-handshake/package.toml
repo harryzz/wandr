@@ -1,6 +1,6 @@
-# Call engine Stage 2 (DTLS-SRTP handshake) — wasi:cli/command warpkg.
-# Run: wart-host --run-once war.probe.dtls
-app_id      = "war.probe.dtls"
+# Call engine Stage 2 (DTLS-SRTP handshake) — wasi:cli/command wandrpkg.
+# Run: wandr-host --run-once wandr.probe.dtls
+app_id      = "wandr.probe.dtls"
 version     = "0.1.0"
 world       = "wasi:cli/command"
 kind        = "system"

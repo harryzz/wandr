@@ -1,7 +1,7 @@
-From: wart maintainer
+From: wandr maintainer
 Subject: [PATCH] DRC: NEGATIVE-RESULT — replace FreeList::first_fit O(F) with O(log F)
 
-**This patch was tested and made the wart-app workload WORSE.** Posted
+**This patch was tested and made the wandr-app workload WORSE.** Posted
 here only as a benchmark fixture so reviewers can see why allocator-
 side speedups alone don't help, and as a starting point for anyone
 exploring this corner of the design space.
@@ -15,7 +15,7 @@ broken by lowest address.
 
 All 12 existing FreeList unit tests pass.
 
-On device (Pixel 2 XL, wart-app + Compose Material3, 2026-05-18):
+On device (Pixel 2 XL, wandr-app + Compose Material3, 2026-05-18):
 
 | Metric        | Unpatched | With this patch | Δ      |
 |---------------|-----------|-----------------|--------|

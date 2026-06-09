@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>wart-call ↔ browser WebRTC test</title>
+  <title>wandr-call ↔ browser WebRTC test</title>
   <style>
     body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; }
     #state { font-size: 1.2rem; padding: .5rem; border-radius: .4rem; background: #eee; }
@@ -11,8 +11,8 @@
   </style>
 </head>
 <body>
-  <h2>wart-call ↔ browser WebRTC test</h2>
-  <p>The browser offers a <b>recvonly</b> audio call; <code>wart-call</code> answers,
+  <h2>wandr-call ↔ browser WebRTC test</h2>
+  <p>The browser offers a <b>recvonly</b> audio call; <code>wandr-call</code> answers,
      connects (ICE + DTLS-SRTP), and streams a 440&nbsp;Hz Opus tone.</p>
   <button id="go">Start call</button>
   <div id="state">idle</div>
@@ -32,7 +32,7 @@ document.getElementById('go').onclick = async () => {
     pc.oniceconnectionstatechange = () => log('ice: ' + pc.iceConnectionState);
     pc.onconnectionstatechange = () => {
       log('pc: ' + pc.connectionState);
-      if (pc.connectionState === 'connected') setState('CONNECTED — wart-call ↔ browser ✓', 'ok');
+      if (pc.connectionState === 'connected') setState('CONNECTED — wandr-call ↔ browser ✓', 'ok');
       if (['failed','disconnected'].includes(pc.connectionState)) setState('failed: ' + pc.connectionState, 'bad');
     };
     pc.ontrack = (e) => { log('ontrack — audio'); document.getElementById('audio').srcObject = e.streams[0]; };

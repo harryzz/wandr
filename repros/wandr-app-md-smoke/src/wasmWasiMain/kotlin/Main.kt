@@ -1,18 +1,18 @@
-// Task 36 step 6 smoke consumer — calls `war:markdown/renderer.render`
-// (resolved by wart-host's loader against the markdown system bundle)
+// Task 36 step 6 smoke consumer — calls `wandr:markdown/renderer.render`
+// (resolved by wandr-host's loader against the markdown system bundle)
 // and prints the result. Kotlin/Wasm has no `System.err`; `println`
 // writes to stdout (fd 1), which `wasmtime run` shows on the
 // controlling terminal during dev-box validation. On-device routing
-// (stdout → logcat) is wart-host's job in step 7.
+// (stdout → logcat) is wandr-host's job in step 7.
 
-import war.mdSmoke.markdown.render
+import wandr.mdSmoke.markdown.render
 
 // Bare render() call — no println (Kotlin/Wasm + wasmtime command
 // adapter interaction throws on println for reasons not yet diagnosed).
 // Successful exit (code 0) is the smoke signal: the import bound, the
 // dep was invoked, the result was received, the program terminated
 // cleanly.
-import war.mdSmoke.markdown.render
+import wandr.mdSmoke.markdown.render
 
 fun main() {
     val result = render("# Hello\n\n**bold** world.")

@@ -1,8 +1,8 @@
-//! Cross-implementation interop: does wart-call speak real WebRTC?
+//! Cross-implementation interop: does wandr-call speak real WebRTC?
 //!
 //! The webrtc-rs async `webrtc` crate (a separate codebase — its own
-//! webrtc-ice/webrtc-dtls) is the offerer; wart-call is the answerer. They
-//! connect over real localhost UDP. If they reach `Connected`, wart-call's
+//! webrtc-ice/webrtc-dtls) is the offerer; wandr-call is the answerer. They
+//! connect over real localhost UDP. If they reach `Connected`, wandr-call's
 //! SDP/ICE/DTLS interoperate with an independent WebRTC stack — the scriptable
 //! proxy for a browser.
 
@@ -23,8 +23,8 @@ use webrtc::rtp_transceiver::rtp_transceiver_direction::RTCRtpTransceiverDirecti
 use webrtc::rtp_transceiver::rtp_codec::RTPCodecType;
 use webrtc::rtp_transceiver::RTCRtpTransceiverInit;
 
-use wart_call::signaling::Signaling;
-use wart_call::{PeerSession, Role};
+use wandr_call::signaling::Signaling;
+use wandr_call::{PeerSession, Role};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
         .build();
     let pc = Arc::new(api.new_peer_connection(RTCConfiguration::default()).await?);
 
-    // One audio m-line (so the pc negotiates audio, matching wart-call).
+    // One audio m-line (so the pc negotiates audio, matching wandr-call).
     pc.add_transceiver_from_kind(
         RTPCodecType::Audio,
         Some(RTCRtpTransceiverInit { direction: RTCRtpTransceiverDirection::Sendrecv, send_encodings: vec![] }),
@@ -66,27 +66,27 @@ async fn main() -> Result<()> {
     let offer_sdp = pc.local_description().await.expect("local desc").sdp;
     println!("[interop] webrtc-rs offer ({} bytes) generated + candidates gathered", offer_sdp.len());
 
-    // ── wart-call: parse the real offer, answer ──
+    // ── wandr-call: parse the real offer, answer ──
     // Advertise the LAN IP (the pc excludes loopback from its host candidates).
     let sock = UdpSocket::bind("0.0.0.0:0")?;
     sock.set_nonblocking(true)?;
-    let ip = wart_call::local_lan_ip().unwrap_or(std::net::IpAddr::from([127, 0, 0, 1]));
+    let ip = wandr_call::local_lan_ip().unwrap_or(std::net::IpAddr::from([127, 0, 0, 1]));
     let wc_addr = SocketAddr::new(ip, sock.local_addr()?.port());
-    println!("[interop] wart-call advertises {wc_addr}");
+    println!("[interop] wandr-call advertises {wc_addr}");
     let mut a = PeerSession::new(Role::Answerer, wc_addr)?;
 
     let remote_sig = Signaling::from_sdp(&offer_sdp)?;
     println!(
-        "[interop] wart-call parsed offer: ufrag={} setup={} cand={:?}",
+        "[interop] wandr-call parsed offer: ufrag={} setup={} cand={:?}",
         remote_sig.ice_ufrag, remote_sig.setup, remote_sig.candidates.first()
     );
     a.set_remote_signaling(&remote_sig)?;
     let answer_sdp = a.local_signaling().to_sdp();
 
     pc.set_remote_description(RTCSessionDescription::answer(answer_sdp)?).await?;
-    println!("[interop] wart-call answer accepted by webrtc-rs pc");
+    println!("[interop] wandr-call answer accepted by webrtc-rs pc");
 
-    // ── drive wart-call (sync) in a thread over its real UDP socket ──
+    // ── drive wandr-call (sync) in a thread over its real UDP socket ──
     let wc_connected = Arc::new(AtomicBool::new(false));
     {
         let flag = wc_connected.clone();
@@ -113,14 +113,14 @@ async fn main() -> Result<()> {
     for _ in 0..200 {
         if pc_connected.load(Ordering::SeqCst) && wc_connected.load(Ordering::SeqCst) {
             println!();
-            println!("INTEROP OK — wart-call connected to the webrtc-rs async stack (ICE + DTLS-SRTP over UDP)");
+            println!("INTEROP OK — wandr-call connected to the webrtc-rs async stack (ICE + DTLS-SRTP over UDP)");
             return Ok(());
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     println!();
     println!(
-        "INTEROP INCOMPLETE — pc_connected={} wart_call_connected={}",
+        "INTEROP INCOMPLETE — pc_connected={} wandr_call_connected={}",
         pc_connected.load(Ordering::SeqCst),
         wc_connected.load(Ordering::SeqCst)
     );

@@ -1,9 +1,9 @@
-// wart_input_spike — task 80 Step 0. Standalone InputReader probe (cc_binary).
+// wandr_input_spike — task 80 Step 0. Standalone InputReader probe (cc_binary).
 // Built in-tree on the AOSP host (a-03); soong resolves the inputflinger header
-// graph. Deploy to ~/android/lineage/external/wart_input_spike/ then: m wart_input_spike
+// graph. Deploy to ~/android/lineage/external/wandr_input_spike/ then: m wandr_input_spike
 cc_binary {
-    name: "wart_input_spike",
-    srcs: ["wart_input_spike.cpp"],
+    name: "wandr_input_spike",
+    srcs: ["wandr_input_spike.cpp"],
     shared_libs: [
         "libinputreader",
         "libinputflinger_base",

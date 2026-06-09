@@ -5,16 +5,16 @@ edition = "2021"
 publish = false
 
 # Browser interop harness: a tiny HTTP server that serves a WebRTC test page and
-# relays SDP, with wart-call as the answerer. Open the page in a real browser
+# relays SDP, with wandr-call as the answerer. Open the page in a real browser
 # (Chrome/Firefox = Google libwebrtc) on the same network; the browser offers a
-# recvonly audio call, wart-call answers + connects (ICE + DTLS-SRTP over real
+# recvonly audio call, wandr-call answers + connects (ICE + DTLS-SRTP over real
 # UDP) and streams a 440 Hz Opus tone the browser plays. This is the definitive
-# "does wart-call speak real WebRTC?" test (cross-impl interop is already proven
+# "does wandr-call speak real WebRTC?" test (cross-impl interop is already proven
 # headless in ../call-interop).
 #
 #   cargo run        # then open http://<this-machine-ip>:8088 in a browser
 
 [dependencies]
-wart-call = { path = "../../crates/wart-call" }
+wandr-call = { path = "../../crates/wandr-call" }
 tiny_http = "0.12"
 anyhow    = "1"

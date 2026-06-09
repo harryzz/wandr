@@ -1,6 +1,6 @@
 //! Browser interop harness — a tiny HTTP server (serves the test page + relays
-//! SDP) with `wart-call` as the answerer. Open the page in a real browser; the
-//! browser offers a recvonly audio call, wart-call answers, connects (ICE +
+//! SDP) with `wandr-call` as the answerer. Open the page in a real browser; the
+//! browser offers a recvonly audio call, wandr-call answers, connects (ICE +
 //! DTLS-SRTP over real UDP), and streams a 440 Hz Opus tone the browser plays.
 //!
 //!   cargo run     # then open http://<this-machine-ip>:8088
@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Result};
 use tiny_http::{Header, Method, Response, Server};
 
-use wart_call::signaling::Signaling;
-use wart_call::{local_lan_ip, PeerSession, Role, SAMPLE_RATE};
+use wandr_call::signaling::Signaling;
+use wandr_call::{local_lan_ip, PeerSession, Role, SAMPLE_RATE};
 
 const INDEX_HTML: &str = include_str!("../index.html");
 const PORT: u16 = 8088;
@@ -21,7 +21,7 @@ const PORT: u16 = 8088;
 fn main() -> Result<()> {
     let server = Server::http(("0.0.0.0", PORT)).map_err(|e| anyhow!("http: {e}"))?;
     let ip = local_lan_ip().unwrap_or(IpAddr::from([127, 0, 0, 1]));
-    println!("▸ wart-call browser harness up");
+    println!("▸ wandr-call browser harness up");
     println!("▸ open  http://{ip}:{PORT}  in a browser on the same network");
     println!("▸ (if it won't connect, disable Chrome mDNS: chrome://flags/#enable-webrtc-hide-local-ips-with-mdns → Disabled — see README)");
 
@@ -51,7 +51,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Build a wart-call answer for the browser's offer + spawn the call-driving
+/// Build a wandr-call answer for the browser's offer + spawn the call-driving
 /// thread (which streams a tone once connected). Returns the answer SDP.
 fn answer_offer(offer_sdp: &str) -> Result<String> {
     let sock = UdpSocket::bind("0.0.0.0:0")?;
@@ -76,7 +76,7 @@ fn answer_offer(offer_sdp: &str) -> Result<String> {
             a.handle_timeout(now);
             if a.is_connected() {
                 if !announced {
-                    println!("[browser] ✓ wart-call CONNECTED to the browser — streaming Opus tone");
+                    println!("[browser] ✓ wandr-call CONNECTED to the browser — streaming Opus tone");
                     announced = true;
                 }
                 let _ = a.send_audio(&tone);

@@ -1,7 +1,7 @@
 // proxlog — minimal NDK ASensorManager proximity logger, for the ART vs --no-art
 // delivery A/B. Uses the LOW-LEVEL sensor path (ASensorManager → ISensorServer →
 // sensorservice), the same path the Java SystemSensorManager uses — NOT the
-// high-level frameworks.sensorservice.ISensorManager that wart-sensormanager/the
+// high-level frameworks.sensorservice.ISensorManager that wandr-sensormanager/the
 // arbiter use. Logs each proximity event's arrival wall-clock so it can be compared
 // against the SLPI's ASH "PRX_STATE" logcat timestamp to get end-to-end delivery
 // latency. Build with the NDK for aarch64-android, run as root in both modes.

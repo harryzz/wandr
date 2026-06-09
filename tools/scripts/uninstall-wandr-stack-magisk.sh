@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Stop the wart-stack daemons immediately + queue the Magisk module for
+# Stop the wandr-stack daemons immediately + queue the Magisk module for
 # removal at next boot. Idempotent.
 set -euo pipefail
 
-MOD_DST="/data/adb/modules/wart-stack"
+MOD_DST="/data/adb/modules/wandr-stack"
 
 echo "▸ stopping any running daemons …"
-adb shell "su -c 'killall -9 wart-arbiter wart-host 2>/dev/null'" || true
-adb shell "su -c 'rm -f /data/local/tmp/wart-zygote.sock /data/local/tmp/wart-arbiter.sock'"
+adb shell "su -c 'killall -9 wandr-arbiter wandr-host 2>/dev/null'" || true
+adb shell "su -c 'rm -f /data/local/tmp/wandr-zygote.sock /data/local/tmp/wandr-arbiter.sock'"
 
 echo "▸ flagging module for next-boot removal …"
 adb shell "su -c '

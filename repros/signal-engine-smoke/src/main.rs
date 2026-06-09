@@ -1,6 +1,6 @@
 //! Task-67 Phase 2 item (1) verification driver.
 //!
-//! A Rust `wasi:cli/command` that imports `wart:signal/chat` and drives the
+//! A Rust `wasi:cli/command` that imports `wandr:signal/chat` and drives the
 //! signal-engine through nothing but that contract — the exact surface a real UI
 //! uses. WAC-plugged onto the engine and run under `repros/wasi-tls-runner`
 //! (which grants network + Signal CA). Pace: call `poll-events` every 50 ms,
@@ -19,7 +19,7 @@ wit_bindgen::generate!({
 
 use std::time::{Duration, Instant};
 
-use wart::signal::chat::{self, Event};
+use wandr::signal::chat::{self, Event};
 
 fn print_qr(data: &str) {
     match qrcode::QrCode::new(data.as_bytes()) {

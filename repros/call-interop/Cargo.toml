@@ -4,16 +4,16 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# Cross-implementation interop check: does wart-call speak real WebRTC? Pairs
-# wart-call (our sans-IO rtc-* based engine) against the webrtc-rs *async*
+# Cross-implementation interop check: does wandr-call speak real WebRTC? Pairs
+# wandr-call (our sans-IO rtc-* based engine) against the webrtc-rs *async*
 # `webrtc` crate — a SEPARATE codebase (its own webrtc-ice/webrtc-dtls/...), the
 # closest scriptable proxy for a browser/libwebrtc. The full RTCPeerConnection is
-# the offerer; wart-call answers. They connect over real localhost UDP. Native
-# (host) — wart-call's protocol logic is target-independent (wasm is proven on
+# the offerer; wandr-call answers. They connect over real localhost UDP. Native
+# (host) — wandr-call's protocol logic is target-independent (wasm is proven on
 # device); this validates protocol compatibility with an independent stack.
 
 [dependencies]
-wart-call = { path = "../../crates/wart-call" }
+wandr-call = { path = "../../crates/wandr-call" }
 webrtc    = "0.11"
 tokio     = { version = "1", features = ["full"] }
 anyhow    = "1"

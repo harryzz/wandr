@@ -4,7 +4,7 @@
 //! encode mic PCM → Opus payload (→ SRTP/RTP), decode payload → speaker PCM. Its
 //! f32 API matches our PCM-f32 pipeline (mic capture + AAudio). This probe does a
 //! full encode→decode round-trip at 48 kHz mono / 20 ms and checks the signal
-//! survives. Run on-device: `wart-host --run-once war.probe.opus`.
+//! survives. Run on-device: `wandr-host --run-once wandr.probe.opus`.
 
 use std::time::Instant;
 

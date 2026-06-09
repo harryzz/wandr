@@ -7,7 +7,7 @@
 //! replace Stage 1's fixed key — and we prove the two independently-derived key
 //! sets AGREE and actually work with SRTP.
 //!
-//! Run on-device: `wart-host --run-once war.probe.dtls`.
+//! Run on-device: `wandr-host --run-once wandr.probe.dtls`.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -29,7 +29,7 @@ fn main() {
 
     // One self-signed cert, shared (loopback). insecure_skip_verify = the WebRTC
     // fingerprint trust model (peer cert checked out-of-band via the SDP, not a CA).
-    let cert = Certificate::generate_self_signed(vec!["wart-call".to_owned()])
+    let cert = Certificate::generate_self_signed(vec!["wandr-call".to_owned()])
         .expect("generate cert");
     let profiles = vec![SrtpProtectionProfile::Srtp_Aes128_Cm_Hmac_Sha1_80];
 

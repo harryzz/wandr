@@ -1,6 +1,6 @@
 //! UDP transport de-risk for the WebRTC call engine (wasm32-wasip2 guest).
 //!
-//! wart-host wires `wasi:sockets` (wasmtime-wasi p2) + grants the network
+//! wandr-host wires `wasi:sockets` (wasmtime-wasi p2) + grants the network
 //! (`inherit_network`), so a guest should be able to use `std::net::UdpSocket`
 //! directly — the sans-IO `rtc` engine would drive its IO this way. This probe
 //! confirms it:
@@ -10,7 +10,7 @@
 //!      parse XOR-MAPPED-ADDRESS. Proves outbound internet UDP + yields our
 //!      public (server-reflexive) address — the first thing ICE needs.
 //!
-//! Run on-device: `wart-host --run-once <app-id>` (or any wasi:cli host).
+//! Run on-device: `wandr-host --run-once <app-id>` (or any wasi:cli host).
 
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::Duration;
@@ -37,7 +37,7 @@ fn loopback() -> std::io::Result<()> {
     let (a_addr, b_addr) = (a.local_addr()?, b.local_addr()?);
     println!("[udp-probe] bound a={a_addr} b={b_addr}");
 
-    let payload = b"WART-UDP-PROBE";
+    let payload = b"WANDR-UDP-PROBE";
     let n = a.send_to(payload, b_addr)?;
     println!("[udp-probe] sent {n} bytes a->b");
 
@@ -63,7 +63,7 @@ fn stun_reflexive() -> std::io::Result<Option<SocketAddr>> {
     let server = "stun.l.google.com:19302";
 
     // 20-byte STUN Binding Request: type 0x0001, len 0, magic cookie, txid.
-    let txid: [u8; 12] = *b"wart-probe!!";
+    let txid: [u8; 12] = *b"wandr-probe!!";
     let mut req = Vec::with_capacity(20);
     req.extend_from_slice(&0x0001u16.to_be_bytes());
     req.extend_from_slice(&0x0000u16.to_be_bytes());

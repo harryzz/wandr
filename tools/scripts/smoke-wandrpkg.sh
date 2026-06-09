@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Build a synthetic `.warpkg` for task-35 step-6 smoke testing.
+# Build a synthetic `.wandrpkg` for task-35 step-6 smoke testing.
 #
 # Usage:
-#   bash scripts/smoke-warpkg.sh [--component <path>] [--out <dir>]
+#   bash scripts/smoke-wandrpkg.sh [--component <path>] [--out <dir>]
 #
 # Defaults:
 #   --component /tmp/skiko-component.wasm   (output of the CLAUDE.md build
 #                                            pipeline step 3, after
 #                                            wasm-tools component new --adapt)
-#   --out       /tmp/smoke.warpkg
+#   --out       /tmp/smoke.wandrpkg
 #
 # Produces:
 #   <out>/
@@ -16,21 +16,21 @@
 #     components/ui.wasm
 #
 # Push to the device with:
-#   adb push <out> /data/local/tmp/smoke.warpkg
+#   adb push <out> /data/local/tmp/smoke.wandrpkg
 #
 # Then on-device:
-#   adb shell "su -c 'WART_APPS_ROOT=/data/local/tmp/wart-apps \
-#       /data/local/tmp/wart-host --install /data/local/tmp/smoke.warpkg'"
+#   adb shell "su -c 'WANDR_APPS_ROOT=/data/local/tmp/wandr-apps \
+#       /data/local/tmp/wandr-host --install /data/local/tmp/smoke.wandrpkg'"
 #
 # And load via:
-#   adb shell "su -c 'WART_APPS_ROOT=/data/local/tmp/wart-apps \
+#   adb shell "su -c 'WANDR_APPS_ROOT=/data/local/tmp/wandr-apps \
 #       LD_LIBRARY_PATH=/data/local/tmp \
-#       /data/local/tmp/wart-host --standalone --app com.example.smoke'"
+#       /data/local/tmp/wandr-host --standalone --app com.example.smoke'"
 
 set -euo pipefail
 
 COMPONENT="/tmp/skiko-component.wasm"
-OUT="/tmp/smoke.warpkg"
+OUT="/tmp/smoke.wandrpkg"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in

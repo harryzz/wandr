@@ -17,10 +17,10 @@ publish = false
 # stack: the keys come from a real DTLS-SRTP handshake and the media crosses a
 # real socket. Record-then-play (one device can't hold input+output MMAP at once;
 # a real two-device call splits these across the two phones).
-#   wart-host --run-once war.probe.calllive
+#   wandr-host --run-once wandr.probe.calllive
 
 [dependencies]
-wart-call = { path = "../../crates/wart-call" }
+wandr-call = { path = "../../crates/wandr-call" }
 wit-bindgen = "0.46"
 
 [profile.release]

@@ -1,6 +1,6 @@
-# Opus codec de-risk, packaged as a wasi:cli/command warpkg to run through the
-# production wart-host. Run: wart-host --run-once war.probe.opus
-app_id      = "war.probe.opus"
+# Opus codec de-risk, packaged as a wasi:cli/command wandrpkg to run through the
+# production wandr-host. Run: wandr-host --run-once wandr.probe.opus
+app_id      = "wandr.probe.opus"
 version     = "0.1.0"
 world       = "wasi:cli/command"
 kind        = "system"

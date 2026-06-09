@@ -1,6 +1,6 @@
-# wart-call real-UDP device check — wasi:cli/command warpkg.
-# Run: wart-host --run-once war.probe.calludp
-app_id      = "war.probe.calludp"
+# wandr-call real-UDP device check — wasi:cli/command wandrpkg.
+# Run: wandr-host --run-once wandr.probe.calludp
+app_id      = "wandr.probe.calludp"
 version     = "0.1.0"
 world       = "wasi:cli/command"
 kind        = "system"

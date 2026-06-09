@@ -1,4 +1,4 @@
-// wart_inputflinger_spike — task 81/architecture spike.
+// wandr_inputflinger_spike — task 81/architecture spike.
 //
 // Run Android's real InputManager (= BnInputFlinger: InputReader + InputDispatcher
 // + …) STANDALONE, register it as the "inputflinger" binder service, and start it —
@@ -10,7 +10,7 @@
 // SELinux service registration). Window-info routing (SF WindowInfosListener →
 // dispatcher) is stage 2. Build as a soong cc_binary on a-03.
 
-#define LOG_TAG "wart_inputflinger_spike"
+#define LOG_TAG "wandr_inputflinger_spike"
 #include <log/log.h>
 
 #include <binder/IServiceManager.h>

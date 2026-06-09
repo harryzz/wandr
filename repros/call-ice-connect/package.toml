@@ -1,6 +1,6 @@
-# Call engine Stage 2b (ICE connectivity) — wasi:cli/command warpkg.
-# Run: wart-host --run-once war.probe.ice
-app_id      = "war.probe.ice"
+# Call engine Stage 2b (ICE connectivity) — wasi:cli/command wandrpkg.
+# Run: wandr-host --run-once wandr.probe.ice
+app_id      = "wandr.probe.ice"
 version     = "0.1.0"
 world       = "wasi:cli/command"
 kind        = "system"

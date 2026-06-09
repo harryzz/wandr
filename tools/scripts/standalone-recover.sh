@@ -16,7 +16,7 @@ if [[ "$(adb get-state 2>/dev/null | tr -d '\r' || true)" != "device" ]]; then
 fi
 
 set +e
-adb shell "su -c 'pkill -9 -f wart-host'"   >/dev/null 2>&1
+adb shell "su -c 'pkill -9 -f wandr-host'"   >/dev/null 2>&1
 adb shell "su -c 'am start -n com.android.systemui/.SystemUIService'" >/dev/null 2>&1
 adb shell "input keyevent KEYCODE_HOME"     >/dev/null 2>&1
 set -e

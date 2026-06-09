@@ -5,13 +5,13 @@
 
 use dioxus::prelude::*;
 
-/// A tiny reactive component — the kind of thing a wart Rust guest would
+/// A tiny reactive component — the kind of thing a wandr Rust guest would
 /// author instead of hand-rolling draw calls.
 fn app() -> Element {
     let mut count = use_signal(|| 0);
     rsx! {
         div {
-            div { "wart launcher (dioxus spike)" }
+            div { "wandr launcher (dioxus spike)" }
             div {
                 div { "tile A" }
                 div { "tile B" }

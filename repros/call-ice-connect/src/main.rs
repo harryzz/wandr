@@ -9,7 +9,7 @@
 //! assembly swaps this wire for it. DTLS (Stage 2a) then runs over the selected
 //! pair.
 //!
-//! Run on-device: `wart-host --run-once war.probe.ice`.
+//! Run on-device: `wandr-host --run-once wandr.probe.ice`.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

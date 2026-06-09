@@ -1,7 +1,7 @@
-# wart monorepo .gitignore.
+# wandr monorepo .gitignore.
 #
 # Post task-52/53 reorg: the previous flat .gitignore of sibling repo
-# names (`wart-*/`, `compose-*/`, `skiko/`, `markdown-renderer/`, ...)
+# names (`wandr-*/`, `compose-*/`, `skiko/`, `markdown-renderer/`, ...)
 # is obsolete — those siblings are now either subtree-merged into
 # apps/, runtime/, repros/ (tracked here) or registered as submodules
 # under external/ (tracked at the parent level by gitlink).

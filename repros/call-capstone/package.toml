@@ -1,6 +1,6 @@
-# Call engine CAPSTONE — full end-to-end secure call. wasi:cli/command warpkg.
-# Run: wart-host --run-once war.probe.call
-app_id      = "war.probe.call"
+# Call engine CAPSTONE — full end-to-end secure call. wasi:cli/command wandrpkg.
+# Run: wandr-host --run-once wandr.probe.call
+app_id      = "wandr.probe.call"
 version     = "0.1.0"
 world       = "wasi:cli/command"
 kind        = "system"

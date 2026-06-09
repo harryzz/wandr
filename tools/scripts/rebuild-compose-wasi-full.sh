@@ -12,7 +12,7 @@ set -e
 
 GRADLE_OPTS_WASI="-Dorg.gradle.configureondemand=false --console=plain --no-daemon --no-configuration-cache"
 
-cd /home/harry/wart/external/compose-multiplatform-core
+cd /home/harry/wandr/external/compose-multiplatform-core
 
 START_TS=$(date +%s)
 

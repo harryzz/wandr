@@ -1,7 +1,7 @@
 # Spike (task 57 follow-up): does dioxus-core + taffy compile to
 # wasm32-wasip2, and how big is it? Evaluating the "dioxus-core + taffy +
 # custom canvas-WIT painter" path as a light reactive Rust UI framework
-# for wart (a Compose alternative). NOT shipped — a feasibility probe.
+# for wandr (a Compose alternative). NOT shipped — a feasibility probe.
 #
 #   cargo build --target wasm32-wasip2 --release
 [package]

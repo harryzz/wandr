@@ -7,7 +7,7 @@
 //! payload (`rtc-sdp` marshal), parse it back (unmarshal), and extract the
 //! fields — the signaling round-trip.
 //!
-//! Run on-device: `wart-host --run-once war.probe.sdp`.
+//! Run on-device: `wandr-host --run-once wandr.probe.sdp`.
 
 use std::io::Cursor;
 

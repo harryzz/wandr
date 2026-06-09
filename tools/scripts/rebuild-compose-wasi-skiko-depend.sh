@@ -7,7 +7,7 @@ set -e
 
 GRADLE_OPTS_WASI="-Dorg.gradle.configureondemand=false --console=plain --no-daemon --no-configuration-cache"
 
-cd /home/harry/wart/external/compose-multiplatform-core
+cd /home/harry/wandr/external/compose-multiplatform-core
 
 # Dep order: leaf-first (graphics → text → ui → foundation-layout →
 # foundation → animation-core → animation → material-ripple → material3).

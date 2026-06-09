@@ -1,5 +1,5 @@
-// wart-launch — run a target in (roughly) system_server's security context, so a
-// wart native process can use the surviving native daemons (SurfaceFlinger, …) with
+// wandr-launch — run a target in (roughly) system_server's security context, so a
+// wandr native process can use the surviving native daemons (SurfaceFlinger, …) with
 // the Java framework stopped (task 83 / ART-off).
 //
 // The dev stand-in for what `init.rc` does natively in a flashable image
@@ -11,13 +11,13 @@
 //     system_server).
 //   - EventHub aborts without CAP_BLOCK_SUSPEND (EPOLLWAKEUP).
 //   - /dev/input is gid `input` (1004).
-// SELinux is handled separately in dev (`setenforce 0`); a real image ships a wart
+// SELinux is handled separately in dev (`setenforce 0`); a real image ships a wandr
 // sepolicy domain instead.
 //
 // Build (NDK, plain libc — no AOSP internal headers):
-//   $CC_aarch64_linux_android -O2 -o wart-launch wart-launch.c
+//   $CC_aarch64_linux_android -O2 -o wandr-launch wandr-launch.c
 //
-// Usage: wart-launch <program> [args...]
+// Usage: wandr-launch <program> [args...]
 
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -67,7 +67,7 @@ static int set_caps(void) {
     data[1].effective = data[1].permitted = data[1].inheritable = (__u32)(caps >> 32);
 
     if (syscall(SYS_capset, &hdr, data) != 0) {
-        fprintf(stderr, "wart-launch: capset failed: %s\n", strerror(errno));
+        fprintf(stderr, "wandr-launch: capset failed: %s\n", strerror(errno));
         return -1;
     }
     return 0;
@@ -81,18 +81,18 @@ int main(int argc, char** argv) {
 
     // Retain permitted caps across the setuid() drop from root.
     if (prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0) != 0) {
-        fprintf(stderr, "wart-launch: PR_SET_KEEPCAPS failed: %s\n", strerror(errno));
+        fprintf(stderr, "wandr-launch: PR_SET_KEEPCAPS failed: %s\n", strerror(errno));
     }
 
     gid_t groups[] = { AID_SYSTEM, AID_GRAPHICS, AID_INPUT };
     if (setgroups(sizeof(groups) / sizeof(groups[0]), groups) != 0) {
-        fprintf(stderr, "wart-launch: setgroups failed: %s\n", strerror(errno));
+        fprintf(stderr, "wandr-launch: setgroups failed: %s\n", strerror(errno));
     }
     if (setgid(AID_SYSTEM) != 0) {
-        fprintf(stderr, "wart-launch: setgid(system) failed: %s\n", strerror(errno));
+        fprintf(stderr, "wandr-launch: setgid(system) failed: %s\n", strerror(errno));
     }
     if (setuid(AID_SYSTEM) != 0) {
-        fprintf(stderr, "wart-launch: setuid(system) failed: %s\n", strerror(errno));
+        fprintf(stderr, "wandr-launch: setuid(system) failed: %s\n", strerror(errno));
         return 1;
     }
 
@@ -105,6 +105,6 @@ int main(int argc, char** argv) {
     prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_WAKE_ALARM, 0, 0);
 
     execvp(argv[1], &argv[1]);
-    fprintf(stderr, "wart-launch: execvp(%s) failed: %s\n", argv[1], strerror(errno));
+    fprintf(stderr, "wandr-launch: execvp(%s) failed: %s\n", argv[1], strerror(errno));
     return 127;
 }

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # verify-libgui-abi.sh — task 33 Step 1.0 mitigation M4.
 #
-# An ELF built against AOSP platform libs (sf_probe, or the wart-host shim)
+# An ELF built against AOSP platform libs (sf_probe, or the wandr-host shim)
 # links fine on the build host but must RUN against the device's own .so
 # set. LineageOS could in principle diverge from the android-15.0.0_r36
 # source the binary was built from. This catches that deterministically:
 # every undefined symbol the ELF imports must be exported by one of the
-# device-pulled libraries in wart-host/vendor/device-libs/.
+# device-pulled libraries in wandr-host/vendor/device-libs/.
 #
 # Usage: verify-libgui-abi.sh <path-to-aarch64-elf>
 # Exit 0 = every imported symbol resolves on-device; non-zero = missing
@@ -16,7 +16,7 @@ set -euo pipefail
 ELF="${1:?usage: verify-libgui-abi.sh <aarch64-elf>}"
 NDK="${ANDROID_NDK_HOME:-/home/harry/android-ndk-r27d}"
 NM="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
-LIBS="$(cd "$(dirname "$0")/../../runtime/wart-host/vendor/device-libs" && pwd)"
+LIBS="$(cd "$(dirname "$0")/../../runtime/wandr-host/vendor/device-libs" && pwd)"
 
 [ -f "$ELF" ] || { echo "no such ELF: $ELF" >&2; exit 2; }
 ls "$LIBS"/*.so >/dev/null 2>&1 || { echo "no device-libs in $LIBS" >&2; exit 2; }

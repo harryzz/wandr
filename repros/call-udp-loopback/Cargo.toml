@@ -4,11 +4,11 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# Device check for wart-call's real UDP transport: two PeerSessions over real
+# Device check for wandr-call's real UDP transport: two PeerSessions over real
 # wasi:sockets UDP (loopback) do signaling → ICE → DTLS-SRTP → encrypted Opus,
 # in a wasm32-wasip2 guest. Proves the std::net::UdpSocket path (→ wasi:sockets)
-# works end-to-end through wart-host on-device.
-#   wart-host --run-once war.probe.calludp
+# works end-to-end through wandr-host on-device.
+#   wandr-host --run-once wandr.probe.calludp
 
 [dependencies]
-wart-call = { path = "../../crates/wart-call" }
+wandr-call = { path = "../../crates/wandr-call" }

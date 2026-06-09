@@ -7,11 +7,11 @@
 #   - android.gui.*                 -> --lang=cpp -> android/gui/Foo.h
 #   - android.hardware.graphics.common.* -> --lang=ndk -> aidl/android/hardware/graphics/common/Foo.h
 #
-# Output: wart-host/vendor/generated-aidl/{include,src}
+# Output: wandr-host/vendor/generated-aidl/{include,src}
 # Part of task 33 Step 1.0 (libgui ABI de-risking). Re-runnable.
 set -euo pipefail
 
-VENDOR="$(cd "$(dirname "$0")/../../runtime/wart-host/vendor" && pwd)"
+VENDOR="$(cd "$(dirname "$0")/../../runtime/wandr-host/vendor" && pwd)"
 FN="$VENDOR/aosp-frameworks-native"
 HW="$VENDOR/aosp-hardware-interfaces"
 OUT="$VENDOR/generated-aidl"
@@ -23,7 +23,7 @@ mkdir -p "$OUT/include" "$OUT/src" "$SCRATCH"
 
 # The android.gui package is split across two source dirs in AOSP; merge
 # both into one import root ($SCRATCH/root/android/gui). Extract PRISTINE
-# AIDL from git, not the working tree — wart-host/build.rs mutates several
+# AIDL from git, not the working tree — wandr-host/build.rs mutates several
 # gui AIDL files in place for rsbinder (ISurfaceComposer trimmed to 4
 # methods, DisplayBrightness stubbed). The cpp aidl backend needs the
 # originals. Also strip Android-15's `rust_type "..."` clause (the SDK-34

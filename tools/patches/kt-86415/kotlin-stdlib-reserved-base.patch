@@ -10,7 +10,7 @@ withScopedMemoryAllocator scope. createAllocatorInTheNewScope() starts
 the root allocator at RESERVED_BASE=0x20000 instead of 0; destroy() is
 left stock so per-call scoped memory is still reclaimed (no leak).
 
-Bumps defaultSnapshotVersion to 2.4.258-SNAPSHOT. Downstream wart build
+Bumps defaultSnapshotVersion to 2.4.258-SNAPSHOT. Downstream wandr build
 patch (task 34); KT-86415 still needs an upstream decision on long-lived
 realloc use.
 
@@ -53,7 +53,7 @@ index baa1f5d4a041..2fae7ac5a19a 100644
      return result
  }
  
-+// KT-86415 (wart task 34): the WASI preview1 component adapter holds a 64 KB
++// KT-86415 (wandr task 34): the WASI preview1 component adapter holds a 64 KB
 +// `State` block at the fixed address [0x10000, 0x20000). cabi_realloc places
 +// nothing there because the root ScopedMemoryAllocator starts at RESERVED_BASE,
 +// not 0 — so the adapter's long-lived State can never be reused by a scoped

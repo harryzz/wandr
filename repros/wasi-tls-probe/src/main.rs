@@ -166,7 +166,7 @@ fn probe(domain: &str) -> Result<String, String> {
     let (_conn, tls_in, tls_out) = tls_handshake(domain, tcp_in, tcp_out)?;
 
     let request = format!(
-        "GET / HTTP/1.1\r\nHost: {domain}\r\nUser-Agent: wart-wasi-tls-probe\r\nConnection: close\r\n\r\n"
+        "GET / HTTP/1.1\r\nHost: {domain}\r\nUser-Agent: wandr-wasi-tls-probe\r\nConnection: close\r\n\r\n"
     );
     write_all(&tls_out, request.as_bytes())?;
     let response = read_to_end(&tls_in)?;
@@ -189,7 +189,7 @@ fn main() {
     let mut all_ok = true;
     for domain in targets {
         // Build the whole line (incl '\n') and emit it as a SINGLE write: when
-        // this runs headless inside wart-host, output goes to the host's
+        // this runs headless inside wandr-host, output goes to the host's
         // logcat stderr sink which emits one log line per newline-terminated
         // write — but `eprintln!("{x}")` splits into multiple writes (prefix,
         // arg, '\n') and the sink only surfaces the first. One write = one

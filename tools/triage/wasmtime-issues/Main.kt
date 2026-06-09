@@ -6,7 +6,7 @@
 // `suspendCoroutine` suspend/resume cycle in a tight unbounded loop,
 // so a plain
 //
-//   wasmtime run -Wgc,function-references,exceptions wart-leak-repro.wasm
+//   wasmtime run -Wgc,function-references,exceptions wandr-leak-repro.wasm
 //
 // reproduces the unbounded WasmGC-garbage accumulation directly — no
 // embedder, no external driver, no exported function to call.

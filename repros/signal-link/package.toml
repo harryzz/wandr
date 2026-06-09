@@ -1,8 +1,8 @@
 # Task-67 increment 4: run the Signal link+receive guest through the production
-# wart-host on-device. A wasi:cli/command (wstd::main exports wasi:cli/run); the
+# wandr-host on-device. A wasi:cli/command (wstd::main exports wasi:cli/run); the
 # loader instantiates it via instantiate_command + call_run. Needs host network +
-# Signal CA (already wired into wart-host, task 66).
-app_id      = "war.signal.link"
+# Signal CA (already wired into wandr-host, task 66).
+app_id      = "wandr.signal.link"
 version     = "0.1.1"
 world       = "wasi:cli/command"
 kind        = "system"

@@ -17,7 +17,7 @@ Place State at the fixed address 0x10000, growing linear memory to cover
 [0x10000,0x20000). Pairs with a Kotlin stdlib patch that starts the root
 ScopedMemoryAllocator at 0x20000, excluding the reserved window.
 
-Downstream wart fork (task 34); not for upstream as-is.
+Downstream wandr fork (task 34); not for upstream as-is.
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 ---
@@ -57,7 +57,7 @@ index 3e89ea191..01c45954c 100644
 -                mem::size_of::<UnsafeCell<State>>(),
 -            ) as *mut State
 -        };
-+        // KT-86415 (wart task 34): State lives at a fixed reserved address, NOT
++        // KT-86415 (wandr task 34): State lives at a fixed reserved address, NOT
 +        // via cabi_realloc. cabi_realloc == Kotlin's componentModelRealloc,
 +        // which places it in the reclaimable ScopedMemoryAllocator bump region;
 +        // once Kotlin runs `freeAllComponentModelReallocAllocatedMemory` the

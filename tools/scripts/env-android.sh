@@ -5,7 +5,7 @@
 # binaries (no unversioned `aarch64-linux-android-clang`). cc-rs (used by
 # skia-bindings, zstd-sys, others) defaults to the unversioned name and
 # fails to find a tool. We pin to API 30 (matches the linker in
-# wart-host/.cargo/config.toml). `cargo apk` also wants ANDROID_HOME for
+# wandr-host/.cargo/config.toml). `cargo apk` also wants ANDROID_HOME for
 # the SDK platform jars + zipalign / apksigner.
 
 NDK_HOME_DEFAULT=/home/harry/android-ndk-r27d

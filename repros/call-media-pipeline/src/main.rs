@@ -10,7 +10,7 @@
 //! Input is a synthetic 440 Hz tone (a pure pipeline test; live mic↔speaker is
 //! blocked by this device's input+output MMAP limit). A fixed SRTP master key +
 //! loopback context stand in for the keys the DTLS handshake derives later.
-//! Run on-device: `wart-host --run-once war.probe.callmedia`.
+//! Run on-device: `wandr-host --run-once wandr.probe.callmedia`.
 
 use std::time::Instant;
 

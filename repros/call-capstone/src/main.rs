@@ -7,7 +7,7 @@
 //!   4. media       — A: tone → Opus → RTP → SRTP → wire → B: → Opus → PCM
 //!
 //! The "wire" is in-memory (real wasi:sockets UDP is de-risked separately).
-//! Run on-device: `wart-host --run-once war.probe.call`.
+//! Run on-device: `wandr-host --run-once wandr.probe.call`.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -86,7 +86,7 @@ fn main() {
     println!("[2/4 ICE] connected — selected pair {} ↔ {}", la.addr(), ra.addr());
 
     // ── 3. DTLS-SRTP handshake over the selected pair ───────────────────────
-    let cert = Certificate::generate_self_signed(vec!["wart-call".into()]).unwrap();
+    let cert = Certificate::generate_self_signed(vec!["wandr-call".into()]).unwrap();
     let profiles = vec![SrtpProtectionProfile::Srtp_Aes128_Cm_Hmac_Sha1_80];
     let server_cfg = Arc::new(ConfigBuilder::default()
         .with_certificates(vec![cert.clone()]).with_srtp_protection_profiles(profiles.clone())

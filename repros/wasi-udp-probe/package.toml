@@ -1,8 +1,8 @@
-# UDP transport de-risk, packaged as a system warpkg so it runs through the
-# production wart-host (wasi:sockets UDP + grant_network). A wasi:cli/command —
+# UDP transport de-risk, packaged as a system wandrpkg so it runs through the
+# production wandr-host (wasi:sockets UDP + grant_network). A wasi:cli/command —
 # the loader instantiates it via instantiate_command and call_run.
-# Run on-device: wart-host --run-once war.probe.udp
-app_id      = "war.probe.udp"
+# Run on-device: wandr-host --run-once wandr.probe.udp
+app_id      = "wandr.probe.udp"
 version     = "0.1.0"
 world       = "wasi:cli/command"
 kind        = "system"

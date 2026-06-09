@@ -308,7 +308,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "tokio",
- "wart-call",
+ "wandr-call",
  "webrtc",
 ]
 
@@ -2361,7 +2361,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "wart-call"
+name = "wandr-call"
 version = "0.1.0"
 dependencies = [
  "bytes",

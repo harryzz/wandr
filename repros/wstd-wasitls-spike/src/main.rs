@@ -164,7 +164,7 @@ async fn probe(domain: &str) -> Result<String, String> {
         tls_handshake(domain, tcp_in, tcp_out).await?;
 
     let request = format!(
-        "GET / HTTP/1.1\r\nHost: {domain}\r\nUser-Agent: wart-wstd-wasitls-spike\r\nConnection: close\r\n\r\n"
+        "GET / HTTP/1.1\r\nHost: {domain}\r\nUser-Agent: wandr-wstd-wasitls-spike\r\nConnection: close\r\n\r\n"
     );
     write_all(&tls_out, request.as_bytes()).await?;
     let response = read_to_end(&tls_in).await?;

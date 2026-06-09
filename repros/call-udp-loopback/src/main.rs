@@ -1,15 +1,15 @@
-//! Device check for wart-call's real UDP transport. Two `PeerSession`s, each on
+//! Device check for wandr-call's real UDP transport. Two `PeerSession`s, each on
 //! a real loopback `UdpSocket` (→ wasi:sockets in the guest), exchange SDP and
 //! drive a full call over the sockets: signaling → ICE → DTLS-SRTP → encrypted
-//! Opus media. Proves the engine works over real UDP through wart-host on-device.
+//! Opus media. Proves the engine works over real UDP through wandr-host on-device.
 //!
-//!   wart-host --run-once war.probe.calludp
+//!   wandr-host --run-once wandr.probe.calludp
 
 use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
-use wart_call::signaling::Signaling;
-use wart_call::{local_lan_ip, PeerSession, Role, SAMPLE_RATE};
+use wandr_call::signaling::Signaling;
+use wandr_call::{local_lan_ip, PeerSession, Role, SAMPLE_RATE};
 
 fn main() {
     // Advertise the real LAN IP (what a peer on the network reaches us at) — the
@@ -68,5 +68,5 @@ fn main() {
     let rms = (got.iter().map(|&v| (v as f64) * (v as f64)).sum::<f64>() / got.len() as f64).sqrt();
     println!("[calludp] B decoded {} samples over UDP (rms={rms:.4})", got.len());
 
-    println!("CALL OVER REAL UDP OK — wart-call PeerSession works over wasi:sockets on wasm32-wasip2");
+    println!("CALL OVER REAL UDP OK — wandr-call PeerSession works over wasi:sockets on wasm32-wasip2");
 }

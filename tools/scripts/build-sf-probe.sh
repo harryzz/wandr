@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the standalone sf_probe binary (task 33 Step 1, M5) for aarch64
-# Android. Compiles wart-host/cpp/sf_probe.cpp against vendored AOSP headers
+# Android. Compiles wandr-host/cpp/sf_probe.cpp against vendored AOSP headers
 # and links against device-pulled .so libs in vendor/device-libs/.
 #
 # Output: /tmp/sf_probe   (push to /data/local/tmp and su-run on device)
@@ -10,7 +10,7 @@ NDK="${ANDROID_NDK_HOME:-/home/harry/android-ndk-r27d}"
 API=35
 CXX="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${API}-clang++"
 
-WH="$(cd "$(dirname "$0")/../wart-host" && pwd)"
+WH="$(cd "$(dirname "$0")/../wandr-host" && pwd)"
 V="$WH/vendor"
 FN="$V/aosp-frameworks-native"
 SC="$V/aosp-system-core"

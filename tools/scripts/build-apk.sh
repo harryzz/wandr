@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the wart-host APK for aarch64-android (release) and report the path.
+# Build the wandr-host APK for aarch64-android (release) and report the path.
 #
 # Pairs with scripts/build-host-android.sh which produces only the host
 # binary (for the bare-binary deploy.sh flow). This one produces the
@@ -17,9 +17,9 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # shellcheck source=./env-android.sh
 source "$REPO_ROOT/tools/scripts/env-android.sh"
 
-cd "$REPO_ROOT/runtime/wart-host"
+cd "$REPO_ROOT/runtime/wandr-host"
 
-APK_PATH="$REPO_ROOT/runtime/wart-host/target/release/apk/wasm_android_host.apk"
+APK_PATH="$REPO_ROOT/runtime/wandr-host/target/release/apk/wasm_android_host.apk"
 APK_BEFORE_MTIME=0
 if [[ -f "$APK_PATH" ]]; then
     APK_BEFORE_MTIME=$(stat -c '%Y' "$APK_PATH" 2>/dev/null || stat -f '%m' "$APK_PATH")

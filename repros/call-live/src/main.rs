@@ -12,7 +12,7 @@
 //! once. Record-then-play because one device can't hold input + output MMAP
 //! simultaneously (a real call splits capture and playback across two phones).
 //!
-//!   wart-host --run-once war.probe.calllive
+//!   wandr-host --run-once wandr.probe.calllive
 
 wit_bindgen::generate!({
     world: "callaudio",
@@ -23,8 +23,8 @@ wit_bindgen::generate!({
 use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
-use wart_call::signaling::Signaling;
-use wart_call::{PeerSession, Role, SAMPLE_RATE};
+use wandr_call::signaling::Signaling;
+use wandr_call::{PeerSession, Role, SAMPLE_RATE};
 
 use crate::my::skiko_gfx::audio::{self, ChannelLayout, Format, TrackConfig};
 

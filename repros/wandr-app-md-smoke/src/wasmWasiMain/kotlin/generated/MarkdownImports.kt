@@ -1,4 +1,4 @@
-// Hand-written Kotlin/Wasm bindings for the `war:markdown/renderer@0.1.0`
+// Hand-written Kotlin/Wasm bindings for the `wandr:markdown/renderer@0.1.0`
 // WIT import. wit-bindgen 0.53.1 doesn't ship a Kotlin generator
 // (despite skiko's headers claiming otherwise — that fork is private),
 // so we author this by hand. Modeled on skiko's ComponentSupport.kt.
@@ -12,7 +12,7 @@
 
 @file:OptIn(UnsafeWasmMemoryApi::class, ComponentModelInternalApi::class)
 
-package war.mdSmoke.markdown
+package wandr.mdSmoke.markdown
 
 import kotlin.wasm.*
 import kotlin.wasm.unsafe.*
@@ -29,8 +29,8 @@ import kotlin.wasm.unsafe.*
 /// is 8 bytes (a list lowers to ptr + len, both i32):
 ///   offset 0..3: blocks.ptr  (i32)
 ///   offset 4..7: blocks.len  (i32)
-/// The component-model linker layer in wart-host bridges the two.
-@WasmImport("war:markdown/renderer@0.1.0", "render")
+/// The component-model linker layer in wandr-host bridges the two.
+@WasmImport("wandr:markdown/renderer@0.1.0", "render")
 private external fun __wasm_import_render(
     sourcePtr: Int, sourceLen: Int, returnAreaPtr: Int,
 )
