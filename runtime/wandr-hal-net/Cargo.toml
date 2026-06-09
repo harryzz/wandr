@@ -27,11 +27,11 @@ libc = "0.2"
 # The netd/dnsresolver binder path (android.net.IDnsResolver — configure the DNS
 # resolver, which has no `ndc` command). Same rsbinder pin as the rest of the
 # stack ([[reference_rsbinder_version]]).
-rsbinder = { git = "https://github.com/hiking90/rsbinder", rev = "5e999e04a", features = ["android_11_plus"] }
+rsbinder = { path = "../../external/rsbinder/rsbinder", features = ["android_11_plus"] }
 # The generated bindings reference `async_trait` (async codegen — sync is broken
 # in this rsbinder); we still call the proxy synchronously.
 async-trait = "0.1"
 
 [build-dependencies]
 # Codegen the IDnsResolver AIDL (android only; build.rs no-ops off-android).
-rsbinder-aidl = { git = "https://github.com/hiking90/rsbinder", rev = "5e999e04a" }
+rsbinder-aidl = { path = "../../external/rsbinder/rsbinder-aidl" }

@@ -19,8 +19,8 @@ use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
 use wandr_hal_net::{
-    dhcp, has_carrier, install_default_rule, read_saved_creds, supplicant, DhcpLease, LinkStatus,
-    WifiCreds, WANDR_NETID, WLAN_IF,
+    dhcp, has_carrier, read_saved_creds, supplicant, DhcpLease, LinkStatus, WifiCreds,
+    WANDR_NETID, WLAN_IF,
 };
 
 fn arbiter_sock_path() -> String {
@@ -138,15 +138,9 @@ fn bring_up_with(creds: WifiCreds, force_assoc: bool) -> Result<Link, String> {
     //    re-exec: the leased address now goes through INetd.interfaceAddAddress
     //    (replacing the root `ip addr` shell-out), alongside the network create /
     //    routes / setDefault / resolver config already on binder.
+    //    + `networkAddUidRanges(0..MAX)` so unmarked traffic routes via netd's own
+    //    per-UID rules (the CS mechanism) — no rtnetlink catch-all `ip rule` needed.
     configure_netd(&lease)?;
-
-    // 5. The ONE irreducible rtnetlink op: the catch-all `from all lookup <iface>`
-    //    rule (root). It bridges the per-UID fwmark gap left by the dead
-    //    ConnectivityService — unmarked (`--no-art`) sockets carry fwmark 0, which
-    //    netd's per-network fwmark rules don't match. INetd exposes ONLY fwmark-based
-    //    rules (networkAddUidRanges etc.), NOT an arbitrary `from all lookup` rule,
-    //    so there is no binder equivalent; this stays rtnetlink by necessity.
-    install_default_rule(WLAN_IF).map_err(|e| format!("install rule: {e}"))?;
 
     let status = LinkStatus {
         up: true,
@@ -303,9 +297,13 @@ fn main() {
         let addr_ok = wandr_hal_net::apply_address_netd(&iface, local_ip, prefix);
         let subnet = wandr_hal_net::subnet_cidr(local_ip, prefix);
         let net_ok = wandr_hal_net::setup_network(netid, &iface, &subnet, gw);
+        // Assign all UIDs to the network — the CS fwmark/UID-range mechanism (binder)
+        // replacing the rtnetlink catch-all `from all lookup` rule. Belt-and-braces
+        // with networkSetDefault, and correct for any future non-root guest uid.
+        let uids_ok = wandr_hal_net::add_default_uid_ranges(netid);
         let dns_ok = !servers.is_empty()
             && wandr_hal_net::configure_resolver(netid, &iface, &servers, &[]);
-        println!("netd-config netid={netid} iface={iface} subnet={subnet} gw={gw} addr={addr_ok} net={net_ok} dns={dns_ok}");
+        println!("netd-config netid={netid} iface={iface} subnet={subnet} gw={gw} addr={addr_ok} net={net_ok} uids={uids_ok} dns={dns_ok}");
         std::process::exit(if addr_ok && net_ok && dns_ok { 0 } else { 1 });
     }
 

@@ -167,6 +167,21 @@ pub fn apply_address_netd(iface: &str, ip: Ipv4Addr, prefix: u8) -> bool {
     }
 }
 
+/// Assign all UIDs to network `netid` via `INetd.networkAddUidRanges` (binder — the
+/// CS fwmark/UID-range mechanism; routes unmarked `--no-art` traffic without the
+/// rtnetlink catch-all rule). uid `system`. No-op / `false` off-android.
+pub fn add_default_uid_ranges(netid: i32) -> bool {
+    #[cfg(target_os = "android")]
+    {
+        netd::add_all_uid_ranges(netid)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = netid;
+        false
+    }
+}
+
 /// Configure the netd DNS resolver for `netid` (binding it to `iface`) with the
 /// given IPv4 servers. The only way to make `getaddrinfo` resolve under
 /// `--no-art` (the resolver moved to the `dnsresolver` binder; no `ndc` command).
@@ -186,7 +201,6 @@ pub fn configure_resolver(netid: i32, iface: &str, servers: &[Ipv4Addr], domains
 
 use std::io;
 use std::net::Ipv4Addr;
-use std::process::Command;
 
 pub use dhcp::DhcpLease;
 pub use supplicant::WifiCreds;
@@ -272,49 +286,12 @@ pub fn read_saved_creds() -> io::Result<Vec<WifiCreds>> {
     Ok(parse_saved_creds(&xml))
 }
 
-/// Configure the leased IPv4 **address** on the interface (bring the link up,
-/// flush stale addresses, set the leased one). Needs root (`CAP_NET_ADMIN`).
-/// Routing is owned by netd ([`setup_network`], run as uid `system`), not here —
-/// this only puts the address on the link so netd can build the connected route.
-/// Link must be `up` before `addr add` so the kernel installs the connected route.
-pub fn apply_address(ifname: &str, lease: &DhcpLease) -> io::Result<()> {
-    run_ip(&["link", "set", ifname, "up"])?;
-    run_ip(&["addr", "flush", "dev", ifname])?;
-    run_ip(&["addr", "add", &format!("{}/{}", lease.ip, lease.prefix), "dev", ifname])?;
-    log::info!("link: address {}/{} on {ifname}", lease.ip, lease.prefix);
-    Ok(())
-}
-
-/// Install the catch-all routing rule (see [`WANDR_RULE_PREF`]) so unmarked
-/// traffic uses netd's per-network table for `ifname` (netd names the table after
-/// the interface). Needs root. Idempotent: delete-then-add so re-runs don't stack
-/// duplicates. Pairs with [`setup_network`], which populates that table.
-pub fn install_default_rule(ifname: &str) -> io::Result<()> {
-    let pref = WANDR_RULE_PREF.to_string();
-    let _ = run_ip(&["rule", "del", "pref", &pref]); // best-effort (absent first run)
-    run_ip(&["rule", "add", "pref", &pref, "from", "all", "lookup", ifname])?;
-    log::info!("link: catch-all rule {pref} → table {ifname}");
-    Ok(())
-}
-
 /// True if the interface has L2 carrier (associated) — `operstate == up` or
 /// `/sys/class/net/<if>/carrier == 1`.
 pub fn has_carrier(ifname: &str) -> bool {
     std::fs::read_to_string(format!("/sys/class/net/{ifname}/carrier"))
         .map(|s| s.trim() == "1")
         .unwrap_or(false)
-}
-
-fn run_ip(args: &[&str]) -> io::Result<()> {
-    let out = Command::new("ip").args(args).output()?;
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("`ip {}` failed: {}", args.join(" "), stderr.trim()),
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -891,7 +891,6 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 [[package]]
 name = "rsbinder"
 version = "0.9.0"
-source = "git+https://github.com/hiking90/rsbinder?rev=5e999e04a#5e999e04aacc5be355ee9ed9d78cf5fbdabedb54"
 dependencies = [
  "async-trait",
  "downcast-rs",
@@ -907,7 +906,6 @@ dependencies = [
 [[package]]
 name = "rsbinder-aidl"
 version = "0.9.0"
-source = "git+https://github.com/hiking90/rsbinder?rev=5e999e04a#5e999e04aacc5be355ee9ed9d78cf5fbdabedb54"
 dependencies = [
  "convert_case",
  "miette",

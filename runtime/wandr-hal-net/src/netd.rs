@@ -147,6 +147,31 @@ pub fn apply_address(iface: &str, ip: Ipv4Addr, prefix: u8) -> bool {
     }
 }
 
+/// Assign every UID to network `netid` via `INetd.networkAddUidRanges` — the
+/// fwmark/UID-range mechanism ConnectivityService uses so that a UID's *unmarked*
+/// traffic routes through a network (the per-UID `ip rule … uidrange … lookup`
+/// netd installs match by UID, so fwmark-0 sockets are covered). Assigning all
+/// UIDs is the binder replacement for the blunt catch-all `from all lookup` rule.
+/// uid `system`. `false` on failure. (Unblocked by the `@JavaOnlyImmutable`
+/// rsbinder fix that lets `UidRangeParcel` generate its fields.)
+pub fn add_all_uid_ranges(netid: i32) -> bool {
+    let Some(svc) = netd_service() else { return false };
+    let ranges = vec![inetd_aidl::android::net::UidRangeParcel::UidRangeParcel {
+        r#start: 0,
+        r#stop: 99999,
+    }];
+    match svc.r#networkAddUidRanges(netid, &ranges) {
+        Ok(_) => {
+            log::info!("netd: networkAddUidRanges({netid}, 0..99999) OK");
+            true
+        }
+        Err(e) => {
+            log::warn!("netd: networkAddUidRanges({netid}) -> {e:?}");
+            false
+        }
+    }
+}
+
 /// Create (if needed) a physical network `netid` over `iface`, install the
 /// connected route for `subnet_cidr` plus the default route via `gateway`, and
 /// make it the system default network — the netd-native equivalent of the `ip

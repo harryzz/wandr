@@ -63,4 +63,4 @@
 [submodule "external/rsbinder"]
 	path = external/rsbinder
 	url = https://codeberg.org/harryzz/rsbinder.git
-	branch = wart-recursive
+	branch = wandr-recursive

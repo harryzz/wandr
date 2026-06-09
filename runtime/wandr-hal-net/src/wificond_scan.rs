@@ -20,10 +20,9 @@ mod binder_aidl {
 }
 
 use binder_aidl::android::net::wifi::nl80211::{
-    IClientInterface::IClientInterface, IScanEvent, IWifiScannerImpl::IWifiScannerImpl,
-    IWificond::IWificond,
+    IClientInterface::IClientInterface, IScanEvent, IWificond::IWificond,
 };
-use rsbinder::{Interface, RemoteProxy};
+use rsbinder::Interface;
 use std::sync::mpsc::{Receiver, Sender};
 
 /// Outcome wificond reports through our `IScanEvent` callback.
@@ -83,7 +82,7 @@ impl rsbinder::BinderAsyncRuntime for BlockingRuntime {
     }
 }
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::ScanEntry;
 
