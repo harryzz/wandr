@@ -1,5 +1,5 @@
 //! The Signal engine behind the `wandr:signal/chat` export. A single background
-//! task (spawned on the persistent [`wandr_step_executor`]) links or resumes, then
+//! task (spawned on the persistent [`wart_step_executor`]) links or resumes, then
 //! runs the receive+send loop; `chat.poll-events` advances that task one
 //! non-blocking step and drains whatever it produced. State shared between the
 //! export functions and the background task lives in a thread-local `Shared`
@@ -236,7 +236,7 @@ async fn fetch_turn(push: &PushService) -> Option<wandr_call::turn::TurnConfig> 
                 return None;
             }
         },
-        _ = wandr_step_executor::sleep(Duration::from_secs(4)).fuse() => {
+        _ = wart_step_executor::sleep(Duration::from_secs(4)).fuse() => {
             dbg_line("turn: get_calling_relays TIMEOUT (4s) — host-only");
             return None;
         }
@@ -425,7 +425,7 @@ pub fn init() {
     if shared().is_some() {
         return; // idempotent
     }
-    wandr_step_executor::init();
+    wart_step_executor::init();
 
     // Preload persisted history, assigning stable ids. Delivery state defaults to
     // `sent` (a persisted message was at least sent/received), overlaid by the
@@ -536,7 +536,7 @@ pub fn init() {
     SHARED.with(|slot| *slot.borrow_mut() = Some(s));
 
     // Detach: the root task must outlive this call (it cancels on drop).
-    wandr_step_executor::spawn(run()).detach();
+    wart_step_executor::spawn(run()).detach();
 }
 
 pub fn poll_events() -> Vec<Event> {
@@ -544,7 +544,7 @@ pub fn poll_events() -> Vec<Event> {
         return Vec::new();
     }
     // Advance the background task(s) without blocking the frame.
-    wandr_step_executor::step();
+    wart_step_executor::step();
     shared()
         .map(|s| s.events.borrow_mut().drain(..).collect())
         .unwrap_or_default()
@@ -759,7 +759,7 @@ async fn run() {
         if now_ms().saturating_sub(started) > 60_000 {
             backoff_ms = 1_000;
         }
-        wandr_step_executor::sleep(Duration::from_millis(backoff_ms)).await;
+        wart_step_executor::sleep(Duration::from_millis(backoff_ms)).await;
         backoff_ms = backoff_ms.saturating_mul(2).min(30_000);
     }
 }
@@ -786,7 +786,7 @@ async fn link(
         PushService::new(SignalServers::Production, None, "wandr-signal-engine");
     let (tx, mut rx) = futures::channel::mpsc::channel(1);
     let pw = password.clone();
-    let task = wandr_step_executor::spawn(async move {
+    let task = wart_step_executor::spawn(async move {
         let mut csprng = seed_rng();
         link_device(
             &mut aci_for_task,
@@ -1015,7 +1015,7 @@ async fn receive_and_send(
     let mut last_ticks: u64 = 0;
     loop {
         let tick_ms = if call_engine.is_active() { 10 } else { 200 };
-        let tick = wandr_step_executor::sleep(Duration::from_millis(tick_ms));
+        let tick = wart_step_executor::sleep(Duration::from_millis(tick_ms));
         // BIASED: poll the websocket FIRST, then the tick. A call pumps the tick
         // at ~10 ms; with a fair select! the always-ready tick frequently won the
         // race and the dropped `stream.next()` future could strand a buffered
@@ -1545,7 +1545,7 @@ fn spawn_group_fetch(shared: &Rc<Shared>, push: &PushService, aci: Uuid, pni: Uu
     };
     let shared = shared.clone();
     let push = push.clone();
-    wandr_step_executor::spawn(async move {
+    wart_step_executor::spawn(async move {
         if let Err(e) = fetch_groups(&shared, &mk, aci, pni, push).await {
             shared.set_state(format!("groups: {e}"));
         }

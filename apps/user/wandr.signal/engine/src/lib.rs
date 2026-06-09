@@ -6,7 +6,7 @@
 //!
 //! The hard part is that each `poll-events` is a *separate* component-export call
 //! and no guest code runs between calls. The background receive loop + websocket
-//! keepalive run on [`wandr_step_executor`] — a persistent, frame-stepped reactor
+//! keepalive run on [`wart_step_executor`] — a persistent, frame-stepped reactor
 //! installed at `init` and advanced one non-blocking step per `poll-events` — so
 //! those tasks survive across frames. See `engine.rs`.
 

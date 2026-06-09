@@ -195,11 +195,11 @@ Built the transport as **drop-in shim crates** swapped via cargo `package =`
 rename (NOT an import rewrite — cargo forbids per-target sources for one dep name,
 so each shim is the single source and cfg-dispatches: real crate on native,
 wasi:tls impl on wasm). Location: `external/libsignal-service-rs/wart-wasi-shims/`:
-- `reqwest/` (`wandr-reqwest-shim`) — `Client`/`ClientBuilder`/`RequestBuilder`/
+- `reqwest/` (`wart-reqwest-shim`) — `Client`/`ClientBuilder`/`RequestBuilder`/
   `Response`/`Certificate`/`Error`/`multipart` over HTTP/1.1 on the shared
   `tls::TlsStream` (wasi:tls + wstd, from the spike). Exposes `random_bytes` +
   `tls` for the ws shim.
-- `reqwest-websocket/` (`wandr-reqwest-websocket-shim`) — RFC6455 `WebSocket`
+- `reqwest-websocket/` (`wart-reqwest-websocket-shim`) — RFC6455 `WebSocket`
   (inherent async `send`/`next`/`close`, `next()` boxed→Unpin for the fork's
   `select!`), `Message`/`CloseCode`, `RequestBuilderExt::upgrade`.
 - Fork edits: `Cargo.toml` deps point at the shims (+ wstd wasm-only); 3 tokio

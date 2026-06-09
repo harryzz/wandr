@@ -58,6 +58,9 @@ LN_WASM=$(build_system_wasm "apps/system/wandr.launcher"          "wandr_launche
 SB_WASM=$(build_system_wasm "apps/system/wandr.statusbar"         "wandr_statusbar.wasm")
 # Task 56 — the taskbar: light Rust bottom-nav canvas guest (Back/Home/Recents).
 TB_WASM=$(build_system_wasm "apps/system/wandr.taskbar"           "wandr_taskbar.wasm")
+# Keyguard/lockscreen — light Rust overlay-lock canvas guest; kind=system so the
+# launcher's apps/-only scan skips it; loaded via --standalone-overlay-lock.
+KG_WASM=$(build_system_wasm "apps/system/wandr.keyguard"          "wandr_keyguard.wasm")
 FT_WASM=$(build_system_wasm "apps/system/wandr.fonts.loader"      "system_fonts.wasm")
 BG_WASM=$(build_system_wasm "apps/system/lang/wandr.lang.bg"       "wandr_lang_bg.wasm")
 FR_WASM=$(build_system_wasm "apps/system/lang/wandr.lang.fr"       "wandr_lang_fr.wasm")
@@ -94,6 +97,7 @@ APP_PKG="$TMP_BASE/wandr-app.wandrpkg"
 LN_PKG="$TMP_BASE/launcher.wandrpkg"
 SB_PKG="$TMP_BASE/statusbar.wandrpkg"
 TB_PKG="$TMP_BASE/taskbar.wandrpkg"
+KG_PKG="$TMP_BASE/keyguard.wandrpkg"
 DX_PKG="$TMP_BASE/dioxus-demo.wandrpkg"
 
 # Each manifest is the app's own apps/.../package.toml (single source of
@@ -105,6 +109,7 @@ pack_wandrpkg "$FT_PKG" "$FT_WASM" "loader"   "$REPO_ROOT/apps/system/wandr.font
 pack_wandrpkg "$LN_PKG" "$LN_WASM" "ui"       "$REPO_ROOT/apps/system/wandr.launcher/package.toml"
 pack_wandrpkg "$SB_PKG" "$SB_WASM" "ui"       "$REPO_ROOT/apps/system/wandr.statusbar/package.toml"
 pack_wandrpkg "$TB_PKG" "$TB_WASM" "ui"       "$REPO_ROOT/apps/system/wandr.taskbar/package.toml"
+pack_wandrpkg "$KG_PKG" "$KG_WASM" "ui"       "$REPO_ROOT/apps/system/wandr.keyguard/package.toml"
 pack_wandrpkg "$DX_PKG" "$DX_WASM" "ui"       "$REPO_ROOT/apps/user/wandr.dioxus.demo/package.toml"
 pack_wandrpkg "$BG_PKG" "$BG_WASM" "lang"     "$REPO_ROOT/apps/system/lang/wandr.lang.bg/package.toml"
 pack_wandrpkg "$FR_PKG" "$FR_WASM" "lang"     "$REPO_ROOT/apps/system/lang/wandr.lang.fr/package.toml"
@@ -135,7 +140,7 @@ pack_wandrpkg "$APP_PKG" "$WANDR_APP_WASM" "ui" \
 echo ""
 echo "▸ pushing wandrpkg dirs to device …"
 # adb push of dir-onto-dir nests; rm the device-side copy first.
-for pkg in "$MD_PKG" "$EM_PKG" "$FT_PKG" "$BG_PKG" "$FR_PKG" "$LN_PKG" "$SB_PKG" "$TB_PKG" "$DX_PKG" "$APP_PKG"; do
+for pkg in "$MD_PKG" "$EM_PKG" "$FT_PKG" "$BG_PKG" "$FR_PKG" "$LN_PKG" "$SB_PKG" "$TB_PKG" "$KG_PKG" "$DX_PKG" "$APP_PKG"; do
     name="$(basename "$pkg")"
     adb shell "rm -rf /data/local/tmp/$name"
     adb push "$pkg" "/data/local/tmp/$name" >/dev/null
@@ -147,7 +152,7 @@ echo "  import-resolution check passes) …"
 adb shell "su -c 'rm -rf $APPS_ROOT && mkdir -p $APPS_ROOT'"
 
 WANDR_ENV="LD_LIBRARY_PATH=/data/local/tmp WANDR_APPS_ROOT=$APPS_ROOT"
-for pkg in markdown emoji fonts lang-bg lang-fr launcher statusbar taskbar dioxus-demo wandr-app; do
+for pkg in markdown emoji fonts lang-bg lang-fr launcher statusbar taskbar keyguard dioxus-demo wandr-app; do
     echo "  install $pkg.wandrpkg"
     adb shell "su -c '$WANDR_ENV /data/local/tmp/wandr-host --install /data/local/tmp/$pkg.wandrpkg'"
 done
