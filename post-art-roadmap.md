@@ -986,3 +986,60 @@ subsystems (alarm/notify drive Signal background receipt) is risk that
 should be scheduled deliberately, not bundled into a feature task. Track
 here; pick up as a dedicated consolidation pass. See
 `[[project_event_bus]]`, `docs/architecture-host-guest-boundary.md`.
+
+---
+
+## 14. Binder ABI portability — multi-version / multi-device (Boundary B)
+
+**Status: DESIGN / DEFERRED tooling. Not built. Full analysis in
+`docs/binder-abi-portability.md`.**
+
+### 14.1 Why this is the scaling moat
+
+The host talks to native survivors over binder via rsbinder (§3). Each
+interface has a binder **ABI** — transaction codes + parcel wire layouts —
+fixed by the AIDL/C++ the *device* was built from, so it varies by Android
+version (15 → 16 → 17) and, for vendor HALs, by device. Today we hand-port
+that per interface for the reference device (Pixel 2 XL / Android 15):
+trim the AIDL keeping method order (= codes), read `cpp_header` parcelable
+layouts out of the C++, and work around rsbinder codegen gaps. Fine for one
+phone; for a **public, multi-device project** it is *the* central problem —
+the difference between "runs on my Pixel" and "runs on any rooted
+AOSP-aligned device." When the repo goes public, "what about Android 16 /
+my phone?" is the first question, and the answer needs to be **"run the
+generator,"** not "wait for a hand-port."
+
+### 14.2 The shape (detail in the doc)
+
+- **80/20 split:** **stable AIDL** (most HALs, `netd`, keymint, SF) is
+  versioned + content-hashed + append-only + AOSP-uniform → the easy,
+  automatable majority (query `getInterfaceVersion`/`getInterfaceHash`,
+  resolve the exact AOSP revision). The pain is concentrated in **unstable
+  AIDL** (wificond) + **`cpp_header` parcelables**.
+- **Leverage Google's toolchain:** AOSP's `aidl --lang=rust` is ABI-correct
+  by construction, and rsbinder's API mirrors `libbinder_rs` (`rsbinder-aidl`
+  is essentially a port of it) — so our gaps are where the port *lags*. The
+  principled route is retargeting the official backend (or its `--dumpapi`
+  IR) to rsbinder; the interim route is upstreaming the annotation/codegen
+  fixes (`@JavaOnlyImmutable` etc.) into `rsbinder-aidl`.
+- **`cpp_header` parcelables** are opaque to *every* AIDL backend (layout is
+  hand-written C++). The robust, version-adapting answer is **Flavor B**:
+  compile the version's real `writeToParcel`/`readFromParcel` + a minimal
+  `Parcel` shim into a tiny native lib and FFI it (not wasm — no sandbox
+  benefit host-side). It auto-adapts per version because it recompiles the
+  actual code.
+- **Generator pipeline:** runtime introspection (live device — descriptor +
+  version/hash; a side-effect-careful transaction-code prober for unstable
+  interfaces) → AOSP-source-by-fingerprint (offline) → rsbinder codegen →
+  Flavor-B `cpp_header` → a thin per-device quirks overlay.
+
+### 14.3 Honest scope + relationship to §3/§4
+
+Scales across **AOSP-aligned** targets (Pixels, GSI, AOSP-derived); heavily
+forked ROMs (OneUI, HyperOS) need overlays — the claim is "any
+reasonably-AOSP-aligned device," not literally every phone. This is
+**Boundary B** host↔HAL ABI tooling — distinct from §4's deliberate
+"no `aidl2wit`" decision (that was the *guest* WIT boundary). Phasing:
+hand-port now (done), build the generator when going public; cover the
+stable-AIDL 80% first, then the prober + Flavor-B for the hard 20%. Full
+write-up: `docs/binder-abi-portability.md`.
