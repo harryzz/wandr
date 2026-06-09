@@ -134,9 +134,16 @@ calibration noise.)
   call: BUFFER TIMEOUT 101→0, HAL underruns 4→0, track re-creates 10→3, audible-usable.
   (A real host-side jitter buffer is the richer follow-up; silence-bridge is the
   AAudioService-equivalent minimum.)
-- Remaining per-track: `set_output_device` (route via `IAudioPolicyService`, host
-  policy path); `applyVolumeShaper` (ramps/fades); blocking `write`/`read` (futex) so
-  consumers needn't hand-pace; the cblk underrun counters for telemetry.
+- Call routing ✅ (live Signal call) — earpiece↔speaker moves the audio. Fix: voice-call
+  opens on `USAGE_MEDIA` so the host's media-strategy re-route (`setDevicesRoleForStrategy`)
+  controls it; a `VOICE_COMMUNICATION` track lands on the phone strategy the re-route
+  doesn't touch. Routing stays a policy concern (not per-track mixer; deviceId pin -889s).
+- Mic mute ✅ (live Signal call) — `set_mic_muted` calls `IAudioFlingerService.setMicMute`
+  (HAL-level, the capture analog to the routing strategy), with the `MIC_MUTED`-gated
+  read_pcm_f32 silence as a per-stream fallback.
+- Remaining per-track: `set_output_device`; `applyVolumeShaper` (ramps/fades); blocking
+  `write`/`read` (futex); cblk underrun counters; a real host-side jitter buffer (vs the
+  silence-bridge pump); capture `VOICE_COMMUNICATION`/AEC source (needs a WIT signal).
 - Wire the backend into the real host audio output path (replace the AAudioService path).
 - Package/uid should come from the calling guest's identity, not the hardcoded
   `"android"`/`geteuid()` default in `attribution_source()`.

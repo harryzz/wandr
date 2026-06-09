@@ -1452,6 +1452,13 @@ pub fn app_output_muted() -> bool {
 static MIC_MUTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 pub fn set_mic_muted(muted: bool) {
     MIC_MUTED.store(muted, std::sync::atomic::Ordering::Relaxed);
+    // System-level mute at the HAL when on the audioclient backend (the analog to the
+    // routing strategy re-route). The MIC_MUTED flag still gates read_pcm_f32 as a
+    // guaranteed per-stream fallback.
+    #[cfg(target_os = "android")]
+    if use_audioclient() {
+        audioclient::set_mic_mute(muted);
+    }
     log::info!("audio: mic {}", if muted { "MUTED" } else { "unmuted" });
 }
 pub fn mic_muted() -> bool {
@@ -1594,7 +1601,13 @@ mod audioclient_path {
         })
     }
     pub fn read_pcm_f32(capture: u32, max_frames: u32) -> Vec<f32> {
-        audioclient::read(capture, max_frames)
+        let mut out = audioclient::read(capture, max_frames);
+        // Mic-mute gate (input): still DRAIN the ring (keep capture flowing so it
+        // doesn't overrun), but hand the guest silence. Matches the legacy path.
+        if super::mic_muted() {
+            out.iter_mut().for_each(|s| *s = 0.0);
+        }
+        out
     }
 }
 
