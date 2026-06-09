@@ -53,17 +53,17 @@ MD_WASM=$(build_system_wasm "apps/system/wandr.markdown.renderer" "markdown_rend
 EM_WASM=$(build_system_wasm "apps/system/wandr.emoji.picker"      "emoji_picker.wasm")
 # Task 57 — the dedicated launcher: a light Rust canvas guest (exports
 # my:skiko-gfx/renderer; ~70 KB; no Kotlin/Compose → leak-immune).
-LN_WASM=$(build_system_wasm "apps/system/wandr.launcher"          "war_launcher.wasm")
+LN_WASM=$(build_system_wasm "apps/system/wandr.launcher"          "wandr_launcher.wasm")
 # Task 55 — the status bar: light Rust top-overlay canvas guest (~48 KB).
-SB_WASM=$(build_system_wasm "apps/system/wandr.statusbar"         "war_statusbar.wasm")
+SB_WASM=$(build_system_wasm "apps/system/wandr.statusbar"         "wandr_statusbar.wasm")
 # Task 56 — the taskbar: light Rust bottom-nav canvas guest (Back/Home/Recents).
-TB_WASM=$(build_system_wasm "apps/system/wandr.taskbar"           "war_taskbar.wasm")
+TB_WASM=$(build_system_wasm "apps/system/wandr.taskbar"           "wandr_taskbar.wasm")
 FT_WASM=$(build_system_wasm "apps/system/wandr.fonts.loader"      "system_fonts.wasm")
-BG_WASM=$(build_system_wasm "apps/system/lang/wandr.lang.bg"       "war_lang_bg.wasm")
-FR_WASM=$(build_system_wasm "apps/system/lang/wandr.lang.fr"       "war_lang_fr.wasm")
+BG_WASM=$(build_system_wasm "apps/system/lang/wandr.lang.bg"       "wandr_lang_bg.wasm")
+FR_WASM=$(build_system_wasm "apps/system/lang/wandr.lang.fr"       "wandr_lang_fr.wasm")
 # Task 59 — the dioxus demo: a reactive Rust guest rendered via the
 # dioxus-canvas "tiny Blitz" over the canvas WIT (~516 KB; user app).
-DX_WASM=$(build_system_wasm "apps/user/wandr.dioxus.demo"          "war_dioxus_demo.wasm")
+DX_WASM=$(build_system_wasm "apps/user/wandr.dioxus.demo"          "wandr_dioxus_demo.wasm")
 
 # ── 2. Package each wandrpkg directory ────────────────────────────────────
 
