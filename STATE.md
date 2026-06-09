@@ -1,5 +1,14 @@
 # ~/wandr — Project state on session handoff
 
+> **2026-06-09 — CURRENT.** Project-wide **WART→WANDR rename + full `--no-art`
+> device redeploy** is COMPLETE and device-verified. Repo is a single `main`
+> branch (pushed to `codeberg.org/harryzz/wandr`). The whole stack runs under
+> `wandr-*`/`wandr.*` and renders on the Pixel 2 XL; all system + user apps are
+> published; Signal state was migrated (link + history preserved). No task is in
+> progress — ready for a new one. Details + the four bring-up gotchas:
+> `.task-state`, `project_wandr_rename` (memory), `tasks/99-wandr-rename-a03-followup.md`.
+> Everything below is older historical record.
+
 > **2026-05-15 — RESOLVED.** The "Option A port" described in this document
 > has shipped. Full Compose-on-WASM PoC works end-to-end on device. This
 > file is kept as historical record of the strategy that was decided

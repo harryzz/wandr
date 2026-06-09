@@ -1,5 +1,5 @@
-TASK=98
+TASK=wandr-rename
 STEP=verify-done
 STATUS=complete
-LAST_SUCCESS=audioclient-rs roadmap: Tiers 1+3 complete, Tier 4 AEC/NS done. Tier 2 (media-player polish) POSTPONED by decision — kept on the roadmap (README marked ⏸), picked up when a media app needs it. Nothing open blocks calls or basic playback. Commits 67cdeb0 (README) + afc553b7 (bump).
-NOTES=
+LAST_SUCCESS=WART→WANDR rename + full --no-art device redeploy COMPLETE + device-verified (2026-06-09). Everything on a single `main` branch (pushed to codeberg `wandr` repo; rename-wart-to-wandr + task-94-wip branches deleted). On-device stack live + rendering: wandr-host/arbiter/inputflinger/framework-shim/sensormanager/net/screen + chrome (launcher/statusbar/taskbar/keyguard) + IME — all wandr, input working. All system+user apps published (keyguard + signal + alarm.test were the gaps, now fixed in build-system-wandrpkgs.sh). Signal state migrated old→new (link+history preserved). a-03 lineage modules renamed (0 wart / 4 wandr). See [[project_wandr_rename]] + tasks/99 for the 4 bring-up gotchas.
+NOTES=No task in progress — ready for a NEW task. Do NOT resume the rename (done). Deferred (separate repos, low priority): per-app codeberg repos (user said old/archived), libsignal `wart-wasi-transport` + rsbinder `wart-recursive` fork branches (intentionally kept `wart`). Repo is a single `main` branch.
