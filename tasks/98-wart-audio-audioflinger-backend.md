@@ -102,10 +102,18 @@ calibration noise.)
   `IAudioTrack.getTimestamp` answers only for offload/direct tracks (normal mixed
   tracks → `INVALID_OPERATION -38`), so position comes from the cblk `mServer` +
   CLOCK_MONOTONIC (device-verified: advances at the sample rate).
-- `out_write underrun` warnings = client pacing at start/end; couple the write pump to
-  a steady cadence (the task-75 `min_frame_delay` lesson).
-- Remaining per-track: `set_volume` (cblk `mVolumeLR` or `applyVolumeShaper`),
-  `set_output_device`; track-invalidation restore (`CBLK_INVALID`/`DISABLED`).
+- `set_volume` ✅ — per-track gain straight to the cblk `mVolumeLR` (offset 16) via a
+  Rust port of AOSP `gain_from_float` (unity→0xE000); mixer applies live, no binder.
+  Device-verified audible. `applyVolumeShaper` (ramps/fades) is the richer follow-up.
+- Track-invalidation restore ✅ — `write`/`read` recover from `CBLK_INVALID` (re-create
+  + swap into the same handle + resume) and `CBLK_DISABLED` (re-start). Verified by
+  construction (hard to force a live route-change invalidation on-device).
+- **Pops / interruptions** (audible) = client pacing: the write pump runs as fast as the
+  ring frees instead of pacing to the wall clock, so the HAL periodically underruns
+  (`out_write underrun`). NEXT: pace the pump to the sample clock (the task-75
+  `min_frame_delay` lesson) — couple writes to ~10 ms cadence.
+- Remaining per-track: `set_output_device` (route via `IAudioPolicyService`, host
+  policy path).
 - Wire the backend into the real host audio output path (replace the AAudioService path).
 - Package/uid should come from the calling guest's identity, not the hardcoded
   `"android"`/`geteuid()` default in `attribution_source()`.

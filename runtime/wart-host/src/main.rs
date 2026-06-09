@@ -506,6 +506,11 @@ fn probe_audioclient(secs: u64, hz: f32, vol: f32) {
             let r = audioclient::start(h);
             eprintln!("probe-audioclient: resumed (start ok={r})");
         }
+        // drop the gain to 0.1 at ~2.2s (audible: the tone should get quieter).
+        if started && tick == 220 {
+            audioclient::set_volume(h, 0.1);
+            eprintln!("probe-audioclient: set_volume(0.1) — tone should drop");
+        }
         let mut buf: Vec<f32> = Vec::with_capacity(480 * 2);
         for _ in 0..480 {
             let s = phase.sin() * vol;
