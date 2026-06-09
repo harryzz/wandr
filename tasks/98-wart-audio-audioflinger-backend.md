@@ -114,6 +114,16 @@ calibration noise.)
   a short sleep stays ahead of the drain. HAL `out_write underrun` went non-zero → **0**;
   device-verified clean playback. (Pacing is the consumer's job — `write()` stays
   "write what fits"; the probe demonstrates the correct pump.)
+- Wired into the real host output path ✅ — `audio_impl` now has a backend-dispatch
+  layer (the WIT `Host` trait + the module-level functions both route through it):
+  **audioclient (AudioFlinger-direct) is the default**, `WART_AUDIO_BACKEND=aaudio`
+  falls back to the legacy AAudioService path. Routing/volume policy
+  (`ensure_initialized`, `set_media_strategy_route`, comms route) is backend-independent
+  and unchanged. `--probe-audio-backend` exercises the dispatch (both backends verified
+  routing + writing frames through the WIT path). Stream-class→usage map: media→MEDIA/
+  MUSIC, voice-call→VOICE_COMMUNICATION/SPEECH, notification→NOTIFICATION/SONIFICATION.
+  TODO validate with a live Signal call; capture uses AUDIO_SOURCE_MIC (VOICE_COMMUNICATION
+  /AEC for calls needs a WIT signal — follow-up).
 - Remaining per-track: `set_output_device` (route via `IAudioPolicyService`, host
   policy path); `applyVolumeShaper` (ramps/fades); blocking `write`/`read` (futex) so
   consumers needn't hand-pace; the cblk underrun counters for telemetry.

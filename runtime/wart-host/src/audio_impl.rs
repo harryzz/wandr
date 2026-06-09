@@ -1458,14 +1458,86 @@ pub fn mic_muted() -> bool {
     MIC_MUTED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+// ── Audio backend selection (task 98) ────────────────────────────────────────
+// The AudioFlinger-direct backend (`audioclient` crate) is the default; it replaces
+// the legacy AAudioService path (`binder_path`), which is unreliable under --no-art
+// (the whole reason for task 98). Set `WART_AUDIO_BACKEND=aaudio` to fall back to the
+// legacy path. Decided once per process (a track must be operated by the backend that
+// created it — the handle spaces are distinct).
+#[cfg(target_os = "android")]
+fn use_audioclient() -> bool {
+    use std::sync::OnceLock;
+    static SEL: OnceLock<bool> = OnceLock::new();
+    *SEL.get_or_init(|| std::env::var("WART_AUDIO_BACKEND").as_deref() != Ok("aaudio"))
+}
+
+// AudioFlinger-direct backend: maps the WIT contract onto the `audioclient` crate
+// (createTrack/createRecord → cblk ring). Routing/volume policy (ensure_initialized,
+// set_media_strategy_route) is backend-independent and stays in audio_policy_impl.
+#[cfg(target_os = "android")]
+mod audioclient_path {
+    use super::{ChannelLayout, StreamClass, TrackConfig};
+
+    fn channels(cfg: &TrackConfig) -> u32 {
+        match cfg.channel_layout { ChannelLayout::Mono => 1, ChannelLayout::Stereo => 2 }
+    }
+    // stream-class → (AUDIO_USAGE_*, AUDIO_CONTENT_TYPE_*).
+    fn usage_content(class: StreamClass) -> (i32, i32) {
+        match class {
+            StreamClass::Media        => (1, 2), // MEDIA / MUSIC
+            StreamClass::VoiceCall    => (2, 1), // VOICE_COMMUNICATION / SPEECH
+            StreamClass::Notification => (5, 4), // NOTIFICATION / SONIFICATION
+        }
+    }
+
+    pub fn create_track(cfg: TrackConfig) -> u32 {
+        // Self-heal a respawned audioserver's volume range before opening (as the
+        // legacy path does), then open + apply the comms route for calls.
+        crate::audio_policy_impl::ensure_initialized();
+        let (usage, content_type) = usage_content(cfg.class);
+        let h = audioclient::open_output(audioclient::OutputConfig {
+            sample_rate: cfg.sample_rate,
+            channels: channels(&cfg),
+            usage,
+            content_type,
+        });
+        if h != 0 && matches!(cfg.class, StreamClass::VoiceCall) {
+            crate::audio_policy_impl::set_media_strategy_route(super::comms_route_speaker());
+        }
+        h
+    }
+
+    pub fn write_pcm_f32(track: u32, samples: &[f32]) -> u32 {
+        audioclient::write(track, samples) as u32
+    }
+    pub fn start(track: u32) -> bool { audioclient::start(track) }
+    pub fn pause(track: u32) -> bool { audioclient::pause(track) }
+    pub fn close(track: u32) { audioclient::close(track) }
+    pub fn pending_frames(track: u32) -> u32 { audioclient::pending_frames(track) }
+
+    pub fn create_capture(cfg: TrackConfig) -> u32 {
+        // The WIT capture path always opens the mic; class is ignored. AUDIO_SOURCE_MIC
+        // (1). (VOICE_COMMUNICATION/AEC for calls is a follow-up — needs a WIT signal.)
+        audioclient::open_input(audioclient::InputConfig {
+            sample_rate: cfg.sample_rate,
+            channels: channels(&cfg),
+            source: 1, // AUDIO_SOURCE_MIC
+        })
+    }
+    pub fn read_pcm_f32(capture: u32, max_frames: u32) -> Vec<f32> {
+        audioclient::read(capture, max_frames)
+    }
+}
+
 // ── Host-internal playback API ───────────────────────────────────────────────
-// Module-level free functions so a background thread (the ringer) can drive AAudio
-// directly without the WIT `Host` trait (`&mut HostState`). Same cfg-switch as the
-// trait methods below; non-Android is a no-op (returns 0/false).
+// Module-level free functions so a background thread (the ringer) can drive playback
+// directly without the WIT `Host` trait (`&mut HostState`). These are the single
+// backend-dispatch layer; the `Host` trait methods below delegate to them. Non-Android
+// is a no-op (returns 0/false).
 
 pub fn create_track(cfg: TrackConfig) -> u32 {
     #[cfg(target_os = "android")]
-    { return binder_path::create_track(cfg); }
+    { if use_audioclient() { return audioclient_path::create_track(cfg); } return binder_path::create_track(cfg); }
     #[cfg(not(target_os = "android"))]
     { let _ = cfg; 0 }
 }
@@ -1474,87 +1546,158 @@ pub fn create_track(cfg: TrackConfig) -> u32 {
 /// (host-side callers that know their intent, e.g. the ringer → `Ringtone`).
 pub fn create_track_routed(cfg: TrackConfig, route: crate::audio_routing::Route) -> u32 {
     #[cfg(target_os = "android")]
-    { return binder_path::open_routed(cfg, route); }
+    {
+        // audioclient routes via policy (no per-track deviceId pin); the explicit route
+        // is applied through the policy layer, so open by class.
+        if use_audioclient() { let _ = route; return audioclient_path::create_track(cfg); }
+        return binder_path::open_routed(cfg, route);
+    }
     #[cfg(not(target_os = "android"))]
     { let _ = (cfg, route); 0 }
 }
 
 pub fn write_pcm_f32(track: u32, samples: &[f32]) -> u32 {
     #[cfg(target_os = "android")]
-    { return binder_path::write_pcm_f32(track, samples); }
+    { if use_audioclient() { return audioclient_path::write_pcm_f32(track, samples); } return binder_path::write_pcm_f32(track, samples); }
     #[cfg(not(target_os = "android"))]
     { let _ = (track, samples); 0 }
 }
 
 pub fn start(track: u32) -> bool {
     #[cfg(target_os = "android")]
-    { return binder_path::start(track); }
+    { if use_audioclient() { return audioclient_path::start(track); } return binder_path::start(track); }
+    #[cfg(not(target_os = "android"))]
+    { let _ = track; false }
+}
+
+pub fn pause(track: u32) -> bool {
+    #[cfg(target_os = "android")]
+    { if use_audioclient() { return audioclient_path::pause(track); } return binder_path::pause(track); }
     #[cfg(not(target_os = "android"))]
     { let _ = track; false }
 }
 
 pub fn close(track: u32) {
     #[cfg(target_os = "android")]
-    { binder_path::close(track); }
+    { if use_audioclient() { audioclient_path::close(track); return; } binder_path::close(track); }
     #[cfg(not(target_os = "android"))]
     { let _ = track; }
 }
 
+pub fn pending_frames(track: u32) -> u32 {
+    #[cfg(target_os = "android")]
+    { if use_audioclient() { return audioclient_path::pending_frames(track); } return binder_path::pending_frames(track); }
+    #[cfg(not(target_os = "android"))]
+    { let _ = track; 0 }
+}
+
+pub fn open_capture(cfg: TrackConfig) -> u32 {
+    #[cfg(target_os = "android")]
+    { if use_audioclient() { return audioclient_path::create_capture(cfg); } return binder_path::create_capture(cfg); }
+    #[cfg(not(target_os = "android"))]
+    { let _ = cfg; 0 }
+}
+
+pub fn read_pcm_f32(capture: u32, max_frames: u32) -> Vec<f32> {
+    #[cfg(target_os = "android")]
+    { if use_audioclient() { return audioclient_path::read_pcm_f32(capture, max_frames); } return binder_path::read_pcm_f32(capture, max_frames); }
+    #[cfg(not(target_os = "android"))]
+    { let _ = (capture, max_frames); Vec::new() }
+}
+
+/// Task 98 — exercise the WIT audio path end-to-end through the backend-dispatch
+/// functions (`create_track`/`write_pcm_f32`/`start` — exactly what the guest's WIT
+/// `Host` impl calls), playing a tone. Confirms the integration routes to the selected
+/// backend (audioclient by default) and produces sound. `--probe-audio-backend`.
+#[cfg(target_os = "android")]
+pub fn probe_backend(secs: u64, hz: f32, vol: f32) {
+    // The real host initializes binder at startup; the standalone probe must do it
+    // before the policy self-heal (ensure_initialized) runs.
+    if let Err(e) = crate::binder::init() {
+        eprintln!("probe-backend: binder init failed: {e}");
+        return;
+    }
+    let cfg = TrackConfig {
+        sample_rate: 48_000,
+        channel_layout: ChannelLayout::Stereo,
+        format: Format::PcmF32,
+        class: StreamClass::Media,
+    };
+    let h = create_track(cfg);
+    if h == 0 {
+        eprintln!("probe-backend: create_track FAILED");
+        return;
+    }
+    eprintln!(
+        "probe-backend: track={h} via {} backend — writing {hz} Hz for {secs}s",
+        if use_audioclient() { "audioclient (AudioFlinger-direct)" } else { "aaudio (legacy)" },
+    );
+    let sr = 48_000.0_f32;
+    let mut phase = 0.0_f32;
+    let mut started = false;
+    let mut pending: Vec<f32> = Vec::new();
+    let mut total = 0u64;
+    let t0 = std::time::Instant::now();
+    while t0.elapsed().as_secs() < secs {
+        while pending.len() < 4096 * 2 {
+            let s = phase.sin() * vol;
+            phase += 2.0 * std::f32::consts::PI * hz / sr;
+            if phase > 2.0 * std::f32::consts::PI {
+                phase -= 2.0 * std::f32::consts::PI;
+            }
+            pending.push(s);
+            pending.push(s);
+        }
+        let n = write_pcm_f32(h, &pending);
+        if n > 0 {
+            total += n as u64;
+            pending.drain(0..n as usize * 2);
+        }
+        if !started && n > 0 {
+            started = true;
+            let ok = start(h);
+            eprintln!("probe-backend: started (ok={ok})");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    eprintln!("probe-backend: wrote {total} frames; closing");
+    close(h);
+    eprintln!("probe-backend: done");
+}
+
 impl Host for crate::HostState {
+    // All methods delegate to the module-level backend-dispatch functions above
+    // (AudioFlinger-direct by default; legacy AAudio with WART_AUDIO_BACKEND=aaudio).
     fn create_track(&mut self, cfg: TrackConfig) -> TrackHandle {
-        #[cfg(target_os = "android")]
-        { return binder_path::create_track(cfg); }
-        #[cfg(not(target_os = "android"))]
-        { let _ = cfg; 0 }
+        create_track(cfg)
     }
 
     fn write_pcm_f32(&mut self, track: TrackHandle, samples: Vec<f32>) -> u32 {
-        #[cfg(target_os = "android")]
-        { return binder_path::write_pcm_f32(track, &samples); }
-        #[cfg(not(target_os = "android"))]
-        { let _ = (track, samples); 0 }
+        write_pcm_f32(track, &samples)
     }
 
     fn start(&mut self, track: TrackHandle) -> bool {
-        #[cfg(target_os = "android")]
-        { return binder_path::start(track); }
-        #[cfg(not(target_os = "android"))]
-        { let _ = track; false }
+        start(track)
     }
 
     fn pause(&mut self, track: TrackHandle) -> bool {
-        #[cfg(target_os = "android")]
-        { return binder_path::pause(track); }
-        #[cfg(not(target_os = "android"))]
-        { let _ = track; false }
+        pause(track)
     }
 
     fn close(&mut self, track: TrackHandle) {
-        #[cfg(target_os = "android")]
-        { binder_path::close(track); }
-        #[cfg(not(target_os = "android"))]
-        { let _ = track; }
+        close(track)
     }
 
     fn pending_frames(&mut self, track: TrackHandle) -> u32 {
-        #[cfg(target_os = "android")]
-        { return binder_path::pending_frames(track); }
-        #[cfg(not(target_os = "android"))]
-        { let _ = track; 0 }
+        pending_frames(track)
     }
 
     fn open_capture(&mut self, cfg: TrackConfig) -> TrackHandle {
-        #[cfg(target_os = "android")]
-        { return binder_path::create_capture(cfg); }
-        #[cfg(not(target_os = "android"))]
-        { let _ = cfg; 0 }
+        open_capture(cfg)
     }
 
     fn read_pcm_f32(&mut self, capture: TrackHandle, max_frames: u32) -> Vec<f32> {
-        #[cfg(target_os = "android")]
-        { return binder_path::read_pcm_f32(capture, max_frames); }
-        #[cfg(not(target_os = "android"))]
-        { let _ = (capture, max_frames); Vec::new() }
+        read_pcm_f32(capture, max_frames)
     }
 }
 

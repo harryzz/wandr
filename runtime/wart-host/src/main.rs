@@ -200,6 +200,18 @@ fn main() {
         return;
     }
 
+    // Task 98 — WIT audio-path integration test: drive create_track/write/start (the
+    // backend-dispatch the guest's WIT Host calls) → the selected backend (audioclient
+    // by default; WART_AUDIO_BACKEND=aaudio for legacy). `--probe-audio-backend [secs]`.
+    if let Some(i) = args.iter().position(|a| a == "--probe-audio-backend") {
+        android_logger::init_once(
+            android_logger::Config::default().with_max_level(log::LevelFilter::Debug),
+        );
+        let secs = args.get(i + 1).and_then(|s| s.parse::<u64>().ok()).unwrap_or(3);
+        wasm_android_host::audio_impl::probe_backend(secs, 440.0, 0.4);
+        return;
+    }
+
     // Task 98 — AudioFlinger-direct CAPTURE smoke test: open a mic record via the
     // `audioclient` crate (IAudioFlingerService.createRecord → IAudioRecord → cblk
     // ring), read PCM for `secs`, and report frame count + peak level (so it's clear
