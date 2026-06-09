@@ -39,17 +39,35 @@ task/log filenames + final sweep.
 - False positives intentionally kept: `wartime` (in this rename's own notes), `mewart`
   ("edit me"→"edit mewart" text-input artifact, tasks/61).
 
-**DEFERRED handoffs (NOT done this session — see also [[project_wandr_rename_a03]] / tasks/99):**
-1. **Device rebuild + lockstep redeploy** to `/data/local/tmp/wandr-*` + reinstall apps
-   (app_ids changed → on-device `war.*` state incl. Signal link/history is orphaned).
-2. **a-03 lineage tree** (`~/android/lineage`, not on this machine): rename
-   `wart-inputflinger`/`wart-framework-shim`/`wart-sensormanager` modules +
-   `libwart_sensors_hal.so` + ninja rebuild — must precede next deploy (socket/.so
-   names already `wandr` in-tree). Full instructions: `tasks/99-wandr-rename-a03-followup.md`.
-3. **codeberg per-app repo renames** — main repo done; per-app repos (wart-app,
-   wart-arbiter, wart-host, wart-leak-repro, war.*) still to rename + URL-update.
-4. The fork branches (libsignal `wart-wasi-transport`, rsbinder `wart-recursive`) if ever
-   desired — separate-repo work.
+**DEVICE REDEPLOY — DONE + device-verified (2026-06-09).** Full `--no-art` stack rebuilt
++ deployed under `wandr-*`/`wandr.*` and rendering; all system + user apps published;
+a-03 modules renamed+rebuilt; Signal state copied old→new (preserved link+history). Four
+non-obvious bugs the bring-up surfaced (fix each next time):
+1. **`war_` wit-bindgen accessors** (`war_ime_ime`→`wandr_ime_ime`, war_alarm/notify/
+   audio-focus/background): the `war:` WIT rename means bindgen emits `wandr_*`; the
+   `war.`/`war:`/`war-` replace rules MISS the `war_`(underscore) caller refs. Host wouldn't compile.
+2. **Stale `libsf_surface.so`** (a "cosmetic" reuse) registered `wart`/`wart-overlay`
+   input windows + looked up the **`wart.windowreg`** binder service, but the rebuilt
+   `wandr-inputflinger` registers `wandr.windowreg` → window-registration handshake
+   silently fails → input dead. MUST rebuild libsf_surface from renamed `sf_surface.cpp`.
+3. **`wandr.keyguard` was never in `build-system-wandrpkgs.sh`** → the topmost locked
+   overlay had no cwasm → rendered empty navy over everything (looked like a total render
+   break). Added it to the script. ‼️ **`screencap` does NOT capture the `--no-art`
+   SurfaceControl overlay** — every shot was byte-identical blank even while the panel
+   rendered fine; check `dumpsys SurfaceFlinger` frame counts + ASK THE USER what the
+   panel shows, don't trust screencap.
+4. **Mis-renamed fork crate** `wandr_step_executor`/`wandr-reqwest-*` in signal-engine +
+   signal-phase0 Cargo.lock: the underscore protection was added in stage 6, so stage-3
+   (apps) wrongly renamed them; restore `wandr_*`→`wart_*` for the libsignal fork crates.
+
+a-03 build for new modules: `m` regenerates soong (modules land in sharded
+`out/soong/build.aosp_arm64.N.ninja`) but dies in kati `dex_preopt_check`; build by
+**soong output path through the COMBINED ninja** (`-k 0`, skips lsdump) — see tasks/99.
+
+**STILL DEFERRED (separate repos):** codeberg per-app repos (wart-app/wart-arbiter/
+wart-host/war.* — user said these are old/archived/moved, low priority); fork branches
+libsignal `wart-wasi-transport` + rsbinder `wart-recursive`. The tracked
+`runtime/wandr-host/prebuilt/libsf_surface.so` is still the stale wart-named artifact.
 
 Reusable rename helper (mask→case-preserving-replace→unmask) was at `/tmp/rename_wandr.pl`.
 Relates to [[reference_wandr_apps_root_install]], [[feedback_build_system_warpkgs_wipes_apps_root]].
