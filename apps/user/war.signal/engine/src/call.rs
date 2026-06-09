@@ -229,6 +229,11 @@ pub struct MediaStats {
     // Peer's RTP demux ids (what ringrtc sends with → what it expects from us).
     pub peer_pt: u8,
     pub peer_ssrc: u32,
+    // DIAG decode failure: the opus decoder's reason for the last failed decode,
+    // that packet's TOC byte, and how many failures carried the stereo bit.
+    pub dec_err_msg: &'static str,
+    pub dec_err_toc: u8,
+    pub dec_err_stereo: u64,
 }
 
 impl ActiveCall {
@@ -405,6 +410,7 @@ impl CallEngine {
             let (srtp_seen, decode_ok, decode_err) = a.call.media_diag();
             let (rtp_seq_gaps, rtp_ts_step, rtp_payload_len) = a.call.rtp_diag();
             let (peer_pt, peer_ssrc) = a.call.rtp_peer_ids();
+            let (dec_err_msg, dec_err_toc, dec_err_stereo) = a.call.dec_err_diag();
             MediaStats {
                 state: a.call.state(),
                 udp_tx: a.udp_tx,
@@ -423,6 +429,9 @@ impl CallEngine {
                 rtp_payload_len,
                 peer_pt,
                 peer_ssrc,
+                dec_err_msg,
+                dec_err_toc,
+                dec_err_stereo,
             }
         })
     }

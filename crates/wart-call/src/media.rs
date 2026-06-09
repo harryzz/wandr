@@ -81,6 +81,13 @@ pub struct MediaSession {
     // to send on (its audio receiver demuxes by these; a mismatch = it drops us).
     rx_pt: u8,
     rx_ssrc: u32,
+    // DIAG (decode failures): the opus decoder's own error string for the last
+    // decode that failed, + that packet's TOC byte (mode/bandwidth/stereo bits) and
+    // a count of failures whose TOC had the stereo bit set. Pins WHY packets are
+    // rejected (channel mismatch vs SILK-decode-failed vs frame parsing).
+    rx_dec_err_msg: &'static str,
+    rx_dec_err_toc: u8,
+    rx_dec_err_stereo: u64,
 }
 
 impl MediaSession {
@@ -119,7 +126,16 @@ impl MediaSession {
             rx_payload_len: 0,
             rx_pt: 0,
             rx_ssrc: 0,
+            rx_dec_err_msg: "",
+            rx_dec_err_toc: 0,
+            rx_dec_err_stereo: 0,
         })
+    }
+
+    /// DIAG: the last decode failure — `(opus error string, failing TOC byte,
+    /// count of failures with the stereo bit set)`. Empty string = no failure yet.
+    pub fn dec_err_diag(&self) -> (&'static str, u8, u64) {
+        (self.rx_dec_err_msg, self.rx_dec_err_toc, self.rx_dec_err_stereo)
     }
 
     /// DIAG: inbound RTP stats `(seq_gaps, last_ts_step, last_payload_len)`.
@@ -227,7 +243,17 @@ impl MediaSession {
             .unwrap_or(self.frame)
             .max(self.frame);
         let mut pcm = vec![0f32; n_samples];
-        let n = self.dec.decode(&pkt.payload, n_samples, &mut pcm).map_err(|_| Error::Codec("decode"))?;
+        let n = match self.dec.decode(&pkt.payload, n_samples, &mut pcm) {
+            Ok(n) => n,
+            Err(e) => {
+                // Preserve the decoder's own reason + the packet's TOC so calldbg can
+                // show WHY (channel mismatch / SILK-decode-failed / frame parse).
+                self.rx_dec_err_msg = e;
+                self.rx_dec_err_toc = pkt.payload.first().copied().unwrap_or(0);
+                if self.rx_dec_err_toc & 0x04 != 0 { self.rx_dec_err_stereo += 1; }
+                return Err(Error::Codec("decode"));
+            }
+        };
         pcm.truncate(n);
         Ok(pcm)
     }

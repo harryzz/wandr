@@ -263,6 +263,11 @@ impl PeerSession {
         self.media.as_ref().map(|m| m.rtp_peer_ids()).unwrap_or((0, 0))
     }
 
+    /// DIAG: last decode failure `(opus error string, failing TOC, stereo-bit count)`.
+    pub fn dec_err_diag(&self) -> (&'static str, u8, u64) {
+        self.media.as_ref().map(|m| m.dec_err_diag()).unwrap_or(("", 0, 0))
+    }
+
     pub fn handle_timeout(&mut self, now: Instant) {
         self.transport.handle_timeout(now);
         let _ = self.ensure_media();

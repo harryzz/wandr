@@ -289,6 +289,11 @@ impl SignalCall {
         self.session.rtp_diag()
     }
 
+    /// DIAG: last decode failure `(opus error string, failing TOC, stereo-bit count)`.
+    pub fn dec_err_diag(&self) -> (&'static str, u8, u64) {
+        self.session.dec_err_diag()
+    }
+
     /// DIAG: the peer's RTP `(payload_type, ssrc)` — what ringrtc actually sends.
     pub fn rtp_peer_ids(&self) -> (u8, u32) {
         self.session.rtp_peer_ids()

@@ -1331,12 +1331,13 @@ async fn receive_and_send(
                                 let tps = ticks.saturating_sub(last_ticks);
                                 last_ticks = ticks;
                                 dbg_line(&format!(
-                                    "media {:?}: ticks/s={} | udp tx={} rx={} | audio tx={} rx={} micpk={:.4} peak={:.3} wr_ok={} wr_zero={} | srtp seen={} ok={} err={} | rtp gaps={} ts_step={} plen={} | peer_pt={} peer_ssrc={:#x} (we send pt=102 ssrc=0xa/0xb)",
+                                    "media {:?}: ticks/s={} | udp tx={} rx={} | audio tx={} rx={} micpk={:.4} peak={:.3} wr_ok={} wr_zero={} | srtp seen={} ok={} err={} | rtp gaps={} ts_step={} plen={} | peer_pt={} peer_ssrc={:#x} | dec_err='{}' toc={:#04x} stereo_errs={} (we send pt=102 ssrc=0xa/0xb)",
                                     m.state, tps, m.udp_tx, m.udp_rx, m.aud_tx, m.aud_rx,
                                     m.mic_peak, m.aud_peak, m.wr_ok, m.wr_zero,
                                     m.srtp_seen, m.decode_ok, m.decode_err,
                                     m.rtp_seq_gaps, m.rtp_ts_step, m.rtp_payload_len,
                                     m.peer_pt, m.peer_ssrc,
+                                    m.dec_err_msg, m.dec_err_toc, m.dec_err_stereo,
                                 ));
                             }
                         }
