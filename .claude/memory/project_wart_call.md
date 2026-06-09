@@ -90,7 +90,8 @@ filter DONE+device-verified (commit 658b929d):** the peer multiplexes streams on
 one port (0x7d2/PT102 audio + 0xd/PT101 telephone-event); `recv()` now skips any
 non-audio-PT packet (empty vec = benign skip, not error) so the decoder + seq/ts
 diag see one coherent stream → rtp gaps 1.4M→0, ts_step steady 2880, decode-err
-~15%→~7.6% (residual = real inbound loss → jitter/PLC follow-up). **The Opus PT is
+~15%→~7.6% (residual was NOT loss — it was the Code 3 parser bug, fixed
+2026-06-09 commit 8133ef91; see below). **The Opus PT is
 now PER-SESSION (not a global const):** WebRTC parses the negotiated SDP rtpmap
 (`Signaling::audio_pt`, from_sdp/to_sdp), `set_remote_signaling` adopts the peer's
 PT; Signal fixes 102 in `params_into`. Correctly scoped across both backends.
@@ -114,8 +115,31 @@ is_relay)`. **Blocking opus-rs crash fixed along the way (commit c8576a8f):** a
 60ms wideband SILK frame from a low-bitrate off-LAN peer panicked opus-rs 0.1.22's
 hardcoded `w_pcm_i16=640` buffer (needs 960*ch) → SIGILL → dead call guest;
 vendored `external/opus-rs` fork sizes it `5760*channels` like the siblings, and
-wart-call's opus-rs is now a path dep on it. Residual inbound relay loss (~17%
-decode err, rx≪tx) → jitter-buffer/PLC follow-up.
+wart-call's opus-rs is now a path dep on it. **The "residual inbound loss" was
+NOT loss** — FIXED 2026-06-09 (commit 8133ef91): it was an opus-rs **Code 3
+(multi-frame) parser bug**. A libopus peer packs 3×20ms Hybrid frames into one
+60ms RTP packet (toc=0x7b); the parser (a) branched on the PADDING bit (0x40) to
+pick CBR-vs-VBR instead of the VBR bit (0x80) — RFC 6716 §3.2.5 makes them
+independent — and (b) used a bogus VBR frame-length encoding (`(b&0x7f)<<8|b1`
+instead of `<252→1B / ≥252→first+second*4`). So >half the peer's packets failed
+(`decode_ok` froze at 488, `decode_err` climbed; `rtp gaps=0` proved no real
+loss). Found by instrumenting the decode-error path (opus error string + failing
+TOC → calldbg `dec_err='…' toc=…`), NOT by assuming loss — a jitter-buffer/PLC
+build would have fixed nothing (rule #1 win, [[feedback_read_source_first]]).
+Device-verified: decode_ok now climbs in lockstep (~93% vs 42%). The dec_err
+instrumentation is kept as permanent tooling.
+
+**OUTBOUND pops fixed 2026-06-09 (commit e63b8bc2):** the guest read ONE FRAME
+(20ms) of mic per engine tick, but the engine ticks ~35/s while the mic produces
+50×20ms frames/s → it fell ~26% behind real-time, the host capture-drain buffer
+overflowed + dropped the surplus, and the far side's jitter buffer starved
+(interruptions/pops). FIX = the guest drains the WHOLE capture each tick (loop
+read_pcm_f32 until a short read), so the full mic stream is sent regardless of
+tick rate. Device-verified: audio tx 37/s→~50/s (real-time), far side confirms no
+pops. (Capture RING overflow was already 0 via the host capture-drain pump in
+audio_impl.rs; the opus ENCODER is single-frame Code 0 and was NOT the cause —
+checked.) RULE: a real-time producer/consumer must drain to empty per tick, never
+a fixed chunk, when the tick rate is below the media frame rate.
 
 **SIGNAL 1:1 CALLS scoped as `tasks/75-ringrtc-signal-calls.md`** (do in a fresh
 session). Key framing: don't port ringrtc (= Rust orchestration + C++ libwebrtc) —

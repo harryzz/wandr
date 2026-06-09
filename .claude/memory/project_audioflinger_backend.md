@@ -40,3 +40,22 @@ fork. Diagnostics kept: `--probe-audioclient[-matrix]`; C++ ref `external/wart-a
 on a-03 (real AudioTrack + offsetof dump + request hexdump). Supersedes the AAudioService
 path for output. Follow-ups: wire into host output path, createRecord, volume/timestamp,
 pacing (out_write underruns), guest-derived package/uid.
+
+## Host-side jitter buffer (call output) — FIXED, live-Signal-verified 2026-06-09
+4th "silent" bug, found offline via `--probe-audio-backend` (probe uses VoiceCall to
+exercise the pump). **Ring-fill target MUST be the server-granted `frameCount`, NOT a
+hardcoded frame count** (`[[feedback_no_hardcoding]]`). The jitter-buffer pump hardcoded
+`RING_TARGET=960` (~20ms); the device's ring is **frameCount=3844** and the mixer pulls
+`notificationFrames=1922` chunks — so a 960 target left the ring ¾-empty at every pull →
+sustained underrun → `prepareTracks_l BUFFER TIMEOUT: remove track … due to underrun` in
+~1s → **ring then froze full (rear-front stuck at 960) and never drained again** = the
+"they hear me, I hear nothing" silence. FIX = new `audioclient::frame_count(handle)`
+(ClientProxy::frame_count passthrough) + pump keeps the ring FULL to it: deferred start
+pre-fills the whole ring (real+silence) then `IAudioTrack.start`, steady-state tops up to
+frameCount each 10ms cycle (real from a bounded host VecDeque + silence pad). Evidence of
+health: logcat `audio-pump: track N ring=3844/3844 full (idle)`, 0 BUFFER TIMEOUT (vs the
+broken `ring=960 full (idle)` forever). Supersedes the silence-bridge (WATERMARK=720) for
+voice-call output. Commits: audioclient-rs e6175fb (frame_count) + wart 9beaf0f0→18d913b8.
+GOTCHA: `git add -A` here swept untracked build binaries (wart-launch/wart-sensormanager/
+wart-inputflinger/wart-framework-shim + a leak-repro tgz) into the commit — `git add` the
+specific paths instead.
