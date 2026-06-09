@@ -487,18 +487,19 @@ fn probe_audioclient(secs: u64, hz: f32, vol: f32) {
     let mut zero_ticks = 0u32;
     let mut tick = 0u32;
     let mut paused_test_done = false;
+    let mut pending: Vec<f32> = Vec::new();
     let t0 = std::time::Instant::now();
     while t0.elapsed().as_secs() < secs {
         tick += 1;
-        // get_timestamp every ~1s (proves the clock model: position should advance).
-        if started && tick % 100 == 0 {
+        // ~200 ticks/s (5 ms sleep). get_timestamp every ~1s (position should advance).
+        if started && tick % 200 == 0 {
             match audioclient::get_timestamp(h) {
-                Some((pos, nt)) => eprintln!("probe-audioclient: t≈{}s getTimestamp pos={pos} nanoTime={nt}", tick / 100),
-                None => eprintln!("probe-audioclient: t≈{}s getTimestamp (none yet)", tick / 100),
+                Some((pos, nt)) => eprintln!("probe-audioclient: t≈{}s getTimestamp pos={pos} nanoTime={nt}", tick / 200),
+                None => eprintln!("probe-audioclient: t≈{}s getTimestamp (none yet)", tick / 200),
             }
         }
         // one pause→resume cycle at ~1.5s (proves pause keeps position, start resumes).
-        if started && !paused_test_done && tick == 150 {
+        if started && !paused_test_done && tick == 300 {
             paused_test_done = true;
             let p = audioclient::pause(h);
             eprintln!("probe-audioclient: pause ok={p} (200ms gap)…");
@@ -507,31 +508,38 @@ fn probe_audioclient(secs: u64, hz: f32, vol: f32) {
             eprintln!("probe-audioclient: resumed (start ok={r})");
         }
         // drop the gain to 0.1 at ~2.2s (audible: the tone should get quieter).
-        if started && tick == 220 {
+        if started && tick == 440 {
             audioclient::set_volume(h, 0.1);
             eprintln!("probe-audioclient: set_volume(0.1) — tone should drop");
         }
-        let mut buf: Vec<f32> = Vec::with_capacity(480 * 2);
-        for _ in 0..480 {
+        // Smooth pacing: keep a `pending` generator buffer topped up to ~one ring
+        // (4096 frames) and write whatever the ring will accept, advancing the sine
+        // phase ONLY by frames actually consumed (drain). This (a) keeps the ring full
+        // so the HAL never underruns, and (b) preserves sample continuity on a partial
+        // write (no phase jump → no click). The 5 ms sleep stays ahead of the drain.
+        let target = 4096usize; // ≈ one ring of headroom (server ring ~3844 frames)
+        while pending.len() < target * 2 {
             let s = phase.sin() * vol;
             phase += 2.0 * std::f32::consts::PI * hz / sr;
             if phase > 2.0 * std::f32::consts::PI {
                 phase -= 2.0 * std::f32::consts::PI;
             }
-            buf.push(s);
-            buf.push(s);
+            pending.push(s);
+            pending.push(s);
         }
-        let n = audioclient::write(h, &buf);
-        total += n;
+        let n = audioclient::write(h, &pending);
         if n == 0 {
             zero_ticks += 1;
+        } else {
+            total += n;
+            pending.drain(0..n * 2); // keep the unwritten tail (continuity)
         }
         if !started && n > 0 {
             let ok = audioclient::start(h);
             started = true;
             eprintln!("probe-audioclient: started (IAudioTrack.start ok={ok})");
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
     let f = audioclient::flush(h);
     eprintln!("probe-audioclient: wrote {total} frames (zero-ticks={zero_ticks}); flush ok={f}; closing");

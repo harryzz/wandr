@@ -108,12 +108,15 @@ calibration noise.)
 - Track-invalidation restore ✅ — `write`/`read` recover from `CBLK_INVALID` (re-create
   + swap into the same handle + resume) and `CBLK_DISABLED` (re-start). Verified by
   construction (hard to force a live route-change invalidation on-device).
-- **Pops / interruptions** (audible) = client pacing: the write pump runs as fast as the
-  ring frees instead of pacing to the wall clock, so the HAL periodically underruns
-  (`out_write underrun`). NEXT: pace the pump to the sample clock (the task-75
-  `min_frame_delay` lesson) — couple writes to ~10 ms cadence.
+- Smooth pacing ✅ — the pump keeps a `pending` source buffer topped up to ~one ring
+  of headroom and writes only what the ring accepts, advancing the source position
+  ONLY by frames actually consumed (so a partial write causes no discontinuity/click);
+  a short sleep stays ahead of the drain. HAL `out_write underrun` went non-zero → **0**;
+  device-verified clean playback. (Pacing is the consumer's job — `write()` stays
+  "write what fits"; the probe demonstrates the correct pump.)
 - Remaining per-track: `set_output_device` (route via `IAudioPolicyService`, host
-  policy path).
+  policy path); `applyVolumeShaper` (ramps/fades); blocking `write`/`read` (futex) so
+  consumers needn't hand-pace; the cblk underrun counters for telemetry.
 - Wire the backend into the real host audio output path (replace the AAudioService path).
 - Package/uid should come from the calling guest's identity, not the hardcoded
   `"android"`/`geteuid()` default in `attribution_source()`.
