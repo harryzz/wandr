@@ -1484,19 +1484,37 @@ fn use_audioclient() -> bool {
 #[cfg(target_os = "android")]
 mod audioclient_path {
     use super::{ChannelLayout, StreamClass, TrackConfig};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
     use std::sync::{Mutex, OnceLock};
 
-    // ── Call-output keep-alive pump ──────────────────────────────────────────
+    // ── Call-output jitter buffer + steady pump ──────────────────────────────
     // AudioFlinger removes a normal track from the mixer on a sustained underrun
     // (BUFFER TIMEOUT); once removed it stops draining, the ring fills, the guest's
-    // writes return 0, and the guest re-creates the track — a big glitch, repeated.
-    // A real-time VoIP guest can't keep the small ring full through network jitter.
-    // This pump keeps each *voice-call* output ring fed with a small silence bridge
-    // when the guest falls behind, so the track stays on the active list (never
-    // removed/re-created) — the AAudioService-equivalent the audioclient path lacks.
-    // (Scoped to calls; media/notification keep the direct path.)
-    struct OutState { started: bool, guest_wrote: bool, channels: u32 }
+    // writes return 0, and the guest re-creates the track — a big glitch, repeated. A
+    // real-time VoIP guest can't keep the small (~40 ms) ring full through network
+    // jitter. So for *voice-call* output we interpose a host-side jitter buffer: the
+    // guest writes into `buf` (never rejected), and a steady pump meters it into the
+    // ring each cycle to a low target, silence-padding only when the guest is genuinely
+    // behind. This decouples the guest's bursty cadence from the ring feed (the
+    // AAudioService-equivalent the audioclient path lacks). (Calls only; media goes
+    // direct — media guests buffer themselves.)
+    // The fill target is NOT a fixed frame count: the AudioFlinger mixer sizes each
+    // track's ring (`frameCount`) per device/route and pulls it in ~half-ring
+    // (`notificationFrames`) chunks, removing the track on a sustained underrun. Keeping
+    // the ring only fractionally full therefore guarantees removal (verified: a 960-frame
+    // target on a 3844-frame ring → BUFFER TIMEOUT in ~1 s). So the pump keeps the ring
+    // *full* to the server-granted `frameCount` (queried per track) — the maximum
+    // underrun cushion, and the device's own chosen output latency (no magic number).
+    const JITTER_CAP_FRAMES: usize = 9600; // bound buffered latency to ~200 ms (drop-old)
+
+    struct OutState {
+        started: bool,        // guest called start() (intent to play)
+        server_started: bool, // the pump has pre-filled the ring + started the AF track
+        guest_wrote: bool,
+        channels: u32,
+        ring_frames: u32,   // the ring's frameCount (0 = not yet queried)
+        buf: VecDeque<f32>, // host jitter buffer (interleaved f32), drained by the pump
+    }
     fn pump() -> &'static Mutex<HashMap<u32, OutState>> {
         static R: OnceLock<Mutex<HashMap<u32, OutState>>> = OnceLock::new();
         R.get_or_init(|| Mutex::new(HashMap::new()))
@@ -1505,28 +1523,71 @@ mod audioclient_path {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
             std::thread::spawn(|| {
-                // ~15 ms cushion: low enough for call latency, high enough to bridge a
-                // pump cycle of jitter. The fill is silence (a real jitter buffer is a
-                // follow-up); it keeps the track alive when the guest stalls.
-                const WATERMARK: u32 = 720; // 15 ms @ 48k
+                let mut cycle = 0u64;
                 loop {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                    let active: Vec<(u32, u32)> = {
-                        let g = pump().lock().unwrap();
-                        g.iter()
-                            .filter(|(_, s)| s.started && s.guest_wrote)
-                            .map(|(h, s)| (*h, s.channels))
-                            .collect()
-                    };
-                    for (h, ch) in active {
-                        let pending = audioclient::pending_frames(h);
-                        if pending < WATERMARK {
-                            // write() also re-starts a track AudioFlinger disabled after
-                            // underrun (CBLK_DISABLED), so this both feeds and revives it.
-                            let silence = vec![0.0f32; (WATERMARK - pending) as usize * ch as usize];
-                            audioclient::write(h, &silence);
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                cycle += 1;
+                // Snapshot active call tracks (lock released before any audioclient call
+                // to keep a single lock order: pump → audioclient, never the reverse).
+                let active: Vec<(u32, u32)> = {
+                    let g = pump().lock().unwrap();
+                    g.iter()
+                        .filter(|(_, s)| s.started && s.guest_wrote)
+                        .map(|(h, s)| (*h, s.channels))
+                        .collect()
+                };
+                for (h, ch) in active {
+                    // Learn the ring's real capacity once (frameCount the server granted),
+                    // then keep the ring full to it. A fixed sub-ring target underruns.
+                    let target = {
+                        let cached = { pump().lock().unwrap().get(&h).map(|s| s.ring_frames).unwrap_or(0) };
+                        if cached != 0 { cached } else {
+                            let fc = audioclient::frame_count(h);
+                            if fc != 0 { if let Some(s) = pump().lock().unwrap().get_mut(&h) { s.ring_frames = fc; } }
+                            fc
                         }
+                    };
+                    if target == 0 { continue; } // ring not mmapped yet
+                    let server_started = {
+                        let g = pump().lock().unwrap();
+                        match g.get(&h) { Some(s) => s.server_started, None => continue }
+                    };
+                    // Deferred start: the guest calls start() while its audio is still in
+                    // the jitter buffer, so we must NOT start the AF track with an empty
+                    // ring (instant underrun → removed). Wait until ≥half a ring of REAL
+                    // audio is buffered, pre-fill the WHOLE ring (real + silence pad), then
+                    // start with a full ring (maximum cushion).
+                    let pending = audioclient::pending_frames(h);
+                    let need = (target.saturating_sub(pending)) as usize; // frames to top up
+                    if need == 0 {
+                        if cycle % 200 == 0 { log::info!("audio-pump: track {h} ring={pending}/{target} full (idle)"); }
+                        continue;
                     }
+                    // Drain real audio from the jitter buffer (under the pump lock); for the
+                    // pre-fill, gate on having half a ring so there's real audio to start on.
+                    let (mut chunk, buf_left): (Vec<f32>, usize) = {
+                        let mut g = pump().lock().unwrap();
+                        let Some(s) = g.get_mut(&h) else { continue };
+                        let buf_frames = s.buf.len() / ch as usize;
+                        if !s.server_started && buf_frames < (target / 2) as usize {
+                            continue; // pre-fill: wait for real audio before first start
+                        }
+                        let n = (need * ch as usize).min(s.buf.len());
+                        (s.buf.drain(0..n).collect(), s.buf.len() / ch as usize)
+                    };
+                    let real = chunk.len() / ch as usize;
+                    // Silence-pad to a full ring (keeps the track alive; write() also
+                    // re-starts a track AudioFlinger disabled after underrun).
+                    chunk.resize(need * ch as usize, 0.0);
+                    let wrote = audioclient::write(h, &chunk);
+                    if !server_started {
+                        let sr = audioclient::start(h); // start once with a full ring
+                        if let Some(s) = pump().lock().unwrap().get_mut(&h) { s.server_started = true; }
+                        log::info!("audio-pump: track {h} pre-fill wrote={wrote}/{target} real={real} start_ok={sr}");
+                    } else if cycle % 200 == 0 {
+                        log::info!("audio-pump: track {h} ring={pending}/{target} topup need={need} real={real} silence={} wrote={wrote} buf_left={buf_left}", need - real);
+                    }
+                }
                 }
             });
         });
@@ -1564,9 +1625,10 @@ mod audioclient_path {
         });
         if h != 0 && matches!(cfg.class, StreamClass::VoiceCall) {
             crate::audio_policy_impl::set_media_strategy_route(super::comms_route_speaker());
-            // Register with the keep-alive pump so the call output ring never underruns.
+            // Register with the jitter-buffer pump so the call output ring never underruns.
             pump().lock().unwrap().insert(h, OutState {
-                started: false, guest_wrote: false, channels: channels(&cfg),
+                started: false, server_started: false, guest_wrote: false,
+                channels: channels(&cfg), ring_frames: 0, buf: VecDeque::new(),
             });
             start_pump_thread();
         }
@@ -1574,22 +1636,57 @@ mod audioclient_path {
     }
 
     pub fn write_pcm_f32(track: u32, samples: &[f32]) -> u32 {
-        if let Some(s) = pump().lock().unwrap().get_mut(&track) { s.guest_wrote = true; }
+        // Call tracks: append into the jitter buffer (the pump meters it to the ring).
+        // The guest is never rejected unless the buffer is full (backpressure bounds
+        // latency). Non-call tracks write straight to the ring.
+        {
+            let mut g = pump().lock().unwrap();
+            if let Some(s) = g.get_mut(&track) {
+                s.guest_wrote = true;
+                let ch = s.channels as usize;
+                let space = (JITTER_CAP_FRAMES * ch).saturating_sub(s.buf.len());
+                let take = samples.len().min(space);
+                s.buf.extend(samples[..take].iter().copied());
+                return (take / ch) as u32;
+            }
+        }
         audioclient::write(track, samples) as u32
     }
     pub fn start(track: u32) -> bool {
-        if let Some(s) = pump().lock().unwrap().get_mut(&track) { s.started = true; }
+        // Pumped (call) tracks: record intent only; the pump starts the AF track once it
+        // has pre-filled the ring (avoids an empty-ring startup underrun). Non-call
+        // tracks start immediately.
+        {
+            let mut g = pump().lock().unwrap();
+            if let Some(s) = g.get_mut(&track) {
+                s.started = true;
+                return true;
+            }
+        }
         audioclient::start(track)
     }
     pub fn pause(track: u32) -> bool {
-        if let Some(s) = pump().lock().unwrap().get_mut(&track) { s.started = false; }
+        // Reset server_started so a later start() re-pre-fills + re-starts the AF track.
+        if let Some(s) = pump().lock().unwrap().get_mut(&track) { s.started = false; s.server_started = false; }
         audioclient::pause(track)
     }
     pub fn close(track: u32) {
         pump().lock().unwrap().remove(&track);
         audioclient::close(track)
     }
-    pub fn pending_frames(track: u32) -> u32 { audioclient::pending_frames(track) }
+    pub fn pending_frames(track: u32) -> u32 {
+        // For a jitter-buffered call track, report the BUFFER backlog, not the ring fill
+        // — the pump keeps the ring topped with silence, so reporting the ring would
+        // show "full" forever and a guest that paces on pending-frames would stop
+        // writing its real audio (→ silence). The guest paces on its own backlog.
+        {
+            let g = pump().lock().unwrap();
+            if let Some(s) = g.get(&track) {
+                return (s.buf.len() / s.channels as usize) as u32;
+            }
+        }
+        audioclient::pending_frames(track)
+    }
 
     pub fn create_capture(cfg: TrackConfig) -> u32 {
         // The WIT capture path always opens the mic; class is ignored. AUDIO_SOURCE_MIC
@@ -1703,7 +1800,7 @@ pub fn probe_backend(secs: u64, hz: f32, vol: f32) {
         sample_rate: 48_000,
         channel_layout: ChannelLayout::Stereo,
         format: Format::PcmF32,
-        class: StreamClass::Media,
+        class: StreamClass::VoiceCall, // exercise the jitter-buffer pump (task 98 debug)
     };
     let h = create_track(cfg);
     if h == 0 {

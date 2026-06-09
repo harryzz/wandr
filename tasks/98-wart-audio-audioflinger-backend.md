@@ -141,9 +141,23 @@ calibration noise.)
 - Mic mute ✅ (live Signal call) — `set_mic_muted` calls `IAudioFlingerService.setMicMute`
   (HAL-level, the capture analog to the routing strategy), with the `MIC_MUTED`-gated
   read_pcm_f32 silence as a per-stream fallback.
+- Host-side jitter buffer ✅ (live Signal call) — supersedes the silence-bridge for
+  voice-call output: the guest writes into a bounded host `VecDeque` (never rejected),
+  a 10 ms pump meters it into the cblk ring. **The fix that made it work was sizing the
+  ring-fill target to the real `frameCount`, not a fixed frame count.** A hardcoded
+  `RING_TARGET=960` (≈20 ms) on this device's **3844-frame** ring (the mixer pulls
+  `notificationFrames=1922` chunks) left the ring ¾-empty at every pull → sustained
+  underrun → `prepareTracks_l BUFFER TIMEOUT: remove track … due to underrun` in ~1 s →
+  the ring then froze full and never drained again (the "they hear me, I hear nothing"
+  silence). Fix: query `audioclient::frame_count(h)` per track and keep the ring **full**
+  to it (deferred start pre-fills the whole ring with real+silence then `start`; steady
+  state tops up to `frameCount` each cycle, real audio + silence pad). A
+  no-hardcoding-rule fix (`[[feedback_no_hardcoding]]`). Verified offline
+  (`--probe-audio-backend`: ring `3844/3844` steady, 0 BUFFER TIMEOUT, 301k frames
+  real-time in 6 s) and on a live Signal call (ring stays full, 0 BUFFER TIMEOUT).
 - Remaining per-track: `set_output_device`; `applyVolumeShaper` (ramps/fades); blocking
-  `write`/`read` (futex); cblk underrun counters; a real host-side jitter buffer (vs the
-  silence-bridge pump); capture `VOICE_COMMUNICATION`/AEC source (needs a WIT signal).
+  `write`/`read` (futex); cblk underrun counters; capture `VOICE_COMMUNICATION`/AEC source
+  (needs a WIT signal).
 - Wire the backend into the real host audio output path (replace the AAudioService path).
 - Package/uid should come from the calling guest's identity, not the hardcoded
   `"android"`/`geteuid()` default in `attribution_source()`.

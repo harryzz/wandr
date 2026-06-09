@@ -1,5 +1,5 @@
 TASK=98
-STEP=AUDIBLE-end-to-end-noart
-STATUS=in-progress
-LAST_SUCCESS=Task 98 AudioFlinger-direct backend AUDIBLE end-to-end under --no-art (createTrack + cblk drain + unmuted). Log: "OpPlayAudio: not muting track for service UID 0", 220k frames drained to HAL.
-NOTES=THREE fixes: (1) track.rs AUDIO_SESSION_ALLOCATE 0 not -1; (2) cblk.rs real ABI offsets sizeof=232 mServer=0 mFutex=8 mBufferSizeInFrames=168 mFlags=176 mFront=184 mRear=188, buffer at base+232; (3) valid attributionSource (uid=geteuid, packageName="android") via structured recursive AttributionSourceState + rsbinder Box-array patch (needed ONLY for unmute #3). Device in --no-art (stack up). wart-host built+deployed /data/local/tmp/wart-host-ac. Task doc + memory written. UNCOMMITTED: audioclient-rs (sessionId+cblk+attributionSource+diagnostics), wart-host (main.rs probes, Cargo.toml [patch]+dep). rsbinder [patch] -> /home/harry/src/rsbinder-patched (LOCAL path, NOT committable as-is — finalize as in-tree vendor or codeberg fork). REMAINING: finalize rsbinder vendoring, wire into host output path, createRecord, pacing.
+STEP=verify-done
+STATUS=complete
+LAST_SUCCESS=Task 98 host-side jitter buffer verified OK — live Signal call audible+smooth; ring stays full (3844/3844), 0 BUFFER TIMEOUT. Fix = derive ring target from real frameCount (was hardcoded 960).
+NOTES=
