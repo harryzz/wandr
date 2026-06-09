@@ -33,6 +33,7 @@ members = [
     "wandr-arbiter-audio",
     "wandr-arbiter-sensors",
     "wandr-arbiter-net",
+    "wandr-arbiter-events",
     "wandr-screen",
 ]
 

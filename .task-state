@@ -1,5 +1,5 @@
-TASK=92
+TASK=90
 STEP=verify-done
 STATUS=complete
-LAST_SUCCESS=Task 92 (wandr:task-manager) DONE + device-verified (2026-06-09). Arbiter task-list/task-kill verbs (+CLI, 2 unit tests pass), host task_manager_host_impl (forwards to arbiter + /proc enrichment + CPU-delta map + bindgen + add_to_linker), dioxus test guest apps/user/wandr.taskmanager. Deployed via per-app --install + run-hybrid-stack --wandr-only. Device: all apps listed with kind badges (S/U), live CPU deltas, PSS<RSS, protected kills refused, user-app kill works (OK killed pid). Final UI scale 1.5, wandr.-stripped, fg/bg abbreviations.
-NOTES=
+LAST_SUCCESS=Task 90 M1 DONE + device-verified (2026-06-09): generic wandr:events pub/sub bus (NOT bespoke connectivity-handler; researched wasi:messaging, used its vocabulary w/ a record not resources). Broker wandr-arbiter-events (topic→subscribers+retained, 3 unit tests), host events_host_impl (producer.publish→evt-publish) + events-incoming export binding, package.toml [events].subscribe (deferred to after control-socket bind so retained doesn't race), wandr-net publishes net.status. Test guest wandr.connectivity.test (dioxus): device-verified Online↔Offline push + retained-on-subscribe (shows Online wifi zah004 192.168.1.217 immediately, 1 event). Guest gotcha: handle() sets DIRTY→pre_frame mark_dirty (dioxus-canvas re-runs only on dirty). NOT committed yet.
+NOTES=Follow-ups: migrate alarm/notify onto the bus; task 90 M2-M4 (wifi mgmt via typed wandr:connectivity/wifi) pending. See project_event_bus.md.

@@ -45,19 +45,38 @@ fn send_arbiter(line: &str) {
     }
 }
 
-/// Report a link snapshot to the arbiter. Offline:
-/// `report-net-state offline`. Online: `report-net-state online wifi <ssid> <ip>`.
-fn report(status: &LinkStatus) {
-    if status.up {
-        let ssid = status.ssid.as_deref().unwrap_or("-");
-        let ip = status
-            .ip
-            .map(|i| i.to_string())
-            .unwrap_or_else(|| "-".into());
-        send_arbiter(&format!("report-net-state online wifi {ssid} {ip}"));
-    } else {
-        send_arbiter("report-net-state offline");
+/// base64 (standard alphabet, padded) — matches the host's decoder. The event-bus
+/// payload is base64 over the line-framed arbiter socket (task 90).
+fn b64_encode(data: &[u8]) -> String {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(A[(n >> 18 & 63) as usize] as char);
+        out.push(A[(n >> 12 & 63) as usize] as char);
+        out.push(if chunk.len() > 1 { A[(n >> 6 & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 2 { A[(n & 63) as usize] as char } else { '=' });
     }
+    out
+}
+
+/// Report a link snapshot to the arbiter. Offline: `report-net-state offline`.
+/// Online: `report-net-state online wifi <ssid> <ip>`. Also publishes the same
+/// snapshot to the generic event bus under topic `net.status` (task 90) so any
+/// guest subscribed via `package.toml [events]` receives it through
+/// `wandr:events/incoming-handler` — the payload is the identical wire string
+/// (`online wifi <ssid> <ip>` / `offline`), base64'd.
+fn report(status: &LinkStatus) {
+    let wire = if status.up {
+        let ssid = status.ssid.as_deref().unwrap_or("-");
+        let ip = status.ip.map(|i| i.to_string()).unwrap_or_else(|| "-".into());
+        format!("online wifi {ssid} {ip}")
+    } else {
+        "offline".to_string()
+    };
+    send_arbiter(&format!("report-net-state {wire}"));
+    send_arbiter(&format!("evt-publish net.status {}", b64_encode(wire.as_bytes())));
 }
 
 /// The supplicant child + the leased status from one successful bring-up.

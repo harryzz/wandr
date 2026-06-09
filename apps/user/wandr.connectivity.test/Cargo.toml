@@ -1,0 +1,30 @@
+# wandr.connectivity.test — the event-bus / connectivity test guest (task 90).
+#
+# A dioxus-canvas guest that exports wasi-messaging-style `wandr:events/
+# incoming-handler` (an extra host export beyond the skiko-gfx surface), so it does
+# its own combined `generate!` + `dioxus_canvas::wire!(app)` (the Signal-guest
+# pattern). It receives `net.status` events from the host (delivered by the arbiter
+# event broker) and renders the live link state.
+#
+#   cargo build --target wasm32-wasip2 --release
+[package]
+name    = "wandr-connectivity-test"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+dioxus        = { version = "0.7", default-features = false, features = ["macro", "html", "signals", "hooks"] }
+dioxus-canvas = { path = "../../../crates/dioxus-canvas" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+
+# dioxus 0.7 + wasm32-wasip2 requires the vendored+patched subsecond (task 60).
+[patch.crates-io]
+subsecond = { path = "../../../external/subsecond" }

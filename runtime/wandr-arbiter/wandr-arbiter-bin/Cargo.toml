@@ -32,6 +32,7 @@ wandr-arbiter-keyguard = { path = "../wandr-arbiter-keyguard" }
 wandr-arbiter-audio = { path = "../wandr-arbiter-audio" }
 wandr-arbiter-sensors = { path = "../wandr-arbiter-sensors" }
 wandr-arbiter-net = { path = "../wandr-arbiter-net" }
+wandr-arbiter-events = { path = "../wandr-arbiter-events" }
 wandr-hal-sensors = { path = "../../wandr-hal-sensors" }
 wandr-hal-display = { path = "../../wandr-hal-display" }
 wandr-hal-lights  = { path = "../../wandr-hal-lights" }

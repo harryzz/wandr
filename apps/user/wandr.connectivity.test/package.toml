@@ -1,0 +1,19 @@
+# Task 90 — event-bus / connectivity test guest. A normal user wandrpkg (installs
+# under apps/). A dioxus-canvas GUI that subscribes to the `net.status` topic on the
+# wandr event bus (wandr:events) and renders the live connectivity snapshot — it
+# receives a retained value on subscribe + every change via
+# wandr:events/incoming-handler.handle.
+app_id      = "wandr.connectivity.test"
+version     = "0.1.0"
+world       = "my:skiko-gfx/skiko-ui"
+composition = "same-store"
+orientation = "auto"
+label       = "Net Monitor"
+
+# Event-bus subscription is host-config (not a WIT call), matching wasi:messaging's
+# delivery model: the host registers each topic with the arbiter for this guest.
+[events]
+subscribe = ["net.status"]
+
+[components]
+ui = "components/ui.wasm"

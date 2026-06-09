@@ -903,3 +903,86 @@ forcing function.
   #13403) **before** running more than one app concurrently — it is
   no longer a "someday" item. The single-app PoC is unaffected and
   remains demo-usable.
+
+---
+
+## 13. Unified host↔guest messaging (Boundary A consolidation)
+
+**Status: ROADMAP — not started. Foundation shipped (the event bus, task
+90); the consolidation is the open work.**
+
+### 13.1 The problem — the host↔guest boundary has grown messy
+
+Every new host↔guest interaction has been added as its *own* bespoke WIT
+package + a parallel slab of host plumbing. We now carry, side by side:
+
+- `wandr:events` (generic pub/sub bus, task 90)
+- `wandr:alarm` (timed-wake: `scheduler` import + `alarm-handler` export)
+- `wandr:notify` (notifications: `notifier` import + `notify-handler` export)
+- `wandr:audio-focus` (focus import + `focus-handler` export)
+- `wandr:ime` (editor-attached/detached export callbacks)
+- `wandr:background` (`bg-tick` pump)
+- `wandr:connectivity` (the typed `wifi` management half, still pending)
+- per-app dep WITs (markdown/emoji/lang/signal `chat` …)
+
+Each "callback" feature repeats the **same five-part host boilerplate**:
+a `*_events_bindings` `bindgen!` world, an `Option<…Events>` field on
+`InstantiatedApp`, a `.ok()` probe in `app_loader`, an `InboundEvent`
+variant + a parse arm in `ime_inbound.rs`, and a drain arm in
+`standalone.rs`. The inbound control socket is *already* a single
+multiplexed line protocol (`alarm-fired`, `notification-clicked`,
+`event`, `doze`, geometry, …) — but each line type is hand-decoded into
+a bespoke typed export call. It's inconsistent (some pub/sub, some
+request/reply, some fire-and-forget callbacks), and adding a feature
+touches 5 files in lockstep.
+
+### 13.2 The shape to converge on
+
+Two clean primitives, picked by *interaction kind* — not one per feature:
+
+1. **Broadcast / notify (host→guest, fire-and-forget)** → the
+   `wandr:events` bus (task 90). Topic + opaque payload + retained value.
+   This is the natural home for `alarm-fired`, `notification-clicked`,
+   connectivity changes, and an `apps.changed` signal for the task
+   manager — all of which are "something happened, here's the new state."
+   Adding one costs a *topic string*, zero new WIT/host wiring.
+2. **Request/reply (guest↔host, typed result)** → keep a typed WIT
+   interface (the bus can't return a value). `wandr:task-manager`
+   (`list-apps`/`kill-app`), the `wandr:connectivity/wifi` management
+   half, and IME editor RPC stay typed. The open work here is collapsing
+   the *plumbing* (one inbound dispatch + one export-callback registry)
+   even while the *interfaces* stay distinct — so a new request/reply
+   feature doesn't re-grow the five-file boilerplate.
+
+The litmus test (see `[[project_event_bus]]`): **fire-and-forget +
+many-could-care → bus; needs-a-typed-answer → request/reply WIT.**
+`bg-tick` (a periodic *pull* pump) and `ime editor-attached` (structured,
+targeted 1:1) are the awkward middles — leave them bespoke unless the
+unified plumbing absorbs them cleanly.
+
+### 13.3 Migration plan (incremental, no big-bang)
+
+1. **Bus is live** (task 90). ✅
+2. Migrate the pure broadcasts onto it and **delete their bespoke
+   `*-events` halves**: `alarm-fired` → topic `alarm.fired`,
+   `notification-clicked` → `notify.click`. Each removes a `bindgen!`
+   world + field + parse arm + drain arm.
+3. Add `apps.changed` so the **task manager drops its polling timer**
+   (the task-92 "push on-apps-changed" follow-up) while keeping
+   `list-apps`/`kill-app` typed.
+4. Factor the remaining typed request/reply features behind **one
+   inbound-dispatch + one export-callback table**, so the InboundEvent
+   enum + the `ime_inbound`/`standalone` arms stop growing per feature.
+5. Revisit `wasi:messaging` alignment: if the proposal stabilises a
+   record (non-resource) form and the guest wit-parser handles it,
+   `wandr:events` is a mechanical swap (it already borrows the
+   vocabulary — `types.message` / `producer` / `incoming-handler`).
+
+### 13.4 Why now is the right time to *write it down*, not *build it*
+
+The bus proved the pattern on a real consumer (connectivity, device-
+verified). The mess is real but not yet blocking — migrating live
+subsystems (alarm/notify drive Signal background receipt) is risk that
+should be scheduled deliberately, not bundled into a feature task. Track
+here; pick up as a dedicated consolidation pass. See
+`[[project_event_bus]]`, `docs/architecture-host-guest-boundary.md`.

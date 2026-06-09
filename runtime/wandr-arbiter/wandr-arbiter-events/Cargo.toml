@@ -1,0 +1,18 @@
+[package]
+name    = "wandr-arbiter-events"
+version = "0.0.1"
+edition = "2021"
+
+# wandr-arbiter-events — the generic in-process event broker (task 90). A single
+# topic→subscribers registry + a retained value per topic. Any module or the
+# wandr-net daemon publishes (`evt-publish <topic> <payload>`); guests subscribe
+# (host-config, `evt-subscribe <pid> <topic>`) and receive `event <topic> <payload>`
+# pushes via `Effect::HostLine` (delivered to the guest's wandr:events/
+# incoming-handler). On subscribe the retained value is delivered immediately
+# (MQTT-retained), so a late subscriber starts coherent. The payload is an opaque
+# base64 string on the wire — the broker never decodes it. Wired in with one line
+# in build_registry().
+
+[dependencies]
+wandr-arbiter-core = { path = "../wandr-arbiter-core" }
+log = { workspace = true }

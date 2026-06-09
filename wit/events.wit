@@ -1,0 +1,65 @@
+// wandr:events — a minimal in-process host↔guest event bus (task 90).
+//
+// Deliberately mirrors `wasi:messaging@0.2.0-draft`'s VOCABULARY (a `types.message`,
+// a `producer` that publishes, an `incoming-handler.handle` push) so it's familiar
+// and forward-compatible — but uses a plain `record message` instead of the
+// proposal's `resource message` + `client`. Resources are heavier than our
+// in-process broker needs and risk the guest wit-parser; migrating to the exact
+// proposal later is a mechanical swap (record → resource, add a client) since the
+// shape is identical.
+//
+// NOT a data path. Subscription is NOT a WIT call — as in wasi:messaging, the host
+// decides delivery: a guest declares its topics in `package.toml`
+// `[events] subscribe = [...]`, which the host registers with the arbiter (the
+// broker). The arbiter delivers the topic's retained value on subscribe + every
+// later change (MQTT-retained), so no separate "get current value" call is needed.
+
+package wandr:events@0.1.0;
+
+interface types {
+    /// An event message — a topic + an opaque payload (plus an optional
+    /// content-type, the wasi:messaging "format" hint). The guest decodes `data`
+    /// per the topic's documented schema.
+    record message {
+        topic: string,
+        content-type: option<string>,
+        data: list<u8>,
+    }
+}
+
+/// Imported by a guest that PUBLISHES events — the analog of wasi:messaging's
+/// `producer`, minus the `client` (the in-process arbiter is the implicit broker).
+interface producer {
+    use types.{message};
+    /// Broadcast `msg` to every guest subscribed to `msg.topic`.
+    publish: func(msg: message);
+}
+
+/// Exported by a guest that RECEIVES events — the analog of wasi:messaging's
+/// `incoming-handler`. The host calls this for each message on a subscribed topic.
+interface incoming-handler {
+    use types.{message};
+    /// A message arrived on a topic this guest subscribed to (via `package.toml`).
+    handle: func(msg: message);
+}
+
+/// Host-import side — the runtime implements `producer` (forwarding to the arbiter)
+/// and `add_to_linker`s it onto every guest's linker.
+world events-host {
+    import producer;
+}
+
+/// Host-export side — the runtime calls a guest's exported `incoming-handler.handle`
+/// when the arbiter fans an event. Bound conditionally per instance (like
+/// `wandr:alarm/alarm-events`); guests that don't export it yield `None`.
+world events-incoming {
+    export incoming-handler;
+}
+
+/// World a guest implements to use the bus: import `producer` (to publish), export
+/// `incoming-handler` (to receive). A receive-only guest can instead just
+/// `export wandr:events/incoming-handler`.
+world events-client {
+    import producer;
+    export incoming-handler;
+}

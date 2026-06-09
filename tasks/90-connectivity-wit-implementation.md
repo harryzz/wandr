@@ -1,13 +1,36 @@
 # Task 90 — implement the `wandr:connectivity` WIT (guest-facing connectivity)
 
-> Status: 🔲 SCOPED. Spun out of task 88 so we can return to task 87 (ART-off
-> audio bug fixes) first. The connectivity **subsystem** is built + device-verified
-> end to end under `--no-art` (task 88: `IWifi` power-up → `ISupplicant` associate
-> → pure-Rust DHCP → `INetd` route → `IDnsResolver` DNS, all over binder as uid
-> system). The **guest-facing WIT contract** is drafted + validated
-> (`wit/connectivity.wit`, commit `6a36f2b1`) but **not wired into wandr-host** — no
-> guest can use it yet. This task does that wiring + implements the `wifi`
-> management interface. See `[[project_artless_network]]`.
+> Status: 🟢 M1 DONE + DEVICE-VERIFIED (2026-06-09) — but redesigned: connectivity
+> change-notification ships over a NEW GENERIC EVENT BUS (`wandr:events`), not the
+> bespoke `wandr:connectivity/network` handler. The connectivity **subsystem**
+> (task 88) + the `wifi`-management **contract** (`wit/connectivity.wit`) still
+> stand; M2–M4 (wifi scan/connect/saved-networks/settings) are unchanged + pending.
+>
+> **Why the redesign:** rather than add a bespoke `connectivity-handler` export
+> (yet another `*-events` world + bindgen + InboundEvent variant + drain arm), we
+> built a single generic publish/subscribe bus so future event types (battery,
+> screen, locale, theme…) cost ZERO new WIT/host wiring — just a topic string.
+> Researched `wasi:messaging@0.2.0-draft` first: its shape matches, but `message`/
+> `client` are **resources** + broker-oriented (Kafka/NATS) + no turnkey host crate,
+> so we built `wandr:events` with the proposal's VOCABULARY (a `types.message`, a
+> `producer` that publishes, an `incoming-handler.handle` push) using a plain
+> **record** (no resources) — forward-compatible, fits the guest wit-parser.
+>
+> **M1 shipped + device-verified (Pixel 2 XL, --no-art):** `wit/events.wit` +
+> generic `wandr-arbiter-events` broker (topic→subscribers + retained value;
+> `evt-subscribe`/`evt-publish`/`evt-unsubscribe`; 3 unit tests) + host
+> `events_host_impl` (`producer.publish` → `evt-publish`) + `events-incoming` export
+> binding (drain → guest `handle`) + `package.toml [events] subscribe=[…]`
+> host-config subscription + base64 line-wire. The `wandr-net` daemon publishes
+> `net.status` (`online wifi <ssid> <ip>`/`offline`) on every change. Test guest
+> `apps/user/wandr.connectivity.test` (dioxus, exports `incoming-handler`) renders
+> live link state — verified Online↔Offline push + retained-on-subscribe. See
+> `[[project_event_bus]]`, `[[project_artless_network]]`.
+>
+> **Original M1 plan (superseded by the bus):** wire `wandr:connectivity/network`
+> `get-status` + `connectivity-handler` into wandr-host. `get-status` is replaced by
+> the bus's retained-delivery-on-subscribe (no separate query); the change handler
+> is replaced by `incoming-handler` on the `net.status` topic.
 
 ## What exists (don't rebuild)
 

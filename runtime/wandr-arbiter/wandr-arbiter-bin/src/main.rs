@@ -58,6 +58,7 @@ use wandr_arbiter_keyguard::KeyguardModule;
 use wandr_arbiter_notify::NotifyModule;
 use wandr_arbiter_power::PowerModule;
 use wandr_arbiter_net::NetModule;
+use wandr_arbiter_events::EventsModule;
 use wandr_arbiter_sensors::SensorsModule;
 use wandr_arbiter_shell::ShellModule;
 use wandr_arbiter_wm::WmModule;
@@ -198,7 +199,13 @@ fn main() {
                     // net-subscribe; the CLI forms are for testing/verification
                     // (net-status dumps the current link, e.g. `wandr-arbiter
                     // net-status`).
-                    | "report-net-state" | "net-status" | "net-subscribe")) => {
+                    | "report-net-state" | "net-status" | "net-subscribe"
+                    // Task 90 — generic event bus verbs. The host's wandr:events
+                    // producer + the wandr-net daemon send evt-publish; the host
+                    // sends evt-subscribe (host-config from package.toml). CLI forms
+                    // for testing: `wandr-arbiter evt-publish <topic> <base64>`,
+                    // `wandr-arbiter evt-subscribe <pid> <topic>`.
+                    | "evt-publish" | "evt-subscribe" | "evt-unsubscribe")) => {
             run_client_multi(verb, &args[1..])
         }
         Some(other) => {
@@ -602,6 +609,11 @@ fn build_registry() -> Registry {
     // on-connectivity-change fan-out. The wandr-net daemon feeds it
     // report-net-state; it emits Effect::HostLine to subscribers. One line.
     reg.register(Box::new(NetModule::new()));
+    // Generic event broker (task 90) — topic→subscribers + retained value. The
+    // host's wandr:events/producer + the wandr-net daemon publish here; guests
+    // subscribe (host-config from package.toml) and receive Effect::HostLine
+    // pushes. One line.
+    reg.register(Box::new(EventsModule::new()));
     reg
 }
 
