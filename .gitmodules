@@ -45,7 +45,7 @@
 [submodule "external/libsignal-service-rs"]
 	path = external/libsignal-service-rs
 	url = https://codeberg.org/harryzz/libsignal-service-rs.git
-	branch = wart-wasi-transport
+	branch = wandr-wasi-transport
 [submodule "external/rtc"]
 	path = external/rtc
 	url = https://github.com/webrtc-rs/rtc
