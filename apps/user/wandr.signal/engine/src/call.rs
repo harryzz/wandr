@@ -26,7 +26,7 @@ use wandr_call::signal::{CallSignal, CallState, HangupKind, SignalCall};
 use wandr_call::turn::TurnConfig;
 
 use crate::my::skiko_gfx::audio::{self, ChannelLayout, Format, StreamClass, TrackConfig};
-use crate::wandr::audio_focus::controls;
+use crate::wandr::audio_focus::{controls, focus};
 use crate::wandr::crypto::aead::AeadKey;
 use crate::wandr::crypto::types::AeadAlgo;
 use crate::wandr::video::decoder::VideoDecoder;
@@ -121,6 +121,9 @@ struct VideoState {
     last_rotation: u32,
     /// Receive budget advertised once per call (REMB + receiverStatus).
     budget_set: bool,
+    /// Whether we told the arbiter this is a VIDEO call (suppresses at-ear
+    /// proximity blanking — the screen is being watched). Tracks transitions.
+    focus_video: bool,
 }
 
 /// Routes the SRTP per-packet AES-GCM to the host's hardware AES via the
@@ -577,6 +580,15 @@ impl ActiveCall {
                 v.applied_bitrate = want;
             }
         }
+        // Tell the arbiter while ANY video flows (ours or theirs): proximity
+        // "near" then means a hand/face in front of the watched screen, not
+        // the phone at the ear — don't blank.
+        let video_active = v.enc.is_some() || self.call.peer_video_enabled() == Some(true);
+        if video_active != v.focus_video {
+            v.focus_video = video_active;
+            focus::call_video(video_active);
+            crate::engine::dbg_line(&format!("video: focus call-video {video_active}"));
+        }
         // The peer's camera state (in-band senderStatus).
         if let Some(on) = self.call.take_peer_video_toggle() {
             crate::engine::dbg_line(&format!("video: peer camera {}", if on { "ON" } else { "OFF" }));
@@ -659,6 +671,10 @@ impl ActiveCall {
         self.video.enc = None;
         self.video.dec = None;
         self.video.wanted = false;
+        if self.video.focus_video {
+            self.video.focus_video = false;
+            focus::call_video(false); // restore at-ear proximity blanking
+        }
     }
 
     /// Apply a (possibly new) UI layout to live surfaces.

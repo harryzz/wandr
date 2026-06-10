@@ -100,6 +100,11 @@ pub struct PowerModule {
     /// (`cadence 0`) so a call keeps running with the screen off. Driven by
     /// `Event::CommsActive` from the audio module; cleaned on `SurfaceRemoved`.
     comms: HashSet<i32>,
+    /// Pids whose comms session is a VIDEO call (task 93): at-ear proximity
+    /// blanking is suppressed while any is active — the user is WATCHING the
+    /// screen, so "near" is a hand/face in front of the panel, not the ear.
+    /// Driven by `Event::VideoCallActive`; cleaned with the comms session.
+    video_calls: HashSet<i32>,
     /// Task 78 — whether we have forced the panel OFF for proximity (phone at the
     /// ear during a call). Tracked so we toggle on transitions only and, crucially,
     /// **always restore** the panel when the call ends / the sensor uncovers (a
@@ -570,6 +575,7 @@ impl ArbiterModule for PowerModule {
         match ev {
             Event::ScreenState { live } => self.on_screen_state(*live, ctx),
             Event::SurfaceRemoved { pid } => {
+                self.video_calls.remove(pid);
                 self.bg_service.remove(pid);
                 self.comms.remove(pid);
                 // Task 78 fail-safe: if the call host died while we'd blanked the
@@ -582,6 +588,9 @@ impl ArbiterModule for PowerModule {
             // already dozing, re-fan THIS pid's cadence now (a call starting
             // mid-doze must wake to 0; ending mid-doze re-dozes to its class).
             Event::CommsActive { pid, active } => {
+                if !*active {
+                    self.video_calls.remove(pid);
+                }
                 if *active { self.comms.insert(*pid); } else { self.comms.remove(pid); }
                 // Task 78 fail-safe: a call ending must restore the panel if
                 // proximity had blanked it (the user can't uncover it post-call).
@@ -611,8 +620,21 @@ impl ArbiterModule for PowerModule {
             // call is active (phone at the ear); never otherwise. Toggle on the
             // debounced transition and track `blanked` so the fail-safes below can
             // always restore the panel.
+            Event::VideoCallActive { pid, active } => {
+                if *active {
+                    self.video_calls.insert(*pid);
+                    // A video call must never sit proximity-blanked.
+                    if self.blanked {
+                        self.ensure_unblanked(ctx);
+                        log::info!("arbiter: video call active → proximity blank lifted");
+                    }
+                } else {
+                    self.video_calls.remove(pid);
+                }
+            }
             Event::ProximityChanged { near } => {
-                let in_call = !self.comms.is_empty();
+                // Video calls suppress at-ear blanking (the screen is watched).
+                let in_call = !self.comms.is_empty() && self.video_calls.is_empty();
                 if in_call && *near && !self.blanked {
                     self.set_panel_blanked(true, ctx);
                     log::info!("arbiter: proximity near + in-call → panel OFF + touch suppressed");

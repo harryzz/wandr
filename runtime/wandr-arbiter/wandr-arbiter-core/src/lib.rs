@@ -298,6 +298,10 @@ pub enum Event {
     /// The power module keeps the call host OUT of doze while active (no dozing
     /// mid-call). Emitted by the audio module on call-start / call-end.
     CommsActive { pid: i32, active: bool },
+    /// The active comms session is a VIDEO call (task 93): the power module
+    /// suppresses at-ear proximity blanking while any video call is active
+    /// (the user is watching the screen).
+    VideoCallActive { pid: i32, active: bool },
 
     // ── SensorService (task 77) ─────────────────────────────────────────────
     /// A consumer wants `kind` enabled (the **consumer protocol** — modules

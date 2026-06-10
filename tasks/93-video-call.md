@@ -14,7 +14,9 @@
 > bitrate, CVO rotation incl. live device rotation, aspect-fit display, and a
 > call-screen UI. Verified live against a real Signal client; user-confirmed.
 > Follow-ups (cosmetic): mirrored self-view, behind-ui hole once dioxus-canvas
-> grows a clear blend, full 4-pose landscape matrix validation.**
+> grows a clear blend, full 4-pose landscape matrix validation, PiP sizing in
+> landscape (quarter-of-long-side doubles it), demote the `[media] geometry`
+> logcat line to debug.**
 
 ## IMPLEMENTATION PLAN — ready to build (next session)
 

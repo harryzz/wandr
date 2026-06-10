@@ -42,16 +42,23 @@ interface focus {
     call-start: func();
     /// End the comms session: restore the normal audio mode + focus.
     call-end: func();
+    /// Mark the active call as VIDEO (or back to audio-only). While video is
+    /// active the arbiter suppresses at-ear proximity screen-blanking — the
+    /// user is WATCHING the screen, so "near" is a hand/face in front of the
+    /// panel, not the phone at the ear. No-op without an active comms session.
+    call-video: func(active: bool);
 }
 
 // ── Audio controls (route / volume / mute) — guest-facing, wandr-arbiter-audio ──
 // A call/media guest's control surface for its OWN output: pick the route
 // (earpiece/speaker), set/read output volume, and mute output and/or mic. The host
-// applies via the existing appliers (set_route + per-stream deviceId pin for route;
-// setStreamVolumeIndex for volume; the PCM-gate mutes for output/mic). `get-*` read
-// the host's currently-applied state (the host is the applier, so it is authoritative
-// for what's live). A guest-explicit `set-route` is honored directly (the user tapped
-// speaker) — distinct from the arbiter's AUTOMATIC routing (proximity/comms defaults).
+// applies the route by re-routing the shared output via a PREFERRED device-role on its
+// product strategy (setDevicesRoleForStrategy) — takes effect mid-call, no re-open, no
+// -889 (the call output is not deviceId-pinned; see task 97 bug #5); volume via
+// setStreamVolumeIndex; output/mic mute via the PCM gate. `get-*` read the host's
+// currently-applied state (the host is the applier, so it is authoritative for what's
+// live). A guest-explicit `set-route` is honored directly (the user tapped speaker) —
+// distinct from the arbiter's AUTOMATIC routing (proximity/comms defaults).
 interface controls {
     /// Output route for this guest's stream. `bluetooth` reserved (BT_SCO, later).
     enum audio-route { earpiece, speaker, bluetooth }

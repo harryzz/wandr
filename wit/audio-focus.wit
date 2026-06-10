@@ -42,6 +42,11 @@ interface focus {
     call-start: func();
     /// End the comms session: restore the normal audio mode + focus.
     call-end: func();
+    /// Mark the active call as VIDEO (or back to audio-only). While video is
+    /// active the arbiter suppresses at-ear proximity screen-blanking — the
+    /// user is WATCHING the screen, so "near" is a hand/face in front of the
+    /// panel, not the phone at the ear. No-op without an active comms session.
+    call-video: func(active: bool);
 }
 
 // ── Audio controls (route / volume / mute) — guest-facing, wandr-arbiter-audio ──

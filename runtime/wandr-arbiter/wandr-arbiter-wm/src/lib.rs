@@ -559,6 +559,7 @@ impl ArbiterModule for WmModule {
             | Event::AlarmTick { .. }
             | Event::ScreenState { .. }
             | Event::CommsActive { .. }
+            | Event::VideoCallActive { .. }
             | Event::SensorAcquire { .. }
             | Event::SensorRelease { .. }
             | Event::SensorReading { .. }

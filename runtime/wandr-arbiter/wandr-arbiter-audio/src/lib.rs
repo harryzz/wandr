@@ -293,10 +293,29 @@ impl AudioModule {
         self.drop_pid(pid, ctx); // release focus → prior owner regains
         ctx.store.cancel_notification(&app_id, CALL_NOTIF_ID);
         // Release proximity + the doze keep-alive (the power module reacts). M3b.
+        ctx.emit(Event::VideoCallActive { pid, active: false });
         ctx.emit(Event::CommsActive { pid, active: false });
         ctx.request(Effect::Persist);
         log::info!("arbiter: audio-call-end pid={pid} app={app_id} → NORMAL");
         Reply::ok(format!("call-end pid={pid} app={app_id}"))
+    }
+
+    /// `audio-call-video <0|1> <pid|app-id>` — flag the active comms session
+    /// as a VIDEO call (the power module suppresses at-ear proximity blanking
+    /// — the user is watching the screen) or back to audio-only.
+    fn cmd_call_video(&mut self, args: &str, ctx: &mut Ctx) -> Reply {
+        let mut it = args.split_whitespace();
+        let active = it.next() == Some("1");
+        let token = it.next().unwrap_or("");
+        let Some((pid, _app_id)) = Self::resolve(token, ctx) else {
+            return Reply::err(format!("audio-call-unknown-owner {token}"));
+        };
+        if self.comms != Some(pid) {
+            return Reply::err(format!("audio-call-not-in-session pid={pid}"));
+        }
+        ctx.emit(Event::VideoCallActive { pid, active });
+        log::info!("arbiter: audio-call-video pid={pid} active={active}");
+        Reply::ok(format!("call-video pid={pid} active={active}"))
     }
 
     // ── Ringer (incoming-call ringtone + vibrate) ───────────────────────────
@@ -605,7 +624,7 @@ impl ArbiterModule for AudioModule {
     fn verbs(&self) -> &[&'static str] {
         &[
             "audio-focus-request", "audio-focus-abandon", "audio-focus-list",
-            "audio-call-start", "audio-call-end", "audio-route",
+            "audio-call-start", "audio-call-end", "audio-call-video", "audio-route",
             "audio-ring-start", "audio-ring-stop", "audio-ringer-mode",
             "volume", "mute", "app-mute", "mic-mute", "app-mic-mute",
             "play-tone",
@@ -619,6 +638,7 @@ impl ArbiterModule for AudioModule {
             "audio-focus-list"    => self.cmd_list(),
             "audio-call-start"    => self.cmd_call_start(args, ctx),
             "audio-call-end"      => self.cmd_call_end(args, ctx),
+            "audio-call-video"    => self.cmd_call_video(args, ctx),
             "audio-route"         => self.cmd_route(args, ctx),
             "play-tone"           => self.cmd_play_tone(args, ctx),
             "audio-ring-start"    => self.cmd_ring_start(args, ctx),

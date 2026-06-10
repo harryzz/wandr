@@ -36,6 +36,7 @@ dioxus_canvas::__wit_bindgen::generate!({
 });
 
 use wandr::signal::chat;
+use wandr::audio_focus::controls;
 // M4 — host imports the guest calls: raise/clear notifications + schedule the
 // keep-alive alarm. (The matching exports are impl'd on `__DioxusCanvasGuest`
 // after the `wire!` below.)
@@ -1016,6 +1017,10 @@ fn push_video_layout() {
 
 #[component]
 fn VideoCallScreen(local_on: bool) -> Element {
+    // Mic / speaker mute (host PCM gates via wandr:audio-focus/controls).
+    // Local signals mirror the host state so taps re-render immediately.
+    let mut mic_muted = use_signal(|| controls::get_mic_mute());
+    let mut spk_muted = use_signal(|| controls::get_mute());
     let btn = "display:flex; justify-content:center; align-items:center; width:128px; height:128px; border-radius:28px; color:#FFFFFF; font-size:60px;";
     let cam_bg = if local_on { "#2E7D32" } else { "#555555" };
     rsx! {
@@ -1024,12 +1029,32 @@ fn VideoCallScreen(local_on: bool) -> Element {
             // The region the video surfaces cover (host-composited).
             div { style: "flex-grow:1;" }
             div {
-                style: format!("display:flex; flex-direction:row; justify-content:center; align-items:center; gap:48px; height:{CONTROLS_H}px; background:{BAR};"),
+                style: format!("display:flex; flex-direction:row; justify-content:center; align-items:center; gap:40px; height:{CONTROLS_H}px; background:{BAR};"),
                 button {
                     style: format!("{btn} background:{cam_bg};"),
                     onmousedown: move |_| {},
                     onclick: move |_| chat::set_video(!local_on),
                     "📷"
+                }
+                button {
+                    style: format!("{btn} background:{};", if mic_muted() { "#C62828" } else { "#455A64" }),
+                    onmousedown: move |_| {},
+                    onclick: move |_| {
+                        let m = !mic_muted();
+                        controls::set_mic_mute(m);
+                        mic_muted.set(m);
+                    },
+                    "🎤"
+                }
+                button {
+                    style: format!("{btn} background:{};", if spk_muted() { "#C62828" } else { "#455A64" }),
+                    onmousedown: move |_| {},
+                    onclick: move |_| {
+                        let m = !spk_muted();
+                        controls::set_mute(m);
+                        spk_muted.set(m);
+                    },
+                    "🔊"
                 }
                 button {
                     style: format!("{btn} background:#C62828;"),
