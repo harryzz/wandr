@@ -1,35 +1,61 @@
 ---
 name: reference_slint_wasip2
-description: Slint 1.16 COMPILES to wasm32-wasip2 (std + renderer-software + compat-1-2, clean wasi:* imports) — but its skia backend is native skia-safe (can't target our WIT); integration = custom Platform + ItemRenderer; text pipeline is the wall
-metadata:
+description: "Slint on wandr is concretely feasible — wasip2 compiles (incl. the parley text stack); right seam = custom ItemRenderer over my:skiko-gfx (femtovg-style), NOT an impostor skia-safe; needs ~4 additive WIT verbs (typeface/draw-glyphs/shadow); effort ≈ 2-3 wandr-task-size"
+metadata: 
+  node_type: memory
   type: reference
+  originSessionId: 66372abf-b0cb-483c-b52e-5b3445aa9260
 ---
 
-**Slint on wandr guests — investigated 2026-06-10 (probe: /tmp/slint-probe).**
+**Slint on wandr guests — investigated 2026-06-10, spike completed same day
+(probe: /tmp/slint-probe; source inventory: /tmp/slint @ master 1.17.0-dev).**
 
 - ✅ **Compiles for wasm32-wasip2**: `slint = { default-features = false,
-  features = ["compat-1-2", "renderer-software", "std"] }` → 4.4 MB component
-  with ONLY `wasi:*` imports (wasm-bindgen/web-sys are in the dep tree from
-  `target_arch=wasm32` browser branches but nothing browser-specific links).
-  The no_std combo (`unsafe-single-threaded`+`libm`, no `std`) does NOT build
-  — i-slint-core's wasm32 cfg paths assume the browser there.
-- ❌ **Slint's `renderer-skia` is NOT retargetable at our WIT**: it binds
-  skia-safe natively (C++ Skia in-process, real GPU/raster surface). Our
-  `my:skiko-gfx/canvas` is skia-SHAPED COMMANDS over the component boundary —
-  different thing. Slint's pluggable seam is the **`ItemRenderer` trait**
-  (what the software renderer implements).
-- Two integration shapes if ever wanted:
-  (A) software renderer → pixel buffer → new blit/shared-mem WIT (+damage
-  rects). Simple, but CPU-renders in wasm + ~16 MB/frame at panel res —
-  fights the idle-CPU work and host-GPU model.
-  (B) custom `Platform` + `ItemRenderer` → canvas WIT verbs (the dioxus-canvas
-  sink equivalent). Right shape; the WALL is TEXT: Slint shapes/lays out text
-  in-guest (glyph-level, fonts in-guest) vs wandr's host-owns-fonts rule
-  (`measure-text`/text blobs host-side, [[feedback_android_fonts]]).
-- License: tri-license (GPLv3 / royalty-free desktop-mobile / commercial).
-- **Verdict vs dioxus-canvas: not better for wandr.** Slint's wins (DSL,
-  widgets, animations, no async runtime — single-threaded fits wasip2) don't
-  outweigh: text-pipeline redesign, losing host-GPU rendering or building a
-  full ItemRenderer bridge, and re-integrating input/IME/rotation/frame-pacing
-  that dioxus-canvas already has. If the DSL appeal grows, derisk with a
-  bounded route-(B) spike on one test app, text first.
+  features = ["compat-1-2", "renderer-software", "std"] }` → 4.4 MB component,
+  ONLY `wasi:*` imports. The no_std combo does NOT build (browser-assuming
+  wasm32 cfg paths). ✅ **The parley text stack also compiles**:
+  `i-slint-core --features std,shared-parley` (parley 0.10 + fontique + skrifa
+  + icu_normalizer) builds clean for wasm32-wasip2.
+- **The old "text wall" is GONE on Slint master**: `renderer-skia` no longer
+  uses SkParagraph — text is shaped GUEST-SIDE by parley
+  (`i_slint_core::textlayout::sharedparley`); the renderer seam is the
+  `GlyphRenderer` trait: it receives font-data blobs + glyph IDs + positions
+  and draws via `canvas.draw_glyphs_at`. All text metrics
+  (`text_size`/`char_size`/`font_metrics`/cursor mapping) are shared
+  `sharedparley::*` helpers any renderer reuses wholesale. Glyph IDs stay
+  consistent because host typeface is created from the SAME font bytes the
+  guest shaped with (fonts: guest-embedded or fetched once via `assets.read`,
+  registered with fontique — no system-font discovery on wasi).
+- **Right seam = custom renderer crate** (`i-slint-renderer-wandr`)
+  implementing `RendererSealed` + `ItemRenderer` (~25 high-level methods:
+  draw_rectangle/border/image/text/path/box_shadow, clip/opacity/layer
+  visits) + `GlyphRenderer`, exactly like `FemtoVGRenderer` (the proven
+  non-skia template, internal/renderers/femtovg). The user's
+  impostor-skia-safe idea (the skiko trick at the Rust level) WOULD work —
+  Slint's skia canvas surface is small (~20 Canvas methods, Paint/Path/Image/
+  gradients all map to existing WIT) — but it's strictly more work: you'd
+  replicate skia-safe types/Handle semantics AND still need the same WIT
+  additions. Direct ItemRenderer is the same mapping minus the type
+  impersonation. i-slint-* internal crates are published but semver-unstable
+  → pin exact version (Slint's own renderers do the same).
+- **WIT gaps: CLOSED 2026-06-11** — the additive batch shipped (6 verbs:
+  `create-typeface`/`drop-typeface`, `draw-glyphs` + `bc-` twin,
+  `draw-shadow-rrect` + `bc-` twin), host impl in canvas_impl.rs
+  (`guest_typefaces` map), WIT mirrored, host builds. Canonical contract +
+  full union inventory (Compose/dioxus/Slint): **`docs/skia-wit-mapping.md`**.
+  Everything else maps: gradients ✓ (linear/radial/sweep), images ✓,
+  SVG-string paths ✓ (Slint paths are lyon → serialize), layers/opacity →
+  save-layer + bc-* bitmap canvases ✓, clip ✓ (track clip stack guest-side
+  like femtovg; no canvas query verbs needed). Colorize-by-gradient
+  (image-filters) deliberately deferred.
+- **Effort estimate**: renderer crate ≈ skia itemrenderer (1.3k lines) +
+  renderer/lib glue (~500) + Platform/WindowAdapter wiring to wandr's
+  input/frame-pacing/IME ≈ 2–3 wandr-task-units; WIT additions are a day
+  (plus shared-WIT rebuild-all-consumers + zygote restart). Parley switch is
+  master-only (1.17-dev) — build against git or wait for release.
+- License: tri-license (GPLv3 / royalty-free / commercial).
+- **Verdict vs dioxus-canvas**: now a real option, not a wall — but still not
+  worth a migration for its own sake; dioxus-canvas already has
+  input/IME/rotation/frame-pacing integrated. Adopt only if the Slint DSL /
+  widget set / animations earn it; derisk with one test app
+  (wandr.slint.test) implementing the renderer against the 4 new verbs.

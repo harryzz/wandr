@@ -78,7 +78,7 @@
 - [Ref: photon image lib](reference_photon_image_lib.md) — wasip2-fit image processing; repros/photon-probe.
 - [Ref: dioxus + taffy UI](reference_dioxus_taffy_rust_ui.md) — light Rust UI for guests; shipped as crates/dioxus-canvas.
 - [Ref: wasi-webgpu/wasi-gfx](reference_wasi_webgpu_gfx.md) — guest-owns-renderer model (Phase 2, unreleased); sf_media child surfaces = the natural host primitive; second path beside skiko-gfx, not a replacement.
-- [Ref: Slint on wasip2](reference_slint_wasip2.md) — compiles (std+software-renderer, clean wasi imports) but skia backend = native skia-safe, not our WIT; text pipeline is the wall; verdict: keep dioxus-canvas.
+- [Ref: Slint on wasip2](reference_slint_wasip2.md) — FEASIBLE: wasip2 + parley text stack compile; seam = custom ItemRenderer over skiko-gfx (femtovg-style, not impostor skia-safe); WIT gaps CLOSED 2026-06-11 (6 verbs: typeface/draw-glyphs/shadow + bc twins); canonical contract = docs/skia-wit-mapping.md; keep dioxus-canvas unless DSL earns it.
 - [Ref: dioxus 0.7 wasip2 subsecond wall](reference_dioxus_07_wasip2_subsecond.md) — narrow subsecond's cfg + [patch.crates-io]; don't re-pin 0.6.
 - [Ref: wasmtime 44 debug APIs](reference_wasmtime_debug_apis.md) — call_hook/breakpoints/single-step tiers for memory corruption.
 - [Ref: wandr wasi-tls transport](reference_wandr_wasi_tls_transport.md) — guest TLS with no guest crypto; Signal CA via custom TlsProvider; in wandr-host.

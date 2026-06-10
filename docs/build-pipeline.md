@@ -71,7 +71,11 @@ cp ~/wandr/wit/skiko-gfx.wit ~/wandr/apps/system/wandr.ime.keyboard/wit/deps/ski
 ```
 
 Then regenerate or hand-edit the Kotlin bindings in
-`external/skiko/skiko/src/wasmWasiMain/kotlin/generated/`.
+`external/skiko/skiko/src/wasmWasiMain/kotlin/generated/` — only needed if
+the change touches verbs/types the Kotlin binding actually imports; purely
+additive verbs don't require it (existing compiled guests import a subset
+and keep working). The canonical Skia↔WIT mapping and the additive-only
+evolution rules live in `docs/skia-wit-mapping.md`.
 
 ## Environment
 

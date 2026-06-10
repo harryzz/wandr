@@ -368,6 +368,44 @@ interface canvas {
                              tex-coords: list<f32>, indices: list<u16>,
                              blend-mode: blend-mode, paint: paint-attrs);
 
+    // ── guest-shaped glyph text (skia-wit mapping, docs/skia-wit-mapping.md) ─
+    // Rust UI libraries (Slint/parley-class) shape text IN the guest and
+    // draw glyph runs, vs the Kotlin path where the host shapes from
+    // strings (create-text-blob / paragraph). Glyph ids only mean anything
+    // against the exact font binary they were shaped with, so the guest
+    // registers its font bytes once and the host builds the typeface from
+    // those SAME bytes (SkFontMgr::makeFromData — never match_family_style,
+    // see the zero-metrics trap).
+
+    /// Typeface from raw font bytes (TTF/OTF/TTC; `index` selects a face in
+    /// a collection, 0 otherwise). Returns 0 on parse failure; drop with
+    /// drop-typeface. Variable-font axes are not supported yet.
+    create-typeface: func(data: list<u8>, index: u32) -> u32;
+    drop-typeface:   func(id: u32);
+
+    /// SkCanvas::drawGlyphs — glyph ids + one absolute (x, y) pair per
+    /// glyph (interleaved, like bc-draw-points), origin added to every
+    /// position. No-op if typeface-id isn't live; extra ids beyond the
+    /// position count are ignored.
+    draw-glyphs:    func(typeface-id: u32, size: f32,
+                         glyph-ids: list<u16>, positions: list<f32>,
+                         origin-x: f32, origin-y: f32, paint: paint-attrs);
+    bc-draw-glyphs: func(id: u32, typeface-id: u32, size: f32,
+                         glyph-ids: list<u16>, positions: list<f32>,
+                         origin-x: f32, origin-y: f32, paint: paint-attrs);
+
+    /// Blurred rrect fill — SkCanvas::drawRRect with
+    /// SkMaskFilter::MakeBlur(kNormal, sigma) on the paint. This is the
+    /// box-shadow primitive; it's a fused verb because paint-attrs is
+    /// ABI-frozen (adding a field breaks every consumer) and a mask
+    /// filter is the only paint feature the existing record can't carry.
+    /// radii as in bc-draw-rrect (0/1/2/4/8 floats); sigma <= 0 draws a
+    /// plain rrect. color is ARGB.
+    draw-shadow-rrect:    func(x: f32, y: f32, w: f32, h: f32,
+                               radii: list<f32>, sigma: f32, color: u32);
+    bc-draw-shadow-rrect: func(id: u32, x: f32, y: f32, w: f32, h: f32,
+                               radii: list<f32>, sigma: f32, color: u32);
+
     // ── debug log ─────────────────────────────────────────────────────────
     log-message: func(msg: string);
 }
