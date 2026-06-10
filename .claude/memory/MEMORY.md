@@ -13,7 +13,7 @@
 - [✅ WART→WANDR rename + redeploy](project_wandr_rename.md) — whole-project rename + full --no-art redeploy; 4 bring-up gotchas; what intentionally kept `wart`.
 - [✅ Task 93 Phase 2: SRTP HW-AES offload](project_wandr_crypto_srtp_offload.md) — LIVE-CALL-VERIFIED: SRTP GCM on host ARMv8 AES via `aead-key` resource; 3.0× audio / 8.5× video; trait-injected (rtc-srtp `external-aead` + wandr-call `host-aead`).
 - [✅ Task 93 Phases 1+4: wandr:video host impl + render](project_wandr_video_host.md) — camera→HW-VP8→HW-decode via WIT + decode-to-SURFACE/PiP (SurfaceView child model, sf_media_* shim, no arbiter role); Surface*→ANativeWindow* upcast gotcha; qcom encoder ignores i-frame-interval.
-- [🟡 Task 93 Phases 3+5: wandr-call video + Signal in-call video](project_wandr_call_video_track.md) — VP8 RTP + SRTCP PLI/SR/REMB; rtp_data senderStatus.video_enabled + CVO ext 4 + VP8-only advert; Signal pump_video + VideoCallScreen deployed; LIVE CALL PENDING.
+- [✅ Task 93 COMPLETE: Signal video calls](project_wandr_call_video_track.md) — LIVE-VERIFIED both ways; RED PT-120 demux, TWCC mandatory (peer parks 36kbps without), 250k REMB floor, aspect-fit from VP8 dims, rotation ONLY via container matrix (BBQ/MediaCodec override all else).
 - [Project: crypto HW offload roadmap](project_crypto_hw_offload.md) — why host-side crypto (wasm can't reach HW AES); 3 offload layers; which crypto AIDL services survive --no-art.
 - [✅ Task 98: AudioFlinger-direct backend](project_audioflinger_backend.md) — pure-Rust createTrack→cblk ring, audible --no-art; 3 ABI/appops bugs documented.
 - [✅ Task 93/95: camera capture --no-art](project_artless_camera.md) — reliable raw 29fps / HW VP8 17fps; EIS-gyro race + stub chain + ruled-out list.

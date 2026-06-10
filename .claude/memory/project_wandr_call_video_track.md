@@ -67,3 +67,31 @@ Next: Phase 4 `Role::Video` decode-to-surface render, Phase 5 Signal protocol.
   `set-video-layout` / `video-status` through the CallIntent queue; UI camera
   button in the in-call header → full-screen `VideoCallScreen` (rects from
   surface size, engine dedups layout). Enable video only AFTER Connected.
+
+**LIVE-CALL HARDENING (2026-06-10 evening — TASK COMPLETE, user-confirmed):**
+- Peer video arrives **RED-wrapped (RFC 2198, PT 120)** — demux extracts the
+  primary block; RED-ULPFEC on the same SSRC = transparent seq continuity.
+- **TWCC receiver feedback is MANDATORY** (twcc.rs, ~10 Hz over SRTCP): a
+  transport-cc-negotiated peer's send BWE ramps ONLY on it — without it it
+  parks at ~36 kbps (the 'blurry video' bug). Live: 25→200 pkts/s after.
+- **Never follow the peer's REMB below a floor (250 kbps)**: its receive
+  estimate only grows from observed throughput — obeying a starvation
+  estimate (live: 8 kbps!) death-spirals. Sending at the floor IS the probe.
+- Advertise our receive budget (2 Mbps): RTCP REMB + rtp_data receiverStatus.
+- **Aspect-fit from the peer's VP8 KEYFRAME coded dims** (RFC 6386 header
+  bytes 6-9) — peers send landscape-coded (1280x720) always; shape ≠ ours.
+- **‼️ ROTATION MECHANISM (3 failed attempts, the keeper):** layer
+  `setTransform` is OVERWRITTEN per-buffer by BLASTBufferQueue;
+  `native_window_set_buffers_transform` (producer window) is OVERWRITTEN by
+  MediaCodec per queued buffer. The ONLY producer-proof place = the
+  **CONTAINER's transform matrix** (`sf_media_set_geometry`: pre-rotation
+  crop box, dims swapped at 90/270, matrix+position rotate it into the final
+  rect; degrees CW, NOT HAL enums). CVO wire value = libwebrtc
+  getFrameOrientation (front (sensor+dev)%360); device rotation fed live
+  from the arbiter's Geometry orient push (dihedral 0/4/3/7 → degrees).
+- Hit the STALE-ZYGOTE trap mid-debug: pushed the host binary without a
+  stack restart → Signal forked the old image → HAL enums hit the degrees
+  shim → identity matrix. The `[media] slot N geometry` logcat line exists
+  to catch exactly this.
+- Follow-ups (cosmetic, unscheduled): mirrored self-view; behind-ui hole
+  (dioxus-canvas clear blend); 4-pose landscape face-validation.
