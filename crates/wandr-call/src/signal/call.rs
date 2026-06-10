@@ -335,6 +335,18 @@ impl SignalCall {
         self.session.set_video_rotation(degrees);
     }
 
+    /// Advertise our receive budget (bps) — REMB + rtp_data receiverStatus —
+    /// so the peer's sender BWE ramps its video up.
+    pub fn set_receive_bitrate(&mut self, bps: u32) {
+        self.session.set_receive_bitrate(bps);
+    }
+
+    /// `((tx_frames, tx_pkts, rx_pkts, rx_frames, rx_broken), pli_tx, pli_rx,
+    /// rtcp_err)` + the peer's REMB — full video diagnostics for the call log.
+    pub fn peer_remb(&self) -> Option<u32> {
+        self.session.peer_remb_bps()
+    }
+
     /// True if we are the **answerer** (callee) — the side that must send
     /// ringrtc's `accepted` so the caller starts streaming media.
     pub fn is_answerer(&self) -> bool {

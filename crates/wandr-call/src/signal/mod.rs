@@ -204,6 +204,7 @@ pub fn encode_rtp_data_state(
     seqnum: u64,
     accepted: bool,
     video_enabled: Option<bool>,
+    receive_max_bitrate_bps: Option<u64>,
 ) -> Vec<u8> {
     proto::RtpDataMessage {
         accepted: accepted.then(|| proto::RtpDataAccepted { id: Some(call_id) }),
@@ -212,6 +213,15 @@ pub fn encode_rtp_data_state(
             video_enabled: Some(v),
             sharing_screen: None,
             audio_enabled: None,
+        }),
+        // Our receive budget — the peer's libwebrtc uses it as the SEND
+        // bitrate target. Without ANY receiver feedback (we send no TWCC/RR)
+        // its BWE parks at the minimum (~36 kbps observed live) — this is the
+        // ringrtc-native lever to un-starve inbound video (REMB is the RTCP
+        // belt-and-braces twin, sent from the session's RTCP pump).
+        receiver_status: receive_max_bitrate_bps.map(|b| proto::RtpDataReceiverStatus {
+            id: Some(call_id),
+            max_bitrate_bps: Some(b),
         }),
         seqnum: Some(seqnum),
         ..Default::default()
@@ -442,13 +452,14 @@ mod tests {
     #[test]
     fn rtp_data_state_round_trip() {
         // Answerer with video on: accepted + senderStatus.video_enabled.
-        let b = encode_rtp_data_state(0xC0FFEE, 7, true, Some(true));
+        let b = encode_rtp_data_state(0xC0FFEE, 7, true, Some(true), Some(2_000_000));
         let st = decode_rtp_data(&b).unwrap();
         assert_eq!(st.video_enabled, Some(true));
+        assert_eq!(st.max_bitrate_bps, Some(2_000_000));
         assert_eq!(st.seqnum, Some(7));
         assert!(!st.hangup);
         // Caller with no video state yet: accepted=false → no senderStatus.
-        let b = encode_rtp_data_state(0xC0FFEE, 8, false, None);
+        let b = encode_rtp_data_state(0xC0FFEE, 8, false, None, None);
         let st = decode_rtp_data(&b).unwrap();
         assert_eq!(st.video_enabled, None);
         // Peer receiverStatus { id, max_bitrate_bps = 300_000 } (tag 5) + hangup (tag 2).

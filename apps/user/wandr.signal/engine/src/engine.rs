@@ -1377,6 +1377,10 @@ async fn receive_and_send(
                                     m.dec_err_msg, m.dec_err_toc, m.dec_err_stereo,
                                 ));
                             }
+                            // Task 93 Phase 5 — per-second video-plane stats.
+                            if let Some(vline) = call_engine.video_stats_line() {
+                                dbg_line(&vline);
+                            }
                         }
                     }
                     if sync_call_state(&shared, &call_engine) {

@@ -111,6 +111,11 @@ pub struct PeerSession {
     /// Outgoing CVO rotation (camera sensor orientation), applied to the video
     /// track when media exists (pending until then).
     video_rotation: Option<u32>,
+    /// Our receive budget (bps) — advertised to the peer via RTCP REMB (and,
+    /// on the Signal path, rtp_data receiverStatus) so its sender-side BWE
+    /// ramps up (it gets no TWCC/RR from us). `None` = don't advertise.
+    receive_budget_bps: Option<u32>,
+    last_remb_tx: Option<Instant>,
     /// Optional host AEAD backend for the SRTP GCM (feature `host-aead`). Set by the
     /// guest via [`PeerSession::set_aead_provider`] before media starts; `None` =
     /// the in-wasm software AES. Used when `ensure_media` builds the `MediaSession`.
@@ -167,6 +172,8 @@ impl PeerSession {
             #[cfg(feature = "signal")]
             peer_rtp_hangup: false,
             video_rotation: None,
+            receive_budget_bps: None,
+            last_remb_tx: None,
             #[cfg(feature = "host-aead")]
             aead_provider: None,
         })
@@ -224,6 +231,8 @@ impl PeerSession {
             peer_max_bitrate: None,
             peer_rtp_hangup: false,
             video_rotation: None,
+            receive_budget_bps: None,
+            last_remb_tx: None,
             #[cfg(feature = "host-aead")]
             aead_provider: None,
         })
@@ -485,6 +494,29 @@ impl PeerSession {
                 }
             }
         }
+
+        // REMB ~1 Hz once we are RECEIVING video and have a budget: the
+        // peer's sender-side BWE needs receiver feedback to ramp up (we send
+        // no TWCC/RR). Shares the SR cadence via last_remb_tx.
+        if let (Some(budget), Some(media_ssrc)) = (self.receive_budget_bps, m.video_rx_ssrc()) {
+            use rtc_rtcp::payload_feedbacks::receiver_estimated_maximum_bitrate::ReceiverEstimatedMaximumBitrate;
+            let due = self
+                .last_remb_tx
+                .is_none_or(|t| now.duration_since(t).as_millis() >= 1000);
+            if due {
+                let remb = ReceiverEstimatedMaximumBitrate {
+                    sender_ssrc: m.video_ssrc().unwrap_or(0),
+                    bitrate: budget as f32,
+                    ssrcs: vec![media_ssrc],
+                };
+                if let Ok(raw) = remb.marshal() {
+                    if let Ok(dg) = m.protect_rtcp(&raw) {
+                        self.transport.queue_media(dg);
+                        self.last_remb_tx = Some(now);
+                    }
+                }
+            }
+        }
     }
 
     /// Inbound-media diagnostics: `(seen, decode_ok, decode_err)`.
@@ -635,6 +667,7 @@ impl PeerSession {
             self.rtp_data_seqnum,
             self.accepted_engaged,
             self.video_enabled_local,
+            self.receive_budget_bps.map(u64::from),
         );
         let dg = self
             .media
@@ -672,6 +705,14 @@ impl PeerSession {
     #[cfg(feature = "signal")]
     pub fn take_peer_rtp_hangup(&mut self) -> bool {
         std::mem::take(&mut self.peer_rtp_hangup)
+    }
+
+    /// Advertise our receive budget (bps) to the peer: RTCP REMB ~1 Hz (and
+    /// the Signal path's rtp_data receiverStatus). Without ANY receiver
+    /// feedback a libwebrtc sender parks at its minimum bitrate (~36 kbps
+    /// observed live) — this is what un-starves inbound video quality.
+    pub fn set_receive_bitrate(&mut self, bps: u32) {
+        self.receive_budget_bps = Some(bps);
     }
 
     /// Set the outgoing CVO rotation (the camera's sensor orientation —

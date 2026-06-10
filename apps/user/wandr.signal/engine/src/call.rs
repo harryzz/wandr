@@ -42,6 +42,10 @@ const VIDEO_W: u32 = 640;
 const VIDEO_H: u32 = 480;
 const VIDEO_FPS: u32 = 30;
 const VIDEO_START_BITRATE_BPS: u32 = 1_000_000;
+// Our RECEIVE budget, advertised to the peer (REMB + rtp_data receiverStatus)
+// so its sender-side BWE ramps up — matches the max_bitrate_bps we advertise
+// in the V4 connection parameters. Without it the peer parks at ~36 kbps.
+const VIDEO_RECV_BITRATE_BPS: u32 = 2_000_000;
 
 /// Video geometry from the UI's call screen, in its surface pixels.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -72,6 +76,8 @@ struct VideoState {
     /// Last CVO rotation pushed to the engine (the encoder's display-rotation
     /// follows live device rotation; update the wire value on change).
     last_rotation: u32,
+    /// Receive budget advertised once per call (REMB + receiverStatus).
+    budget_set: bool,
 }
 
 /// Routes the SRTP per-packet AES-GCM to the host's hardware AES via the
@@ -460,6 +466,10 @@ impl ActiveCall {
     /// decoder on the peer's first keyframe (with its CVO rotation).
     fn pump_video(&mut self) {
         let v = &mut self.video;
+        if !v.budget_set {
+            self.call.set_receive_bitrate(VIDEO_RECV_BITRATE_BPS);
+            v.budget_set = true;
+        }
         // Our camera: open/close per the wanted flag.
         if v.wanted && v.enc.is_none() {
             if let Some(l) = v.layout {
@@ -837,6 +847,30 @@ impl CallEngine {
             ),
             None => (false, false),
         }
+    }
+
+    /// One-line video diagnostics for the periodic call log, or `None` when no
+    /// call / video inactive both ways.
+    pub fn video_stats_line(&self) -> Option<String> {
+        let a = self.active.as_ref()?;
+        let v = &a.video;
+        if v.enc.is_none() && v.dec.is_none() && a.call.peer_video_enabled() != Some(true) {
+            return None;
+        }
+        let ((tx_frames, tx_pkts, rx_pkts, rx_frames, rx_broken), pli_tx, pli_rx, rtcp_err) =
+            a.call.video_diag();
+        Some(format!(
+            "video: enc={} dec={} | tx frames={} pkts={} bitrate={} rot={} | rx pkts={} frames={} broken={} dec_frames={} | pli tx={} rx={} rtcp_err={} | peer: video={:?} max_bps={:?} remb={:?}",
+            a.video.enc.is_some(),
+            a.video.dec.is_some(),
+            tx_frames, tx_pkts, v.applied_bitrate, v.last_rotation,
+            rx_pkts, rx_frames, rx_broken,
+            v.dec.as_ref().map(|d| d.decoded_frames()).unwrap_or(0),
+            pli_tx, pli_rx, rtcp_err,
+            a.call.peer_video_enabled(),
+            a.call.peer_max_bitrate_bps(),
+            a.call.peer_remb(),
+        ))
     }
 
     pub fn hangup(&mut self) -> Vec<CallSignal> {
