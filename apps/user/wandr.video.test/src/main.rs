@@ -22,7 +22,7 @@ wit_bindgen::generate!({
 use crate::wandr::video::decoder::VideoDecoder;
 use crate::wandr::video::encoder::VideoEncoder;
 use crate::wandr::video::types::{
-    CameraFacing, Codec, DecoderConfig, EncoderConfig, VideoError, VideoRect,
+    CameraFacing, Codec, DecoderConfig, EncoderConfig, VideoError, VideoRect, ZLayer,
 };
 use std::net::UdpSocket;
 use std::time::{Duration, Instant};
@@ -46,6 +46,9 @@ fn open_encoder(preview: Option<VideoRect>) -> Option<VideoEncoder> {
         // the call self-view wants front anyway).
         facing: CameraFacing::Front,
         preview,
+        // Headless diagnostic surfaces are top-level; the layer only matters
+        // inside a real app (Signal uses above-ui).
+        preview_layer: ZLayer::AboveUi,
     }) {
         Ok(e) => {
             println!("encoder OPEN ✓ ({W}x{H} VP8, camera live{})",
@@ -64,7 +67,7 @@ fn open_encoder(preview: Option<VideoRect>) -> Option<VideoEncoder> {
 /// `rotation` = peer CVO degrees CW for upright display (Phase 5).
 fn open_decoder(rect: VideoRect, rotation: u32) -> Option<VideoDecoder> {
     let to_surface = rect.width > 0 && rect.height > 0;
-    match VideoDecoder::open(DecoderConfig { codec: Codec::Vp8, width: W, height: H, rect, rotation }) {
+    match VideoDecoder::open(DecoderConfig { codec: Codec::Vp8, width: W, height: H, rect, rotation, layer: ZLayer::AboveUi }) {
         Ok(d) => {
             println!("decoder OPEN ✓ ({}, rotation={rotation}°)",
                 if to_surface { "decode-to-SURFACE, on-screen" } else { "decode-to-buffer" });

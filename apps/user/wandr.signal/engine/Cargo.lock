@@ -3566,6 +3566,7 @@ dependencies = [
  "rand_core 0.6.4",
  "rtc-dtls",
  "rtc-ice",
+ "rtc-rtcp",
  "rtc-rtp",
  "rtc-sdp",
  "rtc-shared",

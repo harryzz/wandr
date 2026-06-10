@@ -826,6 +826,14 @@ fn app() -> Element {
     let call_status = chat::call_status();
     let call_peer = chat::call_peer();
 
+    // Task 93 Phase 5 — a connected call with video (ours or theirs) takes the
+    // whole screen: the host composites the remote + PiP video surfaces above
+    // this app's UI (above-ui layer), inside rects this screen lays out.
+    let (vid_local, vid_remote) = chat::video_status();
+    if matches!(call_status, chat::CallState::Connected) && (vid_local || vid_remote) {
+        return rsx! { VideoCallScreen { local_on: vid_local } };
+    }
+
     // M4 — a notification tap asked to open a thread (set by on-notification-click,
     // outside the runtime). Resolve + navigate to it now.
     if let Some(tid) = PENDING_OPEN.with(|p| p.borrow_mut().take()) {
@@ -975,6 +983,57 @@ fn ProfileScreen(profile: UiProfile, show_profile: Signal<bool>) -> Element {
     }
 }
 
+
+/// Task 93 Phase 5 — the in-call video screen. The video itself is composited
+/// by the HOST (above-ui media surfaces); this screen owns the geometry: it
+/// derives the remote + PiP rects from the live surface size and its own
+/// layout constants, reports them via `set-video-layout`, and draws the
+/// controls strip. Camera toggle + hang up.
+#[component]
+fn VideoCallScreen(local_on: bool) -> Element {
+    // Surface pixels — the same space the video rects use.
+    let sw = crate::my::skiko_gfx::canvas::surface_width();
+    let sh = crate::my::skiko_gfx::canvas::surface_height();
+    // UI-owned call-screen layout policy: a bottom controls strip; remote
+    // video fills everything above it; the PiP sits above the strip, right-
+    // aligned, at the capture aspect (4:3), a quarter of the width.
+    const CONTROLS_H: u32 = 220;
+    const MARGIN: u32 = 24;
+    let video_h = sh.saturating_sub(CONTROLS_H);
+    let pip_w = sw / 4;
+    let pip_h = pip_w * 3 / 4;
+    chat::set_video_layout(
+        0, 0, sw, video_h,
+        sw.saturating_sub(pip_w + MARGIN),
+        video_h.saturating_sub(pip_h + MARGIN),
+        pip_w, pip_h,
+    );
+    let btn = "display:flex; justify-content:center; align-items:center; width:128px; height:128px; border-radius:28px; color:#FFFFFF; font-size:60px;";
+    let cam_bg = if local_on { "#2E7D32" } else { "#555555" };
+    rsx! {
+        div {
+            style: "display:flex; flex-direction:column; height:100%; background:#000000;",
+            // The region the video surfaces cover (host-composited).
+            div { style: "flex-grow:1;" }
+            div {
+                style: format!("display:flex; flex-direction:row; justify-content:center; align-items:center; gap:48px; height:{CONTROLS_H}px; background:{BAR};"),
+                button {
+                    style: format!("{btn} background:{cam_bg};"),
+                    onmousedown: move |_| {},
+                    onclick: move |_| chat::set_video(!local_on),
+                    "📷"
+                }
+                button {
+                    style: format!("{btn} background:#C62828;"),
+                    onmousedown: move |_| {},
+                    onclick: move |_| chat::hangup_call(),
+                    "📵"
+                }
+            }
+        }
+    }
+}
+
 /// Header for an open conversation: a back arrow (clears `current`) + the title.
 #[component]
 fn ThreadHeader(
@@ -1005,6 +1064,14 @@ fn ThreadHeader(
             }
             div { style: "color:{TEXT}; font-size:36px; font-weight:700; flex-grow:1;", "{title}" }
             // 1:1 voice call (not groups, not Note-to-Self): big green→place / red→hang-up.
+            if in_call {
+                button {
+                    style: "display:flex; justify-content:center; align-items:center; width:128px; height:128px; border-radius:28px; background:#2E7D32;",
+                    onmousedown: move |_| {},
+                    onclick: move |_| chat::set_video(true),
+                    div { style: "color:#FFFFFF; font-size:64px;", "📷" }
+                }
+            }
             if can_call {
                 button {
                     style: format!("display:flex; justify-content:center; align-items:center; width:128px; height:128px; border-radius:28px; background:{};", handset_bg),

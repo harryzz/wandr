@@ -133,6 +133,8 @@ struct Shared {
     call_intents: RefCell<VecDeque<CallIntent>>,
     /// Latest call state, mirrored for the synchronous `call-status` getter.
     call_state: Cell<CallState>,
+    /// (our camera on, peer camera on) — mirrored from the CallEngine each tick.
+    video_status: Cell<(bool, bool)>,
     /// Peer ACI of the current/ringing call ("" when idle).
     call_peer: RefCell<String>,
 }
@@ -143,6 +145,10 @@ enum CallIntent {
     Place(String),
     Accept,
     Hangup,
+    /// Task 93 Phase 5 — toggle our camera in the active call.
+    SetVideo(bool),
+    /// The call screen's video geometry (UI surface pixels).
+    SetVideoLayout(call::VideoLayout),
 }
 
 /// Send each [`wandr_call::signal::CallSignal`] to `$peer` (an ACI string) as a
@@ -213,7 +219,7 @@ const NO_TURN: bool = false;
 
 /// Append a line to `/state/calldbg.log` — guest `log::` doesn't reach logcat on
 /// this build, so call/TURN tracing goes to a file we read over adb.
-fn dbg_line(s: &str) {
+pub(crate) fn dbg_line(s: &str) {
     use std::io::Write;
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
@@ -279,6 +285,7 @@ async fn peer_identity_key(store: &MemStore, aci: &str) -> Option<Vec<u8>> {
 fn sync_call_state(shared: &Shared, ce: &CallEngine) -> bool {
     let wit = ce.state().map(to_wit_call_state).unwrap_or(CallState::Idle);
     *shared.call_peer.borrow_mut() = ce.peer();
+    shared.video_status.set(ce.video_status());
     let changed = shared.call_state.get() != wit;
     shared.call_state.set(wit);
     changed
@@ -530,6 +537,7 @@ pub fn init() {
         receipt_outbox: RefCell::new(Vec::new()),
         read_acked: RefCell::new(HashSet::new()),
         call_intents: RefCell::new(VecDeque::new()),
+        video_status: Cell::new((false, false)),
         call_state: Cell::new(CallState::Idle),
         call_peer: RefCell::new(String::new()),
     });
@@ -601,6 +609,24 @@ pub fn hangup_call() {
     if let Some(s) = shared() {
         s.call_intents.borrow_mut().push_back(CallIntent::Hangup);
     }
+}
+
+pub fn set_video(enabled: bool) {
+    if let Some(s) = shared() {
+        s.call_intents.borrow_mut().push_back(CallIntent::SetVideo(enabled));
+    }
+}
+
+pub fn set_video_layout(remote: (u32, u32, u32, u32), pip: (u32, u32, u32, u32)) {
+    if let Some(s) = shared() {
+        s.call_intents
+            .borrow_mut()
+            .push_back(CallIntent::SetVideoLayout(call::VideoLayout { remote, pip }));
+    }
+}
+
+pub fn video_status() -> (bool, bool) {
+    shared().map(|s| s.video_status.get()).unwrap_or((false, false))
 }
 
 pub fn call_status() -> CallState {
@@ -1292,6 +1318,17 @@ async fn receive_and_send(
                                 (call_engine.peer(), call_engine.accept())
                             }
                             CallIntent::Hangup => (call_engine.peer(), call_engine.hangup()),
+                            // Task 93 Phase 5 — in-call video: no signaling of their
+                            // own (the camera state rides the in-band RTP-data
+                            // senderStatus from the call tick).
+                            CallIntent::SetVideo(on) => {
+                                call_engine.set_video(on);
+                                (call_engine.peer(), Vec::new())
+                            }
+                            CallIntent::SetVideoLayout(l) => {
+                                call_engine.set_video_layout(l);
+                                (call_engine.peer(), Vec::new())
+                            }
                         };
                         if let Some(sender) = sender.as_mut() {
                             send_signals!(sender, peer, sigs);

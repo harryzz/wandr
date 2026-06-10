@@ -29,6 +29,13 @@ interface types {
     /// Which camera feeds the encoder (a call self-view wants front).
     enum camera-facing { front, back }
 
+    /// Where a video surface composites relative to the app's own UI buffer
+    /// (the guest owns this policy). `behind-ui` = the SurfaceView model: the
+    /// UI punches a transparent hole and may draw controls OVER the video
+    /// (host clears the layer's opaque flag while video is up). `above-ui` =
+    /// video covers the rect; the UI lays out around it — no hole needed.
+    enum z-layer { behind-ui, above-ui }
+
     enum video-error {
         unsupported-codec,
         no-hw-codec,         // only a software codec exists (e.g. VP9 encode here)
@@ -69,6 +76,8 @@ interface types {
         /// camera streams to a second surface host-side; frames never cross
         /// the boundary). `none` = no self-view. Move via set-preview-rect.
         preview: option<video-rect>,
+        /// Compositing layer for the self-view (see `z-layer`).
+        preview-layer: z-layer,
     }
 
     record decoder-config {
@@ -81,6 +90,8 @@ interface types {
         /// peer's CVO rotation (wandr-call `VideoFrame.rotation`). Fixed at
         /// open (MediaCodec rotation-degrees); reopen if the peer rotates.
         rotation: u32,
+        /// Compositing layer for the remote video (see `z-layer`).
+        layer: z-layer,
     }
 }
 

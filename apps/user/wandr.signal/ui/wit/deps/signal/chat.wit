@@ -44,4 +44,8 @@ interface chat {
   hangup-call: func();
   call-status: func() -> call-state;
   call-peer: func() -> string;
+  set-video: func(enabled: bool);
+  set-video-layout: func(rx: u32, ry: u32, rw: u32, rh: u32,
+                         px: u32, py: u32, pw: u32, ph: u32);
+  video-status: func() -> tuple<bool, bool>;
 }

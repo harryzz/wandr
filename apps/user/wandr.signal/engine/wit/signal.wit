@@ -220,6 +220,20 @@ interface chat {
 
   /// The peer ACI on the current/ringing call, or "" when idle.
   call-peer: func() -> string;
+
+  /// Toggle our camera in the active call (no-op when idle). The camera + HW
+  /// encoder live host-side; the peer learns via the in-band senderStatus.
+  /// Video starts once the call screen has provided set-video-layout.
+  set-video: func(enabled: bool);
+
+  /// The call screen's video geometry, in the UI's own surface pixels:
+  /// remote video rect (rx..rh) + the PiP self-view rect (px..ph). Call when
+  /// the call screen lays out (idempotent — safe to repeat per frame).
+  set-video-layout: func(rx: u32, ry: u32, rw: u32, rh: u32,
+                         px: u32, py: u32, pw: u32, ph: u32);
+
+  /// (our camera on, peer camera on) — drives the call-screen UI.
+  video-status: func() -> tuple<bool, bool>;
 }
 
 /// The engine half of the Signal app. wasi imports (sockets/tls/io/fs/random/
@@ -241,4 +255,9 @@ world signal-engine {
   /// The `aead-key` resource: the host expands the AES key schedule once per SRTP
   /// session and no key material crosses the boundary per packet.
   import wandr:crypto/aead@0.1.0;
+  /// Host HW video for calls (task 93 Phase 5): camera+VP8 encoder (self
+  /// camera, PiP composited host-side) + VP8 decoder (decode-to-surface;
+  /// pixels never enter the guest).
+  import wandr:video/encoder@0.1.0;
+  import wandr:video/decoder@0.1.0;
 }

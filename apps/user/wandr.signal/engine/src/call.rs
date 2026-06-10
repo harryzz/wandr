@@ -29,7 +29,47 @@ use crate::my::skiko_gfx::audio::{self, ChannelLayout, Format, StreamClass, Trac
 use crate::wandr::audio_focus::controls;
 use crate::wandr::crypto::aead::AeadKey;
 use crate::wandr::crypto::types::AeadAlgo;
+use crate::wandr::video::decoder::VideoDecoder;
+use crate::wandr::video::encoder::VideoEncoder;
+use crate::wandr::video::types as vtypes;
 use wandr_call::{AeadCtx, AeadProvider};
+
+// ── 1:1 call video (task 93 Phase 5) ────────────────────────────────────────
+// The call's video media policy lives here (the layer that owns it): the
+// capture/encode shape proven by the task-93 probes — 640×480 VP8 @ 30 fps,
+// 1 Mbps start bitrate (REMB / the peer's receiverStatus adapt it down).
+const VIDEO_W: u32 = 640;
+const VIDEO_H: u32 = 480;
+const VIDEO_FPS: u32 = 30;
+const VIDEO_START_BITRATE_BPS: u32 = 1_000_000;
+
+/// Video geometry from the UI's call screen, in its surface pixels.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct VideoLayout {
+    pub remote: (u32, u32, u32, u32),
+    pub pip: (u32, u32, u32, u32),
+}
+
+fn vrect((x, y, w, h): (u32, u32, u32, u32)) -> vtypes::VideoRect {
+    vtypes::VideoRect { x, y, width: w, height: h }
+}
+
+/// Per-call video state: our camera/encoder, the peer's decoder surface, and
+/// the UI-provided layout. Everything is torn down with the call (the host
+/// releases camera + codecs on resource drop — the cameraserver-wedge rule).
+#[derive(Default)]
+struct VideoState {
+    /// The user wants our camera on (encoder opens once layout is known).
+    wanted: bool,
+    enc: Option<VideoEncoder>,
+    dec: Option<VideoDecoder>,
+    layout: Option<VideoLayout>,
+    /// The CVO rotation the decoder was opened with (reopen on change is a
+    /// follow-up; mid-call device rotation is rare on a phone held in-call).
+    dec_rotation: u32,
+    /// Last bitrate applied to the encoder (avoid re-set every tick).
+    applied_bitrate: u32,
+}
 
 /// Routes the SRTP per-packet AES-GCM to the host's hardware AES via the
 /// `wandr:crypto/aead.aead-key` resource (wandr-call injects this through
@@ -235,6 +275,7 @@ struct ActiveCall {
     aud_peak: f32,            // max |sample| of decoded audio (0 ⇒ silent decode)
     mic_peak: f32,            // max |sample| captured from mic (0 ⇒ silent/muted capture)
     wr_ok: u64, wr_zero: u64, // write_pcm_f32 accepted (>0) vs rejected (ring full)
+    video: VideoState,        // task 93 Phase 5 — in-call video
 }
 
 /// A snapshot of one call's media-flow counters, for periodic logging.
@@ -277,6 +318,7 @@ impl ActiveCall {
             declined: false, busy: false,
             udp_tx: 0, udp_rx: 0, aud_tx: 0, aud_rx: 0, mic_peak: 0.0,
             aud_peak: 0.0, wr_ok: 0, wr_zero: 0,
+            video: VideoState::default(),
         }
     }
 
@@ -404,6 +446,139 @@ impl ActiveCall {
         }
         if let Some(t) = self.trk.take() {
             audio::close(t);
+        }
+        self.teardown_video();
+    }
+
+    /// Pump in-call video once media is connected (task 93 Phase 5):
+    /// camera → host encoder → engine `send_video`, and the peer's frames →
+    /// host decoder surface. Encoder/decoder open lazily — the encoder when
+    /// the user enabled video AND the call screen provided a layout; the
+    /// decoder on the peer's first keyframe (with its CVO rotation).
+    fn pump_video(&mut self) {
+        let v = &mut self.video;
+        // Our camera: open/close per the wanted flag.
+        if v.wanted && v.enc.is_none() {
+            if let Some(l) = v.layout {
+                match VideoEncoder::open(vtypes::EncoderConfig {
+                    codec: vtypes::Codec::Vp8,
+                    width: VIDEO_W,
+                    height: VIDEO_H,
+                    bitrate_bps: VIDEO_START_BITRATE_BPS,
+                    framerate: VIDEO_FPS,
+                    source_camera: true,
+                    facing: vtypes::CameraFacing::Front, // the call self-view
+                    preview: Some(vrect(l.pip)),
+                    preview_layer: vtypes::ZLayer::AboveUi,
+                }) {
+                    Ok(e) => {
+                        // Outgoing CVO = the camera's display rotation, so the
+                        // peer renders us upright; tell it our camera is on.
+                        self.call.set_video_rotation(e.display_rotation());
+                        self.call.set_video_enabled(true);
+                        v.applied_bitrate = VIDEO_START_BITRATE_BPS;
+                        v.enc = Some(e);
+                        crate::engine::dbg_line("video: encoder opened (camera on)");
+                    }
+                    Err(e) => {
+                        crate::engine::dbg_line(&format!("video: encoder open failed: {e:?}"));
+                        v.wanted = false; // don't retry every tick
+                    }
+                }
+            }
+        } else if !v.wanted && v.enc.is_some() {
+            v.enc = None; // host releases camera + codec (ordered teardown)
+            self.call.set_video_enabled(false);
+            crate::engine::dbg_line("video: encoder closed (camera off)");
+        }
+        // Outbound frames + the peer's keyframe requests + bitrate adaptation.
+        if let Some(enc) = &v.enc {
+            while let Some(f) = enc.next_frame() {
+                let _ = self.call.send_video(&f.data, f.timestamp);
+            }
+            if self.call.take_keyframe_request() {
+                enc.request_keyframe();
+            }
+            // The peer's receive budget: its in-band receiverStatus wins, else
+            // RTCP REMB; clamp to our start bitrate as the ceiling.
+            let want = self
+                .call
+                .peer_max_bitrate_bps()
+                .map(|b| b as u32)
+                .or(self.call.peer_remb_bps())
+                .map(|b| b.min(VIDEO_START_BITRATE_BPS))
+                .unwrap_or(VIDEO_START_BITRATE_BPS);
+            if want != v.applied_bitrate {
+                enc.set_bitrate(want);
+                v.applied_bitrate = want;
+            }
+        }
+        // The peer's camera state (in-band senderStatus).
+        if let Some(on) = self.call.take_peer_video_toggle() {
+            crate::engine::dbg_line(&format!("video: peer camera {}", if on { "ON" } else { "OFF" }));
+            if !on {
+                v.dec = None; // surface disappears with the decoder
+            }
+        }
+        // Inbound frames → decoder (opened on the first keyframe, with its
+        // CVO rotation; a mid-stream join asks for a sync point).
+        while let Some(vf) = self.call.recv_video() {
+            if v.dec.is_none() {
+                if !vf.keyframe {
+                    self.call.request_keyframe();
+                    continue;
+                }
+                let Some(l) = v.layout else { continue };
+                match VideoDecoder::open(vtypes::DecoderConfig {
+                    codec: vtypes::Codec::Vp8,
+                    width: VIDEO_W,
+                    height: VIDEO_H,
+                    rect: vrect(l.remote),
+                    rotation: vf.rotation,
+                    layer: vtypes::ZLayer::AboveUi,
+                }) {
+                    Ok(d) => {
+                        v.dec_rotation = vf.rotation;
+                        v.dec = Some(d);
+                        crate::engine::dbg_line(&format!(
+                            "video: decoder opened (peer video, rotation {}°)", vf.rotation
+                        ));
+                    }
+                    Err(e) => {
+                        crate::engine::dbg_line(&format!("video: decoder open failed: {e:?}"));
+                        continue;
+                    }
+                }
+            }
+            if let Some(d) = &v.dec {
+                let _ = d.submit(&vtypes::EncodedFrame {
+                    data: vf.data,
+                    timestamp: vf.timestamp,
+                    keyframe: vf.keyframe,
+                });
+            }
+        }
+    }
+
+    fn teardown_video(&mut self) {
+        // Dropping the WIT resources runs the host's ordered camera/codec
+        // teardown (never leave them across a call end — cameraserver wedge).
+        self.video.enc = None;
+        self.video.dec = None;
+        self.video.wanted = false;
+    }
+
+    /// Apply a (possibly new) UI layout to live surfaces.
+    fn apply_video_layout(&mut self, l: VideoLayout) {
+        if self.video.layout == Some(l) {
+            return;
+        }
+        self.video.layout = Some(l);
+        if let Some(d) = &self.video.dec {
+            d.set_rect(vrect(l.remote));
+        }
+        if let Some(e) = &self.video.enc {
+            e.set_preview_rect(vrect(l.pip));
         }
     }
 }
@@ -626,6 +801,33 @@ impl CallEngine {
     }
 
     /// Hang up; returns the `Hangup` to send and drops the call.
+    // ── in-call video controls (task 93 Phase 5; driven by chat intents) ────
+
+    /// Toggle our camera (no-op when no call is active).
+    pub fn set_video(&mut self, enabled: bool) {
+        if let Some(a) = &mut self.active {
+            a.video.wanted = enabled;
+        }
+    }
+
+    /// The call screen's video geometry (UI surface pixels).
+    pub fn set_video_layout(&mut self, layout: VideoLayout) {
+        if let Some(a) = &mut self.active {
+            a.apply_video_layout(layout);
+        }
+    }
+
+    /// `(our camera on, peer camera on)` — for the call-screen UI.
+    pub fn video_status(&self) -> (bool, bool) {
+        match &self.active {
+            Some(a) => (
+                a.video.wanted || a.video.enc.is_some(),
+                a.call.peer_video_enabled().unwrap_or(false),
+            ),
+            None => (false, false),
+        }
+    }
+
     pub fn hangup(&mut self) -> Vec<CallSignal> {
         if let Some(mut a) = self.active.take() {
             // Declined = we hung up an incoming ring we never accepted. If we
@@ -676,6 +878,7 @@ impl CallEngine {
                     }
                 }
                 a.pump_audio();
+                a.pump_video();
             }
             let sigs = a.call.poll_signals();
             let new_state = a.call.state();

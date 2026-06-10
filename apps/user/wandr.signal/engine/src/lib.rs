@@ -97,6 +97,18 @@ impl Guest for Component {
     fn call_peer() -> String {
         engine::call_peer()
     }
+
+    fn set_video(enabled: bool) {
+        engine::set_video(enabled);
+    }
+
+    fn set_video_layout(rx: u32, ry: u32, rw: u32, rh: u32, px: u32, py: u32, pw: u32, ph: u32) {
+        engine::set_video_layout((rx, ry, rw, rh), (px, py, pw, ph));
+    }
+
+    fn video_status() -> (bool, bool) {
+        engine::video_status()
+    }
 }
 
 export!(Component);
