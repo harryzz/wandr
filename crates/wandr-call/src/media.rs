@@ -74,6 +74,11 @@ pub struct MediaSession {
     // own SSRC. `None` until `enable_video` (the session enables it with the
     // role-derived SSRC as soon as media keys exist).
     video: Option<VideoStream>,
+    // Inbound ringrtc RTP-data control payloads (PT 101) — decrypted protobuf
+    // `rtp_data.Message` bytes, drained by the session (task 93 Phase 5: the
+    // peer's video_enabled / max-bitrate / rtp hangup ride here).
+    #[cfg(feature = "signal")]
+    rtp_data_in: Vec<Vec<u8>>,
     // DIAG (inbound): cumulative RTP-seq gaps (lost/missing packets), last
     // inter-packet timestamp delta (= Opus frame samples: 960=20ms, 2880=60ms),
     // and last payload size. Pins arrival rate / frame size / loss for the call.
@@ -164,6 +169,8 @@ impl MediaSession {
             ts: 0,
             data_ctr: 0,
             video: None,
+            #[cfg(feature = "signal")]
+            rtp_data_in: Vec::new(),
             rx_prev_seq: None,
             rx_prev_ts: None,
             rx_seq_gaps: 0,
@@ -270,6 +277,17 @@ impl MediaSession {
                 return Ok(Vec::new());
             }
         }
+        // ringrtc's RTP-data control channel (PT 101 / SSRC 0xD): queue the
+        // protobuf payload for the session to decode (video_enabled etc.).
+        #[cfg(feature = "signal")]
+        if pkt.header.payload_type == crate::signal::RTP_DATA_PAYLOAD_TYPE
+            && pkt.header.ssrc == crate::signal::RTP_DATA_SSRC
+        {
+            if self.rtp_data_in.len() < 16 {
+                self.rtp_data_in.push(pkt.payload.to_vec());
+            }
+            return Ok(Vec::new());
+        }
         // Only the Opus audio stream is ours to decode; skip everything else so the
         // decoder + the seq/ts/gap stats see a single, coherent stream.
         if pkt.header.payload_type != self.payload_type {
@@ -364,6 +382,24 @@ impl MediaSession {
     /// Video-plane counters; zeros until video is enabled.
     pub fn video_diag(&self) -> VideoDiag {
         self.video.as_ref().map(|v| v.diag()).unwrap_or((0, 0, 0, 0, 0))
+    }
+
+    /// Set the outgoing CVO rotation on the video track (camera sensor
+    /// orientation; degrees CW the receiver should apply).
+    pub fn set_video_rotation(&mut self, degrees: u32) {
+        if let Some(v) = &mut self.video {
+            v.set_rotation(degrees);
+        }
+    }
+
+    /// Next inbound RTP-data control payload (PT 101 protobuf), if any.
+    #[cfg(feature = "signal")]
+    pub fn take_rtp_data(&mut self) -> Option<Vec<u8>> {
+        if self.rtp_data_in.is_empty() {
+            None
+        } else {
+            Some(self.rtp_data_in.remove(0))
+        }
     }
 
     // ── RTCP (SRTCP rides the same contexts; RFC 5761 mux) ──────────────────

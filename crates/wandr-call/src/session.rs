@@ -87,6 +87,30 @@ pub struct PeerSession {
     /// message). Incremented per send; ringrtc resends accumulated state ~1 Hz.
     #[cfg(feature = "signal")]
     rtp_data_seqnum: u64,
+    /// Accumulated outbound RTP-data state (ringrtc semantics — task 93 Phase 5):
+    /// the call id once known, `accepted` while the answerer is engaged, and our
+    /// camera on/off. Resent ~1 Hz from `handle_timeout` once keyed.
+    #[cfg(feature = "signal")]
+    rtp_call_id: Option<u64>,
+    #[cfg(feature = "signal")]
+    accepted_engaged: bool,
+    #[cfg(feature = "signal")]
+    video_enabled_local: Option<bool>,
+    #[cfg(feature = "signal")]
+    last_rtp_data_tx: Option<Instant>,
+    /// Peer state decoded from inbound RTP-data: camera on/off (+ a
+    /// clear-on-read toggle event), requested send bitrate, rtp-data hangup.
+    #[cfg(feature = "signal")]
+    peer_video_enabled: Option<bool>,
+    #[cfg(feature = "signal")]
+    peer_video_toggle: Option<bool>,
+    #[cfg(feature = "signal")]
+    peer_max_bitrate: Option<u64>,
+    #[cfg(feature = "signal")]
+    peer_rtp_hangup: bool,
+    /// Outgoing CVO rotation (camera sensor orientation), applied to the video
+    /// track when media exists (pending until then).
+    video_rotation: Option<u32>,
     /// Optional host AEAD backend for the SRTP GCM (feature `host-aead`). Set by the
     /// guest via [`PeerSession::set_aead_provider`] before media starts; `None` =
     /// the in-wasm software AES. Used when `ensure_media` builds the `MediaSession`.
@@ -126,6 +150,23 @@ impl PeerSession {
             pli_tx: 0, pli_rx: 0, rtcp_err: 0,
             #[cfg(feature = "signal")]
             rtp_data_seqnum: 0,
+            #[cfg(feature = "signal")]
+            rtp_call_id: None,
+            #[cfg(feature = "signal")]
+            accepted_engaged: false,
+            #[cfg(feature = "signal")]
+            video_enabled_local: None,
+            #[cfg(feature = "signal")]
+            last_rtp_data_tx: None,
+            #[cfg(feature = "signal")]
+            peer_video_enabled: None,
+            #[cfg(feature = "signal")]
+            peer_video_toggle: None,
+            #[cfg(feature = "signal")]
+            peer_max_bitrate: None,
+            #[cfg(feature = "signal")]
+            peer_rtp_hangup: false,
+            video_rotation: None,
             #[cfg(feature = "host-aead")]
             aead_provider: None,
         })
@@ -174,6 +215,15 @@ impl PeerSession {
             peer_sr: None,
             pli_tx: 0, pli_rx: 0, rtcp_err: 0,
             rtp_data_seqnum: 0,
+            rtp_call_id: None,
+            accepted_engaged: false,
+            video_enabled_local: None,
+            last_rtp_data_tx: None,
+            peer_video_enabled: None,
+            peer_video_toggle: None,
+            peer_max_bitrate: None,
+            peer_rtp_hangup: false,
+            video_rotation: None,
             #[cfg(feature = "host-aead")]
             aead_provider: None,
         })
@@ -312,6 +362,23 @@ impl PeerSession {
                 if m.take_video_loss() {
                     self.pli_wanted = true;
                 }
+                // ringrtc RTP-data control state from the peer (Phase 5).
+                #[cfg(feature = "signal")]
+                while let Some(b) = m.take_rtp_data() {
+                    let Some(st) = crate::signal::decode_rtp_data(&b) else { continue };
+                    if let Some(v) = st.video_enabled {
+                        if self.peer_video_enabled != Some(v) {
+                            self.peer_video_toggle = Some(v);
+                        }
+                        self.peer_video_enabled = Some(v);
+                    }
+                    if st.max_bitrate_bps.is_some() {
+                        self.peer_max_bitrate = st.max_bitrate_bps;
+                    }
+                    if st.hangup {
+                        self.peer_rtp_hangup = true;
+                    }
+                }
             }
         }
         Ok(())
@@ -445,6 +512,16 @@ impl PeerSession {
         self.transport.handle_timeout(now);
         let _ = self.ensure_media();
         self.pump_rtcp(now);
+        // ringrtc resends the accumulated RTP-data state ~1 Hz; so do we once
+        // there is anything to say (accepted engaged or a video state set).
+        #[cfg(feature = "signal")]
+        if (self.accepted_engaged || self.video_enabled_local.is_some())
+            && self
+                .last_rtp_data_tx
+                .is_none_or(|t| now.duration_since(t).as_millis() >= 1000)
+        {
+            let _ = self.send_rtp_data_state();
+        }
     }
 
     /// PCM frame length (samples) the codec expects per 20 ms tick.
@@ -526,18 +603,85 @@ impl PeerSession {
     /// media until it receives this from the *callee*, so the answerer must send
     /// it (repeatedly, ~1 Hz) once keyed. No-op-errs as `NotConnected` until the
     /// SRTP keys exist. `call_id` is the ringrtc call id (binds the message).
+    /// (Phase 5: this now sends the ACCUMULATED state — accepted + our
+    /// senderStatus — matching ringrtc's merge-and-resend semantics.)
     #[cfg(feature = "signal")]
     pub fn send_accepted(&mut self, call_id: u64) -> Result<(), Error> {
+        self.rtp_call_id = Some(call_id);
+        self.accepted_engaged = true;
+        self.send_rtp_data_state()
+    }
+
+    /// Flip our camera state on the RTP-data channel (`senderStatus.
+    /// video_enabled` — task 93 Phase 5). The peer's ringrtc surfaces it as
+    /// remote-video on/off. Sent immediately when keyed and resent ~1 Hz with
+    /// the accumulated state. `call_id` binds the message (callers never send
+    /// `accepted`, so they pass it here).
+    #[cfg(feature = "signal")]
+    pub fn set_video_enabled(&mut self, call_id: u64, enabled: bool) {
+        self.rtp_call_id = Some(call_id);
+        self.video_enabled_local = Some(enabled);
+        let _ = self.send_rtp_data_state(); // NotConnected → handle_timeout resends
+    }
+
+    /// Encode + queue the accumulated RTP-data `Message`.
+    #[cfg(feature = "signal")]
+    fn send_rtp_data_state(&mut self) -> Result<(), Error> {
+        let Some(call_id) = self.rtp_call_id else { return Ok(()) };
         self.ensure_media()?;
         self.rtp_data_seqnum += 1;
-        let payload = crate::signal::encode_rtp_data_accepted(call_id, self.rtp_data_seqnum);
+        let payload = crate::signal::encode_rtp_data_state(
+            call_id,
+            self.rtp_data_seqnum,
+            self.accepted_engaged,
+            self.video_enabled_local,
+        );
         let dg = self
             .media
             .as_mut()
             .ok_or(Error::NotConnected)?
             .send_rtp_data(crate::signal::RTP_DATA_PAYLOAD_TYPE, crate::signal::RTP_DATA_SSRC, &payload)?;
         self.transport.queue_media(dg);
+        self.last_rtp_data_tx = Some(Instant::now());
         Ok(())
+    }
+
+    /// The peer toggled its camera (from `senderStatus.video_enabled`):
+    /// `Some(true/false)` once per change, clear-on-read. The guest opens /
+    /// closes the remote-video decoder surface on this.
+    #[cfg(feature = "signal")]
+    pub fn take_peer_video_toggle(&mut self) -> Option<bool> {
+        self.peer_video_toggle.take()
+    }
+
+    /// The peer's current camera state, if it ever reported one.
+    #[cfg(feature = "signal")]
+    pub fn peer_video_enabled(&self) -> Option<bool> {
+        self.peer_video_enabled
+    }
+
+    /// The send bitrate the peer requested (`receiverStatus.max_bitrate_bps`)
+    /// — feed to the encoder's `set-bitrate` alongside REMB.
+    #[cfg(feature = "signal")]
+    pub fn peer_max_bitrate_bps(&self) -> Option<u64> {
+        self.peer_max_bitrate
+    }
+
+    /// True once if the peer hung up over RTP data (it also hangs up via
+    /// signaling; this is the faster in-band path). Clear-on-read.
+    #[cfg(feature = "signal")]
+    pub fn take_peer_rtp_hangup(&mut self) -> bool {
+        std::mem::take(&mut self.peer_rtp_hangup)
+    }
+
+    /// Set the outgoing CVO rotation (the camera's sensor orientation —
+    /// degrees CW the receiver should apply for upright display). Carried in
+    /// the `urn:3gpp:video-orientation` header extension, like libwebrtc.
+    pub fn set_video_rotation(&mut self, degrees: u32) {
+        self.video_rotation = Some(degrees);
+        if let Some(m) = &mut self.media {
+            m.set_video_rotation(degrees);
+        }
     }
 
     fn ensure_media(&mut self) -> Result<(), Error> {
@@ -563,6 +707,9 @@ impl PeerSession {
             // libwebrtc insists the two sides' video SSRCs don't overlap.
             let video_ssrc = if self.role == Role::Offerer { 1003 } else { 2003 };
             media.enable_video(VP8_PAYLOAD_TYPE, video_ssrc);
+            if let Some(deg) = self.video_rotation {
+                media.set_video_rotation(deg);
+            }
             self.media = Some(media);
         }
         Ok(())
@@ -822,6 +969,79 @@ mod tests {
         b.handle_timeout(Instant::now());
         pump(&mut b, &bsock, &mut a, &asock);
         assert!(a.take_keyframe_request(), "auto-PLI from the torn frame reached A");
+    }
+
+    /// CVO: the sender's rotation (camera sensor orientation) rides the
+    /// urn:3gpp:video-orientation header extension (id 4, ringrtc's fixed SDP)
+    /// and comes out on the receiver's frame — no pixels touched.
+    #[test]
+    fn video_rotation_crosses_via_cvo_extension() {
+        let (mut a, asock) = peer(Role::Offerer);
+        let (mut b, bsock) = peer(Role::Answerer);
+        let offer = a.local_signaling().to_sdp();
+        let answer = b.local_signaling().to_sdp();
+        a.set_remote_signaling(&Signaling::from_sdp(&answer).unwrap()).unwrap();
+        b.set_remote_signaling(&Signaling::from_sdp(&offer).unwrap()).unwrap();
+        drive(&mut a, &asock, &mut b, &bsock);
+        assert!(a.is_connected() && b.is_connected());
+
+        a.set_video_rotation(90); // e.g. a portrait phone's back camera
+        a.send_video(&[0x00; 600], 3000).unwrap();
+        pump(&mut a, &asock, &mut b, &bsock);
+        let got = b.recv_video().expect("frame with CVO");
+        assert_eq!(got.rotation, 90, "CVO rotation recovered on the receiver");
+
+        // Sticky: a later sender omitting nothing changes — still 90.
+        a.send_video(&[0x01; 100], 6000).unwrap();
+        pump(&mut a, &asock, &mut b, &bsock);
+        assert_eq!(b.recv_video().unwrap().rotation, 90);
+    }
+
+    /// Phase 5 in-call video signaling over the Signal (DH-keyed) path: the
+    /// answerer's accepted+senderStatus reach the caller, video toggles fire
+    /// exactly once per change (clear-on-read), and the accumulated state
+    /// resends carry the latest value.
+    #[cfg(feature = "signal")]
+    #[test]
+    fn video_enabled_toggle_crosses_rtp_data() {
+        let caller_id: Vec<u8> = std::iter::once(0x05).chain(0..32).collect();
+        let callee_id: Vec<u8> = std::iter::once(0x05).chain(32..64).collect();
+        let bind = |role| {
+            let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+            sock.set_nonblocking(true).unwrap();
+            let s = PeerSession::new_signal(
+                role, sock.local_addr().unwrap(), caller_id.clone(), callee_id.clone(), None,
+            )
+            .unwrap();
+            (s, sock)
+        };
+        let (mut a, asock) = bind(Role::Offerer);
+        let (mut b, bsock) = bind(Role::Answerer);
+        let offer = a.local_signaling();
+        let answer = b.local_signaling();
+        a.set_remote_signaling(&answer).unwrap();
+        b.set_remote_signaling(&offer).unwrap();
+        drive(&mut a, &asock, &mut b, &bsock);
+        assert!(a.is_connected() && b.is_connected());
+
+        // Callee accepts + turns video ON (one accumulated message).
+        b.send_accepted(0xC0FFEE).unwrap();
+        b.set_video_enabled(0xC0FFEE, true);
+        pump(&mut b, &bsock, &mut a, &asock);
+        assert_eq!(a.take_peer_video_toggle(), Some(true), "caller saw video ON");
+        assert_eq!(a.take_peer_video_toggle(), None, "toggle is clear-on-read");
+        assert_eq!(a.peer_video_enabled(), Some(true));
+
+        // Resends (same state) must NOT re-fire the toggle.
+        b.handle_timeout(Instant::now() + Duration::from_secs(2));
+        pump(&mut b, &bsock, &mut a, &asock);
+        assert_eq!(a.take_peer_video_toggle(), None, "unchanged state, no event");
+
+        // Video OFF → one new toggle.
+        b.set_video_enabled(0xC0FFEE, false);
+        pump(&mut b, &bsock, &mut a, &asock);
+        assert_eq!(a.take_peer_video_toggle(), Some(false));
+        assert_eq!(a.peer_video_enabled(), Some(false));
     }
 
     /// A tampered fingerprint (MITM) is rejected over real UDP — no connection.

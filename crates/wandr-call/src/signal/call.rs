@@ -250,6 +250,11 @@ impl SignalCall {
         if self.state == CallState::Connecting && self.session.is_connected() {
             self.state = CallState::Connected;
         }
+        // Phase 5: ringrtc also hangs up in-band over RTP data (faster than the
+        // signaling round trip) — honor it like a signaling Hangup.
+        if self.session.take_peer_rtp_hangup() && self.state != CallState::Ended {
+            self.state = CallState::Ended;
+        }
     }
 
     /// PCM samples per 20 ms frame (mic frame size to feed [`Self::send_audio`]).
@@ -298,6 +303,36 @@ impl SignalCall {
     /// rx_broken), pli_tx, pli_rx, rtcp_err)`.
     pub fn video_diag(&self) -> (crate::video::VideoDiag, u64, u64, u64) {
         self.session.video_diag()
+    }
+
+    // ── Phase 5: in-call video state over the RTP-data channel ──────────────
+
+    /// Flip our camera state (`senderStatus.video_enabled`) — the peer's
+    /// ringrtc surfaces it as remote-video on/off. Resent ~1 Hz (accumulated).
+    pub fn set_video_enabled(&mut self, enabled: bool) {
+        self.session.set_video_enabled(self.call_id, enabled);
+    }
+
+    /// The peer toggled its camera: `Some(on)` once per change, clear-on-read.
+    /// Open/close the remote-video decoder surface on this.
+    pub fn take_peer_video_toggle(&mut self) -> Option<bool> {
+        self.session.take_peer_video_toggle()
+    }
+
+    /// The peer's current camera state, if it ever reported one.
+    pub fn peer_video_enabled(&self) -> Option<bool> {
+        self.session.peer_video_enabled()
+    }
+
+    /// The send bitrate the peer asks of us (`receiverStatus.max_bitrate_bps`).
+    pub fn peer_max_bitrate_bps(&self) -> Option<u64> {
+        self.session.peer_max_bitrate_bps()
+    }
+
+    /// Outgoing CVO rotation (camera sensor orientation, degrees CW for the
+    /// receiver) — set once when the encoder opens.
+    pub fn set_video_rotation(&mut self, degrees: u32) {
+        self.session.set_video_rotation(degrees);
     }
 
     /// True if we are the **answerer** (callee) — the side that must send

@@ -124,15 +124,54 @@ mod proto {
         pub id: Option<u64>,
     }
 
-    /// `rtp_data.Message` — the accumulated control state sent over RTP data.
-    /// We only populate `accepted` + `seqnum`; the other fields (hangup,
-    /// sender/receiver status) are parsed-tolerant but unused for a 1:1 call.
+    /// `rtp_data.Hangup` — ringrtc also hangs up over RTP data (in addition
+    /// to the signaling channel). We only detect presence; `type`/`deviceId`
+    /// are parsed-tolerant.
+    #[derive(Clone, PartialEq, Message)]
+    pub struct RtpDataHangup {
+        #[prost(uint64, optional, tag = "1")]
+        pub id: Option<u64>,
+    }
+
+    /// `rtp_data.SenderStatus` — the peer's (and our) in-call media state.
+    /// `video_enabled` is THE 1:1 video on/off signal (task 93 Phase 5):
+    /// ringrtc flips it when the user starts/stops their camera.
+    #[derive(Clone, PartialEq, Message)]
+    pub struct RtpDataSenderStatus {
+        #[prost(uint64, optional, tag = "1")]
+        pub id: Option<u64>,
+        #[prost(bool, optional, tag = "2")]
+        pub video_enabled: Option<bool>,
+        #[prost(bool, optional, tag = "3")]
+        pub sharing_screen: Option<bool>,
+        #[prost(bool, optional, tag = "4")]
+        pub audio_enabled: Option<bool>,
+    }
+
+    /// `rtp_data.ReceiverStatus` — the peer telling US what bitrate to send
+    /// (its receive-side budget; complements RTCP REMB).
+    #[derive(Clone, PartialEq, Message)]
+    pub struct RtpDataReceiverStatus {
+        #[prost(uint64, optional, tag = "1")]
+        pub id: Option<u64>,
+        #[prost(uint64, optional, tag = "2")]
+        pub max_bitrate_bps: Option<u64>,
+    }
+
+    /// `rtp_data.Message` — the ACCUMULATED control state sent over RTP data
+    /// (ringrtc merges updates into one message and resends it ~1 Hz).
     #[derive(Clone, PartialEq, Message)]
     pub struct RtpDataMessage {
         #[prost(message, optional, tag = "1")]
         pub accepted: Option<RtpDataAccepted>,
+        #[prost(message, optional, tag = "2")]
+        pub hangup: Option<RtpDataHangup>,
+        #[prost(message, optional, tag = "3")]
+        pub sender_status: Option<RtpDataSenderStatus>,
         #[prost(uint64, optional, tag = "4")]
         pub seqnum: Option<u64>,
+        #[prost(message, optional, tag = "5")]
+        pub receiver_status: Option<RtpDataReceiverStatus>,
     }
 }
 
@@ -151,8 +190,59 @@ pub fn encode_rtp_data_accepted(call_id: u64, seqnum: u64) -> Vec<u8> {
     proto::RtpDataMessage {
         accepted: Some(proto::RtpDataAccepted { id: Some(call_id) }),
         seqnum: Some(seqnum),
+        ..Default::default()
     }
     .encode_to_vec()
+}
+
+/// Encode the full accumulated `rtp_data.Message` (ringrtc semantics: merge
+/// state, send the latest version): `accepted` only while the answerer is
+/// engaged, `senderStatus.video_enabled` once the local video state is known.
+#[cfg(feature = "signal")]
+pub fn encode_rtp_data_state(
+    call_id: u64,
+    seqnum: u64,
+    accepted: bool,
+    video_enabled: Option<bool>,
+) -> Vec<u8> {
+    proto::RtpDataMessage {
+        accepted: accepted.then(|| proto::RtpDataAccepted { id: Some(call_id) }),
+        sender_status: video_enabled.map(|v| proto::RtpDataSenderStatus {
+            id: Some(call_id),
+            video_enabled: Some(v),
+            sharing_screen: None,
+            audio_enabled: None,
+        }),
+        seqnum: Some(seqnum),
+        ..Default::default()
+    }
+    .encode_to_vec()
+}
+
+/// A decoded inbound RTP-data control message (the fields a 1:1 call acts on).
+#[cfg(feature = "signal")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RtpDataState {
+    /// The peer's camera on/off (from `senderStatus.video_enabled`).
+    pub video_enabled: Option<bool>,
+    /// The send bitrate the peer asks of us (`receiverStatus.max_bitrate_bps`).
+    pub max_bitrate_bps: Option<u64>,
+    /// The peer hung up over RTP data (also arrives via signaling).
+    pub hangup: bool,
+    pub seqnum: Option<u64>,
+}
+
+/// Decode an inbound RTP-data `Message` payload. Returns `None` on a
+/// non-protobuf payload (e.g. a telephone-event sharing PT 101).
+#[cfg(feature = "signal")]
+pub fn decode_rtp_data(b: &[u8]) -> Option<RtpDataState> {
+    let msg = proto::RtpDataMessage::decode(b).ok()?;
+    Some(RtpDataState {
+        video_enabled: msg.sender_status.and_then(|s| s.video_enabled),
+        max_bitrate_bps: msg.receiver_status.and_then(|r| r.max_bitrate_bps),
+        hangup: msg.hangup.is_some(),
+        seqnum: msg.seqnum,
+    })
 }
 
 #[cfg(feature = "signal")]
@@ -171,9 +261,10 @@ fn params_from(s: &Signaling) -> Result<proto::ConnectionParametersV4, Error> {
         ice_ufrag: Some(s.ice_ufrag.clone()),
         ice_pwd: Some(s.ice_pwd.clone()),
         // ringrtc rejects a V4 block with no receive codecs (see the field doc).
-        // Advertise the same set + max-bitrate a real ringrtc audio call sends.
+        // VP8 ONLY (task 93 Phase 5): the peer encodes from OUR receive set,
+        // and the wandr-call video track depacketizes VP8 — advertising VP9
+        // first (as a real ringrtc client does) would make the peer send VP9.
         receive_video_codecs: vec![
-            proto::VideoCodec { r#type: Some(9) }, // VP9
             proto::VideoCodec { r#type: Some(8) }, // VP8
         ],
         max_bitrate_bps: Some(2_000_000),
@@ -324,25 +415,55 @@ mod tests {
 
     /// Golden bytes — locks wire compatibility with Signal/ringrtc WITHOUT a live
     /// client. The field layout matches a real ringrtc audio-call offer captured
-    /// on-device: public_key / ice_ufrag / ice_pwd / 2× receive_video_codecs
-    /// (VP9, VP8) / max_bitrate_bps, inside an Offer whose `v4=4` tag is 0x22. The
-    /// codecs + bitrate are MANDATORY — without them ringrtc rejects the V4 block.
-    /// If this breaks, the on-wire format drifted.
+    /// on-device: public_key / ice_ufrag / ice_pwd / receive_video_codecs (VP8
+    /// only since Phase 5 — the peer encodes from OUR receive set and the video
+    /// track depacketizes VP8) / max_bitrate_bps, inside an Offer whose `v4=4`
+    /// tag is 0x22. The codecs + bitrate are MANDATORY — without them ringrtc
+    /// rejects the V4 block. If this breaks, the on-wire format drifted.
     #[test]
     fn offer_golden_bytes() {
         let s = sig(Some(vec![0x01, 0x02])); // ufrag "AB", pwd "CD"
         let blob = encode_offer(&s).unwrap();
         #[rustfmt::skip]
         let expected: &[u8] = &[
-            0x22, 0x18,                   // Offer.v4 (tag 4, LEN), 24-byte ConnectionParametersV4
+            0x22, 0x14,                   // Offer.v4 (tag 4, LEN), 20-byte ConnectionParametersV4
               0x0A, 0x02, 0x01, 0x02,     //   public_key (tag 1, LEN 2) = 01 02
               0x12, 0x02, 0x41, 0x42,     //   ice_ufrag  (tag 2, LEN 2) = "AB"
               0x1A, 0x02, 0x43, 0x44,     //   ice_pwd    (tag 3, LEN 2) = "CD"
-              0x22, 0x02, 0x08, 0x09,     //   receive_video_codecs[0] = { type: 9 (VP9) }
-              0x22, 0x02, 0x08, 0x08,     //   receive_video_codecs[1] = { type: 8 (VP8) }
+              0x22, 0x02, 0x08, 0x08,     //   receive_video_codecs[0] = { type: 8 (VP8) }
               0x28, 0x80, 0x89, 0x7A,     //   max_bitrate_bps (tag 5, varint) = 2_000_000
         ];
         assert_eq!(blob, expected, "Signal opaque wire format drifted");
+    }
+
+    /// rtp_data state messages: the accumulated encode (accepted + senderStatus)
+    /// decodes back to the fields a 1:1 call acts on; receiverStatus and hangup
+    /// from a peer parse too (hand-built bytes mirror rtp_data.proto tags).
+    #[test]
+    fn rtp_data_state_round_trip() {
+        // Answerer with video on: accepted + senderStatus.video_enabled.
+        let b = encode_rtp_data_state(0xC0FFEE, 7, true, Some(true));
+        let st = decode_rtp_data(&b).unwrap();
+        assert_eq!(st.video_enabled, Some(true));
+        assert_eq!(st.seqnum, Some(7));
+        assert!(!st.hangup);
+        // Caller with no video state yet: accepted=false → no senderStatus.
+        let b = encode_rtp_data_state(0xC0FFEE, 8, false, None);
+        let st = decode_rtp_data(&b).unwrap();
+        assert_eq!(st.video_enabled, None);
+        // Peer receiverStatus { id, max_bitrate_bps = 300_000 } (tag 5) + hangup (tag 2).
+        let msg = proto::RtpDataMessage {
+            hangup: Some(proto::RtpDataHangup { id: Some(1) }),
+            receiver_status: Some(proto::RtpDataReceiverStatus {
+                id: Some(1),
+                max_bitrate_bps: Some(300_000),
+            }),
+            ..Default::default()
+        }
+        .encode_to_vec();
+        let st = decode_rtp_data(&msg).unwrap();
+        assert_eq!(st.max_bitrate_bps, Some(300_000));
+        assert!(st.hangup);
     }
 
     #[test]

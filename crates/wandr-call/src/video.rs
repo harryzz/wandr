@@ -43,13 +43,25 @@ pub const VP8_RTX_PAYLOAD_TYPE: u8 = 118;
 /// The VP8 payload descriptor is inside this budget (the payloader's `mtu`).
 const RTP_PAYLOAD_BUDGET: usize = 1200 - 12 - 16;
 
+/// The `urn:3gpp:video-orientation` (CVO) RTP header-extension id ringrtc fixes
+/// in its generated SDP on both ends (`VIDEO_ORIENTATION_EXT_ID = 4`, rffi
+/// peer_connection.cc). One byte; the low 2 bits are the clockwise rotation the
+/// RECEIVER must apply (0/1/2/3 → 0°/90°/180°/270°). Carrying rotation here —
+/// like libwebrtc — avoids touching pixels for camera sensor orientation.
+const VIDEO_ORIENTATION_EXT_ID: u8 = 4;
+/// RFC 8285 one-byte-header extension profile.
+const EXT_PROFILE_ONE_BYTE: u16 = 0xBEDE;
+
 /// One whole encoded VP8 frame crossing the engine boundary (guest ⇄ engine).
 /// `timestamp` is the 90 kHz RTP timestamp (the same clock `wandr:video` uses).
+/// `rotation` = degrees CLOCKWISE the receiver should rotate the decoded frame
+/// for upright display (from/for the CVO header extension; 0 if absent).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VideoFrame {
     pub data: Vec<u8>,
     pub timestamp: u32,
     pub keyframe: bool,
+    pub rotation: u32,
 }
 
 /// Aggregate video-plane counters: `(tx_frames, tx_packets, rx_packets,
@@ -63,6 +75,13 @@ pub(crate) struct VideoStream {
     ssrc: u32,
     payloader: Vp8Payloader,
     seq: u16,
+    /// Outgoing CVO rotation (degrees CW the receiver should apply). Set from
+    /// the camera's sensor orientation; attached to every video packet once
+    /// known (None = no extension, e.g. a non-camera source).
+    tx_rotation: Option<u32>,
+    /// Last inbound CVO rotation seen (sticky across packets — senders may
+    /// omit the extension on unchanged packets).
+    rx_rotation: u32,
     // tx counters (RTCP SR + diag)
     tx_frames: u64,
     tx_packets: u32,
@@ -96,6 +115,8 @@ impl VideoStream {
             ssrc,
             payloader,
             seq: 1,
+            tx_rotation: None,
+            rx_rotation: 0,
             tx_frames: 0,
             tx_packets: 0,
             tx_octets: 0,
@@ -138,6 +159,12 @@ impl VideoStream {
         (self.tx_frames, self.tx_packets, self.rx_packets, self.rx_frames, self.rx_broken_frames)
     }
 
+    /// Set the outgoing CVO rotation (degrees CW for the receiver to apply —
+    /// the camera's sensor orientation). Attached to every video packet.
+    pub(crate) fn set_rotation(&mut self, degrees: u32) {
+        self.tx_rotation = Some(degrees % 360);
+    }
+
     /// One encoded frame → fragmented VP8 RTP → SRTP datagrams (marker on the
     /// last fragment). `tx` is the media session's send SRTP context.
     pub(crate) fn payload_frame(
@@ -151,6 +178,11 @@ impl VideoStream {
             .payload(RTP_PAYLOAD_BUDGET, &Bytes::copy_from_slice(data))
             .map_err(|_| Error::Rtp("vp8 payload"))?;
         let last = fragments.len().saturating_sub(1);
+        // CVO (one-byte-header profile): low 2 bits = rotation / 90 clockwise.
+        let cvo = self.tx_rotation.map(|deg| rtc_rtp::header::Extension {
+            id: VIDEO_ORIENTATION_EXT_ID,
+            payload: Bytes::copy_from_slice(&[((deg / 90) & 3) as u8]),
+        });
         let mut out = Vec::with_capacity(fragments.len());
         for (i, frag) in fragments.into_iter().enumerate() {
             let payload_len = frag.len() as u32;
@@ -162,6 +194,9 @@ impl VideoStream {
                     timestamp,
                     ssrc: self.ssrc,
                     marker: i == last,
+                    extension: cvo.is_some(),
+                    extension_profile: if cvo.is_some() { EXT_PROFILE_ONE_BYTE } else { 0 },
+                    extensions: cvo.iter().cloned().collect(),
                     ..Default::default()
                 },
                 payload: frag,
@@ -194,6 +229,12 @@ impl VideoStream {
             _ => {}
         }
         self.rx_packets += 1;
+        // CVO: sticky — senders may omit the extension on unchanged packets.
+        for ext in &pkt.header.extensions {
+            if ext.id == VIDEO_ORIENTATION_EXT_ID && !ext.payload.is_empty() {
+                self.rx_rotation = u32::from(ext.payload[0] & 3) * 90;
+            }
+        }
         let seq = pkt.header.sequence_number;
         let contiguous = self.prev_seq.is_none_or(|p| seq == p.wrapping_add(1));
         self.prev_seq = Some(seq);
@@ -242,6 +283,7 @@ impl VideoStream {
                     data: std::mem::take(&mut self.cur),
                     timestamp: self.cur_ts,
                     keyframe,
+                    rotation: self.rx_rotation,
                 });
                 self.rx_frames += 1;
                 self.assembling = false;

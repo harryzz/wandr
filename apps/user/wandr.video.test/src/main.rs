@@ -61,11 +61,12 @@ fn open_encoder(preview: Option<VideoRect>) -> Option<VideoEncoder> {
 
 /// An empty `rect` = decode-to-buffer (Phase 1 diagnostics); a real one =
 /// decode-to-surface — the host composites the video on the panel (Phase 4).
-fn open_decoder(rect: VideoRect) -> Option<VideoDecoder> {
+/// `rotation` = peer CVO degrees CW for upright display (Phase 5).
+fn open_decoder(rect: VideoRect, rotation: u32) -> Option<VideoDecoder> {
     let to_surface = rect.width > 0 && rect.height > 0;
-    match VideoDecoder::open(DecoderConfig { codec: Codec::Vp8, width: W, height: H, rect }) {
+    match VideoDecoder::open(DecoderConfig { codec: Codec::Vp8, width: W, height: H, rect, rotation }) {
         Ok(d) => {
-            println!("decoder OPEN ✓ ({})",
+            println!("decoder OPEN ✓ ({}, rotation={rotation}°)",
                 if to_surface { "decode-to-SURFACE, on-screen" } else { "decode-to-buffer" });
             Some(d)
         }
@@ -83,7 +84,7 @@ fn part1_direct_loopback() -> bool {
     println!("── Part 1: direct WIT loopback (camera → HW VP8 → guest → HW decode) ──");
     let Some(enc) = open_encoder(None) else { return false };
     // Empty rect → decode-to-buffer: keeps Part 1 the pure Phase-1 regression.
-    let Some(dec) = open_decoder(VideoRect { x: 0, y: 0, width: 0, height: 0 }) else { return false };
+    let Some(dec) = open_decoder(VideoRect { x: 0, y: 0, width: 0, height: 0 }, 0) else { return false };
 
     let start = Instant::now();
     let (mut pulled, mut bytes, mut keyframes, mut submitted, mut queue_full, mut other_err) =
@@ -134,8 +135,11 @@ fn part2_engine_pipeline() -> bool {
     // its own surface coordinates).
     let Some(enc) = open_encoder(Some(VideoRect { x: 1020, y: 1840, width: 360, height: 270 }))
     else { return false };
-    let Some(dec) = open_decoder(VideoRect { x: 80, y: 700, width: 1280, height: 960 })
-    else { return false };
+    // Phase 5: the decoder opens LAZILY on the first received keyframe, with
+    // that frame's CVO rotation — the exact pattern a real call uses (the
+    // peer's rotation is unknown until its video arrives).
+    let mut dec: Option<VideoDecoder> = None;
+    let dec_rect = VideoRect { x: 80, y: 700, width: 1280, height: 960 };
 
     // Two engine peers over real wasi:sockets UDP on loopback (the call-live pattern).
     let asock = UdpSocket::bind("127.0.0.1:0").expect("bind A");
@@ -179,6 +183,12 @@ fn part2_engine_pipeline() -> bool {
     }
     println!("   engine peers CONNECTED (ICE + DTLS-SRTP) ✓");
 
+    // Phase 5: A's outgoing CVO = the camera's display rotation; B's frames
+    // carry it and the decoder is opened with it → upright on-screen video.
+    let cam_rotation = enc.display_rotation();
+    a.set_video_rotation(cam_rotation);
+    println!("   camera display-rotation {cam_rotation}° → outgoing CVO");
+
     let start = Instant::now();
     let (mut sent, mut rx_frames, mut decoded_fed, mut queue_full, mut other_err) =
         (0u64, 0u64, 0u64, 0u64, 0u64);
@@ -192,15 +202,26 @@ fn part2_engine_pipeline() -> bool {
             }
         }
         pump(&mut a, &asock, &mut b, &bsock);
-        // Engine B → decoder (the receive path).
+        // Engine B → decoder (the receive path). Decoder opens on the first
+        // KEYFRAME, with that frame's CVO rotation (the real call pattern).
         while let Some(vf) = b.recv_video() {
             rx_frames += 1;
+            if dec.is_none() {
+                if !vf.keyframe {
+                    b.request_keyframe(); // mid-stream join — need a sync point
+                    continue;
+                }
+                dec = open_decoder(dec_rect, vf.rotation);
+                if dec.is_none() {
+                    return false;
+                }
+            }
             let f = crate::wandr::video::types::EncodedFrame {
                 data: vf.data,
                 timestamp: vf.timestamp,
                 keyframe: vf.keyframe,
             };
-            match dec.submit(&f) {
+            match dec.as_ref().unwrap().submit(&f) {
                 Ok(()) => decoded_fed += 1,
                 Err(VideoError::QueueFull) => queue_full += 1,
                 Err(e) => {
@@ -217,7 +238,9 @@ fn part2_engine_pipeline() -> bool {
             // Phase 4 surface-control smoke, mid-run on live video: move +
             // shrink the remote rect and nudge the PiP — visibly jumps on
             // the panel and proves set-rect/set-preview-rect on a hot codec.
-            dec.set_rect(VideoRect { x: 240, y: 950, width: 960, height: 720 });
+            if let Some(d) = &dec {
+                d.set_rect(VideoRect { x: 240, y: 950, width: 960, height: 720 });
+            }
             enc.set_preview_rect(VideoRect { x: 60, y: 1840, width: 360, height: 270 });
             println!("   mid-run: B sent PLI + remote rect moved + PiP moved");
         }
@@ -231,7 +254,7 @@ fn part2_engine_pipeline() -> bool {
         std::thread::sleep(Duration::from_millis(5));
     }
     let secs = start.elapsed().as_secs_f64();
-    let decoded = dec.decoded_frames();
+    let decoded = dec.as_ref().map(|d| d.decoded_frames()).unwrap_or(0);
     let ((_, tx_pkts, rx_pkts, _, rx_broken), _, _, rtcp_err) = b.video_diag();
 
     println!("──────── Part 2 RESULT ────────");
@@ -262,7 +285,9 @@ fn part2_engine_pipeline() -> bool {
                 timestamp: vf.timestamp,
                 keyframe: vf.keyframe,
             };
-            let _ = dec.submit(&f);
+            if let Some(d) = &dec {
+                let _ = d.submit(&f);
+            }
         }
         let now = Instant::now();
         a.handle_timeout(now);

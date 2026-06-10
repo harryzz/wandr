@@ -77,6 +77,10 @@ interface types {
         /// size wins — VP8/VP9 keyframes carry their own dimensions.
         width: u32, height: u32,
         rect: video-rect,    // initial geometry; resizable via set-rect
+        /// Degrees CW to rotate decoded frames for upright display — the
+        /// peer's CVO rotation (wandr-call `VideoFrame.rotation`). Fixed at
+        /// open (MediaCodec rotation-degrees); reopen if the peer rotates.
+        rotation: u32,
     }
 }
 
@@ -98,6 +102,11 @@ interface encoder {
         set-preview-rect: func(rect: video-rect);
         /// Show/hide the PiP self-view (no-op if opened without `preview`).
         set-preview-visible: func(visible: bool);
+        /// Degrees CW a receiver must rotate our frames for upright display
+        /// (the facing-adjusted camera sensor orientation) — feed it to the
+        /// call engine's outgoing CVO (`set_video_rotation`). The PiP
+        /// self-view already compensates host-side.
+        display-rotation: func() -> u32;
     }
 }
 
