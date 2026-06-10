@@ -69,6 +69,9 @@ struct VideoState {
     dec_rotation: u32,
     /// Last bitrate applied to the encoder (avoid re-set every tick).
     applied_bitrate: u32,
+    /// Last CVO rotation pushed to the engine (the encoder's display-rotation
+    /// follows live device rotation; update the wire value on change).
+    last_rotation: u32,
 }
 
 /// Routes the SRTP per-packet AES-GCM to the host's hardware AES via the
@@ -474,7 +477,8 @@ impl ActiveCall {
                     Ok(e) => {
                         // Outgoing CVO = the camera's display rotation, so the
                         // peer renders us upright; tell it our camera is on.
-                        self.call.set_video_rotation(e.display_rotation());
+                        v.last_rotation = e.display_rotation();
+                        self.call.set_video_rotation(v.last_rotation);
                         self.call.set_video_enabled(true);
                         v.applied_bitrate = VIDEO_START_BITRATE_BPS;
                         v.enc = Some(e);
@@ -493,6 +497,13 @@ impl ActiveCall {
         }
         // Outbound frames + the peer's keyframe requests + bitrate adaptation.
         if let Some(enc) = &v.enc {
+            // CVO follows live device rotation (the host folds the arbiter's
+            // orientation push into display-rotation).
+            let rot = enc.display_rotation();
+            if rot != v.last_rotation {
+                v.last_rotation = rot;
+                self.call.set_video_rotation(rot);
+            }
             while let Some(f) = enc.next_frame() {
                 let _ = self.call.send_video(&f.data, f.timestamp);
             }

@@ -17,7 +17,7 @@ use rtc_shared::marshal::{Marshal, Unmarshal};
 use rtc_srtp::context::Context;
 use rtc_srtp::protection_profile::ProtectionProfile;
 
-use crate::video::{VideoDiag, VideoFrame, VideoStream, VP8_RTX_PAYLOAD_TYPE};
+use crate::video::{VideoDiag, VideoFrame, VideoStream, VIDEO_RED_PAYLOAD_TYPE, VP8_RTX_PAYLOAD_TYPE};
 use crate::Error;
 
 /// Total decoded samples per channel in an Opus packet, from its TOC byte (the
@@ -267,11 +267,13 @@ impl MediaSession {
         self.rx_pt = pkt.header.payload_type;
         self.rx_ssrc = pkt.header.ssrc;
         self.rx_payload_len = pkt.payload.len();
-        // The video track (VP8 + its RTX) demuxes by PT into the reassembler;
-        // whole frames come out via `take_video_frame` (empty PCM here = not audio).
+        // The video track (VP8 plain, RED-wrapped, or RTX) demuxes by PT into the
+        // reassembler; whole frames come out via `take_video_frame` (empty PCM
+        // here = not audio). Real ringrtc peers send video as RED (PT 120).
         if let Some(v) = &mut self.video {
             if pkt.header.payload_type == v.pt()
                 || pkt.header.payload_type == VP8_RTX_PAYLOAD_TYPE
+                || pkt.header.payload_type == VIDEO_RED_PAYLOAD_TYPE
             {
                 v.handle_rtp(&pkt);
                 return Ok(Vec::new());

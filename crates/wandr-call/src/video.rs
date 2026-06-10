@@ -36,6 +36,30 @@ pub const VP8_PAYLOAD_TYPE: u8 = 108;
 /// ringrtc's RTX (retransmission, RFC 4588) payload type for VP8 (`VP8_RTX_PT`).
 /// We don't implement RTX; inbound RTX packets are counted + ignored.
 pub const VP8_RTX_PAYLOAD_TYPE: u8 = 118;
+/// ringrtc's RED (RFC 2198 redundancy, `RED_PT`) payload type. A REAL ringrtc
+/// peer sends its video VP8 **wrapped in RED** (live-call captured: peer_pt=120)
+/// — the primary block is the VP8 payload; redundant blocks (and RED-wrapped
+/// ULPFEC, primary PT 122) are skipped (recovery = our PLI path).
+pub const VIDEO_RED_PAYLOAD_TYPE: u8 = 120;
+
+/// Parse an RFC 2198 RED payload: returns `(primary PT, primary-payload offset)`.
+/// Header walk: F=1 → a 4-byte redundant-block header (PT 7 bits, ts-offset 14,
+/// length 10); F=0 → the final 1-byte primary header; redundant payloads sit
+/// between the headers and the primary payload.
+fn red_primary(payload: &[u8]) -> Option<(u8, usize)> {
+    let mut idx = 0usize;
+    let mut red_len = 0usize;
+    loop {
+        let b = *payload.get(idx)?;
+        if b & 0x80 == 0 {
+            let start = idx + 1 + red_len;
+            return (start <= payload.len()).then_some((b & 0x7f, start));
+        }
+        let len = ((*payload.get(idx + 2)? as usize & 0x03) << 8) | *payload.get(idx + 3)? as usize;
+        red_len += len;
+        idx += 4;
+    }
+}
 
 /// Outbound RTP payload budget per packet: the standard WebRTC datagram budget
 /// (1200 — what libwebrtc paces to, safely under every real path MTU) minus the
@@ -213,15 +237,36 @@ impl VideoStream {
         Ok(out)
     }
 
-    /// Feed one decrypted+parsed inbound RTP packet of our video PT (or RTX).
-    /// Whole reassembled frames land in `take_frame`; loss raises `take_loss`.
+    /// Feed one decrypted+parsed inbound RTP packet of our video PT (plain,
+    /// RED-wrapped, or RTX). Whole reassembled frames land in `take_frame`;
+    /// loss raises `take_loss`.
     pub(crate) fn handle_rtp(&mut self, pkt: &Packet) {
         if pkt.header.payload_type == VP8_RTX_PAYLOAD_TYPE {
             return; // RTX not implemented — recovery is PLI → keyframe
         }
-        if pkt.header.payload_type != self.pt {
+        // Resolve the effective VP8 payload: plain, or the RED primary block.
+        let payload: Bytes = if pkt.header.payload_type == self.pt {
+            pkt.payload.clone()
+        } else if pkt.header.payload_type == VIDEO_RED_PAYLOAD_TYPE {
+            match red_primary(&pkt.payload) {
+                Some((ppt, off)) if ppt == self.pt => pkt.payload.slice(off..),
+                _ => {
+                    // RED-wrapped ULPFEC (or a foreign primary): it rides the
+                    // SAME video SSRC and consumes a sequence number — keep the
+                    // continuity tracking transparent so it doesn't read as loss.
+                    if self.rx_ssrc.is_none() {
+                        self.rx_ssrc = Some(pkt.header.ssrc);
+                    }
+                    if self.rx_ssrc == Some(pkt.header.ssrc) {
+                        self.rx_packets += 1;
+                        self.prev_seq = Some(pkt.header.sequence_number);
+                    }
+                    return;
+                }
+            }
+        } else {
             return;
-        }
+        };
         // Lock onto the first video SSRC seen (no simulcast on a 1:1 call).
         match self.rx_ssrc {
             None => self.rx_ssrc = Some(pkt.header.ssrc),
@@ -240,7 +285,7 @@ impl VideoStream {
         self.prev_seq = Some(seq);
 
         let mut vp8 = Vp8Packet::default();
-        let payload = match vp8.depacketize(&pkt.payload) {
+        let payload = match vp8.depacketize(&payload) {
             Ok(p) => p,
             Err(_) => {
                 self.drop_current(true);
@@ -312,5 +357,39 @@ impl VideoStream {
         self.assembling = false;
         self.broken = false;
         self.loss = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::red_primary;
+
+    /// RED with only a primary block: 1-byte header `0|PT`.
+    #[test]
+    fn red_primary_only() {
+        let payload = [0x6C, 0xAA, 0xBB, 0xCC]; // PT 108 + 3 payload bytes
+        assert_eq!(red_primary(&payload), Some((108, 1)));
+    }
+
+    /// RED with one redundant block (4-byte header, length 2) before the
+    /// primary: primary payload starts after both headers + redundant data.
+    #[test]
+    fn red_with_redundant_block() {
+        let payload = [
+            0x80 | 0x6C, 0x00, 0x00, 0x02, // redundant: PT 108, ts-off 0, len 2
+            0x6C,                          // primary header: PT 108
+            0xDE, 0xAD,                    // redundant payload (2 bytes)
+            0x01, 0x02, 0x03,              // primary payload
+        ];
+        assert_eq!(red_primary(&payload), Some((108, 7)));
+    }
+
+    /// Truncated RED headers parse to None (never panic / mis-slice).
+    #[test]
+    fn red_truncated() {
+        assert_eq!(red_primary(&[]), None);
+        assert_eq!(red_primary(&[0x80 | 0x6C, 0x00]), None);
+        // Primary header claims more redundant bytes than exist.
+        assert_eq!(red_primary(&[0x80 | 0x6C, 0x00, 0x03, 0xFF, 0x6C]), None);
     }
 }
