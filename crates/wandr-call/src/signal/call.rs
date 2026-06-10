@@ -149,6 +149,15 @@ impl SignalCall {
         })
     }
 
+    /// Inject the host AEAD backend for the SRTP GCM (feature `host-aead`). Call
+    /// right after `place`/`incoming`, before media starts, so the per-packet GCM
+    /// runs on the host's hardware AES via `wandr:crypto/aead`. See
+    /// [`crate::PeerSession::set_aead_provider`].
+    #[cfg(feature = "host-aead")]
+    pub fn set_aead_provider(&mut self, provider: Box<dyn crate::AeadProvider>) {
+        self.session.set_aead_provider(provider);
+    }
+
     /// Accept a ringing call: apply the offer, queue the `Answer` + our trickled ICE
     /// candidate(s), and start connecting. No-op unless [`CallState::Ringing`].
     pub fn accept(&mut self) -> Result<(), Error> {

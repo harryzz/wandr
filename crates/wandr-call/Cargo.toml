@@ -28,6 +28,10 @@ edition = "2021"
 # the X25519-DH SRTP keying (ringrtc V4) in transport.rs. Pulls prost + the DH/HKDF
 # crypto; the WebRTC-native path + repros/call-* build without it.
 signal = ["dep:prost", "dep:x25519-dalek", "dep:hkdf", "dep:rand_core", "dep:rtc-turn"]
+# `host-aead` lets the consuming guest inject an AEAD backend (the host's hardware
+# AES via wandr:crypto/aead) for the per-packet SRTP GCM. Pure trait injection —
+# wandr-call stays WIT-agnostic; the guest owns the WIT. Off by default = in-wasm AES.
+host-aead = ["rtc-srtp/external-aead"]
 
 [dependencies]
 bytes      = "1"

@@ -1,0 +1,8 @@
+// wandr.srtp.bench imports the host AEAD so it can benchmark the host-backed SRTP
+// path (Context::new_with_aead) alongside the in-wasm path in one run. The cli/run
+// export comes from the wasip2 std runtime (fn main).
+package wandr:srtp-bench;
+
+world srtp-bench {
+    import wandr:crypto/aead-oneshot@0.1.0;
+}

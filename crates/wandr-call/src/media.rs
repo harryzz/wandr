@@ -103,15 +103,54 @@ impl MediaSession {
         send: &SrtpKeys,
         recv: &SrtpKeys,
     ) -> Result<Self, Error> {
+        let tx = Context::new(&send.key, &send.salt, profile, None, None)
+            .map_err(|_| Error::Srtp("send context"))?;
+        let rx = Context::new(&recv.key, &recv.salt, profile, None, None)
+            .map_err(|_| Error::Srtp("recv context"))?;
+        Self::from_contexts(sample_rate, channels, payload_type, ssrc, tx, rx)
+    }
+
+    /// Like [`MediaSession::new`], but the per-packet AES-GCM is delegated to a
+    /// caller-supplied AEAD backend (feature `host-aead`). A wasm guest passes a
+    /// provider that runs the GCM on the host's hardware AES via `wandr:crypto/aead`
+    /// — ~3× faster for audio, ~8× for video vs the in-wasm software AES, with
+    /// byte-identical SRTP framing (so it interops unchanged). `None` provider would
+    /// just be `new`; this exists so the guest, not the library, owns the WIT.
+    #[cfg(feature = "host-aead")]
+    pub fn new_with_aead(
+        sample_rate: u32,
+        channels: u8,
+        payload_type: u8,
+        ssrc: u32,
+        profile: ProtectionProfile,
+        send: &SrtpKeys,
+        recv: &SrtpKeys,
+        provider: &dyn rtc_srtp::AeadProvider,
+    ) -> Result<Self, Error> {
+        let tx = Context::new_with_aead(&send.key, &send.salt, profile, None, None, provider)
+            .map_err(|_| Error::Srtp("send context (aead)"))?;
+        let rx = Context::new_with_aead(&recv.key, &recv.salt, profile, None, None, provider)
+            .map_err(|_| Error::Srtp("recv context (aead)"))?;
+        Self::from_contexts(sample_rate, channels, payload_type, ssrc, tx, rx)
+    }
+
+    /// Assemble a `MediaSession` from already-built SRTP contexts (the part common
+    /// to [`MediaSession::new`] and [`MediaSession::new_with_aead`]).
+    fn from_contexts(
+        sample_rate: u32,
+        channels: u8,
+        payload_type: u8,
+        ssrc: u32,
+        tx: Context,
+        rx: Context,
+    ) -> Result<Self, Error> {
         Ok(Self {
             enc: OpusEncoder::new(sample_rate as _, channels as _, Application::Voip)
                 .map_err(|_| Error::Codec("opus encoder"))?,
             dec: OpusDecoder::new(sample_rate as _, channels as _)
                 .map_err(|_| Error::Codec("opus decoder"))?,
-            tx: Context::new(&send.key, &send.salt, profile, None, None)
-                .map_err(|_| Error::Srtp("send context"))?,
-            rx: Context::new(&recv.key, &recv.salt, profile, None, None)
-                .map_err(|_| Error::Srtp("recv context"))?,
+            tx,
+            rx,
             sample_rate,
             frame: sample_rate as usize / 1000 * 20, // 20 ms
             payload_type,

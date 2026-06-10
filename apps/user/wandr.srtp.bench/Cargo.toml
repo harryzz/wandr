@@ -1,0 +1,24 @@
+[package]
+name    = "wandr-srtp-bench"
+version = "0.1.0"
+edition = "2021"
+
+# wandr.srtp.bench — on-device microbenchmark of the SRTP AES-256-GCM path the
+# Signal call engine runs per RTP packet (task 93 crypto-offload before/after).
+# Runs the EXACT media.rs call shape (rtc_srtp::Context::{encrypt,decrypt}_rtp,
+# AeadAes256Gcm / Signal profile) on representative audio + video packet sizes and
+# reports ns/op, MB/s, and the implied call-rate CPU. Baseline = in-wasm software
+# AES (what compiles into the guest today). After = host wandr:crypto/aead HW AES.
+
+[[bin]]
+name = "wandr-srtp-bench"
+path = "src/main.rs"
+
+[dependencies]
+bytes        = "1"
+wit-bindgen  = "0.57"
+# `external-aead` adds Context::new_with_aead so we can bench the host-backed GCM
+# (wandr:crypto/aead) side-by-side with the in-wasm software path.
+rtc-srtp     = { path = "../../../external/rtc/rtc-srtp", features = ["external-aead"] }
+rtc-rtp      = { path = "../../../external/rtc/rtc-rtp" }
+rtc-shared   = { path = "../../../external/rtc/rtc-shared", default-features = false }

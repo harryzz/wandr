@@ -34,6 +34,13 @@ pub mod turn;
 pub use media::{MediaSession, SrtpKeys};
 pub use session::{PeerSession, Role, SessionState};
 
+/// AEAD backend injection (feature `host-aead`). A guest implements these to run the
+/// SRTP per-packet AES-GCM on the host's hardware AES (`wandr:crypto/aead`) and hands
+/// the provider to [`PeerSession::set_aead_provider`]. Re-exported from `rtc-srtp` so
+/// the guest needn't depend on `rtc-srtp` directly (wandr-call stays the only seam).
+#[cfg(feature = "host-aead")]
+pub use rtc_srtp::{AeadCtx, AeadProvider};
+
 /// Errors from any stage of the call engine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {

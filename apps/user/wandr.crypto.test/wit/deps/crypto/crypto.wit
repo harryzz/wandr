@@ -116,6 +116,23 @@ interface aead {
     }
 }
 
+/// Stateless one-shot AEAD — same crypto as `aead`, but the key is passed per call
+/// instead of held in an `aead-key` resource. For hot paths inside a *composed*
+/// (wac-plugged) guest, where an imported resource can't be resolved across the
+/// composition boundary but plain functions compose fine: SRTP per-packet GCM in
+/// the Signal call engine runs through here. The host keys AES-GCM per call (the
+/// AES-256 schedule is a few hundred ns — dwarfed by the cross-component call), so
+/// throughput tracks the `aead-key` resource path.
+interface aead-oneshot {
+    use types.{aead-algo, crypto-error};
+    /// -> ciphertext || tag. `nonce` is algo-specific (12 B GCM, 24 B XChaCha).
+    seal: func(algo: aead-algo, key: list<u8>, nonce: list<u8>, aad: list<u8>,
+               plaintext: list<u8>) -> result<list<u8>, crypto-error>;
+    /// `ciphertext` = body || tag. `auth-failed` => forged/corrupt -> drop.
+    open: func(algo: aead-algo, key: list<u8>, nonce: list<u8>, aad: list<u8>,
+               ciphertext: list<u8>) -> result<list<u8>, crypto-error>;
+}
+
 interface cipher {
     use types.{cipher-algo, crypto-error};
     /// Raw symmetric cipher context (no authentication). CTR: encrypt == decrypt
@@ -159,6 +176,7 @@ world crypto-client {
     import hash;
     import mac;
     import aead;
+    import aead-oneshot;
     import cipher;
     import kdf;
     import signatures;
@@ -171,6 +189,7 @@ world crypto-host {
     import hash;
     import mac;
     import aead;
+    import aead-oneshot;
     import cipher;
     import kdf;
     import signatures;

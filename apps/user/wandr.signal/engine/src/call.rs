@@ -27,6 +27,37 @@ use wandr_call::turn::TurnConfig;
 
 use crate::my::skiko_gfx::audio::{self, ChannelLayout, Format, StreamClass, TrackConfig};
 use crate::wandr::audio_focus::controls;
+use crate::wandr::crypto::aead_oneshot;
+use crate::wandr::crypto::types::AeadAlgo;
+use wandr_call::{AeadCtx, AeadProvider};
+
+/// Routes the SRTP per-packet AES-GCM to the host's hardware AES via
+/// `wandr:crypto/aead-oneshot` (wandr-call injects this through
+/// `SignalCall::set_aead_provider`). The SRTP framing stays in-guest; only the GCM
+/// block crosses to the host — ~3× (audio)/~8× (video) faster than in-wasm software
+/// AES, byte-identical on the wire so it interops unchanged. One-shot (key passed per
+/// call) rather than the `aead-key` resource because an imported resource doesn't
+/// resolve across this guest's wac-plug composition; functions do.
+struct HostAeadProvider;
+struct HostAeadCtx {
+    algo: AeadAlgo,
+    key: Vec<u8>,
+}
+
+impl AeadProvider for HostAeadProvider {
+    fn new_key(&self, key: &[u8]) -> Box<dyn AeadCtx> {
+        let algo = if key.len() == 16 { AeadAlgo::Aes128Gcm } else { AeadAlgo::Aes256Gcm };
+        Box::new(HostAeadCtx { algo, key: key.to_vec() })
+    }
+}
+impl AeadCtx for HostAeadCtx {
+    fn seal(&self, nonce: &[u8], aad: &[u8], pt: &[u8]) -> Result<Vec<u8>, ()> {
+        aead_oneshot::seal(self.algo, &self.key, nonce, aad, pt).map_err(|_| ())
+    }
+    fn open(&self, nonce: &[u8], aad: &[u8], ct: &[u8]) -> Result<Vec<u8>, ()> {
+        aead_oneshot::open(self.algo, &self.key, nonce, aad, ct).map_err(|_| ())
+    }
+}
 
 const SAMPLE_RATE: u32 = wandr_call::SAMPLE_RATE;
 /// 20 ms @ 48 kHz mono — the Opus frame + audio tick granularity.
@@ -481,8 +512,10 @@ impl CallEngine {
         let sock = bind_socket()?;
         let local = local_candidate_addr(&sock)?;
         // caller = us (offerer): caller_identity = my, callee_identity = peer.
-        let call = SignalCall::place(call_id, local, my_identity, peer_identity, turn)
+        let mut call = SignalCall::place(call_id, local, my_identity, peer_identity, turn)
             .map_err(|e| e.to_string())?;
+        // SRTP GCM on the host's hardware AES (set before media starts).
+        call.set_aead_provider(Box::new(HostAeadProvider));
         let mut active = ActiveCall::new(call, sock, peer_aci, true);
         let sigs = active.call.poll_signals();
         self.active = Some(active);
@@ -567,7 +600,7 @@ impl CallEngine {
         }
         let sock = bind_socket()?;
         let local = local_candidate_addr(&sock)?;
-        let call = SignalCall::incoming(
+        let mut call = SignalCall::incoming(
             call_id,
             local,
             caller_identity.to_vec(),
@@ -576,6 +609,8 @@ impl CallEngine {
             turn,
         )
         .map_err(|e| e.to_string())?;
+        // SRTP GCM on the host's hardware AES (set before media starts).
+        call.set_aead_provider(Box::new(HostAeadProvider));
         self.active = Some(ActiveCall::new(call, sock, caller_aci.to_owned(), false));
         Ok(())
     }

@@ -1,0 +1,10 @@
+# wandr.srtp.bench — wasi:cli command guest. Run: `wandr-host --run-once wandr.srtp.bench`.
+# Baseline build imports NO host crypto (in-wasm software AES-256-GCM). The "after"
+# build will import wandr:crypto/aead to route SRTP GCM to the host's HW AES.
+app_id      = "wandr.srtp.bench"
+version     = "0.1.0"
+world       = "wasi:cli/command"
+composition = "same-store"
+
+[components]
+ui = "components/ui.wasm"

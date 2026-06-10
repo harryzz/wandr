@@ -65,6 +65,11 @@ pub struct PeerSession {
     /// message). Incremented per send; ringrtc resends accumulated state ~1 Hz.
     #[cfg(feature = "signal")]
     rtp_data_seqnum: u64,
+    /// Optional host AEAD backend for the SRTP GCM (feature `host-aead`). Set by the
+    /// guest via [`PeerSession::set_aead_provider`] before media starts; `None` =
+    /// the in-wasm software AES. Used when `ensure_media` builds the `MediaSession`.
+    #[cfg(feature = "host-aead")]
+    aead_provider: Option<Box<dyn crate::AeadProvider>>,
 }
 
 impl PeerSession {
@@ -91,6 +96,8 @@ impl PeerSession {
             audio_pt: OPUS_PAYLOAD_TYPE,
             #[cfg(feature = "signal")]
             rtp_data_seqnum: 0,
+            #[cfg(feature = "host-aead")]
+            aead_provider: None,
         })
     }
 
@@ -129,7 +136,17 @@ impl PeerSession {
             media_seen: 0, decode_ok: 0, decode_err: 0,
             audio_pt: OPUS_PAYLOAD_TYPE,
             rtp_data_seqnum: 0,
+            #[cfg(feature = "host-aead")]
+            aead_provider: None,
         })
+    }
+
+    /// Inject the host AEAD backend for the SRTP GCM (feature `host-aead`). Call
+    /// before the first media frame; once `ensure_media` has built the `MediaSession`
+    /// the SRTP contexts are fixed. `None` (the default) keeps the in-wasm AES.
+    #[cfg(feature = "host-aead")]
+    pub fn set_aead_provider(&mut self, provider: Box<dyn crate::AeadProvider>) {
+        self.aead_provider = Some(provider);
     }
 
     /// Our signaling params — marshal to SDP and send over the signaling channel.
@@ -323,8 +340,17 @@ impl PeerSession {
         if let Some((send, recv)) = self.transport.take_keys() {
             let ssrc = if self.role == Role::Offerer { 0xA } else { 0xB };
             let profile = self.transport.srtp_profile();
-            self.media =
-                Some(MediaSession::new(SAMPLE_RATE, 1, self.audio_pt, ssrc, profile, &send, &recv)?);
+            // Use the host AEAD backend if the guest injected one; else in-wasm AES.
+            #[cfg(feature = "host-aead")]
+            let media = match &self.aead_provider {
+                Some(p) => MediaSession::new_with_aead(
+                    SAMPLE_RATE, 1, self.audio_pt, ssrc, profile, &send, &recv, p.as_ref(),
+                )?,
+                None => MediaSession::new(SAMPLE_RATE, 1, self.audio_pt, ssrc, profile, &send, &recv)?,
+            };
+            #[cfg(not(feature = "host-aead"))]
+            let media = MediaSession::new(SAMPLE_RATE, 1, self.audio_pt, ssrc, profile, &send, &recv)?;
+            self.media = Some(media);
         }
         Ok(())
     }

@@ -19,7 +19,7 @@ libsignal-service = { path = "../../../../external/libsignal-service-rs", defaul
 wart-step-executor = { path = "../../../../external/libsignal-service-rs/wart-wasi-shims/wart-step-executor" }
 # The call engine (Phase 2b-ii): Signal 1:1 voice calls. `signal` pulls the opaque
 # codec + X25519-DH/GCM keying + the SignalCall driver.
-wandr-call = { path = "../../../../crates/wandr-call", features = ["signal"] }
+wandr-call = { path = "../../../../crates/wandr-call", features = ["signal", "host-aead"] }
 wit-bindgen = "0.53"
 futures = "0.3"
 rand = "0.9"
