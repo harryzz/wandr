@@ -238,7 +238,7 @@ world signal-engine {
   /// Hardware AES for the per-packet SRTP GCM (call media). The guest runs the SRTP
   /// framing; only the AES-GCM block is delegated to the host's ARMv8 AES — ~3× (audio)
   /// / ~8× (video) faster than the in-wasm software AES, byte-identical on the wire.
-  /// One-shot (key per call) — device-measured equal to the `aead-key` resource path
-  /// at SRTP packet sizes; the resource also links fine through this wac composition.
-  import wandr:crypto/aead-oneshot@0.1.0;
+  /// The `aead-key` resource: the host expands the AES key schedule once per SRTP
+  /// session and no key material crosses the boundary per packet.
+  import wandr:crypto/aead@0.1.0;
 }

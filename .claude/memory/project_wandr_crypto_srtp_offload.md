@@ -18,11 +18,13 @@ hardware AES via `wandr:crypto`. Architecture (keeps libs portable, WIT out of t
 - **wandr-call**: feature `host-aead = ["rtc-srtp/external-aead"]`, re-exports the traits,
   `MediaSession::new_with_aead`, `PeerSession::set_aead_provider`, `SignalCall::set_aead_provider`.
   WIT-agnostic — the guest injects the provider.
-- **Signal engine** (`apps/user/wandr.signal/engine`): implements the provider via
-  `wandr:crypto/aead-oneshot` (key per call; measured equal to the `aead-key` resource
-  path — the resource ALSO links fine through wac, see
-  [[reference_missing_instance_error_stale_zygote]]), calls `set_aead_provider` after
-  `place`/`incoming`.
+- **Signal engine** (`apps/user/wandr.signal/engine`): implements the provider via the
+  `wandr:crypto/aead.aead-key` RESOURCE (host keys the GCM context once per SRTP
+  session; no key bytes cross per packet) — switched back after proving the earlier
+  "can't link resource through wac" belief false, see
+  [[reference_missing_instance_error_stale_zygote]]. `aead-oneshot` stays as a
+  convenience API (bench uses it; measured equal). Calls `set_aead_provider` after
+  `place`/`incoming`. Device-verified instantiating clean via zygote.
 
 **Device-measured before/after** (Pixel 2 XL, `wandr.srtp.bench` `--run-once`, both
 backends one run): AES-256-GCM, Signal V4 profile.

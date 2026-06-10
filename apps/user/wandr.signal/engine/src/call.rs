@@ -27,35 +27,35 @@ use wandr_call::turn::TurnConfig;
 
 use crate::my::skiko_gfx::audio::{self, ChannelLayout, Format, StreamClass, TrackConfig};
 use crate::wandr::audio_focus::controls;
-use crate::wandr::crypto::aead_oneshot;
+use crate::wandr::crypto::aead::AeadKey;
 use crate::wandr::crypto::types::AeadAlgo;
 use wandr_call::{AeadCtx, AeadProvider};
 
-/// Routes the SRTP per-packet AES-GCM to the host's hardware AES via
-/// `wandr:crypto/aead-oneshot` (wandr-call injects this through
+/// Routes the SRTP per-packet AES-GCM to the host's hardware AES via the
+/// `wandr:crypto/aead.aead-key` resource (wandr-call injects this through
 /// `SignalCall::set_aead_provider`). The SRTP framing stays in-guest; only the GCM
 /// block crosses to the host — ~3× (audio)/~8× (video) faster than in-wasm software
-/// AES, byte-identical on the wire so it interops unchanged. One-shot (key passed
-/// per call) is device-measured equal to the `aead-key` resource path at SRTP
-/// packet sizes (the resource would also link fine through this wac composition).
+/// AES, byte-identical on the wire so it interops unchanged. The resource keys the
+/// host context once per SRTP session, so no key material crosses per packet.
 struct HostAeadProvider;
-struct HostAeadCtx {
-    algo: AeadAlgo,
-    key: Vec<u8>,
-}
+/// The WIT resource handle is only ever touched from this single-threaded guest,
+/// so the `Send + Sync` that `AeadCtx` requires is sound here.
+struct HostAeadCtx(AeadKey);
+unsafe impl Send for HostAeadCtx {}
+unsafe impl Sync for HostAeadCtx {}
 
 impl AeadProvider for HostAeadProvider {
     fn new_key(&self, key: &[u8]) -> Box<dyn AeadCtx> {
         let algo = if key.len() == 16 { AeadAlgo::Aes128Gcm } else { AeadAlgo::Aes256Gcm };
-        Box::new(HostAeadCtx { algo, key: key.to_vec() })
+        Box::new(HostAeadCtx(AeadKey::create(algo, key).expect("host AeadKey::create")))
     }
 }
 impl AeadCtx for HostAeadCtx {
     fn seal(&self, nonce: &[u8], aad: &[u8], pt: &[u8]) -> Result<Vec<u8>, ()> {
-        aead_oneshot::seal(self.algo, &self.key, nonce, aad, pt).map_err(|_| ())
+        self.0.seal(nonce, aad, pt).map_err(|_| ())
     }
     fn open(&self, nonce: &[u8], aad: &[u8], ct: &[u8]) -> Result<Vec<u8>, ()> {
-        aead_oneshot::open(self.algo, &self.key, nonce, aad, ct).map_err(|_| ())
+        self.0.open(nonce, aad, ct).map_err(|_| ())
     }
 }
 
