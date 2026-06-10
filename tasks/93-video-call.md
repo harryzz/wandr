@@ -8,10 +8,11 @@
 > ART-off. WIT contracts ✍️ **DRAFTED + validated**: `wit/video.wit` (`wandr:video`)
 > + `wit/crypto.wit` (`wandr:crypto`), commit `697da5de`. **Audio calls connect both
 > ways (incoming fixed).** Remaining = pure integration, no `--no-art` blockers — see
-> **IMPLEMENTATION PLAN** below. **Phases 1+2+3 ✅ DONE + device-verified
-> (2026-06-10): `wandr:crypto`, `wandr:video` host impl, AND the wandr-call video
-> track (camera→HW-VP8→SRTP/UDP→reassembly→HW-decode 17.4 fps + PLI/SR on-wire) —
-> next is Phase 4 (render + arbiter `Role::Video`).**
+> **IMPLEMENTATION PLAN** below. **Phases 1–4 ✅ DONE + device-verified
+> (2026-06-10): `wandr:crypto`, `wandr:video` host impl, the wandr-call video
+> track, AND decode-to-surface render + PiP self-view (live camera video
+> composited on the panel, screenshot-proven; SurfaceView-style child surfaces,
+> no arbiter role needed) — next is Phase 5 (Signal protocol + call UI).**
 
 ## IMPLEMENTATION PLAN — ready to build (next session)
 
@@ -78,19 +79,45 @@ Part 2): camera → HW VP8 → PeerSession A → SRTP over real wasi:sockets UDP
 PeerSession B → reassembled **88/88 frames, 0 broken** → HW decode **17.4 fps**;
 PLI round trip answered on-wire; SR anchor received; 2× runs clean.
 
-**Phase 4 — render + arbiter `Role::Video`.** New surface role: the decoder output
-surface composited behind/around the guest Skia call UI (z-order, rotation,
-occlusion) + a PiP self-view. Decode-to-surface host compositing (pixels never
-re-enter the guest). Wire the Signal guest call UI to remote-video + local-PiP.
+**Phase 4 — render: decode-to-surface + PiP self-view. ✅ DONE + DEVICE-VERIFIED
+(2026-06-10, screenshot-proven: live camera video composited on the panel).**
+DESIGN DECISION (replaces the sketched arbiter `Role::Video`): video surfaces are
+**children of the app's own SF surface — Android's SurfaceView model** (`sf_media_*`
+in the libgui shim: container+buffer-state-child+BBQ, geometry on the container
+with a scale matrix). Z/visibility/rotation/occlusion are inherited from the app's
+existing role for FREE — backgrounding the app hides its video; zero new arbiter
+state/IPC. Remote video child z=-2, PiP z=-1, both BELOW the app's UI buffer; the
+host clears `eLayerOpaque` while a decoder surface is up (`sf_set_opaque`) so the
+guest's transparent hole blends (controls can overlap video). Headless
+(`--run-once`) processes parent to the bufferless run-once fullscreen surface —
+the same tree, screenshot-verifiable. Decoder = decode-to-surface
+(`releaseOutputBuffer(render=true)`; empty rect = Phase-1 buffer mode); encoder
+gained the **PiP self-view** (camera streams to a second media surface — a second
+`ACaptureSessionOutput`/target on the same session; frames never cross the WIT).
+WIT: `preview: option<video-rect>` + `set-preview-rect/visible`, decoder
+`set-visible`; rects are GUEST-SURFACE pixels. Verified end-to-end on device:
+camera → HW VP8 → wandr-call SRTP/UDP → HW decode → **panel** (~17–30 fps, runs
+back-to-back clean), live `set-rect`/`set-preview-rect` moves on a hot codec,
+buffer→rect scaling (640×480 → 1280×960). GOTCHAS: (1) `Surface*` must be
+explicitly upcast to `ANativeWindow*` before crossing the C ABI as `void*` —
+missing base-pointer adjustment SIGSEGVs camera2ndk; (2) shim rebuilds on a-03:
+re-run ninja ~3× (unrelated `libbinder_ndk` lsdump step fails the build AFTER our
+.so links — check the artifact mtime); (3) a desk-down BACK camera encodes pure
+black — use `facing: front` for visual tests; (4) sensor-orientation rotation is
+NOT yet compensated (image arrives sensor-rotated; fix via container matrix or
+encode-side rotation in Phase 5). REMAINING (moved to Phase 5, needs the in-call
+video-enable signaling to drive it): wire the Signal call UI to remote-video +
+local-PiP rects + transparent hole.
 
 **Phase 5 — Signal-protocol video.** In-call video enable/disable + resolution/
 bitrate adaptation (the `opaque` ConnectionParameters); signaling already advertises
 VP8/VP9.
 
-**Next step (Phases 1+2+3 ✅ done): Phase 4** — render + arbiter `Role::Video`
-(decode-to-surface compositing + PiP self-view), then Phase 5 Signal-protocol
-video (in-call enable/disable; wire constants already grounded: VP8 PT 108,
-SSRC 1003/2003).
+**Next step (Phases 1–4 ✅ done): Phase 5** — Signal-protocol video: in-call
+video enable/disable over the `opaque` ConnectionParameters (wire constants
+grounded: VP8 PT 108, SSRC 1003/2003), the Signal call screen (remote-video +
+local-PiP rects + transparent hole + controls), and camera sensor-rotation
+compensation.
 
 **Residual risks (post-decode-confirmation):** SRTP CPU at video bitrate (→ Phase 2
 mandatory); PLI/keyframe + congestion control (→ Phase 3, the WebRTC bits audio

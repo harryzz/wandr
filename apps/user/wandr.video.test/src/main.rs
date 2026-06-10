@@ -32,7 +32,9 @@ use wandr_call::{PeerSession, Role};
 const W: u32 = 640;
 const H: u32 = 480;
 
-fn open_encoder() -> Option<VideoEncoder> {
+/// `preview` = PiP self-view rect (Phase 4); `None` = encode-only.
+fn open_encoder(preview: Option<VideoRect>) -> Option<VideoEncoder> {
+    let has_preview = preview.is_some();
     match VideoEncoder::open(EncoderConfig {
         codec: Codec::Vp8,
         width: W,
@@ -40,11 +42,14 @@ fn open_encoder() -> Option<VideoEncoder> {
         bitrate_bps: 1_000_000,
         framerate: 30,
         source_camera: true,
-        // Back camera = the probe-proven baseline; the call self-view will use front.
-        facing: CameraFacing::Back,
+        // Front camera (faces up on a desk — the visual A/B for camera content;
+        // the call self-view wants front anyway).
+        facing: CameraFacing::Front,
+        preview,
     }) {
         Ok(e) => {
-            println!("encoder OPEN ✓ ({W}x{H} VP8, camera live)");
+            println!("encoder OPEN ✓ ({W}x{H} VP8, camera live{})",
+                if has_preview { ", PiP preview on-screen" } else { "" });
             Some(e)
         }
         Err(e) => {
@@ -54,15 +59,14 @@ fn open_encoder() -> Option<VideoEncoder> {
     }
 }
 
-fn open_decoder() -> Option<VideoDecoder> {
-    match VideoDecoder::open(DecoderConfig {
-        codec: Codec::Vp8,
-        width: W,
-        height: H,
-        rect: VideoRect { x: 0, y: 0, width: W, height: H },
-    }) {
+/// An empty `rect` = decode-to-buffer (Phase 1 diagnostics); a real one =
+/// decode-to-surface — the host composites the video on the panel (Phase 4).
+fn open_decoder(rect: VideoRect) -> Option<VideoDecoder> {
+    let to_surface = rect.width > 0 && rect.height > 0;
+    match VideoDecoder::open(DecoderConfig { codec: Codec::Vp8, width: W, height: H, rect }) {
         Ok(d) => {
-            println!("decoder OPEN ✓ (decode-to-buffer)");
+            println!("decoder OPEN ✓ ({})",
+                if to_surface { "decode-to-SURFACE, on-screen" } else { "decode-to-buffer" });
             Some(d)
         }
         Err(e) => {
@@ -77,8 +81,9 @@ fn open_decoder() -> Option<VideoDecoder> {
 fn part1_direct_loopback() -> bool {
     const RUN_SECS: u64 = 3;
     println!("── Part 1: direct WIT loopback (camera → HW VP8 → guest → HW decode) ──");
-    let Some(enc) = open_encoder() else { return false };
-    let Some(dec) = open_decoder() else { return false };
+    let Some(enc) = open_encoder(None) else { return false };
+    // Empty rect → decode-to-buffer: keeps Part 1 the pure Phase-1 regression.
+    let Some(dec) = open_decoder(VideoRect { x: 0, y: 0, width: 0, height: 0 }) else { return false };
 
     let start = Instant::now();
     let (mut pulled, mut bytes, mut keyframes, mut submitted, mut queue_full, mut other_err) =
@@ -120,10 +125,17 @@ fn part1_direct_loopback() -> bool {
 /// Part 2 — the wandr-call video track (Phase 3): camera → encoder → PeerSession A
 /// → SRTP/UDP → PeerSession B → reassembled frames → decoder; PLI both ways.
 fn part2_engine_pipeline() -> bool {
-    const RUN_SECS: u64 = 5;
-    println!("── Part 2: wandr-call video track (encoder → SRTP/UDP → decoder) ──");
-    let Some(enc) = open_encoder() else { return false };
-    let Some(dec) = open_decoder() else { return false };
+    const RUN_SECS: u64 = 10;
+    println!("── Part 2: wandr-call video track (encoder → SRTP/UDP → decoder), ON-SCREEN ──");
+    // Phase 4 visual: remote video decode-to-surface in a 2×-scaled rect
+    // (proves the buffer→rect scaling matrix) + the camera PiP self-view
+    // bottom-right. Test rects in taimen panel pixels (this is a headless
+    // diagnostic — the surfaces are top-level; a real call app's rects are
+    // its own surface coordinates).
+    let Some(enc) = open_encoder(Some(VideoRect { x: 1020, y: 1840, width: 360, height: 270 }))
+    else { return false };
+    let Some(dec) = open_decoder(VideoRect { x: 80, y: 700, width: 1280, height: 960 })
+    else { return false };
 
     // Two engine peers over real wasi:sockets UDP on loopback (the call-live pattern).
     let asock = UdpSocket::bind("127.0.0.1:0").expect("bind A");
@@ -202,7 +214,12 @@ fn part2_engine_pipeline() -> bool {
         if !pli_requested && start.elapsed().as_millis() > (RUN_SECS as u128 * 500) {
             pli_requested = true;
             b.request_keyframe();
-            println!("   mid-run: B sent PLI (request_keyframe)");
+            // Phase 4 surface-control smoke, mid-run on live video: move +
+            // shrink the remote rect and nudge the PiP — visibly jumps on
+            // the panel and proves set-rect/set-preview-rect on a hot codec.
+            dec.set_rect(VideoRect { x: 240, y: 950, width: 960, height: 720 });
+            enc.set_preview_rect(VideoRect { x: 60, y: 1840, width: 360, height: 270 });
+            println!("   mid-run: B sent PLI + remote rect moved + PiP moved");
         }
         if a.take_keyframe_request() {
             enc.request_keyframe();
@@ -228,6 +245,30 @@ fn part2_engine_pipeline() -> bool {
 
     let ok = sent > 0 && rx_frames > 0 && decoded > 0 && other_err == 0 && pli_answered;
     println!("   Part 2: {}", if ok { "PASS" } else { "FAIL" });
+
+    // Visual-inspection hold: keep the live video + PiP on the panel (camera
+    // still streaming, decoder still draining via submit-free renders) so a
+    // screenshot/dumpsys can be taken deterministically after the result.
+    println!("   holding surfaces 30s for visual inspection …");
+    let hold = Instant::now();
+    while hold.elapsed().as_secs() < 30 {
+        if let Some(frame) = enc.next_frame() {
+            let _ = a.send_video(&frame.data, frame.timestamp);
+        }
+        pump(&mut a, &asock, &mut b, &bsock);
+        while let Some(vf) = b.recv_video() {
+            let f = crate::wandr::video::types::EncodedFrame {
+                data: vf.data,
+                timestamp: vf.timestamp,
+                keyframe: vf.keyframe,
+            };
+            let _ = dec.submit(&f);
+        }
+        let now = Instant::now();
+        a.handle_timeout(now);
+        b.handle_timeout(now);
+        std::thread::sleep(Duration::from_millis(5));
+    }
     ok
 }
 

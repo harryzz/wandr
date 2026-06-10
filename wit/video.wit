@@ -45,9 +45,13 @@ interface types {
         keyframe: bool,      // true = IDR / VP8 key; decoders need one to start
     }
 
-    /// Where the host paints INCOMING video, in the arbiter/compositor's display-pixel
-    /// space. (Open: should be an arbiter-owned surface/role, not raw pixels — see the
-    /// world note.)
+    /// Where the host paints video, in the GUEST'S OWN surface pixels (the same
+    /// coordinate space the guest draws in). The host realizes it as a child of
+    /// the app's SurfaceFlinger surface (the SurfaceView model), so it moves,
+    /// hides, rotates and z-orders with the app automatically; it composites
+    /// BELOW the app's UI buffer, which punches a transparent hole where video
+    /// should show and may draw controls over it. (In a surfaceless process —
+    /// `--run-once` diagnostics — the rect is panel pixels on a top-level layer.)
     record video-rect { x: u32, y: u32, width: u32, height: u32 }
 
     record encoder-config {
@@ -61,6 +65,10 @@ interface types {
         /// Which camera to capture from when source-camera (falls back to the
         /// first camera if the requested facing doesn't exist).
         facing: camera-facing,
+        /// PiP self-view: where to composite the local camera preview (the
+        /// camera streams to a second surface host-side; frames never cross
+        /// the boundary). `none` = no self-view. Move via set-preview-rect.
+        preview: option<video-rect>,
     }
 
     record decoder-config {
@@ -73,7 +81,7 @@ interface types {
 }
 
 interface encoder {
-    use types.{encoder-config, encoded-frame, video-error};
+    use types.{encoder-config, encoded-frame, video-error, video-rect};
 
     /// Opens the camera (if source-camera) + a HW encoder. One per outgoing stream.
     resource video-encoder {
@@ -86,6 +94,10 @@ interface encoder {
         request-keyframe: func();
         /// Adapt to congestion (the guest drives this from REMB/TWCC).
         set-bitrate: func(bitrate-bps: u32);
+        /// Move/resize the PiP self-view (no-op if opened without `preview`).
+        set-preview-rect: func(rect: video-rect);
+        /// Show/hide the PiP self-view (no-op if opened without `preview`).
+        set-preview-visible: func(visible: bool);
     }
 }
 
@@ -100,6 +112,8 @@ interface decoder {
         submit: func(frame: encoded-frame) -> result<_, video-error>;
         /// Move/resize the video surface (layout change, rotation).
         set-rect: func(rect: video-rect);
+        /// Show/hide the video surface (e.g. the peer paused video).
+        set-visible: func(visible: bool);
         /// true once >=1 keyframe has decoded (UI can drop the placeholder).
         ready: func() -> bool;
         /// Frames decoded so far (diagnostics; Phase 1 decode-to-buffer counts
@@ -110,12 +124,16 @@ interface decoder {
 
 /// Imported by a call-engine guest (crates/wandr-call). The host implements both.
 ///
-/// OPEN DESIGN QUESTION: the decoder surface should integrate with the arbiter's
-/// surface/role + compositing model (z-order vs the guest's skia UI, rotation,
-/// occlusion) rather than the guest passing raw rects — i.e. the host allocates an
-/// arbiter `Role::Video` surface and the guest references it by handle. This sketch
-/// uses a rect to show the shape; wire it to the arbiter when building. Same question
-/// for the encoder self-view preview (composite host-side vs draw in the guest UI).
+/// DESIGN DECISION (task 93 Phase 4, was an open question): video surfaces are
+/// CHILDREN of the app's own SurfaceFlinger surface (Android's SurfaceView
+/// model — `sf_media_*` in the libgui shim), NOT separate arbiter
+/// `Role::Video` surfaces. Z-order/visibility/rotation/occlusion are inherited
+/// from the app's existing role for free — backgrounding the app hides its
+/// video, no new arbiter state or IPC. Remote video sits at child z = -2, the
+/// PiP self-view at -1, both BELOW the app's UI buffer; while a decoder
+/// surface is up the host clears the layer's opaque flag so the guest's
+/// transparent hole blends (controls can overlap video). Rects are
+/// guest-surface pixels (see `video-rect`).
 world video-client {
     import encoder;
     import decoder;
