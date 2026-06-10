@@ -59,3 +59,10 @@ voice-call output. Commits: audioclient-rs e6175fb (frame_count) + wandr 9beaf0f
 GOTCHA: `git add -A` here swept untracked build binaries (wandr-launch/wandr-sensormanager/
 wandr-inputflinger/wandr-framework-shim + a leak-repro tgz) into the commit — `git add` the
 specific paths instead.
+
+**4th gotcha (2026-06-10, task 93 mute buttons):** this backend had NO output-
+mute gate — `app_output_muted` (controls `set-mute`) was only checked inside
+the AAudio backend's `ring_write`, so speaker-mute silenced nothing on calls.
+The gate now lives in the backend-agnostic `write_pcm_f32` DISPATCHER
+(equal-length silence preserves timing/backpressure). Rule: cross-cutting
+audio policy (mute/gain) belongs in the dispatcher, never per-backend.
