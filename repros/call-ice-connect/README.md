@@ -13,7 +13,7 @@ assembly swaps this wire for it. DTLS then runs over the selected pair.
 
 ## Needs the mDNS-optional fork
 `rtc-ice` pulls `rtc-mdns` (socket2/tokio) which doesn't build for wasip2, so this
-uses the **mDNS-optional fork** (`../webrtc-rs-wasip2/rtc-ice-mdns-optional.patch`)
+uses the **mDNS-optional fork** (`../webrtc-rs-wasip2/wandr-rtc.patch`)
 with `default-features = false`. The Cargo.toml path-deps a patched clone of
 webrtc-rs/rtc; apply the patch first.
 

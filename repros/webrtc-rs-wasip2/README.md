@@ -19,7 +19,11 @@ hard-depends on `rtc-mdns`. mDNS ICE candidates are *optional* WebRTC
 functionality (they hide the local IP), and candidate gathering / sockets are
 exactly what the sans-IO design leaves to the embedder.
 
-## The fork (`rtc-ice-mdns-optional.patch`)
+## The fork (`wandr-rtc.patch` — was `rtc-ice-mdns-optional.patch`)
+
+The patch has since grown beyond mDNS: it also carries the task-16 ICE
+self-select/diagnostics and the task-93 rtc-srtp `external-aead` feature (see
+`tools/scripts/patch-rtc.sh` for the full inventory). The mDNS part:
 
 Makes `mdns` an **optional, default-on** Cargo feature in `rtc-ice` and
 `#[cfg(feature = "mdns")]`-gates every reference to the `rtc-mdns` *types*
@@ -32,7 +36,7 @@ stay (pure, no rtc-mdns dep). 4 files, +44/−5.
 Apply against a fresh clone:
 ```
 git clone https://github.com/webrtc-rs/rtc && cd rtc
-git apply /path/to/rtc-ice-mdns-optional.patch
+git apply /path/to/wandr-rtc.patch
 ```
 
 ## Verified (all green)
