@@ -1,5 +1,5 @@
-TASK=90
-STEP=M4-done
+TASK=93
+STEP=srtp-hw-aes-offload
 STATUS=complete
-LAST_SUCCESS=Task 90 M1-M4 DONE + device-verified --no-art. M4 wandr.settings.wifi privileged dioxus Wi-Fi picker WORKS (renders, scans, gate links wifi). Lag/taskbar FIXED (wandr-net cached scan → arbiter non-blocking; IWificond sweep ~4s was freezing the single-threaded arbiter). Launcher visibility FIXED (host launcher_impl includes system-apps/ with show-in-launcher=true; Wi-Fi tile shows). HOST-AOT CRASH RESOLVED: was incremental-build corruption in the Cranelift/regalloc2 codegen (every freshly-AOT'd guest SIGSEGV'd "execute non-executable memory"); fixed by `cargo clean -p` the full cranelift/regalloc2/wasmtime codegen set + rebuild. (My "still crashing" reports were FALSE NEGATIVES: ps|grep <appid> never matches since every guest comm=wandr-host; verify via /proc/<pid> + screenshot, NOT ps grep.)
-NOTES=NOT committed yet. Pending commit: wandr-net (cached scan), apps/system/wandr.settings.wifi/* (new), runtime/wandr-host/src/launcher_impl.rs (show-in-launcher), settings.wifi package.toml, tools/scripts/build-system-wandrpkgs.sh, tasks/90 + .task-state. The codegen clean was a BUILD action (no source change). GOTCHA recorded: never trust ps|grep <app-id> for guest liveness (comm=wandr-host); use /proc or arbiter on_child_exit signal logs.
+LAST_SUCCESS=SRTP AEAD offloaded to host HW AES (wandr:crypto). Device-measured 3.0x audio/8.5x video via wandr.srtp.bench; Signal engine cut over to aead-oneshot + instantiates clean --no-art.
+NOTES=rtc-srtp external-aead feature + wandr-call host-aead + aead-oneshot WIT (wac-plug can't link imported resource - see reference_wac_plug_imported_resource). NOT committed. Live-call verify pending (user). Bench=wandr.srtp.bench.
