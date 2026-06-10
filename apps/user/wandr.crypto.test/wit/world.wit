@@ -1,0 +1,10 @@
+// wandr.crypto.test guest world: a wasi:cli command (fn main provides cli/run on the
+// wasm32-wasip2 target) that imports the wandr:crypto host interfaces it tests.
+package wandr:crypto-test;
+
+world crypto-test {
+    import wandr:crypto/caps@0.1.0;
+    import wandr:crypto/hash@0.1.0;
+    import wandr:crypto/aead@0.1.0;
+    import wandr:crypto/kdf@0.1.0;
+}

@@ -1,0 +1,17 @@
+# wandr.crypto.test — a wasi:cli command guest that exercises wandr:crypto host-side
+# (task 93 Phase A). Proves the WIT boundary end-to-end: guest -> host HW crypto ->
+# guest, with the AES-256-GCM SRTP profile Signal audio uses. Run via
+# `wandr-host --run-once wandr.crypto.test`.
+#   cargo build --target wasm32-wasip2 --release
+[package]
+name    = "wandr-crypto-test"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+wit-bindgen = "0.57"
+
+[profile.release]
+opt-level = "s"
+strip = true

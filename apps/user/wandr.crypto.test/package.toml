@@ -1,0 +1,9 @@
+# wandr.crypto.test — wasi:cli command guest (task 93 Phase A). Run-once consumer:
+# `wandr-host --run-once wandr.crypto.test`. Imports wandr:crypto (host-linked).
+app_id      = "wandr.crypto.test"
+version     = "0.1.0"
+world       = "wasi:cli/command"
+composition = "same-store"
+
+[components]
+ui = "components/ui.wasm"
