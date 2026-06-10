@@ -1,0 +1,11 @@
+# wandr.video.test — wasi:cli command guest (task 93 Phase 1). Run-once consumer:
+# `wandr-host --run-once wandr.video.test`. Imports wandr:video (host-linked).
+# Prereqs on device: wandr-activityms stubs + sensorservice + wandr-sensormanager
+# running, wandr-sensors STOPPED (task 94), cameraserver healthy.
+app_id      = "wandr.video.test"
+version     = "0.1.0"
+world       = "wasi:cli/command"
+composition = "same-store"
+
+[components]
+ui = "components/ui.wasm"

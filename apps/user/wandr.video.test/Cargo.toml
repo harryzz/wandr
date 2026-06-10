@@ -1,0 +1,18 @@
+# wandr.video.test — a wasi:cli command guest that exercises wandr:video host-side
+# (task 93 Phase 1). Proves the WIT boundary end-to-end on device: camera -> host HW
+# VP8 encode -> guest pulls frames -> guest pushes them back -> host HW VP8 decode
+# (the loopback the --probe-video spike ran, now through the real interface). Run via
+# `wandr-host --run-once wandr.video.test`.
+#   cargo build --target wasm32-wasip2 --release
+[package]
+name    = "wandr-video-test"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+wit-bindgen = "0.57"
+
+[profile.release]
+opt-level = "s"
+strip = true

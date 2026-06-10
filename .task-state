@@ -1,5 +1,5 @@
 TASK=93
-STEP=phase-2-done-next-phase-1
-STATUS=in-progress
-LAST_SUCCESS=Task 93 Phase 2 (SRTP HW-AES offload) DONE + LIVE-CALL-VERIFIED: real Signal call, audio both ways, aead-key resource path; 3.0x audio / 8.5x video-size vs in-wasm AES. Commits 11c5efaa..3c316895 pushed.
-NOTES=NEXT = Phase 1: host wandr:video (promote runtime/wandr-host/src/video_probe.rs to the real encoder/decoder WIT impl; plan in tasks/93-video-call.md). Then Phase 3 wandr-call video track, 4 Role::Video render, 5 Signal protocol. GOTCHAS: restart zygote after host linker changes (stale-image trap); clean camera/codec teardown or cameraserver wedges; HW VP8 ~20fps ceiling on taimen. Side follow-ups (not task 93): crypto Phase B asymmetric, launcher ~1% idle wasm.
+STEP=phase-1-done-next-phase-3
+STATUS=complete
+LAST_SUCCESS=Task 93 Phase 1 (host wandr:video impl) DONE + DEVICE-VERIFIED: wandr.video.test --run-once 25.0fps camera->HW-VP8-encode->guest->HW-decode loopback, 124/125 decoded, request-keyframe + set-bitrate live, 2x back-to-back clean (no cameraserver wedge); probe regression passes; chrome stack healthy on new host.
+NOTES=NEXT = Phase 3: wandr-call video track (rtc-rtp VP8 payloader over existing SRTP transport + RTCP PLI/FIR + bitrate control; plan in tasks/93-video-call.md). Then Phase 4 Role::Video decode-to-surface render, Phase 5 Signal protocol video. GOTCHAS for Phase 3: qcom VP8 encoder ignores i-frame-interval (rely on request-keyframe for PLI); decoder submit returns queue-full (resend after keyframe); guest bindgen passes configs BY VALUE; see project_wandr_video_host memory.

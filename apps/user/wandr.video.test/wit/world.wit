@@ -1,0 +1,8 @@
+// wandr.video.test guest world: a wasi:cli command (fn main provides cli/run on the
+// wasm32-wasip2 target) that imports the wandr:video host interfaces it tests.
+package wandr:video-test;
+
+world video-test {
+    import wandr:video/encoder@0.1.0;
+    import wandr:video/decoder@0.1.0;
+}

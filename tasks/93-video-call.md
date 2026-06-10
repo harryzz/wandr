@@ -8,7 +8,9 @@
 > ART-off. WIT contracts ✍️ **DRAFTED + validated**: `wit/video.wit` (`wandr:video`)
 > + `wit/crypto.wit` (`wandr:crypto`), commit `697da5de`. **Audio calls connect both
 > ways (incoming fixed).** Remaining = pure integration, no `--no-art` blockers — see
-> **IMPLEMENTATION PLAN** below (ready for a fresh session).
+> **IMPLEMENTATION PLAN** below. **Phase 2 (`wandr:crypto`) ✅ + Phase 1
+> (`wandr:video` host impl) ✅ both DONE + device-verified (2026-06-10) — next is
+> Phase 3 (wandr-call video track).**
 
 ## IMPLEMENTATION PLAN — ready to build (next session)
 
@@ -18,14 +20,25 @@ loopback 2026-06-10), the codec `configure()` blocks are gone (task-96 shim), an
 1:1 audio calls connect both directions. What's left is our integration code, in
 five buildable phases (each independently testable):
 
-**Phase 1 — host `wandr:video` impl (encoder + decoder).** Promote `video_probe.rs`
-from a spike to the real host component. `encoder`: camera open + `AMediaCodec` VP8
-encoder + input-surface + capture session; guest **pulls** `next-frame()` → encoded
-VP8. `decoder`: `AMediaCodec` VP8 decoder; guest **pushes** `submit(frame)` →
-decode-to-buffer first (proven), then decode-to-surface. Wire the C++ libbinder
-threadpool (`sf_start_binder_threadpool`, in the shim) into the host's video init.
-‼️ **Clean teardown** (the spike's wedge gotcha): camera/codec must release on call
-end/crash — never SIGKILL mid-transaction or cameraserver wedges.
+**Phase 1 — host `wandr:video` impl (encoder + decoder). ✅ DONE + DEVICE-VERIFIED
+(2026-06-10).** Promoted `video_probe.rs` to the real host component:
+`runtime/wandr-host/src/video.rs` (NDK backend — shared `ndk` FFI the probe now
+also rides; camera picked by new `camera-facing` WIT field via ACAMERA_LENS_FACING,
+fallback first id) + `video_host_impl.rs` (WIT resources in `HostState.table`) +
+`video-host` bindgen world + `add_to_linker` at both app_loader sites. Encoder:
+camera → input-surface (0×0 geometry fix) → HW VP8, guest pulls `next-frame()`
+(non-blocking dequeue, CSD filtered, µs→90kHz ts); `request-keyframe`/`set-bitrate`
+via `AMediaCodec_setParameters`. Decoder: decode-to-buffer (Phase 4 = to-surface);
+`submit` returns new `queue-full` error when input bufs exhausted; new
+`decoded-frames()` diagnostic. Threadpool (`sf_start_binder_threadpool`) starts
+LAZILY at first open behind a `Once` (post-fork safe). ‼️ Clean teardown = ordered
+null-tolerant `Drop` (resource drop + store drop both reach it). **Verified by
+`apps/user/wandr.video.test`** (`wasi:cli` guest, `--run-once`): **25.0 fps**
+camera→encode→guest→decode loopback, 125 pulled / 125 submitted / 124 decoded,
+ready=true, first-frame 90 ms, mid-run request-keyframe produced a 2nd keyframe +
+set-bitrate(500k) dropped avg frame 4.8K→3.4K; **ran 2× back-to-back clean**
+(teardown does NOT wedge cameraserver); probe regression (`--probe-video decode`)
+still passes (24.9 fps); chrome stack unaffected by the new linker import.
 
 **Phase 2 — host `wandr:crypto` impl (SRTP AEAD offload). ✅ DONE + LIVE-CALL-VERIFIED
 (2026-06-10).** Built bigger than sketched: universal `wandr:crypto` WIT (hash/mac/
@@ -55,9 +68,9 @@ re-enter the guest). Wire the Signal guest call UI to remote-video + local-PiP.
 bitrate adaptation (the `opaque` ConnectionParameters); signaling already advertises
 VP8/VP9.
 
-**Recommended first step (Phase 2 ✅ done): Phase 1** — host `wandr:video`
-(promote `video_probe.rs`), which unblocks the Phase-3 wandr-call video track.
-Reuse `video_probe.rs` verbatim for the camera/encoder/decoder NDK plumbing.
+**Next step (Phases 1+2 ✅ done): Phase 3** — wandr-call video track (the
+`rtc-rtp` VP8 payloader over the existing SRTP transport + RTCP PLI/FIR +
+bitrate control), consuming `wandr:video` encoder/decoder + `wandr:crypto` AEAD.
 
 **Residual risks (post-decode-confirmation):** SRTP CPU at video bitrate (→ Phase 2
 mandatory); PLI/keyframe + congestion control (→ Phase 3, the WebRTC bits audio
