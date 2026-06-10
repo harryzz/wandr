@@ -49,7 +49,7 @@
       matrix/clip-stack tracking (femtovg pattern).
 - [x] **M3 — text** (DONE 2026-06-11, compile-verified; typeface cache pins the parley blob — HashedBlob trick — so the ptr-keyed id stays valid): `GlyphRenderer::draw_glyph_run` → create-typeface
       (cached per font-blob hash, Slint FontCache pattern) + draw-glyphs.
-- [ ] **M4 — proof app on device**: wandr.slint.test exercising text
+- [x] **M4 — proof app on device** (RENDERS 2026-06-11, screenshot-verified: text/widgets/gradient/shadow/ListView all correct, ~0.7% idle CPU; interactive verification — touch, typing, scroll, animation — pending user): wandr.slint.test exercising text
       (sizes/weights), a TextInput (cursor/selection = parley metrics
       path), scroll, image, drop shadow, opacity animation. Deploy the
       new-verbs host + full stack restart (stale-zygote rule). Visual

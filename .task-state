@@ -1,5 +1,5 @@
 TASK=100
-STEP=M2-done
+STEP=M4-interactive-verify
 STATUS=in-progress
-LAST_SUCCESS=Task 100 M2 verified OK — full ItemRenderer (gradients/images/paths/opacity-layers) compiles for wasm32-wasip2
-NOTES=M2: gradient brushes -> host shader ids (create+drop per draw), images via render_to_buffer (handles SVG) + ImageCacheKey cache + fit(), group opacity via save-layer + extra_canvas_saves counter, lyon->SVG paths, cached pixmaps immediate-mode (unpremultiply). Approximations listed in itemrenderer.rs header. Next: M3 text (GlyphRenderer -> create-typeface/draw-glyphs).
+LAST_SUCCESS=Task 100 M4 RENDERS on device — first Slint UI on wandr (screenshot-verified, ~0.7% idle CPU)
+NOTES=wandr.slint.test installed + launched on the new-verbs host (stack restarted --wandr-only). Rendered correctly: parley text via draw-glyphs (Inter embedded by i-slint-common on wasm), fluent Button/LineEdit/Slider/CheckBox, linear gradient, drop shadow, ListView rows. Pending: USER interactive verification (tap +1 counter/animation, type in LineEdit incl IME, drag-scroll list, slider). Then M5 decision.

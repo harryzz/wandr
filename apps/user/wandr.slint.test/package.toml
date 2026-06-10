@@ -1,0 +1,13 @@
+# Task 100 M4 — Slint evaluation app (user app: no `kind` → installs under
+# apps/, listed by the launcher as a tile).
+app_id      = "wandr.slint.test"
+version     = "0.1.0"
+world       = "my:skiko-gfx/skiko-ui"
+composition = "same-store"
+orientation = "auto"
+label       = "Slint Test"
+# Reactive UI with one looping opacity animation; 30 fps halves its cost.
+max_fps     = 30
+
+[components]
+ui = "components/ui.wasm"

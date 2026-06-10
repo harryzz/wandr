@@ -1,0 +1,29 @@
+# wandr.slint.test — the slint-wandr proof app (task 100 M4).
+#
+# A Slint UI rendered through crates/slint-wandr (ItemRenderer over the
+# canvas WIT, parley-shaped text via draw-glyphs). Exercises the M4 risk
+# list: text sizes/weights, a LineEdit (cursor/selection = parley metrics),
+# scroll (ListView), gradient + drop shadow, an opacity animation.
+#
+#   cargo build --target wasm32-wasip2 --release
+#   cp target/wasm32-wasip2/release/wandr_slint_test.wasm components/ui.wasm
+[package]
+name    = "wandr-slint-test"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# MUST pin the same git rev as crates/slint-wandr's i-slint-core (one crate
+# instance = one platform global). No backend/renderer features — the
+# platform comes from slint_wandr::launch!.
+slint = { git = "https://github.com/slint-ui/slint", rev = "46cfde659f21de52bb0fa3693826ca99a6466d88", default-features = false, features = ["compat-1-2", "std"] }
+slint-wandr = { path = "../../../crates/slint-wandr" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
