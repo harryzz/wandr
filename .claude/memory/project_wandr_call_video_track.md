@@ -95,3 +95,17 @@ Next: Phase 4 `Role::Video` decode-to-surface render, Phase 5 Signal protocol.
   to catch exactly this.
 - Follow-ups (cosmetic, unscheduled): mirrored self-view; behind-ui hole
   (dioxus-canvas clear blend); 4-pose landscape face-validation.
+
+**ROTATION ENDGAME (the last three live-call bugs, all fixed + verified):**
+1. Stale-zygote AGAIN mid-iteration (pushed host, no stack restart → app
+   forked the old image → HAL enums hit the degrees shim → identity matrix).
+   The `[media] slot N geometry` logcat line catches this class instantly.
+2. Local rotation didn't re-apply inbound geometry → gen-counter in the host
+   (`GEOM_GEN` bumps on orientation change; `submit`/`next_frame` re-apply).
+3. The UI never re-pushed the call-screen layout on rotation: **dioxus
+   component bodies don't re-run on resize** (memoized props; chrome
+   "relayout" is just taffy reflow). Fix: dioxus-canvas `on_resize` marks
+   ScopeId::ROOT dirty (root re-renders on resize — generic), and
+   size-derived pushes live in the App ROOT body, not child components.
+Device-rotation degrees source: arbiter Geometry orient (dihedral 0/4/3/7 →
+0/90/180/270; landscape directions = 90 AND 270 — both live-observed).
