@@ -1,6 +1,6 @@
 ---
 name: project_incoming_call_answerer_bug
-description: "OPEN BUG: wandr-signal INCOMING calls (answerer role) never connect media — ICE stuck Checking/pair=none even after relay both-ways works. Outgoing works. Plus multi-ring coordination missing."
+description: "RESOLVED 2026-06-04 (device-verified): incoming Signal calls connect with two-way audio + multi-ring works both ways — self_select_best_pair + accepted RTP-data + device_id self-hangup filter (all from ringrtc source). File kept for the full diagnosis history."
 metadata: 
   node_type: memory
   type: project

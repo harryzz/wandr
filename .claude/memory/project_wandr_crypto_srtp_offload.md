@@ -39,8 +39,9 @@ STATUS: ✅ COMPLETE + LIVE-CALL-VERIFIED (2026-06-10): user placed a real Signa
 on the aead-key resource path — "audio works both ways" (every RTP packet sealed/
 opened through host HW AES across the WIT boundary). The earlier "resource
 implementation is missing" trap was a STALE ZYGOTE image, not a resource/wac problem.
-Incoming-call media still blocked by the separate
-[[project_incoming_call_answerer_bug]]. Commits 11c5efaa/266e6834/3c316895, pushed.
+(Incoming calls were ALREADY fixed 2026-06-04 — [[project_incoming_call_answerer_bug]]
+is RESOLVED; its stale index line misled the task-93 notes for a while.)
+Commits 11c5efaa/266e6834/3c316895, pushed.
 Bench = `wandr.srtp.bench`.
 Build Signal: `apps/user/wandr.signal/build.sh` (PROTOC=$HOME/tools/protoc/bin/protoc),
 then `run-hybrid-stack.sh --wandr-only` so the zygote picks up the new host.
