@@ -1,5 +1,5 @@
 TASK=93
-STEP=srtp-hw-aes-offload
+STEP=srtp-offload-live-verified
 STATUS=complete
-LAST_SUCCESS=SRTP AEAD offloaded to host HW AES (wandr:crypto). Device-measured 3.0x audio/8.5x video via wandr.srtp.bench; Signal engine cut over to aead-oneshot + instantiates clean --no-art.
-NOTES=rtc-srtp external-aead feature + wandr-call host-aead + aead-oneshot WIT (wac-plug can't link imported resource - see reference_wac_plug_imported_resource). NOT committed. Live-call verify pending (user). Bench=wandr.srtp.bench.
+LAST_SUCCESS=Task 93 SRTP HW-AES offload LIVE-CALL-VERIFIED: real Signal call on the aead-key resource path, audio both ways. 3.0x audio / 8.5x video vs in-wasm AES. Commits 11c5efaa/266e6834/3c316895 pushed.
+NOTES=Crypto offload done (symmetric). Open follow-ups: Phase B asymmetric (sig/kx), launcher ~1% idle wasm (dioxus timers), incoming-call answerer ICE bug, task 93 video phases.

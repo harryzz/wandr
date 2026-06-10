@@ -35,10 +35,12 @@ backends one run): AES-256-GCM, Signal V4 profile.
 HW AES requires the `--cfg aes_armv8` + `--cfg polyval_armv8` rustflags in
 `runtime/wandr-host/.cargo/config.toml` (NOT target-feature) — already set.
 
-STATUS: library + engine wiring DONE + compiles; host (with `aead_oneshot::Host`) +
-Signal redeployed, Signal **instantiates clean** under `--no-art` (the earlier "resource implementation
-is missing" trap was a STALE ZYGOTE image, not a resource/wac problem). The actual SRTP-over-HW-AES runs only during a live call → needs a
-user call to verify end-to-end (outgoing works; incoming media still blocked by
-[[project_incoming_call_answerer_bug]]). Committed 11c5efaa + pushed. Bench = `wandr.srtp.bench`.
+STATUS: ✅ COMPLETE + LIVE-CALL-VERIFIED (2026-06-10): user placed a real Signal call
+on the aead-key resource path — "audio works both ways" (every RTP packet sealed/
+opened through host HW AES across the WIT boundary). The earlier "resource
+implementation is missing" trap was a STALE ZYGOTE image, not a resource/wac problem.
+Incoming-call media still blocked by the separate
+[[project_incoming_call_answerer_bug]]. Commits 11c5efaa/266e6834/3c316895, pushed.
+Bench = `wandr.srtp.bench`.
 Build Signal: `apps/user/wandr.signal/build.sh` (PROTOC=$HOME/tools/protoc/bin/protoc),
 then `run-hybrid-stack.sh --wandr-only` so the zygote picks up the new host.
