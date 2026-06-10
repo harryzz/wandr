@@ -66,6 +66,15 @@ impl KeyguardModule {
             .display_mut(PRIMARY_DISPLAY)
             .put_surface(kg, KEYGUARD_APP_ID, Role::Lockscreen);
         self.locked = true;
+        // The focused app was just demoted under the lock screen. Announce the
+        // foreground change to the keyguard so the shell `finishInput()`s the old
+        // editor + hides any soft keyboard that was up — otherwise it floats on top
+        // of the lock screen (the keyguard has no text field). Mirrors what
+        // `promote_to_foreground` emits on a normal app switch.
+        ctx.emit(Event::ForegroundChanged {
+            app_id: Some(KEYGUARD_APP_ID.to_string()),
+            pid: Some(kg),
+        });
         log::info!("arbiter: keyguard LOCKED (covering {:?}, kg pid={kg})", self.saved_fg);
         Reply::ok(format!("locked covering={:?}", self.saved_fg))
     }

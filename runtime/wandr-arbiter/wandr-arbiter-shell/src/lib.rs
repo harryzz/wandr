@@ -98,8 +98,25 @@ impl ArbiterModule for ShellModule {
     }
 
     fn on_event(&mut self, ev: &Event, ctx: &mut Ctx) {
-        if let Event::SurfaceRemoved { pid } = ev {
-            shared::on_surface_removed(ctx, *pid);
+        match ev {
+            Event::SurfaceRemoved { pid } => shared::on_surface_removed(ctx, *pid),
+            // A foreground change that bypassed `promote_to_foreground` (e.g. the
+            // keyguard locking OVER the focused app) must still `finishInput()` the
+            // now-non-visible editor + re-derive IME-overlay visibility — otherwise a
+            // soft keyboard that was up keeps floating on top of the new foreground
+            // (the lock screen). `drop_editor_focus_of` is guarded (no-op when the
+            // editor is already cleared / still the visible app) and
+            // `reconcile_overlay` is idempotent, so this is safe even for the
+            // `ForegroundChanged` that `promote_to_foreground` itself emits.
+            Event::ForegroundChanged { .. } => {
+                if let Some((editor_pid, _)) = shared::ime_editor(ctx.store) {
+                    if shared::visible_app(ctx.store) != Some(editor_pid) {
+                        shared::drop_editor_focus_of(ctx, editor_pid);
+                    }
+                }
+                shared::reconcile_overlay(ctx);
+            }
+            _ => {}
         }
     }
 }
