@@ -1,74 +1,178 @@
-// DRAFT SKETCH (2026-06-08) — wandr:crypto: host-side, hardware-accelerated AEAD for
-// the call media hot path. NOT YET IMPLEMENTED. See project_crypto_hw_offload.
+// wandr:crypto — host-side cryptography for wasm guests. Universal +
+// algorithm-parameterized (the earlier draft hardcoded one resource per algorithm —
+// `gcm`/`aes-ctr`/`hmac-sha1` — with no way to enumerate or extend). Adding an
+// algorithm now = ONE enum variant + ONE host match arm; no new resources/functions.
 //
-// WHY. crates/wandr-call runs ringrtc's V4 SRTP IN the wasm guest, where AES-256-GCM
-// is SOFTWARE AES (constant-time bitsliced, ~5-10x slower + more battery) — a wasm
-// guest can't reach the ARMv8 AES/PMULL instructions. This interface moves the
-// per-packet AEAD to the host, where RustCrypto's aes-gcm auto-uses the CPU crypto
-// extensions (/proc/cpuinfo: aes pmull sha2). The guest keeps the SRTP FRAMING (ROC,
-// replay window, X25519+HKDF key derivation in rtc_srtp::Context) and offloads ONLY
-// the AEAD primitive: small WIT, explicit trust boundary (keys + plaintext cross
-// guest->host; acceptable since the runtime owns the device).
+// BACKEND. The host implements everything with RustCrypto, which AUTO-USES the ARMv8
+// Crypto Extensions in-process (this device /proc/cpuinfo: `aes pmull sha1 sha2`):
+//   * HARDWARE-accelerated: AES (GCM/CTR/CBC/CCM/CMAC) + SHA-1/SHA-2 + HMAC-SHA*.
+//   * Software (no CPU instructions, still fast): ChaCha20/Poly1305.
+//   * Software (no CPU instructions): ALL asymmetric — RSA, ECDSA, Ed25519, X25519,
+//     ECDH. Host-side is still a win (native bignum >> wasm bignum; smaller guests),
+//     just NOT hardware-accelerated.
+// There is NO Android binder service for fast bulk crypto: the CPU extensions are
+// instructions, not a service; keystore2/keymaster is the TEE (sealed keys, ~ms per
+// op — ~1000x too slow for per-packet media). So this interface is in-process, no
+// binder. `caps.*` reports, per device, what's implemented + which is HW-accelerated.
 //
-// GRANULARITY. A keyed CONTEXT resource — the AES key schedule is expanded ONCE at
-// creation and reused for every packet (the SRTP hot path seals thousands of packets
-// under one key; re-expanding per call would dominate). Per packet the guest passes
-// only nonce + aad + payload.
-//
-// NAMING. Repo convention is `wandr:` (cf. wandr:alarm/notify/connectivity); the design
-// note called it `wandr:crypto` — using `wandr:crypto` to match.
+// Aligned in spirit with the `wasi-crypto` proposal (algorithm-parameterized,
+// future-proof) but right-sized: per-op seal/open + keyed-context resources, not the
+// full absorb/squeeze symmetric-state machine. The call media path (SRTP) lives in
+// `aead` (aes-256-gcm, Signal/ringrtc V4) + `cipher`/`mac` (aes-ctr + hmac-sha1, the
+// WebRTC-native profile) + `kdf` (HKDF key schedule).
 
 package wandr:crypto@0.1.0;
 
-interface aead {
-    /// AEAD failures. `auth-failed` = tag mismatch on open (drop the packet).
+interface types {
+    /// Digests. SHA-1/256/384/512 are HW (sha1/sha2 ext). 512-256 = SHA-512/256.
+    enum hash-algo { sha1, sha256, sha384, sha512, sha512-256 }
+
+    /// MACs. HMAC-SHA* ride the SHA HW; AES-CMAC rides AES HW; Poly1305 is software.
+    enum mac-algo { hmac-sha1, hmac-sha256, hmac-sha384, hmac-sha512, aes-cmac, poly1305 }
+
+    /// AEAD. AES-GCM/CCM = HW (AES + PMULL/GHASH); (X)ChaCha20-Poly1305 = software.
+    /// Signal / ringrtc V4 SRTP = `aes-256-gcm`.
+    enum aead-algo {
+        aes-128-gcm, aes-256-gcm,
+        aes-128-ccm, aes-256-ccm,
+        chacha20-poly1305, xchacha20-poly1305,
+    }
+
+    /// Raw (unauthenticated) symmetric ciphers — pair with a MAC. AES = HW. CTR is a
+    /// stream cipher (encrypt == decrypt) and is the SRTP "AES_CM" media cipher; CBC
+    /// needs PKCS7 padding + a unique IV. (ECB is intentionally omitted — unsafe.)
+    enum cipher-algo { aes-128-ctr, aes-256-ctr, aes-128-cbc, aes-256-cbc }
+
+    /// Key derivation. HKDF underlies SRTP/TLS key schedules (rides HMAC-SHA HW).
+    enum kdf-algo { hkdf-sha256, hkdf-sha512, pbkdf2-hmac-sha256 }
+
+    /// Asymmetric signatures. NONE are CPU-HW-accelerated (no ARMv8 bignum/EC
+    /// instructions) — host-side software (still faster than wasm + smaller guests).
+    enum sig-algo { ed25519, ecdsa-p256-sha256, ecdsa-p384-sha384, rsa-pkcs1-sha256, rsa-pss-sha256 }
+
+    /// Key agreement (Diffie-Hellman). Software (no HW). X25519 is what Signal uses.
+    enum kx-algo { x25519, ecdh-p256 }
+
     enum crypto-error {
+        unsupported-algorithm,   // not implemented on this host/device
         invalid-key-length,
         invalid-nonce-length,
-        auth-failed,
-        buffer-too-large,
-    }
-
-    /// An AES-GCM context with the key schedule precomputed. Key length selects the
-    /// variant: 16 bytes => AES-128-GCM, 32 bytes => AES-256-GCM. Signal / ringrtc V4
-    /// SRTP = AEAD_AES_256_GCM => 32-byte key. Create one per SRTP key (per direction)
-    /// and reuse for every packet.
-    resource gcm {
-        /// (WIT constructors can't return result, so creation is a static func.)
-        /// `key` = 16 or 32 bytes; otherwise `invalid-key-length`.
-        create: static func(key: list<u8>) -> result<gcm, crypto-error>;
-
-        /// Encrypt + authenticate. `nonce` = 12 bytes (the SRTP per-packet IV the
-        /// guest derives from salt ^ (ssrc||roc||seq)). `aad` = the RTP header bytes
-        /// covered by SRTP auth. Returns ciphertext || 16-byte GCM tag.
-        seal: func(nonce: list<u8>, aad: list<u8>, plaintext: list<u8>)
-            -> result<list<u8>, crypto-error>;
-
-        /// Verify + decrypt. `ciphertext` = received ciphertext || 16-byte tag.
-        /// `auth-failed` => forged/corrupt; the guest drops the packet.
-        open: func(nonce: list<u8>, aad: list<u8>, ciphertext: list<u8>)
-            -> result<list<u8>, crypto-error>;
+        invalid-length,          // bad ciphertext / IV / input size
+        auth-failed,             // AEAD tag / MAC mismatch -> drop the packet
+        verification-failed,     // signature invalid
+        decode-error,            // malformed key / signature / curve point
     }
 }
 
-/// Secondary — the WebRTC-native DTLS-SRTP path uses AES_128_CM_HMAC_SHA1_80
-/// (AES-128 counter-mode + HMAC-SHA1-80), not GCM. Offload its two primitives the
-/// same way if/when that path needs HW acceleration. The Signal path does NOT use
-/// these; sketched for completeness (wandr-call's WebRTC-native profile).
-interface legacy-srtp {
-    /// AES-128 counter-mode keystream context (key expanded once). The guest XORs the
-    /// returned keystream over the payload — SRTP CM is a stream cipher.
-    resource aes-ctr {
-        create: static func(key: list<u8>) -> result<aes-ctr, string>;  // key = 16 B
-        /// `length` keystream bytes for the given 16-byte counter block `iv`.
-        keystream: func(iv: list<u8>, length: u32) -> list<u8>;
-    }
-    /// HMAC-SHA1 over the SRTP-authed bytes (caller truncates to 80 bits).
-    hmac-sha1: func(key: list<u8>, data: list<u8>) -> list<u8>;
+/// Capability discovery — what THIS host+device implements, and (for symmetric) which
+/// is hardware-accelerated. The flag = "uses the ARMv8 Crypto Extensions"
+/// (runtime-detected), so a guest can prefer e.g. `aes-256-gcm` over
+/// `chacha20-poly1305` when the CPU has AES. Asymmetric lists carry no flag (never HW).
+interface caps {
+    use types.{hash-algo, mac-algo, aead-algo, cipher-algo, kdf-algo, sig-algo, kx-algo};
+    hashes:  func() -> list<tuple<hash-algo, bool>>;
+    macs:    func() -> list<tuple<mac-algo, bool>>;
+    aeads:   func() -> list<tuple<aead-algo, bool>>;
+    ciphers: func() -> list<tuple<cipher-algo, bool>>;
+    kdfs:    func() -> list<tuple<kdf-algo, bool>>;
+    sigs:    func() -> list<sig-algo>;
+    kxs:     func() -> list<kx-algo>;
 }
 
-/// Imported by a call-engine guest (crates/wandr-call). The host implements both.
+interface hash {
+    use types.{hash-algo};
+    /// One-shot digest.
+    digest: func(algo: hash-algo, data: list<u8>) -> list<u8>;
+    /// Incremental digest for large / streamed input.
+    resource hasher {
+        create: static func(algo: hash-algo) -> hasher;
+        update: func(data: list<u8>);
+        /// Finalize -> digest. The context is spent; drop it after.
+        finish: func() -> list<u8>;
+    }
+}
+
+interface mac {
+    use types.{mac-algo, crypto-error};
+    /// Keyed MAC context — key/subkey expanded once, reused per message (the SRTP
+    /// hot-path shape). `verify` is constant-time.
+    resource mac-key {
+        create: static func(algo: mac-algo, key: list<u8>) -> result<mac-key, crypto-error>;
+        compute: func(data: list<u8>) -> list<u8>;
+        verify: func(data: list<u8>, tag: list<u8>) -> bool;
+    }
+}
+
+interface aead {
+    use types.{aead-algo, crypto-error};
+    /// AEAD context — key schedule expanded once, reused per packet. The call media
+    /// AEAD (aes-256-gcm) lives here.
+    resource aead-key {
+        create: static func(algo: aead-algo, key: list<u8>) -> result<aead-key, crypto-error>;
+        /// -> ciphertext || tag. `nonce` length is algo-specific (12 B GCM, 24 B XChaCha).
+        seal: func(nonce: list<u8>, aad: list<u8>, plaintext: list<u8>) -> result<list<u8>, crypto-error>;
+        /// `ciphertext` = body || tag. `auth-failed` => forged/corrupt -> drop.
+        open: func(nonce: list<u8>, aad: list<u8>, ciphertext: list<u8>) -> result<list<u8>, crypto-error>;
+    }
+}
+
+interface cipher {
+    use types.{cipher-algo, crypto-error};
+    /// Raw symmetric cipher context (no authentication). CTR: encrypt == decrypt
+    /// (`iv` = the 16-byte counter block). CBC: `iv` = 16-byte IV, PKCS7-padded.
+    resource cipher-key {
+        create: static func(algo: cipher-algo, key: list<u8>) -> result<cipher-key, crypto-error>;
+        encrypt: func(iv: list<u8>, input: list<u8>) -> result<list<u8>, crypto-error>;
+        decrypt: func(iv: list<u8>, input: list<u8>) -> result<list<u8>, crypto-error>;
+    }
+}
+
+interface kdf {
+    use types.{kdf-algo, crypto-error};
+    /// HKDF (extract+expand): `info` = context, `iterations` ignored (pass 0).
+    /// PBKDF2: `info` ignored, `iterations` = the work factor. `length` = output bytes.
+    derive: func(algo: kdf-algo, ikm: list<u8>, salt: list<u8>, info: list<u8>,
+                 iterations: u32, length: u32) -> result<list<u8>, crypto-error>;
+}
+
+interface signatures {
+    use types.{sig-algo, crypto-error};
+    /// New keypair -> (private, public) in the algo's standard encoding
+    /// (raw for Ed25519/EC; PKCS8/PKCS1-DER for RSA).
+    generate: func(algo: sig-algo) -> result<tuple<list<u8>, list<u8>>, crypto-error>;
+    sign: func(algo: sig-algo, private-key: list<u8>, message: list<u8>) -> result<list<u8>, crypto-error>;
+    verify: func(algo: sig-algo, public-key: list<u8>, message: list<u8>, signature: list<u8>) -> bool;
+}
+
+interface key-exchange {
+    use types.{kx-algo, crypto-error};
+    /// New keypair -> (private, public).
+    generate: func(algo: kx-algo) -> result<tuple<list<u8>, list<u8>>, crypto-error>;
+    /// Raw DH shared secret — run it through `kdf` before using as a key.
+    agree: func(algo: kx-algo, private-key: list<u8>, peer-public: list<u8>) -> result<list<u8>, crypto-error>;
+}
+
+/// A call-engine / app guest imports what it needs (crates/wandr-call uses
+/// aead + cipher + mac + kdf for SRTP).
 world crypto-client {
+    import caps;
+    import hash;
+    import mac;
     import aead;
-    import legacy-srtp;
+    import cipher;
+    import kdf;
+    import signatures;
+    import key-exchange;
+}
+
+/// Host-side import world the runtime `add_to_linker`s (the host implements all of it).
+world crypto-host {
+    import caps;
+    import hash;
+    import mac;
+    import aead;
+    import cipher;
+    import kdf;
+    import signatures;
+    import key-exchange;
 }
