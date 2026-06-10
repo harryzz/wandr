@@ -8,11 +8,13 @@
 > ART-off. WIT contracts ✍️ **DRAFTED + validated**: `wit/video.wit` (`wandr:video`)
 > + `wit/crypto.wit` (`wandr:crypto`), commit `697da5de`. **Audio calls connect both
 > ways (incoming fixed).** Remaining = pure integration, no `--no-art` blockers — see
-> **IMPLEMENTATION PLAN** below. **Phases 1–4 ✅ DONE + device-verified
-> (2026-06-10): `wandr:crypto`, `wandr:video` host impl, the wandr-call video
-> track, AND decode-to-surface render + PiP self-view (live camera video
-> composited on the panel, screenshot-proven; SurfaceView-style child surfaces,
-> no arbiter role needed) — next is Phase 5 (Signal protocol + call UI).**
+> **IMPLEMENTATION PLAN** below. **ALL 5 PHASES ✅ DONE — TASK COMPLETE
+> (2026-06-10): real Signal VIDEO CALLS work both ways on the Pixel 2 XL under
+> `--no-art` (camera→HW VP8→SRTP→peer and back), with TWCC/REMB-adaptive
+> bitrate, CVO rotation incl. live device rotation, aspect-fit display, and a
+> call-screen UI. Verified live against a real Signal client; user-confirmed.
+> Follow-ups (cosmetic): mirrored self-view, behind-ui hole once dioxus-canvas
+> grows a clear blend, full 4-pose landscape matrix validation.**
 
 ## IMPLEMENTATION PLAN — ready to build (next session)
 
@@ -109,8 +111,9 @@ encode-side rotation in Phase 5). REMAINING (moved to Phase 5, needs the in-call
 video-enable signaling to drive it): wire the Signal call UI to remote-video +
 local-PiP rects + transparent hole.
 
-**Phase 5 — Signal-protocol video. 🟡 IMPLEMENTED + DEPLOYED (2026-06-10);
-LIVE-CALL VERIFICATION PENDING (needs a real Signal peer).** Grounded in ringrtc
+**Phase 5 — Signal-protocol video. ✅ DONE + LIVE-CALL-VERIFIED (2026-06-10:
+real Signal peer, video both ways, adaptive quality, correct rotation —
+user-confirmed 'now is ok').** Grounded in ringrtc
 source: video on/off rides the RTP-data channel (`rtp_data.Message.senderStatus.
 video_enabled`, accumulated + resent ~1 Hz — NOT signaling); the peer's
 `receiverStatus.max_bitrate_bps` = its requested send bitrate (wins over REMB);
@@ -127,9 +130,22 @@ camera button in the in-call header → full-screen `VideoCallScreen` (rects
 derived from surface size, reported via `set-video-layout`; camera toggle +
 hang-up). Deployed state-preserved. **TO VERIFY LIVE:** 1:1 call ↔ real Signal
 client, camera on both ways; watch `/state/calldbg.log` `video:` lines.
-KNOWN LIMITS: decoder rotation fixed at open (peer rotating mid-call =
-follow-up); enable video only after Connected (layout must exist first);
-self-view not mirrored.
+LIVE-CALL HARDENING (the second day's worth, all live-verified): RED demux
+(peer wraps VP8 in RFC-2198 RED, PT 120); TWCC receiver feedback (~10 Hz —
+a transport-cc peer's BWE ramps ONLY on it; without it it parks at ~36 kbps);
+REMB death-spiral floor (never follow the peer's estimate below 250 kbps —
+sending at the floor is the probe); receiverStatus/REMB receive-budget
+adverts; aspect-fit from the peer's VP8-keyframe coded dims; and THE ROTATION
+MECHANISM: layer setTransform is overwritten per-buffer by BLASTBufferQueue,
+producer-window buffers-transform is overwritten by MediaCodec itself — the
+ONLY producer-proof place is the CONTAINER's transform matrix
+(sf_media_set_geometry: pre-rotation crop box + matrix+position into the
+final rect). CVO wire formula = libwebrtc getFrameOrientation (front:
+(sensor+dev)%360), folded with live device rotation from the arbiter's
+geometry push. Hit the STALE-ZYGOTE trap mid-iteration (pushed host without
+stack restart → app forked the old image → HAL enums hit the degrees shim →
+identity matrix). KNOWN LIMITS: self-view not mirrored; landscape poses
+validated mechanically (matrix+map) but not face-confirmed in all 4 combos.
 
 **Next step (Phases 1–4 ✅ done): Phase 5** — Signal-protocol video: in-call
 video enable/disable over the `opaque` ConnectionParameters (wire constants
