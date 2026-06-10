@@ -44,3 +44,26 @@ lost-fragment→drop+auto-PLI). Device (`wandr.video.test` Part 2): camera → H
 → PeerSession A → SRTP over real wasi:sockets UDP → B → 88/88 frames 0 broken →
 HW decode 17.4 fps; PLI round-trip answered; 2× runs, no cameraserver wedge.
 Next: Phase 4 `Role::Video` decode-to-surface render, Phase 5 Signal protocol.
+
+**Phase 5 additions (2026-06-10, implemented + deployed; LIVE CALL PENDING):**
+- Video on/off = `rtp_data.Message.senderStatus.video_enabled` (tag 3/2),
+  ACCUMULATED + resent ~1 Hz (ringrtc merges state — `update_and_send_rtp_data_
+  message`); `receiverStatus.max_bitrate_bps` (tag 5/2) = the peer's requested
+  SEND bitrate (wins over REMB); rtp_data `hangup` (tag 2) honored in-band.
+  API: `set_video_enabled(call_id, on)` / `take_peer_video_toggle()` /
+  `peer_max_bitrate_bps()`; `send_accepted` now sends the accumulated message.
+- CVO rotation = header extension id **4** (`urn:3gpp:video-orientation`,
+  fixed in ringrtc's generated SDP): out via `set_video_rotation(deg)`
+  (= encoder `display-rotation()`: back = sensor orientation, front =
+  (360−sensor)%360), in via sticky parse → `VideoFrame.rotation` → decoder
+  `rotation-degrees` at open (REOPEN to change — mid-call rotation = follow-up).
+- **Receive advert = VP8 ONLY** (`receive_video_codecs`): the peer encodes from
+  OUR set; VP9-first (real ringrtc order) would get us VP9 we don't depacketize.
+- wandr:video WIT `z-layer`: `behind-ui` (hole model) vs `above-ui` — the Signal
+  call screen uses above-ui (dioxus-canvas has no clear-blend primitive yet).
+- Signal app: engine `pump_video` beside `pump_audio` (lazy encoder on
+  toggle+layout; decoder on first KEYFRAME with its CVO rotation —
+  keyframe-gated mid-stream join requests a sync point); chat WIT `set-video` /
+  `set-video-layout` / `video-status` through the CallIntent queue; UI camera
+  button in the in-call header → full-screen `VideoCallScreen` (rects from
+  surface size, engine dedups layout). Enable video only AFTER Connected.
