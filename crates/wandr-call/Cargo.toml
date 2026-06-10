@@ -48,6 +48,7 @@ rtc-ice    = { path = "../../external/rtc/rtc-ice", default-features = false }
 rtc-dtls   = { path = "../../external/rtc/rtc-dtls" }
 rtc-srtp   = { path = "../../external/rtc/rtc-srtp" }
 rtc-rtp    = { path = "../../external/rtc/rtc-rtp" }
+rtc-rtcp   = { path = "../../external/rtc/rtc-rtcp" }  # video track: PLI/FIR/SR/REMB (task 93 Phase 3)
 rtc-sdp    = { path = "../../external/rtc/rtc-sdp" }
 rtc-shared = { path = "../../external/rtc/rtc-shared", default-features = false }
 rtc-turn   = { path = "../../external/rtc/rtc-turn", optional = true }  # TURN relay (feature = "signal")

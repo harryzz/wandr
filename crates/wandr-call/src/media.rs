@@ -17,6 +17,7 @@ use rtc_shared::marshal::{Marshal, Unmarshal};
 use rtc_srtp::context::Context;
 use rtc_srtp::protection_profile::ProtectionProfile;
 
+use crate::video::{VideoDiag, VideoFrame, VideoStream, VP8_RTX_PAYLOAD_TYPE};
 use crate::Error;
 
 /// Total decoded samples per channel in an Opus packet, from its TOC byte (the
@@ -69,6 +70,10 @@ pub struct MediaSession {
     // context but needs its own monotonic seq/timestamp; ringrtc drives both off
     // one counter, so we do too.
     data_ctr: u32,
+    // The VP8 video track (task 93 Phase 3) — rides the same SRTP contexts on its
+    // own SSRC. `None` until `enable_video` (the session enables it with the
+    // role-derived SSRC as soon as media keys exist).
+    video: Option<VideoStream>,
     // DIAG (inbound): cumulative RTP-seq gaps (lost/missing packets), last
     // inter-packet timestamp delta (= Opus frame samples: 960=20ms, 2880=60ms),
     // and last payload size. Pins arrival rate / frame size / loss for the call.
@@ -158,6 +163,7 @@ impl MediaSession {
             seq: 1,
             ts: 0,
             data_ctr: 0,
+            video: None,
             rx_prev_seq: None,
             rx_prev_ts: None,
             rx_seq_gaps: 0,
@@ -254,6 +260,16 @@ impl MediaSession {
         self.rx_pt = pkt.header.payload_type;
         self.rx_ssrc = pkt.header.ssrc;
         self.rx_payload_len = pkt.payload.len();
+        // The video track (VP8 + its RTX) demuxes by PT into the reassembler;
+        // whole frames come out via `take_video_frame` (empty PCM here = not audio).
+        if let Some(v) = &mut self.video {
+            if pkt.header.payload_type == v.pt()
+                || pkt.header.payload_type == VP8_RTX_PAYLOAD_TYPE
+            {
+                v.handle_rtp(&pkt);
+                return Ok(Vec::new());
+            }
+        }
         // Only the Opus audio stream is ours to decode; skip everything else so the
         // decoder + the seq/ts/gap stats see a single, coherent stream.
         if pkt.header.payload_type != self.payload_type {
@@ -299,5 +315,66 @@ impl MediaSession {
 
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
+    }
+
+    // ── video track (task 93 Phase 3) ────────────────────────────────────────
+
+    /// Enable the VP8 video track on this session: `pt` is the VP8 payload type
+    /// ([`crate::video::VP8_PAYLOAD_TYPE`] for ringrtc/libwebrtc peers), `ssrc`
+    /// our video send SSRC. Idempotent.
+    pub fn enable_video(&mut self, pt: u8, ssrc: u32) {
+        if self.video.is_none() {
+            self.video = Some(VideoStream::new(pt, ssrc));
+        }
+    }
+
+    /// One encoded VP8 frame (90 kHz `timestamp`) → the SRTP datagrams to send
+    /// (one per RTP fragment, marker on the last).
+    pub fn send_video_frame(&mut self, data: &[u8], timestamp: u32) -> Result<Vec<Vec<u8>>, Error> {
+        let v = self.video.as_mut().ok_or(Error::Rtp("video not enabled"))?;
+        v.payload_frame(&mut self.tx, data, timestamp)
+    }
+
+    /// Next whole reassembled inbound video frame, if any.
+    pub fn take_video_frame(&mut self) -> Option<VideoFrame> {
+        self.video.as_mut().and_then(|v| v.take_frame())
+    }
+
+    /// True once if inbound video loss/drops occurred since the last call — the
+    /// session's PLI trigger.
+    pub fn take_video_loss(&mut self) -> bool {
+        self.video.as_mut().is_some_and(|v| v.take_loss())
+    }
+
+    /// Our video send SSRC (RTCP SR sender), if video is enabled.
+    pub fn video_ssrc(&self) -> Option<u32> {
+        self.video.as_ref().map(|v| v.ssrc())
+    }
+
+    /// The peer's video SSRC once learned from its first packet (PLI target).
+    pub fn video_rx_ssrc(&self) -> Option<u32> {
+        self.video.as_ref().and_then(|v| v.rx_ssrc())
+    }
+
+    /// Video send totals for the RTCP SR: `(packets, octets, last_rtp_ts)`.
+    pub fn video_tx_stats(&self) -> Option<(u32, u32, u32)> {
+        self.video.as_ref().map(|v| v.tx_stats())
+    }
+
+    /// Video-plane counters; zeros until video is enabled.
+    pub fn video_diag(&self) -> VideoDiag {
+        self.video.as_ref().map(|v| v.diag()).unwrap_or((0, 0, 0, 0, 0))
+    }
+
+    // ── RTCP (SRTCP rides the same contexts; RFC 5761 mux) ──────────────────
+
+    /// Protect an RTCP compound payload → SRTCP datagram (our send context).
+    pub fn protect_rtcp(&mut self, raw: &[u8]) -> Result<Vec<u8>, Error> {
+        Ok(self.tx.encrypt_rtcp(raw).map_err(|_| Error::Srtp("encrypt rtcp"))?.to_vec())
+    }
+
+    /// Unprotect an inbound SRTCP datagram → the RTCP compound payload.
+    pub fn unprotect_rtcp(&mut self, data: &[u8]) -> Result<Vec<u8>, Error> {
+        Ok(self.rx.decrypt_rtcp(data).map_err(|_| Error::Srtp("decrypt rtcp"))?.to_vec())
     }
 }

@@ -13,6 +13,7 @@
 - [✅ WART→WANDR rename + redeploy](project_wandr_rename.md) — whole-project rename + full --no-art redeploy; 4 bring-up gotchas; what intentionally kept `wart`.
 - [✅ Task 93 Phase 2: SRTP HW-AES offload](project_wandr_crypto_srtp_offload.md) — LIVE-CALL-VERIFIED: SRTP GCM on host ARMv8 AES via `aead-key` resource; 3.0× audio / 8.5× video; trait-injected (rtc-srtp `external-aead` + wandr-call `host-aead`).
 - [✅ Task 93 Phase 1: wandr:video host impl](project_wandr_video_host.md) — 25fps camera→HW-VP8→guest→HW-decode via WIT; lazy post-fork threadpool + ordered-teardown gotchas; qcom encoder ignores i-frame-interval, request-sync works.
+- [✅ Task 93 Phase 3: wandr-call video track](project_wandr_call_video_track.md) — VP8 RTP on shared SRTP contexts + SRTCP PLI/SR/REMB; device 17.4fps camera→SRTP/UDP→decode; ringrtc constants VP8 PT 108, SSRC 1003/2003 (base+3).
 - [Project: crypto HW offload roadmap](project_crypto_hw_offload.md) — why host-side crypto (wasm can't reach HW AES); 3 offload layers; which crypto AIDL services survive --no-art.
 - [✅ Task 98: AudioFlinger-direct backend](project_audioflinger_backend.md) — pure-Rust createTrack→cblk ring, audible --no-art; 3 ABI/appops bugs documented.
 - [✅ Task 93/95: camera capture --no-art](project_artless_camera.md) — reliable raw 29fps / HW VP8 17fps; EIS-gyro race + stub chain + ruled-out list.

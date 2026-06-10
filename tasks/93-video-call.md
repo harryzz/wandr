@@ -8,9 +8,10 @@
 > ART-off. WIT contracts ✍️ **DRAFTED + validated**: `wit/video.wit` (`wandr:video`)
 > + `wit/crypto.wit` (`wandr:crypto`), commit `697da5de`. **Audio calls connect both
 > ways (incoming fixed).** Remaining = pure integration, no `--no-art` blockers — see
-> **IMPLEMENTATION PLAN** below. **Phase 2 (`wandr:crypto`) ✅ + Phase 1
-> (`wandr:video` host impl) ✅ both DONE + device-verified (2026-06-10) — next is
-> Phase 3 (wandr-call video track).**
+> **IMPLEMENTATION PLAN** below. **Phases 1+2+3 ✅ DONE + device-verified
+> (2026-06-10): `wandr:crypto`, `wandr:video` host impl, AND the wandr-call video
+> track (camera→HW-VP8→SRTP/UDP→reassembly→HW-decode 17.4 fps + PLI/SR on-wire) —
+> next is Phase 4 (render + arbiter `Role::Video`).**
 
 ## IMPLEMENTATION PLAN — ready to build (next session)
 
@@ -52,12 +53,30 @@ CPU/s) — the video critical path is cleared. Real Signal call verified, audio 
 ways. Commits 11c5efaa/266e6834/3c316895. Gotcha for the next phases: after host
 linker changes RESTART THE ZYGOTE (stale-image trap, `repros/wac-resource-import/`).
 
-**Phase 3 — wandr-call video track.** Wire the existing `rtc-rtp` VP8 payloader/
-depacketizer into a video RTP stream over the existing SRTP transport. Add the
-WebRTC video machinery audio didn't need: **RTCP PLI/FIR** (incoming loss/keyframe
-request → ask the encoder for a sync frame via `AMediaCodec` request-sync; honor a
-peer's PLI), **bitrate/congestion control** (check whether `external/rtc` has
-BWE/REMB/transport-cc; a fixed-bitrate v1 if not), and A/V sync via RTCP SR.
+**Phase 3 — wandr-call video track. ✅ DONE + DEVICE-VERIFIED (2026-06-10).**
+New `crates/wandr-call/src/video.rs` (`VideoStream`): VP8 RTP track on the SAME
+SRTP contexts as audio (own SSRC) — RFC 7741 payloader (PictureID on, 1172 B
+payload budget = 1200 − RTP 12 − GCM tag 16) out; depacketize + in-order frame
+reassembly (S-bit/ts keyed, torn frames dropped, never reach the decoder) in.
+RTCP over the same contexts (SRTCP, RFC 5761 byte-1 demux 192–223; works through
+the Phase-2 host-AEAD cipher too): **PLI/FIR in** → `take_keyframe_request()` →
+guest calls encoder `request-keyframe`; **PLI out** = `request_keyframe()` +
+AUTO-PLI on any inbound loss (rate-limited 300 ms — VP8 has no recovery but a
+keyframe; RTX PT 118 ignored); **~1 Hz video SR out** + peer SR surfaced
+(`peer_sender_report` = the A/V-sync NTP⇄RTP anchor); **REMB parsed** →
+`peer_remb_bps()` (v1 congestion control = fixed bitrate + feed REMB to
+`set-bitrate`; `external/rtc` has the RTCP types but no BWE engine — full
+TWCC/BWE deferred). **ringrtc wire constants grounded in source**
+(signalapp/webrtc rffi `peer_connection.cc`): VP8 PT **108**, RTX 118, VP9 109,
+SSRCs = BASE(offerer 1000/answerer 2000)+2 audio/+3 video/+13 RTX → our video
+SSRC 1003/2003 (and the old captured peer audio ssrc 0x7d2=2002 now explained).
+`PeerSession`/`SignalCall` API: `send_video(frame, ts90)` / `recv_video()` /
+`take_keyframe_request` / `request_keyframe` / `peer_remb_bps` / `video_diag`.
+3 new engine tests (round-trip w/ fragmentation, PLI+SR cross the wire,
+lost-fragment→drop+auto-PLI) — 21/21 pass. **Device capstone** (`wandr.video.test`
+Part 2): camera → HW VP8 → PeerSession A → SRTP over real wasi:sockets UDP →
+PeerSession B → reassembled **88/88 frames, 0 broken** → HW decode **17.4 fps**;
+PLI round trip answered on-wire; SR anchor received; 2× runs clean.
 
 **Phase 4 — render + arbiter `Role::Video`.** New surface role: the decoder output
 surface composited behind/around the guest Skia call UI (z-order, rotation,
@@ -68,9 +87,10 @@ re-enter the guest). Wire the Signal guest call UI to remote-video + local-PiP.
 bitrate adaptation (the `opaque` ConnectionParameters); signaling already advertises
 VP8/VP9.
 
-**Next step (Phases 1+2 ✅ done): Phase 3** — wandr-call video track (the
-`rtc-rtp` VP8 payloader over the existing SRTP transport + RTCP PLI/FIR +
-bitrate control), consuming `wandr:video` encoder/decoder + `wandr:crypto` AEAD.
+**Next step (Phases 1+2+3 ✅ done): Phase 4** — render + arbiter `Role::Video`
+(decode-to-surface compositing + PiP self-view), then Phase 5 Signal-protocol
+video (in-call enable/disable; wire constants already grounded: VP8 PT 108,
+SSRC 1003/2003).
 
 **Residual risks (post-decode-confirmation):** SRTP CPU at video bitrate (→ Phase 2
 mandatory); PLI/keyframe + congestion control (→ Phase 3, the WebRTC bits audio

@@ -30,9 +30,11 @@ pub mod signaling;
 pub mod transport;
 #[cfg(feature = "signal")]
 pub mod turn;
+pub mod video;
 
 pub use media::{MediaSession, SrtpKeys};
 pub use session::{PeerSession, Role, SessionState};
+pub use video::{VideoFrame, VP8_PAYLOAD_TYPE};
 
 /// AEAD backend injection (feature `host-aead`). A guest implements these to run the
 /// SRTP per-packet AES-GCM on the host's hardware AES (`wandr:crypto/aead`) and hands

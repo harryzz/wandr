@@ -265,6 +265,41 @@ impl SignalCall {
         self.session.recv_audio()
     }
 
+    // ── video track (task 93 Phase 3; delegates to the PeerSession) ─────────
+
+    /// Send one encoded VP8 frame (90 kHz `timestamp` — the host encoder's
+    /// `next-frame` output passes straight through).
+    pub fn send_video(&mut self, frame: &[u8], timestamp: u32) -> Result<(), Error> {
+        self.session.send_video(frame, timestamp)
+    }
+
+    /// Next whole inbound video frame — feed to the host decoder (`submit`).
+    pub fn recv_video(&mut self) -> Option<crate::VideoFrame> {
+        self.session.recv_video()
+    }
+
+    /// True once if the peer asked for a keyframe (RTCP PLI/FIR) — answer with
+    /// the encoder's `request-keyframe`.
+    pub fn take_keyframe_request(&mut self) -> bool {
+        self.session.take_keyframe_request()
+    }
+
+    /// Ask the peer for a keyframe (our decoder lost sync).
+    pub fn request_keyframe(&mut self) {
+        self.session.request_keyframe()
+    }
+
+    /// The peer's latest REMB bandwidth estimate (bps) — feed to `set-bitrate`.
+    pub fn peer_remb_bps(&self) -> Option<u32> {
+        self.session.peer_remb_bps()
+    }
+
+    /// Video-plane counters: `((tx_frames, tx_pkts, rx_pkts, rx_frames,
+    /// rx_broken), pli_tx, pli_rx, rtcp_err)`.
+    pub fn video_diag(&self) -> (crate::video::VideoDiag, u64, u64, u64) {
+        self.session.video_diag()
+    }
+
     /// True if we are the **answerer** (callee) — the side that must send
     /// ringrtc's `accepted` so the caller starts streaming media.
     pub fn is_answerer(&self) -> bool {

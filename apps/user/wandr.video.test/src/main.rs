@@ -1,10 +1,17 @@
 //! wandr.video.test — a wasi:cli command guest that drives `wandr:video` over the
-//! WIT boundary (task 93 Phase 1 end-to-end test): host opens the camera + HW VP8
-//! encoder, the guest pulls encoded frames (the Phase-3 RTP path's read side) and
-//! pushes each one into a host HW VP8 decoder (the write side) — the spike's
-//! loopback, now through the real interface. Exits cleanly so the host's ordered
-//! camera/codec teardown runs (run twice back-to-back to prove cameraserver
-//! doesn't wedge).
+//! WIT boundary.
+//!
+//! **Part 1 (task 93 Phase 1)**: host opens the camera + HW VP8 encoder, the guest
+//! pulls encoded frames and pushes each into a host HW VP8 decoder — the spike's
+//! loopback through the real interface. Resources are dropped at the end so Part 2's
+//! re-open also proves clean teardown (no cameraserver wedge) within one run.
+//!
+//! **Part 2 (task 93 Phase 3)**: the same camera frames through the wandr-call
+//! video track: encoder → `PeerSession` A `send_video` → VP8 RTP + SRTP over real
+//! `wasi:sockets` UDP (loopback) → `PeerSession` B `recv_video` → reassembled
+//! frames → HW decoder. Plus the RTCP control loop: B `request_keyframe` → PLI on
+//! the wire → A `take_keyframe_request` → encoder `request-keyframe`, and A's ~1 Hz
+//! video sender report landing as B's A/V-sync anchor.
 
 wit_bindgen::generate!({
     world: "video-test",
@@ -17,16 +24,16 @@ use crate::wandr::video::encoder::VideoEncoder;
 use crate::wandr::video::types::{
     CameraFacing, Codec, DecoderConfig, EncoderConfig, VideoError, VideoRect,
 };
+use std::net::UdpSocket;
 use std::time::{Duration, Instant};
+use wandr_call::signaling::Signaling;
+use wandr_call::{PeerSession, Role};
 
 const W: u32 = 640;
 const H: u32 = 480;
-const RUN_SECS: u64 = 5;
 
-fn main() {
-    println!("=== wandr.video.test — guest -> wandr:video host (camera -> HW VP8 -> guest -> HW decode) ===");
-
-    let enc = match VideoEncoder::open(EncoderConfig {
+fn open_encoder() -> Option<VideoEncoder> {
+    match VideoEncoder::open(EncoderConfig {
         codec: Codec::Vp8,
         width: W,
         height: H,
@@ -38,15 +45,17 @@ fn main() {
     }) {
         Ok(e) => {
             println!("encoder OPEN ✓ ({W}x{H} VP8, camera live)");
-            e
+            Some(e)
         }
         Err(e) => {
             println!("FAIL: encoder open: {e:?} (stubs/sensormanager running? wandr-sensors stopped?)");
-            return;
+            None
         }
-    };
+    }
+}
 
-    let dec = match VideoDecoder::open(DecoderConfig {
+fn open_decoder() -> Option<VideoDecoder> {
+    match VideoDecoder::open(DecoderConfig {
         codec: Codec::Vp8,
         width: W,
         height: H,
@@ -54,24 +63,27 @@ fn main() {
     }) {
         Ok(d) => {
             println!("decoder OPEN ✓ (decode-to-buffer)");
-            d
+            Some(d)
         }
         Err(e) => {
             println!("FAIL: decoder open: {e:?}");
-            return;
+            None
         }
-    };
+    }
+}
+
+/// Part 1 — direct WIT loopback (Phase 1 regression): encoder → guest → decoder.
+/// Returns pass/fail. Drops its encoder+decoder on return (teardown exercise).
+fn part1_direct_loopback() -> bool {
+    const RUN_SECS: u64 = 3;
+    println!("── Part 1: direct WIT loopback (camera → HW VP8 → guest → HW decode) ──");
+    let Some(enc) = open_encoder() else { return false };
+    let Some(dec) = open_decoder() else { return false };
 
     let start = Instant::now();
-    let mut pulled = 0u64;
-    let mut bytes = 0u64;
-    let mut keyframes = 0u64;
+    let (mut pulled, mut bytes, mut keyframes, mut submitted, mut queue_full, mut other_err) =
+        (0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
     let mut first_ms: i128 = -1;
-    let mut submitted = 0u64;
-    let mut queue_full = 0u64;
-    let mut other_err = 0u64;
-    let mut midrun_done = false;
-
     while start.elapsed().as_secs() < RUN_SECS {
         if let Some(frame) = enc.next_frame() {
             if first_ms < 0 {
@@ -93,34 +105,140 @@ fn main() {
         } else {
             std::thread::sleep(Duration::from_millis(10));
         }
-        // Mid-run control smoke: congestion-adapt + PLI-style keyframe request.
-        if !midrun_done && start.elapsed().as_millis() > (RUN_SECS as u128 * 500) {
-            midrun_done = true;
-            enc.set_bitrate(500_000);
-            enc.request_keyframe();
-            println!("   mid-run: set-bitrate(500k) + request-keyframe sent");
-        }
     }
     let secs = start.elapsed().as_secs_f64();
     let decoded = dec.decoded_frames();
-
-    println!("──────── RESULT ────────");
-    println!("encoded frames : {pulled} in {secs:.1}s = {:.1} fps", pulled as f64 / secs);
-    println!("avg frame bytes: {}", if pulled > 0 { bytes / pulled } else { 0 });
-    println!("keyframes      : {keyframes}");
-    println!("first-frame    : {first_ms} ms");
-    println!("submitted      : {submitted} (queue-full {queue_full}, other-err {other_err})");
-    println!("decoded frames : {decoded} = {:.1} fps  (ready={})", decoded as f64 / secs, dec.ready());
-
+    println!("   encoded {pulled} ({:.1} fps, avg {} B, {keyframes} kf, first {first_ms} ms)",
+        pulled as f64 / secs, if pulled > 0 { bytes / pulled } else { 0 });
+    println!("   submitted {submitted} (queue-full {queue_full}, err {other_err}) → decoded {decoded}");
     let ok = pulled > 0 && decoded > 0 && other_err == 0;
-    println!(
-        "=== RESULT: {} — wandr:video WIT boundary {} ===",
-        if ok { "PASS" } else { "FAIL" },
-        if ok { "works end-to-end (camera->encode->guest->decode)" } else { "has failures" }
-    );
+    println!("   Part 1: {}", if ok { "PASS" } else { "FAIL" });
+    ok
+    // enc + dec drop here — ordered host teardown; Part 2 re-opens the camera.
+}
 
-    // Explicit drops so the host teardown logs line up with the exit.
-    drop(dec);
-    drop(enc);
-    println!("resources dropped — host should log encoder/decoder teardown");
+/// Part 2 — the wandr-call video track (Phase 3): camera → encoder → PeerSession A
+/// → SRTP/UDP → PeerSession B → reassembled frames → decoder; PLI both ways.
+fn part2_engine_pipeline() -> bool {
+    const RUN_SECS: u64 = 5;
+    println!("── Part 2: wandr-call video track (encoder → SRTP/UDP → decoder) ──");
+    let Some(enc) = open_encoder() else { return false };
+    let Some(dec) = open_decoder() else { return false };
+
+    // Two engine peers over real wasi:sockets UDP on loopback (the call-live pattern).
+    let asock = UdpSocket::bind("127.0.0.1:0").expect("bind A");
+    let bsock = UdpSocket::bind("127.0.0.1:0").expect("bind B");
+    asock.set_nonblocking(true).unwrap();
+    bsock.set_nonblocking(true).unwrap();
+    let mut a = PeerSession::new(Role::Offerer, asock.local_addr().unwrap()).expect("session A");
+    let mut b = PeerSession::new(Role::Answerer, bsock.local_addr().unwrap()).expect("session B");
+    let offer = a.local_signaling().to_sdp();
+    let answer = b.local_signaling().to_sdp();
+    a.set_remote_signaling(&Signaling::from_sdp(&answer).unwrap()).unwrap();
+    b.set_remote_signaling(&Signaling::from_sdp(&offer).unwrap()).unwrap();
+
+    let mut buf = [0u8; 2048];
+    let mut pump = |a: &mut PeerSession, asock: &UdpSocket, b: &mut PeerSession, bsock: &UdpSocket| {
+        for (dst, dg) in a.poll_transmit() {
+            let _ = asock.send_to(&dg, dst);
+        }
+        for (dst, dg) in b.poll_transmit() {
+            let _ = bsock.send_to(&dg, dst);
+        }
+        while let Ok((n, src)) = asock.recv_from(&mut buf) {
+            let _ = a.handle_datagram(src, &buf[..n]);
+        }
+        while let Ok((n, src)) = bsock.recv_from(&mut buf) {
+            let _ = b.handle_datagram(src, &buf[..n]);
+        }
+    };
+
+    let start = Instant::now();
+    while !(a.is_connected() && b.is_connected()) {
+        if start.elapsed().as_secs() > 10 {
+            println!("FAIL: engine peers did not connect (ICE/DTLS)");
+            return false;
+        }
+        let now = Instant::now();
+        a.handle_timeout(now);
+        b.handle_timeout(now);
+        pump(&mut a, &asock, &mut b, &bsock);
+        std::thread::sleep(Duration::from_millis(3));
+    }
+    println!("   engine peers CONNECTED (ICE + DTLS-SRTP) ✓");
+
+    let start = Instant::now();
+    let (mut sent, mut rx_frames, mut decoded_fed, mut queue_full, mut other_err) =
+        (0u64, 0u64, 0u64, 0u64, 0u64);
+    let mut pli_requested = false;
+    let mut pli_answered = false;
+    while start.elapsed().as_secs() < RUN_SECS {
+        // Camera → encoder → engine A (the Phase-5 Signal send path).
+        if let Some(frame) = enc.next_frame() {
+            if a.send_video(&frame.data, frame.timestamp).is_ok() {
+                sent += 1;
+            }
+        }
+        pump(&mut a, &asock, &mut b, &bsock);
+        // Engine B → decoder (the receive path).
+        while let Some(vf) = b.recv_video() {
+            rx_frames += 1;
+            let f = crate::wandr::video::types::EncodedFrame {
+                data: vf.data,
+                timestamp: vf.timestamp,
+                keyframe: vf.keyframe,
+            };
+            match dec.submit(&f) {
+                Ok(()) => decoded_fed += 1,
+                Err(VideoError::QueueFull) => queue_full += 1,
+                Err(e) => {
+                    other_err += 1;
+                    println!("   submit error: {e:?}");
+                }
+            }
+        }
+        // RTCP control loop: B asks for a keyframe mid-run → PLI crosses the
+        // wire → A surfaces it → encoder request-keyframe (the PLI handler).
+        if !pli_requested && start.elapsed().as_millis() > (RUN_SECS as u128 * 500) {
+            pli_requested = true;
+            b.request_keyframe();
+            println!("   mid-run: B sent PLI (request_keyframe)");
+        }
+        if a.take_keyframe_request() {
+            enc.request_keyframe();
+            pli_answered = true;
+        }
+        let now = Instant::now();
+        a.handle_timeout(now);
+        b.handle_timeout(now);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let secs = start.elapsed().as_secs_f64();
+    let decoded = dec.decoded_frames();
+    let ((_, tx_pkts, rx_pkts, _, rx_broken), _, _, rtcp_err) = b.video_diag();
+
+    println!("──────── Part 2 RESULT ────────");
+    println!("frames cam→A   : {sent} in {secs:.1}s = {:.1} fps", sent as f64 / secs);
+    println!("A tx RTP pkts  : {} (fragmented + SRTP)", { let ((_, tx, ..), ..) = a.video_diag(); tx });
+    println!("B rx RTP pkts  : {rx_pkts}, frames reassembled {rx_frames}, broken {rx_broken}");
+    println!("decoder fed    : {decoded_fed} (queue-full {queue_full}, err {other_err}) → decoded {decoded} = {:.1} fps", decoded as f64 / secs);
+    println!("PLI round trip : requested={pli_requested} answered={pli_answered} (rtcp_err {rtcp_err})");
+    println!("B peer SR      : {:?} (A/V-sync anchor from A)", b.peer_sender_report());
+    let _ = tx_pkts;
+
+    let ok = sent > 0 && rx_frames > 0 && decoded > 0 && other_err == 0 && pli_answered;
+    println!("   Part 2: {}", if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
+fn main() {
+    println!("=== wandr.video.test — wandr:video WIT + wandr-call video track ===");
+    let p1 = part1_direct_loopback();
+    let p2 = part2_engine_pipeline();
+    println!(
+        "=== RESULT: {} — Phase 1 {} | Phase 3 {} ===",
+        if p1 && p2 { "ALL PASS" } else { "FAILURES" },
+        if p1 { "ok" } else { "FAIL" },
+        if p2 { "ok" } else { "FAIL" },
+    );
 }

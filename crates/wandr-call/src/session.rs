@@ -24,6 +24,7 @@ use std::time::Instant;
 use crate::media::MediaSession;
 use crate::signaling::Signaling;
 use crate::transport::{Demux, Transport};
+use crate::video::{VideoDiag, VideoFrame, VP8_PAYLOAD_TYPE};
 use crate::{Error, OPUS_PAYLOAD_TYPE, SAMPLE_RATE};
 
 /// Which end of the call this is. Offerer sends the SDP offer; Answerer answers.
@@ -61,6 +62,27 @@ pub struct PeerSession {
     /// WebRTC path `set_remote_signaling` adopts the peer's SDP rtpmap PT, so we
     /// send + decode on whatever the peer uses (ringrtc fixes it at 102).
     audio_pt: u8,
+    /// Whole reassembled inbound video frames (drained by `recv_video`).
+    video_in: Vec<VideoFrame>,
+    /// The peer asked for a keyframe (RTCP PLI/FIR received) — drained by
+    /// `take_keyframe_request`; the guest answers with encoder `request-keyframe`.
+    keyframe_requested: bool,
+    /// We owe the peer a PLI (inbound loss detected, or the guest's decoder asked
+    /// via `request_keyframe`). Sent rate-limited from `handle_timeout`.
+    pli_wanted: bool,
+    last_pli_tx: Option<Instant>,
+    last_sr_tx: Option<Instant>,
+    /// The peer's latest REMB bandwidth estimate (bps), if it sends one — the
+    /// guest can feed this to the encoder's `set-bitrate` (v1 congestion control).
+    peer_remb_bps: Option<u32>,
+    /// The peer's last RTCP sender report `(ssrc, ntp_time, rtp_time)` — the
+    /// wall-clock ⇄ RTP-timestamp anchor a renderer needs for A/V sync.
+    peer_sr: Option<(u32, u64, u32)>,
+    /// RTCP counters: PLIs we sent / PLIs+FIRs the peer sent us / SRTCP packets
+    /// that failed to unprotect.
+    pli_tx: u64,
+    pli_rx: u64,
+    rtcp_err: u64,
     /// Monotonic seqnum for the ringrtc RTP-data control channel (the `accepted`
     /// message). Incremented per send; ringrtc resends accumulated state ~1 Hz.
     #[cfg(feature = "signal")]
@@ -94,6 +116,14 @@ impl PeerSession {
             audio_in: Vec::new(),
             media_seen: 0, decode_ok: 0, decode_err: 0,
             audio_pt: OPUS_PAYLOAD_TYPE,
+            video_in: Vec::new(),
+            keyframe_requested: false,
+            pli_wanted: false,
+            last_pli_tx: None,
+            last_sr_tx: None,
+            peer_remb_bps: None,
+            peer_sr: None,
+            pli_tx: 0, pli_rx: 0, rtcp_err: 0,
             #[cfg(feature = "signal")]
             rtp_data_seqnum: 0,
             #[cfg(feature = "host-aead")]
@@ -135,6 +165,14 @@ impl PeerSession {
             audio_in: Vec::new(),
             media_seen: 0, decode_ok: 0, decode_err: 0,
             audio_pt: OPUS_PAYLOAD_TYPE,
+            video_in: Vec::new(),
+            keyframe_requested: false,
+            pli_wanted: false,
+            last_pli_tx: None,
+            last_sr_tx: None,
+            peer_remb_bps: None,
+            peer_sr: None,
+            pli_tx: 0, pli_rx: 0, rtcp_err: 0,
             rtp_data_seqnum: 0,
             #[cfg(feature = "host-aead")]
             aead_provider: None,
@@ -246,22 +284,140 @@ impl PeerSession {
     }
 
     /// Feed one inbound datagram from `src`; demuxed to ICE/DTLS/media. Decoded
-    /// PCM lands in `recv_audio`.
+    /// PCM lands in `recv_audio`; reassembled video frames in `recv_video`.
     pub fn handle_datagram(&mut self, src: SocketAddr, data: &[u8]) -> Result<(), Error> {
         if let Demux::Media(srtp) = self.transport.handle_datagram(src, data)? {
             self.media_seen += 1;
             self.ensure_media()?;
+            // RFC 5761 RTP/RTCP mux demux on byte 1: RTCP packet types occupy
+            // 192–223 there, while an RTP M|PT byte for our PTs (101/102/108/118)
+            // is <192 without the marker and >223 with it — no overlap.
+            if srtp.len() >= 2 && (192..=223).contains(&srtp[1]) {
+                self.handle_rtcp(&srtp);
+                return Ok(());
+            }
             if let Some(m) = &mut self.media {
                 match m.recv(&srtp) {
-                    // Empty = a non-Opus stream we skipped (telephone-event etc.) —
-                    // not audio, not an error; don't queue or count it.
+                    // Empty = a non-Opus stream we skipped (video → the
+                    // reassembler, telephone-event etc.) — not audio, not an error.
                     Ok(pcm) if pcm.is_empty() => {}
                     Ok(pcm) => { self.audio_in.push(pcm); self.decode_ok += 1; }
                     Err(_) => { self.decode_err += 1; }
                 }
+                while let Some(f) = m.take_video_frame() {
+                    self.video_in.push(f);
+                }
+                // Inbound video loss → owe the peer a PLI (sent rate-limited from
+                // `handle_timeout`; VP8 can't recover references without a keyframe).
+                if m.take_video_loss() {
+                    self.pli_wanted = true;
+                }
             }
         }
         Ok(())
+    }
+
+    /// One inbound SRTCP datagram: unprotect + scan the compound for what the
+    /// video track acts on — PLI/FIR (peer wants a keyframe), REMB (peer's
+    /// bandwidth estimate), SR (the peer's NTP⇄RTP sync anchor).
+    fn handle_rtcp(&mut self, srtcp: &[u8]) {
+        use rtc_rtcp::payload_feedbacks::full_intra_request::FullIntraRequest;
+        use rtc_rtcp::payload_feedbacks::picture_loss_indication::PictureLossIndication;
+        use rtc_rtcp::payload_feedbacks::receiver_estimated_maximum_bitrate::ReceiverEstimatedMaximumBitrate;
+        use rtc_rtcp::sender_report::SenderReport;
+
+        let Some(m) = &mut self.media else { return };
+        let raw = match m.unprotect_rtcp(srtcp) {
+            Ok(r) => r,
+            Err(_) => {
+                self.rtcp_err += 1;
+                return;
+            }
+        };
+        let mut buf = &raw[..];
+        let Ok(pkts) = rtc_rtcp::packet::unmarshal(&mut buf) else {
+            self.rtcp_err += 1;
+            return;
+        };
+        for p in &pkts {
+            let any = p.as_any();
+            if any.downcast_ref::<PictureLossIndication>().is_some()
+                || any.downcast_ref::<FullIntraRequest>().is_some()
+            {
+                // Addressed-SSRC check is deliberately loose: we send one video
+                // stream, so any PLI/FIR from the peer can only mean it.
+                self.keyframe_requested = true;
+                self.pli_rx += 1;
+            } else if let Some(remb) = any.downcast_ref::<ReceiverEstimatedMaximumBitrate>() {
+                self.peer_remb_bps = Some(remb.bitrate as u32);
+            } else if let Some(sr) = any.downcast_ref::<SenderReport>() {
+                self.peer_sr = Some((sr.ssrc, sr.ntp_time, sr.rtp_time));
+            }
+        }
+    }
+
+    /// Build + queue the RTCP we owe: a rate-limited PLI when inbound video needs
+    /// a keyframe, and a ~1 Hz sender report for our outbound video (the peer's
+    /// A/V-sync anchor). Called from `handle_timeout`.
+    fn pump_rtcp(&mut self, now: Instant) {
+        use rtc_rtcp::payload_feedbacks::picture_loss_indication::PictureLossIndication;
+        use rtc_rtcp::sender_report::SenderReport;
+        use rtc_shared::marshal::Marshal;
+
+        // Min spacing between PLIs — a keyframe answer takes a frame interval+RTT
+        // anyway, and libwebrtc itself paces PLIs; this also caps the auto-PLI
+        // storm a lossy link could otherwise trigger per dropped frame.
+        const PLI_MIN_INTERVAL_MS: u128 = 300;
+        const SR_INTERVAL_MS: u128 = 1000;
+
+        let Some(m) = &mut self.media else { return };
+
+        if self.pli_wanted {
+            let due = self
+                .last_pli_tx
+                .is_none_or(|t| now.duration_since(t).as_millis() >= PLI_MIN_INTERVAL_MS);
+            // The PLI targets the peer's video SSRC — unknown until its first
+            // packet arrives; keep `pli_wanted` pending until then.
+            if let (true, Some(media_ssrc)) = (due, m.video_rx_ssrc()) {
+                let pli = PictureLossIndication {
+                    sender_ssrc: m.video_ssrc().unwrap_or(0),
+                    media_ssrc,
+                };
+                if let Ok(raw) = pli.marshal() {
+                    if let Ok(dg) = m.protect_rtcp(&raw) {
+                        self.transport.queue_media(dg);
+                        self.pli_tx += 1;
+                        self.last_pli_tx = Some(now);
+                        self.pli_wanted = false;
+                    }
+                }
+            }
+        }
+
+        // Sender report for the video stream once it has sent anything.
+        if let (Some(ssrc), Some((pkts, octets, last_ts))) = (m.video_ssrc(), m.video_tx_stats()) {
+            if pkts > 0 {
+                let due = self
+                    .last_sr_tx
+                    .is_none_or(|t| now.duration_since(t).as_millis() >= SR_INTERVAL_MS);
+                if due {
+                    let sr = SenderReport {
+                        ssrc,
+                        ntp_time: ntp_now(),
+                        rtp_time: last_ts,
+                        packet_count: pkts,
+                        octet_count: octets,
+                        ..Default::default()
+                    };
+                    if let Ok(raw) = sr.marshal() {
+                        if let Ok(dg) = m.protect_rtcp(&raw) {
+                            self.transport.queue_media(dg);
+                            self.last_sr_tx = Some(now);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Inbound-media diagnostics: `(seen, decode_ok, decode_err)`.
@@ -288,6 +444,7 @@ impl PeerSession {
     pub fn handle_timeout(&mut self, now: Instant) {
         self.transport.handle_timeout(now);
         let _ = self.ensure_media();
+        self.pump_rtcp(now);
     }
 
     /// PCM frame length (samples) the codec expects per 20 ms tick.
@@ -307,6 +464,56 @@ impl PeerSession {
     /// Next decoded PCM frame from the peer, if any.
     pub fn recv_audio(&mut self) -> Option<Vec<f32>> {
         if self.audio_in.is_empty() { None } else { Some(self.audio_in.remove(0)) }
+    }
+
+    // ── video track (task 93 Phase 3) ────────────────────────────────────────
+
+    /// Packetize + protect one encoded VP8 frame (90 kHz `timestamp`, e.g. the
+    /// host encoder's `next-frame` output) → queued for the next `poll_transmit`.
+    pub fn send_video(&mut self, frame: &[u8], timestamp: u32) -> Result<(), Error> {
+        self.ensure_media()?;
+        let m = self.media.as_mut().ok_or(Error::NotConnected)?;
+        for dg in m.send_video_frame(frame, timestamp)? {
+            self.transport.queue_media(dg);
+        }
+        Ok(())
+    }
+
+    /// Next whole reassembled inbound video frame, if any — feed it to the host
+    /// decoder (`wandr:video` `submit`).
+    pub fn recv_video(&mut self) -> Option<VideoFrame> {
+        if self.video_in.is_empty() { None } else { Some(self.video_in.remove(0)) }
+    }
+
+    /// True once if the peer asked for a keyframe (RTCP PLI/FIR) since the last
+    /// call — answer with the encoder's `request-keyframe`.
+    pub fn take_keyframe_request(&mut self) -> bool {
+        std::mem::take(&mut self.keyframe_requested)
+    }
+
+    /// Ask the peer for a keyframe (our decoder lost sync, e.g. `queue-full`
+    /// drops). Queues a rate-limited RTCP PLI on the next `handle_timeout`.
+    pub fn request_keyframe(&mut self) {
+        self.pli_wanted = true;
+    }
+
+    /// The peer's latest REMB bandwidth estimate (bps), if any — v1 congestion
+    /// control: feed it to the encoder's `set-bitrate`.
+    pub fn peer_remb_bps(&self) -> Option<u32> {
+        self.peer_remb_bps
+    }
+
+    /// The peer's last RTCP sender report `(ssrc, ntp_time, rtp_time)` — the
+    /// wall-clock ⇄ RTP-timestamp anchor for A/V sync.
+    pub fn peer_sender_report(&self) -> Option<(u32, u64, u32)> {
+        self.peer_sr
+    }
+
+    /// Video-plane counters: `((tx_frames, tx_pkts, rx_pkts, rx_frames,
+    /// rx_broken), pli_tx, pli_rx, rtcp_err)`.
+    pub fn video_diag(&self) -> (VideoDiag, u64, u64, u64) {
+        let v = self.media.as_ref().map(|m| m.video_diag()).unwrap_or((0, 0, 0, 0, 0));
+        (v, self.pli_tx, self.pli_rx, self.rtcp_err)
     }
 
     /// This session's role (offerer = caller, answerer = callee).
@@ -342,17 +549,38 @@ impl PeerSession {
             let profile = self.transport.srtp_profile();
             // Use the host AEAD backend if the guest injected one; else in-wasm AES.
             #[cfg(feature = "host-aead")]
-            let media = match &self.aead_provider {
+            let mut media = match &self.aead_provider {
                 Some(p) => MediaSession::new_with_aead(
                     SAMPLE_RATE, 1, self.audio_pt, ssrc, profile, &send, &recv, p.as_ref(),
                 )?,
                 None => MediaSession::new(SAMPLE_RATE, 1, self.audio_pt, ssrc, profile, &send, &recv)?,
             };
             #[cfg(not(feature = "host-aead"))]
-            let media = MediaSession::new(SAMPLE_RATE, 1, self.audio_pt, ssrc, profile, &send, &recv)?;
+            let mut media = MediaSession::new(SAMPLE_RATE, 1, self.audio_pt, ssrc, profile, &send, &recv)?;
+            // Video SSRC scheme from ringrtc (signalapp/webrtc rffi
+            // peer_connection.cc): BASE_SSRC = offerer 1000 / answerer 2000,
+            // video = BASE+3 (audio is BASE+2, video RTX BASE+13 — unused here).
+            // libwebrtc insists the two sides' video SSRCs don't overlap.
+            let video_ssrc = if self.role == Role::Offerer { 1003 } else { 2003 };
+            media.enable_video(VP8_PAYLOAD_TYPE, video_ssrc);
             self.media = Some(media);
         }
         Ok(())
+    }
+}
+
+/// Now as a 64-bit NTP timestamp (RFC 3550 SR format): seconds since 1900 in the
+/// high half, fraction in the low. wasi's wall clock serves `SystemTime` in a guest.
+fn ntp_now() -> u64 {
+    /// Seconds between the NTP era (1900) and the Unix epoch (1970).
+    const NTP_UNIX_OFFSET: u64 = 2_208_988_800;
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => {
+            let secs = d.as_secs() + NTP_UNIX_OFFSET;
+            let frac = (u64::from(d.subsec_nanos()) << 32) / 1_000_000_000;
+            (secs << 32) | frac
+        }
+        Err(_) => 0,
     }
 }
 
@@ -452,6 +680,148 @@ mod tests {
         let got = b.recv_audio().expect("B received an audio frame over UDP");
         let rms = (got.iter().map(|&v| (v as f64) * (v as f64)).sum::<f64>() / got.len() as f64).sqrt();
         assert!(rms > 0.0, "decoded audio present");
+    }
+
+    /// Pump every queued datagram from `from` into `to` over the real sockets.
+    fn pump(
+        from: &mut PeerSession, fsock: &UdpSocket,
+        to: &mut PeerSession, tsock: &UdpSocket,
+    ) {
+        let mut buf = [0u8; 2048];
+        for (dest, data) in from.poll_transmit() { let _ = fsock.send_to(&data, dest); }
+        std::thread::sleep(Duration::from_millis(20));
+        while let Ok((n, src)) = tsock.recv_from(&mut buf) {
+            let _ = to.handle_datagram(src, &buf[..n]);
+        }
+    }
+
+    /// Video track over real UDP: an encoded "VP8" frame larger than one MTU is
+    /// fragmented (RFC 7741), SRTP-protected, reassembled whole on the far side
+    /// with its timestamp and the keyframe bit recovered from the payload; a
+    /// non-keyframe follows. The engine half of camera→encoder→RTP→decoder.
+    #[test]
+    fn video_frame_round_trip_over_udp() {
+        let (mut a, asock) = peer(Role::Offerer);
+        let (mut b, bsock) = peer(Role::Answerer);
+        let offer = a.local_signaling().to_sdp();
+        let answer = b.local_signaling().to_sdp();
+        a.set_remote_signaling(&Signaling::from_sdp(&answer).unwrap()).unwrap();
+        b.set_remote_signaling(&Signaling::from_sdp(&offer).unwrap()).unwrap();
+        drive(&mut a, &asock, &mut b, &bsock);
+        assert!(a.is_connected() && b.is_connected());
+
+        // A fake keyframe (LSB of byte 0 = 0) spanning ~3 RTP fragments.
+        let kf: Vec<u8> = (0..3000u32).map(|i| ((i * 7) as u8) & 0xFE).collect();
+        a.send_video(&kf, 90_000).unwrap();
+        pump(&mut a, &asock, &mut b, &bsock);
+        let got = b.recv_video().expect("B reassembled the video frame");
+        assert_eq!(got.data, kf, "frame bytes survive fragment+SRTP round trip");
+        assert_eq!(got.timestamp, 90_000);
+        assert!(got.keyframe, "keyframe bit recovered from the VP8 payload");
+
+        // A small delta frame (LSB = 1).
+        let delta = vec![0x01u8; 100];
+        a.send_video(&delta, 93_000).unwrap();
+        pump(&mut a, &asock, &mut b, &bsock);
+        let got = b.recv_video().expect("delta frame arrives");
+        assert!(!got.keyframe);
+        assert!(b.recv_video().is_none(), "exactly two frames were sent");
+        let ((tx_frames, tx_pkts, rx_pkts, rx_frames, rx_broken), ..) = b.video_diag();
+        assert_eq!((tx_frames, tx_pkts), (0, 0), "B sent no video");
+        assert_eq!(rx_frames, 2);
+        assert!(rx_pkts >= 4, "multi-fragment keyframe + delta");
+        assert_eq!(rx_broken, 0);
+    }
+
+    /// RTCP keyframe signaling both ways: the receiver's `request_keyframe`
+    /// becomes a (SRTCP-protected, rate-limited) PLI on the wire, and the sender
+    /// surfaces it via `take_keyframe_request` — the hook the guest answers with
+    /// the HW encoder's `request-keyframe`. The sender's ~1 Hz video SR also
+    /// lands as the peer's A/V-sync anchor.
+    #[test]
+    fn pli_and_sender_report_cross_the_wire() {
+        let (mut a, asock) = peer(Role::Offerer);
+        let (mut b, bsock) = peer(Role::Answerer);
+        let offer = a.local_signaling().to_sdp();
+        let answer = b.local_signaling().to_sdp();
+        a.set_remote_signaling(&Signaling::from_sdp(&answer).unwrap()).unwrap();
+        b.set_remote_signaling(&Signaling::from_sdp(&offer).unwrap()).unwrap();
+        drive(&mut a, &asock, &mut b, &bsock);
+        assert!(a.is_connected() && b.is_connected());
+
+        // B must first learn A's video SSRC (the PLI's media_ssrc target).
+        a.send_video(&[0x00; 64], 1000).unwrap();
+        pump(&mut a, &asock, &mut b, &bsock);
+        assert!(b.recv_video().is_some());
+
+        assert!(!a.take_keyframe_request(), "no PLI yet");
+        b.request_keyframe();
+        b.handle_timeout(Instant::now()); // pump_rtcp queues the PLI
+        pump(&mut b, &bsock, &mut a, &asock);
+        assert!(a.take_keyframe_request(), "A surfaced the peer's PLI");
+        assert!(!a.take_keyframe_request(), "request is clear-on-read");
+        let (_, pli_tx_b, ..) = b.video_diag();
+        assert_eq!(pli_tx_b, 1);
+
+        // A has sent video → its next handle_timeout emits the video SR; B
+        // stores the NTP⇄RTP anchor under A's video SSRC (offerer = 1003).
+        a.handle_timeout(Instant::now());
+        pump(&mut a, &asock, &mut b, &bsock);
+        let (ssrc, ntp, rtp_ts) = b.peer_sender_report().expect("B received A's SR");
+        assert_eq!(ssrc, 1003, "ringrtc scheme: offerer video SSRC = BASE 1000 + 3");
+        assert!(ntp > 0);
+        assert_eq!(rtp_ts, 1000, "SR anchors A's last sent RTP timestamp");
+    }
+
+    /// A lost fragment drops (only) the broken frame and auto-raises a PLI: the
+    /// receiver never emits a torn frame to the decoder, the following intact
+    /// frame still comes through, and the sender learns it must produce a
+    /// keyframe — VP8's only recovery path without RTX.
+    #[test]
+    fn lost_fragment_drops_frame_and_auto_plis() {
+        let (mut a, asock) = peer(Role::Offerer);
+        let (mut b, bsock) = peer(Role::Answerer);
+        let offer = a.local_signaling().to_sdp();
+        let answer = b.local_signaling().to_sdp();
+        a.set_remote_signaling(&Signaling::from_sdp(&answer).unwrap()).unwrap();
+        b.set_remote_signaling(&Signaling::from_sdp(&offer).unwrap()).unwrap();
+        drive(&mut a, &asock, &mut b, &bsock);
+        assert!(a.is_connected() && b.is_connected());
+
+        // A 3-fragment frame; drop the middle media datagram in transit.
+        let torn: Vec<u8> = vec![0x00; 3000];
+        a.send_video(&torn, 5000).unwrap();
+        let mut media_seen = 0;
+        for (dest, data) in a.poll_transmit() {
+            // Video fragments are the only near-MTU datagrams in flight here.
+            if data.len() > 500 {
+                media_seen += 1;
+                if media_seen == 2 {
+                    continue; // the lost packet
+                }
+            }
+            let _ = asock.send_to(&data, dest);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+        let mut buf = [0u8; 2048];
+        while let Ok((n, src)) = bsock.recv_from(&mut buf) {
+            let _ = b.handle_datagram(src, &buf[..n]);
+        }
+        assert!(b.recv_video().is_none(), "a torn frame must never reach the decoder");
+
+        // The next intact frame still arrives.
+        let intact = vec![0x01u8; 80];
+        a.send_video(&intact, 8000).unwrap();
+        pump(&mut a, &asock, &mut b, &bsock);
+        let got = b.recv_video().expect("intact frame after the torn one");
+        assert_eq!(got.data, intact);
+        let ((_, _, _, rx_frames, rx_broken), ..) = b.video_diag();
+        assert_eq!((rx_frames, rx_broken), (1, 1));
+
+        // The loss auto-queued a PLI → A is told to produce a keyframe.
+        b.handle_timeout(Instant::now());
+        pump(&mut b, &bsock, &mut a, &asock);
+        assert!(a.take_keyframe_request(), "auto-PLI from the torn frame reached A");
     }
 
     /// A tampered fingerprint (MITM) is rejected over real UDP — no connection.

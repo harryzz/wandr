@@ -1,7 +1,9 @@
-# wandr.video.test — a wasi:cli command guest that exercises wandr:video host-side
-# (task 93 Phase 1). Proves the WIT boundary end-to-end on device: camera -> host HW
-# VP8 encode -> guest pulls frames -> guest pushes them back -> host HW VP8 decode
-# (the loopback the --probe-video spike ran, now through the real interface). Run via
+# wandr.video.test — a wasi:cli command guest that exercises wandr:video host-side.
+# Part 1 (task 93 Phase 1): camera -> host HW VP8 encode -> guest pulls frames ->
+# pushes them back -> host HW VP8 decode (the --probe-video loopback through the
+# real WIT). Part 2 (Phase 3): the same frames through the wandr-call video track —
+# PeerSession A -> SRTP over real wasi:sockets UDP -> PeerSession B -> reassembled ->
+# HW decode, plus the RTCP PLI round trip. Run via
 # `wandr-host --run-once wandr.video.test`.
 #   cargo build --target wasm32-wasip2 --release
 [package]
@@ -12,6 +14,7 @@ publish = false
 
 [dependencies]
 wit-bindgen = "0.57"
+wandr-call  = { path = "../../../crates/wandr-call" }
 
 [profile.release]
 opt-level = "s"
