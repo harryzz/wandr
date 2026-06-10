@@ -43,7 +43,7 @@
       `sharedparley`, event wiring (render-frame → draw pass,
       on-pointer-event-v2/on-key-event-v2 → Slint window events,
       on-resize, frame-pacing ← animation-active).
-- [ ] **M2 — ItemRenderer over canvas verbs**: rects/borders/images/paths/
+- [x] **M2 — ItemRenderer over canvas verbs** (DONE 2026-06-11, compile-verified; group opacity = save-layer + extra-restore counter, NOT bc-* offscreen — simpler than planned): rects/borders/images/paths/
       clip direct; opacity+clip layers via create-bitmap-canvas + bc-* +
       snapshot → draw-image; box shadows via draw-shadow-rrect; guest-side
       matrix/clip-stack tracking (femtovg pattern).

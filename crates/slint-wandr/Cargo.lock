@@ -1845,6 +1845,7 @@ name = "slint-wandr"
 version = "0.1.0"
 dependencies = [
  "i-slint-core",
+ "lyon_path",
  "wit-bindgen 0.57.1",
 ]
 

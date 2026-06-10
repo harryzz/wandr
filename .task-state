@@ -1,5 +1,5 @@
 TASK=100
-STEP=M1-done
+STEP=M2-done
 STATUS=in-progress
-LAST_SUCCESS=Task 100 M1 verified OK — slint-wandr skeleton compiles for wasm32-wasip2 (lib + launch! macro smoke)
-NOTES=crates/slint-wandr: Platform/WindowAdapter/RendererSealed (sharedparley metrics) + ItemRenderer M1 (state/clip tracking + rect/border/shadow draws; image/text/path stubbed) + launch! macro (path:[] hermetic fix). Next: M2 ItemRenderer full draws (gradients, images, layers via bc-*, paths).
+LAST_SUCCESS=Task 100 M2 verified OK — full ItemRenderer (gradients/images/paths/opacity-layers) compiles for wasm32-wasip2
+NOTES=M2: gradient brushes -> host shader ids (create+drop per draw), images via render_to_buffer (handles SVG) + ImageCacheKey cache + fit(), group opacity via save-layer + extra_canvas_saves counter, lyon->SVG paths, cached pixmaps immediate-mode (unpremultiply). Approximations listed in itemrenderer.rs header. Next: M3 text (GlyphRenderer -> create-typeface/draw-glyphs).

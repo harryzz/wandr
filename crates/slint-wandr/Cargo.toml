@@ -31,3 +31,9 @@ features = ["std", "unicode", "shared-parley", "path"]
 [dependencies.wit-bindgen]
 # Same version as dioxus-canvas; re-exported as `__wit_bindgen` for launch!.
 version = "0.57.1"
+
+[dependencies.lyon_path]
+# Path-event types from `Path::fitted_path_events` (M2 draw_path). Same
+# major as i-slint-core's — cargo unifies to one instance.
+version = "1.0"
+default-features = false
