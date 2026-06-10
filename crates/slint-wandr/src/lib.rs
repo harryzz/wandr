@@ -1,0 +1,503 @@
+//! # slint-wandr — Slint platform + renderer for wandr guests (task 100)
+//!
+//! Runs a Slint UI as a wasm32-wasip2 wandr guest: a custom
+//! [`i_slint_core::platform::Platform`] + `WindowAdapter` + renderer whose
+//! `ItemRenderer` draws through the host `my:skiko-gfx/canvas` WIT verbs
+//! (host Skia, real GPU) — the femtovg-renderer shape, with the canvas WIT
+//! as the "graphics backend". Text is shaped IN the guest by Slint's parley
+//! stack (`shared-parley`); glyph runs go to the host via `draw-glyphs`
+//! against typefaces registered from the same font bytes (`create-typeface`).
+//! Canonical mapping: `docs/skia-wit-mapping.md`.
+//!
+//! There is no event loop: the host drives everything through the exported
+//! `renderer` interface (`render-frame`, `on-pointer-event-v2`, …) and reads
+//! `frame-pacing.next-frame-delay` for on-demand rendering. A guest app
+//! wires those exports with [`launch!`]:
+//!
+//! ```ignore
+//! slint::include_modules!();
+//! slint_wandr::launch!(|| {
+//!     let ui = MainWindow::new().unwrap();
+//!     ui.show().unwrap();
+//!     ui // kept alive by the macro's thread_local
+//! });
+//! ```
+//!
+//! The app's `slint` dependency must pin the SAME git rev as this crate's
+//! `i-slint-core` (one crate instance = one platform global).
+
+use std::cell::{Cell, RefCell};
+use std::rc::{Rc, Weak};
+
+use i_slint_core::api::Window;
+use i_slint_core::item_tree::ItemTreeWeak;
+use i_slint_core::platform::{PlatformError, WindowEvent};
+use i_slint_core::renderer::RendererSealed;
+use i_slint_core::textlayout::sharedparley;
+use i_slint_core::window::{WindowAdapter, WindowInner};
+
+mod itemrenderer;
+
+/// wit-bindgen re-export for the [`launch!`] expansion (`runtime_path`),
+/// so the guest crate needs no wit-bindgen dependency of its own.
+#[doc(hidden)]
+pub use wit_bindgen as __wit_bindgen;
+
+mod bindings {
+    wit_bindgen::generate!({
+        path: "wit",
+        world: "slint-wandr-imports",
+    });
+}
+pub(crate) use bindings::my::skiko_gfx::{canvas, window as host_window};
+
+// ─── platform ────────────────────────────────────────────────────────────────
+
+/// The wandr [`i_slint_core::platform::Platform`]: hands out the single
+/// [`WandrWindowAdapter`] (wandr guests own exactly one surface).
+struct WandrPlatform;
+
+thread_local! {
+    static ADAPTER: RefCell<Option<Rc<WandrWindowAdapter>>> = const { RefCell::new(None) };
+}
+
+impl i_slint_core::platform::Platform for WandrPlatform {
+    fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
+        let adapter = WandrWindowAdapter::new();
+        ADAPTER.with(|a| *a.borrow_mut() = Some(adapter.clone()));
+        Ok(adapter)
+    }
+
+    fn debug_log(&self, arguments: core::fmt::Arguments) {
+        canvas::log_message(&arguments.to_string());
+    }
+}
+
+/// Install the platform. Idempotent; called by the [`launch!`] expansion
+/// before the app factory constructs the first component.
+pub fn init_platform() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        i_slint_core::platform::set_platform(Box::new(WandrPlatform))
+            .expect("slint platform already set");
+    });
+}
+
+// ─── window adapter ──────────────────────────────────────────────────────────
+
+/// The one window: sized from the host surface, scale factor = the host
+/// window density (px per dp — Slint's logical unit becomes dp).
+pub struct WandrWindowAdapter {
+    window: Window,
+    renderer: WandrRenderer,
+    size: Cell<i_slint_core::api::PhysicalSize>,
+    needs_redraw: Cell<bool>,
+}
+
+impl WandrWindowAdapter {
+    fn new() -> Rc<Self> {
+        let (w, h) = (canvas::surface_width(), canvas::surface_height());
+        let adapter = Rc::new_cyclic(|weak: &Weak<Self>| Self {
+            window: Window::new(weak.clone()),
+            renderer: WandrRenderer::default(),
+            size: Cell::new(i_slint_core::api::PhysicalSize::new(w, h)),
+            needs_redraw: Cell::new(true),
+        });
+        let density = host_window::get_density().max(0.1);
+        adapter
+            .window
+            .dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: density });
+        adapter.window.dispatch_event(WindowEvent::Resized {
+            size: i_slint_core::api::LogicalSize::new(w as f32 / density, h as f32 / density),
+        });
+        adapter
+    }
+
+    /// One full frame through the canvas WIT. The host clears + presents
+    /// around begin/end-frame; everything between goes through the
+    /// [`itemrenderer::WandrItemRenderer`].
+    fn render(&self) {
+        let window_inner = WindowInner::from_pub(&self.window);
+        let Some(window_adapter) = self.renderer.window_adapter() else { return };
+        let scale = self.window.scale_factor();
+        self.renderer.text_layout_cache.clear_cache_if_scale_factor_changed(&self.window);
+        canvas::begin_frame();
+        window_inner.draw_contents(|components, post_render| {
+            let mut ir = itemrenderer::WandrItemRenderer::new(&self.window, scale);
+            // The window background (the WindowItem brush) — painted before
+            // the item tree like the upstream renderers do.
+            if let Some(window_item) = window_inner.window_item() {
+                let brush = window_item.as_pin_ref().background();
+                ir.fill_window_background(brush);
+            }
+            for (component, origin) in components {
+                if let Some(component) = ItemTreeWeak::upgrade(component) {
+                    i_slint_core::item_rendering::render_component_items(
+                        &component,
+                        &mut ir,
+                        *origin,
+                        &window_adapter,
+                    );
+                }
+            }
+            post_render(&mut ir);
+        });
+        canvas::end_frame();
+    }
+}
+
+impl WindowAdapter for WandrWindowAdapter {
+    fn window(&self) -> &Window {
+        &self.window
+    }
+
+    fn size(&self) -> i_slint_core::api::PhysicalSize {
+        self.size.get()
+    }
+
+    fn renderer(&self) -> &dyn i_slint_core::platform::Renderer {
+        &self.renderer
+    }
+
+    fn request_redraw(&self) {
+        self.needs_redraw.set(true);
+    }
+}
+
+// ─── renderer (RendererSealed) ───────────────────────────────────────────────
+
+/// The `RendererSealed` impl. All text layout/metrics delegate to the shared
+/// parley helpers (`sharedparley::*`) — identical to what the upstream skia
+/// and femtovg renderers do; only the drawing differs (our `ItemRenderer`).
+#[derive(Default)]
+pub struct WandrRenderer {
+    maybe_window_adapter: RefCell<Option<Weak<dyn WindowAdapter>>>,
+    text_layout_cache: sharedparley::TextLayoutCache,
+}
+
+impl RendererSealed for WandrRenderer {
+    fn text_size(
+        &self,
+        text_item: core::pin::Pin<&dyn i_slint_core::item_rendering::RenderString>,
+        item_rc: &i_slint_core::item_tree::ItemRc,
+        max_width: Option<i_slint_core::lengths::LogicalLength>,
+        text_wrap: i_slint_core::items::TextWrap,
+    ) -> i_slint_core::lengths::LogicalSize {
+        sharedparley::text_size(
+            self,
+            text_item,
+            item_rc,
+            max_width,
+            text_wrap,
+            Some(&self.text_layout_cache),
+        )
+        .unwrap_or_default()
+    }
+
+    fn char_size(
+        &self,
+        text_item: core::pin::Pin<&dyn i_slint_core::item_rendering::HasFont>,
+        item_rc: &i_slint_core::item_tree::ItemRc,
+        ch: char,
+    ) -> i_slint_core::lengths::LogicalSize {
+        self.slint_context()
+            .and_then(|ctx| {
+                let mut font_ctx = ctx.font_context().borrow_mut();
+                sharedparley::char_size(&mut font_ctx, text_item, item_rc, ch)
+            })
+            .unwrap_or_default()
+    }
+
+    fn font_metrics(
+        &self,
+        font_request: i_slint_core::graphics::FontRequest,
+    ) -> i_slint_core::items::FontMetrics {
+        self.slint_context()
+            .map(|ctx| {
+                let mut font_ctx = ctx.font_context().borrow_mut();
+                sharedparley::font_metrics(&mut font_ctx, font_request)
+            })
+            .unwrap_or_default()
+    }
+
+    fn text_input_byte_offset_for_position(
+        &self,
+        text_input: core::pin::Pin<&i_slint_core::items::TextInput>,
+        item_rc: &i_slint_core::item_tree::ItemRc,
+        pos: i_slint_core::lengths::LogicalPoint,
+    ) -> usize {
+        sharedparley::text_input_byte_offset_for_position(self, text_input, item_rc, pos)
+    }
+
+    fn text_input_cursor_rect_for_byte_offset(
+        &self,
+        text_input: core::pin::Pin<&i_slint_core::items::TextInput>,
+        item_rc: &i_slint_core::item_tree::ItemRc,
+        byte_offset: usize,
+    ) -> i_slint_core::lengths::LogicalRect {
+        sharedparley::text_input_cursor_rect_for_byte_offset(self, text_input, item_rc, byte_offset)
+    }
+
+    fn register_font_from_memory(
+        &self,
+        data: &'static [u8],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let ctx = self.slint_context().ok_or("slint platform not initialized")?;
+        ctx.font_context().borrow_mut().register_static_font(data);
+        Ok(())
+    }
+
+    fn register_font_from_path(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let contents = std::fs::read(path)?;
+        let ctx = self.slint_context().ok_or("slint platform not initialized")?;
+        ctx.font_context().borrow_mut().collection.register_fonts(contents.into(), None);
+        Ok(())
+    }
+
+    fn free_graphics_resources(
+        &self,
+        component: i_slint_core::item_tree::ItemTreeRef,
+        _items: &mut dyn Iterator<Item = core::pin::Pin<i_slint_core::items::ItemRef<'_>>>,
+    ) -> Result<(), PlatformError> {
+        self.text_layout_cache.component_destroyed(component);
+        Ok(())
+    }
+
+    fn set_window_adapter(&self, window_adapter: &Rc<dyn WindowAdapter>) {
+        *self.maybe_window_adapter.borrow_mut() = Some(Rc::downgrade(window_adapter));
+        self.text_layout_cache.clear_all();
+    }
+
+    fn window_adapter(&self) -> Option<Rc<dyn WindowAdapter>> {
+        self.maybe_window_adapter.borrow().as_ref().and_then(|w| w.upgrade())
+    }
+
+    fn supports_transformations(&self) -> bool {
+        // The canvas WIT rotates/scales natively (ItemRenderer::rotate/scale).
+        true
+    }
+}
+
+// ─── runtime entry points (called from the launch! expansion) ────────────────
+
+fn with_adapter(f: impl FnOnce(&Rc<WandrWindowAdapter>)) {
+    ADAPTER.with(|a| {
+        if let Some(adapter) = a.borrow().as_ref() {
+            f(adapter);
+        }
+    });
+}
+
+fn has_active_animations() -> bool {
+    i_slint_core::animations::CURRENT_ANIMATION_DRIVER.with(|d| d.has_active_animations())
+}
+
+/// Host `render-frame`: tick timers/animations, redraw if dirty or animating.
+pub fn handle_render_frame(_nanos: u64) {
+    i_slint_core::platform::update_timers_and_animations();
+    with_adapter(|adapter| {
+        if adapter.needs_redraw.replace(false) || has_active_animations() {
+            adapter.render();
+        }
+    });
+}
+
+/// Pointer kinds as wired by [`launch!`] from the WIT `pointer-kind` enum.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PointerKind {
+    Down,
+    Up,
+    Move,
+    Scroll,
+}
+
+/// Host `on-pointer-event-v2`. x/y are surface (physical) pixels; Slint
+/// wants logical. Multi-touch: Slint's input model is single-pointer, so
+/// pointer-id is ignored (first finger wins at the host's event order).
+/// Scroll is unused on a touch panel (drags drive Flickable) — ignored.
+pub fn handle_pointer_event(_pointer_id: u32, kind: PointerKind, x: f32, y: f32) {
+    with_adapter(|adapter| {
+        let scale = adapter.window.scale_factor();
+        let position = i_slint_core::api::LogicalPosition::new(x / scale, y / scale);
+        let button = i_slint_core::items::PointerEventButton::Left;
+        let event = match kind {
+            PointerKind::Down => WindowEvent::PointerPressed { position, button },
+            PointerKind::Up => WindowEvent::PointerReleased { position, button },
+            PointerKind::Move => WindowEvent::PointerMoved { position },
+            PointerKind::Scroll => return,
+        };
+        adapter.window.dispatch_event(event);
+    });
+}
+
+/// Host `on-key-event-v2`. `code_point` carries printable chars; `key-id`
+/// uses the Compose-webMain key constants for specials (the same contract
+/// dioxus-canvas consumes) — mapped to Slint's special-key code points.
+pub fn handle_key_event(down: bool, code_point: u32, key_id: u32) {
+    use i_slint_core::platform::Key;
+    let ch: Option<char> = match key_id {
+        8 => Some(Key::Backspace.into()),
+        9 => Some(Key::Tab.into()),
+        13 => Some(Key::Return.into()),
+        27 => Some(Key::Escape.into()),
+        37 => Some(Key::LeftArrow.into()),
+        38 => Some(Key::UpArrow.into()),
+        39 => Some(Key::RightArrow.into()),
+        40 => Some(Key::DownArrow.into()),
+        46 => Some(Key::Delete.into()),
+        _ => char::from_u32(code_point).filter(|c| *c != '\0'),
+    };
+    let Some(ch) = ch else { return };
+    let text: i_slint_core::SharedString = ch.into();
+    with_adapter(|adapter| {
+        let event = if down {
+            WindowEvent::KeyPressed { text: text.clone() }
+        } else {
+            WindowEvent::KeyReleased { text: text.clone() }
+        };
+        adapter.window.dispatch_event(event);
+    });
+}
+
+/// Host `on-resize` (rotation, IME inset, …): physical surface pixels.
+pub fn handle_resize(w: u32, h: u32) {
+    with_adapter(|adapter| {
+        adapter.size.set(i_slint_core::api::PhysicalSize::new(w, h));
+        let scale = adapter.window.scale_factor();
+        adapter.window.dispatch_event(WindowEvent::Resized {
+            size: i_slint_core::api::LogicalSize::new(w as f32 / scale, h as f32 / scale),
+        });
+        adapter.needs_redraw.set(true);
+    });
+}
+
+/// Host `frame-pacing.next-frame-delay` (on-demand rendering): 0 while
+/// animating or dirty; otherwise the next Slint timer deadline; large when
+/// fully idle (the host clamps to its idle cap).
+pub fn next_frame_delay() -> u32 {
+    let dirty = ADAPTER.with(|a| {
+        a.borrow().as_ref().map_or(false, |adapter| adapter.needs_redraw.get())
+    });
+    if dirty || has_active_animations() {
+        return 0;
+    }
+    match i_slint_core::platform::duration_until_next_timer_update() {
+        Some(d) => d.as_millis().min(60_000) as u32,
+        None => 60_000,
+    }
+}
+
+/// Wire a Slint UI to the wandr host. Invoke ONCE at the guest crate root.
+/// The factory runs lazily on the first `render-frame`; whatever it returns
+/// is kept alive for the process lifetime (return your component handle).
+#[macro_export]
+macro_rules! launch {
+    ($factory:expr $(,)?) => {
+        $crate::__wit_bindgen::generate!({
+            // Hermetic: `path: []` stops generate! from also parsing the
+            // invoking crate's default `wit/` directory (which may declare
+            // my:skiko-gfx again, or unrelated packages).
+            path: [],
+            inline: r#"
+package my:skiko-gfx@0.1.0;
+
+interface renderer {
+    enum pointer-kind { down, up, move, scroll }
+    enum key-kind     { down, up }
+    render-frame:          func(nanos: u64);
+    on-pointer-event:      func(kind: pointer-kind, x: f32, y: f32);
+    on-key-event:          func(kind: key-kind, key-code: u32);
+    on-resize:             func(w: u32, h: u32);
+    on-scheduled-callback: func(callback-id: u32);
+    on-pointer-event-v2:   func(pointer-id: u32, kind: pointer-kind, x: f32, y: f32, pressure: f32);
+    on-key-event-v2:       func(kind: key-kind, code-point: u32, key-id: u32);
+    on-lifecycle-changed:  func(state: u32);
+}
+
+interface frame-pacing {
+    next-frame-delay: func() -> u32;
+}
+
+world slint-app {
+    export renderer;
+    export frame-pacing;
+}
+"#,
+            world: "slint-app",
+            pub_export_macro: true,
+            export_macro_name: "__slint_wandr_export",
+            runtime_path: "::slint_wandr::__wit_bindgen::rt",
+        });
+
+        ::std::thread_local! {
+            static __SLINT_WANDR_APP:
+                ::core::cell::RefCell<::core::option::Option<::std::boxed::Box<dyn ::core::any::Any>>> =
+                ::core::cell::RefCell::new(::core::option::Option::None);
+        }
+
+        fn __slint_wandr_ensure_app() {
+            __SLINT_WANDR_APP.with(|slot| {
+                if slot.borrow().is_none() {
+                    ::slint_wandr::init_platform();
+                    let app = ($factory)();
+                    *slot.borrow_mut() =
+                        ::core::option::Option::Some(::std::boxed::Box::new(app) as _);
+                }
+            });
+        }
+
+        #[doc(hidden)]
+        struct __SlintWandrGuest;
+
+        impl exports::my::skiko_gfx::renderer::Guest for __SlintWandrGuest {
+            fn render_frame(nanos: u64) {
+                __slint_wandr_ensure_app();
+                ::slint_wandr::handle_render_frame(nanos);
+            }
+            fn on_resize(w: u32, h: u32) {
+                ::slint_wandr::handle_resize(w, h);
+            }
+            fn on_pointer_event_v2(
+                pid: u32,
+                kind: exports::my::skiko_gfx::renderer::PointerKind,
+                x: f32, y: f32, _pressure: f32,
+            ) {
+                use exports::my::skiko_gfx::renderer::PointerKind as K;
+                let kind = match kind {
+                    K::Down => ::slint_wandr::PointerKind::Down,
+                    K::Up => ::slint_wandr::PointerKind::Up,
+                    K::Move => ::slint_wandr::PointerKind::Move,
+                    K::Scroll => ::slint_wandr::PointerKind::Scroll,
+                };
+                ::slint_wandr::handle_pointer_event(pid, kind, x, y);
+            }
+            fn on_key_event_v2(
+                kind: exports::my::skiko_gfx::renderer::KeyKind,
+                code_point: u32, key_id: u32,
+            ) {
+                use exports::my::skiko_gfx::renderer::KeyKind as K;
+                ::slint_wandr::handle_key_event(matches!(kind, K::Down), code_point, key_id);
+            }
+            fn on_pointer_event(
+                _kind: exports::my::skiko_gfx::renderer::PointerKind, _x: f32, _y: f32,
+            ) {}
+            fn on_key_event(
+                _kind: exports::my::skiko_gfx::renderer::KeyKind, _key_code: u32,
+            ) {}
+            fn on_scheduled_callback(_callback_id: u32) {}
+            fn on_lifecycle_changed(_state: u32) {}
+        }
+
+        impl exports::my::skiko_gfx::frame_pacing::Guest for __SlintWandrGuest {
+            fn next_frame_delay() -> u32 {
+                ::slint_wandr::next_frame_delay()
+            }
+        }
+
+        __slint_wandr_export!(__SlintWandrGuest);
+    };
+}

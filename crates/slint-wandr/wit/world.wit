@@ -1,0 +1,137 @@
+// slint-wandr's trimmed copy of the host `my:skiko-gfx` IMPORT surface —
+// the subset the Slint ItemRenderer drives. Types must match the canonical
+// wit/skiko-gfx.wit field-for-field (same canonical ABI); the host linker
+// offers a superset, so importing a subset of each interface is fine.
+// The renderer/frame-pacing EXPORT world lives inline in the `launch!`
+// macro (it must be generated in the app crate). See docs/skia-wit-mapping.md.
+package my:skiko-gfx@0.1.0;
+
+interface canvas {
+    enum paint-style { fill, stroke, fill-and-stroke }
+
+    enum blend-mode {
+        src-over, src, dst-in, dst-out, src-atop, dst-atop, xor,
+        multiply, screen, overlay, darken, lighten, color-dodge,
+        color-burn, hard-light, soft-light, difference, exclusion, clear,
+    }
+
+    enum stroke-cap  { butt, round, square }
+    enum stroke-join { miter, round, bevel }
+    enum color-filter-kind { none, blend, invert }
+    enum clip-mode { intersect, difference }
+
+    record paint-attrs {
+        color:              u32,
+        style:              paint-style,
+        stroke-width:       f32,
+        stroke-miter:       f32,
+        stroke-cap:         stroke-cap,
+        stroke-join:        stroke-join,
+        anti-alias:         bool,
+        alpha:              u8,
+        blend-mode:         blend-mode,
+        shader-id:          u32,
+        color-filter-kind:  color-filter-kind,
+        color-filter-color: u32,
+    }
+
+    record matrix-3x3 {
+        scale-x: f32, skew-x:  f32, trans-x: f32,
+        skew-y:  f32, scale-y: f32, trans-y: f32,
+        persp-0: f32, persp-1: f32, persp-2: f32,
+    }
+
+    record sampling-options {
+        use-cubic: bool,
+        filter:    u8,
+        mipmap:    u8,
+        cubic-b:   f32,
+        cubic-c:   f32,
+    }
+
+    surface-width:  func() -> u32;
+    surface-height: func() -> u32;
+    begin-frame: func();
+    end-frame:   func();
+
+    save:       func();
+    save-layer: func(x: f32, y: f32, w: f32, h: f32, has-bounds: bool, alpha: u8);
+    restore:    func();
+    translate:  func(dx: f32, dy: f32);
+    scale:      func(sx: f32, sy: f32);
+    rotate:     func(degrees: f32);
+    concat:     func(a: f32, b: f32, c: f32,
+                     d: f32, e: f32, f: f32,
+                     g: f32, h: f32, i: f32);
+
+    clip-rect:  func(x: f32, y: f32, w: f32, h: f32, anti-alias: bool);
+    clip-rrect: func(x: f32, y: f32, w: f32, h: f32, rx: f32, ry: f32, anti-alias: bool);
+    clip-path:  func(path-data: list<u8>, anti-alias: bool);
+
+    clear:       func(argb: u32);
+    draw-paint:  func(paint: paint-attrs);
+    draw-rect:   func(x: f32, y: f32, w: f32, h: f32, paint: paint-attrs);
+    draw-rrect:  func(x: f32, y: f32, w: f32, h: f32, rx: f32, ry: f32, paint: paint-attrs);
+    draw-drrect: func(ox: f32, oy: f32, ow: f32, oh: f32, orx: f32, ory: f32,
+                      ix: f32, iy: f32, iw: f32, ih: f32, irx: f32, iry: f32,
+                      paint: paint-attrs);
+    draw-oval:   func(x: f32, y: f32, w: f32, h: f32, paint: paint-attrs);
+    draw-line:   func(x0: f32, y0: f32, x1: f32, y1: f32, paint: paint-attrs);
+    draw-path:   func(path-data: list<u8>, paint: paint-attrs);
+
+    create-image:              func(width: u32, height: u32, pixels: list<u8>) -> u32;
+    create-image-from-encoded: func(bytes: list<u8>) -> u32;
+    get-image-width:           func(image-id: u32) -> u32;
+    get-image-height:          func(image-id: u32) -> u32;
+    draw-image:                func(image-id: u32, x: f32, y: f32, alpha: u8);
+    draw-image-rect:           func(image-id: u32,
+                                    src-x: f32, src-y: f32, src-w: f32, src-h: f32,
+                                    dst-x: f32, dst-y: f32, dst-w: f32, dst-h: f32,
+                                    paint: paint-attrs);
+    drop-image:                func(image-id: u32);
+
+    create-linear-gradient: func(x0: f32, y0: f32, x1: f32, y1: f32,
+                                  colors: list<u32>, stops: list<f32>,
+                                  tile-mode: u8) -> u32;
+    create-radial-gradient: func(cx: f32, cy: f32, radius: f32,
+                                  colors: list<u32>, stops: list<f32>,
+                                  tile-mode: u8) -> u32;
+    create-sweep-gradient:  func(cx: f32, cy: f32,
+                                  start-angle: f32, end-angle: f32,
+                                  colors: list<u32>, stops: list<f32>,
+                                  tile-mode: u8) -> u32;
+    create-image-shader:    func(image-id: u32,
+                                  tile-x: u8, tile-y: u8,
+                                  sampling: sampling-options,
+                                  local-matrix: matrix-3x3) -> u32;
+    create-blend-shader:    func(blend-mode: blend-mode,
+                                  shader1-id: u32, shader2-id: u32) -> u32;
+    drop-shader:            func(id: u32);
+
+    // Offscreen layers (Slint opacity/clip layers, M2).
+    create-bitmap-canvas:   func(width: u32, height: u32) -> u32;
+    drop-bitmap-canvas:     func(id: u32);
+    bitmap-canvas-snapshot: func(id: u32) -> u32;
+
+    // Guest-shaped glyph text + box shadows (the 2026-06-11 additive batch).
+    create-typeface: func(data: list<u8>, index: u32) -> u32;
+    drop-typeface:   func(id: u32);
+    draw-glyphs:     func(typeface-id: u32, size: f32,
+                          glyph-ids: list<u16>, positions: list<f32>,
+                          origin-x: f32, origin-y: f32, paint: paint-attrs);
+    draw-shadow-rrect: func(x: f32, y: f32, w: f32, h: f32,
+                            radii: list<f32>, sigma: f32, color: u32);
+
+    log-message: func(msg: string);
+}
+
+/// density = dpi / 160 — Slint's scale factor.
+interface window {
+    get-density:    func() -> f32;
+    get-font-scale: func() -> f32;
+}
+
+world slint-wandr-imports {
+    import canvas;
+    import window;
+}

@@ -1,0 +1,33 @@
+# slint-wandr — Slint platform + renderer over the wandr `my:skiko-gfx` WIT
+# (task 100, evaluation track). The Slint analogue of dioxus-canvas: a guest
+# wandrpkg calls `slint_wandr::launch!` to wire the host `renderer` /
+# `frame-pacing` exports to a Slint UI; drawing goes through the canvas WIT
+# verbs (host Skia on real GPU), text is shaped IN the guest by Slint's
+# parley stack and drawn via the 2026-06-11 glyph verbs. Contract:
+# docs/skia-wit-mapping.md. Builds into each guest cdylib (wasm32-wasip2).
+[package]
+name    = "slint-wandr"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# Pinned git rev (NOT a release): the renderer plugs into i-slint-core
+# internals (RendererSealed/ItemRenderer/sharedparley) which are
+# semver-unstable, and the parley text stack only exists on master
+# (1.17-dev). A consuming app's `slint` dependency MUST use the same rev so
+# the platform global and item vtables are one crate instance. Re-pin
+# consciously; re-check every signature against the new rev when bumping.
+#
+# `shared-parley` = the guest-side text stack (parley + fontique + skrifa);
+# `path` is force-enabled so ItemRenderer::draw_path always exists in the
+# trait regardless of the app's feature unification.
+[dependencies.i-slint-core]
+git = "https://github.com/slint-ui/slint"
+rev = "46cfde659f21de52bb0fa3693826ca99a6466d88"
+default-features = false
+features = ["std", "unicode", "shared-parley", "path"]
+
+[dependencies.wit-bindgen]
+# Same version as dioxus-canvas; re-exported as `__wit_bindgen` for launch!.
+version = "0.57.1"

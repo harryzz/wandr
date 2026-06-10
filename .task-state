@@ -1,5 +1,5 @@
-TASK=93
-STEP=complete
-STATUS=complete
-LAST_SUCCESS=TASK 93 COMPLETE + polished (2026-06-10): Signal video calls live-verified both ways (quality adaptive via TWCC/REMB, rotation correct portrait+landscape incl live device rotation); video call screen has camera toggle + mic mute + speaker mute (both user-verified) + hangup; at-ear proximity blanking suppressed during video calls (call-video focus verb -> arbiter power gate).
-NOTES=Follow-ups (cosmetic, in tasks/93 header): mirrored self-view, behind-ui hole (needs dioxus-canvas clear blend), 4-pose landscape face-validation, PiP landscape sizing, demote [media] geometry logcat line to debug, proximity-suppression incidental user verification. KEY LESSONS in project_wandr_call_video_track + project_audioflinger_backend memories (container-matrix rotation, TWCC mandatory, REMB floor, RED demux, mute gates belong in the dispatcher).
+TASK=100
+STEP=M1-done
+STATUS=in-progress
+LAST_SUCCESS=Task 100 M1 verified OK — slint-wandr skeleton compiles for wasm32-wasip2 (lib + launch! macro smoke)
+NOTES=crates/slint-wandr: Platform/WindowAdapter/RendererSealed (sharedparley metrics) + ItemRenderer M1 (state/clip tracking + rect/border/shadow draws; image/text/path stubbed) + launch! macro (path:[] hermetic fix). Next: M2 ItemRenderer full draws (gradients, images, layers via bc-*, paths).
