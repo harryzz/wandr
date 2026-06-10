@@ -63,6 +63,41 @@ fn vrect((x, y, w, h): (u32, u32, u32, u32)) -> vtypes::VideoRect {
     vtypes::VideoRect { x, y, width: w, height: h }
 }
 
+/// The coded dimensions from a VP8 KEYFRAME header (RFC 6386 §9.1: 3-byte
+/// frame tag with P=0, start code 9d 01 2a, then 14-bit LE width and height).
+/// The peer's coded WxH can change mid-call (rotation/adaptation) — this is
+/// the ground truth for aspect-fitting its video into our layout area.
+fn vp8_keyframe_dims(data: &[u8]) -> Option<(u32, u32)> {
+    if data.len() < 10 || data[0] & 1 != 0 {
+        return None;
+    }
+    if data[3] != 0x9d || data[4] != 0x01 || data[5] != 0x2a {
+        return None;
+    }
+    let w = (u16::from_le_bytes([data[6], data[7]]) & 0x3FFF) as u32;
+    let h = (u16::from_le_bytes([data[8], data[9]]) & 0x3FFF) as u32;
+    (w > 0 && h > 0).then_some((w, h))
+}
+
+/// Aspect-fit (letterbox) the peer's video — coded `(w, h)`, displayed through
+/// a `rotation` that swaps the visible shape at 90/270 — centered inside the
+/// UI's remote `area`. Stretching to the raw area distorts whenever the peer's
+/// shape differs from ours (their rotation, their adaptation).
+fn fit_rect(area: (u32, u32, u32, u32), dims: (u32, u32), rotation: u32) -> (u32, u32, u32, u32) {
+    let (ax, ay, aw, ah) = area;
+    let (cw, ch) = if rotation % 180 == 90 { (dims.1, dims.0) } else { dims };
+    if cw == 0 || ch == 0 || aw == 0 || ah == 0 {
+        return area;
+    }
+    // Largest WxH with cw:ch aspect inside aw x ah.
+    let (fw, fh) = if (aw as u64) * (ch as u64) <= (ah as u64) * (cw as u64) {
+        (aw, ((aw as u64 * ch as u64) / cw as u64) as u32)
+    } else {
+        (((ah as u64 * cw as u64) / ch as u64) as u32, ah)
+    };
+    (ax + (aw - fw) / 2, ay + (ah - fh) / 2, fw, fh)
+}
+
 /// Per-call video state: our camera/encoder, the peer's decoder surface, and
 /// the UI-provided layout. Everything is torn down with the call (the host
 /// releases camera + codecs on resource drop — the cameraserver-wedge rule).
@@ -76,6 +111,9 @@ struct VideoState {
     /// The peer's last CVO rotation applied to the decoder surface (updated
     /// live via set-rotation when the peer rotates mid-call).
     dec_rotation: u32,
+    /// The peer's coded dimensions (from its VP8 keyframe headers) — with
+    /// rotation, determines the aspect-fit rect inside the layout area.
+    peer_dims: Option<(u32, u32)>,
     /// Last bitrate applied to the encoder (avoid re-set every tick).
     applied_bitrate: u32,
     /// Last CVO rotation pushed to the engine (the encoder's display-rotation
@@ -549,17 +587,36 @@ impl ActiveCall {
         // Inbound frames → decoder (opened on the first keyframe, with its
         // CVO rotation; a mid-stream join asks for a sync point).
         while let Some(vf) = self.call.recv_video() {
+            if vf.keyframe {
+                if let Some(dims) = vp8_keyframe_dims(&vf.data) {
+                    if v.peer_dims != Some(dims) {
+                        crate::engine::dbg_line(&format!(
+                            "video: peer coded dims {}x{} (rot {}°)", dims.0, dims.1, vf.rotation
+                        ));
+                        v.peer_dims = Some(dims);
+                        // Refit the live surface to the new shape.
+                        if let (Some(d), Some(l)) = (&v.dec, v.layout) {
+                            d.set_rect(vrect(fit_rect(l.remote, dims, vf.rotation)));
+                        }
+                    }
+                }
+            }
             if v.dec.is_none() {
                 if !vf.keyframe {
                     self.call.request_keyframe();
                     continue;
                 }
                 let Some(l) = v.layout else { continue };
+                let area = fit_rect(
+                    l.remote,
+                    v.peer_dims.unwrap_or((VIDEO_W, VIDEO_H)),
+                    vf.rotation,
+                );
                 match VideoDecoder::open(vtypes::DecoderConfig {
                     codec: vtypes::Codec::Vp8,
                     width: VIDEO_W,
                     height: VIDEO_H,
-                    rect: vrect(l.remote),
+                    rect: vrect(area),
                     rotation: vf.rotation,
                     layer: vtypes::ZLayer::AboveUi,
                 }) {
@@ -582,6 +639,10 @@ impl ActiveCall {
                 if vf.rotation != v.dec_rotation {
                     v.dec_rotation = vf.rotation;
                     d.set_rotation(vf.rotation);
+                    // 90/270 swap the visible shape — refit into the area.
+                    if let (Some(dims), Some(l)) = (v.peer_dims, v.layout) {
+                        d.set_rect(vrect(fit_rect(l.remote, dims, vf.rotation)));
+                    }
                 }
                 let _ = d.submit(&vtypes::EncodedFrame {
                     data: vf.data,
@@ -607,7 +668,11 @@ impl ActiveCall {
         }
         self.video.layout = Some(l);
         if let Some(d) = &self.video.dec {
-            d.set_rect(vrect(l.remote));
+            d.set_rect(vrect(fit_rect(
+                l.remote,
+                self.video.peer_dims.unwrap_or((VIDEO_W, VIDEO_H)),
+                self.video.dec_rotation,
+            )));
         }
         if let Some(e) = &self.video.enc {
             e.set_preview_rect(vrect(l.pip));
