@@ -1,0 +1,191 @@
+// Task 88 (M1) — ConnectivityService surface (wandr:connectivity).
+//
+// The guest-facing control/status/monitor API for the wandr connectivity stack
+// (the `wandr-arbiter-net` module + the `wandr-net` daemon). It is NOT a data path
+// — guests move packets over `wasi:sockets` → kernel directly; this interface is
+// the app-facing equivalent of Android's `ConnectivityManager`: "am I online?"
+// and "tell me when that changes" (`registerDefaultNetworkCallback`, the single
+// most-used feature — Signal/apps reconnect on it).
+//
+// Separate package (like `wandr:alarm`) so adding it doesn't touch the shared
+// `my:skiko-gfx` contract (no WIT-sync churn across every guest). A guest that
+// cares about connectivity imports `network` + exports `connectivity-handler`
+// (`connectivity-client`); the host links `network` (`connectivity-host`,
+// forwarding to the arbiter `net-status`) and calls the guest's export
+// (`connectivity-events`) when the arbiter fans a `net-changed` line.
+//
+// Two privilege tiers:
+//   * `network` (above) — status/monitor, **any** guest. Implemented (M1).
+//   * `wifi` (below)    — WiFi management (scan / saved-network CRUD / connect /
+//     auto-connect), **privileged** (the Settings / wifi-picker chrome only).
+//     DESIGN CONTRACT — drafted ahead of implementation. Backing per function:
+//     scan = `IWificond` (`wifinl80211`); connect = `ISupplicant` (built, M2);
+//     radio on/off = `IWifi` HAL (built, M2); saved-network store + auto-connect
+//     = the `wandr-arbiter-net` registry + a wandr-owned credential store (the
+//     open storage question). `ip-config` (DHCP vs manual) is per saved network.
+
+package wandr:connectivity@0.1.0;
+
+/// Shared types (WIT requires types to live in an interface, not top-level).
+interface types {
+    /// A connectivity snapshot. Mirrors the arbiter's `NetState` wire form.
+    record network-status {
+        /// Reachable default network present (validated-internet is M1b — for now
+        /// "online" means a default route + DNS are configured).
+        online: bool,
+        /// Active transport: "wifi" (M1), later "ethernet" / "cellular"; "none" offline.
+        transport: string,
+        /// Associated network name when on WiFi (none otherwise).
+        ssid: option<string>,
+        /// IPv4 address of the active link (none offline).
+        ip: option<string>,
+    }
+}
+
+/// Imported by any guest. `get-status` is unprivileged (status is public);
+/// management (scan/connect/saved networks) is the privileged `wifi` interface.
+interface network {
+    use types.{network-status};
+    /// Current connectivity snapshot. The host forwards to the arbiter
+    /// (`net-status`) and maps the reply into `network-status`.
+    get-status: func() -> network-status;
+}
+
+/// WiFi management — the `WifiManager` role (vs `network`'s `ConnectivityManager`
+/// role). **Privileged**: the host gates this interface to the Settings /
+/// wifi-picker chrome app; ordinary guests only get `network`. DESIGN CONTRACT —
+/// drafted ahead of implementation (see the header for per-function backing).
+interface wifi {
+    /// A saved-network handle, assigned by the arbiter registry on `add-network`.
+    type network-id = u32;
+
+    /// Authentication of a network. (EAP credential fields — identity, cert —
+    /// are a future addition to `wifi-config`; `passphrase` covers PSK/SAE.)
+    enum security-kind {
+        open,
+        owe,        // Opportunistic Wireless Encryption (enhanced open)
+        wpa-psk,    // WPA2-Personal
+        sae,        // WPA3-Personal
+        wpa-eap,    // Enterprise (config TBD)
+    }
+
+    /// How the link gets its IPv4 config — per saved network. Today the daemon
+    /// always uses `dhcp`; `manual` is the static-config path (`apply-address` +
+    /// `configure-netd` already take the same fields).
+    variant ip-config {
+        dhcp,
+        manual(static-ip),
+    }
+    record static-ip {
+        address: string,        // IPv4, e.g. "192.168.1.50"
+        prefix-length: u8,      // e.g. 24
+        gateway: string,
+        dns: list<string>,
+    }
+
+    /// One access point from a scan.
+    record scan-result {
+        ssid: string,
+        bssid: string,
+        rssi: s32,              // dBm
+        frequency-mhz: u32,
+        security: security-kind,
+        /// True for the AP we're currently associated to.
+        connected: bool,
+    }
+
+    /// A persisted network (the WifiConfigManager entry).
+    record saved-network {
+        id: network-id,
+        ssid: string,
+        security: security-kind,
+        auto-connect: bool,
+    }
+
+    /// Parameters to add / update a saved network.
+    record wifi-config {
+        ssid: string,
+        security: security-kind,
+        /// PSK/SAE passphrase (none for open/owe).
+        passphrase: option<string>,
+        /// Auto-join when in range (the arbiter's selection policy honors it).
+        auto-connect: bool,
+        /// Hidden SSID (set scan-ssid on the supplicant network).
+        hidden: bool,
+        ip-config: ip-config,
+    }
+
+    // ── radio ────────────────────────────────────────────────────────────────
+    /// Power the WiFi radio on/off (the `IWifi` HAL start/stop + chip power-up).
+    set-enabled: func(on: bool);
+    is-enabled: func() -> bool;
+
+    // ── discovery ────────────────────────────────────────────────────────────
+    /// Trigger + return a scan (via `IWificond`). Blocks until results are ready.
+    scan: func() -> result<list<scan-result>, string>;
+
+    // ── saved networks (WifiConfigManager role; arbiter registry) ─────────────
+    list-saved: func() -> list<saved-network>;
+    add-network: func(cfg: wifi-config) -> result<network-id, string>;
+    update-network: func(id: network-id, cfg: wifi-config) -> result<_, string>;
+    remove-network: func(id: network-id);
+    /// Toggle auto-join for a saved network.
+    set-auto-connect: func(id: network-id, on: bool);
+
+    // ── connection control ────────────────────────────────────────────────────
+    /// Associate to a saved network now (`ISupplicant` addNetwork/select).
+    connect: func(id: network-id) -> result<_, string>;
+    /// One-shot: add (if new) + connect, returning the saved id.
+    connect-new: func(cfg: wifi-config) -> result<network-id, string>;
+    /// Disconnect from the current network (stays saved).
+    disconnect: func();
+    /// Disconnect + forget the currently-connected network.
+    forget-current: func();
+}
+
+/// Exported by a guest that wants change notifications. The runtime (via the
+/// arbiter) calls this when the default network flips online↔offline (or the
+/// active transport/address changes).
+interface connectivity-handler {
+    use types.{network-status};
+    /// Connectivity changed — the guest reconnects sockets / updates UI. Carries
+    /// the new snapshot so the guest needn't immediately call `get-status`.
+    on-connectivity-change: func(status: network-status);
+}
+
+/// World a guest implements to use connectivity: import status, export the
+/// change handler. A regular wandr `.wandrpkg` whose own world also `include`s the
+/// `my:skiko-gfx` surface for a GUI guest.
+world connectivity-client {
+    import network;
+    export connectivity-handler;
+}
+
+/// Host-side import world — the runtime `add_to_linker`s `network` (it
+/// implements it, forwarding `get-status` to the arbiter) onto the guest's linker.
+world connectivity-host {
+    import network;
+}
+
+/// Host-side export world — the runtime bindgen's this to get a typed
+/// `call_on_connectivity_change`, bound conditionally per instance (like
+/// `wandr:alarm/alarm-events`): guests that export `connectivity-handler` get the
+/// binding, others yield `None`.
+world connectivity-events {
+    export connectivity-handler;
+}
+
+/// World the **privileged** Settings / wifi-picker guest implements: management +
+/// status + change events. The host only links `wifi` for guests it trusts
+/// (the system wifi-picker chrome), so an ordinary `.wandrpkg` cannot import this.
+world wifi-settings {
+    import wifi;
+    import network;
+    export connectivity-handler;
+}
+
+/// Host-side import world — the runtime `add_to_linker`s `wifi` (forwarding to
+/// the arbiter + the `wandr-net` daemon) onto a privileged guest's linker only.
+world wifi-host {
+    import wifi;
+}

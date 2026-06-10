@@ -1,0 +1,116 @@
+// The wifi-settings-ui guest world: the trimmed `my:skiko-gfx` contract (verbatim
+// from dioxus-canvas's `skiko_world!` — the canonical WIT's `matrix-3x3` is
+// rejected by the guest wit-parser) PLUS the privileged `wandr:connectivity/wifi`
+// import (a dep under deps/connectivity/). One world → one generate! → no
+// `_rt`/`cabi_realloc` conflict. `wire!` binds the renderer/sink/IME over the
+// skiko half.
+package my:skiko-gfx@0.1.0;
+
+interface canvas {
+    enum paint-style { fill, stroke, fill-and-stroke }
+    enum stroke-cap  { butt, round, square }
+    enum stroke-join { miter, round, bevel }
+    enum blend-mode {
+        src-over, src, dst-in, dst-out, src-atop, dst-atop, xor,
+        multiply, screen, overlay, darken, lighten, color-dodge,
+        color-burn, hard-light, soft-light, difference, exclusion, clear,
+    }
+    enum color-filter-kind { none, blend, invert }
+    record paint-attrs {
+        color:              u32,
+        style:              paint-style,
+        stroke-width:       f32,
+        stroke-miter:       f32,
+        stroke-cap:         stroke-cap,
+        stroke-join:        stroke-join,
+        anti-alias:         bool,
+        alpha:              u8,
+        blend-mode:         blend-mode,
+        shader-id:          u32,
+        color-filter-kind:  color-filter-kind,
+        color-filter-color: u32,
+    }
+    surface-width:  func() -> u32;
+    surface-height: func() -> u32;
+    begin-frame: func();
+    end-frame:   func();
+    clear:       func(argb: u32);
+    save:       func();
+    restore:    func();
+    clip-rect:  func(x: f32, y: f32, w: f32, h: f32, anti-alias: bool);
+    draw-rect:   func(x: f32, y: f32, w: f32, h: f32, paint: paint-attrs);
+    draw-rrect:  func(x: f32, y: f32, w: f32, h: f32, rx: f32, ry: f32, paint: paint-attrs);
+    create-text-blob: func(text: list<u8>, font-family: list<u8>, size: f32, weight: u32, italic: bool) -> u32;
+    draw-text-blob:   func(id: u32, x: f32, y: f32, paint: paint-attrs);
+    drop-text-blob:   func(id: u32);
+    create-image-from-encoded: func(bytes: list<u8>) -> u32;
+    get-image-width:  func(image-id: u32) -> u32;
+    get-image-height: func(image-id: u32) -> u32;
+    draw-image-rect:  func(image-id: u32,
+                           src-x: f32, src-y: f32, src-w: f32, src-h: f32,
+                           dst-x: f32, dst-y: f32, dst-w: f32, dst-h: f32,
+                           paint: paint-attrs);
+    drop-image:       func(image-id: u32);
+}
+
+interface paragraph {
+    record text-style {
+        font-size:   f32,
+        font-weight: u32,
+        italic:      bool,
+        color:       u32,
+        font-family: list<u8>,
+    }
+    create-paragraph-builder: func(width: f32) -> u32;
+    push-text-style:          func(id: u32, style: text-style);
+    add-text:                 func(id: u32, text: list<u8>);
+    pop-text-style:           func(id: u32);
+    build-paragraph:          func(id: u32) -> u32;
+    drop-paragraph-builder:   func(id: u32);
+    layout:                   func(id: u32, width: f32);
+    get-height:               func(id: u32) -> f32;
+    get-max-intrinsic-width:  func(id: u32) -> f32;
+    drop-paragraph:           func(id: u32);
+}
+
+interface ime {
+    notify-editor-attached: func(
+        input-type: string,
+        hint: string,
+        initial-text: string,
+        selection-start: u32,
+        selection-end: u32,
+    );
+    notify-editor-detached: func();
+}
+
+interface renderer {
+    enum pointer-kind { down, up, move, scroll }
+    enum key-kind     { down, up }
+    render-frame:          func(nanos: u64);
+    on-pointer-event:      func(kind: pointer-kind, x: f32, y: f32);
+    on-key-event:          func(kind: key-kind, key-code: u32);
+    on-resize:             func(w: u32, h: u32);
+    on-scheduled-callback: func(callback-id: u32);
+    on-pointer-event-v2:   func(pointer-id: u32, kind: pointer-kind, x: f32, y: f32, pressure: f32);
+    on-key-event-v2:       func(kind: key-kind, code-point: u32, key-id: u32);
+    on-lifecycle-changed:  func(state: u32);
+}
+
+interface frame-pacing {
+    next-frame-delay: func() -> u32;
+}
+
+world wifi-settings-ui-app {
+    import canvas;
+    import paragraph;
+    import ime;
+    // The privileged Wi-Fi management interface (host-implemented; forwarded to the
+    // arbiter `wifi-*` relay → wandr-net.sock + the M3 WifiConfigManager). Linked
+    // ONLY because this guest is `kind=system` + `wifi-control=true`. Dep under
+    // deps/connectivity/. `network` status is NOT imported — it ships over the
+    // wandr:events bus (M1), and the host doesn't link `network` as a WIT import.
+    import wandr:connectivity/wifi@0.1.0;
+    export renderer;
+    export frame-pacing;
+}

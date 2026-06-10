@@ -1,0 +1,22 @@
+# Task 90 M4 — the Wi-Fi settings / picker chrome. The FIRST privileged guest:
+# `kind = system` + `wifi-control = true` is exactly what the host's privilege gate
+# (`LoadedApp::wifi_privileged`) requires before it `add_to_linker`s the privileged
+# `wandr:connectivity/wifi` interface onto this component's linker. A dioxus-canvas
+# GUI that scans, joins (passphrase via the IME), and manages saved networks over
+# the privileged wifi WIT (host → arbiter `wifi-*` relay → wandr-net.sock + the M3
+# WifiConfigManager).
+app_id       = "wandr.settings.wifi"
+version      = "0.1.0"
+world        = "my:skiko-gfx/skiko-ui"
+kind         = "system"
+wifi-control = true
+# Opt this system app into the launcher tile grid (the launcher otherwise lists
+# only apps/ — system chrome stays hidden). Settings/hub apps set this; pure
+# chrome (statusbar/taskbar/ime/keyguard) does not.
+show-in-launcher = true
+composition  = "same-store"
+orientation  = "auto"
+label        = "Wi-Fi"
+
+[components]
+ui = "components/ui.wasm"

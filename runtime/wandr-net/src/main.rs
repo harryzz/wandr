@@ -17,6 +17,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::{Child, Command};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -416,28 +417,48 @@ fn dispatch_control(line: &str, link: &Arc<Mutex<Link>>) -> String {
     }
 }
 
-/// `scan` → IWificond scan; emit one `ap …` line per AP (SSID base64'd) + a final
-/// `ok count=<n>`. Read-only w.r.t. the live association.
+/// Cached scan results + when they were taken. The control `scan` command serves
+/// this **immediately** and refreshes it in a BACKGROUND thread when stale — so the
+/// ~1 s IWificond sweep never runs on the request path. That matters beyond this
+/// daemon: the single-threaded arbiter relays `wifi-scan` synchronously, so a
+/// blocking sweep there froze the arbiter's whole command loop (system-wide input —
+/// taskbar taps — stalled for the sweep). Demand-driven: refresh only fires while
+/// something is actually asking (the settings app polling), and at most one at a time.
+static SCAN_CACHE: Mutex<Option<(Vec<wandr_hal_net::ScanEntry>, Instant)>> = Mutex::new(None);
+static SCAN_INFLIGHT: AtomicBool = AtomicBool::new(false);
+/// How long cached results are served before a background refresh is kicked.
+const SCAN_TTL: Duration = Duration::from_secs(8);
+
+/// `scan` → serve the cached APs (one `ap …` line each, SSID base64'd) + `ok
+/// count=<n>`, kicking a background IWificond sweep if the cache is stale. Returns
+/// instantly (never blocks). First call before any sweep completes → `ok count=0`;
+/// the caller polls again and gets results once the background refresh lands.
 fn control_scan() -> String {
-    match wandr_hal_net::scan_networks() {
-        Some(aps) => {
-            let mut out = String::new();
-            for ap in &aps {
-                out.push_str(&format!(
-                    "ap ssid={} bssid={} rssi={} freq={} sec={} connected={}\n",
-                    b64_encode(ap.ssid.as_bytes()),
-                    ap.bssid,
-                    ap.rssi_dbm,
-                    ap.frequency_mhz,
-                    ap.security,
-                    ap.connected as u8,
-                ));
+    let snapshot = SCAN_CACHE.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let stale = snapshot.as_ref().map_or(true, |(_, t)| t.elapsed() > SCAN_TTL);
+    if stale && !SCAN_INFLIGHT.swap(true, Ordering::AcqRel) {
+        std::thread::spawn(|| {
+            if let Some(aps) = wandr_hal_net::scan_networks() {
+                *SCAN_CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some((aps, Instant::now()));
             }
-            out.push_str(&format!("ok count={}\n", aps.len()));
-            out
-        }
-        None => "err scan-failed\n".to_string(),
+            SCAN_INFLIGHT.store(false, Ordering::Release);
+        });
     }
+    let aps = snapshot.map(|(a, _)| a).unwrap_or_default();
+    let mut out = String::new();
+    for ap in &aps {
+        out.push_str(&format!(
+            "ap ssid={} bssid={} rssi={} freq={} sec={} connected={}\n",
+            b64_encode(ap.ssid.as_bytes()),
+            ap.bssid,
+            ap.rssi_dbm,
+            ap.frequency_mhz,
+            ap.security,
+            ap.connected as u8,
+        ));
+    }
+    out.push_str(&format!("ok count={}\n", aps.len()));
+    out
 }
 
 /// `connect <b64ssid> <b64psk>` → re-associate the live link to an explicit

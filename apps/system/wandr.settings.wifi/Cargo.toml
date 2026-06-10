@@ -1,0 +1,36 @@
+# wandr.settings.wifi — the Wi-Fi settings / picker chrome (task 90 M4).
+#
+# A dioxus-canvas guest that imports the privileged `wandr:connectivity/wifi`
+# (an extra host import beyond the skiko-gfx surface), so it does its own combined
+# `generate!` + `dioxus_canvas::wire!(app)` (the Signal/taskmanager pattern) rather
+# than the one-line `launch!`. Scans + joins (passphrase via the IME) + manages
+# saved networks from the `pre_frame` hook + tap handlers.
+#
+#   cargo build --target wasm32-wasip2 --release
+[package]
+name    = "wandr-settings-wifi"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Facade for rsx!/use_signal.
+dioxus        = { version = "0.7", default-features = false, features = ["macro", "html", "signals", "hooks"] }
+# The renderer + the `skiko_world!`/`wire!` halves. This guest does its OWN
+# combined generate! (skiko-gfx + connectivity/wifi in one) and then calls
+# `dioxus_canvas::wire!(app)`, so it depends on dioxus-canvas for the renderer +
+# the re-exported wit-bindgen (no wit-bindgen dep of its own).
+dioxus-canvas = { path = "../../../crates/dioxus-canvas" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+
+# dioxus 0.7 + wasm32-wasip2 requires the vendored+patched subsecond (task 60) —
+# same [patch] as the other dioxus guests. See external/subsecond/README.md.
+[patch.crates-io]
+subsecond = { path = "../../../external/subsecond" }

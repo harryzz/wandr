@@ -1,13 +1,15 @@
 # Task 90 — implement the `wandr:connectivity` WIT (guest-facing connectivity)
 
-> Status: 🟢 M1+M2+M3 DONE + DEVICE-VERIFIED (M3 2026-06-09). M1 connectivity
+> Status: 🟢 M1+M2+M3+M4 DONE + DEVICE-VERIFIED (M4 2026-06-09). M1 connectivity
 > change-notification ships over the GENERIC EVENT BUS (`wandr:events`). M2 = the
 > privileged wifi control plane (scan/connect/radio via host→arbiter→wandr-net.sock
 > + privilege gate). M3 = the WifiConfigManager (wandr-owned 0600 JSON saved-network
 > store + auto-connect, in `wandr-arbiter-net`; `wandr-net` auto-joins from it).
-> **M4 pending:** the `wandr.settings.wifi` picker app + manual static-IP.
-> Follow-up: a daemon supplicant-disconnect verb to un-stub `disconnect`/
-> `forget-current`.
+> M4 = `apps/system/wandr.settings.wifi`, the first privileged guest (a dioxus
+> Wi-Fi picker exercising the gate + host WIT + the whole M2/M3 stack end-to-end).
+> **Task 90 complete.** Follow-ups: a user entry point (statusbar quick-setting),
+> manual static-IP, and a daemon supplicant-disconnect verb (un-stubs
+> `disconnect`/`forget-current`).
 >
 > **Why the redesign:** rather than add a bespoke `connectivity-handler` export
 > (yet another `*-events` world + bindgen + InboundEvent variant + drain arm), we
@@ -139,10 +141,41 @@ DoD: a guest's `on-connectivity-change` fires when wandr-net flips the link.
    were skipped (they trigger associations) — both ride M2-verified relay/engine
    paths and the resolve/read halves are CLI-verified.
 
-### M4 — `ip-config` manual (static IP) + a Settings/wifi-picker chrome app
-- `manual(static-ip)`: `apply_address` + `configure_netd` already take the same
-  fields; thread a static config from the WIT instead of the DHCP lease.
-- A `wandr.settings.wifi` guest (separate wandrpkg) consuming `wifi-settings`.
+### M4 — Settings/wifi-picker chrome app — 🟢 DONE + device-verified
+- ✅ **`apps/system/wandr.settings.wifi`** — the FIRST privileged guest. `kind =
+  system` + `wifi-control = true` is exactly what `LoadedApp::wifi_privileged`
+  requires, so the host linked `wandr:connectivity/wifi` onto it (verified:
+  `app_loader: wifi-management linked (privileged)`); a non-privileged guest can't
+  import it. A dioxus-canvas GUI: `pre_frame` polls `is-enabled`/`list-saved` every
+  cycle + `scan` on a ~10 s cadence (a scan blocks ~1 s; + a Scan button forces
+  one). UI = Wi-Fi on/off toggle + live scan list (signal bars / secured / connected
+  tags) + tap-to-join (open → direct; saved → `connect(id)`; secured-unsaved →
+  passphrase field via the IME → `connect-new`) + a saved-networks section
+  (auto-connect toggle + Forget). **Device-verified:** the app instantiates,
+  renders the live IWificond scan (zah004 Connected, 4 bars, + 8 secured nets —
+  screenshot), and drives the full stack from a real guest (logcat:
+  guest-initiated `wifi-saved-list` / `wifi-is-enabled` / `wifi-scan` → host WIT →
+  arbiter relay → wandr-net → HALs). Registered in `build-system-wandrpkgs.sh`;
+  installed per-app (no wipe) under `system-apps/`.
+- ✅ **Launcher tile** — a system app isn't normally a launcher tile (the launcher
+  scans `apps/` only). Fixed cleanly: the host's `launcher_impl::scan_installed_apps`
+  now also includes `system-apps/` entries whose manifest sets
+  `show-in-launcher = true` (settings/hub apps opt in; the pure chrome —
+  statusbar/taskbar/ime/keyguard — does not). `wandr.settings.wifi` sets the flag →
+  the "Wi-Fi" tile shows in the launcher (verified: 7 tiles = 6 user apps + Wi-Fi,
+  chrome hidden).
+- ✅ **Scroll** — the picker scrolls smoothly. The first cut hammered a blocking
+  ~1 s `scan` per frame (frame-gated cadence × the ~60 fps scroll stream); now the
+  polls are wall-clock-gated (scan ~10 s, cheap ~1.5 s) AND an interaction guard
+  keeps a fast frame stream (scroll/typing) pure-render (no host calls).
+- **Follow-ups:** the interactive write paths (toggle/passphrase-join/forget) are
+  built on the Signal-proven IME input pattern but were not click-tested (need
+  touch/key injection); they ride the M2/M3-verified relay. Also: (1)
+  `ip-config = manual(static-ip)` — `apply_address`/`configure_netd` already take
+  the fields; thread a static config from the WIT (needs a daemon static path); (2)
+  a daemon supplicant-disconnect verb to un-stub `disconnect`/`forget-current`; (3)
+  a non-blocking cached scan (split IWificond `getScanResults` from the trigger) if
+  the residual ~1 s scan hitch ever matters.
 
 ## Open questions
 1. ✅ RESOLVED (2026-06-09): **Credential storage** = a **wandr-owned JSON store**
