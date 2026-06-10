@@ -495,6 +495,15 @@ impl PeerSession {
             }
         }
 
+        // TWCC receiver feedback (~10 Hz): a transport-cc-negotiated sender
+        // (real ringrtc) ramps its bitrate ONLY on this; without it, it backs
+        // off to minimum and the inbound video stays blurry.
+        if let Some(raw) = m.poll_twcc(now) {
+            if let Ok(dg) = m.protect_rtcp(&raw) {
+                self.transport.queue_media(dg);
+            }
+        }
+
         // REMB ~1 Hz once we are RECEIVING video and have a budget: the
         // peer's sender-side BWE needs receiver feedback to ramp up (we send
         // no TWCC/RR). Shares the SR cadence via last_remb_tx.

@@ -46,6 +46,11 @@ const VIDEO_START_BITRATE_BPS: u32 = 1_000_000;
 // so its sender-side BWE ramps up — matches the max_bitrate_bps we advertise
 // in the V4 connection parameters. Without it the peer parks at ~36 kbps.
 const VIDEO_RECV_BITRATE_BPS: u32 = 2_000_000;
+// Floor for the peer-driven send bitrate. Following REMB downward without a
+// floor death-spirals: the peer's receive estimate only grows from observed
+// throughput, so obeying a starvation estimate (live call: 8 kbps!) keeps it
+// starved. Sending at least this much IS the probe that lets it ramp.
+const VIDEO_MIN_BITRATE_BPS: u32 = 250_000;
 
 /// Video geometry from the UI's call screen, in its surface pixels.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -68,8 +73,8 @@ struct VideoState {
     enc: Option<VideoEncoder>,
     dec: Option<VideoDecoder>,
     layout: Option<VideoLayout>,
-    /// The CVO rotation the decoder was opened with (reopen on change is a
-    /// follow-up; mid-call device rotation is rare on a phone held in-call).
+    /// The peer's last CVO rotation applied to the decoder surface (updated
+    /// live via set-rotation when the peer rotates mid-call).
     dec_rotation: u32,
     /// Last bitrate applied to the encoder (avoid re-set every tick).
     applied_bitrate: u32,
@@ -527,7 +532,7 @@ impl ActiveCall {
                 .peer_max_bitrate_bps()
                 .map(|b| b as u32)
                 .or(self.call.peer_remb_bps())
-                .map(|b| b.min(VIDEO_START_BITRATE_BPS))
+                .map(|b| b.clamp(VIDEO_MIN_BITRATE_BPS, VIDEO_START_BITRATE_BPS))
                 .unwrap_or(VIDEO_START_BITRATE_BPS);
             if want != v.applied_bitrate {
                 enc.set_bitrate(want);
@@ -572,6 +577,12 @@ impl ActiveCall {
                 }
             }
             if let Some(d) = &v.dec {
+                // The peer rotated mid-call: CVO changes per frame; apply at
+                // the compositor (no codec reconfigure).
+                if vf.rotation != v.dec_rotation {
+                    v.dec_rotation = vf.rotation;
+                    d.set_rotation(vf.rotation);
+                }
                 let _ = d.submit(&vtypes::EncodedFrame {
                     data: vf.data,
                     timestamp: vf.timestamp,

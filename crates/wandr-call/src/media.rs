@@ -17,6 +17,7 @@ use rtc_shared::marshal::{Marshal, Unmarshal};
 use rtc_srtp::context::Context;
 use rtc_srtp::protection_profile::ProtectionProfile;
 
+use crate::twcc::{TwccTracker, TRANSPORT_CC_EXT_ID};
 use crate::video::{VideoDiag, VideoFrame, VideoStream, VIDEO_RED_PAYLOAD_TYPE, VP8_RTX_PAYLOAD_TYPE};
 use crate::Error;
 
@@ -79,6 +80,10 @@ pub struct MediaSession {
     // peer's video_enabled / max-bitrate / rtp hangup ride here).
     #[cfg(feature = "signal")]
     rtp_data_in: Vec<Vec<u8>>,
+    // TWCC receiver feedback (Phase 5 quality): records the transport-wide seq
+    // (header ext id 1) + arrival of EVERY inbound media packet; the session
+    // polls + sends the feedback the peer's send-side BWE needs to ramp up.
+    twcc: TwccTracker,
     // DIAG (inbound): cumulative RTP-seq gaps (lost/missing packets), last
     // inter-packet timestamp delta (= Opus frame samples: 960=20ms, 2880=60ms),
     // and last payload size. Pins arrival rate / frame size / loss for the call.
@@ -171,6 +176,7 @@ impl MediaSession {
             video: None,
             #[cfg(feature = "signal")]
             rtp_data_in: Vec::new(),
+            twcc: TwccTracker::new(),
             rx_prev_seq: None,
             rx_prev_ts: None,
             rx_seq_gaps: 0,
@@ -267,6 +273,14 @@ impl MediaSession {
         self.rx_pt = pkt.header.payload_type;
         self.rx_ssrc = pkt.header.ssrc;
         self.rx_payload_len = pkt.payload.len();
+        // TWCC: every inbound media packet carries the transport-wide seq when
+        // negotiated (ringrtc: ext id 1 on audio AND video).
+        for ext in &pkt.header.extensions {
+            if ext.id == TRANSPORT_CC_EXT_ID && ext.payload.len() >= 2 {
+                let seq = u16::from_be_bytes([ext.payload[0], ext.payload[1]]);
+                self.twcc.record(seq, pkt.header.ssrc, std::time::Instant::now());
+            }
+        }
         // The video track (VP8 plain, RED-wrapped, or RTX) demuxes by PT into the
         // reassembler; whole frames come out via `take_video_frame` (empty PCM
         // here = not audio). Real ringrtc peers send video as RED (PT 120).
@@ -414,5 +428,12 @@ impl MediaSession {
     /// Unprotect an inbound SRTCP datagram → the RTCP compound payload.
     pub fn unprotect_rtcp(&mut self, data: &[u8]) -> Result<Vec<u8>, Error> {
         Ok(self.rx.decrypt_rtcp(data).map_err(|_| Error::Srtp("decrypt rtcp"))?.to_vec())
+    }
+
+    /// Next due TWCC feedback (marshaled RTCP), if any — the session protects
+    /// + queues it (~10×/s while media flows).
+    pub fn poll_twcc(&mut self, now: std::time::Instant) -> Option<Vec<u8>> {
+        let sender = self.ssrc;
+        self.twcc.poll(now, sender)
     }
 }

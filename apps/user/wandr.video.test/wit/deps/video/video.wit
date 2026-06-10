@@ -134,6 +134,9 @@ interface decoder {
         set-rect: func(rect: video-rect);
         /// Show/hide the video surface (e.g. the peer paused video).
         set-visible: func(visible: bool);
+        /// Update the peer's CVO rotation live (applied at the compositor —
+        /// no codec reconfigure; pairs with the engine's VideoFrame.rotation).
+        set-rotation: func(degrees: u32);
         /// true once >=1 keyframe has decoded (UI can drop the placeholder).
         ready: func() -> bool;
         /// Frames decoded so far (diagnostics; Phase 1 decode-to-buffer counts
