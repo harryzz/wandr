@@ -206,6 +206,11 @@ impl DomRenderer {
 
     pub fn on_resize(&mut self, w: f32, h: f32) {
         self.surface = (w, h);
+        // Re-run the ROOT component, not just taffy: responsive apps read the
+        // surface size in component bodies (e.g. to place host-composited
+        // video rects), and a pure reflow never re-executes them — a rotation
+        // would relayout the boxes but leave size-derived code stale.
+        self.vdom.mark_dirty(dioxus_core::ScopeId::ROOT);
         self.dirty = true;
     }
 

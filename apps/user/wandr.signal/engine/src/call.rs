@@ -910,6 +910,13 @@ impl CallEngine {
     /// The call screen's video geometry (UI surface pixels).
     pub fn set_video_layout(&mut self, layout: VideoLayout) {
         if let Some(a) = &mut self.active {
+            if a.video.layout != Some(layout) {
+                crate::engine::dbg_line(&format!(
+                    "video: layout remote=({},{} {}x{}) pip=({},{} {}x{})",
+                    layout.remote.0, layout.remote.1, layout.remote.2, layout.remote.3,
+                    layout.pip.0, layout.pip.1, layout.pip.2, layout.pip.3,
+                ));
+            }
             a.apply_video_layout(layout);
         }
     }

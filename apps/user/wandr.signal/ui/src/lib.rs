@@ -831,6 +831,10 @@ fn app() -> Element {
     // this app's UI (above-ui layer), inside rects this screen lays out.
     let (vid_local, vid_remote) = chat::video_status();
     if matches!(call_status, chat::CallState::Connected) && (vid_local || vid_remote) {
+        // Layout push lives HERE (the root body): dioxus-canvas re-runs the
+        // root on surface resize, so rotation re-derives the rects; a child
+        // component body would be skipped (memoized props).
+        push_video_layout();
         return rsx! { VideoCallScreen { local_on: vid_local } };
     }
 
@@ -989,25 +993,29 @@ fn ProfileScreen(profile: UiProfile, show_profile: Signal<bool>) -> Element {
 /// derives the remote + PiP rects from the live surface size and its own
 /// layout constants, reports them via `set-video-layout`, and draws the
 /// controls strip. Camera toggle + hang up.
-#[component]
-fn VideoCallScreen(local_on: bool) -> Element {
-    // Surface pixels — the same space the video rects use.
+/// UI-owned call-screen layout policy: a bottom controls strip; remote video
+/// fills everything above it; the PiP sits above the strip, right-aligned, at
+/// the capture aspect (4:3), a quarter of the width. Derived from the LIVE
+/// surface size — called from the App root so rotation re-derives it.
+const CONTROLS_H: u32 = 220;
+const VIDEO_MARGIN: u32 = 24;
+
+fn push_video_layout() {
     let sw = crate::my::skiko_gfx::canvas::surface_width();
     let sh = crate::my::skiko_gfx::canvas::surface_height();
-    // UI-owned call-screen layout policy: a bottom controls strip; remote
-    // video fills everything above it; the PiP sits above the strip, right-
-    // aligned, at the capture aspect (4:3), a quarter of the width.
-    const CONTROLS_H: u32 = 220;
-    const MARGIN: u32 = 24;
     let video_h = sh.saturating_sub(CONTROLS_H);
     let pip_w = sw / 4;
     let pip_h = pip_w * 3 / 4;
     chat::set_video_layout(
         0, 0, sw, video_h,
-        sw.saturating_sub(pip_w + MARGIN),
-        video_h.saturating_sub(pip_h + MARGIN),
+        sw.saturating_sub(pip_w + VIDEO_MARGIN),
+        video_h.saturating_sub(pip_h + VIDEO_MARGIN),
         pip_w, pip_h,
     );
+}
+
+#[component]
+fn VideoCallScreen(local_on: bool) -> Element {
     let btn = "display:flex; justify-content:center; align-items:center; width:128px; height:128px; border-radius:28px; color:#FFFFFF; font-size:60px;";
     let cam_bg = if local_on { "#2E7D32" } else { "#555555" };
     rsx! {
