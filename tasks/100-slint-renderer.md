@@ -47,7 +47,7 @@
       clip direct; opacity+clip layers via create-bitmap-canvas + bc-* +
       snapshot → draw-image; box shadows via draw-shadow-rrect; guest-side
       matrix/clip-stack tracking (femtovg pattern).
-- [ ] **M3 — text**: `GlyphRenderer::draw_glyph_run` → create-typeface
+- [x] **M3 — text** (DONE 2026-06-11, compile-verified; typeface cache pins the parley blob — HashedBlob trick — so the ptr-keyed id stays valid): `GlyphRenderer::draw_glyph_run` → create-typeface
       (cached per font-blob hash, Slint FontCache pattern) + draw-glyphs.
 - [ ] **M4 — proof app on device**: wandr.slint.test exercising text
       (sizes/weights), a TextInput (cursor/selection = parley metrics

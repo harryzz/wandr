@@ -124,7 +124,11 @@ impl WandrWindowAdapter {
         self.renderer.text_layout_cache.clear_cache_if_scale_factor_changed(&self.window);
         canvas::begin_frame();
         window_inner.draw_contents(|components, post_render| {
-            let mut ir = itemrenderer::WandrItemRenderer::new(&self.window, scale);
+            let mut ir = itemrenderer::WandrItemRenderer::new(
+                &self.window,
+                scale,
+                &self.renderer.text_layout_cache,
+            );
             // The window background (the WindowItem brush) — painted before
             // the item tree like the upstream renderers do.
             if let Some(window_item) = window_inner.window_item() {

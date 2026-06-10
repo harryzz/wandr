@@ -33,6 +33,7 @@ use i_slint_core::lengths::{
     LogicalBorderRadius, LogicalLength, LogicalPoint, LogicalRect, LogicalSize, LogicalVector,
     ScaleFactor,
 };
+use i_slint_core::textlayout::sharedparley::{self, GlyphRenderer, fontique};
 use i_slint_core::window::WindowInner;
 
 use crate::canvas;
@@ -53,6 +54,33 @@ thread_local! {
     /// this is global; bounded by the set of distinct images an app shows.
     static IMAGE_CACHE: RefCell<HashMap<(ImageCacheKey, u32, u32), u32>> =
         RefCell::new(HashMap::new());
+
+    /// Host typeface ids by font blob identity (ptr, len, collection index).
+    /// The cached `FontData` clone PINS the blob so fontique can't evict it
+    /// and recycle the address (Slint's own FontCache plays the same trick
+    /// with HashedBlob). Glyph ids stay valid because the host typeface is
+    /// built from these exact bytes (create-typeface).
+    static TYPEFACE_CACHE:
+        RefCell<HashMap<(usize, usize, u32), (u32, sharedparley::parley::FontData)>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Host typeface id for a parley font blob (created once, cached).
+fn ensure_typeface(font: &sharedparley::parley::FontData) -> Option<u32> {
+    let bytes: &[u8] = font.data.as_ref();
+    let key = (bytes.as_ptr() as usize, bytes.len(), font.index);
+    TYPEFACE_CACHE.with(|c| {
+        if let Some((id, _)) = c.borrow().get(&key) {
+            return Some(*id);
+        }
+        let id = canvas::create_typeface(bytes, font.index);
+        if id == 0 {
+            canvas::log_message("slint-wandr: create-typeface failed (unparseable font blob)");
+            return None;
+        }
+        c.borrow_mut().insert(key, (id, font.clone()));
+        Some(id)
+    })
 }
 
 #[derive(Clone)]
@@ -67,16 +95,22 @@ struct RenderState {
 pub struct WandrItemRenderer<'a> {
     window: &'a i_slint_core::api::Window,
     scale: f32,
+    text_layout_cache: &'a sharedparley::TextLayoutCache,
     state: RenderState,
     saved: Vec<RenderState>,
 }
 
 impl<'a> WandrItemRenderer<'a> {
-    pub fn new(window: &'a i_slint_core::api::Window, scale: f32) -> Self {
+    pub fn new(
+        window: &'a i_slint_core::api::Window,
+        scale: f32,
+        text_layout_cache: &'a sharedparley::TextLayoutCache,
+    ) -> Self {
         let size = window.size();
         Self {
             window,
             scale,
+            text_layout_cache,
             state: RenderState {
                 alpha: 1.0,
                 clip: LogicalRect::new(
@@ -447,21 +481,22 @@ impl i_slint_core::item_rendering::ItemRenderer for WandrItemRenderer<'_> {
 
     fn draw_text(
         &mut self,
-        _text: core::pin::Pin<&dyn i_slint_core::item_rendering::RenderText>,
-        _self_rc: &ItemRc,
-        _size: LogicalSize,
+        text: core::pin::Pin<&dyn i_slint_core::item_rendering::RenderText>,
+        self_rc: &ItemRc,
+        size: LogicalSize,
         _cache: &i_slint_core::item_rendering::CachedRenderingData,
     ) {
-        // M3: sharedparley draw helpers through GlyphRenderer → draw-glyphs.
+        // parley shapes guest-side; we only draw glyph runs (GlyphRenderer).
+        sharedparley::draw_text(self, text, Some(self_rc), size, Some(self.text_layout_cache));
     }
 
     fn draw_text_input(
         &mut self,
-        _text_input: core::pin::Pin<&i_slint_core::items::TextInput>,
-        _self_rc: &ItemRc,
-        _size: LogicalSize,
+        text_input: core::pin::Pin<&i_slint_core::items::TextInput>,
+        self_rc: &ItemRc,
+        size: LogicalSize,
     ) {
-        // M3 (with cursor/selection rects from sharedparley).
+        sharedparley::draw_text_input(self, text_input, self_rc, size, None);
     }
 
     fn draw_path(
@@ -702,5 +737,106 @@ impl i_slint_core::item_rendering::ItemRenderer for WandrItemRenderer<'_> {
 
     fn as_any(&mut self) -> Option<&mut dyn core::any::Any> {
         None
+    }
+}
+
+/// Glyph-level text drawing (M3): parley hands us font blobs + positioned
+/// glyph ids in PHYSICAL px; we register the blob once (`create-typeface`)
+/// and forward runs to `draw-glyphs`. Brushes are flat paint-attrs —
+/// gradient text degrades to the brush's representative color (rare; a
+/// shader-id brush needs ownership semantics PaintAttrs doesn't have).
+/// Faux bold/italic synthesis + variable-font axes are not applied
+/// (deferred with the WIT's variable-font support).
+impl GlyphRenderer for WandrItemRenderer<'_> {
+    type PlatformBrush = canvas::PaintAttrs;
+
+    fn platform_text_fill_brush(
+        &mut self,
+        brush: Brush,
+        _size: LogicalSize,
+    ) -> Option<Self::PlatformBrush> {
+        if brush.is_transparent() {
+            return None;
+        }
+        Some(paint_attrs(
+            color_argb(brush.color()),
+            canvas::PaintStyle::Fill,
+            0.0,
+            (self.state.alpha * 255.0) as u8,
+        ))
+    }
+
+    fn platform_brush_for_color(
+        &mut self,
+        color: &i_slint_core::Color,
+    ) -> Option<Self::PlatformBrush> {
+        if color.alpha() == 0 {
+            return None;
+        }
+        Some(paint_attrs(
+            color_argb(*color),
+            canvas::PaintStyle::Fill,
+            0.0,
+            (self.state.alpha * 255.0) as u8,
+        ))
+    }
+
+    fn platform_text_stroke_brush(
+        &mut self,
+        brush: Brush,
+        physical_stroke_width: f32,
+        _size: LogicalSize,
+    ) -> Option<Self::PlatformBrush> {
+        if brush.is_transparent() {
+            return None;
+        }
+        let mut p = paint_attrs(
+            color_argb(brush.color()),
+            canvas::PaintStyle::Stroke,
+            physical_stroke_width,
+            (self.state.alpha * 255.0) as u8,
+        );
+        p.stroke_cap = canvas::StrokeCap::Butt;
+        p.stroke_join = canvas::StrokeJoin::Miter;
+        p.stroke_miter = 10.0;
+        Some(p)
+    }
+
+    fn draw_glyph_run(
+        &mut self,
+        font: &sharedparley::parley::FontData,
+        font_size: sharedparley::PhysicalLength,
+        _normalized_coords: &[i16],
+        _synthesis: &fontique::Synthesis,
+        brush: Self::PlatformBrush,
+        y_offset: sharedparley::PhysicalLength,
+        glyphs_it: &mut dyn Iterator<Item = sharedparley::parley::layout::Glyph>,
+    ) {
+        let Some(typeface_id) = ensure_typeface(font) else { return };
+        let mut ids: Vec<u16> = Vec::new();
+        let mut positions: Vec<f32> = Vec::new();
+        for g in glyphs_it {
+            ids.push(g.id as u16);
+            positions.push(g.x);
+            positions.push(g.y + y_offset.get());
+        }
+        if ids.is_empty() {
+            return;
+        }
+        canvas::draw_glyphs(typeface_id, font_size.get(), &ids, &positions, 0.0, 0.0, brush);
+    }
+
+    fn fill_rectangle(
+        &mut self,
+        physical_rect: sharedparley::PhysicalRect,
+        brush: Self::PlatformBrush,
+    ) {
+        canvas::draw_rect(
+            physical_rect.min_x(),
+            physical_rect.min_y(),
+            physical_rect.width(),
+            physical_rect.height(),
+            brush,
+        );
     }
 }
