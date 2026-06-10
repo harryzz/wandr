@@ -77,6 +77,7 @@
 - [Ref: wandrpkg manifest convention](reference_wandrpkg_manifest_convention.md) — package.toml lives in app source dir; orientation field.
 - [Ref: photon image lib](reference_photon_image_lib.md) — wasip2-fit image processing; repros/photon-probe.
 - [Ref: dioxus + taffy UI](reference_dioxus_taffy_rust_ui.md) — light Rust UI for guests; shipped as crates/dioxus-canvas.
+- [Ref: wasi-webgpu/wasi-gfx](reference_wasi_webgpu_gfx.md) — guest-owns-renderer model (Phase 2, unreleased); sf_media child surfaces = the natural host primitive; second path beside skiko-gfx, not a replacement.
 - [Ref: Slint on wasip2](reference_slint_wasip2.md) — compiles (std+software-renderer, clean wasi imports) but skia backend = native skia-safe, not our WIT; text pipeline is the wall; verdict: keep dioxus-canvas.
 - [Ref: dioxus 0.7 wasip2 subsecond wall](reference_dioxus_07_wasip2_subsecond.md) — narrow subsecond's cfg + [patch.crates-io]; don't re-pin 0.6.
 - [Ref: wasmtime 44 debug APIs](reference_wasmtime_debug_apis.md) — call_hook/breakpoints/single-step tiers for memory corruption.
