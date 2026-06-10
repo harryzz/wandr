@@ -1,12 +1,63 @@
 # Task 93 — Video calls (AV gap to a full Signal app)
 
-> Status: ✅ CAMERA CAPTURE RELIABLE under `--no-art` (2026-06-08: 29.1fps raw +
-> HW VP8 encode 17.4fps, 3/3 — the task-95 EIS-gyro race is now reliably won, see
-> `tasks/95-*`/[[project_artless_sensor_5s_batterystats]]). The WIT contracts are
-> ✍️ **DRAFTED + validated**: `wit/video.wit` (`wandr:video`) + `wit/crypto.wit`
-> (`wandr:crypto`), commit `697da5de` (steps 5 + risk #2 below). Remaining = pure
-> integration (no `--no-art` blockers): implement those WITs host-side (encode-feed,
-> HW decode→surface, AEAD offload) + wire the wandr-call video track + render.
+> Status: ✅ HW CODECS BOTH WAYS PROVEN under `--no-art`. Camera capture reliable
+> (2026-06-08: 29.1fps raw + HW VP8 encode 17.4fps, 3/3; task-95 EIS-gyro race won).
+> **HW VP8 DECODE now also confirmed** (2026-06-10, `--probe-video decode` loopback):
+> camera → HW VP8 encode (20.1fps) → HW VP8 decode (19.9fps, 100/101 frames; the
+> decoder `configure()` did NOT block — the one open unknown) → full round-trip works
+> ART-off. WIT contracts ✍️ **DRAFTED + validated**: `wit/video.wit` (`wandr:video`)
+> + `wit/crypto.wit` (`wandr:crypto`), commit `697da5de`. **Audio calls connect both
+> ways (incoming fixed).** Remaining = pure integration, no `--no-art` blockers — see
+> **IMPLEMENTATION PLAN** below (ready for a fresh session).
+
+## IMPLEMENTATION PLAN — ready to build (next session)
+
+All the `--no-art` unknowns are now de-risked: camera opens + delivers frames, HW
+VP8 **encode AND decode** both run (≈20 fps round-trip, `video_probe.rs` decode
+loopback 2026-06-10), the codec `configure()` blocks are gone (task-96 shim), and
+1:1 audio calls connect both directions. What's left is our integration code, in
+five buildable phases (each independently testable):
+
+**Phase 1 — host `wandr:video` impl (encoder + decoder).** Promote `video_probe.rs`
+from a spike to the real host component. `encoder`: camera open + `AMediaCodec` VP8
+encoder + input-surface + capture session; guest **pulls** `next-frame()` → encoded
+VP8. `decoder`: `AMediaCodec` VP8 decoder; guest **pushes** `submit(frame)` →
+decode-to-buffer first (proven), then decode-to-surface. Wire the C++ libbinder
+threadpool (`sf_start_binder_threadpool`, in the shim) into the host's video init.
+‼️ **Clean teardown** (the spike's wedge gotcha): camera/codec must release on call
+end/crash — never SIGKILL mid-transaction or cameraserver wedges.
+
+**Phase 2 — host `wandr:crypto` impl (SRTP AEAD offload).** `aead.gcm` seal/open per
+packet via RustCrypto AES-256-GCM on ARMv8 HW-AES; key schedule expanded once.
+Offload only the AEAD primitive; keep ROC/replay/HKDF in the guest `rtc_srtp::Context`.
+**On the critical path for video** (software-AES-in-wasm won't keep up at video
+packet rate) and also speeds up audio calls (task 91).
+
+**Phase 3 — wandr-call video track.** Wire the existing `rtc-rtp` VP8 payloader/
+depacketizer into a video RTP stream over the existing SRTP transport. Add the
+WebRTC video machinery audio didn't need: **RTCP PLI/FIR** (incoming loss/keyframe
+request → ask the encoder for a sync frame via `AMediaCodec` request-sync; honor a
+peer's PLI), **bitrate/congestion control** (check whether `external/rtc` has
+BWE/REMB/transport-cc; a fixed-bitrate v1 if not), and A/V sync via RTCP SR.
+
+**Phase 4 — render + arbiter `Role::Video`.** New surface role: the decoder output
+surface composited behind/around the guest Skia call UI (z-order, rotation,
+occlusion) + a PiP self-view. Decode-to-surface host compositing (pixels never
+re-enter the guest). Wire the Signal guest call UI to remote-video + local-PiP.
+
+**Phase 5 — Signal-protocol video.** In-call video enable/disable + resolution/
+bitrate adaptation (the `opaque` ConnectionParameters); signaling already advertises
+VP8/VP9.
+
+**Recommended first step:** Phase 1 + Phase 2 (host `wandr:video` + `wandr:crypto`),
+since they unblock the wandr-call video track. Reuse `video_probe.rs` verbatim for
+the camera/encoder/decoder NDK plumbing.
+
+**Residual risks (post-decode-confirmation):** SRTP CPU at video bitrate (→ Phase 2
+mandatory); PLI/keyframe + congestion control (→ Phase 3, the WebRTC bits audio
+skipped); decode-to-surface + `Role::Video` compositing (new but lower-risk now that
+HW decode is proven); ~20 fps is the codec ceiling on this 2017 SoC and combined
+live-call load (camera + 2× codec + crypto + Skia + net) may thermal-throttle.
 
 ## ✅ SOLVED: full `--no-art` camera capture chain (2026-06-06)
 
