@@ -1,0 +1,5 @@
+package test:rescheck-app;
+
+world app {
+  import test:rescheck/probe;
+}

@@ -1,0 +1,10 @@
+package test:rescheck;
+
+interface probe {
+  run: func() -> string;
+}
+
+world plug {
+  import wandr:crypto/aead@0.1.0;
+  export probe;
+}

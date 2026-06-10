@@ -19,8 +19,10 @@ hardware AES via `wandr:crypto`. Architecture (keeps libs portable, WIT out of t
   `MediaSession::new_with_aead`, `PeerSession::set_aead_provider`, `SignalCall::set_aead_provider`.
   WIT-agnostic — the guest injects the provider.
 - **Signal engine** (`apps/user/wandr.signal/engine`): implements the provider via
-  `wandr:crypto/aead-oneshot` (NOT the `aead` resource — see [[reference_wac_plug_imported_resource]]),
-  calls `set_aead_provider` after `place`/`incoming`.
+  `wandr:crypto/aead-oneshot` (key per call; measured equal to the `aead-key` resource
+  path — the resource ALSO links fine through wac, see
+  [[reference_missing_instance_error_stale_zygote]]), calls `set_aead_provider` after
+  `place`/`incoming`.
 
 **Device-measured before/after** (Pixel 2 XL, `wandr.srtp.bench` `--run-once`, both
 backends one run): AES-256-GCM, Signal V4 profile.
@@ -32,9 +34,9 @@ HW AES requires the `--cfg aes_armv8` + `--cfg polyval_armv8` rustflags in
 `runtime/wandr-host/.cargo/config.toml` (NOT target-feature) — already set.
 
 STATUS: library + engine wiring DONE + compiles; host (with `aead_oneshot::Host`) +
-Signal redeployed, Signal **instantiates clean** under `--no-art` (was trapping on the
-resource import). The actual SRTP-over-HW-AES runs only during a live call → needs a
+Signal redeployed, Signal **instantiates clean** under `--no-art` (the earlier "resource implementation
+is missing" trap was a STALE ZYGOTE image, not a resource/wac problem). The actual SRTP-over-HW-AES runs only during a live call → needs a
 user call to verify end-to-end (outgoing works; incoming media still blocked by
-[[project_incoming_call_answerer_bug]]). NOT committed yet. Bench = `wandr.srtp.bench`.
+[[project_incoming_call_answerer_bug]]). Committed 11c5efaa + pushed. Bench = `wandr.srtp.bench`.
 Build Signal: `apps/user/wandr.signal/build.sh` (PROTOC=$HOME/tools/protoc/bin/protoc),
 then `run-hybrid-stack.sh --wandr-only` so the zygote picks up the new host.

@@ -117,12 +117,14 @@ interface aead {
 }
 
 /// Stateless one-shot AEAD — same crypto as `aead`, but the key is passed per call
-/// instead of held in an `aead-key` resource. For hot paths inside a *composed*
-/// (wac-plugged) guest, where an imported resource can't be resolved across the
-/// composition boundary but plain functions compose fine: SRTP per-packet GCM in
-/// the Signal call engine runs through here. The host keys AES-GCM per call (the
-/// AES-256 schedule is a few hundred ns — dwarfed by the cross-component call), so
-/// throughput tracks the `aead-key` resource path.
+/// instead of held in an `aead-key` resource. Convenience for single-shot sealing
+/// and for callers that don't want a handle to manage; the Signal call engine's
+/// SRTP runs through here. The host keys AES-GCM per call (the AES-256 schedule is
+/// a few hundred ns — dwarfed by the cross-component call), so throughput is
+/// device-measured EQUAL to the `aead-key` resource path at SRTP packet sizes.
+/// (Resources work fine through wac compositions too — a "resource implementation
+/// is missing" trap during bring-up turned out to be a stale pre-crypto zygote
+/// image, not a wac/wasmtime limitation; see repros + project memory.)
 interface aead-oneshot {
     use types.{aead-algo, crypto-error};
     /// -> ciphertext || tag. `nonce` is algo-specific (12 B GCM, 24 B XChaCha).

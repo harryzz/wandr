@@ -35,9 +35,9 @@ use wandr_call::{AeadCtx, AeadProvider};
 /// `wandr:crypto/aead-oneshot` (wandr-call injects this through
 /// `SignalCall::set_aead_provider`). The SRTP framing stays in-guest; only the GCM
 /// block crosses to the host — ~3× (audio)/~8× (video) faster than in-wasm software
-/// AES, byte-identical on the wire so it interops unchanged. One-shot (key passed per
-/// call) rather than the `aead-key` resource because an imported resource doesn't
-/// resolve across this guest's wac-plug composition; functions do.
+/// AES, byte-identical on the wire so it interops unchanged. One-shot (key passed
+/// per call) is device-measured equal to the `aead-key` resource path at SRTP
+/// packet sizes (the resource would also link fine through this wac composition).
 struct HostAeadProvider;
 struct HostAeadCtx {
     algo: AeadAlgo,
