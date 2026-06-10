@@ -109,9 +109,27 @@ encode-side rotation in Phase 5). REMAINING (moved to Phase 5, needs the in-call
 video-enable signaling to drive it): wire the Signal call UI to remote-video +
 local-PiP rects + transparent hole.
 
-**Phase 5 — Signal-protocol video.** In-call video enable/disable + resolution/
-bitrate adaptation (the `opaque` ConnectionParameters); signaling already advertises
-VP8/VP9.
+**Phase 5 — Signal-protocol video. 🟡 IMPLEMENTED + DEPLOYED (2026-06-10);
+LIVE-CALL VERIFICATION PENDING (needs a real Signal peer).** Grounded in ringrtc
+source: video on/off rides the RTP-data channel (`rtp_data.Message.senderStatus.
+video_enabled`, accumulated + resent ~1 Hz — NOT signaling); the peer's
+`receiverStatus.max_bitrate_bps` = its requested send bitrate (wins over REMB);
+rotation rides the CVO header extension (`urn:3gpp:video-orientation`, ringrtc
+ext id **4**) — outgoing = the camera's facing-adjusted sensor orientation
+(`display-rotation()`), incoming = applied at decoder open (MediaCodec
+`rotation-degrees`). **Receive advert is VP8-ONLY now** (the peer encodes from
+OUR set; VP9-first would get us VP9 we don't depacketize). WIT gained `z-layer`
+(`behind-ui` hole model / `above-ui` — the Signal screen uses above-ui; no
+clear-blend in dioxus-canvas yet). Signal engine: `pump_video` beside
+`pump_audio` (lazy encoder on toggle+layout; decoder on first keyframe with its
+CVO rotation; keyframe-gated mid-stream join; in-band hangup honored). UI:
+camera button in the in-call header → full-screen `VideoCallScreen` (rects
+derived from surface size, reported via `set-video-layout`; camera toggle +
+hang-up). Deployed state-preserved. **TO VERIFY LIVE:** 1:1 call ↔ real Signal
+client, camera on both ways; watch `/state/calldbg.log` `video:` lines.
+KNOWN LIMITS: decoder rotation fixed at open (peer rotating mid-call =
+follow-up); enable video only after Connected (layout must exist first);
+self-view not mirrored.
 
 **Next step (Phases 1–4 ✅ done): Phase 5** — Signal-protocol video: in-call
 video enable/disable over the `opaque` ConnectionParameters (wire constants
