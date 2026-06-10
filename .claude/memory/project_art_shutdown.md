@@ -99,3 +99,6 @@ InputDispatcher AIDL does NOT help — it dies with system_server. The fix is a
 [[project_standalone_input]] (current input = BBQ-direct attach, still rides
 system_server's InputDispatcher). PMS contention ([[project_proximity_screen_off]])
 is a sub-symptom of this same coupling and dissolves once ART is gone.
+
+**/proc/stat parse trap** (bit the CPU measurements): the first field of the `cpu`
+line is the literal label "cpu", not a number — skip field 1 when summing jiffies.

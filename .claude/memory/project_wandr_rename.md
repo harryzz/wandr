@@ -70,4 +70,4 @@ libsignal `wart-wasi-transport` + rsbinder `wart-recursive`. The tracked
 `runtime/wandr-host/prebuilt/libsf_surface.so` is still the stale wart-named artifact.
 
 Reusable rename helper (mask→case-preserving-replace→unmask) was at `/tmp/rename_wandr.pl`.
-Relates to [[reference_wandr_apps_root_install]], [[feedback_build_system_warpkgs_wipes_apps_root]].
+Relates to [[reference_wandr_apps_root_install]], [[feedback_build_system_wandrpkgs_wipes_apps_root]].

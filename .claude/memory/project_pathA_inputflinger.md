@@ -124,3 +124,27 @@ build/test recipe + the ruled-out shortcuts) — start there in the new session.
 
 See [[project_art_shutdown]], tasks/80-standalone-input-art-less.md (Path A section),
 tasks/84-pathA-touch-windowinfos.md.
+
+**✅ RESOLVED (task 84) — SOLVED+device-verified PORTRAIT+LANDSCAPE.** (Moved from
+the index line, which carried this resolution while the file ended at the task-84
+scoping above.) App touch/keys route ART-off: swipe-unlock, launcher, app-switch,
+IME typing, taskbar-with-keyboard, landscape chrome+app+keyboard, system-key dedup.
+Architecture: arbiter (WMS) authors the window list → abstract socket
+`@wandr-inputflinger` → `onWindowInfosChanged` (1-method decl in
+`android::inputdispatcher`, offset-0 single-inherit cast vs the libinputflinger.so
+export — NO heavy InputDispatcher.h); host registers pid→token via the
+`wandr.windowreg` binder service. KEY FIX: `WindowInfo.transform.set(-left,-top)` —
+the dispatcher delivers `transform.transform(raw)` = window-local coords
+(InputDispatcher.cpp:2135); offset windows (IME/taskbar) got raw display coords →
+dead, while fullscreen (identity) worked. LANDSCAPE: arbiter `strip_rect` mirrors
+the host `overlay_rect` handedness (0→S/3→N/4→W/7→E) so chrome/IME input follows
+the rotated bars; app/keyguard already worked via the host base_matrix inverse-map.
+Also: id=pid dedup, IME strip above taskbar, arbiter drives backlight (was 0
+ART-off = invisible panel). `sf_surface` → `libsf_surface.so` (a-03 C++, not Rust).
+
+**FIRST-LAUNCH-INPUT FIX (735a0b9d):** a freshly-launched app was input-dead until
+a bg+fg round-trip — the arbiter pushes the window block at launch BEFORE the
+forked host registers its `wandr.windowreg` token (~70 ms later);
+`feed_window_block` skips a token-less pid and nothing re-pushed. Fix = cache the
+last block + on `TX_REGISTER` call `refeed_last_block()` to re-apply it once the
+token lands.
