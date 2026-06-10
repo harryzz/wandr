@@ -27,11 +27,17 @@ threadpool (`sf_start_binder_threadpool`, in the shim) into the host's video ini
 ‼️ **Clean teardown** (the spike's wedge gotcha): camera/codec must release on call
 end/crash — never SIGKILL mid-transaction or cameraserver wedges.
 
-**Phase 2 — host `wandr:crypto` impl (SRTP AEAD offload).** `aead.gcm` seal/open per
-packet via RustCrypto AES-256-GCM on ARMv8 HW-AES; key schedule expanded once.
-Offload only the AEAD primitive; keep ROC/replay/HKDF in the guest `rtc_srtp::Context`.
-**On the critical path for video** (software-AES-in-wasm won't keep up at video
-packet rate) and also speeds up audio calls (task 91).
+**Phase 2 — host `wandr:crypto` impl (SRTP AEAD offload). ✅ DONE + LIVE-CALL-VERIFIED
+(2026-06-10).** Built bigger than sketched: universal `wandr:crypto` WIT (hash/mac/
+aead/cipher/kdf + caps; `--probe-crypto` 13/13 vectors, HW AES via `--cfg aes_armv8`
+rustflags). SRTP integration exactly as planned: only the AEAD primitive crosses
+(`aead-key` resource — key schedule expanded once host-side); ROC/replay/KDF stay in
+the guest (`rtc-srtp` `external-aead` feature in `wandr-rtc.patch` + wandr-call
+`host-aead`, all trait-injected, WIT stays out of the libs). Device-measured
+(`wandr.srtp.bench`): audio 160B 3.0×, video-size 1100B **8.2–8.7×** (24→2.8 ms
+CPU/s) — the video critical path is cleared. Real Signal call verified, audio both
+ways. Commits 11c5efaa/266e6834/3c316895. Gotcha for the next phases: after host
+linker changes RESTART THE ZYGOTE (stale-image trap, `repros/wac-resource-import/`).
 
 **Phase 3 — wandr-call video track.** Wire the existing `rtc-rtp` VP8 payloader/
 depacketizer into a video RTP stream over the existing SRTP transport. Add the
@@ -49,9 +55,9 @@ re-enter the guest). Wire the Signal guest call UI to remote-video + local-PiP.
 bitrate adaptation (the `opaque` ConnectionParameters); signaling already advertises
 VP8/VP9.
 
-**Recommended first step:** Phase 1 + Phase 2 (host `wandr:video` + `wandr:crypto`),
-since they unblock the wandr-call video track. Reuse `video_probe.rs` verbatim for
-the camera/encoder/decoder NDK plumbing.
+**Recommended first step (Phase 2 ✅ done): Phase 1** — host `wandr:video`
+(promote `video_probe.rs`), which unblocks the Phase-3 wandr-call video track.
+Reuse `video_probe.rs` verbatim for the camera/encoder/decoder NDK plumbing.
 
 **Residual risks (post-decode-confirmation):** SRTP CPU at video bitrate (→ Phase 2
 mandatory); PLI/keyframe + congestion control (→ Phase 3, the WebRTC bits audio
