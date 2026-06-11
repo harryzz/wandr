@@ -69,6 +69,16 @@ source-read), poisoning the instance ("cannot enter component instance",
 app exits). The clean-room spike passes 100k/100k, so the trigger is
 Compose-app runtime state — OPEN follow-up; host auto-falls-back to
 legacy on-key-event-v2 when key-handler is unbound, so typing works.
+ROOT-CAUSE PROGRESS (desktop --app + WANDR_DEBUG_SYNTH_KEY, commit
+3cf1a559): reproduces DETERMINISTICALLY on desktop JIT at frame 120;
+fails identically with an EMPTY on-key body (just freeAll) AND with
+cabi_realloc wrapped in catch(Throwable)+logMessage (catch never fires)
+→ the exception originates in the component lowering/trampoline OUTSIDE
+any wrappable Kotlin code. Next bisect ideas: empty-string key-event
+(skips realloc) vs non-empty; key-event with ONE string; check whether
+Kotlin's compiler-generated export adapter rethrows; wasmtime exception
+tag inspection. weston/WSLg was flaky during this work (SIGSEGV'd) —
+restart WSL before resuming desktop cycles.
 Debug affordances added: desktop host `--app <id>` (resolves cross-app
 deps from WANDR_APPS_ROOT; pull dep components from the phone — wasm is
 target-independent) + desktop `--install`; ime-inbound key failure log
