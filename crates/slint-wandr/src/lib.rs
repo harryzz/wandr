@@ -461,11 +461,108 @@ pub fn handle_pointer_event(_pointer_id: u32, kind: PointerKind, x: f32, y: f32)
     });
 }
 
+thread_local! {
+    /// True once any v3 key event arrived: the host emits v2 AND v3 for
+    /// every keystroke, so once v3 is proven live, v2 is ignored to avoid
+    /// double key delivery (v2 stays as the fallback under an old host).
+    static SAW_KEY_V3: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Host `key-input.on-key` (v3, optional export) — the W3C UIEvents model:
+/// physical `code` token + modifiers + produced `text`. This is the
+/// desktop-grade path (winit/Wayland hosts send real modifiers, so Slint
+/// shortcuts like ctrl+c work: modifier keys are forwarded as Slint's
+/// special code points and Slint tracks the state itself).
+pub fn handle_key_v3(
+    down: bool,
+    repeat: bool,
+    code: &str,
+    text: &str,
+    _alt: bool, _ctrl: bool, _meta: bool, _shift: bool,
+) {
+    use i_slint_core::platform::Key;
+    SAW_KEY_V3.with(|c| c.set(true));
+    // The wandr keyboard's hide button arrives as ESC (task-47): while an
+    // editor is attached, blur + swallow (see handle_key_event for detail).
+    if code == "Escape" && down {
+        let mut dismissed = false;
+        with_adapter(|adapter| {
+            if adapter.ime_attached.get() {
+                adapter.clear_editor_focus();
+                dismissed = true;
+            }
+        });
+        if dismissed {
+            return;
+        }
+    }
+    let ch: Option<char> = match code {
+        // Modifier keys — Slint derives its modifier state from these.
+        "ShiftLeft" => Some(Key::Shift.into()),
+        "ShiftRight" => Some(Key::ShiftR.into()),
+        "ControlLeft" => Some(Key::Control.into()),
+        "ControlRight" => Some(Key::ControlR.into()),
+        "AltLeft" => Some(Key::Alt.into()),
+        "AltRight" => Some(Key::AltGr.into()),
+        "MetaLeft" => Some(Key::Meta.into()),
+        "MetaRight" => Some(Key::MetaR.into()),
+        // Named editing/navigation keys.
+        "Backspace" => Some(Key::Backspace.into()),
+        "Tab" => Some(Key::Tab.into()),
+        "Enter" | "NumpadEnter" => Some(Key::Return.into()),
+        "Escape" => Some(Key::Escape.into()),
+        "Delete" => Some(Key::Delete.into()),
+        "Insert" => Some(Key::Insert.into()),
+        "Home" => Some(Key::Home.into()),
+        "End" => Some(Key::End.into()),
+        "PageUp" => Some(Key::PageUp.into()),
+        "PageDown" => Some(Key::PageDown.into()),
+        "ArrowLeft" => Some(Key::LeftArrow.into()),
+        "ArrowUp" => Some(Key::UpArrow.into()),
+        "ArrowRight" => Some(Key::RightArrow.into()),
+        "ArrowDown" => Some(Key::DownArrow.into()),
+        "F1" => Some(Key::F1.into()),
+        "F2" => Some(Key::F2.into()),
+        "F3" => Some(Key::F3.into()),
+        "F4" => Some(Key::F4.into()),
+        "F5" => Some(Key::F5.into()),
+        "F6" => Some(Key::F6.into()),
+        "F7" => Some(Key::F7.into()),
+        "F8" => Some(Key::F8.into()),
+        "F9" => Some(Key::F9.into()),
+        "F10" => Some(Key::F10.into()),
+        "F11" => Some(Key::F11.into()),
+        "F12" => Some(Key::F12.into()),
+        _ => None,
+    };
+    let key_text: i_slint_core::SharedString = match ch {
+        Some(ch) => ch.into(),
+        // Printable input: the host already resolved layout + modifiers.
+        None if !text.is_empty() => text.into(),
+        None => return,
+    };
+    with_adapter(|adapter| {
+        let event = if !down {
+            WindowEvent::KeyReleased { text: key_text.clone() }
+        } else if repeat {
+            WindowEvent::KeyPressRepeated { text: key_text.clone() }
+        } else {
+            WindowEvent::KeyPressed { text: key_text.clone() }
+        };
+        adapter.window.dispatch_event(event);
+    });
+}
+
 /// Host `on-key-event-v2`. `code_point` carries printable chars; `key-id`
 /// uses the Compose-webMain key constants for specials (the same contract
 /// dioxus-canvas consumes) — mapped to Slint's special-key code points.
+/// FALLBACK path: ignored once v3 (`handle_key_v3`) is observed, since
+/// hosts that know v3 emit both.
 pub fn handle_key_event(down: bool, code_point: u32, key_id: u32) {
     use i_slint_core::platform::Key;
+    if SAW_KEY_V3.with(|c| c.get()) {
+        return;
+    }
     // The wandr keyboard's hide button arrives as ESC (the task-47
     // convention: "reuse the lose-focus path"). While an editor is
     // attached, ESC means "dismiss the keyboard": blur the editor (which
@@ -567,9 +664,24 @@ interface frame-pacing {
     next-frame-delay: func() -> u32;
 }
 
+interface key-input {
+    record key-event {
+        down:   bool,
+        repeat: bool,
+        code:   string,
+        text:   string,
+        alt:    bool,
+        ctrl:   bool,
+        meta:   bool,
+        shift:  bool,
+    }
+    on-key: func(ev: key-event);
+}
+
 world slint-app {
     export renderer;
     export frame-pacing;
+    export key-input;
 }
 "#,
             world: "slint-app",
@@ -640,6 +752,15 @@ world slint-app {
         impl exports::my::skiko_gfx::frame_pacing::Guest for __SlintWandrGuest {
             fn next_frame_delay() -> u32 {
                 ::slint_wandr::next_frame_delay()
+            }
+        }
+
+        impl exports::my::skiko_gfx::key_input::Guest for __SlintWandrGuest {
+            fn on_key(ev: exports::my::skiko_gfx::key_input::KeyEvent) {
+                ::slint_wandr::handle_key_v3(
+                    ev.down, ev.repeat, &ev.code, &ev.text,
+                    ev.alt, ev.ctrl, ev.meta, ev.shift,
+                );
             }
         }
 

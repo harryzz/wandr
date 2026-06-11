@@ -1108,6 +1108,44 @@ world frame-pacing-world {
     export frame-pacing;
 }
 
+/// Optional desktop-grade key events — the W3C UIEvents model (survey
+/// 2026-06-11, docs/skiko-gfx-vs-wasi-gfx.md). Exists because
+/// `renderer.on-key-event-v2`'s (code-point, key-id) pair is
+/// soft-keyboard-shaped and carries NO modifiers — fine on the phone,
+/// lossy under a desktop host (winit/Wayland: no ctrl+c, no shortcuts).
+/// Guests opt in by exporting `key-input-world` (probed like
+/// frame-pacing); hosts emit v1 + v2 + v3 for every keystroke, so a
+/// guest handles whichever it knows and ignores the rest.
+interface key-input {
+    /// One physical-key transition.
+    /// `code` is the W3C UIEvents code token for the PHYSICAL key
+    /// ("KeyA", "ArrowLeft", "NumpadEnter", … —
+    /// https://w3c.github.io/uievents-code/), "" if unidentified. A
+    /// string rather than an enum on purpose: the W3C table grows over
+    /// time, winit's KeyCode names are these exact tokens (desktop host
+    /// maps for free), and the tokens convert 1:1 to/from
+    /// wasi:surface@0.0.1's `key` enum if that ever standardizes.
+    /// `text` is the text this transition produces (layout- and
+    /// modifier-resolved by the host; "" for modifiers / named keys).
+    record key-event {
+        down:   bool,
+        repeat: bool,
+        code:   string,
+        text:   string,
+        alt:    bool,
+        ctrl:   bool,
+        meta:   bool,
+        shift:  bool,
+    }
+
+    on-key: func(ev: key-event);
+}
+
+/// Probe-only world for the host's optional `key-input` bindings.
+world key-input-world {
+    export key-input;
+}
+
 world skiko-ui {
     import canvas;
     import paragraph;

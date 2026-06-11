@@ -82,7 +82,7 @@ It corresponds NOT to our canvas but to the slice wandr spreads across the
 | Who owns the event loop | GUEST pulls: `subscribe-*` → `pollable` + `get-*` (wasi:io poll; a game loop blocks on poll) | HOST pushes: calls `renderer.on-*` exports (reactor model) |
 | Frame timing | `subscribe-frame` vsync tick (record is literally a TODO placeholder) | host-driven `render-frame(nanos)` + `frame-pacing.next-frame-delay` back-channel → on-demand rendering, ~1% idle |
 | Pointer | x,y `f64` only — no pointer-id, pressure, buttons, scroll, touch/mouse distinction | `on-pointer-event-v2`: pointer-id + kind (down/up/move/scroll) + pressure (multi-touch-capable) |
-| Keys | richer than ours: full W3C code enum + alt/ctrl/meta/shift modifiers + `text` | code-point + Compose-webMain key-id; NO modifier bits (fine on a phone, a gap on desktop) |
+| Keys | full W3C code enum + alt/ctrl/meta/shift modifiers + `text` | v2 = code-point + Compose-webMain key-id (mobile-shaped); **v3 `key-input` (2026-06-11)** = W3C code token + modifiers + text + repeat — at parity (string tokens, 1:1 with their enum) |
 | What binds rendering to it | `connect-graphics-context` → webgpu device or frame-buffer (pluggable) | implicit: the surface IS the host Skia target |
 | Mobile-critical pieces | absent: density/scale-factor, IME/text-input, insets/safe-area, lifecycle, idle story | `window.get-density/font-scale`, ime interface, `display.safe-size`, lifecycle, frame-pacing |
 
@@ -104,9 +104,12 @@ Three takeaways:
    sane proposal shape is *reuse their `surface` for windowing once it
    matures* and ride canvas+text on top — and wandr's event experience
    (pointer-id/pressure, density, IME hooks, frame-pacing idle semantics)
-   is exactly the feedback their proposal lacks today. Their richer key
-   model (modifiers!) is conversely something our `on-key-event-v2` would
-   adopt in a v3 if desktop keyboards ever matter.
+   is exactly the feedback their proposal lacks today. Their richer key model was adopted the same day: the optional
+   `my:skiko-gfx/key-input` interface (W3C UIEvents code token + alt/ctrl/
+   meta/shift + text + repeat; probed like frame-pacing, hosts emit
+   v1+v2+v3) — so wandr is NOT keyboard-hardcoded to mobile; the winit
+   desktop host (the Wayland dev path) feeds it real codes + modifiers,
+   and the tokens convert 1:1 to wasi:surface's enum.
 
 ## Could ours become a standard? ("wasi-canvas")
 
