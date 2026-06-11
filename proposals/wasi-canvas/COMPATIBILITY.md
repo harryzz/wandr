@@ -105,12 +105,14 @@ draft, and one rule makes the draft's resource design MANDATORY:**
    "wasi:canvas implemented over wasi:webgpu" layering, which this
    principle actively wants to exist.
 
-Likely review pressure (not a blocker, noted for the eventual phase-0):
-the resource STATICS (`shader.linear-gradient`, `image.decode`,
-`canvas.new-offscreen`) are link-time capabilities, which the principles
-say to use "sparingly" — a reviewer may ask for a `graphics` factory
-resource handed by the embedder so that even creation flows through a
-handle. Cheap to refactor if asked; semantics unchanged.
+~~Likely review pressure~~ RESOLVED in-draft (2026-06-11): creation
+statics were refactored into a `graphics` FACTORY RESOURCE the embedder
+grants alongside the canvas — every host-resident allocation (shaders,
+images, offscreen canvases, recordings) now flows through a handle, so
+embedders can attenuate it (quotas, deny decode). The only remaining
+no-handle creation is `typeface.from-bytes` in the text package, kept
+deliberately: it's pure computation over the guest's OWN bytes, not
+access to an external resource (the distinction Capabilities.md draws).
 
 ## Verdict
 

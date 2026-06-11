@@ -61,7 +61,8 @@ variant, since its renderer already speaks the same shapes.
 ## Files
 
 - `wit/canvas.wit` — `types` (paint/shader/image/geometry) + `draw`
-  (canvas resource: state/clip/draw/pictures/offscreen).
+  (`canvas` = the target, `graphics` = the embedder-granted creation
+  factory: gradients/images/offscreen/recording).
 - `wit/text.wit` — `glyphs` (typeface-from-bytes + positioned glyph runs)
   + optional `layout` (paragraph builder/metrics/hit-testing, clean
   `list<record>` returns).

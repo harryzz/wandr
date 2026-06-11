@@ -82,42 +82,14 @@ interface types {
     }
 
     /// A reusable fill/stroke source: gradients or an image pattern.
-    /// Solid colors don't need a shader (use `paint.color`).
-    resource shader {
-        /// Linear gradient from `start` to `end`. `stops` are (offset in
-        /// 0..1, color) pairs, offsets ascending.
-        linear-gradient: static func(start: point, end: point,
-                                     stops: list<tuple<f32, color>>,
-                                     tile: tile-mode) -> shader;
-        radial-gradient: static func(center: point, radius: f32,
-                                     stops: list<tuple<f32, color>>,
-                                     tile: tile-mode) -> shader;
-        /// Sweep (conic) gradient around `center`; angles in degrees,
-        /// 0° at the positive x-axis, increasing clockwise.
-        sweep-gradient:  static func(center: point,
-                                     start-angle: f32, end-angle: f32,
-                                     stops: list<tuple<f32, color>>,
-                                     tile: tile-mode) -> shader;
-        /// Image as a pattern, transformed by `local`, sampled with
-        /// `sampling`, tiled per axis.
-        image-pattern:   static func(image: borrow<image>,
-                                     tile-x: tile-mode, tile-y: tile-mode,
-                                     sampling: sampling,
-                                     local: transform) -> shader;
-        /// Composite two shaders with a blend mode.
-        blend:           static func(mode: blend-mode,
-                                     dst: borrow<shader>,
-                                     src: borrow<shader>) -> shader;
-    }
+    /// Solid colors don't need a shader (use `paint.color`). Created via
+    /// the `graphics` factory (draw interface) — all host-resident
+    /// allocation flows through an embedder-granted handle, per WASI's
+    /// no-ambient-authority principle.
+    resource shader;
 
-    /// A decoded, host-resident image.
+    /// A decoded, host-resident image. Created via the `graphics` factory.
     resource image {
-        /// Decode PNG/JPEG/WebP/GIF(first frame)/BMP bytes. Errors on
-        /// unrecognized or truncated data.
-        decode:      static func(bytes: list<u8>) -> result<image>;
-        /// Raw non-premultiplied RGBA8 pixels, tightly packed.
-        from-rgba8:  static func(width: u32, height: u32,
-                                 pixels: list<u8>) -> result<image>;
         width:  func() -> u32;
         height: func() -> u32;
     }
@@ -147,11 +119,56 @@ interface types {
 /// contract; everything after that is this interface.
 interface draw {
     use types.{paint, color, rect, rounded-rect, point, transform,
-               fill-rule, sampling, image};
+               fill-rule, sampling, image, shader, blend-mode, tile-mode};
 
     /// A recorded, replayable display list (built via
-    /// `canvas.record` → draws → `finish-recording`).
+    /// `graphics.start-recording` → draws → `canvas.finish-recording`).
     resource picture;
+
+    /// The creation capability: every host-resident allocation (shaders,
+    /// images, offscreen canvases, recordings) is a method here, so the
+    /// EMBEDDER grants it explicitly (alongside the canvas) and may
+    /// attenuate it (quotas, deny decode, …). Pure computation over the
+    /// guest's own data stays out (e.g. typeface-from-bytes in the text
+    /// package).
+    resource graphics {
+        /// Linear gradient from `start` to `end`. `stops` are (offset in
+        /// 0..1, color) pairs, offsets ascending.
+        linear-gradient: func(start: point, end: point,
+                              stops: list<tuple<f32, color>>,
+                              tile: tile-mode) -> shader;
+        radial-gradient: func(center: point, radius: f32,
+                              stops: list<tuple<f32, color>>,
+                              tile: tile-mode) -> shader;
+        /// Sweep (conic) gradient around `center`; angles in degrees,
+        /// 0° at the positive x-axis, increasing clockwise.
+        sweep-gradient:  func(center: point,
+                              start-angle: f32, end-angle: f32,
+                              stops: list<tuple<f32, color>>,
+                              tile: tile-mode) -> shader;
+        /// Image as a pattern, transformed by `local`, sampled with
+        /// `sampling`, tiled per axis.
+        shader-blend:    func(mode: blend-mode, dst: borrow<shader>,
+                              src: borrow<shader>) -> shader;
+        image-pattern:   func(image: borrow<image>,
+                              tile-x: tile-mode, tile-y: tile-mode,
+                              sampling: sampling,
+                              local: transform) -> shader;
+
+        /// Decode PNG/JPEG/WebP/GIF(first frame)/BMP bytes. Errors on
+        /// unrecognized or truncated data.
+        decode-image:     func(bytes: list<u8>) -> result<image>;
+        /// Raw non-premultiplied RGBA8 pixels, tightly packed.
+        image-from-rgba8: func(width: u32, height: u32,
+                               pixels: list<u8>) -> result<image>;
+
+        /// A new offscreen raster canvas (layer caches, painters).
+        new-offscreen:    func(width: u32, height: u32) -> canvas;
+        /// Begin recording into a fresh display list; until
+        /// `canvas.finish-recording`, draws on the returned canvas are
+        /// captured, not rasterized.
+        start-recording:  func(bounds: rect) -> canvas;
+    }
 
     resource canvas {
         /// Drawable size in canvas units (device-independent; the
@@ -208,26 +225,21 @@ interface draw {
                                 paint: paint);
 
         // ── pictures (recorded display lists) ────────────────────────
-        /// Begin recording into a fresh display list; until
-        /// `finish-recording`, draws on the RETURNED canvas are captured,
-        /// not rasterized. (The returned canvas is independent — the
-        /// parent stays usable.)
-        start-recording:  static func(bounds: rect) -> canvas;
-        /// Finish a recording canvas (consumes it).
+        /// Finish a recording canvas (consumes it; from
+        /// `graphics.start-recording`). Static-with-handle: the consumed
+        /// canvas IS the capability.
         finish-recording: static func(c: canvas) -> picture;
         draw-picture:     func(p: borrow<picture>);
 
-        // ── offscreen rasterization ───────────────────────────────────
-        /// A new offscreen raster canvas (layer caches, painters).
-        new-offscreen: static func(width: u32, height: u32) -> canvas;
-        /// Snapshot an offscreen canvas's pixels as an image.
+        /// Snapshot an offscreen canvas's pixels as an image (errors on
+        /// the embedder-presented canvas — its pixels stay private).
         snapshot:      func() -> result<image>;
     }
 }
 
-/// A guest that only needs to draw when handed a canvas (the minimal
-/// portable world; embedders extend it with their own frame/input
-/// contracts).
+/// A guest that draws when handed its capabilities — the embedder grants
+/// a `canvas` (the target) and a `graphics` (the factory) by its own
+/// contract; embedders extend this world with their frame/input story.
 world canvas-guest {
     import types;
     import draw;
