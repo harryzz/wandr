@@ -40,6 +40,17 @@ fn checksum(code: &str, text: &str, mods: u32, repeat: bool) -> u32 {
     h
 }
 
+fn big_checksum(strings: &[&str; 8], mods: u32, ts: u64, repeat: bool) -> u32 {
+    let mut h: u32 = 2166136261;
+    for s in strings {
+        fnv1a(&mut h, s.as_bytes());
+    }
+    fnv1a(&mut h, &mods.to_le_bytes());
+    fnv1a(&mut h, &ts.to_le_bytes());
+    fnv1a(&mut h, &[repeat as u8]);
+    h
+}
+
 /// Deterministic LCG so failures are reproducible.
 struct Lcg(u64);
 impl Lcg {
@@ -103,6 +114,10 @@ fn main() -> Result<()> {
     let mut bad_strict = 0u64;
     let mut ok_late = 0u64;
     let mut bad_late = 0u64;
+    let mut ok_big = 0u64;
+    let mut bad_big = 0u64;
+    let mut ok_big_late = 0u64;
+    let mut bad_big_late = 0u64;
 
     for i in 0..iters {
         let code = CODES[rng.below(CODES.len() as u64) as usize].to_string();
@@ -151,25 +166,73 @@ fn main() -> Result<()> {
             }
         }
 
+        // ── indirect-args spill leg: 8 strings + u32 + u64 + bool = 19 flat ──
+        let mut smalls: Vec<String> = Vec::with_capacity(7);
+        for _ in 0..7 {
+            let n = rng.below(48) as usize;
+            let mut s = String::with_capacity(n);
+            while s.len() < n {
+                s.push((b'a' + rng.below(26) as u8) as char);
+            }
+            smalls.push(s);
+        }
+        let ts = rng.next();
+        let strs: [&str; 8] = [
+            &code, &smalls[0], &smalls[1], &smalls[2], &smalls[3], &smalls[4], &smalls[5], &smalls[6],
+        ];
+        let expect_big = big_checksum(&strs, mods, ts, repeat);
+        let big = exports::wandr::spike::handler::BigEvent {
+            code: code.clone(),
+            text: smalls[0].clone(),
+            key: smalls[1].clone(),
+            locale: smalls[2].clone(),
+            layout: smalls[3].clone(),
+            compose: smalls[4].clone(),
+            dead: smalls[5].clone(),
+            ime: smalls[6].clone(),
+            mods,
+            ts,
+            repeat,
+        };
+
+        let got = handler.call_on_big(&mut store, &big).map_err(|e| anyhow::anyhow!("on-big trapped: {e:#}"))?;
+        if got == expect_big { ok_big += 1 } else {
+            bad_big += 1;
+            if bad_big <= 3 {
+                eprintln!("[big   ] MISMATCH iter={i} expect={expect_big:08x} got={got:08x}");
+            }
+        }
+
+        let got = handler.call_on_big_late_lift(&mut store, &big).map_err(|e| anyhow::anyhow!("on-big-late-lift trapped: {e:#}"))?;
+        if got == expect_big { ok_big_late += 1 } else {
+            bad_big_late += 1;
+            if bad_big_late <= 3 {
+                eprintln!("[bigL  ] MISMATCH iter={i} expect={expect_big:08x} got={got:08x}");
+            }
+        }
+
         if (i + 1) % 10_000 == 0 {
-            println!("… {}/{iters}  strict ok={ok_strict} bad={bad_strict}  late ok={ok_late} bad={bad_late}", i + 1);
+            println!(
+                "… {}/{iters}  strict ok={ok_strict} bad={bad_strict}  late ok={ok_late} bad={bad_late}  big ok={ok_big} bad={bad_big}  bigL ok={ok_big_late} bad={bad_big_late}",
+                i + 1
+            );
         }
     }
 
     println!();
-    println!("strict (freeAll→lift→scoped):  ok={ok_strict} bad={bad_strict}");
-    println!("late   (freeAll→scoped→lift):  ok={ok_late} bad={bad_late}");
+    println!("flat   strict (freeAll→lift→scoped):  ok={ok_strict} bad={bad_strict}");
+    println!("flat   late   (freeAll→scoped→lift):  ok={ok_late} bad={bad_late}");
+    println!("spill  strict (freeAll→lift→scoped):  ok={ok_big} bad={bad_big}");
+    println!("spill  late   (table→scoped→bytes):   ok={ok_big_late} bad={bad_big_late}");
     println!();
-    if bad_strict == 0 {
-        println!("RESULT: STRICT ORDERING PASSES — Kotlin guests CAN receive records with strings");
-        if bad_late == 0 {
-            println!("        (late-lift also passed: the Tier-2 stdlib keeps realloc args out of the scoped arena)");
-        } else {
-            println!("        (late-lift corrupted {bad_late}x: ordering MATTERS — lift before any scoped alloc)");
+    if bad_strict == 0 && bad_big == 0 {
+        println!("RESULT: STRICT ORDERING PASSES on BOTH paths — flat AND indirect-args spill");
+        if bad_late > 0 || bad_big_late > 0 {
+            println!("        (positive controls corrupted: flat {bad_late}x, spill {bad_big_late}x — lift-before-alloc is the contract)");
         }
         Ok(())
     } else {
-        println!("RESULT: FAIL — host→guest record-with-string args corrupted under strict ordering");
+        println!("RESULT: FAIL — strict ordering corrupted (flat bad={bad_strict}, spill bad={bad_big})");
         std::process::exit(1);
     }
 }

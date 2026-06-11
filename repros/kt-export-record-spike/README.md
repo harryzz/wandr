@@ -12,10 +12,21 @@ calls (string sizes 0 B – 64 KB, multi-byte UTF-8, realloc-growth paths) on
 the exact production stack — Kotlin 2.4.0-RC + the wandr `2.4.258-SNAPSHOT`
 stdlib (KT-86415 Tier-2 fix) + the wandr-fork P1 adapter + wasmtime 45:
 
-| export ordering | result |
-|---|---|
-| `freeAll()` → **lift args** → scoped allocations (official Kotlin/wit-bindgen order) | **100000/100000 OK** |
-| `freeAll()` → scoped allocations → lift args (positive control) | **100000/100000 CORRUPTED** |
+| leg | export ordering | result |
+|---|---|---|
+| flat (≤16 flat params) | `freeAll()` → **lift args** → scoped allocations (official Kotlin/wit-bindgen order) | **100000/100000 OK** |
+| flat | `freeAll()` → scoped allocations → lift args (positive control) | **100000/100000 CORRUPTED** |
+| **indirect-args spill** (19 flat params → host passes ONE pointer to a `cabi_realloc`'d args area) | `freeAll()` → lift (table + scalars + bytes) → scoped | **100000/100000 OK** |
+| spill | table read → scoped scribble → string-byte reads (positive control) | **100000/100000 CORRUPTED** |
+
+Both legs identical on desktop JIT (x86_64) and on-device AOT (Pixel 2 XL
+aarch64, cwasm precompiled on-device). The spill case adds one level of
+indirection — the ptr/len TABLE itself lives in the realloc'd area too, so
+a wrapper that scribbles before even reading the table gets wild pointers
+(trap), and one that interleaves allocation between the table read and the
+byte copies gets silent corruption. Same contract, stricter consequences:
+**lift EVERYTHING (table, scalars, and string bytes) before the first
+scoped allocation.**
 
 The positive control corrupting *every single call* proves three things at
 once: the spike can see the hazard, the host-lowered args really do live in
@@ -35,8 +46,11 @@ So the old rule is superseded by a sharper one:
 ## Layout
 
 - `wit/spike.wit` — `wandr:spike/handler`: `key-event` record (2 strings +
-  u32 + bool), two exports returning an FNV-1a-32 checksum: `on-key`
-  (strict order) and `on-key-late-lift` (deliberately wrong order).
+  u32 + bool) → `on-key` / `on-key-late-lift`, and `big-event` (8 strings +
+  u32 + u64 + bool = 19 flat params, forcing the indirect-args spill) →
+  `on-big` / `on-big-late-lift`. All return an FNV-1a-32 checksum.
+  Spill args-area layout (single record arg): 8×(ptr,len) at 0..64,
+  mods u32 @64, ts u64 @72, repeat u8 @80.
 - `guest/` — Kotlin wasmWasi guest, hand-written export wrappers in the
   skiko style (`@WasmExport("wandr:spike/handler@0.1.0#on-key")`, flat
   params `(ptr,len, ptr,len, i32, i32) -> i32`).
@@ -62,14 +76,12 @@ adb shell su -c '/data/local/tmp/spike-runner --precompile /data/local/tmp/spike
 adb shell su -c '/data/local/tmp/spike-runner /data/local/tmp/spike.cwasm 100000'
 ```
 
-**Device result (2026-06-11): identical** — strict 100000/100000 OK,
-late-lift 100000/100000 corrupted. The JIT-only caveat is closed; the
-ordering contract holds under Cranelift AOT on arm64.
+**Device result (2026-06-11): identical on all four legs** — flat + spill
+strict clean, both positive controls corrupt 100%. The JIT-only and
+flat-only caveats are both closed; the ordering contract holds under
+Cranelift AOT on arm64 for both the flat and indirect-args paths.
 
-## Caveats / not covered
+## Not covered
 
-- Flat-params path only (≤16 flat params). A record big enough to spill to
-  an indirect args area also arrives via `cabi_realloc` — same arena, same
-  ordering rule expected, but not exercised here.
 - Strings IN RESULTS (guest→host) were already known-good (guest lowers
   with its own allocator).

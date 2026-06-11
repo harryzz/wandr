@@ -94,9 +94,15 @@ the ordering IS the entire safety contract. New rule: rich export args are
 allowed; lift-before-alloc is mandatory; primitives remain fine where they
 ship today (IME contract unchanged). **AOT/arm64 verified same day:
 identical 100k/100k both ways on the Pixel 2 XL (cwasm precompiled
-on-device like the production installer).** Remaining caveat: flat-params
-path only (≤16); the indirect-args spill case (very large records) is
-unexercised — same arena, same rule expected.
+on-device like the production installer).** **Indirect-args spill case
+ALSO verified (same day, desktop + device): a 19-flat-param record (8
+strings + u32 + u64 + bool) arrives as ONE pointer to a cabi_realloc'd
+args area — strict order 100k/100k clean, interleaved-order control
+100k/100k corrupted. Spill nuance: the ptr/len TABLE lives in the realloc
+area too, so lift EVERYTHING (table + scalars + bytes) before the first
+scoped allocation; scribbling before the table read = wild pointers =
+trap instead of silent corruption.** No remaining unexercised paths for
+export args.
 
 **Historical notes below (old stdlib era) — kept for the failure modes:**
 

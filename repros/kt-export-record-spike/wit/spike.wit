@@ -23,6 +23,27 @@ interface handler {
     /// Returns FNV-1a-32 over (code-bytes ++ text-bytes ++ mods-le ++ repeat).
     on-key: func(ev: key-event) -> u32;
     on-key-late-lift: func(ev: key-event) -> u32;
+
+    /// Indirect-args spill case: 8 strings + u32 + u64 + bool flatten to 19
+    /// core params (> MAX_FLAT_PARAMS=16), so the host passes ONE pointer to
+    /// an args area it allocated in guest memory via cabi_realloc.
+    record big-event {
+        code: string,
+        text: string,
+        key: string,
+        locale: string,
+        layout: string,
+        compose: string,
+        dead: string,
+        ime: string,
+        mods: u32,
+        ts: u64,
+        repeat: bool,
+    }
+
+    /// FNV-1a-32 over (all 8 strings' bytes in order ++ mods-le ++ ts-le ++ repeat).
+    on-big: func(ev: big-event) -> u32;
+    on-big-late-lift: func(ev: big-event) -> u32;
 }
 
 world spike-guest {
