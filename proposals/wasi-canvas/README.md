@@ -80,9 +80,17 @@ variant, since its renderer already speaks the same shapes.
    `imports: { default: trappable }`; skia Surface/PictureRecorder need
    an `unsafe impl Send` on the canvas resource (single-threaded store,
    the video.rs justification).
-2. Port one renderer (slint-wandr) as the proving consumer; measure the
-   resource-handle overhead vs u32 ids. Needs the wandr embedding hook
-   (hand the guest its `canvas` + `graphics` handles — e.g. a
-   my:skiko-gfx-side provider call inside render-frame).
+2. ~~Port one renderer (slint-wandr) as the proving consumer~~ **DONE
+   2026-06-11**: slint-wandr now draws EXCLUSIVELY through wasi:canvas
+   (my:skiko-gfx keeps only window-metrics + IME; the guest imports
+   `wasi:canvas/{types,draw,glyphs,embedding}`). The embedding hook
+   became the non-normative `embedding` interface (get-graphics +
+   begin-frame→canvas / end-frame), exercised per frame. The port
+   UPGRADED fidelity: per-corner radii (max-corner approximation
+   retired), real fill rules, blur-on-paint shadows, owned shader/image/
+   typeface resources that drop themselves. Verified live on the desktop
+   host (`--features wasi-canvas`), interactive, frame times same order
+   as the u32-id port (~6–10 ms @ 500x1000 CPU raster; rigorous
+   handle-overhead measurement still pending a device run).
 3. Let the surface harden; then consider the WASI phase-0 conversation,
    positioned as wasi-gfx's 2D companion (champion overlap natural).

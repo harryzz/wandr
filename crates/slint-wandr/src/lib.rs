@@ -2,12 +2,15 @@
 //!
 //! Runs a Slint UI as a wasm32-wasip2 wandr guest: a custom
 //! [`i_slint_core::platform::Platform`] + `WindowAdapter` + renderer whose
-//! `ItemRenderer` draws through the host `my:skiko-gfx/canvas` WIT verbs
-//! (host Skia, real GPU) — the femtovg-renderer shape, with the canvas WIT
-//! as the "graphics backend". Text is shaped IN the guest by Slint's parley
-//! stack (`shared-parley`); glyph runs go to the host via `draw-glyphs`
-//! against typefaces registered from the same font bytes (`create-typeface`).
-//! Canonical mapping: `docs/skia-wit-mapping.md`.
+//! `ItemRenderer` draws through the **wasi:canvas DRAFT**
+//! (proposals/wasi-canvas — this crate is its PROVING CONSUMER): the
+//! embedder hands over `canvas`/`graphics` resources via the `embedding`
+//! interface inside each host-driven `render-frame`. Text is shaped IN
+//! the guest by Slint's parley stack (`shared-parley`); glyph runs go to
+//! the host as `glyphs.draw-glyphs` against `typeface` resources built
+//! from the same font bytes. Platform bits (window metrics, IME) stay on
+//! `my:skiko-gfx`. History: the original my:skiko-gfx port was task 100;
+//! canonical mapping `docs/skia-wit-mapping.md`.
 //!
 //! There is no event loop: the host drives everything through the exported
 //! `renderer` interface (`render-frame`, `on-pointer-event-v2`, …) and reads
@@ -49,7 +52,21 @@ mod bindings {
         world: "slint-wandr-imports",
     });
 }
-pub(crate) use bindings::my::skiko_gfx::{canvas, ime as host_ime, window as host_window};
+pub(crate) use bindings::my::skiko_gfx::{ime as host_ime, window as host_window};
+
+/// Drawing comes from the wasi:canvas DRAFT (proposals/wasi-canvas) — this
+/// crate is its proving consumer. Single source of truth: the generate!
+/// points straight at the proposal's wit dir.
+mod canvas_bindings {
+    wit_bindgen::generate!({
+        path: "../../proposals/wasi-canvas/wit",
+        world: "embedded-canvas-guest",
+    });
+}
+pub(crate) use canvas_bindings::wasi::canvas::draw as wdraw;
+pub(crate) use canvas_bindings::wasi::canvas::embedding as wembed;
+pub(crate) use canvas_bindings::wasi::canvas::glyphs as wglyphs;
+pub(crate) use canvas_bindings::wasi::canvas::types as wtypes;
 
 // ─── platform ────────────────────────────────────────────────────────────────
 
@@ -69,7 +86,7 @@ impl i_slint_core::platform::Platform for WandrPlatform {
     }
 
     fn debug_log(&self, arguments: core::fmt::Arguments) {
-        canvas::log_message(&arguments.to_string());
+        eprintln!("slint: {arguments}");
     }
 }
 
@@ -105,7 +122,7 @@ pub fn init_platform() {
 fn register_emoji_fallback(ctx: &i_slint_core::SlintContext) {
     const EMOJI_FONT: &str = "/system-fonts/NotoColorEmoji.ttf";
     let Ok(bytes) = std::fs::read(EMOJI_FONT) else {
-        canvas::log_message("slint-wandr: no emoji font at /system-fonts/NotoColorEmoji.ttf");
+        eprintln!("slint-wandr: no emoji font at /system-fonts/NotoColorEmoji.ttf");
         return;
     };
     use i_slint_core::textlayout::sharedparley::fontique;
@@ -129,25 +146,28 @@ pub struct WandrWindowAdapter {
     /// An editor is focused and the wandr keyboard overlay is engaged
     /// (set by input_method_request Enable/Disable).
     ime_attached: Cell<bool>,
+    /// The wasi:canvas creation factory (embedding.get-graphics) —
+    /// acquired once, lives as long as the adapter.
+    graphics: std::cell::OnceCell<wdraw::Graphics>,
 }
 
 impl WandrWindowAdapter {
     fn new() -> Rc<Self> {
-        let (w, h) = (canvas::surface_width(), canvas::surface_height());
+        // Surface size is discovered at the first frame (the canvas handle
+        // carries it); the adapter starts 0x0 and render() dispatches the
+        // real Resized before the first draw.
         let adapter = Rc::new_cyclic(|weak: &Weak<Self>| Self {
             window: Window::new(weak.clone()),
             renderer: WandrRenderer::default(),
-            size: Cell::new(i_slint_core::api::PhysicalSize::new(w, h)),
+            size: Cell::new(i_slint_core::api::PhysicalSize::new(0, 0)),
             needs_redraw: Cell::new(true),
             ime_attached: Cell::new(false),
+            graphics: std::cell::OnceCell::new(),
         });
         let density = host_window::get_density().max(0.1);
         adapter
             .window
             .dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: density });
-        adapter.window.dispatch_event(WindowEvent::Resized {
-            size: i_slint_core::api::LogicalSize::new(w as f32 / density, h as f32 / density),
-        });
         adapter
     }
 
@@ -174,14 +194,27 @@ impl WandrWindowAdapter {
     fn render(&self) {
         let window_inner = WindowInner::from_pub(&self.window);
         let Some(window_adapter) = self.renderer.window_adapter() else { return };
+        let graphics = self.graphics.get_or_init(wembed::get_graphics);
+        let canvas = wembed::begin_frame();
+        // The canvas handle carries the surface size — sync Slint's window
+        // before drawing (covers both the first frame and embedder-side
+        // resizes the on-resize export may not have delivered yet).
+        let (cw, ch) = (canvas.width() as u32, canvas.height() as u32);
         let scale = self.window.scale_factor();
+        if self.size.get() != i_slint_core::api::PhysicalSize::new(cw, ch) {
+            self.size.set(i_slint_core::api::PhysicalSize::new(cw, ch));
+            self.window.dispatch_event(WindowEvent::Resized {
+                size: i_slint_core::api::LogicalSize::new(cw as f32 / scale, ch as f32 / scale),
+            });
+        }
         self.renderer.text_layout_cache.clear_cache_if_scale_factor_changed(&self.window);
-        canvas::begin_frame();
         window_inner.draw_contents(|components, post_render| {
             let mut ir = itemrenderer::WandrItemRenderer::new(
                 &self.window,
                 scale,
                 &self.renderer.text_layout_cache,
+                &canvas,
+                graphics,
             );
             // The window background (the WindowItem brush) — painted before
             // the item tree like the upstream renderers do.
@@ -201,7 +234,8 @@ impl WandrWindowAdapter {
             }
             post_render(&mut ir);
         });
-        canvas::end_frame();
+        drop(canvas);
+        wembed::end_frame();
     }
 }
 

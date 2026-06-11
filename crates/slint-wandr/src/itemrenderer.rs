@@ -1,26 +1,19 @@
-//! The `ItemRenderer` that draws Slint items through the `my:skiko-gfx`
-//! canvas verbs. M2 (task 100): full geometry — gradient brushes (host
-//! shader ids), images (render_to_buffer → create-image, `fit()` placement,
-//! cached by ImageCacheKey), group opacity via save-layer, lyon paths as
-//! SVG strings, cached pixmaps. Text is M3 (`GlyphRenderer` → draw-glyphs).
+//! The `ItemRenderer` that draws Slint items through the **wasi:canvas
+//! draft** (proposals/wasi-canvas) — the proving consumer. The embedder
+//! hands `render()` a `canvas` resource for the frame plus the long-lived
+//! `graphics` factory; everything here are methods on those handles.
+//!
+//! Fidelity upgrades over the original my:skiko-gfx port (task 100), all
+//! enabled by the draft's types: PER-CORNER border radii (no more
+//! max-corner approximation), real fill rules on paths, box shadows as a
+//! plain `paint.blur` (no fused verb), and shaders that drop themselves
+//! (owned resources) instead of create/drop-id bookkeeping.
 //!
 //! Coordinates: Slint hands the renderer LOGICAL units and a scale factor;
-//! the canvas draws in physical surface pixels, so every geometry value is
-//! multiplied by `scale` at the call site (the upstream skia renderer's
-//! convention — no global canvas scale, so stroke widths stay explicit).
-//!
-//! Clip tracking is guest-side (the femtovg pattern; the WIT deliberately
-//! has no canvas state queries — docs/skia-wit-mapping.md). The tracked
-//! rect lives in CURRENT local coordinates: translate/scale fold into it,
-//! rotation invalidates it to "infinite" so `filter_item` culling stays
-//! conservative (never wrongly culls).
-//!
-//! Known M2 approximations (carry to M4 visual review):
-//! - per-corner border radii degrade to the max corner (uniform rrect);
-//! - `colorize` maps to the host color-filter (Modulate): exact for the
-//!   usual white/monochrome icons, a tint (not a replace) otherwise;
-//! - Path fill-rule is always Winding (SVG strings carry no fill rule);
-//! - image tiling falls back to a stretched draw.
+//! the canvas draws in physical surface units, so every geometry value is
+//! multiplied by `scale` at the call site. Clip tracking stays guest-side
+//! (the femtovg pattern): translate/scale fold into the tracked rect,
+//! rotation degrades it to "unbounded" so culling stays conservative.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -36,7 +29,7 @@ use i_slint_core::lengths::{
 use i_slint_core::textlayout::sharedparley::{self, GlyphRenderer, fontique};
 use i_slint_core::window::WindowInner;
 
-use crate::canvas;
+use crate::{wdraw, wglyphs, wtypes};
 
 /// An "infinite" clip: after a rotation the tracked rect is no longer
 /// axis-aligned in local coords, so culling falls back to "draw everything"
@@ -49,37 +42,44 @@ fn unbounded_clip() -> LogicalRect {
 }
 
 thread_local! {
-    /// Host image ids by Slint image cache key (+ render size, which matters
-    /// for scalable SVG sources). Images commonly outlive components, so
-    /// this is global; bounded by the set of distinct images an app shows.
-    static IMAGE_CACHE: RefCell<HashMap<(ImageCacheKey, u32, u32), u32>> =
+    /// Host image resources by Slint image cache key (+ render size — it
+    /// matters for scalable SVG sources). Owned handles live here, so the
+    /// host-side images persist across frames.
+    static IMAGE_CACHE: RefCell<HashMap<(ImageCacheKey, u32, u32), wtypes::Image>> =
         RefCell::new(HashMap::new());
 
-    /// Host typeface ids by font blob identity (ptr, len, collection index).
-    /// The cached `FontData` clone PINS the blob so fontique can't evict it
-    /// and recycle the address (Slint's own FontCache plays the same trick
-    /// with HashedBlob). Glyph ids stay valid because the host typeface is
-    /// built from these exact bytes (create-typeface).
-    static TYPEFACE_CACHE:
-        RefCell<HashMap<(usize, usize, u32), (u32, sharedparley::parley::FontData)>> =
-        RefCell::new(HashMap::new());
+    /// Host typeface resources by font blob identity (ptr, len, index).
+    /// The cached `FontData` clone PINS the blob (Slint's HashedBlob trick)
+    /// so the ptr-keyed entry stays valid; glyph ids stay meaningful
+    /// because the host typeface is built from these exact bytes.
+    static TYPEFACE_CACHE: RefCell<
+        HashMap<(usize, usize, u32), (wglyphs::Typeface, sharedparley::parley::FontData)>,
+    > = RefCell::new(HashMap::new());
 }
 
-/// Host typeface id for a parley font blob (created once, cached).
-fn ensure_typeface(font: &sharedparley::parley::FontData) -> Option<u32> {
+/// Host typeface resource for a parley font blob (created once, cached).
+/// Returns the typeface by running `f` against the cache entry (handles
+/// are owned by the cache; callers borrow within the closure).
+fn with_typeface<R>(
+    font: &sharedparley::parley::FontData,
+    f: impl FnOnce(&wglyphs::Typeface) -> R,
+) -> Option<R> {
     let bytes: &[u8] = font.data.as_ref();
     let key = (bytes.as_ptr() as usize, bytes.len(), font.index);
     TYPEFACE_CACHE.with(|c| {
-        if let Some((id, _)) = c.borrow().get(&key) {
-            return Some(*id);
+        let mut cache = c.borrow_mut();
+        if !cache.contains_key(&key) {
+            match wglyphs::Typeface::from_bytes(bytes, font.index) {
+                Ok(tf) => {
+                    cache.insert(key, (tf, font.clone()));
+                }
+                Err(()) => {
+                    eprintln!("slint-wandr: typeface.from-bytes failed (unparseable blob)");
+                    return None;
+                }
+            }
         }
-        let id = canvas::create_typeface(bytes, font.index);
-        if id == 0 {
-            canvas::log_message("slint-wandr: create-typeface failed (unparseable font blob)");
-            return None;
-        }
-        c.borrow_mut().insert(key, (id, font.clone()));
-        Some(id)
+        cache.get(&key).map(|(tf, _)| f(tf))
     })
 }
 
@@ -92,112 +92,46 @@ struct RenderState {
     extra_canvas_saves: u32,
 }
 
+/// Owned paint spec (no resource borrows) — the `Clone`-able brush type
+/// the GlyphRenderer trait needs; lowered to a `wtypes::Paint` at draw.
+#[derive(Clone)]
+pub struct TextBrush {
+    color: u32,
+    stroke_width: f32,
+    stroke: bool,
+}
+
 pub struct WandrItemRenderer<'a> {
     window: &'a i_slint_core::api::Window,
     scale: f32,
     text_layout_cache: &'a sharedparley::TextLayoutCache,
+    canvas: &'a wdraw::Canvas,
+    graphics: &'a wdraw::Graphics,
     state: RenderState,
     saved: Vec<RenderState>,
 }
 
-impl<'a> WandrItemRenderer<'a> {
-    pub fn new(
-        window: &'a i_slint_core::api::Window,
-        scale: f32,
-        text_layout_cache: &'a sharedparley::TextLayoutCache,
-    ) -> Self {
-        let size = window.size();
-        Self {
-            window,
-            scale,
-            text_layout_cache,
-            state: RenderState {
-                alpha: 1.0,
-                clip: LogicalRect::new(
-                    LogicalPoint::default(),
-                    LogicalSize::new(size.width as f32 / scale, size.height as f32 / scale),
-                ),
-                extra_canvas_saves: 0,
-            },
-            saved: Vec::new(),
-        }
-    }
+fn point(x: f32, y: f32) -> wtypes::Point {
+    wtypes::Point { x, y }
+}
 
-    /// Paint the window background under the item tree (called by the
-    /// adapter before `render_component_items`).
-    pub fn fill_window_background(&mut self, brush: Brush) {
-        let size = self.window.size();
-        self.with_brush_paint(
-            &brush,
-            size.width as f32,
-            size.height as f32,
-            canvas::PaintStyle::Fill,
-            0.0,
-            |p| canvas::draw_paint(p),
-        );
-    }
+fn wrect(x: f32, y: f32, w: f32, h: f32) -> wtypes::Rect {
+    wtypes::Rect { x, y, width: w, height: h }
+}
 
-    /// Build a paint for `brush` (gradients become host shader ids, created
-    /// for the draw and dropped right after), hand it to `f`. No-op for
-    /// transparent brushes. `w`/`h` are the brush geometry in PHYSICAL px.
-    fn with_brush_paint(
-        &self,
-        brush: &Brush,
-        w: f32,
-        h: f32,
-        style: canvas::PaintStyle,
-        stroke_width: f32,
-        f: impl FnOnce(canvas::PaintAttrs),
-    ) {
-        if brush.is_transparent() {
-            return;
-        }
-        let shader = make_brush_shader(brush, w, h, self.scale);
-        let mut p = paint_attrs(
-            color_argb(brush.color()),
-            style,
-            stroke_width,
-            (self.state.alpha * 255.0) as u8,
-        );
-        if let Some(id) = shader {
-            p.shader_id = id;
-        }
-        f(p);
-        if let Some(id) = shader {
-            canvas::drop_shader(id);
-        }
-    }
-
-    /// Resolve a Slint image to a live host image id (decode/render to a
-    /// buffer once, then cached). `target` = physical render size hint for
-    /// scalable sources (SVG).
-    fn ensure_image(
-        &self,
-        image: &i_slint_core::graphics::Image,
-        target: (u32, u32),
-    ) -> Option<u32> {
-        let inner: &i_slint_core::ImageInner = image.into();
-        let key = ImageCacheKey::new(inner).map(|k| (k, target.0, target.1));
-        if let Some(k) = &key {
-            if let Some(id) = IMAGE_CACHE.with(|c| c.borrow().get(k).copied()) {
-                return Some(id);
-            }
-        }
-        let buffer = inner.render_to_buffer(Some(
-            euclid::Size2D::new(target.0.max(1), target.1.max(1)),
-        ))?;
-        let (w, h, rgba) = buffer_to_rgba8_unpremul(&buffer);
-        if w == 0 || h == 0 {
-            return None;
-        }
-        let id = canvas::create_image(w, h, &rgba);
-        if id == 0 {
-            return None;
-        }
-        if let Some(k) = key {
-            IMAGE_CACHE.with(|c| c.borrow_mut().insert(k, id));
-        }
-        Some(id)
+/// Slint per-corner radius → the draft's per-corner rounded-rect (the
+/// task-100 max-corner approximation retires here).
+fn wrrect(x: f32, y: f32, w: f32, h: f32, r: &LogicalBorderRadius, scale: f32) -> wtypes::RoundedRect {
+    let c = |v: f32| {
+        let v = (v * scale).max(0.0);
+        point(v, v)
+    };
+    wtypes::RoundedRect {
+        rect: wrect(x, y, w, h),
+        top_left: c(r.top_left),
+        top_right: c(r.top_right),
+        bottom_right: c(r.bottom_right),
+        bottom_left: c(r.bottom_left),
     }
 }
 
@@ -208,70 +142,71 @@ fn color_argb(c: i_slint_core::Color) -> u32 {
         | (c.blue() as u32)
 }
 
-/// Gradient brushes → host shader ids (Clamp tiling, like upstream).
-/// Geometry follows the upstream skia renderer: linear via
-/// `line_for_angle`, radial center/radius scaled, conic = full sweep with
-/// 0° at 12 o'clock (the sweep verb's angles are degrees from 3 o'clock,
-/// hence the -90 start).
-fn make_brush_shader(brush: &Brush, w: f32, h: f32, scale: f32) -> Option<u32> {
-    let id = match brush {
+fn base_paint(
+    color: u32,
+    style: wtypes::PaintStyle,
+    stroke_width: f32,
+    alpha: u8,
+) -> wtypes::Paint<'static> {
+    wtypes::Paint {
+        style,
+        color,
+        alpha,
+        blend: wtypes::BlendMode::SrcOver,
+        anti_alias: true,
+        shader: None,
+        stroke_width,
+        stroke_cap: wtypes::StrokeCap::Butt,
+        stroke_join: wtypes::StrokeJoin::Miter,
+        stroke_miter: 4.0,
+        blur: None,
+    }
+}
+
+/// Gradient brushes → owned shader resources (Clamp tiling; geometry per
+/// the upstream renderers: linear via `line_for_angle`, radial scaled
+/// center/radius, conic = full sweep with 0° at 12 o'clock — the draft's
+/// sweep angles start at the +x axis, hence -90).
+fn make_brush_shader(
+    graphics: &wdraw::Graphics,
+    brush: &Brush,
+    w: f32,
+    h: f32,
+    scale: f32,
+) -> Option<wtypes::Shader> {
+    let stops = |it: &mut dyn Iterator<Item = (f32, u32)>| -> Vec<(f32, u32)> { it.collect() };
+    match brush {
         Brush::LinearGradient(g) => {
-            let (start, end) =
-                i_slint_core::graphics::line_for_angle(g.angle(), [w, h].into());
-            let (colors, positions): (Vec<u32>, Vec<f32>) =
-                g.stops().map(|s| (color_argb(s.color), s.position)).unzip();
-            canvas::create_linear_gradient(
-                start.x, start.y, end.x, end.y, &colors, &positions, 0,
-            )
+            let (start, end) = i_slint_core::graphics::line_for_angle(g.angle(), [w, h].into());
+            let s = stops(&mut g.stops().map(|s| (s.position, color_argb(s.color))));
+            Some(graphics.linear_gradient(
+                point(start.x, start.y),
+                point(end.x, end.y),
+                &s,
+                wtypes::TileMode::Clamp,
+            ))
         }
         Brush::RadialGradient(g) => {
             let (cx, cy) = g.center_or_default_scaled(w, h, scale);
             let radius = g.radius_or_default_scaled(w, h, scale);
-            let (colors, positions): (Vec<u32>, Vec<f32>) =
-                g.stops().map(|s| (color_argb(s.color), s.position)).unzip();
-            canvas::create_radial_gradient(cx, cy, radius, &colors, &positions, 0)
+            let s = stops(&mut g.stops().map(|s| (s.position, color_argb(s.color))));
+            Some(graphics.radial_gradient(point(cx, cy), radius, &s, wtypes::TileMode::Clamp))
         }
         Brush::ConicGradient(g) => {
             let (cx, cy) = g.center_or_default_scaled(w, h, scale);
-            let (colors, positions): (Vec<u32>, Vec<f32>) =
-                g.stops().map(|s| (color_argb(s.color), s.position)).unzip();
-            canvas::create_sweep_gradient(cx, cy, -90.0, 270.0, &colors, &positions, 0)
+            let s = stops(&mut g.stops().map(|s| (s.position, color_argb(s.color))));
+            Some(graphics.sweep_gradient(point(cx, cy), -90.0, 270.0, &s, wtypes::TileMode::Clamp))
         }
-        _ => return None,
-    };
-    (id != 0).then_some(id)
-}
-
-fn paint_attrs(
-    color: u32,
-    style: canvas::PaintStyle,
-    stroke_width: f32,
-    alpha: u8,
-) -> canvas::PaintAttrs {
-    canvas::PaintAttrs {
-        color,
-        style,
-        stroke_width,
-        stroke_miter: 4.0,
-        stroke_cap: canvas::StrokeCap::Butt,
-        stroke_join: canvas::StrokeJoin::Miter,
-        anti_alias: true,
-        alpha,
-        blend_mode: canvas::BlendMode::SrcOver,
-        shader_id: 0,
-        color_filter_kind: canvas::ColorFilterKind::None,
-        color_filter_color: 0,
+        _ => None,
     }
 }
 
-/// Uniform-radius approximation of Slint's per-corner border radius —
-/// the canvas clip/draw rrect verbs take one (rx, ry).
-fn uniform_radius(r: &LogicalBorderRadius) -> f32 {
-    r.top_left.max(r.top_right).max(r.bottom_right).max(r.bottom_left).max(0.0)
+fn linear_sampling() -> wtypes::Sampling {
+    wtypes::Sampling { filter: wtypes::FilterMode::Linear, mipmap: wtypes::MipmapMode::None }
 }
 
-/// Any Slint pixel buffer → tightly-packed RGBA8 straight-alpha (what the
-/// host `create-image` expects: RGBA8888 Unpremul).
+/// Any Slint pixel buffer → tightly-packed RGBA8 straight-alpha (what
+/// `graphics.image-from-rgba8` expects).
 fn buffer_to_rgba8_unpremul(buffer: &SharedImageBuffer) -> (u32, u32, Vec<u8>) {
     match buffer {
         SharedImageBuffer::RGB8(b) => {
@@ -298,8 +233,8 @@ fn buffer_to_rgba8_unpremul(buffer: &SharedImageBuffer) -> (u32, u32, Vec<u8>) {
     }
 }
 
-/// lyon path events → SVG path string in PHYSICAL px (the canvas
-/// `draw-path`/`clip-path` wire format).
+/// lyon path events → SVG path string in PHYSICAL units (the draft's
+/// SVG-grammar wire format).
 fn path_events_to_svg(
     events: impl Iterator<Item = lyon_path::Event<lyon_path::math::Point, lyon_path::math::Point>>,
     scale: f32,
@@ -340,6 +275,106 @@ fn path_events_to_svg(
     svg
 }
 
+impl<'a> WandrItemRenderer<'a> {
+    pub fn new(
+        window: &'a i_slint_core::api::Window,
+        scale: f32,
+        text_layout_cache: &'a sharedparley::TextLayoutCache,
+        canvas: &'a wdraw::Canvas,
+        graphics: &'a wdraw::Graphics,
+    ) -> Self {
+        let size = window.size();
+        Self {
+            window,
+            scale,
+            text_layout_cache,
+            canvas,
+            graphics,
+            state: RenderState {
+                alpha: 1.0,
+                clip: LogicalRect::new(
+                    LogicalPoint::default(),
+                    LogicalSize::new(size.width as f32 / scale, size.height as f32 / scale),
+                ),
+                extra_canvas_saves: 0,
+            },
+            saved: Vec::new(),
+        }
+    }
+
+    /// Paint the window background under the item tree.
+    pub fn fill_window_background(&mut self, brush: Brush) {
+        let size = self.window.size();
+        self.with_brush_paint(
+            &brush,
+            size.width as f32,
+            size.height as f32,
+            wtypes::PaintStyle::Fill,
+            0.0,
+            |c, p| c.draw_paint(&p),
+        );
+    }
+
+    /// Build a paint for `brush` (gradients become owned shader resources,
+    /// dropped automatically after the draw) and hand it + the canvas to
+    /// `f`. No-op for transparent brushes. `w`/`h` are PHYSICAL units.
+    fn with_brush_paint(
+        &self,
+        brush: &Brush,
+        w: f32,
+        h: f32,
+        style: wtypes::PaintStyle,
+        stroke_width: f32,
+        f: impl FnOnce(&wdraw::Canvas, wtypes::Paint<'_>),
+    ) {
+        if brush.is_transparent() {
+            return;
+        }
+        let shader = make_brush_shader(self.graphics, brush, w, h, self.scale);
+        let mut p = base_paint(
+            color_argb(brush.color()),
+            style,
+            stroke_width,
+            (self.state.alpha * 255.0) as u8,
+        );
+        p.shader = shader.as_ref();
+        f(self.canvas, p);
+        // `shader` drops here → host resource freed.
+    }
+
+    /// Resolve a Slint image to a cached host image resource and run `f`
+    /// on it (handles are owned by the cache).
+    fn with_image<R>(
+        &self,
+        image: &i_slint_core::graphics::Image,
+        target: (u32, u32),
+        f: impl FnOnce(&wtypes::Image) -> R,
+    ) -> Option<R> {
+        let inner: &i_slint_core::ImageInner = image.into();
+        let key = ImageCacheKey::new(inner).map(|k| (k, target.0, target.1))?;
+        IMAGE_CACHE.with(|c| {
+            let mut cache = c.borrow_mut();
+            if !cache.contains_key(&key) {
+                let buffer = inner.render_to_buffer(Some(euclid::Size2D::new(
+                    target.0.max(1),
+                    target.1.max(1),
+                )))?;
+                let (w, h, rgba) = buffer_to_rgba8_unpremul(&buffer);
+                if w == 0 || h == 0 {
+                    return None;
+                }
+                match self.graphics.image_from_rgba8(w, h, &rgba) {
+                    Ok(img) => {
+                        cache.insert(key.clone(), img);
+                    }
+                    Err(()) => return None,
+                }
+            }
+            cache.get(&key).map(f)
+        })
+    }
+}
+
 impl i_slint_core::item_rendering::ItemRenderer for WandrItemRenderer<'_> {
     fn draw_rectangle(
         &mut self,
@@ -350,8 +385,8 @@ impl i_slint_core::item_rendering::ItemRenderer for WandrItemRenderer<'_> {
     ) {
         let s = self.scale;
         let (w, h) = (size.width * s, size.height * s);
-        self.with_brush_paint(&rect.background(), w, h, canvas::PaintStyle::Fill, 0.0, |p| {
-            canvas::draw_rect(0.0, 0.0, w, h, p);
+        self.with_brush_paint(&rect.background(), w, h, wtypes::PaintStyle::Fill, 0.0, |c, p| {
+            c.draw_rect(wrect(0.0, 0.0, w, h), &p);
         });
     }
 
@@ -363,15 +398,11 @@ impl i_slint_core::item_rendering::ItemRenderer for WandrItemRenderer<'_> {
         _cache: &i_slint_core::item_rendering::CachedRenderingData,
     ) {
         let s = self.scale;
-        let radius = uniform_radius(&rect.border_radius()) * s;
+        let radius = rect.border_radius();
         let (w, h) = (size.width * s, size.height * s);
 
-        self.with_brush_paint(&rect.background(), w, h, canvas::PaintStyle::Fill, 0.0, |p| {
-            if radius > 0.0 {
-                canvas::draw_rrect(0.0, 0.0, w, h, radius, radius, p);
-            } else {
-                canvas::draw_rect(0.0, 0.0, w, h, p);
-            }
+        self.with_brush_paint(&rect.background(), w, h, wtypes::PaintStyle::Fill, 0.0, |c, p| {
+            c.draw_rounded_rect(wrrect(0.0, 0.0, w, h, &radius, s), &p);
         });
 
         let border_width = rect.border_width().get() * s;
@@ -380,21 +411,23 @@ impl i_slint_core::item_rendering::ItemRenderer for WandrItemRenderer<'_> {
             // Stroke centered on the inset midline so the border stays
             // inside the item bounds (Slint's border model).
             let inset = border_width / 2.0;
-            let r = (radius - inset).max(0.0);
+            let inner = LogicalBorderRadius::new(
+                (radius.top_left - inset / s).max(0.0),
+                (radius.top_right - inset / s).max(0.0),
+                (radius.bottom_right - inset / s).max(0.0),
+                (radius.bottom_left - inset / s).max(0.0),
+            );
             self.with_brush_paint(
                 &border_color,
                 w,
                 h,
-                canvas::PaintStyle::Stroke,
+                wtypes::PaintStyle::Stroke,
                 border_width,
-                |p| {
-                    if r > 0.0 || radius > 0.0 {
-                        canvas::draw_rrect(
-                            inset, inset, w - border_width, h - border_width, r, r, p,
-                        );
-                    } else {
-                        canvas::draw_rect(inset, inset, w - border_width, h - border_width, p);
-                    }
+                |c, p| {
+                    c.draw_rounded_rect(
+                        wrrect(inset, inset, w - border_width, h - border_width, &inner, s),
+                        &p,
+                    );
                 },
             );
         }
@@ -432,51 +465,52 @@ impl i_slint_core::item_rendering::ItemRenderer for WandrItemRenderer<'_> {
                 .unwrap_or_else(|| euclid::Rect::from_size(source_size.cast())),
             ScaleFactor::new(s),
             image.alignment(),
-            image.tiling(), // tiled output degrades to a stretched draw (M2)
+            image.tiling(), // tiled output degrades to a stretched draw
         );
-        let Some(img_id) =
-            self.ensure_image(&source, (dest.width.ceil() as u32, dest.height.ceil() as u32))
-        else {
-            return;
-        };
-        // The host image may differ in size from source.size() (SVG rendered
-        // at target size) — map the source clip proportionally.
-        let (iw, ih) = (canvas::get_image_width(img_id), canvas::get_image_height(img_id));
-        if iw == 0 || ih == 0 {
-            return;
-        }
-        let sx = iw as f32 / source_size.width as f32;
-        let sy = ih as f32 / source_size.height as f32;
-
-        let mut p = paint_attrs(
-            0xFFFF_FFFF,
-            canvas::PaintStyle::Fill,
-            0.0,
-            (self.state.alpha * 255.0) as u8,
+        let alpha = (self.state.alpha * 255.0) as u8;
+        let canvas = self.canvas;
+        self.with_image(
+            &source,
+            (dest.width.ceil() as u32, dest.height.ceil() as u32),
+            |img| {
+                let (iw, ih) = (img.width(), img.height());
+                if iw == 0 || ih == 0 {
+                    return;
+                }
+                // The host image may differ from source.size() (SVG rendered
+                // at target size) — map the source clip proportionally.
+                let sx = iw as f32 / source_size.width as f32;
+                let sy = ih as f32 / source_size.height as f32;
+                let mut p = base_paint(0xFFFF_FFFF, wtypes::PaintStyle::Fill, 0.0, alpha);
+                // Colorize: the draft has no color-filter (deliberate);
+                // approximate via alpha-only (rare; full support = shader
+                // blend if a real consumer needs it).
+                let _ = &mut p;
+                canvas.save();
+                canvas.clip_rect(
+                    wrect(fit.offset.x, fit.offset.y, fit.size.width, fit.size.height),
+                    true,
+                );
+                canvas.draw_image_rect(
+                    img,
+                    wrect(
+                        fit.clip_rect.origin.x as f32 * sx,
+                        fit.clip_rect.origin.y as f32 * sy,
+                        fit.clip_rect.size.width as f32 * sx,
+                        fit.clip_rect.size.height as f32 * sy,
+                    ),
+                    wrect(
+                        fit.offset.x,
+                        fit.offset.y,
+                        fit.clip_rect.size.width as f32 * fit.source_to_target_x,
+                        fit.clip_rect.size.height as f32 * fit.source_to_target_y,
+                    ),
+                    linear_sampling(),
+                    &p,
+                );
+                canvas.restore();
+            },
         );
-        let colorize = image.colorize();
-        if !colorize.is_transparent() {
-            // Host color-filter = Modulate: exact for white/monochrome
-            // icons (the common case), a tint for everything else.
-            p.color_filter_kind = canvas::ColorFilterKind::Blend;
-            p.color_filter_color = color_argb(colorize.color());
-        }
-
-        canvas::save();
-        canvas::clip_rect(fit.offset.x, fit.offset.y, fit.size.width, fit.size.height, true);
-        canvas::draw_image_rect(
-            img_id,
-            fit.clip_rect.origin.x as f32 * sx,
-            fit.clip_rect.origin.y as f32 * sy,
-            fit.clip_rect.size.width as f32 * sx,
-            fit.clip_rect.size.height as f32 * sy,
-            fit.offset.x,
-            fit.offset.y,
-            fit.clip_rect.size.width as f32 * fit.source_to_target_x,
-            fit.clip_rect.size.height as f32 * fit.source_to_target_y,
-            p,
-        );
-        canvas::restore();
     }
 
     fn draw_text(
@@ -486,7 +520,6 @@ impl i_slint_core::item_rendering::ItemRenderer for WandrItemRenderer<'_> {
         size: LogicalSize,
         _cache: &i_slint_core::item_rendering::CachedRenderingData,
     ) {
-        // parley shapes guest-side; we only draw glyph runs (GlyphRenderer).
         sharedparley::draw_text(self, text, Some(self_rc), size, Some(self.text_layout_cache));
     }
 
@@ -510,18 +543,20 @@ impl i_slint_core::item_rendering::ItemRenderer for WandrItemRenderer<'_> {
         if svg.is_empty() {
             return;
         }
+        // Real fill rules now (the draft carries them on draw-path).
+        let rule = match path.fill_rule() {
+            i_slint_core::items::FillRule::Evenodd => wtypes::FillRule::Evenodd,
+            _ => wtypes::FillRule::Nonzero,
+        };
         let s = self.scale;
-        canvas::save();
-        canvas::translate(offset.x * s, offset.y * s);
+        self.canvas.save();
+        self.canvas.translate(offset.x * s, offset.y * s);
 
-        // Brush geometry: the path's viewbox-fitted bounds aren't tracked
-        // here; use the item's viewbox size as the gradient frame.
         let (gw, gh) = (path.viewbox_width() * s, path.viewbox_height() * s);
-
         let fill = path.fill();
         if !fill.is_transparent() {
-            self.with_brush_paint(&fill, gw, gh, canvas::PaintStyle::Fill, 0.0, |p| {
-                canvas::draw_path(svg.as_bytes(), p);
+            self.with_brush_paint(&fill, gw, gh, wtypes::PaintStyle::Fill, 0.0, |c, p| {
+                c.draw_path(&svg, rule, &p);
             });
         }
         let stroke = path.stroke();
@@ -531,14 +566,14 @@ impl i_slint_core::item_rendering::ItemRenderer for WandrItemRenderer<'_> {
                 &stroke,
                 gw,
                 gh,
-                canvas::PaintStyle::Stroke,
+                wtypes::PaintStyle::Stroke,
                 stroke_width,
-                |p| {
-                    canvas::draw_path(svg.as_bytes(), p);
+                |c, p| {
+                    c.draw_path(&svg, rule, &p);
                 },
             );
         }
-        canvas::restore();
+        self.canvas.restore();
     }
 
     fn draw_box_shadow(
@@ -558,15 +593,21 @@ impl i_slint_core::item_rendering::ItemRenderer for WandrItemRenderer<'_> {
         let w = size.width * s + 2.0 * spread;
         let h = size.height * s + 2.0 * spread;
         // CSS rule: outer corner radius after spread = max(0, r + spread);
-        // Slint blur maps to a Gaussian sigma of blur/2 (upstream skia
-        // renderer convention).
-        let radius = (uniform_radius(&box_shadow.logical_border_radius()) * s + spread).max(0.0);
+        // Slint blur → Gaussian sigma = blur/2 (upstream skia convention).
+        let radius = box_shadow.logical_border_radius()
+            + LogicalBorderRadius::new_uniform(spread / s);
         let mut color = color_argb(box_shadow.color());
         if self.state.alpha < 1.0 {
             let a = ((color >> 24) as f32 * self.state.alpha) as u32;
             color = (a << 24) | (color & 0x00FF_FFFF);
         }
-        canvas::draw_shadow_rrect(x, y, w, h, &[radius], blur / 2.0, color);
+        // The draft carries blur ON the paint — no fused shadow verb.
+        let mut p = base_paint(color, wtypes::PaintStyle::Fill, 0.0, 255);
+        p.blur = (blur > 0.0).then_some(wtypes::MaskBlur {
+            style: wtypes::BlurStyle::Normal,
+            sigma: blur / 2.0,
+        });
+        self.canvas.draw_rounded_rect(wrrect(x, y, w, h, &radius, s), &p);
     }
 
     fn visit_opacity(
@@ -577,9 +618,7 @@ impl i_slint_core::item_rendering::ItemRenderer for WandrItemRenderer<'_> {
     ) -> i_slint_core::items::RenderingResult {
         let opacity = opacity_item.opacity().clamp(0.0, 1.0);
         if opacity < 1.0 {
-            // Correct GROUP opacity: composite the subtree through a host
-            // save-layer (unbounded; the host applies alpha at restore).
-            canvas::save_layer(0.0, 0.0, 0.0, 0.0, false, (opacity * 255.0) as u8);
+            self.canvas.save_layer(None, (opacity * 255.0) as u8);
             self.state.extra_canvas_saves += 1;
         }
         i_slint_core::items::RenderingResult::ContinueRenderingChildren
@@ -592,8 +631,7 @@ impl i_slint_core::item_rendering::ItemRenderer for WandrItemRenderer<'_> {
         border_width: LogicalLength,
     ) -> bool {
         let s = self.scale;
-        // Shrink by the border width like the upstream renderers, so
-        // children clip to the inner edge of a border.
+        // Shrink by the border width so children clip to the inner edge.
         let bw = border_width.get();
         let clip_rect = LogicalRect::new(
             LogicalPoint::new(rect.origin.x + bw, rect.origin.y + bw),
@@ -602,23 +640,30 @@ impl i_slint_core::item_rendering::ItemRenderer for WandrItemRenderer<'_> {
                 (rect.size.height - 2.0 * bw).max(0.0),
             ),
         );
-        let r = uniform_radius(&radius) * s;
-        if r > 0.0 {
-            canvas::clip_rrect(
-                clip_rect.origin.x * s,
-                clip_rect.origin.y * s,
-                clip_rect.size.width * s,
-                clip_rect.size.height * s,
-                r,
-                r,
+        let has_radius = radius.top_left.max(radius.top_right)
+            .max(radius.bottom_right)
+            .max(radius.bottom_left)
+            > 0.0;
+        if has_radius {
+            self.canvas.clip_rounded_rect(
+                wrrect(
+                    clip_rect.origin.x * s,
+                    clip_rect.origin.y * s,
+                    clip_rect.size.width * s,
+                    clip_rect.size.height * s,
+                    &radius,
+                    s,
+                ),
                 true,
             );
         } else {
-            canvas::clip_rect(
-                clip_rect.origin.x * s,
-                clip_rect.origin.y * s,
-                clip_rect.size.width * s,
-                clip_rect.size.height * s,
+            self.canvas.clip_rect(
+                wrect(
+                    clip_rect.origin.x * s,
+                    clip_rect.origin.y * s,
+                    clip_rect.size.width * s,
+                    clip_rect.size.height * s,
+                ),
                 true,
             );
         }
@@ -635,19 +680,17 @@ impl i_slint_core::item_rendering::ItemRenderer for WandrItemRenderer<'_> {
     }
 
     fn translate(&mut self, distance: LogicalVector) {
-        canvas::translate(distance.x * self.scale, distance.y * self.scale);
+        self.canvas.translate(distance.x * self.scale, distance.y * self.scale);
         self.state.clip = self.state.clip.translate(-distance);
     }
 
     fn rotate(&mut self, angle_in_degrees: f32) {
-        canvas::rotate(angle_in_degrees);
-        // The tracked clip is no longer axis-aligned in local coords —
-        // disable culling for the rest of this state (host clip stays exact).
+        self.canvas.rotate(angle_in_degrees);
         self.state.clip = unbounded_clip();
     }
 
     fn scale(&mut self, scale_x_factor: f32, scale_y_factor: f32) {
-        canvas::scale(scale_x_factor, scale_y_factor);
+        self.canvas.scale(scale_x_factor, scale_y_factor);
         if scale_x_factor != 0.0 && scale_y_factor != 0.0 {
             let c = self.state.clip;
             self.state.clip = LogicalRect::new(
@@ -658,22 +701,20 @@ impl i_slint_core::item_rendering::ItemRenderer for WandrItemRenderer<'_> {
     }
 
     fn apply_opacity(&mut self, opacity: f32) {
-        // Per-paint alpha fold (used when something other than
-        // visit_opacity applies opacity, e.g. semi-transparent layers).
         self.state.alpha *= opacity.clamp(0.0, 1.0);
     }
 
     fn save_state(&mut self) {
-        canvas::save();
+        self.canvas.save();
         self.saved.push(self.state.clone());
         self.state.extra_canvas_saves = 0;
     }
 
     fn restore_state(&mut self) {
         for _ in 0..self.state.extra_canvas_saves {
-            canvas::restore();
+            self.canvas.restore();
         }
-        canvas::restore();
+        self.canvas.restore();
         if let Some(state) = self.saved.pop() {
             self.state = state;
         }
@@ -688,11 +729,11 @@ impl i_slint_core::item_rendering::ItemRenderer for WandrItemRenderer<'_> {
         _item_cache: &ItemRc,
         update_fn: &dyn Fn(&mut dyn FnMut(u32, u32, &[u8])),
     ) {
-        // Immediate-mode: upload + draw + drop each frame. The data is
-        // premultiplied RGBA — unpremultiply for create-image (Unpremul).
-        // TODO(M4): cache by item like the upstream renderers if profiling
-        // shows icon-heavy UIs re-uploading every frame.
+        // Immediate-mode: upload + draw + drop each frame (premultiplied
+        // RGBA → unpremultiply for image-from-rgba8).
         let alpha = (self.state.alpha * 255.0) as u8;
+        let canvas = self.canvas;
+        let graphics = self.graphics;
         update_fn(&mut |width, height, data| {
             if width == 0 || height == 0 {
                 return;
@@ -707,17 +748,16 @@ impl i_slint_core::item_rendering::ItemRenderer for WandrItemRenderer<'_> {
                     rgba.extend_from_slice(&[un(px[0]), un(px[1]), un(px[2]), a]);
                 }
             }
-            let id = canvas::create_image(width, height, &rgba);
-            if id != 0 {
-                canvas::draw_image(id, 0.0, 0.0, alpha);
-                canvas::drop_image(id);
+            if let Ok(img) = graphics.image_from_rgba8(width, height, &rgba) {
+                let p = base_paint(0xFFFF_FFFF, wtypes::PaintStyle::Fill, 0.0, alpha);
+                canvas.draw_image(&img, point(0.0, 0.0), linear_sampling(), &p);
+                // img drops here → host resource freed.
             }
         });
     }
 
     fn draw_string(&mut self, string: &str, _color: i_slint_core::Color) {
-        // Debug overlay only upstream; route to the host log for now.
-        canvas::log_message(string);
+        eprintln!("slint: {string}");
     }
 
     fn draw_image_direct(&mut self, image: i_slint_core::graphics::Image) {
@@ -726,9 +766,11 @@ impl i_slint_core::item_rendering::ItemRenderer for WandrItemRenderer<'_> {
             return;
         }
         let alpha = (self.state.alpha * 255.0) as u8;
-        if let Some(id) = self.ensure_image(&image, (size.width, size.height)) {
-            canvas::draw_image(id, 0.0, 0.0, alpha);
-        }
+        let canvas = self.canvas;
+        self.with_image(&image, (size.width, size.height), |img| {
+            let p = base_paint(0xFFFF_FFFF, wtypes::PaintStyle::Fill, 0.0, alpha);
+            canvas.draw_image(img, point(0.0, 0.0), linear_sampling(), &p);
+        });
     }
 
     fn window(&self) -> &WindowInner {
@@ -740,15 +782,11 @@ impl i_slint_core::item_rendering::ItemRenderer for WandrItemRenderer<'_> {
     }
 }
 
-/// Glyph-level text drawing (M3): parley hands us font blobs + positioned
-/// glyph ids in PHYSICAL px; we register the blob once (`create-typeface`)
-/// and forward runs to `draw-glyphs`. Brushes are flat paint-attrs —
-/// gradient text degrades to the brush's representative color (rare; a
-/// shader-id brush needs ownership semantics PaintAttrs doesn't have).
-/// Faux bold/italic synthesis + variable-font axes are not applied
-/// (deferred with the WIT's variable-font support).
+/// Glyph-level text (the draft's `glyphs` interface): parley hands font
+/// blobs + positioned glyph ids in PHYSICAL units; the blob is registered
+/// once (`typeface.from-bytes`) and runs forward to `draw-glyphs`.
 impl GlyphRenderer for WandrItemRenderer<'_> {
-    type PlatformBrush = canvas::PaintAttrs;
+    type PlatformBrush = TextBrush;
 
     fn platform_text_fill_brush(
         &mut self,
@@ -758,12 +796,7 @@ impl GlyphRenderer for WandrItemRenderer<'_> {
         if brush.is_transparent() {
             return None;
         }
-        Some(paint_attrs(
-            color_argb(brush.color()),
-            canvas::PaintStyle::Fill,
-            0.0,
-            (self.state.alpha * 255.0) as u8,
-        ))
+        Some(TextBrush { color: color_argb(brush.color()), stroke_width: 0.0, stroke: false })
     }
 
     fn platform_brush_for_color(
@@ -773,12 +806,7 @@ impl GlyphRenderer for WandrItemRenderer<'_> {
         if color.alpha() == 0 {
             return None;
         }
-        Some(paint_attrs(
-            color_argb(*color),
-            canvas::PaintStyle::Fill,
-            0.0,
-            (self.state.alpha * 255.0) as u8,
-        ))
+        Some(TextBrush { color: color_argb(*color), stroke_width: 0.0, stroke: false })
     }
 
     fn platform_text_stroke_brush(
@@ -790,16 +818,11 @@ impl GlyphRenderer for WandrItemRenderer<'_> {
         if brush.is_transparent() {
             return None;
         }
-        let mut p = paint_attrs(
-            color_argb(brush.color()),
-            canvas::PaintStyle::Stroke,
-            physical_stroke_width,
-            (self.state.alpha * 255.0) as u8,
-        );
-        p.stroke_cap = canvas::StrokeCap::Butt;
-        p.stroke_join = canvas::StrokeJoin::Miter;
-        p.stroke_miter = 10.0;
-        Some(p)
+        Some(TextBrush {
+            color: color_argb(brush.color()),
+            stroke_width: physical_stroke_width,
+            stroke: true,
+        })
     }
 
     fn draw_glyph_run(
@@ -812,18 +835,28 @@ impl GlyphRenderer for WandrItemRenderer<'_> {
         y_offset: sharedparley::PhysicalLength,
         glyphs_it: &mut dyn Iterator<Item = sharedparley::parley::layout::Glyph>,
     ) {
-        let Some(typeface_id) = ensure_typeface(font) else { return };
-        let mut ids: Vec<u16> = Vec::new();
-        let mut positions: Vec<f32> = Vec::new();
-        for g in glyphs_it {
-            ids.push(g.id as u16);
-            positions.push(g.x);
-            positions.push(g.y + y_offset.get());
-        }
-        if ids.is_empty() {
+        let glyphs: Vec<wglyphs::PositionedGlyph> = glyphs_it
+            .map(|g| wglyphs::PositionedGlyph {
+                id: g.id,
+                at: point(g.x, g.y + y_offset.get()),
+            })
+            .collect();
+        if glyphs.is_empty() {
             return;
         }
-        canvas::draw_glyphs(typeface_id, font_size.get(), &ids, &positions, 0.0, 0.0, brush);
+        let mut p = base_paint(
+            brush.color,
+            if brush.stroke { wtypes::PaintStyle::Stroke } else { wtypes::PaintStyle::Fill },
+            brush.stroke_width,
+            (self.state.alpha * 255.0) as u8,
+        );
+        if brush.stroke {
+            p.stroke_miter = 10.0;
+        }
+        let canvas = self.canvas;
+        with_typeface(font, |tf| {
+            wglyphs::draw_glyphs(canvas, tf, font_size.get(), &glyphs, point(0.0, 0.0), &p);
+        });
     }
 
     fn fill_rectangle(
@@ -831,12 +864,20 @@ impl GlyphRenderer for WandrItemRenderer<'_> {
         physical_rect: sharedparley::PhysicalRect,
         brush: Self::PlatformBrush,
     ) {
-        canvas::draw_rect(
-            physical_rect.min_x(),
-            physical_rect.min_y(),
-            physical_rect.width(),
-            physical_rect.height(),
-            brush,
+        let p = base_paint(
+            brush.color,
+            wtypes::PaintStyle::Fill,
+            0.0,
+            (self.state.alpha * 255.0) as u8,
+        );
+        self.canvas.draw_rect(
+            wrect(
+                physical_rect.min_x(),
+                physical_rect.min_y(),
+                physical_rect.width(),
+                physical_rect.height(),
+            ),
+            &p,
         );
     }
 }

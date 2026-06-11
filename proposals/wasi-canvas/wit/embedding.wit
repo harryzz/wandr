@@ -1,0 +1,34 @@
+package wasi:canvas@0.0.1;
+
+
+// NON-NORMATIVE embedding example (kept in the draft because the proving
+// consumer needs ONE concrete handoff): how a HOST-DRIVEN (reactor-model)
+// embedder hands a guest its drawing capabilities. The embedder calls the
+// guest's own render callback (out of scope here — e.g. wandr's
+// `my:skiko-gfx/renderer.render-frame`); during that callback the guest
+// brackets its drawing with begin-frame/end-frame. A poll-loop runtime
+// would instead bind canvases via `wasi:surface` + graphics-context and
+// never import this interface. Embedders choose exactly one handoff.
+interface embedding {
+    use draw.{canvas, graphics};
+
+    /// The creation factory. Stable across frames — acquire once.
+    get-graphics: func() -> graphics;
+
+    /// Begin the embedder's current frame and hand over its canvas (the
+    /// presented target, already cleared/transformed per the embedder's
+    /// policy). The handle is valid until end-frame; the guest should
+    /// drop it before (or it is invalidated at) end-frame.
+    begin-frame: func() -> canvas;
+
+    /// Flush + present the frame begun by begin-frame.
+    end-frame: func();
+}
+
+/// Guest world for host-driven embedders: full drawing + the handoff.
+world embedded-canvas-guest {
+    import types;
+    import draw;
+    import glyphs;
+    import embedding;
+}
