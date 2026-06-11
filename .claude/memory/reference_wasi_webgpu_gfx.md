@@ -31,3 +31,12 @@ metadata:
 - Verdict: standards-track answer for "arbitrary guest renderers/games" later;
   skiko-gfx remains the right default for app UIs. Don't adopt while Phase 2 /
   unreleased — track it.
+- **Full comparison + standardization analysis (2026-06-11):
+  `docs/skiko-gfx-vs-wasi-gfx.md`** — two LAYERS of one stack (GPU-driver vs
+  2D-canvas, the WebGPU-vs-Canvas2D split); they compose both ways
+  (sf_media hosts wasi:surface; a wasi-canvas can sit on wasi:webgpu).
+  "wasi-canvas" from our contract = real gap + only shipped contender
+  (3 languages of consumers); needed first: de-Skia naming, resources not
+  u32 ids, shed wandr-isms, fix indexed-getter warts. Path: publish WIT +
+  skia-wit-mapping as versioned de-facto spec when stable; formal WASI
+  phase-0 only after — positioned as wasi-gfx's 2D companion.
