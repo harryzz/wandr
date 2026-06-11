@@ -9,6 +9,7 @@
 - [RULE: shared WIT change → rebuild ALL consumers + restart zygote](feedback_shared_wit_rebuild_all_consumers.md) — shared-type ABI breaks every importer (skiko Kotlin binding is hand-maintained); run-hybrid-stack.sh re-preloads.
 
 ## Projects / tasks
+- [✅ Task 101: desktop dev loop + W3C key-input](project_desktop_dev_loop.md) — same wasm as device runs on x86_64 host (WSLg-verified); WANDR_DESKTOP_SIZE + JIT; gotchas: present path was MISSING (softbuffer), on-resize gap masqueraded as 3 render bugs, key-input v3 = W3C codes+modifiers (HW-kbd verified).
 - [Project: WASM Android Runtime](project_wasm_runtime.md) — goals, stack, current status.
 - [✅ WART→WANDR rename + redeploy](project_wandr_rename.md) — whole-project rename + full --no-art redeploy; 4 bring-up gotchas; what intentionally kept `wart`.
 - [✅ Task 93 Phase 2: SRTP HW-AES offload](project_wandr_crypto_srtp_offload.md) — LIVE-CALL-VERIFIED: SRTP GCM on host ARMv8 AES via `aead-key` resource; 3.0× audio / 8.5× video; trait-injected (rtc-srtp `external-aead` + wandr-call `host-aead`).

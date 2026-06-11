@@ -1,5 +1,5 @@
-TASK=100
+TASK=101
 STEP=verify-done
 STATUS=complete
-LAST_SUCCESS=Task 100 verified OK — Slint guest UI fully working on wandr (render+touch+IME+emoji+multiline, user-verified)
-NOTES=slint-wandr crate + wandr.slint.test shipped. Follow-ups unscheduled: clipboard, lifecycle pause, font-scale, variable fonts, colorize-gradient, per-corner radii, tiling.
+LAST_SUCCESS=Task 101 verified OK — desktop dev loop live (same wasm as device, WSLg-verified) + key-input v3 HW-keyboard-verified
+NOTES=Recipe in docs/build-pipeline.md "Desktop dev loop"; narrative tasks/101-desktop-dev-loop.md; memory project_desktop_dev_loop. Edges: scroll-wheel unmapped, no desktop IME overlay.
