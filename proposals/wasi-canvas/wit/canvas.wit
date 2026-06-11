@@ -253,5 +253,6 @@ world canvas-host {
     import types;
     import draw;
     import glyphs;
+    import layout;
     import embedding;
 }

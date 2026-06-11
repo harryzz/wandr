@@ -75,8 +75,11 @@ variant, since its renderer already speaks the same shapes.
    `glyphs` (the `canvas-host` bindgen world) over the same SkiaRenderer —
    `runtime/wandr-host/src/wasi_canvas_impl.rs`, linked at both
    instantiate sites, unit-tested on the offscreen path. `layout` host
-   support deferred to the first managed-runtime consumer (the draft
-   marks it embedder-optional). Notes: bindgen needs
+   support landed 2026-06-11 with the dioxus-canvas migration (stage 1):
+   skparagraph-backed paragraph/paragraph-builder resources reusing the
+   renderer's font collection + family-alias typeface resolution; the
+   `wasi-canvas` cargo feature is now DEFAULT-ON (additive linker
+   entries). Notes: bindgen needs
    `imports: { default: trappable }`; skia Surface/PictureRecorder need
    an `unsafe impl Send` on the canvas resource (single-threaded store,
    the video.rs justification).
