@@ -69,6 +69,45 @@ skiko-gfx, never a replacement.**
   GPU stack in browsers. That's the strongest argument that the two
   proposals belong in one family rather than in competition.
 
+## `wasi:surface` specifically (the windowing/input slice)
+
+(Read from the runtime repo, `wasi:surface@0.0.1` — surface resource +
+graphics-context binding + pollable-based events + W3C-UIEvents key enum.)
+It corresponds NOT to our canvas but to the slice wandr spreads across the
+`renderer` export world + `window`/`display` interfaces + the arbiter:
+
+| Concern | `wasi:surface@0.0.1` | wandr |
+|---|---|---|
+| Who creates/sizes the window | GUEST: `surface(create-desc{w,h})`, `request-set-size` | ARBITER: window-server authors geometry/roles; guests never choose (`surface-width/height` is read-only) |
+| Who owns the event loop | GUEST pulls: `subscribe-*` → `pollable` + `get-*` (wasi:io poll; a game loop blocks on poll) | HOST pushes: calls `renderer.on-*` exports (reactor model) |
+| Frame timing | `subscribe-frame` vsync tick (record is literally a TODO placeholder) | host-driven `render-frame(nanos)` + `frame-pacing.next-frame-delay` back-channel → on-demand rendering, ~1% idle |
+| Pointer | x,y `f64` only — no pointer-id, pressure, buttons, scroll, touch/mouse distinction | `on-pointer-event-v2`: pointer-id + kind (down/up/move/scroll) + pressure (multi-touch-capable) |
+| Keys | richer than ours: full W3C code enum + alt/ctrl/meta/shift modifiers + `text` | code-point + Compose-webMain key-id; NO modifier bits (fine on a phone, a gap on desktop) |
+| What binds rendering to it | `connect-graphics-context` → webgpu device or frame-buffer (pluggable) | implicit: the surface IS the host Skia target |
+| Mobile-critical pieces | absent: density/scale-factor, IME/text-input, insets/safe-area, lifecycle, idle story | `window.get-density/font-scale`, ime interface, `display.safe-size`, lifecycle, frame-pacing |
+
+Three takeaways:
+
+1. **Same inversion as the renderer question.** Guest-constructed windows +
+   guest-pulled events suit self-contained engines; arbiter-authored
+   geometry + host-pushed events suit a phone where the window server owns
+   policy. If wandr ever hosts wasi:surface, the impl is mechanical —
+   `sf_media` child surface per `surface` resource, `connect-graphics-
+   context` binds the BBQ producer, SfInputEvent routing fills host-side
+   pollable queues, `create-desc` degrades to a hint the arbiter may
+   ignore — but such guests run a blocking poll loop, a different
+   lifecycle from our export-driven reactors (no bg-tick/on-demand story).
+2. **At 0.0.1 it's visibly immature for mobile** (placeholder frame event,
+   pointer without id/pressure, no density, no IME) — consistent with the
+   "Phase 2, churn expected, don't adopt yet" verdict.
+3. **For the wasi-canvas idea this is good news, not competition**: the
+   sane proposal shape is *reuse their `surface` for windowing once it
+   matures* and ride canvas+text on top — and wandr's event experience
+   (pointer-id/pressure, density, IME hooks, frame-pacing idle semantics)
+   is exactly the feedback their proposal lacks today. Their richer key
+   model (modifiers!) is conversely something our `on-key-event-v2` would
+   adopt in a v3 if desktop keyboards ever matter.
+
 ## Could ours become a standard? ("wasi-canvas")
 
 **The gap is real and ours is the only shipped contender we know of**: WASI
