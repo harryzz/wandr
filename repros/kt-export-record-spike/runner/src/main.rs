@@ -58,9 +58,6 @@ const CODES: &[&str] = &[
 ];
 
 fn main() -> Result<()> {
-    let component_path = std::env::args().nth(1).context("usage: runner <component.wasm> [iters]")?;
-    let iters: u64 = std::env::args().nth(2).map(|s| s.parse()).transpose()?.unwrap_or(100_000);
-
     let mut config = Config::new();
     config.wasm_component_model(true);
     config.wasm_gc(true);
@@ -68,7 +65,30 @@ fn main() -> Result<()> {
     config.wasm_exceptions(true);
     let engine = Engine::new(&config)?;
 
-    let component = Component::from_file(&engine, &component_path)?;
+    let arg1 = std::env::args().nth(1).context("usage: runner <component.wasm|.cwasm> [iters] | runner --precompile <in.wasm> <out.cwasm>")?;
+
+    // AOT mode, mirroring wandr's on-device installer: precompile natively
+    // on the target, then run the .cwasm via deserialize.
+    if arg1 == "--precompile" {
+        let input = std::env::args().nth(2).context("--precompile <in.wasm> <out.cwasm>")?;
+        let output = std::env::args().nth(3).context("--precompile <in.wasm> <out.cwasm>")?;
+        let bytes = std::fs::read(&input)?;
+        let cwasm = engine.precompile_component(&bytes)?;
+        std::fs::write(&output, cwasm)?;
+        println!("precompiled {input} -> {output}");
+        return Ok(());
+    }
+
+    let component_path = arg1;
+    let iters: u64 = std::env::args().nth(2).map(|s| s.parse()).transpose()?.unwrap_or(100_000);
+
+    let component = if component_path.ends_with(".cwasm") {
+        // SAFETY: the .cwasm was produced by this same binary's --precompile
+        // (same wasmtime version + config) on this same machine.
+        unsafe { Component::deserialize_file(&engine, &component_path)? }
+    } else {
+        Component::from_file(&engine, &component_path)?
+    };
     let mut linker: Linker<Ctx> = Linker::new(&engine);
     wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
 

@@ -1,0 +1,11 @@
+# Android cross-compile for the on-device AOT leg of the spike (desktop JIT
+# builds use `--target x86_64-unknown-linux-gnu` explicitly). Same NDK pins
+# as runtime/wandr-host/.cargo/config.toml, minus the crypto cfgs.
+
+[target.aarch64-linux-android]
+ar = "/home/harry/android-ndk-r27d/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+linker = "/home/harry/android-ndk-r27d/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android30-clang"
+rustflags = [
+    "-C", "link-arg=--sysroot=/home/harry/android-ndk-r27d/toolchains/llvm/prebuilt/linux-x86_64/sysroot",
+    "-C", "link-arg=-fuse-ld=lld",
+]

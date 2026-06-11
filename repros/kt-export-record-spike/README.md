@@ -46,15 +46,28 @@ So the old rule is superseded by a sharper one:
 ## Run
 
 ```bash
-./build.sh           # 100k iterations
+./build.sh           # 100k iterations, desktop JIT
 ./build.sh 1000000   # more
 ```
 
+On-device AOT (Pixel 2 XL, aarch64 — precompiled ON the device like the
+production installer):
+
+```bash
+source ../../tools/scripts/env-android.sh
+(cd runner && cargo build --release --target aarch64-linux-android)
+adb push runner/target/aarch64-linux-android/release/kt-export-record-spike-runner /data/local/tmp/spike-runner
+adb push build/spike.component.wasm /data/local/tmp/
+adb shell su -c '/data/local/tmp/spike-runner --precompile /data/local/tmp/spike.component.wasm /data/local/tmp/spike.cwasm'
+adb shell su -c '/data/local/tmp/spike-runner /data/local/tmp/spike.cwasm 100000'
+```
+
+**Device result (2026-06-11): identical** — strict 100000/100000 OK,
+late-lift 100000/100000 corrupted. The JIT-only caveat is closed; the
+ordering contract holds under Cranelift AOT on arm64.
+
 ## Caveats / not covered
 
-- Desktop JIT only; arena behavior is wasm-semantics, not target codegen,
-  so AOT/arm64 is expected to behave identically (re-verify if adopted in
-  production bindings).
 - Flat-params path only (≤16 flat params). A record big enough to spill to
   an indirect args area also arrives via `cabi_realloc` — same arena, same
   ordering rule expected, but not exercised here.

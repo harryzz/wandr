@@ -92,9 +92,11 @@ The positive control (freeAll → scoped scribble → lift) corrupted
 100,000/100,000 — args really do sit in the arena scoped allocs reuse, so
 the ordering IS the entire safety contract. New rule: rich export args are
 allowed; lift-before-alloc is mandatory; primitives remain fine where they
-ship today (IME contract unchanged). Caveats: desktop-JIT spike,
-flat-params path only (≤16); re-verify on AOT/arm64 + the indirect-args
-spill case before adopting in production bindings.
+ship today (IME contract unchanged). **AOT/arm64 verified same day:
+identical 100k/100k both ways on the Pixel 2 XL (cwasm precompiled
+on-device like the production installer).** Remaining caveat: flat-params
+path only (≤16); the indirect-args spill case (very large records) is
+unexercised — same arena, same rule expected.
 
 **Historical notes below (old stdlib era) — kept for the failure modes:**
 
