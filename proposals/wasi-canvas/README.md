@@ -104,5 +104,19 @@ variant, since its renderer already speaks the same shapes.
    into SlintContext::set_color_scheme → fluent dark — i.e. the proving
    consumer caught a real fidelity bug in the legacy pipeline, working
    as intended.
-3. Let the surface harden; then consider the WASI phase-0 conversation,
+3. ~~Migrate the production guests~~ **DONE 2026-06-11** — every
+   non-Kotlin guest now draws through the draft:
+   - **dioxus-canvas** grew a second backend (`launch_wasi_canvas!`,
+     `wire_wasi_canvas!`): CanvasSink over wasi:canvas + layout-built
+     paragraphs; wandr.dioxus.demo, taskmanager, connectivity.test and
+     **Signal** all migrated + device-verified (history intact).
+   - **System chrome** (launcher / statusbar / taskbar / keyguard —
+     the hand-rolled `wit_bindgen::generate!` guests) ported off the
+     legacy canvas; text-blobs → `layout` paragraphs with REAL metrics
+     (true centering / measured-width truncation replaced the per-glyph
+     advance guesses). Device-verified --no-art: boot-to-home, lock +
+     swipe-up unlock, tile-tap launch, taskbar home.
+   The legacy `my:skiko-gfx` canvas now has exactly one consumer class
+   left: Kotlin/Compose (the hand-maintained skiko binding).
+4. Let the surface harden; then consider the WASI phase-0 conversation,
    positioned as wasi-gfx's 2D companion (champion overlap natural).
