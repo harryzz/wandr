@@ -718,24 +718,9 @@ interface frame-pacing {
     next-frame-delay: func() -> u32;
 }
 
-interface key-input {
-    record key-event {
-        down:   bool,
-        repeat: bool,
-        code:   string,
-        text:   string,
-        alt:    bool,
-        ctrl:   bool,
-        meta:   bool,
-        shift:  bool,
-    }
-    on-key: func(ev: key-event);
-}
-
 world slint-app {
     export renderer;
     export frame-pacing;
-    export key-input;
 }
 "#,
             world: "slint-app",
@@ -809,8 +794,85 @@ world slint-app {
             }
         }
 
-        impl exports::my::skiko_gfx::key_input::Guest for __SlintWandrGuest {
-            fn on_key(ev: exports::my::skiko_gfx::key_input::KeyEvent) {
+        __slint_wandr_export!(__SlintWandrGuest);
+
+        // ── wasi:input-handlers (proposals/wasi-input-handlers): the
+        // push-model input + frame driving this guest PREFERS. The host
+        // routes exclusively to these when exported; the legacy renderer
+        // impls above stay as the old-host fallback (never double-fires:
+        // routing is exclusive per input type host-side). Nested module:
+        // two generate!s can't share a scope (both emit `exports`/_rt).
+        mod __slint_wandr_input {
+        use super::__SlintWandrGuest;
+        $crate::__wit_bindgen::generate!({
+            path: [],
+            inline: r#"
+package wasi:input-handlers@0.0.1;
+
+interface pointer-handler {
+    enum kind { down, up, move, scroll, cancel }
+    record pointer-event {
+        id: u32,
+        kind: kind,
+        x: f32,
+        y: f32,
+        pressure: f32,
+        scroll-dx: f32,
+        scroll-dy: f32,
+        alt: bool,
+        ctrl: bool,
+        meta: bool,
+        shift: bool,
+    }
+    on-pointer: func(ev: pointer-event);
+}
+
+interface key-handler {
+    record key-event {
+        down:   bool,
+        repeat: bool,
+        code:   string,
+        text:   string,
+        alt:    bool,
+        ctrl:   bool,
+        meta:   bool,
+        shift:  bool,
+    }
+    on-key: func(ev: key-event);
+}
+
+interface frame-handler {
+    on-frame:  func(nanos: u64);
+    on-resize: func(width: u32, height: u32);
+}
+
+world input-guest {
+    export pointer-handler;
+    export key-handler;
+    export frame-handler;
+}
+"#,
+            world: "input-guest",
+            pub_export_macro: true,
+            export_macro_name: "__slint_wandr_input_export",
+            runtime_path: "::slint_wandr::__wit_bindgen::rt",
+        });
+
+        impl exports::wasi::input_handlers::pointer_handler::Guest for __SlintWandrGuest {
+            fn on_pointer(ev: exports::wasi::input_handlers::pointer_handler::PointerEvent) {
+                use exports::wasi::input_handlers::pointer_handler::Kind as K;
+                let kind = match ev.kind {
+                    K::Down => ::slint_wandr::PointerKind::Down,
+                    K::Up | K::Cancel => ::slint_wandr::PointerKind::Up,
+                    K::Move => ::slint_wandr::PointerKind::Move,
+                    K::Scroll => ::slint_wandr::PointerKind::Scroll,
+                };
+                ::slint_wandr::handle_pointer_event(ev.id, kind, ev.x, ev.y);
+            }
+        }
+
+        impl exports::wasi::input_handlers::key_handler::Guest for __SlintWandrGuest {
+            fn on_key(ev: exports::wasi::input_handlers::key_handler::KeyEvent) {
                 ::slint_wandr::handle_key_v3(
                     ev.down, ev.repeat, &ev.code, &ev.text,
                     ev.alt, ev.ctrl, ev.meta, ev.shift,
@@ -818,6 +880,17 @@ world slint-app {
             }
         }
 
-        __slint_wandr_export!(__SlintWandrGuest);
+        impl exports::wasi::input_handlers::frame_handler::Guest for __SlintWandrGuest {
+            fn on_frame(nanos: u64) {
+                super::__slint_wandr_ensure_app();
+                ::slint_wandr::handle_render_frame(nanos);
+            }
+            fn on_resize(width: u32, height: u32) {
+                ::slint_wandr::handle_resize(width, height);
+            }
+        }
+
+        __slint_wandr_input_export!(__SlintWandrGuest);
+        } // mod __slint_wandr_input
     };
 }
