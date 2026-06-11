@@ -54,4 +54,24 @@ alpha-REPLACE paint bug via Slint).
   a second instance with `wandr-host --standalone --app X` while the
   hybrid stack runs — it creates an unmanaged full-screen surface that
   steals focus (looks like system-wide lag + dead taskbar).
+**Kotlin/Compose input migration (2026-06-11, commit 0fdd098f):**
+wandr-app + wandr.ime.keyboard export pointer-handler + frame-handler
+(device-verified: clicks, IME, typing). TWO HARD-WON FACTS:
+(1) the Kotlin pointer wrapper MUST fan out to BOTH
+`RendererImpl.onPointerEvent` (v1 — the only path that feeds the Compose
+scene) AND `onPointerEventV2` (opt-in WasiInput handler, silently
+discarded when unregistered) — v2-only delivers but produces no clicks.
+(2) ‼️ key-handler is NOT exportable to Compose guests yet: host lowering
+of the key-event strings into a LIVE Compose app throws an exception
+Kotlin `catch(Throwable)` cannot intercept (escapes even from inside
+cabi_realloc's own catch; componentModelRealloc's guards exonerated by
+source-read), poisoning the instance ("cannot enter component instance",
+app exits). The clean-room spike passes 100k/100k, so the trigger is
+Compose-app runtime state — OPEN follow-up; host auto-falls-back to
+legacy on-key-event-v2 when key-handler is unbound, so typing works.
+Debug affordances added: desktop host `--app <id>` (resolves cross-app
+deps from WANDR_APPS_ROOT; pull dep components from the phone — wasm is
+target-independent) + desktop `--install`; ime-inbound key failure log
+prints `{e:?}`.
+
 Related: [[reference_slint_wasip2]], [[feedback_shared_wit_rebuild_all_consumers]].
