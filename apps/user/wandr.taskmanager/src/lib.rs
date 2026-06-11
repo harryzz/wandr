@@ -30,6 +30,8 @@ dioxus_canvas::__wit_bindgen::generate!({
     runtime_path: "::dioxus_canvas::__wit_bindgen::rt",
 });
 
+dioxus_canvas::wasi_canvas_bindings!();
+
 use wandr::task_manager::task_manager;
 use wandr::task_manager::types;
 
@@ -135,7 +137,7 @@ fn poll() -> bool {
 // during input bursts it skips polling until the counter rolls over.
 const POLL_EVERY_FRAMES: u32 = 1;
 
-dioxus_canvas::wire!(app, pre_frame: |r| {
+dioxus_canvas::wire_wasi_canvas!(app, pre_frame: |r| {
     r.set_scale(1.5); // hi-dpi panel — author px are small; 1.5× is the readable size
                       // that still leaves the name column room (2.0 crowds the name into
                       // the usage column). Usage + kill are flex-shrink:0, name is

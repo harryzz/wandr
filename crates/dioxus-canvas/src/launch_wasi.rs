@@ -98,6 +98,18 @@ world dioxus-wasi-app {
             runtime_path: "::dioxus_canvas::__wit_bindgen::rt",
         });
 
+        $crate::wasi_canvas_bindings!();
+    };
+}
+
+/// JUST the wasi:canvas guest bindings (`mod __dioxus_wasi_canvas`) — for
+/// split-form apps that run their own combined `generate!` for the
+/// my:skiko-gfx world + extra imports (task-manager, connectivity, …):
+/// trim canvas/paragraph from your world, invoke this, then
+/// `wire_wasi_canvas!`.
+#[macro_export]
+macro_rules! wasi_canvas_bindings {
+    () => {
         #[doc(hidden)]
         pub mod __dioxus_wasi_canvas {
             $crate::__wit_bindgen::generate!({

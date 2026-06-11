@@ -27,6 +27,8 @@ dioxus_canvas::__wit_bindgen::generate!({
     runtime_path: "::dioxus_canvas::__wit_bindgen::rt",
 });
 
+dioxus_canvas::wasi_canvas_bindings!();
+
 use exports::wandr::events::incoming_handler::{Guest as IncomingHandler, Message};
 
 #[derive(Clone, Default, PartialEq)]
@@ -83,7 +85,7 @@ impl IncomingHandler for __DioxusCanvasGuest {
     }
 }
 
-dioxus_canvas::wire!(app, pre_frame: |r| {
+dioxus_canvas::wire_wasi_canvas!(app, pre_frame: |r| {
     r.set_scale(1.5);
     // An event landed since the last frame → re-run + repaint the component.
     if DIRTY.with(|d| d.replace(false)) {
