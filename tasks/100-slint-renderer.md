@@ -49,13 +49,32 @@
       matrix/clip-stack tracking (femtovg pattern).
 - [x] **M3 — text** (DONE 2026-06-11, compile-verified; typeface cache pins the parley blob — HashedBlob trick — so the ptr-keyed id stays valid): `GlyphRenderer::draw_glyph_run` → create-typeface
       (cached per font-blob hash, Slint FontCache pattern) + draw-glyphs.
-- [x] **M4 — proof app on device** (RENDERS 2026-06-11, screenshot-verified: text/widgets/gradient/shadow/ListView all correct, ~0.7% idle CPU; interactive verification — touch, typing, scroll, animation — pending user): wandr.slint.test exercising text
+- [x] **M4 — proof app on device** (DONE 2026-06-11, USER-VERIFIED interactive: touch/typing/selection/scroll/slider/animation all work; renders text/widgets/gradient/shadow/ListView correctly, ~0.7% idle CPU): wandr.slint.test exercising text
       (sizes/weights), a TextInput (cursor/selection = parley metrics
       path), scroll, image, drop shadow, opacity animation. Deploy the
       new-verbs host + full stack restart (stale-zygote rule). Visual
       verification with the user (subjective outcome rule).
-- [ ] **M5 (only if M4 earns it)** — IME attach/detach, lifecycle,
-      clipboard, density/font-scale from the `window` interface.
+- [x] **M5 (keyboard + emoji, USER-VERIFIED 2026-06-11)** — IME
+      summon/dismiss + emoji fallback + multiline TextEdit all live:
+      * summon: `WindowAdapterInternal::input_method_request` (via
+        `WindowAdapter::internal`) → notify-editor-attached/-detached
+        (byte→char offset conversion; per-keystroke `Update` ignored).
+      * ‼️ first-keystroke SIGILL: `detect_operating_system()` on
+        target_family=wasm calls web_sys → js-sys panic; fixed by setting
+        `OPERATING_SYSTEM_OVERRIDE` → Android in init_platform.
+      * hide button = ESC (task-47 convention): intercept while attached →
+        blur focus item → Disable → detach; swallowed (back still works).
+      * tap-outside dismissal: post-dispatch rect test on the focus item.
+      * emoji: register device NotoColorEmoji (the /system-fonts preopen)
+        under `fontique::GenericFamily::Emoji` (parley's emoji query).
+      * TextEdit multiline + word-wrap + 2D cursor placement verified.
+      Remaining (unscheduled follow-ups): clipboard wiring, lifecycle
+      pause, font-scale, faux bold/italic + variable-font axes,
+      colorize-by-gradient, per-corner radii, image tiling.
+
+**TASK 100 COMPLETE** — Slint is a fully working guest-UI option on wandr.
+The adopt-vs-dioxus-canvas decision stays open (per the recorded verdict:
+dioxus-canvas remains production until the Slint DSL earns a switch).
 
 ## Known traps to carry in
 

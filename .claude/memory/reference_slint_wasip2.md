@@ -1,11 +1,26 @@
 ---
 name: reference_slint_wasip2
-description: "Slint on wandr is concretely feasible — wasip2 compiles (incl. the parley text stack); right seam = custom ItemRenderer over my:skiko-gfx (femtovg-style), NOT an impostor skia-safe; needs ~4 additive WIT verbs (typeface/draw-glyphs/shadow); effort ≈ 2-3 wandr-task-size"
+description: "Slint WORKS on wandr (task 100 COMPLETE 2026-06-11, user-verified) — crates/slint-wandr renderer + wandr.slint.test; gotchas = detect_operating_system browser-trap, ESC-as-hide convention, emoji via fontique GenericFamily::Emoji; dioxus-canvas stays production unless the DSL earns a switch"
 metadata: 
   node_type: memory
   type: reference
   originSessionId: 66372abf-b0cb-483c-b52e-5b3445aa9260
 ---
+
+**STATUS: SHIPPED + USER-VERIFIED (task 100, all of it on 2026-06-11).**
+`crates/slint-wandr` (Platform/WindowAdapter/RendererSealed/ItemRenderer/
+GlyphRenderer + `launch!` macro) + `apps/user/wandr.slint.test`. Render +
+touch + typing + selection + scroll + animation + IME summon/dismiss +
+emoji + multiline TextEdit all verified live on device (~0.7% idle CPU).
+Implementation gotchas (beyond the browser-trap below): keyboard hide
+button = ESC (task-47 convention — blur the focus item on it; swallow so
+`back` still works); tap-outside dismissal = post-dispatch rect test on
+the focus item; emoji = register the DEVICE NotoColorEmoji (via the
+/system-fonts preopen) under `fontique::GenericFamily::Emoji` — what
+parley queries for emoji clusters (SLINT_FONT_PATH would CLOBBER Inter's
+generic chains instead); wit-bindgen `generate!` with `inline` ALSO parses
+the crate's default `wit/` dir → `path: []` to stay hermetic. Original
+investigation (2026-06-10) below.
 
 **Slint on wandr guests — investigated 2026-06-10, spike completed same day
 (probe: /tmp/slint-probe; source inventory: /tmp/slint @ master 1.17.0-dev).**
@@ -53,6 +68,14 @@ metadata:
   input/frame-pacing/IME ≈ 2–3 wandr-task-units; WIT additions are a day
   (plus shared-WIT rebuild-all-consumers + zygote restart). Parley switch is
   master-only (1.17-dev) — build against git or wait for release.
+- ‼️ **Runtime browser-trap on wasip2** (bit us 2026-06-11, M4):
+  `i_slint_core::detect_operating_system()` is cfg'd `target_family="wasm"`
+  → `web_sys::window()` → js-sys "cannot access imported statics" panic →
+  SIGILL — called on EVERY key event (TextInput shortcut matching), so it
+  only fires on first keystroke, not render. Fix: set the public
+  `OPERATING_SYSTEM_OVERRIDE` (→ Android) in init_platform BEFORE any
+  Slint code runs (slint-wandr does). Same class of lurkers: `sys-locale`
+  (js feature) fires if bundled translations are used — untested.
 - License: tri-license (GPLv3 / royalty-free / commercial).
 - **Verdict vs dioxus-canvas**: now a real option, not a wall — but still not
   worth a migration for its own sake; dioxus-canvas already has
