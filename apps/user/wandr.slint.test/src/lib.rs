@@ -85,7 +85,7 @@ slint::slint! {
                     ]
                 }
                 Text {
-                    text: "gradient + shadow";
+                    text: "🎨 gradient + shadow";
                     color: white;
                     font-size: 16px;
                     font-weight: 600;
@@ -97,7 +97,7 @@ slint::slint! {
             // Scroll: drag the list (Flickable under ListView).
             ListView {
                 for i in 40: Text {
-                    text: "row " + i + " — the quick brown fox";
+                    text: "row " + i + " — the quick brown fox 🦊";
                     font-size: 14px;
                     color: i == 0 ? #ffd166 : #cccccc;
                     height: 28px;
