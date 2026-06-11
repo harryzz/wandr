@@ -79,6 +79,14 @@ pub fn init_platform() {
     use std::sync::Once;
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
+        // ‼️ Must be set BEFORE anything calls detect_operating_system():
+        // on target_family="wasm" its fallback queries web_sys::window()
+        // (browser-only) → js-sys "cannot access imported statics" panic →
+        // SIGILL. Hit live on the first keystroke (the shortcut-matching
+        // path in input.rs calls it). Android is the truthful answer and
+        // picks the right shortcut/dialog conventions.
+        i_slint_core::OPERATING_SYSTEM_OVERRIDE
+            .with(|o| o.set(Some(i_slint_core::OperatingSystemType::Android)));
         i_slint_core::platform::set_platform(Box::new(WandrPlatform))
             .expect("slint platform already set");
     });
