@@ -87,9 +87,34 @@ pub fn init_platform() {
         // picks the right shortcut/dialog conventions.
         i_slint_core::OPERATING_SYSTEM_OVERRIDE
             .with(|o| o.set(Some(i_slint_core::OperatingSystemType::Android)));
-        i_slint_core::platform::set_platform(Box::new(WandrPlatform))
-            .expect("slint platform already set");
+        // with_global_context installs the platform AND hands us the
+        // SlintContext, where the emoji fallback gets registered.
+        let _ = i_slint_core::context::with_global_context(
+            || Ok(Box::new(WandrPlatform)),
+            register_emoji_fallback,
+        );
     });
+}
+
+/// Slint's wasm builds embed only Inter (i-slint-common sharedfontique),
+/// which has no emoji coverage — emoji render as tofu. parley resolves
+/// emoji clusters through `fontique::GenericFamily::Emoji`, so register the
+/// device's color-emoji font (wandr-host preopens /system/fonts read-only
+/// at /system-fonts) under that family. Best-effort: missing font = tofu,
+/// not an error.
+fn register_emoji_fallback(ctx: &i_slint_core::SlintContext) {
+    const EMOJI_FONT: &str = "/system-fonts/NotoColorEmoji.ttf";
+    let Ok(bytes) = std::fs::read(EMOJI_FONT) else {
+        canvas::log_message("slint-wandr: no emoji font at /system-fonts/NotoColorEmoji.ttf");
+        return;
+    };
+    use i_slint_core::textlayout::sharedparley::fontique;
+    let mut font_ctx = ctx.font_context().borrow_mut();
+    let fonts = font_ctx.collection.register_fonts(bytes.into(), None);
+    font_ctx.collection.append_generic_families(
+        fontique::GenericFamily::Emoji,
+        fonts.iter().map(|(family_id, _)| *family_id),
+    );
 }
 
 // ─── window adapter ──────────────────────────────────────────────────────────
@@ -101,6 +126,9 @@ pub struct WandrWindowAdapter {
     renderer: WandrRenderer,
     size: Cell<i_slint_core::api::PhysicalSize>,
     needs_redraw: Cell<bool>,
+    /// An editor is focused and the wandr keyboard overlay is engaged
+    /// (set by input_method_request Enable/Disable).
+    ime_attached: Cell<bool>,
 }
 
 impl WandrWindowAdapter {
@@ -111,6 +139,7 @@ impl WandrWindowAdapter {
             renderer: WandrRenderer::default(),
             size: Cell::new(i_slint_core::api::PhysicalSize::new(w, h)),
             needs_redraw: Cell::new(true),
+            ime_attached: Cell::new(false),
         });
         let density = host_window::get_density().max(0.1);
         adapter
@@ -120,6 +149,23 @@ impl WandrWindowAdapter {
             size: i_slint_core::api::LogicalSize::new(w as f32 / density, h as f32 / density),
         });
         adapter
+    }
+
+    /// Blur the focused editor (Slint fires FocusOut → our
+    /// input_method_request(Disable) → notify-editor-detached → the
+    /// arbiter hides the keyboard overlay). Used by the keyboard's hide
+    /// button (which arrives as ESC, the task-47 convention) and by
+    /// tap-outside-the-editor dismissal.
+    fn clear_editor_focus(&self) {
+        let window_inner = WindowInner::from_pub(&self.window);
+        let focus = window_inner.focus_item.borrow().clone();
+        if let Some(item) = focus.upgrade() {
+            window_inner.set_focus_item(
+                &item,
+                false,
+                i_slint_core::items::FocusReason::Programmatic,
+            );
+        }
     }
 
     /// One full frame through the canvas WIT. The host clears + presents
@@ -215,8 +261,12 @@ impl i_slint_core::window::WindowAdapterInternal for WandrWindowAdapter {
                     cursor.min(anchor),
                     cursor.max(anchor),
                 );
+                self.ime_attached.set(true);
             }
-            R::Disable => host_ime::notify_editor_detached(),
+            R::Disable => {
+                host_ime::notify_editor_detached();
+                self.ime_attached.set(false);
+            }
             _ => {}
         }
     }
@@ -388,6 +438,26 @@ pub fn handle_pointer_event(_pointer_id: u32, kind: PointerKind, x: f32, y: f32)
             PointerKind::Scroll => return,
         };
         adapter.window.dispatch_event(event);
+
+        // Android keyboard UX: a tap OUTSIDE the focused editor dismisses
+        // the keyboard. Checked AFTER dispatch so focus moves (and possible
+        // re-attach to another editor) settle first; if an editor is still
+        // attached and the tap landed outside its rect, blur it.
+        if kind == PointerKind::Down && adapter.ime_attached.get() {
+            let window_inner = WindowInner::from_pub(&adapter.window);
+            let focus = window_inner.focus_item.borrow().clone();
+            if let Some(item) = focus.upgrade() {
+                let origin = item.map_to_window(i_slint_core::lengths::LogicalPoint::default());
+                let size = item.geometry().size;
+                let inside = position.x >= origin.x
+                    && position.x <= origin.x + size.width
+                    && position.y >= origin.y
+                    && position.y <= origin.y + size.height;
+                if !inside {
+                    adapter.clear_editor_focus();
+                }
+            }
+        }
     });
 }
 
@@ -396,6 +466,24 @@ pub fn handle_pointer_event(_pointer_id: u32, kind: PointerKind, x: f32, y: f32)
 /// dioxus-canvas consumes) — mapped to Slint's special-key code points.
 pub fn handle_key_event(down: bool, code_point: u32, key_id: u32) {
     use i_slint_core::platform::Key;
+    // The wandr keyboard's hide button arrives as ESC (the task-47
+    // convention: "reuse the lose-focus path"). While an editor is
+    // attached, ESC means "dismiss the keyboard": blur the editor (which
+    // detaches + hides the overlay) and swallow the key — matching the
+    // Android back-closes-keyboard behavior. With no editor attached, ESC
+    // flows through (arbiter `back` routes it to the app).
+    if key_id == 27 && down {
+        let mut dismissed = false;
+        with_adapter(|adapter| {
+            if adapter.ime_attached.get() {
+                adapter.clear_editor_focus();
+                dismissed = true;
+            }
+        });
+        if dismissed {
+            return;
+        }
+    }
     let ch: Option<char> = match key_id {
         8 => Some(Key::Backspace.into()),
         9 => Some(Key::Tab.into()),
