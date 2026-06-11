@@ -64,6 +64,54 @@ advocates against (or stays on its own package — coexistence again).
 4. **`.cwasm` cache keys.** A guest that adopts `wasi:canvas` changes its
    import shape → fresh AOT compile at install. Normal reinstall flow.
 
+## Checked against WASI's own rules (2026-06-11, WebAssembly/WASI@main)
+
+Question: does the "drawing only — no event loop, no windowing, canvas
+handed by the embedder" scope violate any WASI process rule or design
+principle? **No — every relevant rule points the same direction as the
+draft, and one rule makes the draft's resource design MANDATORY:**
+
+1. **In-charter.** The WASI Subgroup Charter's Scope list explicitly
+   includes "APIs for graphics, audio, input devices" (docs/Charter.md).
+2. **Partial-host implementability is explicitly blessed.**
+   DesignPrinciples.md, Portability: "WASI's modular nature means that
+   engines don't need to implement every API in WASI, so we don't need to
+   exclude APIs just because some host environments can't implement
+   them… we'll ultimately decide whether something is 'portable enough'
+   on an API-by-API basis." A canvas no server host implements is fine.
+3. **Decoupling is the prescribed style, not a deviation.**
+   DesignPrinciples.md, Modularity: "WASI will include many interfaces
+   that are not appropriate for every host environment, so WASI uses the
+   component model's worlds mechanism to allow specific sets of APIs…" —
+   splitting drawing from windowing/events is exactly this (and wasi-gfx
+   itself splits webgpu/surface/frame-buffer into separate packages).
+4. **Host-driven (reactor) guests are core WASI practice.** wasi:http's
+   `proxy` world `export incoming-handler` — the HOST invokes the guest
+   per request, the precise shape of wandr's render-frame model. Nothing
+   anywhere mandates guest-owned loops; WASI 0.2's only event primitive
+   (pollables) is itself just another importable interface.
+5. **Capability rules REQUIRE the draft's resource design.**
+   DesignPrinciples.md: "All access to external resources is provided by
+   capabilities… WASI has no ambient authorities, meaning there are no
+   global namespaces at runtime." Capabilities.md: multiple simultaneous
+   resources (our main + offscreen canvases) ⇒ handles. Notably,
+   `my:skiko-gfx`'s ambient module-level draw functions + u32 id
+   namespaces would NOT pass this rule — the draft's canvas-as-handle
+   (handed by the embedder = a runtime capability) is not just cleaner,
+   it's the only standardizable shape.
+6. **Interposition must be possible** (DesignPrinciples.md): any WASI API
+   should be implementable by another component. The draft is plain
+   funcs + resources, so a wasm interposer works — including the
+   "wasi:canvas implemented over wasi:webgpu" layering, which this
+   principle actively wants to exist.
+
+Likely review pressure (not a blocker, noted for the eventual phase-0):
+the resource STATICS (`shader.linear-gradient`, `image.decode`,
+`canvas.new-offscreen`) are link-time capabilities, which the principles
+say to use "sparingly" — a reviewer may ask for a `graphics` factory
+resource handed by the embedder so that even creation flows through a
+handle. Cheap to refactor if asked; semantics unchanged.
+
 ## Verdict
 
 **Proceed with the draft.** No hard breaks under the coexistence strategy;
