@@ -18,6 +18,7 @@
 mod dom;
 mod events;
 mod launch; // defines the exported `launch!` macro
+mod launch_wasi; // `launch_wasi_canvas!` — the wasi:canvas backend (stage 2)
 mod sink;
 mod style;
 
@@ -35,6 +36,7 @@ pub use sink::{CanvasSink, Fill};
 /// [`launch!`] macro invokes `generate!` through this path. Not a stable API.
 #[doc(hidden)]
 pub use wit_bindgen as __wit_bindgen;
+pub use launch_wasi::w3c_code_to_key_id;
 
 /// Per-text-leaf measurement context handed to taffy.
 struct TextCtx {

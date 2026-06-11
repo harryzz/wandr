@@ -19,7 +19,7 @@ static UI_SCALE: AtomicU32 = AtomicU32::new(0x3FC0_0000);
 // The entire wandr backend (WIT imports + exports, sink, IME bridge, renderer
 // wiring) comes from the library. The only app-specific render-time behaviour is
 // pushing the runtime UI scale each frame.
-dioxus_canvas::launch!(app,
+dioxus_canvas::launch_wasi_canvas!(app,
     pre_frame: |r| r.set_scale(f32::from_bits(UI_SCALE.load(Ordering::Relaxed))));
 
 // ── The component gallery ────────────────────────────────────────────────
