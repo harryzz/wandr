@@ -89,8 +89,12 @@ variant, since its renderer already speaks the same shapes.
    UPGRADED fidelity: per-corner radii (max-corner approximation
    retired), real fill rules, blur-on-paint shadows, owned shader/image/
    typeface resources that drop themselves. Verified live on the desktop
-   host (`--features wasi-canvas`), interactive, frame times same order
-   as the u32-id port (~6–10 ms @ 500x1000 CPU raster; rigorous
-   handle-overhead measurement still pending a device run).
+   host (`--features wasi-canvas`, CPU raster) AND on the Pixel 2 XL
+   under --no-art (GPU GL path, AOT cwasm, host serving BOTH canvas
+   packages at once) — same wasm binary in both places. Frame times
+   same order as the u32-id port. Open look-later: fluent control
+   backgrounds render grey vs the old port's white (consistent on both
+   backends — a real delta in the port, likely palette/alpha related,
+   cosmetic).
 3. Let the surface harden; then consider the WASI phase-0 conversation,
    positioned as wasi-gfx's 2D companion (champion overlap natural).
