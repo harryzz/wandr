@@ -1,6 +1,6 @@
 ---
 name: wasi-cabi-realloc-export-block
-description: "Host→guest WIT calls with record-with-strings params throw \"Can't create new allocators while realloc-allocated memory is not freed\" via wasmtime's typed export lowering. Workaround in task 49 step 1b: use bare primitive params (no records, no strings) on host→guest exports. Existing freeAll-at-start covers guest→host imports."
+description: "SUPERSEDED 2026-06-11 by repros/kt-export-record-spike: host→guest exports CAN carry records-with-strings on the Tier-2 stdlib (2.4.258) IFF the wrapper lifts ALL args before any scoped allocation (freeAll→lift→scoped, the official Kotlin/wit-bindgen order) — 100k/100k pass; late-lift corrupts 100k/100k. The old 'primitive-only' rule was the right call on the OLD stdlib (cabi_realloc threw at lowering time); shipped IME contract stays primitive until someone needs richer."
 metadata: 
   node_type: memory
   type: feedback
@@ -78,6 +78,25 @@ pollution source is some other call path between frames. Until
 the root cause is fixed, host→guest record-with-strings is a
 landmine. Primitive params sidestep the entire `cabi_realloc`
 codepath.
+
+**RESOLVED 2026-06-11 — `repros/kt-export-record-spike`:** on the
+production stack (2.4.0-RC compiler + **2.4.258-SNAPSHOT Tier-2 stdlib** +
+wandr-fork adapter + wasmtime 45), the host lowering `cabi_realloc` calls
+NO LONGER throw (the "can't create new allocators" guard was the OLD
+allocator design; Tier-2's persistent realloc allocator removed it), and
+host→guest record-with-strings args survive **100,000/100,000** randomized
+calls (0 B–64 KB, multi-byte UTF-8) — **iff the export wrapper lifts every
+arg before the first `withScopedMemoryAllocator` allocation**
+(freeAll → lift → scoped; the order JetBrains' Kotlin/wit-bindgen emits).
+The positive control (freeAll → scoped scribble → lift) corrupted
+100,000/100,000 — args really do sit in the arena scoped allocs reuse, so
+the ordering IS the entire safety contract. New rule: rich export args are
+allowed; lift-before-alloc is mandatory; primitives remain fine where they
+ship today (IME contract unchanged). Caveats: desktop-JIT spike,
+flat-params path only (≤16); re-verify on AOT/arm64 + the indirect-args
+spill case before adopting in production bindings.
+
+**Historical notes below (old stdlib era) — kept for the failure modes:**
 
 **To revisit later** (open question):
 

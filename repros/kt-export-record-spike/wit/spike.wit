@@ -1,0 +1,30 @@
+// Spike: can a Kotlin/Wasm guest EXPORT a function taking a record with
+// strings? (The wasi:input-handlers shape — code/text are strings.) The
+// canonical ABI makes the HOST lower the strings into guest memory via the
+// guest's cabi_realloc BEFORE the export body runs; Kotlin's single
+// linear-memory arena + freeAll discipline made this historically unsafe
+// (feedback_wasi_cabi_realloc_export_block).
+//
+// Two exports, same payload:
+// - on-key:           official-generator ordering (freeAll -> lift -> scoped)
+// - on-key-late-lift: deliberately WRONG ordering (freeAll -> scoped scribble
+//                     -> lift) — the positive control that shows whether the
+//                     spike can detect arg clobbering at all.
+package wandr:spike@0.1.0;
+
+interface handler {
+    record key-event {
+        code: string,
+        text: string,
+        mods: u32,
+        repeat: bool,
+    }
+
+    /// Returns FNV-1a-32 over (code-bytes ++ text-bytes ++ mods-le ++ repeat).
+    on-key: func(ev: key-event) -> u32;
+    on-key-late-lift: func(ev: key-event) -> u32;
+}
+
+world spike-guest {
+    export handler;
+}

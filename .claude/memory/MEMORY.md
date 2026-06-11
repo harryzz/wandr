@@ -105,7 +105,7 @@
 - [wasmtime AOT compile flags](feedback_wasmtime_compile.md) — needs gc/function-references/exceptions for Kotlin output.
 - [Gradle build directory](feedback_gradle_build_dir.md) — build from skiko/skiko/, not skiko/.
 - [wasmWasi reallocAllocator pollution](feedback_wasi_realloc_allocator.md) — freeAll at the start of EVERY WIT import, forever.
-- [cabi_realloc blocks host→guest records](feedback_wasi_cabi_realloc_export_block.md) — keep host→guest exports primitive-only.
+- [✅ host→guest records-with-strings WORK (was: primitive-only)](feedback_wasi_cabi_realloc_export_block.md) — spike-proven 100k/100k on Tier-2 stdlib IFF wrapper lifts all args before any scoped alloc (freeAll→lift→scoped); late-lift corrupts 100%; repro = repros/kt-export-record-spike.
 - [currentNanoTime traps WIT imports](feedback_currentnanotime_pollutes.md) — avoid near WIT imports; freeAll doesn't clear it.
 - [PathBuilder shim recursion](feedback_pathbuilder_recursion.md) — missing method → infinite recursion → SIGSEGV.
 - [Compose child-layer drawLayer break](feedback_compose_interactivity.md) — child OwnedLayers never drawn; pictures stay records=1.
