@@ -1,5 +1,5 @@
-TASK=101
+TASK=102
 STEP=verify-done
 STATUS=complete
-LAST_SUCCESS=Task 101 verified OK — desktop dev loop live (same wasm as device, WSLg-verified) + key-input v3 HW-keyboard-verified
-NOTES=Recipe in docs/build-pipeline.md "Desktop dev loop"; narrative tasks/101-desktop-dev-loop.md; memory project_desktop_dev_loop. Edges: scroll-wheel unmapped, no desktop IME overlay.
+LAST_SUCCESS=Task 102 Stage 1 verified OK — Kotlin wasi:canvas spike (generated bindings, rev 6b9cb12) renders all ABI categories, desktop + device, RSS flat
+NOTES=apps/user/wandr.ktcanvas.test; recipe in feedback_wit_bindgen_no_kotlin_generator memory; stage map in proposals/wasi-canvas/README.md. Next: Stage 2 = skiko canvas binding regen/port behind a switch (open design Q: WasiDrawable layers stay my:skiko-gfx).

@@ -1,0 +1,117 @@
+package wasi:canvas@0.0.1;
+
+// wasi:canvas text — DRAFT. Two deliberately separate layers, because the
+// shipped consumers split exactly this way (wandr task 100 + skia-wit
+// mapping):
+//
+// * `glyphs` — the portable FLOOR. Guests that shape text themselves
+//   (parley/HarfBuzz-class: Slint, Avalonia) register font bytes and draw
+//   positioned glyph runs. Glyph ids are only meaningful against the
+//   exact bytes they were shaped from, which is why the typeface is
+//   constructed FROM guest bytes.
+// * `layout` — OPTIONAL host-side paragraph layout, for guests whose
+//   runtime cannot ship a shaper (managed runtimes: Kotlin/Compose-class)
+//   or that want host text caches. Embedders MAY omit it; the canonical
+//   feature test is instantiation-time (a world that imports `layout`
+//   fails to instantiate on a host without it).
+
+
+interface glyphs {
+    use types.{paint, point};
+    use draw.{canvas};
+
+    /// A font face built from the guest's own font bytes (`index` selects
+    /// a face within a collection). The host must use these exact bytes —
+    /// glyph ids from the guest's shaper refer to them.
+    resource typeface {
+        from-bytes: static func(bytes: list<u8>, index: u32)
+                    -> result<typeface>;
+    }
+
+    /// One positioned glyph (id from the guest's shaper; position in
+    /// canvas units, relative to the run's `origin`).
+    record positioned-glyph {
+        id: u32,
+        at: point,
+    }
+
+    /// Draw a shaped glyph run. `size` is the em size in canvas units.
+    /// Variable-font axes and synthetic bold/italic are not in the draft
+    /// (record provenance: deferred in wandr too).
+    draw-glyphs: func(canvas: borrow<canvas>, typeface: borrow<typeface>,
+                      size: f32, glyphs: list<positioned-glyph>,
+                      origin: point, paint: paint);
+}
+
+/// OPTIONAL host-side paragraph layout. The contract follows the
+/// host-shaped model wandr ships for Compose (skparagraph-derived,
+/// de-Skia'd): build styled text, lay it out at a width, query metrics,
+/// paint onto a canvas. All queries return values directly (no indexed
+/// getters — those were a guest-binding artifact, not a design).
+interface layout {
+    use types.{color, rect, point};
+    use draw.{canvas};
+
+    record text-style {
+        /// Font family name resolved by the HOST's font collection
+        /// (host-owned fonts is the point of this layer). Empty = default.
+        family:    string,
+        size:      f32,
+        /// CSS-numeric weight (400 normal, 700 bold).
+        weight:    u32,
+        italic:    bool,
+        color:     color,
+        letter-spacing: f32,
+        /// Line height as a multiple of the font size; 0 = font default.
+        line-height:    f32,
+    }
+
+    enum align { start, center, end, justify }
+
+    record line-metrics {
+        start-offset: u32,   // UTF-8 byte offsets into the paragraph text
+        end-offset:   u32,
+        baseline:     f32,
+        ascent:       f32,
+        descent:      f32,
+        left:         f32,
+        width:        f32,
+    }
+
+    resource paragraph {
+        layout:              func(width: f32);
+        paint:               func(canvas: borrow<canvas>, at: point);
+        height:              func() -> f32;
+        max-intrinsic-width: func() -> f32;
+        min-intrinsic-width: func() -> f32;
+        alphabetic-baseline: func() -> f32;
+        lines:               func() -> list<line-metrics>;
+        /// Caret/selection geometry for a UTF-8 byte range.
+        rects-for-range:     func(start: u32, end: u32) -> list<rect>;
+        /// Nearest text position (UTF-8 byte offset) to a point.
+        offset-at:           func(at: point) -> u32;
+        /// [start, end) of the word containing `offset`.
+        word-boundary:       func(offset: u32) -> tuple<u32, u32>;
+    }
+
+    resource paragraph-builder {
+        new:        static func(default-style: text-style, align: align)
+                    -> paragraph-builder;
+        push-style: func(style: text-style);
+        pop-style:  func();
+        add-text:   func(text: string);
+        /// Consumes the builder.
+        build:      static func(b: paragraph-builder) -> paragraph;
+    }
+}
+
+/// Portable text floor: shaping in the guest, glyphs over the wire.
+world text-guest {
+    import glyphs;
+}
+
+/// Full text world for managed-runtime guests (host shapes).
+world text-full {
+    import glyphs;
+    import layout;
+}

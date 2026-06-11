@@ -97,4 +97,25 @@ deps from WANDR_APPS_ROOT; pull dep components from the phone — wasm is
 target-independent) + desktop `--install`; ime-inbound key failure log
 prints `{e:?}`.
 
+**Kotlin wasi:canvas migration (task 102) — Stage 1 DONE 2026-06-11:**
+`apps/user/wandr.ktcanvas.test` = bare-Kotlin spike with bindings GENERATED
+by the Kotlin wit-bindgen fork (rev 6b9cb12, recipe in
+[[wit-bindgen-no-kotlin-generator]]) — imports wasi:canvas
+{types,draw,layout,embedding}, exports my:skiko-gfx/renderer, all from ONE
+generator pass, ZERO hand-written ABI code. Desktop + device verified
+(~1-2ms/frame desktop, RSS flat under per-frame paragraph/canvas churn).
+Every hot ABI shape proven: spilled paint blobs, shader borrow-in-record,
+gradient list<tuple>, SVG-path strings, mask-blur option<record>,
+lines() list<record> lift, offscreen→snapshot→draw-image, resource close().
+Stage map (recorded in proposals/wasi-canvas/README.md): 2 = skiko binding
+regen/port behind a switch; 3 = skiko text → layout; 4 = wandr-app +
+wandr.ime.keyboard world cutover (my:skiko-gfx keeps window/IME/lifecycle +
+WasiDrawable layers — the live-transform machinery is deliberately NOT in
+wasi:canvas, open stage-2 design question). Gotchas: WSLg Wayland resets the
+desktop host connection after a few seconds — use `WINIT_UNIX_BACKEND=x11
+WAYLAND_DISPLAY=`; screenshot via `xwd -name "WASM Android Runtime"` +
+ffmpeg (gnome-screenshot/xwd-root fail under WSLg); on-disk
+wandr.slint.test components/ui.wasm predates the canvas-context realignment
+and no longer instantiates (rebuild before using it as a desktop reference).
+
 Related: [[reference_slint_wasip2]], [[feedback_shared_wit_rebuild_all_consumers]].
