@@ -92,9 +92,14 @@ variant, since its renderer already speaks the same shapes.
    host (`--features wasi-canvas`, CPU raster) AND on the Pixel 2 XL
    under --no-art (GPU GL path, AOT cwasm, host serving BOTH canvas
    packages at once) — same wasm binary in both places. Frame times
-   same order as the u32-id port. Open look-later: fluent control
-   backgrounds render grey vs the old port's white (consistent on both
-   backends — a real delta in the port, likely palette/alpha related,
-   cosmetic).
+   same order as the u32-id port. The 'grey controls' delta root-caused +
+   fixed: the OLD pipeline REPLACED color alpha with paint alpha
+   (rendering fluent's semi-transparent light fills as opaque white);
+   the draft pipeline multiplies faithfully, which exposed that Slint
+   was drawing the LIGHT palette over wandr's dark chrome. Fix =
+   slint-wandr wires the host theme (my:skiko-gfx/theme.get-night-mode)
+   into SlintContext::set_color_scheme → fluent dark — i.e. the proving
+   consumer caught a real fidelity bug in the legacy pipeline, working
+   as intended.
 3. Let the surface harden; then consider the WASI phase-0 conversation,
    positioned as wasi-gfx's 2D companion (champion overlap natural).

@@ -52,7 +52,7 @@ mod bindings {
         world: "slint-wandr-imports",
     });
 }
-pub(crate) use bindings::my::skiko_gfx::{ime as host_ime, window as host_window};
+pub(crate) use bindings::my::skiko_gfx::{ime as host_ime, theme as host_theme, window as host_window};
 
 /// Drawing comes from the wasi:canvas DRAFT (proposals/wasi-canvas) — this
 /// crate is its proving consumer. Single source of truth: the generate!
@@ -105,10 +105,14 @@ pub fn init_platform() {
         i_slint_core::OPERATING_SYSTEM_OVERRIDE
             .with(|o| o.set(Some(i_slint_core::OperatingSystemType::Android)));
         // with_global_context installs the platform AND hands us the
-        // SlintContext, where the emoji fallback gets registered.
+        // SlintContext: register the emoji fallback + pick the color
+        // scheme from the host theme (fluent light/dark palette).
         let _ = i_slint_core::context::with_global_context(
             || Ok(Box::new(WandrPlatform)),
-            register_emoji_fallback,
+            |ctx| {
+                register_emoji_fallback(ctx);
+                apply_host_color_scheme(ctx);
+            },
         );
     });
 }
@@ -132,6 +136,22 @@ fn register_emoji_fallback(ctx: &i_slint_core::SlintContext) {
         fontique::GenericFamily::Emoji,
         fonts.iter().map(|(family_id, _)| *family_id),
     );
+}
+
+/// Map the host night-mode to Slint's ColorScheme so style palettes
+/// (fluent light/dark) match the platform. Found the hard way: the
+/// wasi:canvas port renders brush alpha FAITHFULLY, which exposed that
+/// Slint had been drawing the LIGHT palette (semi-transparent white
+/// control fills) over wandr's dark chrome — the old pipeline's
+/// alpha-replace bug had masked it as opaque white. Auto → Dark (wandr's
+/// chrome default).
+fn apply_host_color_scheme(ctx: &i_slint_core::SlintContext) {
+    use i_slint_core::items::ColorScheme;
+    let scheme = match host_theme::get_night_mode() {
+        host_theme::NightMode::Off => ColorScheme::Light,
+        host_theme::NightMode::On | host_theme::NightMode::Auto => ColorScheme::Dark,
+    };
+    ctx.set_color_scheme(scheme);
 }
 
 // ─── window adapter ──────────────────────────────────────────────────────────

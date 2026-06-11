@@ -24,7 +24,24 @@ interface ime {
     notify-editor-detached: func();
 }
 
+/// System UI theme (night mode) — drives Slint's color scheme so the
+/// fluent palette matches the platform (dark chrome on wandr).
+interface theme {
+    enum night-mode {
+        /// System schedule / no explicit preference — pick a default
+        /// (wandr chrome is dark; guests default dark).
+        auto,
+        /// Light theme requested.
+        off,
+        /// Dark theme requested.
+        on,
+    }
+    get-night-mode:   func() -> night-mode;
+    get-accent-color: func() -> u32;
+}
+
 world slint-wandr-imports {
     import window;
     import ime;
+    import theme;
 }
