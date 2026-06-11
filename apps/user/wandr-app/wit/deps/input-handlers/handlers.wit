@@ -1,0 +1,76 @@
+package wasi:input-handlers@0.0.1;
+
+// DRAFT (wandr, 2026-06-11) — push-model input for HOST-DRIVEN (reactor)
+// runtimes: the guest EXPORTS handlers, the embedder calls them. The
+// reactor-model counterpart to wasi:surface's guest-pulled pollables
+// (precedent for handler exports: wasi:http's incoming-handler). Pairs
+// naturally with wasi:canvas + its embedding interface, completing the
+// my:skiko-gfx-free guest. Hosts probe each interface independently and,
+// per input type, route EXCLUSIVELY to a bound handler (legacy paths only
+// when unbound) — so guests exporting both never see duplicates.
+
+/// Pointer/touch/mouse. Coordinates are surface units (physical px),
+/// matching the canvas the guest draws into.
+interface pointer-handler {
+    enum kind { down, up, move, scroll, cancel }
+
+    record pointer-event {
+        /// Multi-touch pointer id (0 = first finger / the mouse).
+        id: u32,
+        kind: kind,
+        x: f32,
+        y: f32,
+        /// 0.0..1.0; 0.0 when the device doesn't report pressure.
+        pressure: f32,
+        /// Scroll deltas (kind == scroll only; surface units).
+        scroll-dx: f32,
+        scroll-dy: f32,
+        alt: bool,
+        ctrl: bool,
+        meta: bool,
+        shift: bool,
+    }
+
+    on-pointer: func(ev: pointer-event);
+}
+
+/// Keyboard — the W3C UIEvents model (same record as
+/// my:skiko-gfx/key-input, which this supersedes for new-style guests):
+/// `code` = the physical-key token ("KeyA", "ArrowLeft", …;
+/// https://w3c.github.io/uievents-code/), "" if unidentified; `text` =
+/// the produced text, layout- and modifier-resolved by the host.
+interface key-handler {
+    record key-event {
+        down:   bool,
+        repeat: bool,
+        code:   string,
+        text:   string,
+        alt:    bool,
+        ctrl:   bool,
+        meta:   bool,
+        shift:  bool,
+    }
+
+    on-key: func(ev: key-event);
+}
+
+/// Frame driving + surface geometry, for embedders that own the render
+/// loop. `on-frame` is where a wasi:canvas guest brackets its drawing
+/// with embedding.begin-frame/end-frame.
+interface frame-handler {
+    on-frame:  func(nanos: u64);
+    on-resize: func(width: u32, height: u32);
+}
+
+/// What a full new-style guest exports.
+world input-guest {
+    export pointer-handler;
+    export key-handler;
+    export frame-handler;
+}
+
+/// Probe-only worlds — hosts bind each independently after instantiation
+/// (a guest may take any subset).
+world pointer-handler-world { export pointer-handler; }
+world key-handler-world     { export key-handler; }
+world frame-handler-world   { export frame-handler; }

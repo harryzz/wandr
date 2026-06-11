@@ -21,4 +21,11 @@ world ime-keyboard {
     // Task 64 — optional on-demand-render hint; a hidden/idle keyboard returns
     // IDLE so the host stops rendering it 60 fps. See RendererExports.kt.
     export my:skiko-gfx/frame-pacing@0.1.0;
+    // wasi:input-handlers migration — exclusive push-model input routing
+    // (see wandr-app's world note + repros/kt-export-record-spike).
+    export wasi:input-handlers/pointer-handler@0.0.1;
+    // key-handler NOT exported: host key lowering into Kotlin guests dies
+    // with an uncatchable wasm exception (under investigation — see
+    // project_wasi_canvas_migration memory); keys ride legacy on-key-event-v2.
+    export wasi:input-handlers/frame-handler@0.0.1;
 }

@@ -13,4 +13,14 @@ world wandr-app {
     // skiko-ui) so the host can gate render-frame; see frame-pacing in the
     // skiko-gfx deps + RendererExports.kt's @WasmExport.
     export my:skiko-gfx/frame-pacing@0.1.0;
+    // wasi:input-handlers migration — the host routes input/frame EXCLUSIVELY
+    // to these once bound (legacy renderer verbs stay exported for
+    // lifecycle/scheduled-callback + as the contract baseline). The key
+    // handler receives records-with-strings: safe per the lift-before-alloc
+    // contract (repros/kt-export-record-spike, 100k/100k JIT+AOT).
+    export wasi:input-handlers/pointer-handler@0.0.1;
+    // key-handler NOT exported: host key lowering into Kotlin guests dies
+    // with an uncatchable wasm exception (under investigation — see
+    // project_wasi_canvas_migration memory); keys ride legacy on-key-event-v2.
+    export wasi:input-handlers/frame-handler@0.0.1;
 }
