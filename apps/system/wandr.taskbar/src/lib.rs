@@ -46,6 +46,20 @@ thread_local! {
     static STATE: RefCell<State> = RefCell::new(State::default());
 }
 
+// wasi:canvas canvas-context (wasi-gfx graphics-context idiom): one per
+// surface, lazily acquired; frames bracket via get-current-buffer/present.
+thread_local! {
+    static WCTX: RefCell<Option<wembed::CanvasContext>> = const { RefCell::new(None) };
+}
+fn wctx<R>(f: impl FnOnce(&wembed::CanvasContext) -> R) -> R {
+    WCTX.with(|c| {
+        if c.borrow().is_none() {
+            *c.borrow_mut() = Some(wembed::get_context());
+        }
+        f(c.borrow().as_ref().unwrap())
+    })
+}
+
 fn paint(color: u32) -> wtypes::Paint<'static> {
     wtypes::Paint {
         style: wtypes::PaintStyle::Fill,
@@ -105,7 +119,7 @@ impl Guest for Taskbar {
     fn render_frame(_nanos: u64) {
         STATE.with(|st| {
             let mut s = st.borrow_mut();
-            let cv = wembed::begin_frame();
+            let cv = wctx(|x| x.get_current_buffer());
             if s.w == 0.0 {
                 s.w = cv.width();
                 s.h = cv.height();
@@ -136,7 +150,7 @@ impl Guest for Taskbar {
                 draw_icon(&cv, i, third * (i as f32 + 0.5), cy, r);
             }
             drop(cv);
-            wembed::end_frame();
+            wctx(|x| x.present());
 
             s.frame = frame.wrapping_add(1);
         });

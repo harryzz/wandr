@@ -50,6 +50,20 @@ thread_local! {
     static STATE: RefCell<State> = RefCell::new(State::default());
 }
 
+// wasi:canvas canvas-context (wasi-gfx graphics-context idiom): one per
+// surface, lazily acquired; frames bracket via get-current-buffer/present.
+thread_local! {
+    static WCTX: RefCell<Option<wembed::CanvasContext>> = const { RefCell::new(None) };
+}
+fn wctx<R>(f: impl FnOnce(&wembed::CanvasContext) -> R) -> R {
+    WCTX.with(|c| {
+        if c.borrow().is_none() {
+            *c.borrow_mut() = Some(wembed::get_context());
+        }
+        f(c.borrow().as_ref().unwrap())
+    })
+}
+
 const BG: u32 = 0xFF1A1A2E;
 const TILE_PALETTE: [u32; 8] = [
     0xFF4285F4, 0xFFEA4335, 0xFFFBBC05, 0xFF34A853,
@@ -211,7 +225,7 @@ impl Guest for Launcher {
     fn render_frame(_nanos: u64) {
         STATE.with(|st| {
             let mut s = st.borrow_mut();
-            let cv = wembed::begin_frame();
+            let cv = wctx(|x| x.get_current_buffer());
             if s.w == 0.0 {
                 s.w = cv.width();
                 s.h = cv.height();
@@ -233,7 +247,7 @@ impl Guest for Launcher {
                 }
             }
             drop(cv);
-            wembed::end_frame();
+            wctx(|x| x.present());
         });
     }
 

@@ -169,6 +169,7 @@ pub struct WandrWindowAdapter {
     /// The wasi:canvas creation factory (embedding.get-graphics) —
     /// acquired once, lives as long as the adapter.
     graphics: std::cell::OnceCell<wdraw::Graphics>,
+    context: std::cell::OnceCell<wembed::CanvasContext>,
 }
 
 impl WandrWindowAdapter {
@@ -183,6 +184,7 @@ impl WandrWindowAdapter {
             needs_redraw: Cell::new(true),
             ime_attached: Cell::new(false),
             graphics: std::cell::OnceCell::new(),
+            context: std::cell::OnceCell::new(),
         });
         let density = host_window::get_density().max(0.1);
         adapter
@@ -214,8 +216,9 @@ impl WandrWindowAdapter {
     fn render(&self) {
         let window_inner = WindowInner::from_pub(&self.window);
         let Some(window_adapter) = self.renderer.window_adapter() else { return };
-        let graphics = self.graphics.get_or_init(wembed::get_graphics);
-        let canvas = wembed::begin_frame();
+        let ctx = self.context.get_or_init(wembed::get_context);
+        let graphics = self.graphics.get_or_init(|| ctx.graphics());
+        let canvas = ctx.get_current_buffer();
         // The canvas handle carries the surface size — sync Slint's window
         // before drawing (covers both the first frame and embedder-side
         // resizes the on-resize export may not have delivered yet).
@@ -255,7 +258,7 @@ impl WandrWindowAdapter {
             post_render(&mut ir);
         });
         drop(canvas);
-        wembed::end_frame();
+        self.context.get().expect("context exists since render start").present();
     }
 }
 

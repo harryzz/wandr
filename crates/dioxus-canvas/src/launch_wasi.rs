@@ -313,9 +313,12 @@ interface layout {
 interface embedding {
     use draw.{canvas, graphics};
 
-    get-graphics: func() -> graphics;
-    begin-frame: func() -> canvas;
-    end-frame: func();
+    resource canvas-context {
+        graphics: func() -> graphics;
+        get-current-buffer: func() -> canvas;
+        present: func();
+    }
+    get-context: func() -> canvas-context;
 }
 
 world canvas-managed-guest {
@@ -381,6 +384,8 @@ macro_rules! wire_wasi_canvas {
         ::std::thread_local! {
             static __WC_FRAME: ::core::cell::RefCell<::core::option::Option<__wc_draw::Canvas>> =
                 ::core::cell::RefCell::new(::core::option::Option::None);
+            static __WC_CONTEXT: ::core::cell::RefCell<::core::option::Option<__wc_embed::CanvasContext>> =
+                ::core::cell::RefCell::new(::core::option::Option::None);
             static __WC_GRAPHICS: ::core::cell::RefCell<::core::option::Option<__wc_draw::Graphics>> =
                 ::core::cell::RefCell::new(::core::option::Option::None);
             static __WC_LAST_SIZE: ::core::cell::Cell<(f32, f32)> = ::core::cell::Cell::new((0.0, 0.0));
@@ -398,6 +403,19 @@ macro_rules! wire_wasi_canvas {
         }
 
         #[doc(hidden)]
+        /// The canvas-context (wasi-gfx graphics-context idiom), initialized on
+        /// first use — `get-context` is a factory, callable outside frames.
+        #[doc(hidden)]
+        fn __wc_ctx<R>(f: impl FnOnce(&__wc_embed::CanvasContext) -> R) -> R {
+            __WC_CONTEXT.with(|c| {
+                if c.borrow().is_none() {
+                    *c.borrow_mut() = ::core::option::Option::Some(__wc_embed::get_context());
+                }
+                f(c.borrow().as_ref().unwrap())
+            })
+        }
+
+        #[doc(hidden)]
         fn __wc_with_frame<R>(f: impl FnOnce(&__wc_draw::Canvas) -> R) -> ::core::option::Option<R> {
             __WC_FRAME.with(|c| c.borrow().as_ref().map(f))
         }
@@ -412,7 +430,7 @@ macro_rules! wire_wasi_canvas {
         fn __wc_graphics<R>(f: impl FnOnce(&__wc_draw::Graphics) -> R) -> R {
             __WC_GRAPHICS.with(|g| {
                 if g.borrow().is_none() {
-                    *g.borrow_mut() = ::core::option::Option::Some(__wc_embed::get_graphics());
+                    *g.borrow_mut() = ::core::option::Option::Some(__wc_ctx(|x| x.graphics()));
                 }
                 f(g.borrow().as_ref().unwrap())
             })
@@ -454,14 +472,14 @@ macro_rules! wire_wasi_canvas {
             }
             fn begin_frame(&mut self) {
                 __WC_FRAME.with(|c| {
-                    *c.borrow_mut() = ::core::option::Option::Some(__wc_embed::begin_frame());
+                    *c.borrow_mut() = ::core::option::Option::Some(__wc_ctx(|x| x.get_current_buffer()));
                 });
             }
             fn end_frame(&mut self) {
                 __WC_FRAME.with(|c| {
                     *c.borrow_mut() = ::core::option::Option::None;
                 });
-                __wc_embed::end_frame();
+                __wc_ctx(|x| x.present());
             }
             fn clear(&mut self, argb: u32) {
                 __wc_with_frame(|c| c.clear(argb));
