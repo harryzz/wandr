@@ -69,16 +69,26 @@ source-read), poisoning the instance ("cannot enter component instance",
 app exits). The clean-room spike passes 100k/100k, so the trigger is
 Compose-app runtime state — OPEN follow-up; host auto-falls-back to
 legacy on-key-event-v2 when key-handler is unbound, so typing works.
-ROOT-CAUSE PROGRESS (desktop --app + WANDR_DEBUG_SYNTH_KEY, commit
-3cf1a559): reproduces DETERMINISTICALLY on desktop JIT at frame 120;
-fails identically with an EMPTY on-key body (just freeAll) AND with
-cabi_realloc wrapped in catch(Throwable)+logMessage (catch never fires)
-→ the exception originates in the component lowering/trampoline OUTSIDE
-any wrappable Kotlin code. Next bisect ideas: empty-string key-event
-(skips realloc) vs non-empty; key-event with ONE string; check whether
-Kotlin's compiler-generated export adapter rethrows; wasmtime exception
-tag inspection. weston/WSLg was flaky during this work (SIGSEGV'd) —
-restart WSL before resuming desktop cycles.
+✅ ROOT-CAUSED + FIXED (2026-06-11, wandr 9e7a8fef + ~/xl/kotlin
+f0f3496ab748): Kotlin/Wasm wraps EVERY @WasmExport in an epilogue that
+calls kotlin.wasm.internal.invokeOnExportedFunctionExit on
+outermost-export exit — INCLUDING cabi_realloc. Host lowers export-arg
+strings → cabi_realloc's epilogue pumps kotlinx-coroutines' queued jobs
+(live Compose always has some) while realloc memory is pending →
+withScopedMemoryAllocator in pumped code throws "Can't create new
+allocators while realloc-allocated memory is not freed" → escapes
+uncatchably (compiler-generated epilogue, outside all user code) →
+poisons the instance. Found by reading the component WAT (wasm-tools
+print; the trap-classifier trick — distinct trap flavors as a message
+channel — proved the catch never ran). FIX: stdlib fork
+internalCallback.kt skips the pump while isComponentModelReallocPending();
+republish kotlin-stdlib-wasm-wasi 2.4.258-SNAPSHOT
+(`./gradlew :kotlin-stdlib:publishWasmWasiPublicationToMavenLocal` in
+~/xl/kotlin). Kotlin guests now export ALL THREE handlers; IME typing
+device-verified through key-handler. UPSTREAM-RELEVANT: hits anyone
+combining kotlinx-coroutines with host-lowered export args (JetBrains
+wit-bindgen flow included) — candidate for a KT issue + the KT-86415
+thread.
 Debug affordances added: desktop host `--app <id>` (resolves cross-app
 deps from WANDR_APPS_ROOT; pull dep components from the phone — wasm is
 target-independent) + desktop `--install`; ime-inbound key failure log
