@@ -49,7 +49,7 @@ mod bindings {
         world: "slint-wandr-imports",
     });
 }
-pub(crate) use bindings::my::skiko_gfx::{canvas, window as host_window};
+pub(crate) use bindings::my::skiko_gfx::{canvas, ime as host_ime, window as host_window};
 
 // ─── platform ────────────────────────────────────────────────────────────────
 
@@ -166,6 +166,51 @@ impl WindowAdapter for WandrWindowAdapter {
 
     fn request_redraw(&self) {
         self.needs_redraw.set(true);
+    }
+
+    fn internal(
+        &self,
+        _: i_slint_core::InternalToken,
+    ) -> Option<&dyn i_slint_core::window::WindowAdapterInternal> {
+        Some(self)
+    }
+}
+
+impl i_slint_core::window::WindowAdapterInternal for WandrWindowAdapter {
+    /// Soft-keyboard wiring (task 47 IME model): Slint raises this when a
+    /// TextInput gains/loses focus. Attach summons the wandr keyboard
+    /// overlay (which resizes our surface via on-resize); typed text
+    /// arrives back through on-key-event-v2. `Update` fires per keystroke
+    /// and is deliberately ignored — the keyboard tracks content from the
+    /// keys it sent; re-attaching every keystroke would churn the overlay.
+    fn input_method_request(&self, request: i_slint_core::window::InputMethodRequest) {
+        use i_slint_core::window::InputMethodRequest as R;
+        match request {
+            R::Enable(props) => {
+                let input_type = match props.input_type {
+                    i_slint_core::items::InputType::Number => "number",
+                    i_slint_core::items::InputType::Decimal => "decimal",
+                    i_slint_core::items::InputType::Password => "password",
+                    _ => "text",
+                };
+                // The wandr contract carries CHAR offsets (what the
+                // keyboard guests consume); Slint reports BYTE offsets.
+                let to_chars = |byte_off: usize| {
+                    props.text.as_str().get(..byte_off).map_or(0, |s| s.chars().count()) as u32
+                };
+                let cursor = to_chars(props.cursor_position);
+                let anchor = props.anchor_position.map_or(cursor, &to_chars);
+                host_ime::notify_editor_attached(
+                    input_type,
+                    "",
+                    props.text.as_str(),
+                    cursor.min(anchor),
+                    cursor.max(anchor),
+                );
+            }
+            R::Disable => host_ime::notify_editor_detached(),
+            _ => {}
+        }
     }
 }
 
