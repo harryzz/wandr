@@ -68,11 +68,21 @@ variant, since its renderer already speaks the same shapes.
   `list<record>` returns).
 - `COMPATIBILITY.md` — the hard-break analysis that gated this draft.
 
-## Next steps (unscheduled)
+## Next steps
 
-1. Host implementation behind a feature flag (maps ~1:1 onto the existing
-   `canvas_impl.rs` internals).
+1. ~~Host implementation behind a feature flag~~ **DONE 2026-06-11**:
+   `wandr-host --features wasi-canvas` implements `types` + `draw` +
+   `glyphs` (the `canvas-host` bindgen world) over the same SkiaRenderer —
+   `runtime/wandr-host/src/wasi_canvas_impl.rs`, linked at both
+   instantiate sites, unit-tested on the offscreen path. `layout` host
+   support deferred to the first managed-runtime consumer (the draft
+   marks it embedder-optional). Notes: bindgen needs
+   `imports: { default: trappable }`; skia Surface/PictureRecorder need
+   an `unsafe impl Send` on the canvas resource (single-threaded store,
+   the video.rs justification).
 2. Port one renderer (slint-wandr) as the proving consumer; measure the
-   resource-handle overhead vs u32 ids.
+   resource-handle overhead vs u32 ids. Needs the wandr embedding hook
+   (hand the guest its `canvas` + `graphics` handles — e.g. a
+   my:skiko-gfx-side provider call inside render-frame).
 3. Let the surface harden; then consider the WASI phase-0 conversation,
    positioned as wasi-gfx's 2D companion (champion overlap natural).

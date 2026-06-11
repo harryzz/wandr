@@ -244,3 +244,13 @@ world canvas-guest {
     import types;
     import draw;
 }
+
+/// Host-side bindgen world: everything a host that implements the draft
+/// (sans the optional `layout`) must provide. wandr's runtime binds this
+/// behind its `wasi-canvas` cargo feature; `layout` host support is a
+/// follow-up (the proposal marks it embedder-optional).
+world canvas-host {
+    import types;
+    import draw;
+    import glyphs;
+}
