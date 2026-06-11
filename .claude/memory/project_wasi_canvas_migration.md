@@ -34,8 +34,11 @@ alpha-REPLACE paint bug via Slint).
   main packages), `path: ["../../../proposals/wasi-canvas/wit", "wit"]`
   (proposal root FIRST — resolution order matters), and `generate_all`
   (else "missing with mapping for wasi:canvas/types").
-- frame bracket: `let cv = wembed::begin_frame(); … drop(cv);
-  wembed::end_frame();` — dims from `cv.width()/height()`.
+- frame bracket (post canvas-context alignment, commit b2f8dc00):
+  `get-context() -> canvas-context { graphics, get-current-buffer,
+  present }` — wasi-gfx graphics-context idiom; guests keep a lazy
+  thread_local context (`wctx`/`__wc_ctx` helpers) and bracket frames
+  with `get-current-buffer()` … `present()`. Dims from canvas handle.
 - text: Para{p,baseline,width,height} built from
   `layout::ParagraphBuilder`; paint at top-left origin (`y_baseline -
   baseline` when matching old blob baselines).
