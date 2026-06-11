@@ -402,6 +402,22 @@ macro_rules! wire_wasi_canvas {
             __WC_FRAME.with(|c| c.borrow().as_ref().map(f))
         }
 
+        /// The `graphics` factory resource, initialized on FIRST use — not
+        /// only in `begin_frame`. Resource creation (image decode, shaders)
+        /// legitimately happens during relayout, which runs BEFORE the
+        /// frame's `begin-frame` (the legacy backend's create verbs were
+        /// always-available plain imports; `get-graphics` is likewise
+        /// callable outside a frame — it's a factory, not frame state).
+        #[doc(hidden)]
+        fn __wc_graphics<R>(f: impl FnOnce(&__wc_draw::Graphics) -> R) -> R {
+            __WC_GRAPHICS.with(|g| {
+                if g.borrow().is_none() {
+                    *g.borrow_mut() = ::core::option::Option::Some(__wc_embed::get_graphics());
+                }
+                f(g.borrow().as_ref().unwrap())
+            })
+        }
+
         /// Build + layout a paragraph for a blob spec at a color; returns
         /// (paragraph, alphabetic-baseline).
         #[doc(hidden)]
@@ -437,11 +453,6 @@ macro_rules! wire_wasi_canvas {
                 }
             }
             fn begin_frame(&mut self) {
-                __WC_GRAPHICS.with(|g| {
-                    if g.borrow().is_none() {
-                        *g.borrow_mut() = ::core::option::Option::Some(__wc_embed::get_graphics());
-                    }
-                });
                 __WC_FRAME.with(|c| {
                     *c.borrow_mut() = ::core::option::Option::Some(__wc_embed::begin_frame());
                 });
@@ -527,10 +538,8 @@ macro_rules! wire_wasi_canvas {
                 measure_text(text, family, size, weight, italic)
             }
             fn create_image(&mut self, bytes: &[u8]) -> u32 {
-                match __WC_GRAPHICS.with(|g| {
-                    g.borrow().as_ref().map(|g| g.decode_image(bytes))
-                }) {
-                    ::core::option::Option::Some(::core::result::Result::Ok(img)) => {
+                match __wc_graphics(|g| g.decode_image(bytes)) {
+                    ::core::result::Result::Ok(img) => {
                         let id = __WC_NEXT_IMAGE.with(|n| {
                             let id = n.get();
                             n.set(id.wrapping_add(1).max(1));
