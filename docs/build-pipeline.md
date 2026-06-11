@@ -77,6 +77,30 @@ additive verbs don't require it (existing compiled guests import a subset
 and keep working). The canonical Skia↔WIT mapping and the additive-only
 evolution rules live in `docs/skia-wit-mapping.md`.
 
+## Desktop dev loop (no device)
+
+The x86_64 host runs any guest wasm directly under a winit window
+(WSLg/Wayland/X11) — restored + completed 2026-06-11:
+
+```bash
+cd runtime/wandr-host && cargo build --release --target x86_64-unknown-linux-gnu
+WANDR_DESKTOP_SIZE=500x1000 \
+  runtime/wandr-host/target/x86_64-unknown-linux-gnu/release/wasm-android-host \
+  apps/user/<app>/components/ui.wasm
+```
+
+- JIT (`Component::from_file`) — the no-AOT-on-desktop rule holds; same
+  wasm as the device, no reinstall step.
+- Presents via softbuffer (CPU raster blit — no GL needed).
+- `WANDR_DESKTOP_SIZE=WxH` = phone-shaped viewport; WM resizes forward to
+  the guest (`on-resize`).
+- Real keyboards work end-to-end via `my:skiko-gfx/key-input` (W3C codes +
+  modifiers); mouse = pointer events; scroll-wheel is not mapped.
+- `/usr/share/fonts/truetype/noto` is preopened as `/system-fonts`
+  (device parity — emoji fallback works on Debian/Ubuntu layouts).
+- No arbiter on desktop: IME attach/detach logs a warning (no keyboard
+  overlay), chrome insets are 0, `/state` persistence works.
+
 ## Environment
 
 - Rust toolchain with `aarch64-linux-android` target
