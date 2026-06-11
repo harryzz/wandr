@@ -591,6 +591,23 @@ macro_rules! wire_wasi_canvas {
             (p.max_intrinsic_width(), p.height())
         }
 
+        /// Current surface size in physical px — the live frame's canvas
+        /// when inside a frame, else the last seen size. (Replaces direct
+        /// `canvas::surface-width/height` reads from the legacy backend.)
+        pub fn surface_size() -> (u32, u32) {
+            let s = __WC_FRAME.with(|c| c.borrow().as_ref().map(|c| (c.width(), c.height())));
+            match s {
+                ::core::option::Option::Some(s) => {
+                    __WC_LAST_SIZE.with(|v| v.set(s));
+                    (s.0 as u32, s.1 as u32)
+                }
+                ::core::option::Option::None => {
+                    let (w, h) = __WC_LAST_SIZE.with(|v| v.get());
+                    (w as u32, h as u32)
+                }
+            }
+        }
+
         /// Report a focused editor so the host shows the soft keyboard.
         pub fn editor_attach(input_type: &str, hint: &str, initial_text: &str, selection_start: u32, selection_end: u32) {
             crate::my::skiko_gfx::ime::notify_editor_attached(input_type, hint, initial_text, selection_start, selection_end);

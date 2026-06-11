@@ -35,6 +35,8 @@ dioxus_canvas::__wit_bindgen::generate!({
     runtime_path: "::dioxus_canvas::__wit_bindgen::rt",
 });
 
+dioxus_canvas::wasi_canvas_bindings!();
+
 use wandr::signal::chat;
 use wandr::audio_focus::controls;
 // M4 — host imports the guest calls: raise/clear notifications + schedule the
@@ -84,7 +86,7 @@ const BG_IDLE_MS: u32 = 1000; // ~1 Hz when quiet (= the host idle cap)
 const BG_COOL_AFTER: u32 = 8; // ticks of quiet before cooling
 const BG_IDLE_AFTER: u32 = 24; // ticks of quiet before fully idle
 
-dioxus_canvas::wire!(app, pre_frame: |r| {
+dioxus_canvas::wire_wasi_canvas!(app, pre_frame: |r| {
     r.set_scale(2.0); // hi-dpi panel — author px are small; 2× for readability
     // Pump the engine; a change resets the idle counter (and re-renders).
     let changed = pump();
@@ -1002,8 +1004,7 @@ const CONTROLS_H: u32 = 220;
 const VIDEO_MARGIN: u32 = 24;
 
 fn push_video_layout() {
-    let sw = crate::my::skiko_gfx::canvas::surface_width();
-    let sh = crate::my::skiko_gfx::canvas::surface_height();
+    let (sw, sh) = surface_size();
     let video_h = sh.saturating_sub(CONTROLS_H);
     let pip_w = sw / 4;
     let pip_h = pip_w * 3 / 4;
