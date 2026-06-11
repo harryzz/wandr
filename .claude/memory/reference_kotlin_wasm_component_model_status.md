@@ -43,5 +43,23 @@ Kotlin/Wasm compilation is stable + default (faster rebuilds — `kotlin.increme
 to disable), and intra-module `.klib` inlining is on by default (2.4.0-RC2). Worth
 confirming our build picks these up given the slow Compose compile.
 
+**UPDATE 2026-06-11 (internet re-check, post Kotlin 2.4.0 STABLE release
+June 2026):** conclusions unchanged at the pipeline level — the official
+sample still ships `wasm-tools component embed` + `component new --adapt`
+with the STOCK P1 reactor adapter; no native wasip2 target. New facts:
+(1) **KT-86415 is still UNRESOLVED** ("To be discussed", affects
+2.4.0-RC and master; master MemoryAllocation.kt still doesn't advance the
+parent's availableAddress on child destroy) → our adapter State-pin +
+2.4.258 stdlib override stay mandatory. (2) The **Kotlin/wit-bindgen
+fork now emits the freeAll discipline itself** (see
+[[wit-bindgen-no-kotlin-generator]] update) — our rule became the
+official pattern. (3) KT-64569 (Component Model meta) = In Progress,
+**planned 2.5.0-Beta1**; the named blocker is the **GC ABI**
+(component-model issue #525 pre-proposal: pass values via WasmGC memory
+instead of linear) — the long-term path that retires cabi_realloc
+pressure for WasmGC languages entirely. (4) KT-64568 (libraries → WASI
+0.2) was PAUSED Aug 2025 to prioritize the Wasm Beta (KT-75370).
+Watch list: KT-86415, 2.5.0-Beta1, component-model#525.
+
 Related: [[wit-bindgen-no-kotlin-generator]], [[wasi-realloc-allocator-pollution]],
 [[kotlin-wasm-scopedmemory-destroy-bug]].
