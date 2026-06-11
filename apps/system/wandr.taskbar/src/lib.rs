@@ -14,18 +14,19 @@
 //! recomputed inline each frame; a tapped button flashes briefly.
 
 wit_bindgen::generate!({
-    world: "taskbar-app",
-    path: "wit/taskbar.wit",
+    world: "my:skiko-gfx/taskbar-app",
+    path: ["../../../proposals/wasi-canvas/wit", "wit"],
+    generate_all,
 });
 
 use std::cell::RefCell;
 
 use crate::exports::my::skiko_gfx::frame_pacing::Guest as FramePacingGuest;
 use crate::exports::my::skiko_gfx::renderer::{Guest, KeyKind, PointerKind};
-use crate::my::skiko_gfx::canvas::{
-    self, BlendMode, ColorFilterKind, PaintAttrs, PaintStyle, StrokeCap, StrokeJoin,
-};
 use crate::my::skiko_gfx::launcher;
+use crate::wasi::canvas::draw as wdraw;
+use crate::wasi::canvas::embedding as wembed;
+use crate::wasi::canvas::types as wtypes;
 
 const BG: u32 = 0xFF12121C; // opaque dark strip (matches the status bar)
 const FG: u32 = 0xFFECECEC; // icon color
@@ -45,21 +46,24 @@ thread_local! {
     static STATE: RefCell<State> = RefCell::new(State::default());
 }
 
-fn paint(color: u32) -> PaintAttrs {
-    PaintAttrs {
+fn paint(color: u32) -> wtypes::Paint<'static> {
+    wtypes::Paint {
+        style: wtypes::PaintStyle::Fill,
         color,
-        style: PaintStyle::Fill,
-        stroke_width: 0.0,
-        stroke_miter: 4.0,
-        stroke_cap: StrokeCap::Butt,
-        stroke_join: StrokeJoin::Miter,
-        anti_alias: true,
         alpha: 255,
-        blend_mode: BlendMode::SrcOver,
-        shader_id: 0,
-        color_filter_kind: ColorFilterKind::None,
-        color_filter_color: 0,
+        blend: wtypes::BlendMode::SrcOver,
+        anti_alias: true,
+        shader: None,
+        stroke_width: 0.0,
+        stroke_cap: wtypes::StrokeCap::Butt,
+        stroke_join: wtypes::StrokeJoin::Miter,
+        stroke_miter: 4.0,
+        blur: None,
     }
+}
+
+fn rect(x: f32, y: f32, w: f32, h: f32) -> wtypes::Rect {
+    wtypes::Rect { x, y, width: w, height: h }
 }
 
 /// Fire the nav action for a tapped button index (0=back, 1=home, 2=recents).
@@ -73,7 +77,7 @@ fn invoke(index: usize) {
 }
 
 /// Draw the icon for button `i` centered at (cx, cy) with extent `r`.
-fn draw_icon(i: usize, cx: f32, cy: f32, r: f32) {
+fn draw_icon(cv: &wdraw::Canvas, i: usize, cx: f32, cy: f32, r: f32) {
     let p = paint(FG);
     match i {
         // Back — left-pointing triangle.
@@ -82,14 +86,14 @@ fn draw_icon(i: usize, cx: f32, cy: f32, r: f32) {
                 "M {:.1} {:.1} L {:.1} {:.1} L {:.1} {:.1} Z",
                 cx - r, cy, cx + r * 0.8, cy - r, cx + r * 0.8, cy + r,
             );
-            canvas::draw_path(svg.as_bytes(), p);
+            cv.draw_path(&svg, wtypes::FillRule::Nonzero, &p);
         }
         // Home — circle.
-        1 => canvas::draw_oval(cx - r, cy - r, 2.0 * r, 2.0 * r, p),
+        1 => cv.draw_oval(rect(cx - r, cy - r, 2.0 * r, 2.0 * r), &p),
         // Recents — square.
         2 => {
             let s = r * 1.7;
-            canvas::draw_rect(cx - s * 0.5, cy - s * 0.5, s, s, p);
+            cv.draw_rect(rect(cx - s * 0.5, cy - s * 0.5, s, s), &p);
         }
         _ => {}
     }
@@ -101,9 +105,10 @@ impl Guest for Taskbar {
     fn render_frame(_nanos: u64) {
         STATE.with(|st| {
             let mut s = st.borrow_mut();
+            let cv = wembed::begin_frame();
             if s.w == 0.0 {
-                s.w = canvas::surface_width() as f32;
-                s.h = canvas::surface_height() as f32;
+                s.w = cv.width();
+                s.h = cv.height();
             }
             let w = s.w;
             let h = s.h;
@@ -112,9 +117,8 @@ impl Guest for Taskbar {
             let r = h * 0.22; // icon extent — ~0.44h tall, fits the strip
             let frame = s.frame;
 
-            canvas::begin_frame();
-            canvas::clear(BG);
-            canvas::draw_rect(0.0, 0.0, w, h, paint(BG));
+            cv.clear(BG);
+            cv.draw_rect(rect(0.0, 0.0, w, h), &paint(BG));
 
             // Flash pill behind a recently-tapped button.
             if let Some((idx, set_at)) = s.pressed {
@@ -122,16 +126,17 @@ impl Guest for Taskbar {
                     let cx = third * (idx as f32 + 0.5);
                     let pw = third * 0.7;
                     let ph = h * 0.7;
-                    canvas::draw_rect(cx - pw * 0.5, (h - ph) * 0.5, pw, ph, paint(FLASH));
+                    cv.draw_rect(rect(cx - pw * 0.5, (h - ph) * 0.5, pw, ph), &paint(FLASH));
                 } else {
                     s.pressed = None;
                 }
             }
 
             for i in 0..3 {
-                draw_icon(i, third * (i as f32 + 0.5), cy, r);
+                draw_icon(&cv, i, third * (i as f32 + 0.5), cy, r);
             }
-            canvas::end_frame();
+            drop(cv);
+            wembed::end_frame();
 
             s.frame = frame.wrapping_add(1);
         });

@@ -6,8 +6,8 @@
 //! wired in M3; for now it just renders.
 
 wit_bindgen::generate!({
-    world: "keyguard-app",
-    path: "wit",
+    world: "my:skiko-gfx/keyguard-app",
+    path: ["../../../proposals/wasi-canvas/wit", "wit"],
     generate_all,
 });
 
@@ -15,10 +15,10 @@ use std::cell::RefCell;
 
 use crate::exports::my::skiko_gfx::frame_pacing::Guest as FramePacingGuest;
 use crate::exports::my::skiko_gfx::renderer::{Guest as RendererGuest, KeyKind, PointerKind};
-use crate::my::skiko_gfx::canvas::{
-    self, BlendMode, ColorFilterKind, PaintAttrs, PaintStyle, StrokeCap, StrokeJoin,
-};
 use crate::my::skiko_gfx::status;
+use crate::wasi::canvas::embedding as wembed;
+use crate::wasi::canvas::layout as wlayout;
+use crate::wasi::canvas::types as wtypes;
 use crate::wandr::keyguard::keyguard;
 
 const BG: u32 = 0xFF0A0A12; // near-black lock background
@@ -32,8 +32,8 @@ struct State {
     w: f32,
     h: f32,
     clock: String,
-    clock_blob: Option<u32>,
-    hint_blob: Option<u32>,
+    clock_para: Option<Para>,
+    hint_para: Option<Para>,
     // M3 — swipe-up unlock: remember the press y; a clear upward release unlocks.
     down_y: Option<f32>,
 }
@@ -42,25 +42,51 @@ thread_local! {
     static STATE: RefCell<State> = RefCell::new(State::default());
 }
 
-fn paint(color: u32) -> PaintAttrs {
-    PaintAttrs {
+fn paint(color: u32) -> wtypes::Paint<'static> {
+    wtypes::Paint {
+        style: wtypes::PaintStyle::Fill,
         color,
-        style: PaintStyle::Fill,
-        stroke_width: 0.0,
-        stroke_miter: 4.0,
-        stroke_cap: StrokeCap::Butt,
-        stroke_join: StrokeJoin::Miter,
-        anti_alias: true,
         alpha: 255,
-        blend_mode: BlendMode::SrcOver,
-        shader_id: 0,
-        color_filter_kind: ColorFilterKind::None,
-        color_filter_color: 0,
+        blend: wtypes::BlendMode::SrcOver,
+        anti_alias: true,
+        shader: None,
+        stroke_width: 0.0,
+        stroke_cap: wtypes::StrokeCap::Butt,
+        stroke_join: wtypes::StrokeJoin::Miter,
+        stroke_miter: 4.0,
+        blur: None,
     }
 }
 
-fn blob(text: &str, size: f32, weight: u32) -> u32 {
-    canvas::create_text_blob(text.as_bytes(), FAMILY, size, weight, false)
+/// Laid-out paragraph (wasi:canvas/layout) — color baked, draws at a
+/// baseline origin, REAL width (retires the 0.27-per-glyph centering hack).
+struct Para {
+    p: wlayout::Paragraph,
+    baseline: f32,
+    width: f32,
+}
+
+fn para(text: &str, size: f32, weight: u32, color: u32) -> Para {
+    let style = wlayout::TextStyle {
+        family: "sans-serif".into(),
+        size,
+        weight,
+        italic: false,
+        color,
+        letter_spacing: 0.0,
+        line_height: 0.0,
+    };
+    let b = wlayout::ParagraphBuilder::new(&style, wlayout::Align::Start);
+    b.add_text(text);
+    let p = wlayout::ParagraphBuilder::build(b);
+    p.layout(1.0e6);
+    let baseline = p.alphabetic_baseline();
+    let width = p.max_intrinsic_width();
+    Para { p, baseline, width }
+}
+
+fn draw_para(cv: &crate::wasi::canvas::draw::Canvas, pa: &Para, x: f32, baseline_y: f32) {
+    pa.p.paint(cv, wtypes::Point { x, y: baseline_y - pa.baseline });
 }
 
 /// M3 — unlock on a clear upward swipe (Down then Up at least ~12% of the screen
@@ -88,33 +114,33 @@ impl RendererGuest for Lock {
     fn render_frame(_nanos: u64) {
         STATE.with(|st| {
             let mut s = st.borrow_mut();
+            let cv = wembed::begin_frame();
+            if s.w <= 0.0 {
+                s.w = cv.width();
+                s.h = cv.height();
+            }
             let (w, h) = (s.w.max(1.0), s.h.max(1.0));
             // Big clock — rebuilt only when the minute changes.
             let clock = status::clock_text();
-            if clock != s.clock || s.clock_blob.is_none() {
-                if let Some(b) = s.clock_blob.take() { canvas::drop_text_blob(b); }
-                s.clock_blob = Some(blob(&clock, h * 0.13, 300));
+            if clock != s.clock || s.clock_para.is_none() {
+                s.clock_para = Some(para(&clock, h * 0.13, 300, CLOCK_FG));
                 s.clock = clock;
             }
-            if s.hint_blob.is_none() {
-                s.hint_blob = Some(blob(HINT, h * 0.030, 500));
+            if s.hint_para.is_none() {
+                s.hint_para = Some(para(HINT, h * 0.030, 500, HINT_FG));
             }
 
-            let clock_size = h * 0.13;
-            // No measure-text API; approximate centering (~0.27×size per glyph).
-            let clock_w = s.clock.chars().count() as f32 * clock_size * 0.27;
-            let hint_w = HINT.chars().count() as f32 * (h * 0.030) * 0.27;
-
-            canvas::begin_frame();
-            canvas::clear(BG);
-            canvas::draw_rect(0.0, 0.0, w, h, paint(BG));
-            if let Some(b) = s.clock_blob {
-                canvas::draw_text_blob(b, w * 0.5 - clock_w, h * 0.42, paint(CLOCK_FG));
+            cv.clear(BG);
+            cv.draw_rect(wtypes::Rect { x: 0.0, y: 0.0, width: w, height: h }, &paint(BG));
+            // Real centering — the paragraph carries its measured width.
+            if let Some(p) = &s.clock_para {
+                draw_para(&cv, p, w * 0.5 - p.width * 0.5, h * 0.42);
             }
-            if let Some(b) = s.hint_blob {
-                canvas::draw_text_blob(b, w * 0.5 - hint_w, h * 0.88, paint(HINT_FG));
+            if let Some(p) = &s.hint_para {
+                draw_para(&cv, p, w * 0.5 - p.width * 0.5, h * 0.88);
             }
-            canvas::end_frame();
+            drop(cv);
+            wembed::end_frame();
         });
     }
 

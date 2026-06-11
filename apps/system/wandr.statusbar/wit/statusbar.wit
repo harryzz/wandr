@@ -5,44 +5,6 @@
 
 package my:skiko-gfx@0.1.0;
 
-interface canvas {
-    enum paint-style { fill, stroke, fill-and-stroke }
-    enum stroke-cap  { butt, round, square }
-    enum stroke-join { miter, round, bevel }
-    enum blend-mode {
-        src-over, src, dst-in, dst-out, src-atop, dst-atop, xor,
-        multiply, screen, overlay, darken, lighten, color-dodge,
-        color-burn, hard-light, soft-light, difference, exclusion, clear,
-    }
-    enum color-filter-kind { none, blend, invert }
-    record paint-attrs {
-        color:              u32,
-        style:              paint-style,
-        stroke-width:       f32,
-        stroke-miter:       f32,
-        stroke-cap:         stroke-cap,
-        stroke-join:        stroke-join,
-        anti-alias:         bool,
-        alpha:              u8,
-        blend-mode:         blend-mode,
-        shader-id:          u32,
-        color-filter-kind:  color-filter-kind,
-        color-filter-color: u32,
-    }
-
-    surface-width:  func() -> u32;
-    surface-height: func() -> u32;
-    begin-frame: func();
-    end-frame:   func();
-    clear:       func(argb: u32);
-
-    draw-rect:   func(x: f32, y: f32, w: f32, h: f32, paint: paint-attrs);
-
-    create-text-blob: func(text: list<u8>, font-family: list<u8>, size: f32, weight: u32, italic: bool) -> u32;
-    draw-text-blob:   func(id: u32, x: f32, y: f32, paint: paint-attrs);
-    drop-text-blob:   func(id: u32);
-}
-
 interface status {
     clock-text:   func() -> string;
     battery-text: func() -> string;
@@ -68,7 +30,11 @@ interface frame-pacing {
 }
 
 world statusbar-app {
-    import canvas;
+    // Drawing + text via the wasi:canvas draft (second generate! path root).
+    import wasi:canvas/types@0.0.1;
+    import wasi:canvas/draw@0.0.1;
+    import wasi:canvas/layout@0.0.1;
+    import wasi:canvas/embedding@0.0.1;
     import status;
     // M3b — the notification feed (host-implemented; answered from the arbiter).
     // The interface lives in wit/deps/notify/ (package wandr:notify); the host

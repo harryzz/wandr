@@ -10,8 +10,8 @@
 //! per-frame allocation, no animation loop.
 
 wit_bindgen::generate!({
-    world: "statusbar-app",
-    path: "wit",
+    world: "my:skiko-gfx/statusbar-app",
+    path: ["../../../proposals/wasi-canvas/wit", "wit"],
     generate_all,
 });
 
@@ -19,10 +19,10 @@ use std::cell::RefCell;
 
 use crate::exports::my::skiko_gfx::frame_pacing::Guest as FramePacingGuest;
 use crate::exports::my::skiko_gfx::renderer::{Guest, KeyKind, PointerKind};
-use crate::my::skiko_gfx::canvas::{
-    self, BlendMode, ColorFilterKind, PaintAttrs, PaintStyle, StrokeCap, StrokeJoin,
-};
 use crate::my::skiko_gfx::status;
+use crate::wasi::canvas::embedding as wembed;
+use crate::wasi::canvas::layout as wlayout;
+use crate::wasi::canvas::types as wtypes;
 use crate::wandr::notify::notify_feed;
 
 const BG: u32 = 0xFF12121C; // opaque dark strip
@@ -39,12 +39,12 @@ struct State {
     h: f32,
     clock: String,
     battery: String,
-    clock_blob: Option<u32>,
-    batt_blob: Option<u32>,
-    label_blob: Option<u32>,
+    clock_para: Option<Para>,
+    batt_para: Option<Para>,
+    label_para: Option<Para>,
     // M3b — notification badge.
     notif_label: String,
-    notif_blob: Option<u32>,
+    notif_para: Option<Para>,
     notif_count: u32,
     notif_nid: u64,
     badge_x0: f32,
@@ -55,27 +55,50 @@ thread_local! {
     static STATE: RefCell<State> = RefCell::new(State::default());
 }
 
-fn paint(color: u32) -> PaintAttrs {
-    PaintAttrs {
+fn paint(color: u32) -> wtypes::Paint<'static> {
+    wtypes::Paint {
+        style: wtypes::PaintStyle::Fill,
         color,
-        style: PaintStyle::Fill,
-        stroke_width: 0.0,
-        stroke_miter: 4.0,
-        stroke_cap: StrokeCap::Butt,
-        stroke_join: StrokeJoin::Miter,
-        anti_alias: true,
         alpha: 255,
-        blend_mode: BlendMode::SrcOver,
-        shader_id: 0,
-        color_filter_kind: ColorFilterKind::None,
-        color_filter_color: 0,
+        blend: wtypes::BlendMode::SrcOver,
+        anti_alias: true,
+        shader: None,
+        stroke_width: 0.0,
+        stroke_cap: wtypes::StrokeCap::Butt,
+        stroke_join: wtypes::StrokeJoin::Miter,
+        stroke_miter: 4.0,
+        blur: None,
     }
 }
 
-const FAMILY: &[u8] = b"sans-serif";
+/// A laid-out host paragraph (wasi:canvas/layout) standing in for the old
+/// text blobs. Color bakes at build; draws at a BASELINE origin like
+/// blobs did (paragraphs paint at top-left: top = baseline_y - baseline).
+struct Para {
+    p: wlayout::Paragraph,
+    baseline: f32,
+}
 
-fn blob(text: &str, size: f32, weight: u32) -> u32 {
-    canvas::create_text_blob(text.as_bytes(), FAMILY, size, weight, false)
+fn para(text: &str, size: f32, weight: u32, color: u32) -> Para {
+    let style = wlayout::TextStyle {
+        family: "sans-serif".into(),
+        size,
+        weight,
+        italic: false,
+        color,
+        letter_spacing: 0.0,
+        line_height: 0.0,
+    };
+    let b = wlayout::ParagraphBuilder::new(&style, wlayout::Align::Start);
+    b.add_text(text);
+    let p = wlayout::ParagraphBuilder::build(b);
+    p.layout(1.0e6);
+    let baseline = p.alphabetic_baseline();
+    Para { p, baseline }
+}
+
+fn draw_para(cv: &crate::wasi::canvas::draw::Canvas, pa: &Para, x: f32, baseline_y: f32) {
+    pa.p.paint(cv, wtypes::Point { x, y: baseline_y - pa.baseline });
 }
 
 /// M3b — a tap inside the notification badge opens the most recent notification.
@@ -97,28 +120,27 @@ impl Guest for Bar {
     fn render_frame(_nanos: u64) {
         STATE.with(|st| {
             let mut s = st.borrow_mut();
+            let cv = wembed::begin_frame();
             if s.w == 0.0 {
-                s.w = canvas::surface_width() as f32;
-                s.h = canvas::surface_height() as f32;
+                s.w = cv.width();
+                s.h = cv.height();
             }
             // One-time static label. Font sizes are proportional to the
             // bar height (WANDR_STATUSBAR_PX) so they scale with it.
-            if s.label_blob.is_none() {
-                s.label_blob = Some(blob("wandr", s.h * 0.32, 600));
+            if s.label_para.is_none() {
+                s.label_para = Some(para("wandr", s.h * 0.32, 600, 0xFF8AB4F8));
             }
             // Refresh clock + battery every render (the host paces us at
             // ~1 Hz via frame-pacing); rebuild blobs only when the text
             // actually changes, so a no-change render stays a pure replay.
             let clock = status::clock_text();
-            if clock != s.clock || s.clock_blob.is_none() {
-                if let Some(b) = s.clock_blob.take() { canvas::drop_text_blob(b); }
-                s.clock_blob = Some(blob(&clock, s.h * 0.42, 600));
+            if clock != s.clock || s.clock_para.is_none() {
+                s.clock_para = Some(para(&clock, s.h * 0.42, 600, FG));
                 s.clock = clock;
             }
             let battery = status::battery_text();
-            if battery != s.battery || s.batt_blob.is_none() {
-                if let Some(b) = s.batt_blob.take() { canvas::drop_text_blob(b); }
-                s.batt_blob = Some(blob(&battery, s.h * 0.32, 400));
+            if battery != s.battery || s.batt_para.is_none() {
+                s.batt_para = Some(para(&battery, s.h * 0.32, 400, FG));
                 s.battery = battery;
             }
             // M3b — active notifications (queried from the arbiter via the host
@@ -128,9 +150,8 @@ impl Guest for Bar {
             s.notif_count = actives.len() as u32;
             s.notif_nid = actives.last().map(|n| n.nid).unwrap_or(0);
             let label = if s.notif_count > 0 { format!("\u{25CF} {}", s.notif_count) } else { String::new() };
-            if label != s.notif_label || (s.notif_count > 0 && s.notif_blob.is_none()) {
-                if let Some(b) = s.notif_blob.take() { canvas::drop_text_blob(b); }
-                s.notif_blob = if s.notif_count > 0 { Some(blob(&label, s.h * 0.40, 700)) } else { None };
+            if label != s.notif_label || (s.notif_count > 0 && s.notif_para.is_none()) {
+                s.notif_para = if s.notif_count > 0 { Some(para(&label, s.h * 0.40, 700, 0xFFE5894A)) } else { None };
                 s.notif_label = label;
             }
 
@@ -138,25 +159,25 @@ impl Guest for Bar {
             let h = s.h;
             // ~vertically centered for the proportional font sizes.
             let baseline = h * 0.64;
-            canvas::begin_frame();
-            canvas::clear(BG);
-            canvas::draw_rect(0.0, 0.0, w, h, paint(BG));
-            if let Some(b) = s.label_blob { canvas::draw_text_blob(b, 40.0, baseline, paint(0xFF8AB4F8)); }
+            cv.clear(BG);
+            cv.draw_rect(wtypes::Rect { x: 0.0, y: 0.0, width: w, height: h }, &paint(BG));
+            if let Some(p) = &s.label_para { draw_para(&cv, p, 40.0, baseline); }
             // Clock centered.
-            if let Some(b) = s.clock_blob { canvas::draw_text_blob(b, w * 0.5 - 48.0, baseline, paint(FG)); }
+            if let Some(p) = &s.clock_para { draw_para(&cv, p, w * 0.5 - 48.0, baseline); }
             // Battery right-aligned-ish.
-            if let Some(b) = s.batt_blob { canvas::draw_text_blob(b, w - 160.0, baseline, paint(FG)); }
+            if let Some(p) = &s.batt_para { draw_para(&cv, p, w - 160.0, baseline); }
             // Notification badge, left of the battery; remember its hit region.
             let badge_x = w - 300.0;
-            if let Some(b) = s.notif_blob {
-                canvas::draw_text_blob(b, badge_x, baseline, paint(0xFFE5894A));
+            if s.notif_para.is_some() {
+                if let Some(p) = &s.notif_para { draw_para(&cv, p, badge_x, baseline); }
                 s.badge_x0 = badge_x - 24.0;
                 s.badge_x1 = badge_x + 96.0;
             } else {
                 s.badge_x0 = 0.0;
                 s.badge_x1 = 0.0;
             }
-            canvas::end_frame();
+            drop(cv);
+            wembed::end_frame();
         });
     }
 

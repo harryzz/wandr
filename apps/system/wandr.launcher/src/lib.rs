@@ -1,26 +1,27 @@
 //! wandr.launcher — the wandr home screen as a LIGHT Rust canvas guest
-//! (task 57). Exports `my:skiko-gfx/renderer` and draws the app grid
-//! directly via the canvas WIT — no Kotlin/Compose, so no continuation
-//! leak ([[feedback_indeterminate_progress_leak]]) and a tiny working
-//! set, which matters for an always-running home process.
+//! (task 57). Exports `my:skiko-gfx/renderer` and draws the app grid via the
+//! wasi:canvas draft (proposals/wasi-canvas) — no Kotlin/Compose, so no
+//! continuation leak ([[feedback_indeterminate_progress_leak]]) and a tiny
+//! working set, which matters for an always-running home process.
 //!
 //! Layout is built ONCE (when the app list + surface dims are known, and
 //! again on resize) into a flat draw list + tile hit-rects; `render_frame`
 //! just replays it. No per-frame allocation churn, no animation loop.
 
 wit_bindgen::generate!({
-    world: "launcher-app",
-    path: "wit/launcher.wit",
+    world: "my:skiko-gfx/launcher-app",
+    path: ["../../../proposals/wasi-canvas/wit", "wit"],
+    generate_all,
 });
 
 use std::cell::RefCell;
 
 use crate::exports::my::skiko_gfx::frame_pacing::Guest as FramePacingGuest;
 use crate::exports::my::skiko_gfx::renderer::{Guest, KeyKind, PointerKind};
-use crate::my::skiko_gfx::canvas::{
-    self, BlendMode, ColorFilterKind, PaintAttrs, PaintStyle, StrokeCap, StrokeJoin,
-};
 use crate::my::skiko_gfx::launcher;
+use crate::wasi::canvas::embedding as wembed;
+use crate::wasi::canvas::layout as wlayout;
+use crate::wasi::canvas::types as wtypes;
 
 // ── State ───────────────────────────────────────────────────────────────
 
@@ -28,8 +29,8 @@ use crate::my::skiko_gfx::launcher;
 enum DrawItem {
     /// Rounded-rect fill (letter tile).
     Tile { x: f32, y: f32, w: f32, h: f32, color: u32 },
-    /// Text blob (host-owned id) at a baseline origin.
-    Text { id: u32, x: f32, y: f32, color: u32 },
+    /// Laid-out paragraph (index into `State::paras`) at a top-left origin.
+    Text { para: usize, x: f32, y: f32 },
 }
 
 struct HitRect { x: f32, y: f32, w: f32, h: f32, app_id: String }
@@ -42,7 +43,7 @@ struct State {
     apps: Vec<(String, String)>, // (app-id, label)
     items: Vec<DrawItem>,
     hits: Vec<HitRect>,
-    blobs: Vec<u32>, // host text-blob ids we own (dropped on relayout)
+    paras: Vec<Para>, // paragraph resources we own (rebuilt on relayout)
 }
 
 thread_local! {
@@ -55,20 +56,30 @@ const TILE_PALETTE: [u32; 8] = [
     0xFFAB47BC, 0xFF00ACC1, 0xFFFF7043, 0xFF5C6BC0,
 ];
 
-fn paint(color: u32) -> PaintAttrs {
-    PaintAttrs {
+fn paint(color: u32) -> wtypes::Paint<'static> {
+    wtypes::Paint {
+        style: wtypes::PaintStyle::Fill,
         color,
-        style: PaintStyle::Fill,
-        stroke_width: 0.0,
-        stroke_miter: 4.0,
-        stroke_cap: StrokeCap::Butt,
-        stroke_join: StrokeJoin::Miter,
-        anti_alias: true,
         alpha: 255,
-        blend_mode: BlendMode::SrcOver,
-        shader_id: 0,
-        color_filter_kind: ColorFilterKind::None,
-        color_filter_color: 0,
+        blend: wtypes::BlendMode::SrcOver,
+        anti_alias: true,
+        shader: None,
+        stroke_width: 0.0,
+        stroke_cap: wtypes::StrokeCap::Butt,
+        stroke_join: wtypes::StrokeJoin::Miter,
+        stroke_miter: 4.0,
+        blur: None,
+    }
+}
+
+fn rrect(x: f32, y: f32, w: f32, h: f32, r: f32) -> wtypes::RoundedRect {
+    let c = wtypes::Point { x: r, y: r };
+    wtypes::RoundedRect {
+        rect: wtypes::Rect { x, y, width: w, height: h },
+        top_left: c,
+        top_right: c,
+        bottom_right: c,
+        bottom_left: c,
     }
 }
 
@@ -80,10 +91,33 @@ fn tile_color(app_id: &str) -> u32 {
     TILE_PALETTE[(h as usize) % TILE_PALETTE.len()]
 }
 
-const FAMILY: &[u8] = b"sans-serif";
+/// Laid-out paragraph (wasi:canvas/layout) — color baked at build time;
+/// real width/height metrics (retires the per-glyph-advance approximations).
+struct Para {
+    p: wlayout::Paragraph,
+    width: f32,
+    height: f32,
+    baseline: f32,
+}
 
-fn new_blob(text: &str, size: f32, weight: u32) -> u32 {
-    canvas::create_text_blob(text.as_bytes(), FAMILY, size, weight, false)
+fn para(text: &str, size: f32, weight: u32, color: u32) -> Para {
+    let style = wlayout::TextStyle {
+        family: "sans-serif".into(),
+        size,
+        weight,
+        italic: false,
+        color,
+        letter_spacing: 0.0,
+        line_height: 0.0,
+    };
+    let b = wlayout::ParagraphBuilder::new(&style, wlayout::Align::Start);
+    b.add_text(text);
+    let p = wlayout::ParagraphBuilder::build(b);
+    p.layout(1.0e6);
+    let width = p.max_intrinsic_width();
+    let height = p.height();
+    let baseline = p.alphabetic_baseline();
+    Para { p, width, height, baseline }
 }
 
 /// Parse the host's newline / TAB-delimited `list-apps` output, dropping
@@ -102,10 +136,8 @@ fn load_apps() -> Vec<(String, String)> {
 
 /// Rebuild the draw list + hit-rects for the current dims + app list.
 fn relayout(s: &mut State) {
-    // Drop the host text blobs from the previous layout.
-    for id in s.blobs.drain(..) {
-        canvas::drop_text_blob(id);
-    }
+    // Dropping the Para resources releases the host-side paragraphs.
+    s.paras.clear();
     s.items.clear();
     s.hits.clear();
 
@@ -117,25 +149,26 @@ fn relayout(s: &mut State) {
     let top_inset = 0.0_f32;
     // Title — "Apps" header, 2× the original size.
     let title_size = 88.0_f32;
-    let title = new_blob("Apps", title_size, 600);
-    s.blobs.push(title);
-    // Baseline one em below the top edge so the larger glyphs aren't clipped.
-    let title_baseline = top_inset + title_size;
-    s.items.push(DrawItem::Text { id: title, x: margin, y: title_baseline, color: 0xFFFFFFFF });
+    let title = para("Apps", title_size, 600, 0xFFFFFFFF);
+    // Baseline one em below the top edge so the larger glyphs aren't clipped
+    // (same placement as before, but via the REAL baseline metric).
+    let title_top = top_inset + title_size - title.baseline;
+    let title_bottom = title_top + title.height;
+    s.items.push(DrawItem::Text { para: s.paras.len(), x: margin, y: title_top });
+    s.paras.push(title);
 
     // Grid. Tiles are 2× the original size (task 57 follow-up).
     let tile = 264.0_f32;
     let gap = 56.0_f32;
-    // App-name label, 2× the original size; reserve room (em + descent pad) below
-    // each tile so the taller text fits within the cell.
+    // App-name label, 2× the original size; reserve room (em + descent pad)
+    // below each tile so the taller text fits within the cell.
     let label_size = 56.0_f32;
     let label_h = label_size + 24.0_f32;
     let cell_w = tile + gap;
     let cell_h = tile + label_h + gap;
     let usable = (s.w - margin * 2.0).max(cell_w);
     let cols = ((usable + gap) / cell_w).floor().max(1.0) as usize;
-    // Start the grid a gap below the (now taller) title baseline+descent.
-    let top = title_baseline + title_size * 0.3 + gap;
+    let top = title_bottom + gap;
 
     for (i, (id, label)) in s.apps.iter().enumerate() {
         let col = i % cols;
@@ -144,23 +177,27 @@ fn relayout(s: &mut State) {
         let y = top + row as f32 * cell_h;
         s.items.push(DrawItem::Tile { x, y, w: tile, h: tile, color: tile_color(id) });
 
-        // Letter, centered-ish on the tile (baseline approx, scaled 2×).
+        // Letter, truly centered on the tile (real paragraph metrics).
         let letter = label.chars().next().unwrap_or('?').to_uppercase().to_string();
-        let lblob = new_blob(&letter, 120.0, 600);
-        s.blobs.push(lblob);
-        s.items.push(DrawItem::Text { id: lblob, x: x + tile * 0.5 - 36.0, y: y + tile * 0.5 + 44.0, color: 0xFFFFFFFF });
+        let lpa = para(&letter, 120.0, 600, 0xFFFFFFFF);
+        s.items.push(DrawItem::Text {
+            para: s.paras.len(),
+            x: x + (tile - lpa.width) * 0.5,
+            y: y + (tile - lpa.height) * 0.5,
+        });
+        s.paras.push(lpa);
 
-        // Label under the tile, truncated to the tile width at the larger size
-        // (max chars derived from tile width ÷ approx glyph advance ≈ 0.55·em,
-        // so it stays within the cell on any density instead of overflowing).
-        let max_chars = ((tile / (label_size * 0.55)) as usize).max(4);
+        // Label under the tile, truncated to the tile width using REAL
+        // measured widths (no glyph-advance approximation).
         let mut disp = label.clone();
-        if disp.chars().count() > max_chars {
-            disp = disp.chars().take(max_chars - 1).collect::<String>() + "…";
+        let mut tpa = para(&disp, label_size, 400, 0xFFE0E0E0);
+        while tpa.width > tile && disp.chars().count() > 1 {
+            let keep = disp.chars().count().saturating_sub(2);
+            disp = disp.chars().take(keep).collect::<String>() + "…";
+            tpa = para(&disp, label_size, 400, 0xFFE0E0E0);
         }
-        let tblob = new_blob(&disp, label_size, 400);
-        s.blobs.push(tblob);
-        s.items.push(DrawItem::Text { id: tblob, x, y: y + tile + label_size, color: 0xFFE0E0E0 });
+        s.items.push(DrawItem::Text { para: s.paras.len(), x, y: y + tile + (label_h - tpa.height) * 0.5 });
+        s.paras.push(tpa);
 
         s.hits.push(HitRect { x, y, w: tile, h: tile + label_h, app_id: id.clone() });
     }
@@ -174,32 +211,29 @@ impl Guest for Launcher {
     fn render_frame(_nanos: u64) {
         STATE.with(|st| {
             let mut s = st.borrow_mut();
+            let cv = wembed::begin_frame();
             if s.w == 0.0 {
-                s.w = canvas::surface_width() as f32;
-                s.h = canvas::surface_height() as f32;
+                s.w = cv.width();
+                s.h = cv.height();
             }
             if !s.loaded {
                 s.apps = load_apps();
                 s.loaded = true;
                 relayout(&mut s);
             }
-            canvas::begin_frame();
-            canvas::clear(BG);
-            // Snapshot the items to avoid borrowing `s` across the draw
-            // calls (the canvas imports don't touch STATE, but keep it
-            // clean).
-            let items = s.items.clone();
-            for it in &items {
+            cv.draw_rect(wtypes::Rect { x: 0.0, y: 0.0, width: s.w, height: s.h }, &paint(BG));
+            for it in s.items.iter() {
                 match *it {
                     DrawItem::Tile { x, y, w, h, color } => {
-                        canvas::draw_rrect(x, y, w, h, 52.0, 52.0, paint(color));
+                        cv.draw_rounded_rect(rrect(x, y, w, h, 52.0), &paint(color));
                     }
-                    DrawItem::Text { id, x, y, color } => {
-                        canvas::draw_text_blob(id, x, y, paint(color));
+                    DrawItem::Text { para, x, y } => {
+                        s.paras[para].p.paint(&cv, wtypes::Point { x, y });
                     }
                 }
             }
-            canvas::end_frame();
+            drop(cv);
+            wembed::end_frame();
         });
     }
 

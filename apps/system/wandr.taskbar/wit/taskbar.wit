@@ -6,48 +6,6 @@
 
 package my:skiko-gfx@0.1.0;
 
-interface canvas {
-    enum paint-style { fill, stroke, fill-and-stroke }
-    enum stroke-cap  { butt, round, square }
-    enum stroke-join { miter, round, bevel }
-    enum blend-mode {
-        src-over, src, dst-in, dst-out, src-atop, dst-atop, xor,
-        multiply, screen, overlay, darken, lighten, color-dodge,
-        color-burn, hard-light, soft-light, difference, exclusion, clear,
-    }
-    enum color-filter-kind { none, blend, invert }
-    record paint-attrs {
-        color:              u32,
-        style:              paint-style,
-        stroke-width:       f32,
-        stroke-miter:       f32,
-        stroke-cap:         stroke-cap,
-        stroke-join:        stroke-join,
-        anti-alias:         bool,
-        alpha:              u8,
-        blend-mode:         blend-mode,
-        shader-id:          u32,
-        color-filter-kind:  color-filter-kind,
-        color-filter-color: u32,
-    }
-
-    surface-width:  func() -> u32;
-    surface-height: func() -> u32;
-    begin-frame: func();
-    end-frame:   func();
-    clear:       func(argb: u32);
-
-    draw-rect:   func(x: f32, y: f32, w: f32, h: f32, paint: paint-attrs);
-    draw-oval:   func(x: f32, y: f32, w: f32, h: f32, paint: paint-attrs);
-    // SVG path string bytes (M/L/C/Q/A/Z) — host parses via Path::from_svg.
-    // Used for the Back triangle (the device font lacks the geometric-shapes
-    // glyphs, so the nav icons are drawn as shapes, not text).
-    draw-path:   func(path-data: list<u8>, paint: paint-attrs);
-}
-
-// Shell-navigation subset of the host's `launcher` interface (task 56).
-// The host provides the full interface (list-apps / launch-app / go-home
-// / go-back / recents); the taskbar imports only the three nav verbs.
 interface launcher {
     go-home: func();
     go-back: func();
@@ -74,7 +32,11 @@ interface frame-pacing {
 }
 
 world taskbar-app {
-    import canvas;
+    // Drawing via the wasi:canvas draft (proposals/wasi-canvas, second
+    // generate! path root).
+    import wasi:canvas/types@0.0.1;
+    import wasi:canvas/draw@0.0.1;
+    import wasi:canvas/embedding@0.0.1;
     import launcher;
     export renderer;
     export frame-pacing;

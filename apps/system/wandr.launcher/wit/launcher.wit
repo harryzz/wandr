@@ -1,67 +1,18 @@
 // Trimmed `my:skiko-gfx` WIT for the Rust launcher guest (task 57).
 //
-// We redeclare the my:skiko-gfx@0.1.0 package with only the interfaces +
-// verbs the launcher uses. Why not point wit-bindgen at the canonical
-// wit/skiko-gfx.wit: the guest wit-bindgen (0.46) rejects its
+// Drawing + text moved to the wasi:canvas draft (proposals/wasi-canvas);
+// my:skiko-gfx keeps only the launcher channel + the renderer/frame-pacing
+// exports. Why the renderer subset is redeclared here instead of pointing at
+// the canonical wit/skiko-gfx.wit: the guest wit-bindgen rejects its
 // `matrix-3x3` type (a WIT identifier word can't start with a digit;
-// wasmtime's host parser is lenient, the guest one isn't). The host's
-// `add_to_linker` provides the FULL canvas/launcher/renderer interfaces;
-// a component importing this SUBSET links fine (verified on device).
-//
-// `paint-attrs` + its enums are copied VERBATIM from skiko-gfx.wit
-// (field order, types, and enum variant order all matter for structural
-// type-matching against the host's interface).
+// wasmtime's host parser is lenient, the guest one isn't). A component
+// importing/exporting this SUBSET links fine (verified on device).
 
 package my:skiko-gfx@0.1.0;
-
-interface canvas {
-    enum paint-style { fill, stroke, fill-and-stroke }
-    enum stroke-cap  { butt, round, square }
-    enum stroke-join { miter, round, bevel }
-    enum blend-mode {
-        src-over, src, dst-in, dst-out, src-atop, dst-atop, xor,
-        multiply, screen, overlay, darken, lighten, color-dodge,
-        color-burn, hard-light, soft-light, difference, exclusion, clear,
-    }
-    enum color-filter-kind { none, blend, invert }
-    record paint-attrs {
-        color:              u32,
-        style:              paint-style,
-        stroke-width:       f32,
-        stroke-miter:       f32,
-        stroke-cap:         stroke-cap,
-        stroke-join:        stroke-join,
-        anti-alias:         bool,
-        alpha:              u8,
-        blend-mode:         blend-mode,
-        shader-id:          u32,
-        color-filter-kind:  color-filter-kind,
-        color-filter-color: u32,
-    }
-
-    surface-width:  func() -> u32;
-    surface-height: func() -> u32;
-    begin-frame: func();
-    end-frame:   func();
-    clear:       func(argb: u32);
-
-    draw-rect:   func(x: f32, y: f32, w: f32, h: f32, paint: paint-attrs);
-    draw-rrect:  func(x: f32, y: f32, w: f32, h: f32, rx: f32, ry: f32, paint: paint-attrs);
-
-    create-text-blob: func(text: list<u8>, font-family: list<u8>, size: f32, weight: u32, italic: bool) -> u32;
-    draw-text-blob:   func(id: u32, x: f32, y: f32, paint: paint-attrs);
-    drop-text-blob:   func(id: u32);
-}
 
 interface launcher {
     list-apps:  func() -> string;
     launch-app: func(app-id: string);
-}
-
-interface status {
-    // Subset of the host's status interface — the launcher only needs
-    // the reserved top-strip height for its content inset (task 55).
-    bar-height: func() -> u32;
 }
 
 interface renderer {
@@ -84,9 +35,11 @@ interface frame-pacing {
 }
 
 world launcher-app {
-    import canvas;
+    import wasi:canvas/types@0.0.1;
+    import wasi:canvas/draw@0.0.1;
+    import wasi:canvas/layout@0.0.1;
+    import wasi:canvas/embedding@0.0.1;
     import launcher;
-    import status;
     export renderer;
     export frame-pacing;
 }
