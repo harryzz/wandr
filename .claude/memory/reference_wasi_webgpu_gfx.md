@@ -40,3 +40,9 @@ metadata:
   u32 ids, shed wandr-isms, fix indexed-getter warts. Path: publish WIT +
   skia-wit-mapping as versioned de-facto spec when stable; formal WASI
   phase-0 only after — positioned as wasi-gfx's 2D companion.
+- **DRAFT WRITTEN 2026-06-11: `proposals/wasi-canvas/`** (wasm-tools-valid
+  wasi:canvas@0.0.1: canvas/picture/shader/image resources, paint record w/
+  borrow<shader> + mask-blur, SVG paths + fill-rule, per-corner rrects,
+  glyphs + optional layout text layers; drawing-only scope = the red line).
+  Gate analysis in COMPATIBILITY.md: NO hard breaks (coexistence — second
+  add_to_linker over the same SkiaRenderer; my:skiko-gfx untouched).
