@@ -6,7 +6,7 @@
 //! (i-slint-common sharedfontique), so no font registration is needed.
 
 slint::slint! {
-    import { Button, LineEdit, ListView, Slider, CheckBox, VerticalBox, HorizontalBox } from "std-widgets.slint";
+    import { Button, LineEdit, TextEdit, ListView, Slider, CheckBox, VerticalBox, HorizontalBox } from "std-widgets.slint";
 
     export component MainWindow inherits Window {
         background: #101418;
@@ -43,6 +43,13 @@ slint::slint! {
 
             LineEdit {
                 placeholder-text: "type here…";
+            }
+
+            // Multiline: Enter inserts a newline, long lines word-wrap.
+            TextEdit {
+                height: 110px;
+                wrap: word-wrap;
+                placeholder-text: "multiline — Enter makes a new line…";
             }
 
             HorizontalBox {
