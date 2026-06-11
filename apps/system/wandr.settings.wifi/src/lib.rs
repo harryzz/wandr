@@ -32,6 +32,8 @@ dioxus_canvas::__wit_bindgen::generate!({
     runtime_path: "::dioxus_canvas::__wit_bindgen::rt",
 });
 
+dioxus_canvas::wasi_canvas_bindings!();
+
 use wandr::connectivity::wifi;
 use wandr::connectivity::wifi::{IpConfig, SecurityKind, WifiConfig};
 
@@ -136,7 +138,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(1500);
 /// pure-render and defer host polls until the user pauses.
 const INTERACT_GAP: Duration = Duration::from_millis(400);
 
-dioxus_canvas::wire!(app, pre_frame: |r| {
+dioxus_canvas::wire_wasi_canvas!(app, pre_frame: |r| {
     r.set_scale(1.5); // hi-dpi panel — author px are small; 1.5× is the readable size.
     let now = Instant::now();
     let gap = LAST_FRAME.with(|c| c.replace(Some(now))).map(|t| now.saturating_duration_since(t));
