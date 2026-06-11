@@ -64,10 +64,68 @@ fun __wasm_export_ih_onPointer(
 }
 
 // ── key-handler ───────────────────────────────────────────────────────────
-// NOT exported. Lowering the key-event record's strings into a live Compose
-// guest throws an exception that Kotlin catch(Throwable) cannot intercept
-// (escapes even from inside cabi_realloc's catch), poisoning the instance.
-// The clean-room spike (repros/kt-export-record-spike) passes 100k/100k, so
-// the trigger is Compose-app allocator/runtime state — under investigation.
-// Until resolved, keys ride the legacy primitive on-key-event-v2 path (the
-// host falls back automatically when key-handler is unbound).
+// record key-event { down: bool, repeat: bool, code: string, text: string,
+//   alt,ctrl,meta,shift: bool } → 10 flat params, TWO host-lowered strings.
+// ‼️ Requires the wandr stdlib fix (2.4.258-SNAPSHOT, internalCallback.kt):
+// cabi_realloc is itself an @WasmExport, so its compiler-generated epilogue
+// fired invokeOnExportedFunctionExit (kotlinx-coroutines' pump) WHILE the
+// host-lowered args were pending → "Can't create new allocators…" escaped
+// uncatchably and poisoned the instance. The stdlib now skips the pump
+// while realloc memory is pending.
+
+private fun w3cCodeToKeyId(code: String): UInt = when (code) {
+    "Backspace" -> 8u
+    "Tab" -> 9u
+    "Enter", "NumpadEnter" -> 13u
+    "Escape" -> 27u
+    "Space" -> 32u
+    "PageUp" -> 33u
+    "PageDown" -> 34u
+    "End" -> 35u
+    "Home" -> 36u
+    "ArrowLeft" -> 37u
+    "ArrowUp" -> 38u
+    "ArrowRight" -> 39u
+    "ArrowDown" -> 40u
+    "Insert" -> 45u
+    "Delete" -> 46u
+    else -> 0u
+}
+
+private fun firstCodePoint(s: String): UInt {
+    if (s.isEmpty()) return 0u
+    val c0 = s[0]
+    return if (c0.isHighSurrogate() && s.length > 1 && s[1].isLowSurrogate()) {
+        ((((c0.code - 0xD800) shl 10) or (s[1].code - 0xDC00)) + 0x10000).toUInt()
+    } else {
+        c0.code.toUInt()
+    }
+}
+
+private fun __ih_loadString(addr: Int, len: Int): String {
+    val base = Pointer(addr.toUInt())
+    return ByteArray(len) { i -> (base + i).loadByte() }.decodeToString()
+}
+
+@WasmExport("wasi:input-handlers/key-handler@0.0.1#on-key")
+fun __wasm_export_ih_onKey(
+    down: Int, repeat: Int,
+    codePtr: Int, codeLen: Int,
+    textPtr: Int, textLen: Int,
+    alt: Int, ctrl: Int, meta: Int, shift: Int,
+): Unit {
+    freeAllComponentModelReallocAllocatedMemory()
+    try {
+        // Lift BOTH strings before any allocator scope opens (the spike contract).
+        val code = __ih_loadString(codePtr, codeLen)
+        val text = __ih_loadString(textPtr, textLen)
+        withScopedMemoryAllocator { _ ->
+            val kind = if (down != 0) Renderer.KeyKind.values()[0] else Renderer.KeyKind.values()[1]
+            RendererImpl.onKeyEventV2(kind, firstCodePoint(text), w3cCodeToKeyId(code))
+        }
+    } catch (t: Throwable) {
+        try {
+            Canvas.Import.logMessage("ih-onKey FAILED: ${t.message}")
+        } catch (_: Throwable) {}
+    }
+}

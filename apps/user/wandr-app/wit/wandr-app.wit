@@ -19,8 +19,9 @@ world wandr-app {
     // handler receives records-with-strings: safe per the lift-before-alloc
     // contract (repros/kt-export-record-spike, 100k/100k JIT+AOT).
     export wasi:input-handlers/pointer-handler@0.0.1;
-    // key-handler NOT exported: host key lowering into Kotlin guests dies
-    // with an uncatchable wasm exception (under investigation — see
-    // project_wasi_canvas_migration memory); keys ride legacy on-key-event-v2.
+    // key-handler requires the wandr stdlib fix (invokeOnExportedFunctionExit
+    // skipped while canonical-ABI realloc memory is pending) — see
+    // InputHandlerExports.kt.
+    export wasi:input-handlers/key-handler@0.0.1;
     export wasi:input-handlers/frame-handler@0.0.1;
 }
