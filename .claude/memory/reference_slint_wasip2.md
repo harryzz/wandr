@@ -7,7 +7,13 @@ metadata:
   originSessionId: 66372abf-b0cb-483c-b52e-5b3445aa9260
 ---
 
-**STATUS: SHIPPED + USER-VERIFIED (task 100, all of it on 2026-06-11).**
+**STATUS: SHIPPED + USER-VERIFIED (task 100, 2026-06-11) — and since the
+same day slint-wandr is ALSO the wasi:canvas PROVING CONSUMER: it draws
+exclusively through the draft (proposals/wasi-canvas; my:skiko-gfx keeps
+only window+ime; embedding handoff = get-graphics + begin/end-frame).
+‼️ wandr.slint.test now requires a host built with --features
+wasi-canvas; the my:skiko-gfx canvas era of this crate ended at commit
+4c66471a (check out before fc9ff5c3 for the old backend).**
 `crates/slint-wandr` (Platform/WindowAdapter/RendererSealed/ItemRenderer/
 GlyphRenderer + `launch!` macro) + `apps/user/wandr.slint.test`. Render +
 touch + typing + selection + scroll + animation + IME summon/dismiss +
