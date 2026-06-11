@@ -45,4 +45,13 @@ alpha-REPLACE paint bug via Slint).
 - evdev tap/swipe injection for --no-art verification:
   `/data/local/tmp/{tap,swipe-up}.sh` (sendevent type-B on
   /dev/input/event1; `adb shell input` is dead without ART).
+- ‼️ reinstalling a `kind=system` app needs a ZYGOTE RESTART: the zygote
+  auto-preloads every system bundle at startup, and forks after a
+  reinstall run the STALE preloaded image against the new cwasm →
+  SIGSEGV in a lower-import trampoline (a new face of
+  [[reference_missing_instance_error_stale_zygote]]). User apps
+  (apps/*) are not preloaded and reload fresh. Also: never debug-launch
+  a second instance with `wandr-host --standalone --app X` while the
+  hybrid stack runs — it creates an unmanaged full-screen surface that
+  steals focus (looks like system-wide lag + dead taskbar).
 Related: [[reference_slint_wasip2]], [[feedback_shared_wit_rebuild_all_consumers]].
