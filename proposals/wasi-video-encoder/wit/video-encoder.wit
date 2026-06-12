@@ -1,0 +1,87 @@
+// wasi:video-encoder — DRAFT (wandr, 2026-06-12). NOT WIRED.
+//
+// The FACTORED form of wandr:video's encoder half (live-call-verified on
+// Signal video calls): host-side capture + hardware encode, compressed
+// frames to the guest — raw camera pixels never cross the boundary.
+//
+// Factoring (mirrors wasi:video-decoder): surface vocabulary moves OUT.
+// The shipped fused contract carries preview placement
+// (preview: option<video-rect>, preview-layer, set-preview-rect,
+// set-preview-visible) inside the encoder — but the camera viewfinder is
+// really the FIFTH graphics-context producer (camera frames composited
+// into a surface's buffers, beside webgpu / frame-buffer / canvas /
+// video-decoder). Here that is ONE verb: connect-preview(ctx);
+// where/whether the preview shows is the surface's contract
+// (request/configure, embedder-governed).
+//
+// Named lanes (R2/R3, decided not hidden): a standalone wasi:camera
+// device API (enumeration, formats, permissions, frames-to-guest) is
+// deliberately NOT designed here — `facing` is the union the shipped
+// consumer needs; a camera package would factor the SOURCE out of the
+// encoder the way wasi:surface factors placement. Guest-supplied frames
+// (screen-share) = the same future source lane.
+package wasi:video-encoder@0.0.1;
+
+interface types {
+    enum codec { vp8, vp9, h264, h265 }
+
+    enum camera-facing { front, back }
+
+    enum video-error {
+        unsupported-codec,
+        no-hw-codec,
+        codec-init-failed,
+        no-camera,
+        surface-unavailable,
+    }
+
+    /// One compressed frame (ready for RTP packetization).
+    record encoded-frame {
+        data: list<u8>,
+        /// 90 kHz media timestamp (the RTP clock).
+        timestamp: u32,
+        keyframe: bool,
+    }
+
+    record encoder-config {
+        codec: codec,
+        width: u32,
+        height: u32,
+        bitrate-bps: u32,
+        framerate: u32,
+        facing: camera-facing,
+    }
+}
+
+interface encoder {
+    use types.{camera-facing, codec, encoder-config, encoded-frame, video-error};
+    use wasi:graphics-context/graphics-context@0.0.2.{context};
+
+    resource video-encoder {
+        /// Opens the camera + a hardware encoder host-side.
+        open: static func(config: encoder-config)
+              -> result<video-encoder, video-error>;
+
+        /// Pull the next compressed frame; none = not ready yet (poll on
+        /// the embedder's frame cadence — the shipped consumer's model).
+        next-frame: func() -> option<encoded-frame>;
+
+        request-keyframe: func();
+        set-bitrate: func(bitrate-bps: u32);
+
+        /// Degrees the capture is rotated relative to the panel's natural
+        /// orientation (CVO for the SENDING side — the peer applies it).
+        display-rotation: func() -> u32;
+
+        /// The viewfinder as a surface producer (the FIFTH context type):
+        /// composite the live capture into the connected surface's
+        /// buffers. One producer per context; placement/visibility/z are
+        /// the SURFACE's contract, not the encoder's.
+        connect-preview: func(ctx: borrow<context>) -> result<_, video-error>;
+    }
+}
+
+world video-encoder-guest {
+    import types;
+    import encoder;
+}

@@ -216,7 +216,7 @@ MAPPED (MouseWheel → kind=scroll; LINE_SCROLL_PX=48 named constant —
 3×16px CSS-default lines; W3C sign pinned in the 0.0.2 WIT comment:
 positive = down/right; XWayland zero-delta valuator noise suppressed
 host-side; user-verified ±48/±96/±144 = coalesced notches on both axes).
-`proposals/wasi-video-decoder/` = the factored fourth-context-consumer
+`proposals/wasi-video-encoder/` = the factored encoder (camera preview = the FIFTH context producer via connect-preview; encoder itself NOT surface-related — compressed bytes only; standalone wasi:camera = named lane). `proposals/wasi-video-decoder/` = the factored fourth-context-consumer
 draft (decoder + connect(ctx), CVO set-rotation kept, placement→surface)
 — validated, NOT wired; fused wandr:video ships on. The wasi-gfx WIRING
 PLAN (WIT additive-only for our packages + 5-step host re-skin) lives in

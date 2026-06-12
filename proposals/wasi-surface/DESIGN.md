@@ -113,6 +113,7 @@ interface surface-events {
 | webgpu / frame-buffer | upstream's `device.connect-graphics-context(borrow<context>)` + `buffer.from-graphics-buffer(abstract-buffer)` — referenced, not redesigned here | upstream, pre-stable |
 | **canvas** (third type) | DRAFTED: `wasi:canvas@0.0.2/connection` (`proposals/wasi-canvas/wit-0.0.2/connection.wit`, validated) — `canvas-device.connect(ctx)` + `from-graphics-buffer`; NOT in the canvas-host world yet. The fused `embedding.canvas-context` stays the reactor form (documented equivalence) | both forms now artifacts; un-fused wires at the trigger |
 | **video decoder** (fourth type) | DRAFTED: `proposals/wasi-video-decoder/` — decoder + `connect(ctx)`; placement/visibility/z moved to surface vocabulary; CVO `set-rotation` kept (frame property, not placement) | draft validated 2026-06-12; fused wandr:video keeps shipping side-by-side until the wiring trigger |
+| **camera preview** (fifth type) | DRAFTED: `proposals/wasi-video-encoder/` — the viewfinder as `encoder.connect-preview(ctx)`; the shipped fused form's preview-rect/visible/layer move to surface vocabulary. The encoder ITSELF is not surface-related (compressed bytes to the guest); only its viewfinder composites. A standalone wasi:camera (source factored from encoder) is the named future lane | draft validated 2026-06-12; fused wandr:video ships on |
 
 ## Event-profile tie-in (no new vocabulary)
 
@@ -190,6 +191,20 @@ checklist, not a rediscovery):
 **Out of scope at wiring time** (already settled): window creation policy
 stays with the arbiter; the reference UI libraries keep consuming
 canvas + input-handlers and notice nothing.
+
+## Named lane: wasi:audio (the empty upstream slot)
+
+Checked 2026-06-12 against the official WASI proposals table: NO
+wasi-audio/media/video proposal exists at any phase (only the ancient
+discussion issue WebAssembly/WASI#307); the Subgroup Charter explicitly
+lists audio in scope. Pixels now have the complete five-producer socket
+story — sound has none. wandr ships a live-call-verified host-audio
+contract (wit/audio.wit: playback FIFO + capture; focus/routing =
+arbiter policy), so a greenfield `wasi:audio` draft derived from shipped
+semantics is ours to make — the wasi:canvas playbook again. Scope
+decision (user, 2026-06-12): no monolithic "wasi:media" (players exist
+without video); media composition (A/V sync, transport) = a wandr:media
+package, out of WASI scope.
 
 ## Named deferrals
 
