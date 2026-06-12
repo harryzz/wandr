@@ -284,3 +284,17 @@ read a never-populated cache after the canvas-context refactor → Signal pushed
 (0,0) video rects → decoder fell to decode-to-buffer (no surface), peer saw us,
 we saw nothing. begin_frame now refreshes the cache from the acquired buffer.
 NEXT: Phase C deletion (~3,700 lines; inventory docs/ui-shell-consolidation.md).
+
+**2026-06-12 — Phase C COMPLETE (deployed; call re-verify pending).** my:skiko-gfx
+no longer exists: host bindgens (skiko-ui/frame-pacing/key-input/0.0.1
+input-handlers/0.0.1 canvas) deleted; 22 *_impl.rs re-target the new traits
+(consolidated_impl = logging impl + one add_to_linker); canvas_impl 2314→1072
+(SkiaRenderer core + WasiDrawable FFI kept); input.rs 0.0.2-only;
+wit/skiko-gfx.wit + skiko mirror deleted; WIT-sync rule retired from CLAUDE.md;
+proposals 0.0.1 trees deleted, wit-0.0.2 promoted to wit/. Signal ENGINE was the
+last live legacy importer (my:skiko-gfx/audio) — ported to wasi:audio pcm
+resources (drop = close, write-then-start preserved). Host 60M→57M. Audio types
+live in audio_impl.rs (ringer/wasi-audio consume). Stack redeployed; Signal up
+connected, history intact. Commits: cebb9a57 (host surgery), f3bdbb3c (WIT
+retirement + engine port). Cosmetic follow-ups: SkiaRenderer dead-field sweep,
+docs/build-pipeline.md + docs/host-rendering.md catch-up.

@@ -1,5 +1,5 @@
 TASK=105
-STEP=phase-C-start
-STATUS=in-progress
-LAST_SUCCESS=Phase B COMPLETE + USER-VERIFIED on device (2026-06-12): all guests new-style; Signal video call works both views after begin-frame size-cache fix (80cf1b3f)
-NOTES=Phase C = legacy deletion per docs/ui-shell-consolidation.md inventory: host delegation inversion (~22 *_impl.rs re-target to new traits, delete consolidated_impl delegations), delete 0.0.1 wasi_canvas_impl.rs + bindings, canvas_impl.rs legacy-verb shrink (~60%, keep SkiaRenderer core + WasiDrawable FFI), paragraph_impl.rs, skiko-ui bindgen + 23 host sites, key_input + legacy frame_pacing bindings, 0.0.1 input bindings/arms, wit/skiko-gfx.wit + mirrors, promote proposals wit-0.0.2 -> wit/. Desktop+android regression after each chunk; redeploy at end.
+STEP=verify-done
+STATUS=complete
+LAST_SUCCESS=Task 105 (Phase A+B+C) verified OK — my:skiko-gfx fully retired end-to-end; all guests on wasi:canvas/input-handlers 0.0.2 + wandr:ui-shell/device/chrome/assets + wasi:logging/audio; Phase C host deployed, Signal connected on device (user re-verify of voice/video call pending — engine audio moved to wasi:audio resources)
+NOTES=Follow-ups (cosmetic): SkiaRenderer dead-field sweep, docs/build-pipeline.md + host-rendering.md catch-up, guest-side junk-file cleanup in skiko (.bak files).
