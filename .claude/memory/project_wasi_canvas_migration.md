@@ -285,7 +285,7 @@ read a never-populated cache after the canvas-context refactor → Signal pushed
 we saw nothing. begin_frame now refreshes the cache from the acquired buffer.
 NEXT: Phase C deletion (~3,700 lines; inventory docs/ui-shell-consolidation.md).
 
-**2026-06-12 — Phase C COMPLETE (deployed; call re-verify pending).** my:skiko-gfx
+**2026-06-12 — Phase C COMPLETE, USER-VERIFIED (call audio both ways OK on the wasi:audio engine).** my:skiko-gfx
 no longer exists: host bindgens (skiko-ui/frame-pacing/key-input/0.0.1
 input-handlers/0.0.1 canvas) deleted; 22 *_impl.rs re-target the new traits
 (consolidated_impl = logging impl + one add_to_linker); canvas_impl 2314→1072
