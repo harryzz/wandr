@@ -71,6 +71,19 @@ serve 0.0.1 + 0.0.2 side-by-side; shipped consumers migrate lazily.
 After this bump, both packages are frozen for all six consumers —
 everything further is additive (R2) or a deliberate version event (R3).
 
+## The recognition rule (why gestures differ per UI library — by design)
+
+**The wire carries the lowest-level facts the platform can provide;
+everything above that is guest policy.** Touchscreen gestures cross as
+raw per-id contacts and each framework's own gesture system recognizes
+them (Compose's pointerInput arena, Flutter's gesture arena, egui's
+sensing, Avalonia's recognizers) — same as every native platform, and
+why a long-press FEELS like that framework's long-press. Host-side
+recognition would force one gesture-feel on all frameworks and break
+their mid-flight disambiguation. Trackpad gestures cross as resolved
+deltas only because the platform never exposes contacts there — the
+deltas ARE the lowest-level fact.
+
 ## `gesture-handler` — designed now, additive whenever (wasm-tools-validated)
 
 ```wit
