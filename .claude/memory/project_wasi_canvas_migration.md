@@ -240,6 +240,19 @@ instantiation; 0.0.1 trees dropped; wit/skiko-gfx.wit + mirrors die).
 Finale audit findings that forced this shape: surfaceWidth/Height and
 logMessage both squat on the legacy CANVAS interface.
 
+**AUDIO/MEDIA (2026-06-12): upstream slot EMPTY (verified — no
+wasi-audio/media/video proposal at any phase; charter lists audio in
+scope). `proposals/wasi-audio/` = greenfield draft from the shipped
+my:skiko-gfx/audio semantics (resources not sentinel handles; f32 wire +
+i16 format at R1 enum-union; backpressure write→frames-accepted; RED
+LINE: focus/volume/route policy = embedder (arbiter), guest sends only
+`class` intent; named lanes: playback.position = the A/V master clock,
+multichannel/passthrough = R3, device enumeration = deliberately absent).
+User scope decision: NO monolithic wasi:media — composition (sync +
+transport) = future wandr:media, out of WASI scope; scope note + the
+R5-style justification (sync is the capability gap) =
+docs/wandr-media-scope.md.**
+
 **The four REFERENCE LIBRARIES (validation set, user-fixed 2026-06-12):
 skiko-compose, dioxus, slint, Avalonia UI** — every wasi:canvas contract
 decision must be cross-checked against ALL FOUR (they span the ownership
