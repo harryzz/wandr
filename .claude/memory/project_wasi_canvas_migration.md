@@ -131,10 +131,36 @@ set/reset-matrix. Verified: desktop (full demo screenshot) + Pixel 2 XL
 world got the imports + new build componentizes, but the on-device
 component is intentionally the OLD build (no behavior change with flag
 off; redeploy needs a zygote restart — ride along with the next one).
-Remaining: 3 = skiko text → layout; 4 = full cutover (my:skiko-gfx keeps
-window/IME/lifecycle + WasiDrawable layers; color-filter + image draws
-need additive draft growth — batch the WIT change with stage 3 to pay the
-rebuild-all-consumers event once). Gotchas: WSLg Wayland resets the
+**Stage 3 DONE 2026-06-12: Compose text on wasi:canvas/layout +
+the ONE batched WIT break, deployed everywhere.** Draft changes
+(proposals/wasi-canvas): paint += `filter: option<color-filter>`
+(variant blend(color-blend{color,mode})/invert — host honors the mode,
+unlike legacy's hardcoded Modulate), line-metrics extended to the full
+13-field editor shape, paragraph += ideographic-baseline + line-count,
+rects-for-range REPLACED by selection-boxes(start,end,height-style,
+width-style)->list<text-box{rect,direction}> (no callers existed).
+WIT copies live in FIVE extra places: wandr-app + ime.keyboard +
+ktcanvas.test wit/deps + skiko wit-canvas/deps + **dioxus-canvas
+launch_wasi.rs INLINE string** (slint-wandr generate! points at
+proposals directly — no copy). skiko: paragraph/{Paragraph,
+ParagraphBuilder}.kt dual-path (wasi-only resource when enabled —
+paragraphs aren't dual-handle like shaders; builder nulls wres on
+build so close() can't drop handle 0; maxWidth = guest-remembered
+layout width). Parity choices (deliberate, revisit in a fidelity pass):
+lineHeight=0, align=START (legacy ignored ParagraphStyle entirely —
+mapping align would double-align), colorFilter still routes legacy
+until images migrate. Rebuilt + deployed: host (desktop+android),
+9 Rust guests + Signal (state backed up), skiko→compose×9→wandr-app +
+ime.keyboard (keyboard redeployed this round — zygote restarted via
+run-hybrid-stack --wandr-only; plain restart bails on home-resolution
+under --no-art). Device user-verified (chrome boot, wandr-app text/
+fields, Signal). GOTCHA: use `adb shell` directly (adbd is root) — NOT
+`su -c` (the Magisk am-spin trap, [[reference_artoff_magisk_am_spin]]).
+Stage 4 remaining: images/bitmap-canvas → wasi (ATOMIC Image flip —
+images must not be dual-handle, double pixel memory; color-filter
+adoption rides along), then retire my:skiko-gfx canvas+paragraph from
+the Kotlin worlds (my:skiko-gfx keeps window/IME/lifecycle + WasiDrawable
+layers + text blobs until their own story). Gotchas: WSLg Wayland resets the
 desktop host connection after a few seconds — use `WINIT_UNIX_BACKEND=x11
 WAYLAND_DISPLAY=`; screenshot via `xwd -name "WASM Android Runtime"` +
 ffmpeg (gnome-screenshot/xwd-root fail under WSLg); on-disk

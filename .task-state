@@ -1,5 +1,5 @@
 TASK=102
 STEP=verify-done
 STATUS=complete
-LAST_SUCCESS=Task 102 Stage 2 verified OK — Compose geometry/clips/transforms/shaders on wasi:canvas (WasiCanvasBackend switch), desktop + device (taps, scroll, RSS flat)
-NOTES=skiko generated/wasicanvas bindings + WasiCanvasBackend + per-paint routing; legacy kept: text/images/pictures/drawables/set-matrix. ime.keyboard NOT redeployed on device (old component fine, flag off; needs zygote restart — ride next one). Stage 3 next: skiko text → layout + batch color-filter WIT addition (one rebuild-all event).
+LAST_SUCCESS=Task 102 Stage 3 verified OK — Compose text on wasi:canvas/layout; batched WIT break (paint.filter + full line-metrics + selection-boxes) deployed across host + all consumers; device user-verified
+NOTES=Parity choices: lineHeight=0, align=START, colorFilter still legacy-routed. Stage 4 next: images/bitmap-canvas → wasi (atomic Image flip + color-filter adoption), then my:skiko-gfx canvas+paragraph retirement from Kotlin worlds. Keyboard redeployed this round (zygote restarted).

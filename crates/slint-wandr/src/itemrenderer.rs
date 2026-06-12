@@ -160,6 +160,7 @@ fn base_paint(
         stroke_join: wtypes::StrokeJoin::Miter,
         stroke_miter: 4.0,
         blur: None,
+        filter: None,
     }
 }
 

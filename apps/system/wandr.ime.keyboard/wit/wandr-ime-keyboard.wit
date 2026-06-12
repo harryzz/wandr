@@ -18,6 +18,7 @@ world ime-keyboard {
     // canvas path, bit-for-bit).
     import wasi:canvas/types@0.0.1;
     import wasi:canvas/draw@0.0.1;
+    import wasi:canvas/layout@0.0.1;
     import wasi:canvas/embedding@0.0.1;
     // Step 5 — declared language plugins. One import per plugin
     // (each plugin uses its own WIT package because two deps cannot

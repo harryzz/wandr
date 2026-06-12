@@ -73,6 +73,7 @@ fn paint(color: u32) -> wtypes::Paint<'static> {
         stroke_join: wtypes::StrokeJoin::Miter,
         stroke_miter: 4.0,
         blur: None,
+        filter: None,
     }
 }
 

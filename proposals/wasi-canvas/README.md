@@ -133,11 +133,17 @@ variant, since its renderer already speaks the same shapes.
    resolved cleanly because legacy and wasi verbs share the host's
    `renderer.canvas()`, so live-transform drawable recordings capture wasi
    draws; per-paint fallback covers color-filter and image-shader draws.
-   Remaining stages: (3) skiko text → `layout` (+ batch the additive draft
-   needs surfaced by Compose: paint color-filter, image draw verbs'
-   sampling parity — one rebuild-all event), (4) cut over wandr-app +
-   wandr.ime.keyboard worlds fully — my:skiko-gfx keeps the non-canvas
-   remainder (window/IME/lifecycle + the WasiDrawable live-transform
-   layers, deliberately out of wasi:canvas).
+   **Stage 3 DONE 2026-06-12**: Compose text runs on `layout`, and the
+   draft absorbed the one batched break Compose surfaced: paint grew
+   `filter: option<color-filter>` (blend(color, mode) | invert),
+   line-metrics became the full 13-field editor shape, paragraph gained
+   ideographic-baseline + line-count, and rects-for-range was replaced
+   by `selection-boxes` (height/width box styles + per-box direction).
+   Host + every consumer rebuilt and device-verified in one event.
+   Remaining: (4) images/bitmap-canvas → wasi (atomic Image migration +
+   color-filter adoption for tinted icons), then cut the Kotlin worlds
+   over fully — my:skiko-gfx keeps the non-canvas remainder
+   (window/IME/lifecycle + the WasiDrawable live-transform layers,
+   deliberately out of wasi:canvas).
 5. Let the surface harden; then consider the WASI phase-0 conversation,
    positioned as wasi-gfx's 2D companion (champion overlap natural).

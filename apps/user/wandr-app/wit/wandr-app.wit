@@ -15,6 +15,7 @@ world wandr-app {
     // interface sets are always-linked host-side over the same SkiaRenderer.
     import wasi:canvas/types@0.0.1;
     import wasi:canvas/draw@0.0.1;
+    import wasi:canvas/layout@0.0.1;
     import wasi:canvas/embedding@0.0.1;
     // Task 64 — optional on-demand-render hint. Opt-in export (not part of
     // skiko-ui) so the host can gate render-frame; see frame-pacing in the

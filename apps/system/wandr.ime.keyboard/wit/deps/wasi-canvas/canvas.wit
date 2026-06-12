@@ -94,6 +94,22 @@ interface types {
         height: func() -> u32;
     }
 
+    /// Tint: combine each output pixel with `color` via `mode`
+    /// (CSS/skia provenance: SkColorFilters::Blend; icon tinting is
+    /// `mode = src-in`).
+    record color-blend {
+        color: color,
+        mode:  blend-mode,
+    }
+
+    /// Color filter applied to the paint's output — after color/shader
+    /// resolve, before blending into the destination.
+    variant color-filter {
+        blend(color-blend),
+        /// Channel-wise RGB inversion (alpha preserved).
+        invert,
+    }
+
     /// Per-draw styling. A value (not a resource): builder ergonomics live
     /// in guest bindings; the wire carries the resolved state. Used only
     /// as a parameter, so the `shader` borrow is canonical-ABI-legal.
@@ -112,6 +128,8 @@ interface types {
         stroke-miter: f32,
         /// Mask blur (shadows/glows); none = sharp.
         blur:         option<mask-blur>,
+        /// Color filter (icon tinting, inversion); none = pass-through.
+        filter:       option<color-filter>,
     }
 }
 

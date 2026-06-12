@@ -68,30 +68,64 @@ interface layout {
 
     enum align { start, center, end, justify }
 
+    /// Per-line metrics — the full editor-grade shape (cursor placement,
+    /// line hit-testing). Field provenance: skia textlayout LineMetrics,
+    /// which is what every shipped host-shaping engine exposes.
     record line-metrics {
         start-offset: u32,   // UTF-8 byte offsets into the paragraph text
         end-offset:   u32,
-        baseline:     f32,
+        /// `end-offset` with trailing whitespace excluded.
+        end-excluding-whitespace: u32,
+        /// `end-offset` including a trailing hard-break newline.
+        end-including-newline: u32,
+        /// True when the line ends in an explicit newline.
+        hard-break:   bool,
         ascent:       f32,
         descent:      f32,
-        left:         f32,
+        /// Ascent before any line-height multiplier.
+        unscaled-ascent: f32,
+        height:       f32,
         width:        f32,
+        left:         f32,
+        baseline:     f32,
+        line-number:  u32,
+    }
+
+    enum text-direction { ltr, rtl }
+
+    /// How tall the rects returned by `selection-boxes` are (CSS caret /
+    /// selection-highlight distinctions; skparagraph RectHeightStyle).
+    enum rect-height-style {
+        tight, max, include-line-spacing-middle,
+        include-line-spacing-top, include-line-spacing-bottom, strut,
+    }
+
+    enum rect-width-style { tight, max }
+
+    record text-box {
+        rect:      rect,
+        direction: text-direction,
     }
 
     resource paragraph {
-        layout:              func(width: f32);
-        paint:               func(canvas: borrow<canvas>, at: point);
-        height:              func() -> f32;
-        max-intrinsic-width: func() -> f32;
-        min-intrinsic-width: func() -> f32;
-        alphabetic-baseline: func() -> f32;
-        lines:               func() -> list<line-metrics>;
-        /// Caret/selection geometry for a UTF-8 byte range.
-        rects-for-range:     func(start: u32, end: u32) -> list<rect>;
+        layout:               func(width: f32);
+        paint:                func(canvas: borrow<canvas>, at: point);
+        height:               func() -> f32;
+        max-intrinsic-width:  func() -> f32;
+        min-intrinsic-width:  func() -> f32;
+        alphabetic-baseline:  func() -> f32;
+        ideographic-baseline: func() -> f32;
+        line-count:           func() -> u32;
+        lines:                func() -> list<line-metrics>;
+        /// Caret/selection geometry for a UTF-8 byte range, with the
+        /// box-shape policy callers like text editors need.
+        selection-boxes:      func(start: u32, end: u32,
+                                   height: rect-height-style,
+                                   width: rect-width-style) -> list<text-box>;
         /// Nearest text position (UTF-8 byte offset) to a point.
-        offset-at:           func(at: point) -> u32;
+        offset-at:            func(at: point) -> u32;
         /// [start, end) of the word containing `offset`.
-        word-boundary:       func(offset: u32) -> tuple<u32, u32>;
+        word-boundary:        func(offset: u32) -> tuple<u32, u32>;
     }
 
     resource paragraph-builder {

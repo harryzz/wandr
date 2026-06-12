@@ -169,6 +169,16 @@ interface types {
         height: func() -> u32;
     }
 
+    record color-blend {
+        color: color,
+        mode:  blend-mode,
+    }
+
+    variant color-filter {
+        blend(color-blend),
+        invert,
+    }
+
     record paint {
         style:        paint-style,
         color:        color,
@@ -181,6 +191,7 @@ interface types {
         stroke-join:  stroke-join,
         stroke-miter: f32,
         blur:         option<mask-blur>,
+        filter:       option<color-filter>,
     }
 }
 
@@ -280,24 +291,48 @@ interface layout {
     record line-metrics {
         start-offset: u32,
         end-offset:   u32,
-        baseline:     f32,
+        end-excluding-whitespace: u32,
+        end-including-newline: u32,
+        hard-break:   bool,
         ascent:       f32,
         descent:      f32,
-        left:         f32,
+        unscaled-ascent: f32,
+        height:       f32,
         width:        f32,
+        left:         f32,
+        baseline:     f32,
+        line-number:  u32,
+    }
+
+    enum text-direction { ltr, rtl }
+
+    enum rect-height-style {
+        tight, max, include-line-spacing-middle,
+        include-line-spacing-top, include-line-spacing-bottom, strut,
+    }
+
+    enum rect-width-style { tight, max }
+
+    record text-box {
+        rect:      rect,
+        direction: text-direction,
     }
 
     resource paragraph {
-        layout:              func(width: f32);
-        paint:               func(canvas: borrow<canvas>, at: point);
-        height:              func() -> f32;
-        max-intrinsic-width: func() -> f32;
-        min-intrinsic-width: func() -> f32;
-        alphabetic-baseline: func() -> f32;
-        lines:               func() -> list<line-metrics>;
-        rects-for-range:     func(start: u32, end: u32) -> list<rect>;
-        offset-at:           func(at: point) -> u32;
-        word-boundary:       func(offset: u32) -> tuple<u32, u32>;
+        layout:               func(width: f32);
+        paint:                func(canvas: borrow<canvas>, at: point);
+        height:               func() -> f32;
+        max-intrinsic-width:  func() -> f32;
+        min-intrinsic-width:  func() -> f32;
+        alphabetic-baseline:  func() -> f32;
+        ideographic-baseline: func() -> f32;
+        line-count:           func() -> u32;
+        lines:                func() -> list<line-metrics>;
+        selection-boxes:      func(start: u32, end: u32,
+                                   height: rect-height-style,
+                                   width: rect-width-style) -> list<text-box>;
+        offset-at:            func(at: point) -> u32;
+        word-boundary:        func(offset: u32) -> tuple<u32, u32>;
     }
 
     resource paragraph-builder {
@@ -364,6 +399,7 @@ macro_rules! wire_wasi_canvas {
                 stroke_join: __wc_types::StrokeJoin::Miter,
                 stroke_miter: 4.0,
                 blur: None,
+        filter: None,
             }
         }
 

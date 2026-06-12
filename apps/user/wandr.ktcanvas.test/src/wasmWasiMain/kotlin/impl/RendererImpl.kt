@@ -16,11 +16,13 @@ private fun fill(
 ) = Types.Paint(
     Types.PaintStyle.FILL, color, alpha, Types.BlendMode.SRC_OVER,
     true, shader, 0f, Types.StrokeCap.BUTT, Types.StrokeJoin.MITER, 4f, blur,
+    null,
 )
 
 private fun stroke(color: UInt, width: Float) = Types.Paint(
     Types.PaintStyle.STROKE, color, 255u.toUByte(), Types.BlendMode.SRC_OVER,
     true, null, width, Types.StrokeCap.ROUND, Types.StrokeJoin.ROUND, 4f, null,
+    null,
 )
 
 private fun rrect(r: Types.Rect, radius: Float): Types.RoundedRect {

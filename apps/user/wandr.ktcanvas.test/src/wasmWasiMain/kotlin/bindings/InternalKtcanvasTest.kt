@@ -99,7 +99,7 @@ internal external fun __wasm_import_clipPath(p0: kotlin.Int, p1: kotlin.Int, p2:
 internal external fun __wasm_import_clear(p0: kotlin.Int, p1: kotlin.Int): kotlin.Unit
 
 @kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.draw-paint")
-internal external fun __wasm_import_drawPaint(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Int, p3: kotlin.Int, p4: kotlin.Int, p5: kotlin.Int, p6: kotlin.Int, p7: kotlin.Int, p8: kotlin.Float, p9: kotlin.Int, p10: kotlin.Int, p11: kotlin.Float, p12: kotlin.Int, p13: kotlin.Int, p14: kotlin.Float): kotlin.Unit
+internal external fun __wasm_import_drawPaint(p0: kotlin.Int): kotlin.Unit
 
 @kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.draw-rect")
 internal external fun __wasm_import_drawRect(p0: kotlin.Int): kotlin.Unit
@@ -160,11 +160,17 @@ internal external fun __wasm_import_minIntrinsicWidth(p0: kotlin.Int): kotlin.Fl
 @kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[method]paragraph.alphabetic-baseline")
 internal external fun __wasm_import_alphabeticBaseline(p0: kotlin.Int): kotlin.Float
 
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[method]paragraph.ideographic-baseline")
+internal external fun __wasm_import_ideographicBaseline(p0: kotlin.Int): kotlin.Float
+
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[method]paragraph.line-count")
+internal external fun __wasm_import_lineCount(p0: kotlin.Int): kotlin.Int
+
 @kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[method]paragraph.lines")
 internal external fun __wasm_import_lines(p0: kotlin.Int, p1: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[method]paragraph.rects-for-range")
-internal external fun __wasm_import_rectsForRange(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Int, p3: kotlin.Int): kotlin.Unit
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[method]paragraph.selection-boxes")
+internal external fun __wasm_import_selectionBoxes(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Int, p3: kotlin.Int, p4: kotlin.Int, p5: kotlin.Int): kotlin.Unit
 
 @kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[method]paragraph.offset-at")
 internal external fun __wasm_import_offsetAt(p0: kotlin.Int, p1: kotlin.Float, p2: kotlin.Float): kotlin.Int

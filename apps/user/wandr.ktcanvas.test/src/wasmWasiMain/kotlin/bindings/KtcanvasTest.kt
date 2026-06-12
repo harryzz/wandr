@@ -192,6 +192,24 @@ import bindings.runtime.*
   }
 
   /**
+  Tint: combine each output pixel with `color` via `mode`
+  (CSS/skia provenance: SkColorFilters::Blend; icon tinting is
+  `mode = src-in`).
+  */
+  class ColorBlend(
+    var color: kotlin.UInt,
+    var mode: bindings.Types.BlendMode,
+  )
+
+  /**
+  Color filter applied to the paint's output — after color/shader
+  resolve, before blending into the destination.
+  */
+  sealed interface ColorFilter{ 
+    class Blend(val value: bindings.Types.ColorBlend) : ColorFilter
+    object Invert : ColorFilter
+  }
+  /**
   Per-draw styling. A value (not a resource): builder ergonomics live
   in guest bindings; the wire carries the resolved state. Used only
   as a parameter, so the `shader` borrow is canonical-ABI-legal.
@@ -217,6 +235,10 @@ import bindings.runtime.*
     Mask blur (shadows/glows); none = sharp.
     */
     var blur: bindings.Types.MaskBlur?,
+    /**
+    Color filter (icon tinting, inversion); none = pass-through.
+    */
+    var filter: bindings.Types.ColorFilter?,
   )
 
   // END OF TYPES
@@ -615,32 +637,55 @@ import bindings.runtime.*
     fun drawPaint(paint: bindings.Types.Paint) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+        val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=64, align=4)*/ allocator.allocate(64).address.toInt()
         var handle = this.__handle.value;
-        val option: kotlin.Int
-        val option2: kotlin.Int
+        (ptr + 0).ptr.storeInt(handle)
+        (ptr + 4).ptr.storeByte(paint.style.ordinal.toByte())
+        (ptr + 8).ptr.storeInt(paint.color.toInt())
+        (ptr + 12).ptr.storeByte(paint.alpha.toInt().toByte())
+        (ptr + 13).ptr.storeByte(paint.blend.ordinal.toByte())
+        (ptr + 14).ptr.storeByte((if(paint.antiAlias) 1 else 0).toByte())
         val payload0 = paint.shader
         if (payload0 != null) {
+          (ptr + 16).ptr.storeByte(1.toByte())
           var handle1 = payload0.__handle.value;
-          option = 1
-          option2 = handle1
+          (ptr + 20).ptr.storeInt(handle1)
         } else {
-          option = 0
-          option2 = 0
+          (ptr + 16).ptr.storeByte(0.toByte())
         }
-        val option6: kotlin.Int
-        val option7: kotlin.Int
-        val option8: kotlin.Float
-        val payload5 = paint.blur
-        if (payload5 != null) {
-          option6 = 1
-          option7 = payload5.style.ordinal
-          option8 = payload5.sigma
+        (ptr + 24).ptr.storeFloat(paint.strokeWidth)
+        (ptr + 28).ptr.storeByte(paint.strokeCap.ordinal.toByte())
+        (ptr + 29).ptr.storeByte(paint.strokeJoin.ordinal.toByte())
+        (ptr + 32).ptr.storeFloat(paint.strokeMiter)
+        val payload3 = paint.blur
+        if (payload3 != null) {
+          (ptr + 36).ptr.storeByte(1.toByte())
+          (ptr + 40).ptr.storeByte(payload3.style.ordinal.toByte())
+          (ptr + 44).ptr.storeFloat(payload3.sigma)
         } else {
-          option6 = 0
-          option7 = 0
-          option8 = 0.0f
+          (ptr + 36).ptr.storeByte(0.toByte())
         }
-        __wasm_import_drawPaint(handle, paint.style.ordinal, paint.color.toInt(), paint.alpha.toInt(), paint.blend.ordinal, (if(paint.antiAlias) 1 else 0), option, option2, paint.strokeWidth, paint.strokeCap.ordinal, paint.strokeJoin.ordinal, paint.strokeMiter, option6, option7, option8)
+        val payload6 = paint.filter
+        if (payload6 != null) {
+          (ptr + 48).ptr.storeByte(1.toByte())
+          // VariantLower START
+          when (val x = payload6) {
+            is bindings.Types.ColorFilter.Blend -> {
+              val payload7 = x.value
+              (ptr + 52).ptr.storeByte(0.toByte())
+              (ptr + 56).ptr.storeInt(payload7.color.toInt())
+              (ptr + 60).ptr.storeByte(payload7.mode.ordinal.toByte())
+            }
+            is bindings.Types.ColorFilter.Invert -> {
+              (ptr + 52).ptr.storeByte(1.toByte())
+            }
+            else -> error("unreachable")
+          }
+          // VariantLower END
+        } else {
+          (ptr + 48).ptr.storeByte(0.toByte())
+        }
+        __wasm_import_drawPaint(ptr)
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
       }
       // </editor-fold>
@@ -648,7 +693,7 @@ import bindings.runtime.*
     fun drawRect(r: bindings.Types.Rect, paint: bindings.Types.Paint) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
-        val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=64, align=4)*/ allocator.allocate(64).address.toInt()
+        val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=80, align=4)*/ allocator.allocate(80).address.toInt()
         var handle = this.__handle.value;
         (ptr + 0).ptr.storeInt(handle)
         (ptr + 4).ptr.storeFloat(r.x)
@@ -680,6 +725,26 @@ import bindings.runtime.*
         } else {
           (ptr + 52).ptr.storeByte(0.toByte())
         }
+        val payload6 = paint.filter
+        if (payload6 != null) {
+          (ptr + 64).ptr.storeByte(1.toByte())
+          // VariantLower START
+          when (val x = payload6) {
+            is bindings.Types.ColorFilter.Blend -> {
+              val payload7 = x.value
+              (ptr + 68).ptr.storeByte(0.toByte())
+              (ptr + 72).ptr.storeInt(payload7.color.toInt())
+              (ptr + 76).ptr.storeByte(payload7.mode.ordinal.toByte())
+            }
+            is bindings.Types.ColorFilter.Invert -> {
+              (ptr + 68).ptr.storeByte(1.toByte())
+            }
+            else -> error("unreachable")
+          }
+          // VariantLower END
+        } else {
+          (ptr + 64).ptr.storeByte(0.toByte())
+        }
         __wasm_import_drawRect(ptr)
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
       }
@@ -688,7 +753,7 @@ import bindings.runtime.*
     fun drawRoundedRect(rr: bindings.Types.RoundedRect, paint: bindings.Types.Paint) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
-        val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=96, align=4)*/ allocator.allocate(96).address.toInt()
+        val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=112, align=4)*/ allocator.allocate(112).address.toInt()
         var handle = this.__handle.value;
         (ptr + 0).ptr.storeInt(handle)
         (ptr + 4).ptr.storeFloat(rr.rect.x)
@@ -728,6 +793,26 @@ import bindings.runtime.*
         } else {
           (ptr + 84).ptr.storeByte(0.toByte())
         }
+        val payload6 = paint.filter
+        if (payload6 != null) {
+          (ptr + 96).ptr.storeByte(1.toByte())
+          // VariantLower START
+          when (val x = payload6) {
+            is bindings.Types.ColorFilter.Blend -> {
+              val payload7 = x.value
+              (ptr + 100).ptr.storeByte(0.toByte())
+              (ptr + 104).ptr.storeInt(payload7.color.toInt())
+              (ptr + 108).ptr.storeByte(payload7.mode.ordinal.toByte())
+            }
+            is bindings.Types.ColorFilter.Invert -> {
+              (ptr + 100).ptr.storeByte(1.toByte())
+            }
+            else -> error("unreachable")
+          }
+          // VariantLower END
+        } else {
+          (ptr + 96).ptr.storeByte(0.toByte())
+        }
         __wasm_import_drawRoundedRect(ptr)
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
       }
@@ -739,7 +824,7 @@ import bindings.runtime.*
     fun drawDoubleRoundedRect(outer: bindings.Types.RoundedRect, inner: bindings.Types.RoundedRect, paint: bindings.Types.Paint) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
-        val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=144, align=4)*/ allocator.allocate(144).address.toInt()
+        val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=160, align=4)*/ allocator.allocate(160).address.toInt()
         var handle = this.__handle.value;
         (ptr + 0).ptr.storeInt(handle)
         (ptr + 4).ptr.storeFloat(outer.rect.x)
@@ -791,6 +876,26 @@ import bindings.runtime.*
         } else {
           (ptr + 132).ptr.storeByte(0.toByte())
         }
+        val payload6 = paint.filter
+        if (payload6 != null) {
+          (ptr + 144).ptr.storeByte(1.toByte())
+          // VariantLower START
+          when (val x = payload6) {
+            is bindings.Types.ColorFilter.Blend -> {
+              val payload7 = x.value
+              (ptr + 148).ptr.storeByte(0.toByte())
+              (ptr + 152).ptr.storeInt(payload7.color.toInt())
+              (ptr + 156).ptr.storeByte(payload7.mode.ordinal.toByte())
+            }
+            is bindings.Types.ColorFilter.Invert -> {
+              (ptr + 148).ptr.storeByte(1.toByte())
+            }
+            else -> error("unreachable")
+          }
+          // VariantLower END
+        } else {
+          (ptr + 144).ptr.storeByte(0.toByte())
+        }
         __wasm_import_drawDoubleRoundedRect(ptr)
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
       }
@@ -799,7 +904,7 @@ import bindings.runtime.*
     fun drawOval(bounds: bindings.Types.Rect, paint: bindings.Types.Paint) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
-        val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=64, align=4)*/ allocator.allocate(64).address.toInt()
+        val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=80, align=4)*/ allocator.allocate(80).address.toInt()
         var handle = this.__handle.value;
         (ptr + 0).ptr.storeInt(handle)
         (ptr + 4).ptr.storeFloat(bounds.x)
@@ -831,6 +936,26 @@ import bindings.runtime.*
         } else {
           (ptr + 52).ptr.storeByte(0.toByte())
         }
+        val payload6 = paint.filter
+        if (payload6 != null) {
+          (ptr + 64).ptr.storeByte(1.toByte())
+          // VariantLower START
+          when (val x = payload6) {
+            is bindings.Types.ColorFilter.Blend -> {
+              val payload7 = x.value
+              (ptr + 68).ptr.storeByte(0.toByte())
+              (ptr + 72).ptr.storeInt(payload7.color.toInt())
+              (ptr + 76).ptr.storeByte(payload7.mode.ordinal.toByte())
+            }
+            is bindings.Types.ColorFilter.Invert -> {
+              (ptr + 68).ptr.storeByte(1.toByte())
+            }
+            else -> error("unreachable")
+          }
+          // VariantLower END
+        } else {
+          (ptr + 64).ptr.storeByte(0.toByte())
+        }
         __wasm_import_drawOval(ptr)
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
       }
@@ -839,7 +964,7 @@ import bindings.runtime.*
     fun drawLine(start: bindings.Types.Point, end: bindings.Types.Point, paint: bindings.Types.Paint) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
-        val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=64, align=4)*/ allocator.allocate(64).address.toInt()
+        val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=80, align=4)*/ allocator.allocate(80).address.toInt()
         var handle = this.__handle.value;
         (ptr + 0).ptr.storeInt(handle)
         (ptr + 4).ptr.storeFloat(start.x)
@@ -871,6 +996,26 @@ import bindings.runtime.*
         } else {
           (ptr + 52).ptr.storeByte(0.toByte())
         }
+        val payload6 = paint.filter
+        if (payload6 != null) {
+          (ptr + 64).ptr.storeByte(1.toByte())
+          // VariantLower START
+          when (val x = payload6) {
+            is bindings.Types.ColorFilter.Blend -> {
+              val payload7 = x.value
+              (ptr + 68).ptr.storeByte(0.toByte())
+              (ptr + 72).ptr.storeInt(payload7.color.toInt())
+              (ptr + 76).ptr.storeByte(payload7.mode.ordinal.toByte())
+            }
+            is bindings.Types.ColorFilter.Invert -> {
+              (ptr + 68).ptr.storeByte(1.toByte())
+            }
+            else -> error("unreachable")
+          }
+          // VariantLower END
+        } else {
+          (ptr + 64).ptr.storeByte(0.toByte())
+        }
         __wasm_import_drawLine(ptr)
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
       }
@@ -883,7 +1028,7 @@ import bindings.runtime.*
     fun drawArc(bounds: bindings.Types.Rect, startAngle: kotlin.Float, sweepAngle: kotlin.Float, includeCenter: kotlin.Boolean, paint: bindings.Types.Paint) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
-        val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=76, align=4)*/ allocator.allocate(76).address.toInt()
+        val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=92, align=4)*/ allocator.allocate(92).address.toInt()
         var handle = this.__handle.value;
         (ptr + 0).ptr.storeInt(handle)
         (ptr + 4).ptr.storeFloat(bounds.x)
@@ -918,6 +1063,26 @@ import bindings.runtime.*
         } else {
           (ptr + 64).ptr.storeByte(0.toByte())
         }
+        val payload6 = paint.filter
+        if (payload6 != null) {
+          (ptr + 76).ptr.storeByte(1.toByte())
+          // VariantLower START
+          when (val x = payload6) {
+            is bindings.Types.ColorFilter.Blend -> {
+              val payload7 = x.value
+              (ptr + 80).ptr.storeByte(0.toByte())
+              (ptr + 84).ptr.storeInt(payload7.color.toInt())
+              (ptr + 88).ptr.storeByte(payload7.mode.ordinal.toByte())
+            }
+            is bindings.Types.ColorFilter.Invert -> {
+              (ptr + 80).ptr.storeByte(1.toByte())
+            }
+            else -> error("unreachable")
+          }
+          // VariantLower END
+        } else {
+          (ptr + 76).ptr.storeByte(0.toByte())
+        }
         __wasm_import_drawArc(ptr)
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
       }
@@ -929,7 +1094,7 @@ import bindings.runtime.*
     fun drawPath(path: kotlin.String, rule: bindings.Types.FillRule, paint: bindings.Types.Paint) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
-        val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(48+3*4), align=4)*/ allocator.allocate((48+3*4)).address.toInt()
+        val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(64+3*4), align=4)*/ allocator.allocate((64+3*4)).address.toInt()
         var handle = this.__handle.value;
         (ptr + 0).ptr.storeInt(handle)
 
@@ -965,6 +1130,26 @@ import bindings.runtime.*
         } else {
           (ptr + (36+3*4)).ptr.storeByte(0.toByte())
         }
+        val payload7 = paint.filter
+        if (payload7 != null) {
+          (ptr + (48+3*4)).ptr.storeByte(1.toByte())
+          // VariantLower START
+          when (val x = payload7) {
+            is bindings.Types.ColorFilter.Blend -> {
+              val payload8 = x.value
+              (ptr + (52+3*4)).ptr.storeByte(0.toByte())
+              (ptr + (56+3*4)).ptr.storeInt(payload8.color.toInt())
+              (ptr + (60+3*4)).ptr.storeByte(payload8.mode.ordinal.toByte())
+            }
+            is bindings.Types.ColorFilter.Invert -> {
+              (ptr + (52+3*4)).ptr.storeByte(1.toByte())
+            }
+            else -> error("unreachable")
+          }
+          // VariantLower END
+        } else {
+          (ptr + (48+3*4)).ptr.storeByte(0.toByte())
+        }
         __wasm_import_drawPath(ptr)
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
       }
@@ -973,7 +1158,7 @@ import bindings.runtime.*
     fun drawImage(image: bindings.Types.Image, at: bindings.Types.Point, sampling: bindings.Types.Sampling, paint: bindings.Types.Paint) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
-        val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=64, align=4)*/ allocator.allocate(64).address.toInt()
+        val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=80, align=4)*/ allocator.allocate(80).address.toInt()
         var handle = this.__handle.value;
         (ptr + 0).ptr.storeInt(handle)
         var handle0 = image.__handle.value;
@@ -1007,6 +1192,26 @@ import bindings.runtime.*
         } else {
           (ptr + 52).ptr.storeByte(0.toByte())
         }
+        val payload7 = paint.filter
+        if (payload7 != null) {
+          (ptr + 64).ptr.storeByte(1.toByte())
+          // VariantLower START
+          when (val x = payload7) {
+            is bindings.Types.ColorFilter.Blend -> {
+              val payload8 = x.value
+              (ptr + 68).ptr.storeByte(0.toByte())
+              (ptr + 72).ptr.storeInt(payload8.color.toInt())
+              (ptr + 76).ptr.storeByte(payload8.mode.ordinal.toByte())
+            }
+            is bindings.Types.ColorFilter.Invert -> {
+              (ptr + 68).ptr.storeByte(1.toByte())
+            }
+            else -> error("unreachable")
+          }
+          // VariantLower END
+        } else {
+          (ptr + 64).ptr.storeByte(0.toByte())
+        }
         __wasm_import_drawImage(ptr)
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
       }
@@ -1018,7 +1223,7 @@ import bindings.runtime.*
     fun drawImageRect(image: bindings.Types.Image, src: bindings.Types.Rect, dst: bindings.Types.Rect, sampling: bindings.Types.Sampling, paint: bindings.Types.Paint) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
-        val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=88, align=4)*/ allocator.allocate(88).address.toInt()
+        val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=104, align=4)*/ allocator.allocate(104).address.toInt()
         var handle = this.__handle.value;
         (ptr + 0).ptr.storeInt(handle)
         var handle0 = image.__handle.value;
@@ -1057,6 +1262,26 @@ import bindings.runtime.*
           (ptr + 84).ptr.storeFloat(payload4.sigma)
         } else {
           (ptr + 76).ptr.storeByte(0.toByte())
+        }
+        val payload7 = paint.filter
+        if (payload7 != null) {
+          (ptr + 88).ptr.storeByte(1.toByte())
+          // VariantLower START
+          when (val x = payload7) {
+            is bindings.Types.ColorFilter.Blend -> {
+              val payload8 = x.value
+              (ptr + 92).ptr.storeByte(0.toByte())
+              (ptr + 96).ptr.storeInt(payload8.color.toInt())
+              (ptr + 100).ptr.storeByte(payload8.mode.ordinal.toByte())
+            }
+            is bindings.Types.ColorFilter.Invert -> {
+              (ptr + 92).ptr.storeByte(1.toByte())
+            }
+            else -> error("unreachable")
+          }
+          // VariantLower END
+        } else {
+          (ptr + 88).ptr.storeByte(0.toByte())
         }
         __wasm_import_drawImageRect(ptr)
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
@@ -1159,17 +1384,68 @@ import bindings.runtime.*
     JUSTIFY,
   }
 
+  /**
+  Per-line metrics — the full editor-grade shape (cursor placement,
+  line hit-testing). Field provenance: skia textlayout LineMetrics,
+  which is what every shipped host-shaping engine exposes.
+  */
   class LineMetrics(
     var startOffset: kotlin.UInt,
     /**
     UTF-8 byte offsets into the paragraph text
     */
     var endOffset: kotlin.UInt,
-    var baseline: kotlin.Float,
+    /**
+    `end-offset` with trailing whitespace excluded.
+    */
+    var endExcludingWhitespace: kotlin.UInt,
+    /**
+    `end-offset` including a trailing hard-break newline.
+    */
+    var endIncludingNewline: kotlin.UInt,
+    /**
+    True when the line ends in an explicit newline.
+    */
+    var hardBreak: kotlin.Boolean,
     var ascent: kotlin.Float,
     var descent: kotlin.Float,
-    var left: kotlin.Float,
+    /**
+    Ascent before any line-height multiplier.
+    */
+    var unscaledAscent: kotlin.Float,
+    var height: kotlin.Float,
     var width: kotlin.Float,
+    var left: kotlin.Float,
+    var baseline: kotlin.Float,
+    var lineNumber: kotlin.UInt,
+  )
+
+  enum class TextDirection {
+    LTR,
+    RTL,
+  }
+
+  /**
+  How tall the rects returned by `selection-boxes` are (CSS caret /
+  selection-highlight distinctions; skparagraph RectHeightStyle).
+  */
+  enum class RectHeightStyle {
+    TIGHT,
+    MAX,
+    INCLUDE_LINE_SPACING_MIDDLE,
+    INCLUDE_LINE_SPACING_TOP,
+    INCLUDE_LINE_SPACING_BOTTOM,
+    STRUT,
+  }
+
+  enum class RectWidthStyle {
+    TIGHT,
+    MAX,
+  }
+
+  class TextBox(
+    var rect: bindings.Types.Rect,
+    var direction: bindings.Layout.TextDirection,
   )
   class Paragraph : kotlin.AutoCloseable {
     internal var __handle: bindings.runtime.ResourceHandle = bindings.runtime.ResourceHandle(0)
@@ -1234,6 +1510,26 @@ import bindings.runtime.*
       }
       // </editor-fold>
     }
+    fun ideographicBaseline(): kotlin.Float {
+      // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+        var handle = this.__handle.value;
+        val ret: kotlin.Float = __wasm_import_ideographicBaseline(handle)
+        kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
+        return ret
+      }
+      // </editor-fold>
+    }
+    fun lineCount(): kotlin.UInt {
+      // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+        var handle = this.__handle.value;
+        val ret: kotlin.Int = __wasm_import_lineCount(handle)
+        kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
+        return ret.toUInt()
+      }
+      // </editor-fold>
+    }
     fun lines(): kotlin.collections.List<bindings.Layout.LineMetrics> {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
@@ -1244,16 +1540,22 @@ import bindings.runtime.*
 
         val list = kotlin.collections.ArrayList<bindings.Layout.LineMetrics>((ptr + 4).ptr.loadInt())
         for (i in 0 until (ptr + 4).ptr.loadInt()) {
-          val base = ((ptr + 0).ptr.loadInt()) + (i * 28)
+          val base = ((ptr + 0).ptr.loadInt()) + (i * 52)
           
           list.add(bindings.Layout.LineMetrics(
           (base + 0).ptr.loadInt().toUInt(),
           (base + 4).ptr.loadInt().toUInt(),
-          (base + 8).ptr.loadFloat(),
-          (base + 12).ptr.loadFloat(),
-          (base + 16).ptr.loadFloat(),
+          (base + 8).ptr.loadInt().toUInt(),
+          (base + 12).ptr.loadInt().toUInt(),
+          ((base + 16).ptr.loadUByte().toInt() != 0),
           (base + 20).ptr.loadFloat(),
           (base + 24).ptr.loadFloat(),
+          (base + 28).ptr.loadFloat(),
+          (base + 32).ptr.loadFloat(),
+          (base + 36).ptr.loadFloat(),
+          (base + 40).ptr.loadFloat(),
+          (base + 44).ptr.loadFloat(),
+          (base + 48).ptr.loadInt().toUInt(),
           ))
         }
         return list
@@ -1261,25 +1563,29 @@ import bindings.runtime.*
       // </editor-fold>
     }
     /**
-    Caret/selection geometry for a UTF-8 byte range.
+    Caret/selection geometry for a UTF-8 byte range, with the
+    box-shape policy callers like text editors need.
     */
-    fun rectsForRange(start: kotlin.UInt, end: kotlin.UInt): kotlin.collections.List<bindings.Types.Rect> {
+    fun selectionBoxes(start: kotlin.UInt, end: kotlin.UInt, height: bindings.Layout.RectHeightStyle, width: bindings.Layout.RectWidthStyle): kotlin.collections.List<bindings.Layout.TextBox> {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(2*4), align=4)*/ allocator.allocate((2*4)).address.toInt()
-        __wasm_import_rectsForRange(handle, start.toInt(), end.toInt(), ptr)
+        __wasm_import_selectionBoxes(handle, start.toInt(), end.toInt(), height.ordinal, width.ordinal, ptr)
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
 
-        val list = kotlin.collections.ArrayList<bindings.Types.Rect>((ptr + 4).ptr.loadInt())
+        val list = kotlin.collections.ArrayList<bindings.Layout.TextBox>((ptr + 4).ptr.loadInt())
         for (i in 0 until (ptr + 4).ptr.loadInt()) {
-          val base = ((ptr + 0).ptr.loadInt()) + (i * 16)
+          val base = ((ptr + 0).ptr.loadInt()) + (i * 20)
           
-          list.add(bindings.Types.Rect(
+          list.add(bindings.Layout.TextBox(
+          bindings.Types.Rect(
           (base + 0).ptr.loadFloat(),
           (base + 4).ptr.loadFloat(),
           (base + 8).ptr.loadFloat(),
           (base + 12).ptr.loadFloat(),
+          ),
+          bindings.Layout.TextDirection.values()[(base + 16).ptr.loadUByte().toInt()],
           ))
         }
         return list
