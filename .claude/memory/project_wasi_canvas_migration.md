@@ -167,6 +167,22 @@ ffmpeg (gnome-screenshot/xwd-root fail under WSLg); on-disk
 wandr.slint.test components/ui.wasm predates the canvas-context realignment
 and no longer instantiates (rebuild before using it as a desktop reference).
 
+**FINAL DESIGN STATE (2026-06-12) — the user-fixed GOAL: architecturally
+clean, NO overlapping functionality, WASI-acceptable, 100% consumable by
+the reference libraries.** Both contracts redesigned and acceptance-
+checked (NOT wired): proposals/wasi-canvas/REDESIGN-0.0.2.md (§11 =
+overlap audit + final 4-criteria check, all PASS; one documented R5
+exception: `clear`) and proposals/wasi-input-handlers/REDESIGN-0.0.2.md
+(0.0.1 pointer-event FAILED the six-consumer union — missing
+button/buttons/device/tilt/twist + enter/leave kinds, all
+breaking-class; fixed shapes wasm-tools-validated). SEQUENCING DECISION
+(path B): implement BOTH 0.0.2 packages side-by-side first (scene = a
+re-skin of the host WasiDrawable machinery), THEN one single Kotlin
+finale (images + drawables→scene + blobs→paragraphs + setMatrix→guest
+matrix tracking) — NOT stage-4-on-0.0.1 (would touch skiko twice).
+After that event both packages are FROZEN: evolution = additive methods
+(R2) or side-by-side versions (R3) only.
+
 **The four REFERENCE LIBRARIES (validation set, user-fixed 2026-06-12):
 skiko-compose, dioxus, slint, Avalonia UI** — every wasi:canvas contract
 decision must be cross-checked against ALL FOUR (they span the ownership

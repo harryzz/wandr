@@ -9,7 +9,7 @@
 - [RULE: shared WIT change → rebuild ALL consumers + restart zygote](feedback_shared_wit_rebuild_all_consumers.md) — shared-type ABI breaks every importer (skiko Kotlin binding is hand-maintained); run-hybrid-stack.sh re-preloads.
 
 ## Projects / tasks
-- [✅ wasi:canvas + wasi:input-handlers migration](project_wasi_canvas_migration.md) — drafts in proposals/, host impl default-on; Slint/dioxus(+Signal)/all-4-chrome migrated + device-verified; porting recipe + wit-bindgen multi-package gotchas (path order, qualified world, generate_all, textual export!).
+- [wasi:canvas + wasi:input-handlers — migration stages 1-3 ✅ + FINAL 0.0.2 design](project_wasi_canvas_migration.md) — GOAL fixed: clean/no-overlap/WASI-OK/100%-consumable; both REDESIGN-0.0.2.md docs acceptance-checked; path B next (0.0.2 side-by-side, then ONE Kotlin finale); old hook: drafts in proposals/, host impl default-on; Slint/dioxus(+Signal)/all-4-chrome migrated + device-verified; porting recipe + wit-bindgen multi-package gotchas (path order, qualified world, generate_all, textual export!).
 - [✅ Task 101: desktop dev loop + W3C key-input](project_desktop_dev_loop.md) — same wasm as device runs on x86_64 host (WSLg-verified); WANDR_DESKTOP_SIZE + JIT; gotchas: present path was MISSING (softbuffer), on-resize gap masqueraded as 3 render bugs, key-input v3 = W3C codes+modifiers (HW-kbd verified).
 - [Project: WASM Android Runtime](project_wasm_runtime.md) — goals, stack, current status.
 - [✅ WART→WANDR rename + redeploy](project_wandr_rename.md) — whole-project rename + full --no-art redeploy; 4 bring-up gotchas; what intentionally kept `wart`.

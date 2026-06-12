@@ -7,6 +7,18 @@
 > (Slint/dioxus/chrome-class) — consume the package **without any further
 > contract modification**, while staying inside WASI's design rules.
 
+## 0. Design goal (the acceptance criteria, user-fixed 2026-06-12)
+
+> **An architecturally clean design, without overlapping
+> functionalities, acceptable to WASI, and 100% consumable by the
+> reference UI libraries.**
+
+Every section below serves one of those four clauses; §11 is the final
+check of all four. "100%" means: every operation a shipped or
+first-port renderer emits has a contract home — named deferrals are
+rare ops that don't block a port (proven: Slint SHIPPED with the same
+deferral class outstanding).
+
 ## 1. Why a redesign, and the method error it corrects
 
 The 0.0.1 draft was derived from a **tooling snapshot**, not from the
@@ -492,3 +504,42 @@ Compose's UTF-16 units through unchanged. ASCII masks the mismatch today.
 canonical encoding) and the Kotlin adapter must convert at the boundary —
 a host-impl/adapter correctness item discovered by the stage-3 source
 read, recorded here so it's resolved by decision rather than by accident.
+
+## 11. Overlap audit + final acceptance check (2026-06-12)
+
+### 11a. Overlap audit — no two verbs doing the same job
+
+Apparent pairs examined; each is LAYERING or an AXIS, except two
+documented R5 exceptions:
+
+| Pair | Verdict |
+|---|---|
+| `glyphs` vs `layout` (both draw text) | NOT overlap — the text-shaping axis; disjoint consumer classes, a world imports one (the 0.0.1 two-text-layers rule, re-affirmed) |
+| `picture` vs `scene.layer` | layered — a layer REFERENCES a picture; scene adds only mutability + replay-time resolution |
+| `save-layer(alpha)` vs `layer.set-alpha` | axis — scoped compositing while drawing vs retained property captured by recordings |
+| `paint.blur` vs `layer.set-shadow-elevation` | justified pair — mask blur is per-geometry; elevation shadows derive from the LAYER's clip outline (ambient+spot model) and must live in the retained node so capturing recordings keep them |
+| `draw-image` vs `image-pattern` shader | standard 2D split — composite op vs fill source (every 2D API has both) |
+| offscreen+`snapshot` vs `picture` | different cost models — raster cache (icons) vs vector replay (scenes); consumers use both for different content |
+| `clear(color)` vs `draw-paint{blend: src}` | **documented R5 exception** — semantically derivable, kept because it is the universal canvas idiom AND the host's distinct fast path (GPU clear); the one deliberate redundancy in the package |
+| `embedding` vs `frame-handler` | different packages, complementary — canvas acquisition vs frame driving |
+
+Net: zero unjustified overlaps; one idiom exception (`clear`) and one
+retained/immediate shadow pair, both with recorded rationale.
+
+### 11b. Final acceptance check
+
+| Criterion | Status | Evidence |
+|---|---|---|
+| Architecturally clean | **PASS** | ownership axes (§3) put an interface boundary wherever ownership flips; profiles = worlds (§3b); R1–R5 make evolution additive-by-construction; platform remainder (window/IME/lifecycle) correctly OUTSIDE the package |
+| No overlapping functionality | **PASS** | §11a — layering/axes throughout; two justified, documented exceptions |
+| WASI-acceptable | **PASS (design level)** | full package machine-validated (wasm-tools, incl. all §9 amendments); DesignPrinciples re-verified verbatim against WASI@main; capabilities via the graphics factory; optional interfaces per modularity; interposition holds (scene implementable over draw); borrow-lifetime semantics specified host-retained. Formal acceptance = the phase-0→3 campaign (champion, portability criteria, 2 implementations) — a process question, not a design gap |
+| 100% reference-library consumable | **PASS** | Compose: full, incl. `scene` (= its RenderNode) — stages 1–3 shipped the geometry+text half; dioxus: already shipped on the draft; Slint: the shipped proving consumer; Avalonia: every IDrawingContextImpl op mapped (§9a), first-port complete with the same rare-deferral class Slint shipped with. Prospects beyond the set: egui = one additive promotion (`draw-mesh`); Flutter = contract-ready, gated only on dart2wasm WASI |
+
+**Companion check**: `wasi:input-handlers` gets the same treatment in
+`proposals/wasi-input-handlers/REDESIGN-0.0.2.md` — its 0.0.1
+pointer-event FAILED the six-consumer union (buttons/device/tilt/
+enter-leave, all breaking-class) and is fixed there; both packages bump
+together in the single path-B migration event, after which BOTH are
+frozen: all reference libraries consume the same two contracts, and
+nothing changes later except by additive method (R2) or deliberate
+side-by-side version (R3).

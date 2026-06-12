@@ -68,6 +68,21 @@ variant, since its renderer already speaks the same shapes.
   `list<record>` returns).
 - `COMPATIBILITY.md` — the hard-break analysis that gated this draft.
 
+## The 0.0.2 redesign (the forward design — read it first)
+
+**`REDESIGN-0.0.2.md`** supersedes this README's design posture (NOT yet
+wired): goal = architecturally clean, no overlapping functionality,
+WASI-acceptable, 100% consumable by the four reference libraries
+(skiko-compose, dioxus, slint, Avalonia UI — §1b fixes the validation
+set). It carries the binding evolution rules (R1 union-sized
+breaking shapes / R2 additive methods / R3 version events / R4 binding
+floor / R5 no derivable verbs), the ownership-axes model, the new
+optional `scene` interface, out-of-sample validations (Avalonia, egui,
+Flutter), the overlap audit and the final acceptance check (§11).
+Companion: `../wasi-input-handlers/REDESIGN-0.0.2.md` (pointer-event
+union fixes). Both packages bump together in one migration event
+(path B: implement 0.0.2 side-by-side, then the single Kotlin finale).
+
 ## Next steps
 
 1. ~~Host implementation behind a feature flag~~ **DONE 2026-06-11**:
