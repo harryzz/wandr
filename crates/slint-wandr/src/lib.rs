@@ -61,7 +61,7 @@ pub(crate) use bindings::wandr::ui_shell::{
 /// points straight at the proposal's 0.0.2 wit dir.
 mod canvas_bindings {
     wit_bindgen::generate!({
-        path: "../../proposals/wasi-canvas/wit-0.0.2",
+        path: "../../proposals/wasi-canvas/wit",
         world: "embedded-canvas-guest",
     });
 }

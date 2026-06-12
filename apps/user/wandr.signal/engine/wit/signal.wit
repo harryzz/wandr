@@ -243,7 +243,7 @@ world signal-engine {
   export chat;
   /// Mic capture + AAudio playback for live calls (Phase 2b-ii). Host-provided
   /// (skiko-gfx); after `wac plug`, this remains a host import of the composite.
-  import my:skiko-gfx/audio@0.1.0;
+  import wasi:audio/pcm@0.0.1;
   /// Drive the ringer + comms session on wandr-arbiter-audio (host-forwarded).
   import wandr:audio-focus/focus@0.1.0;
   /// Read the current call route (earpiece/speaker) so the call loop can re-open

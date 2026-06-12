@@ -52,7 +52,7 @@ build_system_wasm() {
 MD_WASM=$(build_system_wasm "apps/system/wandr.markdown.renderer" "markdown_renderer.wasm")
 EM_WASM=$(build_system_wasm "apps/system/wandr.emoji.picker"      "emoji_picker.wasm")
 # Task 57 — the dedicated launcher: a light Rust canvas guest (exports
-# my:skiko-gfx/renderer; ~70 KB; no Kotlin/Compose → leak-immune).
+# wasi:input-handlers; ~70 KB; no Kotlin/Compose → leak-immune).
 LN_WASM=$(build_system_wasm "apps/system/wandr.launcher"          "wandr_launcher.wasm")
 # Task 55 — the status bar: light Rust top-overlay canvas guest (~48 KB).
 SB_WASM=$(build_system_wasm "apps/system/wandr.statusbar"         "wandr_statusbar.wasm")
@@ -127,8 +127,8 @@ if [[ ! -f "$WANDR_APP_WASM" ]]; then
     echo "✗ $WANDR_APP_WASM not found." >&2
     echo "  Build it via scripts/standalone-launch.sh's Kotlin pipeline:" >&2
     echo "    cd wandr-app && ./gradlew compileProductionExecutableKotlinWasmWasi" >&2
-    echo "    wasm-tools component embed --world my:skiko-gfx/skiko-ui \\" >&2
-    echo "        wit/skiko-gfx.wit \\" >&2
+    echo "    wasm-tools component embed --world wandr-app \\" >&2
+    echo "        apps/user/wandr-app/wit \\" >&2
     echo "        wandr-app/build/.../wandr-app.wasm -o /tmp/embedded.wasm" >&2
     echo "    wasm-tools component new /tmp/embedded.wasm \\" >&2
     echo "        --adapt wasmtime-src/.../wasi_snapshot_preview1.wasm \\" >&2

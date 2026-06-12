@@ -1,30 +1,50 @@
-package wasi:input-handlers@0.0.1;
+package wasi:input-handlers@0.0.2;
 
-// DRAFT (wandr, 2026-06-11) — push-model input for HOST-DRIVEN (reactor)
-// runtimes: the guest EXPORTS handlers, the embedder calls them. The
-// reactor-model counterpart to wasi:surface's guest-pulled pollables
-// (precedent for handler exports: wasi:http's incoming-handler). Pairs
-// naturally with wasi:canvas + its embedding interface, completing the
-// my:skiko-gfx-free guest. Hosts probe each interface independently and,
-// per input type, route EXCLUSIVELY to a bound handler (legacy paths only
-// when unbound) — so guests exporting both never see duplicates.
+// 0.0.2 = the six-consumer union of 0.0.1's pointer-event (see
+// REDESIGN-0.0.2.md): + device kind, changed-button + held-buttons
+// (W3C button/buttons — host-authoritative because guests miss ups
+// outside the surface), pen tilt/twist (0 when unreported, the
+// pressure convention), enter/leave hover kinds, and the optional
+// gesture-handler for platform-resolved trackpad gestures (which
+// produce no pointer streams anywhere). key-handler and frame-handler
+// are unchanged from 0.0.1 by decision (code+text spans the W3C key
+// model; density/configure belongs to the surface vocabulary).
+//
+// Multi-touch (normative): W3C per-contact streams keyed by `id` —
+// host-assigned, stable for the contact's lifetime, reusable after
+// up/cancel; 0 = first contact / the mouse. No snapshot event exists:
+// snapshot-camp frameworks assemble guest-side from the id map.
 
-/// Pointer/touch/mouse. Coordinates are surface units (physical px),
-/// matching the canvas the guest draws into.
 interface pointer-handler {
-    enum kind { down, up, move, scroll, cancel }
+    enum kind { down, up, move, scroll, cancel, enter, leave }
+
+    enum pointer-device { unknown, mouse, touch, pen }
+
+    /// The button that CHANGED (down/up); none for move/scroll.
+    enum button { none, primary, secondary, middle, back, forward }
+
+    /// Buttons currently held.
+    flags buttons { primary, secondary, middle, back, forward }
 
     record pointer-event {
-        /// Multi-touch pointer id (0 = first finger / the mouse).
         id: u32,
         kind: kind,
+        device: pointer-device,
         x: f32,
         y: f32,
         /// 0.0..1.0; 0.0 when the device doesn't report pressure.
         pressure: f32,
-        /// Scroll deltas (kind == scroll only; surface units).
+        /// Pen tilt in degrees; 0 when unreported.
+        tilt-x: f32,
+        tilt-y: f32,
+        /// Pen barrel rotation in degrees; 0 when unreported.
+        twist: f32,
+        /// Scroll deltas (kind == scroll only; surface units, W3C
+        /// wheel sign: positive = content moves down/right).
         scroll-dx: f32,
         scroll-dy: f32,
+        button: button,
+        buttons: buttons,
         alt: bool,
         ctrl: bool,
         meta: bool,
@@ -34,11 +54,7 @@ interface pointer-handler {
     on-pointer: func(ev: pointer-event);
 }
 
-/// Keyboard — the W3C UIEvents model (same record as
-/// my:skiko-gfx/key-input, which this supersedes for new-style guests):
-/// `code` = the physical-key token ("KeyA", "ArrowLeft", …;
-/// https://w3c.github.io/uievents-code/), "" if unidentified; `text` =
-/// the produced text, layout- and modifier-resolved by the host.
+/// Unchanged from 0.0.1 (decision recorded in REDESIGN-0.0.2.md).
 interface key-handler {
     record key-event {
         down:   bool,
@@ -50,16 +66,37 @@ interface key-handler {
         meta:   bool,
         shift:  bool,
     }
-
     on-key: func(ev: key-event);
 }
 
-/// Frame driving + surface geometry, for embedders that own the render
-/// loop. `on-frame` is where a wasi:canvas guest brackets its drawing
-/// with embedding.begin-frame/end-frame.
+/// Unchanged from 0.0.1.
 interface frame-handler {
     on-frame:  func(nanos: u64);
     on-resize: func(width: u32, height: u32);
+}
+
+/// OPTIONAL — platform-resolved continuous gestures (trackpad
+/// pinch/rotate class). Delivered ONLY for gestures the platform
+/// provides no pointer streams for; touchscreen gestures arrive as
+/// pointer contacts and are recognized by the GUEST framework.
+interface gesture-handler {
+    enum phase { begin, update, end, cancel }
+
+    record gesture-event {
+        phase: phase,
+        /// Focal point, surface units.
+        x: f32,
+        y: f32,
+        /// Multiplicative scale delta since the previous event (1.0 = none).
+        scale: f32,
+        /// Rotation delta in degrees since the previous event.
+        rotation: f32,
+        /// Pan delta since the previous event, surface units.
+        pan-dx: f32,
+        pan-dy: f32,
+    }
+
+    on-gesture: func(ev: gesture-event);
 }
 
 /// What a full new-style guest exports.
@@ -69,8 +106,8 @@ world input-guest {
     export frame-handler;
 }
 
-/// Probe-only worlds — hosts bind each independently after instantiation
-/// (a guest may take any subset).
+/// Probe-only worlds — hosts bind each independently.
 world pointer-handler-world { export pointer-handler; }
 world key-handler-world     { export key-handler; }
 world frame-handler-world   { export frame-handler; }
+world gesture-handler-world { export gesture-handler; }

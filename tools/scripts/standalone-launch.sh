@@ -77,8 +77,8 @@ Build per CLAUDE.md "Build pipeline" (Kotlin → wasm → component → cwasm):
   ./gradlew compileProductionExecutableKotlinWasmWasi --console=plain --no-daemon
 
   wasm-tools component embed \\
-      --world my:skiko-gfx/skiko-ui \\
-      $REPO_ROOT/wit/skiko-gfx.wit \\
+      --world wandr-app \\
+      $REPO_ROOT/apps/user/wandr-app/wit \\
       build/compileSync/wasmWasi/main/productionExecutable/kotlin/wandr-app.wasm \\
       -o /tmp/embedded.wasm
 

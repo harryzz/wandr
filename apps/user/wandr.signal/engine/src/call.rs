@@ -25,7 +25,7 @@ use wandr_call::local_lan_ip;
 use wandr_call::signal::{CallSignal, CallState, HangupKind, SignalCall};
 use wandr_call::turn::TurnConfig;
 
-use crate::my::skiko_gfx::audio::{self, ChannelLayout, Format, StreamClass, TrackConfig};
+use crate::wasi::audio::pcm::{Capture, ChannelLayout, Format, Playback, StreamClass, StreamConfig};
 use crate::wandr::audio_focus::{controls, focus};
 use crate::wandr::crypto::aead::AeadKey;
 use crate::wandr::crypto::types::AeadAlgo;
@@ -306,8 +306,8 @@ struct ActiveCall {
     call: SignalCall,
     sock: UdpSocket,
     peer_aci: String,
-    cap: Option<u32>,
-    trk: Option<u32>,
+    cap: Option<Capture>,
+    trk: Option<Playback>,
     track_started: bool,
     /// The route (`true`=speaker) the open output track was created with — so a
     /// mid-call toggle (wandr:audio-focus/controls) can re-open it on the new device.
@@ -400,7 +400,7 @@ impl ActiveCall {
         // avoids a close/re-open every tick.
         let want_speaker = matches!(controls::get_route(), controls::AudioRoute::Speaker);
         if self.trk.is_some() && want_speaker != self.cur_speaker {
-            if let Some(t) = self.trk.take() { audio::close(t); }
+            drop(self.trk.take()); // resource drop runs the host close
             self.track_started = false;
             self.play_buf.clear();
             self.cur_speaker = want_speaker;
@@ -417,23 +417,21 @@ impl ActiveCall {
             // this device — voice-comm usage gets -889). The mono Opus frames are
             // duplicated L/R below. voice-call class → the host routes to the
             // arbiter's call route (earpiece by default, speaker on `audio-route`).
-            let cfg = TrackConfig { sample_rate: SAMPLE_RATE, channel_layout: ChannelLayout::Stereo, format: Format::PcmF32, class: StreamClass::VoiceCall };
-            let h = audio::create_track(cfg);
-            if h != 0 {
+            let cfg = StreamConfig { sample_rate: SAMPLE_RATE, channel_layout: ChannelLayout::Stereo, format: Format::PcmF32, class: StreamClass::VoiceCall };
+            if let Ok(h) = Playback::open(cfg) {
                 self.trk = Some(h); // started after the first write (write-then-start)
                 self.cur_speaker = want_speaker; // the route this track opened with
             }
         }
         if self.trk.is_some() && self.cap.is_none() {
             // Capture only after the output is up (see ORDER note above).
-            let cfg = TrackConfig { sample_rate: SAMPLE_RATE, channel_layout: ChannelLayout::Mono, format: Format::PcmF32, class: StreamClass::VoiceCall };
-            let h = audio::open_capture(cfg);
-            if h != 0 {
-                audio::start(h);
+            let cfg = StreamConfig { sample_rate: SAMPLE_RATE, channel_layout: ChannelLayout::Mono, format: Format::PcmF32, class: StreamClass::VoiceCall };
+            if let Ok(h) = Capture::open(cfg) {
+                let _ = h.start();
                 self.cap = Some(h);
             }
         }
-        if let Some(cap) = self.cap {
+        if let Some(cap) = &self.cap {
             // Drain ALL captured audio each tick, not one frame: the engine ticks at
             // ~35/s (>20 ms apart), but the mic produces 50×20 ms frames/s. A single
             // FRAME read per tick falls behind real-time, the host capture buffer fills
@@ -441,7 +439,7 @@ impl ActiveCall {
             // side's jitter buffer starves (interruptions/pops). Loop until the
             // capture ring/buffer is empty (a short read = drained).
             loop {
-                let chunk = audio::read_pcm_f32(cap, FRAME as u32);
+                let chunk = cap.read(FRAME as u32);
                 let n = chunk.len();
                 if n == 0 { break; }
                 for &s in &chunk { let a = s.abs(); if a > self.mic_peak { self.mic_peak = a; } }
@@ -455,7 +453,7 @@ impl ActiveCall {
                 }
             }
         }
-        if let Some(trk) = self.trk {
+        if let Some(trk) = &self.trk {
             // 1. Drain every decoded frame into the stereo playout FIFO (mono Opus
             //    → L/R). The host ring is tiny (~32 ms); writing each frame straight
             //    through dropped most of a jittery burst. Buffer here instead.
@@ -479,13 +477,13 @@ impl ActiveCall {
             //    the stereo frames it accepted (2 samples each). Keep the rest for
             //    the next tick rather than dropping it.
             if !self.play_buf.is_empty() {
-                let frames = audio::write_pcm_f32(trk, &self.play_buf) as usize;
+                let frames = trk.write(&self.play_buf) as usize;
                 let consumed = (frames * 2).min(self.play_buf.len());
                 if consumed > 0 {
                     self.play_buf.drain(..consumed);
                     self.wr_ok += 1;
                     if !self.track_started {
-                        audio::start(trk); // write-then-start: prime before the HAL pulls
+                        let _ = trk.start(); // write-then-start: prime before the HAL pulls
                         self.track_started = true;
                     }
                 } else {
@@ -496,12 +494,10 @@ impl ActiveCall {
     }
 
     fn teardown_audio(&mut self) {
-        if let Some(c) = self.cap.take() {
-            audio::close(c);
-        }
-        if let Some(t) = self.trk.take() {
-            audio::close(t);
-        }
+        // Resource drops run the host's close (never leave streams across
+        // a call end).
+        drop(self.cap.take());
+        drop(self.trk.take());
         self.teardown_video();
     }
 

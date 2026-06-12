@@ -123,7 +123,7 @@ Canonical map: **`docs/repository-layout.md`**. Top level:
 ```
 apps/{system,user}/   wandrpkgs (system chrome + user apps); native = wandr-*, wandrpkg = wandr.*
 runtime/              native Rust host stack — wandr-host (wasmtime+skia+EGL), wandr-arbiter
-wit/                  canonical WIT (skiko-gfx.wit is the runtime contract)
+wit/                  canonical wandr:* WIT (ui-shell/device/chrome/assets/ime…)
 crates/               shared guest-side Rust libs (dioxus-canvas)
 external/             submodules: skiko, wasmtime, compose-multiplatform-core, kotlin, subsecond
 tools/scripts/        build-system-wandrpkgs.sh, run-hybrid-stack.sh, build-host-android.sh, …
@@ -181,6 +181,8 @@ the user asks or names one):
 
 ## WIT sync rule (one-liner)
 
-When `wit/skiko-gfx.wit` changes, mirror it to `external/skiko/skiko/wit/` and
-every consumer's `wit/deps/skiko-gfx/`. Full command + binding-regen note:
-`docs/build-pipeline.md`.
+RETIRED with my:skiko-gfx (Phase C, task 105). The canonical contracts are
+`proposals/wasi-canvas/wit`, `proposals/wasi-input-handlers/wit`, and the
+`wit/` packages (ui-shell/device/chrome/assets/ime); consumers carry
+subset COPIES in their `wit/deps/` (subset-linking is sound — the host
+provides supersets). Sync a copy only when a consumer needs a new verb.

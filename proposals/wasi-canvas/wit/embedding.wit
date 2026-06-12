@@ -1,4 +1,4 @@
-package wasi:canvas@0.0.1;
+package wasi:canvas@0.0.2;
 
 
 // NON-NORMATIVE embedding example (kept in the draft because the proving

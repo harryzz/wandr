@@ -96,7 +96,7 @@ swap) and delete the matching delegation block in
   `input_handlers_bindings` (0.0.1).
 - WIT trees: `wit/skiko-gfx.wit` + every consumer mirror deleted (the
   WIT-sync rule retires from CLAUDE.md with it); proposals' 0.0.1
-  canvas/input trees dropped, `wit-0.0.2` renames to `wit/`.
+  canvas/input trees dropped, `wit` renames to `wit/`.
 
 *Guest-side cleanup rides Phase B, not C:* skiko's legacy arms (the
 `wc()` gate fallbacks, `witAttrs`, blob paths, `node/` legacy verbs,
