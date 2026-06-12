@@ -167,4 +167,15 @@ ffmpeg (gnome-screenshot/xwd-root fail under WSLg); on-disk
 wandr.slint.test components/ui.wasm predates the canvas-context realignment
 and no longer instantiates (rebuild before using it as a desktop reference).
 
+**The four REFERENCE LIBRARIES (validation set, user-fixed 2026-06-12):
+skiko-compose, dioxus, slint, Avalonia UI** — every wasi:canvas contract
+decision must be cross-checked against ALL FOUR (they span the ownership
+axes; 0.0.1 broke by validating against only the easy three). Design
+rules + redesign live in proposals/wasi-canvas/REDESIGN-0.0.2.md
+(R1 union-sized records / R2 additive methods / R3 record-change =
+version event / R4 binding floor / R5 no derivable verbs — funcC
+composable from funcA+funcB at no capability/wire cost stays OUT, in
+guest adapters). Avalonia gotcha for any set-transform debate:
+IDrawingContextImpl.Transform is an absolute SETTER per visual.
+
 Related: [[reference_slint_wasip2]], [[feedback_shared_wit_rebuild_all_consumers]].

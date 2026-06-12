@@ -33,6 +33,24 @@ evolution only" rule predicted.
    record layouts.
 3. Shapes are chosen so all future evolution is **additive** (§2).
 
+## 1b. The reference libraries (the validation set)
+
+Every contract decision in this package — additions, R5 cuts, record
+shapes — is cross-checked against these FOUR reference consumers. They
+span all positions on the ownership axes (§3), which is what makes the
+set sufficient:
+
+| Reference library | wandr adapter | Status | Axis positions |
+|---|---|---|---|
+| **Compose Multiplatform** (skiko-compose) | `external/skiko` wasmWasi binding | shipped; migrated through stages 1–3 | host-shapes (`layout`), host-retained scene (`scene`) |
+| **dioxus** | `crates/dioxus-canvas` | shipped; migrated to 0.0.1 | host-shapes (`layout`), guest scene |
+| **Slint** | `crates/slint-wandr` | shipped; the 0.0.1 proving consumer | guest-shapes (`glyphs`), guest scene |
+| **Avalonia UI** | prospective (`docs/avalonia-wandr-feasibility.md`) | mapped out-of-sample (§9) | guest-shapes (`glyphs`), guest scene (in-guest compositor) |
+
+A decision validated against fewer than all four is not validated
+(the 0.0.1 lesson: it was validated bottom-up against the easy three
+positions and broke on the fourth).
+
 ## 2. Evolution rules (binding for this package)
 
 These are the rules that make "no further modification" a property of the
@@ -59,6 +77,19 @@ design rather than a hope:
   futures/streams/maps/fixed-length lists (unimplemented in the Kotlin
   generator), no exported interfaces in this package (import-only keeps
   the canvas neutral to the embedder's event model — the red line).
+- **R5 — orthogonality: no derivable verbs.** If a candidate function is
+  (1) semantically composable from existing primitives, (2) within the
+  guest's CAPABILITY (a managed guest has no pathops library or shaper —
+  capability gaps are host-side by definition), and (3) materially free
+  (composition doesn't multiply hot-path wire calls or force a full
+  list lift to answer a scalar), it stays OUT of the WIT and lives in
+  guest adapters. Already-applied instances: circle→oval,
+  points/polygon→rects/lines, skew/rotate-about-point→concat,
+  restore-to-count→restore loop, opacity-mask→dst-in-in-layer,
+  max-width→guest-remembered layout width. Kept-despite-derivability
+  (failing test 2 or 3): combine-paths (capability), line-count
+  (full-list lift to answer a scalar), did-exceed-max-lines (not
+  derivable at all).
 
 ## 3. The ownership axes (why the package is split the way it is)
 
@@ -103,29 +134,38 @@ anti-alias, shader borrow, stroke quad, mask-blur, color-filter). No
 deltas. (Dash/path-effects and runtime shaders remain named deferrals —
 §7 — because no consumer has *shipped* the need.)
 
-### 4.2 `draw` — two additive functions
+### 4.2 `draw` — one additive function
 
 ```wit
-resource canvas {
-    // ... 0.0.1 surface unchanged ...
-
-    /// Replace the transform accumulated since this canvas was acquired
-    /// (buffer, offscreen, or recording). The embedder's base transform
-    /// (orientation, density policy) sits OUTSIDE this space and cannot
-    /// be escaped — capability-clean absolute transforms, HTML canvas
-    /// `setTransform` precedent. Closes the legacy `set/reset-matrix`
-    /// residue (the last my:skiko-gfx canvas verbs Compose still calls).
-    set-transform: func(t: transform);
-}
-
 enum path-op { union, intersect, difference, xor, reverse-difference }
 
 /// Boolean path combination (SkPathOps class). Pure computation over
 /// guest-owned data — capability-free by the same Capabilities.md
-/// distinction as typeface.from-bytes. Compose's Path.op / clip-by-path
-/// difference flows need it; SVG-string in, SVG-string out.
+/// distinction as typeface.from-bytes. In the contract because it fails
+/// R5's capability test: managed guests have no 2D boolean-ops library.
+/// Compose's Path.op / clip-by-path difference flows need it;
+/// SVG-string in, SVG-string out.
 combine-paths: func(a: string, b: string, op: path-op) -> string;
 ```
+
+`set-transform` was considered and REJECTED under R5: absolute
+transforms are derivable by guest-side matrix tracking (mirror the save
+stack; on set emit `concat(A⁻¹·T)` and anchor the tracked matrix to the
+exact target, so inversion error never accumulates) — the adapter
+pattern `docs/skia-wit-mapping.md` already prescribes and slint-wandr
+already ships. The legacy `set/reset-matrix` residue retires into the
+Kotlin adapter, not into the contract.
+
+**Four-way cross-check of the cut (1b set, 2026-06-12):**
+
+| | set-transform | one-shot draw-text |
+|---|---|---|
+| Compose | `setMatrix` rare (SkiaBackedCanvas edge paths) → adapter tracking | drawString/TextLine rare → paragraph mapping |
+| dioxus | never sets absolute transforms | **the live proof**: dioxus-canvas already migrated legacy text-blobs → `layout` paragraphs, shipped + device-verified |
+| Slint | never (tracks guest-side already — the shipped precedent) | never (glyphs) |
+| Avalonia | **heaviest user**: `IDrawingContextImpl.Transform { get; set; }` is an absolute SETTER applied per visual (verified against AvaloniaUI/master 2026-06-12) — the derivation still passes R5 test 3 (one wire call either way; per-set cost is one guest-side 3×3 inverse-multiply), but Avalonia is the named first candidate to trigger the R2 re-entry if tracking shows drift or profile cost | never (DrawGlyphRun only) |
+
+Re-entry lane for both cuts: additive method/function (R2).
 
 ### 4.3 `glyphs` — unchanged
 
@@ -213,15 +253,16 @@ interface layout {
         add-text:      func(text: string);
         build:         static func(b: paragraph-builder) -> paragraph;
     }
-
-    /// One-shot host-shaped run, baseline-anchored: the honest form of
-    /// the legacy text-blob family (create/draw/drop, begin/add/end).
-    /// Single-style runs draw directly; multi-run blobs are N calls;
-    /// guests that re-draw shaped text cache a paragraph instead.
-    draw-text: func(canvas: borrow<canvas>, style: text-style,
-                    text: string, baseline-origin: point);
 }
 ```
+
+A one-shot `draw-text` convenience was considered and REJECTED under
+R5: a host-shaped run IS a single-style paragraph painted at
+`baseline-origin.y − alphabetic-baseline()`, and the adapter caches the
+paragraph exactly where the legacy blob cache lived (the whole
+create/draw/drop + begin/add/end text-blob family retires into this
+mapping). Re-entry lane if per-run paragraph churn ever profiles hot:
+additive function (R2).
 
 ### 4.5 `scene` — NEW optional interface (retained layers)
 
@@ -301,7 +342,7 @@ the design would be incomplete:
 | begin/end-frame, surface-w/h | `embedding` canvas-context; window metrics are the embedder's (window) contract |
 | save / save-layer / restore | `draw.canvas` (unchanged) |
 | translate/scale/rotate/skew/concat | `draw.canvas` (skew = concat) |
-| set-matrix / reset-matrix | **`canvas.set-transform`** (§4.2) |
+| set-matrix / reset-matrix | guest-side matrix tracking in the adapter (R5; the skia-wit-mapping principle, shipped in slint-wandr) |
 | clip-rect / clip-rrect (per-corner) / clip-path | `draw.canvas` |
 | clear, draw-paint/rect/rrect/drrect/oval/line/arc/path/point(s)/circle | `draw.canvas` (point/circle = guest-side mappings, as shipped) |
 | path-combine (SkPathOps) | **`draw.combine-paths`** (§4.2) |
@@ -313,7 +354,7 @@ the design would be incomplete:
 | bitmap-canvas + ~30 `bc-*` twins + snapshot | offscreen `canvas` resource (one type, zero twins) + `snapshot` |
 | pictures (recorder family) | `graphics.start-recording` / `canvas.finish-recording` / `draw-picture` |
 | **drawables (create/set-*/draw/drop)** | **`scene.layer`** (§4.5) |
-| text blobs (create/draw/drop, begin/add/end, draw-string) | **`layout.draw-text`** (§4.4) + cached paragraphs |
+| text blobs (create/draw/drop, begin/add/end, draw-string) | adapter-cached `layout` paragraphs painted at baseline − alphabetic-baseline (R5) |
 | paragraph builder + styles | `layout.paragraph-builder` (setter form; decoration/shadow/background now carried) |
 | layout/paint/height/intrinsics/baselines/line-count | `layout.paragraph` |
 | rects-for-range + modes + direction | `selection-boxes` (stage 3) |
@@ -373,6 +414,7 @@ the design surface, with the lane it re-enters through.
 | Variable-font axes | no guest ships a variable font | additive `glyphs` params via new func (R2) |
 | Image pixel readback / encode | privacy posture kept; no consumer needs it | additive `image` methods (R2) |
 | Font-metrics-without-paragraph | paragraph intrinsics cover shipped needs | additive `layout.measure-text` (R2) |
+| Layer effects (blur/drop-shadow on arbitrary content — Avalonia PushEffect, Compose Modifier.blur) | only effect-on-*shape* shipped (paint.blur) | additive `save-layer-with-filter` method (R2) |
 
 ## 8. Adoption sketch (non-binding)
 
@@ -384,7 +426,30 @@ whenever convenient. `my:skiko-gfx` then shrinks to the true remainder
 (window/IME/lifecycle/theme + transport for input), which is the sibling-
 package layering both worlds already use.
 
-## 9. One open contract question (carried, not hidden)
+## 9. Out-of-sample validation: Avalonia (2026-06-12)
+
+The design must hold for consumers that did NOT shape it. Avalonia is
+the fourth class candidate (C#/.NET, HarfBuzz shaping, in-guest
+compositor — `docs/avalonia-wandr-feasibility.md`), and every op in its
+`IDrawingContextImpl` inventory has a 0.0.2 home through the
+**shaping-guest profile** (`types`+`draw`+`glyphs`), with zero contract
+modification:
+
+- Geometry/clips/layers/gradients/images/tile-brushes map 1:1 (conic =
+  sweep-gradient; render targets = offscreen canvas + snapshot;
+  box-shadows = paint.blur).
+- **PushOpacityMask — a "gap" in the legacy mapping — is expressible
+  here**: save-layer → content → mask drawn with `blend = dst-in` →
+  restore. 0.0.2's faithful blend pipeline composes what the legacy
+  contract needed a verb for.
+- Its in-guest compositor means it never imports `scene` (axis-3
+  guest-owned) and never imports `layout` (it shapes) — validating that
+  both are genuinely optional rather than Compose-shaped requirements.
+- It would eventually press on exactly two named deferrals — pen dashes
+  (guest-side pre-dashing meanwhile; §7 R3 lane) and layer effects
+  (PushEffect; §7 additive lane) — neither a record break.
+
+## 10. One open contract question (carried, not hidden)
 
 **Text offset encoding.** The draft says UTF-8 byte offsets; the shipped
 host passes offsets through to skparagraph; the Kotlin adapter passes
