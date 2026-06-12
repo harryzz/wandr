@@ -35,3 +35,20 @@ input is this a function of?" and compute it. If you can't, name it once, justif
 it in a comment, and flag it to the user as a knob — don't silently bake it in.
 Relptes to [[feedback_clean_library_usage]] (don't leak plumbing / keep it
 portable).
+
+**The rule generalizes to ASSUMPTIONS, not just numbers (user-taught
+2026-06-12, task 102).** "Kotlin stays on my:skiko-gfx" was a hardcode: a
+point-in-time TOOLING snapshot ("no Kotlin bindgen, list<record> too costly")
+baked into durable WIT record shapes, when the durable source of truth — the
+empirical union of consumer semantics (docs/skia-wit-mapping.md) — already
+existed and said paint needs color-filter and line-metrics needs 13 fields.
+The snapshot was stale at write time (github.com/Kotlin/wit-bindgen existed);
+the cost surfaced far from the decision as a rebuild-all ABI break (stage 3).
+Both halves of the rule apply unchanged: (1) derive contracts from the
+owning input — consumer SEMANTICS, never consumer TOOLCHAINS (which-consumers-
+can-bind is the binding layer's concern, not the contract's); (2) an
+unavoidable environmental assumption must be ONE named, dated, challengeable
+decision at the design surface — not a margin note whose consequences live
+in frozen record layouts. Corollary for WIT/ABI work: records ship at
+union-of-known-consumers size; later evolution is additive verbs/methods
+only; a record change is a version-bump event.
