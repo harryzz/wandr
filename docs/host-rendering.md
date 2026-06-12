@@ -23,45 +23,54 @@ and the skiko wasmWasiMain file map. Read for canvas_impl / skiko / rendering wo
   SVG string (M/L/C/Q/A/Z commands). Rust host parses with
   `skia_safe::Path::from_svg()`. No custom binary format needed.
 
-- **Shader resources (task 11):** Handle-based (`create-*-gradient` → `u32` ID,
-  `drop-shader`). Stored in `HashMap<u32, skia_safe::Shader>` on host side.
-  `paint-attrs` extended with `shader_id: u32` (0 = none).
+- **Resources (post-Phase-C):** every host-resident object (shaders,
+  images, pictures, typefaces, paragraphs, recordings, scene layers) is a
+  wasmtime `ResourceTable` resource on the wasi:canvas@0.0.2 contract —
+  the legacy u32-id maps are gone.
 
 ## Architecture: how the layers connect
 
 ```
 Kotlin wandr-app (wasmWasiMain)
   └─ calls: org.jetbrains.skia.Canvas / Paint / Path / Shader / ...
-       └─ WasiCanvas.kt delegates to → WIT imports (generated/SkikoUi.kt)
-            └─ WIT interface: wit/skiko-gfx.wit
-                 └─ Rust host: runtime/wandr-host/src/canvas_impl.rs implements WIT trait
+       └─ WasiCanvas.kt routes to → wasi:canvas@0.0.2 bindings
+            (generated/wasicanvas/, JetBrains Kotlin wit-bindgen fork)
+            └─ WIT: proposals/wasi-canvas/wit (types/draw/layout/scene/embedding)
+                 └─ Rust host: wasi_canvas_002_impl.rs (resources in
+                    HostState.table; backing types in wasi_canvas_impl.rs)
                       └─ calls: skia_safe::Canvas / Paint / Path / Shader / ...
 ```
 
 **One-way data flow for a draw call:**
 1. Kotlin builds a `Paint`, sets color/blendMode/shader
-2. `WasiCanvas.witAttrs()` serializes Paint to a flat `PaintAttrs` WIT record
-3. `WitCanvas.Import.drawRect(x, y, w, h, paintAttrs)` crosses the WASM boundary
-4. Rust `draw_rect()` calls `make_paint(&attrs)` → `canvas.draw_rect(rect, &paint)`
+2. `Paint.wasiPaint()` maps it to the wasi:canvas `paint` record
+   (carrying an `option<borrow<shader>>` resource handle)
+3. `canvas.draw-rect(rect, paint)` crosses the boundary on the frame
+   canvas (or the innermost guest-explicit recording — see
+   WasiCanvasBackend's target stack)
+4. The host resolves the canvas resource and calls skia
 
-**Text blob path** (different from draw because host owns the font):
-1. Kotlin calls `WitCanvas.Import.createTextBlob(text, family, size, weight, italic)` → `u32` ID
-2. Kotlin calls `drawTextBlob(id, x, y, paintAttrs)`
-3. Kotlin calls `dropTextBlob(id)` — host frees the resource
+**Text path:** Compose paragraphs go through `wasi:canvas/layout`
+(0.0.2 setter-form paragraph-builder; host shapes via skparagraph).
+The old text-blob verbs are gone — `drawString`/`drawTextBlob` build a
+host paragraph per run (drawTextRun in WasiCanvasBackend.kt).
 
-**Shader path** (task 11):
-1. Kotlin calls `WitCanvas.Import.createLinearGradient(...)` → `u32` shader ID
-2. Kotlin stores ID in `Paint.shader`
-3. `witAttrs()` includes `shader_id` in the record
-4. Rust `make_paint()` looks up shader by ID and applies it
+**Retained scenes:** RenderNode = a `wasi:canvas/scene` layer — content
+recorded once via `graphics.start-recording` → `layer.set-content`
+(consumes the recording LIVE; pictures would snapshot nested layers);
+per-frame motion is `set-transform`/`set-alpha`/clips only. Host side:
+the WasiDrawable C++ shim (canvas_impl.rs FFI + cpp/wasi_drawable.cpp).
 
 ## Skiko wasmWasiMain — file reference
 
 | File | Purpose |
 |------|---------|
-| `generated/SkikoUi.kt` | WIT-generated public API — `Canvas.Import.*` calls |
-| `generated/InternalSkikoUi.kt` | Low-level `@WasmImport` external function declarations |
-| `org/jetbrains/skia/SkiaTypes.wasi.kt` | Canvas, Paint, Rect, RRect, Font, Typeface, TextBlob, Path stubs |
-| `org/jetbrains/skiko/WasiCanvas.kt` | Concrete Canvas implementation — delegates to WIT imports |
-| `org/jetbrains/skiko/SkiaLayerWasi.kt` | SkiaLayer stub — beginFrame/endFrame, renderDelegate |
-| `org/jetbrains/skiko/wasi/RendererImpl.kt` | WIT renderer export — renderFrame, onPointerEvent, onKeyEvent, onResize |
+| `generated/wasicanvas/` | wasi:canvas@0.0.2 bindings (Kotlin wit-bindgen fork; regen recipe in `wit-canvas/world.wit`) |
+| `generated/uishell/` | wandr:ui-shell imports + shell-events/frame-pacing/input-handlers exports (`wit-shell/world.wit`) |
+| `org/jetbrains/skia/SkiaTypes.wasi.kt` | Canvas (offscreen = new-offscreen resource), Paint, Rect, Path, Shader, Image, TextBlob value types |
+| `org/jetbrains/skia/paragraph/` | Paragraph + ParagraphBuilder over wasi:canvas/layout |
+| `org/jetbrains/skiko/WasiCanvas.kt` | The singleton main canvas — routes to WasiCanvasBackend.target (frame / innermost recording), guest CTM tracking for set/reset-matrix |
+| `org/jetbrains/skiko/wasi/WasiCanvasBackend.kt` | frame bracket, recording stack, paint/type mappers, drawTextRun |
+| `org/jetbrains/skiko/node/RenderNode.wasi.kt` | RenderNode over scene layers |
+| `org/jetbrains/skiko/wasi/ShellImpls.kt` | export impls (shell-events, frame-pacing, pointer/key/frame handlers) |
+| `org/jetbrains/skiko/SkiaLayerWasi.kt` | SkiaLayer — doFrame reads size off the acquired buffer |
