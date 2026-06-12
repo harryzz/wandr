@@ -541,8 +541,17 @@ macro_rules! wire_wasi_canvas {
                 }
             }
             fn begin_frame(&mut self) {
+                let buf = __wc_ctx(|x| x.get_current_buffer());
+                // Refresh the out-of-frame size cache HERE: component bodies
+                // run BEFORE begin_frame (relayout precedes the draw pass),
+                // so `surface_size()` calls from them hit __WC_LAST_SIZE —
+                // which otherwise never gets set (post-canvas-context, size
+                // only exists on an acquired buffer). Signal's video rects
+                // came out (0,0) → zero surface rect → decode-to-buffer →
+                // invisible call video.
+                __WC_LAST_SIZE.with(|v| v.set((buf.width(), buf.height())));
                 __WC_FRAME.with(|c| {
-                    *c.borrow_mut() = ::core::option::Option::Some(__wc_ctx(|x| x.get_current_buffer()));
+                    *c.borrow_mut() = ::core::option::Option::Some(buf);
                 });
             }
             fn end_frame(&mut self) {
