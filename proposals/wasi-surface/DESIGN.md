@@ -41,6 +41,10 @@ WebGPU and media sinks behind it); so does every compositor stack.
 
 ## The shapes (wasm-tools-validated 2026-06-12)
 
+> Reproducible artifact: `wit-sketch/` beside this doc — the same shapes
+> as files, headed with the upstream-ownership disclaimer (validation
+> material for the change-set, never a shipped package).
+
 ```wit
 package wasi:graphics-context@0.0.2;
 
@@ -107,8 +111,8 @@ interface surface-events {
 | Producer | Connection idiom | Status |
 |---|---|---|
 | webgpu / frame-buffer | upstream's `device.connect-graphics-context(borrow<context>)` + `buffer.from-graphics-buffer(abstract-buffer)` — referenced, not redesigned here | upstream, pre-stable |
-| **canvas** (third type) | the UN-FUSED alignment target: `canvas-device.connect(ctx)` + `canvas.from-graphics-buffer(b) -> canvas`. Today's `wasi:canvas/embedding.canvas-context` is the FUSED reactor form (`get-current-buffer() -> canvas` directly) — KEPT; un-fusing is an additive second entry point whenever the upstream conversation needs it | fused form shipped |
-| **video decoder** (fourth type) | the factoring lane from the convergence recheck: `video-decoder.connect(ctx)` replaces the placement verbs fused into the codec today (`set-rect/set-visible/set-rotation` → child-surface geometry, arbiter-governed) | fused form shipped, live-call-verified; factor only if/when wasi:surface lands on wandr |
+| **canvas** (third type) | DRAFTED: `wasi:canvas@0.0.2/connection` (`proposals/wasi-canvas/wit-0.0.2/connection.wit`, validated) — `canvas-device.connect(ctx)` + `from-graphics-buffer`; NOT in the canvas-host world yet. The fused `embedding.canvas-context` stays the reactor form (documented equivalence) | both forms now artifacts; un-fused wires at the trigger |
+| **video decoder** (fourth type) | DRAFTED: `proposals/wasi-video-decoder/` — decoder + `connect(ctx)`; placement/visibility/z moved to surface vocabulary; CVO `set-rotation` kept (frame property, not placement) | draft validated 2026-06-12; fused wandr:video keeps shipping side-by-side until the wiring trigger |
 
 ## Event-profile tie-in (no new vocabulary)
 
@@ -148,6 +152,44 @@ an engine-class guest (wasi-gfx consumer), the wandr:video factoring,
 or the upstream standards conversation. When triggered, implementation
 is a re-skin of existing machinery — the same situation `scene` is in
 with the WasiDrawable code.
+
+## Wiring plan — the day upstream wasi-gfx stabilizes
+
+What concretely changes, by layer (kept current so the trigger costs a
+checklist, not a rediscovery):
+
+**WIT — our packages need NO breaking change (by construction):**
+
+| Package | Change | Class |
+|---|---|---|
+| wasi:canvas | the un-fused connection entry EXISTS: `wit-0.0.2/connection.wit` (validated, outside the canvas-host world) — wiring = add it to the world + host impl | ADDITIVE, drafted |
+| wandr:video → `wasi:video-decoder` | the factored draft now EXISTS: `proposals/wasi-video-decoder/` (decoder + `connect(ctx)`; placement/visibility/z moved to the surface vocabulary; CVO `set-rotation` stays — a property of the frames). Fused wandr:video keeps shipping side-by-side (R3) | NEW greenfield package, validated |
+| wasi:input-handlers | nothing — the push profile is delivery-complete; the pull profile is upstream's `surface-events` pollables consuming the SAME vocabulary | none |
+| upstream wasi:surface/graphics-context | imported as published (plus our DESIGN.md change-set offered upstream); never authored by us | — |
+
+**Host (wandr-host) — a re-skin of machinery already running:**
+
+1. Bindgen modules for the published `wasi:surface` + `wasi:graphics-context`
+   (imports, the input-handlers pattern).
+2. `SurfaceRes` over the task-93 `sf_media` child SurfaceControl (android)
+   — create-desc → child surface; `request-set-size` forwarded to the
+   arbiter as an ADVISORY (request/configure); configure events fed from
+   the arbiter's existing geometry pushes. Desktop: a child viewport of
+   the winit window (the overlay pattern).
+3. `ContextRes` binding one surface to one producer; `abstract-buffer`
+   realization per producer: frame-buffer = CPU upload into the BBQ
+   producer (the task-93 present path); canvas = a skia surface targeting
+   the child surface (the renderer's Main-canvas machinery, re-targeted);
+   video = MediaCodec output surface (what decode-to-surface already does
+   internally — `connect` just names it).
+4. Pull-profile pollables: per-surface event queues exposed via
+   `wasi:io/poll` pollables on HostState (the convergence proposal's
+   step-3 spike) — reactor guests never touch this path.
+5. Loader: linker additions + probes, same shape as every package.
+
+**Out of scope at wiring time** (already settled): window creation policy
+stays with the arbiter; the reference UI libraries keep consuming
+canvas + input-handlers and notice nothing.
 
 ## Named deferrals
 

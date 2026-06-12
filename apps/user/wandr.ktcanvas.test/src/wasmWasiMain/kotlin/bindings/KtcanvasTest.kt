@@ -8,7 +8,7 @@ import impl.*
 
 import bindings.runtime.*
 
-@WitInterface("wasi:canvas/types@0.0.1")
+@WitInterface("wasi:canvas/types@0.0.2")
 /*external */interface Types {
   @WitImport
   companion object Import : bindings.Types {
@@ -24,11 +24,17 @@ import bindings.runtime.*
   enum class BlendMode {
     SRC_OVER,
     SRC,
+    DST,
+    DST_OVER,
+    SRC_IN,
     DST_IN,
+    SRC_OUT,
     DST_OUT,
     SRC_ATOP,
     DST_ATOP,
     XOR,
+    PLUS,
+    MODULATE,
     MULTIPLY,
     SCREEN,
     OVERLAY,
@@ -41,6 +47,10 @@ import bindings.runtime.*
     DIFFERENCE,
     EXCLUSION,
     CLEAR,
+    HUE,
+    SATURATION,
+    COLOR,
+    LUMINOSITY,
   }
 
   enum class PaintStyle {
@@ -246,7 +256,7 @@ import bindings.runtime.*
 
 }
 
-@WitInterface("wasi:canvas/draw@0.0.1")
+@WitInterface("wasi:canvas/draw@0.0.2")
 /*external */interface Draw {
   @WitImport
   companion object Import : bindings.Draw {
@@ -282,10 +292,16 @@ import bindings.runtime.*
     Linear gradient from `start` to `end`. `stops` are (offset in
     0..1, color) pairs, offsets ascending.
     */
-    fun linearGradient(start: bindings.Types.Point, end: bindings.Types.Point, stops: kotlin.collections.List<kotlin.Pair<kotlin.Float, kotlin.UInt>>, tile: bindings.Types.TileMode): bindings.Types.Shader {
+    fun linearGradient(start: bindings.Types.Point, end: bindings.Types.Point, stops: kotlin.collections.List<kotlin.Pair<kotlin.Float, kotlin.UInt>>, tile: bindings.Types.TileMode, local: bindings.Types.Transform?): bindings.Types.Shader {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+        val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(56+4*4), align=4)*/ allocator.allocate((56+4*4)).address.toInt()
         var handle = this.__handle.value;
+        (ptr + 0).ptr.storeInt(handle)
+        (ptr + 4).ptr.storeFloat(start.x)
+        (ptr + 8).ptr.storeFloat(start.y)
+        (ptr + 12).ptr.storeFloat(end.x)
+        (ptr + 16).ptr.storeFloat(end.y)
 
         val address = allocator.allocate(stops.size * 8 /*, align_wasm32=4*/).address.toInt()
         for ((index, el) in stops.withIndex()) {
@@ -294,17 +310,40 @@ import bindings.runtime.*
           (base + 4).ptr.storeInt(el.second.toInt())
 
         }
-        val ret: kotlin.Int = __wasm_import_linearGradient(handle, start.x, start.y, end.x, end.y, address, stops.size, tile.ordinal)
+        (ptr + (16+2*4)).ptr.storeInt(stops.size)
+        (ptr + (16+1*4)).ptr.storeInt(address)
+        (ptr + (16+3*4)).ptr.storeByte(tile.ordinal.toByte())
+        val payload0 = local
+        if (payload0 != null) {
+          (ptr + (20+3*4)).ptr.storeByte(1.toByte())
+          (ptr + (24+3*4)).ptr.storeFloat(payload0.m00)
+          (ptr + (28+3*4)).ptr.storeFloat(payload0.m01)
+          (ptr + (32+3*4)).ptr.storeFloat(payload0.m02)
+          (ptr + (36+3*4)).ptr.storeFloat(payload0.m10)
+          (ptr + (40+3*4)).ptr.storeFloat(payload0.m11)
+          (ptr + (44+3*4)).ptr.storeFloat(payload0.m12)
+          (ptr + (48+3*4)).ptr.storeFloat(payload0.m20)
+          (ptr + (52+3*4)).ptr.storeFloat(payload0.m21)
+          (ptr + (56+3*4)).ptr.storeFloat(payload0.m22)
+        } else {
+          (ptr + (20+3*4)).ptr.storeByte(0.toByte())
+        }
+        val ret: kotlin.Int = __wasm_import_linearGradient(ptr)
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
         val resource = bindings.Types.Shader(bindings.runtime.ResourceHandle(ret))
         return resource
       }
       // </editor-fold>
     }
-    fun radialGradient(center: bindings.Types.Point, radius: kotlin.Float, stops: kotlin.collections.List<kotlin.Pair<kotlin.Float, kotlin.UInt>>, tile: bindings.Types.TileMode): bindings.Types.Shader {
+    fun radialGradient(center: bindings.Types.Point, radius: kotlin.Float, stops: kotlin.collections.List<kotlin.Pair<kotlin.Float, kotlin.UInt>>, tile: bindings.Types.TileMode, local: bindings.Types.Transform?): bindings.Types.Shader {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+        val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(56+3*4), align=4)*/ allocator.allocate((56+3*4)).address.toInt()
         var handle = this.__handle.value;
+        (ptr + 0).ptr.storeInt(handle)
+        (ptr + 4).ptr.storeFloat(center.x)
+        (ptr + 8).ptr.storeFloat(center.y)
+        (ptr + 12).ptr.storeFloat(radius)
 
         val address = allocator.allocate(stops.size * 8 /*, align_wasm32=4*/).address.toInt()
         for ((index, el) in stops.withIndex()) {
@@ -313,7 +352,25 @@ import bindings.runtime.*
           (base + 4).ptr.storeInt(el.second.toInt())
 
         }
-        val ret: kotlin.Int = __wasm_import_radialGradient(handle, center.x, center.y, radius, address, stops.size, tile.ordinal)
+        (ptr + (16+1*4)).ptr.storeInt(stops.size)
+        (ptr + 16).ptr.storeInt(address)
+        (ptr + (16+2*4)).ptr.storeByte(tile.ordinal.toByte())
+        val payload0 = local
+        if (payload0 != null) {
+          (ptr + (20+2*4)).ptr.storeByte(1.toByte())
+          (ptr + (24+2*4)).ptr.storeFloat(payload0.m00)
+          (ptr + (28+2*4)).ptr.storeFloat(payload0.m01)
+          (ptr + (32+2*4)).ptr.storeFloat(payload0.m02)
+          (ptr + (36+2*4)).ptr.storeFloat(payload0.m10)
+          (ptr + (40+2*4)).ptr.storeFloat(payload0.m11)
+          (ptr + (44+2*4)).ptr.storeFloat(payload0.m12)
+          (ptr + (48+2*4)).ptr.storeFloat(payload0.m20)
+          (ptr + (52+2*4)).ptr.storeFloat(payload0.m21)
+          (ptr + (56+2*4)).ptr.storeFloat(payload0.m22)
+        } else {
+          (ptr + (20+2*4)).ptr.storeByte(0.toByte())
+        }
+        val ret: kotlin.Int = __wasm_import_radialGradient(ptr)
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
         val resource = bindings.Types.Shader(bindings.runtime.ResourceHandle(ret))
         return resource
@@ -324,10 +381,16 @@ import bindings.runtime.*
     Sweep (conic) gradient around `center`; angles in degrees,
     0° at the positive x-axis, increasing clockwise.
     */
-    fun sweepGradient(center: bindings.Types.Point, startAngle: kotlin.Float, endAngle: kotlin.Float, stops: kotlin.collections.List<kotlin.Pair<kotlin.Float, kotlin.UInt>>, tile: bindings.Types.TileMode): bindings.Types.Shader {
+    fun sweepGradient(center: bindings.Types.Point, startAngle: kotlin.Float, endAngle: kotlin.Float, stops: kotlin.collections.List<kotlin.Pair<kotlin.Float, kotlin.UInt>>, tile: bindings.Types.TileMode, local: bindings.Types.Transform?): bindings.Types.Shader {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+        val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(56+4*4), align=4)*/ allocator.allocate((56+4*4)).address.toInt()
         var handle = this.__handle.value;
+        (ptr + 0).ptr.storeInt(handle)
+        (ptr + 4).ptr.storeFloat(center.x)
+        (ptr + 8).ptr.storeFloat(center.y)
+        (ptr + 12).ptr.storeFloat(startAngle)
+        (ptr + 16).ptr.storeFloat(endAngle)
 
         val address = allocator.allocate(stops.size * 8 /*, align_wasm32=4*/).address.toInt()
         for ((index, el) in stops.withIndex()) {
@@ -336,7 +399,25 @@ import bindings.runtime.*
           (base + 4).ptr.storeInt(el.second.toInt())
 
         }
-        val ret: kotlin.Int = __wasm_import_sweepGradient(handle, center.x, center.y, startAngle, endAngle, address, stops.size, tile.ordinal)
+        (ptr + (16+2*4)).ptr.storeInt(stops.size)
+        (ptr + (16+1*4)).ptr.storeInt(address)
+        (ptr + (16+3*4)).ptr.storeByte(tile.ordinal.toByte())
+        val payload0 = local
+        if (payload0 != null) {
+          (ptr + (20+3*4)).ptr.storeByte(1.toByte())
+          (ptr + (24+3*4)).ptr.storeFloat(payload0.m00)
+          (ptr + (28+3*4)).ptr.storeFloat(payload0.m01)
+          (ptr + (32+3*4)).ptr.storeFloat(payload0.m02)
+          (ptr + (36+3*4)).ptr.storeFloat(payload0.m10)
+          (ptr + (40+3*4)).ptr.storeFloat(payload0.m11)
+          (ptr + (44+3*4)).ptr.storeFloat(payload0.m12)
+          (ptr + (48+3*4)).ptr.storeFloat(payload0.m20)
+          (ptr + (52+3*4)).ptr.storeFloat(payload0.m21)
+          (ptr + (56+3*4)).ptr.storeFloat(payload0.m22)
+        } else {
+          (ptr + (20+3*4)).ptr.storeByte(0.toByte())
+        }
+        val ret: kotlin.Int = __wasm_import_sweepGradient(ptr)
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
         val resource = bindings.Types.Shader(bindings.runtime.ResourceHandle(ret))
         return resource
@@ -1347,7 +1428,7 @@ import bindings.runtime.*
 
 }
 
-@WitInterface("wasi:canvas/layout@0.0.1")
+@WitInterface("wasi:canvas/layout@0.0.2")
 /*external */interface Layout {
   @WitImport
   companion object Import : bindings.Layout {
@@ -1356,6 +1437,38 @@ import bindings.runtime.*
   }
   // START OF TYPES
 
+
+  enum class DecorationLineStyle {
+    SOLID,
+    DOUBLE,
+    DOTTED,
+    DASHED,
+    WAVY,
+  }
+
+  /**
+  Text decorations (Compose TextDecoration, dart:ui decorations).
+  */
+  class Decoration(
+    var underline: kotlin.Boolean,
+    var overline: kotlin.Boolean,
+    var lineThrough: kotlin.Boolean,
+    /**
+    0 = use the text color.
+    */
+    var color: kotlin.UInt,
+    var style: bindings.Layout.DecorationLineStyle,
+    /**
+    Multiple of the font-suggested thickness.
+    */
+    var thickness: kotlin.Float,
+  )
+
+  class TextShadow(
+    var color: kotlin.UInt,
+    var offset: bindings.Types.Point,
+    var sigma: kotlin.Float,
+  )
 
   class TextStyle(
     /**
@@ -1375,6 +1488,16 @@ import bindings.runtime.*
     Line height as a multiple of the font size; 0 = font default.
     */
     var lineHeight: kotlin.Float,
+    /**
+    Vertical run shift (superscript/subscript); 0 = none.
+    */
+    var baselineShift: kotlin.Float,
+    var decoration: bindings.Layout.Decoration?,
+    /**
+    Empty = none (a LIST — dart:ui carries multiple per span).
+    */
+    var shadows: kotlin.collections.List<bindings.Layout.TextShadow>,
+    var background: kotlin.UInt?,
   )
 
   enum class Align {
@@ -1622,23 +1745,126 @@ import bindings.runtime.*
       }
       // </editor-fold>
     }
+    /**
+    True when max-lines truncated the layout.
+    */
+    fun didExceedMaxLines(): kotlin.Boolean {
+      // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+        var handle = this.__handle.value;
+        val ret: kotlin.Int = __wasm_import_didExceedMaxLines(handle)
+        kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
+        return (ret != 0)
+      }
+      // </editor-fold>
+    }
     companion object {
     }
   }
+  /**
+  Setter form (R2): paragraph-wide options are methods, so the
+  next option is additive instead of a constructor break.
+  */
   class ParagraphBuilder : kotlin.AutoCloseable {
     internal var __handle: bindings.runtime.ResourceHandle = bindings.runtime.ResourceHandle(0)
     internal constructor(handle: bindings.runtime.ResourceHandle) { __handle = handle }
     override fun close() { __cm_resource_abi_import_Layout_ParagraphBuilder_drop(__handle.value) }
-    fun pushStyle(style: bindings.Layout.TextStyle) {
+    fun setAlign(a: bindings.Layout.Align) {
+      // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+        var handle = this.__handle.value;
+        __wasm_import_setAlign(handle, a.ordinal)
+        kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
+      }
+      // </editor-fold>
+    }
+    fun setDirection(d: bindings.Layout.TextDirection) {
+      // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+        var handle = this.__handle.value;
+        __wasm_import_setDirection(handle, d.ordinal)
+        kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
+      }
+      // </editor-fold>
+    }
+    /**
+    0 = unlimited.
+    */
+    fun setMaxLines(n: kotlin.UInt) {
+      // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+        var handle = this.__handle.value;
+        __wasm_import_setMaxLines(handle, n.toInt())
+        kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
+      }
+      // </editor-fold>
+    }
+    fun setEllipsis(e: kotlin.String) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
 
-        val bytearray = style.family.encodeToByteArray()
+        val bytearray = e.encodeToByteArray()
         val len = bytearray.size
         val ptr = allocator.writeToLinearMemory(bytearray).address.toInt()
 
-        __wasm_import_pushStyle(handle, ptr, len, style.size, style.weight.toInt(), (if(style.italic) 1 else 0), style.color.toInt(), style.letterSpacing, style.lineHeight)
+        __wasm_import_setEllipsis(handle, ptr, len)
+        kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
+      }
+      // </editor-fold>
+    }
+    fun pushStyle(style: bindings.Layout.TextStyle) {
+      // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+        val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(56+5*4), align=4)*/ allocator.allocate((56+5*4)).address.toInt()
+        var handle = this.__handle.value;
+        (ptr + 0).ptr.storeInt(handle)
+
+        val bytearray = style.family.encodeToByteArray()
+        val len = bytearray.size
+        val ptr0 = allocator.writeToLinearMemory(bytearray).address.toInt()
+
+        (ptr + (2*4)).ptr.storeInt(len)
+        (ptr + 4).ptr.storeInt(ptr0)
+        (ptr + (3*4)).ptr.storeFloat(style.size)
+        (ptr + (4+3*4)).ptr.storeInt(style.weight.toInt())
+        (ptr + (8+3*4)).ptr.storeByte((if(style.italic) 1 else 0).toByte())
+        (ptr + (12+3*4)).ptr.storeInt(style.color.toInt())
+        (ptr + (16+3*4)).ptr.storeFloat(style.letterSpacing)
+        (ptr + (20+3*4)).ptr.storeFloat(style.lineHeight)
+        (ptr + (24+3*4)).ptr.storeFloat(style.baselineShift)
+        val payload1 = style.decoration
+        if (payload1 != null) {
+          (ptr + (28+3*4)).ptr.storeByte(1.toByte())
+          (ptr + (32+3*4)).ptr.storeByte((if(payload1.underline) 1 else 0).toByte())
+          (ptr + (33+3*4)).ptr.storeByte((if(payload1.overline) 1 else 0).toByte())
+          (ptr + (34+3*4)).ptr.storeByte((if(payload1.lineThrough) 1 else 0).toByte())
+          (ptr + (36+3*4)).ptr.storeInt(payload1.color.toInt())
+          (ptr + (40+3*4)).ptr.storeByte(payload1.style.ordinal.toByte())
+          (ptr + (44+3*4)).ptr.storeFloat(payload1.thickness)
+        } else {
+          (ptr + (28+3*4)).ptr.storeByte(0.toByte())
+        }
+
+        val address = allocator.allocate(style.shadows.size * 16 /*, align_wasm32=4*/).address.toInt()
+        for ((index, el) in style.shadows.withIndex()) {
+          val base = address + (index * 16)
+          (base + 0).ptr.storeInt(el.color.toInt())
+          (base + 4).ptr.storeFloat(el.offset.x)
+          (base + 8).ptr.storeFloat(el.offset.y)
+          (base + 12).ptr.storeFloat(el.sigma)
+
+        }
+        (ptr + (48+4*4)).ptr.storeInt(style.shadows.size)
+        (ptr + (48+3*4)).ptr.storeInt(address)
+        val payload3 = style.background
+        if (payload3 != null) {
+          (ptr + (48+5*4)).ptr.storeByte(1.toByte())
+          (ptr + (52+5*4)).ptr.storeInt(payload3.toInt())
+        } else {
+          (ptr + (48+5*4)).ptr.storeByte(0.toByte())
+        }
+        __wasm_import_pushStyle(ptr)
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
       }
       // </editor-fold>
@@ -1667,15 +1893,56 @@ import bindings.runtime.*
       // </editor-fold>
     }
     companion object {
-      fun new(defaultStyle: bindings.Layout.TextStyle, align: bindings.Layout.Align): bindings.Layout.ParagraphBuilder {
+      fun new(defaultStyle: bindings.Layout.TextStyle): bindings.Layout.ParagraphBuilder {
         // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
         kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+          val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(56+4*4), align=4)*/ allocator.allocate((56+4*4)).address.toInt()
 
           val bytearray = defaultStyle.family.encodeToByteArray()
           val len = bytearray.size
-          val ptr = allocator.writeToLinearMemory(bytearray).address.toInt()
+          val ptr0 = allocator.writeToLinearMemory(bytearray).address.toInt()
 
-          val ret: kotlin.Int = __wasm_import_new(ptr, len, defaultStyle.size, defaultStyle.weight.toInt(), (if(defaultStyle.italic) 1 else 0), defaultStyle.color.toInt(), defaultStyle.letterSpacing, defaultStyle.lineHeight, align.ordinal)
+          (ptr + 4).ptr.storeInt(len)
+          (ptr + 0).ptr.storeInt(ptr0)
+          (ptr + (2*4)).ptr.storeFloat(defaultStyle.size)
+          (ptr + (4+2*4)).ptr.storeInt(defaultStyle.weight.toInt())
+          (ptr + (8+2*4)).ptr.storeByte((if(defaultStyle.italic) 1 else 0).toByte())
+          (ptr + (12+2*4)).ptr.storeInt(defaultStyle.color.toInt())
+          (ptr + (16+2*4)).ptr.storeFloat(defaultStyle.letterSpacing)
+          (ptr + (20+2*4)).ptr.storeFloat(defaultStyle.lineHeight)
+          (ptr + (24+2*4)).ptr.storeFloat(defaultStyle.baselineShift)
+          val payload1 = defaultStyle.decoration
+          if (payload1 != null) {
+            (ptr + (28+2*4)).ptr.storeByte(1.toByte())
+            (ptr + (32+2*4)).ptr.storeByte((if(payload1.underline) 1 else 0).toByte())
+            (ptr + (33+2*4)).ptr.storeByte((if(payload1.overline) 1 else 0).toByte())
+            (ptr + (34+2*4)).ptr.storeByte((if(payload1.lineThrough) 1 else 0).toByte())
+            (ptr + (36+2*4)).ptr.storeInt(payload1.color.toInt())
+            (ptr + (40+2*4)).ptr.storeByte(payload1.style.ordinal.toByte())
+            (ptr + (44+2*4)).ptr.storeFloat(payload1.thickness)
+          } else {
+            (ptr + (28+2*4)).ptr.storeByte(0.toByte())
+          }
+
+          val address = allocator.allocate(defaultStyle.shadows.size * 16 /*, align_wasm32=4*/).address.toInt()
+          for ((index, el) in defaultStyle.shadows.withIndex()) {
+            val base = address + (index * 16)
+            (base + 0).ptr.storeInt(el.color.toInt())
+            (base + 4).ptr.storeFloat(el.offset.x)
+            (base + 8).ptr.storeFloat(el.offset.y)
+            (base + 12).ptr.storeFloat(el.sigma)
+
+          }
+          (ptr + (48+3*4)).ptr.storeInt(defaultStyle.shadows.size)
+          (ptr + (48+2*4)).ptr.storeInt(address)
+          val payload3 = defaultStyle.background
+          if (payload3 != null) {
+            (ptr + (48+4*4)).ptr.storeByte(1.toByte())
+            (ptr + (52+4*4)).ptr.storeInt(payload3.toInt())
+          } else {
+            (ptr + (48+4*4)).ptr.storeByte(0.toByte())
+          }
+          val ret: kotlin.Int = __wasm_import_new(ptr)
           kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
           val resource = bindings.Layout.ParagraphBuilder(bindings.runtime.ResourceHandle(ret))
           return resource
@@ -1705,7 +1972,181 @@ import bindings.runtime.*
 
 }
 
-@WitInterface("wasi:canvas/embedding@0.0.1")
+@WitInterface("wasi:canvas/scene@0.0.2")
+/*external */interface Scene {
+  @WitImport
+  companion object Import : bindings.Scene {
+    // <editor-fold defaultstate="collapsed" desc="Generated Import Code">
+    /**
+    Draw the layer's current content with its current properties.
+    On a RECORDING canvas the recording retains the layer HOST-side
+    (never the guest's borrow): replay resolves picture + properties
+    at replay time; property/content updates never invalidate
+    capturing recordings; dropping the guest's handle does not
+    invalidate captures (host keeps the layer alive until the last
+    capturing recording drops).
+    */
+    override fun drawLayer(canvas: bindings.Draw.Canvas, l: bindings.Scene.Layer) {
+      // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+        var handle = canvas.__handle.value;
+        var handle0 = l.__handle.value;
+        __wasm_import_drawLayer(handle, handle0)
+        kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
+      }
+      // </editor-fold>
+    }
+    // </editor-fold>
+  }
+  // START OF TYPES
+
+  class Layer : kotlin.AutoCloseable {
+    internal var __handle: bindings.runtime.ResourceHandle = bindings.runtime.ResourceHandle(0)
+    internal constructor(handle: bindings.runtime.ResourceHandle) { __handle = handle }
+    override fun close() { __cm_resource_abi_import_Scene_Layer_drop(__handle.value) }
+    /**
+    Set the layer's content by CONSUMING a recording canvas
+    (from graphics.start-recording). The recording is finished
+    as LIVE content: layers drawn into it via draw-layer stay
+    resolved at replay time, so nested layers keep working when
+    a parent re-records (snapshot-into-picture would freeze
+    them — why this is not `set-picture`, which is also R5-
+    derivable from this). Traps if `recording` is not a
+    recording canvas.
+    */
+    fun setContent(recording: bindings.Draw.Canvas) {
+      // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+        var handle = this.__handle.value;
+        var handle0 = recording.__handle.value;
+        recording.__handle = bindings.runtime.ResourceHandle(0);
+        __wasm_import_setContent(handle, handle0)
+        kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
+      }
+      // </editor-fold>
+    }
+    fun setBounds(bounds: bindings.Types.Rect) {
+      // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+        var handle = this.__handle.value;
+        __wasm_import_setBounds(handle, bounds.x, bounds.y, bounds.width, bounds.height)
+        kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
+      }
+      // </editor-fold>
+    }
+    fun setTransform(t: bindings.Types.Transform) {
+      // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+        var handle = this.__handle.value;
+        __wasm_import_setTransform(handle, t.m00, t.m01, t.m02, t.m10, t.m11, t.m12, t.m20, t.m21, t.m22)
+        kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
+      }
+      // </editor-fold>
+    }
+    /**
+    0..255 alpha applied at replay.
+    */
+    fun setAlpha(alpha: kotlin.UByte) {
+      // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+        var handle = this.__handle.value;
+        __wasm_import_setAlpha(handle, alpha.toInt())
+        kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
+      }
+      // </editor-fold>
+    }
+    fun setClipRect(r: bindings.Types.Rect, antiAlias: kotlin.Boolean) {
+      // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+        var handle = this.__handle.value;
+        __wasm_import_setClipRect(handle, r.x, r.y, r.width, r.height, (if(antiAlias) 1 else 0))
+        kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
+      }
+      // </editor-fold>
+    }
+    fun setClipRoundedRect(rr: bindings.Types.RoundedRect, antiAlias: kotlin.Boolean) {
+      // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+        var handle = this.__handle.value;
+        __wasm_import_setClipRoundedRect(handle, rr.rect.x, rr.rect.y, rr.rect.width, rr.rect.height, rr.topLeft.x, rr.topLeft.y, rr.topRight.x, rr.topRight.y, rr.bottomRight.x, rr.bottomRight.y, rr.bottomLeft.x, rr.bottomLeft.y, (if(antiAlias) 1 else 0))
+        kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
+      }
+      // </editor-fold>
+    }
+    /**
+    SVG path data (Flutter ClipPathLayer; Compose outline clips).
+    */
+    fun setClipPath(path: kotlin.String, antiAlias: kotlin.Boolean) {
+      // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+        var handle = this.__handle.value;
+
+        val bytearray = path.encodeToByteArray()
+        val len = bytearray.size
+        val ptr = allocator.writeToLinearMemory(bytearray).address.toInt()
+
+        __wasm_import_setClipPath(handle, ptr, len, (if(antiAlias) 1 else 0))
+        kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
+      }
+      // </editor-fold>
+    }
+    fun clearClip() {
+      // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+        var handle = this.__handle.value;
+        __wasm_import_clearClip(handle)
+        kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
+      }
+      // </editor-fold>
+    }
+    /**
+    Material-style drop shadow from the layer's clip outline;
+    0 = none.
+    */
+    fun setShadowElevation(elevation: kotlin.Float) {
+      // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+        var handle = this.__handle.value;
+        __wasm_import_setShadowElevation(handle, elevation)
+        kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
+      }
+      // </editor-fold>
+    }
+    companion object {
+      /**
+      Created through the embedder-granted factory (capability
+      rule: host-resident allocation flows through a handle).
+      */
+      fun new(g: bindings.Draw.Graphics): bindings.Scene.Layer {
+        // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+        kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+          var handle = g.__handle.value;
+          val ret: kotlin.Int = __wasm_import_new3(handle)
+          kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
+          val resource = bindings.Scene.Layer(bindings.runtime.ResourceHandle(ret))
+          return resource
+        }
+        // </editor-fold>
+      }
+    }
+  }
+
+  // END OF TYPES
+
+  /**
+  Draw the layer's current content with its current properties.
+  On a RECORDING canvas the recording retains the layer HOST-side
+  (never the guest's borrow): replay resolves picture + properties
+  at replay time; property/content updates never invalidate
+  capturing recordings; dropping the guest's handle does not
+  invalidate captures (host keeps the layer alive until the last
+  capturing recording drops).
+  */
+  fun drawLayer(canvas: bindings.Draw.Canvas, l: bindings.Scene.Layer)
+
+}
+
+@WitInterface("wasi:canvas/embedding@0.0.2")
 /*external */interface Embedding {
   @WitImport
   companion object Import : bindings.Embedding {
@@ -1847,6 +2288,92 @@ import bindings.runtime.*
   when it's backgrounded, Destroyed on exit).
   */
   fun onLifecycleChanged(state: kotlin.UInt)
+
+}
+
+@WitInterface("wasi:input-handlers/pointer-handler@0.0.2")
+/*external */interface PointerHandler {
+  // START OF TYPES
+
+
+  enum class Kind {
+    DOWN,
+    UP,
+    MOVE,
+    SCROLL,
+    CANCEL,
+    ENTER,
+    LEAVE,
+  }
+
+  enum class PointerDevice {
+    UNKNOWN,
+    MOUSE,
+    TOUCH,
+    PEN,
+  }
+
+  /**
+  The button that CHANGED (down/up); none for move/scroll.
+  */
+  enum class Button {
+    NONE,
+    PRIMARY,
+    SECONDARY,
+    MIDDLE,
+    BACK,
+    FORWARD,
+  }
+
+  /**
+  Buttons currently held.
+  */
+  value class Buttons internal constructor(val _value: kotlin.Long) {
+    constructor(
+    primary: kotlin.Boolean = false,secondary: kotlin.Boolean = false,middle: kotlin.Boolean = false,back: kotlin.Boolean = false,forward: kotlin.Boolean = false,
+    ) : this(0L or (if (primary) (1L shl 0) else 0L) or (if (secondary) (1L shl 1) else 0L) or (if (middle) (1L shl 2) else 0L) or (if (back) (1L shl 3) else 0L) or (if (forward) (1L shl 4) else 0L))
+    val primary: kotlin.Boolean get() = (_value and (1L shl 0)) != 0L
+    val secondary: kotlin.Boolean get() = (_value and (1L shl 1)) != 0L
+    val middle: kotlin.Boolean get() = (_value and (1L shl 2)) != 0L
+    val back: kotlin.Boolean get() = (_value and (1L shl 3)) != 0L
+    val forward: kotlin.Boolean get() = (_value and (1L shl 4)) != 0L
+  }
+
+  class PointerEvent(
+    var id: kotlin.UInt,
+    var kind: bindings.PointerHandler.Kind,
+    var device: bindings.PointerHandler.PointerDevice,
+    var x: kotlin.Float,
+    var y: kotlin.Float,
+    /**
+    0.0..1.0; 0.0 when the device doesn't report pressure.
+    */
+    var pressure: kotlin.Float,
+    /**
+    Pen tilt in degrees; 0 when unreported.
+    */
+    var tiltX: kotlin.Float,
+    var tiltY: kotlin.Float,
+    /**
+    Pen barrel rotation in degrees; 0 when unreported.
+    */
+    var twist: kotlin.Float,
+    /**
+    Scroll deltas (kind == scroll only; surface units).
+    */
+    var scrollDx: kotlin.Float,
+    var scrollDy: kotlin.Float,
+    var button: bindings.PointerHandler.Button,
+    var buttons: bindings.PointerHandler.Buttons,
+    var alt: kotlin.Boolean,
+    var ctrl: kotlin.Boolean,
+    var meta: kotlin.Boolean,
+    var shift: kotlin.Boolean,
+  )
+
+  // END OF TYPES
+
+  fun onPointer(ev: bindings.PointerHandler.PointerEvent)
 
 }
 

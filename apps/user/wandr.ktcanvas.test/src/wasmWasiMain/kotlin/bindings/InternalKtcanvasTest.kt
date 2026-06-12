@@ -9,208 +9,261 @@ import impl.*
 import bindings.runtime.*
 
 
-@kotlin.wasm.WasmImport("wasi:canvas/types@0.0.1", "[resource-drop]shader")
+@kotlin.wasm.WasmImport("wasi:canvas/types@0.0.2", "[resource-drop]shader")
 internal external fun __cm_resource_abi_import_Types_Shader_drop(handle: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/types@0.0.1", "[resource-drop]image")
+@kotlin.wasm.WasmImport("wasi:canvas/types@0.0.2", "[resource-drop]image")
 internal external fun __cm_resource_abi_import_Types_Image_drop(handle: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/types@0.0.1", "[method]image.width")
+@kotlin.wasm.WasmImport("wasi:canvas/types@0.0.2", "[method]image.width")
 internal external fun __wasm_import_width(p0: kotlin.Int): kotlin.Int
 
-@kotlin.wasm.WasmImport("wasi:canvas/types@0.0.1", "[method]image.height")
+@kotlin.wasm.WasmImport("wasi:canvas/types@0.0.2", "[method]image.height")
 internal external fun __wasm_import_height(p0: kotlin.Int): kotlin.Int
 
 
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[resource-drop]picture")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[resource-drop]picture")
 internal external fun __cm_resource_abi_import_Draw_Picture_drop(handle: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[resource-drop]graphics")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[resource-drop]graphics")
 internal external fun __cm_resource_abi_import_Draw_Graphics_drop(handle: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]graphics.linear-gradient")
-internal external fun __wasm_import_linearGradient(p0: kotlin.Int, p1: kotlin.Float, p2: kotlin.Float, p3: kotlin.Float, p4: kotlin.Float, p5: kotlin.Int, p6: kotlin.Int, p7: kotlin.Int): kotlin.Int
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]graphics.linear-gradient")
+internal external fun __wasm_import_linearGradient(p0: kotlin.Int): kotlin.Int
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]graphics.radial-gradient")
-internal external fun __wasm_import_radialGradient(p0: kotlin.Int, p1: kotlin.Float, p2: kotlin.Float, p3: kotlin.Float, p4: kotlin.Int, p5: kotlin.Int, p6: kotlin.Int): kotlin.Int
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]graphics.radial-gradient")
+internal external fun __wasm_import_radialGradient(p0: kotlin.Int): kotlin.Int
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]graphics.sweep-gradient")
-internal external fun __wasm_import_sweepGradient(p0: kotlin.Int, p1: kotlin.Float, p2: kotlin.Float, p3: kotlin.Float, p4: kotlin.Float, p5: kotlin.Int, p6: kotlin.Int, p7: kotlin.Int): kotlin.Int
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]graphics.sweep-gradient")
+internal external fun __wasm_import_sweepGradient(p0: kotlin.Int): kotlin.Int
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]graphics.shader-blend")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]graphics.shader-blend")
 internal external fun __wasm_import_shaderBlend(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Int, p3: kotlin.Int): kotlin.Int
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]graphics.image-pattern")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]graphics.image-pattern")
 internal external fun __wasm_import_imagePattern(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Int, p3: kotlin.Int, p4: kotlin.Int, p5: kotlin.Int, p6: kotlin.Float, p7: kotlin.Float, p8: kotlin.Float, p9: kotlin.Float, p10: kotlin.Float, p11: kotlin.Float, p12: kotlin.Float, p13: kotlin.Float, p14: kotlin.Float): kotlin.Int
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]graphics.decode-image")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]graphics.decode-image")
 internal external fun __wasm_import_decodeImage(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Int, p3: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]graphics.image-from-rgba8")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]graphics.image-from-rgba8")
 internal external fun __wasm_import_imageFromRgba8(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Int, p3: kotlin.Int, p4: kotlin.Int, p5: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]graphics.new-offscreen")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]graphics.new-offscreen")
 internal external fun __wasm_import_newOffscreen(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Int): kotlin.Int
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]graphics.start-recording")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]graphics.start-recording")
 internal external fun __wasm_import_startRecording(p0: kotlin.Int, p1: kotlin.Float, p2: kotlin.Float, p3: kotlin.Float, p4: kotlin.Float): kotlin.Int
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[resource-drop]canvas")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[resource-drop]canvas")
 internal external fun __cm_resource_abi_import_Draw_Canvas_drop(handle: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.width")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.width")
 internal external fun __wasm_import_width0(p0: kotlin.Int): kotlin.Float
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.height")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.height")
 internal external fun __wasm_import_height1(p0: kotlin.Int): kotlin.Float
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.save")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.save")
 internal external fun __wasm_import_save(p0: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.save-layer")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.save-layer")
 internal external fun __wasm_import_saveLayer(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Float, p3: kotlin.Float, p4: kotlin.Float, p5: kotlin.Float, p6: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.restore")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.restore")
 internal external fun __wasm_import_restore(p0: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.translate")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.translate")
 internal external fun __wasm_import_translate(p0: kotlin.Int, p1: kotlin.Float, p2: kotlin.Float): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.scale")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.scale")
 internal external fun __wasm_import_scale(p0: kotlin.Int, p1: kotlin.Float, p2: kotlin.Float): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.rotate")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.rotate")
 internal external fun __wasm_import_rotate(p0: kotlin.Int, p1: kotlin.Float): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.concat")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.concat")
 internal external fun __wasm_import_concat(p0: kotlin.Int, p1: kotlin.Float, p2: kotlin.Float, p3: kotlin.Float, p4: kotlin.Float, p5: kotlin.Float, p6: kotlin.Float, p7: kotlin.Float, p8: kotlin.Float, p9: kotlin.Float): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.clip-rect")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.clip-rect")
 internal external fun __wasm_import_clipRect(p0: kotlin.Int, p1: kotlin.Float, p2: kotlin.Float, p3: kotlin.Float, p4: kotlin.Float, p5: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.clip-rounded-rect")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.clip-rounded-rect")
 internal external fun __wasm_import_clipRoundedRect(p0: kotlin.Int, p1: kotlin.Float, p2: kotlin.Float, p3: kotlin.Float, p4: kotlin.Float, p5: kotlin.Float, p6: kotlin.Float, p7: kotlin.Float, p8: kotlin.Float, p9: kotlin.Float, p10: kotlin.Float, p11: kotlin.Float, p12: kotlin.Float, p13: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.clip-path")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.clip-path")
 internal external fun __wasm_import_clipPath(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Int, p3: kotlin.Int, p4: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.clear")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.clear")
 internal external fun __wasm_import_clear(p0: kotlin.Int, p1: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.draw-paint")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.draw-paint")
 internal external fun __wasm_import_drawPaint(p0: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.draw-rect")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.draw-rect")
 internal external fun __wasm_import_drawRect(p0: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.draw-rounded-rect")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.draw-rounded-rect")
 internal external fun __wasm_import_drawRoundedRect(p0: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.draw-double-rounded-rect")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.draw-double-rounded-rect")
 internal external fun __wasm_import_drawDoubleRoundedRect(p0: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.draw-oval")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.draw-oval")
 internal external fun __wasm_import_drawOval(p0: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.draw-line")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.draw-line")
 internal external fun __wasm_import_drawLine(p0: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.draw-arc")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.draw-arc")
 internal external fun __wasm_import_drawArc(p0: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.draw-path")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.draw-path")
 internal external fun __wasm_import_drawPath(p0: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.draw-image")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.draw-image")
 internal external fun __wasm_import_drawImage(p0: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.draw-image-rect")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.draw-image-rect")
 internal external fun __wasm_import_drawImageRect(p0: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.draw-picture")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.draw-picture")
 internal external fun __wasm_import_drawPicture(p0: kotlin.Int, p1: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[method]canvas.snapshot")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]canvas.snapshot")
 internal external fun __wasm_import_snapshot(p0: kotlin.Int, p1: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.1", "[static]canvas.finish-recording")
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[static]canvas.finish-recording")
 internal external fun __wasm_import_finishRecording(p0: kotlin.Int): kotlin.Int
 
 
 
-@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[resource-drop]paragraph")
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.2", "[resource-drop]paragraph")
 internal external fun __cm_resource_abi_import_Layout_Paragraph_drop(handle: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[method]paragraph.layout")
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.2", "[method]paragraph.layout")
 internal external fun __wasm_import_layout(p0: kotlin.Int, p1: kotlin.Float): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[method]paragraph.paint")
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.2", "[method]paragraph.paint")
 internal external fun __wasm_import_paint(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Float, p3: kotlin.Float): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[method]paragraph.height")
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.2", "[method]paragraph.height")
 internal external fun __wasm_import_height2(p0: kotlin.Int): kotlin.Float
 
-@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[method]paragraph.max-intrinsic-width")
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.2", "[method]paragraph.max-intrinsic-width")
 internal external fun __wasm_import_maxIntrinsicWidth(p0: kotlin.Int): kotlin.Float
 
-@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[method]paragraph.min-intrinsic-width")
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.2", "[method]paragraph.min-intrinsic-width")
 internal external fun __wasm_import_minIntrinsicWidth(p0: kotlin.Int): kotlin.Float
 
-@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[method]paragraph.alphabetic-baseline")
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.2", "[method]paragraph.alphabetic-baseline")
 internal external fun __wasm_import_alphabeticBaseline(p0: kotlin.Int): kotlin.Float
 
-@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[method]paragraph.ideographic-baseline")
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.2", "[method]paragraph.ideographic-baseline")
 internal external fun __wasm_import_ideographicBaseline(p0: kotlin.Int): kotlin.Float
 
-@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[method]paragraph.line-count")
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.2", "[method]paragraph.line-count")
 internal external fun __wasm_import_lineCount(p0: kotlin.Int): kotlin.Int
 
-@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[method]paragraph.lines")
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.2", "[method]paragraph.lines")
 internal external fun __wasm_import_lines(p0: kotlin.Int, p1: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[method]paragraph.selection-boxes")
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.2", "[method]paragraph.selection-boxes")
 internal external fun __wasm_import_selectionBoxes(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Int, p3: kotlin.Int, p4: kotlin.Int, p5: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[method]paragraph.offset-at")
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.2", "[method]paragraph.offset-at")
 internal external fun __wasm_import_offsetAt(p0: kotlin.Int, p1: kotlin.Float, p2: kotlin.Float): kotlin.Int
 
-@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[method]paragraph.word-boundary")
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.2", "[method]paragraph.word-boundary")
 internal external fun __wasm_import_wordBoundary(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[resource-drop]paragraph-builder")
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.2", "[method]paragraph.did-exceed-max-lines")
+internal external fun __wasm_import_didExceedMaxLines(p0: kotlin.Int): kotlin.Int
+
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.2", "[resource-drop]paragraph-builder")
 internal external fun __cm_resource_abi_import_Layout_ParagraphBuilder_drop(handle: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[method]paragraph-builder.push-style")
-internal external fun __wasm_import_pushStyle(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Int, p3: kotlin.Float, p4: kotlin.Int, p5: kotlin.Int, p6: kotlin.Int, p7: kotlin.Float, p8: kotlin.Float): kotlin.Unit
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.2", "[method]paragraph-builder.set-align")
+internal external fun __wasm_import_setAlign(p0: kotlin.Int, p1: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[method]paragraph-builder.pop-style")
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.2", "[method]paragraph-builder.set-direction")
+internal external fun __wasm_import_setDirection(p0: kotlin.Int, p1: kotlin.Int): kotlin.Unit
+
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.2", "[method]paragraph-builder.set-max-lines")
+internal external fun __wasm_import_setMaxLines(p0: kotlin.Int, p1: kotlin.Int): kotlin.Unit
+
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.2", "[method]paragraph-builder.set-ellipsis")
+internal external fun __wasm_import_setEllipsis(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Int): kotlin.Unit
+
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.2", "[method]paragraph-builder.push-style")
+internal external fun __wasm_import_pushStyle(p0: kotlin.Int): kotlin.Unit
+
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.2", "[method]paragraph-builder.pop-style")
 internal external fun __wasm_import_popStyle(p0: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[method]paragraph-builder.add-text")
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.2", "[method]paragraph-builder.add-text")
 internal external fun __wasm_import_addText(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[static]paragraph-builder.new")
-internal external fun __wasm_import_new(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Float, p3: kotlin.Int, p4: kotlin.Int, p5: kotlin.Int, p6: kotlin.Float, p7: kotlin.Float, p8: kotlin.Int): kotlin.Int
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.2", "[static]paragraph-builder.new")
+internal external fun __wasm_import_new(p0: kotlin.Int): kotlin.Int
 
-@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.1", "[static]paragraph-builder.build")
+@kotlin.wasm.WasmImport("wasi:canvas/layout@0.0.2", "[static]paragraph-builder.build")
 internal external fun __wasm_import_build(p0: kotlin.Int): kotlin.Int
 
 
 
-@kotlin.wasm.WasmImport("wasi:canvas/embedding@0.0.1", "get-context")
+@kotlin.wasm.WasmImport("wasi:canvas/scene@0.0.2", "draw-layer")
+internal external fun __wasm_import_drawLayer(p0: kotlin.Int, p1: kotlin.Int): kotlin.Unit
+
+@kotlin.wasm.WasmImport("wasi:canvas/scene@0.0.2", "[resource-drop]layer")
+internal external fun __cm_resource_abi_import_Scene_Layer_drop(handle: kotlin.Int): kotlin.Unit
+
+@kotlin.wasm.WasmImport("wasi:canvas/scene@0.0.2", "[method]layer.set-content")
+internal external fun __wasm_import_setContent(p0: kotlin.Int, p1: kotlin.Int): kotlin.Unit
+
+@kotlin.wasm.WasmImport("wasi:canvas/scene@0.0.2", "[method]layer.set-bounds")
+internal external fun __wasm_import_setBounds(p0: kotlin.Int, p1: kotlin.Float, p2: kotlin.Float, p3: kotlin.Float, p4: kotlin.Float): kotlin.Unit
+
+@kotlin.wasm.WasmImport("wasi:canvas/scene@0.0.2", "[method]layer.set-transform")
+internal external fun __wasm_import_setTransform(p0: kotlin.Int, p1: kotlin.Float, p2: kotlin.Float, p3: kotlin.Float, p4: kotlin.Float, p5: kotlin.Float, p6: kotlin.Float, p7: kotlin.Float, p8: kotlin.Float, p9: kotlin.Float): kotlin.Unit
+
+@kotlin.wasm.WasmImport("wasi:canvas/scene@0.0.2", "[method]layer.set-alpha")
+internal external fun __wasm_import_setAlpha(p0: kotlin.Int, p1: kotlin.Int): kotlin.Unit
+
+@kotlin.wasm.WasmImport("wasi:canvas/scene@0.0.2", "[method]layer.set-clip-rect")
+internal external fun __wasm_import_setClipRect(p0: kotlin.Int, p1: kotlin.Float, p2: kotlin.Float, p3: kotlin.Float, p4: kotlin.Float, p5: kotlin.Int): kotlin.Unit
+
+@kotlin.wasm.WasmImport("wasi:canvas/scene@0.0.2", "[method]layer.set-clip-rounded-rect")
+internal external fun __wasm_import_setClipRoundedRect(p0: kotlin.Int, p1: kotlin.Float, p2: kotlin.Float, p3: kotlin.Float, p4: kotlin.Float, p5: kotlin.Float, p6: kotlin.Float, p7: kotlin.Float, p8: kotlin.Float, p9: kotlin.Float, p10: kotlin.Float, p11: kotlin.Float, p12: kotlin.Float, p13: kotlin.Int): kotlin.Unit
+
+@kotlin.wasm.WasmImport("wasi:canvas/scene@0.0.2", "[method]layer.set-clip-path")
+internal external fun __wasm_import_setClipPath(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Int, p3: kotlin.Int): kotlin.Unit
+
+@kotlin.wasm.WasmImport("wasi:canvas/scene@0.0.2", "[method]layer.clear-clip")
+internal external fun __wasm_import_clearClip(p0: kotlin.Int): kotlin.Unit
+
+@kotlin.wasm.WasmImport("wasi:canvas/scene@0.0.2", "[method]layer.set-shadow-elevation")
+internal external fun __wasm_import_setShadowElevation(p0: kotlin.Int, p1: kotlin.Float): kotlin.Unit
+
+@kotlin.wasm.WasmImport("wasi:canvas/scene@0.0.2", "[static]layer.new")
+internal external fun __wasm_import_new3(p0: kotlin.Int): kotlin.Int
+
+
+
+@kotlin.wasm.WasmImport("wasi:canvas/embedding@0.0.2", "get-context")
 internal external fun __wasm_import_getContext(): kotlin.Int
 
-@kotlin.wasm.WasmImport("wasi:canvas/embedding@0.0.1", "[resource-drop]canvas-context")
+@kotlin.wasm.WasmImport("wasi:canvas/embedding@0.0.2", "[resource-drop]canvas-context")
 internal external fun __cm_resource_abi_import_Embedding_CanvasContext_drop(handle: kotlin.Int): kotlin.Unit
 
-@kotlin.wasm.WasmImport("wasi:canvas/embedding@0.0.1", "[method]canvas-context.graphics")
+@kotlin.wasm.WasmImport("wasi:canvas/embedding@0.0.2", "[method]canvas-context.graphics")
 internal external fun __wasm_import_graphics(p0: kotlin.Int): kotlin.Int
 
-@kotlin.wasm.WasmImport("wasi:canvas/embedding@0.0.1", "[method]canvas-context.get-current-buffer")
+@kotlin.wasm.WasmImport("wasi:canvas/embedding@0.0.2", "[method]canvas-context.get-current-buffer")
 internal external fun __wasm_import_getCurrentBuffer(p0: kotlin.Int): kotlin.Int
 
-@kotlin.wasm.WasmImport("wasi:canvas/embedding@0.0.1", "[method]canvas-context.present")
+@kotlin.wasm.WasmImport("wasi:canvas/embedding@0.0.2", "[method]canvas-context.present")
 internal external fun __wasm_import_present(p0: kotlin.Int): kotlin.Unit
 
 
@@ -284,6 +337,36 @@ fun __wasm_export_onLifecycleChanged(p0: kotlin.Int): kotlin.Unit {
   kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
   RendererImpl.onLifecycleChanged(p0.toUInt())
 
+}
+}
+
+
+
+@kotlin.wasm.WasmExport("wasi:input-handlers/pointer-handler@0.0.2#on-pointer")
+fun __wasm_export_onPointer(p0: kotlin.Int): kotlin.Unit {
+  kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
+  kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+  PointerHandlerImpl.onPointer(bindings.PointerHandler.PointerEvent(
+  (p0 + 0).ptr.loadInt().toUInt(),
+  bindings.PointerHandler.Kind.values()[(p0 + 4).ptr.loadUByte().toInt()],
+  bindings.PointerHandler.PointerDevice.values()[(p0 + 5).ptr.loadUByte().toInt()],
+  (p0 + 8).ptr.loadFloat(),
+  (p0 + 12).ptr.loadFloat(),
+  (p0 + 16).ptr.loadFloat(),
+  (p0 + 20).ptr.loadFloat(),
+  (p0 + 24).ptr.loadFloat(),
+  (p0 + 28).ptr.loadFloat(),
+  (p0 + 32).ptr.loadFloat(),
+  (p0 + 36).ptr.loadFloat(),
+  bindings.PointerHandler.Button.values()[(p0 + 40).ptr.loadUByte().toInt()],
+  bindings.PointerHandler.Buttons((p0 + 41).ptr.loadUByte().toInt().toLong()),
+  ((p0 + 42).ptr.loadUByte().toInt() != 0),
+  ((p0 + 43).ptr.loadUByte().toInt() != 0),
+  ((p0 + 44).ptr.loadUByte().toInt() != 0),
+  ((p0 + 45).ptr.loadUByte().toInt() != 0),
+  ))
+
+  // GuestDeallocate(p0)
 }
 }
 

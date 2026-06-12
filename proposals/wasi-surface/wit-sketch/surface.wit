@@ -1,0 +1,52 @@
+// UPSTREAM-OWNED PACKAGE (wasi-gfx org) — this is wandr's PROPOSED
+// CHANGE-SET as a validatable sketch (capability-granted context via
+// surface.get-context, request/configure geometry, configure-with-scale,
+// optional pull-profile events), NOT a wandr package and claiming no
+// version lineage (DESIGN.md §ownership). Ship-before-upstream fallback
+// = wandr:surface@0.0.1. Validation: `wasm-tools component wit .`
+package wasi:surface@0.0.2;
+
+interface surface {
+    use wasi:graphics-context/graphics-context@0.0.2.{context};
+
+    /// Authoritative geometry (xdg_shell model: clients REQUEST,
+    /// compositors CONFIGURE). Delivered via the embedder's event
+    /// profile: push = frame-handler.on-resize (+ metrics re-query),
+    /// pull = the optional surface-events pollables.
+    record configure-event {
+        width:  u32,
+        height: u32,
+        /// Device scale (1.0 = 1:1). Phones: fixed; desktops: changes
+        /// when a window crosses monitors.
+        scale:  f32,
+    }
+
+    resource surface {
+        /// No constructor: surfaces are EMBEDDER-GRANTED (a reactor
+        /// guest's primary surface via its world entry; child surfaces
+        /// via embedder policy — wandr: the arbiter).
+        width:  func() -> u32;
+        height: func() -> u32;
+        scale:  func() -> f32;
+        /// Advisory; the embedder MAY ignore it. Authoritative size
+        /// always arrives as a configure.
+        request-set-size: func(width: option<u32>, height: option<u32>);
+        /// The surface's swapchain socket — one per surface, stable.
+        get-context: func() -> context;
+    }
+}
+
+/// OPTIONAL pull-profile events, for guests that own a poll loop.
+/// Reactor-class guests use wasi:input-handlers instead (push profile);
+/// the two never coexist on one surface (embedder routes exclusively).
+interface surface-events {
+    use wasi:io/poll@0.2.0.{pollable};
+    use surface.{surface, configure-event};
+
+    subscribe-configure: func(s: borrow<surface>) -> pollable;
+    get-configure:       func(s: borrow<surface>) -> option<configure-event>;
+}
+
+world surface-guest {
+    import surface;
+}

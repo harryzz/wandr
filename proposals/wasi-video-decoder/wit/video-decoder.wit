@@ -1,0 +1,83 @@
+// wasi:video-decoder — DRAFT (wandr, 2026-06-12). NOT WIRED.
+//
+// The FACTORED form of wandr:video's decoder half (live-call-verified on
+// Signal video calls): a hardware video decoder as the FOURTH
+// graphics-context consumer — the "media element" of the surface socket,
+// beside webgpu, frame-buffer and wasi:canvas (the ownership-axes model,
+// proposals/wasi-surface/DESIGN.md). The decoder fills the connected
+// surface's buffers host-side; decoded frames never cross the boundary.
+//
+// What moved OUT vs the shipped fused contract (wit/video.wit): surface
+// placement (set-rect), visibility (set-visible) and z-layer — those are
+// the SURFACE's vocabulary (child-surface geometry under the embedder's
+// request/configure policy). What stays: content-orientation correction
+// (set-rotation — a property of the FRAMES, the peer's CVO, not of
+// placement). Adoption trigger = the same as wasi:surface wiring; the
+// fused wandr:video keeps shipping unchanged until then (R3 coexistence).
+package wasi:video-decoder@0.0.1;
+
+interface types {
+    enum codec { vp8, vp9, h264, h265 }
+
+    enum video-error {
+        unsupported-codec,
+        no-hw-codec,
+        codec-init-failed,
+        bad-frame,
+        /// Decoder input queue full — frame dropped; resend after a keyframe.
+        queue-full,
+        /// No connected surface can accept output.
+        surface-unavailable,
+    }
+
+    /// One compressed frame (e.g. reassembled from RTP after SRTP-open).
+    record encoded-frame {
+        data: list<u8>,
+        /// 90 kHz media timestamp (the RTP clock).
+        timestamp: u32,
+        /// true = IDR / keyframe; decoders need one to start.
+        keyframe: bool,
+    }
+
+    record decoder-config {
+        codec: codec,
+        /// Coded-size hint for codec init (from signaling); the stream's
+        /// actual size wins where the codec carries dimensions.
+        width: u32,
+        height: u32,
+    }
+}
+
+interface decoder {
+    use types.{codec, decoder-config, encoded-frame, video-error};
+    use wasi:graphics-context/graphics-context@0.0.2.{context};
+
+    resource video-decoder {
+        open: static func(config: decoder-config)
+              -> result<video-decoder, video-error>;
+
+        /// Claim the surface socket: decoded output composites into the
+        /// connected surface's buffers (one producer per context). Frames
+        /// submitted before a connect MAY be dropped on
+        /// decode-to-surface hosts.
+        connect: func(ctx: borrow<context>) -> result<_, video-error>;
+
+        /// Push one compressed frame.
+        submit: func(frame: encoded-frame) -> result<_, video-error>;
+
+        /// Content-orientation correction in degrees CW (the peer's CVO
+        /// rotation) — applied at composition, no codec reconfigure.
+        set-rotation: func(degrees: u32);
+
+        /// true once at least one keyframe has decoded.
+        ready: func() -> bool;
+
+        /// Frames decoded so far (diagnostics).
+        decoded-frames: func() -> u64;
+    }
+}
+
+world video-decoder-guest {
+    import types;
+    import decoder;
+}

@@ -194,6 +194,34 @@ lane). Design-only; triggers: engine-class guest, video factoring, or
 upstream conversation. The family is now THREE designed proposals under
 one goal: canvas, input-handlers (+gesture-handler), surface/socket.
 
+**PATH B HOST PHASE DONE (task 103, 2026-06-12): both 0.0.2 packages
+IMPLEMENTED and served side-by-side with 0.0.1** (proposals/*/wit-0.0.2 =
+the real trees; host: wasi_canvas_002_impl.rs — scene over the WasiDrawable
+C++ extended with set_matrix/set_alpha/set_clip_path; input 002>001>legacy
+routing in input.rs with PointerMeta small-int carrier, W3C buttons-held
+tracking in App, winit CursorEntered/Left → enter/leave). Verified: 0.0.1
+consumers regression-clean on the same host; 0.0.2 spike desktop+device
+(scene transform-only star, builder setters + did-exceed, color-filter
+src-in tint, LIVE pointer union record — device tap = "up touch
+btn=primary held=-"). IMPLEMENTATION-DISCOVERED DESIGN FIX: scene content
+= set-content(recording) consumed as finish-recording-as-DRAWABLE (live
+nested layers; a picture would snapshot/freeze children) — set-picture
+R5-dropped; recorded in REDESIGN §4.5. gesture-handler: WIT world bound,
+NO host event source yet (no trackpad). Remaining path B: the single
+Kotlin finale (skiko → 0.0.2: images, drawables→scene, blobs→paragraphs,
+setMatrix→guest tracking, pointer id-map assembly, input 0.0.2 exports).
+
+**Wheel + wasi-gfx readiness (2026-06-12):** desktop scroll wheel NOW
+MAPPED (MouseWheel → kind=scroll; LINE_SCROLL_PX=48 named constant —
+3×16px CSS-default lines; W3C sign pinned in the 0.0.2 WIT comment:
+positive = down/right; XWayland zero-delta valuator noise suppressed
+host-side; user-verified ±48/±96/±144 = coalesced notches on both axes).
+`proposals/wasi-video-decoder/` = the factored fourth-context-consumer
+draft (decoder + connect(ctx), CVO set-rotation kept, placement→surface)
+— validated, NOT wired; fused wandr:video ships on. The wasi-gfx WIRING
+PLAN (WIT additive-only for our packages + 5-step host re-skin) lives in
+proposals/wasi-surface/DESIGN.md.
+
 **The four REFERENCE LIBRARIES (validation set, user-fixed 2026-06-12):
 skiko-compose, dioxus, slint, Avalonia UI** — every wasi:canvas contract
 decision must be cross-checked against ALL FOUR (they span the ownership

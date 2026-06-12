@@ -1,22 +1,30 @@
-// Stage-1 spike scene: every element exercises one canonical-ABI category
-// of the generated wasi:canvas binding (see wit/ktcanvas-test.wit).
+// Stage-1 spike scene, upgraded to wasi:canvas@0.0.2 (task 103 path B):
+// every 0.0.2 delta has a visible element — scene layer (spin WITHOUT
+// re-record), paint color-filter tint, builder setters (max-lines +
+// ellipsis + did-exceed), gradient local param, and the 0.0.2
+// pointer-handler export (device/button/buttons readout on screen).
 package impl
 
 import bindings.Draw
 import bindings.Embedding
 import bindings.Layout
+import bindings.PointerHandler
 import bindings.Renderer
+import bindings.Scene
 import bindings.Types
+import kotlin.math.cos
+import kotlin.math.sin
 
 private fun fill(
     color: UInt,
     shader: Types.Shader? = null,
     blur: Types.MaskBlur? = null,
     alpha: UByte = 255u.toUByte(),
+    filter: Types.ColorFilter? = null,
 ) = Types.Paint(
     Types.PaintStyle.FILL, color, alpha, Types.BlendMode.SRC_OVER,
     true, shader, 0f, Types.StrokeCap.BUTT, Types.StrokeJoin.MITER, 4f, blur,
-    null,
+    filter,
 )
 
 private fun stroke(color: UInt, width: Float) = Types.Paint(
@@ -31,25 +39,28 @@ private fun rrect(r: Types.Rect, radius: Float): Types.RoundedRect {
 }
 
 private fun textStyle(size: Float, color: UInt, weight: UInt = 400u) =
-    Layout.TextStyle("", size, weight, false, color, 0f, 0f)
+    Layout.TextStyle(
+        "", size, weight, false, color,
+        0f, 0f, 0f, null, listOf(), null,
+    )
 
 // 5-point star in a 100x100 unit box (shape definition; placed/sized by
-// canvas transform from real geometry).
+// the LAYER transform — never re-recorded).
 private const val STAR_PATH =
     "M50 5 L61 38 L96 38 L68 59 L79 92 L50 72 L21 92 L32 59 L4 38 L39 38 Z"
 
 object RendererImpl : Renderer {
-    // Lazy per-instance state: imports may only be called once the host has
-    // the instance up (first render-frame), never at module init.
     private var ctx: Embedding.CanvasContext? = null
     private var gfx: Draw.Graphics? = null
 
-    // Geometry-derived caches, keyed by the width they were built for.
     private var cachedW = -1f
     private var cardShader: Types.Shader? = null
     private var checkerImage: Types.Image? = null
+    private var starLayer: Scene.Layer? = null
+    private var starSide = 0f
 
     private var frame = 0
+    internal var lastPtr: String = "pointer: (none yet)"
 
     private fun context(): Embedding.CanvasContext =
         ctx ?: Embedding.Import.getContext().also { ctx = it }
@@ -57,13 +68,14 @@ object RendererImpl : Renderer {
     private fun graphics(): Draw.Graphics =
         gfx ?: context().graphics().also { gfx = it }
 
-    /** Rebuild the size-dependent resources (gradient shader, checkerboard
-     *  image) when the surface width changes — exercises resource drop +
-     *  re-create on top of the steady per-frame churn. */
+    /** Size-keyed resources; the star LAYER's content is recorded exactly
+     *  once per size — per-frame motion is set-transform only (the scene
+     *  contract's whole point). */
     private fun rebuildSizedResources(w: Float, h: Float) {
         if (w == cachedW) return
         cardShader?.close()
         checkerImage?.close()
+        starLayer?.close()
 
         val margin = w * 0.06f
         val card = Types.Rect(margin, h * 0.08f, w - 2f * margin, h * 0.18f)
@@ -72,9 +84,9 @@ object RendererImpl : Renderer {
             Types.Point(card.x + card.width, card.y + card.height),
             listOf(0.0f to 0xFF7C4DFFu, 1.0f to 0xFF00BCD4u),
             Types.TileMode.CLAMP,
+            null,
         )
 
-        // Offscreen → snapshot → image (result<image> lift + offscreen drop).
         val side = (w * 0.12f).toUInt().coerceAtLeast(2u)
         val off = graphics().newOffscreen(side, side)
         val half = side.toFloat() / 2f
@@ -84,7 +96,31 @@ object RendererImpl : Renderer {
         checkerImage = off.snapshot().getOrThrow()
         off.close()
 
+        // scene 0.0.2: the star is recorded ONCE into a layer; every frame
+        // only mutates the layer transform (no re-record, no path re-send).
+        starSide = w * 0.28f
+        val rec = graphics().startRecording(Types.Rect(0f, 0f, 100f, 100f))
+        rec.drawPath(STAR_PATH, Types.FillRule.NONZERO, fill(0xFFFFAB40u))
+        val layer = Scene.Layer.new(graphics())
+        layer.setContent(rec)
+        layer.setBounds(Types.Rect(0f, 0f, 100f, 100f))
+        starLayer = layer
+
         cachedW = w
+    }
+
+    /** Rotation about (cx,cy) composed with scale s and translation — the
+     *  layer's full 3x3, computed guest-side from real geometry. */
+    private fun starTransform(cx: Float, cy: Float, s: Float, deg: Float): Types.Transform {
+        val r = deg * (3.1415927f / 180f)
+        val c = cos(r) * s
+        val n = sin(r) * s
+        // T(cx,cy) · R·S · T(-50,-50)
+        return Types.Transform(
+            c, -n, cx + (-50f * c) + (50f * n),
+            n, c, cy + (-50f * n) + (-50f * c),
+            0f, 0f, 1f,
+        )
     }
 
     override fun renderFrame(nanos: ULong) {
@@ -99,43 +135,32 @@ object RendererImpl : Renderer {
         val card = Types.Rect(margin, h * 0.08f, w - 2f * margin, h * 0.18f)
         val corner = w * 0.04f
 
-        // 1. flat-path paint (≤16 args): background fill.
         cv.drawPaint(fill(0xFF101418u))
 
-        // 5. option<mask-blur>: soft shadow under the card.
         val shadow = Types.Rect(card.x, card.y + w * 0.015f, card.width, card.height)
         cv.drawRoundedRect(
             rrect(shadow, corner),
             fill(0xFF000000u, blur = Types.MaskBlur(Types.BlurStyle.NORMAL, w * 0.02f), alpha = 160u.toUByte()),
         )
-
-        // 3. shader borrow inside the spilled paint blob: gradient card.
         cv.drawRoundedRect(rrect(card, corner), fill(0xFF000000u, shader = cardShader))
 
-        // 2. plain spilled blob (>16 flat args, no shader): accent bar.
         val barY = card.y + card.height + h * 0.02f
         cv.drawRect(Types.Rect(margin, barY, card.width, h * 0.012f), fill(0xFF00E676u))
 
-        // 4. string + enum: SVG star, placed by transform, spinning from the
-        // host-provided frame clock (never currentNanoTime — realloc trap).
-        val starSide = w * 0.28f
-        cv.save()
-        cv.translate(w / 2f, barY + h * 0.05f + starSide / 2f)
-        cv.rotate(((nanos / 1_000_000uL).toLong() % 36000L).toFloat() / 100f)
-        cv.scale(starSide / 100f, starSide / 100f)
-        cv.translate(-50f, -50f)
-        cv.drawPath(STAR_PATH, Types.FillRule.NONZERO, fill(0xFFFFAB40u))
-        cv.restore()
+        // scene: transform-only animation (content recorded once).
+        starLayer?.let { layer ->
+            val deg = ((nanos / 1_000_000uL).toLong() % 36000L).toFloat() / 100f
+            layer.setTransform(
+                starTransform(w / 2f, barY + h * 0.05f + starSide / 2f, starSide / 100f, deg)
+            )
+            Scene.Import.drawLayer(cv, layer)
+        }
 
-        // 6. layout: title inside the card + wrapped body; lines() drives
-        // baseline tick marks (proves the list<record> lift carries real
-        // metrics, not garbage).
         val titleSize = h * 0.028f
         run {
-            val b = Layout.ParagraphBuilder.new(
-                textStyle(titleSize, 0xFFFFFFFFu, weight = 700u), Layout.Align.CENTER,
-            )
-            b.addText("wasi:canvas × Kotlin")
+            val b = Layout.ParagraphBuilder.new(textStyle(titleSize, 0xFFFFFFFFu, weight = 700u))
+            b.setAlign(Layout.Align.CENTER)
+            b.addText("wasi:canvas 0.0.2 × Kotlin")
             val p = Layout.ParagraphBuilder.build(b)
             p.layout(card.width)
             p.paint(cv, Types.Point(card.x, card.y + (card.height - p.height()) / 2f))
@@ -143,14 +168,15 @@ object RendererImpl : Renderer {
         }
         run {
             val bodyTop = barY + h * 0.05f + starSide + h * 0.04f
-            val b = Layout.ParagraphBuilder.new(
-                textStyle(h * 0.021f, 0xFFB0BEC5u), Layout.Align.START,
-            )
+            // builder setters: clamp to 2 lines with an ellipsis; the
+            // did-exceed flag is rendered so the truncation is provable.
+            val b = Layout.ParagraphBuilder.new(textStyle(h * 0.021f, 0xFFB0BEC5u))
+            b.setMaxLines(2u)
+            b.setEllipsis("…")
             b.addText(
-                "Every element on this screen crossed the wasi:canvas draft " +
-                "through bindings generated by the Kotlin wit-bindgen fork: " +
-                "spilled paint records, SVG path strings, gradient stop lists, " +
-                "and these baseline ticks read back from paragraph.lines().",
+                "This paragraph is deliberately longer than two lines so the " +
+                "0.0.2 builder setters (set-max-lines + set-ellipsis) take " +
+                "effect and did-exceed-max-lines() returns true below the cut.",
             )
             val p = Layout.ParagraphBuilder.build(b)
             p.layout(card.width)
@@ -163,28 +189,34 @@ object RendererImpl : Renderer {
                     stroke(0xFF00E676u, h * 0.002f),
                 )
             }
-            // 7. per-frame create/close churn (this paragraph + the frame
-            // counter below) shakes out drop bugs at 60 fps.
             val bodyBottom = bodyTop + p.height()
+            val exceeded = p.didExceedMaxLines()
             p.close()
 
-            val fb = Layout.ParagraphBuilder.new(
-                textStyle(h * 0.018f, 0xFF80DEEAu), Layout.Align.START,
-            )
-            fb.addText("frame $frame")
+            val fb = Layout.ParagraphBuilder.new(textStyle(h * 0.018f, 0xFF80DEEAu))
+            fb.addText("frame $frame · truncated=$exceeded\n$lastPtr")
             val fp = Layout.ParagraphBuilder.build(fb)
             fp.layout(card.width)
             fp.paint(cv, Types.Point(card.x, bodyBottom + h * 0.02f))
             fp.close()
         }
 
-        // 8. image draw (snapshot of the offscreen checkerboard).
+        // color-filter: same checkerboard twice — raw, then tinted via
+        // paint.filter = blend(cyan, src-in) (the dart:ui/Compose icon-tint
+        // shape the 0.0.2 paint carries).
         checkerImage?.let { img ->
+            val s = Types.Sampling(Types.FilterMode.LINEAR, Types.MipmapMode.NONE)
+            cv.drawImage(img, Types.Point(margin, h - margin - w * 0.12f), s, fill(0xFFFFFFFFu))
             cv.drawImage(
                 img,
-                Types.Point(margin, h - margin - w * 0.12f),
-                Types.Sampling(Types.FilterMode.LINEAR, Types.MipmapMode.NONE),
-                fill(0xFFFFFFFFu),
+                Types.Point(margin * 2f + w * 0.12f, h - margin - w * 0.12f),
+                s,
+                fill(
+                    0xFFFFFFFFu,
+                    filter = Types.ColorFilter.Blend(
+                        Types.ColorBlend(0xFF00E5FFu, Types.BlendMode.SRC_IN)
+                    ),
+                ),
             )
         }
 
@@ -193,8 +225,6 @@ object RendererImpl : Renderer {
     }
 
     override fun onResize(w: UInt, h: UInt) {
-        // Geometry is re-derived from the buffer every frame; just invalidate
-        // the size-keyed caches.
         cachedW = -1f
     }
 
@@ -206,7 +236,28 @@ object RendererImpl : Renderer {
     override fun onLifecycleChanged(state: UInt) {}
 }
 
+/// 0.0.2 pointer export: renders the union record live (device kind, the
+/// changed button, the held set, hover enter/leave) — the on-screen proof
+/// that flags + new enums lower correctly through the Kotlin generator.
+object PointerHandlerImpl : PointerHandler {
+    override fun onPointer(ev: PointerHandler.PointerEvent) {
+        val held = buildString {
+            if (ev.buttons.primary) append("P")
+            if (ev.buttons.secondary) append("S")
+            if (ev.buttons.middle) append("M")
+            if (ev.buttons.back) append("B")
+            if (ev.buttons.forward) append("F")
+        }.ifEmpty { "-" }
+        val scroll = if (ev.kind == PointerHandler.Kind.SCROLL)
+            " d=(${ev.scrollDx.toInt()},${ev.scrollDy.toInt()})" else ""
+        RendererImpl.lastPtr =
+            "pointer: ${ev.kind.name.lowercase()} ${ev.device.name.lowercase()} " +
+            "btn=${ev.button.name.lowercase()} held=$held " +
+            "(${ev.x.toInt()},${ev.y.toInt()})$scroll"
+    }
+}
+
 fun main() {
-    // Never invoked — reactor component (renderer exports only);
+    // Never invoked — reactor component (renderer + pointer exports only);
     // binaries.executable() just needs an entry point to compile.
 }

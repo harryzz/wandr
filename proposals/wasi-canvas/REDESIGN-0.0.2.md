@@ -318,13 +318,17 @@ interface scene {
         /// rule: all host-resident allocation flows through a handle).
         new: static func(g: borrow<graphics>) -> layer;
 
-        /// The layer's content. The BORROW is not retained (component
-        /// model rule: a borrow cannot outlive the call) — the HOST
-        /// retains the immutable picture content internally, so the
-        /// guest may drop its picture handle afterwards. Swapping
-        /// content does NOT invalidate anything that has captured this
-        /// layer (see draw-layer).
-        set-picture:           func(p: borrow<picture>);
+        /// Set the layer's content by CONSUMING a recording canvas
+        /// (graphics.start-recording). IMPLEMENTATION-DISCOVERED FIX
+        /// (2026-06-12, path B): content must be finished as LIVE
+        /// drawable state, not a picture — a picture SNAPSHOTS captured
+        /// child layers, freezing them when a parent re-records; the
+        /// recording form keeps nested layers resolving at replay time
+        /// (skia finish-recording-as-drawable, the semantics the legacy
+        /// RenderNode machinery already relies on). `set-picture` was
+        /// dropped: R5-derivable from this (draw the picture into a
+        /// one-op recording). Traps on a non-recording canvas.
+        set-content:           func(recording: canvas);
         set-bounds:            func(bounds: rect);
         set-transform:         func(t: transform);
         set-clip-rect:         func(r: rect, anti-alias: bool);

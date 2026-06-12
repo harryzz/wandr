@@ -1,0 +1,26 @@
+package wasi:canvas@0.0.2;
+
+/// OPTIONAL — the UN-FUSED form of the embedding handoff: wasi:canvas as
+/// the THIRD pluggable graphics-context type (beside webgpu and
+/// frame-buffer; video is the fourth — proposals/wasi-video-decoder).
+/// Mirrors upstream's frame-buffer idiom (device.connect +
+/// from-graphics-buffer). NOT in the canvas-host world yet: reactor
+/// guests keep the fused `embedding.canvas-context`
+/// (≡ surface.get-context + canvas connection, the documented
+/// equivalence); this interface wires the day wasi:surface lands.
+interface connection {
+    use draw.{canvas, graphics};
+    use wasi:graphics-context/graphics-context@0.0.2.{context, abstract-buffer};
+
+    /// The canvas-flavored producer; created through the embedder-granted
+    /// factory (capability rule), then claims a surface's socket.
+    resource canvas-device {
+        new: static func(g: borrow<graphics>) -> canvas-device;
+        /// One producer per context.
+        connect: func(ctx: borrow<context>);
+    }
+
+    /// Convert the connected context's acquired buffer into a drawable
+    /// canvas (the from-graphics-buffer idiom; consumes the buffer).
+    from-graphics-buffer: func(b: abstract-buffer) -> canvas;
+}

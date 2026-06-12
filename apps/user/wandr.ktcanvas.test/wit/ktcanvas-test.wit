@@ -12,10 +12,15 @@
 package wandr:ktcanvas-test;
 
 world ktcanvas-test {
-    import wasi:canvas/types@0.0.1;
-    import wasi:canvas/draw@0.0.1;
-    import wasi:canvas/layout@0.0.1;
-    import wasi:canvas/embedding@0.0.1;
+    import wasi:canvas/types@0.0.2;
+    import wasi:canvas/draw@0.0.2;
+    import wasi:canvas/layout@0.0.2;
+    import wasi:canvas/scene@0.0.2;
+    import wasi:canvas/embedding@0.0.2;
 
     export my:skiko-gfx/renderer@0.1.0;
+    /// 0.0.2 pointer export — validates the union record (device/button/
+    /// buttons-flags/enter-leave) through the Kotlin generator + the
+    /// host's 002>001>legacy routing.
+    export wasi:input-handlers/pointer-handler@0.0.2;
 }
