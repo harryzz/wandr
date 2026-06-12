@@ -1,12 +1,11 @@
-//! The **wasi:canvas backend** for dioxus-canvas (stage 2 of the draft
-//! migration): [`launch_wasi_canvas!`] is a drop-in alternative to
+//! The **wasi:canvas backend** for dioxus-canvas (Phase B: fully
+//! new-style): [`launch_wasi_canvas!`] is a drop-in alternative to
 //! `launch!` that implements the same `CanvasSink` over the
-//! `wasi:canvas` draft (proposals/wasi-canvas) and exports the
-//! `wasi:input-handlers` trio (proposals/wasi-input-handlers) alongside
-//! the legacy renderer exports (the host routes exclusively, so dual
-//! export never duplicates; old hosts fall back to the legacy path —
-//! EXCEPT the canvas import itself, which hard-requires a host with
-//! wasi:canvas, default-on since stage 1).
+//! `wasi:canvas@0.0.2` draft (proposals/wasi-canvas) and exports the
+//! `wasi:input-handlers@0.0.2` trio plus `wandr:ui-shell`
+//! shell-events/frame-pacing. No `my:skiko-gfx` legs remain — the host
+//! treats the legacy renderer world as an optional probe since the
+//! Phase B host prep.
 //!
 //! Mapping notes (the interesting deltas vs the legacy sink):
 //! - Text blobs → host-shaped paragraphs (`wasi:canvas/layout`): the sink
@@ -46,8 +45,8 @@ pub fn w3c_code_to_key_id(code: &str) -> u32 {
 }
 
 /// Generates the guest bindings for the wasi:canvas backend:
-/// 1. at the invocation scope — the legacy `my:skiko-gfx` package
-///    (ime import + renderer/frame-pacing exports; NO canvas/paragraph),
+/// 1. at the invocation scope — the `wandr:ui-shell` slice this backend
+///    consumes (ime import + shell-events/frame-pacing exports),
 /// 2. `mod __dioxus_wasi_canvas` — the wasi:canvas draft imports,
 /// 3. `mod __dioxus_input` — the wasi:input-handlers exports.
 /// (Three `generate!`s can't share a scope — each emits `exports`/`_rt`.)
@@ -55,8 +54,9 @@ pub fn w3c_code_to_key_id(code: &str) -> u32 {
 macro_rules! wasi_canvas_world {
     () => {
         $crate::__wit_bindgen::generate!({
+            path: [],
             inline: r#"
-package my:skiko-gfx@0.1.0;
+package wandr:ui-shell@0.1.0;
 
 interface ime {
     notify-editor-attached: func(
@@ -69,17 +69,15 @@ interface ime {
     notify-editor-detached: func();
 }
 
-interface renderer {
-    enum pointer-kind { down, up, move, scroll }
-    enum key-kind     { down, up }
-    render-frame:          func(nanos: u64);
-    on-pointer-event:      func(kind: pointer-kind, x: f32, y: f32);
-    on-key-event:          func(kind: key-kind, key-code: u32);
-    on-resize:             func(w: u32, h: u32);
+interface lifecycle {
+    enum state { initialized, created, started, resumed, paused, stopped, destroyed }
+    get-state: func() -> state;
+}
+
+interface shell-events {
+    use lifecycle.{state};
     on-scheduled-callback: func(callback-id: u32);
-    on-pointer-event-v2:   func(pointer-id: u32, kind: pointer-kind, x: f32, y: f32, pressure: f32);
-    on-key-event-v2:       func(kind: key-kind, code-point: u32, key-id: u32);
-    on-lifecycle-changed:  func(state: u32);
+    on-lifecycle-changed:  func(new-state: state);
 }
 
 interface frame-pacing {
@@ -88,7 +86,7 @@ interface frame-pacing {
 
 world dioxus-wasi-app {
     import ime;
-    export renderer;
+    export shell-events;
     export frame-pacing;
 }
 "#,
@@ -115,15 +113,17 @@ macro_rules! wasi_canvas_bindings {
             $crate::__wit_bindgen::generate!({
                 path: [],
                 inline: r#"
-package wasi:canvas@0.0.1;
+package wasi:canvas@0.0.2;
 
 interface types {
     type color = u32;
 
     enum blend-mode {
-        src-over, src, dst-in, dst-out, src-atop, dst-atop, xor,
-        multiply, screen, overlay, darken, lighten, color-dodge,
-        color-burn, hard-light, soft-light, difference, exclusion, clear,
+        src-over, src, dst, dst-over, src-in, dst-in, src-out, dst-out,
+        src-atop, dst-atop, xor, plus, modulate, multiply, screen,
+        overlay, darken, lighten, color-dodge, color-burn, hard-light,
+        soft-light, difference, exclusion, clear,
+        hue, saturation, color, luminosity,
     }
 
     enum paint-style { fill, stroke, fill-and-stroke }
@@ -204,14 +204,17 @@ interface draw {
     resource graphics {
         linear-gradient: func(start: point, end: point,
                               stops: list<tuple<f32, color>>,
-                              tile: tile-mode) -> shader;
+                              tile: tile-mode,
+                              local: option<transform>) -> shader;
         radial-gradient: func(center: point, radius: f32,
                               stops: list<tuple<f32, color>>,
-                              tile: tile-mode) -> shader;
+                              tile: tile-mode,
+                              local: option<transform>) -> shader;
         sweep-gradient:  func(center: point,
                               start-angle: f32, end-angle: f32,
                               stops: list<tuple<f32, color>>,
-                              tile: tile-mode) -> shader;
+                              tile: tile-mode,
+                              local: option<transform>) -> shader;
         shader-blend:    func(mode: blend-mode, dst: borrow<shader>,
                               src: borrow<shader>) -> shader;
         image-pattern:   func(image: borrow<image>,
@@ -276,6 +279,23 @@ interface layout {
     use types.{color, rect, point};
     use draw.{canvas};
 
+    enum decoration-line-style { solid, double, dotted, dashed, wavy }
+
+    record decoration {
+        underline:    bool,
+        overline:     bool,
+        line-through: bool,
+        color:        color,
+        style:        decoration-line-style,
+        thickness:    f32,
+    }
+
+    record text-shadow {
+        color:  color,
+        offset: point,
+        sigma:  f32,
+    }
+
     record text-style {
         family:    string,
         size:      f32,
@@ -284,6 +304,10 @@ interface layout {
         color:     color,
         letter-spacing: f32,
         line-height:    f32,
+        baseline-shift: f32,
+        decoration:     option<decoration>,
+        shadows:        list<text-shadow>,
+        background:     option<color>,
     }
 
     enum align { start, center, end, justify }
@@ -333,15 +357,20 @@ interface layout {
                                    width: rect-width-style) -> list<text-box>;
         offset-at:            func(at: point) -> u32;
         word-boundary:        func(offset: u32) -> tuple<u32, u32>;
+        did-exceed-max-lines: func() -> bool;
     }
 
     resource paragraph-builder {
-        new:        static func(default-style: text-style, align: align)
-                    -> paragraph-builder;
-        push-style: func(style: text-style);
-        pop-style:  func();
-        add-text:   func(text: string);
-        build:      static func(b: paragraph-builder) -> paragraph;
+        new:           static func(default-style: text-style)
+                       -> paragraph-builder;
+        set-align:     func(a: align);
+        set-direction: func(d: text-direction);
+        set-max-lines: func(n: u32);
+        set-ellipsis:  func(e: string);
+        push-style:    func(style: text-style);
+        pop-style:     func();
+        add-text:      func(text: string);
+        build:         static func(b: paragraph-builder) -> paragraph;
     }
 }
 
@@ -485,8 +514,13 @@ macro_rules! wire_wasi_canvas {
                 color,
                 letter_spacing: 0.0,
                 line_height: 0.0,
+                baseline_shift: 0.0,
+                decoration: ::core::option::Option::None,
+                shadows: ::std::vec::Vec::new(),
+                background: ::core::option::Option::None,
             };
-            let b = __wc_layout::ParagraphBuilder::new(&style, __wc_layout::Align::Start);
+            // 0.0.2 setter-form builder; align defaults to start.
+            let b = __wc_layout::ParagraphBuilder::new(&style);
             b.add_text(&spec.text);
             let p = __wc_layout::ParagraphBuilder::build(b);
             p.layout(UNCONSTRAINED);
@@ -646,8 +680,12 @@ macro_rules! wire_wasi_canvas {
                 color: 0xFFFF_FFFF,
                 letter_spacing: 0.0,
                 line_height: 0.0,
+                baseline_shift: 0.0,
+                decoration: ::core::option::Option::None,
+                shadows: ::std::vec::Vec::new(),
+                background: ::core::option::Option::None,
             };
-            let b = __wc_layout::ParagraphBuilder::new(&style, __wc_layout::Align::Start);
+            let b = __wc_layout::ParagraphBuilder::new(&style);
             b.add_text(text);
             let p = __wc_layout::ParagraphBuilder::build(b);
             p.layout(UNCONSTRAINED);
@@ -673,12 +711,12 @@ macro_rules! wire_wasi_canvas {
 
         /// Report a focused editor so the host shows the soft keyboard.
         pub fn editor_attach(input_type: &str, hint: &str, initial_text: &str, selection_start: u32, selection_end: u32) {
-            crate::my::skiko_gfx::ime::notify_editor_attached(input_type, hint, initial_text, selection_start, selection_end);
+            crate::wandr::ui_shell::ime::notify_editor_attached(input_type, hint, initial_text, selection_start, selection_end);
         }
 
         /// The focused editor blurred — hides the keyboard.
         pub fn editor_detach() {
-            crate::my::skiko_gfx::ime::notify_editor_detached();
+            crate::wandr::ui_shell::ime::notify_editor_detached();
         }
 
         // ── renderer state + exports (legacy fallback AND input-handlers) ────
@@ -709,42 +747,16 @@ macro_rules! wire_wasi_canvas {
             });
         }
 
-        impl crate::exports::my::skiko_gfx::renderer::Guest for __DioxusCanvasGuest {
-            fn render_frame(_nanos: u64) {
-                __dioxus_render_frame_impl();
-            }
-            fn on_resize(w: u32, h: u32) {
-                __dioxus_canvas_with(|r| r.on_resize(w as f32, h as f32));
-            }
-            fn on_pointer_event_v2(
-                _pid: u32,
-                kind: crate::exports::my::skiko_gfx::renderer::PointerKind,
-                x: f32, y: f32, _pressure: f32,
-            ) {
-                use crate::exports::my::skiko_gfx::renderer::PointerKind;
-                __dioxus_canvas_with(|r| match kind {
-                    PointerKind::Down => r.on_pointer_down(x, y),
-                    PointerKind::Move => r.on_pointer_move(x, y),
-                    PointerKind::Up => r.on_pointer_up(x, y),
-                    PointerKind::Scroll => {}
-                });
-            }
-            fn on_key_event_v2(
-                kind: crate::exports::my::skiko_gfx::renderer::KeyKind,
-                code_point: u32, key_id: u32,
-            ) {
-                use crate::exports::my::skiko_gfx::renderer::KeyKind;
-                __dioxus_canvas_with(|r| r.on_key(matches!(kind, KeyKind::Down), code_point, key_id));
-            }
-            fn on_pointer_event(_kind: crate::exports::my::skiko_gfx::renderer::PointerKind, _x: f32, _y: f32) {}
-            fn on_key_event(_kind: crate::exports::my::skiko_gfx::renderer::KeyKind, _key_code: u32) {}
+        impl crate::exports::wandr::ui_shell::shell_events::Guest for __DioxusCanvasGuest {
             fn on_scheduled_callback(_callback_id: u32) {}
-            fn on_lifecycle_changed(state: u32) {
-                __dioxus_canvas_with(|r| r.set_lifecycle(state));
+            fn on_lifecycle_changed(new_state: crate::exports::wandr::ui_shell::shell_events::State) {
+                // DomRenderer keys off the host lifecycle ordinals
+                // (resumed=3, paused=4, stopped=5) — the enum order matches.
+                __dioxus_canvas_with(|r| r.set_lifecycle(new_state as u32));
             }
         }
 
-        impl crate::exports::my::skiko_gfx::frame_pacing::Guest for __DioxusCanvasGuest {
+        impl crate::exports::wandr::ui_shell::frame_pacing::Guest for __DioxusCanvasGuest {
             fn next_frame_delay() -> u32 {
                 __DIOXUS_CANVAS_RENDERER.with(|cell| cell.borrow().as_ref().map_or(0, |d| d.next_frame_delay()))
             }
@@ -762,18 +774,27 @@ macro_rules! wire_wasi_canvas {
             $crate::__wit_bindgen::generate!({
                 path: [],
                 inline: r#"
-package wasi:input-handlers@0.0.1;
+package wasi:input-handlers@0.0.2;
 
 interface pointer-handler {
-    enum kind { down, up, move, scroll, cancel }
+    enum kind { down, up, move, scroll, cancel, enter, leave }
+    enum pointer-device { unknown, mouse, touch, pen }
+    enum button { none, primary, secondary, middle, back, forward }
+    flags buttons { primary, secondary, middle, back, forward }
     record pointer-event {
         id: u32,
         kind: kind,
+        device: pointer-device,
         x: f32,
         y: f32,
         pressure: f32,
+        tilt-x: f32,
+        tilt-y: f32,
+        twist: f32,
         scroll-dx: f32,
         scroll-dy: f32,
+        button: button,
+        buttons: buttons,
         alt: bool,
         ctrl: bool,
         meta: bool,
@@ -820,7 +841,9 @@ world input-guest {
                         Kind::Down => r.on_pointer_down(ev.x, ev.y),
                         Kind::Move => r.on_pointer_move(ev.x, ev.y),
                         Kind::Up | Kind::Cancel => r.on_pointer_up(ev.x, ev.y),
-                        Kind::Scroll => {}
+                        // Hover + wheel have no DomRenderer mapping (parity
+                        // with the 0.0.1 behavior — touch-first guests).
+                        Kind::Scroll | Kind::Enter | Kind::Leave => {}
                     });
                 }
             }
