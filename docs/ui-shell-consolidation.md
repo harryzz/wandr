@@ -61,13 +61,47 @@ The user's constraint: no N× skiko/compose compiles. Sequencing:
   One cargo build each.
 - Deploy = the stage-3 playbook (per-app installs + one zygote restart).
 
-**Phase C — host cleanup (after B verifies):**
-- Delete the skiko-ui bindgen world + my:skiko-gfx impls; instantiation
-  becomes probe-only (no required exports).
-- Drop wasi:canvas@0.0.1 + input-handlers@0.0.1 bindgen/linker entries
-  and the wit/ trees; wit-0.0.2 renames to wit/.
-- Delete wit/skiko-gfx.wit + every consumer mirror (the WIT-sync rule
-  dies with it).
+**Phase C — host cleanup (after B verifies). Sized inventory
+(2026-06-12 audit), two kinds of work:**
+
+*C1 — the delegation inversion (the one structural task).* Phase A made
+new-trait impls DELEGATE to the legacy trait impls whose logic is
+inline. When the legacy bindgen dies, the logic must live in the new
+homes: for each of the ~22 `*_impl.rs` files (theme, locale, clipboard,
+window, lifecycle, scheduler, text-segmentation, ime/keyboard, haptics,
+power, thermal, sensors, lights, pointer-icon, assets, audio, launcher,
+status, display-geometry, …) RE-TARGET the `impl … Host for HostState`
+block to the new bindgen trait (same method bodies; enum type paths
+swap) and delete the matching delegation block in
+`consolidated_impl.rs`. Mechanical, file-per-file, compiler-guarded.
+
+*C2 — deletions (~3,700 lines of host code):*
+- `canvas_impl.rs` (2,314 lines): the legacy canvas trait impl — the
+  38-verb `bc-*` family, text-blob machinery + raster caches, the u32
+  maps (images/shaders/pictures/recorders/drawables/text-blobs),
+  `recording_stack` modal routing (0.0.2 recordings are table
+  resources; once Compose is on `scene`, nothing uses it).
+  KEEPS: SkiaRenderer core (surface/EGL/base-matrix/flush/canvas(),
+  font-collection + get-typeface), the WasiDrawable wrapper + FFI
+  (scene's machinery), dihedral transform. ~60% shrink.
+- `paragraph_impl.rs` (297 lines): delete entirely.
+- `wasi_canvas_impl.rs` (1,139 lines, 0.0.1): delete entirely; the
+  0.0.2 impl renames into its place.
+- `lib.rs`: `mod bindings` (the skiko-ui world) + its 23 `SkikoUi`
+  usage sites → probe-only instantiation (dispatch fallback arms in
+  input.rs die; standalone/zygote/preload typed paths rework);
+  `key_input_bindings` (superseded by input-handlers) and the legacy
+  `frame_pacing_bindings` (superseded by ui-shell pacing) die.
+- `input.rs`: 0.0.1 GuestInput fields + legacy dispatch arms +
+  `input_handlers_bindings` (0.0.1).
+- WIT trees: `wit/skiko-gfx.wit` + every consumer mirror deleted (the
+  WIT-sync rule retires from CLAUDE.md with it); proposals' 0.0.1
+  canvas/input trees dropped, `wit-0.0.2` renames to `wit/`.
+
+*Guest-side cleanup rides Phase B, not C:* skiko's legacy arms (the
+`wc()` gate fallbacks, `witAttrs`, blob paths, `node/` legacy verbs,
+the `.bak/.orig/.checkpoint` junk files), wandr-app's smoke-test +
+log-message scatter.
 
 ## Acceptance check (family goal)
 
