@@ -18,7 +18,13 @@ shipped / Avalonia feasible / Qt no / Flutter gated / Go n/a). Full memo:
   wandr's existing `paragraph` interface, no glyph verbs needed. dart2wasm
   emits WasmGC (our wasmtime already enables gc for Kotlin) BUT only runs
   in JS environments — core libs import JS builtins; "doesn't support
-  wasmtime" per Dart docs. **Gate = dart-lang/sdk#56366** (`-t wasi`,
+  wasmtime" per Dart docs. **UPDATE 2026-06-12: dart:ui → wasi:canvas 0.0.2 mapping DONE**
+(flutter memo §dart:ui): SceneBuilder independently re-derives the
+`scene` interface; the check drove three R1 breaking-class amendments
+into REDESIGN-0.0.2 (29-mode blend enum union — the Compose binding was
+silently degrading 10 modes to src-over!, text shadows = list, gradient
+local transforms). Contract is Flutter-ready; only the toolchain gate
+remains. **Gate = dart-lang/sdk#56366** (`-t wasi`,
   open/unimplemented). Native-engine-embedder shape rejected (fat C++
   runtime beside wandr, bypasses sandbox + skiko-gfx). If the gate flips,
   Flutter jumps the port queue.

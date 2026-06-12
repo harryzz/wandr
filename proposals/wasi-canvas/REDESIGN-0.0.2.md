@@ -56,10 +56,13 @@ positions and broke on the fourth).
 These are the rules that make "no further modification" a property of the
 design rather than a hope:
 
-- **R1 — records ship at union size.** A record is ABI-frozen the moment
-  one consumer compiles against it. Every record below carries the full
-  field set any *shipped* consumer semantics needs; speculative fields are
-  NOT included (R3 covers them).
+- **R1 — breaking-class shapes ship at union size.** A record is
+  ABI-frozen the moment one consumer compiles against it — and so are
+  ENUMS (adding a case is instantiation-breaking) and FUNCTION
+  SIGNATURES (adding a parameter likewise). All three ship at the union
+  of known consumer semantics — including PROSPECTIVE consumers for the
+  breaking classes, where checking costs nothing pre-freeze (the
+  Flutter check, §9); speculative needs stay out (R3 covers them).
 - **R2 — methods and free functions are the additive lane.** Resources
   grow methods, interfaces grow functions; compiled components import only
   what they call, so this never breaks anyone. Consequently: anything
@@ -127,12 +130,17 @@ out of the package entirely (COMPATIBILITY.md red line, unchanged).
 
 ## 4. The package, interface by interface (deltas vs 0.0.1-as-shipped)
 
-### 4.1 `types` — unchanged
+### 4.1 `types` — paint unchanged; blend-mode completed to the union
 
 Post-stage-3 `paint` is already at union size (style, color, alpha, blend,
-anti-alias, shader borrow, stroke quad, mask-blur, color-filter). No
-deltas. (Dash/path-effects and runtime shaders remain named deferrals —
-§7 — because no consumer has *shipped* the need.)
+anti-alias, shader borrow, stroke quad, mask-blur, color-filter).
+**`blend-mode` grows from 19 to the full 29-mode skia/CSS set** (adding
+dst, dst-over, src-in, src-out, plus, modulate, hue, saturation, color,
+luminosity): enum cases are a breaking class (R1), dart:ui uses all 29,
+and the Compose binding's "extended modes → src-over" fallback is a
+latent fidelity bug this closes. (Dash/path-effects and runtime shaders
+remain named deferrals — §7 — because no consumer has *shipped* the
+need.)
 
 ### 4.2 `draw` — one additive function
 
@@ -166,6 +174,14 @@ Kotlin adapter, not into the contract.
 | Avalonia | **heaviest user**: `IDrawingContextImpl.Transform { get; set; }` is an absolute SETTER applied per visual (verified against AvaloniaUI/master 2026-06-12) — the derivation still passes R5 test 3 (one wire call either way; per-set cost is one guest-side 3×3 inverse-multiply), but Avalonia is the named first candidate to trigger the R2 re-entry if tracking shows drift or profile cost | never (DrawGlyphRun only) |
 
 Re-entry lane for both cuts: additive method/function (R2).
+
+One signature amendment (R1, from the Flutter check): the three
+`graphics` gradient constructors gain a trailing `local:
+option<transform>` (shader-local matrix, independent of canvas
+transform). dart:ui's Gradient takes an optional matrix4, and skiko's
+`makeWithLocalMatrix` no-op stub was silently masking the same gap for
+Compose; signatures are breaking, so it ships now while 0.0.2 is
+unwired.
 
 ### 4.3 `glyphs` — unchanged
 
@@ -220,7 +236,10 @@ interface layout {
         /// Vertical run shift (superscript/subscript); 0 = none.
         baseline-shift: f32,
         decoration:     option<decoration>,
-        shadow:         option<text-shadow>,
+        /// Empty = none. A LIST because dart:ui carries multiple
+        /// shadows per span — one optional shadow was Compose-snapshot
+        /// thinking (the 0.0.1 mistake shape, caught pre-freeze).
+        shadows:        list<text-shadow>,
         background:     option<color>,
     }
 
@@ -298,6 +317,8 @@ interface scene {
         set-transform:         func(t: transform);
         set-clip-rect:         func(r: rect, anti-alias: bool);
         set-clip-rounded-rect: func(rr: rounded-rect, anti-alias: bool);
+        /// SVG path data (Flutter ClipPathLayer; Compose outline clips).
+        set-clip-path:         func(path: string, anti-alias: bool);
         clear-clip:            func();
         set-alpha:             func(alpha: u8);
         /// Material-style drop shadow from layer geometry; 0 = none.
@@ -371,7 +392,7 @@ next to its canvas today.
 
 ## 6. WASI-rules audit (delta over COMPATIBILITY.md's, which still holds)
 
-**Verified 2026-06-12:** (a) the complete 0.0.2 package — including
+**Verified 2026-06-12 (re-run after the §9-driven amendments — 29-mode blend enum, shadows list, gradient local transforms, scene.set-clip-path, and the deferred draw-mesh shape):** (a) the complete 0.0.2 package — including
 `scene`, the union records with nested `option<record>`s, the setter
 builder, and a `managed-ui-guest` world — was materialized and passes
 `wasm-tools component wit` (the component model's static rules:
@@ -414,7 +435,10 @@ the design surface, with the lane it re-enters through.
 | Variable-font axes | no guest ships a variable font | additive `glyphs` params via new func (R2) |
 | Image pixel readback / encode | privacy posture kept; no consumer needs it | additive `image` methods (R2) |
 | Font-metrics-without-paragraph | paragraph intrinsics cover shipped needs | additive `layout.measure-text` (R2) |
-| Layer effects (blur/drop-shadow on arbitrary content — Avalonia PushEffect, Compose Modifier.blur) | only effect-on-*shape* shipped (paint.blur) | additive `save-layer-with-filter` method (R2) |
+| Layer effects (blur/drop-shadow on arbitrary content — Avalonia PushEffect, Compose Modifier.blur, Flutter BackdropFilter/ShaderMask) | only effect-on-*shape* shipped (paint.blur) | additive `save-layer-with-filter` method (R2) |
+| Textured triangle meshes (`draw-mesh`) | no shipped consumer; egui is the promoting candidate (its ENTIRE output — docs/egui-wandr-feasibility.md) | additive function (R2); passes R5 as a primitive (not derivable at sane wire cost); shape pre-validated (wasm-tools, 2026-06-12); promotion must spec index validation (out-of-range → trap) |
+| Image sub-region updates (`image.write-region`) | images immutable; egui's incremental font atlas is the promoting candidate (whole-texture re-upload meanwhile) | additive method (R2) — BUT it makes images mutable, so promotion must specify capture semantics for `image-pattern` shaders and pictures referencing the image (snapshot-at-creation vs live); until specified, determinism/interposition argue for snapshot |
+| drawAtlas / drawShadow-on-path (dart:ui) | Flutter-only so far | additive verbs (R2) |
 
 ## 8. Adoption sketch (non-binding)
 
@@ -426,7 +450,17 @@ whenever convenient. `my:skiko-gfx` then shrinks to the true remainder
 (window/IME/lifecycle/theme + transport for input), which is the sibling-
 package layering both worlds already use.
 
-## 9. Out-of-sample validation: Avalonia (2026-06-12)
+## 9. Out-of-sample validations (2026-06-12)
+
+Three prospective consumers checked; per-row mappings live in their
+memos — `docs/avalonia-wandr-feasibility.md` (below),
+`docs/egui-wandr-feasibility.md` (mesh+atlas class; promotes the
+draw-mesh deferral), `docs/flutter-wandr-feasibility.md` §dart:ui
+(managed-ui class; independently re-derived `scene` via SceneBuilder and
+drove the R1 breaking-class amendments: 29-mode blend enum, shadows
+list, gradient local transforms).
+
+### 9a. Avalonia
 
 The design must hold for consumers that did NOT shape it. Avalonia is
 the fourth class candidate (C#/.NET, HarfBuzz shaping, in-guest

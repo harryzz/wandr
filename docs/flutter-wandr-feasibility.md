@@ -64,6 +64,55 @@ principle: it's a fat per-app native runtime with its own GPU context,
 bypassing the wasm sandbox, the component model, and `my:skiko-gfx`
 entirely. That's "Flutter beside wandr," not a wandr guest.
 
+## dart:ui → wasi:canvas 0.0.2 architectural fit (added 2026-06-12)
+
+Re-checked against the redesigned contract (`proposals/wasi-canvas/
+REDESIGN-0.0.2.md`) so the answer is ready the day dart2wasm grows a
+WASI target — Flutter is the prospective SIXTH reference consumer, and
+its check found real contract gaps (now folded into 0.0.2; see below).
+
+**Profile: managed-ui, the full stack — and the strongest validation of
+`scene` yet.** Flutter's compositor speaks SceneBuilder: push
+transform/offset/clip/opacity layers + `addPicture`. That is the
+`scene` interface almost name-for-name (layers + pictures + replay-time
+resolution), independently confirming that host-retained layers are the
+managed-toolkit pattern, not Compose-private machinery:
+
+| dart:ui surface | 0.0.2 home |
+|---|---|
+| Canvas (drawRect/RRect/DRRect/oval/circle/line/arc/path/paint/points) | `draw.canvas` verb-for-verb (SkCanvas heritage on both sides) |
+| Picture / PictureRecorder | `graphics.start-recording` / `finish-recording` / `draw-picture` |
+| SceneBuilder pushTransform/Offset | `scene.layer.set-transform` |
+| SceneBuilder pushClipRect/RRect/Path | layer clip setters (clip-path added to `scene` from this check) |
+| SceneBuilder pushOpacity | `scene.layer.set-alpha` |
+| Paragraph / ParagraphBuilder (SkParagraph) | `layout` near 1:1 — same skparagraph ancestry; maxLines/ellipsis = the 0.0.2 builder setters |
+| Path.combine | `draw.combine-paths` |
+| ImageShader, Gradient.linear/radial/sweep | `graphics` factory (gradients' optional matrix4 = the `local` transform 0.0.2 gained from this check) |
+| Image.toByteData / FragmentProgram / drawAtlas / drawVertices / drawShadow(path) / BackdropFilter / ShaderMask / placeholders | named deferrals, all with additive lanes (drawVertices rides egui's `draw-mesh` promotion) |
+
+**Contract findings this check fed back into 0.0.2** (the value of
+checking prospective consumers against the BREAKING-change classes now,
+while the redesign is unwired):
+
+1. **blend-mode must ship at the full 29-mode skia/CSS union** — enum
+   case additions are instantiation-breaking just like record fields
+   (R1 explicitly covers enums now). dart:ui uses all 29; Compose's
+   binding silently degrades the missing 10 (dst, dst-over, src-in,
+   src-out, plus, modulate, hue, saturation, color, luminosity) to
+   src-over today — a latent fidelity bug the Flutter check exposed.
+2. **text-style.shadows is a `list<text-shadow>`** (dart:ui TextStyle
+   carries a shadow LIST; one optional shadow was Compose-snapshot
+   thinking — the exact 0.0.1 mistake shape, caught pre-freeze).
+3. **gradient constructors gain `local: option<transform>`** (function
+   signatures are a breaking class too; dart:ui Gradient takes an
+   optional matrix4, and skiko's `makeWithLocalMatrix` no-op stub was
+   masking the same gap for Compose).
+
+Everything else was already covered or already a named deferral. The
+verdict stands: when dart-lang/sdk#56366 lands, the contract is ready;
+the work is the web_ui-style binding (CanvasKit JS-interop → WIT
+imports), not architecture.
+
 ## Final guest-UI lineup
 
 | | Compose (Kotlin) | dioxus-canvas (Rust) | Slint (Rust) | Avalonia (C#) | Qt (C++) | **Flutter (Dart)** |
