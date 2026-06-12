@@ -170,6 +170,50 @@ interface ime {
 /// which installed app is the currently-active IME; the user can
 /// install many (wandr.ime.keyboard / wandr.ime.voice / wandr.ime.zh / ...)
 /// and switch between them at runtime.
+/// Factored out of my:skiko-gfx (the consolidation event): the IME app's
+/// synthetic-key channel toward the focused editor — verbatim from the
+/// shipped `keyboard` interface.
+interface keyboard-send {
+    /// Push a synthetic key event to the focused editor via the
+    /// arbiter. `code-point` is the Unicode scalar of the char if
+    /// printable (0 for non-printable / meta keys); the focused
+    /// `BasicTextField` inserts based on this.
+    ///
+    /// `key-id` is a COMPOSE-Key-compatible numeric ID — NOT an
+    /// Android AKEYCODE_*. Specifically the same values the host's
+    /// winit branch sends (wandr-host `lib.rs:512-528`):
+    ///   Backspace = 8, Tab = 9, Enter = 13, Escape = 27, Space = 32,
+    ///   PageUp = 33, PageDown = 34, End = 35, Home = 36,
+    ///   ArrowLeft/Up/Right/Down = 37/38/39/40, Insert = 45, Delete = 46.
+    /// For printable characters (letters / digits / punctuation),
+    /// `key-id = 0` and the field uses `code-point`.
+    ///
+    /// `action` is 0 = down, 1 = up.
+    ///
+    /// Fire-and-forget — the arbiter delivers asynchronously to
+    /// the per-host control socket; this call returns as soon as
+    /// the arbiter has acknowledged the socket write.
+    send-key-event: func(code-point: u32, key-id: u32, action: u8);
+
+    /// Task 47 step 3c — IME guest declares its preferred overlay
+    /// panel height in physical pixels. Called once at composition
+    /// root (or whenever the keyboard layout's natural height
+    /// changes — e.g. shift, secondary layer, voice-mode panel).
+    ///
+    /// Only meaningful when the host was launched with
+    /// `--standalone-overlay`. The host re-sizes its SurfaceControl
+    /// to `PW x height-px`, repositions to `(0, PH - height-px)`,
+    /// and re-registers the input window at the smaller rect.
+    /// `ANativeWindow_setBuffersGeometry` is invoked to flush EGL's
+    /// notion of the surface size; the next frame draws to the new
+    /// dimensions.
+    ///
+    /// No-op on fullscreen surfaces (logs a warning).
+    request-overlay-height: func(height-px: u32);
+}
+
+world keyboard-send-imports { import keyboard-send; }
+
 world ime-client-world {
     import input-connection;
     export ime;
