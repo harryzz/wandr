@@ -2,4 +2,4 @@ TASK=103
 STEP=consolidation-designed
 STATUS=in-progress
 LAST_SUCCESS=Path B host phase committed (6197425f); wandr:ui-shell draft validated; consolidation plan (A/B/C) recorded — end state retires my:skiko-gfx AND 0.0.1 packages
-NOTES=Next session = Phase A (host-additive: ui-shell re-binding + wasi:logging + wandr:* service groups), then Phase B = THE one rebuild of every guest (Kotlin finale + all Rust guests 0.0.1→0.0.2+ui-shell), Phase C host cleanup. Full plan: proposals/wandr-ui-shell/DESIGN.md; finale per-item audit in memory.
+NOTES=Next session = Phase A (host-additive: ui-shell re-binding + wasi:logging + wandr:* service groups), then Phase B = THE one rebuild of every guest (Kotlin finale + all Rust guests 0.0.1→0.0.2+ui-shell), Phase C host cleanup. Full plan: docs/ui-shell-consolidation.md; finale per-item audit in memory.

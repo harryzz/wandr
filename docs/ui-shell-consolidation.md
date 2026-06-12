@@ -2,7 +2,9 @@
 
 > Proposal (2026-06-12). Bound by the family goal (clean / no overlap /
 > WASI-shaped / 100% reference-library consumable) and rules R1–R5
-> (`../wasi-canvas/REDESIGN-0.0.2.md`). WIT: `wit/ui-shell.wit`
+> (`proposals/wasi-canvas/REDESIGN-0.0.2.md`). WIT: `wit/ui-shell.wit`
+> (repo root — a wandr:* platform contract beside alarm/notify/etc.,
+> deliberately NOT in proposals/: that tree is the WASI-facing family)
 > (validated). The user-set end state: **neither legacy package
 > survives** — my:skiko-gfx does not live on as "the rest", and
 > wasi:canvas@0.0.1 does not stay served once its consumers move.

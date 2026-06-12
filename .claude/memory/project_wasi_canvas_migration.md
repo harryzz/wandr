@@ -224,7 +224,7 @@ proposals/wasi-surface/DESIGN.md.
 
 **THE CONSOLIDATION PLAN (user-set end state 2026-06-12: NEITHER
 my:skiko-gfx NOR wasi:canvas@0.0.1 survives).**
-proposals/wandr-ui-shell/DESIGN.md + wit/ (validated): the universal
+docs/ui-shell-consolidation.md + wit/ui-shell.wit (validated): the universal
 UI-shell package (metrics/theme/locale/clipboard/ime/lifecycle/
 scheduler/text-segmentation imports + shell-events/frame-pacing
 exports — replaces the legacy renderer export's non-input legs);
