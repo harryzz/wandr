@@ -1,5 +1,5 @@
-TASK=105
-STEP=verify-done
-STATUS=complete
-LAST_SUCCESS=Task 105 (Phase A+B+C) verified OK — my:skiko-gfx fully retired end-to-end; all guests on wasi:canvas/input-handlers 0.0.2 + wandr:ui-shell/device/chrome/assets + wasi:logging/audio; Phase C host deployed, Signal connected on device — USER-VERIFIED incl. call audio both ways on the wasi:audio engine
-NOTES=Follow-ups DONE (2026-06-12 evening): dead-field sweep, docs catch-up, skiko junk purge — see commit log.
+TASK=106
+STEP=0
+STATUS=not-started
+LAST_SUCCESS=Task 105 verified OK — my:skiko-gfx retired end-to-end (Phases A+B+C); all guests on wasi:canvas/input-handlers 0.0.2 + wandr:ui-shell family; device-verified incl. Signal voice+video; follow-ups done; everything pushed to codeberg
+NOTES=Avalonia spike #1 per tasks/106-avalonia-spike.md. BLOCKED ON ONE USER COMMAND: sudo apt install -y dotnet-sdk-10.0 (then agent installs componentize-dotnet templates/SDK user-level). Toolchain facts in reference_avalonia_wandr memory (2026-06-12 check: 0.7.0-preview00010, .NET 10, Linux NativeAOT-LLVM OK, no separate wasi-sdk).
