@@ -266,7 +266,7 @@ IDrawingContextImpl.Transform is an absolute SETTER per visual.
 
 Related: [[reference_slint_wasip2]], [[feedback_shared_wit_rebuild_all_consumers]].
 
-**2026-06-12 — Phase B COMPLETE, deployed on device (awaiting user visual verify).**
+**2026-06-12 — Phase B COMPLETE — USER-VERIFIED ON DEVICE 2026-06-12 (touch/IME/Signal incl. VIDEO CALL both views).**
 Every guest is fully new-style (wasi:canvas@0.0.2 + wasi:input-handlers@0.0.2 +
 wandr:ui-shell + wandr:{device,chrome,assets} + wasi:{logging,audio}); zero
 my:skiko-gfx imports/exports remain in any shipped component. Host treats the
@@ -279,3 +279,8 @@ under every layer → invisible). Kotlin generator regens MUST run
 tools/scripts/patch-kotlin-bindgen-freeall.py (leading-freeAll; see
 [[feedback_wasi_realloc_allocator]]). Phase C deletion starts only after the
 user confirms device interaction (touch/IME/Signal/rotation).
+Video-call gotcha (fixed 80cf1b3f): dioxus wire surface_size() outside a frame
+read a never-populated cache after the canvas-context refactor → Signal pushed
+(0,0) video rects → decoder fell to decode-to-buffer (no surface), peer saw us,
+we saw nothing. begin_frame now refreshes the cache from the acquired buffer.
+NEXT: Phase C deletion (~3,700 lines; inventory docs/ui-shell-consolidation.md).

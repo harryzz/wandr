@@ -1,5 +1,5 @@
-TASK=104
-STEP=phaseA-complete
-STATUS=complete
-LAST_SUCCESS=Phase A COMPLETE: ui-shell + logging + device/chrome/assets/keyboard-send + wasi:audio (resources over the live-call-verified track machinery) all served additively; regression clean both generations
-NOTES=Phase B next (THE one rebuild of every guest): Kotlin finale (skiko→0.0.2 canvas/scene/images/blobs/setMatrix + input 0.0.2 + ui-shell + wasi:logging + wasi:audio + surface-wh→canvas dims + id-map assembly) AND all Rust guests (0.0.1→0.0.2 + ui-shell + export swap renderer/frame-pacing→input-handlers-0.0.2/shell worlds). Host prep riding Phase B: shell-events/ui-shell-pacing dispatch preference at standalone+desktop call sites. Then Phase C cleanup. Android host rebuild+push before device deploy.
+TASK=105
+STEP=phase-C-start
+STATUS=in-progress
+LAST_SUCCESS=Phase B COMPLETE + USER-VERIFIED on device (2026-06-12): all guests new-style; Signal video call works both views after begin-frame size-cache fix (80cf1b3f)
+NOTES=Phase C = legacy deletion per docs/ui-shell-consolidation.md inventory: host delegation inversion (~22 *_impl.rs re-target to new traits, delete consolidated_impl delegations), delete 0.0.1 wasi_canvas_impl.rs + bindings, canvas_impl.rs legacy-verb shrink (~60%, keep SkiaRenderer core + WasiDrawable FFI), paragraph_impl.rs, skiko-ui bindgen + 23 host sites, key_input + legacy frame_pacing bindings, 0.0.1 input bindings/arms, wit/skiko-gfx.wit + mirrors, promote proposals wit-0.0.2 -> wit/. Desktop+android regression after each chunk; redeploy at end.
