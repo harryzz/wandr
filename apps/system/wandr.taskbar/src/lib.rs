@@ -14,16 +14,19 @@
 //! recomputed inline each frame; a tapped button flashes briefly.
 
 wit_bindgen::generate!({
-    world: "my:skiko-gfx/taskbar-app",
-    path: ["../../../proposals/wasi-canvas/wit", "wit"],
+    world: "wandr:taskbar-app/taskbar-app",
+    path: "wit",
     generate_all,
 });
 
 use std::cell::RefCell;
 
-use crate::exports::my::skiko_gfx::frame_pacing::Guest as FramePacingGuest;
-use crate::exports::my::skiko_gfx::renderer::{Guest, KeyKind, PointerKind};
-use crate::my::skiko_gfx::launcher;
+use crate::exports::wandr::ui_shell::frame_pacing::Guest as FramePacingGuest;
+use crate::exports::wasi::input_handlers::frame_handler::Guest as FrameGuest;
+use crate::exports::wasi::input_handlers::pointer_handler::{
+    Guest as PointerGuest, Kind as PointerKind, PointerEvent,
+};
+use crate::wandr::chrome::launcher;
 use crate::wasi::canvas::draw as wdraw;
 use crate::wasi::canvas::embedding as wembed;
 use crate::wasi::canvas::types as wtypes;
@@ -116,8 +119,8 @@ fn draw_icon(cv: &wdraw::Canvas, i: usize, cx: f32, cy: f32, r: f32) {
 
 struct Taskbar;
 
-impl Guest for Taskbar {
-    fn render_frame(_nanos: u64) {
+impl FrameGuest for Taskbar {
+    fn on_frame(_nanos: u64) {
         STATE.with(|st| {
             let mut s = st.borrow_mut();
             let cv = wctx(|x| x.get_current_buffer());
@@ -165,10 +168,14 @@ impl Guest for Taskbar {
         });
     }
 
-    fn on_pointer_event_v2(_pid: u32, kind: PointerKind, x: f32, _y: f32, _pressure: f32) {
-        if !matches!(kind, PointerKind::Down) {
+}
+
+impl PointerGuest for Taskbar {
+    fn on_pointer(ev: PointerEvent) {
+        if !matches!(ev.kind, PointerKind::Down) {
             return;
         }
+        let x = ev.x;
         let index = STATE.with(|st| {
             let mut s = st.borrow_mut();
             if s.w <= 0.0 {
@@ -182,13 +189,6 @@ impl Guest for Taskbar {
             invoke(idx);
         }
     }
-
-    // Unused inputs.
-    fn on_pointer_event(_kind: PointerKind, _x: f32, _y: f32) {}
-    fn on_key_event(_kind: KeyKind, _key_code: u32) {}
-    fn on_scheduled_callback(_callback_id: u32) {}
-    fn on_key_event_v2(_kind: KeyKind, _code_point: u32, _key_id: u32) {}
-    fn on_lifecycle_changed(_state: u32) {}
 }
 
 /// Task 64 — the nav bar is static except for the brief tap-flash pill.

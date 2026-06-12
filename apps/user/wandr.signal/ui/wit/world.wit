@@ -1,9 +1,12 @@
-// The signal-ui guest world: the trimmed `my:skiko-gfx` contract (verbatim from
-// dioxus-canvas's `skiko_world!` — the canonical WIT's `matrix-3x3` is rejected
-// by the guest wit-parser) PLUS the engine's `wandr:signal/chat` import (a dep
-// under deps/signal/). One world → one generate! → no `_rt`/`cabi_realloc`
-// conflict. `wire!` binds the renderer/sink/IME over the skiko half.
-package my:skiko-gfx@0.1.0;
+// The signal-ui guest world (Phase B): the wandr:ui-shell slice the
+// dioxus-canvas backend consumes (ime import + shell-events/frame-pacing
+// exports) PLUS the engine's `wandr:signal/chat` import (a dep under
+// deps/signal/) and the background-receipt/notify/alarm/audio legs. One
+// world → one generate! → no `_rt`/`cabi_realloc` conflict. Drawing + input
+// come from dioxus-canvas's own wasi:canvas@0.0.2 / wasi:input-handlers@0.0.2
+// generates. The host clock (timezone-local timestamps) now comes from
+// `wandr:chrome/status` (deps/chrome/) — its post-consolidation home.
+package wandr:ui-shell@0.1.0;
 
 interface ime {
     notify-editor-attached: func(
@@ -16,37 +19,26 @@ interface ime {
     notify-editor-detached: func();
 }
 
-interface renderer {
-    enum pointer-kind { down, up, move, scroll }
-    enum key-kind     { down, up }
-    render-frame:          func(nanos: u64);
-    on-pointer-event:      func(kind: pointer-kind, x: f32, y: f32);
-    on-key-event:          func(kind: key-kind, key-code: u32);
-    on-resize:             func(w: u32, h: u32);
+interface lifecycle {
+    enum state { initialized, created, started, resumed, paused, stopped, destroyed }
+    get-state: func() -> state;
+}
+
+interface shell-events {
+    use lifecycle.{state};
     on-scheduled-callback: func(callback-id: u32);
-    on-pointer-event-v2:   func(pointer-id: u32, kind: pointer-kind, x: f32, y: f32, pressure: f32);
-    on-key-event-v2:       func(kind: key-kind, code-point: u32, key-id: u32);
-    on-lifecycle-changed:  func(state: u32);
+    on-lifecycle-changed:  func(new-state: state);
 }
 
 interface frame-pacing {
     next-frame-delay: func() -> u32;
 }
 
-// Subset of the canonical `status` interface — just the host's local wall-clock,
-// used to derive the device timezone offset so message timestamps render in local
-// time. The host links the full skiko-ui world, so importing this subset resolves.
-interface status {
-    clock-text: func() -> string;
-}
-
 world signal-ui-app {
-    // Drawing comes from the wasi:canvas draft (separate
-    // dioxus_canvas::wasi_canvas_bindings! generate).
     import ime;
-    import status;
+    import wandr:chrome/status@0.1.0;
     import wandr:signal/chat@0.1.0;
-    export renderer;
+    export shell-events;
     export frame-pacing;
     // M4 (Signal background-receipt) — keep the engine pumping while backgrounded
     // (bg-tick instead of render), raise notifications on inbound, re-wake if

@@ -1,24 +1,27 @@
 //! wandr.launcher — the wandr home screen as a LIGHT Rust canvas guest
-//! (task 57). Exports `my:skiko-gfx/renderer` and draws the app grid via the
-//! wasi:canvas draft (proposals/wasi-canvas) — no Kotlin/Compose, so no
+//! (task 57). Exports the wasi:input-handlers@0.0.2 frame/pointer handlers
+//! and draws the app grid via wasi:canvas@0.0.2 — no Kotlin/Compose, so no
 //! continuation leak ([[feedback_indeterminate_progress_leak]]) and a tiny
 //! working set, which matters for an always-running home process.
 //!
 //! Layout is built ONCE (when the app list + surface dims are known, and
-//! again on resize) into a flat draw list + tile hit-rects; `render_frame`
+//! again on resize) into a flat draw list + tile hit-rects; `on_frame`
 //! just replays it. No per-frame allocation churn, no animation loop.
 
 wit_bindgen::generate!({
-    world: "my:skiko-gfx/launcher-app",
-    path: ["../../../proposals/wasi-canvas/wit", "wit"],
+    world: "wandr:launcher-app/launcher-app",
+    path: "wit",
     generate_all,
 });
 
 use std::cell::RefCell;
 
-use crate::exports::my::skiko_gfx::frame_pacing::Guest as FramePacingGuest;
-use crate::exports::my::skiko_gfx::renderer::{Guest, KeyKind, PointerKind};
-use crate::my::skiko_gfx::launcher;
+use crate::exports::wandr::ui_shell::frame_pacing::Guest as FramePacingGuest;
+use crate::exports::wasi::input_handlers::frame_handler::Guest as FrameGuest;
+use crate::exports::wasi::input_handlers::pointer_handler::{
+    Guest as PointerGuest, Kind as PointerKind, PointerEvent,
+};
+use crate::wandr::chrome::launcher;
 use crate::wasi::canvas::embedding as wembed;
 use crate::wasi::canvas::layout as wlayout;
 use crate::wasi::canvas::types as wtypes;
@@ -124,8 +127,13 @@ fn para(text: &str, size: f32, weight: u32, color: u32) -> Para {
         color,
         letter_spacing: 0.0,
         line_height: 0.0,
+        baseline_shift: 0.0,
+        decoration: None,
+        shadows: Vec::new(),
+        background: None,
     };
-    let b = wlayout::ParagraphBuilder::new(&style, wlayout::Align::Start);
+    // 0.0.2 setter-form builder; align defaults to start.
+    let b = wlayout::ParagraphBuilder::new(&style);
     b.add_text(text);
     let p = wlayout::ParagraphBuilder::build(b);
     p.layout(1.0e6);
@@ -222,8 +230,8 @@ fn relayout(s: &mut State) {
 
 struct Launcher;
 
-impl Guest for Launcher {
-    fn render_frame(_nanos: u64) {
+impl FrameGuest for Launcher {
+    fn on_frame(_nanos: u64) {
         STATE.with(|st| {
             let mut s = st.borrow_mut();
             let cv = wctx(|x| x.get_current_buffer());
@@ -263,10 +271,14 @@ impl Guest for Launcher {
         });
     }
 
-    fn on_pointer_event_v2(_pid: u32, kind: PointerKind, x: f32, y: f32, _pressure: f32) {
-        if !matches!(kind, PointerKind::Down) {
+}
+
+impl PointerGuest for Launcher {
+    fn on_pointer(ev: PointerEvent) {
+        if !matches!(ev.kind, PointerKind::Down) {
             return;
         }
+        let (x, y) = (ev.x, ev.y);
         let target = STATE.with(|st| {
             let s = st.borrow();
             s.hits
@@ -278,13 +290,6 @@ impl Guest for Launcher {
             launcher::launch_app(&app_id);
         }
     }
-
-    // Unused inputs.
-    fn on_pointer_event(_kind: PointerKind, _x: f32, _y: f32) {}
-    fn on_key_event(_kind: KeyKind, _key_code: u32) {}
-    fn on_scheduled_callback(_callback_id: u32) {}
-    fn on_key_event_v2(_kind: KeyKind, _code_point: u32, _key_id: u32) {}
-    fn on_lifecycle_changed(_state: u32) {}
 }
 
 /// Task 64 — the home screen is fully static (layout built once, no

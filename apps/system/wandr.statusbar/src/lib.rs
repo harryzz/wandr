@@ -10,16 +10,19 @@
 //! per-frame allocation, no animation loop.
 
 wit_bindgen::generate!({
-    world: "my:skiko-gfx/statusbar-app",
-    path: ["../../../proposals/wasi-canvas/wit", "wit"],
+    world: "wandr:statusbar-app/statusbar-app",
+    path: "wit",
     generate_all,
 });
 
 use std::cell::RefCell;
 
-use crate::exports::my::skiko_gfx::frame_pacing::Guest as FramePacingGuest;
-use crate::exports::my::skiko_gfx::renderer::{Guest, KeyKind, PointerKind};
-use crate::my::skiko_gfx::status;
+use crate::exports::wandr::ui_shell::frame_pacing::Guest as FramePacingGuest;
+use crate::exports::wasi::input_handlers::frame_handler::Guest as FrameGuest;
+use crate::exports::wasi::input_handlers::pointer_handler::{
+    Guest as PointerGuest, Kind as PointerKind, PointerEvent,
+};
+use crate::wandr::chrome::status;
 use crate::wasi::canvas::embedding as wembed;
 use crate::wasi::canvas::layout as wlayout;
 use crate::wasi::canvas::types as wtypes;
@@ -103,8 +106,13 @@ fn para(text: &str, size: f32, weight: u32, color: u32) -> Para {
         color,
         letter_spacing: 0.0,
         line_height: 0.0,
+        baseline_shift: 0.0,
+        decoration: None,
+        shadows: Vec::new(),
+        background: None,
     };
-    let b = wlayout::ParagraphBuilder::new(&style, wlayout::Align::Start);
+    // 0.0.2 setter-form builder; align defaults to start.
+    let b = wlayout::ParagraphBuilder::new(&style);
     b.add_text(text);
     let p = wlayout::ParagraphBuilder::build(b);
     p.layout(1.0e6);
@@ -131,8 +139,8 @@ fn tap(kind: PointerKind, x: f32) {
 
 struct Bar;
 
-impl Guest for Bar {
-    fn render_frame(_nanos: u64) {
+impl FrameGuest for Bar {
+    fn on_frame(_nanos: u64) {
         STATE.with(|st| {
             let mut s = st.borrow_mut();
             let cv = wctx(|x| x.get_current_buffer());
@@ -203,17 +211,12 @@ impl Guest for Bar {
             s.h = h as f32;
         });
     }
+}
 
-    fn on_pointer_event(kind: PointerKind, x: f32, _y: f32) {
-        tap(kind, x);
+impl PointerGuest for Bar {
+    fn on_pointer(ev: PointerEvent) {
+        tap(ev.kind, ev.x);
     }
-    fn on_key_event(_kind: KeyKind, _key_code: u32) {}
-    fn on_scheduled_callback(_callback_id: u32) {}
-    fn on_pointer_event_v2(_pid: u32, kind: PointerKind, x: f32, _y: f32, _pressure: f32) {
-        tap(kind, x);
-    }
-    fn on_key_event_v2(_kind: KeyKind, _code_point: u32, _key_id: u32) {}
-    fn on_lifecycle_changed(_state: u32) {}
 }
 
 impl FramePacingGuest for Bar {

@@ -6,16 +6,19 @@
 //! wired in M3; for now it just renders.
 
 wit_bindgen::generate!({
-    world: "my:skiko-gfx/keyguard-app",
-    path: ["../../../proposals/wasi-canvas/wit", "wit"],
+    world: "wandr:keyguard-app/keyguard-app",
+    path: "wit",
     generate_all,
 });
 
 use std::cell::RefCell;
 
-use crate::exports::my::skiko_gfx::frame_pacing::Guest as FramePacingGuest;
-use crate::exports::my::skiko_gfx::renderer::{Guest as RendererGuest, KeyKind, PointerKind};
-use crate::my::skiko_gfx::status;
+use crate::exports::wandr::ui_shell::frame_pacing::Guest as FramePacingGuest;
+use crate::exports::wasi::input_handlers::frame_handler::Guest as FrameGuest;
+use crate::exports::wasi::input_handlers::pointer_handler::{
+    Guest as PointerGuest, Kind as PointerKind, PointerEvent,
+};
+use crate::wandr::chrome::status;
 use crate::wasi::canvas::embedding as wembed;
 use crate::wasi::canvas::layout as wlayout;
 use crate::wasi::canvas::types as wtypes;
@@ -90,8 +93,13 @@ fn para(text: &str, size: f32, weight: u32, color: u32) -> Para {
         color,
         letter_spacing: 0.0,
         line_height: 0.0,
+        baseline_shift: 0.0,
+        decoration: None,
+        shadows: Vec::new(),
+        background: None,
     };
-    let b = wlayout::ParagraphBuilder::new(&style, wlayout::Align::Start);
+    // 0.0.2 setter-form builder; align defaults to start.
+    let b = wlayout::ParagraphBuilder::new(&style);
     b.add_text(text);
     let p = wlayout::ParagraphBuilder::build(b);
     p.layout(1.0e6);
@@ -125,8 +133,8 @@ fn gesture(kind: PointerKind, y: f32) {
 
 struct Lock;
 
-impl RendererGuest for Lock {
-    fn render_frame(_nanos: u64) {
+impl FrameGuest for Lock {
+    fn on_frame(_nanos: u64) {
         STATE.with(|st| {
             let mut s = st.borrow_mut();
             let cv = wctx(|x| x.get_current_buffer());
@@ -167,16 +175,12 @@ impl RendererGuest for Lock {
         });
     }
 
-    fn on_pointer_event(kind: PointerKind, _x: f32, y: f32) {
-        gesture(kind, y);
+}
+
+impl PointerGuest for Lock {
+    fn on_pointer(ev: PointerEvent) {
+        gesture(ev.kind, ev.y);
     }
-    fn on_key_event(_kind: KeyKind, _key_code: u32) {}
-    fn on_scheduled_callback(_callback_id: u32) {}
-    fn on_pointer_event_v2(_pid: u32, kind: PointerKind, _x: f32, y: f32, _pressure: f32) {
-        gesture(kind, y);
-    }
-    fn on_key_event_v2(_kind: KeyKind, _code_point: u32, _key_id: u32) {}
-    fn on_lifecycle_changed(_state: u32) {}
 }
 
 impl FramePacingGuest for Lock {

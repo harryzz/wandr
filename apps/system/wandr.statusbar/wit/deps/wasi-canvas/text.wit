@@ -1,0 +1,186 @@
+package wasi:canvas@0.0.2;
+
+// wasi:canvas text — DRAFT. Two deliberately separate layers, because the
+// shipped consumers split exactly this way (wandr task 100 + skia-wit
+// mapping):
+//
+// * `glyphs` — the portable FLOOR. Guests that shape text themselves
+//   (parley/HarfBuzz-class: Slint, Avalonia) register font bytes and draw
+//   positioned glyph runs. Glyph ids are only meaningful against the
+//   exact bytes they were shaped from, which is why the typeface is
+//   constructed FROM guest bytes.
+// * `layout` — OPTIONAL host-side paragraph layout, for guests whose
+//   runtime cannot ship a shaper (managed runtimes: Kotlin/Compose-class)
+//   or that want host text caches. Embedders MAY omit it; the canonical
+//   feature test is instantiation-time (a world that imports `layout`
+//   fails to instantiate on a host without it).
+
+
+interface glyphs {
+    use types.{paint, point};
+    use draw.{canvas};
+
+    /// A font face built from the guest's own font bytes (`index` selects
+    /// a face within a collection). The host must use these exact bytes —
+    /// glyph ids from the guest's shaper refer to them.
+    resource typeface {
+        from-bytes: static func(bytes: list<u8>, index: u32)
+                    -> result<typeface>;
+    }
+
+    /// One positioned glyph (id from the guest's shaper; position in
+    /// canvas units, relative to the run's `origin`).
+    record positioned-glyph {
+        id: u32,
+        at: point,
+    }
+
+    /// Draw a shaped glyph run. `size` is the em size in canvas units.
+    /// Variable-font axes and synthetic bold/italic are not in the draft
+    /// (record provenance: deferred in wandr too).
+    draw-glyphs: func(canvas: borrow<canvas>, typeface: borrow<typeface>,
+                      size: f32, glyphs: list<positioned-glyph>,
+                      origin: point, paint: paint);
+}
+
+/// OPTIONAL host-side paragraph layout. The contract follows the
+/// host-shaped model wandr ships for Compose (skparagraph-derived,
+/// de-Skia'd): build styled text, lay it out at a width, query metrics,
+/// paint onto a canvas. All queries return values directly (no indexed
+/// getters — those were a guest-binding artifact, not a design).
+interface layout {
+    use types.{color, rect, point};
+    use draw.{canvas};
+
+    enum decoration-line-style { solid, double, dotted, dashed, wavy }
+
+    /// Text decorations (Compose TextDecoration, dart:ui decorations).
+    record decoration {
+        underline:    bool,
+        overline:     bool,
+        line-through: bool,
+        /// 0 = use the text color.
+        color:        color,
+        style:        decoration-line-style,
+        /// Multiple of the font-suggested thickness.
+        thickness:    f32,
+    }
+
+    record text-shadow {
+        color:  color,
+        offset: point,
+        sigma:  f32,
+    }
+
+    record text-style {
+        /// Font family name resolved by the HOST's font collection
+        /// (host-owned fonts is the point of this layer). Empty = default.
+        family:    string,
+        size:      f32,
+        /// CSS-numeric weight (400 normal, 700 bold).
+        weight:    u32,
+        italic:    bool,
+        color:     color,
+        letter-spacing: f32,
+        /// Line height as a multiple of the font size; 0 = font default.
+        line-height:    f32,
+        /// Vertical run shift (superscript/subscript); 0 = none.
+        baseline-shift: f32,
+        decoration:     option<decoration>,
+        /// Empty = none (a LIST — dart:ui carries multiple per span).
+        shadows:        list<text-shadow>,
+        background:     option<color>,
+    }
+
+    enum align { start, center, end, justify }
+
+    /// Per-line metrics — the full editor-grade shape (cursor placement,
+    /// line hit-testing). Field provenance: skia textlayout LineMetrics,
+    /// which is what every shipped host-shaping engine exposes.
+    record line-metrics {
+        start-offset: u32,   // UTF-8 byte offsets into the paragraph text
+        end-offset:   u32,
+        /// `end-offset` with trailing whitespace excluded.
+        end-excluding-whitespace: u32,
+        /// `end-offset` including a trailing hard-break newline.
+        end-including-newline: u32,
+        /// True when the line ends in an explicit newline.
+        hard-break:   bool,
+        ascent:       f32,
+        descent:      f32,
+        /// Ascent before any line-height multiplier.
+        unscaled-ascent: f32,
+        height:       f32,
+        width:        f32,
+        left:         f32,
+        baseline:     f32,
+        line-number:  u32,
+    }
+
+    enum text-direction { ltr, rtl }
+
+    /// How tall the rects returned by `selection-boxes` are (CSS caret /
+    /// selection-highlight distinctions; skparagraph RectHeightStyle).
+    enum rect-height-style {
+        tight, max, include-line-spacing-middle,
+        include-line-spacing-top, include-line-spacing-bottom, strut,
+    }
+
+    enum rect-width-style { tight, max }
+
+    record text-box {
+        rect:      rect,
+        direction: text-direction,
+    }
+
+    resource paragraph {
+        layout:               func(width: f32);
+        paint:                func(canvas: borrow<canvas>, at: point);
+        height:               func() -> f32;
+        max-intrinsic-width:  func() -> f32;
+        min-intrinsic-width:  func() -> f32;
+        alphabetic-baseline:  func() -> f32;
+        ideographic-baseline: func() -> f32;
+        line-count:           func() -> u32;
+        lines:                func() -> list<line-metrics>;
+        /// Caret/selection geometry for a UTF-8 byte range, with the
+        /// box-shape policy callers like text editors need.
+        selection-boxes:      func(start: u32, end: u32,
+                                   height: rect-height-style,
+                                   width: rect-width-style) -> list<text-box>;
+        /// Nearest text position (UTF-8 byte offset) to a point.
+        offset-at:            func(at: point) -> u32;
+        /// [start, end) of the word containing `offset`.
+        word-boundary:        func(offset: u32) -> tuple<u32, u32>;
+        /// True when max-lines truncated the layout.
+        did-exceed-max-lines: func() -> bool;
+    }
+
+    /// Setter form (R2): paragraph-wide options are methods, so the
+    /// next option is additive instead of a constructor break.
+    resource paragraph-builder {
+        new:           static func(default-style: text-style)
+                       -> paragraph-builder;
+        set-align:     func(a: align);
+        set-direction: func(d: text-direction);
+        /// 0 = unlimited.
+        set-max-lines: func(n: u32);
+        set-ellipsis:  func(e: string);
+        push-style:    func(style: text-style);
+        pop-style:     func();
+        add-text:      func(text: string);
+        /// Consumes the builder.
+        build:         static func(b: paragraph-builder) -> paragraph;
+    }
+}
+
+/// Portable text floor: shaping in the guest, glyphs over the wire.
+world text-guest {
+    import glyphs;
+}
+
+/// Full text world for managed-runtime guests (host shapes).
+world text-full {
+    import glyphs;
+    import layout;
+}

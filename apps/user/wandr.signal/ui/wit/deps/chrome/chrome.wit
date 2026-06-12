@@ -1,0 +1,9 @@
+// Subset of the canonical wandr:chrome contract (wit/chrome.wit) — just the
+// host's local wall-clock, used to derive the device timezone offset so
+// message timestamps render in local time. The host links the full status
+// interface, so importing this subset resolves.
+package wandr:chrome@0.1.0;
+
+interface status {
+    clock-text: func() -> string;
+}

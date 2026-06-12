@@ -1,45 +1,17 @@
-// Trimmed `my:skiko-gfx` WIT for the Rust launcher guest (task 57).
-//
-// Drawing + text moved to the wasi:canvas draft (proposals/wasi-canvas);
-// my:skiko-gfx keeps only the launcher channel + the renderer/frame-pacing
-// exports. Why the renderer subset is redeclared here instead of pointing at
-// the canonical wit/skiko-gfx.wit: the guest wit-bindgen rejects its
-// `matrix-3x3` type (a WIT identifier word can't start with a digit;
-// wasmtime's host parser is lenient, the guest one isn't). A component
-// importing/exporting this SUBSET links fine (verified on device).
-
-package my:skiko-gfx@0.1.0;
-
-interface launcher {
-    list-apps:  func() -> string;
-    launch-app: func(app-id: string);
-}
-
-interface renderer {
-    enum pointer-kind { down, up, move, scroll }
-    enum key-kind     { down, up }
-    render-frame:          func(nanos: u64);
-    on-pointer-event:      func(kind: pointer-kind, x: f32, y: f32);
-    on-key-event:          func(kind: key-kind, key-code: u32);
-    on-resize:             func(w: u32, h: u32);
-    on-scheduled-callback: func(callback-id: u32);
-    on-pointer-event-v2:   func(pointer-id: u32, kind: pointer-kind, x: f32, y: f32, pressure: f32);
-    on-key-event-v2:       func(kind: key-kind, code-point: u32, key-id: u32);
-    on-lifecycle-changed:  func(state: u32);
-}
-
-// Task 64 — optional on-demand-render hint (copied verbatim from the
-// canonical skiko-gfx.wit). The host gates the expensive render on this.
-interface frame-pacing {
-    next-frame-delay: func() -> u32;
-}
+// The launcher guest world (Phase B — fully new-style). Drawing + text via
+// wasi:canvas@0.0.2; frames + taps via the wasi:input-handlers@0.0.2
+// exports; pacing via wandr:ui-shell/frame-pacing; the launcher channel
+// from wandr:chrome (the my:skiko-gfx slice's post-consolidation home).
+// All interfaces live in deps/ — this package only declares the world.
+package wandr:launcher-app@0.1.0;
 
 world launcher-app {
-    import wasi:canvas/types@0.0.1;
-    import wasi:canvas/draw@0.0.1;
-    import wasi:canvas/layout@0.0.1;
-    import wasi:canvas/embedding@0.0.1;
-    import launcher;
-    export renderer;
-    export frame-pacing;
+    import wasi:canvas/types@0.0.2;
+    import wasi:canvas/draw@0.0.2;
+    import wasi:canvas/layout@0.0.2;
+    import wasi:canvas/embedding@0.0.2;
+    import wandr:chrome/launcher@0.1.0;
+    export wasi:input-handlers/pointer-handler@0.0.2;
+    export wasi:input-handlers/frame-handler@0.0.2;
+    export wandr:ui-shell/frame-pacing@0.1.0;
 }

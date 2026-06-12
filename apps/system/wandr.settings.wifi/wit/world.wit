@@ -1,10 +1,11 @@
-// The wifi-settings-ui guest world: the trimmed `my:skiko-gfx` contract (verbatim
-// from dioxus-canvas's `skiko_world!` — the canonical WIT's `matrix-3x3` is
-// rejected by the guest wit-parser) PLUS the privileged `wandr:connectivity/wifi`
-// import (a dep under deps/connectivity/). One world → one generate! → no
-// `_rt`/`cabi_realloc` conflict. `wire_wasi_canvas!` binds the renderer/sink/IME
-// over the skiko half.
-package my:skiko-gfx@0.1.0;
+// The wifi-settings guest world (Phase B): the wandr:ui-shell slice the
+// dioxus-canvas backend consumes (ime import + shell-events/frame-pacing
+// exports) PLUS the privileged `wandr:connectivity/wifi` import (a dep under
+// deps/connectivity/). `network` status is NOT imported — it ships over the
+// wandr:events bus (M1), and the host doesn't link `network` as a WIT import.
+// Drawing + input come from dioxus-canvas's own wasi:canvas@0.0.2 /
+// wasi:input-handlers@0.0.2 generates.
+package wandr:ui-shell@0.1.0;
 
 interface ime {
     notify-editor-attached: func(
@@ -17,17 +18,15 @@ interface ime {
     notify-editor-detached: func();
 }
 
-interface renderer {
-    enum pointer-kind { down, up, move, scroll }
-    enum key-kind     { down, up }
-    render-frame:          func(nanos: u64);
-    on-pointer-event:      func(kind: pointer-kind, x: f32, y: f32);
-    on-key-event:          func(kind: key-kind, key-code: u32);
-    on-resize:             func(w: u32, h: u32);
+interface lifecycle {
+    enum state { initialized, created, started, resumed, paused, stopped, destroyed }
+    get-state: func() -> state;
+}
+
+interface shell-events {
+    use lifecycle.{state};
     on-scheduled-callback: func(callback-id: u32);
-    on-pointer-event-v2:   func(pointer-id: u32, kind: pointer-kind, x: f32, y: f32, pressure: f32);
-    on-key-event-v2:       func(kind: key-kind, code-point: u32, key-id: u32);
-    on-lifecycle-changed:  func(state: u32);
+    on-lifecycle-changed:  func(new-state: state);
 }
 
 interface frame-pacing {
@@ -35,16 +34,8 @@ interface frame-pacing {
 }
 
 world wifi-settings-ui-app {
-    // Drawing comes from the wasi:canvas draft (separate
-    // dioxus_canvas::wasi_canvas_bindings! generate) — this world keeps
-    // only the wandr platform bits + the app's own imports/exports.
     import ime;
-    // The privileged Wi-Fi management interface (host-implemented; forwarded to the
-    // arbiter `wifi-*` relay → wandr-net.sock + the M3 WifiConfigManager). Linked
-    // ONLY because this guest is `kind=system` + `wifi-control=true`. Dep under
-    // deps/connectivity/. `network` status is NOT imported — it ships over the
-    // wandr:events bus (M1), and the host doesn't link `network` as a WIT import.
     import wandr:connectivity/wifi@0.1.0;
-    export renderer;
+    export shell-events;
     export frame-pacing;
 }

@@ -1,0 +1,282 @@
+/// wasi:canvas — DRAFT 2D vector-canvas interface (host-rendered).
+///
+/// Status: wandr draft 0.0.1 (2026-06-11), not submitted anywhere. Grown
+/// from `my:skiko-gfx` (shipping on wandr: Android device + Linux desktop,
+/// one guest binary) and the empirical union of four UI frameworks'
+/// drawing needs (Compose, dioxus-canvas, Slint shipped; Avalonia
+/// analyzed) — see wandr `docs/skia-wit-mapping.md` for the per-op
+/// provenance and `proposals/wasi-canvas/COMPATIBILITY.md` for the
+/// design constraints.
+///
+/// SCOPE. Drawing only. A `canvas` is handed to the guest by the
+/// EMBEDDER's own contract (a render callback, wasi:surface +
+/// graphics-context, a one-shot rasterizer, …); presentation, windowing,
+/// input and the event loop are deliberately out of scope — this package
+/// must compose with both host-driven (reactor) and guest-driven (poll
+/// loop) runtimes. Semantics are specified by reference to the W3C/SVG
+/// families where they exist (SVG path grammar, CSS blend modes), not to
+/// any particular renderer.
+///
+/// MODEL. Host-owned renderer: the guest sends drawing SEMANTICS
+/// (device-independent commands + value-encoded styling); the host
+/// rasterizes however it likes (GPU or CPU — guests cannot observe
+/// which). Heavy long-lived objects (images, shaders, typefaces,
+/// pictures) are resources; per-call styling (`paint`) is a value record
+/// carrying resource borrows. This is the 2D companion layer to
+/// wasi:webgpu/wasi-gfx (guest-owned rendering), the same split the web
+/// ships as Canvas2D vs WebGPU.
+package wasi:canvas@0.0.2;
+
+/// Shared value types + styling resources.
+interface types {
+    /// Colors are 32-bit non-premultiplied ARGB (0xAARRGGBB).
+    type color = u32;
+
+    /// CSS/Porter-Duff blend modes (https://www.w3.org/TR/compositing-1/).
+    enum blend-mode {
+        src-over, src, dst, dst-over, src-in, dst-in, src-out, dst-out,
+        src-atop, dst-atop, xor, plus, modulate, multiply, screen,
+        overlay, darken, lighten, color-dodge, color-burn, hard-light,
+        soft-light, difference, exclusion, clear,
+        hue, saturation, color, luminosity,
+    }
+
+    enum paint-style { fill, stroke, fill-and-stroke }
+    enum stroke-cap  { butt, round, square }
+    enum stroke-join { miter, round, bevel }
+    enum fill-rule   { nonzero, evenodd }
+    enum tile-mode   { clamp, repeat, mirror, decal }
+
+    /// Gaussian blur applied to the drawn geometry's mask (box shadows,
+    /// glows). `sigma` is the Gaussian standard deviation in canvas units.
+    enum blur-style { normal, solid, outer, inner }
+    record mask-blur {
+        style: blur-style,
+        sigma: f32,
+    }
+
+    record point { x: f32, y: f32 }
+    record rect  { x: f32, y: f32, width: f32, height: f32 }
+
+    /// Per-corner elliptical radii (order: top-left, top-right,
+    /// bottom-right, bottom-left — CSS border-radius order).
+    record rounded-rect {
+        rect: rect,
+        top-left:     point,
+        top-right:    point,
+        bottom-right: point,
+        bottom-left:  point,
+    }
+
+    /// Row-major 3x3 matrix (affine + perspective row).
+    record transform {
+        m00: f32, m01: f32, m02: f32,
+        m10: f32, m11: f32, m12: f32,
+        m20: f32, m21: f32, m22: f32,
+    }
+
+    /// Image sampling for scaled draws and image shaders.
+    enum filter-mode { nearest, linear }
+    enum mipmap-mode { none, nearest, linear }
+    record sampling {
+        filter: filter-mode,
+        mipmap: mipmap-mode,
+    }
+
+    /// A reusable fill/stroke source: gradients or an image pattern.
+    /// Solid colors don't need a shader (use `paint.color`). Created via
+    /// the `graphics` factory (draw interface) — all host-resident
+    /// allocation flows through an embedder-granted handle, per WASI's
+    /// no-ambient-authority principle.
+    resource shader;
+
+    /// A decoded, host-resident image. Created via the `graphics` factory.
+    resource image {
+        width:  func() -> u32;
+        height: func() -> u32;
+    }
+
+    /// Tint: combine each output pixel with `color` via `mode`
+    /// (CSS/skia provenance: SkColorFilters::Blend; icon tinting is
+    /// `mode = src-in`).
+    record color-blend {
+        color: color,
+        mode:  blend-mode,
+    }
+
+    /// Color filter applied to the paint's output — after color/shader
+    /// resolve, before blending into the destination.
+    variant color-filter {
+        blend(color-blend),
+        /// Channel-wise RGB inversion (alpha preserved).
+        invert,
+    }
+
+    /// Per-draw styling. A value (not a resource): builder ergonomics live
+    /// in guest bindings; the wire carries the resolved state. Used only
+    /// as a parameter, so the `shader` borrow is canonical-ABI-legal.
+    record paint {
+        style:        paint-style,
+        /// Ignored when `shader` is set (the shader supplies color).
+        color:        color,
+        /// 0..255 alpha multiplied onto color/shader output.
+        alpha:        u8,
+        blend:        blend-mode,
+        anti-alias:   bool,
+        shader:       option<borrow<shader>>,
+        stroke-width: f32,
+        stroke-cap:   stroke-cap,
+        stroke-join:  stroke-join,
+        stroke-miter: f32,
+        /// Mask blur (shadows/glows); none = sharp.
+        blur:         option<mask-blur>,
+        /// Color filter (icon tinting, inversion); none = pass-through.
+        filter:       option<color-filter>,
+    }
+}
+
+/// The drawing surface. How a guest OBTAINS a canvas is the embedder's
+/// contract; everything after that is this interface.
+interface draw {
+    use types.{paint, color, rect, rounded-rect, point, transform,
+               fill-rule, sampling, image, shader, blend-mode, tile-mode};
+
+    /// A recorded, replayable display list (built via
+    /// `graphics.start-recording` → draws → `canvas.finish-recording`).
+    resource picture;
+
+    /// The creation capability: every host-resident allocation (shaders,
+    /// images, offscreen canvases, recordings) is a method here, so the
+    /// EMBEDDER grants it explicitly (alongside the canvas) and may
+    /// attenuate it (quotas, deny decode, …). Pure computation over the
+    /// guest's own data stays out (e.g. typeface-from-bytes in the text
+    /// package).
+    resource graphics {
+        /// Linear gradient from `start` to `end`. `stops` are (offset in
+        /// 0..1, color) pairs, offsets ascending.
+        linear-gradient: func(start: point, end: point,
+                              stops: list<tuple<f32, color>>,
+                              tile: tile-mode,
+                              local: option<transform>) -> shader;
+        radial-gradient: func(center: point, radius: f32,
+                              stops: list<tuple<f32, color>>,
+                              tile: tile-mode,
+                              local: option<transform>) -> shader;
+        /// Sweep (conic) gradient around `center`; angles in degrees,
+        /// 0° at the positive x-axis, increasing clockwise.
+        sweep-gradient:  func(center: point,
+                              start-angle: f32, end-angle: f32,
+                              stops: list<tuple<f32, color>>,
+                              tile: tile-mode,
+                              local: option<transform>) -> shader;
+        /// Image as a pattern, transformed by `local`, sampled with
+        /// `sampling`, tiled per axis.
+        shader-blend:    func(mode: blend-mode, dst: borrow<shader>,
+                              src: borrow<shader>) -> shader;
+        image-pattern:   func(image: borrow<image>,
+                              tile-x: tile-mode, tile-y: tile-mode,
+                              sampling: sampling,
+                              local: transform) -> shader;
+
+        /// Decode PNG/JPEG/WebP/GIF(first frame)/BMP bytes. Errors on
+        /// unrecognized or truncated data.
+        decode-image:     func(bytes: list<u8>) -> result<image>;
+        /// Raw non-premultiplied RGBA8 pixels, tightly packed.
+        image-from-rgba8: func(width: u32, height: u32,
+                               pixels: list<u8>) -> result<image>;
+
+        /// A new offscreen raster canvas (layer caches, painters).
+        new-offscreen:    func(width: u32, height: u32) -> canvas;
+        /// Begin recording into a fresh display list; until
+        /// `canvas.finish-recording`, draws on the returned canvas are
+        /// captured, not rasterized.
+        start-recording:  func(bounds: rect) -> canvas;
+    }
+
+    resource canvas {
+        /// Drawable size in canvas units (device-independent; the
+        /// embedder defines the unit-to-pixel density out of band).
+        width:  func() -> f32;
+        height: func() -> f32;
+
+        // ── state stack ───────────────────────────────────────────────
+        save:    func();
+        /// Composite everything until the matching `restore` through an
+        /// offscreen layer with `alpha`, optionally bounded.
+        save-layer: func(bounds: option<rect>, alpha: u8);
+        restore: func();
+
+        translate: func(dx: f32, dy: f32);
+        scale:     func(sx: f32, sy: f32);
+        /// Degrees clockwise.
+        rotate:    func(degrees: f32);
+        concat:    func(t: transform);
+
+        // ── clip (always intersects; save/restore scopes it) ──────────
+        clip-rect:         func(r: rect, anti-alias: bool);
+        clip-rounded-rect: func(rr: rounded-rect, anti-alias: bool);
+        /// `path` is an SVG path-data string
+        /// (https://www.w3.org/TR/SVG2/paths.html#PathData).
+        clip-path:         func(path: string, rule: fill-rule,
+                                anti-alias: bool);
+
+        // ── drawing ───────────────────────────────────────────────────
+        /// Fill the whole clip with `color` (respecting blend).
+        clear:             func(color: color);
+        draw-paint:        func(paint: paint);
+        draw-rect:         func(r: rect, paint: paint);
+        draw-rounded-rect: func(rr: rounded-rect, paint: paint);
+        /// Outer rounded rect minus inner (borders/donuts).
+        draw-double-rounded-rect: func(outer: rounded-rect,
+                                       inner: rounded-rect, paint: paint);
+        draw-oval:         func(bounds: rect, paint: paint);
+        draw-line:         func(start: point, end: point, paint: paint);
+        /// Arc of the oval inscribed in `bounds`; angles in degrees,
+        /// 0° at the positive x-axis, increasing clockwise.
+        draw-arc:          func(bounds: rect, start-angle: f32,
+                                sweep-angle: f32, include-center: bool,
+                                paint: paint);
+        /// SVG path-data string, filled/stroked per `paint.style`.
+        draw-path:         func(path: string, rule: fill-rule,
+                                paint: paint);
+
+        draw-image:        func(image: borrow<image>, at: point,
+                                sampling: sampling, paint: paint);
+        /// Draw `src` (image pixels) into `dst` (canvas units).
+        draw-image-rect:   func(image: borrow<image>, src: rect,
+                                dst: rect, sampling: sampling,
+                                paint: paint);
+
+        // ── pictures (recorded display lists) ────────────────────────
+        /// Finish a recording canvas (consumes it; from
+        /// `graphics.start-recording`). Static-with-handle: the consumed
+        /// canvas IS the capability.
+        finish-recording: static func(c: canvas) -> picture;
+        draw-picture:     func(p: borrow<picture>);
+
+        /// Snapshot an offscreen canvas's pixels as an image (errors on
+        /// the embedder-presented canvas — its pixels stay private).
+        snapshot:      func() -> result<image>;
+    }
+}
+
+/// A guest that draws when handed its capabilities — the embedder grants
+/// a `canvas` (the target) and a `graphics` (the factory) by its own
+/// contract; embedders extend this world with their frame/input story.
+world canvas-guest {
+    import types;
+    import draw;
+}
+
+/// Host-side bindgen world: everything a host that implements the draft
+/// (sans the optional `layout`) must provide. wandr's runtime binds this
+/// behind its `wasi-canvas` cargo feature; `layout` host support is a
+/// follow-up (the proposal marks it embedder-optional).
+world canvas-host {
+    import types;
+    import draw;
+    import glyphs;
+    import layout;
+    import scene;
+    import embedding;
+}

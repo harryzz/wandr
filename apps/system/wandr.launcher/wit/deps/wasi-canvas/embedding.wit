@@ -1,0 +1,58 @@
+package wasi:canvas@0.0.2;
+
+
+// NON-NORMATIVE embedding example (kept in the draft because the proving
+// consumer needs ONE concrete handoff): how a HOST-DRIVEN (reactor-model)
+// embedder hands a guest its drawing capabilities.
+//
+// Shaped to align with wasi-gfx's graphics-context idiom (the
+// surface-convergence proposal, docs/surface-convergence-proposal.md):
+// a `canvas-context` is a surface-bound swapchain whose buffers are 2D
+// canvases rendered by the HOST —
+//
+//   wasi-gfx graphics-context      canvas-context (this interface)
+//   ─────────────────────────      ───────────────────────────────
+//   get-current-buffer             get-current-buffer -> canvas
+//   present                        present
+//   (device/factory handle)       graphics -> graphics
+//
+// so it can become a third pluggable context type beside webgpu-device
+// and frame-buffer once a real `wasi:surface.connect-graphics-context`
+// exists. Until then, reactor guests obtain THE context for their
+// host-assigned surface via `get-context` and the embedder calls the
+// guest's own render callback (out of scope here — e.g. wandr's
+// frame-handler.on-frame); during that callback the guest brackets its
+// drawing with get-current-buffer/present. A poll-loop runtime would
+// instead bind via `wasi:surface` and never import this interface.
+interface embedding {
+    use draw.{canvas, graphics};
+
+    /// The canvas-flavored graphics context for one surface.
+    resource canvas-context {
+        /// The creation factory (shaders/images/typefaces/pictures…).
+        /// Stable across frames — acquire once.
+        graphics: func() -> graphics;
+
+        /// Acquire the current frame's buffer: the presented target,
+        /// already cleared/transformed per the embedder's policy. The
+        /// handle is valid until present; the guest should drop it
+        /// before (or it is invalidated at) present.
+        get-current-buffer: func() -> canvas;
+
+        /// Flush + present the buffer acquired by get-current-buffer.
+        present: func();
+    }
+
+    /// The context for the guest's (host-assigned) surface. Reactor
+    /// guests have exactly one; under wasi:surface this would instead
+    /// come from `surface.connect-graphics-context`.
+    get-context: func() -> canvas-context;
+}
+
+/// Guest world for host-driven embedders: full drawing + the handoff.
+world embedded-canvas-guest {
+    import types;
+    import draw;
+    import glyphs;
+    import embedding;
+}

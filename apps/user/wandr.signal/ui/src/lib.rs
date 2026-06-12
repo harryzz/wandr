@@ -221,7 +221,7 @@ fn local_offset_min() -> i64 {
         if let Some(o) = c.get() {
             return o;
         }
-        let clock = crate::my::skiko_gfx::status::clock_text();
+        let clock = crate::wandr::chrome::status::clock_text();
         let utc_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
