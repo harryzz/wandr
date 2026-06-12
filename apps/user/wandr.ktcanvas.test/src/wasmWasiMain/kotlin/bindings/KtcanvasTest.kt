@@ -179,6 +179,8 @@ import bindings.runtime.*
     override fun close() { __cm_resource_abi_import_Types_Image_drop(__handle.value) }
     fun width(): kotlin.UInt {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ret: kotlin.Int = __wasm_import_width(handle)
@@ -189,6 +191,8 @@ import bindings.runtime.*
     }
     fun height(): kotlin.UInt {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ret: kotlin.Int = __wasm_import_height(handle)
@@ -294,6 +298,8 @@ import bindings.runtime.*
     */
     fun linearGradient(start: bindings.Types.Point, end: bindings.Types.Point, stops: kotlin.collections.List<kotlin.Pair<kotlin.Float, kotlin.UInt>>, tile: bindings.Types.TileMode, local: bindings.Types.Transform?): bindings.Types.Shader {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(56+4*4), align=4)*/ allocator.allocate((56+4*4)).address.toInt()
         var handle = this.__handle.value;
@@ -337,6 +343,8 @@ import bindings.runtime.*
     }
     fun radialGradient(center: bindings.Types.Point, radius: kotlin.Float, stops: kotlin.collections.List<kotlin.Pair<kotlin.Float, kotlin.UInt>>, tile: bindings.Types.TileMode, local: bindings.Types.Transform?): bindings.Types.Shader {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(56+3*4), align=4)*/ allocator.allocate((56+3*4)).address.toInt()
         var handle = this.__handle.value;
@@ -383,6 +391,8 @@ import bindings.runtime.*
     */
     fun sweepGradient(center: bindings.Types.Point, startAngle: kotlin.Float, endAngle: kotlin.Float, stops: kotlin.collections.List<kotlin.Pair<kotlin.Float, kotlin.UInt>>, tile: bindings.Types.TileMode, local: bindings.Types.Transform?): bindings.Types.Shader {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(56+4*4), align=4)*/ allocator.allocate((56+4*4)).address.toInt()
         var handle = this.__handle.value;
@@ -430,6 +440,8 @@ import bindings.runtime.*
     */
     fun shaderBlend(mode: bindings.Types.BlendMode, dst: bindings.Types.Shader, src: bindings.Types.Shader): bindings.Types.Shader {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         var handle0 = dst.__handle.value;
@@ -443,6 +455,8 @@ import bindings.runtime.*
     }
     fun imagePattern(image: bindings.Types.Image, tileX: bindings.Types.TileMode, tileY: bindings.Types.TileMode, sampling: bindings.Types.Sampling, local: bindings.Types.Transform): bindings.Types.Shader {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         var handle0 = image.__handle.value;
@@ -459,6 +473,8 @@ import bindings.runtime.*
     */
     fun decodeImage(bytes: kotlin.collections.List<kotlin.UByte>): kotlin.Result<bindings.Types.Image> {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
 
@@ -487,6 +503,8 @@ import bindings.runtime.*
     */
     fun imageFromRgba8(width: kotlin.UInt, height: kotlin.UInt, pixels: kotlin.collections.List<kotlin.UByte>): kotlin.Result<bindings.Types.Image> {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
 
@@ -515,6 +533,8 @@ import bindings.runtime.*
     */
     fun newOffscreen(width: kotlin.UInt, height: kotlin.UInt): bindings.Draw.Canvas {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ret: kotlin.Int = __wasm_import_newOffscreen(handle, width.toInt(), height.toInt())
@@ -531,6 +551,8 @@ import bindings.runtime.*
     */
     fun startRecording(bounds: bindings.Types.Rect): bindings.Draw.Canvas {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ret: kotlin.Int = __wasm_import_startRecording(handle, bounds.x, bounds.y, bounds.width, bounds.height)
@@ -550,6 +572,8 @@ import bindings.runtime.*
     */
     fun combinePaths(a: kotlin.String, b: kotlin.String, op: bindings.Draw.PathOp): kotlin.String? {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
 
@@ -601,6 +625,8 @@ import bindings.runtime.*
     */
     fun width(): kotlin.Float {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ret: kotlin.Float = __wasm_import_width0(handle)
@@ -611,6 +637,8 @@ import bindings.runtime.*
     }
     fun height(): kotlin.Float {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ret: kotlin.Float = __wasm_import_height1(handle)
@@ -624,6 +652,8 @@ import bindings.runtime.*
     */
     fun save() {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         __wasm_import_save(handle)
@@ -637,6 +667,8 @@ import bindings.runtime.*
     */
     fun saveLayer(bounds: bindings.Types.Rect?, alpha: kotlin.UByte) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val option: kotlin.Int
@@ -665,6 +697,8 @@ import bindings.runtime.*
     }
     fun restore() {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         __wasm_import_restore(handle)
@@ -674,6 +708,8 @@ import bindings.runtime.*
     }
     fun translate(dx: kotlin.Float, dy: kotlin.Float) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         __wasm_import_translate(handle, dx, dy)
@@ -683,6 +719,8 @@ import bindings.runtime.*
     }
     fun scale(sx: kotlin.Float, sy: kotlin.Float) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         __wasm_import_scale(handle, sx, sy)
@@ -695,6 +733,8 @@ import bindings.runtime.*
     */
     fun rotate(degrees: kotlin.Float) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         __wasm_import_rotate(handle, degrees)
@@ -704,6 +744,8 @@ import bindings.runtime.*
     }
     fun concat(t: bindings.Types.Transform) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         __wasm_import_concat(handle, t.m00, t.m01, t.m02, t.m10, t.m11, t.m12, t.m20, t.m21, t.m22)
@@ -716,6 +758,8 @@ import bindings.runtime.*
     */
     fun clipRect(r: bindings.Types.Rect, antiAlias: kotlin.Boolean) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         __wasm_import_clipRect(handle, r.x, r.y, r.width, r.height, (if(antiAlias) 1 else 0))
@@ -725,6 +769,8 @@ import bindings.runtime.*
     }
     fun clipRoundedRect(rr: bindings.Types.RoundedRect, antiAlias: kotlin.Boolean) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         __wasm_import_clipRoundedRect(handle, rr.rect.x, rr.rect.y, rr.rect.width, rr.rect.height, rr.topLeft.x, rr.topLeft.y, rr.topRight.x, rr.topRight.y, rr.bottomRight.x, rr.bottomRight.y, rr.bottomLeft.x, rr.bottomLeft.y, (if(antiAlias) 1 else 0))
@@ -738,6 +784,8 @@ import bindings.runtime.*
     */
     fun clipPath(path: kotlin.String, rule: bindings.Types.FillRule, antiAlias: kotlin.Boolean) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
 
@@ -756,6 +804,8 @@ import bindings.runtime.*
     */
     fun clear(color: kotlin.UInt) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         __wasm_import_clear(handle, color.toInt())
@@ -765,6 +815,8 @@ import bindings.runtime.*
     }
     fun drawPaint(paint: bindings.Types.Paint) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=64, align=4)*/ allocator.allocate(64).address.toInt()
         var handle = this.__handle.value;
@@ -821,6 +873,8 @@ import bindings.runtime.*
     }
     fun drawRect(r: bindings.Types.Rect, paint: bindings.Types.Paint) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=80, align=4)*/ allocator.allocate(80).address.toInt()
         var handle = this.__handle.value;
@@ -881,6 +935,8 @@ import bindings.runtime.*
     }
     fun drawRoundedRect(rr: bindings.Types.RoundedRect, paint: bindings.Types.Paint) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=112, align=4)*/ allocator.allocate(112).address.toInt()
         var handle = this.__handle.value;
@@ -952,6 +1008,8 @@ import bindings.runtime.*
     */
     fun drawDoubleRoundedRect(outer: bindings.Types.RoundedRect, inner: bindings.Types.RoundedRect, paint: bindings.Types.Paint) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=160, align=4)*/ allocator.allocate(160).address.toInt()
         var handle = this.__handle.value;
@@ -1032,6 +1090,8 @@ import bindings.runtime.*
     }
     fun drawOval(bounds: bindings.Types.Rect, paint: bindings.Types.Paint) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=80, align=4)*/ allocator.allocate(80).address.toInt()
         var handle = this.__handle.value;
@@ -1092,6 +1152,8 @@ import bindings.runtime.*
     }
     fun drawLine(start: bindings.Types.Point, end: bindings.Types.Point, paint: bindings.Types.Paint) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=80, align=4)*/ allocator.allocate(80).address.toInt()
         var handle = this.__handle.value;
@@ -1156,6 +1218,8 @@ import bindings.runtime.*
     */
     fun drawArc(bounds: bindings.Types.Rect, startAngle: kotlin.Float, sweepAngle: kotlin.Float, includeCenter: kotlin.Boolean, paint: bindings.Types.Paint) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=92, align=4)*/ allocator.allocate(92).address.toInt()
         var handle = this.__handle.value;
@@ -1222,6 +1286,8 @@ import bindings.runtime.*
     */
     fun drawPath(path: kotlin.String, rule: bindings.Types.FillRule, paint: bindings.Types.Paint) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(64+3*4), align=4)*/ allocator.allocate((64+3*4)).address.toInt()
         var handle = this.__handle.value;
@@ -1286,6 +1352,8 @@ import bindings.runtime.*
     }
     fun drawImage(image: bindings.Types.Image, at: bindings.Types.Point, sampling: bindings.Types.Sampling, paint: bindings.Types.Paint) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=80, align=4)*/ allocator.allocate(80).address.toInt()
         var handle = this.__handle.value;
@@ -1351,6 +1419,8 @@ import bindings.runtime.*
     */
     fun drawImageRect(image: bindings.Types.Image, src: bindings.Types.Rect, dst: bindings.Types.Rect, sampling: bindings.Types.Sampling, paint: bindings.Types.Paint) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=104, align=4)*/ allocator.allocate(104).address.toInt()
         var handle = this.__handle.value;
@@ -1419,6 +1489,8 @@ import bindings.runtime.*
     }
     fun drawPicture(p: bindings.Draw.Picture) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         var handle0 = p.__handle.value;
@@ -1433,6 +1505,8 @@ import bindings.runtime.*
     */
     fun snapshot(): kotlin.Result<bindings.Types.Image> {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=8, align=4)*/ allocator.allocate(8).address.toInt()
@@ -1458,6 +1532,8 @@ import bindings.runtime.*
       */
       fun finishRecording(c: bindings.Draw.Canvas): bindings.Draw.Picture {
         // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+        // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+        kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
         kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
           var handle = c.__handle.value;
           c.__handle = bindings.runtime.ResourceHandle(0);
@@ -1624,6 +1700,8 @@ import bindings.runtime.*
     override fun close() { __cm_resource_abi_import_Layout_Paragraph_drop(__handle.value) }
     fun layout(width: kotlin.Float) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         __wasm_import_layout(handle, width)
@@ -1633,6 +1711,8 @@ import bindings.runtime.*
     }
     fun paint(canvas: bindings.Draw.Canvas, at: bindings.Types.Point) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         var handle0 = canvas.__handle.value;
@@ -1643,6 +1723,8 @@ import bindings.runtime.*
     }
     fun height(): kotlin.Float {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ret: kotlin.Float = __wasm_import_height2(handle)
@@ -1653,6 +1735,8 @@ import bindings.runtime.*
     }
     fun maxIntrinsicWidth(): kotlin.Float {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ret: kotlin.Float = __wasm_import_maxIntrinsicWidth(handle)
@@ -1663,6 +1747,8 @@ import bindings.runtime.*
     }
     fun minIntrinsicWidth(): kotlin.Float {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ret: kotlin.Float = __wasm_import_minIntrinsicWidth(handle)
@@ -1673,6 +1759,8 @@ import bindings.runtime.*
     }
     fun alphabeticBaseline(): kotlin.Float {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ret: kotlin.Float = __wasm_import_alphabeticBaseline(handle)
@@ -1683,6 +1771,8 @@ import bindings.runtime.*
     }
     fun ideographicBaseline(): kotlin.Float {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ret: kotlin.Float = __wasm_import_ideographicBaseline(handle)
@@ -1693,6 +1783,8 @@ import bindings.runtime.*
     }
     fun lineCount(): kotlin.UInt {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ret: kotlin.Int = __wasm_import_lineCount(handle)
@@ -1703,6 +1795,8 @@ import bindings.runtime.*
     }
     fun lines(): kotlin.collections.List<bindings.Layout.LineMetrics> {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(2*4), align=4)*/ allocator.allocate((2*4)).address.toInt()
@@ -1739,6 +1833,8 @@ import bindings.runtime.*
     */
     fun selectionBoxes(start: kotlin.UInt, end: kotlin.UInt, height: bindings.Layout.RectHeightStyle, width: bindings.Layout.RectWidthStyle): kotlin.collections.List<bindings.Layout.TextBox> {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(2*4), align=4)*/ allocator.allocate((2*4)).address.toInt()
@@ -1768,6 +1864,8 @@ import bindings.runtime.*
     */
     fun offsetAt(at: bindings.Types.Point): kotlin.UInt {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ret: kotlin.Int = __wasm_import_offsetAt(handle, at.x, at.y)
@@ -1781,6 +1879,8 @@ import bindings.runtime.*
     */
     fun wordBoundary(offset: kotlin.UInt): kotlin.Pair<kotlin.UInt, kotlin.UInt> {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=8, align=4)*/ allocator.allocate(8).address.toInt()
@@ -1798,6 +1898,8 @@ import bindings.runtime.*
     */
     fun didExceedMaxLines(): kotlin.Boolean {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ret: kotlin.Int = __wasm_import_didExceedMaxLines(handle)
@@ -1819,6 +1921,8 @@ import bindings.runtime.*
     override fun close() { __cm_resource_abi_import_Layout_ParagraphBuilder_drop(__handle.value) }
     fun setAlign(a: bindings.Layout.Align) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         __wasm_import_setAlign(handle, a.ordinal)
@@ -1828,6 +1932,8 @@ import bindings.runtime.*
     }
     fun setDirection(d: bindings.Layout.TextDirection) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         __wasm_import_setDirection(handle, d.ordinal)
@@ -1840,6 +1946,8 @@ import bindings.runtime.*
     */
     fun setMaxLines(n: kotlin.UInt) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         __wasm_import_setMaxLines(handle, n.toInt())
@@ -1849,6 +1957,8 @@ import bindings.runtime.*
     }
     fun setEllipsis(e: kotlin.String) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
 
@@ -1863,6 +1973,8 @@ import bindings.runtime.*
     }
     fun pushStyle(style: bindings.Layout.TextStyle) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(56+5*4), align=4)*/ allocator.allocate((56+5*4)).address.toInt()
         var handle = this.__handle.value;
@@ -1919,6 +2031,8 @@ import bindings.runtime.*
     }
     fun popStyle() {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         __wasm_import_popStyle(handle)
@@ -1928,6 +2042,8 @@ import bindings.runtime.*
     }
     fun addText(text: kotlin.String) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
 
@@ -1943,6 +2059,8 @@ import bindings.runtime.*
     companion object {
       fun new(defaultStyle: bindings.Layout.TextStyle): bindings.Layout.ParagraphBuilder {
         // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+        // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+        kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
         kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
           val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(56+4*4), align=4)*/ allocator.allocate((56+4*4)).address.toInt()
 
@@ -2002,6 +2120,8 @@ import bindings.runtime.*
       */
       fun build(b: bindings.Layout.ParagraphBuilder): bindings.Layout.Paragraph {
         // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+        // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+        kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
         kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
           var handle = b.__handle.value;
           b.__handle = bindings.runtime.ResourceHandle(0);
@@ -2036,6 +2156,8 @@ import bindings.runtime.*
     */
     override fun drawLayer(canvas: bindings.Draw.Canvas, l: bindings.Scene.Layer) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = canvas.__handle.value;
         var handle0 = l.__handle.value;
@@ -2064,6 +2186,8 @@ import bindings.runtime.*
     */
     fun setContent(recording: bindings.Draw.Canvas) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         var handle0 = recording.__handle.value;
@@ -2075,6 +2199,8 @@ import bindings.runtime.*
     }
     fun setBounds(bounds: bindings.Types.Rect) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         __wasm_import_setBounds(handle, bounds.x, bounds.y, bounds.width, bounds.height)
@@ -2084,6 +2210,8 @@ import bindings.runtime.*
     }
     fun setTransform(t: bindings.Types.Transform) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         __wasm_import_setTransform(handle, t.m00, t.m01, t.m02, t.m10, t.m11, t.m12, t.m20, t.m21, t.m22)
@@ -2096,6 +2224,8 @@ import bindings.runtime.*
     */
     fun setAlpha(alpha: kotlin.UByte) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         __wasm_import_setAlpha(handle, alpha.toInt())
@@ -2105,6 +2235,8 @@ import bindings.runtime.*
     }
     fun setClipRect(r: bindings.Types.Rect, antiAlias: kotlin.Boolean) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         __wasm_import_setClipRect(handle, r.x, r.y, r.width, r.height, (if(antiAlias) 1 else 0))
@@ -2114,6 +2246,8 @@ import bindings.runtime.*
     }
     fun setClipRoundedRect(rr: bindings.Types.RoundedRect, antiAlias: kotlin.Boolean) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         __wasm_import_setClipRoundedRect(handle, rr.rect.x, rr.rect.y, rr.rect.width, rr.rect.height, rr.topLeft.x, rr.topLeft.y, rr.topRight.x, rr.topRight.y, rr.bottomRight.x, rr.bottomRight.y, rr.bottomLeft.x, rr.bottomLeft.y, (if(antiAlias) 1 else 0))
@@ -2126,6 +2260,8 @@ import bindings.runtime.*
     */
     fun setClipPath(path: kotlin.String, antiAlias: kotlin.Boolean) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
 
@@ -2140,6 +2276,8 @@ import bindings.runtime.*
     }
     fun clearClip() {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         __wasm_import_clearClip(handle)
@@ -2153,6 +2291,8 @@ import bindings.runtime.*
     */
     fun setShadowElevation(elevation: kotlin.Float) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         __wasm_import_setShadowElevation(handle, elevation)
@@ -2167,6 +2307,8 @@ import bindings.runtime.*
       */
       fun new(g: bindings.Draw.Graphics): bindings.Scene.Layer {
         // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+        // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+        kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
         kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
           var handle = g.__handle.value;
           val ret: kotlin.Int = __wasm_import_new3(handle)
@@ -2206,6 +2348,8 @@ import bindings.runtime.*
     */
     override fun getContext(): bindings.Embedding.CanvasContext {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ret: kotlin.Int = __wasm_import_getContext()
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
@@ -2231,6 +2375,8 @@ import bindings.runtime.*
     */
     fun graphics(): bindings.Draw.Graphics {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ret: kotlin.Int = __wasm_import_graphics(handle)
@@ -2248,6 +2394,8 @@ import bindings.runtime.*
     */
     fun getCurrentBuffer(): bindings.Draw.Canvas {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ret: kotlin.Int = __wasm_import_getCurrentBuffer(handle)
@@ -2262,6 +2410,8 @@ import bindings.runtime.*
     */
     fun present() {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         __wasm_import_present(handle)

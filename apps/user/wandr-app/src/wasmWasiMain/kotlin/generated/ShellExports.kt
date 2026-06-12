@@ -81,7 +81,7 @@ fun __wasm_export_onPointer(p0: Int): Unit {
         lf(p0 + 32),
         lf(p0 + 36),
         PointerHandler.Button.values()[lb(p0 + 40)],
-        PointerHandler.Buttons(lb(p0 + 41).toLong()),
+        org.jetbrains.skiko.wasi.shell.pointerButtonsOf(lb(p0 + 41).toLong()),
         lb(p0 + 42) != 0,
         lb(p0 + 43) != 0,
         lb(p0 + 44) != 0,

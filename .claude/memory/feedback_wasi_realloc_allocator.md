@@ -25,3 +25,17 @@ The leading freeAll is a no-op when reallocAllocator is already null (cheap), an
 **Still needed even after [[kotlin-wasm-scopedmemory-destroy-bug]] is fixed upstream:** the two issues compose — `freeAll` is what *triggers* the buggy `destroy()`. Removing the freeAll would dodge that destroy chain but immediately hit `IllegalStateException` from `createAllocatorInTheNewScope`'s `check(reallocAllocator == null)`. To drop the freeAll workaround you'd need a separate upstream change letting `withScopedMemoryAllocator` suspend/resume an active `reallocAllocator` instead of refusing to nest — bigger than KT-86415. So in practice: keep the freeAll forever; KT-86415's patch just makes the freeAll's downstream `destroy()` call no longer leak State's range.
 
 **Diagnostic for similar issues:** Use `Store::take_pending_exception()` in the host (wasmtime ≥44 with `gc` + `exceptions` features) and walk the Throwable struct: field 0 of exnref → AnyRef → struct → field 4 (message: String) → field 5 (length) + field 6 (chars: WasmCharArray of i16 UTF-16). See host/src/lib.rs ~line 188.
+
+**2026-06-12 update (Phase B, task 105):** the JetBrains Kotlin
+wit-bindgen fork (rev 6b9cb12) does NOT emit the leading freeAll in its
+generated IMPORT wrappers (only the post-call one). Any guest that calls
+`Any.toString()`/`hashCode()` before an import (the FIRST
+`identityHashCode()` seeds `Random.Default` → `wasiRandomGet` →
+`cabi_realloc`) then throws "Can't create new allocators while
+realloc-allocated memory is not freed" at the next wrapper's
+`withScopedMemoryAllocator` entry. EVERY regen must run
+`tools/scripts/patch-kotlin-bindgen-freeall.py` on the generated
+import-wrapper file (the regen recipes in wit-canvas/world.wit,
+wit-shell/world.wit, both wit-platform/world.wit and the ktcanvas
+build.sh now say so). Cost of forgetting: ~1h of guest-side bisection —
+twice now.

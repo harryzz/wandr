@@ -21,6 +21,7 @@ import org.jetbrains.skiko.SkikoPointerEventKind
 import org.jetbrains.skiko.SkikoRenderDelegate
 import org.jetbrains.skiko.currentSkiaLayer
 import org.jetbrains.skiko.wasi.WasiInput
+import org.jetbrains.skiko.wasi.shell.PointerHandler.Kind as PtrKind
 import org.jetbrains.skiko.wasi.WasiLifecycle
 import org.jetbrains.skiko.wasi.WasiScheduler
 import org.jetbrains.skiko.wasi.shell.Clipboard as WitClipboard
@@ -242,14 +243,13 @@ fun main() {
             )
         }
         val type = androidx.compose.ui.input.pointer.PointerEventType
-        val k = org.jetbrains.skiko.wasi.shell.PointerHandler.Kind
         val evtType = when (ev.kind) {
-            k.DOWN   -> type.Press
-            k.UP, k.CANCEL -> type.Release
-            k.MOVE   -> type.Move
-            k.SCROLL -> type.Scroll
-            k.ENTER  -> type.Enter
-            k.LEAVE  -> type.Exit
+            PtrKind.DOWN   -> type.Press
+            PtrKind.UP, PtrKind.CANCEL -> type.Release
+            PtrKind.MOVE   -> type.Move
+            PtrKind.SCROLL -> type.Scroll
+            PtrKind.ENTER  -> type.Enter
+            PtrKind.LEAVE  -> type.Exit
         }
         val ptrType = when (ev.device) {
             org.jetbrains.skiko.wasi.shell.PointerHandler.PointerDevice.MOUSE ->
@@ -265,7 +265,7 @@ fun main() {
             // scroll delta in "lines" (the desktop convention, ~64 px/line
             // matches upstream skiko's desktop divisor closely enough that
             // we reuse the host's 48 px line unit directly).
-            scrollDelta = if (ev.kind == k.SCROLL) {
+            scrollDelta = if (ev.kind == PtrKind.SCROLL) {
                 androidx.compose.ui.geometry.Offset(ev.scrollDx / 48f, ev.scrollDy / 48f)
             } else {
                 androidx.compose.ui.geometry.Offset.Zero

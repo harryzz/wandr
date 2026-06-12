@@ -25,7 +25,7 @@ import kotlin.wasm.unsafe.*
 ///     [0] disc (u8): 0 = none, 1 = some
 ///     [4..8] list.ptr (i32)
 ///     [8..12] list.len (i32)
-@WasmImport("my:skiko-gfx/assets@0.1.0", "read")
+@WasmImport("wandr:assets/assets@0.1.0", "read")
 private external fun __wasm_import_assets_read(
     namePtr: Int, nameLen: Int, returnAreaPtr: Int,
 )

@@ -18,10 +18,10 @@ import kotlin.wasm.*
 
 enum class NightMode { AUTO, OFF, ON }
 
-@WasmImport("my:skiko-gfx/theme@0.1.0", "get-night-mode")
+@WasmImport("wandr:ui-shell/theme@0.1.0", "get-night-mode")
 private external fun __wasm_import_theme_get_night_mode(): Int
 
-@WasmImport("my:skiko-gfx/theme@0.1.0", "get-accent-color")
+@WasmImport("wandr:ui-shell/theme@0.1.0", "get-accent-color")
 private external fun __wasm_import_theme_get_accent_color(): Int
 
 fun getNightMode(): NightMode = when (__wasm_import_theme_get_night_mode()) {

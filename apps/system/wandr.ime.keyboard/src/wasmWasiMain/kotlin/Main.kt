@@ -21,6 +21,7 @@ import org.jetbrains.skiko.SkikoPointerEventKind
 import org.jetbrains.skiko.SkikoRenderDelegate
 import org.jetbrains.skiko.currentSkiaLayer
 import org.jetbrains.skiko.wasi.WasiInput
+import org.jetbrains.skiko.wasi.shell.PointerHandler.Kind as PtrKind
 import org.jetbrains.skiko.wasi.WasiLifecycle
 import org.jetbrains.skiko.wasi.WasiScheduler
 import org.jetbrains.skiko.wasi.shell.Clipboard as WitClipboard
@@ -281,14 +282,13 @@ fun main() {
             )
         }
         val type = androidx.compose.ui.input.pointer.PointerEventType
-        val k = org.jetbrains.skiko.wasi.shell.PointerHandler.Kind
         val evtType = when (ev.kind) {
-            k.DOWN   -> type.Press
-            k.UP, k.CANCEL -> type.Release
-            k.MOVE   -> type.Move
-            k.SCROLL -> type.Scroll
-            k.ENTER  -> type.Enter
-            k.LEAVE  -> type.Exit
+            PtrKind.DOWN   -> type.Press
+            PtrKind.UP, PtrKind.CANCEL -> type.Release
+            PtrKind.MOVE   -> type.Move
+            PtrKind.SCROLL -> type.Scroll
+            PtrKind.ENTER  -> type.Enter
+            PtrKind.LEAVE  -> type.Exit
         }
         realScene.sendPointerEvent(
             eventType = evtType,

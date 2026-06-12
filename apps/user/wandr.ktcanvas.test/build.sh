@@ -27,6 +27,9 @@ if [[ "${1:-}" == "--regen" ]]; then
     rm -rf src/wasmWasiMain/kotlin/bindings
     "$BINDGEN" kotlin --kotlin-imports 'impl.*' -w ktcanvas-test wit \
         --out-dir src/wasmWasiMain/kotlin/bindings/
+    # Leading freeAll the generator omits (CLAUDE.md required-forever rule).
+    python3 "$WANDR_ROOT/tools/scripts/patch-kotlin-bindgen-freeall.py" \
+        src/wasmWasiMain/kotlin/bindings/KtcanvasTest.kt
     exit 0
 fi
 

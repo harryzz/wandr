@@ -18,11 +18,11 @@ import kotlin.wasm.unsafe.*
 
 /// `list-apps() -> string`. Importer-side canonical ABI: caller-allocated
 /// 8-byte return area holding the returned string's (ptr, len).
-@WasmImport("my:skiko-gfx/launcher@0.1.0", "list-apps")
+@WasmImport("wandr:chrome/launcher@0.1.0", "list-apps")
 private external fun __wasm_import_launcher_list_apps(returnAreaPtr: Int)
 
 /// `launch-app(app-id: string)`. Importer-side: (ptr, len), no return.
-@WasmImport("my:skiko-gfx/launcher@0.1.0", "launch-app")
+@WasmImport("wandr:chrome/launcher@0.1.0", "launch-app")
 private external fun __wasm_import_launcher_launch_app(idPtr: Int, idLen: Int)
 
 /// One installed app: its id (for launch) and display label.

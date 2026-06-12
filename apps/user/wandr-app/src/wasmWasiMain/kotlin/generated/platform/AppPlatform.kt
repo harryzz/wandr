@@ -17,6 +17,8 @@ import wandr.platform.runtime.*
     */
     override fun perform(feedback: wandr.platform.Haptics.Feedback): kotlin.Boolean {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ret: kotlin.Int = __wasm_import_perform(feedback.ordinal)
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
@@ -29,6 +31,8 @@ import wandr.platform.runtime.*
     */
     override fun vibrateMs(durationMs: kotlin.UInt): kotlin.Boolean {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ret: kotlin.Int = __wasm_import_vibrateMs(durationMs.toInt())
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
@@ -74,6 +78,8 @@ import wandr.platform.runtime.*
     */
     override fun boost(kind: wandr.platform.Power.Hint, durationMs: kotlin.UInt) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         __wasm_import_boost(kind.ordinal, durationMs.toInt())
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
@@ -85,6 +91,8 @@ import wandr.platform.runtime.*
     */
     override fun setMode(kind: wandr.platform.Power.Mode, enabled: kotlin.Boolean) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         __wasm_import_setMode(kind.ordinal, (if(enabled) 1 else 0))
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
@@ -97,6 +105,8 @@ import wandr.platform.runtime.*
     */
     override fun isHintSupported(kind: wandr.platform.Power.Hint): kotlin.Boolean {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ret: kotlin.Int = __wasm_import_isHintSupported(kind.ordinal)
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
@@ -109,6 +119,8 @@ import wandr.platform.runtime.*
     */
     override fun isModeSupported(kind: wandr.platform.Power.Mode): kotlin.Boolean {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ret: kotlin.Int = __wasm_import_isModeSupported(kind.ordinal)
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
@@ -187,6 +199,8 @@ import wandr.platform.runtime.*
     */
     override fun listTemperatures(): kotlin.collections.List<wandr.platform.Thermal.Temperature> {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(2*4), align=4)*/ allocator.allocate((2*4)).address.toInt()
         __wasm_import_listTemperatures(ptr)
@@ -211,6 +225,8 @@ import wandr.platform.runtime.*
     */
     override fun listTemperaturesOf(kind: wandr.platform.Thermal.Kind): kotlin.collections.List<wandr.platform.Thermal.Temperature> {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(2*4), align=4)*/ allocator.allocate((2*4)).address.toInt()
         __wasm_import_listTemperaturesOf(kind.ordinal, ptr)
@@ -236,6 +252,8 @@ import wandr.platform.runtime.*
     */
     override fun overallThrottle(): wandr.platform.Thermal.Throttle {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ret: kotlin.Int = __wasm_import_overallThrottle()
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
@@ -311,6 +329,8 @@ import wandr.platform.runtime.*
     */
     override fun listSensors(): kotlin.collections.List<wandr.platform.Sensors.SensorInfo> {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(2*4), align=4)*/ allocator.allocate((2*4)).address.toInt()
         __wasm_import_listSensors(ptr)
@@ -340,6 +360,8 @@ import wandr.platform.runtime.*
     */
     override fun enable(handle: kotlin.UInt, rateHz: kotlin.UInt): kotlin.Boolean {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ret: kotlin.Int = __wasm_import_enable(handle.toInt(), rateHz.toInt())
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
@@ -352,6 +374,8 @@ import wandr.platform.runtime.*
     */
     override fun disable(handle: kotlin.UInt) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         __wasm_import_disable(handle.toInt())
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
@@ -365,6 +389,8 @@ import wandr.platform.runtime.*
     */
     override fun pollLatest(handle: kotlin.UInt): wandr.platform.Sensors.SensorSample {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=24, align=8)*/ allocator.allocate(24).address.toInt()
         __wasm_import_pollLatest(handle.toInt(), ptr)
@@ -478,6 +504,8 @@ import wandr.platform.runtime.*
     */
     override fun set(kind: wandr.platform.Lights.LightType, state: wandr.platform.Lights.LightState): kotlin.Boolean {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ret: kotlin.Int = __wasm_import_set(kind.ordinal, state.colorArgb.toInt(), state.flashOnMs.toInt(), state.flashOffMs.toInt(), state.flashMode.ordinal)
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
@@ -490,6 +518,8 @@ import wandr.platform.runtime.*
     */
     override fun supports(kind: wandr.platform.Lights.LightType): kotlin.Boolean {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ret: kotlin.Int = __wasm_import_supports(kind.ordinal)
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
@@ -563,6 +593,8 @@ import wandr.platform.runtime.*
     */
     override fun listApps(): kotlin.String {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(2*4), align=4)*/ allocator.allocate((2*4)).address.toInt()
         __wasm_import_listApps(ptr)
@@ -578,6 +610,8 @@ import wandr.platform.runtime.*
     */
     override fun launchApp(appId: kotlin.String) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
 
         val bytearray = appId.encodeToByteArray()
@@ -595,6 +629,8 @@ import wandr.platform.runtime.*
     */
     override fun goHome() {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         __wasm_import_goHome()
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
@@ -607,6 +643,8 @@ import wandr.platform.runtime.*
     */
     override fun goBack() {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         __wasm_import_goBack()
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
@@ -619,6 +657,8 @@ import wandr.platform.runtime.*
     */
     override fun recents() {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         __wasm_import_recents()
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
@@ -672,6 +712,8 @@ import wandr.platform.runtime.*
     */
     override fun clockText(): kotlin.String {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(2*4), align=4)*/ allocator.allocate((2*4)).address.toInt()
         __wasm_import_clockText(ptr)
@@ -685,6 +727,8 @@ import wandr.platform.runtime.*
     */
     override fun batteryText(): kotlin.String {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(2*4), align=4)*/ allocator.allocate((2*4)).address.toInt()
         __wasm_import_batteryText(ptr)
@@ -700,6 +744,8 @@ import wandr.platform.runtime.*
     */
     override fun barHeight(): kotlin.UInt {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ret: kotlin.Int = __wasm_import_barHeight()
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
@@ -742,6 +788,8 @@ import wandr.platform.runtime.*
     */
     override fun displaySize(): wandr.platform.Display.Size {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=8, align=4)*/ allocator.allocate(8).address.toInt()
         __wasm_import_displaySize(ptr)
@@ -759,6 +807,8 @@ import wandr.platform.runtime.*
     */
     override fun contentSize(): wandr.platform.Display.Size {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=8, align=4)*/ allocator.allocate(8).address.toInt()
         __wasm_import_contentSize(ptr)
@@ -778,6 +828,8 @@ import wandr.platform.runtime.*
     */
     override fun safeSize(): wandr.platform.Display.Size {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=8, align=4)*/ allocator.allocate(8).address.toInt()
         __wasm_import_safeSize(ptr)
@@ -795,6 +847,8 @@ import wandr.platform.runtime.*
     */
     override fun currentOrientation(): wandr.platform.Display.Orientation {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         val ret: kotlin.Int = __wasm_import_currentOrientation()
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
@@ -862,6 +916,8 @@ import wandr.platform.runtime.*
     */
     override fun set(kind: wandr.platform.PointerIcon.Kind) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         __wasm_import_set0(kind.ordinal)
         kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
@@ -917,6 +973,8 @@ import wandr.platform.runtime.*
     */
     override fun read(name: kotlin.String): kotlin.collections.List<kotlin.UByte>? {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
 
         val bytearray = name.encodeToByteArray()
@@ -975,6 +1033,8 @@ import wandr.platform.runtime.*
     */
     override fun log(level: wandr.platform.Logging.Level, context: kotlin.String, message: kotlin.String) {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
 
         val bytearray = context.encodeToByteArray()
@@ -1107,6 +1167,8 @@ import wandr.platform.runtime.*
     */
     fun write(samples: kotlin.collections.List<kotlin.Float>): kotlin.UInt {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
 
@@ -1128,6 +1190,8 @@ import wandr.platform.runtime.*
     */
     fun bufferedFrames(): kotlin.UInt {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ret: kotlin.Int = __wasm_import_bufferedFrames(handle)
@@ -1138,6 +1202,8 @@ import wandr.platform.runtime.*
     }
     fun start(): kotlin.Result<kotlin.Unit> {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=2, align=1)*/ allocator.allocate(2).address.toInt()
@@ -1157,6 +1223,8 @@ import wandr.platform.runtime.*
     */
     fun pause(): kotlin.Result<kotlin.Unit> {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=2, align=1)*/ allocator.allocate(2).address.toInt()
@@ -1174,6 +1242,8 @@ import wandr.platform.runtime.*
     companion object {
       fun open(config: wandr.platform.Pcm.StreamConfig): kotlin.Result<wandr.platform.Pcm.Playback> {
         // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+        // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+        kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
         kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
           val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=8, align=4)*/ allocator.allocate(8).address.toInt()
           __wasm_import_open(config.sampleRate.toInt(), config.channelLayout.ordinal, config.format.ordinal, config.class_.ordinal, ptr)
@@ -1201,6 +1271,8 @@ import wandr.platform.runtime.*
     */
     fun read(maxFrames: kotlin.UInt): kotlin.collections.List<kotlin.Float> {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=(2*4), align=4)*/ allocator.allocate((2*4)).address.toInt()
@@ -1222,6 +1294,8 @@ import wandr.platform.runtime.*
     */
     fun availableFrames(): kotlin.UInt {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ret: kotlin.Int = __wasm_import_availableFrames(handle)
@@ -1232,6 +1306,8 @@ import wandr.platform.runtime.*
     }
     fun start(): kotlin.Result<kotlin.Unit> {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=2, align=1)*/ allocator.allocate(2).address.toInt()
@@ -1248,6 +1324,8 @@ import wandr.platform.runtime.*
     }
     fun pause(): kotlin.Result<kotlin.Unit> {
       // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+      kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
       kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
         var handle = this.__handle.value;
         val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=2, align=1)*/ allocator.allocate(2).address.toInt()
@@ -1265,6 +1343,8 @@ import wandr.platform.runtime.*
     companion object {
       fun open(config: wandr.platform.Pcm.StreamConfig): kotlin.Result<wandr.platform.Pcm.Capture> {
         // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+        // [wandr post-regen] leading freeAll — see patch-kotlin-bindgen-freeall.py
+        kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
         kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
           val ptr = /* RETURN_ADDRESS_ALLOC(size_wasm32=8, align=4)*/ allocator.allocate(8).address.toInt()
           __wasm_import_open4(config.sampleRate.toInt(), config.channelLayout.ordinal, config.format.ordinal, config.class_.ordinal, ptr)

@@ -5,7 +5,11 @@
 // fork what to generate. Regen:
 //   wit-bindgen kotlin --kotlin-package-name wandr.platform \
 //     -w app-platform wit-platform --out-dir src/wasmWasiMain/kotlin/generated/platform/
-//   then DELETE the duplicate cabi_realloc export from the generated
+//   then run tools/scripts/patch-kotlin-bindgen-freeall.py on the
+//   generated import-wrapper file (inserts the LEADING freeAll the
+//   generator omits — the CLAUDE.md required-forever rule; without it
+//   the first identityHashCode()/Random call poisons the next import),
+//   and DELETE the duplicate cabi_realloc export from the generated
 //   runtime/ComponentSupport.kt (skiko's generated runtime already
 //   exports it).
 package wandr:app-platform;
