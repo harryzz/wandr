@@ -191,7 +191,20 @@ interface draw {
         /// `canvas.finish-recording`, draws on the returned canvas are
         /// captured, not rasterized.
         start-recording:  func(bounds: rect) -> canvas;
+
+        /// Boolean-combine two SVG path-data strings (R2 addition,
+        /// 2026-06-12). Path boolean ops fail the derivability test —
+        /// computing them guest-side means shipping a full 2D boolean
+        /// kernel; every shipped consumer's renderer already has one.
+        /// Returns none when either operand or the result is empty
+        /// (the skia Op contract callers like border-stroke expect).
+        combine-paths:    func(a: string, b: string,
+                               op: path-op) -> option<string>;
     }
+
+    /// Boolean operators for `graphics.combine-paths` (skia SkPathOp /
+    /// W3C-clip-path provenance; reverse-difference = b minus a).
+    enum path-op { difference, intersect, union, xor, reverse-difference }
 
     resource canvas {
         /// Drawable size in canvas units (device-independent; the
