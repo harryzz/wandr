@@ -265,3 +265,17 @@ guest adapters). Avalonia gotcha for any set-transform debate:
 IDrawingContextImpl.Transform is an absolute SETTER per visual.
 
 Related: [[reference_slint_wasip2]], [[feedback_shared_wit_rebuild_all_consumers]].
+
+**2026-06-12 — Phase B COMPLETE, deployed on device (awaiting user visual verify).**
+Every guest is fully new-style (wasi:canvas@0.0.2 + wasi:input-handlers@0.0.2 +
+wandr:ui-shell + wandr:{device,chrome,assets} + wasi:{logging,audio}); zero
+my:skiko-gfx imports/exports remain in any shipped component. Host treats the
+legacy SkikoUi world as an optional probe. Landmarks: combine-paths joined the
+draft (R2 — Modifier.border, path booleans not guest-derivable); skiko finale =
+canvas-0.0.2-only with guest-explicit recording stack + CTM tracking
+(set/reset-matrix emulation) + scene-backed RenderNode + paragraph-backed text
+blobs; Compose text MUST paint to WasiCanvasBackend.target (frameCanvas put it
+under every layer → invisible). Kotlin generator regens MUST run
+tools/scripts/patch-kotlin-bindgen-freeall.py (leading-freeAll; see
+[[feedback_wasi_realloc_allocator]]). Phase C deletion starts only after the
+user confirms device interaction (touch/IME/Signal/rotation).
