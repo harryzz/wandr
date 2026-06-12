@@ -129,6 +129,62 @@ the core surface universal.
    hand (working canvas-context, shared events, both profiles live on a
    real phone).
 
+## DESIGNED (2026-06-12): proposals/wasi-surface/DESIGN-0.0.2.md
+
+The socket model this document sketched is now a designed proposal —
+`wasi:surface` + `wasi:graphics-context` 0.0.2 shapes
+(wasm-tools-validated), the four producer connection idioms, the
+fused-form equivalences (canvas embedding, video placement) with their
+un-fuse lanes, overlap audit and the four-criteria acceptance check.
+This document remains the reasoning record; the design doc is the
+artifact.
+
+## Upstream recheck (2026-06-12) — claims re-grounded against source
+
+Upstream re-inventoried (it MOVED: surface/graphics-context/frame-buffer
+now live in `wasi-gfx/wasi-gfx-runtime` `wit/deps/`, not in
+WebAssembly/wasi-webgpu, which keeps only webgpu.wit). Three verdicts:
+
+1. **canvas-context vs `wasi:graphics-context.context` — same idiom,
+   one deliberate structural divergence.** Their context is
+   renderer-agnostic: `get-current-buffer() -> abstract-buffer`, and the
+   connected renderer API converts (`frame-buffer.buffer
+   .from-graphics-buffer(abstract-buffer)`). Ours FUSES the conversion
+   (`get-current-buffer() -> canvas`). Full alignment = the third-context
+   shape (`canvas-device.connect-graphics-context` +
+   `canvas.from-graphics-buffer`) — DEFERRED deliberately: upstream is
+   visibly pre-stable (their `present` is marked "TODO: might want to
+   remove", frame-event is an empty TODO record, and `context` has an
+   AMBIENT constructor that violates WASI's own no-ambient-authority
+   rule — our embedder-granted `get-context` is the cleaner capability
+   story to converge TOWARD, not from).
+2. **Event vocabulary — ours is strictly richer; convergence flows FROM
+   wandr's records.** Upstream surface events: pointer = {x,y} ONLY (no
+   multi-touch id, no buttons, no pressure, no scroll, no
+   enter/leave!), key = a ~150-case enum of the same W3C code table our
+   `code: string` carries, frame-event = empty. The
+   wasi:input-handlers@0.0.2 records (six-consumer union) are the
+   credible shared vocabulary for the push/pull split — the pitch
+   strengthens: we bring the event model upstream lacks.
+3. **The video claim, made precise.** "Signal's video path ≈ wasi-gfx"
+   holds at the INFRASTRUCTURE level: the task-93 sf_media child
+   SurfaceControl + BBQ producer is exactly what a wasi:surface
+   implementation needs host-side (create-desc → child surface;
+   request-set-size = advisory under the arbiter, matching the
+   request/configure reading; pull-profile events = the queue+pollable
+   work of step 3). It does NOT hold at the WIT level, and shouldn't:
+   wandr:video is a codec contract. The clean observation the recheck
+   adds: a video decoder is naturally ANOTHER graphics-context consumer
+   (a fourth context type beside webgpu/frame-buffer/canvas — the
+   "media element" of the socket), and wandr:video currently FUSES
+   surface placement (set-rect/set-visible/set-rotation) into the
+   decoder resource. Named decision: the fusion stays (shipped,
+   live-call-verified; placement verbs are the arbiter-geometry
+   shorthand) — the factoring lane (codec ↔ surface attachment) is
+   recorded for IF wandr ever implements wasi:surface, at which point
+   those three verbs would overlap with surface vocabulary and the
+   decoder would instead connect to a child surface's context.
+
 ## Non-goals
 
 - Porting Compose itself to webgpu/frame-buffer (gives up host Skia — the

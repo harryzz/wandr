@@ -183,6 +183,17 @@ matrix tracking) — NOT stage-4-on-0.0.1 (would touch skiko twice).
 After that event both packages are FROZEN: evolution = additive methods
 (R2) or side-by-side versions (R3) only.
 
+**THIRD DESIGN (2026-06-12): proposals/wasi-surface/DESIGN-0.0.2.md** —
+the socket model de-floated: wasi:surface + wasi:graphics-context 0.0.2
+(capability-granted context — fixes upstream's ambient constructor; 
+request/configure geometry; optional pull-profile pollables), four
+producer types (webgpu/frame-buffer upstream, canvas third, video
+fourth), fused-form equivalences documented (canvas embedding ≡
+primary-surface.get-context; video placement verbs = the factoring
+lane). Design-only; triggers: engine-class guest, video factoring, or
+upstream conversation. The family is now THREE designed proposals under
+one goal: canvas, input-handlers (+gesture-handler), surface/socket.
+
 **The four REFERENCE LIBRARIES (validation set, user-fixed 2026-06-12):
 skiko-compose, dioxus, slint, Avalonia UI** — every wasi:canvas contract
 decision must be cross-checked against ALL FOUR (they span the ownership

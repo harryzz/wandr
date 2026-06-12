@@ -46,3 +46,19 @@ metadata:
   glyphs + optional layout text layers; drawing-only scope = the red line).
   Gate analysis in COMPATIBILITY.md: NO hard breaks (coexistence — second
   add_to_linker over the same SkiaRenderer; my:skiko-gfx untouched).
+
+**RECHECK 2026-06-12 (source-grounded, docs/surface-convergence-proposal.md
+§Upstream recheck):** upstream MOVED — surface/graphics-context/
+frame-buffer live in `wasi-gfx/wasi-gfx-runtime` wit/deps (WebAssembly/
+wasi-webgpu keeps only webgpu.wit). Their shapes are pre-stable (ambient
+context constructor — violates their own capability rule; present =
+"TODO maybe remove"; empty frame-event; pointer events = {x,y} ONLY — no
+multi-touch/buttons/pressure). Verdicts: canvas-context = same idiom,
+deliberately FUSED (canvas instead of abstract-buffer indirection) —
+third-context alignment deferred until upstream stabilizes; our
+input-handlers 0.0.2 records are STRICTLY richer = the credible shared
+event vocabulary; video claim holds at INFRA level only (sf_media child
+surface = the wasi:surface primitive) — wandr:video fuses placement
+verbs (set-rect/visible/rotation) into the decoder; factoring lane
+(decoder as a fourth graphics-context consumer) recorded for if
+wasi:surface ever lands on wandr.
