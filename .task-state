@@ -1,5 +1,5 @@
 TASK=102
 STEP=verify-done
 STATUS=complete
-LAST_SUCCESS=Task 102 Stage 1 verified OK — Kotlin wasi:canvas spike (generated bindings, rev 6b9cb12) renders all ABI categories, desktop + device, RSS flat
-NOTES=apps/user/wandr.ktcanvas.test; recipe in feedback_wit_bindgen_no_kotlin_generator memory; stage map in proposals/wasi-canvas/README.md. Next: Stage 2 = skiko canvas binding regen/port behind a switch (open design Q: WasiDrawable layers stay my:skiko-gfx).
+LAST_SUCCESS=Task 102 Stage 2 verified OK — Compose geometry/clips/transforms/shaders on wasi:canvas (WasiCanvasBackend switch), desktop + device (taps, scroll, RSS flat)
+NOTES=skiko generated/wasicanvas bindings + WasiCanvasBackend + per-paint routing; legacy kept: text/images/pictures/drawables/set-matrix. ime.keyboard NOT redeployed on device (old component fine, flag off; needs zygote restart — ride next one). Stage 3 next: skiko text → layout + batch color-filter WIT addition (one rebuild-all event).

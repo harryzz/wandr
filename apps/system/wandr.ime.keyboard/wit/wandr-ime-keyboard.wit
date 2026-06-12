@@ -12,6 +12,13 @@ package wandr:ime-keyboard@0.1.0;
 world ime-keyboard {
     include my:skiko-gfx/skiko-ui@0.1.0;
     include wandr:ime/ime-events@0.1.0;
+    // Task 102 stage 2 — the skiko klib now references the wasi:canvas
+    // bindings (reachable behind WasiCanvasBackend.enabled), so the component
+    // declares the imports even while this app keeps the flag off (legacy
+    // canvas path, bit-for-bit).
+    import wasi:canvas/types@0.0.1;
+    import wasi:canvas/draw@0.0.1;
+    import wasi:canvas/embedding@0.0.1;
     // Step 5 — declared language plugins. One import per plugin
     // (each plugin uses its own WIT package because two deps cannot
     // share the same `linker.instance(name)` entry); adding a new

@@ -107,11 +107,34 @@ generator pass, ZERO hand-written ABI code. Desktop + device verified
 Every hot ABI shape proven: spilled paint blobs, shader borrow-in-record,
 gradient list<tuple>, SVG-path strings, mask-blur option<record>,
 lines() list<record> lift, offscreen→snapshot→draw-image, resource close().
-Stage map (recorded in proposals/wasi-canvas/README.md): 2 = skiko binding
-regen/port behind a switch; 3 = skiko text → layout; 4 = wandr-app +
-wandr.ime.keyboard world cutover (my:skiko-gfx keeps window/IME/lifecycle +
-WasiDrawable layers — the live-transform machinery is deliberately NOT in
-wasi:canvas, open stage-2 design question). Gotchas: WSLg Wayland resets the
+**Stage 2 DONE 2026-06-11 (same day): Compose geometry on wasi:canvas,
+device-verified.** The skiko main canvas routes transforms/clips/geometry
+draws + gradient shaders through generated wasi:canvas bindings
+(skiko `generated/wasicanvas/`, world = `wit-canvas/world.wit`, regen note
+inside; generated runtime's `cabi_realloc` MUST be deleted after regen — the
+app's RendererExports.kt exports it) behind
+`org.jetbrains.skiko.wasi.WasiCanvasBackend.enabled` (wandr-app main() flips
+it; default false = legacy bit-for-bit). KEY ARCHITECTURAL FACT that makes
+per-verb migration safe: legacy AND wasi verbs hit the SAME
+`renderer.canvas()` (canvas_impl.rs:809 routes into the active legacy
+recording stack) — so wasi draws are captured by WasiDrawable/RenderNode
+recordings, state (matrix/clip/saves) is shared, and any call can fall back
+per-paint. Routing rule (`WasiCanvas.wc()`): legacy when paint has
+color-filter (not in draft) or a legacy-only shader (image shaders);
+outside the frame bracket frameCanvas==null → legacy (composition-time
+rasterization just works). Shader = dual-handle (legacy id always + wres
+when enabled, both dropped in discard()). Frame bracket swaps wholesale
+(canvas-context ≡ legacy begin/end-frame host-side). Legacy-kept: text
+blobs/paragraph (stage 3), images + bitmap-canvas, pictures/drawables,
+set/reset-matrix. Verified: desktop (full demo screenshot) + Pixel 2 XL
+(counter taps, scroll-over-recordings, RSS flat). wandr.ime.keyboard:
+world got the imports + new build componentizes, but the on-device
+component is intentionally the OLD build (no behavior change with flag
+off; redeploy needs a zygote restart — ride along with the next one).
+Remaining: 3 = skiko text → layout; 4 = full cutover (my:skiko-gfx keeps
+window/IME/lifecycle + WasiDrawable layers; color-filter + image draws
+need additive draft growth — batch the WIT change with stage 3 to pay the
+rebuild-all-consumers event once). Gotchas: WSLg Wayland resets the
 desktop host connection after a few seconds — use `WINIT_UNIX_BACKEND=x11
 WAYLAND_DISPLAY=`; screenshot via `xwd -name "WASM Android Runtime"` +
 ffmpeg (gnome-screenshot/xwd-root fail under WSLg); on-disk

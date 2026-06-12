@@ -126,12 +126,18 @@ variant, since its renderer already speaks the same shapes.
    one generator pass, zero hand-written ABI code, desktop + Pixel-2-XL
    verified (spilled paint blobs, shader borrows in records, gradient stop
    lists, SVG-path strings, list<record> line-metrics lifts, resource drop
-   churn all correct). Remaining stages: (2) regenerate/port the skiko
-   canvas binding behind a switch, (3) skiko text → `layout`, (4) cut over
-   wandr-app + wandr.ime.keyboard worlds — my:skiko-gfx keeps the
-   non-canvas remainder (window/IME/lifecycle + the WasiDrawable
-   live-transform layers, which are deliberately out of wasi:canvas; how
-   Compose's RenderNode machinery maps is the open stage-2 design
-   question).
+   churn all correct). **Stage 2 DONE 2026-06-11**: Compose runs with
+   geometry/transforms/clips/gradient-shaders on wasi:canvas (skiko
+   `generated/wasicanvas/` bindings behind `WasiCanvasBackend.enabled`),
+   desktop + device verified incl. scroll — the RenderNode question
+   resolved cleanly because legacy and wasi verbs share the host's
+   `renderer.canvas()`, so live-transform drawable recordings capture wasi
+   draws; per-paint fallback covers color-filter and image-shader draws.
+   Remaining stages: (3) skiko text → `layout` (+ batch the additive draft
+   needs surfaced by Compose: paint color-filter, image draw verbs'
+   sampling parity — one rebuild-all event), (4) cut over wandr-app +
+   wandr.ime.keyboard worlds fully — my:skiko-gfx keeps the non-canvas
+   remainder (window/IME/lifecycle + the WasiDrawable live-transform
+   layers, deliberately out of wasi:canvas).
 5. Let the surface harden; then consider the WASI phase-0 conversation,
    positioned as wasi-gfx's 2D companion (champion overlap natural).

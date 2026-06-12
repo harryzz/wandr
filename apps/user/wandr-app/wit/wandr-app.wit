@@ -9,6 +9,13 @@ world wandr-app {
     import wandr:markdown/renderer@0.1.0;
     import wandr:emoji/picker@0.1.0;
     import wandr:fonts/loader@0.1.0;
+    // Task 102 stage 2 — skiko's geometry/transform/clip/shader path runs on
+    // the wasi:canvas draft when WasiCanvasBackend.enabled (Main.kt flips it);
+    // text/images/pictures/drawables stay on the my:skiko-gfx canvas. Both
+    // interface sets are always-linked host-side over the same SkiaRenderer.
+    import wasi:canvas/types@0.0.1;
+    import wasi:canvas/draw@0.0.1;
+    import wasi:canvas/embedding@0.0.1;
     // Task 64 — optional on-demand-render hint. Opt-in export (not part of
     // skiko-ui) so the host can gate render-frame; see frame-pacing in the
     // skiko-gfx deps + RendererExports.kt's @WasmExport.

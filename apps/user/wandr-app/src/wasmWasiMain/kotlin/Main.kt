@@ -37,6 +37,12 @@ import testapp.compose.App
 import testapp.compose.WasiComposeScene
 
 fun main() {
+    // Task 102 stage 2: route skiko's geometry/transform/clip/shader draws
+    // through the wasi:canvas draft (text/images/pictures/drawables stay on
+    // my:skiko-gfx). Flip to false to A/B against the legacy canvas path
+    // without rebuilding skiko.
+    org.jetbrains.skiko.wasi.WasiCanvasBackend.enabled = true
+
     composeUiBaseSmokeTest()
     composeUiGraphicsSmokeTest()
     composeUiTextSmokeTest()
