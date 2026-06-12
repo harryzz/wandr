@@ -2,4 +2,4 @@ TASK=105
 STEP=verify-done
 STATUS=complete
 LAST_SUCCESS=Task 105 (Phase A+B+C) verified OK — my:skiko-gfx fully retired end-to-end; all guests on wasi:canvas/input-handlers 0.0.2 + wandr:ui-shell/device/chrome/assets + wasi:logging/audio; Phase C host deployed, Signal connected on device — USER-VERIFIED incl. call audio both ways on the wasi:audio engine
-NOTES=Follow-ups (cosmetic): SkiaRenderer dead-field sweep, docs/build-pipeline.md + host-rendering.md catch-up, guest-side junk-file cleanup in skiko (.bak files).
+NOTES=Follow-ups DONE (2026-06-12 evening): dead-field sweep, docs catch-up, skiko junk purge — see commit log.
