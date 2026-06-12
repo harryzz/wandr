@@ -1,5 +1,5 @@
 TASK=104
-STEP=phaseA-core-done
-STATUS=in-progress
-LAST_SUCCESS=Phase A core LIVE: wandr:ui-shell + wasi:logging (vendored upstream) + wandr:{device,chrome,assets} + wandr:ime/keyboard-send all served via delegating impls (consolidated_impl.rs, compiled first try); both-generation regression clean (0.0.2 spike 5/5, wandr-app 5/5)
-NOTES=Remaining Phase A chunks: (1) wasi:audio host impl (resource-based over audio_impl track machinery — the one non-delegating piece), (2) shell-events/ui-shell-frame-pacing dispatch PREFERENCE at standalone+desktop call sites (probe bindgen exists: ui_shell_export_bindings) — can ride Phase B host prep instead. Then Phase B = the one rebuild of every guest. Android host rebuild+push needed before Phase B device work.
+STEP=phaseA-complete
+STATUS=complete
+LAST_SUCCESS=Phase A COMPLETE: ui-shell + logging + device/chrome/assets/keyboard-send + wasi:audio (resources over the live-call-verified track machinery) all served additively; regression clean both generations
+NOTES=Phase B next (THE one rebuild of every guest): Kotlin finale (skiko→0.0.2 canvas/scene/images/blobs/setMatrix + input 0.0.2 + ui-shell + wasi:logging + wasi:audio + surface-wh→canvas dims + id-map assembly) AND all Rust guests (0.0.1→0.0.2 + ui-shell + export swap renderer/frame-pacing→input-handlers-0.0.2/shell worlds). Host prep riding Phase B: shell-events/ui-shell-pacing dispatch preference at standalone+desktop call sites. Then Phase C cleanup. Android host rebuild+push before device deploy.
