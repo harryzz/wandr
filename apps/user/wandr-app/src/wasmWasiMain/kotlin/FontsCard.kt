@@ -21,7 +21,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import org.jetbrains.skiko.wasi.wit.Canvas as WitCanvas
 import testapp.fonts.FontInfo
 import testapp.fonts.listAllFonts
 
@@ -79,12 +78,12 @@ internal fun FontsCard() {
 
 private fun loadFonts(): List<FontInfo> = try {
     val all = listAllFonts()
-    WitCanvas.Import.logMessage(
+    logMessage(
         "fonts-card: list-all() → ${all.size} font files; " +
         "${all.map { it.family }.distinct().size} distinct families"
     )
     all
 } catch (t: Throwable) {
-    WitCanvas.Import.logMessage("fonts-card: list-all() FAILED: ${t.message ?: t::class.simpleName}")
+    logMessage("fonts-card: list-all() FAILED: ${t.message ?: t::class.simpleName}")
     emptyList()
 }

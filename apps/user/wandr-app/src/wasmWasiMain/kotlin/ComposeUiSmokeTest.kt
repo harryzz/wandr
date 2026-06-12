@@ -13,7 +13,6 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import org.jetbrains.skiko.wasi.wit.Canvas as WitCanvas
 
 /**
  * Compose-ui core smoke test. Compiles iff compose-ui-wasi is linkable;
@@ -32,7 +31,7 @@ fun composeUiSmokeTest() {
     val color = Color.Red
     val density = LocalDensity
     val descKey = SemanticsProperties.ContentDescription
-    WitCanvas.Import.logMessage(
+    logMessage(
         "compose-ui smoke: alignment=${alignment}, rect=${rect}, intOff=${intOff}, " +
         "intSize=${intSize}, key=${key.keyCode}, ptr=${ptr}, color=${color}, " +
         "modifier=${modifier::class.simpleName}, density-local=${density::class.simpleName}, " +

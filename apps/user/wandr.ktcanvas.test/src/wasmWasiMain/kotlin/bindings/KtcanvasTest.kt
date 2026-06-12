@@ -540,8 +540,56 @@ import bindings.runtime.*
       }
       // </editor-fold>
     }
+    /**
+    Boolean-combine two SVG path-data strings (R2 addition,
+    2026-06-12). Path boolean ops fail the derivability test —
+    computing them guest-side means shipping a full 2D boolean
+    kernel; every shipped consumer's renderer already has one.
+    Returns none when either operand or the result is empty
+    (the skia Op contract callers like border-stroke expect).
+    */
+    fun combinePaths(a: kotlin.String, b: kotlin.String, op: bindings.Draw.PathOp): kotlin.String? {
+      // <editor-fold defaultstate="collapsed" desc="Generated Canonical ABI Adapter Code">
+      kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
+        var handle = this.__handle.value;
+
+        val bytearray = a.encodeToByteArray()
+        val len = bytearray.size
+        val ptr = allocator.writeToLinearMemory(bytearray).address.toInt()
+
+
+        val bytearray2 = b.encodeToByteArray()
+        val len1 = bytearray2.size
+        val ptr0 = allocator.writeToLinearMemory(bytearray2).address.toInt()
+
+        val ptr3 = /* RETURN_ADDRESS_ALLOC(size_wasm32=(3*4), align=4)*/ allocator.allocate((3*4)).address.toInt()
+        __wasm_import_combinePaths(handle, ptr, len, ptr0, len1, op.ordinal, ptr3)
+        kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory();
+        // OptionLift start
+        val option = if ((ptr3 + 0).ptr.loadUByte().toInt()== 1) {
+          bindings.runtime.STRING_FROM_MEM((ptr3 + 4).ptr.loadInt(), (ptr3 + (2*4)).ptr.loadInt())
+        } else {
+          null
+        }
+        // OptionLift end
+        return option
+      }
+      // </editor-fold>
+    }
     companion object {
     }
+  }
+
+  /**
+  Boolean operators for `graphics.combine-paths` (skia SkPathOp /
+  W3C-clip-path provenance; reverse-difference = b minus a).
+  */
+  enum class PathOp {
+    DIFFERENCE,
+    INTERSECT,
+    UNION,
+    XOR,
+    REVERSE_DIFFERENCE,
   }
   class Canvas : kotlin.AutoCloseable {
     internal var __handle: bindings.runtime.ResourceHandle = bindings.runtime.ResourceHandle(0)
@@ -2236,58 +2284,15 @@ import bindings.runtime.*
 
 }
 
-@WitInterface("my:skiko-gfx/renderer@0.1.0")
-/*external */interface Renderer {
+@WitInterface("wasi:input-handlers/frame-handler@0.0.2")
+/*external */interface FrameHandler {
   // START OF TYPES
 
 
-  enum class PointerKind {
-    DOWN,
-    UP,
-    MOVE,
-    SCROLL,
-  }
-
-  enum class KeyKind {
-    DOWN,
-    UP,
-  }
-
   // END OF TYPES
 
-  fun renderFrame(nanos: kotlin.ULong)
-  fun onPointerEvent(kind: bindings.Renderer.PointerKind, x: kotlin.Float, y: kotlin.Float)
-  fun onKeyEvent(kind: bindings.Renderer.KeyKind, keyCode: kotlin.UInt)
-  fun onResize(w: kotlin.UInt, h: kotlin.UInt)
-  /**
-  Fired by the host when a previously scheduled callback comes due.
-  callback-id is whatever the guest passed to schedule-delayed.
-  */
-  fun onScheduledCallback(callbackId: kotlin.UInt)
-  /**
-  Enriched pointer event — same semantics as on-pointer-event plus
-  multi-touch pointer-id (0..N) and normalized pressure (0.0..1.0,
-  0.0 if the device doesn't report it). Hosts emit both v1 and v2
-  for every touch; guests can ignore whichever they don't need.
-  */
-  fun onPointerEventV2(pointerId: kotlin.UInt, kind: bindings.Renderer.PointerKind, x: kotlin.Float, y: kotlin.Float, pressure: kotlin.Float)
-  /**
-  Enriched key event — same semantics as on-key-event plus the
-  resolved UTF-32 code-point (for printable chars; 0 if not
-  printable) and a `key-id` whose numeric value matches Compose's
-  webMain `Key(keyCode: Long)` constants (8=Backspace, 9=Tab,
-  13=Enter, 37=ArrowLeft, 38=ArrowUp, 39=ArrowRight, 40=ArrowDown,
-  46=Delete, 27=Escape, 0=Unknown). For printable text the guest
-  should use `code-point` to build a Compose `KeyEvent`; for
-  special keys (backspace, arrows, enter) the guest uses `key-id`.
-  */
-  fun onKeyEventV2(kind: bindings.Renderer.KeyKind, codePoint: kotlin.UInt, keyId: kotlin.UInt)
-  /**
-  Lifecycle state transition. Fired by the host on every observed
-  transition (initial Resumed when the activity comes up, Stopped
-  when it's backgrounded, Destroyed on exit).
-  */
-  fun onLifecycleChanged(state: kotlin.UInt)
+  fun onFrame(nanos: kotlin.ULong)
+  fun onResize(width: kotlin.UInt, height: kotlin.UInt)
 
 }
 
@@ -2359,7 +2364,8 @@ import bindings.runtime.*
     */
     var twist: kotlin.Float,
     /**
-    Scroll deltas (kind == scroll only; surface units).
+    Scroll deltas (kind == scroll only; surface units, W3C
+    wheel sign: positive = content moves down/right).
     */
     var scrollDx: kotlin.Float,
     var scrollDy: kotlin.Float,

@@ -47,9 +47,9 @@ import androidx.compose.ui.scene.CanvasLayersComposeScene
 import androidx.compose.ui.scene.ComposeScene
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntSize
-import org.jetbrains.skiko.wasi.wit.Keyboard as WitKeyboard
-import org.jetbrains.skiko.wasi.wit.Display as WitDisplay
-import org.jetbrains.skiko.wasi.wit.Window as WitWindow
+import wandr.platform.KeyboardSend as WitKeyboard
+import wandr.platform.Display as WitDisplay
+import org.jetbrains.skiko.wasi.shell.Metrics as WitWindow
 
 val wasiFrameDispatcher: WasiFrameDispatcher = WasiFrameDispatcher()
 

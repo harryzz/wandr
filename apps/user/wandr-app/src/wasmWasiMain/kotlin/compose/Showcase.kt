@@ -28,7 +28,6 @@ import org.jetbrains.skia.paragraph.Paragraph
 import org.jetbrains.skia.paragraph.ParagraphBuilder
 import org.jetbrains.skia.paragraph.ParagraphStyle
 import org.jetbrains.skia.paragraph.TextStyle as ParagraphTextStyle
-import org.jetbrains.skiko.wasi.wit.Canvas as WitCanvas
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
@@ -366,9 +365,8 @@ private fun SectionTask10(s: Float) {
                 "mono", sp(148f), baselineY)
         }.build()
     }
-    DisposableEffect(multiBlob) {
-        onDispose { WitCanvas.Import.dropTextBlob(multiBlob._hostId) }
-    }
+    // Phase B: TextBlob is a pure guest value (runs drawn as host
+    // paragraphs per draw) — nothing host-side to dispose.
 
     RawDraw(width = sp(330f), height = sp(34f)) { canvas ->
         canvas.drawString("task 10: TextBlobBuilder multi-run", 0f, sp(8f), labelFont, labelPaint)

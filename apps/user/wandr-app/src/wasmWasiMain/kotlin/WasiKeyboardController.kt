@@ -53,7 +53,7 @@ class WasiKeyboardController : SoftwareKeyboardController {
         // currently-active IME app's per-host control socket; the
         // IME calls into our exported `wandr:ime/ime.on-editor-attached`.
         try {
-            org.jetbrains.skiko.wasi.wit.Ime.Import.notifyEditorAttached(
+            org.jetbrains.skiko.wasi.shell.Ime.Import.notifyEditorAttached(
                 inputType = keyboardTypeToWire(pendingKeyboardType),
                 hint = "",
                 initialText = "",
@@ -70,7 +70,7 @@ class WasiKeyboardController : SoftwareKeyboardController {
     override fun hide() {
         isVisible.value = false
         try {
-            org.jetbrains.skiko.wasi.wit.Ime.Import.notifyEditorDetached()
+            org.jetbrains.skiko.wasi.shell.Ime.Import.notifyEditorDetached()
         } catch (t: Throwable) {
             // Same defensive pattern as show().
         }

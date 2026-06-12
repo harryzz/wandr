@@ -18,7 +18,6 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
-import org.jetbrains.skiko.wasi.wit.Canvas as WitCanvas
 
 /**
  * compose-foundation smoke test. Compiles iff compose-foundation-wasi is
@@ -47,7 +46,7 @@ fun composeFoundationSmokeTest() {
     val singleLine = TextFieldLineLimits.SingleLine
     val multiLine = TextFieldLineLimits.MultiLine(minHeightInLines = 1, maxHeightInLines = 4)
 
-    WitCanvas.Import.logMessage(
+    logMessage(
         "compose-foundation smoke: " +
         "orientations=${orientations}, mutate=${mutatePrio}, pointerType=${pe}, " +
         "press=${pressInteraction}, hover=${hoverInteraction::class.simpleName}, " +

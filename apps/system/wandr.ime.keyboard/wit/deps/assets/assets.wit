@@ -1,0 +1,11 @@
+// wandr:assets — wandrpkg asset reads factored out of my:skiko-gfx.
+package wandr:assets@0.1.0;
+
+interface assets {
+    /// Read the entire file. Returns `none` for any failure mode (see
+    /// interface doc). Suited to small-to-medium reads (~MB range); a
+    /// streaming variant is a follow-up if/when bigger payloads matter.
+    read: func(name: string) -> option<list<u8>>;
+}
+
+world assets-imports { import assets; }

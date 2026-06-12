@@ -1,35 +1,51 @@
 package wandr:app@0.1.0;
 
-/// wandr-app's world — adds the cross-app `wandr:markdown/renderer`
-/// import on top of the canonical skiko-ui interfaces. Including
-/// `skiko-ui` brings the full Compose render contract; we just add
-/// the markdown import on top.
+/// wandr-app's world (Phase B, task 105) — fully new-style: drawing via
+/// wasi:canvas@0.0.2, the UI-shell contract via wandr:ui-shell, app/OS
+/// services via wandr:{device,chrome,assets} + wasi:{logging,audio}, and
+/// the push-model exports (wasi:input-handlers@0.0.2 + shell-events/
+/// frame-pacing). No my:skiko-gfx remains.
 world wandr-app {
-    include my:skiko-gfx/skiko-ui@0.1.0;
+    // Drawing (host-rendered 2D canvas + host-shaped text + scene layers).
+    import wasi:canvas/types@0.0.2;
+    import wasi:canvas/draw@0.0.2;
+    import wasi:canvas/layout@0.0.2;
+    import wasi:canvas/scene@0.0.2;
+    import wasi:canvas/embedding@0.0.2;
+    // The universal UI-shell contract.
+    import wandr:ui-shell/metrics@0.1.0;
+    import wandr:ui-shell/theme@0.1.0;
+    import wandr:ui-shell/locale@0.1.0;
+    import wandr:ui-shell/clipboard@0.1.0;
+    import wandr:ui-shell/ime@0.1.0;
+    import wandr:ui-shell/lifecycle@0.1.0;
+    import wandr:ui-shell/scheduler@0.1.0;
+    import wandr:ui-shell/text-segmentation@0.1.0;
+    // App/OS services at their post-consolidation homes.
+    import wandr:device/haptics@0.1.0;
+    import wandr:device/power@0.1.0;
+    import wandr:device/thermal@0.1.0;
+    import wandr:device/sensors@0.1.0;
+    import wandr:device/lights@0.1.0;
+    import wandr:chrome/launcher@0.1.0;
+    import wandr:chrome/status@0.1.0;
+    import wandr:chrome/display@0.1.0;
+    import wandr:chrome/pointer-icon@0.1.0;
+    import wandr:assets/assets@0.1.0;
+    import wasi:logging/logging@0.1.0-draft;
+    import wasi:audio/pcm@0.0.1;
+    // Cross-app deps (unchanged).
     import wandr:markdown/renderer@0.1.0;
     import wandr:emoji/picker@0.1.0;
     import wandr:fonts/loader@0.1.0;
-    // Task 102 stage 2 — skiko's geometry/transform/clip/shader path runs on
-    // the wasi:canvas draft when WasiCanvasBackend.enabled (Main.kt flips it);
-    // text/images/pictures/drawables stay on the my:skiko-gfx canvas. Both
-    // interface sets are always-linked host-side over the same SkiaRenderer.
-    import wasi:canvas/types@0.0.1;
-    import wasi:canvas/draw@0.0.1;
-    import wasi:canvas/layout@0.0.1;
-    import wasi:canvas/embedding@0.0.1;
-    // Task 64 — optional on-demand-render hint. Opt-in export (not part of
-    // skiko-ui) so the host can gate render-frame; see frame-pacing in the
-    // skiko-gfx deps + RendererExports.kt's @WasmExport.
-    export my:skiko-gfx/frame-pacing@0.1.0;
-    // wasi:input-handlers migration — the host routes input/frame EXCLUSIVELY
-    // to these once bound (legacy renderer verbs stay exported for
-    // lifecycle/scheduled-callback + as the contract baseline). The key
-    // handler receives records-with-strings: safe per the lift-before-alloc
-    // contract (repros/kt-export-record-spike, 100k/100k JIT+AOT).
-    export wasi:input-handlers/pointer-handler@0.0.1;
-    // key-handler requires the wandr stdlib fix (invokeOnExportedFunctionExit
-    // skipped while canonical-ABI realloc memory is pending) — see
-    // InputHandlerExports.kt.
-    export wasi:input-handlers/key-handler@0.0.1;
-    export wasi:input-handlers/frame-handler@0.0.1;
+    // Push-model exports — the host routes frames/input EXCLUSIVELY here;
+    // lifecycle + scheduler callbacks via shell-events; on-demand-render
+    // pacing via frame-pacing. The key handler receives
+    // records-with-strings: safe per the lift-before-alloc contract
+    // (repros/kt-export-record-spike, 100k/100k JIT+AOT).
+    export wandr:ui-shell/shell-events@0.1.0;
+    export wandr:ui-shell/frame-pacing@0.1.0;
+    export wasi:input-handlers/pointer-handler@0.0.2;
+    export wasi:input-handlers/key-handler@0.0.2;
+    export wasi:input-handlers/frame-handler@0.0.2;
 }

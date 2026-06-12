@@ -1,0 +1,91 @@
+// wasi:audio — DRAFT (wandr, 2026-06-12). NOT WIRED.
+//
+// PCM device I/O for WebAssembly components: the AUDIO slot of the WASI
+// Charter ("APIs for graphics, audio, input devices"), which the
+// proposals table leaves empty (verified 2026-06-12 — nothing at any
+// phase; only discussion issue WebAssembly/WASI#307). Derived from
+// wandr's shipped, live-call-verified host-audio contract
+// (my:skiko-gfx/audio: playback ring + mic capture on real hardware),
+// de-warted per the wasi-canvas REDESIGN rules: resources instead of
+// sentinel-0 u32 handles, results instead of bools, R1 union shapes.
+//
+// THE RED LINE (the canvas-windowing analog): audio FOCUS, VOLUME and
+// ROUTE POLICY are the EMBEDDER's contract, not this package — every
+// platform owns them (wandr: the arbiter's focus stack + routing core).
+// The guest expresses only routing INTENT (`class`), per the
+// decides/applies split the shipped contract proved: guest intends,
+// embedder decides, host applies.
+//
+// Named lanes (decided, not hidden): `playback.position` (frames played
+// — the A/V-sync master clock a wandr:media composition needs) = R2
+// additive method when that consumer ships; >2-channel layouts +
+// compressed-audio passthrough = R3 version events; device enumeration
+// = deliberately ABSENT (no ambient authority — the embedder routes).
+package wasi:audio@0.0.1;
+
+interface pcm {
+    /// Sample formats. R1: enums are a BREAKING class, so this ships at
+    /// the known union (every audio API carries both; hosts convert).
+    enum format { pcm-f32, pcm-i16 }
+
+    enum channel-layout { mono, stereo }
+
+    /// Routing INTENT (not policy): `media` → the embedder's default
+    /// output; `voice-call` → the embedder's current call route;
+    /// `notification` → the alert output. Ignored for capture.
+    enum stream-class { media, voice-call, notification }
+
+    enum audio-error {
+        unavailable,
+        permission-denied,
+        config-rejected,
+    }
+
+    /// `sample-rate`: the device-native rate is always accepted
+    /// (48000 universally; hosts may resample others).
+    record stream-config {
+        sample-rate:    u32,
+        channel-layout: channel-layout,
+        format:         format,
+        class:          stream-class,
+    }
+
+    resource playback {
+        open: static func(config: stream-config)
+              -> result<playback, audio-error>;
+
+        /// Append interleaved samples (f32 wire type regardless of
+        /// `format`; pcm-i16 streams convert host-side). Returns FRAMES
+        /// accepted — may be fewer than offered when the ring is full;
+        /// the guest retries the remainder (the proven backpressure
+        /// model).
+        write: func(samples: list<f32>) -> u32;
+
+        /// Frames written but not yet consumed by the device; 0 = a
+        /// near-underrun cue (write more per call).
+        buffered-frames: func() -> u32;
+
+        start: func() -> result<_, audio-error>;
+        /// Stops flow without dropping buffered frames; start resumes.
+        pause: func() -> result<_, audio-error>;
+    }
+
+    resource capture {
+        open: static func(config: stream-config)
+              -> result<capture, audio-error>;
+
+        /// Drain up to `max-frames` × channels interleaved samples;
+        /// fewer (or empty) if the device hasn't produced them yet.
+        read: func(max-frames: u32) -> list<f32>;
+
+        /// Frames ready to read.
+        available-frames: func() -> u32;
+
+        start: func() -> result<_, audio-error>;
+        pause: func() -> result<_, audio-error>;
+    }
+}
+
+world audio-guest {
+    import pcm;
+}

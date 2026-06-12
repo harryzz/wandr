@@ -28,7 +28,6 @@ import org.jetbrains.skia.paragraph.Paragraph
 import org.jetbrains.skia.paragraph.ParagraphBuilder
 import org.jetbrains.skia.paragraph.ParagraphStyle
 import org.jetbrains.skia.paragraph.TextStyle as ParagraphTextStyle
-import org.jetbrains.skiko.wasi.wit.Canvas as WitCanvas
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin

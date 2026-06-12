@@ -13,7 +13,7 @@ package testapp
 
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
-import org.jetbrains.skiko.wasi.wit.ImeInputType
+import testapp.exports.ImeInputType
 
 object ImeEventsImpl {
     /// Compose-tracked input type. ImeKeyboard reads this inside

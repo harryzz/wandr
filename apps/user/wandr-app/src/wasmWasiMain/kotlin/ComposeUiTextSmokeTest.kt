@@ -16,7 +16,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.sp
-import org.jetbrains.skiko.wasi.wit.Canvas as WitCanvas
 
 /**
  * Smoke test for compose-ui-text-wasi. Compiles iff the publication is usable;
@@ -69,7 +68,7 @@ fun composeUiTextSmokeTest() {
     val range2 = TextRange(7, 12)
     val rangeCollapsed = TextRange(3)
 
-    WitCanvas.Import.logMessage(
+    logMessage(
         "compose-ui-text smoke: " +
         "Locale.current=${current.toLanguageTag()} (lang=${current.language} region=${current.region}), " +
         "custom=${custom.toLanguageTag()}, list.size=${list.size}, " +

@@ -1,0 +1,146 @@
+// wandr:device — device services factored out of my:skiko-gfx (the
+// consolidation event, docs/ui-shell-consolidation.md). Interfaces
+// verbatim from the shipped contract; host impls re-bound, not rewritten.
+package wandr:device@0.1.0;
+
+interface haptics {
+    enum feedback { tap, long-press, virtual-key, click, double-click }
+    /// Trigger a predefined feedback by semantic kind.
+    perform:    func(feedback: feedback) -> bool;
+    /// Vibrate for an arbitrary duration in milliseconds (1..1000).
+    vibrate-ms: func(duration-ms: u32)   -> bool;
+}
+
+interface power {
+    enum hint {
+        interaction,             // user is actively touching/scrolling
+        display-update-imminent, // frame about to swap
+    }
+    enum mode {
+        low-power,               // battery saver
+        sustained-performance,   // anti-throttle for steady workloads
+        fixed-performance,       // pin clocks (benchmark / test only)
+        expensive-rendering,     // sustained heavy GPU
+        game,                    // user is playing a game
+        interactive,             // device awake + ready for input
+    }
+    /// Send a one-shot boost hint. `duration-ms` is advisory; 0 = HAL default.
+    /// (Named `boost` rather than `hint` to avoid a name collision with the
+    /// `hint` type — WIT requires distinct names for types and functions.)
+    boost:             func(kind: hint, duration-ms: u32);
+    /// Toggle a sustained mode on/off. Pairs of enable/disable expected.
+    set-mode:          func(kind: mode, enabled: bool);
+    /// Query whether the device supports a hint at all. False means the
+    /// HAL will silently no-op on boost(kind, ...).
+    is-hint-supported: func(kind: hint) -> bool;
+    /// Same for modes.
+    is-mode-supported: func(kind: mode) -> bool;
+}
+
+interface thermal {
+    enum kind {
+        cpu, gpu, battery, skin, modem, npu, display, soc,
+        wifi, camera, speaker, ambient,
+    }
+    enum throttle {
+        %none,      // 0 = normal operation
+        light,
+        moderate,
+        severe,
+        critical,
+        emergency,
+        shutdown,
+    }
+    record temperature {
+        kind:     kind,
+        celsius:  f32,
+        throttle: throttle,
+    }
+    /// Every temperature sensor on the device.
+    list-temperatures: func() -> list<temperature>;
+    /// Sensors of the given kind only. Empty list if device has no such sensor.
+    list-temperatures-of: func(kind: kind) -> list<temperature>;
+    /// Most severe throttle status across all sensors — what apps care
+    /// about for "should I degrade my UI?" decisions.
+    overall-throttle:  func() -> throttle;
+}
+
+interface sensors {
+    /// Sensor types we know how to map. `unknown` lets the host expose
+    /// devices we don't recognize without crashing; guest can still
+    /// enable/poll them but should not interpret the float values.
+    enum kind {
+        unknown, accelerometer, magnetic-field, gyroscope, light,
+        pressure, proximity, gravity, linear-acceleration,
+        rotation-vector, relative-humidity, ambient-temperature,
+        game-rotation-vector,
+    }
+    record sensor-info {
+        /// Opaque ID for enable/disable/poll. Stable within one
+        /// sensorservice lifetime; reset on reboot.
+        handle:       u32,
+        kind:         kind,
+        max-range:    f32,  // sensor-specific units
+        resolution:   f32,
+        min-delay-ms: u32,  // shortest supported period
+        power-ma:     f32,  // estimated draw when active
+    }
+    /// One reading. `timestamp-ns = 0` means "no sample available since
+    /// last poll" — sentinel to avoid the option<record> ABI hassle.
+    /// For vec3 sensors (accel/gyro/mag/gravity/linear-accel) x/y/z are
+    /// the X/Y/Z components in SI units. For scalar sensors (light,
+    /// proximity, pressure, humidity, ambient-temperature) only x is
+    /// meaningful (y=z=0). Rotation-vector / game-rotation-vector pack
+    /// the unit quaternion's i/j/k into x/y/z; w is dropped (recoverable
+    /// from sqrt(1 - x²-y²-z²) when needed).
+    record sensor-sample {
+        timestamp-ns: u64,
+        x: f32,
+        y: f32,
+        z: f32,
+    }
+    /// Enumerate every sensor the device exposes. Cheap; cache once on
+    /// startup. Unknown sensor types still appear with kind=unknown.
+    list-sensors: func() -> list<sensor-info>;
+    /// Start streaming at rate-hz. Returns false on unknown handle, rate
+    /// below the sensor's min-delay, or HAL refusal. Calling enable a
+    /// second time on the same handle changes the rate.
+    enable:       func(handle: u32, rate-hz: u32) -> bool;
+    /// Stop streaming. Safe on a not-enabled handle (no-op).
+    disable:      func(handle: u32);
+    /// Latest sample for `handle`. Returns sentinel (timestamp-ns=0) if
+    /// no event has arrived since the last poll. Each non-sentinel poll
+    /// consumes the stored sample.
+    poll-latest:  func(handle: u32) -> sensor-sample;
+}
+
+interface lights {
+    enum light-type {
+        backlight, keyboard, buttons, battery, notifications,
+        attention, bluetooth, wifi, microphone,
+    }
+    enum flash-mode { %none, timed, hardware }
+    record light-state {
+        /// Packed 0xAARRGGBB. Matches AIDL HwLightState.color.
+        color-argb:    u32,
+        /// Milliseconds the light is on per flash cycle (ignored if mode=none).
+        flash-on-ms:   u32,
+        /// Milliseconds the light is off per flash cycle (ignored if mode=none).
+        flash-off-ms:  u32,
+        flash-mode:    flash-mode,
+    }
+    /// Set every light of this kind. Returns true if at least one logical
+    /// light of `kind` was updated; false if device has no such light or
+    /// the binder call failed.
+    set:      func(kind: light-type, state: light-state) -> bool;
+    /// True if the device exposes any light of this kind.
+    supports: func(kind: light-type) -> bool;
+}
+
+world device-imports {
+    import haptics;
+    import power;
+    import thermal;
+    import sensors;
+    import lights;
+}

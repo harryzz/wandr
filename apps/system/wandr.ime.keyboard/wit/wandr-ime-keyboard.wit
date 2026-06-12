@@ -1,37 +1,56 @@
 package wandr:ime-keyboard@0.1.0;
 
-/// wandr.ime.keyboard's world. Includes the canonical skiko-ui imports
-/// (Canvas / Paragraph / Keyboard.sendKeyEvent / ...) plus the
-/// IME-events export (`wandr:ime/ime` — `on-editor-attached` /
-/// `on-editor-detached`) the host calls when focus changes.
-///
-/// `include wandr:ime/ime-events` (stripped sibling of `ime-client-world`
-/// that omits the input-connection import) — see wit/ime.wit. We don't
-/// use wandr:ime/input-connection; key events go through the existing
-/// my:skiko-gfx/keyboard outbound path (task 47 step 3b).
+/// wandr.ime.keyboard's world (Phase B, task 105) — fully new-style:
+/// drawing via wasi:canvas@0.0.2, the UI-shell contract via
+/// wandr:ui-shell, app/OS services via wandr:{device,chrome,assets} +
+/// wasi:{logging,audio}, the IME-only wandr:ime/keyboard-send outbound
+/// channel, and the push-model exports. The IME-events export
+/// (`wandr:ime/ime` — on-editor-attached/-detached) is unchanged.
 world ime-keyboard {
-    include my:skiko-gfx/skiko-ui@0.1.0;
+    // Drawing.
+    import wasi:canvas/types@0.0.2;
+    import wasi:canvas/draw@0.0.2;
+    import wasi:canvas/layout@0.0.2;
+    import wasi:canvas/scene@0.0.2;
+    import wasi:canvas/embedding@0.0.2;
+    // The universal UI-shell contract.
+    import wandr:ui-shell/metrics@0.1.0;
+    import wandr:ui-shell/theme@0.1.0;
+    import wandr:ui-shell/locale@0.1.0;
+    import wandr:ui-shell/clipboard@0.1.0;
+    import wandr:ui-shell/ime@0.1.0;
+    import wandr:ui-shell/lifecycle@0.1.0;
+    import wandr:ui-shell/scheduler@0.1.0;
+    import wandr:ui-shell/text-segmentation@0.1.0;
+    // App/OS services at their post-consolidation homes.
+    import wandr:device/haptics@0.1.0;
+    import wandr:device/power@0.1.0;
+    import wandr:device/thermal@0.1.0;
+    import wandr:device/sensors@0.1.0;
+    import wandr:device/lights@0.1.0;
+    import wandr:chrome/launcher@0.1.0;
+    import wandr:chrome/status@0.1.0;
+    import wandr:chrome/display@0.1.0;
+    import wandr:chrome/pointer-icon@0.1.0;
+    import wandr:assets/assets@0.1.0;
+    import wasi:logging/logging@0.1.0-draft;
+    import wasi:audio/pcm@0.0.1;
+    // The IME's synthetic-key channel toward the focused editor + the
+    // overlay-height request.
+    import wandr:ime/keyboard-send@0.1.0;
+    // IME-events export — the host calls these when editor focus changes.
     include wandr:ime/ime-events@0.1.0;
-    // Task 102 stage 2 — the skiko klib now references the wasi:canvas
-    // bindings (reachable behind WasiCanvasBackend.enabled), so the component
-    // declares the imports even while this app keeps the flag off (legacy
-    // canvas path, bit-for-bit).
-    import wasi:canvas/types@0.0.1;
-    import wasi:canvas/draw@0.0.1;
-    import wasi:canvas/layout@0.0.1;
-    import wasi:canvas/embedding@0.0.1;
     // Step 5 — declared language plugins. One import per plugin
     // (each plugin uses its own WIT package because two deps cannot
     // share the same `linker.instance(name)` entry); adding a new
     // language requires an entry here + an @WasmImport in LangAdapter.
     import wandr:keyboard-lang-bg/lang@0.1.0;
     import wandr:keyboard-lang-fr/lang@0.1.0;
-    // Task 64 — optional on-demand-render hint; a hidden/idle keyboard returns
-    // IDLE so the host stops rendering it 60 fps. See RendererExports.kt.
-    export my:skiko-gfx/frame-pacing@0.1.0;
-    // wasi:input-handlers migration — exclusive push-model input routing
-    // (see wandr-app's world note + repros/kt-export-record-spike).
-    export wasi:input-handlers/pointer-handler@0.0.1;
-    export wasi:input-handlers/key-handler@0.0.1;
-    export wasi:input-handlers/frame-handler@0.0.1;
+    // Push-model exports — frames/input + lifecycle/scheduler callbacks +
+    // on-demand-render pacing (a hidden/idle keyboard returns IDLE).
+    export wandr:ui-shell/shell-events@0.1.0;
+    export wandr:ui-shell/frame-pacing@0.1.0;
+    export wasi:input-handlers/pointer-handler@0.0.2;
+    export wasi:input-handlers/key-handler@0.0.2;
+    export wasi:input-handlers/frame-handler@0.0.2;
 }

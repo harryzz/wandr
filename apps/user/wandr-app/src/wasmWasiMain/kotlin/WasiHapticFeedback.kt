@@ -4,7 +4,7 @@ package testapp
 
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import org.jetbrains.skiko.wasi.wit.Haptics as WitHaptics
+import wandr.platform.Haptics as WitHaptics
 
 /**
  * Bridge from Compose's [HapticFeedback] interface to the host's WIT

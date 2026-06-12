@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.union
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
-import org.jetbrains.skiko.wasi.wit.Canvas as WitCanvas
 
 /**
  * Foundation-layout smoke test. Compiles iff compose-foundation-layout-wasi is
@@ -37,7 +36,7 @@ fun composeFoundationLayoutSmokeTest() {
     val insAdd     = ins1.add(ins2)
     val insExclude = ins1.exclude(ins2)
 
-    WitCanvas.Import.logMessage(
+    logMessage(
         "foundation-layout smoke: " +
         "arrangements=[${arrCenter}, ${arrEnd}, ${arrEvenly}], align=${alignCenter}, " +
         "pad=${pad}, padAll=${padAll}, padStart-ltr=${padLtr}, padStart-rtl=${padRtl}, padEnd-ltr=${padEnd}, " +

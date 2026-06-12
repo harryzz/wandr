@@ -45,7 +45,6 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import org.jetbrains.skiko.wasi.wit.Canvas as WitCanvas
 import testapp.assets.readAsset
 import testapp.markdown.Block
 import testapp.markdown.Document
@@ -99,17 +98,17 @@ internal fun MarkdownCard() {
 private fun renderOnce(): Document? = try {
     val assetBytes = readAsset("demo.md")
     val source = if (assetBytes != null) {
-        WitCanvas.Import.logMessage("markdown-card: read assets/demo.md (${assetBytes.size} bytes)")
+        logMessage("markdown-card: read assets/demo.md (${assetBytes.size} bytes)")
         assetBytes.decodeToString()
     } else {
-        WitCanvas.Import.logMessage("markdown-card: assets/demo.md missing — using fallback")
+        logMessage("markdown-card: assets/demo.md missing — using fallback")
         FALLBACK_SOURCE
     }
     val d = renderDocument(source)
-    WitCanvas.Import.logMessage("markdown-card: render() → ${d.blocks.size} blocks (full tree lifted)")
+    logMessage("markdown-card: render() → ${d.blocks.size} blocks (full tree lifted)")
     d
 } catch (t: Throwable) {
-    WitCanvas.Import.logMessage("markdown-card: render() FAILED: ${t.message ?: t::class.simpleName}")
+    logMessage("markdown-card: render() FAILED: ${t.message ?: t::class.simpleName}")
     null
 }
 

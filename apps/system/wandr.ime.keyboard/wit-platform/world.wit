@@ -1,0 +1,25 @@
+// Generation-only world for wandr.ime.keyboard's platform bindings
+// (Phase B, task 105) — same recipe as wandr-app's wit-platform plus the
+// IME-app-only wandr:ime/keyboard-send slice (synthetic keys toward the
+// focused editor + the overlay-height request). Regen:
+//   wit-bindgen kotlin --kotlin-package-name wandr.platform \
+//     -w app-platform wit-platform --out-dir src/wasmWasiMain/kotlin/generated/platform/
+//   then DELETE the duplicate cabi_realloc export from the generated
+//   runtime/ComponentSupport.kt.
+package wandr:ime-platform;
+
+world app-platform {
+    import wandr:device/haptics@0.1.0;
+    import wandr:device/power@0.1.0;
+    import wandr:device/thermal@0.1.0;
+    import wandr:device/sensors@0.1.0;
+    import wandr:device/lights@0.1.0;
+    import wandr:chrome/launcher@0.1.0;
+    import wandr:chrome/status@0.1.0;
+    import wandr:chrome/display@0.1.0;
+    import wandr:chrome/pointer-icon@0.1.0;
+    import wandr:assets/assets@0.1.0;
+    import wandr:ime/keyboard-send@0.1.0;
+    import wasi:logging/logging@0.1.0-draft;
+    import wasi:audio/pcm@0.0.1;
+}

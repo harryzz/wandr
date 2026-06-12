@@ -23,26 +23,20 @@ import org.jetbrains.skiko.currentSkiaLayer
 import org.jetbrains.skiko.wasi.WasiInput
 import org.jetbrains.skiko.wasi.WasiLifecycle
 import org.jetbrains.skiko.wasi.WasiScheduler
-import org.jetbrains.skiko.wasi.wit.Canvas as WitCanvas
-import org.jetbrains.skiko.wasi.wit.Clipboard as WitClipboard
-import org.jetbrains.skiko.wasi.wit.Haptics as WitHaptics
-import org.jetbrains.skiko.wasi.wit.Power as WitPower
-import org.jetbrains.skiko.wasi.wit.Sensors as WitSensors
-import org.jetbrains.skiko.wasi.wit.Thermal as WitThermal
-import org.jetbrains.skiko.wasi.wit.Locale as WitLocale
-import org.jetbrains.skiko.wasi.wit.PointerIcon as WitPointerIcon
-import org.jetbrains.skiko.wasi.wit.TextSegmentation as WitTextSeg
-import org.jetbrains.skiko.wasi.wit.Window as WitWindow
+import org.jetbrains.skiko.wasi.shell.Clipboard as WitClipboard
+import org.jetbrains.skiko.wasi.shell.Locale as WitLocale
+import org.jetbrains.skiko.wasi.shell.Metrics as WitWindow
+import org.jetbrains.skiko.wasi.shell.TextSegmentation as WitTextSeg
+import wandr.platform.Display as WitDisplay
+import wandr.platform.Haptics as WitHaptics
+import wandr.platform.PointerIcon as WitPointerIcon
+import wandr.platform.Power as WitPower
+import wandr.platform.Sensors as WitSensors
+import wandr.platform.Thermal as WitThermal
 import testapp.compose.App
 import testapp.compose.WasiComposeScene
 
 fun main() {
-    // Task 102 stage 2: route skiko's geometry/transform/clip/shader draws
-    // through the wasi:canvas draft (text/images/pictures/drawables stay on
-    // my:skiko-gfx). Flip to false to A/B against the legacy canvas path
-    // without rebuilding skiko.
-    org.jetbrains.skiko.wasi.WasiCanvasBackend.enabled = true
-
     composeUiBaseSmokeTest()
     composeUiGraphicsSmokeTest()
     composeUiTextSmokeTest()
@@ -56,18 +50,18 @@ fun main() {
     val density = WitWindow.Import.getDensity()
     val fontScale = WitWindow.Import.getFontScale()
     val dpi = WitWindow.Import.getDpi()
-    WitCanvas.Import.logMessage(
+    logMessage(
         "android-window smoke: density=${density} px/dp, fontScale=${fontScale}, dpi=${dpi}"
     )
 
     val h1 = WasiScheduler.schedule(800u) {
-        WitCanvas.Import.logMessage("android-scheduler smoke: fired @800ms ✓")
+        logMessage("android-scheduler smoke: fired @800ms ✓")
     }
     val h2 = WasiScheduler.schedule(200u) {
-        WitCanvas.Import.logMessage("android-scheduler smoke: BUG — cancelled task still fired")
+        logMessage("android-scheduler smoke: BUG — cancelled task still fired")
     }
     WasiScheduler.cancel(h2)
-    WitCanvas.Import.logMessage(
+    logMessage(
         "android-scheduler smoke: h1=${h1} scheduled @800ms, h2=${h2} cancelled @200ms"
     )
 
@@ -88,31 +82,23 @@ fun main() {
     val sentenceSecond = WitTextSeg.Import.nextBoundary(sample, WitTextSeg.BoundaryKind.SENTENCE, sentenceFirst + 1u)
     val graphemeAt3 = WitTextSeg.Import.nextBoundary(sample, WitTextSeg.BoundaryKind.GRAPHEME, 3u)
     val prevWordBefore16 = WitTextSeg.Import.prevBoundary(sample, WitTextSeg.BoundaryKind.WORD, 16u)
-    WitCanvas.Import.logMessage(
+    logMessage(
         "text-segmentation smoke: word-bounds=${wordBoundaries}, " +
         "sentences-end-at=[${sentenceFirst}, ${sentenceSecond}], " +
         "grapheme-≥3=${graphemeAt3}, prev-word-≤16=${prevWordBefore16}, " +
         "total-utf8-bytes=${sampleLen}"
     )
 
-    // android-input-v2 smoke: log first 5 enriched events that arrive.
+    // input-002 smoke: the first 5 union events are logged from the scene
+    // dispatch handler registered below (single handler slot).
     var v2Count = 0
-    WasiInput.setPointerHandler { pointerId, kind, x, y, pressure ->
-        if (v2Count < 5) {
-            v2Count++
-            WitCanvas.Import.logMessage(
-                "android-input-v2 smoke #${v2Count}: id=${pointerId} kind=${kind} " +
-                "@(${x.toInt()},${y.toInt()}) pressure=${pressure}"
-            )
-        }
-    }
 
     // android-lifecycle smoke: log current state + register an observer.
-    WitCanvas.Import.logMessage(
+    logMessage(
         "android-lifecycle smoke: currentState=${WasiLifecycle.currentState()} at boot"
     )
     WasiLifecycle.addObserver { state ->
-        WitCanvas.Import.logMessage("android-lifecycle smoke: → ${state}")
+        logMessage("android-lifecycle smoke: → ${state}")
     }
 
     // android-power + android-thermal smoke: probe IPower + IThermal HALs.
@@ -124,7 +110,7 @@ fun main() {
     WitPower.Import.boost(WitPower.Hint.INTERACTION, 100u)
     val overall    = WitThermal.Import.overallThrottle()
     val allTemps   = WitThermal.Import.listTemperatures()
-    WitCanvas.Import.logMessage(
+    logMessage(
         "android-power-thermal smoke: hint(INTERACTION) supported=${intHintSup}, boost sent, " +
         "overallThrottle=${overall}, sensors=${allTemps.size}" +
         (if (allTemps.isNotEmpty()) " first=${allTemps.first().kind}/${allTemps.first().celsius}°C" else "")
@@ -137,14 +123,14 @@ fun main() {
     // enableSensor() to deliver the first event.
     val sensors = WitSensors.Import.listSensors()
     val accelInfo = sensors.firstOrNull { it.kind == WitSensors.Kind.ACCELEROMETER }
-    WitCanvas.Import.logMessage(
+    logMessage(
         "android-sensors smoke: ${sensors.size} sensors; accel handle=${accelInfo?.handle ?: 0u}"
     )
     if (accelInfo != null) {
         WitSensors.Import.enable(accelInfo.handle, 50u)
         WasiScheduler.schedule(200u) {
             val s = WitSensors.Import.pollLatest(accelInfo.handle)
-            WitCanvas.Import.logMessage(
+            logMessage(
                 "android-sensors smoke: accel ts=${s.timestampNs} x=${s.x} y=${s.y} z=${s.z} (m/s²)"
             )
             WitSensors.Import.disable(accelInfo.handle)
@@ -158,7 +144,7 @@ fun main() {
     // denies the binder call → returns false (no crash).
     val tapOk      = WitHaptics.Import.perform(WitHaptics.Feedback.TAP)
     val vibrateOk  = WitHaptics.Import.vibrateMs(50u)
-    WitCanvas.Import.logMessage(
+    logMessage(
         "android-haptics smoke: perform(TAP)=${tapOk}, vibrateMs(50)=${vibrateOk}"
     )
 
@@ -170,9 +156,9 @@ fun main() {
 
     // android-locale smoke: read user's locale, time format, direction.
     val loc       = WitLocale.Import.primaryLocale()
-    val is24      = WitLocale.Import.is24HourFormat()
+    val is24      = WitLocale.Import.isTwentyFourHourFormat()
     val direction = WitLocale.Import.getLayoutDirection()
-    WitCanvas.Import.logMessage(
+    logMessage(
         "android-locale smoke: primary=${loc}, 24h=${is24}, direction=${direction}"
     )
 
@@ -183,7 +169,7 @@ fun main() {
     val hasMid = WitClipboard.Import.hasText()
     WitClipboard.Import.clear()
     val after  = WitClipboard.Import.hasText()
-    WitCanvas.Import.logMessage(
+    logMessage(
         "android-clipboard smoke: before=hasText=${before}, " +
         "after-set: text=\"${mid}\" hasText=${hasMid}, " +
         "after-clear: hasText=${after}"
@@ -193,7 +179,7 @@ fun main() {
     WitPointerIcon.Import.set(WitPointerIcon.Kind.TEXT)
     WitPointerIcon.Import.set(WitPointerIcon.Kind.HAND)
     WitPointerIcon.Import.set(WitPointerIcon.Kind.DEFAULT)
-    WitCanvas.Import.logMessage("android-pointer-icon smoke: 3 calls completed (no-op on touch)")
+    logMessage("android-pointer-icon smoke: 3 calls completed (no-op on touch)")
 
     val layer = SkiaLayer()
     currentSkiaLayer = layer
@@ -223,10 +209,14 @@ fun main() {
     var lastKeyState    by mutableStateOf(-1)
 
     // ── Real Compose Multiplatform scene (Material3 demo) ────────────────
-    val widthPx  = WitCanvas.Import.surfaceWidth().toInt()
-    val heightPx = WitCanvas.Import.surfaceHeight().toInt()
+    // Boot-time surface size (no frame is active yet): the app content
+    // area from wandr:chrome/display; the per-frame resize path below
+    // corrects any drift on the first frame.
+    val bootSize = WitDisplay.Import.contentSize()
+    val widthPx  = bootSize.width.toInt()
+    val heightPx = bootSize.height.toInt()
     val realScene = buildRealComposeScene(widthPx, heightPx, density)
-    WitCanvas.Import.logMessage(
+    logMessage(
         "real-compose scene built: ${widthPx}x${heightPx} px @ density=${density}"
     )
 
@@ -240,34 +230,56 @@ fun main() {
         wasiFrameDispatcher.flush()
     }
 
-    layer.inputDelegate = object : SkikoInputDelegate {
-        override fun onPointerEvent(kind: SkikoPointerEventKind, x: Float, y: Float) {
-            val type = androidx.compose.ui.input.pointer.PointerEventType
-            val evtType = when (kind) {
-                SkikoPointerEventKind.DOWN   -> type.Press
-                SkikoPointerEventKind.UP     -> type.Release
-                SkikoPointerEventKind.MOVE   -> type.Move
-                SkikoPointerEventKind.SCROLL -> type.Scroll
-                else                         -> type.Move
-            }
-            realScene.sendPointerEvent(
-                eventType = evtType,
-                position = androidx.compose.ui.geometry.Offset(x, y),
-                type = androidx.compose.ui.input.pointer.PointerType.Touch,
+    // Pointer events arrive EXCLUSIVELY through the wasi:input-handlers
+    // 0.0.2 export (skiko WasiInput) — the legacy SkikoInputDelegate leg is
+    // retired with the my:skiko-gfx renderer export.
+    WasiInput.setPointerHandler { ev ->
+        if (v2Count < 5) {
+            v2Count++
+            logMessage(
+                "input-002 smoke #${v2Count}: id=${ev.id} kind=${ev.kind} dev=${ev.device} " +
+                "btn=${ev.button} @(${ev.x.toInt()},${ev.y.toInt()}) pressure=${ev.pressure}"
             )
-            // Drain the dispatcher after EVERY pointer event so the
-            // suspending pointer-input coroutines (Modifier.scrollable,
-            // detectDragGestures, …) get to await the NEXT event before
-            // it arrives. Without this, only DOWN/UP make it to the
-            // scrollable's drag detector — MOVE deltas pile up as
-            // queued resumptions that all share the same stale
-            // continuation, and scrolling never engages.
-            wasiFrameDispatcher.flush()
         }
-        override fun onKeyEvent(kind: SkikoKeyEventKind, keyCode: Int) {
-            // Legacy v1 path — keep but unused now that on-key-event-v2
-            // delivers the resolved codepoint + Compose-compatible key-id.
+        val type = androidx.compose.ui.input.pointer.PointerEventType
+        val k = org.jetbrains.skiko.wasi.shell.PointerHandler.Kind
+        val evtType = when (ev.kind) {
+            k.DOWN   -> type.Press
+            k.UP, k.CANCEL -> type.Release
+            k.MOVE   -> type.Move
+            k.SCROLL -> type.Scroll
+            k.ENTER  -> type.Enter
+            k.LEAVE  -> type.Exit
         }
+        val ptrType = when (ev.device) {
+            org.jetbrains.skiko.wasi.shell.PointerHandler.PointerDevice.MOUSE ->
+                androidx.compose.ui.input.pointer.PointerType.Mouse
+            org.jetbrains.skiko.wasi.shell.PointerHandler.PointerDevice.PEN ->
+                androidx.compose.ui.input.pointer.PointerType.Stylus
+            else -> androidx.compose.ui.input.pointer.PointerType.Touch
+        }
+        realScene.sendPointerEvent(
+            eventType = evtType,
+            position = androidx.compose.ui.geometry.Offset(ev.x, ev.y),
+            // W3C wheel sign (positive = content down/right) → Compose
+            // scroll delta in "lines" (the desktop convention, ~64 px/line
+            // matches upstream skiko's desktop divisor closely enough that
+            // we reuse the host's 48 px line unit directly).
+            scrollDelta = if (ev.kind == k.SCROLL) {
+                androidx.compose.ui.geometry.Offset(ev.scrollDx / 48f, ev.scrollDy / 48f)
+            } else {
+                androidx.compose.ui.geometry.Offset.Zero
+            },
+            type = ptrType,
+        )
+        // Drain the dispatcher after EVERY pointer event so the
+        // suspending pointer-input coroutines (Modifier.scrollable,
+        // detectDragGestures, …) get to await the NEXT event before
+        // it arrives. Without this, only DOWN/UP make it to the
+        // scrollable's drag detector — MOVE deltas pile up as
+        // queued resumptions that all share the same stale
+        // continuation, and scrolling never engages.
+        wasiFrameDispatcher.flush()
     }
     // Wire enriched hardware-keyboard events to the Compose scene. The
     // host emits BOTH v1 (onKeyEvent above) and v2 (onKeyEventV2 here);
@@ -278,9 +290,11 @@ fun main() {
     // into the focused BasicTextField (the TextFieldState API one — the
     // legacy onValueChange API still freezes on tap, see
     // feedback_basictextfield_freeze.md).
-    org.jetbrains.skiko.wasi.WasiInput.setKeyHandler { kind, codePoint, keyId ->
+    org.jetbrains.skiko.wasi.WasiInput.setKeyHandler { ev ->
+        val codePoint = firstCodePoint(ev.text)
+        val keyId = w3cCodeToKeyId(ev.code)
         @OptIn(androidx.compose.ui.InternalComposeUiApi::class)
-        val type = if (kind == org.jetbrains.skiko.wasi.wit.Renderer.KeyKind.DOWN) {
+        val type = if (ev.down) {
             androidx.compose.ui.input.key.KeyEventType.KeyDown
         } else {
             androidx.compose.ui.input.key.KeyEventType.KeyUp
@@ -332,5 +346,36 @@ fun main() {
         // (Checkbox, DropdownMenu, …) would freeze after first toggle.
         // See WasiFrameDispatcher.kt.
         wasiFrameDispatcher.flush()
+    }
+}
+
+// ── key-event helpers (moved from the retired InputHandlerExports.kt) ───────
+
+internal fun w3cCodeToKeyId(code: String): UInt = when (code) {
+    "Backspace" -> 8u
+    "Tab" -> 9u
+    "Enter", "NumpadEnter" -> 13u
+    "Escape" -> 27u
+    "Space" -> 32u
+    "PageUp" -> 33u
+    "PageDown" -> 34u
+    "End" -> 35u
+    "Home" -> 36u
+    "ArrowLeft" -> 37u
+    "ArrowUp" -> 38u
+    "ArrowRight" -> 39u
+    "ArrowDown" -> 40u
+    "Insert" -> 45u
+    "Delete" -> 46u
+    else -> 0u
+}
+
+internal fun firstCodePoint(s: String): UInt {
+    if (s.isEmpty()) return 0u
+    val c0 = s[0]
+    return if (c0.isHighSurrogate() && s.length > 1 && s[1].isLowSurrogate()) {
+        ((((c0.code - 0xD800) shl 10) or (s[1].code - 0xDC00)) + 0x10000).toUInt()
+    } else {
+        c0.code.toUInt()
     }
 }

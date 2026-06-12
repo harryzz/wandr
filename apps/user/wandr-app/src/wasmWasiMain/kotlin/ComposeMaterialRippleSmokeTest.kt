@@ -2,7 +2,6 @@ package testapp
 
 import androidx.compose.material.ripple.RippleAlpha
 import androidx.compose.material.ripple.createRippleModifierNode
-import org.jetbrains.skiko.wasi.wit.Canvas as WitCanvas
 
 /**
  * compose-material-ripple smoke test. Compiles iff
@@ -27,7 +26,7 @@ fun composeMaterialRippleSmokeTest() {
     )
     val createFactory = ::createRippleModifierNode
 
-    WitCanvas.Import.logMessage(
+    logMessage(
         "compose-material-ripple smoke: " +
         "alpha={pressed=${customAlpha.pressedAlpha}, focused=${customAlpha.focusedAlpha}, " +
         "dragged=${customAlpha.draggedAlpha}, hovered=${customAlpha.hoveredAlpha}}, " +

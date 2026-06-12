@@ -1,4 +1,4 @@
-package wasi:canvas@0.0.1;
+package wasi:canvas@0.0.2;
 
 // wasi:canvas text — DRAFT. Two deliberately separate layers, because the
 // shipped consumers split exactly this way (wandr task 100 + skia-wit
@@ -52,6 +52,26 @@ interface layout {
     use types.{color, rect, point};
     use draw.{canvas};
 
+    enum decoration-line-style { solid, double, dotted, dashed, wavy }
+
+    /// Text decorations (Compose TextDecoration, dart:ui decorations).
+    record decoration {
+        underline:    bool,
+        overline:     bool,
+        line-through: bool,
+        /// 0 = use the text color.
+        color:        color,
+        style:        decoration-line-style,
+        /// Multiple of the font-suggested thickness.
+        thickness:    f32,
+    }
+
+    record text-shadow {
+        color:  color,
+        offset: point,
+        sigma:  f32,
+    }
+
     record text-style {
         /// Font family name resolved by the HOST's font collection
         /// (host-owned fonts is the point of this layer). Empty = default.
@@ -64,6 +84,12 @@ interface layout {
         letter-spacing: f32,
         /// Line height as a multiple of the font size; 0 = font default.
         line-height:    f32,
+        /// Vertical run shift (superscript/subscript); 0 = none.
+        baseline-shift: f32,
+        decoration:     option<decoration>,
+        /// Empty = none (a LIST — dart:ui carries multiple per span).
+        shadows:        list<text-shadow>,
+        background:     option<color>,
     }
 
     enum align { start, center, end, justify }
@@ -126,16 +152,25 @@ interface layout {
         offset-at:            func(at: point) -> u32;
         /// [start, end) of the word containing `offset`.
         word-boundary:        func(offset: u32) -> tuple<u32, u32>;
+        /// True when max-lines truncated the layout.
+        did-exceed-max-lines: func() -> bool;
     }
 
+    /// Setter form (R2): paragraph-wide options are methods, so the
+    /// next option is additive instead of a constructor break.
     resource paragraph-builder {
-        new:        static func(default-style: text-style, align: align)
-                    -> paragraph-builder;
-        push-style: func(style: text-style);
-        pop-style:  func();
-        add-text:   func(text: string);
+        new:           static func(default-style: text-style)
+                       -> paragraph-builder;
+        set-align:     func(a: align);
+        set-direction: func(d: text-direction);
+        /// 0 = unlimited.
+        set-max-lines: func(n: u32);
+        set-ellipsis:  func(e: string);
+        push-style:    func(style: text-style);
+        pop-style:     func();
+        add-text:      func(text: string);
         /// Consumes the builder.
-        build:      static func(b: paragraph-builder) -> paragraph;
+        build:         static func(b: paragraph-builder) -> paragraph;
     }
 }
 

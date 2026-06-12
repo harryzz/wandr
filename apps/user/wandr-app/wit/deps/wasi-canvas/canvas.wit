@@ -25,7 +25,7 @@
 /// carrying resource borrows. This is the 2D companion layer to
 /// wasi:webgpu/wasi-gfx (guest-owned rendering), the same split the web
 /// ships as Canvas2D vs WebGPU.
-package wasi:canvas@0.0.1;
+package wasi:canvas@0.0.2;
 
 /// Shared value types + styling resources.
 interface types {
@@ -34,9 +34,11 @@ interface types {
 
     /// CSS/Porter-Duff blend modes (https://www.w3.org/TR/compositing-1/).
     enum blend-mode {
-        src-over, src, dst-in, dst-out, src-atop, dst-atop, xor,
-        multiply, screen, overlay, darken, lighten, color-dodge,
-        color-burn, hard-light, soft-light, difference, exclusion, clear,
+        src-over, src, dst, dst-over, src-in, dst-in, src-out, dst-out,
+        src-atop, dst-atop, xor, plus, modulate, multiply, screen,
+        overlay, darken, lighten, color-dodge, color-burn, hard-light,
+        soft-light, difference, exclusion, clear,
+        hue, saturation, color, luminosity,
     }
 
     enum paint-style { fill, stroke, fill-and-stroke }
@@ -154,16 +156,19 @@ interface draw {
         /// 0..1, color) pairs, offsets ascending.
         linear-gradient: func(start: point, end: point,
                               stops: list<tuple<f32, color>>,
-                              tile: tile-mode) -> shader;
+                              tile: tile-mode,
+                              local: option<transform>) -> shader;
         radial-gradient: func(center: point, radius: f32,
                               stops: list<tuple<f32, color>>,
-                              tile: tile-mode) -> shader;
+                              tile: tile-mode,
+                              local: option<transform>) -> shader;
         /// Sweep (conic) gradient around `center`; angles in degrees,
         /// 0° at the positive x-axis, increasing clockwise.
         sweep-gradient:  func(center: point,
                               start-angle: f32, end-angle: f32,
                               stops: list<tuple<f32, color>>,
-                              tile: tile-mode) -> shader;
+                              tile: tile-mode,
+                              local: option<transform>) -> shader;
         /// Image as a pattern, transformed by `local`, sampled with
         /// `sampling`, tiled per axis.
         shader-blend:    func(mode: blend-mode, dst: borrow<shader>,
@@ -186,7 +191,20 @@ interface draw {
         /// `canvas.finish-recording`, draws on the returned canvas are
         /// captured, not rasterized.
         start-recording:  func(bounds: rect) -> canvas;
+
+        /// Boolean-combine two SVG path-data strings (R2 addition,
+        /// 2026-06-12). Path boolean ops fail the derivability test —
+        /// computing them guest-side means shipping a full 2D boolean
+        /// kernel; every shipped consumer's renderer already has one.
+        /// Returns none when either operand or the result is empty
+        /// (the skia Op contract callers like border-stroke expect).
+        combine-paths:    func(a: string, b: string,
+                               op: path-op) -> option<string>;
     }
+
+    /// Boolean operators for `graphics.combine-paths` (skia SkPathOp /
+    /// W3C-clip-path provenance; reverse-difference = b minus a).
+    enum path-op { difference, intersect, union, xor, reverse-difference }
 
     resource canvas {
         /// Drawable size in canvas units (device-independent; the
@@ -272,5 +290,6 @@ world canvas-host {
     import draw;
     import glyphs;
     import layout;
+    import scene;
     import embedding;
 }

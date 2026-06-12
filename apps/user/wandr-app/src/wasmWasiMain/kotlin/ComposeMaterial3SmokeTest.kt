@@ -8,7 +8,6 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import org.jetbrains.skiko.wasi.wit.Canvas as WitCanvas
 
 /**
  * compose-material3 smoke test. Compiles iff compose-material3-wasi is
@@ -33,7 +32,7 @@ fun composeMaterial3SmokeTest() {
     val typographyRef: Typography = MaterialTheme::class.let { Typography() }
     val shapesRef: Shapes = Shapes()
 
-    WitCanvas.Import.logMessage(
+    logMessage(
         "compose-material3 smoke: " +
         "lightColorScheme=${schemeRef::class.simpleName}, " +
         "light.primary=${light.primary}, dark.primary=${dark.primary}, " +

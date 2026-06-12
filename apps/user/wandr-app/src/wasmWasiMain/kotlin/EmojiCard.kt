@@ -26,7 +26,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import org.jetbrains.skiko.wasi.wit.Canvas as WitCanvas
 import testapp.emoji.Emoji
 import testapp.emoji.listAllEmojis
 
@@ -79,7 +78,7 @@ internal fun EmojiCard() {
 /// emojis-in-category) pairs.
 private fun loadGrouped(): List<Pair<String, List<Emoji>>> = try {
     val all = listAllEmojis()
-    WitCanvas.Import.logMessage("emoji-card: list-all() → ${all.size} emojis")
+    logMessage("emoji-card: list-all() → ${all.size} emojis")
     val orderedKeys = LinkedHashSet<String>()
     val byKey = HashMap<String, MutableList<Emoji>>()
     for (e in all) {
@@ -88,6 +87,6 @@ private fun loadGrouped(): List<Pair<String, List<Emoji>>> = try {
     }
     orderedKeys.map { it to byKey[it]!! }
 } catch (t: Throwable) {
-    WitCanvas.Import.logMessage("emoji-card: list-all() FAILED: ${t.message ?: t::class.simpleName}")
+    logMessage("emoji-card: list-all() FAILED: ${t.message ?: t::class.simpleName}")
     emptyList()
 }

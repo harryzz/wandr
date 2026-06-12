@@ -25,7 +25,7 @@
 
 @file:OptIn(UnsafeWasmMemoryApi::class, ExperimentalWasmInterop::class, ComponentModelInternalApi::class)
 
-package org.jetbrains.skiko.wasi.wit
+package testapp.exports
 
 import kotlin.wasm.unsafe.*
 import testapp.ImeEventsImpl

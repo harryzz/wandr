@@ -17,7 +17,6 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.dp
-import org.jetbrains.skiko.wasi.wit.Canvas as WitCanvas
 
 /**
  * compose-animation-core smoke test. Compiles iff compose-animation-core-wasi
@@ -52,7 +51,7 @@ fun composeAnimationCoreSmokeTest() {
     val dpCnv = androidx.compose.ui.unit.Dp.VectorConverter
     val vecFromDp = dpCnv.convertToVector(24.dp)
 
-    WitCanvas.Import.logMessage(
+    logMessage(
         "compose-animation-core smoke: " +
         "easings={linear=${linAt33}, fastSlow=${fastSlow}, inOut=${easeInOut}, outBack=${easeBack}, customBez=${customBez}}, " +
         "vectors=[${v1}, ${v2}], " +

@@ -56,6 +56,9 @@ internal external fun __wasm_import_newOffscreen(p0: kotlin.Int, p1: kotlin.Int,
 @kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]graphics.start-recording")
 internal external fun __wasm_import_startRecording(p0: kotlin.Int, p1: kotlin.Float, p2: kotlin.Float, p3: kotlin.Float, p4: kotlin.Float): kotlin.Int
 
+@kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[method]graphics.combine-paths")
+internal external fun __wasm_import_combinePaths(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Int, p3: kotlin.Int, p4: kotlin.Int, p5: kotlin.Int, p6: kotlin.Int): kotlin.Unit
+
 @kotlin.wasm.WasmImport("wasi:canvas/draw@0.0.2", "[resource-drop]canvas")
 internal external fun __cm_resource_abi_import_Draw_Canvas_drop(handle: kotlin.Int): kotlin.Unit
 
@@ -268,74 +271,20 @@ internal external fun __wasm_import_present(p0: kotlin.Int): kotlin.Unit
 
 
 
-@kotlin.wasm.WasmExport("my:skiko-gfx/renderer@0.1.0#render-frame")
-fun __wasm_export_renderFrame(p0: kotlin.Long): kotlin.Unit {
+@kotlin.wasm.WasmExport("wasi:input-handlers/frame-handler@0.0.2#on-frame")
+fun __wasm_export_onFrame(p0: kotlin.Long): kotlin.Unit {
   kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
   kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
-  RendererImpl.renderFrame(p0.toULong())
+  FrameHandlerImpl.onFrame(p0.toULong())
 
 }
 }
 
-@kotlin.wasm.WasmExport("my:skiko-gfx/renderer@0.1.0#on-pointer-event")
-fun __wasm_export_onPointerEvent(p0: kotlin.Int, p1: kotlin.Float, p2: kotlin.Float): kotlin.Unit {
-  kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
-  kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
-  RendererImpl.onPointerEvent(bindings.Renderer.PointerKind.values()[p0], p1, p2)
-
-}
-}
-
-@kotlin.wasm.WasmExport("my:skiko-gfx/renderer@0.1.0#on-key-event")
-fun __wasm_export_onKeyEvent(p0: kotlin.Int, p1: kotlin.Int): kotlin.Unit {
-  kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
-  kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
-  RendererImpl.onKeyEvent(bindings.Renderer.KeyKind.values()[p0], p1.toUInt())
-
-}
-}
-
-@kotlin.wasm.WasmExport("my:skiko-gfx/renderer@0.1.0#on-resize")
+@kotlin.wasm.WasmExport("wasi:input-handlers/frame-handler@0.0.2#on-resize")
 fun __wasm_export_onResize(p0: kotlin.Int, p1: kotlin.Int): kotlin.Unit {
   kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
   kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
-  RendererImpl.onResize(p0.toUInt(), p1.toUInt())
-
-}
-}
-
-@kotlin.wasm.WasmExport("my:skiko-gfx/renderer@0.1.0#on-scheduled-callback")
-fun __wasm_export_onScheduledCallback(p0: kotlin.Int): kotlin.Unit {
-  kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
-  kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
-  RendererImpl.onScheduledCallback(p0.toUInt())
-
-}
-}
-
-@kotlin.wasm.WasmExport("my:skiko-gfx/renderer@0.1.0#on-pointer-event-v2")
-fun __wasm_export_onPointerEventV2(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Float, p3: kotlin.Float, p4: kotlin.Float): kotlin.Unit {
-  kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
-  kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
-  RendererImpl.onPointerEventV2(p0.toUInt(), bindings.Renderer.PointerKind.values()[p1], p2, p3, p4)
-
-}
-}
-
-@kotlin.wasm.WasmExport("my:skiko-gfx/renderer@0.1.0#on-key-event-v2")
-fun __wasm_export_onKeyEventV2(p0: kotlin.Int, p1: kotlin.Int, p2: kotlin.Int): kotlin.Unit {
-  kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
-  kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
-  RendererImpl.onKeyEventV2(bindings.Renderer.KeyKind.values()[p0], p1.toUInt(), p2.toUInt())
-
-}
-}
-
-@kotlin.wasm.WasmExport("my:skiko-gfx/renderer@0.1.0#on-lifecycle-changed")
-fun __wasm_export_onLifecycleChanged(p0: kotlin.Int): kotlin.Unit {
-  kotlin.wasm.unsafe.freeAllComponentModelReallocAllocatedMemory()
-  kotlin.wasm.unsafe.withScopedMemoryAllocator { allocator ->
-  RendererImpl.onLifecycleChanged(p0.toUInt())
+  FrameHandlerImpl.onResize(p0.toUInt(), p1.toUInt())
 
 }
 }

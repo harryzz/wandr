@@ -4,7 +4,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import org.jetbrains.skiko.wasi.WasiLifecycle
-import org.jetbrains.skiko.wasi.wit.Lifecycle as WitLifecycle
+import org.jetbrains.skiko.wasi.shell.Lifecycle as WitLifecycle
 
 /**
  * Adapts the host-driven activity lifecycle (delivered via WIT

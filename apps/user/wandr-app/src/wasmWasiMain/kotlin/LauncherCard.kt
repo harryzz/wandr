@@ -38,7 +38,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import org.jetbrains.skiko.wasi.wit.Canvas as WitCanvas
 import testapp.launcher.AppEntry
 import testapp.launcher.launchApp
 import testapp.launcher.listApps
@@ -96,7 +95,7 @@ private fun AppTile(app: AppEntry) {
             .width(72.dp)
             .clip(RoundedCornerShape(12.dp))
             .clickable {
-                WitCanvas.Import.logMessage("launcher-card: tap → launch ${app.appId}")
+                logMessage("launcher-card: tap → launch ${app.appId}")
                 launchApp(app.appId)
             }
             .padding(4.dp),
@@ -141,9 +140,9 @@ private fun tileColor(appId: String): Color {
 
 private fun loadApps(): List<AppEntry> = try {
     val apps = listApps()
-    WitCanvas.Import.logMessage("launcher-card: list-apps → ${apps.size} app(s)")
+    logMessage("launcher-card: list-apps → ${apps.size} app(s)")
     apps
 } catch (t: Throwable) {
-    WitCanvas.Import.logMessage("launcher-card: list-apps FAILED: ${t.message ?: t::class.simpleName}")
+    logMessage("launcher-card: list-apps FAILED: ${t.message ?: t::class.simpleName}")
     emptyList()
 }

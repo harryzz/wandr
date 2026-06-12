@@ -39,7 +39,6 @@ package testapp
 
 import kotlin.wasm.*
 import kotlin.wasm.unsafe.*
-import org.jetbrains.skiko.wasi.wit.Canvas as WitCanvas
 
 // ── Lifted Kotlin types ──────────────────────────────────────────────
 
@@ -149,7 +148,7 @@ object LangAdapter {
      *  one broken plugin doesn't kill the whole IME). */
     fun loadAllLangPlugins(): List<KeyboardLayout> {
         val loaded = plugins.mapNotNull { it.toKeyboardLayout() }
-        WitCanvas.Import.logMessage(
+        logMessage(
             "LangAdapter: loaded ${loaded.size} plugin(s): " +
                 loaded.joinToString { it.name }
         )
@@ -171,7 +170,7 @@ object LangAdapter {
                 shiftedLetterRows = shifted.map { row -> row.map { it.toKeyDef() } },
             )
         }.getOrElse { t ->
-            WitCanvas.Import.logMessage(
+            logMessage(
                 "LangAdapter: plugin '$id' failed: ${t::class.simpleName} ${t.message}"
             )
             null

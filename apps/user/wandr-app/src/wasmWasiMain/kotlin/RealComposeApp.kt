@@ -174,19 +174,19 @@ private fun MaterialDemoApp() {
     // works. DisposableEffect runs once on composition + once on dispose.
     val lifecycleOwner = LocalLifecycleOwner.current
     androidx.compose.runtime.DisposableEffect(Unit) {
-        org.jetbrains.skiko.wasi.wit.Canvas.Import.logMessage(
+        logMessage(
             "compose-lifecycle smoke: LocalLifecycleOwner.lifecycle.currentState=" +
                 "${lifecycleOwner.lifecycle.currentState}"
         )
         onDispose { }
     }
     androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
-        org.jetbrains.skiko.wasi.wit.Canvas.Import.logMessage(
+        logMessage(
             "compose-lifecycle smoke: LifecycleEventEffect ON_RESUME fired"
         )
     }
     androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_PAUSE) {
-        org.jetbrains.skiko.wasi.wit.Canvas.Import.logMessage(
+        logMessage(
             "compose-lifecycle smoke: LifecycleEventEffect ON_PAUSE fired"
         )
     }
@@ -233,7 +233,7 @@ private fun MaterialDemoApp() {
     } else {
         base
     }
-    org.jetbrains.skiko.wasi.wit.Canvas.Import.logMessage(
+    logMessage(
         "real-compose: night-mode=${nightMode}, accent=0x${accentArgb.toString(16).padStart(8, '0')}"
     )
     MaterialTheme(colorScheme = scheme) {
@@ -430,15 +430,16 @@ private fun CounterCard() {
 // audioserver returns to idle — unlike the old startup smoke that leaked the
 // track and kept audioserver pumping at ~8-9% CPU forever.
 private fun playToneAndRelease() {
-    val track = org.jetbrains.skiko.wasi.wit.Audio.Import.createTrack(
-        org.jetbrains.skiko.wasi.wit.Audio.TrackConfig(
+    val track = wandr.platform.Pcm.Playback.open(
+        wandr.platform.Pcm.StreamConfig(
             sampleRate    = 48000u,
-            channelLayout = org.jetbrains.skiko.wasi.wit.Audio.ChannelLayout.STEREO,
-            format        = org.jetbrains.skiko.wasi.wit.Audio.Format.PCM_F32,
+            channelLayout = wandr.platform.Pcm.ChannelLayout.STEREO,
+            format        = wandr.platform.Pcm.Format.PCM_F32,
+            class_        = wandr.platform.Pcm.StreamClass.MEDIA,
         )
-    )
-    if (track == 0u) {
-        org.jetbrains.skiko.wasi.wit.Canvas.Import.logMessage("play-tone: createTrack failed (media.aaudio unavailable)")
+    ).getOrNull()
+    if (track == null) {
+        logMessage("play-tone: playback.open failed (media.aaudio unavailable)")
         return
     }
     val sr = 48000
@@ -451,12 +452,12 @@ private fun playToneAndRelease() {
         val v = (kotlin.math.sin(twoPi * freq * i / sr) * amp).toFloat()
         samples.add(v); samples.add(v)
     }
-    val wrote = org.jetbrains.skiko.wasi.wit.Audio.Import.writePcmF32(track, samples)
-    org.jetbrains.skiko.wasi.wit.Audio.Import.start(track)
-    org.jetbrains.skiko.wasi.wit.Canvas.Import.logMessage("play-tone: track=$track wrote=$wrote frames — closing in 400ms")
+    val wrote = track.write(samples)
+    track.start()
+    logMessage("play-tone: wrote=$wrote frames — closing in 400ms")
     org.jetbrains.skiko.wasi.WasiScheduler.schedule(400u) {
-        org.jetbrains.skiko.wasi.wit.Audio.Import.close(track)
-        org.jetbrains.skiko.wasi.wit.Canvas.Import.logMessage("play-tone: closed track=$track (audioserver should return to idle)")
+        track.close()
+        logMessage("play-tone: closed track (audioserver should return to idle)")
     }
 }
 
@@ -761,7 +762,7 @@ private fun TextFieldCard(
             androidx.compose.runtime.snapshotFlow { state.text.toString() },
             androidx.compose.runtime.snapshotFlow { state.selection },
         ) { t, s -> "text=\"$t\" sel=$s" }.collect {
-            org.jetbrains.skiko.wasi.wit.Canvas.Import.logMessage("tfstate $it")
+            logMessage("tfstate $it")
         }
     }
     Card(modifier = Modifier.fillMaxWidth()) {

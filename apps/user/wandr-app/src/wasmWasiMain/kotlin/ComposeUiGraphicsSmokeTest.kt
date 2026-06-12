@@ -14,7 +14,6 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.colorspace.ColorSpaces
-import org.jetbrains.skiko.wasi.wit.Canvas as WitCanvas
 
 /**
  * Smoke test for compose-ui-graphics-wasi. Compiles iff the publication is
@@ -94,7 +93,7 @@ fun composeUiGraphicsSmokeTest() {
     // ── Compose-level Rect/Size pulled from ui-geometry through ui-graphics
     val rect = ComposeRect(Offset(10f, 20f), Size(100f, 50f))
 
-    WitCanvas.Import.logMessage(
+    logMessage(
         "compose-ui-graphics smoke: " +
         "Color.Red=${red}, custom.value=0x${packed.toString(16)}, mixed-rgb=(${mixed.red},${mixed.green},${mixed.blue}), " +
         "brushes=${linearBrush::class.simpleName}/${radialBrush::class.simpleName}/${sweepBrush::class.simpleName}, " +

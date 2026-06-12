@@ -12,7 +12,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.fastRoundToInt
 import androidx.compose.ui.util.floatFromBits
 import androidx.compose.ui.util.trace
-import org.jetbrains.skiko.wasi.wit.Canvas as WitCanvas
 
 fun composeUiBaseSmokeTest() {
     val offset = Offset(10f, 20f)
@@ -30,7 +29,7 @@ fun composeUiBaseSmokeTest() {
     val piBitsHi  = floatFromBits(0x40490FDB)         // ~π
     val traced    = trace("smoke") { rect.width + rect.height }
 
-    WitCanvas.Import.logMessage(
+    logMessage(
         "compose-ui-base smoke: rect=${rect}, px=${px}, isz=${isz}, " +
         "16dp@2x=${widthPx}px, 14sp=${fontSize}, " +
         "round(3.6)=${rounded}, π≈${piBitsHi}, traced=${traced}"

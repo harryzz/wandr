@@ -47,8 +47,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import org.jetbrains.skiko.wasi.wit.Canvas as WitCanvas
-import org.jetbrains.skiko.wasi.wit.Keyboard as WitKeyboard
+import wandr.platform.KeyboardSend as WitKeyboard
 
 // ─── Compose Key constants ───────────────────────────────────────────
 //
@@ -528,15 +527,15 @@ object ImeKeyboardDefaults {
 // position, return the layout name to display.
 
 internal fun pickLayout(
-    editorType: org.jetbrains.skiko.wasi.wit.ImeInputType,
+    editorType: testapp.exports.ImeInputType,
     userSelectedLang: String,
     userRequestedLayout: String,
 ): String = when (editorType) {
-    org.jetbrains.skiko.wasi.wit.ImeInputType.NUMBER   -> "Numeric"
-    org.jetbrains.skiko.wasi.wit.ImeInputType.PHONE    -> "Phone"
-    org.jetbrains.skiko.wasi.wit.ImeInputType.EMAIL    -> "Email"
-    org.jetbrains.skiko.wasi.wit.ImeInputType.URL      -> "Url"
-    org.jetbrains.skiko.wasi.wit.ImeInputType.PASSWORD -> "Password"
+    testapp.exports.ImeInputType.NUMBER   -> "Numeric"
+    testapp.exports.ImeInputType.PHONE    -> "Phone"
+    testapp.exports.ImeInputType.EMAIL    -> "Email"
+    testapp.exports.ImeInputType.URL      -> "Url"
+    testapp.exports.ImeInputType.PASSWORD -> "Password"
     // TEXT and MULTILINE_TEXT honor the user's chosen layout (which
     // is initialized to the cycled language).
     else -> userRequestedLayout
@@ -544,13 +543,13 @@ internal fun pickLayout(
 
 /** True when the editor-type forces a layout — disables 🌐 cycle. */
 internal fun isEditorTypeOverride(
-    editorType: org.jetbrains.skiko.wasi.wit.ImeInputType,
+    editorType: testapp.exports.ImeInputType,
 ): Boolean = when (editorType) {
-    org.jetbrains.skiko.wasi.wit.ImeInputType.NUMBER,
-    org.jetbrains.skiko.wasi.wit.ImeInputType.PHONE,
-    org.jetbrains.skiko.wasi.wit.ImeInputType.EMAIL,
-    org.jetbrains.skiko.wasi.wit.ImeInputType.URL,
-    org.jetbrains.skiko.wasi.wit.ImeInputType.PASSWORD -> true
+    testapp.exports.ImeInputType.NUMBER,
+    testapp.exports.ImeInputType.PHONE,
+    testapp.exports.ImeInputType.EMAIL,
+    testapp.exports.ImeInputType.URL,
+    testapp.exports.ImeInputType.PASSWORD -> true
     else -> false
 }
 
@@ -582,7 +581,7 @@ fun ImeKeyboard(
     // "English" while the screenshot shows Numeric, the buttons drawn
     // and the click handlers wired up diverged.
     androidx.compose.runtime.LaunchedEffect(layoutName, currentEditorType) {
-        WitCanvas.Import.logMessage(
+        logMessage(
             "ImeKeyboard: layoutName=$layoutName editorType=$currentEditorType userReq=$userRequestedLayout"
         )
     }
@@ -675,7 +674,7 @@ fun ImeKeyboard(
                                 // the overlay), and tapping the field
                                 // again re-shows the keyboard. No new WIT
                                 // surface, no arbiter changes.
-                                WitCanvas.Import.logMessage("ime: Hide tapped → sending ESC")
+                                logMessage("ime: Hide tapped → sending ESC")
                                 sendKey(0, KEY_ESCAPE)
                             }
                         }
