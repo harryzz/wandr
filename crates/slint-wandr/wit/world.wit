@@ -1,18 +1,19 @@
-// slint-wandr's trimmed copy of the host `my:skiko-gfx` IMPORT surface.
-// Since the wasi:canvas port (task: proving consumer), DRAWING comes from
-// the wasi:canvas draft (proposals/wasi-canvas, separate generate!) — this
-// file keeps only the wandr platform bits: window metrics + IME.
-package my:skiko-gfx@0.1.0;
+// slint-wandr's import slice of the wandr:ui-shell contract (Phase B —
+// the my:skiko-gfx window/ime/theme slices' post-consolidation home).
+// Drawing comes from wasi:canvas@0.0.2 (separate generate!) — this file
+// keeps only the platform bits: display metrics + IME + theme.
+package wandr:ui-shell@0.1.0;
 
 /// density = dpi / 160 — Slint's scale factor.
-interface window {
+interface metrics {
     get-density:    func() -> f32;
     get-font-scale: func() -> f32;
+    get-dpi:        func() -> u32;
 }
 
 /// Soft-keyboard summon/dismiss (task 47 IME model): the guest reports
 /// editor focus; the host/arbiter engage the keyboard overlay, and typed
-/// text comes back through the regular on-key-event-v2 export.
+/// text comes back through the regular key-handler export.
 interface ime {
     notify-editor-attached: func(
         input-type: string,
@@ -27,21 +28,13 @@ interface ime {
 /// System UI theme (night mode) — drives Slint's color scheme so the
 /// fluent palette matches the platform (dark chrome on wandr).
 interface theme {
-    enum night-mode {
-        /// System schedule / no explicit preference — pick a default
-        /// (wandr chrome is dark; guests default dark).
-        auto,
-        /// Light theme requested.
-        off,
-        /// Dark theme requested.
-        on,
-    }
+    enum night-mode { auto, off, on }
     get-night-mode:   func() -> night-mode;
     get-accent-color: func() -> u32;
 }
 
 world slint-wandr-imports {
-    import window;
+    import metrics;
     import ime;
     import theme;
 }

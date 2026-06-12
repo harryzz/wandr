@@ -185,18 +185,19 @@ fn make_brush_shader(
                 point(end.x, end.y),
                 &s,
                 wtypes::TileMode::Clamp,
+                None,
             ))
         }
         Brush::RadialGradient(g) => {
             let (cx, cy) = g.center_or_default_scaled(w, h, scale);
             let radius = g.radius_or_default_scaled(w, h, scale);
             let s = stops(&mut g.stops().map(|s| (s.position, color_argb(s.color))));
-            Some(graphics.radial_gradient(point(cx, cy), radius, &s, wtypes::TileMode::Clamp))
+            Some(graphics.radial_gradient(point(cx, cy), radius, &s, wtypes::TileMode::Clamp, None))
         }
         Brush::ConicGradient(g) => {
             let (cx, cy) = g.center_or_default_scaled(w, h, scale);
             let s = stops(&mut g.stops().map(|s| (s.position, color_argb(s.color))));
-            Some(graphics.sweep_gradient(point(cx, cy), -90.0, 270.0, &s, wtypes::TileMode::Clamp))
+            Some(graphics.sweep_gradient(point(cx, cy), -90.0, 270.0, &s, wtypes::TileMode::Clamp, None))
         }
         _ => None,
     }

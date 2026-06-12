@@ -52,14 +52,16 @@ mod bindings {
         world: "slint-wandr-imports",
     });
 }
-pub(crate) use bindings::my::skiko_gfx::{ime as host_ime, theme as host_theme, window as host_window};
+pub(crate) use bindings::wandr::ui_shell::{
+    ime as host_ime, metrics as host_window, theme as host_theme,
+};
 
 /// Drawing comes from the wasi:canvas DRAFT (proposals/wasi-canvas) — this
 /// crate is its proving consumer. Single source of truth: the generate!
-/// points straight at the proposal's wit dir.
+/// points straight at the proposal's 0.0.2 wit dir.
 mod canvas_bindings {
     wit_bindgen::generate!({
-        path: "../../proposals/wasi-canvas/wit",
+        path: "../../proposals/wasi-canvas/wit-0.0.2",
         world: "embedded-canvas-guest",
     });
 }
@@ -699,22 +701,20 @@ macro_rules! launch {
         $crate::__wit_bindgen::generate!({
             // Hermetic: `path: []` stops generate! from also parsing the
             // invoking crate's default `wit/` directory (which may declare
-            // my:skiko-gfx again, or unrelated packages).
+            // unrelated packages).
             path: [],
             inline: r#"
-package my:skiko-gfx@0.1.0;
+package wandr:ui-shell@0.1.0;
 
-interface renderer {
-    enum pointer-kind { down, up, move, scroll }
-    enum key-kind     { down, up }
-    render-frame:          func(nanos: u64);
-    on-pointer-event:      func(kind: pointer-kind, x: f32, y: f32);
-    on-key-event:          func(kind: key-kind, key-code: u32);
-    on-resize:             func(w: u32, h: u32);
+interface lifecycle {
+    enum state { initialized, created, started, resumed, paused, stopped, destroyed }
+    get-state: func() -> state;
+}
+
+interface shell-events {
+    use lifecycle.{state};
     on-scheduled-callback: func(callback-id: u32);
-    on-pointer-event-v2:   func(pointer-id: u32, kind: pointer-kind, x: f32, y: f32, pressure: f32);
-    on-key-event-v2:       func(kind: key-kind, code-point: u32, key-id: u32);
-    on-lifecycle-changed:  func(state: u32);
+    on-lifecycle-changed:  func(new-state: state);
 }
 
 interface frame-pacing {
@@ -722,7 +722,7 @@ interface frame-pacing {
 }
 
 world slint-app {
-    export renderer;
+    export shell-events;
     export frame-pacing;
 }
 "#,
@@ -752,46 +752,12 @@ world slint-app {
         #[doc(hidden)]
         struct __SlintWandrGuest;
 
-        impl exports::my::skiko_gfx::renderer::Guest for __SlintWandrGuest {
-            fn render_frame(nanos: u64) {
-                __slint_wandr_ensure_app();
-                ::slint_wandr::handle_render_frame(nanos);
-            }
-            fn on_resize(w: u32, h: u32) {
-                ::slint_wandr::handle_resize(w, h);
-            }
-            fn on_pointer_event_v2(
-                pid: u32,
-                kind: exports::my::skiko_gfx::renderer::PointerKind,
-                x: f32, y: f32, _pressure: f32,
-            ) {
-                use exports::my::skiko_gfx::renderer::PointerKind as K;
-                let kind = match kind {
-                    K::Down => ::slint_wandr::PointerKind::Down,
-                    K::Up => ::slint_wandr::PointerKind::Up,
-                    K::Move => ::slint_wandr::PointerKind::Move,
-                    K::Scroll => ::slint_wandr::PointerKind::Scroll,
-                };
-                ::slint_wandr::handle_pointer_event(pid, kind, x, y);
-            }
-            fn on_key_event_v2(
-                kind: exports::my::skiko_gfx::renderer::KeyKind,
-                code_point: u32, key_id: u32,
-            ) {
-                use exports::my::skiko_gfx::renderer::KeyKind as K;
-                ::slint_wandr::handle_key_event(matches!(kind, K::Down), code_point, key_id);
-            }
-            fn on_pointer_event(
-                _kind: exports::my::skiko_gfx::renderer::PointerKind, _x: f32, _y: f32,
-            ) {}
-            fn on_key_event(
-                _kind: exports::my::skiko_gfx::renderer::KeyKind, _key_code: u32,
-            ) {}
+        impl exports::wandr::ui_shell::shell_events::Guest for __SlintWandrGuest {
             fn on_scheduled_callback(_callback_id: u32) {}
-            fn on_lifecycle_changed(_state: u32) {}
+            fn on_lifecycle_changed(_new_state: exports::wandr::ui_shell::shell_events::State) {}
         }
 
-        impl exports::my::skiko_gfx::frame_pacing::Guest for __SlintWandrGuest {
+        impl exports::wandr::ui_shell::frame_pacing::Guest for __SlintWandrGuest {
             fn next_frame_delay() -> u32 {
                 ::slint_wandr::next_frame_delay()
             }
@@ -799,29 +765,35 @@ world slint-app {
 
         __slint_wandr_export!(__SlintWandrGuest);
 
-        // ── wasi:input-handlers (proposals/wasi-input-handlers): the
-        // push-model input + frame driving this guest PREFERS. The host
-        // routes exclusively to these when exported; the legacy renderer
-        // impls above stay as the old-host fallback (never double-fires:
-        // routing is exclusive per input type host-side). Nested module:
-        // two generate!s can't share a scope (both emit `exports`/_rt).
+        // ── wasi:input-handlers: the push-model input + frame driving.
+        // Nested module: two generate!s can't share a scope (both emit
+        // `exports`/_rt).
         mod __slint_wandr_input {
         use super::__SlintWandrGuest;
         $crate::__wit_bindgen::generate!({
             path: [],
             inline: r#"
-package wasi:input-handlers@0.0.1;
+package wasi:input-handlers@0.0.2;
 
 interface pointer-handler {
-    enum kind { down, up, move, scroll, cancel }
+    enum kind { down, up, move, scroll, cancel, enter, leave }
+    enum pointer-device { unknown, mouse, touch, pen }
+    enum button { none, primary, secondary, middle, back, forward }
+    flags buttons { primary, secondary, middle, back, forward }
     record pointer-event {
         id: u32,
         kind: kind,
+        device: pointer-device,
         x: f32,
         y: f32,
         pressure: f32,
+        tilt-x: f32,
+        tilt-y: f32,
+        twist: f32,
         scroll-dx: f32,
         scroll-dy: f32,
+        button: button,
+        buttons: buttons,
         alt: bool,
         ctrl: bool,
         meta: bool,
@@ -869,6 +841,9 @@ world input-guest {
                     K::Up | K::Cancel => ::slint_wandr::PointerKind::Up,
                     K::Move => ::slint_wandr::PointerKind::Move,
                     K::Scroll => ::slint_wandr::PointerKind::Scroll,
+                    // Hover lifecycle — no Slint mapping yet (parity with
+                    // 0.0.1, which never delivered these).
+                    K::Enter | K::Leave => return,
                 };
                 ::slint_wandr::handle_pointer_event(ev.id, kind, ev.x, ev.y);
             }
