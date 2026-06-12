@@ -222,6 +222,24 @@ draft (decoder + connect(ctx), CVO set-rotation kept, placement→surface)
 PLAN (WIT additive-only for our packages + 5-step host re-skin) lives in
 proposals/wasi-surface/DESIGN.md.
 
+**THE CONSOLIDATION PLAN (user-set end state 2026-06-12: NEITHER
+my:skiko-gfx NOR wasi:canvas@0.0.1 survives).**
+proposals/wandr-ui-shell/DESIGN.md + wit/ (validated): the universal
+UI-shell package (metrics/theme/locale/clipboard/ime/lifecycle/
+scheduler/text-segmentation imports + shell-events/frame-pacing
+exports — replaces the legacy renderer export's non-input legs);
+log-message → wasi:logging (host impl to add); app/OS services
+(audio/haptics/power/thermal/sensors/lights/assets/display/
+pointer-icon/keyboard/launcher/status/keyguard/taskbar) → wandr:*
+groups (device/audio/assets/chrome). ONE-EVENT sequencing: Phase A
+host-additive (ui-shell re-binding + wasi:logging), Phase B EVERY guest
+moves once (Kotlin finale as audited — incl. surface-w/h→canvas dims +
+the 70 log-message call sites — AND all Rust guests 0.0.1→0.0.2 +
+ui-shell), Phase C host cleanup (skiko-ui world deleted → probe-only
+instantiation; 0.0.1 trees dropped; wit/skiko-gfx.wit + mirrors die).
+Finale audit findings that forced this shape: surfaceWidth/Height and
+logMessage both squat on the legacy CANVAS interface.
+
 **The four REFERENCE LIBRARIES (validation set, user-fixed 2026-06-12):
 skiko-compose, dioxus, slint, Avalonia UI** — every wasi:canvas contract
 decision must be cross-checked against ALL FOUR (they span the ownership

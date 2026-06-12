@@ -1,5 +1,5 @@
 TASK=103
-STEP=verify-done
-STATUS=complete
-LAST_SUCCESS=Task 103 (path B host phase) verified OK — wasi:canvas@0.0.2 + wasi:input-handlers@0.0.2 served side-by-side with 0.0.1; spike device-verified (scene layer transform-anim, builder setters+did-exceed, color-filter tint, 0.0.2 pointer union record incl touch/buttons through evdev tap); 0.0.1 consumers regression-clean on same host
-NOTES=set-content design fix recorded in REDESIGN (recording-as-drawable for live nesting; set-picture R5-dropped). Remaining path B: the single Kotlin finale (skiko → 0.0.2: images + drawables→scene + blobs→paragraphs + setMatrix tracking + id-map assembly + 0.0.2 input). gesture-handler bound host-side: NOT yet (no trackpad source) — probe exists in WIT only.
+STEP=consolidation-designed
+STATUS=in-progress
+LAST_SUCCESS=Path B host phase committed (6197425f); wandr:ui-shell draft validated; consolidation plan (A/B/C) recorded — end state retires my:skiko-gfx AND 0.0.1 packages
+NOTES=Next session = Phase A (host-additive: ui-shell re-binding + wasi:logging + wandr:* service groups), then Phase B = THE one rebuild of every guest (Kotlin finale + all Rust guests 0.0.1→0.0.2+ui-shell), Phase C host cleanup. Full plan: proposals/wandr-ui-shell/DESIGN.md; finale per-item audit in memory.
