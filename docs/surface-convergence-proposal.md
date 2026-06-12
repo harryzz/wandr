@@ -129,7 +129,7 @@ the core surface universal.
    hand (working canvas-context, shared events, both profiles live on a
    real phone).
 
-## DESIGNED (2026-06-12): proposals/wasi-surface/DESIGN-0.0.2.md
+## DESIGNED (2026-06-12): proposals/wasi-surface/DESIGN.md (upstream-feedback record, not a wandr package)
 
 The socket model this document sketched is now a designed proposal —
 `wasi:surface` + `wasi:graphics-context` 0.0.2 shapes

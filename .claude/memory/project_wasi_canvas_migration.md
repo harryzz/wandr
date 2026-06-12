@@ -183,7 +183,7 @@ matrix tracking) — NOT stage-4-on-0.0.1 (would touch skiko twice).
 After that event both packages are FROZEN: evolution = additive methods
 (R2) or side-by-side versions (R3) only.
 
-**THIRD DESIGN (2026-06-12): proposals/wasi-surface/DESIGN-0.0.2.md** —
+**THIRD DESIGN (2026-06-12): proposals/wasi-surface/DESIGN.md** — OWNERSHIP-CORRECTED: surface/graphics-context are UPSTREAM-owned (wasi-gfx org); our doc = the change-set we'd propose + design record, NOT a wandr package (no version-lineage claim; ship-before-upstream fallback = wandr:surface@0.0.1) —
 the socket model de-floated: wasi:surface + wasi:graphics-context 0.0.2
 (capability-granted context — fixes upstream's ambient constructor; 
 request/configure geometry; optional pull-profile pollables), four

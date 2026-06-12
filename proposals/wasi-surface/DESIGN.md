@@ -1,14 +1,22 @@
-# wasi:surface + wasi:graphics-context 0.0.2 — the socket design (NOT WIRED)
+# The surface/graphics-context socket — design record + upstream feedback (NOT WIRED, NOT OURS)
 
-> Proposal only (2026-06-12). The third design in the family, bound by
-> the same user-fixed GOAL (architecturally clean, no overlapping
-> functionality, WASI-acceptable, 100% consumable by the reference
-> consumers) and the same rules (R1–R5,
-> `../wasi-canvas/REDESIGN-0.0.2.md` §2). This de-floats the socket
-> model that previously lived across `docs/skiko-gfx-vs-wasi-gfx.md`,
-> `docs/surface-convergence-proposal.md` and its 2026-06-12 upstream
-> recheck. Versioned 0.0.2 to signal "upstream wasi-gfx 0.0.1 shapes +
-> the capability fixes we'd propose."
+> Design record only (2026-06-12, ownership framing corrected same
+> day). Bound by the same user-fixed GOAL and rules (R1–R5,
+> `../wasi-canvas/REDESIGN-0.0.2.md` §2); de-floats the socket model
+> from `docs/skiko-gfx-vs-wasi-gfx.md` + the convergence doc.
+>
+> **Ownership: `wasi:surface` and `wasi:graphics-context` are
+> UPSTREAM-OWNED packages (the wasi-gfx org), unlike our greenfield
+> wasi:canvas / wasi:input-handlers drafts.** The WIT below is therefore
+> NOT a wandr package and claims no version lineage — it is the
+> CHANGE-SET we would propose upstream (capability-granted context,
+> request/configure, configure-with-scale, optional pull events), with
+> version labels purely illustrative for validation. If wandr ever
+> needs to SHIP this layer before upstream stabilizes, it ships under
+> OUR namespace as `wandr:surface@0.0.1` and migrates when upstream
+> lands — the my:skiko-gfx precedent. What wandr's own contracts
+> actually depend on is only each producer's connection lane, and those
+> live in OUR packages (canvas's un-fuse lane, video's factoring lane)."
 
 ## The model (the one sentence)
 
