@@ -1,0 +1,23 @@
+// Subset copy of wandr:ui-shell (host provides the superset) — the demo
+// only needs display density to drive Avalonia's RenderScaling.
+package wandr:ui-shell@0.1.0;
+
+interface metrics {
+    get-density:    func() -> f32;
+    get-font-scale: func() -> f32;
+    get-dpi:        func() -> u32;
+}
+
+// Soft-keyboard summon/dismiss: the guest reports editor focus; the
+// host/arbiter raise the keyboard overlay, and typed text comes back
+// through the regular key-handler export.
+interface ime {
+    notify-editor-attached: func(
+        input-type: string,
+        hint: string,
+        initial-text: string,
+        selection-start: u32,
+        selection-end: u32,
+    );
+    notify-editor-detached: func();
+}

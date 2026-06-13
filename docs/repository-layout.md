@@ -26,6 +26,7 @@ what language it's written in.
 ├── apps/          # wandrpkgs — anything that lands on the device as a .wandrpkg
 ├── runtime/       # native Rust binaries — the host stack
 ├── crates/        # shared guest-side Rust libraries (compiled INTO wandrpkgs)
+├── dotnet/        # shared guest-side C#/.NET libraries (the .NET peer of crates/)
 ├── wit/           # canonical WIT contracts (single source of truth)
 ├── external/      # vendored / forked upstream code
 ├── tools/         # build scripts, patches, dev diagnostics
@@ -101,6 +102,23 @@ reusable guest framework code. `dioxus-canvas` is the reactive-UI renderer
 that drives the canvas WIT from a dioxus app; `wandr.dioxus.demo` (and future
 rich Rust guests) path-depend on it. Kept WIT-agnostic via a `CanvasSink`
 trait so it stays host-testable; the consuming wandrpkg owns the trimmed WIT.
+
+### `dotnet/` — shared guest-side C#/.NET libraries
+
+```
+dotnet/
+└── avalonia-wandr/   # AvaloniaUI (NativeAOT→wasm) adapter — render/text/input/IME
+```
+
+The .NET peer of `crates/`: reusable guest framework code for C#/.NET
+guests, kept out of `crates/` because that's the Rust workspace (shared
+`Cargo.lock`). `avalonia-wandr` is the AvaloniaUI adapter — the .NET
+analogue of `crates/slint-wandr`. Because componentize-dotnet generates WIT
+bindings **per project** (against the world name), a .NET guest lib can't
+ship as a precompiled `.dll` that shares those types; `avalonia-wandr`
+therefore ships as **shared source** compiled into the consuming component
+via `avalonia-wandr.props` against a fixed world. Reference consumer:
+`apps/user/wandr.avalonia.demo`. See `dotnet/avalonia-wandr/README.md`.
 
 ### `wit/` — canonical WIT
 

@@ -1,0 +1,12 @@
+// Task 107 / Avalonia spike #2 — C# guest that shapes text with a
+// statically-linked harfbuzz (wasm32-wasi) and draws it through
+// wasi:canvas/glyphs (the Avalonia ITextShaperImpl → DrawGlyphRun model).
+package wandr:csharp-spike2@0.0.1;
+
+world text-spike {
+    import wasi:canvas/types@0.0.2;
+    import wasi:canvas/draw@0.0.2;
+    import wasi:canvas/glyphs@0.0.2;
+    import wasi:canvas/embedding@0.0.2;
+    export wasi:input-handlers/frame-handler@0.0.2;
+}

@@ -1,0 +1,11 @@
+// Task 106 / Avalonia spike #1 — bare C# guest world. Subset copies of
+// proposals/wasi-canvas/wit + proposals/wasi-input-handlers/wit live in
+// deps/ (subset-linking is sound: the host provides supersets).
+package wandr:csharp-spike@0.0.1;
+
+world spike {
+    import wasi:canvas/types@0.0.2;
+    import wasi:canvas/draw@0.0.2;
+    import wasi:canvas/embedding@0.0.2;
+    export wasi:input-handlers/frame-handler@0.0.2;
+}

@@ -1,0 +1,16 @@
+# Task 107 — AvaloniaUI controls demo (user app: no `kind` → installs under
+# apps/, listed by the launcher as a tile). Self-contained C#/NativeAOT
+# guest; renders Avalonia 11.3.17 + FluentTheme through wasi:canvas.
+app_id      = "wandr.avalonia.demo"
+version     = "0.1.0"
+# Documentation only — the host binds by probing the component's actual
+# exports (wasi:input-handlers frame/pointer/key), not this string.
+world       = "wandr:avalonia-demo/demo"
+composition = "same-store"
+orientation = "auto"
+label       = "Avalonia Demo"
+# Reactive UI; no animation loop → 30 fps cap halves the idle render cost.
+max_fps     = 30
+
+[components]
+ui = "components/ui.wasm"

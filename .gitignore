@@ -17,3 +17,9 @@
 # Rust
 **/Cargo.lock.bak
 
+
+# .NET (dotnet/ guest libs + apps/user/*.avalonia.* etc.)
+**/bin/
+**/obj/
+repros/avalonia-spike*/**/native/*.a
+**/generated/wit/

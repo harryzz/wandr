@@ -1,0 +1,18 @@
+// avalonia-wandr — the shared guest world every Avalonia-on-wandr app
+// builds against. Its name is FIXED (→ generated namespace `GuestWorld`)
+// so the library's source compiles against a stable binding namespace;
+// apps consume the library via avalonia-wandr.props and never redefine it.
+// Subset copies of the contracts live in deps/ (host provides supersets).
+package wandr:avalonia-guest@0.1.0;
+
+world guest {
+    import wasi:canvas/types@0.0.2;
+    import wasi:canvas/draw@0.0.2;
+    import wasi:canvas/glyphs@0.0.2;
+    import wasi:canvas/embedding@0.0.2;
+    import wandr:ui-shell/metrics@0.1.0;
+    import wandr:ui-shell/ime@0.1.0;
+    export wasi:input-handlers/frame-handler@0.0.2;
+    export wasi:input-handlers/pointer-handler@0.0.2;
+    export wasi:input-handlers/key-handler@0.0.2;
+}

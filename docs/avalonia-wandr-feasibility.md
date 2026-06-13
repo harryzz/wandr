@@ -129,3 +129,48 @@ language-agnostic — the first non-Rust, non-Kotlin consumer. It's also the
 richest widget set of the four. But it should wait for a concrete need (a
 C#-team app, or wanting Avalonia's control library); the spike order above
 turns it into an estimate in ~a day of toolchain work.
+
+## Spike #1 results (2026-06-12, task 106) — **GO**
+
+Spike #1 ran exactly as scoped (`repros/avalonia-spike1/`): a bare C#
+reactor guest importing `wasi:canvas/{types,draw,embedding}@0.0.2` and
+exporting `wasi:input-handlers/frame-handler@0.0.2`, rendering a centered,
+surface-proportional rect on the desktop host. **Everything worked on the
+first build** — the toolchain risk this memo flagged as the biggest unknown
+is paid down.
+
+Numbers (Debian 13 / WSL2, .NET SDK 10.0.301, componentize-dotnet
+0.7.0-preview00010, bundled wit-bindgen 0.41.0, wasi-sdk 24 auto-cached):
+
+| Metric | Value |
+|---|---|
+| Bare-guest size (Release, trimmed NativeAOT) | **2.57 MB** wasm (Debug: 9.6 MB) |
+| `wasmtime compile` AOT proxy (Release) | 0.64 s wall → 3.9 MB cwasm |
+| Incremental `dotnet build` | 15–22 s |
+| First build (incl. toolchain download) | 1 m 24 s |
+| Host load+JIT (x86_64 desktop) | ~1 s |
+| render_frame | first 2.6 ms, steady 2.2–4.1 ms |
+
+The 2.57 MB floor is **smaller than the 8.7 MB Slint guest** — the memo's
+30–80 MB Avalonia projection now reads pessimistic at the low end (the floor
+contributes almost nothing; the question is purely Avalonia's own trimmed
+size).
+
+Canonical-ABI surprises: **none.** Imported resources (`canvas-context`,
+`canvas`, `graphics` → IDisposable handle classes), records, options and
+enums all bind cleanly. The three friction points, all small:
+
+1. **Export namespace casing** — the impl class must sit in
+   `SpikeWorld.wit.exports.wasi.inputHandlers.v0_0_2` (world + camelCased
+   package + `v`-mangled version); the build error names the expected
+   `FrameHandlerImpl` symbol, so it's discoverable, not guessable-wrong.
+2. The released templates package only ships `componentize.wasi.cli`; the
+   library/reactor csproj is hand-rolled from the main-branch `wasi-lib`
+   template (OutputType=Library + `<Wit Include="wit" World="spike"/>`).
+3. WIT subset copies must keep `text.wit`/`scene.wit` alongside
+   `canvas.wit` because the package-level worlds in `canvas.wit` reference
+   `glyphs`/`layout`/`scene` (resolver parses whole packages, not used
+   interfaces).
+
+Next: spike #2 = harfbuzz-as-wasm32-wasi native dep + the
+`WandrPlatformRenderInterface` headless clone (steps 2–3 above).

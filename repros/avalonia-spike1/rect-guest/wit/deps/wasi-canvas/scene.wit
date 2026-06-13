@@ -1,0 +1,49 @@
+package wasi:canvas@0.0.2;
+
+/// OPTIONAL host-retained layers — the managed-UI scene extension
+/// (RenderNode/CALayer class). A layer is a mutable retained node:
+/// content recorded once, properties (transform/clip/alpha/shadow)
+/// mutated per frame WITHOUT re-recording — what makes scrolling cost
+/// a transform write.
+interface scene {
+    use types.{transform, rect, rounded-rect};
+    use draw.{canvas, graphics};
+
+    resource layer {
+        /// Created through the embedder-granted factory (capability
+        /// rule: host-resident allocation flows through a handle).
+        new: static func(g: borrow<graphics>) -> layer;
+
+        /// Set the layer's content by CONSUMING a recording canvas
+        /// (from graphics.start-recording). The recording is finished
+        /// as LIVE content: layers drawn into it via draw-layer stay
+        /// resolved at replay time, so nested layers keep working when
+        /// a parent re-records (snapshot-into-picture would freeze
+        /// them — why this is not `set-picture`, which is also R5-
+        /// derivable from this). Traps if `recording` is not a
+        /// recording canvas.
+        set-content: func(recording: canvas);
+
+        set-bounds:            func(bounds: rect);
+        set-transform:         func(t: transform);
+        /// 0..255 alpha applied at replay.
+        set-alpha:             func(alpha: u8);
+        set-clip-rect:         func(r: rect, anti-alias: bool);
+        set-clip-rounded-rect: func(rr: rounded-rect, anti-alias: bool);
+        /// SVG path data (Flutter ClipPathLayer; Compose outline clips).
+        set-clip-path:         func(path: string, anti-alias: bool);
+        clear-clip:            func();
+        /// Material-style drop shadow from the layer's clip outline;
+        /// 0 = none.
+        set-shadow-elevation:  func(elevation: f32);
+    }
+
+    /// Draw the layer's current content with its current properties.
+    /// On a RECORDING canvas the recording retains the layer HOST-side
+    /// (never the guest's borrow): replay resolves picture + properties
+    /// at replay time; property/content updates never invalidate
+    /// capturing recordings; dropping the guest's handle does not
+    /// invalidate captures (host keeps the layer alive until the last
+    /// capturing recording drops).
+    draw-layer: func(canvas: borrow<canvas>, l: borrow<layer>);
+}

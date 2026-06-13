@@ -1,0 +1,73 @@
+<!--
+  avalonia-wandr — shared build fragment. A consuming app's .csproj is just:
+
+    <Project Sdk="Microsoft.NET.Sdk">
+      <Import Project="../avalonia-wandr/avalonia-wandr.props" />
+      <PropertyGroup>
+        <AssemblyName>my_app</AssemblyName>
+        <RootNamespace>my_app</RootNamespace>
+      </PropertyGroup>
+    </Project>
+
+  The app provides only its Application + root Window and registers them via
+  WandrAvalonia.Host.Configure(...) (from a [ModuleInitializer]). Everything
+  else — the wasi:canvas render backend, harfbuzz text, input + soft-keyboard
+  wiring, the WIT world and its exports — comes from this library.
+
+  componentize-dotnet generates the WIT bindings per-project against the
+  WORLD name, so the library ships as SHARED SOURCE compiled into the app
+  (not a separate .dll): the generated `GuestWorld` namespace must exist in
+  the same assembly as the library code that uses it.
+-->
+<Project>
+
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RuntimeIdentifier>wasi-wasm</RuntimeIdentifier>
+    <UseAppHost>false</UseAppHost>
+    <PublishTrimmed>true</PublishTrimmed>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SelfContained>true</SelfContained>
+    <!-- Host lowers strings/lists into guest memory for the input-handler
+         exports → the component must export cabi_realloc. -->
+    <IlcExportUnmanagedEntrypoints>true</IlcExportUnmanagedEntrypoints>
+    <!-- Implementing IPlatformRenderInterface/IDrawingContextImpl etc. needs
+         the lib (not ref) Avalonia assemblies. Pin the EXACT Avalonia
+         version (these are unstable internal APIs). -->
+    <AvaloniaAccessUnstablePrivateApis>true</AvaloniaAccessUnstablePrivateApis>
+  </PropertyGroup>
+
+  <!-- The library's source, compiled into the consuming component. -->
+  <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)src/**/*.cs" />
+  </ItemGroup>
+
+  <!-- The shared guest world (fixed name → stable `GuestWorld` bindings). -->
+  <ItemGroup>
+    <Wit Remove="**\*.wit" />
+    <Wit Include="$(MSBuildThisFileDirectory)wit" World="guest" />
+  </ItemGroup>
+
+  <!-- HarfBuzzSharp's DllImport("libHarfBuzzSharp") resolves statically
+       against the harfbuzz 14.2.1 wasi archive bundled with the library. -->
+  <ItemGroup>
+    <DirectPInvoke Include="libHarfBuzzSharp" />
+    <NativeLibrary Include="$(MSBuildThisFileDirectory)native/libharfbuzz.a" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BytecodeAlliance.Componentize.DotNet.Wasm.SDK" Version="0.7.0-preview*" />
+    <PackageReference Include="runtime.linux-x64.microsoft.dotnet.ilcompiler.llvm" Version="10.0.0-alpha.1.25162.1" />
+    <!-- Avalonia 12.x net10 assets need a newer corelib than the pinned ILC
+         alpha ships (TimeSpan.FromMilliseconds(long)); 11.3.17 is clean. -->
+    <PackageReference Include="Avalonia" Version="11.3.17" />
+    <PackageReference Include="Avalonia.Headless" Version="11.3.17" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.17" />
+    <PackageReference Include="HarfBuzzSharp" Version="8.3.1.3" />
+  </ItemGroup>
+
+</Project>

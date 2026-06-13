@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Everything reusable (render backend, text, input, IME, the WIT world
+       + exports, harfbuzz, AOT/componentize config, Avalonia packages)
+       comes from the shared library. This app provides only DemoApp.cs
+       (its UI) and AppInit.cs (the Host.Configure registration). -->
+  <Import Project="../../../dotnet/avalonia-wandr/avalonia-wandr.props" />
+
+  <PropertyGroup>
+    <AssemblyName>avalonia_demo</AssemblyName>
+    <RootNamespace>avalonia_demo</RootNamespace>
+  </PropertyGroup>
+
+</Project>

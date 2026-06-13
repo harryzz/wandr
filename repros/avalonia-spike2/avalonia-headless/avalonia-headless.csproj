@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>avalonia_headless</AssemblyName>
+    <RootNamespace>avalonia_headless</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RuntimeIdentifier>wasi-wasm</RuntimeIdentifier>
+    <UseAppHost>false</UseAppHost>
+    <PublishTrimmed>true</PublishTrimmed>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SelfContained>true</SelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BytecodeAlliance.Componentize.DotNet.Wasm.SDK" Version="0.7.0-preview*" />
+    <!-- Bumped from the template's alpha.1.25162.1: that corelib predates
+         TimeSpan.FromMilliseconds(long), which Avalonia 12 net10.0 calls. -->
+    <PackageReference Include="runtime.linux-x64.microsoft.dotnet.ilcompiler.llvm" Version="10.0.0-alpha.1.25162.1" />
+    <PackageReference Include="Avalonia" Version="11.3.17" />
+    <PackageReference Include="Avalonia.Headless" Version="11.3.17" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.17" />
+  </ItemGroup>
+
+  <!-- Avalonia.Headless forces UseHarfBuzz(); HarfBuzzSharp's P/Invokes
+       (module "libHarfBuzzSharp") resolve statically against the same
+       wasi-sdk-24 harfbuzz archive the text-guest links. -->
+  <ItemGroup>
+    <DirectPInvoke Include="libHarfBuzzSharp" />
+    <NativeLibrary Include="../text-guest/native/libharfbuzz.a" />
+  </ItemGroup>
+
+</Project>

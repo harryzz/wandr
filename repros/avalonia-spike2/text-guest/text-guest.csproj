@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>text_guest</AssemblyName>
+    <RootNamespace>text_guest</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RuntimeIdentifier>wasi-wasm</RuntimeIdentifier>
+    <UseAppHost>false</UseAppHost>
+    <PublishTrimmed>true</PublishTrimmed>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SelfContained>true</SelfContained>
+    <WitGeneratedFilesRoot>generated/wit</WitGeneratedFilesRoot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BytecodeAlliance.Componentize.DotNet.Wasm.SDK" Version="0.7.0-preview*" />
+    <PackageReference Include="runtime.linux-x64.microsoft.dotnet.ilcompiler.llvm" Version="10.0.0-alpha.1.25162.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Wit Remove="**\*.wit" />
+    <Wit Include="wit" World="text-spike" />
+  </ItemGroup>
+
+  <!-- harfbuzz 14.2.1 amalgamation compiled with the same wasi-sdk-24 the
+       NativeAOT-LLVM link uses; DirectPInvoke resolves DllImport("harfbuzz")
+       statically against it. -->
+  <ItemGroup>
+    <DirectPInvoke Include="harfbuzz" />
+    <NativeLibrary Include="native/libharfbuzz.a" />
+  </ItemGroup>
+
+</Project>
