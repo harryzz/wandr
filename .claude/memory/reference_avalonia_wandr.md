@@ -75,11 +75,18 @@ of `crates/`; documented in docs/repository-layout.md). App source now in
 bindings per-project against the world name, so the generated `GuestWorld`
 namespace must be in the same assembly as the lib code; the .props compiles
 src/ into the consumer against a FIXED world `wandr:avalonia-guest`. App
-provides only Application + root Window. **KNOWN ISSUE: ~60% idle CPU** —
-render loop repaints every frame (InvalidateVisual + ForceRenderTimerTick,
-no on-demand gating); full redraw is load-bearing (suppresses the
-input-render artifact); fix = on-demand rendering ([[reference_on_demand_rendering]]);
-not investigated yet. See dotnet/avalonia-wandr/README.md.
+provides only Application + root Window. **IDLE CPU FIXED (on-demand
+rendering, 2026-06-13): ~60% → ~3% on device.** Was: forced full repaint
+(InvalidateVisual + PreviousFrameIsRetained=false) + full-surface
+snapshot/blit/present every frame. Now: incremental retention
+(PreviousFrameIsRetained=true, no InvalidateVisual) + on-demand present —
+compositor early-outs when not dirty, CreateDrawingContext→FrameBridge.
+MarkDrawn(), EndFrame skips acquire+snapshot+blit+present unless drawn; size
+from on-resize (no idle buffer acquire). Mini stays fixed by the InFrame
+gate (NOT the full redraw). Verified desktop 291960 frames/1 present, device
+~3% idle, interaction fine. Headroom: frame-pacing WIT to stop max_fps
+wake-ups ([[reference_on_demand_rendering]]) not wired. See
+dotnet/avalonia-wandr/README.md.
 
 **IME / soft keyboard — device-verified.** Wired like slint-wandr: import
 the EXISTING `wandr:ui-shell/ime` (subset copy in wit/deps), call

@@ -154,19 +154,26 @@ internal class WandrRenderTarget : IRenderTarget2
         IsSuitableForDirectRendering = true,
     };
 
+    // A drawing context is created only when the compositor actually renders
+    // (it early-outs when nothing is dirty) — so this is the on-demand
+    // signal: tell FrameBridge a frame was drawn, otherwise it skips the
+    // present entirely. The offscreen genuinely retains previous contents,
+    // so incremental dirty-rect redraw is correct (and cheap when idle); the
+    // mini artifact is handled by CurrentCanvas's InFrame gate, not by
+    // forcing a full redraw.
     public IDrawingContextImpl CreateDrawingContext(bool scaleToDpi)
-        => new WandrDrawingContext();
+    {
+        FrameBridge.MarkDrawn();
+        return new WandrDrawingContext();
+    }
 
     public IDrawingContextImpl CreateDrawingContext(PixelSize expectedPixelSize,
         out RenderTargetDrawingContextProperties properties)
     {
-        // Full redraw every frame (paired with Window.InvalidateVisual) so
-        // the on-frame pass always repaints everything — input-triggered
-        // renders are gated out by FrameBridge.CurrentCanvas, so on-frame
-        // is the only thing that draws.
+        FrameBridge.MarkDrawn();
         properties = new RenderTargetDrawingContextProperties
         {
-            PreviousFrameIsRetained = false,
+            PreviousFrameIsRetained = true,
         };
         return new WandrDrawingContext();
     }

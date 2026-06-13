@@ -63,13 +63,17 @@ Pins (see comments in `avalonia-wandr.props`): Avalonia **11.3.17**
 
 ## Known issues
 
-- **High idle CPU (~60%).** The render loop repaints **every frame**
-  (`Window.InvalidateVisual()` + `ForceRenderTimerTick`, no dirty/on-demand
-  gating) — it renders continuously even when nothing changed. Full redraw
-  is currently load-bearing (it's what suppresses the unscaled
-  input-render artifact, task 107), so the fix is on-demand rendering:
-  render only when Avalonia signals dirty / via frame-pacing, the way the
-  Rust guests do (`reference_on_demand_rendering`). Not yet investigated.
+- **Idle CPU — FIXED (on-demand rendering).** Was ~60% (full repaint +
+  full-surface snapshot/blit/present every frame). Now the compositor
+  renders incrementally and only when something is dirty (it early-outs
+  otherwise); the render target's `CreateDrawingContext` marks the frame
+  drawn, and `FrameBridge` skips the buffer-acquire + snapshot + blit +
+  present entirely when nothing drew. Measured **~3% idle on the Pixel 2
+  XL** (down from ~60%), interaction unaffected. The mini artifact stays
+  fixed via the `InFrame` canvas gate (not the old forced full redraw).
+  Remaining headroom: the host still calls `on-frame` at `max_fps` even
+  when idle; a `frame-pacing` WIT verb (`reference_on_demand_rendering`)
+  to suspend wake-ups would take it toward ~0, but isn't wired yet.
 - Transient overlays (tooltips/popups/menus) are separate top-levels and
   out of scope — they can leave brief residue and aren't wired to arbiter
   surfaces.

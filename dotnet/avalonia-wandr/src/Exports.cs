@@ -10,9 +10,7 @@ public class FrameHandlerImpl : IFrameHandler
     public static void OnFrame(ulong nanos) => Runtime.Frame(nanos);
 
     public static void OnResize(uint width, uint height)
-    {
-        // Surface size is re-read from the frame buffer each on-frame.
-    }
+        => FrameBridge.OnHostResize(width, height);
 }
 
 public class PointerHandlerImpl : IPointerHandler

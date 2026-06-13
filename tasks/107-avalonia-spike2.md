@@ -270,15 +270,20 @@ only its `Application` + root `Window`. Rebuilt + verified from the new
 `apps/user/` location (build OK; device run unchanged — same WIT surface,
 same 41 MB wasm).
 
-### KNOWN ISSUE: high idle CPU (~60%)
+### Idle CPU (~60%) — FIXED (on-demand rendering, 2026-06-13)
 
-The render loop repaints EVERY frame (`InvalidateVisual` +
-`ForceRenderTimerTick`, no dirty/on-demand gating) → continuous rendering
-even when idle. Full redraw is currently load-bearing (suppresses the
-unscaled input-render artifact). Fix = on-demand rendering (render only on
-Avalonia dirty / frame-pacing, like the Rust guests —
-`reference_on_demand_rendering`). NOT investigated yet (user flagged
-2026-06-13). Noted in `dotnet/avalonia-wandr/README.md`.
+Was ~60% idle: the loop forced a full repaint (`InvalidateVisual` +
+`PreviousFrameIsRetained=false`) + a full-surface snapshot/blit/present
+every frame. Fix: incremental retention (`PreviousFrameIsRetained=true`,
+no `InvalidateVisual`) + on-demand present — the compositor early-outs when
+nothing's dirty, `WandrRenderTarget.CreateDrawingContext` calls
+`FrameBridge.MarkDrawn()`, and `EndFrame` skips acquire+snapshot+blit+
+present unless a frame drew. Size comes from `on-resize` (no idle buffer
+acquire). The mini stays fixed by the `InFrame` canvas gate (the forced
+full redraw was NOT what fixed it). Verified: desktop idle = 291,960
+frames / **1 present**; **device idle ~3% CPU (was ~60%)**, rendering +
+tap/type interaction unaffected. Further headroom: a `frame-pacing` WIT
+verb to stop the `max_fps` wake-ups (not wired).
 
 ### Known limitation: transient-overlay ghosts
 

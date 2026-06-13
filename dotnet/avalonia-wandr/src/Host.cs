@@ -71,12 +71,12 @@ internal static class Runtime
                     _window.Show();
             }
 
-            // Full repaint each frame so the opaque window background
-            // overdraws any stale corner (paired with
-            // PreviousFrameIsRetained=false). Input-triggered renders are
-            // gated out by FrameBridge.CurrentCanvas, so on-frame is the
-            // only thing that draws.
-            _window!.InvalidateVisual();
+            // On-demand: pump layout/animation/input and let the compositor
+            // render ONLY if something is dirty (it early-outs otherwise).
+            // No forced full repaint — incremental redraw into the retained
+            // offscreen is correct and idle-cheap; FrameBridge skips the
+            // present when nothing drew (the input-render/mini artifact is
+            // handled by the InFrame canvas gate, not by full redraw).
             Dispatcher.UIThread.RunJobs();
             AvaloniaHeadlessPlatform.ForceRenderTimerTick();
 

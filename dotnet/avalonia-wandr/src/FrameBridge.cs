@@ -48,12 +48,21 @@ internal static class FrameBridge
     /// pass; those renders must no-op (canvas == null) or they draw
     /// UNSCALED into the retained canvas (the miniature-copy artifact).
     /// Deferring to on-frame is correct: input still updates state, and the
-    /// next frame's full redraw (InvalidateVisual + PreviousFrameIsRetained
-    /// = false) reflects it.
+    /// next on-frame's incremental redraw reflects it.
     internal static IDraw.Canvas? CurrentCanvas => InFrame ? _retained : null;
 
     /// True only between BeginFrame and EndFrame.
     internal static bool InFrame { get; private set; }
+
+    /// Set by the render target when the compositor actually draws a frame
+    /// (it early-outs when nothing is dirty). Drives on-demand presenting:
+    /// when idle we skip the buffer acquire + snapshot + blit + present
+    /// entirely, so an idle UI costs ~nothing instead of a full redraw +
+    /// full-surface copy every frame.
+    private static bool _drawn;
+    internal static void MarkDrawn() => _drawn = true;
+
+    private static bool _sizeKnown;
 
     /// Physical surface pixels.
     internal static float SurfaceWidth { get; private set; }
@@ -63,11 +72,31 @@ internal static class FrameBridge
     internal static float LogicalWidth => SurfaceWidth / Density;
     internal static float LogicalHeight => SurfaceHeight / Density;
 
+    /// The host's on-resize gives the surface size without touching the
+    /// swapchain — so idle frames never need to acquire a buffer just to
+    /// learn the size. Render frames re-confirm it from the real buffer.
+    internal static void OnHostResize(uint width, uint height)
+    {
+        if (width == 0 || height == 0)
+            return;
+        SurfaceWidth = width;
+        SurfaceHeight = height;
+        _sizeKnown = true;
+    }
+
     internal static void BeginFrame()
     {
-        _frame = Context.GetCurrentBuffer();
-        SurfaceWidth = _frame.Width();
-        SurfaceHeight = _frame.Height();
+        _drawn = false;
+
+        // Learn the size once without a resize event (first frame): a single
+        // buffer acquire, reused by EndFrame if this frame draws.
+        if (!_sizeKnown)
+        {
+            _frame = Context.GetCurrentBuffer();
+            SurfaceWidth = _frame.Width();
+            SurfaceHeight = _frame.Height();
+            _sizeKnown = true;
+        }
 
         if (_retained is null ||
             _retained.Width() != SurfaceWidth || _retained.Height() != SurfaceHeight)
@@ -79,7 +108,7 @@ internal static class FrameBridge
         // Density base: Avalonia renders in logical units (RenderScaling 1),
         // scale the retained canvas by density to map logical → physical.
         // Balanced by Restore in EndFrame.
-        _retained.Save();
+        _retained!.Save();
         _retained.Scale(Density, Density);
         InFrame = true;
     }
@@ -87,9 +116,17 @@ internal static class FrameBridge
     internal static void EndFrame()
     {
         InFrame = false;
-        if (_frame is null)
-            return;
         _retained!.Restore();
+
+        if (!_drawn)
+        {
+            // Nothing changed this frame — don't acquire/snapshot/present.
+            _frame?.Dispose();
+            _frame = null;
+            return;
+        }
+
+        _frame ??= Context.GetCurrentBuffer();
         using (var img = _retained.Snapshot())
         {
             var full = new ITypes.Rect(0, 0, SurfaceWidth, SurfaceHeight);
