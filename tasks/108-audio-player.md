@@ -82,6 +82,15 @@ flushed mid-play and killed audio.
 - **Trigger:** M1's decode-CPU/battery numbers show offload pays for long
   background playback. Contracts may land before the impl so the guest is
   written against the final shape.
+- **Host underrun robustness (deferred here from M1, 2026-06-14).** Hide
+  AudioFlinger's underrun track-removal so no guest can lose audio by
+  under-feeding/stopping (mechanism-in-host). The host currently keeps MEDIA
+  tracks "direct"; the sound fix = route media playback through the host
+  jitter-pump model (proven glitch-free for calls) while PRESERVING media's
+  direct `pending_frames`/`position`/backpressure semantics. Then drop the
+  guest's close-at-end workaround. Do it here because M4 already touches the
+  host audio path. (Naive alts rejected: silence-padding the direct ring
+  glitches; lazy-re-create needs unreliable dead-track detection.)
 
 ## Discipline (binding — from the design §Discipline)
 1. PCM floor mandatory + sufficient; HW always optional.
