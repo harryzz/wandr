@@ -1,21 +1,19 @@
-//! wandr.audio.player — Slint UI, streaming multi-track player (task 108 M3).
-//!
-//! Scans `/music` (host-preopened, read-only) for albums → tracks, decodes the
-//! current track INCREMENTALLY (Symphonia, low memory) in the
-//! `wandr:background/background` bg-tick, resampling to the 48 kHz backend with a
-//! guest-side linear resampler, and writes PCM to `wasi:audio`. The engine +
-//! now-playing publishing run in bg-tick (every role) so playback + lockscreen
-//! control survive backgrounding. UI is Slint via `crates/slint-wandr`: a Slint
-//! ListView playlist + progress bar with a draggable thumb; cover art is the
-//! album's `albumart.{jpg,png}` decoded guest-side → Slint Image.
+//! wandr.audio.player — Slint streaming music player with a library browser
+//! (task 108 M3). Scans `/music` (host read-only preopen) reading tags, browses
+//! by Albums/Artists/Genres/Songs (drill-down), and streams the current track
+//! incrementally (Symphonia, low memory) in the `wandr:background/background`
+//! bg-tick with a guest-side resampler to the 48 kHz backend. Two views — a
+//! Library browser and a Now-Playing screen — with a mini now-playing bar.
+//! Engine + media-session publishing run in bg-tick (every role).
 //!
 //!   cargo build --target wasm32-wasip2 --release
 //!   cp target/wasm32-wasip2/release/wandr_audio_player.wasm components/ui.wasm
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use slint::{ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
+use slint::{ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
 
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{Decoder, DecoderOptions};
@@ -32,15 +30,28 @@ use crate::bindings::wasi::media_session::session as wsession;
 const OUT_RATE: u32 = 48_000;
 const MUSIC_DIR: &str = "/music";
 
+// tab ids
+const TAB_ALBUMS: i32 = 0;
+const TAB_ARTISTS: i32 = 1;
+const TAB_GENRES: i32 = 2;
+const TAB_SONGS: i32 = 3;
+
 slint::slint! {
     import { ListView } from "std-widgets.slint";
 
-    struct TrackRow { title: string, album: string, current: bool }
+    struct Row { primary: string, secondary: string, current: bool }
 
     export component MainWindow inherits Window {
         background: #141422;
-        in property <string> song-title: "—";
-        in property <string> subtitle: "";
+        in property <int> view: 0;        // 0 = library, 1 = now-playing
+        // library
+        in property <int> tab: 0;
+        in property <bool> in-drill: false;
+        in property <string> crumb: "";
+        in property <[Row]> rows: [];
+        // now-playing / mini-bar
+        in property <string> np-title: "—";
+        in property <string> np-sub: "";
         in property <string> elapsed: "0:00";
         in property <string> right-time: "0:00";
         in property <float> progress: 0.0;
@@ -49,7 +60,11 @@ slint::slint! {
         in property <bool> has-cover: false;
         in property <bool> shuffle: false;
         in property <bool> repeat: false;
-        in property <[TrackRow]> tracks: [];
+        callback set-tab(int);
+        callback row-tap(int);
+        callback go-back();
+        callback open-np();
+        callback close-np();
         callback toggle();
         callback prev-track();
         callback next-track();
@@ -57,175 +72,204 @@ slint::slint! {
         callback toggle-shuffle();
         callback toggle-repeat();
         callback toggle-time();
-        callback select(int);
 
-        property <length> art-size: min(root.width, root.height) * 0.30;
-        property <length> btn: min(root.width, root.height) * 0.13;
         property <color> on-col: #4285f4;
         property <color> off-col: #8a8aa0;
 
-        VerticalLayout {
-            padding: root.width * 0.06;
-            spacing: root.height * 0.012;
+        // ── Library view ──────────────────────────────────────────────────
+        if (root.view == 0) : Rectangle {
+            width: 100%; height: 100%;
+            VerticalLayout {
+                padding: 10px;
+                spacing: 6px;
 
-            HorizontalLayout {
-                alignment: center;
-                Rectangle {
-                    width: art-size; height: art-size;
-                    border-radius: art-size * 0.08;
-                    clip: true;
-                    background: #24243a;
-                    if root.has-cover : Image {
-                        width: 100%; height: 100%;
-                        source: root.cover;
-                        image-fit: ImageFit.cover;
-                    }
-                    if !root.has-cover : Rectangle {
-                        width: art-size * 0.66; height: art-size * 0.66;
-                        border-radius: self.width / 2;
-                        background: #4285f4;
-                        Rectangle {
-                            width: art-size * 0.14; height: art-size * 0.14;
-                            border-radius: self.width / 2;
-                            background: #24243a;
+                // Tabs
+                HorizontalLayout {
+                    spacing: 6px;
+                    for t[i] in [ "Albums", "Artists", "Genres", "Songs" ] : Rectangle {
+                        height: 34px;
+                        border-radius: 8px;
+                        background: root.tab == i ? #20203a : transparent;
+                        Text {
+                            text: t; font-size: 13px;
+                            horizontal-alignment: center; vertical-alignment: center;
+                            color: root.tab == i ? on-col : #c8c8d8;
                         }
+                        TouchArea { clicked => { root.set-tab(i); } }
                     }
                 }
-            }
 
-            Text {
-                text: root.song-title; color: white; font-size: 19px; font-weight: 700;
-                horizontal-alignment: center; overflow: elide;
-            }
-            Text {
-                text: root.subtitle; color: #b0b0c8; font-size: 13px;
-                horizontal-alignment: center; overflow: elide;
-            }
-
-            // Progress bar with a draggable seek thumb.
-            prog := Rectangle {
-                height: 16px;
-                property <bool> dragging: false;
-                property <float> drag-frac: 0.0;
-                property <float> shown: dragging ? drag-frac : root.progress;
-                Rectangle {
-                    width: 100%; height: 4px; y: (parent.height - self.height) / 2;
-                    border-radius: 2px; background: #3a3a52;
-                }
-                Rectangle {
-                    width: parent.width * prog.shown; height: 4px;
-                    y: (parent.height - self.height) / 2;
-                    border-radius: 2px; background: #4285f4;
-                }
-                Rectangle {
-                    width: 14px; height: 14px; border-radius: 7px; background: white;
-                    x: prog.shown * (parent.width - self.width);
-                    y: (parent.height - self.height) / 2;
-                }
-                TouchArea {
-                    moved => {
-                        prog.drag-frac = clamp(self.mouse-x / self.width, 0.0, 1.0);
-                        prog.dragging = true;
-                    }
-                    pointer-event(ev) => {
-                        if (ev.kind == PointerEventKind.down) {
-                            prog.drag-frac = clamp(self.mouse-x / self.width, 0.0, 1.0);
-                            prog.dragging = true;
-                        }
-                        if (ev.kind == PointerEventKind.up) {
-                            root.seek(prog.drag-frac);
-                            prog.dragging = false;
-                        }
-                    }
-                }
-            }
-
-            HorizontalLayout {
-                Text { text: root.elapsed; color: #b0b0c8; font-size: 12px; }
-                Rectangle { }
-                TouchArea {
-                    width: rt.preferred-width; height: rt.preferred-height;
-                    clicked => { root.toggle-time(); }
-                    rt := Text { text: root.right-time; color: #b0b0c8; font-size: 12px; }
-                }
-            }
-
-            // Transport: shuffle · prev · play/pause · next · repeat.
-            HorizontalLayout {
-                alignment: center;
-                spacing: root.width * 0.045;
-
-                Rectangle {
-                    width: btn * 0.62; height: btn * 0.62;
-                    Path {
-                        width: 100%; height: 100%; viewbox-width: 100; viewbox-height: 100;
-                        commands: "M 14 34 L 42 34 L 86 66 M 74 58 L 88 66 L 76 73 M 14 66 L 42 66 L 86 34 M 76 27 L 88 34 L 74 42";
-                        stroke: root.shuffle ? on-col : off-col; stroke-width: 7px; fill: transparent;
-                    }
-                    TouchArea { clicked => { root.toggle-shuffle(); } }
-                }
-                Rectangle {
-                    width: btn * 0.8; height: btn * 0.8;
-                    Path {
-                        width: 100%; height: 100%; viewbox-width: 100; viewbox-height: 100;
-                        commands: "M 64 28 L 40 50 L 64 72 Z M 32 28 L 38 28 L 38 72 L 32 72 Z";
-                        fill: white;
-                    }
-                    TouchArea { clicked => { root.prev-track(); } }
-                }
-                Rectangle {
-                    width: btn; height: btn; border-radius: btn / 2; background: #4285f4;
-                    if !root.playing : Path {
-                        width: 100%; height: 100%; viewbox-width: 100; viewbox-height: 100;
-                        commands: "M 36 24 L 76 50 L 36 76 Z";
-                        fill: white;
-                    }
-                    if root.playing : Path {
-                        width: 100%; height: 100%; viewbox-width: 100; viewbox-height: 100;
-                        commands: "M 34 26 L 45 26 L 45 74 L 34 74 Z M 55 26 L 66 26 L 66 74 L 55 74 Z";
-                        fill: white;
-                    }
-                    TouchArea { clicked => { root.toggle(); } }
-                }
-                Rectangle {
-                    width: btn * 0.8; height: btn * 0.8;
-                    Path {
-                        width: 100%; height: 100%; viewbox-width: 100; viewbox-height: 100;
-                        commands: "M 36 28 L 60 50 L 36 72 Z M 62 28 L 68 28 L 68 72 L 62 72 Z";
-                        fill: white;
-                    }
-                    TouchArea { clicked => { root.next-track(); } }
-                }
-                Rectangle {
-                    width: btn * 0.62; height: btn * 0.62;
-                    Path {
-                        width: 100%; height: 100%; viewbox-width: 100; viewbox-height: 100;
-                        commands: "M 34 38 L 60 38 A 14 14 0 0 1 74 52 L 74 58 M 66 53 L 74 62 L 82 53 M 66 62 L 40 62 A 14 14 0 0 1 26 48 L 26 42 M 18 47 L 26 38 L 34 47";
-                        stroke: root.repeat ? on-col : off-col; stroke-width: 7px; fill: transparent;
-                    }
-                    TouchArea { clicked => { root.toggle-repeat(); } }
-                }
-            }
-
-            // Playlist.
-            ListView {
-                vertical-stretch: 1;
-                for t[i] in root.tracks : Rectangle {
-                    height: 46px;
-                    background: t.current ? #20203a : transparent;
+                // Breadcrumb / back (when drilled in)
+                if (root.in-drill) : Rectangle {
+                    height: 30px;
                     HorizontalLayout {
-                        padding-left: 10px; padding-right: 10px;
-                        VerticalLayout {
-                            alignment: center;
-                            Text {
-                                text: t.title; font-size: 14px; overflow: elide;
-                                color: t.current ? #4285f4 : white;
+                        spacing: 8px;
+                        Rectangle {
+                            width: 26px; height: 26px;
+                            Path {
+                                width: 100%; height: 100%; viewbox-width: 100; viewbox-height: 100;
+                                commands: "M 60 24 L 34 50 L 60 76"; stroke: white; stroke-width: 9px; fill: transparent;
                             }
-                            Text { text: t.album; font-size: 11px; color: #8a8aa0; overflow: elide; }
+                            TouchArea { clicked => { root.go-back(); } }
+                        }
+                        Text {
+                            text: root.crumb; color: white; font-size: 15px; font-weight: 700;
+                            vertical-alignment: center; overflow: elide;
                         }
                     }
-                    TouchArea { clicked => { root.select(i); } }
                 }
+
+                // Current level (groups or tracks)
+                ListView {
+                    vertical-stretch: 1;
+                    for r[i] in root.rows : Rectangle {
+                        height: 50px;
+                        background: r.current ? #20203a : transparent;
+                        HorizontalLayout {
+                            padding-left: 10px; padding-right: 10px;
+                            VerticalLayout {
+                                alignment: center;
+                                Text {
+                                    text: r.primary; font-size: 15px; overflow: elide;
+                                    color: r.current ? on-col : white;
+                                }
+                                Text { text: r.secondary; font-size: 11px; color: #8a8aa0; overflow: elide; }
+                            }
+                        }
+                        TouchArea { clicked => { root.row-tap(i); } }
+                    }
+                }
+
+                // Mini now-playing bar
+                Rectangle {
+                    height: 58px; border-radius: 10px; background: #1c1c2e;
+                    TouchArea { clicked => { root.open-np(); } }
+                    HorizontalLayout {
+                        padding: 10px; spacing: 10px;
+                        VerticalLayout {
+                            alignment: center; horizontal-stretch: 1;
+                            Text { text: root.np-title; color: white; font-size: 14px; overflow: elide; }
+                            Text { text: root.np-sub; color: #8a8aa0; font-size: 11px; overflow: elide; }
+                        }
+                        Rectangle {
+                            width: 42px; height: 42px; border-radius: 21px; background: #4285f4;
+                            if !root.playing : Path {
+                                width: 100%; height: 100%; viewbox-width: 100; viewbox-height: 100;
+                                commands: "M 38 26 L 74 50 L 38 74 Z"; fill: white;
+                            }
+                            if root.playing : Path {
+                                width: 100%; height: 100%; viewbox-width: 100; viewbox-height: 100;
+                                commands: "M 35 28 L 45 28 L 45 72 L 35 72 Z M 55 28 L 65 28 L 65 72 L 55 72 Z"; fill: white;
+                            }
+                            TouchArea { clicked => { root.toggle(); } }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Now-Playing view ──────────────────────────────────────────────
+        if (root.view == 1) : Rectangle {
+            width: 100%; height: 100%;
+            property <length> art-size: min(root.width, root.height) * 0.42;
+            property <length> btn: min(root.width, root.height) * 0.15;
+            VerticalLayout {
+                padding: root.width * 0.06;
+                spacing: root.height * 0.018;
+                alignment: center;
+
+                // close (down) button
+                HorizontalLayout {
+                    Rectangle {
+                        width: 30px; height: 30px;
+                        Path {
+                            width: 100%; height: 100%; viewbox-width: 100; viewbox-height: 100;
+                            commands: "M 24 40 L 50 66 L 76 40"; stroke: white; stroke-width: 9px; fill: transparent;
+                        }
+                        TouchArea { clicked => { root.close-np(); } }
+                    }
+                    Rectangle { }
+                }
+
+                HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: art-size; height: art-size; border-radius: art-size * 0.08;
+                        clip: true; background: #24243a;
+                        if root.has-cover : Image { width: 100%; height: 100%; source: root.cover; image-fit: ImageFit.cover; }
+                        if !root.has-cover : Rectangle {
+                            width: art-size * 0.66; height: art-size * 0.66; border-radius: self.width / 2; background: #4285f4;
+                            Rectangle { width: art-size * 0.14; height: art-size * 0.14; border-radius: self.width / 2; background: #24243a; }
+                        }
+                    }
+                }
+
+                Text { text: root.np-title; color: white; font-size: 20px; font-weight: 700; horizontal-alignment: center; overflow: elide; }
+                Text { text: root.np-sub; color: #b0b0c8; font-size: 13px; horizontal-alignment: center; overflow: elide; }
+
+                prog := Rectangle {
+                    height: 16px;
+                    property <bool> dragging: false;
+                    property <float> drag-frac: 0.0;
+                    property <float> shown: dragging ? drag-frac : root.progress;
+                    Rectangle { width: 100%; height: 4px; y: (parent.height - self.height)/2; border-radius: 2px; background: #3a3a52; }
+                    Rectangle { width: parent.width * prog.shown; height: 4px; y: (parent.height - self.height)/2; border-radius: 2px; background: #4285f4; }
+                    Rectangle { width: 14px; height: 14px; border-radius: 7px; background: white; x: prog.shown * (parent.width - self.width); y: (parent.height - self.height)/2; }
+                    TouchArea {
+                        moved => { prog.drag-frac = clamp(self.mouse-x / self.width, 0.0, 1.0); prog.dragging = true; }
+                        pointer-event(ev) => {
+                            if (ev.kind == PointerEventKind.down) { prog.drag-frac = clamp(self.mouse-x / self.width, 0.0, 1.0); prog.dragging = true; }
+                            if (ev.kind == PointerEventKind.up) { root.seek(prog.drag-frac); prog.dragging = false; }
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    Text { text: root.elapsed; color: #b0b0c8; font-size: 12px; }
+                    Rectangle { }
+                    TouchArea {
+                        width: rt.preferred-width; height: rt.preferred-height;
+                        clicked => { root.toggle-time(); }
+                        rt := Text { text: root.right-time; color: #b0b0c8; font-size: 12px; }
+                    }
+                }
+
+                HorizontalLayout {
+                    alignment: center; spacing: root.width * 0.045;
+                    Rectangle {
+                        width: btn * 0.62; height: btn * 0.62;
+                        Path { width: 100%; height: 100%; viewbox-width: 100; viewbox-height: 100;
+                            commands: "M 14 34 L 42 34 L 86 66 M 74 58 L 88 66 L 76 73 M 14 66 L 42 66 L 86 34 M 76 27 L 88 34 L 74 42";
+                            stroke: root.shuffle ? on-col : off-col; stroke-width: 7px; fill: transparent; }
+                        TouchArea { clicked => { root.toggle-shuffle(); } }
+                    }
+                    Rectangle {
+                        width: btn * 0.8; height: btn * 0.8;
+                        Path { width: 100%; height: 100%; viewbox-width: 100; viewbox-height: 100;
+                            commands: "M 64 28 L 40 50 L 64 72 Z M 32 28 L 38 28 L 38 72 L 32 72 Z"; fill: white; }
+                        TouchArea { clicked => { root.prev-track(); } }
+                    }
+                    Rectangle {
+                        width: btn; height: btn; border-radius: btn / 2; background: #4285f4;
+                        if !root.playing : Path { width: 100%; height: 100%; viewbox-width: 100; viewbox-height: 100; commands: "M 36 24 L 76 50 L 36 76 Z"; fill: white; }
+                        if root.playing : Path { width: 100%; height: 100%; viewbox-width: 100; viewbox-height: 100; commands: "M 34 26 L 45 26 L 45 74 L 34 74 Z M 55 26 L 66 26 L 66 74 L 55 74 Z"; fill: white; }
+                        TouchArea { clicked => { root.toggle(); } }
+                    }
+                    Rectangle {
+                        width: btn * 0.8; height: btn * 0.8;
+                        Path { width: 100%; height: 100%; viewbox-width: 100; viewbox-height: 100;
+                            commands: "M 36 28 L 60 50 L 36 72 Z M 62 28 L 68 28 L 68 72 L 62 72 Z"; fill: white; }
+                        TouchArea { clicked => { root.next-track(); } }
+                    }
+                    Rectangle {
+                        width: btn * 0.62; height: btn * 0.62;
+                        Path { width: 100%; height: 100%; viewbox-width: 100; viewbox-height: 100;
+                            commands: "M 34 38 L 60 38 A 14 14 0 0 1 74 52 L 74 58 M 66 53 L 74 62 L 82 53 M 66 62 L 40 62 A 14 14 0 0 1 26 48 L 26 42 M 18 47 L 26 38 L 34 47";
+                            stroke: root.repeat ? on-col : off-col; stroke-width: 7px; fill: transparent; }
+                        TouchArea { clicked => { root.toggle-repeat(); } }
+                    }
+                }
+                Rectangle { vertical-stretch: 1; }
             }
         }
     }
@@ -235,8 +279,10 @@ slint::slint! {
 #[derive(Clone)]
 struct LibTrack {
     path: String,
-    title: String, // derived from filename (cheap)
+    title: String,
+    artist: String,
     album: String,
+    genre: String,
     art_path: Option<String>,
 }
 
@@ -246,10 +292,10 @@ struct Loaded {
     track_id: u32,
     channels: usize,
     resampler: Option<LinearResampler>,
-    pending: Vec<f32>, // resampled 48k interleaved, not yet written
+    pending: Vec<f32>,
     pending_pos: usize,
     eof: bool,
-    total_frames: u64, // at 48k (0 = unknown)
+    total_frames: u64,
     title: String,
     subtitle: String,
     art: Option<(Vec<u8>, u32, u32)>,
@@ -258,7 +304,16 @@ struct Loaded {
 #[derive(Default)]
 struct State {
     library: Vec<LibTrack>,
-    order: Vec<usize>, // play order (shuffle-aware) → library index
+    albums: Vec<(String, Vec<usize>)>,
+    artists: Vec<(String, Vec<usize>)>,
+    genres: Vec<(String, Vec<usize>)>,
+    // browse nav
+    view: i32, // 0 library, 1 now-playing
+    tab: i32,
+    drill: Option<usize>,
+    // play queue
+    queue: Vec<usize>, // natural-order lib indices of the play context
+    order: Vec<usize>, // queue, possibly shuffled
     order_pos: usize,
     scanned: bool,
     loaded: Option<Loaded>,
@@ -268,16 +323,13 @@ struct State {
     anchor_track: u64,
     sw_frames: u64,
     ended: bool,
-    published: bool,
     pub_playing: bool,
     last_pub_sec: i64,
     shuffle: bool,
     repeat: bool,
     show_remaining: bool,
-    // UI dirty flags
-    list_dirty: bool,
+    rows_dirty: bool,
     meta_dirty: bool,
-    // album-art cache (decode once per album)
     art_cache: Option<(String, Vec<u8>, u32, u32)>,
     rng: u64,
 }
@@ -289,7 +341,7 @@ thread_local! {
 
 // ── Linear streaming resampler (src → 48k) ───────────────────────────────────
 struct LinearResampler {
-    step: f64, // source frames advanced per output frame
+    step: f64,
     ch: usize,
     pos: f64,
     last: Vec<f32>,
@@ -312,7 +364,7 @@ impl LinearResampler {
         }
         let mut out = Vec::with_capacity(((n as f64 / self.step) as usize + 2) * ch);
         while self.pos < n as f64 {
-            let i = self.pos.floor() as usize; // 0..n-1
+            let i = self.pos.floor() as usize;
             let frac = (self.pos - i as f64) as f32;
             for c in 0..ch {
                 let a = if i == 0 { self.last[c] } else { input[(i - 1) * ch + c] };
@@ -327,7 +379,7 @@ impl LinearResampler {
     }
 }
 
-// ── Library scan ─────────────────────────────────────────────────────────────
+// ── Library scan (reads tags) ────────────────────────────────────────────────
 fn pretty_title(fname: &str) -> String {
     let stem = fname.rsplit_once('.').map(|(a, _)| a).unwrap_or(fname);
     let trimmed = stem
@@ -346,6 +398,53 @@ fn is_audio(p: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
+fn ext_of(path: &str) -> &str {
+    path.rsplit_once('.').map(|(_, e)| e).unwrap_or("")
+}
+
+/// Read (title, artist, album, genre) tags without decoding audio.
+fn read_tags(path: &str) -> (Option<String>, Option<String>, Option<String>, Option<String>) {
+    let none = (None, None, None, None);
+    let Ok(file) = std::fs::File::open(path) else {
+        return none;
+    };
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = Hint::new();
+    hint.with_extension(ext_of(path));
+    let Ok(mut probed) = symphonia::default::get_probe().format(
+        &hint,
+        mss,
+        &FormatOptions::default(),
+        &MetadataOptions::default(),
+    ) else {
+        return none;
+    };
+    let (mut ti, mut ar, mut al, mut ge) = (None, None, None, None);
+    let mut scan = |rev: &symphonia::core::meta::MetadataRevision| {
+        for tag in rev.tags() {
+            match tag.std_key {
+                Some(StandardTagKey::TrackTitle) => ti = Some(tag.value.to_string()),
+                Some(StandardTagKey::Artist) => ar = Some(tag.value.to_string()),
+                Some(StandardTagKey::AlbumArtist) => {
+                    if ar.is_none() {
+                        ar = Some(tag.value.to_string())
+                    }
+                }
+                Some(StandardTagKey::Album) => al = Some(tag.value.to_string()),
+                Some(StandardTagKey::Genre) => ge = Some(tag.value.to_string()),
+                _ => {}
+            }
+        }
+    };
+    if let Some(rev) = probed.format.metadata().current() {
+        scan(rev);
+    }
+    if let Some(rev) = probed.metadata.get().as_ref().and_then(|m| m.current()) {
+        scan(rev);
+    }
+    (ti, ar, al, ge)
+}
+
 fn scan_library() -> Vec<LibTrack> {
     let mut out = Vec::new();
     let Ok(albums) = std::fs::read_dir(MUSIC_DIR) else {
@@ -359,7 +458,7 @@ fn scan_library() -> Vec<LibTrack> {
         .collect();
     album_dirs.sort();
     for apath in album_dirs {
-        let album = apath.file_name().unwrap().to_string_lossy().to_string();
+        let dir_album = apath.file_name().unwrap().to_string_lossy().to_string();
         let art_path = ["albumart.jpg", "albumart.png", "cover.jpg", "cover.png", "folder.jpg"]
             .iter()
             .map(|f| apath.join(f))
@@ -372,11 +471,15 @@ fn scan_library() -> Vec<LibTrack> {
             files.flatten().map(|e| e.path()).filter(|p| is_audio(p)).collect();
         tracks.sort();
         for p in tracks {
+            let path = p.to_string_lossy().to_string();
             let fname = p.file_name().unwrap().to_string_lossy().to_string();
+            let (ti, ar, al, ge) = read_tags(&path);
             out.push(LibTrack {
-                path: p.to_string_lossy().to_string(),
-                title: pretty_title(&fname),
-                album: album.clone(),
+                path,
+                title: ti.unwrap_or_else(|| pretty_title(&fname)),
+                artist: ar.unwrap_or_else(|| "Unknown Artist".to_string()),
+                album: al.unwrap_or_else(|| dir_album.clone()),
+                genre: ge.unwrap_or_else(|| "Unknown Genre".to_string()),
                 art_path: art_path.clone(),
             });
         }
@@ -384,14 +487,18 @@ fn scan_library() -> Vec<LibTrack> {
     out
 }
 
-fn ext_of(path: &str) -> &str {
-    path.rsplit_once('.').map(|(_, e)| e).unwrap_or("")
+fn group_by(lib: &[LibTrack], key: impl Fn(&LibTrack) -> &str) -> Vec<(String, Vec<usize>)> {
+    let mut m: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, t) in lib.iter().enumerate() {
+        m.entry(key(t).to_string()).or_default().push(i);
+    }
+    m.into_iter().collect()
 }
 
 fn load_art(s: &mut State, art_path: &Option<String>) -> Option<(Vec<u8>, u32, u32)> {
     let path = art_path.as_ref()?;
-    if let Some((cached_path, rgba, w, h)) = &s.art_cache {
-        if cached_path == path {
+    if let Some((cached, rgba, w, h)) = &s.art_cache {
+        if cached == path {
             return Some((rgba.clone(), *w, *h));
         }
     }
@@ -404,9 +511,9 @@ fn load_art(s: &mut State, art_path: &Option<String>) -> Option<(Vec<u8>, u32, u
     Some((raw, w, h))
 }
 
-// ── Load a library track for streaming (no full decode) ──────────────────────
+// ── Load + stream ────────────────────────────────────────────────────────────
 fn load(s: &mut State, lib_index: usize) {
-    s.pb = None; // close any open track (channels may differ); play() reopens
+    s.pb = None;
     s.playing = false;
     let Some(entry) = s.library.get(lib_index).cloned() else {
         return;
@@ -427,7 +534,7 @@ fn load(s: &mut State, lib_index: usize) {
         Ok(p) => p,
         Err(_) => return,
     };
-    let mut format = probed.format;
+    let format = probed.format;
     let track = match format.default_track() {
         Some(t) => t.clone(),
         None => return,
@@ -442,26 +549,6 @@ fn load(s: &mut State, lib_index: usize) {
         Ok(d) => d,
         Err(_) => return,
     };
-
-    // Tags (real title/artist/album override the filename-derived title).
-    let (mut title, mut artist, mut album) = (None, None, None);
-    if let Some(rev) = format.metadata().current() {
-        for tag in rev.tags() {
-            match tag.std_key {
-                Some(StandardTagKey::TrackTitle) => title = Some(tag.value.to_string()),
-                Some(StandardTagKey::Artist) => artist = Some(tag.value.to_string()),
-                Some(StandardTagKey::Album) => album = Some(tag.value.to_string()),
-                _ => {}
-            }
-        }
-    }
-    let title = title.unwrap_or_else(|| entry.title.clone());
-    let subtitle = match (artist, album) {
-        (Some(a), Some(al)) => format!("{a} — {al}"),
-        (Some(a), None) => a,
-        (None, _) => entry.album.clone(),
-    };
-
     let total_frames = n_frames
         .map(|nf| (nf as u128 * OUT_RATE as u128 / src_rate.max(1) as u128) as u64)
         .unwrap_or(0);
@@ -478,25 +565,23 @@ fn load(s: &mut State, lib_index: usize) {
         pending_pos: 0,
         eof: false,
         total_frames,
-        title,
-        subtitle,
+        title: entry.title.clone(),
+        subtitle: format!("{} — {}", entry.artist, entry.album),
         art,
     });
     s.anchor_dev = 0;
     s.anchor_track = 0;
     s.sw_frames = 0;
     s.ended = false;
-    s.list_dirty = true;
+    s.rows_dirty = true;
     s.meta_dirty = true;
-    publish_metadata(s);
+    publish_metadata(s, &entry);
     publish_state(s);
     publish_position(s);
-    s.published = true;
     s.pub_playing = s.playing;
     s.last_pub_sec = -1;
 }
 
-// ── Streaming decode + ring feed ─────────────────────────────────────────────
 fn decode_more(s: &mut State) -> bool {
     let Some(l) = s.loaded.as_mut() else {
         return false;
@@ -557,7 +642,7 @@ fn pump(s: &mut State) {
                 l.pending_pos = 0;
             }
             if accepted == 0 {
-                break; // ring full
+                break;
             }
         } else {
             if s.loaded.as_ref().unwrap().eof {
@@ -581,9 +666,7 @@ fn play(s: &mut State) {
     if s.loaded.is_none() {
         return;
     }
-    if s.ended {
-        s.ended = false;
-    }
+    s.ended = false;
     match &s.pb {
         Some(pb) => {
             let _ = pb.start();
@@ -668,13 +751,11 @@ fn go_to(s: &mut State, order_pos: usize, autoplay: bool) {
 }
 
 fn on_track_end(s: &mut State) {
-    if s.repeat && s.order_pos + 1 >= s.order.len() {
-        // repeat the queue: wrap to the start.
-        go_to(s, 0, true);
-    } else if s.order_pos + 1 < s.order.len() {
+    if s.order_pos + 1 < s.order.len() {
         go_to(s, s.order_pos + 1, true);
+    } else if s.repeat {
+        go_to(s, 0, true);
     } else {
-        // end of queue, no repeat: stop at the end.
         s.pb = None;
         s.playing = false;
         s.ended = true;
@@ -684,35 +765,73 @@ fn on_track_end(s: &mut State) {
     }
 }
 
-fn rebuild_order(s: &mut State, keep_lib: Option<usize>) {
-    let n = s.library.len();
+fn fisher_yates(v: &mut [usize], rng: &mut u64) {
+    let mut i = v.len();
+    while i > 1 {
+        i -= 1;
+        *rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let j = (*rng >> 33) as usize % (i + 1);
+        v.swap(i, j);
+    }
+}
+
+/// Rebuild `order` from `queue` (shuffled or natural), positioned at `keep`.
+fn apply_order(s: &mut State, keep_lib: Option<usize>) {
     if s.shuffle {
-        let mut v: Vec<usize> = (0..n).collect();
-        let mut i = n;
-        while i > 1 {
-            i -= 1;
-            s.rng = s.rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            let j = (s.rng >> 33) as usize % (i + 1);
-            v.swap(i, j);
-        }
+        let mut v = s.queue.clone();
+        fisher_yates(&mut v, &mut s.rng);
         s.order = v;
     } else {
-        s.order = (0..n).collect();
+        s.order = s.queue.clone();
     }
     if let Some(lib) = keep_lib {
         s.order_pos = s.order.iter().position(|&k| k == lib).unwrap_or(0);
+    } else {
+        s.order_pos = 0;
     }
-    s.list_dirty = true;
+}
+
+/// Start playing from a browsed track list (becomes the queue).
+fn play_from(s: &mut State, tracks: Vec<usize>, tapped: usize) {
+    if tracks.is_empty() {
+        return;
+    }
+    let keep = tracks[tapped.min(tracks.len() - 1)];
+    s.queue = tracks;
+    apply_order(s, Some(keep));
+    go_to(s, s.order_pos, true);
+}
+
+// ── Browse helpers ───────────────────────────────────────────────────────────
+fn showing_tracks(s: &State) -> bool {
+    s.tab == TAB_SONGS || s.drill.is_some()
+}
+
+fn groups_for(s: &State) -> &[(String, Vec<usize>)] {
+    match s.tab {
+        TAB_ALBUMS => &s.albums,
+        TAB_ARTISTS => &s.artists,
+        TAB_GENRES => &s.genres,
+        _ => &[],
+    }
+}
+
+fn current_track_list(s: &State) -> Vec<usize> {
+    if s.tab == TAB_SONGS {
+        return (0..s.library.len()).collect();
+    }
+    match s.drill {
+        Some(g) => groups_for(s).get(g).map(|(_, idxs)| idxs.clone()).unwrap_or_default(),
+        None => Vec::new(),
+    }
 }
 
 // ── media-session publishing ────────────────────────────────────────────────
-fn publish_metadata(s: &State) {
-    let Some(l) = &s.loaded else { return };
-    let (artist, album) = l.subtitle.split_once(" — ").unwrap_or((l.subtitle.as_str(), ""));
+fn publish_metadata(_s: &State, entry: &LibTrack) {
     wsession::set_metadata(&wsession::Metadata {
-        title: l.title.clone(),
-        artist: artist.to_string(),
-        album: album.to_string(),
+        title: entry.title.clone(),
+        artist: entry.artist.clone(),
+        album: entry.album.clone(),
         artwork: None,
     });
 }
@@ -743,16 +862,20 @@ fn after_change_publish(s: &mut State) {
     s.last_pub_sec = -1;
 }
 
-// ── Engine step (bg-tick, every role) ────────────────────────────────────────
+// ── Engine step (bg-tick) ────────────────────────────────────────────────────
 fn engine_step(s: &mut State) -> u32 {
     if !s.scanned {
         s.scanned = true;
         s.rng = 0x9E3779B97F4A7C15;
         s.library = scan_library();
-        s.order = (0..s.library.len()).collect();
-        s.list_dirty = true;
+        s.albums = group_by(&s.library, |t| &t.album);
+        s.artists = group_by(&s.library, |t| &t.artist);
+        s.genres = group_by(&s.library, |t| &t.genre);
+        s.queue = (0..s.library.len()).collect();
+        s.order = s.queue.clone();
+        s.rows_dirty = true;
         if !s.library.is_empty() {
-            go_to(s, 0, false); // load first track, paused
+            go_to(s, 0, false);
         }
     }
     if s.loaded.is_none() {
@@ -798,27 +921,31 @@ fn push_ui() {
         let Some(ui) = b.as_ref() else { return };
         STATE.with(|st| {
             let mut s = st.borrow_mut();
+            // now-playing fields
             let (title, subtitle, total) = match &s.loaded {
                 Some(l) => (l.title.clone(), l.subtitle.clone(), l.total_frames),
-                None => ("No music in /music".to_string(), String::new(), 0),
+                None => ("—".to_string(), String::new(), 0),
             };
             let pos = position_frames(&s).min(if total > 0 { total } else { u64::MAX });
-            let progress = if total > 0 { (pos as f32 / total as f32).clamp(0.0, 1.0) } else { 0.0 };
-            ui.set_song_title(title.into());
-            ui.set_subtitle(subtitle.into());
+            ui.set_np_title(title.into());
+            ui.set_np_sub(subtitle.into());
             ui.set_elapsed(fmt_time(pos).into());
             ui.set_right_time(
-                if s.show_remaining {
-                    format!("-{}", fmt_time(total.saturating_sub(pos)))
-                } else {
-                    fmt_time(total)
-                }
-                .into(),
+                if s.show_remaining { format!("-{}", fmt_time(total.saturating_sub(pos))) } else { fmt_time(total) }.into(),
             );
-            ui.set_progress(progress);
+            ui.set_progress(if total > 0 { (pos as f32 / total as f32).clamp(0.0, 1.0) } else { 0.0 });
             ui.set_playing(s.playing);
             ui.set_shuffle(s.shuffle);
             ui.set_repeat(s.repeat);
+            ui.set_view(s.view);
+            ui.set_tab(s.tab);
+            ui.set_in_drill(s.drill.is_some());
+            ui.set_crumb(
+                s.drill
+                    .and_then(|g| groups_for(&s).get(g).map(|(n, _)| n.clone()))
+                    .unwrap_or_default()
+                    .into(),
+            );
 
             if s.meta_dirty {
                 s.meta_dirty = false;
@@ -833,26 +960,38 @@ fn push_ui() {
                 }
             }
 
-            if s.list_dirty {
-                s.list_dirty = false;
+            if s.rows_dirty {
+                s.rows_dirty = false;
                 let cur = cur_lib_index(&s);
-                let rows: Vec<TrackRow> = s
-                    .library
-                    .iter()
-                    .enumerate()
-                    .map(|(i, t)| TrackRow {
-                        title: t.title.as_str().into(),
-                        album: t.album.as_str().into(),
-                        current: Some(i) == cur,
-                    })
-                    .collect();
-                ui.set_tracks(ModelRc::from(Rc::new(VecModel::from(rows))));
+                let rows: Vec<Row> = if showing_tracks(&s) {
+                    current_track_list(&s)
+                        .iter()
+                        .map(|&li| {
+                            let t = &s.library[li];
+                            Row {
+                                primary: t.title.as_str().into(),
+                                secondary: t.artist.as_str().into(),
+                                current: Some(li) == cur,
+                            }
+                        })
+                        .collect()
+                } else {
+                    groups_for(&s)
+                        .iter()
+                        .map(|(name, idxs)| Row {
+                            primary: name.as_str().into(),
+                            secondary: format!("{} song{}", idxs.len(), if idxs.len() == 1 { "" } else { "s" }).into(),
+                            current: false,
+                        })
+                        .collect()
+                };
+                ui.set_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
             }
         });
     });
 }
 
-// ── Transport commands (Slint callbacks + media-session on-action) ───────────
+// ── Commands ─────────────────────────────────────────────────────────────────
 fn cmd_toggle() {
     STATE.with(|st| {
         let mut s = st.borrow_mut();
@@ -940,7 +1079,6 @@ fn cmd_prev() {
         if s.order.is_empty() {
             return;
         }
-        // >3s in → restart current; else previous track.
         if position_frames(&s) > 3 * OUT_RATE as u64 {
             seek_to(&mut s, 0);
             after_change_publish(&mut s);
@@ -951,21 +1089,12 @@ fn cmd_prev() {
     });
     push_ui();
 }
-fn cmd_select(lib_index: usize) {
-    STATE.with(|st| {
-        let mut s = st.borrow_mut();
-        if let Some(pos) = s.order.iter().position(|&k| k == lib_index) {
-            go_to(&mut s, pos, true);
-        }
-    });
-    push_ui();
-}
 fn cmd_toggle_shuffle() {
     STATE.with(|st| {
         let mut s = st.borrow_mut();
         s.shuffle = !s.shuffle;
         let cur = cur_lib_index(&s);
-        rebuild_order(&mut s, cur);
+        apply_order(&mut s, cur);
     });
     push_ui();
 }
@@ -977,6 +1106,46 @@ fn cmd_toggle_time() {
     STATE.with(|st| st.borrow_mut().show_remaining ^= true);
     push_ui();
 }
+fn cmd_set_tab(tab: i32) {
+    STATE.with(|st| {
+        let mut s = st.borrow_mut();
+        s.tab = tab;
+        s.drill = None;
+        s.rows_dirty = true;
+    });
+    push_ui();
+}
+fn cmd_go_back() {
+    STATE.with(|st| {
+        let mut s = st.borrow_mut();
+        s.drill = None;
+        s.rows_dirty = true;
+    });
+    push_ui();
+}
+fn cmd_row_tap(i: usize) {
+    STATE.with(|st| {
+        let mut s = st.borrow_mut();
+        if showing_tracks(&s) {
+            let tracks = current_track_list(&s);
+            if i < tracks.len() {
+                play_from(&mut s, tracks, i);
+            }
+        } else if i < groups_for(&s).len() {
+            s.drill = Some(i);
+            s.rows_dirty = true;
+        }
+    });
+    push_ui();
+}
+fn cmd_open_np() {
+    STATE.with(|st| st.borrow_mut().view = 1);
+    push_ui();
+}
+fn cmd_close_np() {
+    STATE.with(|st| st.borrow_mut().view = 0);
+    push_ui();
+}
 
 fn engine_tick() -> u32 {
     let delay = STATE.with(|st| engine_step(&mut st.borrow_mut()));
@@ -984,7 +1153,7 @@ fn engine_tick() -> u32 {
     delay
 }
 
-// ── WIT: the audio-extras world (alongside slint_wandr::launch!) ─────────────
+// ── WIT bindings (alongside slint_wandr::launch!) ────────────────────────────
 mod bindings {
     slint_wandr::__wit_bindgen::generate!({
         path: "wit",
@@ -1034,7 +1203,11 @@ slint_wandr::launch!(|| {
     ui.on_toggle_shuffle(cmd_toggle_shuffle);
     ui.on_toggle_repeat(cmd_toggle_repeat);
     ui.on_toggle_time(cmd_toggle_time);
-    ui.on_select(|i| cmd_select(i as usize));
+    ui.on_set_tab(|t| cmd_set_tab(t));
+    ui.on_row_tap(|i| cmd_row_tap(i as usize));
+    ui.on_go_back(cmd_go_back);
+    ui.on_open_np(cmd_open_np);
+    ui.on_close_np(cmd_close_np);
     UI.with(|u| *u.borrow_mut() = Some(ui.clone_strong()));
     push_ui();
     ui.show().expect("audio-player: show");
