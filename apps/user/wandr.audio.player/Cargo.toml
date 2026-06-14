@@ -1,7 +1,9 @@
-# wandr.audio.player — task 108 M1: Symphonia decode → wasi:audio PCM, with a
-# wasi:canvas waveform/transport UI. Pure-Rust canvas reactor (cdylib), like
-# crates/dioxus-canvas guests and the launcher. See docs/audio-player-design.md.
+# wandr.audio.player — task 108. Symphonia decode → wasi:audio PCM, now-playing
+# via wasi:media-session, UI in Slint (crates/slint-wandr). The audio engine runs
+# in the wandr:background/background bg-tick (render-independent), so playback +
+# lockscreen control survive backgrounding. See docs/audio-player-design.md.
 #   cargo build --target wasm32-wasip2 --release
+#   cp target/wasm32-wasip2/release/wandr_audio_player.wasm components/ui.wasm
 [package]
 name    = "wandr-audio-player"
 version = "0.1.0"
@@ -12,11 +14,19 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = "0.57"
-# Default features = royalty-free codecs/formats (FLAC default-on, no flag, no
-# licensing concern — the design's "licensing stays guest-side"). mp3/aac are
-# additive feature flags when wanted.
-symphonia = "0.5"
+# UI via Slint over crates/slint-wandr. MUST pin the same git rev as
+# crates/slint-wandr's i-slint-core (one crate instance = one platform global);
+# the WIT bindings reuse slint_wandr::__wit_bindgen so there is one runtime.
+slint = { git = "https://github.com/slint-ui/slint", rev = "46cfde659f21de52bb0fa3693826ca99a6466d88", default-features = false, features = ["compat-1-2", "std"] }
+slint-wandr = { path = "../../../crates/slint-wandr" }
+# Default features = royalty-free codecs/formats (FLAC/WAV/OGG/Vorbis); `mp3`
+# added for the user's library (patents expired 2017 — licensing stays guest-side
+# per the design). Streaming decode (incremental, low memory) + a guest-side
+# linear resampler to the 48 kHz backend rate.
+symphonia = { version = "0.5", features = ["mp3"] }
+# Guest-side cover-art decode (embedded FLAC/ID3 PICTURE → RGBA → Slint Image).
+# Pure-Rust jpeg+png only (wasm-ok), no default codecs.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
 [profile.release]
 opt-level = "s"

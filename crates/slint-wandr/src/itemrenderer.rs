@@ -353,27 +353,41 @@ impl<'a> WandrItemRenderer<'a> {
         f: impl FnOnce(&wtypes::Image) -> R,
     ) -> Option<R> {
         let inner: &i_slint_core::ImageInner = image.into();
-        let key = ImageCacheKey::new(inner).map(|k| (k, target.0, target.1))?;
-        IMAGE_CACHE.with(|c| {
-            let mut cache = c.borrow_mut();
-            if !cache.contains_key(&key) {
-                let buffer = inner.render_to_buffer(Some(euclid::Size2D::new(
-                    target.0.max(1),
-                    target.1.max(1),
-                )))?;
-                let (w, h, rgba) = buffer_to_rgba8_unpremul(&buffer);
-                if w == 0 || h == 0 {
-                    return None;
+        // Path/embedded images have a stable cache key → upload once, reuse. A
+        // runtime pixel-buffer image (Image::from_rgba8) has NO cache key; render
+        // + upload it uncached each call so it still draws (e.g. decoded album
+        // art). Either way the host image is dropped at end of `f`/frame for the
+        // uncached path.
+        let key = ImageCacheKey::new(inner).map(|k| (k, target.0, target.1));
+        match key {
+            Some(key) => IMAGE_CACHE.with(|c| {
+                let mut cache = c.borrow_mut();
+                if !cache.contains_key(&key) {
+                    let img = self.render_and_upload(inner, target)?;
+                    cache.insert(key.clone(), img);
                 }
-                match self.graphics.image_from_rgba8(w, h, &rgba) {
-                    Ok(img) => {
-                        cache.insert(key.clone(), img);
-                    }
-                    Err(()) => return None,
-                }
+                cache.get(&key).map(f)
+            }),
+            None => {
+                let img = self.render_and_upload(inner, target)?;
+                Some(f(&img))
             }
-            cache.get(&key).map(f)
-        })
+        }
+    }
+
+    /// Render a Slint image to a tight RGBA8 buffer and upload it to a host image.
+    fn render_and_upload(
+        &self,
+        inner: &i_slint_core::ImageInner,
+        target: (u32, u32),
+    ) -> Option<wtypes::Image> {
+        let buffer =
+            inner.render_to_buffer(Some(euclid::Size2D::new(target.0.max(1), target.1.max(1))))?;
+        let (w, h, rgba) = buffer_to_rgba8_unpremul(&buffer);
+        if w == 0 || h == 0 {
+            return None;
+        }
+        self.graphics.image_from_rgba8(w, h, &rgba).ok()
     }
 }
 
