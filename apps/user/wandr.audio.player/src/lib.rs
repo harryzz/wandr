@@ -10,7 +10,7 @@
 //!   cp target/wasm32-wasip2/release/wandr_audio_player.wasm components/ui.wasm
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -293,6 +293,7 @@ struct LibTrack {
     artist: String,
     album: String,
     genre: String,
+    track_no: Option<u32>, // from tags — orders canonical titles within an album
     art_path: Option<String>,
     akey: String, // stable album key ("artist|album" from tags) — cover-cache key
 }
@@ -416,11 +417,19 @@ fn ext_of(path: &str) -> &str {
     path.rsplit_once('.').map(|(_, e)| e).unwrap_or("")
 }
 
-/// Read (title, artist, album, genre) tags without decoding audio.
-fn read_tags(path: &str) -> (Option<String>, Option<String>, Option<String>, Option<String>) {
-    let none = (None, None, None, None);
+#[derive(Default)]
+struct Tags {
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    genre: Option<String>,
+    track_no: Option<u32>,
+}
+
+/// Read tags without decoding audio.
+fn read_tags(path: &str) -> Tags {
     let Ok(file) = std::fs::File::open(path) else {
-        return none;
+        return Tags::default();
     };
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
     let mut hint = Hint::new();
@@ -431,21 +440,29 @@ fn read_tags(path: &str) -> (Option<String>, Option<String>, Option<String>, Opt
         &FormatOptions::default(),
         &MetadataOptions::default(),
     ) else {
-        return none;
+        return Tags::default();
     };
-    let (mut ti, mut ar, mut al, mut ge) = (None, None, None, None);
+    let mut t = Tags::default();
     let mut scan = |rev: &symphonia::core::meta::MetadataRevision| {
         for tag in rev.tags() {
             match tag.std_key {
-                Some(StandardTagKey::TrackTitle) => ti = Some(tag.value.to_string()),
-                Some(StandardTagKey::Artist) => ar = Some(tag.value.to_string()),
+                Some(StandardTagKey::TrackTitle) => t.title = Some(tag.value.to_string()),
+                Some(StandardTagKey::Artist) => t.artist = Some(tag.value.to_string()),
                 Some(StandardTagKey::AlbumArtist) => {
-                    if ar.is_none() {
-                        ar = Some(tag.value.to_string())
+                    if t.artist.is_none() {
+                        t.artist = Some(tag.value.to_string())
                     }
                 }
-                Some(StandardTagKey::Album) => al = Some(tag.value.to_string()),
-                Some(StandardTagKey::Genre) => ge = Some(tag.value.to_string()),
+                Some(StandardTagKey::Album) => t.album = Some(tag.value.to_string()),
+                Some(StandardTagKey::Genre) => t.genre = Some(tag.value.to_string()),
+                Some(StandardTagKey::TrackNumber) => {
+                    // value may be "3" or "3/12" — take the leading integer.
+                    let s = tag.value.to_string();
+                    let n: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+                    if let Ok(v) = n.parse::<u32>() {
+                        t.track_no = Some(v);
+                    }
+                }
                 _ => {}
             }
         }
@@ -456,7 +473,7 @@ fn read_tags(path: &str) -> (Option<String>, Option<String>, Option<String>, Opt
     if let Some(rev) = probed.metadata.get().as_ref().and_then(|m| m.current()) {
         scan(rev);
     }
-    (ti, ar, al, ge)
+    t
 }
 
 fn scan_library() -> Vec<LibTrack> {
@@ -487,16 +504,17 @@ fn scan_library() -> Vec<LibTrack> {
         for p in tracks {
             let path = p.to_string_lossy().to_string();
             let fname = p.file_name().unwrap().to_string_lossy().to_string();
-            let (ti, ar, al, ge) = read_tags(&path);
-            let artist = ar.unwrap_or_else(|| "Unknown Artist".to_string());
-            let album = al.unwrap_or_else(|| dir_album.clone());
+            let tags = read_tags(&path);
+            let artist = tags.artist.unwrap_or_else(|| "Unknown Artist".to_string());
+            let album = tags.album.unwrap_or_else(|| dir_album.clone());
             let akey = format!("{artist}|{album}");
             out.push(LibTrack {
                 path,
-                title: ti.unwrap_or_else(|| pretty_title(&fname)),
+                title: tags.title.unwrap_or_else(|| pretty_title(&fname)),
                 artist,
                 album,
-                genre: ge.unwrap_or_else(|| "Unknown Genre".to_string()),
+                genre: tags.genre.unwrap_or_else(|| "Unknown Genre".to_string()),
+                track_no: tags.track_no,
                 art_path: art_path.clone(),
                 akey,
             });
@@ -511,6 +529,65 @@ fn group_by(lib: &[LibTrack], key: impl Fn(&LibTrack) -> &str) -> Vec<(String, V
         m.entry(key(t).to_string()).or_default().push(i);
     }
     m.into_iter().collect()
+}
+
+/// Apply canonical album/artist/track-title to every track sharing `akey`.
+/// Empty canonical fields fall back to the existing tag/filename value (so a
+/// source that returns no name leaves the raw value untouched). Track titles are
+/// matched by canonical order — the album's tracks sorted by tag track-number
+/// (else path) zipped against the source tracklist. `akey` itself never changes
+/// (it stays the tag-derived cover-cache key). Does NOT recompute groupings.
+fn apply_album_meta(s: &mut State, akey: &str, album: &str, artist: &str, tracks: &[String]) -> bool {
+    let mut idxs: Vec<usize> =
+        s.library.iter().enumerate().filter(|(_, t)| t.akey == akey).map(|(i, _)| i).collect();
+    idxs.sort_by(|&a, &b| {
+        let ta = s.library[a].track_no.unwrap_or(u32::MAX);
+        let tb = s.library[b].track_no.unwrap_or(u32::MAX);
+        ta.cmp(&tb).then_with(|| s.library[a].path.cmp(&s.library[b].path))
+    });
+    let mut changed = false;
+    for (n, &li) in idxs.iter().enumerate() {
+        let t = &mut s.library[li];
+        if !album.is_empty() && t.album != album {
+            t.album = album.to_string();
+            changed = true;
+        }
+        if !artist.is_empty() && t.artist != artist {
+            t.artist = artist.to_string();
+            changed = true;
+        }
+        if let Some(title) = tracks.get(n) {
+            if !title.is_empty() && &t.title != title {
+                t.title = title.clone();
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
+/// After names changed for `akey`: recompute the groupings (preserving the
+/// drilled group by name across the re-sort), refresh the now-playing display if
+/// the current track is in this album, and mark rows dirty.
+fn regroup_after_meta(s: &mut State, akey: &str) {
+    let drilled_name = s.drill.and_then(|g| groups_for(s).get(g).map(|(n, _)| n.clone()));
+    s.albums = group_by(&s.library, |t| &t.album);
+    s.artists = group_by(&s.library, |t| &t.artist);
+    s.genres = group_by(&s.library, |t| &t.genre);
+    if let Some(name) = drilled_name {
+        s.drill = groups_for(s).iter().position(|(n, _)| *n == name);
+    }
+    if let Some(cur) = cur_lib_index(s) {
+        if s.library[cur].akey == akey {
+            let e = s.library[cur].clone();
+            if let Some(l) = s.loaded.as_mut() {
+                l.title = e.title.clone();
+                l.subtitle = format!("{} — {}", e.artist, e.album);
+            }
+            publish_metadata(s, &e);
+        }
+    }
+    s.rows_dirty = true;
 }
 
 fn load_art(s: &mut State, art_path: &Option<String>) -> Option<(Vec<u8>, u32, u32)> {
@@ -889,32 +966,37 @@ fn engine_step(s: &mut State) -> u32 {
         s.rng = 0x9E3779B97F4A7C15;
         wandr_step_executor::init(); // Phase A — async metadata-fetch reactor
         s.library = scan_library();
+        // Phase A — per distinct album (akey): load the cached cover + cached
+        // canonical names (applied before grouping so the library reflects them),
+        // and queue a fetch for whatever is still missing. One sequential task
+        // does the network work (rate-limit-friendly).
+        let mut seen = HashSet::new();
+        let mut to_fetch = Vec::new();
+        for i in 0..s.library.len() {
+            let akey = s.library[i].akey.clone();
+            if !seen.insert(akey.clone()) {
+                continue;
+            }
+            if let Some(dec) = load_cached_cover(&akey) {
+                s.album_art.insert(akey.clone(), dec);
+            }
+            let meta = load_cached_meta(&akey);
+            if let Some((al, ar, tr)) = &meta {
+                apply_album_meta(s, &akey, al, ar, tr);
+            }
+            let have_cover = s.album_art.contains_key(&akey);
+            let have_meta = meta.is_some();
+            if !have_cover || !have_meta {
+                let t = &s.library[i];
+                to_fetch.push((akey.clone(), t.artist.clone(), t.album.clone(), have_cover));
+            }
+        }
         s.albums = group_by(&s.library, |t| &t.album);
         s.artists = group_by(&s.library, |t| &t.artist);
         s.genres = group_by(&s.library, |t| &t.genre);
         s.queue = (0..s.library.len()).collect();
         s.order = s.queue.clone();
         s.rows_dirty = true;
-        // Phase A — covers: load from the /state cache where present, else queue a
-        // fetch. One sequential task does the network work (rate-limit-friendly).
-        let albums: Vec<(String, String, String)> = s
-            .albums
-            .iter()
-            .filter_map(|(_, idxs)| {
-                idxs.first().map(|&i| {
-                    let t = &s.library[i];
-                    (t.akey.clone(), t.artist.clone(), t.album.clone())
-                })
-            })
-            .collect();
-        let mut to_fetch = Vec::new();
-        for (akey, artist, album) in albums {
-            if let Some(dec) = load_cached_cover(&akey) {
-                s.album_art.insert(akey, dec);
-            } else {
-                to_fetch.push((akey, artist, album));
-            }
-        }
         spawn_library_fetch(to_fetch);
         if !s.library.is_empty() {
             go_to(s, 0, false);
@@ -1233,6 +1315,8 @@ struct Cand {
     name: String,
     artist: String,
     cover: String,
+    id: String,            // source album id (mbid / deezer id / itunes collectionId)
+    tracks: Vec<String>,   // canonical tracklist if the first response carried it
     src: &'static str,
 }
 impl Cand {
@@ -1249,9 +1333,14 @@ fn decode_rgba(bytes: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
     Some((rgba.into_raw(), w, h))
 }
 
+fn safe_key(akey: &str) -> String {
+    akey.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect()
+}
 fn cache_file(akey: &str) -> String {
-    let safe: String = akey.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
-    format!("{CACHE_DIR}/{safe}.img")
+    format!("{CACHE_DIR}/{}.img", safe_key(akey))
+}
+fn meta_file(akey: &str) -> String {
+    format!("{CACHE_DIR}/{}.json", safe_key(akey))
 }
 
 fn load_cached_cover(akey: &str) -> Option<(Vec<u8>, u32, u32)> {
@@ -1262,6 +1351,27 @@ fn load_cached_cover(akey: &str) -> Option<(Vec<u8>, u32, u32)> {
 fn save_cached_cover(akey: &str, bytes: &[u8]) {
     let _ = std::fs::create_dir_all(CACHE_DIR);
     let _ = std::fs::write(cache_file(akey), bytes);
+}
+
+/// Persist the canonical album/artist/tracklist so relaunch shows real names
+/// without hitting the network (covers are cached too → the fetch is skipped).
+fn save_cached_meta(akey: &str, album: &str, artist: &str, tracks: &[String]) {
+    let _ = std::fs::create_dir_all(CACHE_DIR);
+    let v = serde_json::json!({ "album": album, "artist": artist, "tracks": tracks });
+    let _ = std::fs::write(meta_file(akey), v.to_string());
+}
+
+fn load_cached_meta(akey: &str) -> Option<(String, String, Vec<String>)> {
+    let body = std::fs::read_to_string(meta_file(akey)).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let album = v.get("album").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let artist = v.get("artist").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let tracks = v
+        .get("tracks")
+        .and_then(|x| x.as_array())
+        .map(|a| a.iter().filter_map(|t| t.as_str().map(|s| s.to_string())).collect())
+        .unwrap_or_default();
+    Some((album, artist, tracks))
 }
 
 /// GET raw bytes, following up to 6 redirects manually (the shim sends one
@@ -1311,7 +1421,15 @@ fn jstr(v: &serde_json::Value, path: &[&str]) -> String {
             None => return String::new(),
         };
     }
-    cur.as_str().unwrap_or("").to_string()
+    if let Some(s) = cur.as_str() {
+        s.to_string()
+    } else if let Some(n) = cur.as_u64() {
+        n.to_string()
+    } else if let Some(n) = cur.as_i64() {
+        n.to_string()
+    } else {
+        String::new()
+    }
 }
 
 /// MusicBrainz release search → Cover Art Archive front image by release MBID.
@@ -1328,6 +1446,8 @@ async fn lookup_musicbrainz(client: &reqwest::Client, artist: &str, album: &str)
         name: jstr(rel, &["title"]),
         artist: jstr(rel, &["artist-credit", "0", "name"]),
         cover: format!("https://coverartarchive.org/release/{mbid}/front-500"),
+        id: mbid,
+        tracks: Vec::new(),
         src: "musicbrainz",
     }
 }
@@ -1342,7 +1462,14 @@ async fn lookup_deezer(client: &reqwest::Client, artist: &str, album: &str) -> C
         let xl = jstr(d, &["cover_xl"]);
         if xl.is_empty() { jstr(d, &["cover_big"]) } else { xl }
     };
-    Cand { name: jstr(d, &["title"]), artist: jstr(d, &["artist", "name"]), cover, src: "deezer" }
+    Cand {
+        name: jstr(d, &["title"]),
+        artist: jstr(d, &["artist", "name"]),
+        cover,
+        id: jstr(d, &["id"]),
+        tracks: Vec::new(),
+        src: "deezer",
+    }
 }
 
 /// iTunes Search (no key) → artworkUrl (upscaled to 600×600).
@@ -1352,7 +1479,14 @@ async fn lookup_itunes(client: &reqwest::Client, artist: &str, album: &str) -> C
     let Some(v) = get_json(client, &url).await else { return Cand::default() };
     let Some(r) = v.get("results").and_then(|r| r.get(0)) else { return Cand::default() };
     let cover = jstr(r, &["artworkUrl100"]).replace("100x100bb", "600x600bb");
-    Cand { name: jstr(r, &["collectionName"]), artist: jstr(r, &["artistName"]), cover, src: "itunes" }
+    Cand {
+        name: jstr(r, &["collectionName"]),
+        artist: jstr(r, &["artistName"]),
+        cover,
+        id: jstr(r, &["collectionId"]),
+        tracks: Vec::new(),
+        src: "itunes",
+    }
 }
 
 /// Last.fm album.getInfo (needs LASTFM_API_KEY) → largest non-placeholder image.
@@ -1384,11 +1518,87 @@ async fn lookup_lastfm(client: &reqwest::Client, artist: &str, album: &str) -> C
             best
         })
         .unwrap_or_default();
-    Cand { name: jstr(&v, &["album", "name"]), artist: jstr(&v, &["album", "artist"]), cover, src: "lastfm" }
+    // album.getinfo carries the tracklist inline (track[].name, in order).
+    let tracks = v
+        .get("album")
+        .and_then(|a| a.get("tracks"))
+        .and_then(|t| t.get("track"))
+        .and_then(|t| t.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|t| t.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    Cand {
+        name: jstr(&v, &["album", "name"]),
+        artist: jstr(&v, &["album", "artist"]),
+        cover,
+        id: String::new(),
+        tracks,
+        src: "lastfm",
+    }
 }
 
-/// One album's multi-source lookup: query MusicBrainz → Deezer → iTunes, log
-/// each, return the first candidate that yielded a cover. (Caching + UI next.)
+/// Fetch the canonical tracklist for the chosen candidate. Uses the inline list
+/// if the first response already carried it (Last.fm), else one follow-up call
+/// keyed by the source album id. Empty on any failure (titles then fall back).
+async fn fetch_tracklist(client: &reqwest::Client, c: &Cand) -> Vec<String> {
+    if !c.tracks.is_empty() {
+        return c.tracks.clone();
+    }
+    if c.id.is_empty() {
+        return Vec::new();
+    }
+    match c.src {
+        "musicbrainz" => {
+            let url = format!("https://musicbrainz.org/ws/2/release/{}?inc=recordings&fmt=json", c.id);
+            let Some(v) = get_json(client, &url).await else { return Vec::new() };
+            let mut out = Vec::new();
+            if let Some(media) = v.get("media").and_then(|m| m.as_array()) {
+                for md in media {
+                    if let Some(tr) = md.get("tracks").and_then(|t| t.as_array()) {
+                        for t in tr {
+                            out.push(t.get("title").and_then(|x| x.as_str()).unwrap_or("").to_string());
+                        }
+                    }
+                }
+            }
+            out
+        }
+        "deezer" => {
+            let url = format!("https://api.deezer.com/album/{}", c.id);
+            let Some(v) = get_json(client, &url).await else { return Vec::new() };
+            v.get("tracks")
+                .and_then(|t| t.get("data"))
+                .and_then(|d| d.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .map(|t| t.get("title").and_then(|x| x.as_str()).unwrap_or("").to_string())
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+        "itunes" => {
+            let url = format!("https://itunes.apple.com/lookup?id={}&entity=song", c.id);
+            let Some(v) = get_json(client, &url).await else { return Vec::new() };
+            v.get("results")
+                .and_then(|r| r.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter(|x| x.get("wrapperType").and_then(|w| w.as_str()) == Some("track"))
+                        .map(|t| t.get("trackName").and_then(|x| x.as_str()).unwrap_or("").to_string())
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// One album's multi-source lookup: query MusicBrainz → Deezer → iTunes →
+/// Last.fm, log each, return the first candidate that yielded a cover (its name/
+/// artist/tracklist are then used as the canonical metadata).
 async fn fetch_one(client: &reqwest::Client, artist: &str, album: &str) -> Option<Cand> {
     log1(&format!("[meta] lookup {artist:?} / {album:?}"));
     let mb = lookup_musicbrainz(client, artist, album).await;
@@ -1410,7 +1620,7 @@ async fn fetch_one(client: &reqwest::Client, artist: &str, album: &str) -> Optio
 /// Pre-fetch metadata/art for every album in one sequential task (on the
 /// step-executor, so it runs across bg-ticks without blocking audio). Sequential
 /// + a courtesy delay respects MusicBrainz's 1 req/s limit.
-fn spawn_library_fetch(albums: Vec<(String, String, String)>) {
+fn spawn_library_fetch(albums: Vec<(String, String, String, bool)>) {
     if albums.is_empty() {
         return;
     }
@@ -1425,22 +1635,41 @@ fn spawn_library_fetch(albums: Vec<(String, String, String)>) {
                 return;
             }
         };
-        for (akey, artist, album) in albums {
+        for (akey, artist, album, have_cover) in albums {
             if let Some(c) = fetch_one(&client, &artist, &album).await {
-                match download_bytes(&client, &c.cover).await {
-                    Some(bytes) => {
-                        save_cached_cover(&akey, &bytes);
-                        if let Some(dec) = decode_rgba(&bytes) {
-                            log1(&format!("[meta] cover {akey} {}x{} ({} bytes) via {}", dec.1, dec.2, bytes.len(), c.src));
-                            STATE.with(|st| {
-                                let mut s = st.borrow_mut();
-                                s.album_art.insert(akey.clone(), dec);
-                                s.meta_dirty = true;
-                            });
-                            push_ui();
-                        }
+                // Canonical names + tracklist (fall back to raw tags/filenames
+                // where a source returned nothing). Persist + apply in-memory.
+                let tracks = fetch_tracklist(&client, &c).await;
+                log1(&format!("[meta]   tracklist [{}]: {} title(s)", c.src, tracks.len()));
+                save_cached_meta(&akey, &c.name, &c.artist, &tracks);
+                let changed = STATE.with(|st| {
+                    let mut s = st.borrow_mut();
+                    let ch = apply_album_meta(&mut s, &akey, &c.name, &c.artist, &tracks);
+                    if ch {
+                        regroup_after_meta(&mut s, &akey);
                     }
-                    None => log1(&format!("[meta] cover download failed: {}", c.cover)),
+                    ch
+                });
+                if changed {
+                    push_ui();
+                }
+                // Cover (skip if we already had it cached).
+                if !have_cover {
+                    match download_bytes(&client, &c.cover).await {
+                        Some(bytes) => {
+                            save_cached_cover(&akey, &bytes);
+                            if let Some(dec) = decode_rgba(&bytes) {
+                                log1(&format!("[meta] cover {akey} {}x{} ({} bytes) via {}", dec.1, dec.2, bytes.len(), c.src));
+                                STATE.with(|st| {
+                                    let mut s = st.borrow_mut();
+                                    s.album_art.insert(akey.clone(), dec);
+                                    s.meta_dirty = true;
+                                });
+                                push_ui();
+                            }
+                        }
+                        None => log1(&format!("[meta] cover download failed: {}", c.cover)),
+                    }
                 }
             }
             wandr_step_executor::sleep(Duration::from_millis(1100)).await;
