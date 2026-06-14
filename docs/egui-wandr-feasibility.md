@@ -80,6 +80,115 @@ present (canvas-context)
    budget.
 3. Only if atlas re-upload dominates: `image.write-region`.
 
+## In-depth verification (2026-06-14) — is the path clean?
+
+Re-checked the claim against the actual artifacts (contract WIT, host impl,
+egui rendering core). **Clean = bounded, verified, no hidden blockers — but
+NOT drop-in: one additive verb + its host impl + a perf spike.**
+
+- **Toolchain: clean, zero risk.** Pure Rust → `wasm32-wasip2` +
+  `wit_bindgen`, the identical shipped path of `crates/slint-wandr` and
+  `crates/dioxus-canvas`. No WasmGC, no adapter fork, no corelib pins.
+- **Supporting verbs: present AND host-implemented (verified).** Confirmed
+  in `proposals/wasi-canvas/wit/canvas.wit` and live in
+  `runtime/wandr-host/src/wasi_canvas_002_impl.rs` (skia_safe):
+  `image-from-rgba8`, `clip-rect`, `draw-path` (untextured fallback),
+  `image` + `image-pattern`/`sampling`. So egui's entire loop EXCEPT the
+  mesh draw runs on today's contract+host.
+- **The one gap: `draw-mesh`** — confirmed NOT in the WIT and NOT in the
+  host. It's the documented R2 additive deferral (egui = the promoting
+  consumer; shape pre-validated by wasm-tools; promotion specs
+  index-validation → trap). The egui→skia mapping is clean:
+  `drawVertices(Vertices::new_copy(TriangleList, pos, texs=uv, colors,
+  indices), BlendMode::Modulate, paint{shader = image-pattern(atlas, local
+  matrix = scale(texW,texH)), anti_alias=false})`. Two host details, both
+  known/expressible: (a) skia `texs` are in SHADER space, not normalized →
+  the atlas shader needs the scale-to-texel local matrix; (b) per-vertex
+  color × texture = `BlendMode::Modulate`.
+- **One spec wrinkle to pin at promotion (the only "not fully clean"
+  point):** `draw-mesh(…, texture: option<image>)` bakes egui's
+  modulate + linear-sampling + AA-off conventions into the host impl. Fine
+  for egui, but it makes the verb egui-shaped; a second mesh consumer
+  (Flutter `drawVertices` is noted to "ride" this promotion) might need a
+  blend/sampling param. Resolve the verb's generality once, at promotion,
+  to avoid a later breaking re-spec.
+- **Idle cost now solved upstream:** the on-demand rendering shipped for
+  avalonia-wandr (incremental + skip-present-when-idle, `MarkDrawn`) is the
+  same mechanism egui's `needs_repaint`→frame-pacing wants, so an idle egui
+  guest would be ~free. Only ACTIVE-frame vertex wire cost remains the
+  measurement (immediate mode: busy screen ≈ 10⁴ verts ≈ ~200 KB/frame).
+- **No hidden blockers:** the sole unmappable feature, `PaintCallback`
+  (custom GPU / 3D), is a genuine named exclusion (wasi-gfx side), needed
+  by no standard widget.
+
+**Net:** the path is clean and free of surprises; the work is exactly
+"add `draw-mesh` (additive) + host skia `drawVertices` + a spike to measure
+per-frame vertex cost," with the verb-generality decision the one thing to
+get right up front. Unchanged from the original verdict — now confirmed
+against the real contract/host, not just analysis.
+
+## Design Q&A (2026-06-14) — guest-side emulation + wire cost
+
+**Can `draw-mesh` be emulated guest-side with existing verbs? No.** Two
+routes, both rejected: (a) decompose to vector verbs — breaks on per-vertex
+GOURAUD color/alpha (egui's AA = per-vertex alpha feathering; flat fills
+can't interpolate color across a triangle → no AA), and textured triangles
+(text) would need one clip+image+restore PER triangle (~10⁴/frame, absurd);
+(b) guest software-rasterizes the whole frame → `image-from-rgba8` +
+`draw-image` — fully expressible and correct, but uploads a ~15 MB full-frame
+bitmap per repaint (vs ~200 KB of verts) and moves raster off the host GPU
+to guest CPU. So `draw-mesh` (host `drawVertices`) is genuinely the only
+clean way to get gouraud color + texture modulation + AA in one GPU call —
+confirms the R5 "primitive, not derivable" finding against egui's real AA.
+
+**Active-frame wire cost — Avalonia approach, does clean spec win?** Idle:
+yes, identically — `needs_repaint`→frame-pacing→skip frame = zero (the
+on-demand mechanism shipped for avalonia-wandr). Active: Avalonia's win is
+RETAINED+dirty-tracked deltas; egui is IMMEDIATE (full re-tessellation, no
+deltas) so that win does NOT transfer — and need not, because the boundary
+is **in-process**: a `draw-mesh` call hands the host a ptr+len into guest
+linear memory (bulk memcpy, not IPC). ~200 KB/repaint = microseconds. Clean
+spec wins: (1) flat/parallel buffers (`positions/uvs: list<point>`,
+`colors`/`indices: list<u32>`) matching skia `SkVertices::MakeCopy`'s
+separate arrays → host near-zero-copy + bulk-memcpy lowering (egui
+de-interleaves guest-side, one cheap pass); (2) frame-pacing for idle. A
+retained `mesh` resource (true Avalonia retention) is a poor fit (egui has
+no stable per-frame mesh identity) — skip. Net: the wire is a cheap memcpy;
+the only real per-frame cost is host GPU rasterization, identical for any
+consumer. The "wire cost = main risk" framing softens to a non-issue.
+
+## Contract-cleanliness reconsideration (2026-06-14) — draw-mesh vs wasi-gfx
+
+Pressed on "is the interface clean / standard / non-duplicating?", the
+draw-mesh-in-wasi:canvas plan does NOT pass the *standard* bar, and the
+recommendation flips:
+
+- draw-mesh is non-duplicating ✓ and reusable ✓, BUT it has **no W3C
+  Canvas2D analog** (Canvas2D has no `drawVertices`); it's a skia extension
+  (`SkCanvas::drawVertices`). wasi:canvas is positioned as the **Canvas2D**
+  companion to wasi-gfx (the web's Canvas2D-vs-WebGPU split), so a
+  gouraud-textured-triangle verb is GPU-layer scope creep into the 2D layer.
+- egui is fundamentally a **GPU mesh renderer** — its real backend is
+  `egui_wgpu` (egui → wgpu → WebGPU), and **wasi-gfx/wasi-webgpu** exists to
+  run exactly that as a component. So the clean, WASI-standard placement is
+  **egui → wasi-gfx, NOT draw-mesh in wasi:canvas.** egui then *validates*
+  the wasi-canvas ↔ wasi-gfx boundary (lands on the GPU side) instead of
+  stretching the 2D contract. Keeps both layers clean + non-overlapping.
+- **Recommendation (priority = clean/standard, not effort): do NOT add
+  draw-mesh.** Keep wasi:canvas pure Canvas2D (Compose/Slint/Avalonia/
+  Flutter-dart:ui/SwiftUI). egui waits on wandr wiring wasi-gfx (Phase 2,
+  unreleased — bigger than one verb, but the boundary-correct path).
+- Pragmatic counter, recorded but not chosen: skia (a 2D lib) does carry
+  drawVertices, and egui's core needs only textured-triangle *fill*, not the
+  full WebGPU pipeline — so draw-mesh is one verb vs all of wasi-webgpu. A
+  defensible INTERIM iff egui is urgent and wasi-gfx absent, but explicitly a
+  skia-extension lane that migrates to wasi-gfx. Earlier sections (mapping
+  table, "one additive verb") describe THIS interim; the standard answer
+  above supersedes them when cleanliness is the priority.
+- SwiftUI/OpenSwiftUI checked at the same time: a standard Canvas2D consumer
+  (RenderBox shapes/text/images) — needs **no** canvas-WIT changes; its GPU
+  effects (Shader/MeshGradient) are wasi-gfx, like egui's PaintCallback.
+
 ## Footprint / risks
 
 - Guest size: MB-scale (pure Rust, no runtime) — the lightest candidate
