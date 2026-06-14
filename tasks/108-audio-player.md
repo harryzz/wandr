@@ -32,8 +32,8 @@ host advertises what HW it has; absence → guest does it itself.
   tracks; visual verify with the user (`[[feedback_visual_verification]]`).
 - Records: guest size, decode CPU %, first-audio latency.
 
-### M2 — `wandr:media-session` (the native-feel gap)
-- New arbiter-owned package `wandr:media-session@0.1.0` (sibling of
+### M2 — `wasi:media-session` (the native-feel gap)
+- New arbiter-owned package `wasi:media-session@0.0.1` (sibling of
   `wandr:audio-focus`/`alarm`/`notify`), tracking the **W3C Media Session API**
   shape: guest publishes now-playing metadata + playback state + position;
   arbiter renders the lockscreen/notification transport and routes
@@ -54,7 +54,7 @@ host advertises what HW it has; absence → guest does it itself.
 - `wasi:audio-codec@0.0.1` (WebCodecs-shaped): `probe` + HW decode/encode,
   **transcode** (PCM back) and **tunnel** (decode → sink) modes; reuse the
   `wasi:video-decoder` error enum. Host backend = MediaCodec/DSP.
-- `wandr:audio-effects@0.1.0`: attach Android `AudioEffect`s (EQ/BassBoost/
+- `wasi:audio-effects@0.0.1`: attach Android `AudioEffect`s (EQ/BassBoost/
   Virtualizer/Loudness/Reverb) to the stream, portable params.
 - Player switches **transcode/guest while foreground** (visualizer/DSP) and
   **tunnel when backgrounded/screen-off** (battery) — "exposes both, picks

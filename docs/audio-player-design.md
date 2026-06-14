@@ -135,10 +135,10 @@ it's a family split by layer (verified 2026-06-14):
 | `wasi:audio` PCM device | **none** — the web hides the raw device inside `AudioContext` (closest: `AudioWorkletProcessor.process()` + `getUserMedia`). WASI-charter audio slot, not a W3C mirror | n/a |
 | `wasi:audio-codec` (HW decode/encode) | **WebCodecs `AudioDecoder`/`AudioEncoder`** (`EncodedAudioChunk` ↔ `AudioData`, `isConfigSupported`) | W3C WD (Jun 2026) |
 | DSP/EQ/spectrum (guest-side) | **Web Audio API** node graph (BiquadFilter/Analyser/Panner/Worklet) — we do it in Rust, don't mirror the graph | W3C Rec 1.0 / WD 1.1 |
-| `wandr:media-session` (transport/now-playing) | **W3C Media Session API** (`metadata` + `setActionHandler` + `setPositionState`) — direct template | W3C spec, widely shipped |
+| `wasi:media-session` (transport/now-playing) | **W3C Media Session API** (`metadata` + `setActionHandler` + `setPositionState`) — direct template | W3C spec, widely shipped |
 | Network streaming (HLS/DASH) | Media Source Extensions — guest-side demux concern | W3C Rec |
 
-So `wandr:media-session` and the optional `wasi:audio-codec` lane each get a
+So `wasi:media-session` and the optional `wasi:audio-codec` lane each get a
 real W3C spec to track; the core PCM contract correctly has none.
 
 ## The wandr media family (one umbrella, separate packages)
@@ -156,7 +156,7 @@ media family*. Each is an optional capability the guest queries + falls back on.
 | `wasi:audio-effects` | Web Audio | optional HW DSP |
 | `wasi:video-decoder` / `-encoder` | WebCodecs Video | optional HW codec |
 | `wasi:eme` | Encrypted Media Extensions | optional DRM control plane |
-| `wandr:media-session` | Media Session API | transport, arbiter |
+| `wasi:media-session` | Media Session API | transport, arbiter |
 | `wandr:audio-focus` | (platform audio focus) | focus/route, shipped |
 | *(no package)* MSE | Media Source Extensions | guest orchestration |
 
@@ -214,7 +214,7 @@ media family*. Each is an optional capability the guest queries + falls back on.
 | Spectrum / waveform viz | guest (`rustfft`/`realfft`) → `wasi:canvas` | no |
 | Network streaming | guest via `wasi:http` / the `wasi:tls` shim | no |
 | **Transport clock (position)** | `wasi:audio` | **promote (L0)** |
-| **Lockscreen/notification transport, now-playing, media buttons** | new `wandr:media-session` (arbiter-owned) | **yes** |
+| **Lockscreen/notification transport, now-playing, media buttons** | new `wasi:media-session` (arbiter-owned) | **yes** |
 | Focus / ducking / route / volume / mute | `wandr:audio-focus` (shipped) | no |
 | Background wakelock | arbiter (`[[project_arbiter_audio]]`) | no |
 
@@ -245,14 +245,20 @@ non-binding drafts, deps wired at implementation time.
    (spectrum) and AudioWorklet (custom DSP) are deliberately OUT — those are
    guest-side. Optional: empty `query()` → guest does all DSP in Rust.
 
-4. **`wandr:media-session@0.1.0`** (sketched: `proposals/wandr-media-session/`)
-   — arbiter-owned, like `wandr:audio-focus`/`wandr:alarm`/`wandr:notify`.
-   Guest publishes now-playing metadata + state + position; the arbiter renders
-   the lockscreen/notification transport and routes **headset/BT media-button**
-   events to the guest's `session-handler` export. Aligned 1:1 to the W3C
-   **Media Session API** (`metadata`/`playbackState`/`setPositionState`/
-   `setActionHandler`). `wandr:` namespace because transport UI is platform
-   policy — the audio analog of the canvas-windowing red line. The largest
+4. **`wasi:media-session@0.0.1`** (sketched: `proposals/wasi-media-session/`)
+   — guest publishes now-playing metadata + state + position and receives
+   transport intents via a `session-handler` export; the host renders the
+   lockscreen/notification controls and routes **headset/BT media-button**
+   events (wandr: via the arbiter). Aligned 1:1 to the W3C **Media Session API**
+   (`metadata`/`playbackState`/`setPositionState`/`setActionHandler`).
+   **`wasi:` namespace** — it mirrors a shipped W3C standard and the guest
+   contract is portable (every OS has the analog: MPRIS / Windows SMTC / macOS
+   Now Playing / Android MediaSession); which host surface renders it is an
+   implementation detail, like `wasi:audio`'s backend. The red line still holds
+   via the contract SHAPE (guest never draws the transport, only publishes state
+   + receives intents — exactly `wasi:audio`'s intent-vs-policy split), not via
+   the namespace. (Contrast `wandr:audio-focus`, which stays `wandr:` precisely
+   because it has NO W3C standard — platform-idiosyncratic.) The largest
    genuinely-missing piece and what makes a player feel native.
 
 5. **`wasi:eme@0.0.1`** (sketched: `proposals/wasi-eme/`) — the W3C **Encrypted
@@ -307,6 +313,6 @@ A `apps/user/wandr.audio.player` guest: Symphonia decode of a local FLAC/MP3 →
 `rubato` to 48 k → `wasi:audio.playback.write`, with a `wasi:canvas` UI (album
 art via `decode-image`, a seekbar driven by the new `position`). Validates the
 guest-decode floor, the one `position` addition, and art reuse — and tells us
-whether HW offload is ever worth building. `wandr:media-session` is the
+whether HW offload is ever worth building. `wasi:media-session` is the
 natural second milestone; `wasi:audio-codec`/`-effects` land only behind a
 measured need. See `tasks/108-audio-player.md`.

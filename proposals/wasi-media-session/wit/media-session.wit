@@ -1,21 +1,28 @@
-// wandr:media-session — DRAFT / SKETCH (wandr, 2026-06-14, task 108). NOT WIRED.
+// wasi:media-session — DRAFT / SKETCH (wandr, 2026-06-14, task 108). NOT WIRED.
 //
 // The now-playing / transport primitive. Aligned 1:1 to the W3C
 // **Media Session API** (`navigator.mediaSession`): `metadata`,
 // `playbackState`, `setPositionState`, and `setActionHandler`.
 //
-// wandr: namespace, ARBITER-OWNED — a sibling of wandr:audio-focus /
-// wandr:alarm / wandr:notify, and the audio analog of the canvas-windowing
-// red line: TRANSPORT UI IS PLATFORM POLICY, not the app's. The guest only
-// publishes now-playing state + receives transport intents; the arbiter renders
-// the lockscreen / notification controls and routes headset / Bluetooth
-// MEDIA-BUTTON events. (Focus / route / volume stay in wandr:audio-focus; this
-// package is purely metadata + transport actions.)
+// wasi: namespace — it mirrors a shipped W3C standard and the GUEST-FACING
+// contract is portable: every platform has a media-session analog (Linux
+// MPRIS, Windows SMTC, macOS Now Playing, Android MediaSession), so a guest
+// written to this runs anywhere. WHICH host surface renders it is an
+// implementation detail (wandr: the arbiter's lockscreen/notification + headset
+// MEDIA-BUTTON routing) — the normal WASI host-implements-the-capability model,
+// like wasi:audio's backend is AudioFlinger/PipeWire/etc.
 //
-// Shape mirrors wandr:audio-focus: a host-import `session` the guest drives,
-// and an exported `session-handler` the arbiter calls (probed `.ok()` per
-// instance, like alarm-events).
-package wandr:media-session@0.1.0;
+// The red line still holds, but via the contract SHAPE, not the namespace: the
+// guest only PUBLISHES now-playing state + RECEIVES transport intents; it never
+// draws the transport UI (same as wasi:audio expresses routing intent while the
+// host owns route policy). Focus / route / volume stay in `wandr:audio-focus`
+// (which is `wandr:` precisely because it has NO W3C standard — platform-
+// idiosyncratic); this package is purely metadata + transport actions.
+//
+// Shape: a host-import `session` the guest drives, and an exported
+// `session-handler` the host calls (probed `.ok()` per instance, like
+// alarm-events).
+package wasi:media-session@0.0.1;
 
 interface session {
     /// W3C MediaImage (artwork). Raw bytes (decoded host-side via
@@ -78,14 +85,15 @@ interface session-handler {
         seek-time-s: option<f64>,
     }
 
-    /// The arbiter delivers a transport intent (lockscreen tap / headset
-    /// button / BT AVRCP). The guest applies it (play/pause/seek/skip).
+    /// The host delivers a transport intent (lockscreen tap / headset button /
+    /// BT AVRCP — wandr: routed by the arbiter). The guest applies it
+    /// (play/pause/seek/skip).
     on-action: func(details: action-details);
 }
 
-/// Host-import side — the host implements `session` (forwarded to the arbiter's
-/// media-session module) and add_to_linkers it onto every guest (harmless for
-/// ones that don't import it).
+/// Host-import side — the host implements `session` (wandr: forwarded to the
+/// arbiter's media-session module) and add_to_linkers it onto every guest
+/// (harmless for ones that don't import it).
 world media-session-host {
     import session;
 }

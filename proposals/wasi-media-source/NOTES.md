@@ -22,7 +22,7 @@ wasi:http / wasi:tls  → fetch segments        (guest; reuse Signal's transport
 Symphonia              → demux + decode        (guest; or…)
 wasi:audio-codec       → HW decode the segments (optional, when chosen — TUNNEL)
 wasi:audio             → PCM sink              (the floor)
-wandr:media-session    → now-playing/transport
+wasi:media-session    → now-playing/transport
 ```
 
 So `SourceBuffer.appendBuffer(segment)` becomes either "Symphonia decodes the

@@ -1,6 +1,6 @@
 ---
 name: project_audio_player
-description: "Task 108 audio player design (scoped 2026-06-14, not built): layered capability-negotiated audio stack — wasi:audio PCM = portable floor (guest decodes in Rust); HW codec (wasi:audio-codec/WebCodecs-shaped) + HW effects (wandr:audio-effects) = optional, guest queries+opts-in+falls-back; transcode-vs-tunnel; promote playback.position; new wandr:media-session. Design = docs/audio-player-design.md, task = tasks/108-audio-player.md"
+description: "Task 108 audio player design (scoped 2026-06-14, not built): layered capability-negotiated audio stack — wasi:audio PCM = portable floor (guest decodes in Rust); HW codec (wasi:audio-codec/WebCodecs-shaped) + HW effects (wasi:audio-effects) = optional, guest queries+opts-in+falls-back; transcode-vs-tunnel; promote playback.position; new wasi:media-session. Design = docs/audio-player-design.md, task = tasks/108-audio-player.md"
 metadata: 
   node_type: memory
   type: project
@@ -20,7 +20,7 @@ generalized to codecs + DSP:**
   absent/refused → guest decodes itself ("use HW if present, write own when
   absent" = one `match`, reusing video-decoder's `unsupported-codec`/
   `no-hw-codec` errors).
-- **Layer 2 — `wandr:audio-effects` (optional HW DSP).** Attach Android
+- **Layer 2 — `wasi:audio-effects` (optional HW DSP).** Attach Android
   AudioEffect (EQ/BassBoost/Virtualizer/Loudness/Reverb) to the stream, OR
   Rust biquad/fundsp. Portable params only (dB/Hz).
 
@@ -47,7 +47,7 @@ the contracts so this stays open.
 **Gaps filled:** decode (Symphonia + `external/opus-rs`, guest) · transport
 clock (**promote `playback.position`** — the ONE `wasi:audio` add, the master
 clock for seekbar + A/V sync) · now-playing/lockscreen/headset-buttons (**new
-`wandr:media-session@0.1.0`**, arbiter-owned like [[project_event_bus]]/alarm/
+`wasi:media-session@0.0.1`**, arbiter-owned like [[project_event_bus]]/alarm/
 notify, tracks W3C Media Session API) · tags/art (Symphonia + `graphics.
 decode-image`) · seek/gapless/crossfade/ReplayGain/EQ/spectrum/streaming (all
 guest, NO new WIT).
@@ -57,7 +57,7 @@ verified 2026-06-14): PCM device has NO web analog (web hides it inside
 AudioContext / AudioWorkletProcessor.process + getUserMedia) → cites WASI
 charter slot; `wasi:audio-codec`←WebCodecs AudioDecoder/Encoder (W3C WD);
 DSP/EQ/spectrum←Web Audio API (W3C Rec, but guest-side in Rust, not mirrored);
-`wandr:media-session`←Media Session API. So media-session + the HW-codec lane
+`wasi:media-session`←Media Session API. So media-session + the HW-codec lane
 each get a real W3C spec to track; core PCM correctly has none.
 
 **Libs (pure-Rust wasm32-wasip2):** Symphonia (demux+decode FLAC/MP3/AAC/ALAC/
@@ -86,7 +86,7 @@ WASI modularity, each optional w/ guest fallback; W3C Media WG mirror:**
 transcode=read vs tunnel=connect-to-playback; reuses video-decoder errors;
 µs timestamps), `wasi:audio-effects` (Web Audio node subset: biquad/compressor/
 gain/stereo-pan/reverb/delay, portable dB/Hz/s params, AnalyserNode+AudioWorklet
-DELIBERATELY OUT = guest-side; wasi: ns), `wandr:media-session` (Media Session
+DELIBERATELY OUT = guest-side; wasi: ns), `wasi:media-session` (Media Session
 API 1:1, arbiter-owned like audio-focus, host `session`+export `session-handler`),
 `wasi:eme` (EME control plane; host owns CDM, guest shuttles opaque license
 blobs via wasi:http = the SRTP-offload pattern; OWNS `decrypt-config`/
@@ -99,8 +99,14 @@ chunks; SECURE-OUTPUT rule = robust DRM is sink/tunnel-only (no read; ClearKey
 may read=testing). MSE = NO package (proposals/wasi-media-source/NOTES.md: guest
 orchestration over http/tls+codec+audio; the ONLY real host residue = DRM/EME,
 which wasi:eme covers). Family table + ASCII stack diagram in the design doc.
-Namespace logic: wasi:* = W3C-standard portable capabilities; wandr:* = arbiter/
-platform policy (transport UI red line). UI deferred until contracts settle.
+Namespace logic (refined 2026-06-14): wasi:* = mirrors a W3C standard AND the
+guest contract is portable (audio/codec/effects/eme/media-session — media-session
+moved wandr:→wasi: because Media Session API is a shipped W3C std w/ universal
+analogs MPRIS/SMTC/Now-Playing/Android; host rendering it via the arbiter is just
+impl detail, red line held by contract SHAPE not namespace). wandr:* = NO W3C
+standard / platform-idiosyncratic (audio-focus stays wandr:). Note: wasi:media:x
+is INVALID WIT (one colon) + against WASI convention (wasi-gfx is flat) → flat
+names + docs umbrella, no super-namespace. UI deferred until contracts settle.
 
 Related: [[project_audioflinger_backend]], [[project_arbiter_audio]],
 [[project_audio_routing_arbiter]], [[project_wandr_crypto_srtp_offload]],
