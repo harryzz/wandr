@@ -57,7 +57,7 @@
 - [Signal resume point](project_signal_resume_point.md) — paused feature list + next steps (receipts, attachments).
 - [Project: Signal client architecture](project_signal_client_architecture.md) — guest-side client over generic wasi:tls; host stays generic.
 - [Project: Signal wasip2 transport swap](project_signal_wasip2_transport_swap.md) — libsignal compiles for wasip2; reqwest shim over wasi:tls.
-- [Project: wart-step-executor](project_wart_step_executor.md) — persistent frame-stepped reactor; async survives across export calls.
+- [Project: wandr-step-executor](project_wandr_step_executor.md) — persistent frame-stepped reactor; async survives across export calls.
 - [Boot-model libgui build](project_boot_model_libgui_build.md) — a-03 is available infra, not a blocker; check Rust/Skia path first.
 - [Standalone orientation](project_standalone_orientation.md) — eglQuerySurface lies on taimen; use ANativeWindow geometry.
 - [✅ Standalone input (task 33)](project_standalone_input.md) — touch routes via BBQ-direct attach.

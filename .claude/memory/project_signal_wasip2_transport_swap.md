@@ -64,7 +64,7 @@ wasm32-wasip2.** Implemented as **drop-in shim crates** swapped via cargo
 different sources per target, so each shim is the *single* source and
 cfg-dispatches internally (real `reqwest`/`reqwest-websocket` on native via
 `pub use ...::*`; wasi:tls impl on wasm). Crates in
-`external/libsignal-service-rs/wart-wasi-shims/{reqwest,reqwest-websocket}`:
+`external/libsignal-service-rs/wandr-wasi-shims/{reqwest,reqwest-websocket}`:
 HTTP/1.1 `Client/RequestBuilder/Response/multipart` + RFC6455 `WebSocket`
 (inherent async send/next/close; `next()` boxed → Unpin for the fork's
 `futures::select!`) over a shared `tls::TlsStream` (the spike's wasi:tls+wstd).

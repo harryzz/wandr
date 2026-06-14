@@ -95,7 +95,7 @@ roadmap item, not a quick task.
 ## Relationship to other work
 
 - Built on the Signal client ([[project_signal_resume_point]],
-  [[project_signal_client_architecture]], [[project_wart_step_executor]]).
+  [[project_signal_client_architecture]], [[project_wandr_step_executor]]).
 - Render-side levers + the "whole screen repaints every frame even when not dirty"
   note live in [[reference_dioxus_taffy_rust_ui]] and `tasks/64-on-demand-rendering.md`.
 - The hybrid zygote/background-pool model is [[project_app_lifecycle_and_packaging]].

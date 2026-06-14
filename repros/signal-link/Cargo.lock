@@ -1319,9 +1319,9 @@ dependencies = [
  "url",
  "usernames",
  "uuid",
- "wart-reqwest-shim",
- "wart-reqwest-websocket-shim",
- "wart-step-executor",
+ "wandr-reqwest-shim",
+ "wandr-reqwest-websocket-shim",
+ "wandr-step-executor",
  "zkgroup",
 ]
 
@@ -2283,7 +2283,7 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
- "wart-step-executor",
+ "wandr-step-executor",
 ]
 
 [[package]]
@@ -2759,16 +2759,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
-name = "want"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfa7760aed19e106de2c7c0b581b509f2f25d3dacaf737cb82ac61bc6d760b0e"
-dependencies = [
- "try-lock",
-]
-
-[[package]]
-name = "wart-reqwest-shim"
+name = "wandr-reqwest-shim"
 version = "0.1.0"
 dependencies = [
  "base64",
@@ -2779,28 +2770,37 @@ dependencies = [
  "serde",
  "serde_json",
  "url",
- "wart-step-executor",
+ "wandr-step-executor",
  "wasip2",
  "wit-bindgen 0.53.1",
 ]
 
 [[package]]
-name = "wart-reqwest-websocket-shim"
+name = "wandr-reqwest-websocket-shim"
 version = "0.1.0"
 dependencies = [
  "base64",
  "reqwest-websocket",
  "url",
- "wart-reqwest-shim",
+ "wandr-reqwest-shim",
 ]
 
 [[package]]
-name = "wart-step-executor"
+name = "wandr-step-executor"
 version = "0.1.0"
 dependencies = [
  "async-task",
  "slab",
  "wasip2",
+]
+
+[[package]]
+name = "want"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfa7760aed19e106de2c7c0b581b509f2f25d3dacaf737cb82ac61bc6d760b0e"
+dependencies = [
+ "try-lock",
 ]
 
 [[package]]

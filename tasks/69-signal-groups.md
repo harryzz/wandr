@@ -86,4 +86,4 @@ Sketch:
 - dioxus-canvas `<img>` support for avatars (task 67 Phase 3,
   [[reference_dioxus_taffy_rust_ui]]).
 - Transport + persistent executor (`tasks/66`, `tasks/67`,
-  [[project_wart_step_executor]]).
+  [[project_wandr_step_executor]]).

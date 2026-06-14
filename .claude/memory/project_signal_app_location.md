@@ -34,4 +34,4 @@ Still in `repros/` (correctly — genuine spikes / drivers, NOT the app):
 `signal-phase0` (Phase 0 de-risk), `signal-link` (Phase 1 CLI),
 `signal-engine-smoke` (Rust CLI verification driver, `wac plug`'d onto the engine).
 
-See [[project_signal_client_architecture]], [[project_wart_step_executor]].
+See [[project_signal_client_architecture]], [[project_wandr_step_executor]].

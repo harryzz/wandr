@@ -4,7 +4,7 @@ A `wasm32-wasip2` guest that links as a Signal **secondary device** and **receiv
 decrypts** an end-to-end-encrypted 1:1 text — with **no crypto or networking
 compiled into the guest**. All transport runs over task-66 host-delegated
 `wasi:tls` via our libsignal-service-rs fork (`external/libsignal-service-rs`,
-transport swapped to wasi:tls in `wart-wasi-shims/`).
+transport swapped to wasi:tls in `wandr-wasi-shims/`).
 
 ## What it does
 - `do_link` → `provisioning::link_device` over the provisioning websocket; prints

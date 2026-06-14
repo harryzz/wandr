@@ -31,11 +31,13 @@ task/log filenames + final sweep.
   wart-leak-repro,war.ime.keyboard,war.lang.bg,war.lang.fr}` repo URLs — those repos
   aren't renamed yet. (The MAIN repo `harryzz/wart`→`harryzz/wandr` IS done — remote
   set-url'd + in-tree URLs updated 2026-06-09.)
-- libsignal-service-rs fork (`external/libsignal-service-rs`): dir `wart-wasi-shims/`,
-  crates `wart-step-executor` / `wart-reqwest-shim` / `wart-reqwest-websocket-shim`
-  (hyphen + underscore forms), branch `wart-wasi-transport`. In-tree path-deps point at them.
-- rsbinder fork branch `wart-recursive` (`.gitmodules`).
-- Memory slug `project_wart_step_executor` (it's about the protected fork crate).
+- ✅ RENAMED 2026-06-14 (no longer protected): libsignal-service-rs fork shims →
+  `wandr-wasi-shims/`, crates `wandr-step-executor` / `wandr-reqwest-shim` /
+  `wandr-reqwest-websocket-shim` (+ underscore forms), branch `wandr-wasi-transport`;
+  consumers (wandr.signal engine, repros/signal-link, signal-phase0) + Cargo.lock +
+  memory slug `project_wandr_step_executor` all updated. Fork commit sits on
+  `wandr-wasi-transport`; PUSH the fork + rename the codeberg branch when publishing.
+- rsbinder fork branch `wart-recursive` (`.gitmodules`) — still `wart` (separate fork).
 - False positives intentionally kept: `wartime` (in this rename's own notes), `mewart`
   ("edit me"→"edit mewart" text-input artifact, tasks/61).
 
@@ -65,9 +67,9 @@ a-03 build for new modules: `m` regenerates soong (modules land in sharded
 **soong output path through the COMBINED ninja** (`-k 0`, skips lsdump) — see tasks/99.
 
 **STILL DEFERRED (separate repos):** codeberg per-app repos (wart-app/wart-arbiter/
-wart-host/war.* — user said these are old/archived/moved, low priority); fork branches
-libsignal `wart-wasi-transport` + rsbinder `wart-recursive`. The tracked
-`runtime/wandr-host/prebuilt/libsf_surface.so` is still the stale wart-named artifact.
+wart-host/war.* — user said these are old/archived/moved, low priority); rsbinder fork
+branch `wart-recursive` (libsignal `wart-wasi-transport`→`wandr-wasi-transport` now DONE).
+The tracked `runtime/wandr-host/prebuilt/libsf_surface.so` is still the stale wart-named artifact.
 
 Reusable rename helper (mask→case-preserving-replace→unmask) was at `/tmp/rename_wandr.pl`.
 Relates to [[reference_wandr_apps_root_install]], [[feedback_build_system_wandrpkgs_wipes_apps_root]].

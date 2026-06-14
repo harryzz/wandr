@@ -15,7 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 libsignal-service = { path = "../../external/libsignal-service-rs", default-features = false }
-wart-step-executor = { path = "../../external/libsignal-service-rs/wart-wasi-shims/wart-step-executor" }
+wandr-step-executor = { path = "../../external/libsignal-service-rs/wandr-wasi-shims/wandr-step-executor" }
 futures = "0.3"
 rand = "0.9"
 rand_chacha = "0.9"

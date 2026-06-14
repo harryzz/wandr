@@ -54,6 +54,6 @@ Then `scp` the stripped intermediate into `runtime/wandr-<mod>/…` and `adb pus
   `wart-leak-repro`, `war.ime.keyboard`, `war.lang.{bg,fr}` — those `codeberg.org/harryzz/`
   URLs are intentionally **left as-is** in-tree until each repo is renamed.
 - **libsignal-service-rs fork** (`external/libsignal-service-rs`, branch
-  `wart-wasi-transport`) — `wart-wasi-shims/{wart-step-executor,wart-reqwest-shim,
-  wart-reqwest-websocket-shim}` kept their names; in-tree path-deps point at them.
+  `wart-wasi-transport`) — `wandr-wasi-shims/{wandr-step-executor,wandr-reqwest-shim,
+  wandr-reqwest-websocket-shim}` kept their names; in-tree path-deps point at them.
 - **rsbinder fork** branch `wart-recursive` — left as-is.

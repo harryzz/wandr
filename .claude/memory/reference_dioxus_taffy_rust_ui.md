@@ -75,7 +75,7 @@ the host keeps calling `render_frame`; `mark_dirty()` forces a re-diff on change
 the guest root calls `dioxus::core::needs_update()` (NOT in the `dioxus` facade
 prelude — `dioxus::core` is the `dioxus_core` re-export) to stay armed, and reads
 a `thread_local` model that the `pre_frame` hook updates. See
-[[project_wart_step_executor]], [[project_signal_client_architecture]].
+[[project_wandr_step_executor]], [[project_signal_client_architecture]].
 
 **Edit-field gotcha — IME won't attach without an `onmousemove` (2026-05-30).**
 dioxus-canvas only dispatches `onmousedown`/`onmouseup` for **draggable** elements

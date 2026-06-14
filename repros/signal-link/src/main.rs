@@ -81,7 +81,7 @@ async fn do_link(
     let push =
         PushService::new(SignalServers::Production, None, "wandr-signal-link");
     let (tx, mut rx) = futures::channel::mpsc::channel(1);
-    let task = wart_step_executor::spawn(async move {
+    let task = wandr_step_executor::spawn(async move {
         let mut csprng = seed_rng();
         link_device(
             &mut aci, &mut pni, &mut csprng, push, &password, "wandr", tx,
@@ -343,21 +343,21 @@ async fn do_receive(
     Ok(())
 }
 
-// The libsignal transport now runs on the persistent `wart-step-executor` (the
+// The libsignal transport now runs on the persistent `wandr-step-executor` (the
 // engine in `repros/signal-engine` needs it to survive across `chat.poll-events`;
 // the shared fork binds to it). This CLI drives it the simple way: spawn the app
-// future, then `step()` to completion. See [[project_wart_step_executor]].
+// future, then `step()` to completion. See [[project_wandr_step_executor]].
 fn main() {
-    wart_step_executor::init();
+    wandr_step_executor::init();
     let done = std::rc::Rc::new(std::cell::Cell::new(false));
     let d = done.clone();
-    wart_step_executor::spawn(async move {
+    wandr_step_executor::spawn(async move {
         run_app().await;
         d.set(true);
     })
     .detach();
     while !done.get() {
-        wart_step_executor::step();
+        wandr_step_executor::step();
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
 }

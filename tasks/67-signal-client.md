@@ -11,7 +11,7 @@ on-device (Pixel 2 XL via wandr-host).
 - **Working code:** `repros/signal-link/` — the full client as a `wasi:cli/command`
   (`src/main.rs` link/receive/send, `src/store.rs` ProtocolStore, `src/persist.rs`
   WASI-fs persistence). Forked transport: `external/libsignal-service-rs/`
-  (+`wart-wasi-shims/` = reqwest/reqwest-websocket over wasi:tls). Foundation
+  (+`wandr-wasi-shims/` = reqwest/reqwest-websocket over wasi:tls). Foundation
   spike: `repros/wstd-wasitls-spike/`. Desktop runner (Signal CA + `/state`
   preopen): `repros/wasi-tls-runner/`.
 - **Build:** `cd repros/signal-link && PROTOC=~/tools/protoc/bin/protoc cargo build
@@ -194,12 +194,12 @@ drop order (parent resource outlives its child streams).
 Built the transport as **drop-in shim crates** swapped via cargo `package =`
 rename (NOT an import rewrite — cargo forbids per-target sources for one dep name,
 so each shim is the single source and cfg-dispatches: real crate on native,
-wasi:tls impl on wasm). Location: `external/libsignal-service-rs/wart-wasi-shims/`:
-- `reqwest/` (`wart-reqwest-shim`) — `Client`/`ClientBuilder`/`RequestBuilder`/
+wasi:tls impl on wasm). Location: `external/libsignal-service-rs/wandr-wasi-shims/`:
+- `reqwest/` (`wandr-reqwest-shim`) — `Client`/`ClientBuilder`/`RequestBuilder`/
   `Response`/`Certificate`/`Error`/`multipart` over HTTP/1.1 on the shared
   `tls::TlsStream` (wasi:tls + wstd, from the spike). Exposes `random_bytes` +
   `tls` for the ws shim.
-- `reqwest-websocket/` (`wart-reqwest-websocket-shim`) — RFC6455 `WebSocket`
+- `reqwest-websocket/` (`wandr-reqwest-websocket-shim`) — RFC6455 `WebSocket`
   (inherent async `send`/`next`/`close`, `next()` boxed→Unpin for the fork's
   `select!`), `Message`/`CloseCode`, `RequestBuilderExt::upgrade`.
 - Fork edits: `Cargo.toml` deps point at the shims (+ wstd wasm-only); 3 tokio
@@ -322,7 +322,7 @@ reactor per call and clears it on return — spawned tasks do NOT survive across
 component-export calls, and no guest code runs between calls. So the engine can't
 do a short `block_on` per `poll-events`. It needs a **persistent single-thread
 step-executor** (built in `init`, stepped non-blocking each `poll-events`), and the
-`wart-wasi-shims` pollable-await (`tls.rs::schedule` → `wstd::runtime::AsyncPollable`)
+`wandr-wasi-shims` pollable-await (`tls.rs::schedule` → `wstd::runtime::AsyncPollable`)
 must bind to that executor instead. wstd's reactor stepping methods are private, so
 roll a minimal executor (futures + task queue + a non-blocking `wasi:io/poll` with a
 0-timeout pollable). Contained in the engine; UI/contract unaffected.
@@ -449,12 +449,12 @@ wired) + a **writable** `/state` preopen (still pending — task 38 wired only
 ### Phase 2 item (1) result (2026-05-30)
 **The gate — `wstd::block_on` builds/destroys its reactor per call, so spawned
 tasks die between export calls — is cleared.** New crate
-`external/libsignal-service-rs/wart-wasi-shims/wart-step-executor`: a persistent
+`external/libsignal-service-rs/wandr-wasi-shims/wandr-step-executor`: a persistent
 thread-local reactor (installed at `init`, never torn down) advanced by a
 **non-blocking `step()`** (the `wasi:io/poll` 0-duration-timer trick, à la wstd's
 `nonblock_check_pollables`). Bookkeeping mirrors wstd 0.6.6's reactor; only the
 lifecycle + stepping differ. The three transport touchpoints in the libsignal
-fork are rebound off wstd onto it: `wart-wasi-shims/reqwest/src/tls.rs`
+fork are rebound off wstd onto it: `wandr-wasi-shims/reqwest/src/tls.rs`
 (`AsyncPollable`), `src/push_service/mod.rs` (background ws task `spawn`),
 `src/websocket/mod.rs` (keepalive `sleep`); the `wstd` dep is replaced in both
 shim Cargo.tomls + the fork's wasm32 deps.

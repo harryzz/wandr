@@ -49,5 +49,5 @@ dioxus now, Compose later), composed via WAC. UI is toolkit-agnostic; engine sta
 the only thing touching the network. **Gating runtime finding:** `wstd::block_on`
 recreates+clears its reactor per call, and no guest code runs between component
 exports — so the engine needs a PERSISTENT step-executor (built in `init`, stepped
-non-blocking per `poll-events`) with the wart-wasi-shims pollable-await bound to it
+non-blocking per `poll-events`) with the wandr-wasi-shims pollable-await bound to it
 (not wstd's block_on reactor). Full design + contract in `tasks/67-signal-client.md`.

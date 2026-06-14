@@ -10,7 +10,7 @@ metadata:
 Signal work **paused 2026-05-31** at the user's request. Where it stands + resume
 points. Code lives at `apps/user/wandr.signal/` (`engine/` + `ui/`); build/deploy is
 `apps/user/wandr.signal/build.sh [--deploy]`. See [[project_signal_app_location]],
-[[project_signal_client_architecture]], [[project_wart_step_executor]].
+[[project_signal_client_architecture]], [[project_wandr_step_executor]].
 
 ## Shipped + device-verified (Pixel 2 XL)
 - Link as secondary device; resume across restarts (account/store in `/state`).

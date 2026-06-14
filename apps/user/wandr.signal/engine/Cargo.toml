@@ -6,7 +6,7 @@ publish = false
 
 # Task-67 Phase 2 item (1): the Signal engine as a wasm32-wasip2 reactor
 # component exporting `wandr:signal/chat`. Refactors the proven signal-link CLI
-# (link + receive + send + persist) onto the persistent wart-step-executor so the
+# (link + receive + send + persist) onto the persistent wandr-step-executor so the
 # background tasks survive across `chat.poll-events` calls. Reuses signal-link's
 # store.rs / persist.rs verbatim.
 
@@ -16,7 +16,7 @@ path = "src/lib.rs"
 
 [dependencies]
 libsignal-service = { path = "../../../../external/libsignal-service-rs", default-features = false }
-wart-step-executor = { path = "../../../../external/libsignal-service-rs/wart-wasi-shims/wart-step-executor" }
+wandr-step-executor = { path = "../../../../external/libsignal-service-rs/wandr-wasi-shims/wandr-step-executor" }
 # The call engine (Phase 2b-ii): Signal 1:1 voice calls. `signal` pulls the opaque
 # codec + X25519-DH/GCM keying + the SignalCall driver.
 wandr-call = { path = "../../../../crates/wandr-call", features = ["signal", "host-aead"] }

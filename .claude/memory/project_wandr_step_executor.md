@@ -1,5 +1,5 @@
 ---
-name: project-wart-step-executor
+name: project-wandr-step-executor
 description: "Persistent frame-stepped wasi:io/poll executor that lets a wasm guest's async tasks survive across component-export calls (task 67 Phase 2 engine)"
 metadata: 
   node_type: memory
@@ -15,8 +15,8 @@ background receive loop / websocket keepalive make progress), that's fatal. wstd
 stepping methods (`block_on_pollables`, `nonblock_check_pollables`,
 `pop_ready_list`) are `pub(crate)`, so you can't drive its reactor yourself.
 
-**Fix (DONE 2026-05-30, desktop-verified):** new crate `wart-step-executor` at
-`external/libsignal-service-rs/wart-wasi-shims/wart-step-executor`. A **persistent**
+**Fix (DONE 2026-05-30, desktop-verified):** new crate `wandr-step-executor` at
+`external/libsignal-service-rs/wandr-wasi-shims/wandr-step-executor`. A **persistent**
 thread-local reactor installed at `init()` (never torn down) advanced by a
 **non-blocking `step()`** — the `wasi:io/poll` 0-duration-timer trick (append a
 `subscribe_duration(0)` pollable so `poll()` returns immediately), copied from
@@ -26,7 +26,7 @@ lifecycle + non-blocking step differ (~280 lines). API: `init()` / `spawn()` /
 `step()` / `sleep()` / `AsyncPollable`.
 
 The libsignal fork's three wstd touchpoints were rebound onto it (off wstd):
-`wart-wasi-shims/reqwest/src/tls.rs` (`AsyncPollable`), `src/push_service/mod.rs`
+`wandr-wasi-shims/reqwest/src/tls.rs` (`AsyncPollable`), `src/push_service/mod.rs`
 (background ws-process `spawn().detach()`), `src/websocket/mod.rs` (keepalive
 `sleep`); `wstd` dep replaced in both shim Cargo.tomls + the fork's wasm32 deps.
 
