@@ -19,6 +19,14 @@
 // string — a host that lacks one returns `unsupported-key-system` and the app
 // degrades or refuses. So the contract is OS-agnostic; the CDM is host detail.
 //
+// SCOPE DECISION (2026-06-14): ClearKey-ONLY is the committed scope. Widevine
+// is DEFERRED, not designed out — the key-system string + the secure-output
+// rule already leave room to add it host-side with NO contract change. Reasons
+// to defer: Widevine L1 needs the TEE + a Google-provisioned CDM (a real
+// commitment) and exists only on-device (not the desktop host), whereas
+// ClearKey is trivial (host AES-CTR), portable, and covers self-served /
+// Signal-style encrypted media.
+//
 // SECURE-OUTPUT CONSTRAINT (enforced by the codec lane, not here): for a robust
 // CDM, decrypt+decode happen in the secure path and the decoder may output ONLY
 // to a sink (wasi:audio-codec TUNNEL / a secure surface) — never `read` back to

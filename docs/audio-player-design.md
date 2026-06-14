@@ -255,12 +255,19 @@ non-binding drafts, deps wired at implementation time.
    policy — the audio analog of the canvas-windowing red line. The largest
    genuinely-missing piece and what makes a player feel native.
 
-5. **Media Source Extensions (streaming)** — NO package; streaming is guest
+5. **`wasi:eme@0.0.1`** (sketched: `proposals/wasi-eme/`) — the W3C **Encrypted
+   Media Extensions** control plane: host owns the CDM, guest shuttles opaque
+   license blobs (the SRTP-offload pattern). Owns `decrypt-config` (added to the
+   audio + video codec chunks). **SCOPE: ClearKey-only committed (2026-06-14)**
+   — host-side AES-CTR, portable, self-hostable, covers self-served / Signal-
+   style encrypted media. **Widevine deferred** (needs TEE + a Google-provisioned
+   CDM, device-only); the key-system string + secure-output rule leave room to
+   add it host-side with no contract change.
+
+6. **Media Source Extensions (streaming)** — NO package; streaming is guest
    orchestration over `wasi:http`/`wasi:tls` + `wasi:audio-codec` +
-   `wasi:audio`. The one real host-contract residue MSE drags in is **DRM/EME**
-   (protected content needs a hardware-secure decode path the guest never sees)
-   — its own future proposal, gated on whether wandr supports protected
-   content at all. Open questions in `proposals/wasi-media-source/NOTES.md`.
+   `wasi:audio`. The only host-contract residue MSE drags in is DRM, covered by
+   `wasi:eme` above. Open questions in `proposals/wasi-media-source/NOTES.md`.
 
 ## Libraries (all pure-Rust, wasm32-wasip2, the shipped toolchain)
 

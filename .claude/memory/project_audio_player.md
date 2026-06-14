@@ -88,9 +88,12 @@ transcode=read vs tunnel=connect-to-playback; reuses video-decoder errors;
 gain/stereo-pan/reverb/delay, portable dB/Hz/s params, AnalyserNode+AudioWorklet
 DELIBERATELY OUT = guest-side; wasi: ns), `wandr:media-session` (Media Session
 API 1:1, arbiter-owned like audio-focus, host `session`+export `session-handler`),
-`wasi:eme` (EME control plane; ClearKey MANDATORY, Widevine behind key-system
-string; host owns CDM, guest shuttles opaque license blobs via wasi:http = the
-SRTP-offload pattern; OWNS `decrypt-config`/`encryption-scheme`/`subsample`).
+`wasi:eme` (EME control plane; host owns CDM, guest shuttles opaque license
+blobs via wasi:http = the SRTP-offload pattern; OWNS `decrypt-config`/
+`encryption-scheme`/`subsample`). **DRM SCOPE DECIDED 2026-06-14 = ClearKey-ONLY**
+(host AES-CTR, portable, self-hostable, covers self-served/Signal-style);
+Widevine DEFERRED (TEE + Google-provisioned CDM, device-only) but reachable via
+the key-system string with NO contract change.
 `decrypt-config` + optional key-session added to BOTH audio-codec + video-decoder
 chunks; SECURE-OUTPUT rule = robust DRM is sink/tunnel-only (no read; ClearKey
 may read=testing). MSE = NO package (proposals/wasi-media-source/NOTES.md: guest

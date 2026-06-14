@@ -64,7 +64,9 @@ WIT sketch alongside the other three: most of it isn't a host capability.
 
 No `wasi:media-source` package is needed: streaming is guest orchestration over
 `wasi:http`/`wasi:tls` + `wasi:audio-codec` + `wasi:audio`. The ONE thing MSE
-drags in that is a real, separate host-contract question is **DRM/EME** — which
-deserves its own proposal and its own discussion, gated on whether wandr wants
-to support protected content at all. Everything else MSE implies is already
-covered by the floor + the codec lane.
+drags in that is a real, separate host-contract question is **DRM/EME** — now
+sketched as `proposals/wasi-eme/`, **scoped ClearKey-only** (2026-06-14):
+host-side AES-CTR, portable, covers self-served / Signal-style encrypted media;
+Widevine deferred (TEE + Google-provisioned CDM, device-only) but reachable via
+the key-system string with no contract change. Everything else MSE implies is
+already covered by the floor + the codec lane.
