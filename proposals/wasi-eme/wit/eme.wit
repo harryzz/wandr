@@ -1,0 +1,148 @@
+// wasi:eme — DRAFT / SKETCH (wandr, 2026-06-14, task 108). NOT WIRED.
+//
+// The DRM control plane. Mirrors the W3C **Encrypted Media Extensions** (EME,
+// W3C Rec since 2017; revision WD 2026-05-20). Per the spec's own framing,
+// "EME is NOT a DRM system; it is the communication channel for DRM" — it
+// standardizes only the message passing between the app, the CDM (Content
+// Decryption Module), and the license server. It does NOT carry keys or do
+// crypto: the CDM is a black box behind a registered key-system string.
+//
+// WHY THIS IS A CLEAN WASI FIT (the SRTP/crypto-offload pattern again): the
+// GUEST shuttles OPAQUE blobs (it has wasi:http/wasi:tls for the license-server
+// round-trip); the HOST owns the CDM and the keys/decrypt in a secure path the
+// guest never sees. Capability-granted, no ambient authority.
+//
+// CLEARKEY-FIRST. `org.w3.clearkey` (keys in the clear — AES-CTR host-side) is
+// MANDATORY and is the testable, self-hostable baseline (enough for encrypted
+// self-served media). Robust systems (`com.widevine.alpha` → Android MediaDrm
+// L1 in the TEE) are HOST-OPTIONAL, hidden entirely behind the key-system
+// string — a host that lacks one returns `unsupported-key-system` and the app
+// degrades or refuses. So the contract is OS-agnostic; the CDM is host detail.
+//
+// SECURE-OUTPUT CONSTRAINT (enforced by the codec lane, not here): for a robust
+// CDM, decrypt+decode happen in the secure path and the decoder may output ONLY
+// to a sink (wasi:audio-codec TUNNEL / a secure surface) — never `read` back to
+// the guest. ClearKey (keys in the clear) MAY allow `read` (testing). The
+// crypto vocabulary (`decrypt-config`) lives here; the codecs reference it.
+package wasi:eme@0.0.1;
+
+interface eme {
+    /// = EME initDataType. How the init data in `generate-request` is framed.
+    enum init-data-type { cenc, keyids, webm }
+
+    /// = MediaKeySessionType.
+    enum session-type { temporary, persistent-license }
+
+    /// = MediaKeyMessageType (the outgoing message's kind).
+    enum message-type {
+        license-request,
+        license-renewal,
+        license-release,
+        individualization-request,
+    }
+
+    /// = MediaKeyStatus (per-key state in the CDM).
+    enum key-status {
+        usable,
+        expired,
+        released,
+        output-restricted,
+        output-downscaled,
+        status-pending,
+        internal-error,
+    }
+
+    enum eme-error {
+        unsupported-key-system,   // host has no CDM for this string
+        unsupported-config,
+        not-allowed,              // policy / robustness refused
+        invalid-state,
+        session-closed,
+        cdm-error,
+    }
+
+    /// = Common Encryption scheme. `cenc` = AES-CTR (subsample); `cbcs` =
+    /// AES-CBC pattern.
+    enum encryption-scheme { cenc, cbcs }
+
+    /// One subsample run for partial (subsample) encryption: `clear-bytes`
+    /// pass through, then `cipher-bytes` are encrypted.
+    record subsample { clear-bytes: u32, cipher-bytes: u32 }
+
+    /// = WebCodecs `decryptConfig`. Attached to an encoded chunk by the codec
+    /// packages; the host decrypts via the bound `key-session`'s key for
+    /// `key-id`. Owned here so audio + video codecs share one definition.
+    record decrypt-config {
+        scheme: encryption-scheme,
+        key-id: list<u8>,
+        /// Initialization vector / counter.
+        iv: list<u8>,
+        /// cenc subsample layout (empty = whole-sample encryption).
+        subsamples: list<subsample>,
+        /// cbcs pattern (encrypted:skipped blocks of 16 bytes; 0/0 = no
+        /// pattern, i.e. full-cipher cbcs).
+        crypt-byte-block: u32,
+        skip-byte-block: u32,
+    }
+
+    /// = MediaKeySystemConfiguration (subset). Codec capability strings follow
+    /// the EME/MSE form, e.g. "audio/mp4; codecs=\"mp4a.40.2\"".
+    record key-system-config {
+        audio-capabilities: list<string>,
+        video-capabilities: list<string>,
+        persistent-state: bool,
+        distinctive-identifier: bool,
+    }
+
+    /// = requestMediaKeySystemAccess + createMediaKeys, folded. `org.w3.clearkey`
+    /// MUST succeed; others are host-optional.
+    request-access: func(key-system: string, configs: list<key-system-config>)
+        -> result<media-keys, eme-error>;
+
+    record key-status-entry { key-id: list<u8>, status: key-status }
+
+    /// = MediaKeys.
+    resource media-keys {
+        /// = createSession.
+        create-session: func(kind: session-type) -> result<key-session, eme-error>;
+        /// = setServerCertificate (Widevine privacy mode); no-op for ClearKey.
+        set-server-certificate: func(cert: list<u8>) -> result<bool, eme-error>;
+    }
+
+    /// = MediaKeySession. The control loop: generate-request → take-message →
+    /// (guest POSTs to its license server) → update.
+    resource key-session {
+        /// = generateRequest(initDataType, initData) → produces a message.
+        generate-request: func(init-data-type: init-data-type, init-data: list<u8>)
+            -> result<_, eme-error>;
+
+        /// = load(sessionId) for a persistent-license session.
+        load: func(session-id: string) -> result<bool, eme-error>;
+
+        /// Pull the pending outgoing message (= the EME `message` event). The
+        /// guest sends the opaque bytes to ITS license server. None = nothing
+        /// pending.
+        take-message: func() -> option<tuple<message-type, list<u8>>>;
+
+        /// = update(response): hand the license-server reply to the CDM; keys
+        /// become usable. (ClearKey: the response is the JWK key set.)
+        update: func(response: list<u8>) -> result<_, eme-error>;
+
+        /// = keyStatuses.
+        key-statuses: func() -> list<key-status-entry>;
+
+        /// = sessionId (for persistent reload).
+        session-id: func() -> string;
+
+        /// = expiration (ms since epoch; none = never).
+        expiration: func() -> option<u64>;
+
+        close: func();
+        /// = remove() — destroy a persistent license.
+        remove: func() -> result<_, eme-error>;
+    }
+}
+
+world eme-guest {
+    import eme;
+}

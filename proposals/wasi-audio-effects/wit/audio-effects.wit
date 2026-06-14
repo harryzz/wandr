@@ -1,0 +1,118 @@
+// wasi:audio-effects — DRAFT / SKETCH (wandr, 2026-06-14, task 108). NOT WIRED.
+//
+// The OPTIONAL hardware DSP lane. Param vocabulary aligned to the W3C
+// **Web Audio API** node set (BiquadFilterNode, DynamicsCompressorNode,
+// GainNode, StereoPannerNode, ConvolverNode, DelayNode).
+//
+// WHY OPTIONAL (capability-negotiation rule — docs/audio-player-design.md):
+// the DEFAULT DSP path is the guest doing it in Rust (biquad / fundsp) over
+// the PCM it already holds — that needs NO WIT. This package is what a guest
+// attaches when it wants the HOST's hardware effect chain instead (battery, or
+// because it's running TUNNEL decode and no longer holds the PCM). A guest:
+//   1. `query()` → which effects the host provides
+//   2. attach the ones it has; do the rest (or all) in Rust.
+// A host with no HW effects returns an empty capability set and the guest's
+// Rust DSP carries it — so the contract stays OS-agnostic. On Android these
+// map to the AudioEffect chain (Equalizer / DynamicsProcessing / BassBoost /
+// Reverb / LoudnessEnhancer) attached to the track's session.
+//
+// DELIBERATELY OUT (guest-side, no host analog needed):
+//   • AnalyserNode (spectrum / waveform) — the guest has the PCM; it FFTs it
+//     itself (rustfft) and draws via wasi:canvas. Not a host effect.
+//   • AudioWorkletNode (custom DSP) — that IS guest-side Rust by definition.
+// So this package is exactly the hardware-accelerable Web-Audio node subset.
+//
+// Effects ATTACH to a wasi:audio playback stream; chain order = attach order.
+// Params are PORTABLE units (dB, Hz, seconds, ratio) — never vendor tuning
+// (the design's "no non-portable knobs" rule). Live updates mirror Web Audio's
+// AudioParam mutation (no node re-create).
+//
+// Deps wired at implementation time: imports `wasi:audio/pcm`'s `playback`.
+package wasi:audio-effects@0.0.1;
+
+interface effects {
+    // use wasi:audio/pcm.{playback};   // wired at impl time
+
+    /// W3C Web Audio BiquadFilterType — the EQ/filter primitive.
+    enum filter-type {
+        lowpass, highpass, bandpass,
+        lowshelf, highshelf, peaking, notch, allpass,
+    }
+
+    /// Which effects this host can run in hardware (the probe). Empty = none;
+    /// the guest does all DSP in Rust.
+    flags capabilities {
+        gain,
+        biquad,
+        multiband-eq,
+        compressor,
+        stereo-pan,
+        reverb,
+        delay,
+    }
+
+    query: func() -> capabilities;
+
+    /// BiquadFilterNode params (frequency Hz, Q, peaking/shelf gain dB).
+    record biquad-params {
+        kind: filter-type,
+        frequency-hz: f32,
+        q: f32,
+        gain-db: f32,
+    }
+
+    /// One band of a graphic/parametric EQ (Android Equalizer = N of these;
+    /// Web Audio = N BiquadFilterNodes in series).
+    record eq-band {
+        frequency-hz: f32,
+        gain-db: f32,
+        q: f32,
+    }
+
+    /// DynamicsCompressorNode params (Web Audio units).
+    record compressor-params {
+        threshold-db: f32,
+        knee-db: f32,
+        ratio: f32,
+        attack-s: f32,
+        release-s: f32,
+    }
+
+    /// ConvolverNode as a PORTABLE preset (a raw impulse-response buffer is the
+    /// R2 power-user lane; presets cover the shipped need without shipping IRs).
+    record reverb-params {
+        room-size: f32,  // 0..1
+        damping: f32,    // 0..1
+        wet: f32,        // 0..1 dry/wet mix
+    }
+
+    /// One effect, aligned 1:1 to a Web Audio node.
+    variant effect-spec {
+        gain(f32),                       // GainNode.gain (linear)
+        biquad(biquad-params),           // BiquadFilterNode
+        multiband-eq(list<eq-band>),     // Equalizer / series of BiquadFilters
+        compressor(compressor-params),   // DynamicsCompressorNode
+        stereo-pan(f32),                 // StereoPannerNode.pan, -1..1
+        reverb(reverb-params),           // ConvolverNode (preset)
+        delay(f32),                      // DelayNode.delayTime (seconds)
+    }
+
+    enum effect-error { unsupported-effect, stream-invalid, config-rejected }
+
+    resource effect {
+        /// Attach to a playback stream; chain order = creation order.
+        /// create: static func(stream: borrow<playback>, spec: effect-spec)
+        ///         -> result<effect, effect-error>;
+
+        /// Live param update (= Web Audio AudioParam mutation; no re-create).
+        update: func(spec: effect-spec);
+
+        /// Bypass without detaching (keeps chain position).
+        set-enabled: func(on: bool);
+        // drop = detach from the chain.
+    }
+}
+
+world audio-effects-guest {
+    import effects;
+}

@@ -1,0 +1,97 @@
+// wandr:media-session — DRAFT / SKETCH (wandr, 2026-06-14, task 108). NOT WIRED.
+//
+// The now-playing / transport primitive. Aligned 1:1 to the W3C
+// **Media Session API** (`navigator.mediaSession`): `metadata`,
+// `playbackState`, `setPositionState`, and `setActionHandler`.
+//
+// wandr: namespace, ARBITER-OWNED — a sibling of wandr:audio-focus /
+// wandr:alarm / wandr:notify, and the audio analog of the canvas-windowing
+// red line: TRANSPORT UI IS PLATFORM POLICY, not the app's. The guest only
+// publishes now-playing state + receives transport intents; the arbiter renders
+// the lockscreen / notification controls and routes headset / Bluetooth
+// MEDIA-BUTTON events. (Focus / route / volume stay in wandr:audio-focus; this
+// package is purely metadata + transport actions.)
+//
+// Shape mirrors wandr:audio-focus: a host-import `session` the guest drives,
+// and an exported `session-handler` the arbiter calls (probed `.ok()` per
+// instance, like alarm-events).
+package wandr:media-session@0.1.0;
+
+interface session {
+    /// W3C MediaImage (artwork). Raw bytes (decoded host-side via
+    /// graphics.decode-image for the lockscreen) rather than a URL — guests
+    /// have no ambient fetch authority, and the art usually came from a tag.
+    record artwork {
+        /// "image/png" | "image/jpeg" | "image/webp".
+        mime: string,
+        data: list<u8>,
+    }
+
+    /// W3C MediaMetadata.
+    record metadata {
+        title: string,
+        artist: string,
+        album: string,
+        artwork: option<artwork>,
+    }
+
+    /// W3C MediaSessionPlaybackState.
+    enum playback-state { none, paused, playing }
+
+    /// W3C MediaPositionState (drives the scrubber). `position-s` is the
+    /// guest's current playhead — typically `wasi:audio playback.position`
+    /// converted to seconds.
+    record position-state {
+        duration-s: f64,
+        playback-rate: f64,
+        position-s: f64,
+    }
+
+    /// = navigator.mediaSession.metadata =.
+    set-metadata: func(meta: metadata);
+    /// = navigator.mediaSession.playbackState =.
+    set-playback-state: func(state: playback-state);
+    /// = navigator.mediaSession.setPositionState(...).
+    set-position: func(pos: position-state);
+    /// Playback ended / session torn down — clear the now-playing UI.
+    clear: func();
+}
+
+interface session-handler {
+    /// W3C MediaSessionAction (the player-relevant subset; call actions
+    /// like togglemicrophone/hangup live in the call path, not here).
+    enum action {
+        play,
+        pause,
+        stop,
+        seek-to,
+        seek-forward,
+        seek-backward,
+        previous-track,
+        next-track,
+    }
+
+    /// W3C MediaSessionActionDetails. `seek-time-s` carries the target for
+    /// `seek-to`, or the offset for seek-forward/backward (none = default step).
+    record action-details {
+        action: action,
+        seek-time-s: option<f64>,
+    }
+
+    /// The arbiter delivers a transport intent (lockscreen tap / headset
+    /// button / BT AVRCP). The guest applies it (play/pause/seek/skip).
+    on-action: func(details: action-details);
+}
+
+/// Host-import side — the host implements `session` (forwarded to the arbiter's
+/// media-session module) and add_to_linkers it onto every guest (harmless for
+/// ones that don't import it).
+world media-session-host {
+    import session;
+}
+
+/// Export side — typed `on-action` for guests that export `session-handler`
+/// (probed `.ok()` per instance, like alarm-events).
+world media-session-events {
+    export session-handler;
+}

@@ -31,12 +31,22 @@ interface types {
     }
 
     /// One compressed frame (e.g. reassembled from RTP after SRTP-open).
+    ///
+    /// ENCRYPTED MEDIA (task 108): `decrypt` carries per-frame Common-Encryption
+    /// params (= WebCodecs `decryptConfig`, owned by wasi:eme); the key comes
+    /// from a wasi:eme `key-session` bound at decoder open. For a robust CDM the
+    /// decoder is secure-surface-only (decode-to-surface already keeps frames
+    /// host-side — the natural fit). Additive; cleartext when `decrypt` = none.
+    // use wasi:eme.{decrypt-config};   // wired at impl time
     record encoded-frame {
         data: list<u8>,
         /// 90 kHz media timestamp (the RTP clock).
         timestamp: u32,
         /// true = IDR / keyframe; decoders need one to start.
         keyframe: bool,
+        /// none = cleartext; some = encrypted. Type:
+        /// `option<wasi:eme/eme.decrypt-config>`.
+        // decrypt: option<decrypt-config>,
     }
 
     record decoder-config {
@@ -45,6 +55,9 @@ interface types {
         /// actual size wins where the codec carries dimensions.
         width: u32,
         height: u32,
+        /// ENCRYPTED MEDIA: bind a wasi:eme `key-session` (= EME setMediaKeys).
+        /// Type `option<borrow<wasi:eme/eme.key-session>>` (wired at impl time).
+        // key-session: option<borrow<key-session>>,
     }
 }
 

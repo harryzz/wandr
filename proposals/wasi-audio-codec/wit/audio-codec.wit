@@ -1,0 +1,165 @@
+// wasi:audio-codec — DRAFT / SKETCH (wandr, 2026-06-14, task 108). NOT WIRED.
+//
+// The OPTIONAL hardware codec lane of the audio stack. Mirrors the W3C
+// **WebCodecs** `AudioDecoder` / `AudioEncoder` (EncodedAudioChunk ↔ AudioData,
+// isConfigSupported), the audio sibling of the in-tree `wasi:video-decoder`.
+//
+// WHY OPTIONAL (the design's capability-negotiation rule — see
+// docs/audio-player-design.md): audio decode is cheap, so the DEFAULT is the
+// guest decoding in Rust (Symphonia) and writing PCM through `wasi:audio`
+// (the mandatory portable floor). This package is what a guest reaches for to
+// OFFLOAD to hardware (battery / DSP) when the host has it. A guest:
+//   1. `probe(config)` → hardware | software | unsupported   (= isConfigSupported)
+//   2. if acceptable → open + use this; else decode it itself.
+// "Use the HW if present, write my own when absent" is one match on the open
+// result. A minimal host (or a PipeWire/CoreAudio/WASAPI host with no HW
+// codec) advertises `unsupported` and the guest's Rust fallback carries it —
+// so the contract stays OS-agnostic. Reuses the `wasi:video-decoder` error
+// vocabulary so fallback is uniform across media.
+//
+// TWO OUTPUT TOPOLOGIES (the design's transcode-vs-tunnel decision):
+//   • TRANSCODE — decode → PCM returned to the guest via `read` (WebCodecs
+//     AudioData). Composable: the guest can EQ / mix / visualize, then write
+//     to `wasi:audio`. Used foreground.
+//   • TUNNEL — `connect` the decoder to a `wasi:audio` playback sink; decoded
+//     PCM flows straight to the device host-side, never crossing back (Android
+//     offloaded playback; the CPU sleeps). Used backgrounded/screen-off.
+// A good player exposes both and picks per-situation; they are mutually
+// exclusive by physics (tunnel hands the PCM to the hardware).
+//
+// Deps wired at implementation time: TUNNEL imports `wasi:audio/pcm`'s
+// `playback` as the sink (copy into wit/deps/ then).
+package wasi:audio-codec@0.0.1;
+
+interface types {
+    /// Codecs a host MAY accelerate. The royalty-free set (opus/flac/vorbis/
+    /// pcm) is the safe floor; mp3/aac are HW-common but patent-touched, so a
+    /// host may decline them and the guest decodes in-process (licensing stays
+    /// guest-side, as with the Symphonia feature flags).
+    enum codec { opus, aac, mp3, flac, vorbis, pcm-mulaw, pcm-alaw }
+
+    /// WebCodecs `hardwareAcceleration` preference.
+    enum acceleration { no-preference, prefer-hardware, prefer-software }
+
+    /// `probe` result (= WebCodecs isConfigSupported, but explicit about the
+    /// lane so the guest can choose rather than have the host hide it).
+    enum support { hardware, software, unsupported }
+
+    /// Same vocabulary as wasi:video-decoder so guest fallback is uniform.
+    enum codec-error {
+        unsupported-codec,
+        no-hw-codec,
+        codec-init-failed,
+        bad-data,
+        /// Input queue full — retry after draining.
+        queue-full,
+        /// TUNNEL: no connected sink can accept output.
+        sink-unavailable,
+    }
+
+    /// WebCodecs `EncodedAudioChunk` (one compressed packet, e.g. demuxed
+    /// guest-side or pulled from a network segment).
+    ///
+    /// ENCRYPTED MEDIA: `decrypt` carries the per-chunk Common-Encryption
+    /// params (= WebCodecs `decryptConfig`). The KEY comes from a wasi:eme
+    /// `key-session` bound at decoder open; the host decrypts in the secure
+    /// path. For a robust CDM the decoder is then SINK-ONLY (TUNNEL) — `read`
+    /// is refused so plaintext never reaches the guest; ClearKey MAY allow
+    /// `read` (testing). Owner of `decrypt-config` is wasi:eme.
+    // use wasi:eme.{decrypt-config};   // wired at impl time
+    record encoded-chunk {
+        data: list<u8>,
+        /// Presentation timestamp in MICROSECONDS (WebCodecs unit).
+        timestamp-us: s64,
+        /// `key` vs `delta` (most audio is all-key; matters for AAC-on-MP4).
+        keyframe: bool,
+        /// none = cleartext; some = encrypted (decrypt host-side via the bound
+        /// key-session). Type: `option<wasi:eme/eme.decrypt-config>`.
+        // decrypt: option<decrypt-config>,
+    }
+
+    /// WebCodecs `AudioDecoderConfig` (subset).
+    record decoder-config {
+        codec: codec,
+        sample-rate: u32,
+        channels: u32,
+        acceleration: acceleration,
+        /// Codec-private init data (esds / FLAC STREAMINFO / Opus head).
+        description: option<list<u8>>,
+        /// ENCRYPTED MEDIA: bind a wasi:eme `key-session` (= EME setMediaKeys);
+        /// chunks then carry `decrypt-config` and decrypt host-side against this
+        /// session's keys. none = cleartext decoder. Type:
+        /// `option<borrow<wasi:eme/eme.key-session>>` (wired at impl time).
+        // key-session: option<borrow<key-session>>,
+    }
+
+    /// WebCodecs `AudioEncoderConfig` (subset).
+    record encoder-config {
+        codec: codec,
+        sample-rate: u32,
+        channels: u32,
+        bitrate-bps: u32,
+        acceleration: acceleration,
+    }
+}
+
+interface decoder {
+    use types.{decoder-config, encoded-chunk, support, codec-error};
+    // TUNNEL sink (wired at impl time):
+    // use wasi:audio/pcm.{playback};
+
+    /// = WebCodecs AudioDecoder.isConfigSupported. The guest decides the lane.
+    probe: func(config: decoder-config) -> support;
+
+    resource audio-decoder {
+        open: static func(config: decoder-config)
+              -> result<audio-decoder, codec-error>;
+
+        /// TUNNEL: bind decoded PCM straight to a wasi:audio playback sink
+        /// (host-side; the guest never reads). Mutually exclusive with `read`.
+        /// connect: func(sink: borrow<playback>) -> result<_, codec-error>;
+
+        /// = WebCodecs decode(EncodedAudioChunk). Push one compressed packet.
+        submit: func(chunk: encoded-chunk) -> result<_, codec-error>;
+
+        /// TRANSCODE: drain up to `max-frames` × channels interleaved f32
+        /// (WebCodecs AudioData, the wasi:audio wire format). Empty until
+        /// frames are ready. Errors if the decoder is in TUNNEL mode.
+        read: func(max-frames: u32) -> list<f32>;
+
+        /// = WebCodecs flush(): finish decoding queued input (end of stream).
+        flush: func();
+
+        sample-rate: func() -> u32;
+        channels: func() -> u32;
+        decoded-frames: func() -> u64;
+    }
+}
+
+interface encoder {
+    use types.{encoder-config, encoded-chunk, support, codec-error};
+
+    probe: func(config: encoder-config) -> support;
+
+    resource audio-encoder {
+        open: static func(config: encoder-config)
+              -> result<audio-encoder, codec-error>;
+
+        /// = WebCodecs encode(AudioData). Push interleaved f32 frames.
+        submit: func(samples: list<f32>) -> result<_, codec-error>;
+
+        /// Drain finished compressed packets (= the EncodedAudioChunk output).
+        read: func() -> list<encoded-chunk>;
+
+        /// First-packet codec-private bytes (esds / Opus head) once available.
+        description: func() -> option<list<u8>>;
+
+        flush: func();
+    }
+}
+
+world audio-codec-guest {
+    import types;
+    import decoder;
+    import encoder;
+}

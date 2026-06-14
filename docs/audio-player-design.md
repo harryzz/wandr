@@ -21,7 +21,7 @@ offload already shipped — is **mechanism in the host, policy in the guest**:
    per-stream (`wasi:audio-codec`, WebCodecs-shaped). Absent or refused →
    the guest decodes it itself. "Use the HW if it's there; write my own when
    it isn't" is one `match` on the open result.
-3. **HW effects/DSP = optional capability**, same shape (`wandr:audio-effects`,
+3. **HW effects/DSP = optional capability**, same shape (`wasi:audio-effects`,
    Android-effect-shaped). Attach host EQ/etc. to the stream, or do biquad in
    Rust. Guest picks.
 
@@ -82,7 +82,7 @@ Two output **topologies** (the real decision — see §3):
 
 Encoder is symmetric: HW AAC record (MediaCodec) vs guest Opus/AAC encode.
 
-### Layer 2 — `wandr:audio-effects` (optional HW DSP)
+### Layer 2 — `wasi:audio-effects` (optional HW DSP)
 
 The host advertises its hardware/framework effect set — on Android the
 standard `AudioEffect` chain attachable to a track's session (Equalizer,
@@ -141,6 +141,61 @@ it's a family split by layer (verified 2026-06-14):
 So `wandr:media-session` and the optional `wasi:audio-codec` lane each get a
 real W3C spec to track; the core PCM contract correctly has none.
 
+## The wandr media family (one umbrella, separate packages)
+
+W3C has no single "Media" spec — the family is owned by the **Media Working
+Group** (MSE, EME, WebCodecs, Media Capabilities, Media Session, PiP); Web Audio
+is the separate **Audio WG**. wandr mirrors that: **separate packages** (a
+minimal host ships only `wasi:audio` — WASI modularity), grouped as the *wandr
+media family*. Each is an optional capability the guest queries + falls back on.
+
+| Package | W3C analog | Layer / namespace |
+|---|---|---|
+| `wasi:audio` | (device — no web analog) | floor, mandatory |
+| `wasi:audio-codec` | WebCodecs Audio | optional HW codec |
+| `wasi:audio-effects` | Web Audio | optional HW DSP |
+| `wasi:video-decoder` / `-encoder` | WebCodecs Video | optional HW codec |
+| `wasi:eme` | Encrypted Media Extensions | optional DRM control plane |
+| `wandr:media-session` | Media Session API | transport, arbiter |
+| `wandr:audio-focus` | (platform audio focus) | focus/route, shipped |
+| *(no package)* MSE | Media Source Extensions | guest orchestration |
+
+```
+                      wandr MEDIA FAMILY   (W3C Media WG  ->  WASI)
+
+ +----------------------------------------------------------------------------+
+ | GUEST  (pure-Rust player component)                                        |
+ |  playlist . seek/ABR . Symphonia demux . Rust DSP/FFT . license client     |
+ +--+----------+----------+----------+-----------+-----------+-----------------+
+    |compressed| PCM      | effect   | license   | now-      | draw + input
+    | chunks   | samples  | params   | blobs(opq)| playing   |
+    v          v          v          v           v           v
+ +-------+ +--------+ +---------+ +--------+ +---------+ +------------+
+ | audio | | audio  | | audio-  | |  eme   | | media-  | |  canvas    |  WIT
+ | -codec| | (PCM   | | effects | | (EME   | | session | |  + input   |  family
+ |(WebCo | |  FLOOR)| |(WebAud) | | ctrl)  | |(MediaSe)| |            |
+ | +video| |        | |         | |        | | +focus  | |            |
+ +---+---+ +---+----+ +----+----+ +---+----+ +----+----+ +-----+------+
+ ====|=========|===========|==========|===========|============|=== guest|host
+ +---v---+ +---v----+ +----v----+ +---v----+ +----v----+ +-----v------+
+ | HW    | | Audio- | | HW fx   | |  CDM   | | arbiter | | skia / EGL |  HOST
+ | codec | | Flinger| | chain   | |Widevine| | session | |            |
+ |(Media-| | ring   | |(AudioFx)| | /Clear-| | +focus  | |            |
+ |Codec) | |        | |         | | Key    | | +route  | |            |
+ +---+---+ +---+----+ +----+----+ +---+----+ +----+----+ +-----+------+
+ +---v---------v-----------v----------v-----------v------------v------+
+ | HARDWARE:  DSP . audio out . TEE (Widevine L1) . panel            |
+ +------------------------------------------------------------------+
+
+ DECODE PATHS                          DRM CONTROL LOOP (wasi:eme)
+ - TRANSCODE codec.read -> guest PCM   generate-request -> take-message ->
+   -> Rust DSP/FFT -> audio.write        guest POSTs to ITS license server ->
+   (foreground: viz, custom EQ)          update(response) -> keys live in CDM ->
+ - TUNNEL codec.connect(audio sink)      codec decrypts in the SECURE path ->
+   PCM never returns; HW fx; CPU         output is SINK-ONLY for robust DRM
+   sleeps (background/screen-off)        (ClearKey may allow read = testing)
+```
+
 ## Feature map — where each piece lives
 
 | Feature | Home | New WIT? |
@@ -155,7 +210,7 @@ real W3C spec to track; the core PCM contract correctly has none.
 | Resample → device rate | guest (`rubato`) | no |
 | Gapless / crossfade / ReplayGain | guest DSP pre-write | no |
 | EQ / effects (custom) | guest (biquad / `fundsp`) | no |
-| EQ / effects (HW, when chosen) | host via `wandr:audio-effects` | **yes (L2)** |
+| EQ / effects (HW, when chosen) | host via `wasi:audio-effects` | **yes (L2)** |
 | Spectrum / waveform viz | guest (`rustfft`/`realfft`) → `wasi:canvas` | no |
 | Network streaming | guest via `wasi:http` / the `wasi:tls` shim | no |
 | **Transport clock (position)** | `wasi:audio` | **promote (L0)** |
@@ -165,30 +220,47 @@ real W3C spec to track; the core PCM contract correctly has none.
 
 ## Contract additions (minimal, each a named lane)
 
-1. **`playback.position() -> u64` (frames played)** in `wasi:audio` — promote
-   the already-named R2 deferral. The master clock for the progress bar,
-   accurate-seek confirmation, and A/V sync (pairs with the video decoder's
-   90 kHz ts). The player is its promoting consumer. Optionally add `drain()`
-   (play-out-then-stop, vs `pause` which retains) to end a track clicklessly.
+The family below mirrors the W3C audio standards by layer (§W3C alignment).
+**WIT sketches drafted 2026-06-14** (task 108) under `proposals/` — all
+non-binding drafts, deps wired at implementation time.
 
-2. **`wasi:audio-codec@0.0.1`** (new, optional) — WebCodecs-shaped HW
-   decode/encode with `probe` + transcode/tunnel output. Reuses the
-   `wasi:video-decoder` error vocabulary (`unsupported-codec`/`no-hw-codec`)
-   so guest fallback is one `match`. Separate package so a minimal host ships
-   only Layer 0.
+1. **`playback.position() -> u64` (frames played)** in `wasi:audio` — ✅ DONE
+   (promoted + host impl + device-verified, M1). The master clock for the
+   progress bar, accurate-seek confirmation, and A/V sync (pairs with the video
+   decoder's 90 kHz ts). The player is its promoting consumer. (`drain()` —
+   play-out-then-stop vs `pause` which retains — remains an optional add.)
 
-3. **`wandr:audio-effects@0.1.0`** (new, optional) — attach host effects to a
-   stream, portable params. Separate package, `wandr:` namespace (no cross-
-   platform standard for *host* effects yet; Web Audio is guest-side).
+2. **`wasi:audio-codec@0.0.1`** (sketched: `proposals/wasi-audio-codec/`) —
+   the W3C **WebCodecs** `AudioDecoder`/`AudioEncoder` lane: `probe`
+   (= isConfigSupported), `submit`/`read` (= decode/EncodedAudioChunk↔AudioData)
+   with transcode (`read`) vs tunnel (`connect` to a `wasi:audio` sink) output.
+   Reuses the `wasi:video-decoder` error vocabulary so guest fallback is one
+   `match`. Separate package so a minimal host ships only Layer 0.
 
-4. **`wandr:media-session@0.1.0`** (new) — arbiter-owned, like
-   `wandr:audio-focus`/`wandr:alarm`/`wandr:notify`. Guest publishes
-   now-playing metadata + state + position; the arbiter renders the
-   lockscreen/notification transport and routes **headset/BT media-button**
-   events (play/pause/next/prev/seek) to the guest's handler. Tracks the W3C
-   Media Session API shape. The "platform owns transport UI" red line — the
-   audio analog of the canvas-windowing split. The largest genuinely-missing
-   piece and what makes a player feel native.
+3. **`wasi:audio-effects@0.0.1`** (sketched: `proposals/wasi-audio-effects/`) —
+   the W3C **Web Audio API** node subset that is hardware-accelerable
+   (BiquadFilter/Compressor/Gain/StereoPanner/Convolver/Delay), attached to a
+   `wasi:audio` stream with portable params (dB/Hz/s). `wasi:` namespace (Web
+   Audio is the cross-platform standard the params track). AnalyserNode
+   (spectrum) and AudioWorklet (custom DSP) are deliberately OUT — those are
+   guest-side. Optional: empty `query()` → guest does all DSP in Rust.
+
+4. **`wandr:media-session@0.1.0`** (sketched: `proposals/wandr-media-session/`)
+   — arbiter-owned, like `wandr:audio-focus`/`wandr:alarm`/`wandr:notify`.
+   Guest publishes now-playing metadata + state + position; the arbiter renders
+   the lockscreen/notification transport and routes **headset/BT media-button**
+   events to the guest's `session-handler` export. Aligned 1:1 to the W3C
+   **Media Session API** (`metadata`/`playbackState`/`setPositionState`/
+   `setActionHandler`). `wandr:` namespace because transport UI is platform
+   policy — the audio analog of the canvas-windowing red line. The largest
+   genuinely-missing piece and what makes a player feel native.
+
+5. **Media Source Extensions (streaming)** — NO package; streaming is guest
+   orchestration over `wasi:http`/`wasi:tls` + `wasi:audio-codec` +
+   `wasi:audio`. The one real host-contract residue MSE drags in is **DRM/EME**
+   (protected content needs a hardware-secure decode path the guest never sees)
+   — its own future proposal, gated on whether wandr supports protected
+   content at all. Open questions in `proposals/wasi-media-source/NOTES.md`.
 
 ## Libraries (all pure-Rust, wasm32-wasip2, the shipped toolchain)
 
