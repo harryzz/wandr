@@ -38,5 +38,29 @@ wasi:canvas changes, no speculative verb. Treat wasi:webgpu as a future
 SECOND rendering lane implemented wholesale host-side. SwiftUI/Avalonia/
 Slint/Flutter/Compose stay on wasi:canvas (pure Canvas2D), need no WebGPU.
 
+wasi:canvas ↔ W3C Canvas2D (verified vs the WIT 2026-06-14, memo has the
+table): SAME layer (immediate-mode stateful-stack 2D, HOST owns the
+rasterizer — vs wasi:webgpu where the guest drives the pipeline), but SHAPE =
+Skia SkCanvas, not a W3C port (reverse-derived from Compose/Slint/Avalonia in
+task 105). Concept-for-concept maps to Canvas2D (save/restore, transforms,
+clip, rect/oval/arc/line/path, drawImage, gradients incl. sweep≈conic,
+image-pattern≈createPattern, 29 blend-modes≈globalCompositeOperation);
+draw-path/clip-path take a LITERAL SVG path-data string (covers all
+moveTo/bezier/arcTo/roundRect). Richer than Canvas2D: paint as value record
+(SkPaint), pictures/scene-layers, paragraph/glyphs text stack, color-filter,
+combine-paths, snapshot. MISSING vs Canvas2D — most "gaps" are actually
+covered (pixel I/O = image-from-rgba8+snapshot; conic = sweep-gradient; all
+path cmds = SVG string). Genuine deltas: (1) setLineDash/lineDashOffset =
+ABSENT (no dash/path-effect on paint) — the one CLEAN additive gap (skia
+SkDashPathEffect), no shipped consumer needs it yet; (2) generic offset
+drop-shadow (shadowColor/Offset/Blur) = PARTIAL (paint.blur is in-place
+mask-blur, no offset/sep color; rrect case = draw-shadow-rrect; emulable);
+(3) ctx.filter CSS chain = PARTIAL (only color-filter blend/invert +
+mask-blur); (4) isPointInPath/isPointInStroke = ABSENT BY DESIGN
+(hit-testing is guest-side); (5) getTransform/setTransform/resetTransform =
+convenience-only (do via save/restore+concat). Net: wasi:canvas is a
+functional SUPERSET of Canvas2D for all framework draws → confirms the layer
+claim, and draw-mesh (no Canvas2D analog at all) is out-of-layer.
+
 Related: [[reference_slint_wasip2]], [[project_wasi_canvas_migration]],
 [[reference_wasi_webgpu_gfx]], [[reference_avalonia_wandr]].
