@@ -1,0 +1,33 @@
+[package]
+name = "wandr-reqwest"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# A drop-in `reqwest`: real reqwest on native (passthrough), a wasi:tls subset on
+# wasm32 (see src/lib.rs + README.md). Shared guest-side lib: the libsignal fork
+# consumes it as its `reqwest` dependency (package rename) for the Signal guest,
+# and wandr.audio.player uses it for internet metadata/cover-art lookups.
+
+[lib]
+path = "src/lib.rs"
+
+# native: passthrough to the real reqwest (features it needs hardcoded here).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls-manual-roots", "stream"] }
+
+# wasm32: the wasi:tls implementation.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wandr-step-executor = { path = "../wandr-step-executor" }
+wasip2 = "1"
+wit-bindgen = "0.53"
+http = "1"
+bytes = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+futures = "0.3"
+url = "2"
+
+[profile.release]
+opt-level = "s"

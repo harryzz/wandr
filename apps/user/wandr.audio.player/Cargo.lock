@@ -3321,12 +3321,12 @@ dependencies = [
  "slint-wandr",
  "symphonia",
  "url",
- "wandr-reqwest-shim",
+ "wandr-reqwest",
  "wandr-step-executor",
 ]
 
 [[package]]
-name = "wandr-reqwest-shim"
+name = "wandr-reqwest"
 version = "0.1.0"
 dependencies = [
  "base64",

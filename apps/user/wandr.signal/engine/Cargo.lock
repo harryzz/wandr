@@ -1611,8 +1611,8 @@ dependencies = [
  "url",
  "usernames",
  "uuid",
- "wandr-reqwest-shim",
- "wandr-reqwest-websocket-shim",
+ "wandr-reqwest",
+ "wandr-reqwest-websocket",
  "wandr-step-executor",
  "zkgroup",
 ]
@@ -3578,7 +3578,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "wandr-reqwest-shim"
+name = "wandr-reqwest"
 version = "0.1.0"
 dependencies = [
  "base64",
@@ -3595,13 +3595,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "wandr-reqwest-websocket-shim"
+name = "wandr-reqwest-websocket"
 version = "0.1.0"
 dependencies = [
  "base64",
  "reqwest-websocket",
  "url",
- "wandr-reqwest-shim",
+ "wandr-reqwest",
 ]
 
 [[package]]

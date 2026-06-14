@@ -1,0 +1,9 @@
+// Imports-only world for the wasi:tls-backed `reqwest` drop-in shim. No exports
+// (this is a library; the final guest app provides wasi:cli/run). cli/imports
+// pulls wasi:sockets/io/clocks so generate_all emits them.
+package wart:reqwest-wasi-shim;
+
+world shim {
+    include wasi:cli/imports@0.2.6;
+    include wasi:tls/imports@0.2.0-draft;
+}

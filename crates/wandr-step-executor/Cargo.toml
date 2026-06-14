@@ -1,0 +1,31 @@
+[package]
+name = "wandr-step-executor"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# A persistent, frame-stepped single-threaded async executor for wasm32-wasip2.
+#
+# wstd::runtime::block_on builds a reactor, runs a future to completion, then
+# tears the reactor down — so spawned tasks don't survive between calls and no
+# guest code runs *between* component-export invocations. The Signal engine
+# (task 67 Phase 2) exports `wart:signal/chat`: each `poll-events` is a separate
+# call, and the background receive loop / websocket keepalive must keep making
+# progress across them. This crate installs ONE thread-local reactor at `init()`
+# that lives for the whole component, and advances it with a NON-blocking
+# `step()` called once per export. The transport shims' pollable-await
+# (`AsyncPollable`), `spawn`, and `sleep` are rebound here instead of wstd's.
+#
+# Bookkeeping is modeled on wstd 0.6.6's runtime (reactor.rs); the lifecycle and
+# the non-blocking step differ. wasm32-only — it depends on `wasip2`.
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+async-task = "4"
+slab = "0.4"
+wasip2 = "1"
+
+[profile.release]
+opt-level = "s"

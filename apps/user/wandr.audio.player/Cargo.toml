@@ -31,8 +31,8 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 # wandr-reqwest-shim over wasi:tls (no guest crypto; network granted by the host),
 # driven by the wandr-step-executor reactor so fetches run across bg-ticks without
 # blocking audio. JSON via serde_json.
-reqwest = { path = "../../../external/libsignal-service-rs/wandr-wasi-shims/reqwest", package = "wandr-reqwest-shim" }
-wandr-step-executor = { path = "../../../external/libsignal-service-rs/wandr-wasi-shims/wandr-step-executor" }
+reqwest = { path = "../../../crates/wandr-reqwest", package = "wandr-reqwest" }
+wandr-step-executor = { path = "../../../crates/wandr-step-executor" }
 url = "2"
 serde_json = "1"
 

@@ -1,0 +1,23 @@
+[package]
+name = "wandr-reqwest-websocket"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Drop-in subset of `reqwest-websocket` (RFC6455 client) over the wandr-reqwest
+# TlsStream. Swapped in for the real crate on wasm32 by our libsignal-service-rs
+# fork. See the wandr-reqwest crate for the shared wasi:tls core.
+
+[lib]
+path = "src/lib.rs"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+reqwest-websocket = { version = "0.4.2", features = ["json"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wandr-reqwest = { path = "../wandr-reqwest" }
+base64 = "0.22"
+url = "2"
+
+[profile.release]
+opt-level = "s"

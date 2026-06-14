@@ -1319,8 +1319,8 @@ dependencies = [
  "url",
  "usernames",
  "uuid",
- "wandr-reqwest-shim",
- "wandr-reqwest-websocket-shim",
+ "wandr-reqwest",
+ "wandr-reqwest-websocket",
  "wandr-step-executor",
  "zkgroup",
 ]
@@ -2759,7 +2759,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
-name = "wandr-reqwest-shim"
+name = "wandr-reqwest"
 version = "0.1.0"
 dependencies = [
  "base64",
@@ -2776,13 +2776,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "wandr-reqwest-websocket-shim"
+name = "wandr-reqwest-websocket"
 version = "0.1.0"
 dependencies = [
  "base64",
  "reqwest-websocket",
  "url",
- "wandr-reqwest-shim",
+ "wandr-reqwest",
 ]
 
 [[package]]

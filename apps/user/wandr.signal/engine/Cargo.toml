@@ -16,7 +16,7 @@ path = "src/lib.rs"
 
 [dependencies]
 libsignal-service = { path = "../../../../external/libsignal-service-rs", default-features = false }
-wandr-step-executor = { path = "../../../../external/libsignal-service-rs/wandr-wasi-shims/wandr-step-executor" }
+wandr-step-executor = { path = "../../../../crates/wandr-step-executor" }
 # The call engine (Phase 2b-ii): Signal 1:1 voice calls. `signal` pulls the opaque
 # codec + X25519-DH/GCM keying + the SignalCall driver.
 wandr-call = { path = "../../../../crates/wandr-call", features = ["signal", "host-aead"] }
