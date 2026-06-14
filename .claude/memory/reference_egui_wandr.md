@@ -62,5 +62,14 @@ convenience-only (do via save/restore+concat). Net: wasi:canvas is a
 functional SUPERSET of Canvas2D for all framework draws → confirms the layer
 claim, and draw-mesh (no Canvas2D analog at all) is out-of-layer.
 
+Contract doc synced (2026-06-14): proposals/wasi-canvas/REDESIGN-0.0.2.md §7
+deferral table now records the redirect — the `draw-mesh` (textured triangle
+meshes) row is **DEFERRED INDEFINITELY** with **egui explicitly removed as the
+promoting candidate** (no Canvas2D analog → out-of-layer; egui→wasi:webgpu).
+The R2/R5 re-entry note is kept ONLY for a hypothetical future mesh-fill-
+without-GPU consumer. Separately, the §7 dash row is annotated as the single
+clean additive gap vs W3C Canvas2D (setLineDash/lineDashOffset → paint `dash`
+field, skia SkDashPathEffect, R3).
+
 Related: [[reference_slint_wasip2]], [[project_wasi_canvas_migration]],
 [[reference_wasi_webgpu_gfx]], [[reference_avalonia_wandr]].
