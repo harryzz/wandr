@@ -39,10 +39,18 @@ title/format from tags, real waveform overview (guest-side from PCM), seekbar
 driven by `position`, play/pause + tap-seek via touch (pointer-handler +
 inputflinger). 1.54 MB guest. Run: `wandr-arbiter launch wandr.audio.player`
 (needs host-108 for `position`). Notes: desktop winit window unusable in the WSL
-sandbox (wayland reset) → verified via device screencap; tap-seek uses
-close+reopen (no `wasi:audio flush()`) — a finding: a `flush()`/`drain()` verb
-would make seek gapless. Album-art decode (`graphics.decode-image`) deferred (the
-test FLAC has no embedded art).
+sandbox (wayland reset) → verified via device screencap. Album-art decode
+(`graphics.decode-image`) deferred (the test FLAC has no embedded art).
+
+**✅ wasi:audio `flush()` + `drain()` ADDED + device-verified gapless seek
+(2026-06-14).** The close+reopen seek finding is resolved: `flush` (drop
+buffered now) + `drain` (play-out-then-stop) on the playback resource; host
+impl = `IAudioTrack.flush`/`stop` (flush PAUSES first — flush mid-play wedges
+the track), with `position` kept continuous (host subtracts the dropped
+backlog from the `written` counter). Player seek rewired: `flush → re-anchor
+the device clock → prime the ring → resume` (anchor_dev/anchor_track model).
+Gotcha: `AudioTrack.flush()` is only valid stopped/paused — first attempt
+flushed mid-play and killed audio.
 
 ### M2 — `wasi:media-session` (the native-feel gap)
 - New arbiter-owned package `wasi:media-session@0.0.1` (sibling of

@@ -66,9 +66,10 @@ struct State {
     track: Option<Track>,
     pb: Option<wpcm::Playback>,
     playing: bool,
-    cursor: usize,    // next interleaved-sample index to write
-    base_frame: u64,  // frames consumed before the current `pb` (seek continuity)
-    sw_frames: u64,   // software clock (desktop / no-backend fallback)
+    cursor: usize,     // next interleaved-sample index to write
+    anchor_dev: u64,   // pb.position() captured at the last anchor (open / seek)
+    anchor_track: u64, // the track frame that anchor maps to
+    sw_frames: u64,    // software clock (desktop / no-backend fallback)
     last_nanos: u64,
     ended: bool,
 }
@@ -345,36 +346,54 @@ fn pump(s: &mut State) {
 
 fn position_frames(s: &State) -> u64 {
     match &s.pb {
-        Some(pb) => s.base_frame + pb.position(),
+        // Device clock is monotonic frames-since-open; map it to the track via
+        // the anchor captured at the last open/seek.
+        Some(pb) => s.anchor_track + pb.position().saturating_sub(s.anchor_dev),
         None => s.sw_frames,
     }
 }
 
-/// Close + reopen the stream to flush the ring, then re-point the decode
-/// cursor — wasi:audio has no `flush`, so seek = a fresh stream. (A finding:
-/// a `flush()` verb would make this gapless; noted in the design.)
+/// Seek via `playback.flush` (no stream re-create): drop the buffered
+/// (old-position) audio, re-anchor the device clock to the target, and
+/// re-point the decode cursor. `flush` keeps `position` continuous, so the
+/// anchor math stays exact.
 fn seek(s: &mut State, target_frame: u64) {
-    let (cfg, ch) = match &s.track {
-        Some(t) => (stream_config(t), t.channels),
+    let ch = match &s.track {
+        Some(t) => t.channels,
         None => return,
     };
-    s.pb = None; // drop = close = flush
     s.cursor = target_frame as usize * ch;
-    s.base_frame = target_frame;
     s.sw_frames = target_frame;
     s.ended = false;
-    if let Ok(pb) = wpcm::Playback::open(cfg) {
-        if s.playing {
-            let _ = pb.start();
+    if s.pb.is_some() {
+        let was_playing = s.playing;
+        // flush() pauses + drops the buffered (old-position) audio host-side.
+        let pos = {
+            let pb = s.pb.as_ref().unwrap();
+            pb.flush();
+            pb.position()
+        };
+        s.anchor_dev = pos;
+        s.anchor_track = target_frame;
+        // Prime the ring from the new position BEFORE resuming, so the device
+        // doesn't restart into an empty ring (instant underrun).
+        pump(s);
+        if was_playing {
+            if let Some(pb) = &s.pb {
+                let _ = pb.start();
+            }
         }
-        s.pb = Some(pb);
     }
 }
 
 fn toggle(s: &mut State) {
     if s.ended {
+        // Restart from the top: flush-seek to 0, then re-start the device.
         s.playing = true;
-        seek(s, 0); // restart from the top
+        seek(s, 0);
+        if let Some(pb) = &s.pb {
+            let _ = pb.start();
+        }
         return;
     }
     if s.playing {
@@ -391,6 +410,10 @@ fn toggle(s: &mut State) {
                 if let Some(t) = &s.track {
                     if let Ok(pb) = wpcm::Playback::open(stream_config(t)) {
                         let _ = pb.start();
+                        // Anchor the device clock to the current playhead
+                        // (carries any seek made before the first play).
+                        s.anchor_dev = pb.position();
+                        s.anchor_track = s.sw_frames;
                         s.pb = Some(pb);
                     }
                 }

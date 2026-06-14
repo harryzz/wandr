@@ -82,9 +82,14 @@ from tags, real WAVEFORM overview computed guest-side from PCM (showcases the
 guest-DSP point), seekbar driven by `position`, play/pause + tap-seek via touch —
 ALL user-confirmed working on device. 1.54 MB guest. Risk probe = repros/audio-
 decode-probe. Launch: `wandr-arbiter launch wandr.audio.player` (needs host-108
-for position; stack restarted --no-art on host-108). FINDINGS: (a) tap-seek =
-close+reopen the stream (wasi:audio has no flush) → a `flush()`/`drain()` verb
-would make seek gapless — candidate wasi:audio add; (b) desktop winit window
+for position; stack restarted --no-art on host-108). FINDINGS: (a) ✅ RESOLVED — `flush()`+`drain()`
+ADDED to wasi:audio (WIT+host+guest), device-verified GAPLESS seek (2026-06-14):
+flush=IAudioTrack.flush but MUST pause first (flush mid-play wedges the track →
+no audio; the v1 bug), drain=IAudioTrack.stop; host keeps `position` continuous
+by subtracting the dropped backlog from the `written` counter; player seek
+rewired to flush→re-anchor(anchor_dev/anchor_track)→prime ring→resume (replaced
+close+reopen + base_frame). audioclient exposes flush/stop/getTimestamp (the
+last = future fix for the ~40ms position lead). (b) desktop winit window
 unusable in the WSL sandbox (wayland connection reset) → verified via adb
 screencap; (c) adb `input tap` doesn't work under --no-art (no system_server) —
 touch routes via evdev/wandr-inputflinger, so interactive tests need real taps.

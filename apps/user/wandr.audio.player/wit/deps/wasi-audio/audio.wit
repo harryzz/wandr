@@ -77,6 +77,17 @@ interface pcm {
         start: func() -> result<_, audio-error>;
         /// Stops flow without dropping buffered frames; start resumes.
         pause: func() -> result<_, audio-error>;
+
+        /// Discard all buffered (unplayed) frames immediately — the seek/flush
+        /// primitive (no need to close+reopen the stream). `position` stays
+        /// continuous: the dropped frames count as neither played nor pending,
+        /// so the playhead does not jump. Added 2026-06-14 (task 108; the
+        /// player's tap-seek is the promoting consumer).
+        flush: func();
+
+        /// Play out the buffered frames, then stop (clickless end-of-track) —
+        /// vs `pause` (stops now, keeps buffer) and `flush` (drops now).
+        drain: func();
     }
 
     resource capture {
