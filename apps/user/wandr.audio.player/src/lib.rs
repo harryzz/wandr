@@ -388,13 +388,11 @@ fn seek(s: &mut State, target_frame: u64) {
 
 fn toggle(s: &mut State) {
     if s.ended {
-        // Restart from the top: flush-seek to 0, then re-start the device.
-        s.playing = true;
-        seek(s, 0);
-        if let Some(pb) = &s.pb {
-            let _ = pb.start();
-        }
-        return;
+        // Track was closed at end — reset to the top; the open arm below
+        // creates a fresh track (no seek-after-end target was set).
+        s.ended = false;
+        s.sw_frames = 0;
+        s.cursor = 0;
     }
     if s.playing {
         if let Some(pb) = &s.pb {
@@ -458,6 +456,13 @@ impl FrameGuest for Player {
             let drained = s.pb.as_ref().map(|p| p.buffered_frames() == 0).unwrap_or(true);
             let cursor_done = s.cursor >= s.track.as_ref().unwrap().samples.len();
             if s.playing && pos >= total.saturating_sub(1) && cursor_done && drained {
+                // CLOSE the track at end. Leaving it started with an empty ring
+                // underruns, and AudioFlinger removes a sustained-underrun track
+                // ("BUFFER TIMEOUT: remove track ... due to underrun") — a
+                // removed track can't be revived by flush/start. So drop it; a
+                // fresh track is opened on replay/seek-after-end.
+                s.pb = None; // drop = close
+                s.sw_frames = total; // freeze the display at the end
                 s.playing = false;
                 s.ended = true;
             }

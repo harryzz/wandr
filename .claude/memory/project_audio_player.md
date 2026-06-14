@@ -89,7 +89,27 @@ no audio; the v1 bug), drain=IAudioTrack.stop; host keeps `position` continuous
 by subtracting the dropped backlog from the `written` counter; player seek
 rewired to flush→re-anchor(anchor_dev/anchor_track)→prime ring→resume (replaced
 close+reopen + base_frame). audioclient exposes flush/stop/getTimestamp (the
-last = future fix for the ~40ms position lead). (b) desktop winit window
+last = future fix for the ~40ms position lead).
+END→SEEK→PLAY BUG (2026-06-14, user-found, FIXED guest-side): when the track
+played to end, the empty ring underran and AudioFlinger REMOVED the track
+("prepareTracks_l BUFFER TIMEOUT: remove track ... due to underrun") — a removed
+track can't be revived by flush/start (no audio). The guest-side fix = CLOSE the
+track at end (pb=None) + reopen a FRESH track on replay/seek-after-end (reuses the
+working open path; flush-seek stays for live mid-play). pause-at-end did NOT work
+(AF removes within a buffer cycle ~21ms, before the guest's 33ms on_frame reacts —
+the RACE). HOST-SIDE ROBUSTNESS = OPEN: ideally the host hides underrun-death so
+no guest can break audio (mechanism-in-host). BUT the host deliberately keeps
+MEDIA tracks "direct" (audio_impl comment: "media goes direct — media guests
+buffer themselves"); the call jitter-PUMP solves underrun-death for CALL tracks
+only. The naive host fixes each have a CATCH: (1) silence-padding the guest's
+ring glitches the direct stream (silence interleaves with real audio); (2) the
+call-pump model changes media's pending_frames/backpressure + position semantics;
+(3) lazy re-create needs reliable dead-track detection (getTimestamp/underruns
+only give it over a time-window). The sound host fix = move media playback onto
+the host jitter-pump model (proven glitch-free for calls), preserving position +
+backpressure — a real, careful change, best done when M4 extends the host audio
+path. Guest close-at-end is a fine "good-citizen" workaround meanwhile.
+(b) desktop winit window
 unusable in the WSL sandbox (wayland connection reset) → verified via adb
 screencap; (c) adb `input tap` doesn't work under --no-art (no system_server) —
 touch routes via evdev/wandr-inputflinger, so interactive tests need real taps.
