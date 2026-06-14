@@ -233,6 +233,67 @@ draw-mesh, treat wasi:webgpu as a future second rendering lane implemented
 **wholesale (host-side)** when the spec lands. SwiftUI/Avalonia/Slint/
 Flutter/Compose stay on wasi:canvas and need no WebGPU.
 
+## wasi:canvas ↔ W3C Canvas2D — the layer relationship (2026-06-14)
+
+The whole egui verdict (and the "keep wasi:canvas pure Canvas2D" stance)
+rests on what wasi:canvas *is* relative to the web's `CanvasRenderingContext2D`.
+Recorded here because it's the load-bearing distinction.
+
+**Same layer, different shape.** wasi:canvas and W3C Canvas2D occupy the
+*same architectural layer*: immediate-mode, stateful-stack, high-level 2D
+drawing of vectors + images + text where **the host owns the rasterizer** —
+as opposed to the GPU-pipeline layer (WebGPU / wasi:webgpu) where the guest
+drives buffers/shaders. On that axis wasi:canvas sits exactly where Canvas2D
+sits; that's why it pairs with wasi:webgpu the way the web pairs Canvas2D with
+WebGPU. But its concrete *shape* is **Skia's `SkCanvas`, not a port of the
+W3C interface** — it was reverse-derived (task 105) from what
+Compose(skiko)/Slint/Avalonia actually call, so it's "Canvas2D-*shaped*" by
+category, "Skia-shaped" by signature.
+
+**Concept-for-concept shared with Canvas2D:** `save`/`restore`/`save-layer` ≈
+`save`/`restore`(+`globalAlpha`); `translate`/`scale`/`rotate`/`concat` ≈ the
+transform setters; `clip-rect`/`-rounded-rect`/`-path` ≈ `clip()`;
+`draw-rect`/`-oval`/`-arc`/`-line`/`-path` ≈ the fill/stroke primitives;
+`draw-image`/`-image-rect` ≈ `drawImage(…)`; `linear`/`radial`/`sweep-gradient`
+≈ `createLinear`/`Radial`/`ConicGradient`; `image-pattern` ≈ `createPattern`;
+`blend-mode` (29 modes) ≈ `globalCompositeOperation`; `sampling` ≈
+`imageSmoothingEnabled`/`Quality`. Two bits are the **literal** W3C standard,
+not just analogous: `draw-path`/`clip-path` take an **SVG path-data string**
+(the `Path2D(svg)` format, so all of moveTo/bezier/arcTo/ellipse/roundRect
+are covered through one verb), and the blend set traces to the same W3C
+compositing spec.
+
+**Richer / Skia-isms beyond plain Canvas2D:** `paint` as a value record
+(SkPaint) instead of stateful context props; `picture`/`finish-recording`/
+`draw-picture` (SkPicture display lists); `scene` layers (retained
+compositor); a real `paragraph`/`glyphs` text stack (vs the single
+`fillText`); `color-filter`, `mask-blur`, `shader`, `combine-paths`,
+`draw-double-rounded-rect`, `snapshot`.
+
+### Missing vs W3C Canvas2D (verified against the WIT, 2026-06-14)
+
+Checked the full W3C Canvas2D surface against `proposals/wasi-canvas/wit/`.
+Most apparent gaps turn out covered (pixel I/O = `image-from-rgba8` +
+`snapshot`; conic gradient = `sweep-gradient`; all path commands = SVG
+string). The genuine deltas:
+
+| Canvas2D feature | wasi:canvas status | Notes |
+|---|---|---|
+| `setLineDash` / `lineDashOffset` | **absent** | No dash / path-effect field on `paint`. The cleanest real gap — purely additive (a `dash: option<...>` on paint, skia `SkDashPathEffect`) when a consumer needs it. None of the shipped five do yet. |
+| `shadowColor`/`shadowOffsetX/Y`/`shadowBlur` (generic offset drop-shadow on any draw) | **partial** | `paint.blur` (mask-blur) blurs the paint's own color in place — no separate shadow color or offset. The common rrect case has `draw-shadow-rrect`. Generic case is emulable (draw the shape offset in shadow color + mask-blur, then the real shape on top), just not one property. |
+| `ctx.filter` (CSS filter chain: blur/brightness/contrast/hue-rotate/…) | **partial** | Only `color-filter` (blend/invert) + `mask-blur`. The general chain is absent; esoteric, no shipped consumer needs it. |
+| `isPointInPath` / `isPointInStroke` | **absent by design** | Hit-testing lives guest-side (the guest owns its scene); not a host concern. |
+| `getTransform` / `setTransform` / `resetTransform` | **convenience-only** | Readback + absolute set aren't exposed; expressible via `save`/`restore` + `concat`. |
+
+**Net:** wasi:canvas is a functional superset of Canvas2D for everything our
+UI frameworks draw, with one clean additive gap (line dashing) and two
+partials (generic drop-shadow, CSS filter chain) that are emulable or
+unneeded today. The only *intentional* omission is hit-testing (guest-side).
+This confirms the layer claim: wasi:canvas is the Canvas2D layer in Skia
+vocabulary — so a GPU-mesh verb like `draw-mesh` is genuinely out-of-layer
+(it has no Canvas2D analog at all), which is exactly why egui belongs on
+wasi:webgpu, not here.
+
 ## Footprint / risks
 
 - Guest size: MB-scale (pure Rust, no runtime) — the lightest candidate
