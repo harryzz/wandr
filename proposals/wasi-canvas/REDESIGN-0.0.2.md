@@ -444,7 +444,7 @@ the design surface, with the lane it re-enters through.
 
 | Deferral | Why (2026-06-12) | Re-entry lane |
 |---|---|---|
-| Dash / path effects | no shipped consumer (Slint borders shipped solid) | `paint` field → **R3 version event**; flag the moment a consumer ships dashes |
+| Dash / path effects (= W3C Canvas2D `setLineDash`/`lineDashOffset`) | no shipped consumer (Slint borders shipped solid). **The single clean additive gap vs W3C Canvas2D** — verified 2026-06-14, the only genuinely-absent Canvas2D drawing feature (others are covered or guest-side; see docs/egui-wandr-feasibility.md) | `paint` field (`dash: option<...>`, skia `SkDashPathEffect`) → **R3 version event**; flag the moment a consumer ships dashes |
 | Foreground paint on text spans (gradient text) | rare; Compose ships color spans only | additive `push-style-with-paint` method (R2) |
 | Placeholders / inline content | stubbed empty in the shipped Compose port | additive builder method + `placeholder-boxes` query (R2) |
 | draw-vertices / atlas / patch / SkSL | no consumer renders them | additive verbs (R2) |
