@@ -189,6 +189,50 @@ recommendation flips:
   (RenderBox shapes/text/images) — needs **no** canvas-WIT changes; its GPU
   effects (Shader/MeshGradient) are wasi-gfx, like egui's PaintCallback.
 
+## wasi-webgpu forward-compat check (2026-06-14) — no function to pre-adopt
+
+Asked whether wasi-webgpu exposes a function we could mirror NOW (same
+name/flow/path) in wasi:canvas, so that when the spec lands we just "plug in"
+wasi-webgpu. Verified against the real WIT (`WebAssembly/wasi-gfx`, WebGPU
+half now at the `wasi-webgpu` repo: `wit/webgpu.wit`, 1093 lines, +
+`imports.wit`). **Answer: no — there is no single function to mirror.**
+
+- wasi:webgpu@0.0.1 is a **faithful, mechanical mirror of the entire W3C
+  WebGPU API** — `gpu`, `gpu-adapter`, `gpu-device`, `gpu-buffer`,
+  `gpu-bind-group`, `gpu-pipeline-layout`, `gpu-render-pipeline`,
+  `gpu-command-encoder`, `gpu-render-pass-encoder`, `gpu-texture`,
+  `gpu-queue`. There is **no high-level "draw a mesh" verb**. The draw entry
+  points are `draw` / `draw-indexed` on `gpu-render-pass-encoder`, reached
+  only through the full pipeline dance: `create-render-pipeline` →
+  `begin-render-pass` → `set-pipeline` → `set-vertex-buffer` →
+  `set-bind-group` → `draw` → `end` → `queue.submit`. Presentation mirrors
+  the web swapchain exactly: `gpu-canvas-context.configure()` +
+  `get-current-texture()` per frame.
+- The CPU-side `wasi:surface` / `wasi:frame-buffer` interfaces the governance
+  blog mentioned are **not in the repo yet** — only the WebGPU interface is
+  published.
+- So the unit of adoption is the **whole device/pipeline/render-pass object
+  graph**, not one function. Pre-declaring `draw`/`draw-indexed` in
+  wasi:canvas would mean dragging in pipelines, shader modules, bind groups,
+  vertex buffers and a swapchain — i.e. re-implementing WebGPU inside the
+  Canvas2D interface. That is exactly the duplication + scope-creep the
+  clean/standard priority rules out. There is nothing to alias at the verb
+  level.
+
+**The clean forward-compatible plug lives at the STACK level, not the verb
+level.** egui renders through `egui_wgpu` → **wgpu**, and wgpu already has a
+wasi-webgpu backend. So an egui guest's clean target is just "wgpu," and the
+"plug when the spec arrives" is: **wandr implements the `wasi:webgpu` host
+interfaces** (skia/EGL already provide the GPU device underneath). The day
+that's wired, egui-on-wgpu-on-wasi-webgpu runs with **zero changes to egui,
+zero changes to wasi:canvas, and no speculative verb invented today** — you
+adopt the real standard interface verbatim rather than carrying a hand-rolled
+lookalike you'd later have to reconcile/deprecate. This strictly confirms the
+prior section's reversal: keep wasi:canvas pure Canvas2D, do NOT add
+draw-mesh, treat wasi:webgpu as a future second rendering lane implemented
+**wholesale (host-side)** when the spec lands. SwiftUI/Avalonia/Slint/
+Flutter/Compose stay on wasi:canvas and need no WebGPU.
+
 ## Footprint / risks
 
 - Guest size: MB-scale (pure Rust, no runtime) — the lightest candidate
