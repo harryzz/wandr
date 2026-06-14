@@ -70,15 +70,31 @@ AudioFlinger-direct backend [[project_audioflinger_backend]] (f32 @ 48k
 stereo). M1 spike = local FLAC/MP3 → player guest + `position`; M2 =
 media-session; M4 = HW lanes ONLY behind a measured battery need.
 
-**M1 CORE DONE + device-verified (2026-06-14):** `apps/user/wandr.audio.player`
-(wasi:cli/command) — Symphonia 0.5.5 FLAC decode → wasi:audio, AUDIBLE on
-Pixel 2 XL (user-confirmed clean). `playback.position` PROMOTED (proposal WIT +
-host `wasi_audio_impl.rs` PlaybackRes.written counter; position = written −
-buffered), verified tracking wall-clock ±40ms. Risk probe = repros/audio-decode-
-probe. Run: su -c 'LD_LIBRARY_PATH=/data/local/tmp WANDR_APPS_ROOT=/data/local/
-tmp/wandr-apps /data/local/tmp/wandr-host-108 --run-once wandr.audio.player'.
-~40ms lead = position counts our ring only, not the downstream AF mixer buffer
-(future: true presentation ts via cblk mServer/AudioTimestamp).
+**M1 DONE + USER-VERIFIED on device (2026-06-14):** `apps/user/wandr.audio.player`
+— Symphonia 0.5.5 FLAC decode → wasi:audio, AUDIBLE on Pixel 2 XL (user-confirmed
+clean). `playback.position` PROMOTED (proposal WIT + host `wasi_audio_impl.rs`
+PlaybackRes.written counter; position = written − buffered), tracks wall ±40ms
+(lead = counts our ring only, not the downstream AF mixer buffer; future: true
+presentation ts via cblk mServer/AudioTimestamp). The guest STARTED as a
+wasi:cli/command spike then became a **wasi:canvas UI reactor** (imports canvas/
+audio, exports input-handlers frame+pointer): vinyl art placeholder, title/format
+from tags, real WAVEFORM overview computed guest-side from PCM (showcases the
+guest-DSP point), seekbar driven by `position`, play/pause + tap-seek via touch —
+ALL user-confirmed working on device. 1.54 MB guest. Risk probe = repros/audio-
+decode-probe. Launch: `wandr-arbiter launch wandr.audio.player` (needs host-108
+for position; stack restarted --no-art on host-108). FINDINGS: (a) tap-seek =
+close+reopen the stream (wasi:audio has no flush) → a `flush()`/`drain()` verb
+would make seek gapless — candidate wasi:audio add; (b) desktop winit window
+unusable in the WSL sandbox (wayland connection reset) → verified via adb
+screencap; (c) adb `input tap` doesn't work under --no-art (no system_server) —
+touch routes via evdev/wandr-inputflinger, so interactive tests need real taps.
+Album-art decode (graphics.decode-image) deferred — test FLAC has no art.
+HOW (UI patterns, from the launcher): cdylib + wit_bindgen::generate!(world,
+generate_all) + export!(Player); canvas via wembed::get_context()→get_current_
+buffer()→draw_*→present; text via wlayout ParagraphBuilder; all geometry derived
+from cv.width()/height() (no hardcoding). package.toml `world` field is
+informational — UI vs command dispatch is by launch mode (arbiter launch =
+instantiate+probe exports; --run-once = instantiate_command).
 
 **MEDIA FAMILY SKETCHED 2026-06-14 (proposals/, NOT WIRED) — separate packages,
 WASI modularity, each optional w/ guest fallback; W3C Media WG mirror:**

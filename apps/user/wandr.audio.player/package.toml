@@ -1,12 +1,15 @@
-# wandr.audio.player — M1 spike (task 108). wasi:cli/command run-once consumer:
-#   wandr-host --run-once wandr.audio.player
-# Imports wasi:audio/pcm (host-linked, already wired in app_loader.rs). Decodes
-# an embedded 48 kHz stereo FLAC and plays it. No UI yet — the seekbar/canvas
-# UI lands once the audio floor is proven (then playback.position).
+# wandr.audio.player — task 108 M1. User app (no `kind` → installs under apps/,
+# shows as a launcher tile). A wasi:canvas UI reactor that decodes + plays an
+# embedded FLAC and renders a waveform + transport. Launched normally (the host
+# UI path probes the input-handlers exports); the `world` field is informational.
 app_id      = "wandr.audio.player"
 version     = "0.1.0"
-world       = "wasi:cli/command"
+world       = "my:skiko-gfx/skiko-ui"
 composition = "same-store"
+orientation = "auto"
+label       = "Audio Player"
+# Transport animates the seekbar; 30 fps is plenty and halves the cost.
+max_fps     = 30
 
 [components]
 ui = "components/ui.wasm"

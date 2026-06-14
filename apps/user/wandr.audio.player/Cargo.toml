@@ -1,13 +1,15 @@
-# wandr.audio.player — M1 spike (task 108): Symphonia decode → wasi:audio PCM.
-# Pure-Rust wasi:cli/command guest; run via `wandr-host --run-once
-# wandr.audio.player`. Proves the guest-decode floor (the design's Layer 0)
-# before any contract change. See docs/audio-player-design.md.
+# wandr.audio.player — task 108 M1: Symphonia decode → wasi:audio PCM, with a
+# wasi:canvas waveform/transport UI. Pure-Rust canvas reactor (cdylib), like
+# crates/dioxus-canvas guests and the launcher. See docs/audio-player-design.md.
 #   cargo build --target wasm32-wasip2 --release
 [package]
 name    = "wandr-audio-player"
 version = "0.1.0"
 edition = "2021"
 publish = false
+
+[lib]
+crate-type = ["cdylib"]
 
 [dependencies]
 wit-bindgen = "0.57"

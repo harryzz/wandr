@@ -32,6 +32,18 @@ host advertises what HW it has; absence → guest does it itself.
   tracks; visual verify with the user (`[[feedback_visual_verification]]`).
 - Records: guest size, decode CPU %, first-audio latency.
 
+**✅ M1 DONE + USER-VERIFIED ON DEVICE (2026-06-14).** Symphonia FLAC decode →
+`wasi:audio` audible; `playback.position` promoted (host impl, tracks wall ±40ms);
+`apps/user/wandr.audio.player` is a `wasi:canvas` reactor — vinyl art placeholder,
+title/format from tags, real waveform overview (guest-side from PCM), seekbar
+driven by `position`, play/pause + tap-seek via touch (pointer-handler +
+inputflinger). 1.54 MB guest. Run: `wandr-arbiter launch wandr.audio.player`
+(needs host-108 for `position`). Notes: desktop winit window unusable in the WSL
+sandbox (wayland reset) → verified via device screencap; tap-seek uses
+close+reopen (no `wasi:audio flush()`) — a finding: a `flush()`/`drain()` verb
+would make seek gapless. Album-art decode (`graphics.decode-image`) deferred (the
+test FLAC has no embedded art).
+
 ### M2 — `wasi:media-session` (the native-feel gap)
 - New arbiter-owned package `wasi:media-session@0.0.1` (sibling of
   `wandr:audio-focus`/`alarm`/`notify`), tracking the **W3C Media Session API**

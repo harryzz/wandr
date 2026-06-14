@@ -1,10 +1,17 @@
-// wandr.audio.player — M1 spike guest (task 108). A wasi:cli/command guest
-// (fn main → cli/run on wasm32-wasip2) that decodes an embedded FLAC with
-// Symphonia and plays it through the host's wasi:audio PCM contract — proving
-// the guest-side decode floor end-to-end with NO contract change (wasi:audio
-// already plays PCM; playback.position is promoted later).
+// wandr.audio.player — the player UI guest (task 108 M1). A wasi:canvas
+// reactor: decodes an embedded FLAC with Symphonia (the guest-decode floor),
+// plays it through wasi:audio, and renders a waveform + transport over
+// wasi:canvas, driven by the wasi:input-handlers frame/pointer exports.
+// The seekbar is driven by `wasi:audio playback.position` (the clock promoted
+// in M1). No new host contract beyond `position`.
 package wandr:audio-player;
 
 world audio-player {
+    import wasi:canvas/types@0.0.2;
+    import wasi:canvas/draw@0.0.2;
+    import wasi:canvas/layout@0.0.2;
+    import wasi:canvas/embedding@0.0.2;
     import wasi:audio/pcm@0.0.1;
+    export wasi:input-handlers/frame-handler@0.0.2;
+    export wasi:input-handlers/pointer-handler@0.0.2;
 }
