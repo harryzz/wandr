@@ -26,14 +26,19 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::{MetadataOptions, StandardTagKey};
 use symphonia::core::probe::Hint;
 
+use crate::exports::wandr::background::background::Guest as BackgroundGuest;
 use crate::exports::wasi::input_handlers::frame_handler::Guest as FrameGuest;
 use crate::exports::wasi::input_handlers::pointer_handler::{
     Guest as PointerGuest, Kind as PKind, PointerEvent,
+};
+use crate::exports::wasi::media_session::session_handler::{
+    Action, ActionDetails, Guest as SessionHandlerGuest,
 };
 use crate::wasi::audio::pcm as wpcm;
 use crate::wasi::canvas::embedding as wembed;
 use crate::wasi::canvas::layout as wlayout;
 use crate::wasi::canvas::types as wtypes;
+use crate::wasi::media_session::session as wsession;
 
 static FLAC: &[u8] = include_bytes!("test.flac");
 
@@ -55,6 +60,8 @@ struct Track {
     samples: Vec<f32>, // interleaved f32 (the wasi:audio wire format)
     title: String,
     subtitle: String,
+    artist: String, // media-session metadata (separate from the display subtitle)
+    album: String,
     peaks: [f32; PEAKS], // normalized 0..1 waveform overview
     total_frames: u64,
 }
@@ -69,9 +76,12 @@ struct State {
     cursor: usize,     // next interleaved-sample index to write
     anchor_dev: u64,   // pb.position() captured at the last anchor (open / seek)
     anchor_track: u64, // the track frame that anchor maps to
-    sw_frames: u64,    // software clock (desktop / no-backend fallback)
-    last_nanos: u64,
+    sw_frames: u64,    // playhead when no device stream is open (pre-play / paused / end)
     ended: bool,
+    // ── media-session publishing (M2) ──
+    published: bool,    // metadata sent to the now-playing surface yet?
+    pub_playing: bool,  // last playback-state published (to detect transitions)
+    last_pub_sec: i64,  // last whole-second position published (~1 Hz throttle)
 }
 
 thread_local! {
@@ -171,6 +181,8 @@ fn decode() -> Track {
         }
     }
 
+    let artist_s = artist.clone().unwrap_or_default();
+    let album_s = album.clone().unwrap_or_default();
     let subtitle = match (artist, album) {
         (Some(a), Some(al)) => format!("{a} — {al}"),
         (Some(a), None) => a,
@@ -188,6 +200,8 @@ fn decode() -> Track {
         samples,
         title: title.unwrap_or_else(|| "Untitled".to_string()),
         subtitle,
+        artist: artist_s,
+        album: album_s,
         peaks,
         total_frames,
     }
@@ -421,11 +435,108 @@ fn toggle(s: &mut State) {
     }
 }
 
+// ── Media-session publishing (M2) ──────────────────────────────────────────
+/// Push now-playing metadata to the system chrome (lockscreen / status bar).
+/// The test FLAC has no embedded art, so `artwork` is none (art is deferred).
+fn publish_metadata(t: &Track) {
+    wsession::set_metadata(&wsession::Metadata {
+        title: t.title.clone(),
+        artist: t.artist.clone(),
+        album: t.album.clone(),
+        artwork: None,
+    });
+}
+
+fn current_state(s: &State) -> wsession::PlaybackState {
+    if s.playing {
+        wsession::PlaybackState::Playing
+    } else if s.ended {
+        wsession::PlaybackState::None
+    } else {
+        wsession::PlaybackState::Paused
+    }
+}
+
+fn publish_state(s: &State) {
+    wsession::set_playback_state(current_state(s));
+}
+
+fn publish_position(s: &State) {
+    let (sr, total) = match &s.track {
+        Some(t) => (t.sample_rate.max(1) as f64, t.total_frames),
+        None => return,
+    };
+    let pos = position_frames(s).min(total);
+    wsession::set_position(wsession::PositionState {
+        duration_s: total as f64 / sr,
+        playback_rate: if s.playing { 1.0 } else { 0.0 },
+        position_s: pos as f64 / sr,
+    });
+}
+
+/// The audio engine: pump the device ring, detect end-of-track, and publish
+/// media-session state + position. Runs render-INDEPENDENTLY via `bg-tick` (the
+/// host calls it in EVERY role), so playback keeps going and lockscreen transport
+/// keeps reaching us while backgrounded (screen locked) — without it, a
+/// backgrounded guest stops rendering, the ring underruns, and AudioFlinger
+/// removes the track. `on-frame` also calls it (the publish guards de-dupe, the
+/// pump is idempotent). Returns the desired ms until the next call.
+fn engine_step(s: &mut State) -> u32 {
+    if s.track.is_none() {
+        s.track = Some(decode());
+    }
+    // Publish now-playing metadata once the track is decoded (M2).
+    if !s.published {
+        publish_metadata(s.track.as_ref().unwrap());
+        publish_state(s);
+        publish_position(s);
+        s.pub_playing = s.playing;
+        s.last_pub_sec = -1;
+        s.published = true;
+    }
+
+    if s.playing {
+        pump(s);
+    }
+
+    // End detection — CLOSE the track at end. Leaving it started with an empty
+    // ring underruns, and AudioFlinger removes a sustained-underrun track
+    // ("BUFFER TIMEOUT: remove track … due to underrun") — a removed track can't
+    // be revived by flush/start. So drop it; a fresh track is opened on
+    // replay/seek-after-end.
+    let total = s.track.as_ref().unwrap().total_frames;
+    let pos = position_frames(s).min(total);
+    let drained = s.pb.as_ref().map(|p| p.buffered_frames() == 0).unwrap_or(true);
+    let cursor_done = s.cursor >= s.track.as_ref().unwrap().samples.len();
+    if s.playing && pos >= total.saturating_sub(1) && cursor_done && drained {
+        s.pb = None; // drop = close
+        s.sw_frames = total; // freeze the display at the end
+        s.playing = false;
+        s.ended = true;
+    }
+
+    // Media-session: publish a state transition immediately, and the position
+    // ~1 Hz (whole-second changes) so the lockscreen scrubber tracks without
+    // per-frame chatter.
+    if s.pub_playing != s.playing {
+        publish_state(s);
+        s.pub_playing = s.playing;
+    }
+    let cur_sec = (pos / s.track.as_ref().unwrap().sample_rate.max(1) as u64) as i64;
+    if cur_sec != s.last_pub_sec {
+        publish_position(s);
+        s.last_pub_sec = cur_sec;
+    }
+
+    // ~33 ms keeps the ring fed while playing; relax to 500 ms when idle.
+    if s.playing { 33 } else { 500 }
+}
+
 // ── Reactor ──────────────────────────────────────────────────────────────
 struct Player;
 
 impl FrameGuest for Player {
-    fn on_frame(nanos: u64) {
+    fn on_frame(_nanos: u64) {
         STATE.with(|st| {
             let mut s = st.borrow_mut();
             let cv = wctx(|x| x.get_current_buffer());
@@ -433,40 +544,12 @@ impl FrameGuest for Player {
                 s.w = cv.width();
                 s.h = cv.height();
             }
-            if s.track.is_none() {
-                s.track = Some(decode());
-            }
+            // The audio engine + media-session publishing live in engine_step
+            // (also driven by bg-tick while backgrounded). on-frame only renders.
+            engine_step(&mut s);
 
-            // Software clock (desktop / no backend): advance only while playing
-            // and when no real stream is driving `position`.
-            let dt = if s.last_nanos == 0 { 0 } else { nanos.saturating_sub(s.last_nanos) };
-            s.last_nanos = nanos;
-            if s.playing && s.pb.is_none() {
-                let sr = s.track.as_ref().unwrap().sample_rate as u64;
-                s.sw_frames = s.sw_frames.saturating_add(dt.saturating_mul(sr) / 1_000_000_000);
-            }
-
-            if s.playing {
-                pump(&mut s);
-            }
-
-            // End detection.
             let total = s.track.as_ref().unwrap().total_frames;
             let pos = position_frames(&s).min(total);
-            let drained = s.pb.as_ref().map(|p| p.buffered_frames() == 0).unwrap_or(true);
-            let cursor_done = s.cursor >= s.track.as_ref().unwrap().samples.len();
-            if s.playing && pos >= total.saturating_sub(1) && cursor_done && drained {
-                // CLOSE the track at end. Leaving it started with an empty ring
-                // underruns, and AudioFlinger removes a sustained-underrun track
-                // ("BUFFER TIMEOUT: remove track ... due to underrun") — a
-                // removed track can't be revived by flush/start. So drop it; a
-                // fresh track is opened on replay/seek-after-end.
-                s.pb = None; // drop = close
-                s.sw_frames = total; // freeze the display at the end
-                s.playing = false;
-                s.ended = true;
-            }
-
             let (w, h) = (s.w, s.h);
             let lay = layout(w, h);
             let frac = if total > 0 { (pos as f32 / total as f32).clamp(0.0, 1.0) } else { 0.0 };
@@ -576,6 +659,69 @@ impl PointerGuest for Player {
                 seek(&mut s, (frac as f64 * total as f64) as u64);
             }
         });
+    }
+}
+
+impl SessionHandlerGuest for Player {
+    /// A transport intent arrived from the system chrome (lockscreen tap /
+    /// headset button), routed by the arbiter. Apply it to the same controls the
+    /// on-screen buttons drive, then republish so the surface updates at once.
+    fn on_action(details: ActionDetails) {
+        STATE.with(|st| {
+            let mut s = st.borrow_mut();
+            let (sr, total) = match &s.track {
+                Some(t) => (t.sample_rate.max(1) as f64, t.total_frames),
+                None => return,
+            };
+            let step_s = details.seek_time_s.unwrap_or(10.0).max(0.0);
+            match details.action {
+                Action::Play => {
+                    if !s.playing {
+                        toggle(&mut s);
+                    }
+                }
+                Action::Pause => {
+                    if s.playing {
+                        toggle(&mut s);
+                    }
+                }
+                Action::Stop => {
+                    if s.playing {
+                        toggle(&mut s);
+                    }
+                    seek(&mut s, 0);
+                }
+                Action::SeekTo => {
+                    if let Some(t) = details.seek_time_s {
+                        seek(&mut s, (t.max(0.0) * sr) as u64);
+                    }
+                }
+                Action::SeekForward => {
+                    let target = (position_frames(&s) as f64 + step_s * sr) as u64;
+                    seek(&mut s, target.min(total));
+                }
+                Action::SeekBackward => {
+                    let target = (position_frames(&s) as f64 - step_s * sr).max(0.0) as u64;
+                    seek(&mut s, target);
+                }
+                // Single embedded track: prev = restart, next = no-op.
+                Action::PreviousTrack => seek(&mut s, 0),
+                Action::NextTrack => {}
+            }
+            publish_state(&s);
+            publish_position(&s);
+            s.pub_playing = s.playing;
+            s.last_pub_sec = -1; // force the next frame's position publish too
+        });
+    }
+}
+
+impl BackgroundGuest for Player {
+    /// The host pumps this render-independently in every role (including while
+    /// backgrounded behind the lockscreen). It runs the audio engine + publishes
+    /// now-playing, so playback continues and lockscreen transport stays live.
+    fn bg_tick() -> u32 {
+        STATE.with(|st| engine_step(&mut st.borrow_mut()))
     }
 }
 

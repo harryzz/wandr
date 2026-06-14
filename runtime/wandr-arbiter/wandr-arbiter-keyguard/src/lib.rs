@@ -75,6 +75,13 @@ impl KeyguardModule {
             app_id: Some(KEYGUARD_APP_ID.to_string()),
             pid: Some(kg),
         });
+        // Re-push system orientation so the lock screen + chrome snap PORTRAIT (the
+        // lock screen never rotates — like an orientation-locked launcher). wm's
+        // OrientationChanged handler re-fans; effective_orient now returns 0 because
+        // a Role::Lockscreen surface is present. (orient value is unchanged — this
+        // just forces the re-fan; the lock, not this value, decides portrait.)
+        let orient = ctx.store.geometry(PRIMARY_DISPLAY).map(|g| g.orientation).unwrap_or(0);
+        ctx.emit(Event::OrientationChanged { id: PRIMARY_DISPLAY, orient });
         log::info!("arbiter: keyguard LOCKED (covering {:?}, kg pid={kg})", self.saved_fg);
         Reply::ok(format!("locked covering={:?}", self.saved_fg))
     }
@@ -98,6 +105,11 @@ impl KeyguardModule {
             ctx.request(Effect::Foreground { app_id });
         }
         self.locked = false;
+        // Re-push system orientation now the lockscreen surface is gone, so chrome +
+        // the restored app return to the decided device orient (effective_orient no
+        // longer forces portrait).
+        let orient = ctx.store.geometry(PRIMARY_DISPLAY).map(|g| g.orientation).unwrap_or(0);
+        ctx.emit(Event::OrientationChanged { id: PRIMARY_DISPLAY, orient });
         log::info!("arbiter: keyguard UNLOCKED");
         Reply::ok("unlocked")
     }

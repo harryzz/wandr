@@ -80,6 +80,17 @@ fn focused_editor(store: &Store, id: DisplayId) -> Option<i32> {
 /// gating ONLY chrome (not the foreground app) is what made a locked launcher
 /// rotate while the bars stayed portrait. So this gates *everyone*.
 fn effective_orient(store: &Store, id: DisplayId) -> u32 {
+    // The lock screen pins portrait and never rotates (like an orientation-locked
+    // launcher), regardless of the orientation of the app it covers. A
+    // `Role::Lockscreen` surface present ⇒ locked ⇒ force portrait for EVERYONE
+    // (keyguard + chrome), so the lock screen and the status bar stay coherent.
+    if store
+        .display(id)
+        .map(|d| d.surfaces().iter().any(|s| s.role == Role::Lockscreen))
+        .unwrap_or(false)
+    {
+        return 0;
+    }
     store
         .geometry(id)
         .map(|g| if g.orientation_locked { 0 } else { g.orientation })
@@ -151,7 +162,10 @@ impl WmModule {
             .map(|d| {
                 d.surfaces()
                     .iter()
-                    .filter(|s| s.role == Role::Chrome)
+                    // Chrome strips + the lock screen (it pins portrait via
+                    // effective_orient, but must still receive the push so it
+                    // doesn't keep the orient it had at lock/launch time).
+                    .filter(|s| s.role == Role::Chrome || s.role == Role::Lockscreen)
                     .map(|s| s.pid)
                     .collect()
             })
@@ -667,13 +681,27 @@ win-commit\n";
         d.set_chrome_anchor(70, ChromeAnchor::Top);
         let block = input_window_block(&store, PRIMARY_DISPLAY).unwrap();
         // statusbar above lockscreen; the backgrounded app is excluded; focus = keyguard.
+        // The lockscreen pins portrait (orient 0) regardless of any decided orient.
         let expected = "\
-win-begin 255 1440 2880\n\
+win-begin 0 1440 2880\n\
 win 70 0 0 1440 133 0\n\
 win 99 0 0 1440 2880 1\n\
 win-focus 99\n\
 win-commit\n";
         assert_eq!(block, expected);
+    }
+
+    #[test]
+    fn lockscreen_forces_portrait_over_landscape_app() {
+        // A landscape orient is decided (e.g. the covered app was landscape), but
+        // the lock screen pins portrait — effective_orient returns 0 regardless.
+        let mut store = measured_store();
+        store.geometry_mut(PRIMARY_DISPLAY).orientation = 4; // landscape (90°)
+        assert_eq!(effective_orient(&store, PRIMARY_DISPLAY), 4); // no lock yet
+        store
+            .display_mut(PRIMARY_DISPLAY)
+            .put_surface(99, "wandr.keyguard", Role::Lockscreen);
+        assert_eq!(effective_orient(&store, PRIMARY_DISPLAY), 0); // locked ⇒ portrait
     }
 
     #[test]

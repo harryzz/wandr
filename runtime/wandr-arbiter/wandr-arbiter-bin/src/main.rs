@@ -56,6 +56,7 @@ use wandr_arbiter_core::{Event, Registry, Reply, Store, PRIMARY_DISPLAY};
 use wandr_arbiter_audio::AudioModule;
 use wandr_arbiter_keyguard::KeyguardModule;
 use wandr_arbiter_notify::NotifyModule;
+use wandr_arbiter_media_session::MediaSessionModule;
 use wandr_arbiter_power::PowerModule;
 use wandr_arbiter_net::NetModule;
 use wandr_arbiter_events::EventsModule;
@@ -734,6 +735,11 @@ fn build_registry() -> Registry {
     // subscribe (host-config from package.toml) and receive Effect::HostLine
     // pushes. One line.
     reg.register(Box::new(EventsModule::new()));
+    // Task 108 M2 — media-session: owns now-playing/transport state; the host's
+    // wasi:media-session/session import publishes here, the chrome's
+    // wandr:chrome/now-playing import reads it, and transport taps route back to
+    // the active session's session-handler.on-action. One line.
+    reg.register(Box::new(MediaSessionModule::new()));
     reg
 }
 

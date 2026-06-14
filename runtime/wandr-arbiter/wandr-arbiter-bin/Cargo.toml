@@ -27,6 +27,7 @@ wandr-arbiter-wm    = { path = "../wandr-arbiter-wm" }
 wandr-arbiter-shell = { path = "../wandr-arbiter-shell" }
 wandr-arbiter-alarm = { path = "../wandr-arbiter-alarm" }
 wandr-arbiter-notify = { path = "../wandr-arbiter-notify" }
+wandr-arbiter-media-session = { path = "../wandr-arbiter-media-session" }
 wandr-arbiter-power = { path = "../wandr-arbiter-power" }
 wandr-arbiter-keyguard = { path = "../wandr-arbiter-keyguard" }
 wandr-arbiter-audio = { path = "../wandr-arbiter-audio" }

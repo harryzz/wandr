@@ -1,0 +1,17 @@
+[package]
+name    = "wandr-arbiter-media-session"
+version = "0.0.1"
+edition = "2021"
+
+# wandr-arbiter-media-session — the now-playing / transport module (task 108 M2).
+# Owns the per-app media-session state (metadata + playback state + position +
+# artwork) and the active-session selection. Apps publish through the
+# wasi:media-session/session host import (forwarded as media-session-set-*); the
+# system chrome (lockscreen / status bar) reads it (media-session-now-playing /
+# -artwork) and issues transport intents (media-session-action), which this
+# module routes to the active session's session-handler.on-action. Wired in with
+# one line in build_registry().
+
+[dependencies]
+wandr-arbiter-core = { path = "../wandr-arbiter-core" }
+log = { workspace = true }

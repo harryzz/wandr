@@ -3,7 +3,8 @@
 // plays it through wasi:audio, and renders a waveform + transport over
 // wasi:canvas, driven by the wasi:input-handlers frame/pointer exports.
 // The seekbar is driven by `wasi:audio playback.position` (the clock promoted
-// in M1). No new host contract beyond `position`.
+// in M1). M2: publishes now-playing + receives transport intents via
+// wasi:media-session (lockscreen / headset controls).
 package wandr:audio-player;
 
 world audio-player {
@@ -12,6 +13,14 @@ world audio-player {
     import wasi:canvas/layout@0.0.2;
     import wasi:canvas/embedding@0.0.2;
     import wasi:audio/pcm@0.0.1;
+    // M2 — publish now-playing metadata/state/position to the system chrome.
+    import wasi:media-session/session@0.0.1;
     export wasi:input-handlers/frame-handler@0.0.2;
     export wasi:input-handlers/pointer-handler@0.0.2;
+    // M2 — receive transport intents (lockscreen tap / headset button).
+    export wasi:media-session/session-handler@0.0.1;
+    // M2 — background-service: keep pumping the audio ring + publishing position
+    // while backgrounded (screen locked), so lockscreen control keeps working and
+    // playback doesn't underrun-die. The host calls bg-tick render-independently.
+    export wandr:background/background@0.1.0;
 }

@@ -28,6 +28,7 @@ members = [
     "wandr-arbiter-shell",
     "wandr-arbiter-alarm",
     "wandr-arbiter-notify",
+    "wandr-arbiter-media-session",
     "wandr-arbiter-power",
     "wandr-arbiter-keyguard",
     "wandr-arbiter-audio",

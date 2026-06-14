@@ -10,6 +10,10 @@ orientation = "auto"
 label       = "Audio Player"
 # Transport animates the seekbar; 30 fps is plenty and halves the cost.
 max_fps     = 30
+# M2 — background-service: the host pumps `bg-tick` while we're backgrounded
+# (screen locked) so the audio ring stays fed (no underrun-death) and lockscreen
+# transport keeps reaching us. The engine runs in bg-tick; on-frame only renders.
+background  = true
 
 [components]
 ui = "components/ui.wasm"

@@ -157,6 +157,39 @@ standard / platform-idiosyncratic (audio-focus stays wandr:). Note: wasi:media:x
 is INVALID WIT (one colon) + against WASI convention (wasi-gfx is flat) → flat
 names + docs umbrella, no super-namespace. UI deferred until contracts settle.
 
+**M2 PHASE 1 COMPLETE + USER-VERIFIED (2026-06-14) — wasi:media-session now-playing/lockscreen transport. User confirmed on device: real lockscreen taps drive the player, audio audible+clean, swipe-unlock works. LOCKSCREEN-ORIENTATION FIX (user-reported: lock appeared landscape when app was landscape): lock screen now ALWAYS portrait + no rotation (like launcher). Fix = wandr-arbiter-wm `effective_orient()` returns 0 when a `Role::Lockscreen` surface is present (the surface model IS the lock signal; no Store flag needed) + Lockscreen added to `fan_overlays` targets; keyguard module emits `Event::OrientationChanged` on lock/unlock so wm re-fans → locking from a landscape app snaps BOTH lock screen AND status bar to portrait, unlock restores the app's orient. Device-verified via `report-orientation <0..3>|nc -U …arbiter.sock` + lock + screencap. STALE-CONTROLS FIX (user: killed player but lockscreen controls stayed): ROOT CAUSE was host-side — `now_playing::get()`/`artwork()` didn't strip the arbiter's `"OK "` status-line prefix, so an empty reply (`"OK "`) failed `line.trim().is_empty()` (trim=="OK") and got parsed into `Some` with blank fields → drew the title-less bar+buttons. FIX = strip `line.strip_prefix("OK").map(str::trim)` then emptiness-check/parse the body (applies to ANY chrome/host reader of an arbiter `Reply` over the socket — the reply is always `OK <body>`/`ERR <body>`). + arbiter `MediaSessionModule::prune_dead(ctx)` backstop (retain only sessions whose pid `ctx.store.app_by_pid().is_some()`; recompute active) called on now-playing/artwork/action — drops stale sessions from rapid relaunches / missed SurfaceRemoved. Both device-verified: card shows when player live, fully gone when killed. SWIPE FIX: detect via peak Move-travel (max of release-delta and drag peak), not Down/Up delta — the Down/Up-delta way failed on touch once the now-playing card crowded the lower swipe area. Phase 2 (headset) deferred.**
+Built like notify/alarm/audio-focus. NEW chrome read iface `wandr:chrome/now-playing`
+(get/artwork/send-action) — wasi:media-session stays the PORTABLE guest contract,
+the platform render-feed is wandr:chrome (namespace logic, like notify-feed). Host
+`media_session_host_impl.rs` (session publish + chrome now-playing read, forwards to
+arbiter over the line socket); new `wandr-arbiter-media-session` module (sessions map +
+active-session = last set-metadata / set-state playing; SurfaceRemoved cleanup; routes
+media-session-action -> active session host -> session-handler.on-action). keyguard
+renders title+scrubber+prev/play/next + tap->send-action. player imports session
+(publish)+exports session-handler(apply). Loop device-verified end-to-end via screencap +
+`echo media-session-action <act>|nc -U /data/local/tmp/wandr-arbiter.sock` (CLI does NOT
+forward module verbs — only the socket does; nc -U works on device).
+TWO BUGS HIT+FIXED:
+(1) EMPTY METADATA FIELD COLLAPSE: pct_encode("")="" -> empty token -> whitespace
+split collapses the positional set-metadata wire -> arbiter rejects (needs 4 args) ->
+title blank but transport showed (session existed via set-state). FIX = `~` sentinel for
+empty fields (enc_field/dec_field both crates; `~` never emitted by pct_encode).
+(2) ‼️ LOCKSCREEN-CONTROLLED PLAYER MUST BE A BACKGROUND-SERVICE: when the player is
+backgrounded behind the lock it STOPS rendering (render skipped when Role::Background) ->
+no pump() -> ring underruns -> AudioFlinger removes track -> "play dies after end/prev/next"
++ scrubber frozen + transport unresponsive. FIX = package.toml `background=true` + export
+`wandr:background/background`; moved the audio engine into `engine_step()` called by
+`bg-tick` (host pumps render-INDEPENDENTLY in EVERY role, clamp 16..IDLE_CAP) — on_frame
+now ONLY renders. Verified: while covering=player(locked), set-position advances 0..N,
+after-end prev+play recovers, no track-removal. (Generalizes: any guest controllable while
+backgrounded = bg-service, like Signal.)
+SWIPE-UNLOCK: user couldn't unlock; `git diff` CONFIRMS keyguard unlock logic
+byte-identical (NOT my regression) — pre-existing gesture; the now-playing card crowds the
+lower swipe area so a short swipe falls under the 12%-of-h threshold. Force-unlock:
+`echo unlock|nc -U …arbiter.sock`. Phase 2 (headset/BT media-button via wandr_inputflinger
+interceptKeyBeforeQueueing) DEFERRED — evdev device-risk (BT AVRCP may bypass HID; validate
+with getevent first). Plan: ~/.claude/plans/cat-task-state-polymorphic-kernighan.md
+
 Related: [[project_audioflinger_backend]], [[project_arbiter_audio]],
 [[project_audio_routing_arbiter]], [[project_wandr_crypto_srtp_offload]],
 [[reference_wasi_webgpu_gfx]], [[project_desktop_dev_loop]],

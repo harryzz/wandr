@@ -12,6 +12,8 @@ world keyguard-app {
     import wasi:canvas/layout@0.0.2;
     import wasi:canvas/embedding@0.0.2;
     import wandr:chrome/status@0.1.0;
+    // Task 108 M2 — now-playing transport on the lockscreen (read + send-action).
+    import wandr:chrome/now-playing@0.1.0;
     // M3 — the unlock channel to the arbiter (dep under wit/deps/keyguard/).
     import wandr:keyguard/keyguard@0.1.0;
     export wasi:input-handlers/pointer-handler@0.0.2;

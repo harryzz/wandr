@@ -58,6 +58,50 @@ interface display {
     current-orientation: func() -> orientation;
 }
 
+interface now-playing {
+    /// W3C MediaSessionPlaybackState (mirror of wasi:media-session).
+    enum playback-state { none, paused, playing }
+
+    /// W3C MediaSessionAction subset the transport surfaces (lockscreen /
+    /// status bar) can issue. Routed by the arbiter to the active session's
+    /// `wasi:media-session/session-handler.on-action`.
+    enum action {
+        play, pause, stop, seek-to,
+        seek-forward, seek-backward,
+        previous-track, next-track,
+    }
+
+    /// Now-playing snapshot the system chrome renders. `position-s` is the
+    /// guest's last-published playhead; `has-artwork` tells the surfacer
+    /// whether `artwork()` is worth calling (art bytes are large, so they're
+    /// fetched on demand rather than on every poll).
+    record now-playing-info {
+        app-id: string,
+        title: string,
+        artist: string,
+        album: string,
+        state: playback-state,
+        duration-s: f64,
+        position-s: f64,
+        has-artwork: bool,
+    }
+
+    /// The active media session's now-playing, or none if nothing is playing.
+    /// Host-implemented: answered live from the arbiter (it owns the session
+    /// state), like `notify-feed.list-active`.
+    get: func() -> option<now-playing-info>;
+
+    /// The active session's artwork bytes (a decodable image: png/jpeg/webp),
+    /// or none. Fetched on demand only when `has-artwork` is set.
+    artwork: func() -> option<list<u8>>;
+
+    /// The user tapped a transport control. The host forwards it to the
+    /// arbiter, which delivers `on-action` to the active session's guest.
+    /// `seek-time-s` carries the target for `seek-to` / the offset for
+    /// seek-forward/backward (none = the guest's default step).
+    send-action: func(act: action, seek-time-s: option<f64>);
+}
+
 interface pointer-icon {
     enum kind {
         default, text, hand, crosshair, wait, help, progress,
@@ -75,4 +119,5 @@ world chrome-imports {
     import status;
     import display;
     import pointer-icon;
+    import now-playing;
 }
