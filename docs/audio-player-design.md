@@ -221,8 +221,12 @@ media family*. Each is an optional capability the guest queries + falls back on.
 ## Contract additions (minimal, each a named lane)
 
 The family below mirrors the W3C audio standards by layer (§W3C alignment).
-**WIT sketches drafted 2026-06-14** (task 108) under `proposals/` — all
-non-binding drafts, deps wired at implementation time.
+**WIT drafts under `proposals/`** (task 108, 2026-06-14) — non-binding but
+**complete and `wasm-tools`-validated**, with cross-package deps wired
+(`wasi:audio-codec` → `wasi:audio` + `wasi:eme`; `wasi:audio-effects` →
+`wasi:audio`; `wasi:video-decoder` → `wasi:eme`). Constraint honored: WIT
+records can't hold `borrow<>`, so `key-session` bindings are `open()` params,
+not config-record fields.
 
 1. **`playback.position() -> u64` (frames played)** in `wasi:audio` — ✅ DONE
    (promoted + host impl + device-verified, M1). The master clock for the

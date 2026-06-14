@@ -37,16 +37,16 @@ interface types {
     /// from a wasi:eme `key-session` bound at decoder open. For a robust CDM the
     /// decoder is secure-surface-only (decode-to-surface already keeps frames
     /// host-side — the natural fit). Additive; cleartext when `decrypt` = none.
-    // use wasi:eme.{decrypt-config};   // wired at impl time
+    use wasi:eme/eme@0.0.1.{decrypt-config};
     record encoded-frame {
         data: list<u8>,
         /// 90 kHz media timestamp (the RTP clock).
         timestamp: u32,
         /// true = IDR / keyframe; decoders need one to start.
         keyframe: bool,
-        /// none = cleartext; some = encrypted. Type:
-        /// `option<wasi:eme/eme.decrypt-config>`.
-        // decrypt: option<decrypt-config>,
+        /// none = cleartext; some = encrypted — decrypt host-side via the
+        /// key-session bound at `open`.
+        decrypt: option<decrypt-config>,
     }
 
     record decoder-config {
@@ -55,18 +55,20 @@ interface types {
         /// actual size wins where the codec carries dimensions.
         width: u32,
         height: u32,
-        /// ENCRYPTED MEDIA: bind a wasi:eme `key-session` (= EME setMediaKeys).
-        /// Type `option<borrow<wasi:eme/eme.key-session>>` (wired at impl time).
-        // key-session: option<borrow<key-session>>,
     }
 }
 
 interface decoder {
     use types.{codec, decoder-config, encoded-frame, video-error};
     use wasi:graphics-context/graphics-context@0.0.2.{context};
+    use wasi:eme/eme@0.0.1.{key-session};  // ENCRYPTED MEDIA: the bound keys
 
     resource video-decoder {
-        open: static func(config: decoder-config)
+        /// `keys` binds a wasi:eme key-session (= EME setMediaKeys) for an
+        /// encrypted stream; none = cleartext. Robust DRM stays secure-surface-
+        /// only (decode-to-surface already keeps frames host-side).
+        open: static func(config: decoder-config,
+                          keys: option<borrow<key-session>>)
               -> result<video-decoder, video-error>;
 
         /// Claim the surface socket: decoded output composites into the

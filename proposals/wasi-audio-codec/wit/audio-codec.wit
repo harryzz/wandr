@@ -27,8 +27,9 @@
 // A good player exposes both and picks per-situation; they are mutually
 // exclusive by physics (tunnel hands the PCM to the hardware).
 //
-// Deps wired at implementation time: TUNNEL imports `wasi:audio/pcm`'s
-// `playback` as the sink (copy into wit/deps/ then).
+// Cross-package deps (wired, in wit/deps/): `wasi:audio` (the TUNNEL
+// `playback` sink) and `wasi:eme` (`decrypt-config` on the chunk + the
+// `key-session` bound at `open` for encrypted media).
 package wasi:audio-codec@0.0.1;
 
 interface types {
@@ -66,16 +67,16 @@ interface types {
     /// path. For a robust CDM the decoder is then SINK-ONLY (TUNNEL) — `read`
     /// is refused so plaintext never reaches the guest; ClearKey MAY allow
     /// `read` (testing). Owner of `decrypt-config` is wasi:eme.
-    // use wasi:eme.{decrypt-config};   // wired at impl time
+    use wasi:eme/eme@0.0.1.{decrypt-config};
     record encoded-chunk {
         data: list<u8>,
         /// Presentation timestamp in MICROSECONDS (WebCodecs unit).
         timestamp-us: s64,
         /// `key` vs `delta` (most audio is all-key; matters for AAC-on-MP4).
         keyframe: bool,
-        /// none = cleartext; some = encrypted (decrypt host-side via the bound
-        /// key-session). Type: `option<wasi:eme/eme.decrypt-config>`.
-        // decrypt: option<decrypt-config>,
+        /// none = cleartext; some = encrypted — decrypt host-side via the
+        /// key-session bound at `open`.
+        decrypt: option<decrypt-config>,
     }
 
     /// WebCodecs `AudioDecoderConfig` (subset).
@@ -86,11 +87,6 @@ interface types {
         acceleration: acceleration,
         /// Codec-private init data (esds / FLAC STREAMINFO / Opus head).
         description: option<list<u8>>,
-        /// ENCRYPTED MEDIA: bind a wasi:eme `key-session` (= EME setMediaKeys);
-        /// chunks then carry `decrypt-config` and decrypt host-side against this
-        /// session's keys. none = cleartext decoder. Type:
-        /// `option<borrow<wasi:eme/eme.key-session>>` (wired at impl time).
-        // key-session: option<borrow<key-session>>,
     }
 
     /// WebCodecs `AudioEncoderConfig` (subset).
@@ -105,19 +101,23 @@ interface types {
 
 interface decoder {
     use types.{decoder-config, encoded-chunk, support, codec-error};
-    // TUNNEL sink (wired at impl time):
-    // use wasi:audio/pcm.{playback};
+    use wasi:audio/pcm@0.0.1.{playback};   // TUNNEL sink
+    use wasi:eme/eme@0.0.1.{key-session};  // ENCRYPTED MEDIA: the bound keys
 
     /// = WebCodecs AudioDecoder.isConfigSupported. The guest decides the lane.
     probe: func(config: decoder-config) -> support;
 
     resource audio-decoder {
-        open: static func(config: decoder-config)
+        /// `keys` binds a wasi:eme key-session (= EME setMediaKeys) for an
+        /// encrypted stream; none = cleartext. (The borrow lives in the param,
+        /// not `decoder-config` — WIT records can't hold borrows.)
+        open: static func(config: decoder-config,
+                          keys: option<borrow<key-session>>)
               -> result<audio-decoder, codec-error>;
 
         /// TUNNEL: bind decoded PCM straight to a wasi:audio playback sink
         /// (host-side; the guest never reads). Mutually exclusive with `read`.
-        /// connect: func(sink: borrow<playback>) -> result<_, codec-error>;
+        connect: func(sink: borrow<playback>) -> result<_, codec-error>;
 
         /// = WebCodecs decode(EncodedAudioChunk). Push one compressed packet.
         submit: func(chunk: encoded-chunk) -> result<_, codec-error>;

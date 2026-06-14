@@ -27,11 +27,12 @@
 // (the design's "no non-portable knobs" rule). Live updates mirror Web Audio's
 // AudioParam mutation (no node re-create).
 //
-// Deps wired at implementation time: imports `wasi:audio/pcm`'s `playback`.
+// Cross-package dep (wired, in wit/deps/): `wasi:audio` — effects attach to a
+// `playback` stream.
 package wasi:audio-effects@0.0.1;
 
 interface effects {
-    // use wasi:audio/pcm.{playback};   // wired at impl time
+    use wasi:audio/pcm@0.0.1.{playback};   // effects attach to a playback stream
 
     /// W3C Web Audio BiquadFilterType — the EQ/filter primitive.
     enum filter-type {
@@ -101,8 +102,8 @@ interface effects {
 
     resource effect {
         /// Attach to a playback stream; chain order = creation order.
-        /// create: static func(stream: borrow<playback>, spec: effect-spec)
-        ///         -> result<effect, effect-error>;
+        create: static func(sink: borrow<playback>, spec: effect-spec)
+                -> result<effect, effect-error>;
 
         /// Live param update (= Web Audio AudioParam mutation; no re-create).
         update: func(spec: effect-spec);

@@ -112,7 +112,15 @@ Widevine DEFERRED (TEE + Google-provisioned CDM, device-only) but reachable via
 the key-system string with NO contract change.
 `decrypt-config` + optional key-session added to BOTH audio-codec + video-decoder
 chunks; SECURE-OUTPUT rule = robust DRM is sink/tunnel-only (no read; ClearKey
-may read=testing). MSE = NO package (proposals/wasi-media-source/NOTES.md: guest
+may read=testing). CROSS-PACKAGE DEPS NOW WIRED + wasm-tools-validated
+(2026-06-14): audio-codec→{audio(playback),eme(decrypt-config,key-session)},
+audio-effects→audio(playback), video-decoder→eme; each `use
+<ns>:<pkg>/<iface>@<ver>.{..}` with the dep copied into that proposal's
+wit/deps/<bare-name>/. WIT GOTCHAS hit: (1) `borrow<>` CANNOT live in a record →
+key-session bindings are `open()` params, not config-record fields; (2) `stream`
+is a reserved WIT keyword → can't be a param name (used `sink`); (3) nested
+namespace wasi:media:x invalid (one colon). Headers still say "NOT WIRED" =
+no HOST impl yet (contracts are complete drafts). MSE = NO package (proposals/wasi-media-source/NOTES.md: guest
 orchestration over http/tls+codec+audio; the ONLY real host residue = DRM/EME,
 which wasi:eme covers). Family table + ASCII stack diagram in the design doc.
 Namespace logic (refined 2026-06-14): wasi:* = mirrors a W3C standard AND the
