@@ -10,8 +10,9 @@
 //!   cp target/wasm32-wasip2/release/wandr_audio_player.wasm components/ui.wasm
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
+use std::time::Duration;
 
 use slint::{ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
 
@@ -29,6 +30,11 @@ use crate::bindings::wasi::media_session::session as wsession;
 
 const OUT_RATE: u32 = 48_000;
 const MUSIC_DIR: &str = "/music";
+/// Last.fm API key (free, from last.fm/api). Empty → the Last.fm source is
+/// skipped. Set this to enable album.getInfo lookups.
+const LASTFM_API_KEY: &str = "adc9909f24e4992ebe93ccb14dedf65d";
+/// Cover-art cache (writable /state preopen). Per album: <key>.img (raw bytes).
+const CACHE_DIR: &str = "/state/meta";
 
 // tab ids
 const TAB_ALBUMS: i32 = 0;
@@ -146,6 +152,10 @@ slint::slint! {
                     TouchArea { clicked => { root.open-np(); } }
                     HorizontalLayout {
                         padding: 10px; spacing: 10px;
+                        Rectangle {
+                            width: 40px; height: 40px; border-radius: 6px; clip: true; background: #24243a;
+                            if root.has-cover : Image { width: 100%; height: 100%; source: root.cover; image-fit: ImageFit.cover; }
+                        }
                         VerticalLayout {
                             alignment: center; horizontal-stretch: 1;
                             Text { text: root.np-title; color: white; font-size: 14px; overflow: elide; }
@@ -284,6 +294,7 @@ struct LibTrack {
     album: String,
     genre: String,
     art_path: Option<String>,
+    akey: String, // stable album key ("artist|album" from tags) — cover-cache key
 }
 
 struct Loaded {
@@ -298,7 +309,8 @@ struct Loaded {
     total_frames: u64,
     title: String,
     subtitle: String,
-    art: Option<(Vec<u8>, u32, u32)>,
+    art: Option<(Vec<u8>, u32, u32)>, // local albumart fallback
+    akey: String,                     // for the fetched-cover lookup
 }
 
 #[derive(Default)]
@@ -332,6 +344,8 @@ struct State {
     meta_dirty: bool,
     art_cache: Option<(String, Vec<u8>, u32, u32)>,
     rng: u64,
+    // Phase A — fetched/cached internet cover art, decoded RGBA, keyed by akey.
+    album_art: HashMap<String, (Vec<u8>, u32, u32)>,
 }
 
 thread_local! {
@@ -474,13 +488,17 @@ fn scan_library() -> Vec<LibTrack> {
             let path = p.to_string_lossy().to_string();
             let fname = p.file_name().unwrap().to_string_lossy().to_string();
             let (ti, ar, al, ge) = read_tags(&path);
+            let artist = ar.unwrap_or_else(|| "Unknown Artist".to_string());
+            let album = al.unwrap_or_else(|| dir_album.clone());
+            let akey = format!("{artist}|{album}");
             out.push(LibTrack {
                 path,
                 title: ti.unwrap_or_else(|| pretty_title(&fname)),
-                artist: ar.unwrap_or_else(|| "Unknown Artist".to_string()),
-                album: al.unwrap_or_else(|| dir_album.clone()),
+                artist,
+                album,
                 genre: ge.unwrap_or_else(|| "Unknown Genre".to_string()),
                 art_path: art_path.clone(),
+                akey,
             });
         }
     }
@@ -552,7 +570,8 @@ fn load(s: &mut State, lib_index: usize) {
     let total_frames = n_frames
         .map(|nf| (nf as u128 * OUT_RATE as u128 / src_rate.max(1) as u128) as u64)
         .unwrap_or(0);
-    let art = load_art(s, &entry.art_path);
+    // Prefer a fetched/cached internet cover; fall back to the local albumart file.
+    let art = s.album_art.get(&entry.akey).cloned().or_else(|| load_art(s, &entry.art_path));
     let resampler = if src_rate != OUT_RATE { Some(LinearResampler::new(src_rate, channels)) } else { None };
 
     s.loaded = Some(Loaded {
@@ -568,6 +587,7 @@ fn load(s: &mut State, lib_index: usize) {
         title: entry.title.clone(),
         subtitle: format!("{} — {}", entry.artist, entry.album),
         art,
+        akey: entry.akey.clone(),
     });
     s.anchor_dev = 0;
     s.anchor_track = 0;
@@ -867,6 +887,7 @@ fn engine_step(s: &mut State) -> u32 {
     if !s.scanned {
         s.scanned = true;
         s.rng = 0x9E3779B97F4A7C15;
+        wandr_step_executor::init(); // Phase A — async metadata-fetch reactor
         s.library = scan_library();
         s.albums = group_by(&s.library, |t| &t.album);
         s.artists = group_by(&s.library, |t| &t.artist);
@@ -874,6 +895,27 @@ fn engine_step(s: &mut State) -> u32 {
         s.queue = (0..s.library.len()).collect();
         s.order = s.queue.clone();
         s.rows_dirty = true;
+        // Phase A — covers: load from the /state cache where present, else queue a
+        // fetch. One sequential task does the network work (rate-limit-friendly).
+        let albums: Vec<(String, String, String)> = s
+            .albums
+            .iter()
+            .filter_map(|(_, idxs)| {
+                idxs.first().map(|&i| {
+                    let t = &s.library[i];
+                    (t.akey.clone(), t.artist.clone(), t.album.clone())
+                })
+            })
+            .collect();
+        let mut to_fetch = Vec::new();
+        for (akey, artist, album) in albums {
+            if let Some(dec) = load_cached_cover(&akey) {
+                s.album_art.insert(akey, dec);
+            } else {
+                to_fetch.push((akey, artist, album));
+            }
+        }
+        spawn_library_fetch(to_fetch);
         if !s.library.is_empty() {
             go_to(s, 0, false);
         }
@@ -949,7 +991,13 @@ fn push_ui() {
 
             if s.meta_dirty {
                 s.meta_dirty = false;
-                match s.loaded.as_ref().and_then(|l| l.art.clone()) {
+                // Prefer a fetched/cached internet cover (by the current album's
+                // akey), else the local albumart loaded with the track.
+                let art = s
+                    .loaded
+                    .as_ref()
+                    .and_then(|l| s.album_art.get(&l.akey).cloned().or_else(|| l.art.clone()));
+                match art {
                     Some((rgba, w, h)) => {
                         let mut buf = SharedPixelBuffer::<Rgba8Pixel>::new(w, h);
                         buf.make_mut_bytes().copy_from_slice(&rgba);
@@ -1150,7 +1198,256 @@ fn cmd_close_np() {
 fn engine_tick() -> u32 {
     let delay = STATE.with(|st| engine_step(&mut st.borrow_mut()));
     push_ui();
+    wandr_step_executor::step(); // advance any in-flight metadata fetch (non-blocking)
     delay
+}
+
+// ── Phase A: internet metadata lookup (increment 1 — fetch + log) ────────────
+fn q_encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else if b == b' ' {
+            out.push_str("%20");
+        } else {
+            out.push('%');
+            let h = |n: u8| (if n < 10 { b'0' + n } else { b'A' + n - 10 }) as char;
+            out.push(h(b >> 4));
+            out.push(h(b & 0xf));
+        }
+    }
+    out
+}
+
+/// stderr→logcat bridges per write(), so build the whole line + emit it in ONE
+/// write_all (a plain eprintln! splits a long line across many logcat entries).
+fn log1(s: &str) {
+    use std::io::Write;
+    let _ = std::io::stderr().write_all(format!("{s}\n").as_bytes());
+}
+
+/// One source's album candidate.
+#[derive(Default, Clone)]
+struct Cand {
+    name: String,
+    artist: String,
+    cover: String,
+    src: &'static str,
+}
+impl Cand {
+    fn ok(&self) -> bool {
+        !self.cover.is_empty()
+    }
+}
+
+// ── cover download + cache ───────────────────────────────────────────────────
+fn decode_rgba(bytes: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
+    let img = image::load_from_memory(bytes).ok()?;
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    Some((rgba.into_raw(), w, h))
+}
+
+fn cache_file(akey: &str) -> String {
+    let safe: String = akey.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+    format!("{CACHE_DIR}/{safe}.img")
+}
+
+fn load_cached_cover(akey: &str) -> Option<(Vec<u8>, u32, u32)> {
+    let bytes = std::fs::read(cache_file(akey)).ok()?;
+    decode_rgba(&bytes)
+}
+
+fn save_cached_cover(akey: &str, bytes: &[u8]) {
+    let _ = std::fs::create_dir_all(CACHE_DIR);
+    let _ = std::fs::write(cache_file(akey), bytes);
+}
+
+/// GET raw bytes, following up to 6 redirects manually (the shim sends one
+/// request; Cover Art Archive 302s to archive.org).
+async fn download_bytes(client: &reqwest::Client, url0: &str) -> Option<Vec<u8>> {
+    let mut url = url0.to_string();
+    for _ in 0..6 {
+        let u = url::Url::parse(&url).ok()?;
+        let resp = client.get(u).send().await.ok()?;
+        let st = resp.status();
+        if st.is_redirection() {
+            let loc = resp.headers().get("location").and_then(|h| h.to_str().ok())?.to_string();
+            url = if loc.starts_with("http") {
+                loc
+            } else {
+                url::Url::parse(&url).ok()?.join(&loc).ok()?.to_string()
+            };
+            continue;
+        }
+        if !st.is_success() {
+            return None;
+        }
+        return Some(resp.bytes().await.ok()?.to_vec());
+    }
+    None
+}
+
+async fn get_json(client: &reqwest::Client, url: &str) -> Option<serde_json::Value> {
+    let u = url::Url::parse(url).ok()?;
+    let resp = client.get(u).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let body = resp.text().await.ok()?;
+    serde_json::from_str(&body).ok()
+}
+
+fn jstr(v: &serde_json::Value, path: &[&str]) -> String {
+    let mut cur = v;
+    for p in path {
+        let next = match p.parse::<usize>() {
+            Ok(i) => cur.get(i),   // array index
+            Err(_) => cur.get(*p), // object key
+        };
+        cur = match next {
+            Some(x) => x,
+            None => return String::new(),
+        };
+    }
+    cur.as_str().unwrap_or("").to_string()
+}
+
+/// MusicBrainz release search → Cover Art Archive front image by release MBID.
+async fn lookup_musicbrainz(client: &reqwest::Client, artist: &str, album: &str) -> Cand {
+    let q = q_encode(&format!("release:\"{album}\" AND artist:\"{artist}\""));
+    let url = format!("https://musicbrainz.org/ws/2/release?query={q}&fmt=json&limit=3");
+    let Some(v) = get_json(client, &url).await else { return Cand::default() };
+    let Some(rel) = v.get("releases").and_then(|r| r.get(0)) else { return Cand::default() };
+    let mbid = jstr(rel, &["id"]);
+    if mbid.is_empty() {
+        return Cand::default();
+    }
+    Cand {
+        name: jstr(rel, &["title"]),
+        artist: jstr(rel, &["artist-credit", "0", "name"]),
+        cover: format!("https://coverartarchive.org/release/{mbid}/front-500"),
+        src: "musicbrainz",
+    }
+}
+
+/// Deezer album search (no key) → cover_xl.
+async fn lookup_deezer(client: &reqwest::Client, artist: &str, album: &str) -> Cand {
+    let q = q_encode(&format!("artist:\"{artist}\" album:\"{album}\""));
+    let url = format!("https://api.deezer.com/search/album?q={q}&limit=3");
+    let Some(v) = get_json(client, &url).await else { return Cand::default() };
+    let Some(d) = v.get("data").and_then(|d| d.get(0)) else { return Cand::default() };
+    let cover = {
+        let xl = jstr(d, &["cover_xl"]);
+        if xl.is_empty() { jstr(d, &["cover_big"]) } else { xl }
+    };
+    Cand { name: jstr(d, &["title"]), artist: jstr(d, &["artist", "name"]), cover, src: "deezer" }
+}
+
+/// iTunes Search (no key) → artworkUrl (upscaled to 600×600).
+async fn lookup_itunes(client: &reqwest::Client, artist: &str, album: &str) -> Cand {
+    let term = q_encode(&format!("{artist} {album}"));
+    let url = format!("https://itunes.apple.com/search?term={term}&entity=album&limit=3");
+    let Some(v) = get_json(client, &url).await else { return Cand::default() };
+    let Some(r) = v.get("results").and_then(|r| r.get(0)) else { return Cand::default() };
+    let cover = jstr(r, &["artworkUrl100"]).replace("100x100bb", "600x600bb");
+    Cand { name: jstr(r, &["collectionName"]), artist: jstr(r, &["artistName"]), cover, src: "itunes" }
+}
+
+/// Last.fm album.getInfo (needs LASTFM_API_KEY) → largest non-placeholder image.
+async fn lookup_lastfm(client: &reqwest::Client, artist: &str, album: &str) -> Cand {
+    if LASTFM_API_KEY.is_empty() {
+        return Cand::default();
+    }
+    let url = format!(
+        "https://ws.audioscrobbler.com/2.0/?method=album.getinfo&api_key={}&artist={}&album={}&format=json",
+        LASTFM_API_KEY,
+        q_encode(artist),
+        q_encode(album),
+    );
+    let Some(v) = get_json(client, &url).await else { return Cand::default() };
+    // image[] is ordered small→mega; keep the last non-empty, non-placeholder url.
+    let cover = v
+        .get("album")
+        .and_then(|a| a.get("image"))
+        .and_then(|i| i.as_array())
+        .map(|arr| {
+            let mut best = String::new();
+            for img in arr {
+                let u = img.get("#text").and_then(|s| s.as_str()).unwrap_or("");
+                // skip Last.fm's "no cover" star placeholder
+                if !u.is_empty() && !u.contains("2a96cbd8b46e442fc41c2b86b821562f") {
+                    best = u.to_string();
+                }
+            }
+            best
+        })
+        .unwrap_or_default();
+    Cand { name: jstr(&v, &["album", "name"]), artist: jstr(&v, &["album", "artist"]), cover, src: "lastfm" }
+}
+
+/// One album's multi-source lookup: query MusicBrainz → Deezer → iTunes, log
+/// each, return the first candidate that yielded a cover. (Caching + UI next.)
+async fn fetch_one(client: &reqwest::Client, artist: &str, album: &str) -> Option<Cand> {
+    log1(&format!("[meta] lookup {artist:?} / {album:?}"));
+    let mb = lookup_musicbrainz(client, artist, album).await;
+    log1(&format!("[meta]   musicbrainz: name={:?} artist={:?} cover={}", mb.name, mb.artist, mb.cover));
+    let dz = lookup_deezer(client, artist, album).await;
+    log1(&format!("[meta]   deezer:      name={:?} artist={:?} cover={}", dz.name, dz.artist, dz.cover));
+    let it = lookup_itunes(client, artist, album).await;
+    log1(&format!("[meta]   itunes:      name={:?} artist={:?} cover={}", it.name, it.artist, it.cover));
+    let lf = lookup_lastfm(client, artist, album).await;
+    log1(&format!("[meta]   lastfm:      name={:?} artist={:?} cover={}", lf.name, lf.artist, lf.cover));
+    let chosen = [mb, dz, it, lf].into_iter().find(|c| c.ok());
+    match &chosen {
+        Some(c) => log1(&format!("[meta] CHOSEN [{}] name={:?} artist={:?} cover={}", c.src, c.name, c.artist, c.cover)),
+        None => log1("[meta] CHOSEN: none"),
+    }
+    chosen
+}
+
+/// Pre-fetch metadata/art for every album in one sequential task (on the
+/// step-executor, so it runs across bg-ticks without blocking audio). Sequential
+/// + a courtesy delay respects MusicBrainz's 1 req/s limit.
+fn spawn_library_fetch(albums: Vec<(String, String, String)>) {
+    if albums.is_empty() {
+        return;
+    }
+    wandr_step_executor::spawn(async move {
+        let client = match reqwest::Client::builder()
+            .user_agent("wandr-audio-player/0.1 ( https://codeberg.org/harryzz/wandr )")
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                log1(&format!("[meta] client err: {e:?}"));
+                return;
+            }
+        };
+        for (akey, artist, album) in albums {
+            if let Some(c) = fetch_one(&client, &artist, &album).await {
+                match download_bytes(&client, &c.cover).await {
+                    Some(bytes) => {
+                        save_cached_cover(&akey, &bytes);
+                        if let Some(dec) = decode_rgba(&bytes) {
+                            log1(&format!("[meta] cover {akey} {}x{} ({} bytes) via {}", dec.1, dec.2, bytes.len(), c.src));
+                            STATE.with(|st| {
+                                let mut s = st.borrow_mut();
+                                s.album_art.insert(akey.clone(), dec);
+                                s.meta_dirty = true;
+                            });
+                            push_ui();
+                        }
+                    }
+                    None => log1(&format!("[meta] cover download failed: {}", c.cover)),
+                }
+            }
+            wandr_step_executor::sleep(Duration::from_millis(1100)).await;
+        }
+        log1("[meta] library fetch complete");
+    })
+    .detach();
 }
 
 // ── WIT bindings (alongside slint_wandr::launch!) ────────────────────────────

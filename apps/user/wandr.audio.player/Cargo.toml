@@ -27,6 +27,14 @@ symphonia = { version = "0.5", features = ["mp3"] }
 # Guest-side cover-art decode (embedded FLAC/ID3 PICTURE → RGBA → Slint Image).
 # Pure-Rust jpeg+png only (wasm-ok), no default codecs.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+# Internet metadata/cover-art lookup (Phase A): host-delegated HTTPS via the
+# wandr-reqwest-shim over wasi:tls (no guest crypto; network granted by the host),
+# driven by the wandr-step-executor reactor so fetches run across bg-ticks without
+# blocking audio. JSON via serde_json.
+reqwest = { path = "../../../external/libsignal-service-rs/wandr-wasi-shims/reqwest", package = "wandr-reqwest-shim" }
+wandr-step-executor = { path = "../../../external/libsignal-service-rs/wandr-wasi-shims/wandr-step-executor" }
+url = "2"
+serde_json = "1"
 
 [profile.release]
 opt-level = "s"
