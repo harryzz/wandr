@@ -1,0 +1,22 @@
+# wandr.audio.player — M1 spike (task 108): Symphonia decode → wasi:audio PCM.
+# Pure-Rust wasi:cli/command guest; run via `wandr-host --run-once
+# wandr.audio.player`. Proves the guest-decode floor (the design's Layer 0)
+# before any contract change. See docs/audio-player-design.md.
+#   cargo build --target wasm32-wasip2 --release
+[package]
+name    = "wandr-audio-player"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+wit-bindgen = "0.57"
+# Default features = royalty-free codecs/formats (FLAC default-on, no flag, no
+# licensing concern — the design's "licensing stays guest-side"). mp3/aac are
+# additive feature flags when wanted.
+symphonia = "0.5"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

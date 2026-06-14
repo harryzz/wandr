@@ -1,0 +1,10 @@
+// wandr.audio.player — M1 spike guest (task 108). A wasi:cli/command guest
+// (fn main → cli/run on wasm32-wasip2) that decodes an embedded FLAC with
+// Symphonia and plays it through the host's wasi:audio PCM contract — proving
+// the guest-side decode floor end-to-end with NO contract change (wasi:audio
+// already plays PCM; playback.position is promoted later).
+package wandr:audio-player;
+
+world audio-player {
+    import wasi:audio/pcm@0.0.1;
+}

@@ -1,0 +1,12 @@
+# wandr.audio.player — M1 spike (task 108). wasi:cli/command run-once consumer:
+#   wandr-host --run-once wandr.audio.player
+# Imports wasi:audio/pcm (host-linked, already wired in app_loader.rs). Decodes
+# an embedded 48 kHz stereo FLAC and plays it. No UI yet — the seekbar/canvas
+# UI lands once the audio floor is proven (then playback.position).
+app_id      = "wandr.audio.player"
+version     = "0.1.0"
+world       = "wasi:cli/command"
+composition = "same-store"
+
+[components]
+ui = "components/ui.wasm"
