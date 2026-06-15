@@ -12,9 +12,10 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
-use slint::{ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
+use slint::{ComponentHandle, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
 
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{Decoder, DecoderOptions};
@@ -30,6 +31,15 @@ use crate::bindings::wasi::media_session::session as wsession;
 
 const OUT_RATE: u32 = 48_000;
 const MUSIC_DIR: &str = "/music";
+// Spectrum visualizer. FFT_SIZE = analysis window; NUM_BARS = log-spaced bands
+// rendered (a spectral-resolution choice, not device geometry); SCOPE_CAP = mono
+// history ring, sized to cover the device buffer depth + one FFT window so the
+// visualized window can be aligned to the audible position.
+const FFT_SIZE: usize = 1024;
+const NUM_BARS: usize = 48;
+const SCOPE_CAP: usize = 1 << 16; // 65536 frames ≈ 1.36 s @ 48 kHz
+const VIZ_LO_HZ: f32 = 40.0;
+const VIZ_HI_HZ: f32 = 16_000.0;
 /// Last.fm API key (free, from last.fm/api). Empty → the Last.fm source is
 /// skipped. Set this to enable album.getInfo lookups.
 const LASTFM_API_KEY: &str = "adc9909f24e4992ebe93ccb14dedf65d";
@@ -66,6 +76,7 @@ slint::slint! {
         in property <bool> has-cover: false;
         in property <bool> shuffle: false;
         in property <bool> repeat: false;
+        in property <[float]> bars: [];
         callback set-tab(int);
         callback row-tap(int);
         callback go-back();
@@ -216,6 +227,24 @@ slint::slint! {
 
                 Text { text: root.np-title; color: white; font-size: 20px; font-weight: 700; horizontal-alignment: center; overflow: elide; }
                 Text { text: root.np-sub; color: #b0b0c8; font-size: 13px; horizontal-alignment: center; overflow: elide; }
+
+                // Spectrum visualizer — log-spaced bands of the audible audio.
+                Rectangle {
+                    height: min(root.width, root.height) * 0.13;
+                    HorizontalLayout {
+                        spacing: 3px;
+                        for b in root.bars : Rectangle {
+                            horizontal-stretch: 1;
+                            Rectangle {
+                                width: parent.width;
+                                height: max(2px, parent.height * b);
+                                y: parent.height - self.height;
+                                border-radius: 2px;
+                                background: @linear-gradient(0deg, #4285f4 0%, #34e0c8 100%);
+                            }
+                        }
+                    }
+                }
 
                 prog := Rectangle {
                     height: 16px;
@@ -368,11 +397,30 @@ struct State {
     rng: u64,
     // Phase A — fetched/cached internet cover art, decoded RGBA, keyed by akey.
     album_art: HashMap<String, (Vec<u8>, u32, u32)>,
+    // Visualizer: mono history ring (written-frame coords), smoothed band levels,
+    // a reusable FFT plan, and a precomputed Hann window.
+    scope: Vec<f32>,
+    scope_written: u64, // mono frames WRITTEN to the device since open (not decoded)
+    open_dev: u64,      // pb.position() at open/flush → played = position() - open_dev
+    bars: Vec<f32>,
+    bars_were_active: bool, // pushed live last frame → flatten once when stopping
+    fft: Option<Arc<dyn rustfft::Fft<f32>>>,
+    hann: Vec<f32>,
 }
 
 thread_local! {
     static STATE: RefCell<State> = RefCell::new(State::default());
     static UI: RefCell<Option<MainWindow>> = const { RefCell::new(None) };
+    // Persistent visualizer model — updated in place (set_row_data) every frame so
+    // only the bar heights re-evaluate (Slint partial redraw), never rebuilding the
+    // 48-item repeater. Bound to the `bars` property once at launch.
+    static BARS_MODEL: Rc<VecModel<f32>> = Rc::new(VecModel::from(vec![0.0_f32; NUM_BARS]));
+    // Drives continuous frames while the visualizer is on screen. The host's
+    // on-demand renderer only reschedules via next_frame_delay() (polled AFTER a
+    // render); a pending Slint timer makes it return ~16ms, so frames keep coming.
+    // Its callback requests the redraw. Bootstraps off the tap that opens
+    // now-playing (input → render → re-poll). Stopped when not visualizing.
+    static VIZ_TIMER: slint::Timer = slint::Timer::default();
 }
 
 // ── Linear streaming resampler (src → 48k) ───────────────────────────────────
@@ -762,6 +810,7 @@ fn hard_load(s: &mut State, order_pos: usize, autoplay: bool) {
             pb.flush();
         }
     }
+    scope_reset(s);
     if autoplay {
         play(s);
     }
@@ -838,6 +887,80 @@ fn cur_total(s: &State) -> u64 {
         .unwrap_or(0)
 }
 
+// ── Spectrum visualizer ──────────────────────────────────────────────────────
+fn scope_reset(s: &mut State) {
+    if s.scope.len() == SCOPE_CAP {
+        for x in &mut s.scope {
+            *x = 0.0;
+        }
+    }
+    s.scope_written = 0;
+    s.open_dev = s.pb.as_ref().map(|p| p.position()).unwrap_or(0);
+}
+
+/// FFT the audible window (aligned to playback by compensating the device buffer
+/// depth) and fold it into NUM_BARS log-spaced bands, each mapped dBFS → 0..1.
+fn compute_spectrum(s: &State) -> Vec<f32> {
+    let zero = vec![0.0; NUM_BARS];
+    let (Some(fft), Some(pb), true) = (s.fft.as_ref(), s.pb.as_ref(), s.scope.len() == SCOPE_CAP)
+    else {
+        return zero;
+    };
+    // Audible "now" = frames the device has PLAYED since open. The scope is
+    // indexed by frames written to the device, so this window is what's heard.
+    let end = pb.position().saturating_sub(s.open_dev).min(s.scope_written);
+    let buffered = s.scope_written.saturating_sub(end);
+    if end < FFT_SIZE as u64 || buffered + FFT_SIZE as u64 > SCOPE_CAP as u64 {
+        return zero;
+    }
+    let start = end - FFT_SIZE as u64;
+    let mut buf: Vec<rustfft::num_complex::Complex<f32>> = (0..FFT_SIZE)
+        .map(|i| {
+            let v = s.scope[((start as usize) + i) % SCOPE_CAP] * s.hann[i];
+            rustfft::num_complex::Complex { re: v, im: 0.0 }
+        })
+        .collect();
+    fft.process(&mut buf);
+
+    let bins = FFT_SIZE / 2;
+    let mut bars = vec![0.0f32; NUM_BARS];
+    let ratio = VIZ_HI_HZ / VIZ_LO_HZ;
+    for (k, bar) in bars.iter_mut().enumerate() {
+        let f_lo = VIZ_LO_HZ * ratio.powf(k as f32 / NUM_BARS as f32);
+        let f_hi = VIZ_LO_HZ * ratio.powf((k + 1) as f32 / NUM_BARS as f32);
+        let b_lo = ((f_lo * FFT_SIZE as f32 / OUT_RATE as f32) as usize).clamp(1, bins - 1);
+        let b_hi = ((f_hi * FFT_SIZE as f32 / OUT_RATE as f32) as usize).clamp(b_lo + 1, bins);
+        let mut acc = 0.0f32;
+        for b in b_lo..b_hi {
+            acc += buf[b].norm();
+        }
+        let mag = acc / (b_hi - b_lo) as f32 / FFT_SIZE as f32;
+        let db = 20.0 * (mag + 1e-9).log10();
+        *bar = ((db + 60.0) / 60.0).clamp(0.0, 1.0);
+    }
+    bars
+}
+
+/// Update smoothed bars: instant attack, fast decay (peak-style fall-off, tuned
+/// for the ~60 Hz visualizer cadence). Only animates while the now-playing view
+/// is visible and playing; otherwise flattens (no continuous redraw when idle).
+fn update_bars(s: &mut State) {
+    if s.bars.len() != NUM_BARS {
+        s.bars = vec![0.0; NUM_BARS];
+    }
+    if s.playing && s.view == 1 {
+        let raw = compute_spectrum(s);
+        for i in 0..NUM_BARS {
+            let prev = s.bars[i];
+            s.bars[i] = if raw[i] > prev { raw[i] } else { prev * 0.78 + raw[i] * 0.22 };
+        }
+    } else {
+        for v in &mut s.bars {
+            *v = 0.0;
+        }
+    }
+}
+
 fn decode_more(s: &mut State) -> bool {
     let Some(l) = s.loaded.as_mut() else {
         return false;
@@ -893,11 +1016,26 @@ fn pump(s: &mut State) {
         if has_pending {
             ensure_seg(s);
             let ch = s.loaded.as_ref().unwrap().channels.max(1);
+            let old_pos = s.loaded.as_ref().unwrap().pending_pos;
             let accepted = {
                 let l = s.loaded.as_ref().unwrap();
                 let pb = s.pb.as_ref().unwrap();
                 pb.write(&l.pending[l.pending_pos..]) as usize
             };
+            // Tap exactly the frames accepted by the device into the visualizer
+            // scope ring (written-frame coords, so it aligns with pb.position()).
+            if accepted > 0 && s.scope.len() == SCOPE_CAP {
+                let l = s.loaded.as_ref().unwrap();
+                for f in 0..accepted {
+                    let base = old_pos + f * ch;
+                    let mut m = 0.0;
+                    for c in 0..ch {
+                        m += l.pending[base + c];
+                    }
+                    s.scope[(s.scope_written as usize + f) % SCOPE_CAP] = m / ch as f32;
+                }
+                s.scope_written += accepted as u64;
+            }
             let l = s.loaded.as_mut().unwrap();
             l.pending_pos += accepted * ch;
             if l.pending_pos >= l.pending.len() {
@@ -962,6 +1100,7 @@ fn play(s: &mut State) {
                 s.pb_stereo = out_layout_stereo(ch);
                 s.gapless_blocked = false;
                 s.segments.clear();
+                scope_reset(s);
                 if let Some(l) = s.loaded.as_mut() {
                     l.seg_started = false; // pump's ensure_seg anchors the first segment
                 }
@@ -1017,6 +1156,7 @@ fn seek_to(s: &mut State, target_48k: u64) {
     if let Some(pb) = s.pb.as_ref() {
         pb.flush();
     }
+    scope_reset(s);
     pump(s);
     if s.playing {
         if let Some(pb) = s.pb.as_ref() {
@@ -1151,6 +1291,15 @@ fn engine_step(s: &mut State) -> u32 {
     if !s.scanned {
         s.scanned = true;
         s.rng = 0x9E3779B97F4A7C15;
+        // Visualizer: allocate the scope ring, FFT plan, Hann window, band state.
+        s.scope = vec![0.0; SCOPE_CAP];
+        s.bars = vec![0.0; NUM_BARS];
+        s.fft = Some(rustfft::FftPlanner::<f32>::new().plan_fft_forward(FFT_SIZE));
+        s.hann = (0..FFT_SIZE)
+            .map(|i| {
+                0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / (FFT_SIZE as f32 - 1.0)).cos()
+            })
+            .collect();
         wandr_step_executor::init(); // Phase A — async metadata-fetch reactor
         s.library = scan_library();
         // Phase A — per distinct album (akey): load the cached cover + cached
@@ -1200,6 +1349,8 @@ fn engine_step(s: &mut State) -> u32 {
         pump(s);
     }
 
+    update_bars(s); // spectrum visualizer (FFT only when now-playing + playing)
+
     // End / layout-change transition: only fires once the device ring has fully
     // drained AND the decode head is exhausted (gapless keeps the ring fed across
     // same-layout boundaries, so this is reached only at the real end or when the
@@ -1246,7 +1397,13 @@ fn engine_step(s: &mut State) -> u32 {
         s.last_pub_sec = cur_sec;
     }
 
-    if s.playing { 33 } else { 500 }
+    // ~60 Hz while the spectrum is on screen (snappy bars), ~30 Hz otherwise
+    // while playing (audio ring), idle when stopped.
+    if s.playing {
+        if s.view == 1 { 16 } else { 33 }
+    } else {
+        500
+    }
 }
 
 // ── UI bridge ───────────────────────────────────────────────────────────────
@@ -1282,6 +1439,41 @@ fn push_ui() {
                 if s.show_remaining { format!("-{}", fmt_time(total.saturating_sub(pos))) } else { fmt_time(total) }.into(),
             );
             ui.set_progress(if total > 0 { (pos as f32 / total as f32).clamp(0.0, 1.0) } else { 0.0 });
+            // Visualizer bars: update the persistent model IN PLACE every frame
+            // while animating (only the heights re-evaluate → partial redraw); on
+            // stop, flatten once so we don't spin the renderer idle.
+            let viz_active = s.playing && s.view == 1 && s.bars.len() == NUM_BARS;
+            if viz_active {
+                BARS_MODEL.with(|m| {
+                    for (i, &v) in s.bars.iter().enumerate() {
+                        m.set_row_data(i, v);
+                    }
+                });
+                if !s.bars_were_active {
+                    // Entering the visualizer (off a tap → render context): start the
+                    // frame pump so the host keeps rendering at ~60 fps.
+                    VIZ_TIMER.with(|t| {
+                        t.start(slint::TimerMode::Repeated, Duration::from_millis(16), || {
+                            UI.with(|u| {
+                                if let Some(ui) = u.borrow().as_ref() {
+                                    ui.window().request_redraw();
+                                }
+                            });
+                        });
+                    });
+                }
+                ui.window().request_redraw();
+                s.bars_were_active = true;
+            } else if s.bars_were_active {
+                BARS_MODEL.with(|m| {
+                    for i in 0..NUM_BARS {
+                        m.set_row_data(i, 0.0);
+                    }
+                });
+                VIZ_TIMER.with(|t| t.stop());
+                ui.window().request_redraw();
+                s.bars_were_active = false;
+            }
             ui.set_playing(s.playing);
             ui.set_shuffle(s.shuffle);
             ui.set_repeat(s.repeat);
@@ -1965,6 +2157,7 @@ slint_wandr::launch!(|| {
     ui.on_go_back(cmd_go_back);
     ui.on_open_np(cmd_open_np);
     ui.on_close_np(cmd_close_np);
+    BARS_MODEL.with(|m| ui.set_bars(ModelRc::from(m.clone())));
     UI.with(|u| *u.borrow_mut() = Some(ui.clone_strong()));
     push_ui();
     ui.show().expect("audio-player: show");

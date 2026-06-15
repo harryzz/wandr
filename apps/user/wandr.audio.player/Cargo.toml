@@ -35,6 +35,9 @@ reqwest = { path = "../../../crates/wandr-reqwest", package = "wandr-reqwest" }
 wandr-step-executor = { path = "../../../crates/wandr-step-executor" }
 url = "2"
 serde_json = "1"
+# Spectrum visualizer: 1024-pt FFT of the audible PCM window → log-spaced bands.
+# Pure Rust (scalar fallback on wasm), no_std-friendly.
+rustfft = "6"
 
 [profile.release]
 opt-level = "s"
