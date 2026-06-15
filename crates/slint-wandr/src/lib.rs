@@ -692,6 +692,29 @@ pub fn next_frame_delay() -> u32 {
     }
 }
 
+thread_local! {
+    static LIFECYCLE_CB: core::cell::RefCell<Option<Box<dyn FnMut(bool)>>> =
+        const { core::cell::RefCell::new(None) };
+}
+
+/// Register a foreground/background callback. `true` on Resumed (foreground),
+/// `false` on Paused (backgrounded). Lets a guest react to its role — e.g. a
+/// media app switching to a deep audio buffer + slow tick when backgrounded.
+/// No-op for guests that don't register one.
+pub fn on_lifecycle(f: impl FnMut(bool) + 'static) {
+    LIFECYCLE_CB.with(|c| *c.borrow_mut() = Some(Box::new(f)));
+}
+
+/// Called by the `launch!` macro's `on-lifecycle-changed` export. Not public API.
+#[doc(hidden)]
+pub fn __dispatch_lifecycle_fg(foreground: bool) {
+    LIFECYCLE_CB.with(|c| {
+        if let Some(f) = c.borrow_mut().as_mut() {
+            f(foreground);
+        }
+    });
+}
+
 /// Wire a Slint UI to the wandr host. Invoke ONCE at the guest crate root.
 /// The factory runs lazily on the first `render-frame`; whatever it returns
 /// is kept alive for the process lifetime (return your component handle).
@@ -754,7 +777,14 @@ world slint-app {
 
         impl exports::wandr::ui_shell::shell_events::Guest for __SlintWandrGuest {
             fn on_scheduled_callback(_callback_id: u32) {}
-            fn on_lifecycle_changed(_new_state: exports::wandr::ui_shell::shell_events::State) {}
+            fn on_lifecycle_changed(new_state: exports::wandr::ui_shell::shell_events::State) {
+                use exports::wandr::ui_shell::shell_events::State;
+                match new_state {
+                    State::Resumed => ::slint_wandr::__dispatch_lifecycle_fg(true),
+                    State::Paused => ::slint_wandr::__dispatch_lifecycle_fg(false),
+                    _ => {}
+                }
+            }
         }
 
         impl exports::wandr::ui_shell::frame_pacing::Guest for __SlintWandrGuest {

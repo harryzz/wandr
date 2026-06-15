@@ -191,6 +191,61 @@ lower swipe area so a short swipe falls under the 12%-of-h threshold. Force-unlo
 interceptKeyBeforeQueueing) DEFERRED — evdev device-risk (BT AVRCP may bypass HID; validate
 with getevent first). Plan: ~/.claude/plans/cat-task-state-polymorphic-kernighan.md
 
+**M3 COMPLETE + shipped (2026-06-15, all device-verified + pushed):** Slint rewrite
+(crates/slint-wandr) + library browser (albums/artists/genres/songs) + internet
+cover-art (multi-source MB/CAA→Deezer→iTunes→Last.fm) + canonical names (with raw
+fallback) + gapless + ReplayGain + spectrum visualizer + 10-band biquad EQ +
+crossfade + AAC/M4A (symphonia aac+isomp4). Last.fm key moved OUT of source →
+/state/config.json. simd128 enabled for the guest build (.cargo/config.toml;
+negligible for bg playback — overhead-bound, kept for fg FFT). Opus deferred
+(symphonia has NO opus decoder, only OGG-Opus demux; needs external/opus-rs; low
+value for local files). Commits: 32564547/765fa156/3fdbaa26/0e1c2ecc (cover art +
+shim relocation + canonical names), a495f5a0 (gapless+RG), ef123b45 (visualizer),
+117561d5 (EQ), b5b3004d (crossfade), 3edd7fa8 (AAC+config), ba3cafd5 (simd128).
+
+‼️ **M4 UPDATE (2026-06-15): the DEEP-BUFFER path is FEASIBLE — gate PASSED.**
+The "blocked" verdict below was specific to the AAudio-binder path. `POWER_SAVING`
+lives in libaaudio's LEGACY path (`AudioStreamTrack.cpp:98` → `flags =
+AUDIO_OUTPUT_FLAG_DEEP_BUFFER` on a classic `android::AudioTrack`), NOT the AAudio
+service path. Probe (`audio_impl::probe_deepbuffer`, called from
+`--probe-audio-caps`) via `IAudioFlingerService::createTrack(attr=MEDIA,
+flags=0x8 DEEP_BUFFER, frameCount=96000)` → **granted frameCount=96000 (=2 s!),
+afFrameCount=1920 (40 ms mixer burst), outputId=29, under --no-art as root.** So a
+2 s ring IS reachable (vs AAudio SHARED's 80 ms hard cap) → guest can refill ~0.7 Hz
+vs 30 Hz → the real background-battery win. Permission-wall worry was WRONG: the
+first `createTrack` BAD_VALUE was a malformed `AudioOffloadInfo` (its default empty
+`AudioChannelLayout` union fails `aidl2legacy`; `createTrack` ALWAYS converts
+`offloadInfo` even for non-offload) — fixed by a valid offloadInfo (valid base +
+streamType MUSIC + usage MEDIA + encapsulation NONE). Wired `IAudioFlingerService`
++ `IAudioTrack` AIDL into build.rs. REMAINING BUILD: map `IAudioTrack::getCblk()` →
+`audio_track_cblk_t` (private/media/AudioTrackShared.h) classic streaming producer
+(mFront/mRear/mServer/mFutex + data buffer after the cblk), wire as the Media
+playback backend (large ring), then guest = detect backgrounded (slint-wandr
+lifecycle hook fwd on-lifecycle-changed) + write seconds ahead + slow bg-tick. The
+host probe/AIDL changes are UNCOMMITTED (investigation). The text below is the
+SUPERSEDED interim "blocked" finding (kept for the hardware facts):
+
+‼️ **M4 (HW decode + tunnel/offload for background low-battery) = [SUPERSEDED — see
+above] BLOCKED on Pixel 2 XL hardware (2026-06-15).** Measured: background music ≈ 23% CPU (fg-library
+24%, true-bg 23% — backgrounding saves nothing; the cost is the **30 Hz bg-tick,
+forced by an 80 ms audio ring**). The design's tunnel/offload premise doesn't exist
+on this SoC (msm8998/SD835): (1) **no HW audio decoder** — only `OMX.google.*`
+SOFTWARE mp3/aac/flac (MediaCodec would cost the same as in-guest Symphonia); (2)
+**no `COMPRESS_OFFLOAD` AudioFlinger output** (Pixels never shipped audio offload;
+the lone "offload" prop is BT-filtering); (3) **AAudio SHARED mixer ring hard-capped
+at 80 ms** — PROVED by requesting `StreamParameters.bufferCapacity=96000` (2 s) →
+AudioFlinger granted **3844** (FrmCnt unchanged) → can't write seconds ahead → can't
+slow the 30 Hz tick. The Hexagon **aDSP exists** (`/dev/adsprpc-smd`, adsprpcd) and
+already does playout for the `DEEP_BUFFER` thread (flag 0x8), but reaching that
+thread needs a DIFFERENT track API — classic `AudioTrack`+`AUDIO_OUTPUT_FLAG_DEEP_BUFFER`
+via `audio_policy` (fragile under --no-art) or libaaudio `PERFORMANCE_MODE_POWER_SAVING`
+(backend bypasses libaaudio) — a big, risky rework. `StreamParameters` (AAudio AIDL)
+HAS `bufferCapacity` (requestable) but NO perf-mode field (resolved in libaaudio). So
+deep-buffer/offload is not reachable through the `media.aaudio`-direct backend. The
+`wasi:audio-codec` contract (proposals/, fully sketched) stays valid for devices that
+DO offload — just no payoff here. M4 awaiting a user decision (stop/document vs. the
+classic-AudioTrack rework vs. cheap per-tick guest trims).
+
 Related: [[project_audioflinger_backend]], [[project_arbiter_audio]],
 [[project_audio_routing_arbiter]], [[project_wandr_crypto_srtp_offload]],
 [[reference_wasi_webgpu_gfx]], [[project_desktop_dev_loop]],

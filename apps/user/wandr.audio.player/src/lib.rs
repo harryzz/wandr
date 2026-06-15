@@ -523,6 +523,7 @@ struct State {
     pb: Option<wpcm::Playback>,
     pb_stereo: bool,              // output layout the device was opened with
     gapless_blocked: bool,        // next track's layout differs → fall back to reopen
+    backgrounded: bool,           // app behind/screen-off → host gives a deep ring; slow tick
     playing: bool,
     sw_frames: u64,               // position shown when pb is None (pre-play / stopped)
     ended: bool,
@@ -1579,6 +1580,51 @@ fn seek_to(s: &mut State, target_48k: u64) {
     }
 }
 
+/// Close the device and reopen it at the current position. The host picks the
+/// ring size from the app's role at open time (foreground = small/responsive,
+/// background = deep/battery), so this is how we switch buffer depth on the
+/// bg↔fg transition. A clean reopen (fresh track) — NOT a flush — so it never
+/// trips the underrun-removal that a flush on a deep ring would.
+fn reopen_at_current(s: &mut State) {
+    if s.loaded.is_none() {
+        return;
+    }
+    let pos = position_frames(s);
+    let was_playing = s.playing;
+    s.pb = None; // close → next play() opens a fresh track with the role's ring size
+    s.segments.clear();
+    s.xfade = None;
+    s.gapless_blocked = false;
+    s.ended = false;
+    {
+        let l = s.loaded.as_mut().unwrap();
+        let total = l.total_frames;
+        let target = if total > 0 { pos.min(total) } else { pos };
+        let secs = target as f64 / OUT_RATE as f64;
+        let _ = l.format.seek(
+            SeekMode::Accurate,
+            SeekTo::Time { time: Time::new(secs.trunc() as u64, secs.fract()), track_id: Some(l.track_id) },
+        );
+        l.decoder.reset();
+        l.pending.clear();
+        l.pending_pos = 0;
+        l.eof = false;
+        l.base = target;
+        l.decoded = target;
+        l.seg_started = false;
+        if let Some(r) = l.resampler.as_mut() {
+            r.reset();
+        }
+        s.sw_frames = target;
+    }
+    eq_reset_state(s);
+    if was_playing {
+        play(s); // reopens (host ring size by role) + scope_reset inside
+        pump(s); // fill the new ring
+    }
+    after_change_publish(s);
+}
+
 /// The currently AUDIBLE library index (front segment, else the decode head).
 fn cur_lib_index(s: &State) -> Option<usize> {
     if let Some(sg) = s.segments.front() {
@@ -1818,10 +1864,29 @@ fn engine_step(s: &mut State) -> u32 {
 
     // ~60 Hz while the spectrum is on screen (snappy bars), ~30 Hz otherwise
     // while playing (audio ring), idle when stopped.
-    if s.playing {
-        if s.view == 1 { 16 } else { 33 }
+    // Bg-tick cadence by role:
+    //  • backgrounded + playing → REFILL-DRIVEN over the deep ring (host gave a
+    //    ~2 s ring): fill it, then sleep until ~1 s remains. ~1 wake/s instead of
+    //    30 → the CPU sleeps (the M4 background-battery win). No seeking happens
+    //    backgrounded, so the deep ring never hits the flush-underrun problem.
+    //  • foreground now-playing → ~60 Hz (snappy spectrum, small ring).
+    //  • foreground library → ~30 Hz.
+    //  • stopped → idle.
+    if !s.playing {
+        return 500;
+    }
+    if s.backgrounded {
+        let buffered = s.pb.as_ref().map(|p| p.buffered_frames() as u64).unwrap_or(0);
+        let low_water = OUT_RATE as u64; // keep ≥1 s queued (underrun margin)
+        if buffered > low_water {
+            (((buffered - low_water) * 1000 / OUT_RATE as u64) as u32).clamp(50, 1000)
+        } else {
+            50
+        }
+    } else if s.view == 1 {
+        16
     } else {
-        500
+        33
     }
 }
 
@@ -2175,6 +2240,21 @@ fn cmd_cycle_xfade() {
             _ => 0.0,
         };
         save_eq(&s);
+    });
+    push_ui();
+}
+
+/// Foreground/background transition (from slint-wandr's lifecycle). Reopen the
+/// track so the host gives the role-appropriate ring (small/responsive foreground,
+/// deep/battery background); the bg-tick cadence then follows `backgrounded`.
+fn cmd_set_backgrounded(bg: bool) {
+    STATE.with(|st| {
+        let mut s = st.borrow_mut();
+        if s.backgrounded == bg {
+            return;
+        }
+        s.backgrounded = bg;
+        reopen_at_current(&mut s);
     });
     push_ui();
 }
@@ -2643,6 +2723,9 @@ slint_wandr::launch!(|| {
     ui.on_eq_flat(cmd_eq_flat);
     ui.on_eq_set_band(|b, g| cmd_eq_set_band(b as usize, g));
     ui.on_cycle_xfade(cmd_cycle_xfade);
+    // Foreground/background → switch the audio ring (deep+slow when backgrounded
+    // for battery, small+responsive when foreground). See cmd_set_backgrounded.
+    slint_wandr::on_lifecycle(|foreground| cmd_set_backgrounded(!foreground));
     BARS_MODEL.with(|m| ui.set_bars(ModelRc::from(m.clone())));
     ui.set_eq_range(EQ_RANGE_DB);
     ui.set_eq_labels(ModelRc::from(Rc::new(VecModel::from(

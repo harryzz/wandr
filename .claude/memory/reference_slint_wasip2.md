@@ -82,6 +82,25 @@ investigation (2026-06-10) below.
   `OPERATING_SYSTEM_OVERRIDE` (→ Android) in init_platform BEFORE any
   Slint code runs (slint-wandr does). Same class of lurkers: `sys-locale`
   (js feature) fires if bundled translations are used — untested.
+- ‼️ **Continuous/data-driven animation needs a live Slint `Timer` (cost 6
+  device iterations, task 108 visualizer, 2026-06-15).** The host renderer is
+  ON-DEMAND: it reschedules the next render ONLY via the guest's
+  `next_frame_delay()` (slint-wandr line ~682), polled by the host AFTER each
+  render. When the guest looks idle that returns up to 60 s, so `next_render_at`
+  is pushed far out — and `needs_redraw`/`window().request_redraw()` set later
+  from a bg-tick CANNOT pull it back (the host only renders on
+  `now>=next_render_at` or a host-side `dirty` from input/timers). So a
+  visualizer whose data updates in bg-tick never repainted — the surface sat at
+  ~4.5 fps (measured via `dumpsys SurfaceFlinger --latency wandr#NNNN`). FIX:
+  keep a repeating `slint::Timer` (≈16 ms) alive while animating; a pending
+  Slint timer makes `duration_until_next_timer_update` → `next_frame_delay`
+  return ~16 ms, so the host renders continuously (4.5 → ~35 fps). Its callback
+  calls `request_redraw`. Bootstraps off the input event (tap) that started the
+  animation (input → render → re-poll). Stop the timer when not animating so
+  idle stays on-demand-cheap. (A perpetual Slint animation / `animation-tick()`
+  binding works too but has the same bootstrap need + harder to gate.)
+  `set_row_data` on a PERSISTENT model (not a fresh ModelRc each frame) for the
+  animated data → partial redraw, not a repeater rebuild.
 - License: tri-license (GPLv3 / royalty-free / commercial).
 - **Verdict vs dioxus-canvas**: now a real option, not a wall — but still not
   worth a migration for its own sake; dioxus-canvas already has
