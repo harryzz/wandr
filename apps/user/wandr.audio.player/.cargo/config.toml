@@ -1,0 +1,6 @@
+# Enable WASM SIMD (simd128) for guest builds. wasmtime accepts the `simd`
+# proposal by default and the AOT (cwasm) lowers simd128 → NEON on aarch64, so
+# the DSP hot paths (Symphonia decode, rustfft FFT, EQ biquads, resampler)
+# vectorize. Cuts decode CPU → shorter wakeups → better background battery.
+[target.wasm32-wasip2]
+rustflags = ["-C", "target-feature=+simd128"]
