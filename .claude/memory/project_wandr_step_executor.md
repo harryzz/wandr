@@ -15,8 +15,9 @@ background receive loop / websocket keepalive make progress), that's fatal. wstd
 stepping methods (`block_on_pollables`, `nonblock_check_pollables`,
 `pop_ready_list`) are `pub(crate)`, so you can't drive its reactor yourself.
 
-**Fix (DONE 2026-05-30, desktop-verified):** new crate `wandr-step-executor` at
-`external/libsignal-service-rs/wandr-wasi-shims/wandr-step-executor`. A **persistent**
+**Fix (DONE 2026-05-30, desktop-verified):** new crate `wandr-step-executor`, now
+at `crates/wandr-step-executor` (relocated 2026-06-15 out of the libsignal fork —
+see below). A **persistent**
 thread-local reactor installed at `init()` (never torn down) advanced by a
 **non-blocking `step()`** — the `wasi:io/poll` 0-duration-timer trick (append a
 `subscribe_duration(0)` pollable so `poll()` returns immediately), copied from
@@ -26,9 +27,21 @@ lifecycle + non-blocking step differ (~280 lines). API: `init()` / `spawn()` /
 `step()` / `sleep()` / `AsyncPollable`.
 
 The libsignal fork's three wstd touchpoints were rebound onto it (off wstd):
-`wandr-wasi-shims/reqwest/src/tls.rs` (`AsyncPollable`), `src/push_service/mod.rs`
+the reqwest shim's `tls.rs` (`AsyncPollable`), `src/push_service/mod.rs`
 (background ws-process `spawn().detach()`), `src/websocket/mod.rs` (keepalive
 `sleep`); `wstd` dep replaced in both shim Cargo.tomls + the fork's wasm32 deps.
+
+**RELOCATED to crates/ (2026-06-15, commits parent `765fa156` + submodule
+`5164118f6`).** The three transport shims were never Signal-specific, so they
+moved out of the fork into the wandr tree as first-class shared libs:
+`wandr-wasi-shims/{reqwest,reqwest-websocket,wandr-step-executor}` →
+`crates/{wandr-reqwest,wandr-reqwest-websocket,wandr-step-executor}`, dropping the
+`-shim` suffix (packages `wandr-reqwest` / `wandr-reqwest-websocket`). All-or-nothing
+(chain `reqwest-websocket → reqwest → step-executor`). Consumers repointed: audio
+player, Signal engine, repros/signal-link, and the fork itself (`../../crates/`,
+since it only ever builds inside a wandr checkout). `wandr.audio.player` uses
+`wandr-reqwest` + `wandr-step-executor` for internet cover-art lookups — the
+original non-Signal consumer that motivated the move.
 
 Engine pattern (`apps/user/wandr.signal/engine`, promoted out of repros 2026-05-31): `init` spawns+**detaches** one root task
 (spawn returns `async_task::Task` which **cancels on drop** — must `.detach()`);

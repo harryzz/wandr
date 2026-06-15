@@ -31,12 +31,15 @@ task/log filenames + final sweep.
   wart-leak-repro,war.ime.keyboard,war.lang.bg,war.lang.fr}` repo URLs — those repos
   aren't renamed yet. (The MAIN repo `harryzz/wart`→`harryzz/wandr` IS done — remote
   set-url'd + in-tree URLs updated 2026-06-09.)
-- ✅ RENAMED 2026-06-14 (no longer protected): libsignal-service-rs fork shims →
-  `wandr-wasi-shims/`, crates `wandr-step-executor` / `wandr-reqwest-shim` /
-  `wandr-reqwest-websocket-shim` (+ underscore forms), branch `wandr-wasi-transport`;
-  consumers (wandr.signal engine, repros/signal-link, signal-phase0) + Cargo.lock +
-  memory slug `project_wandr_step_executor` all updated. Fork commit sits on
-  `wandr-wasi-transport`; PUSH the fork + rename the codeberg branch when publishing.
+- ✅ RENAMED 2026-06-14 then RELOCATED 2026-06-15: the libsignal fork shims were
+  first renamed to `wandr-wasi-shims/` (`wandr-step-executor` / `wandr-reqwest-shim`
+  / `wandr-reqwest-websocket-shim`), then **moved out of the fork into the wandr
+  tree** as `crates/{wandr-reqwest,wandr-reqwest-websocket,wandr-step-executor}`
+  (dropped `-shim`; parent `765fa156` + submodule `5164118f6`). They were never
+  Signal-specific (wandr.audio.player uses them for cover-art lookups). Consumers
+  repointed: audio player, wandr.signal engine, repros/signal-link, and the fork
+  itself (`../../crates/`). Branch `wandr-wasi-transport` still unpushed; PUSH the
+  fork + rename the codeberg branch when publishing. See [[project_wandr_step_executor]].
 - rsbinder fork branch `wart-recursive` (`.gitmodules`) — still `wart` (separate fork).
 - False positives intentionally kept: `wartime` (in this rename's own notes), `mewart`
   ("edit me"→"edit mewart" text-input artifact, tasks/61).
