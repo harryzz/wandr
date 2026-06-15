@@ -40,6 +40,14 @@ const NUM_BARS: usize = 48;
 const SCOPE_CAP: usize = 1 << 16; // 65536 frames ≈ 1.36 s @ 48 kHz
 const VIZ_LO_HZ: f32 = 40.0;
 const VIZ_HI_HZ: f32 = 16_000.0;
+// 10-band graphic EQ — ISO octave centers, peaking biquads (RBJ cookbook),
+// Q for ~1-octave bandwidth, ±EQ_RANGE_DB user range. Applied in the decode path.
+const EQ_BANDS: usize = 10;
+const EQ_FREQS: [f32; EQ_BANDS] =
+    [31.25, 62.5, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0];
+const EQ_Q: f32 = 1.41; // sqrt(2) → ~1 octave
+const EQ_RANGE_DB: f32 = 12.0;
+const EQ_FILE: &str = "/state/eq.json";
 /// Last.fm API key (free, from last.fm/api). Empty → the Last.fm source is
 /// skipped. Set this to enable album.getInfo lookups.
 const LASTFM_API_KEY: &str = "adc9909f24e4992ebe93ccb14dedf65d";
@@ -77,6 +85,11 @@ slint::slint! {
         in property <bool> shuffle: false;
         in property <bool> repeat: false;
         in property <[float]> bars: [];
+        // graphic EQ
+        in property <bool> eq-enabled: false;
+        in property <[float]> eq-gains: [];   // dB per band
+        in property <[string]> eq-labels: [];
+        in property <float> eq-range: 12.0;   // ± dB
         callback set-tab(int);
         callback row-tap(int);
         callback go-back();
@@ -89,6 +102,11 @@ slint::slint! {
         callback toggle-shuffle();
         callback toggle-repeat();
         callback toggle-time();
+        callback open-eq();
+        callback close-eq();
+        callback eq-toggle();
+        callback eq-flat();
+        callback eq-set-band(int, float);
 
         property <color> on-col: #4285f4;
         property <color> off-col: #8a8aa0;
@@ -199,7 +217,7 @@ slint::slint! {
                 spacing: root.height * 0.018;
                 alignment: center;
 
-                // close (down) button
+                // close (down) button + EQ entry
                 HorizontalLayout {
                     Rectangle {
                         width: 30px; height: 30px;
@@ -210,6 +228,16 @@ slint::slint! {
                         TouchArea { clicked => { root.close-np(); } }
                     }
                     Rectangle { }
+                    Rectangle {
+                        width: 44px; height: 30px; border-radius: 8px;
+                        background: root.eq-enabled ? #20203a : transparent;
+                        Text {
+                            text: "EQ"; font-size: 14px; font-weight: 700;
+                            horizontal-alignment: center; vertical-alignment: center;
+                            color: root.eq-enabled ? #4285f4 : #c8c8d8;
+                        }
+                        TouchArea { clicked => { root.open-eq(); } }
+                    }
                 }
 
                 HorizontalLayout {
@@ -311,6 +339,87 @@ slint::slint! {
                 Rectangle { vertical-stretch: 1; }
             }
         }
+
+        // ── EQ view ───────────────────────────────────────────────────────
+        if (root.view == 2) : Rectangle {
+            width: 100%; height: 100%;
+            VerticalLayout {
+                padding: root.width * 0.05;
+                spacing: root.height * 0.02;
+
+                // header: back · title · flat · enable
+                HorizontalLayout {
+                    spacing: 10px;
+                    Rectangle {
+                        width: 30px; height: 30px;
+                        Path {
+                            width: 100%; height: 100%; viewbox-width: 100; viewbox-height: 100;
+                            commands: "M 60 24 L 34 50 L 60 76"; stroke: white; stroke-width: 9px; fill: transparent;
+                        }
+                        TouchArea { clicked => { root.close-eq(); } }
+                    }
+                    Text {
+                        text: "Equalizer"; color: white; font-size: 18px; font-weight: 700;
+                        vertical-alignment: center; horizontal-stretch: 1;
+                    }
+                    Rectangle {
+                        width: 56px; height: 30px; border-radius: 8px; background: #20203a;
+                        Text { text: "Flat"; font-size: 13px; color: #c8c8d8;
+                            horizontal-alignment: center; vertical-alignment: center; }
+                        TouchArea { clicked => { root.eq-flat(); } }
+                    }
+                    Rectangle {
+                        width: 52px; height: 30px; border-radius: 15px;
+                        background: root.eq-enabled ? #4285f4 : #3a3a52;
+                        Rectangle {
+                            width: 24px; height: 24px; border-radius: 12px; background: white;
+                            x: root.eq-enabled ? parent.width - self.width - 3px : 3px;
+                            y: (parent.height - self.height) / 2;
+                        }
+                        TouchArea { clicked => { root.eq-toggle(); } }
+                    }
+                }
+
+                // band sliders
+                HorizontalLayout {
+                    spacing: 4px;
+                    for g[i] in root.eq-gains : VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 4px;
+                        sl := Rectangle {
+                            vertical-stretch: 1;
+                            property <length> usable: self.height - 16px;
+                            // center reference line
+                            Rectangle {
+                                width: 3px; height: 100%; border-radius: 1px; background: #2a2a40;
+                                x: (parent.width - self.width) / 2;
+                            }
+                            // thumb
+                            Rectangle {
+                                width: 70%; height: 16px; border-radius: 4px;
+                                x: (parent.width - self.width) / 2;
+                                y: (1 - (g + root.eq-range) / (2 * root.eq-range)) * sl.usable;
+                                background: root.eq-enabled ? #4285f4 : #555568;
+                            }
+                            TouchArea {
+                                moved => {
+                                    root.eq-set-band(i, (1 - self.mouse-y / self.height) * 2 * root.eq-range - root.eq-range);
+                                }
+                                pointer-event(ev) => {
+                                    if (ev.kind == PointerEventKind.down) {
+                                        root.eq-set-band(i, (1 - self.mouse-y / self.height) * 2 * root.eq-range - root.eq-range);
+                                    }
+                                }
+                            }
+                        }
+                        Text {
+                            text: root.eq-labels[i]; font-size: 9px; color: #8a8aa0;
+                            horizontal-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -406,6 +515,13 @@ struct State {
     bars_were_active: bool, // pushed live last frame → flatten once when stopping
     fft: Option<Arc<dyn rustfft::Fft<f32>>>,
     hann: Vec<f32>,
+    // Graphic EQ: per-band gain (dB), normalized biquad coeffs [b0,b1,b2,a1,a2],
+    // and per-(channel,band) DF2T state [z1,z2]. eq_active = enabled && non-flat.
+    eq_enabled: bool,
+    eq_gains: Vec<f32>,
+    eq_coeffs: Vec<[f32; 5]>,
+    eq_z: Vec<[f32; 2]>,
+    eq_active: bool,
 }
 
 thread_local! {
@@ -460,6 +576,81 @@ impl LinearResampler {
         self.last.copy_from_slice(&input[(n - 1) * ch..n * ch]);
         self.pos -= n as f64;
         out
+    }
+}
+
+// ── Graphic EQ (biquad peaking, RBJ cookbook) ────────────────────────────────
+/// Recompute normalized peaking-biquad coeffs for every band from eq_gains, and
+/// set eq_active (enabled and at least one non-flat band).
+fn eq_recalc(s: &mut State) {
+    if s.eq_coeffs.len() != EQ_BANDS {
+        s.eq_coeffs = vec![[1.0, 0.0, 0.0, 0.0, 0.0]; EQ_BANDS];
+    }
+    if s.eq_z.len() != 2 * EQ_BANDS {
+        s.eq_z = vec![[0.0, 0.0]; 2 * EQ_BANDS];
+    }
+    let mut nonflat = false;
+    for b in 0..EQ_BANDS {
+        let gain = s.eq_gains.get(b).copied().unwrap_or(0.0);
+        if gain.abs() > 0.05 {
+            nonflat = true;
+        }
+        let a = 10f32.powf(gain / 40.0);
+        let w0 = 2.0 * std::f32::consts::PI * EQ_FREQS[b] / OUT_RATE as f32;
+        let (sw, cw) = (w0.sin(), w0.cos());
+        let alpha = sw / (2.0 * EQ_Q);
+        let b0 = 1.0 + alpha * a;
+        let b1 = -2.0 * cw;
+        let b2 = 1.0 - alpha * a;
+        let a0 = 1.0 + alpha / a;
+        let a1 = -2.0 * cw;
+        let a2 = 1.0 - alpha / a;
+        s.eq_coeffs[b] = [b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0];
+    }
+    s.eq_active = s.eq_enabled && nonflat;
+}
+
+/// Apply the band cascade in place to interleaved output (DF2T per band/channel).
+fn eq_apply(coeffs: &[[f32; 5]], z: &mut [[f32; 2]], out: &mut [f32], ch: usize) {
+    let n = out.len() / ch;
+    for f in 0..n {
+        for c in 0..ch.min(2) {
+            let mut x = out[f * ch + c];
+            for b in 0..EQ_BANDS {
+                let co = &coeffs[b];
+                let st = &mut z[c * EQ_BANDS + b];
+                let y = co[0] * x + st[0];
+                st[0] = co[1] * x - co[3] * y + st[1];
+                st[1] = co[2] * x - co[4] * y;
+                x = y;
+            }
+            out[f * ch + c] = x;
+        }
+    }
+}
+
+fn eq_reset_state(s: &mut State) {
+    for v in &mut s.eq_z {
+        *v = [0.0, 0.0];
+    }
+}
+
+fn save_eq(s: &State) {
+    let _ = std::fs::create_dir_all("/state");
+    let v = serde_json::json!({ "enabled": s.eq_enabled, "gains": s.eq_gains });
+    let _ = std::fs::write(EQ_FILE, v.to_string());
+}
+
+fn load_eq(s: &mut State) {
+    let Ok(body) = std::fs::read_to_string(EQ_FILE) else { return };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) else { return };
+    s.eq_enabled = v.get("enabled").and_then(|x| x.as_bool()).unwrap_or(false);
+    if let Some(arr) = v.get("gains").and_then(|x| x.as_array()) {
+        for (b, g) in arr.iter().take(EQ_BANDS).enumerate() {
+            if let Some(d) = g.as_f64() {
+                s.eq_gains[b] = (d as f32).clamp(-EQ_RANGE_DB, EQ_RANGE_DB);
+            }
+        }
     }
 }
 
@@ -811,6 +1002,7 @@ fn hard_load(s: &mut State, order_pos: usize, autoplay: bool) {
         }
     }
     scope_reset(s);
+    eq_reset_state(s);
     if autoplay {
         play(s);
     }
@@ -991,6 +1183,12 @@ fn decode_more(s: &mut State) -> bool {
                         *x = (*x * g).clamp(-1.0, 1.0);
                     }
                 }
+                // Graphic EQ (disjoint fields from s.loaded). Applied to exactly the
+                // samples that go to pending → device + visualizer scope.
+                if s.eq_active {
+                    let ch = l.channels.max(1);
+                    eq_apply(&s.eq_coeffs, &mut s.eq_z, &mut out, ch);
+                }
                 l.pending = out;
                 l.pending_pos = 0;
                 return true;
@@ -1157,6 +1355,7 @@ fn seek_to(s: &mut State, target_48k: u64) {
         pb.flush();
     }
     scope_reset(s);
+    eq_reset_state(s);
     pump(s);
     if s.playing {
         if let Some(pb) = s.pb.as_ref() {
@@ -1300,6 +1499,10 @@ fn engine_step(s: &mut State) -> u32 {
                 0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / (FFT_SIZE as f32 - 1.0)).cos()
             })
             .collect();
+        // Graphic EQ: persisted gains/enable → coeffs.
+        s.eq_gains = vec![0.0; EQ_BANDS];
+        load_eq(s);
+        eq_recalc(s);
         wandr_step_executor::init(); // Phase A — async metadata-fetch reactor
         s.library = scan_library();
         // Phase A — per distinct album (akey): load the cached cover + cached
@@ -1477,6 +1680,8 @@ fn push_ui() {
             ui.set_playing(s.playing);
             ui.set_shuffle(s.shuffle);
             ui.set_repeat(s.repeat);
+            ui.set_eq_enabled(s.eq_enabled);
+            ui.set_eq_gains(ModelRc::from(Rc::new(VecModel::from(s.eq_gains.clone()))));
             ui.set_view(s.view);
             ui.set_tab(s.tab);
             ui.set_in_drill(s.drill.is_some());
@@ -1697,6 +1902,45 @@ fn cmd_open_np() {
 }
 fn cmd_close_np() {
     STATE.with(|st| st.borrow_mut().view = 0);
+    push_ui();
+}
+fn cmd_open_eq() {
+    STATE.with(|st| st.borrow_mut().view = 2);
+    push_ui();
+}
+fn cmd_close_eq() {
+    STATE.with(|st| st.borrow_mut().view = 1);
+    push_ui();
+}
+fn cmd_eq_toggle() {
+    STATE.with(|st| {
+        let mut s = st.borrow_mut();
+        s.eq_enabled = !s.eq_enabled;
+        eq_recalc(&mut s);
+        save_eq(&s);
+    });
+    push_ui();
+}
+fn cmd_eq_set_band(band: usize, gain_db: f32) {
+    STATE.with(|st| {
+        let mut s = st.borrow_mut();
+        if band < EQ_BANDS {
+            s.eq_gains[band] = gain_db.clamp(-EQ_RANGE_DB, EQ_RANGE_DB);
+            eq_recalc(&mut s);
+            save_eq(&s);
+        }
+    });
+    push_ui();
+}
+fn cmd_eq_flat() {
+    STATE.with(|st| {
+        let mut s = st.borrow_mut();
+        for g in &mut s.eq_gains {
+            *g = 0.0;
+        }
+        eq_recalc(&mut s);
+        save_eq(&s);
+    });
     push_ui();
 }
 
@@ -2157,7 +2401,26 @@ slint_wandr::launch!(|| {
     ui.on_go_back(cmd_go_back);
     ui.on_open_np(cmd_open_np);
     ui.on_close_np(cmd_close_np);
+    ui.on_open_eq(cmd_open_eq);
+    ui.on_close_eq(cmd_close_eq);
+    ui.on_eq_toggle(cmd_eq_toggle);
+    ui.on_eq_flat(cmd_eq_flat);
+    ui.on_eq_set_band(|b, g| cmd_eq_set_band(b as usize, g));
     BARS_MODEL.with(|m| ui.set_bars(ModelRc::from(m.clone())));
+    ui.set_eq_range(EQ_RANGE_DB);
+    ui.set_eq_labels(ModelRc::from(Rc::new(VecModel::from(
+        EQ_FREQS
+            .iter()
+            .map(|&f| {
+                if f >= 1000.0 {
+                    format!("{}k", (f / 1000.0).round() as i32)
+                } else {
+                    format!("{}", f.round() as i32)
+                }
+                .into()
+            })
+            .collect::<Vec<slint::SharedString>>(),
+    ))));
     UI.with(|u| *u.borrow_mut() = Some(ui.clone_strong()));
     push_ui();
     ui.show().expect("audio-player: show");
