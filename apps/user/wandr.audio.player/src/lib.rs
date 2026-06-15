@@ -10,7 +10,7 @@
 //!   cp target/wasm32-wasip2/release/wandr_audio_player.wasm components/ui.wasm
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -296,8 +296,16 @@ struct LibTrack {
     track_no: Option<u32>, // from tags — orders canonical titles within an album
     art_path: Option<String>,
     akey: String, // stable album key ("artist|album" from tags) — cover-cache key
+    // ReplayGain (from tags) — dB gains + linear peaks, track + album scope.
+    rg_track_gain: Option<f32>,
+    rg_track_peak: Option<f32>,
+    rg_album_gain: Option<f32>,
+    rg_album_peak: Option<f32>,
 }
 
+/// The track currently being DECODED (the decode head). Decode runs ahead of
+/// playback for gapless transitions; all display/metadata is derived from the
+/// library via the audible `Seg`, not from here.
 struct Loaded {
     format: Box<dyn FormatReader>,
     decoder: Box<dyn Decoder>,
@@ -308,10 +316,21 @@ struct Loaded {
     pending_pos: usize,
     eof: bool,
     total_frames: u64,
-    title: String,
-    subtitle: String,
-    art: Option<(Vec<u8>, u32, u32)>, // local albumart fallback
-    akey: String,                     // for the fetched-cover lookup
+    gain: f32,        // ReplayGain linear factor (1.0 = none)
+    base: u64,        // track-frame of the first decoded sample (0, or a seek target)
+    seg_started: bool, // a Seg has been pushed for this decode head
+}
+
+/// One written-but-not-fully-played track segment. Maps device frames (the
+/// playback `position()` counter, which never resets across gapless transitions)
+/// to a track + its position. The front segment is the currently AUDIBLE track.
+#[derive(Clone)]
+struct Seg {
+    order_pos: usize,
+    lib_index: usize,
+    total_frames: u64,
+    dev_start: u64, // device-frame at which this segment's `base` frame is heard
+    base: u64,      // track-frame at dev_start (0, or a seek target)
 }
 
 #[derive(Default)]
@@ -329,12 +348,14 @@ struct State {
     order: Vec<usize>, // queue, possibly shuffled
     order_pos: usize,
     scanned: bool,
-    loaded: Option<Loaded>,
+    loaded: Option<Loaded>,       // decode head
+    decode_order: usize,          // order index of the decode head
+    segments: VecDeque<Seg>,      // written tracks; front = audible
     pb: Option<wpcm::Playback>,
+    pb_stereo: bool,              // output layout the device was opened with
+    gapless_blocked: bool,        // next track's layout differs → fall back to reopen
     playing: bool,
-    anchor_dev: u64,
-    anchor_track: u64,
-    sw_frames: u64,
+    sw_frames: u64,               // position shown when pb is None (pre-play / stopped)
     ended: bool,
     pub_playing: bool,
     last_pub_sec: i64,
@@ -424,6 +445,18 @@ struct Tags {
     album: Option<String>,
     genre: Option<String>,
     track_no: Option<u32>,
+    rg_track_gain: Option<f32>,
+    rg_track_peak: Option<f32>,
+    rg_album_gain: Option<f32>,
+    rg_album_peak: Option<f32>,
+}
+
+/// ReplayGain gain tags look like "-7.89 dB"; peaks like "0.987264".
+fn parse_rg_db(v: &str) -> Option<f32> {
+    v.trim().trim_end_matches(|c: char| c.is_ascii_alphabetic() || c == ' ').trim().parse().ok()
+}
+fn parse_rg_peak(v: &str) -> Option<f32> {
+    v.trim().parse().ok()
 }
 
 /// Read tags without decoding audio.
@@ -462,6 +495,18 @@ fn read_tags(path: &str) -> Tags {
                     if let Ok(v) = n.parse::<u32>() {
                         t.track_no = Some(v);
                     }
+                }
+                Some(StandardTagKey::ReplayGainTrackGain) => {
+                    t.rg_track_gain = parse_rg_db(&tag.value.to_string())
+                }
+                Some(StandardTagKey::ReplayGainTrackPeak) => {
+                    t.rg_track_peak = parse_rg_peak(&tag.value.to_string())
+                }
+                Some(StandardTagKey::ReplayGainAlbumGain) => {
+                    t.rg_album_gain = parse_rg_db(&tag.value.to_string())
+                }
+                Some(StandardTagKey::ReplayGainAlbumPeak) => {
+                    t.rg_album_peak = parse_rg_peak(&tag.value.to_string())
                 }
                 _ => {}
             }
@@ -517,6 +562,10 @@ fn scan_library() -> Vec<LibTrack> {
                 track_no: tags.track_no,
                 art_path: art_path.clone(),
                 akey,
+                rg_track_gain: tags.rg_track_gain,
+                rg_track_peak: tags.rg_track_peak,
+                rg_album_gain: tags.rg_album_gain,
+                rg_album_peak: tags.rg_album_peak,
             });
         }
     }
@@ -580,11 +629,8 @@ fn regroup_after_meta(s: &mut State, akey: &str) {
     if let Some(cur) = cur_lib_index(s) {
         if s.library[cur].akey == akey {
             let e = s.library[cur].clone();
-            if let Some(l) = s.loaded.as_mut() {
-                l.title = e.title.clone();
-                l.subtitle = format!("{} — {}", e.artist, e.album);
-            }
             publish_metadata(s, &e);
+            s.meta_dirty = true;
         }
     }
     s.rows_dirty = true;
@@ -607,51 +653,75 @@ fn load_art(s: &mut State, art_path: &Option<String>) -> Option<(Vec<u8>, u32, u
 }
 
 // ── Load + stream ────────────────────────────────────────────────────────────
-fn load(s: &mut State, lib_index: usize) {
-    s.pb = None;
-    s.playing = false;
-    let Some(entry) = s.library.get(lib_index).cloned() else {
-        return;
-    };
-    let file = match std::fs::File::open(&entry.path) {
-        Ok(f) => f,
-        Err(_) => return,
-    };
+fn out_layout_stereo(channels: usize) -> bool {
+    channels >= 2
+}
+
+/// ReplayGain dB → linear factor with peak clip-protection (cap so gain*peak ≤ 1).
+fn rg_factor(gain_db: Option<f32>, peak: Option<f32>) -> f32 {
+    match gain_db {
+        Some(g) => {
+            let mut f = 10f32.powf(g / 20.0);
+            if let Some(p) = peak {
+                if p > 0.0 && f * p > 1.0 {
+                    f = 1.0 / p;
+                }
+            }
+            f.clamp(0.0, 4.0)
+        }
+        None => 1.0,
+    }
+}
+
+fn queue_is_single_album(s: &State) -> bool {
+    let mut it = s.queue.iter();
+    let Some(&first) = it.next() else { return false };
+    let a = &s.library[first].akey;
+    it.all(|&i| &s.library[i].akey == a)
+}
+
+/// Album gain when playing one album in order (preserves intra-album dynamics),
+/// else track gain. Falls back across scopes; absent tags → 1.0 (no-op).
+fn compute_rg_gain(s: &State, e: &LibTrack) -> f32 {
+    let album_mode = !s.shuffle && queue_is_single_album(s);
+    if album_mode && e.rg_album_gain.is_some() {
+        rg_factor(e.rg_album_gain, e.rg_album_peak)
+    } else {
+        rg_factor(e.rg_track_gain.or(e.rg_album_gain), e.rg_track_peak.or(e.rg_album_peak))
+    }
+}
+
+/// Open a track's decoder (pure — no playback/UI state mutation beyond the art
+/// cache, which it doesn't touch). Returns the decode head.
+fn open_track(s: &State, lib_index: usize) -> Option<Loaded> {
+    let entry = s.library.get(lib_index)?;
+    let file = std::fs::File::open(&entry.path).ok()?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
     let mut hint = Hint::new();
     hint.with_extension(ext_of(&entry.path));
-    let probed = match symphonia::default::get_probe().format(
-        &hint,
-        mss,
-        &FormatOptions { enable_gapless: true, ..Default::default() },
-        &MetadataOptions::default(),
-    ) {
-        Ok(p) => p,
-        Err(_) => return,
-    };
+    let probed = symphonia::default::get_probe()
+        .format(
+            &hint,
+            mss,
+            &FormatOptions { enable_gapless: true, ..Default::default() },
+            &MetadataOptions::default(),
+        )
+        .ok()?;
     let format = probed.format;
-    let track = match format.default_track() {
-        Some(t) => t.clone(),
-        None => return,
-    };
+    let track = format.default_track()?.clone();
     let track_id = track.id;
     let src_rate = track.codec_params.sample_rate.unwrap_or(OUT_RATE);
     let channels = track.codec_params.channels.map(|c| c.count()).unwrap_or(2);
     let n_frames = track.codec_params.n_frames;
-    let decoder = match symphonia::default::get_codecs()
-        .make(&track.codec_params, &DecoderOptions::default())
-    {
-        Ok(d) => d,
-        Err(_) => return,
-    };
+    let decoder =
+        symphonia::default::get_codecs().make(&track.codec_params, &DecoderOptions::default()).ok()?;
     let total_frames = n_frames
         .map(|nf| (nf as u128 * OUT_RATE as u128 / src_rate.max(1) as u128) as u64)
         .unwrap_or(0);
-    // Prefer a fetched/cached internet cover; fall back to the local albumart file.
-    let art = s.album_art.get(&entry.akey).cloned().or_else(|| load_art(s, &entry.art_path));
-    let resampler = if src_rate != OUT_RATE { Some(LinearResampler::new(src_rate, channels)) } else { None };
-
-    s.loaded = Some(Loaded {
+    let resampler =
+        if src_rate != OUT_RATE { Some(LinearResampler::new(src_rate, channels)) } else { None };
+    let gain = compute_rg_gain(s, entry);
+    Some(Loaded {
         format,
         decoder,
         track_id,
@@ -661,22 +731,111 @@ fn load(s: &mut State, lib_index: usize) {
         pending_pos: 0,
         eof: false,
         total_frames,
-        title: entry.title.clone(),
-        subtitle: format!("{} — {}", entry.artist, entry.album),
-        art,
-        akey: entry.akey.clone(),
-    });
-    s.anchor_dev = 0;
-    s.anchor_track = 0;
-    s.sw_frames = 0;
+        gain,
+        base: 0,
+        seg_started: false,
+    })
+}
+
+/// Hard transition to `order_pos` (user skip / explicit jump / first load):
+/// flush the device, drop decode-ahead, start fresh. Reopens the device only if
+/// the new track's output layout differs.
+fn hard_load(s: &mut State, order_pos: usize, autoplay: bool) {
+    if order_pos >= s.order.len() {
+        return;
+    }
+    s.order_pos = order_pos;
+    s.decode_order = order_pos;
+    let lib = s.order[order_pos];
+    s.loaded = open_track(s, lib);
+    s.segments.clear();
+    s.gapless_blocked = false;
     s.ended = false;
+    s.sw_frames = 0;
     s.rows_dirty = true;
     s.meta_dirty = true;
-    publish_metadata(s, &entry);
-    publish_state(s);
-    publish_position(s);
-    s.pub_playing = s.playing;
-    s.last_pub_sec = -1;
+    if s.pb.is_some() {
+        let new_stereo = s.loaded.as_ref().map(|l| out_layout_stereo(l.channels)).unwrap_or(s.pb_stereo);
+        if new_stereo != s.pb_stereo {
+            s.pb = None; // play() reopens with the right layout
+        } else if let Some(pb) = s.pb.as_ref() {
+            pb.flush();
+        }
+    }
+    if autoplay {
+        play(s);
+    }
+    after_change_publish(s);
+}
+
+/// Gapless continue: open the next track as the new decode head WITHOUT touching
+/// the device, so its samples are written straight after the current track's
+/// tail. Returns false if the next track can't continue on the open device
+/// (open failed or output layout differs → caller falls back to hard_load).
+fn soft_advance(s: &mut State, next_order: usize) -> bool {
+    let Some(&lib) = s.order.get(next_order) else { return false };
+    let Some(loaded) = open_track(s, lib) else { return false };
+    if out_layout_stereo(loaded.channels) != s.pb_stereo {
+        return false;
+    }
+    s.loaded = Some(loaded);
+    s.decode_order = next_order;
+    true
+}
+
+/// Create the audible `Seg` for the current decode head right before its first
+/// sample is written (so dev_start is the device frame where it becomes audible).
+fn ensure_seg(s: &mut State) {
+    if !matches!(&s.loaded, Some(l) if !l.seg_started) {
+        return;
+    }
+    let Some(pb) = s.pb.as_ref() else { return };
+    let dev_start = pb.position() + pb.buffered_frames() as u64;
+    let (total, base) = {
+        let l = s.loaded.as_ref().unwrap();
+        (l.total_frames, l.base)
+    };
+    let order_pos = s.decode_order;
+    let lib_index = s.order.get(order_pos).copied().unwrap_or(0);
+    s.segments.push_back(Seg { order_pos, lib_index, total_frames: total, dev_start, base });
+    if let Some(l) = s.loaded.as_mut() {
+        l.seg_started = true;
+    }
+}
+
+/// The next order index the decode head should advance to, or None at the end.
+fn next_decode_order(s: &State) -> Option<usize> {
+    let from = s.decode_order;
+    if from + 1 < s.order.len() {
+        Some(from + 1)
+    } else if s.repeat && !s.order.is_empty() {
+        Some(0)
+    } else {
+        None
+    }
+}
+
+/// Pop fully-played front segments so segments.front() is the audible track;
+/// returns true if the audible track changed.
+fn advance_audible(s: &mut State) -> bool {
+    let played = s.pb.as_ref().map(|p| p.position()).unwrap_or(0);
+    let mut changed = false;
+    while s.segments.len() > 1 && played >= s.segments[1].dev_start {
+        s.segments.pop_front();
+        changed = true;
+    }
+    if let Some(front) = s.segments.front() {
+        s.order_pos = front.order_pos;
+    }
+    changed
+}
+
+fn cur_total(s: &State) -> u64 {
+    s.segments
+        .front()
+        .map(|f| f.total_frames)
+        .or_else(|| s.loaded.as_ref().map(|l| l.total_frames))
+        .unwrap_or(0)
 }
 
 fn decode_more(s: &mut State) -> bool {
@@ -699,10 +858,16 @@ fn decode_more(s: &mut State) -> bool {
                 let spec = *audio.spec();
                 let mut sb = SampleBuffer::<f32>::new(audio.capacity() as u64, spec);
                 sb.copy_interleaved_ref(audio);
-                let out = match l.resampler.as_mut() {
+                let mut out = match l.resampler.as_mut() {
                     Some(r) => r.process(sb.samples()),
                     None => sb.samples().to_vec(),
                 };
+                if l.gain != 1.0 {
+                    let g = l.gain;
+                    for x in out.iter_mut() {
+                        *x = (*x * g).clamp(-1.0, 1.0);
+                    }
+                }
                 l.pending = out;
                 l.pending_pos = 0;
                 return true;
@@ -726,6 +891,7 @@ fn pump(s: &mut State) {
             l.pending_pos < l.pending.len()
         };
         if has_pending {
+            ensure_seg(s);
             let ch = s.loaded.as_ref().unwrap().channels.max(1);
             let accepted = {
                 let l = s.loaded.as_ref().unwrap();
@@ -741,22 +907,36 @@ fn pump(s: &mut State) {
             if accepted == 0 {
                 break;
             }
+        } else if !s.loaded.as_ref().unwrap().eof {
+            // refill from the decode head (sets eof if exhausted; loop re-checks)
+            decode_more(s);
         } else {
-            if s.loaded.as_ref().unwrap().eof {
+            // decode head fully drained — try to continue gaplessly into the next
+            // track without stopping the device.
+            if s.gapless_blocked {
                 break;
             }
-            if !decode_more(s) {
-                break;
+            match next_decode_order(s) {
+                Some(n) => {
+                    if !soft_advance(s, n) {
+                        s.gapless_blocked = true; // layout change → engine reopens at drain
+                        break;
+                    }
+                }
+                None => break,
             }
         }
     }
 }
 
 fn position_frames(s: &State) -> u64 {
-    match &s.pb {
-        Some(pb) => s.anchor_track + pb.position().saturating_sub(s.anchor_dev),
-        None => s.sw_frames,
+    if let Some(pb) = &s.pb {
+        if let Some(sg) = s.segments.front() {
+            let p = sg.base + pb.position().saturating_sub(sg.dev_start);
+            return if sg.total_frames > 0 { p.min(sg.total_frames) } else { p };
+        }
     }
+    s.sw_frames
 }
 
 fn play(s: &mut State) {
@@ -778,9 +958,13 @@ fn play(s: &mut State) {
             };
             if let Ok(pb) = wpcm::Playback::open(cfg) {
                 let _ = pb.start();
-                s.anchor_dev = pb.position();
-                s.anchor_track = s.sw_frames;
                 s.pb = Some(pb);
+                s.pb_stereo = out_layout_stereo(ch);
+                s.gapless_blocked = false;
+                s.segments.clear();
+                if let Some(l) = s.loaded.as_mut() {
+                    l.seg_started = false; // pump's ensure_seg anchors the first segment
+                }
             }
         }
     }
@@ -795,6 +979,16 @@ fn pause(s: &mut State) {
 }
 
 fn seek_to(s: &mut State, target_48k: u64) {
+    // Seeks act on the AUDIBLE track; if the decode head ran ahead (gapless
+    // window), re-sync it to the audible track first.
+    if let Some(front) = s.segments.front().cloned() {
+        if s.decode_order != front.order_pos {
+            if let Some(l) = open_track(s, front.lib_index) {
+                s.loaded = Some(l);
+                s.decode_order = front.order_pos;
+            }
+        }
+    }
     let target = {
         let Some(l) = s.loaded.as_mut() else {
             return;
@@ -809,57 +1003,34 @@ fn seek_to(s: &mut State, target_48k: u64) {
         l.pending.clear();
         l.pending_pos = 0;
         l.eof = false;
+        l.base = target;
+        l.seg_started = false;
         if let Some(r) = l.resampler.as_mut() {
             r.reset();
         }
         target
     };
+    s.segments.clear();
+    s.gapless_blocked = false;
     s.sw_frames = target;
     s.ended = false;
-    let was = s.playing;
     if let Some(pb) = s.pb.as_ref() {
         pb.flush();
-        s.anchor_dev = pb.position();
-        s.anchor_track = target;
     }
     pump(s);
-    if was {
+    if s.playing {
         if let Some(pb) = s.pb.as_ref() {
             let _ = pb.start();
         }
     }
 }
 
+/// The currently AUDIBLE library index (front segment, else the decode head).
 fn cur_lib_index(s: &State) -> Option<usize> {
+    if let Some(sg) = s.segments.front() {
+        return Some(sg.lib_index);
+    }
     s.order.get(s.order_pos).copied()
-}
-
-fn go_to(s: &mut State, order_pos: usize, autoplay: bool) {
-    if order_pos >= s.order.len() {
-        return;
-    }
-    s.order_pos = order_pos;
-    let lib = s.order[order_pos];
-    load(s, lib);
-    if autoplay {
-        play(s);
-    }
-    after_change_publish(s);
-}
-
-fn on_track_end(s: &mut State) {
-    if s.order_pos + 1 < s.order.len() {
-        go_to(s, s.order_pos + 1, true);
-    } else if s.repeat {
-        go_to(s, 0, true);
-    } else {
-        s.pb = None;
-        s.playing = false;
-        s.ended = true;
-        if let Some(l) = &s.loaded {
-            s.sw_frames = l.total_frames;
-        }
-    }
 }
 
 fn fisher_yates(v: &mut [usize], rng: &mut u64) {
@@ -873,7 +1044,10 @@ fn fisher_yates(v: &mut [usize], rng: &mut u64) {
 }
 
 /// Rebuild `order` from `queue` (shuffled or natural), positioned at `keep`.
+/// Keeps in-flight segments + the decode head pointing at their tracks under the
+/// new ordering, so reshuffling mid-playback only affects what comes next.
 fn apply_order(s: &mut State, keep_lib: Option<usize>) {
+    let decode_lib = s.order.get(s.decode_order).copied();
     if s.shuffle {
         let mut v = s.queue.clone();
         fisher_yates(&mut v, &mut s.rng);
@@ -881,11 +1055,22 @@ fn apply_order(s: &mut State, keep_lib: Option<usize>) {
     } else {
         s.order = s.queue.clone();
     }
-    if let Some(lib) = keep_lib {
-        s.order_pos = s.order.iter().position(|&k| k == lib).unwrap_or(0);
-    } else {
-        s.order_pos = 0;
+    s.segments.retain(|sg| s.order.contains(&sg.lib_index));
+    for sg in &mut s.segments {
+        if let Some(p) = s.order.iter().position(|&k| k == sg.lib_index) {
+            sg.order_pos = p;
+        }
     }
+    s.order_pos = if let Some(front) = s.segments.front() {
+        front.order_pos
+    } else if let Some(lib) = keep_lib {
+        s.order.iter().position(|&k| k == lib).unwrap_or(0)
+    } else {
+        0
+    };
+    s.decode_order = decode_lib
+        .and_then(|dl| s.order.iter().position(|&k| k == dl))
+        .unwrap_or(s.order_pos);
 }
 
 /// Start playing from a browsed track list (becomes the queue).
@@ -896,7 +1081,7 @@ fn play_from(s: &mut State, tracks: Vec<usize>, tapped: usize) {
     let keep = tracks[tapped.min(tracks.len() - 1)];
     s.queue = tracks;
     apply_order(s, Some(keep));
-    go_to(s, s.order_pos, true);
+    hard_load(s, s.order_pos, true);
 }
 
 // ── Browse helpers ───────────────────────────────────────────────────────────
@@ -943,8 +1128,10 @@ fn publish_state(s: &State) {
     wsession::set_playback_state(st);
 }
 fn publish_position(s: &State) {
-    let Some(l) = &s.loaded else { return };
-    let total = l.total_frames;
+    if s.loaded.is_none() && s.segments.is_empty() {
+        return;
+    }
+    let total = cur_total(s);
     let pos = position_frames(s).min(if total > 0 { total } else { u64::MAX });
     wsession::set_position(wsession::PositionState {
         duration_s: total as f64 / OUT_RATE as f64,
@@ -999,30 +1186,59 @@ fn engine_step(s: &mut State) -> u32 {
         s.rows_dirty = true;
         spawn_library_fetch(to_fetch);
         if !s.library.is_empty() {
-            go_to(s, 0, false);
+            hard_load(s, 0, false);
         }
     }
-    if s.loaded.is_none() {
+    if s.loaded.is_none() && s.segments.is_empty() {
         return 1000;
     }
+
+    // Flip the audible track when playback crosses a gapless boundary.
+    let flipped = advance_audible(s);
 
     if s.playing {
         pump(s);
     }
 
-    let (eof, total) = {
-        let l = s.loaded.as_ref().unwrap();
-        (l.eof && l.pending_pos >= l.pending.len(), l.total_frames)
-    };
-    let ring_empty = s.pb.as_ref().map(|p| p.buffered_frames() == 0).unwrap_or(true);
-    if s.playing && eof && ring_empty {
-        on_track_end(s);
+    // End / layout-change transition: only fires once the device ring has fully
+    // drained AND the decode head is exhausted (gapless keeps the ring fed across
+    // same-layout boundaries, so this is reached only at the real end or when the
+    // next track needs a device reopen).
+    if s.playing {
+        let head_eof =
+            s.loaded.as_ref().map(|l| l.eof && l.pending_pos >= l.pending.len()).unwrap_or(true);
+        let ring_empty = s.pb.as_ref().map(|p| p.buffered_frames() == 0).unwrap_or(true);
+        if head_eof && ring_empty {
+            match next_decode_order(s) {
+                Some(n) => hard_load(s, n, true), // layout change → reopen device
+                None => {
+                    s.pb = None;
+                    s.playing = false;
+                    s.ended = true;
+                    s.sw_frames = cur_total(s);
+                    s.segments.clear();
+                    after_change_publish(s);
+                }
+            }
+        }
+    }
+
+    if flipped {
+        s.meta_dirty = true;
+        s.rows_dirty = true;
+        if let Some(lib) = cur_lib_index(s) {
+            let e = s.library[lib].clone();
+            publish_metadata(s, &e);
+        }
+        publish_state(s);
+        s.last_pub_sec = -1;
     }
 
     if s.pub_playing != s.playing {
         publish_state(s);
         s.pub_playing = s.playing;
     }
+    let total = cur_total(s);
     let pos = position_frames(s).min(if total > 0 { total } else { u64::MAX });
     let cur_sec = (pos / OUT_RATE as u64) as i64;
     if cur_sec != s.last_pub_sec {
@@ -1045,9 +1261,17 @@ fn push_ui() {
         let Some(ui) = b.as_ref() else { return };
         STATE.with(|st| {
             let mut s = st.borrow_mut();
-            // now-playing fields
-            let (title, subtitle, total) = match &s.loaded {
-                Some(l) => (l.title.clone(), l.subtitle.clone(), l.total_frames),
+            // now-playing fields — derived from the AUDIBLE library entry.
+            let disp_lib = if s.loaded.is_some() || !s.segments.is_empty() {
+                cur_lib_index(&s)
+            } else {
+                None
+            };
+            let (title, subtitle, total) = match disp_lib {
+                Some(lib) => {
+                    let t = &s.library[lib];
+                    (t.title.clone(), format!("{} — {}", t.artist, t.album), cur_total(&s))
+                }
                 None => ("—".to_string(), String::new(), 0),
             };
             let pos = position_frames(&s).min(if total > 0 { total } else { u64::MAX });
@@ -1073,12 +1297,19 @@ fn push_ui() {
 
             if s.meta_dirty {
                 s.meta_dirty = false;
-                // Prefer a fetched/cached internet cover (by the current album's
-                // akey), else the local albumart loaded with the track.
-                let art = s
-                    .loaded
-                    .as_ref()
-                    .and_then(|l| s.album_art.get(&l.akey).cloned().or_else(|| l.art.clone()));
+                // Prefer a fetched/cached internet cover (by the audible album's
+                // akey), else the local albumart file.
+                let art = match disp_lib {
+                    Some(lib) => {
+                        let ak = s.library[lib].akey.clone();
+                        let ap = s.library[lib].art_path.clone();
+                        match s.album_art.get(&ak).cloned() {
+                            Some(a) => Some(a),
+                            None => load_art(&mut s, &ap),
+                        }
+                    }
+                    None => None,
+                };
                 match art {
                     Some((rgba, w, h)) => {
                         let mut buf = SharedPixelBuffer::<Rgba8Pixel>::new(w, h);
@@ -1162,7 +1393,7 @@ fn cmd_stop() {
 fn cmd_seek_frac(frac: f32) {
     STATE.with(|st| {
         let mut s = st.borrow_mut();
-        let total = s.loaded.as_ref().map(|l| l.total_frames).unwrap_or(0);
+        let total = cur_total(&s);
         if total > 0 {
             seek_to(&mut s, (frac.clamp(0.0, 1.0) as f64 * total as f64) as u64);
             after_change_publish(&mut s);
@@ -1182,7 +1413,7 @@ fn cmd_seek_rel(delta: f64) {
     STATE.with(|st| {
         let mut s = st.borrow_mut();
         let cur = position_frames(&s) as f64;
-        let total = s.loaded.as_ref().map(|l| l.total_frames).unwrap_or(0);
+        let total = cur_total(&s);
         let mut target = (cur + delta * OUT_RATE as f64).max(0.0) as u64;
         if total > 0 {
             target = target.min(total);
@@ -1199,7 +1430,7 @@ fn cmd_next() {
             return;
         }
         let np = (s.order_pos + 1) % s.order.len();
-        go_to(&mut s, np, true);
+        hard_load(&mut s, np, true);
     });
     push_ui();
 }
@@ -1214,7 +1445,7 @@ fn cmd_prev() {
             after_change_publish(&mut s);
         } else {
             let pp = if s.order_pos == 0 { s.order.len() - 1 } else { s.order_pos - 1 };
-            go_to(&mut s, pp, true);
+            hard_load(&mut s, pp, true);
         }
     });
     push_ui();
