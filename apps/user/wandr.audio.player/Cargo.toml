@@ -23,7 +23,10 @@ slint-wandr = { path = "../../../crates/slint-wandr" }
 # added for the user's library (patents expired 2017 — licensing stays guest-side
 # per the design). Streaming decode (incremental, low memory) + a guest-side
 # linear resampler to the 48 kHz backend rate.
-symphonia = { version = "0.5", features = ["mp3"] }
+# default features add FLAC/WAV/OGG-Vorbis; `mp3` + `aac`/`isomp4` add MP3 and
+# AAC in M4A/MP4 containers (common in local libraries). Opus is intentionally
+# out (Symphonia only demuxes it; no decoder — see docs/audio-player-design.md).
+symphonia = { version = "0.5", features = ["mp3", "aac", "isomp4"] }
 # Guest-side cover-art decode (embedded FLAC/ID3 PICTURE → RGBA → Slint Image).
 # Pure-Rust jpeg+png only (wasm-ok), no default codecs.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }

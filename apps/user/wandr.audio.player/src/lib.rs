@@ -48,9 +48,10 @@ const EQ_FREQS: [f32; EQ_BANDS] =
 const EQ_Q: f32 = 1.41; // sqrt(2) → ~1 octave
 const EQ_RANGE_DB: f32 = 12.0;
 const EQ_FILE: &str = "/state/eq.json";
-/// Last.fm API key (free, from last.fm/api). Empty → the Last.fm source is
-/// skipped. Set this to enable album.getInfo lookups.
-const LASTFM_API_KEY: &str = "adc9909f24e4992ebe93ccb14dedf65d";
+/// User config (writable /state preopen): `{"lastfm_api_key": "..."}`. The key is
+/// optional and kept OUT of source — present + non-empty → the Last.fm metadata
+/// source is used; absent → it's skipped (the other sources still run).
+const CONFIG_FILE: &str = "/state/config.json";
 /// Cover-art cache (writable /state preopen). Per album: <key>.img (raw bytes).
 const CACHE_DIR: &str = "/state/meta";
 
@@ -555,6 +556,8 @@ struct State {
     // Crossfade: blend duration (s, 0 = off, gapless) + the in-progress blend.
     xfade_secs: f32,
     xfade: Option<Xfade>,
+    // Optional Last.fm API key from /state/config.json (empty = source disabled).
+    lastfm_key: String,
 }
 
 thread_local! {
@@ -691,6 +694,19 @@ fn load_eq(s: &mut State) {
     s.xfade_secs = v.get("xfade").and_then(|x| x.as_f64()).unwrap_or(0.0).clamp(0.0, 12.0) as f32;
 }
 
+/// Load the optional Last.fm API key from /state/config.json. Absent/empty →
+/// the Last.fm metadata source is skipped.
+fn load_config(s: &mut State) {
+    let Ok(body) = std::fs::read_to_string(CONFIG_FILE) else { return };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) else { return };
+    s.lastfm_key = v
+        .get("lastfm_api_key")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+}
+
 // ── Library scan (reads tags) ────────────────────────────────────────────────
 fn pretty_title(fname: &str) -> String {
     let stem = fname.rsplit_once('.').map(|(a, _)| a).unwrap_or(fname);
@@ -705,7 +721,10 @@ fn is_audio(p: &std::path::Path) -> bool {
     p.extension()
         .map(|x| {
             let x = x.to_string_lossy().to_lowercase();
-            x == "mp3" || x == "flac" || x == "wav" || x == "ogg"
+            matches!(
+                x.as_str(),
+                "mp3" | "flac" | "wav" | "ogg" | "m4a" | "mp4" | "m4b" | "aac"
+            )
         })
         .unwrap_or(false)
 }
@@ -1699,6 +1718,7 @@ fn engine_step(s: &mut State) -> u32 {
         s.eq_gains = vec![0.0; EQ_BANDS];
         load_eq(s);
         eq_recalc(s);
+        load_config(s); // optional Last.fm API key
         wandr_step_executor::init(); // Phase A — async metadata-fetch reactor
         s.library = scan_library();
         // Phase A — per distinct album (akey): load the cached cover + cached
@@ -1732,7 +1752,7 @@ fn engine_step(s: &mut State) -> u32 {
         s.queue = (0..s.library.len()).collect();
         s.order = s.queue.clone();
         s.rows_dirty = true;
-        spawn_library_fetch(to_fetch);
+        spawn_library_fetch(to_fetch, s.lastfm_key.clone());
         if !s.library.is_empty() {
             hard_load(s, 0, false);
         }
@@ -2371,14 +2391,15 @@ async fn lookup_itunes(client: &reqwest::Client, artist: &str, album: &str) -> C
     }
 }
 
-/// Last.fm album.getInfo (needs LASTFM_API_KEY) → largest non-placeholder image.
-async fn lookup_lastfm(client: &reqwest::Client, artist: &str, album: &str) -> Cand {
-    if LASTFM_API_KEY.is_empty() {
+/// Last.fm album.getInfo (needs an API key from /state/config.json) → largest
+/// non-placeholder image. Empty key → skipped.
+async fn lookup_lastfm(client: &reqwest::Client, artist: &str, album: &str, key: &str) -> Cand {
+    if key.is_empty() {
         return Cand::default();
     }
     let url = format!(
         "https://ws.audioscrobbler.com/2.0/?method=album.getinfo&api_key={}&artist={}&album={}&format=json",
-        LASTFM_API_KEY,
+        key,
         q_encode(artist),
         q_encode(album),
     );
@@ -2481,7 +2502,7 @@ async fn fetch_tracklist(client: &reqwest::Client, c: &Cand) -> Vec<String> {
 /// One album's multi-source lookup: query MusicBrainz → Deezer → iTunes →
 /// Last.fm, log each, return the first candidate that yielded a cover (its name/
 /// artist/tracklist are then used as the canonical metadata).
-async fn fetch_one(client: &reqwest::Client, artist: &str, album: &str) -> Option<Cand> {
+async fn fetch_one(client: &reqwest::Client, artist: &str, album: &str, lastfm_key: &str) -> Option<Cand> {
     log1(&format!("[meta] lookup {artist:?} / {album:?}"));
     let mb = lookup_musicbrainz(client, artist, album).await;
     log1(&format!("[meta]   musicbrainz: name={:?} artist={:?} cover={}", mb.name, mb.artist, mb.cover));
@@ -2489,7 +2510,7 @@ async fn fetch_one(client: &reqwest::Client, artist: &str, album: &str) -> Optio
     log1(&format!("[meta]   deezer:      name={:?} artist={:?} cover={}", dz.name, dz.artist, dz.cover));
     let it = lookup_itunes(client, artist, album).await;
     log1(&format!("[meta]   itunes:      name={:?} artist={:?} cover={}", it.name, it.artist, it.cover));
-    let lf = lookup_lastfm(client, artist, album).await;
+    let lf = lookup_lastfm(client, artist, album, lastfm_key).await;
     log1(&format!("[meta]   lastfm:      name={:?} artist={:?} cover={}", lf.name, lf.artist, lf.cover));
     let chosen = [mb, dz, it, lf].into_iter().find(|c| c.ok());
     match &chosen {
@@ -2502,7 +2523,7 @@ async fn fetch_one(client: &reqwest::Client, artist: &str, album: &str) -> Optio
 /// Pre-fetch metadata/art for every album in one sequential task (on the
 /// step-executor, so it runs across bg-ticks without blocking audio). Sequential
 /// + a courtesy delay respects MusicBrainz's 1 req/s limit.
-fn spawn_library_fetch(albums: Vec<(String, String, String, bool)>) {
+fn spawn_library_fetch(albums: Vec<(String, String, String, bool)>, lastfm_key: String) {
     if albums.is_empty() {
         return;
     }
@@ -2518,7 +2539,7 @@ fn spawn_library_fetch(albums: Vec<(String, String, String, bool)>) {
             }
         };
         for (akey, artist, album, have_cover) in albums {
-            if let Some(c) = fetch_one(&client, &artist, &album).await {
+            if let Some(c) = fetch_one(&client, &artist, &album, &lastfm_key).await {
                 // Canonical names + tracklist (fall back to raw tags/filenames
                 // where a source returned nothing). Persist + apply in-memory.
                 let tracks = fetch_tracklist(&client, &c).await;
