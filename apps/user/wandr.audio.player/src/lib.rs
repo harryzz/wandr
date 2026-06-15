@@ -90,6 +90,7 @@ slint::slint! {
         in property <[float]> eq-gains: [];   // dB per band
         in property <[string]> eq-labels: [];
         in property <float> eq-range: 12.0;   // ± dB
+        in property <string> xfade-label: "Off";
         callback set-tab(int);
         callback row-tap(int);
         callback go-back();
@@ -107,6 +108,7 @@ slint::slint! {
         callback eq-toggle();
         callback eq-flat();
         callback eq-set-band(int, float);
+        callback cycle-xfade();
 
         property <color> on-col: #4285f4;
         property <color> off-col: #8a8aa0;
@@ -418,6 +420,23 @@ slint::slint! {
                         }
                     }
                 }
+
+                // crossfade
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text {
+                        text: "Crossfade"; color: #c8c8d8; font-size: 14px;
+                        vertical-alignment: center; horizontal-stretch: 1;
+                    }
+                    Rectangle {
+                        width: 64px; height: 32px; border-radius: 8px; background: #20203a;
+                        Text {
+                            text: root.xfade-label; font-size: 14px; font-weight: 700;
+                            color: #4285f4; horizontal-alignment: center; vertical-alignment: center;
+                        }
+                        TouchArea { clicked => { root.cycle-xfade(); } }
+                    }
+                }
             }
         }
     }
@@ -457,6 +476,17 @@ struct Loaded {
     gain: f32,        // ReplayGain linear factor (1.0 = none)
     base: u64,        // track-frame of the first decoded sample (0, or a seek target)
     seg_started: bool, // a Seg has been pushed for this decode head
+    decoded: u64,     // output (48k) frames decoded so far — drives crossfade onset
+    eq_z: Vec<[f32; 2]>, // per-stream EQ filter state (so a crossfade pair filters cleanly)
+}
+
+/// An in-progress crossfade: the incoming track decoded in parallel, mixed with
+/// the outgoing one over `dur` output frames (equal-power curve).
+struct Xfade {
+    next: Loaded,
+    order: usize, // order index of the incoming track
+    pos: u64,
+    dur: u64,
 }
 
 /// One written-but-not-fully-played track segment. Maps device frames (the
@@ -515,13 +545,16 @@ struct State {
     bars_were_active: bool, // pushed live last frame → flatten once when stopping
     fft: Option<Arc<dyn rustfft::Fft<f32>>>,
     hann: Vec<f32>,
-    // Graphic EQ: per-band gain (dB), normalized biquad coeffs [b0,b1,b2,a1,a2],
-    // and per-(channel,band) DF2T state [z1,z2]. eq_active = enabled && non-flat.
+    // Graphic EQ: per-band gain (dB) + normalized biquad coeffs [b0,b1,b2,a1,a2].
+    // Filter state ([z1,z2] per channel/band) lives per-Loaded. eq_active =
+    // enabled && non-flat.
     eq_enabled: bool,
     eq_gains: Vec<f32>,
     eq_coeffs: Vec<[f32; 5]>,
-    eq_z: Vec<[f32; 2]>,
     eq_active: bool,
+    // Crossfade: blend duration (s, 0 = off, gapless) + the in-progress blend.
+    xfade_secs: f32,
+    xfade: Option<Xfade>,
 }
 
 thread_local! {
@@ -586,9 +619,6 @@ fn eq_recalc(s: &mut State) {
     if s.eq_coeffs.len() != EQ_BANDS {
         s.eq_coeffs = vec![[1.0, 0.0, 0.0, 0.0, 0.0]; EQ_BANDS];
     }
-    if s.eq_z.len() != 2 * EQ_BANDS {
-        s.eq_z = vec![[0.0, 0.0]; 2 * EQ_BANDS];
-    }
     let mut nonflat = false;
     for b in 0..EQ_BANDS {
         let gain = s.eq_gains.get(b).copied().unwrap_or(0.0);
@@ -630,14 +660,20 @@ fn eq_apply(coeffs: &[[f32; 5]], z: &mut [[f32; 2]], out: &mut [f32], ch: usize)
 }
 
 fn eq_reset_state(s: &mut State) {
-    for v in &mut s.eq_z {
-        *v = [0.0, 0.0];
+    if let Some(l) = s.loaded.as_mut() {
+        for v in &mut l.eq_z {
+            *v = [0.0, 0.0];
+        }
     }
 }
 
 fn save_eq(s: &State) {
     let _ = std::fs::create_dir_all("/state");
-    let v = serde_json::json!({ "enabled": s.eq_enabled, "gains": s.eq_gains });
+    let v = serde_json::json!({
+        "enabled": s.eq_enabled,
+        "gains": s.eq_gains,
+        "xfade": s.xfade_secs,
+    });
     let _ = std::fs::write(EQ_FILE, v.to_string());
 }
 
@@ -652,6 +688,7 @@ fn load_eq(s: &mut State) {
             }
         }
     }
+    s.xfade_secs = v.get("xfade").and_then(|x| x.as_f64()).unwrap_or(0.0).clamp(0.0, 12.0) as f32;
 }
 
 // ── Library scan (reads tags) ────────────────────────────────────────────────
@@ -973,6 +1010,8 @@ fn open_track(s: &State, lib_index: usize) -> Option<Loaded> {
         gain,
         base: 0,
         seg_started: false,
+        decoded: 0,
+        eq_z: vec![[0.0, 0.0]; 2 * EQ_BANDS],
     })
 }
 
@@ -988,6 +1027,7 @@ fn hard_load(s: &mut State, order_pos: usize, autoplay: bool) {
     let lib = s.order[order_pos];
     s.loaded = open_track(s, lib);
     s.segments.clear();
+    s.xfade = None;
     s.gapless_blocked = false;
     s.ended = false;
     s.sw_frames = 0;
@@ -1153,10 +1193,9 @@ fn update_bars(s: &mut State) {
     }
 }
 
-fn decode_more(s: &mut State) -> bool {
-    let Some(l) = s.loaded.as_mut() else {
-        return false;
-    };
+/// Decode one packet of a single track into `l.pending` — resample → ReplayGain
+/// → EQ (per-stream filter state, so a crossfade pair filters independently).
+fn decode_chunk(l: &mut Loaded, eq_coeffs: &[[f32; 5]], eq_active: bool) -> bool {
     loop {
         let packet = match l.format.next_packet() {
             Ok(p) => p,
@@ -1183,12 +1222,11 @@ fn decode_more(s: &mut State) -> bool {
                         *x = (*x * g).clamp(-1.0, 1.0);
                     }
                 }
-                // Graphic EQ (disjoint fields from s.loaded). Applied to exactly the
-                // samples that go to pending → device + visualizer scope.
-                if s.eq_active {
-                    let ch = l.channels.max(1);
-                    eq_apply(&s.eq_coeffs, &mut s.eq_z, &mut out, ch);
+                let ch = l.channels.max(1);
+                if eq_active {
+                    eq_apply(eq_coeffs, &mut l.eq_z, &mut out, ch);
                 }
+                l.decoded += (out.len() / ch) as u64;
                 l.pending = out;
                 l.pending_pos = 0;
                 return true;
@@ -1202,8 +1240,158 @@ fn decode_more(s: &mut State) -> bool {
     }
 }
 
+fn decode_more(s: &mut State) -> bool {
+    let eq_active = s.eq_active;
+    let coeffs = &s.eq_coeffs;
+    match s.loaded.as_mut() {
+        Some(l) => decode_chunk(l, coeffs, eq_active),
+        None => false,
+    }
+}
+
+/// Start a crossfade once the decode head reaches `total - dur` (and there's a
+/// next track of matching layout). No-op when crossfade is off or near no track.
+fn maybe_start_xfade(s: &mut State) {
+    if s.xfade_secs <= 0.0 || s.xfade.is_some() {
+        return;
+    }
+    let (total, decoded) = match &s.loaded {
+        Some(l) => (l.total_frames, l.decoded),
+        None => return,
+    };
+    if total == 0 {
+        return;
+    }
+    let dur = (s.xfade_secs * OUT_RATE as f32) as u64;
+    if dur == 0 || decoded < total.saturating_sub(dur) {
+        return;
+    }
+    let Some(no) = next_decode_order(s) else { return };
+    let Some(mut next) = open_track(s, s.order[no]) else { return };
+    if out_layout_stereo(next.channels) != s.pb_stereo {
+        return; // layout change → let it end / hard-switch instead
+    }
+    // Flip the now-playing display to the incoming track at the START of the blend
+    // (its position counts up from 0:00 through the overlap and beyond), so push
+    // its segment here and mark it started so the post-promotion ensure_seg skips.
+    let dev_start = {
+        let pb = s.pb.as_ref().unwrap();
+        pb.position() + pb.buffered_frames() as u64
+    };
+    next.seg_started = true;
+    s.segments.push_back(Seg {
+        order_pos: no,
+        lib_index: s.order[no],
+        total_frames: next.total_frames,
+        dev_start,
+        base: 0,
+    });
+    s.xfade = Some(Xfade { next, order: no, pos: 0, dur });
+}
+
+/// Promote the incoming track to the decode head when the blend completes.
+fn xfade_finish(s: &mut State) {
+    let Some(x) = s.xfade.take() else { return };
+    // The incoming segment was already pushed (flip-at-start); just promote it to
+    // the decode head and continue normally.
+    s.decode_order = x.order;
+    s.order_pos = x.order;
+    s.loaded = Some(x.next); // seg_started already true → ensure_seg won't re-push
+}
+
+/// Mix the outgoing + incoming tracks (equal-power) and write the blend.
+fn pump_xfade(s: &mut State) {
+    loop {
+        // Ensure both sides have decoded samples.
+        if { let l = s.loaded.as_ref().unwrap(); l.pending_pos >= l.pending.len() }
+            && !s.loaded.as_ref().unwrap().eof
+        {
+            decode_more(s);
+        }
+        if { let x = s.xfade.as_ref().unwrap(); x.next.pending_pos >= x.next.pending.len() }
+            && !s.xfade.as_ref().unwrap().next.eof
+        {
+            let eq_active = s.eq_active;
+            let coeffs = &s.eq_coeffs;
+            let x = s.xfade.as_mut().unwrap();
+            decode_chunk(&mut x.next, coeffs, eq_active);
+        }
+        let ch = s.loaded.as_ref().unwrap().channels.max(1);
+        let la = { let l = s.loaded.as_ref().unwrap(); (l.pending.len() - l.pending_pos) / ch };
+        let na = { let x = s.xfade.as_ref().unwrap(); (x.next.pending.len() - x.next.pending_pos) / ch };
+        let (pos, dur) = { let x = s.xfade.as_ref().unwrap(); (x.pos, x.dur) };
+        let remaining = dur.saturating_sub(pos);
+
+        // Blend done, or the outgoing track ran out → promote the incoming.
+        if remaining == 0 || (s.loaded.as_ref().unwrap().eof && la == 0) {
+            xfade_finish(s);
+            return;
+        }
+        let avail = la.min(na);
+        if avail == 0 {
+            if s.xfade.as_ref().unwrap().next.eof && na == 0 {
+                xfade_finish(s); // incoming was shorter than the blend
+            }
+            break;
+        }
+        let n = avail.min(remaining as usize);
+        let mut mix = vec![0.0f32; n * ch];
+        {
+            let l = s.loaded.as_ref().unwrap();
+            let x = s.xfade.as_ref().unwrap();
+            let (lp, np) = (l.pending_pos, x.next.pending_pos);
+            for f in 0..n {
+                let t = (pos + f as u64) as f32 / dur as f32;
+                let og = (t * std::f32::consts::FRAC_PI_2).cos();
+                let ig = (t * std::f32::consts::FRAC_PI_2).sin();
+                for c in 0..ch {
+                    mix[f * ch + c] = l.pending[lp + f * ch + c] * og + x.next.pending[np + f * ch + c] * ig;
+                }
+            }
+        }
+        let accepted = { s.pb.as_ref().unwrap().write(&mix[..]) as usize };
+        if accepted == 0 {
+            break; // device ring full
+        }
+        if s.scope.len() == SCOPE_CAP {
+            for f in 0..accepted {
+                let mut m = 0.0;
+                for c in 0..ch {
+                    m += mix[f * ch + c];
+                }
+                s.scope[(s.scope_written as usize + f) % SCOPE_CAP] = m / ch as f32;
+            }
+            s.scope_written += accepted as u64;
+        }
+        {
+            let l = s.loaded.as_mut().unwrap();
+            l.pending_pos += accepted * ch;
+            if l.pending_pos >= l.pending.len() {
+                l.pending.clear();
+                l.pending_pos = 0;
+            }
+        }
+        {
+            let x = s.xfade.as_mut().unwrap();
+            x.next.pending_pos += accepted * ch;
+            if x.next.pending_pos >= x.next.pending.len() {
+                x.next.pending.clear();
+                x.next.pending_pos = 0;
+            }
+            x.pos += accepted as u64;
+        }
+    }
+}
+
 fn pump(s: &mut State) {
     if s.pb.is_none() || s.loaded.is_none() {
+        return;
+    }
+    if s.xfade.is_none() {
+        maybe_start_xfade(s);
+    }
+    if s.xfade.is_some() {
+        pump_xfade(s);
         return;
     }
     loop {
@@ -1246,6 +1434,12 @@ fn pump(s: &mut State) {
         } else if !s.loaded.as_ref().unwrap().eof {
             // refill from the decode head (sets eof if exhausted; loop re-checks)
             decode_more(s);
+            // crossfade may now be due (decoded reached total - dur)
+            maybe_start_xfade(s);
+            if s.xfade.is_some() {
+                pump_xfade(s);
+                return;
+            }
         } else {
             // decode head fully drained — try to continue gaplessly into the next
             // track without stopping the device.
@@ -1341,6 +1535,7 @@ fn seek_to(s: &mut State, target_48k: u64) {
         l.pending_pos = 0;
         l.eof = false;
         l.base = target;
+        l.decoded = target; // decode position now starts at the seek target
         l.seg_started = false;
         if let Some(r) = l.resampler.as_mut() {
             r.reset();
@@ -1348,6 +1543,7 @@ fn seek_to(s: &mut State, target_48k: u64) {
         target
     };
     s.segments.clear();
+    s.xfade = None;
     s.gapless_blocked = false;
     s.sw_frames = target;
     s.ended = false;
@@ -1558,7 +1754,7 @@ fn engine_step(s: &mut State) -> u32 {
     // drained AND the decode head is exhausted (gapless keeps the ring fed across
     // same-layout boundaries, so this is reached only at the real end or when the
     // next track needs a device reopen).
-    if s.playing {
+    if s.playing && s.xfade.is_none() {
         let head_eof =
             s.loaded.as_ref().map(|l| l.eof && l.pending_pos >= l.pending.len()).unwrap_or(true);
         let ring_empty = s.pb.as_ref().map(|p| p.buffered_frames() == 0).unwrap_or(true);
@@ -1682,6 +1878,10 @@ fn push_ui() {
             ui.set_repeat(s.repeat);
             ui.set_eq_enabled(s.eq_enabled);
             ui.set_eq_gains(ModelRc::from(Rc::new(VecModel::from(s.eq_gains.clone()))));
+            ui.set_xfade_label(
+                if s.xfade_secs <= 0.0 { "Off".to_string() } else { format!("{}s", s.xfade_secs as i32) }
+                    .into(),
+            );
             ui.set_view(s.view);
             ui.set_tab(s.tab);
             ui.set_in_drill(s.drill.is_some());
@@ -1939,6 +2139,21 @@ fn cmd_eq_flat() {
             *g = 0.0;
         }
         eq_recalc(&mut s);
+        save_eq(&s);
+    });
+    push_ui();
+}
+fn cmd_cycle_xfade() {
+    STATE.with(|st| {
+        let mut s = st.borrow_mut();
+        // Off → 2 → 4 → 6 → 8 → Off
+        s.xfade_secs = match s.xfade_secs as i32 {
+            0 => 2.0,
+            2 => 4.0,
+            4 => 6.0,
+            6 => 8.0,
+            _ => 0.0,
+        };
         save_eq(&s);
     });
     push_ui();
@@ -2406,6 +2621,7 @@ slint_wandr::launch!(|| {
     ui.on_eq_toggle(cmd_eq_toggle);
     ui.on_eq_flat(cmd_eq_flat);
     ui.on_eq_set_band(|b, g| cmd_eq_set_band(b as usize, g));
+    ui.on_cycle_xfade(cmd_cycle_xfade);
     BARS_MODEL.with(|m| ui.set_bars(ModelRc::from(m.clone())));
     ui.set_eq_range(EQ_RANGE_DB);
     ui.set_eq_labels(ModelRc::from(Rc::new(VecModel::from(
