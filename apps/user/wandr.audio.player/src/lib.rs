@@ -1053,6 +1053,14 @@ fn hard_load(s: &mut State, order_pos: usize, autoplay: bool) {
     s.sw_frames = 0;
     s.rows_dirty = true;
     s.meta_dirty = true;
+    // Publish the new track's title/artist to the media session (lockscreen
+    // now-playing). hard_load is the user-driven change path (row tap / next /
+    // prev / layout-change advance); it clears segments, so the gapless
+    // `flipped` detector in engine_step never fires for it — publish here.
+    if s.loaded.is_some() {
+        let e = s.library[lib].clone();
+        publish_metadata(s, &e);
+    }
     if s.pb.is_some() {
         let new_stereo = s.loaded.as_ref().map(|l| out_layout_stereo(l.channels)).unwrap_or(s.pb_stereo);
         if new_stereo != s.pb_stereo {
