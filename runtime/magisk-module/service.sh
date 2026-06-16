@@ -63,6 +63,25 @@ done
 # the framework (early in boot it may not be up yet).
 wait_svc SurfaceFlinger 60 || log "warn: SurfaceFlinger not seen (continuing)"
 
+# ── 0b. Wait for CE (credential-encrypted) storage to unlock ─────────────────
+# /data/media/0 + /data/user/0 are FBE Credential-Encrypted: locked until the
+# user-0 CE key is installed. With NO lockscreen credential, system_server
+# unlocks user 0 automatically early in boot (the framework needs CE) — once the
+# in-kernel fscrypt key is added it SURVIVES system_server being killed. So we
+# must not stop the framework until that unlock has landed, or the whole stack
+# (and the user's music/photos/app data) runs against ciphertext.
+# Bounded: if a lockscreen credential IS set, ce_available never flips without
+# authentication — we time out and proceed (CE stays locked, as before).
+_i=0
+while [ "$_i" -lt 40 ] && [ "$(getprop sys.user.0.ce_available)" != "true" ]; do
+    sleep 0.5; _i=$((_i+1))
+done
+if [ "$(getprop sys.user.0.ce_available)" = "true" ]; then
+    log "user-0 CE storage unlocked (ce_available=true) — /data/media/0 will be readable"
+else
+    log "warn: user-0 CE still locked after wait (lockscreen credential set?) — CE storage will be ciphertext under --no-art"
+fi
+
 # ── 1. Stop the Java framework (system_server) ───────────────────────────────
 log "stopping Java framework (zygote + system_server)"
 stop zygote 2>/dev/null
