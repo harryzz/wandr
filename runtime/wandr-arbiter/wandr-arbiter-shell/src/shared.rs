@@ -9,9 +9,12 @@
 use wandr_arbiter_core::{Ctx, Effect, EditorInfo, Event, Role, Store, PRIMARY_DISPLAY};
 
 /// Chrome app-ids that are overlays/system surfaces, not switchable user apps —
-/// excluded from the recents/cycle ring (task 56).
-pub(crate) const CHROME_APP_IDS: [&str; 4] =
-    ["wandr.statusbar", "wandr.taskbar", "wandr.ime.keyboard", "wandr.keyguard"];
+/// excluded from the recents/cycle ring (task 56) + protected from task-kill.
+/// `wandr.powermenu` (task 110) is a modal overlay exactly like `wandr.keyguard`:
+/// shown on the power long-press, hidden (Background) otherwise — never a
+/// switchable task.
+pub(crate) const CHROME_APP_IDS: [&str; 5] =
+    ["wandr.statusbar", "wandr.taskbar", "wandr.ime.keyboard", "wandr.keyguard", "wandr.powermenu"];
 
 // ── owned-snapshot helpers over the Store (avoid borrow conflicts with ctx) ──
 
