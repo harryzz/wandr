@@ -1,5 +1,5 @@
 TASK=112
 STEP=investigate-done
 STATUS=in-progress
-LAST_SUCCESS=Task 112 investigate: built TeaVM 0.15 WasmGC module from pure Java; imports = JS-host teavm* contract (not WASI); two integration paths identified
-NOTES=repros/java-wasm-spike/ builds spike.wasm (WasmGC). Next: integrate phase Path A (provide teavm* contract over WASI, study TeaVM tests.wasi host). Path B = TeaVM C→wasi-sdk fallback.
+LAST_SUCCESS=Task 112 investigate: TeaVM 0.15 built (WasmGC=JS-host). CORRECTED: tests.wasi=C backend→wasm32-wasi (proven, standard WASI, zero-patch, adapter-ready). Path B (C) recommended for go/no-go; Path A (WasmGC patch) = later optimization.
+NOTES=Next integrate: Path B = install wasi-sdk, TeaVM C target → wasm32-wasi → run under wasmtime → P1→P2 adapter. repros/java-wasm-spike/ has the WasmGC build.

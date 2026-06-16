@@ -170,3 +170,29 @@ impl, provide the `teavm*` contract from wandr-host, instantiate `spike.wasm`, c
 an export. Fall back to Path B if the WasmGC+js-string host surface proves deep.
 J2WASM stays a watch-item (WasmGC + maintained, but same JS-host gap, no `teavm*`
 test-host to crib).
+
+### Correction (2026-06-16, same day): tests.wasi = C backend, not WasmGC
+
+Checked TeaVM's JUnit run strategies — only **Browser**, **C**, generic. **WasmGC
+is tested in headless Chrome (browser/JS); there is NO WasmGC-under-WASI runtime in
+TeaVM.** The earlier note "tests.wasi runs WasmGC, crib its host impl" was wrong.
+`CRunStrategy` has `compilerCommand` (clang/wasi-sdk) + `wrapperCommand` (wasmtime)
+→ **`tests.wasi` = the `C` backend compiled to `wasm32-wasi`, run under wasmtime**
+(CI-proven). So the two real paths, corrected:
+
+- **Path B (C backend) — the proven, zero-patch route.** TeaVM `C` → `wasm32-wasi`
+  (via **wasi-sdk** clang) **already emits standard `wasi_snapshot_preview1`** and
+  is tested in TeaVM CI. wandr supplies nothing custom (standard WASI is linked) and
+  the module **drops into the existing P1→P2 adapter**. Cost: wasi-sdk toolchain;
+  linear-memory, not WasmGC. **This satisfies the "patch TeaVM to emit WASI"
+  principle with no patch at all.**
+- **Path A (WasmGC) — a real TeaVM patch, no crib.** Replace the JS-host floor
+  (`teavmConsole`/`teavmDate`/`teavmMemory`/`teavm.*`) with `wasi_*` imports +
+  **disable `wasm:js-string`** (use char-array strings). No existing wasi-WasmGC
+  runtime exists to copy. Bigger; yields WasmGC (wandr's Kotlin shape, smaller/
+  faster).
+
+**Revised recommendation:** run the go/no-go on **Path B (C backend) first** — it's
+the proven, no-patch, standard-WASI, adapter-ready path = fastest answer to "does
+Java→component work on wandr." If it passes, pursue the **Path A WasmGC patch as an
+optimization** (matches Kotlin, better runtime), now that viability is proven.
