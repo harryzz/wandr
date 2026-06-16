@@ -113,6 +113,80 @@ pid means actually-running HIDL.** Don't count the `?` rows.
   would be unreachable — but on A16 there's essentially nothing functional left on
   HIDL, so the `--no-art` survivor set is cleaner (all AIDL on binder/vndbinder).
 
+## C++ shim breakdown (HIDL-transport vs native-library)
+
+"Newer device ⇒ no more shims" is **only half true**. wandr has two *kinds* of C++
+shim, and only the **HIDL-transport** kind disappears on an AIDL device. The
+**native-library wrappers** stay regardless, and `wandr-inputflinger` keeps a-03
+alive on any device.
+
+| Shim | Why it's C++ | HIDL-transport? | On an AIDL device | Built on |
+|---|---|---|---|---|
+| **wandr-sensormanager** | sensors **HIDL** → AIDL bridge | **yes** | **GONE** → pure-rsbinder `wandr-hal-*` | a-03 |
+| camera-EIS gyro shim | sensors/EIS **HIDL** | **yes** | **GONE** | a-03 |
+| `wandr-radio` (task 111, planned) | radio **HIDL `@1.4`** (taimen) | **yes** | **NOT NEEDED** — radio is AIDL → pure-rsbinder | (would be a-03) |
+| **wandr-inputflinger** | links `libinputflinger` C++ `InputDispatcher` | no | **STAYS** (no Rust equivalent) | a-03 |
+| **wandr-framework-shim** | registers stub binder services | no (AIDL/binder) | **STAYS** (portable to rsbinder in principle, not today) | a-03 |
+| **libsf_surface** (`sf_surface.cpp`) | wraps `SurfaceComposerClient`/BBQ/InputFlinger (libgui C++) | no | **STAYS** | local (cc-rs) |
+| **sf_media** | wraps `AMediaCodec` (NDK) | no — transport-agnostic | **STAYS** | local (cc-rs) |
+| `wasi_drawable` | skia drawable | no | **STAYS** | local (cc-rs) |
+
+Takeaways:
+
+- **Going AIDL removes the *HIDL-transport* shims only** — `wandr-sensormanager`,
+  the camera-gyro shim, and the planned `wandr-radio`. Those collapse into plain
+  Rust `wandr-hal-*` crates (rsbinder over AIDL).
+- **a-03 is NOT eliminated** — `wandr-inputflinger` links the AOSP `InputDispatcher`
+  C++ (no Rust path), and `wandr-framework-shim` is C++ binder stubs today. Both
+  need the Soong/AOSP tree regardless of HIDL/AIDL.
+- **The local cc-rs shims always remain** — `libsf_surface` (SurfaceFlinger / EGL /
+  BBQ via libgui), `sf_media` (codecs via NDK `AMediaCodec`), `wasi_drawable`
+  (skia). They wrap native C++ libraries that have **no binder/Rust path at all**, so
+  the HIDL-vs-AIDL distinction never touches them.
+- **Rule of thumb:** HIDL-vs-AIDL only matters for HALs wandr reaches **directly
+  over binder** (sensors, radio, display-power). HALs behind a **native/NDK API**
+  (media via `AMediaCodec`, display via libgui, EGL/GLES via the driver, audio via
+  the AudioFlinger client) are transport-abstracted — no shim choice to make.
+
+### Radio specifically
+
+The full stack on the Pixel 2 XL, top to bottom:
+
+```
+modem (baseband firmware)
+   ↑  QMI  (Qualcomm protocol over shared mem — NOT binder)
+rild / qcril            vendor C++ RIL daemon  (pid 1421)
+   ↑  rild socket
+radio HAL service       android.hardware.radio@1.4::IRadio   (pid 3433)
+   ─────────────────────  HIDL  on /dev/hwbinder  ◄── THE HIDL BOUNDARY
+   ↑  HIDL client
+RILJ  (RIL.java)        Java, in com.android.phone           ◄── first Java layer
+   ↑
+phone · isub · isms · telecom · TelephonyRegistry · carrier_config   (Java services)
+   ↑
+TelephonyManager (Java SDK)  →  apps
+```
+
+Key points:
+
+- `rild`/`qcril` talk to the modem over **QMI** (not binder); they expose the radio
+  HAL as **HIDL `IRadio`** (here via the separate `@1.4-service.legacy` process
+  fronting `rild`).
+- The Java client that speaks HIDL is **RILJ (`RIL.java`)** — it is the **HIDL
+  client** of `IRadio`. The named services (`phone`/`isub`/`isms`/…) sit *above*
+  RILJ and never touch HIDL directly.
+- Under `--no-art`, **RILJ + all the Java services die, but `rild` + the HIDL
+  `IRadio` HAL survive.** So wandr's `wandr-radio` shim becomes the **new HIDL
+  `IRadio` client that replaces RILJ**, re-exposing a Rust/AIDL bridge upward.
+
+- **Pixel 2 XL (taimen):** radio is **HIDL `@1.4`** (`android.hardware.radio@1.4-
+  service.legacy` → `rild`). Task 111 **needs a C++ HIDL shim** — a HIDL *client* of
+  `android.hardware.radio@1.4::IRadio` bridging to Rust via a local AIDL service
+  (the `wandr-sensormanager` pattern). You don't shim `rild`/`qcril` themselves; you
+  shim the HIDL `IRadio` interface they serve.
+- **Pixel 6 Pro / 9a:** radio is **AIDL** → **no shim**, a pure-rsbinder
+  `wandr-hal-*` client (targeting `/dev/vndbinder` since it's a vendor HAL).
+
 ## Which device to use (Pixel-specific nuance)
 
 The freeze rule (HIDL = vendor launch level) is the rule for **third-party GRF
