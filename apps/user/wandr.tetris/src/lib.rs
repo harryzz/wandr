@@ -22,6 +22,7 @@ use crate::exports::wandr::ui_shell::shell_events::Guest as ShellEventsGuest;
 use crate::exports::wasi::input_handlers::frame_handler::Guest as FrameGuest;
 use crate::exports::wasi::input_handlers::key_handler::{Guest as KeyGuest, KeyEvent};
 use crate::exports::wasi::input_handlers::pointer_handler::{Guest as PointerGuest, PointerEvent};
+use crate::wandr::chrome::launcher;
 use crate::wasi::canvas::draw::Canvas;
 use crate::wasi::canvas::embedding as wembed;
 use crate::wasi::canvas::layout as wlayout;
@@ -37,6 +38,23 @@ const MAX_LOCK_RESETS: u32 = 15;
 /// High score persisted in the writable `/state` preopen (same pattern as the
 /// audio player's config/EQ); best-effort (absent on the desktop dev loop).
 const HS_FILE: &str = "/state/tetris-highscore.json";
+/// Touch auto-shift (DAS = delay before repeat, ARR = repeat interval) for the
+/// on-screen move buttons.
+const DAS_NS: u64 = 170_000_000;
+const ARR_NS: u64 = 45_000_000;
+/// On-screen control-band buttons (M3 touch). Indices are also the hit-test ids.
+const NBTN: usize = 8;
+const B_LEFT: u8 = 0;
+const B_RIGHT: u8 = 1;
+const B_CCW: u8 = 2;
+const B_CW: u8 = 3;
+const B_SOFT: u8 = 4;
+const B_HARD: u8 = 5;
+const B_HOLD: u8 = 6;
+const B_PAUSE: u8 = 7;
+const BTN_BG: u32 = 0xFF1E2030;
+const BTN_DOWN: u32 = 0xFF34384E;
+const BTN_FG: u32 = 0xFFE6E9F2;
 
 // ── Palette ──────────────────────────────────────────────────────────────────
 const BG_APP: u32 = 0xFF0A0A12;
@@ -168,6 +186,13 @@ struct State {
     soft_drop: bool,
     lock_accum_ns: u64,
     lock_resets: u32,
+    // M3 — touch controls.
+    touches: Vec<(u32, u8)>,                  // pointer id -> held button id
+    move_dir: i32,                            // -1/0/+1 from held move buttons
+    das_ns: u64,
+    das_started: bool,
+    touch_soft: bool,
+    board_touch: Option<(u32, f32, f32, u64)>, // id, start x, start y, start nanos
     w: f32,
     h: f32,
     hud: Option<(u32, u32, u32, u32, [Para; 2])>, // (score,hi,level,lines) -> 2 lines
@@ -199,6 +224,12 @@ impl Default for State {
             soft_drop: false,
             lock_accum_ns: 0,
             lock_resets: 0,
+            touches: Vec::new(),
+            move_dir: 0,
+            das_ns: 0,
+            das_started: false,
+            touch_soft: false,
+            board_touch: None,
             w: 0.0,
             h: 0.0,
             hud: None,
@@ -437,12 +468,17 @@ fn ghost_y(s: &State) -> i32 {
     gy
 }
 
+/// Soft drop is active from the keyboard (ArrowDown held) or the touch button.
+fn soft_active(s: &State) -> bool {
+    s.soft_drop || s.touch_soft
+}
+
 /// Guideline gravity: seconds-per-cell by level, → ns. Soft drop is 20× faster.
 fn gravity_ns(s: &State) -> u64 {
     let l = s.level as f64;
     let secs = (0.8 - (l - 1.0) * 0.007).max(0.05).powf(l - 1.0);
     let ns = (secs * 1.0e9) as u64;
-    if s.soft_drop {
+    if soft_active(s) {
         (ns / 20).max(1_000_000)
     } else {
         ns.max(1_000_000)
@@ -531,6 +567,7 @@ fn draw_para(cv: &Canvas, pa: &Para, x: f32, baseline_y: f32) {
 
 // ── Layout (derived from surface dims — no hardcoding) ─────────────────────────
 struct Layout {
+    w: f32,
     cell: f32,
     bx: f32,
     by: f32,
@@ -538,11 +575,17 @@ struct Layout {
     board_h: f32,
     margin: f32,
     top_h: f32,
+    ctrl_y: f32,
+    ctrl_h: f32,
 }
 fn layout(w: f32, h: f32) -> Layout {
     let margin = w * 0.02;
-    let top_h = h * 0.20; // HUD text + hold/next previews
-    let avail_h = h - top_h - margin;
+    let top_h = h * 0.165; // HUD text + hold/next previews
+    let ctrl_h = h * 0.17; // bottom on-screen control band (2 rows × 4)
+    let ctrl_y = h - ctrl_h;
+    let region_top = top_h;
+    let region_bot = ctrl_y - margin;
+    let avail_h = (region_bot - region_top - margin).max(1.0);
     let cell = ((w - 2.0 * margin) / COLS as f32)
         .min(avail_h / ROWS as f32)
         .floor()
@@ -550,8 +593,33 @@ fn layout(w: f32, h: f32) -> Layout {
     let board_w = cell * COLS as f32;
     let board_h = cell * ROWS as f32;
     let bx = (w - board_w) * 0.5;
-    let by = top_h + (h - top_h - board_h) * 0.5;
-    Layout { cell, bx, by, board_w, board_h, margin, top_h }
+    let by = region_top + (region_bot - region_top - board_h) * 0.5;
+    Layout { w, cell, bx, by, board_w, board_h, margin, top_h, ctrl_y, ctrl_h }
+}
+
+/// Rect of control-band button `i` (0..NBTN) — 2 rows × 4 cols. Single source
+/// of truth shared by rendering and hit-testing.
+fn btn_rect(l: &Layout, i: usize) -> wtypes::Rect {
+    let gap = l.margin;
+    let bw = (l.w - 2.0 * l.margin - 3.0 * gap) / 4.0;
+    let bh = (l.ctrl_h - l.margin - gap) / 2.0;
+    let col = (i % 4) as f32;
+    let row = (i / 4) as f32;
+    let x = l.margin + col * (bw + gap);
+    let y = l.ctrl_y + l.margin * 0.5 + row * (bh + gap);
+    rect(x, y, bw, bh)
+}
+fn board_rect(l: &Layout) -> wtypes::Rect {
+    rect(l.bx, l.by, l.board_w, l.board_h)
+}
+/// In-app exit button (top-right). Needed for fullscreen/immersive use where the
+/// taskbar isn't available; foregrounds the launcher via `go-home`.
+fn exit_rect(l: &Layout, h: f32) -> wtypes::Rect {
+    let sz = h * 0.05;
+    rect(l.w - l.margin - sz, l.margin * 0.5, sz, sz)
+}
+fn in_rect(r: &wtypes::Rect, x: f32, y: f32) -> bool {
+    x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height
 }
 
 fn draw_cell_at(cv: &Canvas, x: f32, y: f32, size: f32, color: u32, alpha: u8) {
@@ -579,6 +647,40 @@ fn draw_preview(cv: &Canvas, bx: f32, by: f32, bw: f32, bh: f32, kind: u8, alpha
     let oy = by + (bh - used_h * pcell) * 0.5;
     for &(c, r) in cells {
         draw_cell_at(cv, ox + (c - minc) as f32 * pcell, oy + (r - minr) as f32 * pcell, pcell, COLORS[kind as usize], alpha);
+    }
+}
+
+/// Center a single text label inside a rect (approximate vertical centering).
+fn draw_label(cv: &Canvas, r: &wtypes::Rect, txt: &str, size: f32, color: u32) {
+    let p = para(txt, size, 700, color);
+    draw_para(cv, &p, r.x + (r.width - p.width) * 0.5, r.y + r.height * 0.5 + size * 0.34);
+}
+
+/// Draw a filled triangle from three points (button icons).
+fn tri(cv: &Canvas, a: (f32, f32), b: (f32, f32), c: (f32, f32), color: u32) {
+    let path = format!("M {} {} L {} {} L {} {} Z", a.0, a.1, b.0, b.1, c.0, c.1);
+    cv.draw_path(&path, wtypes::FillRule::Nonzero, &paint(color));
+}
+
+/// Draw an on-screen control button: rounded background (highlighted when held)
+/// + a vector/text icon for its action.
+fn draw_button(cv: &Canvas, r: &wtypes::Rect, btn: u8, down: bool, h: f32) {
+    cv.draw_rounded_rect(rrect(r.x, r.y, r.width, r.height, r.height * 0.18), &paint(if down { BTN_DOWN } else { BTN_BG }));
+    let (cx, cy) = (r.x + r.width * 0.5, r.y + r.height * 0.5);
+    let s = r.height.min(r.width) * 0.28;
+    match btn {
+        B_LEFT => tri(cv, (cx + s * 0.6, cy - s), (cx - s * 0.7, cy), (cx + s * 0.6, cy + s), BTN_FG),
+        B_RIGHT => tri(cv, (cx - s * 0.6, cy - s), (cx + s * 0.7, cy), (cx - s * 0.6, cy + s), BTN_FG),
+        B_SOFT => tri(cv, (cx - s, cy - s * 0.6), (cx + s, cy - s * 0.6), (cx, cy + s * 0.7), BTN_FG),
+        B_HARD => {
+            tri(cv, (cx - s, cy - s * 0.8), (cx + s, cy - s * 0.8), (cx, cy + s * 0.1), BTN_FG);
+            cv.draw_rect(rect(cx - s, cy + s * 0.45, s * 2.0, s * 0.34), &paint(BTN_FG));
+        }
+        B_CCW => draw_label(cv, r, "↺", h * 0.046, BTN_FG),
+        B_CW => draw_label(cv, r, "↻", h * 0.046, BTN_FG),
+        B_HOLD => draw_label(cv, r, "HOLD", h * 0.022, BTN_FG),
+        B_PAUSE => draw_label(cv, r, "❚❚", h * 0.030, BTN_FG),
+        _ => {}
     }
 }
 
@@ -692,13 +794,25 @@ fn render(s: &mut State, cv: &Canvas) {
         }
     }
 
+    // ── On-screen control band (M3 touch; also mouse-clickable on desktop) ──
+    for i in 0..NBTN {
+        let r = btn_rect(&l, i);
+        let held = s.touches.iter().any(|(_, b)| *b as usize == i);
+        draw_button(cv, &r, i as u8, held, h);
+    }
+
+    // ── Exit button (top-right) — always tappable; foregrounds the launcher ──
+    let ex = exit_rect(&l, h);
+    cv.draw_rounded_rect(rrect(ex.x, ex.y, ex.width, ex.height, ex.height * 0.22), &paint(BTN_BG));
+    draw_label(cv, &ex, "✕", h * 0.030, BTN_FG);
+
     // ── Overlays ──
     if s.game_over || s.paused {
         cv.draw_rect(rect(0.0, 0.0, w, h), &paint(OVERLAY));
         let title = if s.game_over { "GAME OVER" } else { "PAUSED" };
         let tp = para(title, h * 0.06, 700, HUD_FG);
         draw_para(cv, &tp, w * 0.5 - tp.width * 0.5, h * 0.46);
-        let hint = if s.game_over { "press R to restart" } else { "press P to resume" };
+        let hint = if s.game_over { "tap / R to restart" } else { "tap / P to resume" };
         let hp = para(hint, h * 0.026, 400, HUD_DIM);
         draw_para(cv, &hp, w * 0.5 - hp.width * 0.5, h * 0.52);
     }
@@ -746,6 +860,131 @@ fn handle_key(s: &mut State, code: &str, down: bool) {
     }
 }
 
+// ── Touch input (M3) ──────────────────────────────────────────────────────────
+/// Recompute the held-button-derived state (move direction, soft-drop) from the
+/// active touches set.
+fn recompute_held(s: &mut State) {
+    s.move_dir = 0;
+    s.touch_soft = false;
+    for &(_, b) in &s.touches {
+        match b {
+            B_LEFT => s.move_dir = -1,
+            B_RIGHT => s.move_dir = 1,
+            B_SOFT => s.touch_soft = true,
+            _ => {}
+        }
+    }
+}
+
+/// Press a control-band button: held buttons (move/soft) are tracked for
+/// auto-shift/continuous drop; the rest fire once.
+fn press_button(s: &mut State, btn: u8, id: u32) {
+    match btn {
+        B_LEFT | B_RIGHT | B_SOFT => {
+            s.touches.push((id, btn));
+            recompute_held(s);
+            if btn != B_SOFT {
+                try_move(s, if btn == B_LEFT { -1 } else { 1 });
+                s.das_ns = 0;
+                s.das_started = false;
+            }
+        }
+        B_CCW => rotate(s, false),
+        B_CW => rotate(s, true),
+        B_HARD => hard_drop(s),
+        B_HOLD => hold(s),
+        B_PAUSE => s.paused = true,
+        _ => {}
+    }
+}
+
+/// Board gesture on release (the secondary, nice-to-have layer; the buttons are
+/// primary): tap = rotate, horizontal swipe = move, downward flick = hard drop,
+/// downward drag = soft step.
+fn board_gesture(s: &mut State, l: &Layout, sx: f32, sy: f32, ex: f32, ey: f32, dt_ns: u64) {
+    let cell = l.cell;
+    let dx = ex - sx;
+    let dy = ey - sy;
+    if dx.abs() < cell * 0.6 && dy.abs() < cell * 0.6 {
+        rotate(s, true); // tap = rotate CW
+        return;
+    }
+    if dy.abs() >= dx.abs() {
+        if dy > 0.0 {
+            if dy > cell * 4.0 && dt_ns < 250_000_000 {
+                hard_drop(s); // fast downward flick
+            } else {
+                let steps = (dy / cell) as i32;
+                for _ in 0..steps.min(ROWS as i32) {
+                    if !collides(&s.board, s.kind, s.rot, s.x, s.y + 1) {
+                        s.y += 1;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+    } else {
+        let steps = (dx / cell) as i32;
+        let dir = steps.signum();
+        for _ in 0..steps.abs().min(COLS as i32) {
+            if !try_move(s, dir) {
+                break;
+            }
+        }
+    }
+}
+
+fn handle_pointer(s: &mut State, ev: &PointerEvent) {
+    use crate::exports::wasi::input_handlers::pointer_handler::Kind;
+    let l = layout(s.w.max(1.0), s.h.max(1.0));
+    match ev.kind {
+        Kind::Down => {
+            // Exit button works in any state — leave to the launcher.
+            if in_rect(&exit_rect(&l, s.h.max(1.0)), ev.x, ev.y) {
+                launcher::go_home();
+                return;
+            }
+            // While stopped/paused, any tap on the board resumes/restarts (no
+            // keyboard on the device). The PAUSE button still works while playing.
+            if s.game_over {
+                reset(s);
+                return;
+            }
+            if s.paused {
+                s.paused = false;
+                return;
+            }
+            for i in 0..NBTN {
+                if in_rect(&btn_rect(&l, i), ev.x, ev.y) {
+                    press_button(s, i as u8, ev.id);
+                    return;
+                }
+            }
+            if in_rect(&board_rect(&l), ev.x, ev.y) {
+                s.board_touch = Some((ev.id, ev.x, ev.y, s.last_ns));
+            }
+        }
+        Kind::Up | Kind::Cancel | Kind::Leave => {
+            if let Some(pos) = s.touches.iter().position(|(id, _)| *id == ev.id) {
+                s.touches.remove(pos);
+                recompute_held(s);
+                if s.move_dir == 0 {
+                    s.das_started = false;
+                }
+            }
+            if let Some((id, sx, sy, st)) = s.board_touch {
+                if id == ev.id {
+                    let dt = s.last_ns.saturating_sub(st);
+                    board_gesture(s, &l, sx, sy, ev.x, ev.y, dt);
+                    s.board_touch = None;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 // ── Guest exports ─────────────────────────────────────────────────────────────
 struct Tetris;
 
@@ -770,6 +1009,18 @@ impl FrameGuest for Tetris {
 
             if !s.paused && !s.game_over {
                 let dt = nanos.saturating_sub(s.last_ns).min(LOCK_DELAY_NS * 4);
+                // Touch auto-shift (DAS/ARR) for held on-screen move buttons.
+                if s.move_dir != 0 {
+                    s.das_ns += dt;
+                    let thr = if s.das_started { ARR_NS } else { DAS_NS };
+                    if s.das_ns >= thr {
+                        let dir = s.move_dir;
+                        try_move(&mut s, dir);
+                        s.das_ns = 0;
+                        s.das_started = true;
+                    }
+                }
+                let soft = soft_active(&s);
                 if grounded(&s) {
                     // Resting: count down the lock delay.
                     s.lock_accum_ns += dt;
@@ -784,7 +1035,7 @@ impl FrameGuest for Tetris {
                         s.gravity_accum_ns -= interval;
                         if !collides(&s.board, s.kind, s.rot, s.x, s.y + 1) {
                             s.y += 1;
-                            if s.soft_drop {
+                            if soft {
                                 s.score += 1; // soft-drop: 1 pt/cell
                             }
                         } else {
@@ -820,7 +1071,9 @@ impl KeyGuest for Tetris {
 }
 
 impl PointerGuest for Tetris {
-    fn on_pointer(_ev: PointerEvent) {} // touch arrives in M3
+    fn on_pointer(ev: PointerEvent) {
+        STATE.with(|st| handle_pointer(&mut st.borrow_mut(), &ev));
+    }
 }
 
 impl FramePacingGuest for Tetris {
@@ -838,7 +1091,19 @@ impl FramePacingGuest for Tetris {
 
 impl ShellEventsGuest for Tetris {
     fn on_scheduled_callback(_id: u32) {}
-    fn on_lifecycle_changed(_new_state: crate::exports::wandr::ui_shell::shell_events::State) {}
+    /// Pause when backgrounded; do NOT auto-resume (the user resumes via the
+    /// pause button / tap / P), matching the guideline.
+    fn on_lifecycle_changed(new_state: crate::exports::wandr::ui_shell::shell_events::State) {
+        use crate::exports::wandr::ui_shell::shell_events::State as S;
+        if matches!(new_state, S::Paused | S::Stopped) {
+            STATE.with(|st| {
+                let mut s = st.borrow_mut();
+                if s.started && !s.game_over {
+                    s.paused = true;
+                }
+            });
+        }
+    }
 }
 
 export!(Tetris);
