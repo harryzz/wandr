@@ -762,6 +762,7 @@ fn run_module(verb: &str, args: &str) -> Option<(Reply, Vec<wandr_arbiter_core::
 /// Run a module-owned command + flush its effects + write the single reply line.
 /// Caller holds `arbiter_lock`.
 fn dispatch_module(verb: &str, rest: &str, stream: &mut UnixStream) -> Result<()> {
+    let fg_before = model_foreground_slot().map(|(_, id)| id);
     match run_module(verb, rest) {
         Some((reply, effects)) => {
             execute_effects(effects);
@@ -774,6 +775,11 @@ fn dispatch_module(verb: &str, rest: &str, stream: &mut UnixStream) -> Result<()
             log::warn!("arbiter: module_owns({verb}) true but dispatch_command returned None");
         }
     }
+    // Any verb that changed the foreground (foreground/go-home/back/cycle/kill)
+    // reconciles immersive chrome to the new visible app.
+    if model_foreground_slot().map(|(_, id)| id) != fg_before {
+        reconcile_immersive();
+    }
     Ok(())
 }
 
@@ -785,18 +791,67 @@ fn dispatch_foreground(app_id: &str) {
     if let Some((_reply, effects)) = run_module("foreground", app_id) {
         execute_effects(effects);
     }
+    reconcile_immersive();
+}
+
+/// True if the installed app's manifest declares `immersive = true`. Read live
+/// from the install dir (`WANDR_APPS_ROOT/apps/<id>/<ver>/package.toml`) since
+/// the arbiter doesn't otherwise parse manifests. Cheap; runs on foreground
+/// changes only.
+fn app_is_immersive(app_id: &str) -> bool {
+    let root = std::env::var("WANDR_APPS_ROOT")
+        .unwrap_or_else(|_| "/data/local/tmp/wandr-apps".to_string());
+    let app_dir = format!("{root}/apps/{app_id}");
+    let Ok(rd) = std::fs::read_dir(&app_dir) else { return false };
+    let mut vers: Vec<String> = rd
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    vers.sort();
+    let Some(ver) = vers.last() else { return false };
+    let Ok(body) = std::fs::read_to_string(format!("{app_dir}/{ver}/package.toml")) else {
+        return false;
+    };
+    body.lines().any(|l| {
+        let t = l.trim();
+        t.starts_with("immersive")
+            && t.split('=')
+                .nth(1)
+                .map(|v| v.trim().trim_matches('"').starts_with("true"))
+                .unwrap_or(false)
+    })
+}
+
+/// Reconcile chrome visibility + insets to the CURRENT foreground app's
+/// immersive flag (self-healing: any foreground change — launch, go-home,
+/// cycle, notification-tap, app death → promote — funnels through here). The
+/// `set-immersive` WM verb is idempotent, so redundant calls are free. Caller
+/// holds `arbiter_lock`.
+fn reconcile_immersive() {
+    let immersive = model_foreground_slot()
+        .map(|(_, id)| app_is_immersive(&id))
+        .unwrap_or(false);
+    if let Some((_r, effects)) = run_module("set-immersive", if immersive { "1" } else { "0" }) {
+        execute_effects(effects);
+    }
 }
 
 /// Inject an event from a legacy handler onto the bus and run whatever effects
 /// the reacting modules requested. The seam by which the legacy state machine
 /// drives the modules. Caller holds `arbiter_lock`.
 fn bus_emit(ev: Event) {
+    let fg_before = model_foreground_slot().map(|(_, id)| id);
     let effects = {
         let mut reg = registry().lock().unwrap_or_else(|e| e.into_inner());
         let mut store = core_store().lock().unwrap_or_else(|e| e.into_inner());
         reg.dispatch_event(ev, &mut store)
     };
     execute_effects(effects);
+    // App death → foreground promotion also reconciles immersive chrome.
+    if model_foreground_slot().map(|(_, id)| id) != fg_before {
+        reconcile_immersive();
+    }
 }
 
 /// The single mechanism executor (task 74) — the only place that performs the
@@ -813,6 +868,7 @@ fn execute_effects(effects: Vec<wandr_arbiter_core::Effect>) {
                 }
             }
             Effect::SetRole { pid, role } => apply_role(pid, role),
+            Effect::SignalVisible { pid, visible } => send_role_signal(pid, visible),
             Effect::Foreground { app_id } => {
                 // Signal bg-receipt M3 — a notification tap brings the owner
                 // forward. Re-enters the `foreground` verb (safe: execute_effects

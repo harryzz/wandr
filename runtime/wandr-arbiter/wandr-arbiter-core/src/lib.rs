@@ -102,6 +102,12 @@ pub struct DisplayGeometry {
     /// the device sensor. Replaces the cross-process orient-lock file — the
     /// foreground host reports it via `set-orientation-lock`.
     pub orientation_locked: bool,
+    /// Whether the foreground app is immersive (manifest `immersive = true`):
+    /// the status/task bars are hidden and the app gets zero chrome insets
+    /// (full screen). Keyed on the visible app, so it's self-healing — leaving
+    /// the immersive app restores chrome. The binary reads the flag from the
+    /// installed manifest on each foreground change and drives `set-immersive`.
+    pub immersive: bool,
 }
 
 impl Default for DisplayGeometry {
@@ -115,6 +121,7 @@ impl Default for DisplayGeometry {
             inset_bottom: 0,
             keyboard_px: 0,
             orientation_locked: false,
+            immersive: false,
         }
     }
 }
@@ -434,6 +441,11 @@ pub enum Effect {
     /// signal, OOM-score, and present push (one effect replaces the scattered
     /// `send_role_signal`/`write_oom_score`/`send_present` trios).
     SetRole { pid: i32, role: Role },
+    /// Toggle a tracked surface's visibility WITHOUT changing its role, by the
+    /// same SIGUSR1/2 the role path uses (`visible=false` → Background-hide,
+    /// `true` → Foreground-show). Used to hide/show the chrome strips for an
+    /// immersive foreground app (the chrome surface keeps its `Role::Chrome`).
+    SignalVisible { pid: i32, visible: bool },
     /// Ask the zygote to launch an app (home-fallback / launch verb).
     Launch { app_id: String, kind: LaunchKind },
     /// Bring a tracked app to the foreground (the binary runs the `foreground`

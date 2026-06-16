@@ -1,5 +1,5 @@
 TASK=109
-STEP=M2-done
+STEP=immersive-done
 STATUS=complete
-LAST_SUCCESS=Task 109 M2 COMPLETE + committed. wandr.tetris: 7-bag, SRS+wall-kicks, ghost, hold, next-5, lock delay, gravity curve, guideline scoring (b2b/combo/drop), high score. Desktop loop now GPU (80447b60). M1 (f3d2318f), present/decorations (b12e0aee).
-NOTES=M3 next: deploy to Pixel 2 XL (wandr-host --install -> wandr-arbiter launch); touch controls (on-screen button band hit-tested in pointer-handler + board gestures: tap=rotate, swipe L/R=move, swipe down=soft, flick=hard); pause-on-background via shell-events on-lifecycle-changed (Paused->pause); palette/polish; USER VISUAL-VERIFY on device (real taps, no adb input under --no-art). Desktop frame: user runs 100% scale for native frame, or DECORATIONS=0 borderless.
+LAST_SUCCESS=Task 109 M1/M2/M3 (3a2acfad) + GPU desktop present (80447b60) + IMMERSIVE (device-verified: launch hides status+task bars, exit restores) all committed. wandr.tetris is a complete game with desktop+device touch/keys, fullscreen immersive, in-app exit.
+NOTES=Immersive = arbiter-only (core SignalVisible+geometry.immersive, wm set-immersive verb + zero insets, bin app_is_immersive reads installed package.toml + reconcile_immersive on fg-change). Loaded via run-hybrid-stack.sh --wandr-only (the device now runs it). Self-healing keyed on visible app. Optional follow-ups: M4 (t-spin/anim/sound via wasi:audio), add `immersive` to app_installer Manifest struct for cleanliness (arbiter currently reads raw toml so not required). Deploy recipe: --install -> kill pid to re-fork -> arbiter launch; new app -> restart launcher; new arbiter code -> --wandr-only.

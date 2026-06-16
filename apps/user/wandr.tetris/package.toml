@@ -7,6 +7,9 @@ version     = "0.1.0"
 world       = "wandr:tetris-app/tetris-app"
 composition = "same-store"
 orientation = "locked"   # stay portrait (manifest values are "auto" | "locked")
+# Fullscreen game: the arbiter hides the status + task bars while this app is
+# foreground and gives it zero chrome insets (the in-app ✕ button exits).
+immersive   = true
 label       = "Tetris"
 # 60 fps cap so the falling piece animates smoothly; the renderer is on-demand
 # (frame-pacing returns a long delay while paused/game-over), so idle stays cheap.

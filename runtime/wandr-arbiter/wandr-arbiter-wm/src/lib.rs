@@ -37,7 +37,7 @@
 //!   it and pushes a real `orient`; the host applies it on push-back.
 
 use wandr_arbiter_core::{
-    ArbiterModule, ChromeAnchor, Ctx, DisplayId, Event, Reply, Role, SensorKind, Store,
+    ArbiterModule, ChromeAnchor, Ctx, DisplayId, Effect, Event, Reply, Role, SensorKind, Store,
     INSET_HOST_OWNED, ORIENT_HOST_OWNED, PRIMARY_DISPLAY,
 };
 
@@ -114,6 +114,8 @@ impl WmModule {
     /// every surface gets them (fullscreen reserves; chrome sizes; IME anchors).
     fn inset_fields(store: &Store, id: DisplayId) -> (u32, u32) {
         match store.geometry(id) {
+            // Immersive foreground app: chrome is hidden, so it reserves nothing.
+            Some(g) if g.immersive => (0, 0),
             Some(g) if g.density_known() => g.chrome_insets(),
             _ => (INSET_HOST_OWNED, INSET_HOST_OWNED),
         }
@@ -411,7 +413,7 @@ pub fn input_window_block(store: &Store, id: DisplayId) -> Option<String> {
 
 impl ArbiterModule for WmModule {
     fn verbs(&self) -> &[&'static str] {
-        &["report-orientation", "set-orientation-lock", "report-panel"]
+        &["report-orientation", "set-orientation-lock", "report-panel", "set-immersive"]
     }
 
     fn on_command(&mut self, verb: &str, args: &str, ctx: &mut Ctx) -> Reply {
@@ -489,6 +491,44 @@ impl ArbiterModule for WmModule {
                 Reply::ok(format!(
                     "panel w={w} h={h} density={density:.3} inset-top={top} inset-bottom={bottom}"
                 ))
+            }
+            // `set-immersive <0|1>` — the binary read the new foreground app's
+            // manifest `immersive` flag. Immersive ⇒ hide the chrome strips
+            // (status/task bars) and push zero insets to the visible app (full
+            // screen); non-immersive ⇒ show chrome + restore real insets. Keyed
+            // on the visible app, so leaving an immersive app restores chrome.
+            // Idempotent: a no-op when the state is unchanged.
+            "set-immersive" => {
+                let imm = match args.trim() {
+                    "1" => true,
+                    "0" => false,
+                    other => return Reply::err(format!("set-immersive-bad-arg {other:?}")),
+                };
+                if ctx.store.geometry(PRIMARY_DISPLAY).map(|g| g.immersive) == Some(imm) {
+                    return Reply::ok(format!("immersive {} (unchanged)", imm as u8));
+                }
+                ctx.store.geometry_mut(PRIMARY_DISPLAY).immersive = imm;
+                // Hide/show the chrome strips (Role::Chrome) without touching role.
+                let chrome_pids: Vec<i32> = ctx
+                    .store
+                    .display(PRIMARY_DISPLAY)
+                    .map(|d| {
+                        d.surfaces()
+                            .iter()
+                            .filter(|s| s.role == Role::Chrome)
+                            .map(|s| s.pid)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                for pid in chrome_pids {
+                    ctx.request(Effect::SignalVisible { pid, visible: !imm });
+                }
+                // Repush geometry to the visible app with the new insets.
+                if let Some(fg) = ctx.store.display(PRIMARY_DISPLAY).and_then(|d| d.visible_app()) {
+                    let line = self.geometry_line(ctx.store, PRIMARY_DISPLAY, 0);
+                    ctx.deliver_to_host(fg, line);
+                }
+                Reply::ok(format!("immersive {}", imm as u8))
             }
             other => Reply::err(format!("wm-unknown-verb {other}")),
         }
