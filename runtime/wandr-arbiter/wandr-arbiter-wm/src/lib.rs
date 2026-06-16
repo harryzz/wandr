@@ -321,10 +321,16 @@ pub fn input_window_block(store: &Store, id: DisplayId) -> Option<String> {
     let (w, h) = (g.panel_w as i32, g.panel_h as i32);
     let orient = effective_orient(store, id);
     // Chrome strip heights from the authored insets (0 when not yet known → no
-    // strip authored, app still routes).
-    let (inset_top, inset_bottom) = match g.chrome_insets() {
-        (t, b) if t != INSET_HOST_OWNED && b != INSET_HOST_OWNED => (t as i32, b as i32),
-        _ => (0, 0),
+    // strip authored, app still routes). Immersive ⇒ the chrome strips are
+    // hidden, so author NO chrome input windows (else the hidden taskbar would
+    // still swallow touches in its region).
+    let (inset_top, inset_bottom) = if g.immersive {
+        (0, 0)
+    } else {
+        match g.chrome_insets() {
+            (t, b) if t != INSET_HOST_OWNED && b != INSET_HOST_OWNED => (t as i32, b as i32),
+            _ => (0, 0),
+        }
     };
     let kb = g.keyboard_px as i32;
 

@@ -835,6 +835,9 @@ fn reconcile_immersive() {
     if let Some((_r, effects)) = run_module("set-immersive", if immersive { "1" } else { "0" }) {
         execute_effects(effects);
     }
+    // Re-author the input-window list: immersive toggles whether the chrome
+    // strips claim touches (the hidden taskbar must stop swallowing them).
+    push_input_windows();
 }
 
 /// Inject an event from a legacy handler onto the bus and run whatever effects
