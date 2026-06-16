@@ -124,3 +124,49 @@ spike is trying to exclude).
 
 🔲 Scoped 2026-06-16, not started. Time-boxed go/no-go; start at M0 (target unit:
 GSM SMS PDU codec, fallback `org.json`).
+
+## Investigate findings (2026-06-16)
+
+Hands-on, ground-truth (built + inspected a real module — `repros/java-wasm-spike/`):
+
+- **Environment ready:** JDK 21, Maven 3.9.9, `wasm-tools` 1.245.1 + `wasmtime` 45
+  (wandr's exact versions), Maven Central reachable.
+- **TeaVM latest = 0.15.0; target enum is now `{ JAVASCRIPT, WEBASSEMBLY_GC, C }`**
+  — the old **linear-memory `WEBASSEMBLY` backend was removed upstream**. So
+  "revive the dormant linear-mem teavm-wasi fork on live upstream" is *not* viable
+  as-is; its backend no longer exists.
+- **Built `spike.wasm`** from trivial pure Java (`teavm-maven-plugin` `compile`,
+  `targetType=WEBASSEMBLY_GC`) — valid WasmGC, 36 KB.
+- **Its imports prove WasmGC is JS-host-targeted, not WASI:** `wasm:js-string`
+  (JS-string builtins) + `teavmJso.*` (JS interop) + a small named runtime
+  contract: `teavmConsole.putcharStdout`, `teavmDate.currentTimeMillis`,
+  `teavmMemory.{heapOffset,maxSize,notifyHeapResized}`, `teavm.{takeStackTrace,
+  decorateException}`. **No `wasi_snapshot_preview1`.** (Same shape as J2WASM.)
+- **…but the contract is shallow + named, and a WASI host for it already exists:**
+  TeaVM's upstream **`-Pteavm.tests.wasi=true`** mode runs WasmGC under a non-JS
+  host → there is a reference implementation of the `teavm*` import contract to
+  study. `teavmConsole.putcharStdout` ↔ WASI `fd_write` is the tell.
+
+### Revised integration picture (the fork for the integrate phase)
+
+The hypothesis "TeaVM → WASI core module → P1→P2 adapter" is **wrong in detail**:
+TeaVM doesn't emit a WASI module; it emits a **WasmGC module with a custom `teavm*`
+import contract**. Two real paths:
+
+- **Path A — WasmGC + custom host imports (no WASI/adapter).** wandr's wasmtime
+  instantiates the WasmGC module directly, providing the ~6-8 `teavm*` funcs (+
+  js-string builtins, or disable them) as host functions; component/custom-WIT
+  wrapping is done by embedding the core module + hand-wiring exports (NOT the
+  P1→P2 adapter, which is WASI-preview1-shaped). **Pro:** WasmGC (wandr's Kotlin
+  shape), maintained, small shim. **Con:** not the existing component path; js-string
+  builtins need wasmtime support or a shim.
+- **Path B — TeaVM `C` backend → wasi-sdk → WASI core module → P1→P2 adapter.** The
+  classic linear-memory WASI path, fits wandr's *existing* component flow. **Pro:**
+  reuses the adapter; clean WASI. **Con:** Java→C→wasm (wasi-sdk + clang setup),
+  no WasmGC, heavier; untested here.
+
+**Next (integrate phase): evaluate Path A first** — study TeaVM's `tests.wasi` host
+impl, provide the `teavm*` contract from wandr-host, instantiate `spike.wasm`, call
+an export. Fall back to Path B if the WasmGC+js-string host surface proves deep.
+J2WASM stays a watch-item (WasmGC + maintained, but same JS-host gap, no `teavm*`
+test-host to crib).
