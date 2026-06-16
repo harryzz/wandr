@@ -146,6 +146,56 @@ a fine target** — and anything Pixel 6→10 on a current build works. Don't op
 for "launched with A15"; optimize for "running a current OS build" (which kills the
 HIDL transport and gives Google's AIDL vendor HALs).
 
+## Device selection criteria (what wandr actually needs)
+
+wandr does **not** require LineageOS or a userdebug build — that's a common
+over-statement. The boot path (`service.sh`) runs in Magisk's `late_start_service`
+= already root, and `run-hybrid-stack.sh` elevates with `su -c`; neither needs
+`adb root`/`ro.debuggable` (the adb-root pin is gated on `ro.debuggable` and
+no-ops on a user build by design).
+
+**Hard requirements:**
+
+1. **Root** (Magisk / `su`).
+2. **AOSP-based framework** — wandr assumes stock-AOSP-shaped `system_server` /
+   SurfaceFlinger / binder / HALs. **Pixel stock ≈ AOSP; Motorola "My UX" ≈
+   near-AOSP** → fine. **Heavy skins (Xiaomi HyperOS, Samsung One UI, Oppo/Vivo
+   ColorOS) are the real risk** — modified SurfaceFlinger, custom services,
+   aggressive process-killers — not "is it LineageOS."
+3. **Permissive SELinux (or custom sepolicy)** — wandr's root HAL/binder access +
+   stopping `system_server` hit AVC denials under stock enforcing policy; you need
+   `setenforce 0` via root or Magisk sepolicy.
+4. **Unlockable bootloader** (to flash Magisk) — buy the **retail/unlocked**
+   variant; carrier units (Verizon/AT&T/…) block it.
+5. *(optional)* **AIDL-clean** to skip C++ HIDL shims — A15+ launch or running A16.
+
+**Not required (conveniences only):** LineageOS, userdebug, `adb root`,
+`ro.debuggable=1`.
+
+**What LineageOS buys you** (a risk reducer, not a necessity): guaranteed
+AOSP-clean + permissive-friendly base, `adb root`, and **someone already did the
+device bring-up** (kernel / SELinux / GPU-EGL / vendor-service quirks). On stock
+you take those on yourself.
+
+**Net device guidance (by the corrected gates):**
+
+- **Top recommendation: Pixel 9a** — the only Pixel that *launched* on A15 (born
+  AIDL-clean), stock ≈ AOSP, trivially unlockable, Tensor/Mali GPU already proven
+  via the Pixel 6, well-trodden Pixel+Magisk(+optional LineageOS) path. Lowest
+  bring-up risk per dollar.
+- **Already on hand: Pixel 6 Pro** — AIDL-clean on A16; perfectly usable.
+- **Viable (cheaper): retail-unlocked near-stock Motorola** (My UX, A15) — meets
+  every hard gate; you self-handle SELinux/verified-boot and have no community
+  bring-up net. Prefer a model with an official LineageOS port (e.g. Moto G200
+  `xpeng`, LOS 23 / Adreno) if you want the safety net.
+- **Risky / avoid:** heavy-skin phones (HyperOS / One UI / ColorOS) — framework
+  deviates from AOSP; carrier-locked units (no unlock); ultra-budget devices with
+  no custom-ROM scene *and* a heavy skin.
+
+Always confirm the actual HAL transport with the `lshal` / `service list` pass
+above before committing — "launched A15" implies but does not guarantee zero HIDL
+on non-Pixel (GRF can leave BSP HIDL HALs).
+
 ## Bottom line
 
 > HIDL on a device is driven by **(vendor launch level) for GRF devices** but by
@@ -155,3 +205,9 @@ HIDL transport and gives Google's AIDL vendor HALs).
 > Pixel 6+ ⇒ AIDL everywhere ⇒ pure-rsbinder, no C++ HIDL shims.** For telephony
 > specifically, the Pixel 6 Pro turns task 111 from "C++ HIDL shim + Rust" into
 > "Rust-only AIDL client."
+>
+> **Device pick:** wandr needs **root + an AOSP-based framework** (not LineageOS
+> specifically). Top recommendation **Pixel 9a** (born-AIDL, lowest bring-up risk);
+> the **Pixel 6 Pro on hand** already works; a **retail-unlocked near-stock
+> Motorola (A15)** is the cheap viable option. Heavy skins (HyperOS/One UI/ColorOS)
+> and carrier-locked units are the things to avoid.
