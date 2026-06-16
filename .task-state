@@ -1,5 +1,5 @@
 TASK=109
-STEP=M1-done
+STEP=M2-done
 STATUS=complete
-LAST_SUCCESS=Task 109 M1 COMPLETE + user-verified on desktop dev loop. wandr.tetris playable core (keys-only). Desktop loop HiDPI crash fixed in host (decorations off + present reconcile). Committed.
-NOTES=M2 next: 7-bag randomizer, SRS rotation + wall-kick tables (incl. I-piece), ghost piece, hold slot, next-queue (5), lock delay (~0.5s move-reset), gravity curve by level (level-up /10 lines), scoring (single/double/triple/tetris + back-to-back + combo + soft/hard-drop pts), high score in /state/highscore.json. Still desktop-verified. Then M3 device+touch.
+LAST_SUCCESS=Task 109 M2 COMPLETE + committed. wandr.tetris: 7-bag, SRS+wall-kicks, ghost, hold, next-5, lock delay, gravity curve, guideline scoring (b2b/combo/drop), high score. Desktop loop now GPU (80447b60). M1 (f3d2318f), present/decorations (b12e0aee).
+NOTES=M3 next: deploy to Pixel 2 XL (wandr-host --install -> wandr-arbiter launch); touch controls (on-screen button band hit-tested in pointer-handler + board gestures: tap=rotate, swipe L/R=move, swipe down=soft, flick=hard); pause-on-background via shell-events on-lifecycle-changed (Paused->pause); palette/polish; USER VISUAL-VERIFY on device (real taps, no adb input under --no-art). Desktop frame: user runs 100% scale for native frame, or DECORATIONS=0 borderless.
