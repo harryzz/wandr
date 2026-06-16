@@ -1,0 +1,4 @@
+package wandr:spike;
+world spike {
+  export packed-len: func(septets: s32) -> s32;
+}

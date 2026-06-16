@@ -131,3 +131,20 @@ thesis is validated at the toolchain level.
 - **M5 component:** P1→P2 adapter → component + a real custom WIT export (the
   current `@Export` is a raw core-func; the adapter + hand-ABI gives the WIT
   interface) → instantiate from wandr-host on device.
+
+## M5 test (2026-06-17) — confirmed blocked on M4 (expected)
+
+Attempted the component pipeline on the current (M2/M3) module:
+`wasm-tools component embed wit/ spike.wasm` (OK) → `component new` →
+**`error: module requires an import interface named teavmDate`**. `component new`
+maps core imports to WIT interfaces; the floor imports (`teavmDate`, `teavmMemory`,
+`env::memory`) are camelCase TeaVM-custom names with no WIT mapping → no component
+until M4 removes/converts them.
+
+Note: the **substance** of M5 (a host calling an exported Java fn) is already
+proven by the `stub-host` harness (`packed_len` → correct results). The remaining
+M5 work is *packaging* as a component + WIT, gated entirely on M4:
+- `env::memory` → module-defined memory (not imported)
+- `teavmMemory.{heapOffset,maxSize,notifyHeapResized}` → module-internal/self-managed
+- `teavmDate.currentTimeMillis` → `wasi clock_time_get`
+Then `component new --adapt` (P1→P2) + the embedded WIT yields a real component.
