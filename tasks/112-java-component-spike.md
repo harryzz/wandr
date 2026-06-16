@@ -10,24 +10,58 @@
 
 ## Goal (one sentence)
 
-Get **one shallow-native, self-contained pure-Java unit** compiled with TeaVM →
-core wasm module → wandr's existing **P1→P2 adapter** → a **component that exports
-a custom WIT**, and **instantiate + call it from wandr-host** (desktop dev loop,
-then on device). Prove the *toolchain* end-to-end; defer framework entanglement.
+Get **one shallow-native, self-contained pure-Java unit** through a Java → core
+wasm module → wandr's **P1→P2 adapter** → a **component that exports a custom WIT**,
+**instantiated + called from wandr-host** (desktop dev loop, then device) — by
+**assembling the pipeline from whatever existing tools fit and writing the missing
+glue** where they don't. Prove the *toolchain is buildable* end-to-end; defer
+framework entanglement.
 
-## Why this exact shape
+## Nature of the task: investigate → integrate → build
 
-- **Isolate the variable.** The spike tests the **toolchain** (TeaVM + adapter +
-  custom-WIT export on wandr), NOT the framework-entanglement question (Binder /
-  Looper / deep JNI). So the target must be **pure Java with zero `android.*`,
-  zero native, zero Binder, zero Looper** — every obstacle from the design note
-  removed except "can Java become a wandr component at all."
+There is **no off-the-shelf Java→Component-Model toolchain** (confirmed:
+`docs/wasm-component-language-support.md`). So this is **not** "adopt a tool" — it's
+**R&D**: survey the available pieces, **stitch the usable ones together**, and
+**write the parts that are missing**, time-boxed per part. Three phases:
+
+1. **Investigate** — establish, hands-on, what each candidate actually produces and
+   where it stops (see the inventory below). Cheap, first.
+2. **Integrate** — wire the viable pieces into one path to a wandr component
+   (compiler → core module → P1→P2 adapter → custom-WIT export → instantiate).
+3. **Build the missing parts** — only what the integration proves is absent (e.g. a
+   binding shim, a WASI-host shim for JS-env imports, a revived bindgen). Each
+   missing part is its own bounded go/no-go; if one is too deep, that's the wall.
+
+### Why this exact shape
+
+- **Isolate the variable.** Tests the **toolchain** (compile + adapter + custom-WIT
+  export on wandr), NOT framework entanglement (Binder / Looper / deep JNI). So the
+  target must be **pure Java with zero `android.*`, zero native, zero Binder, zero
+  Looper** — every obstacle from the design note removed except "can Java become a
+  wandr component at all."
 - **Reuse what exists.** wandr already wraps Kotlin/Wasm core modules into reactor
-  components via the P1→P2 adapter, with **hand-written canonical-ABI bindings**
-  (the skiko binding). The spike does the same for a TeaVM core module — so a
-  missing `wit-bindgen-teavm-java` generator is **not** a blocker (hand-write the
-  ABI; the removed generator is a later convenience, not a gate).
-- **Bounded + go/no-go.** Days, not months. A hard wall is a *useful* result.
+  components via the P1→P2 adapter with **hand-written canonical-ABI bindings** (the
+  skiko binding). Do the same for the Java module — so a missing
+  `wit-bindgen-teavm-java` generator is **not** a blocker (hand-write the ABI).
+- **Bounded + go/no-go per part.** Days, not months. A hard wall is a *useful*
+  result.
+
+## Toolchain inventory (mix-and-match)
+
+| Piece | Provides | Gap / status |
+|---|---|---|
+| **TeaVM (upstream `konsoletyper`)** | Java → core wasm; **linear-mem backend → WASI** + a separate WasmGC→JS backend; actively maintained | the **WASI** path is the linear-mem one; component wiring lapsed |
+| **teavm-wasi forks (golem/fermyon)** | the WASI + CM glue + `wit-bindgen-teavm-java` | **dormant** (2022–23); revive/port onto live upstream TeaVM |
+| **J2CL / J2WASM (Google + Chrome)** | Java → **WasmGC** (same shape as wandr's Kotlin path → reuses the adapter) ; actively maintained (commit 2026-06) | **JS-host only (jsinterop), NO WASI/standalone** — same gate as dart2wasm. Usable only if a standalone mode lands *or* we shim its JS env as WASI host fns (large) → **watch / preferred-if-standalone** |
+| **wandr P1→P2 adapter** | core module → reactor component (KT-86415 State-pin, fixed linear-mem partition) | tuned for Kotlin/Wasm; **verify** it wraps a TeaVM module (its own check) |
+| **hand-written canonical-ABI bindings** | custom-WIT import/export without a generator (skiko precedent) | manual; fine for the spike's one interface |
+| **AIDL2WIT** (user's project) | Binder → WIT (for the *later* entangled-service phase) | not needed for the pure-Java spike |
+| **Looper-on-step-executor shim** | Handler/Looper (for the *later* phase) | not needed for the pure-Java spike |
+
+**Working hypothesis to test first:** **TeaVM linear-mem → WASI core module → wandr
+P1→P2 adapter → hand-written ABI** is the only path that targets the right host
+today; J2WASM (WasmGC, maintained) is the better *future* base but JS-locked. The
+investigate phase confirms or refutes this before any integration effort.
 
 ## Target unit
 
