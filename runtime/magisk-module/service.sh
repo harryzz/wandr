@@ -32,6 +32,9 @@ log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$LOG"; }
 spawn() { log "spawn: $1"; setsid sh -c "$2" </dev/null >>"${3:-$LOG}" 2>&1 & }
 have() { [ -e "$1" ]; }
 svc_found() { service check "$1" 2>/dev/null | grep -q found; }
+# Run an arbiter CLI verb with a hard timeout so a blocked reply (e.g. a slow/
+# flaky sensors-HAL on a cold boot) can never hang the whole boot bringup.
+arb() { timeout 25 env WANDR_APPS_ROOT="$APPS_ROOT" "$ARB" "$@" >>"$LOG" 2>&1 || log "arb $* failed/timed out (continuing)"; }
 # Wait up to <2nd arg>×0.5s for a unix socket; 0 = appeared.
 wait_sock() { _i=0; while [ "$_i" -lt "${2:-20}" ]; do [ -S "$1" ] && return 0; sleep 0.5; _i=$((_i+1)); done; return 1; }
 # Wait up to <2nd arg>×0.5s for a binder service name.
@@ -40,6 +43,17 @@ wait_svc() { _i=0; while [ "$_i" -lt "${2:-20}" ]; do svc_found "$1" && return 0
 log "=== wandr-stack boot (service.sh, --no-art default) ==="
 
 [ -f "$MODDIR/disable" ] && { log "disable flag present — skipping"; exit 0; }
+
+# ── 0. Pin adbd to root (userdebug) ──────────────────────────────────────────
+# We stop system_server below; this guarantees a ROOT adb recovery channel
+# survives even if a later bringup step stalls. Equivalent to `adb root`, but
+# applied at every boot so it persists. `ro.debuggable=1` gates this; on a user
+# build the restart is a harmless no-op (adbd stays shell).
+if [ "$(getprop ro.debuggable)" = "1" ]; then
+    log "pinning adbd to root (service.adb.root=1, restart adbd)"
+    setprop service.adb.root 1
+    setprop ctl.restart adbd
+fi
 
 for b in "$HOST" "$ARB" "$LAUNCH" "$T/libsf_surface.so"; do
     have "$b" || { log "missing $b — bailing (deploy the stack first)"; exit 1; }
@@ -123,22 +137,22 @@ if have "$T/wandr-net"; then
 fi
 if [ -n "$HOME_APP" ]; then
     log "set-home $HOME_APP"
-    WANDR_APPS_ROOT=$APPS_ROOT "$ARB" set-home "$HOME_APP" >>"$LOG" 2>&1 || true
+    arb set-home "$HOME_APP"
 fi
 log "status bar + taskbar"
 spawn statusbar "LD_LIBRARY_PATH=$T WANDR_APPS_ROOT=$APPS_ROOT $HOST --standalone-overlay-top --app wandr.statusbar" /dev/null
 spawn taskbar "LD_LIBRARY_PATH=$T WANDR_APPS_ROOT=$APPS_ROOT $HOST --standalone-overlay-bottom-bar --app wandr.taskbar" /dev/null
 log "IME keyboard + set-ime"
-WANDR_APPS_ROOT=$APPS_ROOT "$ARB" launch-overlay wandr.ime.keyboard >>"$LOG" 2>&1 || true
+arb launch-overlay wandr.ime.keyboard
 sleep 1
-WANDR_APPS_ROOT=$APPS_ROOT "$ARB" set-ime wandr.ime.keyboard >>"$LOG" 2>&1 || true
+arb set-ime wandr.ime.keyboard
 log "keyguard + boot-lock"
 spawn keyguard "LD_LIBRARY_PATH=$T WANDR_APPS_ROOT=$APPS_ROOT $HOST --standalone-overlay-lock --app wandr.keyguard" /dev/null
 sleep 1
-WANDR_APPS_ROOT=$APPS_ROOT "$ARB" lock >>"$LOG" 2>&1 || true
+arb lock
 log "power menu (hidden overlay)"
 spawn powermenu "LD_LIBRARY_PATH=$T WANDR_APPS_ROOT=$APPS_ROOT $HOST --standalone-overlay-lock --app wandr.powermenu" /dev/null
 sleep 2
-WANDR_APPS_ROOT=$APPS_ROOT "$ARB" pm-dismiss >>"$LOG" 2>&1 || true
+arb pm-dismiss
 
 log "=== wandr-stack up (zygote + arbiter + chrome, --no-art default) ==="

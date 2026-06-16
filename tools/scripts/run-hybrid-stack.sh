@@ -25,6 +25,17 @@
 # stack is left running; stop it later with `--stop`.
 set -euo pipefail
 
+# Ensure a ROOT adb channel for the whole run. The dev loop needs it: under
+# --no-art we stop system_server, and the bringup steps below (pushing binaries
+# to /data/local/tmp, pkill of system daemons, reading device logs) assume uid 0.
+# `adb root` is idempotent — a no-op when already root, a harmless failure on a
+# non-debuggable (user) build. wait-for-device reconnects after adbd restarts.
+if ! adb shell id 2>/dev/null | grep -q 'uid=0'; then
+    echo "▸ elevating adb to root (adb root) …"
+    adb root >/dev/null 2>&1 || true
+    adb wait-for-device
+fi
+
 # Detached stop path: tear the stack down and restore SystemUI, then exit.
 if [[ "${1:-}" == "--stop" ]]; then
     echo "▸ stopping wandr-arbiter + wandr-host + wandr-inputflinger …"
