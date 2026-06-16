@@ -6,7 +6,7 @@
   <packaging>jar</packaging>
   <properties>
     <maven.compiler.release>17</maven.compiler.release>
-    <teavm.version>0.15.0</teavm.version>
+    <teavm.version>0.16.0-SNAPSHOT</teavm.version>
   </properties>
   <dependencies>
     <dependency>
@@ -14,11 +14,12 @@
       <artifactId>teavm-classlib</artifactId>
       <version>${teavm.version}</version>
       <scope>provided</scope>
-      <exclusions>
-        <exclusion><groupId>org.teavm</groupId><artifactId>teavm-jso-impl</artifactId></exclusion>
-        <exclusion><groupId>org.teavm</groupId><artifactId>teavm-jso-apis</artifactId></exclusion>
-        <exclusion><groupId>org.teavm</groupId><artifactId>teavm-jso</artifactId></exclusion>
-      </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.teavm</groupId>
+      <artifactId>teavm-interop</artifactId>
+      <version>${teavm.version}</version>
+      <scope>provided</scope>
     </dependency>
   </dependencies>
   <build>

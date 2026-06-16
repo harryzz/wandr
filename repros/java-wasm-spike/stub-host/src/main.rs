@@ -49,9 +49,15 @@ fn main() -> anyhow::Result<()> {
 
     eprintln!("[harness] instantiating (start section runs main)…");
     match linker.instantiate(&mut store, &module) {
-        Ok(_) => {
-            eprintln!("\n[harness] RESULT: instantiated + main ran with NO trap on \
-                       teavmJso/js-string => those imports are DEAD for pure compute.");
+        Ok(instance) => {
+            eprintln!("[harness] instantiated (JS-free). Calling exported Java fn packed_len…");
+            let f = instance.get_typed_func::<i32, i32>(&mut store, "packed_len")?;
+            for n in [1, 3, 5, 8, 10] {
+                let r = f.call(&mut store, n)?;
+                println!("  packed_len({n}) = {r}");
+            }
+            eprintln!("\n[harness] RESULT: a host (wasmtime) CALLED a Java function and got \
+                       results — Java compute runs JS-free under WASI-class wasmtime.");
             Ok(())
         }
         Err(e) => {

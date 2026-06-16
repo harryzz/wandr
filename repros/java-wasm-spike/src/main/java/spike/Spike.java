@@ -1,14 +1,14 @@
 package spike;
 
-// Pure-Java, zero android.*/native/Binder/Looper — the task-112 spike shape.
+import org.teavm.interop.Export;
+
 public final class Spike {
-    // Non-trivial pure logic: GSM 7-bit septet packing length (an SMS-PDU primitive).
+    // Pure Java arithmetic (no console/heap/clock) — the host will call this.
+    @Export(name = "packed_len")
     public static int packedLen(int septets) {
         return (septets * 7 + 7) / 8;
     }
     public static void main(String[] args) {
-        StringBuilder sb = new StringBuilder();
-        for (int n = 1; n <= 5; n++) sb.append(packedLen(n)).append(' ');
-        System.out.println("spike packedLen: " + sb.toString().trim());
+        // entry not used by the test; the export is what we call.
     }
 }

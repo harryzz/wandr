@@ -89,3 +89,45 @@ step:
 Acceptance harness (`repros/java-wasm-spike/stub-host`) + the `spike.wasm` build
 (`repros/java-wasm-spike`) already exist. Effort: a real TeaVM fork, bounded to the
 five items above.
+
+## M2+M3 DONE — JS-free WasmGC, host-callable (2026-06-16)
+
+**Validated the whole approach end-to-end.** Two small TeaVM patches
+(`repros/java-wasm-spike/teavm-patches/`) on `0.16.0-SNAPSHOT`:
+- **`01-throwable-dejso.patch`** — `TThrowable`'s WasmGC stack-trace path used
+  `JSString` + `LazyStackSupplier extends JSObject` (reachable from *every*
+  exception — the thing that pulled JSO). Replaced with an empty trace.
+- **`02-jsoplugin-gate.patch`** — gate `WasmGCJso.install(...)` behind
+  `-Dteavm.wasmgc.nojso=true` (removes the JSO codegen + the `stringToJs` module
+  initializer that ran `wasm:js-string`).
+
+Rebuild loop confirmed working: `publishToMavenLocal` (~7 min full / faster for
+the 2 changed modules) → `mvn -Dteavm.wasmgc.nojso=true package` → inspect/run.
+
+**Result:** the pure-Java spike now compiles to a WasmGC module importing **only
+the floor** — `env::memory`, `teavmDate::currentTimeMillis`, `teavmMemory::{heap
+Offset,maxSize,notifyHeapResized}` — **zero `teavmJso`, zero `wasm:js-string`,
+zero `teavm` stack-trace imports**. It **instantiates under wasmtime**, and an
+`@Export(name="packed_len")` Java function is **called from the host (wasmtime)
+returning correct results**:
+```
+packed_len(1)=1  (3)=3  (5)=5  (8)=7  (10)=9
+```
+(harness: `repros/java-wasm-spike/stub-host`, provides memory + heap globals +
+no-op notifyHeapResized; the floor `teavmDate` was unreached by `packed_len`.)
+
+**This is the go/no-go PASS:** Java→JS-free-WasmGC→runs-on-wasmtime→callable-from-
+a-non-JS-host works, via two located, surgical patches. The "AOSP-Java-as-wasm"
+thesis is validated at the toolchain level.
+
+### Remaining (M1/M4/M5 — engineering, not unknowns)
+- **M1 packaging:** make it a real `WEBASSEMBLY_GC_WASI` mode — gate the Throwable
+  patch too (currently unconditional → affects browser WasmGC) behind the same
+  mode; both patches are tiny + already located.
+- **M4 floor→WASI:** `teavmDate.currentTimeMillis`→`clock_time_get`,
+  `teavmConsole.putcharStdout`→`fd_write` (restore stdout — it dropped out with the
+  crude JSO gate; investigate the WasmGC console path), `teavmMemory` heap
+  self-managed → then no host stubs, a standard WASI module.
+- **M5 component:** P1→P2 adapter → component + a real custom WIT export (the
+  current `@Export` is a raw core-func; the adapter + hand-ABI gives the WIT
+  interface) → instantiate from wandr-host on device.
