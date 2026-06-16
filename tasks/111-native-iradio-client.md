@@ -76,6 +76,24 @@ rild / qcril  (vendor C++, survives --no-art)
 - **Unrelated:** `wandr-call` is IP/WebRTC VoIP — orthogonal to this CS/cellular
   path (though a future "calls" UI could unify both).
 
+## Alternative approach — reuse RILJ as a wasm component (don't rewrite it)
+
+This whole task is "reimplement RILJ's slice in Rust." A **heretic alternative**
+(see `docs/java-framework-reuse-via-wasm.md`): **compile the existing pure-Java
+RILJ to a wasm component and reuse it**, inheriting Google's telephony state
+machine + edge cases instead of re-deriving them. The three entanglements:
+**Binder → AIDL2WIT** (substitute the AIDL proxy's native transact with a WIT the
+host fulfills — on taimen via this task's C++ HIDL shim, on a Pixel 6/9a via
+rsbinder); **HandlerThread → wandr's frame-stepped step-executor** (Looper is ~pure
+Java; only `MessageQueue`'s ~3-4 native methods need a cooperative host pump);
+**residual JNI → ~3 host shims** (`SystemProperties`/`Slog`/minor `Parcel`). Gated
+on reviving a Java→Component-Model toolchain (TeaVM core module + wandr's P1→P2
+adapter — the toolchain is currently dormant; see
+`docs/wasm-component-language-support.md`). If pursued, this flips the task from a
+multi-month Rust rewrite to "compile RILJ + shim its two host deps." RILJ is the
+marquee PoC for the reuse pattern precisely because it's the worst rewrite and the
+most liftable service.
+
 ## Milestones
 
 - **M0 — spike (sole-client proof):** C++ probe on hwbinder; `setRadioPower(on)`,
