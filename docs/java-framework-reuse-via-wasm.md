@@ -26,6 +26,60 @@ So: **take the pure-Java pieces, compile them to wasm components, and reuse them
 verbatim** — no ART, isolated, on-demand. Reuse over rewrite where the logic is
 big and the policy isn't ours.
 
+## Vision vs achievable (the honest north star)
+
+**The dream:** `aosp-tree | our-tools > android.wasm` — point the pipeline
+(TeaVM-WASI + AIDL2WIT + the Looper-on-step-executor shim + native-method
+substitution) at the whole AOSP framework and get "Android, wasm-based"
+automatically, no hand-porting. It *feels* like it should compile, because every
+obstacle has a mechanical transform.
+
+**Why "whole tree, zero manual work" is the fantasy line** — four irreducible
+reasons:
+
+1. **The native floor can't be auto-generated.** AIDL2WIT mechanizes the *Binder*
+   boundary, but the *non-Binder* JNI surface is enormous and bottoms out in real
+   native subsystems (skia, EGL, AudioFlinger, ICU text shaping, BoringSSL crypto,
+   codecs, bionic). A tool can transpile the Java *calling* `nativeDrawText`; it
+   cannot conjure the shaper behind it. Thousands of native methods need real
+   implementations, not a transform.
+2. **There are no component boundaries in the source.** `system_server` is one
+   process of shared static singletons + ServiceManager + the resource/asset
+   system + services reaching into each other. Components need *boundaries with
+   WITs*, which don't exist in AOSP — you have to **decide** them. Design, not a
+   pass.
+3. **Runtime-model mismatch.** ART is multi-threaded, shared-heap, JIT; wasm
+   components are single-threaded, isolated, WasmGC. Much framework code assumes
+   threads + cross-process-mutable statics.
+4. **TeaVM coverage + scale.** Reflection, dynamic class loading, `Unsafe`,
+   ART-isms → per-class walls; and all-of-AOSP→wasm is a colossal artifact with no
+   benefit on most paths.
+
+> (The *other* way to get "whole tree, no manual work" is the un-elegant one:
+> compile ART + bionic + framework as native → wasm and run **Android-in-a-wasm-VM**
+> — emulation, not components. Huge, slow, zero component-model wins. The
+> transpile-to-components path here is the elegant version; it trades "automatic"
+> for "compounding.")
+
+**The achievable shape — a compounding spectrum, not a button:** don't lift *all*
+of AOSP — lift the **Java logic layer**, and run it on wandr's **native floor**,
+which wandr is already building piece by piece (skia/EGL, AudioFlinger client,
+sensors, input, HAL shims, the arbiter). The wasm-Java imports those capabilities
+via WIT. **The "native floor I can't auto-generate" *is wandr itself*.** Concretely:
+
+- A **liftability pipeline** analyzes each class's **native + transitive closure**,
+  auto-lifts the ones whose surface is already shimmed, and **flags the rest** as
+  "needs a host shim" or "needs a boundary decision."
+- The auto-lifted **green-list grows every time wandr implements another native
+  shim or wires another WIT** — work wandr does for its own sake anyway. So the
+  "no manual work" claim is true *at the easy end and expanding*; the manual
+  frontier is exactly the native floor + boundary design.
+
+So the honest tagline is **not** "AOSP → one button → Android-wasm." It is: *"an
+automated lifter for the shallow-native Java layer, riding wandr's native floor,
+with a frontier that shrinks as wandr grows."* RILJ (telephony) is the first
+non-trivial proof; each capability wandr adds widens what the lifter gets for free.
+
 ## The three obstacles — and why two are already solved
 
 Lifting a `system_server` class to wasm faces three entanglements. The scorecard:
