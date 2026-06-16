@@ -1,5 +1,5 @@
 TASK=112
-STEP=patch-points-located
+STEP=js-string-experiment-done
 STATUS=in-progress
-LAST_SUCCESS=Task 112: located WasmGC→WASI patch points in TeaVM 0.15. Floor (3 spots: WasmGCSupport console, SystemIntrinsic clock, WasmGCTarget/Heap heap) mechanical. Crux = classlib api-deps JSO → String via WasmGCJSRuntime pulls js-string+teavmJso. Pivotal: does wasmtime 45 do wasm:js-string builtins natively?
-NOTES=/tmp/teavm shallow clone. Next integrate: (1) test wasmtime wasm:js-string support, (2) patch floor→wasi, (3) build+run spike.wasm under wasmtime, (4) P1→P2 adapter.
+LAST_SUCCESS=Task 112: wasmtime js-string experiment. js-string MOOT (optional+fallback). Real blocker = teavmJso (13 JS-interop imports) via classlib api-dep on JSO, pulled even for pure compute. Floor mechanical; JSO-decoupling is the cost.
+NOTES=Next: embedder-host test (Rust/wasmtime, env::memory + trapping stubs for teavm*/teavmJso/js-string + real putcharStdout) to learn if teavmJso imports are live or dead for pure compute → decides stub-it (easy) vs patch-out-JSO (real).

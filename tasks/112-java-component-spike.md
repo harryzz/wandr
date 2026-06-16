@@ -236,3 +236,36 @@ JSO-string decoupling (size gated on the wasmtime-js-string answer). All localiz
 no architectural rewrite. Next: integrate phase — (1) answer the wasmtime
 js-string question, (2) apply the floor redirects, (3) build + run `spike.wasm`
 under wasmtime, (4) P1→P2 adapter → component.
+
+## wasmtime js-string experiment (2026-06-16) — result
+
+Ran `spike.wasm` under wasmtime 45 (`-W gc,function-references,exceptions,
+tail-call,reference-types`). Full import surface: `teavmJso`×13, `wasm:js-string`×7,
+`teavmMemory`×3, `teavm`×2, `teavmDate`×1, `teavmConsole`×1, `env`(memory)×1.
+Module exports `teavm.malloc/free/realloc/exceptionMessage/processQueue/…` (the
+TeaVM runtime ABI). Instantiation stops at `unknown import: env::memory`.
+
+**Findings:**
+1. **js-string is MOOT.** `WasmGCJSRuntime.java` gates it: `if
+   (stringBuiltinsSupported) {…} else {fallback}` — **optional, with a built-in
+   fallback**. We don't need wasmtime to implement `wasm:js-string` (and it exposes
+   no flag for it). Worry retired.
+2. **The real blocker is `teavmJso` (13 genuine JS-interop imports)**, pulled in
+   even for pure compute because **`teavm-classlib` api-depends on JSO**
+   (`classlib/build.gradle.kts:30-31`) and the WasmGC backend wires the JSO runtime
+   in. No non-JS host satisfies `teavmJso.createClass/getProperty/callFunction1/…`.
+3. The clean floor (`teavmConsole`/`teavmDate`/`teavmMemory`/`teavm`/`env`) is the
+   mechanical part; **JSO decoupling is the actual cost.**
+
+**Revised patch statement:** not "disable js-string" but **"decouple the WasmGC
+classlib/runtime from JSO so a pure-compute guest emits zero `teavmJso`/`js-string`"**
++ redirect the floor to WASI + self-manage `env::memory`/heap.
+
+**Next (sizes the whole patch): are the 13 `teavmJso` imports live or dead for pure
+compute?** Test with an embedder host (Rust/wasmtime) providing `env::memory` +
+trapping stubs for all `teavm*`/`teavmJso`/`js-string` imports + a real
+`teavmConsole.putcharStdout`→stdout, then call the entry:
+- **Dead** (stubs never hit) → satisfy with stubs; module runs without real JS →
+  fast path to a running module, JSO-decoupling deferred.
+- **Live** (called on the println/string path) → real patch: a "no-JS-host" WasmGC
+  mode excluding the JSO string/console bridge.
