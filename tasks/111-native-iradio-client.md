@@ -123,5 +123,8 @@ decode after the bump per `[[reference_rsbinder_version]]`.
 
 ## Status
 
-🔲 Scoped, not started. Effort: **large** (a full RIL-client-equivalent). Gated on a
-SIM. Recommend M0 as a standalone go/no-go spike before committing to M1–M4.
+⏸️ **POSTPONED** (2026-06-16) — scoped, deferred. Effort: **large** (a full
+RIL-client-equivalent). Gated on a **SIM**. **Revisit on an AIDL-radio device**
+(Pixel 6 Pro / 9a → pure-rsbinder, no C++ HIDL shim) rather than the Pixel 2 XL
+(HIDL `@1.4` → C++ shim) — see `docs/device-hal-inventory.md`. When resumed, run M0
+as a standalone go/no-go spike before committing to M1–M4.
