@@ -351,3 +351,27 @@ true cost now known* (a real project via A or B). Recommend deciding which path
 likely fastest to a running module (spike PASS); Path A is the portable production
 direction. Note: js-string being a standard host-provided proposal softens the
 "patch-TeaVM-not-host" preference — host-side js-string is standards-aligned.
+
+## CORRECTION (2026-06-16): js-string is a BROWSER standard, not a WASI one
+
+Earlier I framed `wasm:js-string` as "a standard host-provided proposal (incl.
+non-JS hosts)" and said it "softens the patch-TeaVM preference." **That is wrong.**
+The **JS String Builtins** proposal belongs to the **WebAssembly *JS* Interface /
+web-embedding** world — its "host" is a **JavaScript engine**, its strings are
+`externref`s to **JS strings**. It is **NOT** a WASI / Component-Model standard,
+which is precisely why **wasmtime does not implement it** (out of scope for a
+non-JS runtime — not a gap that will be filled). Standard *in browsers*, not in
+the component model.
+
+Consequences:
+- **Path B retracted as "standards-aligned."** Implementing `wasm:js-string`
+  host-side = **faking a JavaScript string environment** in a non-JS runtime =
+  exactly the non-portable host glue to avoid. The "patch TeaVM, not the host"
+  preference is **reinforced**, not softened.
+- **Path A is the only correct path** to a clean WASI/component-model module:
+  **patch TeaVM classlib so `java.lang.String` is char-array-backed** (drop
+  `nativeString()`/`substringJS`/js-string). Deeper, but JS-free and portable.
+- **Root insight:** TeaVM-WasmGC and J2WASM are browser-only because they bet
+  `java.lang.String` on js-string = the JS host. That is the fundamental reason
+  **no Java→WasmGC+WASI toolchain exists** — they target the JS embedding, not WASI.
+  A Java→WASI-WasmGC path REQUIRES char-array strings (Path A); nothing ships it.
