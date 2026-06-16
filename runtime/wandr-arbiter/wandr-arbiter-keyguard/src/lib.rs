@@ -35,6 +35,10 @@ pub struct KeyguardModule {
     menu_shown: bool,
     menu_saved_fg: Option<String>,
     menu_suppressed_pid: Option<i32>,
+    /// True when the menu was opened *over the lock screen*: the keyguard was
+    /// demoted out of the input window list (so the power menu — not the
+    /// keyguard's swipe area — receives touch) and must be restored on dismiss.
+    menu_covered_keyguard: bool,
 }
 
 impl KeyguardModule {
@@ -113,6 +117,20 @@ impl KeyguardModule {
             ctx.deliver_to_host(pid, "input-suppress 1\n");
             self.menu_suppressed_pid = Some(pid);
         }
+        // Opened over the lock screen: the keyguard is also a fullscreen
+        // `Role::Lockscreen` surface, so at equal input-z the dispatcher would
+        // route touch to it (the swipe-to-unlock area) instead of the menu.
+        // Demote it to `Background` so it drops out of the input window list and
+        // the power menu becomes the sole focusable `Lockscreen` surface. Restored
+        // on dismiss. (`visible_app()` excludes the keyguard, so the block above
+        // never covers this — it must be handled explicitly.)
+        if self.locked {
+            if let Some(kg) = Self::keyguard_pid(ctx) {
+                ctx.request(Effect::SetRole { pid: kg, role: Role::Background });
+                ctx.store.display_mut(PRIMARY_DISPLAY).set_role(kg, Role::Background);
+                self.menu_covered_keyguard = true;
+            }
+        }
         ctx.request(Effect::SetRole { pid: pm, role: Role::Lockscreen });
         ctx.store
             .display_mut(PRIMARY_DISPLAY)
@@ -139,6 +157,18 @@ impl KeyguardModule {
         if self.menu_shown {
             if let Some(pid) = self.menu_suppressed_pid.take() {
                 ctx.deliver_to_host(pid, "input-suppress 0\n");
+            }
+            // Restore the lock screen we demoted on show (back to the input list +
+            // focus). Done before re-foregrounding any covered app so the keyguard
+            // stays the modal top surface while locked.
+            if self.menu_covered_keyguard {
+                if let Some(kg) = Self::keyguard_pid(ctx) {
+                    ctx.request(Effect::SetRole { pid: kg, role: Role::Lockscreen });
+                    ctx.store
+                        .display_mut(PRIMARY_DISPLAY)
+                        .put_surface(kg, KEYGUARD_APP_ID, Role::Lockscreen);
+                }
+                self.menu_covered_keyguard = false;
             }
             if let Some(app_id) = self.menu_saved_fg.take() {
                 ctx.request(Effect::Foreground { app_id });
@@ -264,6 +294,30 @@ mod tests {
         // Keyguard hidden + the covered app re-foregrounded (via the shell verb).
         assert!(eff.iter().any(|e| matches!(e, Effect::SetRole { pid: 99, role: Role::Background })));
         assert!(eff.iter().any(|e| matches!(e, Effect::Foreground { app_id } if app_id == "wandr.dioxus.demo")));
+    }
+
+    #[test]
+    fn power_menu_over_lock_demotes_keyguard_for_input() {
+        let (mut r, mut store) = reg();
+        seed(&mut store, "wandr.dioxus.demo", 10, Role::Foreground);
+        seed(&mut store, KEYGUARD_APP_ID, 99, Role::Background);
+        seed(&mut store, POWERMENU_APP_ID, 77, Role::Background);
+        r.dispatch_command("lock", "", &mut store).unwrap();
+        assert_eq!(store.display(PRIMARY_DISPLAY).unwrap().role_of(99), Some(Role::Lockscreen));
+
+        // Show the menu over the lock screen: keyguard must drop out of the input
+        // list (Background) so the power menu becomes the sole Lockscreen surface.
+        let (_reply, eff) = r.dispatch_command("power-menu", "", &mut store).unwrap();
+        assert!(eff.iter().any(|e| matches!(e, Effect::SetRole { pid: 99, role: Role::Background })));
+        assert!(eff.iter().any(|e| matches!(e, Effect::SetRole { pid: 77, role: Role::Lockscreen })));
+        assert_eq!(store.display(PRIMARY_DISPLAY).unwrap().role_of(99), Some(Role::Background));
+        assert_eq!(store.display(PRIMARY_DISPLAY).unwrap().role_of(77), Some(Role::Lockscreen));
+
+        // Dismiss restores the lock screen as the focusable Lockscreen surface.
+        let (_reply, eff) = r.dispatch_command("pm-dismiss", "", &mut store).unwrap();
+        assert!(eff.iter().any(|e| matches!(e, Effect::SetRole { pid: 99, role: Role::Lockscreen })));
+        assert_eq!(store.display(PRIMARY_DISPLAY).unwrap().role_of(99), Some(Role::Lockscreen));
+        assert_eq!(store.display(PRIMARY_DISPLAY).unwrap().role_of(77), Some(Role::Background));
     }
 
     #[test]

@@ -1,9 +1,9 @@
 //! wandr.powermenu — the power long-press menu (task 110). A LIGHT Rust canvas
-//! guest (like wandr.keyguard): a dim full-screen overlay with four buttons —
-//! Lock / Power off / Restart / Emergency. The arbiter shows it (Role::Lockscreen)
-//! on a POWER long-press and demotes the app behind it; a button tap calls a
-//! `wandr:keyguard/keyguard` pm-* verb (host → arbiter), which hides the menu and
-//! performs the action. A tap outside the buttons dismisses.
+//! guest (like wandr.keyguard): over the dimmed screen, a rounded dark card with
+//! a 2×2 grid of circular icon buttons — Emergency / Lockdown / Power off /
+//! Restart. The arbiter shows it (Role::Lockscreen) on a POWER long-press; a
+//! button tap calls a `wandr:keyguard/keyguard` pm-* verb (host → arbiter),
+//! which hides the menu and performs the action. A tap outside dismisses.
 
 wit_bindgen::generate!({
     world: "wandr:powermenu-app/powermenu-app",
@@ -24,14 +24,15 @@ use crate::wasi::canvas::embedding as wembed;
 use crate::wasi::canvas::layout as wlayout;
 use crate::wasi::canvas::types as wtypes;
 
-const SCRIM: u32 = 0xCC05060B; // dim over the app behind
-const BTN_BG: u32 = 0xFF1E2230;
-const BTN_FG: u32 = 0xFFFFFFFF;
-const EMERGENCY_BG: u32 = 0xFF7A1E22; // red-ish
-const TITLE_FG: u32 = 0xFFB8BCC8;
+const SCRIM: u32 = 0xA6000000; // dim over the screen (wallpaper still visible)
+const CARD: u32 = 0xF21D1D20; // rounded dark card
+const CIRCLE: u32 = 0xFF2E2E31; // normal button circle
+const CIRCLE_EMERGENCY: u32 = 0xFFF0655B; // Emergency = salmon/red
+const ICON: u32 = 0xFFFFFFFF;
+const LABEL: u32 = 0xFFE9ECF2;
 
-/// The four actions, top to bottom.
-const ITEMS: [&str; 4] = ["Lock", "Power off", "Restart", "Emergency"];
+// Row-major 2×2: Emergency, Lockdown, Power off, Restart.
+const LABELS: [&str; 4] = ["Emergency", "Lockdown", "Power off", "Restart"];
 
 #[derive(Default)]
 struct State {
@@ -53,7 +54,7 @@ fn wctx<R>(f: impl FnOnce(&wembed::CanvasContext) -> R) -> R {
     })
 }
 
-fn paint(color: u32) -> wtypes::Paint<'static> {
+fn fill(color: u32) -> wtypes::Paint<'static> {
     wtypes::Paint {
         style: wtypes::PaintStyle::Fill,
         color,
@@ -62,12 +63,18 @@ fn paint(color: u32) -> wtypes::Paint<'static> {
         anti_alias: true,
         shader: None,
         stroke_width: 0.0,
-        stroke_cap: wtypes::StrokeCap::Butt,
-        stroke_join: wtypes::StrokeJoin::Miter,
+        stroke_cap: wtypes::StrokeCap::Round,
+        stroke_join: wtypes::StrokeJoin::Round,
         stroke_miter: 4.0,
         blur: None,
         filter: None,
     }
+}
+fn stroke(color: u32, width: f32) -> wtypes::Paint<'static> {
+    let mut p = fill(color);
+    p.style = wtypes::PaintStyle::Stroke;
+    p.stroke_width = width;
+    p
 }
 fn rect(x: f32, y: f32, w: f32, h: f32) -> wtypes::Rect {
     wtypes::Rect { x, y, width: w, height: h }
@@ -76,11 +83,17 @@ fn rrect(x: f32, y: f32, w: f32, h: f32, r: f32) -> wtypes::RoundedRect {
     let c = wtypes::Point { x: r, y: r };
     wtypes::RoundedRect { rect: rect(x, y, w, h), top_left: c, top_right: c, bottom_right: c, bottom_left: c }
 }
-fn para(text: &str, size: f32, weight: u32, color: u32) -> (wlayout::Paragraph, f32, f32) {
+fn pt(x: f32, y: f32) -> wtypes::Point {
+    wtypes::Point { x, y }
+}
+fn circle(cv: &Canvas, cx: f32, cy: f32, r: f32, color: u32) {
+    cv.draw_oval(rect(cx - r, cy - r, r * 2.0, r * 2.0), &fill(color));
+}
+fn label_centered(cv: &Canvas, text: &str, size: f32, color: u32, cx: f32, baseline: f32) {
     let style = wlayout::TextStyle {
         family: "sans-serif".into(),
         size,
-        weight,
+        weight: 500,
         italic: false,
         color,
         letter_spacing: 0.0,
@@ -94,25 +107,67 @@ fn para(text: &str, size: f32, weight: u32, color: u32) -> (wlayout::Paragraph, 
     b.add_text(text);
     let p = wlayout::ParagraphBuilder::build(b);
     p.layout(1.0e6);
-    let baseline = p.alphabetic_baseline();
     let width = p.max_intrinsic_width();
-    (p, baseline, width)
-}
-fn draw_centered(cv: &Canvas, text: &str, size: f32, weight: u32, color: u32, cx: f32, baseline_y: f32) {
-    let (p, baseline, width) = para(text, size, weight, color);
-    p.paint(cv, wtypes::Point { x: cx - width * 0.5, y: baseline_y - baseline });
+    let base = p.alphabetic_baseline();
+    p.paint(cv, pt(cx - width * 0.5, baseline - base));
 }
 
-/// Button `i`'s rect — a centered vertical stack, derived from the surface dims.
-fn item_rect(w: f32, h: f32, i: usize) -> wtypes::Rect {
-    let bw = (w * 0.66).min(h * 0.5);
-    let bh = h * 0.09;
-    let gap = h * 0.025;
-    let n = ITEMS.len() as f32;
-    let total = n * bh + (n - 1.0) * gap;
-    let x = (w - bw) * 0.5;
-    let y0 = (h - total) * 0.5;
-    rect(x, y0 + i as f32 * (bh + gap), bw, bh)
+/// The card rect (rounded dark container), centered horizontally, upper-middle.
+fn card_rect(w: f32, h: f32) -> wtypes::Rect {
+    let cw = (w * 0.80).min(h * 0.45);
+    let ch = cw; // square 2×2
+    rect((w - cw) * 0.5, (h - ch) * 0.42, cw, ch)
+}
+/// (quadrant rect, circle center, radius, label baseline) for button `i`.
+fn item(w: f32, h: f32, i: usize) -> (wtypes::Rect, f32, f32, f32, f32) {
+    let c = card_rect(w, h);
+    let (qw, qh) = (c.width * 0.5, c.height * 0.5);
+    let (col, row) = ((i % 2) as f32, (i / 2) as f32);
+    let q = rect(c.x + col * qw, c.y + row * qh, qw, qh);
+    let r = qw.min(qh) * 0.27;
+    let ccx = q.x + qw * 0.5;
+    let ccy = q.y + qh * 0.40;
+    let label_base = q.y + qh * 0.80;
+    (q, ccx, ccy, r, label_base)
+}
+
+// ── Icons (white, drawn from primitives) ──────────────────────────────────────
+fn icon_emergency(cv: &Canvas, cx: f32, cy: f32, r: f32) {
+    let p = stroke(ICON, r * 0.20);
+    let l = r * 0.60;
+    for deg in [90.0_f32, 30.0, 150.0] {
+        let a = deg.to_radians();
+        let (dx, dy) = (a.cos() * l, a.sin() * l);
+        cv.draw_line(pt(cx - dx, cy - dy), pt(cx + dx, cy + dy), &p);
+    }
+}
+fn icon_lock(cv: &Canvas, cx: f32, cy: f32, r: f32) {
+    let bw = r * 1.05;
+    let bh = r * 0.80;
+    let by = cy - bh * 0.20;
+    cv.draw_rounded_rect(rrect(cx - bw * 0.5, by, bw, bh, r * 0.18), &fill(ICON));
+    // shackle — top half-circle, stroked, sitting on the body
+    let sw = r * 0.66;
+    cv.draw_arc(rect(cx - sw * 0.5, by - sw * 0.62, sw, sw), 180.0, 180.0, false, &stroke(ICON, r * 0.16));
+}
+fn icon_power(cv: &Canvas, cx: f32, cy: f32, r: f32) {
+    let rr = r * 0.60;
+    // ring with a gap at the top
+    cv.draw_arc(rect(cx - rr, cy - rr, rr * 2.0, rr * 2.0), -55.0, 290.0, false, &stroke(ICON, r * 0.18));
+    cv.draw_line(pt(cx, cy - rr * 1.15), pt(cx, cy - rr * 0.05), &stroke(ICON, r * 0.18));
+}
+fn icon_restart(cv: &Canvas, cx: f32, cy: f32, r: f32) {
+    let rr = r * 0.60;
+    cv.draw_arc(rect(cx - rr, cy - rr, rr * 2.0, rr * 2.0), -40.0, 300.0, false, &stroke(ICON, r * 0.18));
+    // arrowhead at the arc's open (top) end, pointing up-left
+    let ax = cx + rr * (-40.0_f32).to_radians().cos();
+    let ay = cy + rr * (-40.0_f32).to_radians().sin();
+    let s = r * 0.30;
+    let path = format!(
+        "M {} {} L {} {} L {} {} Z",
+        ax + s * 0.1, ay - s, ax + s * 0.9, ay + s * 0.1, ax - s * 0.2, ay + s * 0.2
+    );
+    cv.draw_path(&path, wtypes::FillRule::Nonzero, &fill(ICON));
 }
 
 struct PowerMenu;
@@ -124,13 +179,20 @@ impl FrameGuest for PowerMenu {
             let cv = wctx(|x| x.get_current_buffer());
             let (w, h) = (s.w.max(cv.width()).max(1.0), s.h.max(cv.height()).max(1.0));
             cv.clear(0);
-            cv.draw_rect(rect(0.0, 0.0, w, h), &paint(SCRIM));
-            draw_centered(&cv, "Power", h * 0.03, 600, TITLE_FG, w * 0.5, item_rect(w, h, 0).y - h * 0.03);
-            for (i, label) in ITEMS.iter().enumerate() {
-                let r = item_rect(w, h, i);
-                let bg = if *label == "Emergency" { EMERGENCY_BG } else { BTN_BG };
-                cv.draw_rounded_rect(rrect(r.x, r.y, r.width, r.height, r.height * 0.22), &paint(bg));
-                draw_centered(&cv, label, h * 0.028, 600, BTN_FG, r.x + r.width * 0.5, r.y + r.height * 0.62);
+            cv.draw_rect(rect(0.0, 0.0, w, h), &fill(SCRIM));
+            let c = card_rect(w, h);
+            cv.draw_rounded_rect(rrect(c.x, c.y, c.width, c.height, c.width * 0.07), &fill(CARD));
+            for i in 0..4 {
+                let (_q, ccx, ccy, r, lbase) = item(w, h, i);
+                let col = if i == 0 { CIRCLE_EMERGENCY } else { CIRCLE };
+                circle(&cv, ccx, ccy, r, col);
+                match i {
+                    0 => icon_emergency(&cv, ccx, ccy, r),
+                    1 => icon_lock(&cv, ccx, ccy, r),
+                    2 => icon_power(&cv, ccx, ccy, r),
+                    _ => icon_restart(&cv, ccx, ccy, r),
+                }
+                label_centered(&cv, LABELS[i], h * 0.018, LABEL, ccx, lbase);
             }
             drop(cv);
             wctx(|x| x.present());
@@ -154,26 +216,25 @@ impl PointerGuest for PowerMenu {
             let s = st.borrow();
             (s.w.max(1.0), s.h.max(1.0))
         });
-        for i in 0..ITEMS.len() {
-            let r = item_rect(w, h, i);
-            if ev.x >= r.x && ev.x <= r.x + r.width && ev.y >= r.y && ev.y <= r.y + r.height {
+        for i in 0..4 {
+            let (q, _cx, _cy, _r, _l) = item(w, h, i);
+            if ev.x >= q.x && ev.x <= q.x + q.width && ev.y >= q.y && ev.y <= q.y + q.height {
                 match i {
-                    0 => control::pm_lock(),
-                    1 => control::pm_power_off(),
-                    2 => control::pm_restart(),
-                    _ => control::pm_emergency(),
+                    0 => control::pm_emergency(),
+                    1 => control::pm_lock(),
+                    2 => control::pm_power_off(),
+                    _ => control::pm_restart(),
                 }
                 return;
             }
         }
-        // Tapped outside the buttons → dismiss.
-        control::pm_dismiss();
+        control::pm_dismiss(); // tapped outside the card
     }
 }
 
 impl FramePacingGuest for PowerMenu {
     fn next_frame_delay() -> u32 {
-        500 // static menu; only repaints on resize/show
+        500 // static menu; repaints on resize/show
     }
 }
 

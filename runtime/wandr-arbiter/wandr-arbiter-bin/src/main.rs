@@ -841,41 +841,80 @@ fn cmd_pm_action(stream: &mut UnixStream, action: &str) -> Result<()> {
     Ok(())
 }
 
-/// POWER long-press timing (task 110). The single decider for the multi-host
-/// fan-in: the first DOWN within the window starts the press; the first UP ends
-/// it. Hold ≥1 s → power menu; shorter → the existing panel toggle.
-fn power_down_at() -> &'static std::sync::Mutex<Option<std::time::Instant>> {
-    static P: std::sync::OnceLock<std::sync::Mutex<Option<std::time::Instant>>> =
+/// POWER long-press timing (task 110). Single decider for the multi-host fan-in.
+/// On DOWN we arm a 1 s timer; if the key is still held when it fires, the menu
+/// opens *while pressed* (not on release). A release before 1 s = a short press
+/// → the existing panel toggle. `(gen, down_instant)`; `gen` lets the timer
+/// thread tell its own press from a newer one.
+fn power_pending() -> &'static std::sync::Mutex<Option<(u64, std::time::Instant)>> {
+    static P: std::sync::OnceLock<std::sync::Mutex<Option<(u64, std::time::Instant)>>> =
         std::sync::OnceLock::new();
     P.get_or_init(|| std::sync::Mutex::new(None))
 }
+static POWER_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Open the power menu, waking the panel first so it's visible from a locked /
+/// screen-off state (#3). `panel on` is a no-op when already on.
+fn show_power_menu() {
+    if let Some((_r, eff)) = run_module("panel", "on") {
+        execute_effects(eff);
+    }
+    if let Some((_r, eff)) = run_module("power-menu", "") {
+        execute_effects(eff);
+    }
+}
 
 fn cmd_power_down(stream: &mut UnixStream) -> Result<()> {
-    let mut g = power_down_at().lock().unwrap_or_else(|e| e.into_inner());
-    // Dedup the per-host fan-in: only the first DOWN within 2 s starts a press.
-    if g.map(|t| t.elapsed() > std::time::Duration::from_secs(2)).unwrap_or(true) {
-        *g = Some(std::time::Instant::now());
-    }
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+    let gen = {
+        let mut g = power_pending().lock().unwrap_or_else(|e| e.into_inner());
+        // Dedup the per-host fan-in: only the first DOWN within 2 s starts a press.
+        if let Some((_, t)) = *g {
+            if t.elapsed() <= Duration::from_secs(2) {
+                writeln!(stream, "OK power-down (dup)")?;
+                return Ok(());
+            }
+        }
+        let gen = POWER_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+        *g = Some((gen, Instant::now()));
+        gen
+    };
+    // Hold timer: if still pressed at 1 s, open the menu *while held*.
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(1));
+        let _guard = arbiter_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let fire = {
+            let mut g = power_pending().lock().unwrap_or_else(|e| e.into_inner());
+            match *g {
+                Some((gn, _)) if gn == gen => {
+                    *g = None; // consume this press
+                    true
+                }
+                _ => false, // released already (or superseded)
+            }
+        };
+        if fire {
+            show_power_menu();
+        }
+    });
     writeln!(stream, "OK power-down")?;
     Ok(())
 }
 
 fn cmd_power_up(stream: &mut UnixStream) -> Result<()> {
-    let pressed = {
-        let mut g = power_down_at().lock().unwrap_or_else(|e| e.into_inner());
+    use std::time::Duration;
+    let taken = {
+        let mut g = power_pending().lock().unwrap_or_else(|e| e.into_inner());
         g.take()
     };
-    if let Some(t) = pressed {
-        if t.elapsed() >= std::time::Duration::from_secs(1) {
-            // Long press → power menu (keyguard module's show).
-            if let Some((_r, eff)) = run_module("power-menu", "") {
-                execute_effects(eff);
-            }
-        } else {
-            // Short press → toggle the panel (the existing power-key behavior).
-            if let Some((_r, eff)) = run_module("power-key", "") {
-                execute_effects(eff);
-            }
+    if let Some((_, t)) = taken {
+        // Released before the timer consumed it: short press → panel toggle.
+        // (A ≥1 s race that beats the timer here still opens the menu.)
+        if t.elapsed() >= Duration::from_secs(1) {
+            show_power_menu();
+        } else if let Some((_r, eff)) = run_module("power-key", "") {
+            execute_effects(eff);
         }
     }
     writeln!(stream, "OK power-up")?;
