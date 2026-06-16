@@ -269,3 +269,43 @@ trapping stubs for all `teavm*`/`teavmJso`/`js-string` imports + a real
   fast path to a running module, JSO-decoupling deferred.
 - **Live** (called on the println/string path) → real patch: a "no-JS-host" WasmGC
   mode excluding the JSO string/console bridge.
+
+## Live-vs-dead test result (2026-06-16) — LIVE, and the patch is now precise
+
+Built a wasmtime embedder harness (`repros/java-wasm-spike/stub-host/`): real
+`env::memory` + `heapOffset`/`maxSize` globals + real `putcharStdout` +
+`stringBuiltinsSupported`→false, **trapping stubs for all other imports**. The
+module's `start` section runs `main` at instantiation.
+
+**Result: trapped during the MODULE INITIALIZER (before main):**
+```
+0: WasmGCJSRuntime::stringToJs
+1: teavm@initializer
+Caused by: unknown import: `wasm:js-string::fromCharCode` has not been defined
+```
+
+**Conclusions:**
+1. **The JSO/js-string bridge is LIVE — on the mandatory init path even for pure
+   compute.** `teavm-classlib` `api`-depends on JSO → `WasmGCJsoCommonGenerator`
+   contributes to the module initializer (`writeToInitializer` →
+   `stringToJs`, lines 170/174) → `wasm:js-string::fromCharCode`. Runs before
+   `main`, regardless of whether the guest uses JSO. **The "stub it as dead"
+   shortcut is OUT.**
+2. **CORRECTION to the earlier "js-string is moot" note:** `stringToJs`'s
+   `stringBuiltinsSupported==false` *fallback ALSO uses js-string builtins*
+   (`fromCharCode`+`concat` instead of `fromCharArray`). The flag only swaps which
+   builtins; js-string is fundamental to Java-String→JS-String conversion and is
+   unavoidable whenever `stringToJs` runs. js-string is avoidable ONLY by not
+   calling `stringToJs` — i.e., by excluding JSO.
+3. **The patch is now precise + bounded:** **gate JSO out of the non-JS-host WasmGC
+   build** — break `classlib`'s `api(project(":jso:impl"))` for this target (or
+   gate `WasmGCJso`'s initializer registration on "JS host present"). Core
+   `java.lang.String` is JSO-independent (uses the core `WasmGCStringPool`
+   char-array constants), so pure compute should still work once JSO is out. This is
+   **dependency/initializer gating, not a String reimplementation.**
+
+**Build phase, next step:** patch TeaVM to exclude/gate the JSO contribution for a
+non-JS-host WasmGC build, rebuild `spike.wasm`, re-run the harness — expect zero
+`teavmJso`/`js-string` imports, leaving only the clean floor (console/clock/heap)
+to redirect to WASI. If pure-compute Java compiles + runs sans JSO → the floor
+redirects + P1→P2 adapter are the remaining mechanical work, and the spike PASSES.
