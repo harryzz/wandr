@@ -23,6 +23,7 @@ use crate::exports::wasi::input_handlers::frame_handler::Guest as FrameGuest;
 use crate::exports::wasi::input_handlers::key_handler::{Guest as KeyGuest, KeyEvent};
 use crate::exports::wasi::input_handlers::pointer_handler::{Guest as PointerGuest, PointerEvent};
 use crate::wandr::chrome::launcher;
+use crate::wasi::audio::pcm as wpcm;
 use crate::wasi::canvas::draw::Canvas;
 use crate::wasi::canvas::embedding as wembed;
 use crate::wasi::canvas::layout as wlayout;
@@ -42,6 +43,27 @@ const HS_FILE: &str = "/state/tetris-highscore.json";
 /// on-screen move buttons.
 const DAS_NS: u64 = 170_000_000;
 const ARR_NS: u64 = 45_000_000;
+/// M4 — line-clear animation + level-up flash durations, and settings file.
+const CLEAR_ANIM_NS: u64 = 200_000_000;
+const LEVELUP_FLASH_NS: u64 = 450_000_000;
+const BANNER_NS: u64 = 900_000_000;
+const SETTINGS_FILE: &str = "/state/tetris-settings.json";
+/// M4 — SFX synth. Mono f32 at the universal device rate; keep ~60 ms buffered.
+const SR: u32 = 48000;
+const AUDIO_BUF_FRAMES: u32 = SR / 16; // ~60 ms
+
+/// One synth voice: a fading tone (sine or square) with an optional start delay
+/// (for staggered arpeggios). Decremented per sample by the audio feed.
+#[derive(Clone, Copy)]
+struct Voice {
+    phase: f32,
+    inc: f32, // cycles per sample = freq / SR
+    rem: u32, // samples remaining
+    total: u32,
+    amp: f32,
+    square: bool,
+    delay: u32, // samples before this voice starts sounding
+}
 /// On-screen control-band buttons (M3 touch). Indices are also the hit-test ids.
 const NBTN: usize = 8;
 const B_LEFT: u8 = 0;
@@ -193,6 +215,19 @@ struct State {
     das_started: bool,
     touch_soft: bool,
     board_touch: Option<(u32, f32, f32, u64)>, // id, start x, start y, start nanos
+    // M4 — polish + settings.
+    last_rot: bool,                  // last successful action was a rotation (T-spin)
+    last_kick: usize,                // kick index the last rotation used (for T-spin mini)
+    clearing: Option<(Vec<usize>, u64)>, // rows animating out + elapsed ns (defers collapse)
+    levelup_flash_ns: u64,           // remaining level-up flash time
+    banner: Option<(String, u64)>,   // transient T-SPIN/TETRIS banner: text + remaining ns
+    ghost_on: bool,                  // ghost piece on/off (persisted)
+    das_cfg_ns: u64,                 // DAS delay (persisted, tunable)
+    arr_cfg_ns: u64,                 // ARR repeat (persisted, tunable)
+    settings_loaded: bool,
+    muted: bool,                     // SFX muted (persisted)
+    voices: Vec<Voice>,              // active SFX voices (mixed by the audio feed)
+    pcm: Vec<f32>,                   // mixed-but-unwritten samples (write backpressure FIFO)
     w: f32,
     h: f32,
     hud: Option<(u32, u32, u32, u32, [Para; 2])>, // (score,hi,level,lines) -> 2 lines
@@ -230,6 +265,18 @@ impl Default for State {
             das_started: false,
             touch_soft: false,
             board_touch: None,
+            last_rot: false,
+            last_kick: 0,
+            clearing: None,
+            levelup_flash_ns: 0,
+            banner: None,
+            ghost_on: true,
+            das_cfg_ns: DAS_NS,
+            arr_cfg_ns: ARR_NS,
+            settings_loaded: false,
+            muted: false,
+            voices: Vec::new(),
+            pcm: Vec::new(),
             w: 0.0,
             h: 0.0,
             hud: None,
@@ -253,6 +300,145 @@ fn wctx<R>(f: impl FnOnce(&wembed::CanvasContext) -> R) -> R {
     })
 }
 
+// ── Audio (M4 SFX) ────────────────────────────────────────────────────────────
+// One playback stream, opened once and kept alive across restarts (so it lives
+// in a thread-local, not in State). SFX are queued as `Voice`s on State; the
+// per-frame feed mixes them and tops up the ring (continuous feed avoids the
+// AudioFlinger underrun-suspension seen in task 97). Best-effort: if `open`
+// fails (e.g. the desktop dev loop has no audio backend), the game is silent.
+thread_local! {
+    static AUDIO: RefCell<Option<wpcm::Playback>> = const { RefCell::new(None) };
+    static AUDIO_TRIED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static AUDIO_ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Open the SFX stream once (idempotent). Silent if the host has no audio.
+fn audio_init() {
+    if AUDIO_TRIED.with(|t| t.get()) {
+        return;
+    }
+    AUDIO_TRIED.with(|t| t.set(true));
+    let cfg = wpcm::StreamConfig {
+        sample_rate: SR,
+        channel_layout: wpcm::ChannelLayout::Mono,
+        format: wpcm::Format::PcmF32,
+        class: wpcm::StreamClass::Media, // the proven-audible route (audio player path)
+    };
+    if let Ok(pb) = wpcm::Playback::open(cfg) {
+        // Start immediately, then feed continuously (the audio player's proven
+        // sequence: start-at-open, write every tick). The feed writes silence
+        // when no voices are active so the device track never starves.
+        let _ = pb.start();
+        AUDIO_ON.with(|a| a.set(true));
+        AUDIO.with(|c| *c.borrow_mut() = Some(pb));
+    }
+}
+
+/// Queue a fading tone. `freq` Hz, `dur` ms, `amp` 0..1, optional `delay` ms.
+fn beep(s: &mut State, freq: f32, dur_ms: u32, amp: f32, square: bool, delay_ms: u32) {
+    let total = (SR * dur_ms / 1000).max(1);
+    s.voices.push(Voice {
+        phase: 0.0,
+        inc: freq / SR as f32,
+        rem: total,
+        total,
+        amp,
+        square,
+        delay: SR * delay_ms / 1000,
+    });
+}
+
+// SFX — short, synthesized, no assets.
+fn sfx_lock(s: &mut State) {
+    beep(s, 130.0, 55, 0.45, true, 0);
+}
+fn sfx_harddrop(s: &mut State) {
+    beep(s, 90.0, 70, 0.5, true, 0);
+}
+fn sfx_hold(s: &mut State) {
+    beep(s, 440.0, 45, 0.3, false, 0);
+}
+/// Line clear — pitch + voices scale with the clear; difficult moves sparkle.
+fn sfx_clear(s: &mut State, n: u32, difficult: bool) {
+    let base = 380.0 + n as f32 * 120.0;
+    beep(s, base, 120, 0.5, false, 0);
+    if n >= 2 {
+        beep(s, base * 1.5, 130, 0.4, false, 60);
+    }
+    if difficult {
+        beep(s, base * 2.0, 160, 0.4, false, 120);
+    }
+}
+fn sfx_levelup(s: &mut State) {
+    for (i, m) in [1.0f32, 1.26, 1.5, 2.0].iter().enumerate() {
+        beep(s, 440.0 * m, 110, 0.35, false, i as u32 * 70);
+    }
+}
+fn sfx_gameover(s: &mut State) {
+    for (i, f) in [440.0f32, 330.0, 247.0, 165.0].iter().enumerate() {
+        beep(s, *f, 220, 0.4, true, i as u32 * 130);
+    }
+}
+
+/// Mix the active voices and top the ring up to ~60 ms; lazily start the stream
+/// when voices appear and pause it once the tail has drained (idle stream =
+/// paused, never underrun-suspended). Drops finished voices.
+fn audio_feed(s: &mut State) {
+    // 1) Render new mixed samples into the FIFO so it holds ~AUDIO_BUF_FRAMES
+    //    of audio (silence when no voices). Voices advance ONLY here.
+    let target = AUDIO_BUF_FRAMES as usize;
+    if s.muted {
+        s.voices.clear(); // drop queued SFX; keep feeding silence below
+    }
+    if s.pcm.len() < target {
+        let need = target - s.pcm.len();
+        let start = s.pcm.len();
+        s.pcm.resize(start + need, 0.0);
+        for v in s.voices.iter_mut() {
+            for sample in s.pcm[start..].iter_mut() {
+                if v.rem == 0 {
+                    break;
+                }
+                if v.delay > 0 {
+                    v.delay -= 1;
+                    continue;
+                }
+                let env = v.amp * (v.rem as f32 / v.total as f32);
+                let wave = if v.square {
+                    if v.phase < 0.5 { 1.0 } else { -1.0 }
+                } else {
+                    (v.phase * std::f32::consts::TAU).sin()
+                };
+                *sample += wave * env;
+                v.phase += v.inc;
+                if v.phase >= 1.0 {
+                    v.phase -= 1.0;
+                }
+                v.rem -= 1;
+            }
+        }
+        s.voices.retain(|v| v.rem > 0);
+        for x in s.pcm[start..].iter_mut() {
+            *x = (*x * 0.6).clamp(-1.0, 1.0); // master volume + clip guard
+        }
+    }
+    // 2) Write EVERY tick (like the audio player) — this keeps the device track
+    //    fed and triggers its disable/underrun recovery. Drain only what the ring
+    //    accepted; the remainder rides to the next tick (no drift, no drop).
+    AUDIO.with(|c| {
+        let Some(pb) = c.borrow().as_ref().map(|p| p as *const wpcm::Playback) else { return };
+        // SAFETY: single-threaded; the borrow lives only for this call.
+        let pb = unsafe { &*pb };
+        if s.pcm.is_empty() {
+            return;
+        }
+        let accepted = pb.write(&s.pcm) as usize;
+        if accepted > 0 {
+            s.pcm.drain(0..accepted.min(s.pcm.len()));
+        }
+    });
+}
+
 // ── High score (best-effort /state persistence) ───────────────────────────────
 fn load_high_score() -> u32 {
     let Ok(s) = std::fs::read_to_string(HS_FILE) else { return 0 };
@@ -261,6 +447,49 @@ fn load_high_score() -> u32 {
 fn save_high_score(hs: u32) {
     let _ = std::fs::create_dir_all("/state");
     let _ = std::fs::write(HS_FILE, format!("{{\"high_score\": {hs}}}\n"));
+}
+
+/// Tiny JSON-ish field reader (no serde): the integer after `"<key>"`.
+fn json_num(body: &str, key: &str) -> Option<u64> {
+    let i = body.find(&format!("\"{key}\""))?;
+    let rest = &body[i + key.len() + 2..];
+    let digits: String = rest
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse().ok()
+}
+
+/// Load settings (DAS/ARR ms + ghost) from `/state`; defaults when absent.
+fn load_settings(s: &mut State) {
+    s.settings_loaded = true;
+    let Ok(body) = std::fs::read_to_string(SETTINGS_FILE) else { return };
+    if let Some(das) = json_num(&body, "das_ms") {
+        s.das_cfg_ns = das.clamp(0, 1000) * 1_000_000;
+    }
+    if let Some(arr) = json_num(&body, "arr_ms") {
+        s.arr_cfg_ns = arr.clamp(0, 1000) * 1_000_000;
+    }
+    if let Some(g) = json_num(&body, "ghost") {
+        s.ghost_on = g != 0;
+    }
+    if let Some(m) = json_num(&body, "mute") {
+        s.muted = m != 0;
+    }
+}
+fn save_settings(s: &State) {
+    let _ = std::fs::create_dir_all("/state");
+    let _ = std::fs::write(
+        SETTINGS_FILE,
+        format!(
+            "{{\"das_ms\": {}, \"arr_ms\": {}, \"ghost\": {}, \"mute\": {}}}\n",
+            s.das_cfg_ns / 1_000_000,
+            s.arr_cfg_ns / 1_000_000,
+            s.ghost_on as u8,
+            s.muted as u8
+        ),
+    );
 }
 
 // ── Game logic (pure) ─────────────────────────────────────────────────────────
@@ -315,8 +544,10 @@ fn spawn(s: &mut State, kind: u8) {
     s.gravity_accum_ns = 0;
     s.lock_accum_ns = 0;
     s.lock_resets = 0;
+    s.last_rot = false;
     if collides(&s.board, s.kind, s.rot, s.x, s.y) {
         s.game_over = true;
+        sfx_gameover(s);
         if s.score > s.high_score {
             s.high_score = s.score;
             save_high_score(s.high_score);
@@ -339,6 +570,7 @@ fn touch_lock_reset(s: &mut State) {
 fn try_move(s: &mut State, dx: i32) -> bool {
     if !collides(&s.board, s.kind, s.rot, s.x + dx, s.y) {
         s.x += dx;
+        s.last_rot = false; // a move clears the T-spin "last action was rotation" flag
         touch_lock_reset(s);
         true
     } else {
@@ -347,6 +579,7 @@ fn try_move(s: &mut State, dx: i32) -> bool {
 }
 
 /// SRS rotation with wall-kicks; reverts (returns false) if no candidate fits.
+/// Records the kick index used (for the T-spin mini exception).
 fn rotate(s: &mut State, cw: bool) {
     if s.kind == 1 {
         return; // O never rotates
@@ -354,22 +587,62 @@ fn rotate(s: &mut State, cw: bool) {
     let from = s.rot;
     let to = if cw { (from + 1) % 4 } else { (from + 3) % 4 };
     let is_i = s.kind == 0;
-    for (kx, ky) in kicks(is_i, from, to) {
+    for (i, (kx, ky)) in kicks(is_i, from, to).into_iter().enumerate() {
         let nx = s.x + kx as i32;
         let ny = s.y - ky as i32; // SRS y is UP; this grid's row is DOWN
         if !collides(&s.board, s.kind, to, nx, ny) {
             s.x = nx;
             s.y = ny;
             s.rot = to;
+            s.last_rot = true;
+            s.last_kick = i;
             touch_lock_reset(s);
             return;
         }
     }
 }
 
-/// Lock the active piece, clear full rows, apply guideline scoring (line values
-/// ×level, back-to-back tetris ×1.5, combo bonus), then spawn the next piece.
+/// T-spin classification at lock (T piece + last action was a rotation): the
+/// 3-corner rule. Returns 0 = none, 1 = mini, 2 = proper. A proper T-spin needs
+/// both "front" corners (the pointing side) filled; otherwise it's a mini —
+/// except the last/farthest kick (index 4) promotes a mini to proper (guideline).
+fn tspin_kind(s: &State) -> u8 {
+    if s.kind != 2 || !s.last_rot {
+        return 0; // T = index 2
+    }
+    let occ = |cx: i32, cy: i32| -> bool {
+        cx < 0
+            || cx >= COLS as i32
+            || cy >= ROWS as i32
+            || (cy >= 0 && s.board[cy as usize * COLS + cx as usize].is_some())
+    };
+    let (x, y) = (s.x, s.y);
+    let (tl, tr) = (occ(x, y), occ(x + 2, y));
+    let (bl, br) = (occ(x, y + 2), occ(x + 2, y + 2));
+    if (tl as u8 + tr as u8 + bl as u8 + br as u8) < 3 {
+        return 0;
+    }
+    // Front corners = the two on the side the T points to.
+    let (f1, f2) = match s.rot {
+        0 => (tl, tr),
+        1 => (tr, br),
+        2 => (bl, br),
+        _ => (tl, bl),
+    };
+    if (f1 && f2) || s.last_kick == 4 {
+        2
+    } else {
+        1
+    }
+}
+
+/// Lock the active piece, score it (T-spin aware: line values ×level,
+/// back-to-back ×1.5, combo bonus, T-spin/mini bonuses), and EITHER start the
+/// line-clear animation (collapse deferred to `finish_clear`) or spawn the next
+/// piece immediately when nothing cleared.
 fn lock_and_next(s: &mut State) {
+    let tspin = tspin_kind(s);
+    sfx_lock(s);
     for &(dx, dy) in &SHAPES[s.kind as usize][s.rot as usize] {
         let cx = s.x + dx as i32;
         let cy = s.y + dy as i32;
@@ -377,14 +650,90 @@ fn lock_and_next(s: &mut State) {
             s.board[cy as usize * COLS + cx as usize] = Some(s.kind);
         }
     }
-    // Compact non-full rows toward the bottom.
+    // Full rows (indices) — collapse is deferred until the animation ends.
+    let rows: Vec<usize> = (0..ROWS)
+        .filter(|&ry| (0..COLS).all(|cx| s.board[ry * COLS + cx].is_some()))
+        .collect();
+    let n = rows.len() as u32;
+
+    // Guideline scoring. `base` 0 ⇒ no banner/score event.
+    let (base, difficult, name): (u32, bool, &str) = match (tspin, n) {
+        (2, 0) => (400, true, "T-SPIN"),
+        (2, 1) => (800, true, "T-SPIN SINGLE"),
+        (2, 2) => (1200, true, "T-SPIN DOUBLE"),
+        (2, 3) => (1600, true, "T-SPIN TRIPLE"),
+        (1, 0) => (100, true, "T-SPIN MINI"),
+        (1, 1) => (200, true, "T-SPIN MINI"),
+        (1, 2) => (400, true, "T-SPIN MINI"),
+        (_, 1) => (100, false, "SINGLE"),
+        (_, 2) => (300, false, "DOUBLE"),
+        (_, 3) => (500, false, "TRIPLE"),
+        (_, 4) => (800, true, "TETRIS"),
+        _ => (0, false, ""),
+    };
+
+    if n > 0 {
+        s.combo += 1;
+    } else {
+        s.combo = -1;
+    }
+    if base > 0 {
+        let mut pts = base;
+        if difficult && s.b2b {
+            pts = pts * 3 / 2; // back-to-back ×1.5
+        }
+        pts *= s.level;
+        s.score += pts;
+        if n > 0 && s.combo > 0 {
+            s.score += 50 * s.combo as u32 * s.level;
+        }
+        // b2b: set by a difficult action; broken only by a normal line clear.
+        if difficult {
+            s.b2b = true;
+        } else if n > 0 {
+            s.b2b = false;
+        }
+        let label = if s.b2b && difficult && (name == "TETRIS" || name.starts_with("T-SPIN")) {
+            format!("B2B {name}")
+        } else {
+            name.to_string()
+        };
+        s.banner = Some((label, BANNER_NS));
+    }
+    if n > 0 {
+        sfx_clear(s, n, difficult);
+        s.lines += n;
+        let nl = s.lines / 10 + 1;
+        if nl > s.level {
+            s.levelup_flash_ns = LEVELUP_FLASH_NS;
+            sfx_levelup(s);
+        }
+        s.level = nl;
+    }
+    if s.score > s.high_score {
+        s.high_score = s.score;
+        save_high_score(s.high_score);
+    }
+
+    if rows.is_empty() {
+        let k = next_kind(s);
+        spawn(s, k);
+        s.can_hold = true;
+    } else {
+        s.clearing = Some((rows, 0)); // animate, then finish_clear collapses
+    }
+}
+
+/// End the line-clear animation: drop the full rows and spawn the next piece.
+fn finish_clear(s: &mut State) {
+    let rows = match s.clearing.take() {
+        Some((r, _)) => r,
+        None => return,
+    };
     let mut nb = vec![None; ROWS * COLS];
     let mut wy: i32 = ROWS as i32 - 1;
-    let mut cleared = 0u32;
     for ry in (0..ROWS).rev() {
-        let full = (0..COLS).all(|cx| s.board[ry * COLS + cx].is_some());
-        if full {
-            cleared += 1;
+        if rows.contains(&ry) {
             continue;
         }
         for cx in 0..COLS {
@@ -393,38 +742,6 @@ fn lock_and_next(s: &mut State) {
         wy -= 1;
     }
     s.board = nb;
-
-    if cleared > 0 {
-        s.combo += 1;
-        let base = match cleared {
-            1 => 100,
-            2 => 300,
-            3 => 500,
-            4 => 800,
-            _ => 0,
-        };
-        let difficult = cleared == 4;
-        let mut pts = base;
-        if difficult && s.b2b {
-            pts = pts * 3 / 2; // back-to-back tetris ×1.5
-        }
-        pts *= s.level;
-        s.score += pts;
-        if s.combo > 0 {
-            s.score += 50 * s.combo as u32 * s.level;
-        }
-        s.b2b = difficult;
-        s.lines += cleared;
-        s.level = s.lines / 10 + 1;
-    } else {
-        s.combo = -1; // chain broken; b2b survives a no-clear placement
-    }
-
-    if s.score > s.high_score {
-        s.high_score = s.score;
-        save_high_score(s.high_score);
-    }
-
     let k = next_kind(s);
     spawn(s, k);
     s.can_hold = true;
@@ -436,6 +753,7 @@ fn hold(s: &mut State) {
     if !s.can_hold {
         return;
     }
+    sfx_hold(s);
     let cur = s.kind;
     match s.hold.take() {
         Some(h) => {
@@ -452,6 +770,7 @@ fn hold(s: &mut State) {
 }
 
 fn hard_drop(s: &mut State) {
+    sfx_harddrop(s);
     while !collides(&s.board, s.kind, s.rot, s.x, s.y + 1) {
         s.y += 1;
         s.score += 2; // hard-drop: 2 pts/cell
@@ -618,6 +937,11 @@ fn exit_rect(l: &Layout, h: f32) -> wtypes::Rect {
     let sz = h * 0.05;
     rect(l.w - l.margin - sz, l.margin * 0.5, sz, sz)
 }
+/// Mute toggle — square just left of the exit button.
+fn mute_rect(l: &Layout, h: f32) -> wtypes::Rect {
+    let ex = exit_rect(l, h);
+    rect(ex.x - ex.width - l.margin * 0.6, ex.y, ex.width, ex.height)
+}
 fn in_rect(r: &wtypes::Rect, x: f32, y: f32) -> bool {
     x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height
 }
@@ -774,14 +1098,26 @@ fn render(s: &mut State, cv: &Canvas) {
         }
     }
 
-    if !s.game_over {
-        // Ghost piece (translucent landing preview).
-        let gy = ghost_y(s);
-        if gy != s.y {
-            for &(dx, dy) in &SHAPES[s.kind as usize][s.rot as usize] {
-                let cy = gy + dy as i32;
-                if cy >= 0 {
-                    draw_cell(cv, &l, s.x + dx as i32, cy, COLORS[s.kind as usize], 60);
+    if let Some((rows, elapsed)) = &s.clearing {
+        // Line-clear animation: the full rows flash white, fading out.
+        let frac = 1.0 - (*elapsed as f32 / CLEAR_ANIM_NS as f32).clamp(0.0, 1.0);
+        let a = (210.0 * frac) as u8;
+        for &ry in rows {
+            cv.draw_rect(
+                rect(l.bx, l.by + ry as f32 * l.cell, l.board_w, l.cell),
+                &paint_a(0xFFFFFFFF, a),
+            );
+        }
+    } else if !s.game_over {
+        // Ghost piece (translucent landing preview) — optional (settings).
+        if s.ghost_on {
+            let gy = ghost_y(s);
+            if gy != s.y {
+                for &(dx, dy) in &SHAPES[s.kind as usize][s.rot as usize] {
+                    let cy = gy + dy as i32;
+                    if cy >= 0 {
+                        draw_cell(cv, &l, s.x + dx as i32, cy, COLORS[s.kind as usize], 60);
+                    }
                 }
             }
         }
@@ -801,10 +1137,55 @@ fn render(s: &mut State, cv: &Canvas) {
         draw_button(cv, &r, i as u8, held, h);
     }
 
+    // ── Mute toggle (top-right, left of exit) ──
+    let mr = mute_rect(&l, h);
+    cv.draw_rounded_rect(rrect(mr.x, mr.y, mr.width, mr.height, mr.height * 0.22), &paint(BTN_BG));
+    {
+        let (cx, cy) = (mr.x + mr.width * 0.5, mr.y + mr.height * 0.5);
+        let u = mr.height * 0.16;
+        // Speaker silhouette (body + cone).
+        let spk = format!(
+            "M {} {} L {} {} L {} {} L {} {} L {} {} L {} {} Z",
+            cx - u * 1.4, cy - u * 0.5, cx - u * 0.5, cy - u * 0.5,
+            cx + u * 0.4, cy - u * 1.1, cx + u * 0.4, cy + u * 1.1,
+            cx - u * 0.5, cy + u * 0.5, cx - u * 1.4, cy + u * 0.5,
+        );
+        let fg = if s.muted { HUD_DIM } else { BTN_FG };
+        cv.draw_path(&spk, wtypes::FillRule::Nonzero, &paint(fg));
+        if s.muted {
+            cv.draw_line(
+                wtypes::Point { x: cx - u * 1.2, y: cy - u * 1.2 },
+                wtypes::Point { x: cx + u * 1.4, y: cy + u * 1.4 },
+                &stroke(0xFFF44336, mr.height * 0.06),
+            );
+        } else {
+            // little "sound" arc
+            cv.draw_path(
+                &format!("M {} {} L {} {}", cx + u, cy - u * 0.8, cx + u, cy + u * 0.8),
+                wtypes::FillRule::Nonzero,
+                &stroke(BTN_FG, mr.height * 0.05),
+            );
+        }
+    }
+
     // ── Exit button (top-right) — always tappable; foregrounds the launcher ──
     let ex = exit_rect(&l, h);
     cv.draw_rounded_rect(rrect(ex.x, ex.y, ex.width, ex.height, ex.height * 0.22), &paint(BTN_BG));
     draw_label(cv, &ex, "✕", h * 0.030, BTN_FG);
+
+    // ── Level-up flash (brief white tint) ──
+    if s.levelup_flash_ns > 0 {
+        let a = (110.0 * (s.levelup_flash_ns as f32 / LEVELUP_FLASH_NS as f32)) as u8;
+        cv.draw_rect(rect(0.0, 0.0, w, h), &paint_a(0xFFFFFFFF, a));
+    }
+
+    // ── Transient action banner (T-SPIN / TETRIS / B2B …), fading ──
+    if let Some((text, rem)) = &s.banner {
+        let a = (255.0 * (*rem as f32 / BANNER_NS as f32).clamp(0.0, 1.0)) as u32;
+        let col = (a << 24) | 0x00FFD54F; // amber, alpha-faded
+        let bp = para(text, h * 0.036, 800, col);
+        draw_para(cv, &bp, w * 0.5 - bp.width * 0.5, l.by + h * 0.10);
+    }
 
     // ── Overlays ──
     if s.game_over || s.paused {
@@ -837,9 +1218,21 @@ fn handle_key(s: &mut State, code: &str, down: bool) {
             }
             return;
         }
+        // Settings: toggle the ghost piece (persisted to /state).
+        "KeyG" => {
+            s.ghost_on = !s.ghost_on;
+            save_settings(s);
+            return;
+        }
+        // Settings: mute/unmute SFX (persisted to /state).
+        "KeyM" => {
+            s.muted = !s.muted;
+            save_settings(s);
+            return;
+        }
         _ => {}
     }
-    if s.paused || s.game_over {
+    if s.paused || s.game_over || s.clearing.is_some() {
         return;
     }
     match code {
@@ -940,7 +1333,12 @@ fn handle_pointer(s: &mut State, ev: &PointerEvent) {
     let l = layout(s.w.max(1.0), s.h.max(1.0));
     match ev.kind {
         Kind::Down => {
-            // Exit button works in any state — leave to the launcher.
+            // Mute + exit buttons work in any state.
+            if in_rect(&mute_rect(&l, s.h.max(1.0)), ev.x, ev.y) {
+                s.muted = !s.muted;
+                save_settings(s);
+                return;
+            }
             if in_rect(&exit_rect(&l, s.h.max(1.0)), ev.x, ev.y) {
                 launcher::go_home();
                 return;
@@ -1001,18 +1399,40 @@ impl FrameGuest for Tetris {
                 s.rng = nanos | 1;
                 s.last_ns = nanos;
                 s.high_score = load_high_score();
+                load_settings(&mut s);
+                audio_init();
                 let k = next_kind(&mut s);
                 spawn(&mut s, k);
                 s.can_hold = true;
                 s.started = true;
+                s.voices.clear(); // no spawn SFX on the very first piece
             }
 
-            if !s.paused && !s.game_over {
-                let dt = nanos.saturating_sub(s.last_ns).min(LOCK_DELAY_NS * 4);
+            let dt = nanos.saturating_sub(s.last_ns).min(LOCK_DELAY_NS * 4);
+            // Fade the transient banner + level-up flash regardless of phase.
+            if let Some((_, ref mut rem)) = s.banner {
+                *rem = rem.saturating_sub(dt);
+            }
+            if s.banner.as_ref().map(|(_, r)| *r == 0).unwrap_or(false) {
+                s.banner = None;
+            }
+            s.levelup_flash_ns = s.levelup_flash_ns.saturating_sub(dt);
+
+            // Line-clear animation phase: hold the board (rows flashing), then
+            // collapse + spawn. Gravity/input are inert while clearing.
+            if s.clearing.is_some() {
+                if let Some((_, elapsed)) = s.clearing.as_mut() {
+                    *elapsed += dt;
+                }
+                let done = s.clearing.as_ref().map(|(_, e)| *e >= CLEAR_ANIM_NS).unwrap_or(false);
+                if done {
+                    finish_clear(&mut s);
+                }
+            } else if !s.paused && !s.game_over {
                 // Touch auto-shift (DAS/ARR) for held on-screen move buttons.
                 if s.move_dir != 0 {
                     s.das_ns += dt;
-                    let thr = if s.das_started { ARR_NS } else { DAS_NS };
+                    let thr = if s.das_started { s.arr_cfg_ns } else { s.das_cfg_ns };
                     if s.das_ns >= thr {
                         let dir = s.move_dir;
                         try_move(&mut s, dir);
@@ -1049,6 +1469,7 @@ impl FrameGuest for Tetris {
             }
             s.last_ns = nanos;
 
+            audio_feed(&mut s);
             render(&mut s, &cv);
             drop(cv);
             wctx(|x| x.present());
@@ -1080,7 +1501,11 @@ impl FramePacingGuest for Tetris {
     fn next_frame_delay() -> u32 {
         STATE.with(|st| {
             let s = st.borrow();
-            if s.paused || s.game_over {
+            // Fast while SFX voices are sounding or a banner/flash is fading, so
+            // the audio feed keeps the ring topped up; idle otherwise.
+            if !s.voices.is_empty() || s.banner.is_some() || s.levelup_flash_ns > 0 {
+                16
+            } else if s.paused || s.game_over {
                 500
             } else {
                 16

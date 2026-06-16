@@ -1,5 +1,5 @@
 TASK=109
-STEP=immersive-done
+STEP=M4-done
 STATUS=complete
-LAST_SUCCESS=Task 109 M1/M2/M3 (3a2acfad) + GPU desktop present (80447b60) + IMMERSIVE (device-verified: launch hides status+task bars, exit restores) all committed. wandr.tetris is a complete game with desktop+device touch/keys, fullscreen immersive, in-app exit.
-NOTES=Immersive = arbiter-only (core SignalVisible+geometry.immersive, wm set-immersive verb + zero insets, bin app_is_immersive reads installed package.toml + reconcile_immersive on fg-change). Loaded via run-hybrid-stack.sh --wandr-only (the device now runs it). Self-healing keyed on visible app. Optional follow-ups: M4 (t-spin/anim/sound via wasi:audio), add `immersive` to app_installer Manifest struct for cleanliness (arbiter currently reads raw toml so not required). Deploy recipe: --install -> kill pid to re-fork -> arbiter launch; new app -> restart launcher; new arbiter code -> --wandr-only.
+LAST_SUCCESS=Task 109 COMPLETE: M1-M4 + immersive, all committed + (pending this push) on codeberg. wandr.tetris = full modern-guideline game: desktop+device, touch+keys, immersive fullscreen, in-app exit, T-spins, animations, settings, sound+mute.
+NOTES=M4 = T-spins+scoring, line-clear animation+level-up flash+banner, settings (/state das/arr/ghost/mute; G ghost, M mute + speaker button), sound via wasi:audio (synth SFX; KEY: start-at-open + write-every-tick FIFO backpressure = audibility; buffered-gate skipping writes was the silence bug). All device-verified. Deploy: --install -> kill pid (re-fork) -> arbiter launch; arbiter code changes -> run-hybrid-stack.sh --wandr-only. Nothing open.
