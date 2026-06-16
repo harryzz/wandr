@@ -9,7 +9,8 @@ use wandr_arbiter_core::{
 };
 
 use crate::shared::{
-    active_ime, foreground_slot, ime_editor, promote_to_foreground, visible_app, CHROME_APP_IDS,
+    active_ime, drop_editor_focus_of, foreground_slot, ime_editor, overlay_engaged,
+    promote_to_foreground, reconcile_overlay, visible_app, CHROME_APP_IDS,
 };
 
 impl crate::ShellModule {
@@ -91,15 +92,28 @@ impl crate::ShellModule {
     }
 
     pub(crate) fn cmd_back(&mut self, ctx: &mut Ctx) -> Reply {
-        // Route ESC to the foreground slot (the IME during a split, so it can
-        // dismiss the keyboard — preserving the legacy target).
+        // Android BACK semantics, layered:
+        //  1. IME up → dismiss the keyboard HERE and stop (the app is sent
+        //     nothing). Drop editor focus first so `reconcile_overlay` won't
+        //     immediately re-show it (keyboard visibility is derived from focus),
+        //     then tear the overlay split down (IME→Background, app→Foreground).
+        if overlay_engaged(ctx.store) {
+            if let Some((editor_pid, _)) = ime_editor(ctx.store) {
+                drop_editor_focus_of(ctx, editor_pid);
+            }
+            reconcile_overlay(ctx);
+            log::info!("arbiter: back → IME dismissed");
+            return Reply::ok("back → ime dismissed");
+        }
+        //  2. No IME → deliver BACK (ESC: code-point 0, key-id 27) to the
+        //     foreground app and let it decide (pop a screen, close a dialog, or
+        //     ignore it). Down+up so either edge handler fires.
         let Some((fg_pid, fg)) = foreground_slot(ctx.store) else {
             return Reply::ok("back noop (no foreground app)");
         };
-        // ESC: code-point 0, key-id 27. Send down+up so either edge handler fires.
         ctx.deliver_to_host(fg_pid, "key-event 0 27 down\n".to_string());
         ctx.deliver_to_host(fg_pid, "key-event 0 27 up\n".to_string());
-        log::info!("arbiter: back → ESC queued to fg={fg} pid={fg_pid}");
+        log::info!("arbiter: back → ESC to fg={fg} pid={fg_pid}");
         Reply::ok(format!("back → pid={fg_pid} (esc)"))
     }
 
