@@ -375,3 +375,30 @@ Consequences:
   `java.lang.String` on js-string = the JS host. That is the fundamental reason
   **no Java→WasmGC+WASI toolchain exists** — they target the JS embedding, not WASI.
   A Java→WASI-WasmGC path REQUIRES char-array strings (Path A); nothing ships it.
+
+## PRECISE coupling (2026-06-16) — it's Throwable + Object + JSO-plugin, NOT String
+
+Tracing "where is java.lang.String coupled to JSO" overturned the prior claim:
+**String is NOT the coupling.** `WasmGCTarget.getPlatformTags()` returns only
+`{ Platforms.WEBASSEMBLY_GC }` → `PlatformDetector.isJavaScript()` is **false** on
+WasmGC → `TString.substring`/`strip`/`toLowerCase` take the **char-array path**
+(`fastCharArray()`), not `substringJS`. `TString` already has a complete char-array
+implementation (shared with the C backend). The js-string imports come from the
+**JSO runtime**, pulled in by:
+
+1. **`java.lang.Throwable`** (`classlib/.../java/lang/TThrowable.java:121,134,160`):
+   WasmGC stack-trace capture uses `JSString.valueOf(getClass().getName())` +
+   `takeWasmGCStack(JSObject)` + `initNativeExceptionJS(JSObject)`. **Reachable from
+   every exception** → pulls `JSString` (this is the failed-exclusion trace via
+   `throwCloneNotSupportedException`) and runs `stringToJs`→`wasm:js-string` at init.
+2. **`java.lang.Object`** (`TObject.java:32`): `import org.teavm.jso.browser.TimerHandler`.
+3. **The JSO plugin is unconditionally installed for WasmGC** — `JSOPlugin.install`:
+   `if (wasmGCHost != null) WasmGCJso.install(...)` → always contributes the
+   JS-interop codegen + the `WasmGCJsoCommonGenerator` module initializer.
+
+**Path A re-scoped (smaller + specific):** NOT a String rewrite. It's:
+(a) de-JSO-ify `Throwable`'s WasmGC stack-trace path (a non-JS stack capture);
+(b) handle `Object`'s `TimerHandler`; (c) **gate the JSO plugin off for a non-JS-host
+WasmGC mode** (the `if (wasmGCHost != null)` install + the initializer contribution).
+The String char-array path already exists. This is a concentrated TeaVM patch
+(Throwable + Object + JSOPlugin install gate), not a classlib-wide String fork.

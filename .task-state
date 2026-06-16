@@ -1,5 +1,5 @@
 TASK=112
-STEP=build-phase-attempt1-failed
+STEP=coupling-pinpointed
 STATUS=in-progress
-LAST_SUCCESS=Task 112 build phase: JSO exclusion fails (JSString in classlib core). Root cause: TeaVM WasmGC String is JS-string-backed by design. CORRECTED: wasm:js-string is a BROWSER/JS-embedding standard, NOT WASI/component — wasmtime rightly doesn't implement it. So Path B (host-side js-string) = faking a JS env = non-portable; RETRACTED. Path A (patch TeaVM classlib → char-array String) is the only clean WASI path. Patch-TeaVM preference validated.
-NOTES=Go/no-go: Path A (patch TeaVM classlib String→char-array; drop nativeString/substringJS/js-string) is the real path = a substantial TeaVM fork. Decide commit vs bank. repros/java-wasm-spike + stub-host ready.
+LAST_SUCCESS=Task 112: PINPOINTED the JSO coupling. NOT String — TString uses char-arrays on WasmGC (platform tags={WEBASSEMBLY_GC}, isJavaScript()=false). Real coupling: (1) TThrowable.java:121,134,160 stack-trace uses JSString/JSObject (reachable from every exception); (2) TObject.java:32 TimerHandler; (3) JSOPlugin always installs WasmGCJso for WasmGC. Path A re-scoped: de-JSO Throwable stack trace + Object timer + gate JSO plugin for non-JS WasmGC mode. Concentrated, not a String rewrite.
+NOTES=Path A surface: TThrowable (non-JS stack capture), TObject (timer), JSOPlugin install gate. String char-array path already exists (C backend). repros/java-wasm-spike + stub-host ready.
