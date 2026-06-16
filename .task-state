@@ -1,5 +1,5 @@
 TASK=112
-STEP=investigate-done
+STEP=patch-points-located
 STATUS=in-progress
-LAST_SUCCESS=Task 112 investigate: TeaVM 0.15 built (WasmGC=JS-host). CORRECTED: tests.wasi=C backend→wasm32-wasi (proven, standard WASI, zero-patch, adapter-ready). Path B (C) recommended for go/no-go; Path A (WasmGC patch) = later optimization.
-NOTES=Next integrate: Path B = install wasi-sdk, TeaVM C target → wasm32-wasi → run under wasmtime → P1→P2 adapter. repros/java-wasm-spike/ has the WasmGC build.
+LAST_SUCCESS=Task 112: located WasmGC→WASI patch points in TeaVM 0.15. Floor (3 spots: WasmGCSupport console, SystemIntrinsic clock, WasmGCTarget/Heap heap) mechanical. Crux = classlib api-deps JSO → String via WasmGCJSRuntime pulls js-string+teavmJso. Pivotal: does wasmtime 45 do wasm:js-string builtins natively?
+NOTES=/tmp/teavm shallow clone. Next integrate: (1) test wasmtime wasm:js-string support, (2) patch floor→wasi, (3) build+run spike.wasm under wasmtime, (4) P1→P2 adapter.

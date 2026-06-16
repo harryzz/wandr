@@ -196,3 +196,43 @@ TeaVM.** The earlier note "tests.wasi runs WasmGC, crib its host impl" was wrong
 the proven, no-patch, standard-WASI, adapter-ready path = fastest answer to "does
 Java→component work on wandr." If it passes, pursue the **Path A WasmGC patch as an
 optimization** (matches Kotlin, better runtime), now that viability is proven.
+
+## WasmGC → WASI patch points (located 2026-06-16, TeaVM 0.15 / shallow clone)
+
+Decision: pursue **WasmGC** (skip C backend — wandr needs the WasmGC shape). Floor
+target = `wasi_snapshot_preview1` (preview2 has no flat import set; the P1→P2
+adapter lifts it to a component — same as Kotlin/Wasm).
+
+**Clean floor → WASI (mechanical):**
+- **stdout/stderr** — `core/src/main/java/org/teavm/backend/wasm/runtime/WasmGCSupport.java:56,59`
+  `@Import(name="putcharStdout"/"putcharStderr", module="teavmConsole")` →
+  reimplement over `wasi_snapshot_preview1.fd_write` (fd 1/2).
+- **clock** — `core/src/main/java/org/teavm/backend/wasm/intrinsics/SystemIntrinsic.java:41-43`
+  (`setImportModule("teavmDate")`, name `currentTimeMillis`) → emit
+  `wasi_snapshot_preview1.clock_time_get` (ns→ms).
+- **heap globals** — `core/src/main/java/org/teavm/backend/wasm/WasmGCTarget.java:498-508`
+  (`heapOffset`/`maxSize` imported globals from `teavmMemory`) +
+  `core/src/main/java/org/teavm/runtime/heap/Heap.java:215` (`notifyHeapResized`)
+  → make module-internal / self-managed. The **C backend already runs standalone**,
+  so crib its heap-init (no host-provided heap layout).
+- **exceptions** — `teavm.takeStackTrace`/`decorateException`: locate (WasmGCSupport
+  / generated) → keep internal / stub.
+
+**The crux — String routes through JSO:** `teavm-classlib` hard-depends on JSO
+(`classlib/build.gradle.kts:30-31` `api(project(":jso:impl"))`), and WasmGC
+`java.lang.String` interop goes through `jso/impl/src/main/java/org/teavm/jso/impl/wasmgc/WasmGCJSRuntime.java`
+— the source of **both** `wasm:js-string.*` and `teavmJso.*` imports. That's why
+even pure Java pulled JS imports.
+
+**PIVOTAL open question (first integrate experiment):** does **wasmtime 45 natively
+implement the `wasm:js-string` builtins proposal**? If YES → those imports are
+host-satisfied with no JS, leaving only `teavmJso.*` to address → much smaller
+patch. If NO → patch `WasmGCJSRuntime` to do string ops natively (char-array; core
+`WasmGCStringPool` already builds char-array constants) or add a backend flag for
+non-JS strings.
+
+**Patch surface summary:** 3 mechanical floor spots (console/clock/heap) + the
+JSO-string decoupling (size gated on the wasmtime-js-string answer). All localized;
+no architectural rewrite. Next: integrate phase — (1) answer the wasmtime
+js-string question, (2) apply the floor redirects, (3) build + run `spike.wasm`
+under wasmtime, (4) P1→P2 adapter → component.
