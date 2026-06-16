@@ -197,7 +197,9 @@ public:
         const bool down = keyEvent.getAction() == AKEY_EVENT_ACTION_DOWN;
         switch (code) {
             case AKEYCODE_POWER:
-                if (down) arbiter_send("power-key\n");
+                // Task 110 — forward DOWN + UP so the arbiter can time the press
+                // (single decider): short = panel toggle, hold ≥1 s = power menu.
+                arbiter_send(down ? "power-down\n" : "power-up\n");
                 return; // not PASS_TO_USER → dropped from window dispatch
             case AKEYCODE_VOLUME_UP:
                 if (down) arbiter_send("volume up\n");

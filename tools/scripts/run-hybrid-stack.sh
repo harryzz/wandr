@@ -685,6 +685,14 @@ bring_up_chrome() {
     # Boot = locked: the keyguard module shows the lock screen + demotes the app.
     adb shell "su -c '/data/local/tmp/wandr-arbiter lock'" 2>&1 | tr -d '\r'
 
+    # Power menu (task 110) — a hidden fullscreen overlay, shown by the keyguard
+    # module on a POWER long-press. Launch it, then `pm-dismiss` to background the
+    # just-registered (visible) surface so it starts hidden.
+    echo "▸ power menu (hidden overlay)"
+    spawn_detached /dev/null "${EXTRA_ENV}LD_LIBRARY_PATH=/data/local/tmp WANDR_APPS_ROOT=$APPS_ROOT /data/local/tmp/wandr-host --standalone-overlay-lock --app wandr.powermenu"
+    sleep 2
+    adb shell "su -c 'WANDR_APPS_ROOT=$APPS_ROOT /data/local/tmp/wandr-arbiter pm-dismiss'" 2>&1 | tr -d '\r'
+
     # --no-art high-CPU fix: clear the Magisk su-log workers accumulated across ALL
     # the `su -c` of bringup (the mid-bringup sweep above runs before zygote/chrome,
     # so every `spawn_detached` + arbiter call after it leaves a fresh stuck worker).

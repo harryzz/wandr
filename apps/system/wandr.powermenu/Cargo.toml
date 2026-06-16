@@ -1,0 +1,21 @@
+# wandr.powermenu — power long-press menu overlay (task 110). A light Rust canvas
+# guest (like wandr.keyguard): a dim full-screen overlay with Lock / Power off /
+# Restart / Emergency buttons. Shown by the arbiter on a POWER long-press; button
+# taps call wandr:keyguard/keyguard pm-* verbs (host → arbiter).
+#   cargo build --target wasm32-wasip2 --release
+[package]
+name    = "wandr-powermenu"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

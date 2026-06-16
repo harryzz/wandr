@@ -1,0 +1,13 @@
+# Power-menu overlay system app (kind=system, not launcher-listed). Loaded via
+# --standalone-overlay-lock (a high-layer overlay), shown/hidden by the arbiter
+# keyguard module on a POWER long-press.
+app_id      = "wandr.powermenu"
+version     = "0.1.0"
+world       = "wandr:powermenu-app/powermenu-app"
+kind        = "system"
+composition = "same-store"
+orientation = "auto"
+label       = "Power Menu"
+
+[components]
+ui = "components/ui.wasm"

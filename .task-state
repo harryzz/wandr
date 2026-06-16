@@ -1,5 +1,5 @@
-TASK=109
-STEP=M4-done
-STATUS=complete
-LAST_SUCCESS=Task 109 COMPLETE: M1-M4 + immersive, all committed + (pending this push) on codeberg. wandr.tetris = full modern-guideline game: desktop+device, touch+keys, immersive fullscreen, in-app exit, T-spins, animations, settings, sound+mute.
-NOTES=M4 = T-spins+scoring, line-clear animation+level-up flash+banner, settings (/state das/arr/ghost/mute; G ghost, M mute + speaker button), sound via wasi:audio (synth SFX; KEY: start-at-open + write-every-tick FIFO backpressure = audibility; buffered-gate skipping writes was the silence bug). All device-verified. Deploy: --install -> kill pid (re-fork) -> arbiter launch; arbiter code changes -> run-hybrid-stack.sh --wandr-only. Nothing open.
+TASK=110
+STEP=powermenu-blocked-on-a03-inputflinger-build
+STATUS=in-progress
+LAST_SUCCESS=Power menu fully built; Rust side device-verified (arbiter times power-down/up: short=toggle, >=1s=menu shown/hidden). ROOT CAUSE of "same as before": the PHYSICAL power key is dispatched by wandr-inputflinger (C++, path A; hosts don't read evdev), which forwarded power-key on DOWN only. Fixed in wandr_inputflinger.cpp to forward power-down/power-up. BUT wandr-inputflinger is a Soong cc_binary built on a-03 (~/android/lineage) — NOT on this machine. Cannot build C++ here.
+NOTES=REMAINING: build wandr-inputflinger on a-03 with the committed wandr_inputflinger.cpp change, deploy to /data/local/tmp/wandr-inputflinger (chmod 755), restart stack (--wandr-only). a-03 fast build: cd ~/android/lineage; prebuilts/build-tools/linux-x86/bin/ninja -f out/combined-aosp_arm64.ninja wandr-inputflinger (sync the .cpp into the tree first). Everything else committed+working: wit/keyguard.wit pm-* verbs; keyguard_host_impl; KeyguardModule power-menu/pm-dismiss; bin power-down/up timing + pm-* actions (reboot -p/reboot); app apps/system/wandr.powermenu; host audio_policy_impl forward_power_down/up + standalone; run-hybrid-stack launch+boot-hide. On a-03 build + verify: done.

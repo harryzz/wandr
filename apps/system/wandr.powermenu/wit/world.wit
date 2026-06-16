@@ -1,0 +1,17 @@
+// wandr.powermenu — the power long-press menu overlay (task 110). A pure
+// wasi:canvas + wasi:input-handlers reactor (like wandr.keyguard): a dim
+// full-screen surface with Lock / Power off / Restart / Emergency buttons.
+// Button taps call wandr:keyguard/keyguard pm-* verbs (host forwards to the
+// arbiter, which hides the menu + performs the action).
+package wandr:powermenu-app@0.1.0;
+
+world powermenu-app {
+    import wasi:canvas/types@0.0.2;
+    import wasi:canvas/draw@0.0.2;
+    import wasi:canvas/layout@0.0.2;
+    import wasi:canvas/embedding@0.0.2;
+    import wandr:keyguard/keyguard@0.1.0;              // pm-* control channel
+    export wasi:input-handlers/pointer-handler@0.0.2;
+    export wasi:input-handlers/frame-handler@0.0.2;
+    export wandr:ui-shell/frame-pacing@0.1.0;
+}

@@ -17,6 +17,8 @@ use wandr_arbiter_core::{ArbiterModule, Ctx, Effect, Event, Reply, Role, PRIMARY
 
 /// The keyguard guest's app-id (launched as a `--standalone-overlay-lock` overlay).
 const KEYGUARD_APP_ID: &str = "wandr.keyguard";
+/// The power-menu overlay guest (task 110) — same modal-overlay machinery.
+const POWERMENU_APP_ID: &str = "wandr.powermenu";
 
 #[derive(Default)]
 pub struct KeyguardModule {
@@ -29,6 +31,10 @@ pub struct KeyguardModule {
     /// region with the app behind it; rect-filtering alone wouldn't exclude it).
     /// Re-enabled on unlock.
     suppressed_pid: Option<i32>,
+    // ── Power menu (task 110) — a second modal overlay, same mechanism. ──
+    menu_shown: bool,
+    menu_saved_fg: Option<String>,
+    menu_suppressed_pid: Option<i32>,
 }
 
 impl KeyguardModule {
@@ -86,6 +92,65 @@ impl KeyguardModule {
         Reply::ok(format!("locked covering={:?}", self.saved_fg))
     }
 
+    fn powermenu_pid(ctx: &Ctx) -> Option<i32> {
+        ctx.store.app(POWERMENU_APP_ID).map(|a| a.pid)
+    }
+
+    /// Show the power menu as a modal overlay (same mechanism as locking: demote
+    /// + input-suppress the visible app, show the overlay topmost+focused).
+    fn do_show_menu(&mut self, ctx: &mut Ctx) -> Reply {
+        if self.menu_shown {
+            return Reply::ok("power-menu-already-shown");
+        }
+        let Some(pm) = Self::powermenu_pid(ctx) else {
+            return Reply::err("powermenu-not-running (launch wandr.powermenu first)");
+        };
+        let vis = ctx.store.display(PRIMARY_DISPLAY).and_then(|d| d.visible_app());
+        self.menu_saved_fg = vis.and_then(|pid| ctx.store.app_by_pid(pid).map(|a| a.app_id.clone()));
+        if let Some(pid) = vis {
+            ctx.request(Effect::SetRole { pid, role: Role::Background });
+            ctx.store.display_mut(PRIMARY_DISPLAY).set_role(pid, Role::Background);
+            ctx.deliver_to_host(pid, "input-suppress 1\n");
+            self.menu_suppressed_pid = Some(pid);
+        }
+        ctx.request(Effect::SetRole { pid: pm, role: Role::Lockscreen });
+        ctx.store
+            .display_mut(PRIMARY_DISPLAY)
+            .put_surface(pm, POWERMENU_APP_ID, Role::Lockscreen);
+        self.menu_shown = true;
+        ctx.emit(Event::ForegroundChanged {
+            app_id: Some(POWERMENU_APP_ID.to_string()),
+            pid: Some(pm),
+        });
+        let orient = ctx.store.geometry(PRIMARY_DISPLAY).map(|g| g.orientation).unwrap_or(0);
+        ctx.emit(Event::OrientationChanged { id: PRIMARY_DISPLAY, orient });
+        log::info!("arbiter: power-menu SHOWN (covering {:?}, pm pid={pm})", self.menu_saved_fg);
+        Reply::ok("power-menu shown")
+    }
+
+    /// Hide the power menu + restore the covered app (mirrors unlock). Always
+    /// backgrounds the powermenu surface — this also covers the boot case where
+    /// `pm-dismiss` hides the just-registered (visible Chrome) overlay.
+    fn do_hide_menu(&mut self, ctx: &mut Ctx) -> Reply {
+        if let Some(pm) = Self::powermenu_pid(ctx) {
+            ctx.request(Effect::SetRole { pid: pm, role: Role::Background });
+            ctx.store.display_mut(PRIMARY_DISPLAY).set_role(pm, Role::Background);
+        }
+        if self.menu_shown {
+            if let Some(pid) = self.menu_suppressed_pid.take() {
+                ctx.deliver_to_host(pid, "input-suppress 0\n");
+            }
+            if let Some(app_id) = self.menu_saved_fg.take() {
+                ctx.request(Effect::Foreground { app_id });
+            }
+            self.menu_shown = false;
+            let orient = ctx.store.geometry(PRIMARY_DISPLAY).map(|g| g.orientation).unwrap_or(0);
+            ctx.emit(Event::OrientationChanged { id: PRIMARY_DISPLAY, orient });
+            log::info!("arbiter: power-menu HIDDEN");
+        }
+        Reply::ok("power-menu hidden")
+    }
+
     fn do_unlock(&mut self, ctx: &mut Ctx) -> Reply {
         if !self.locked {
             return Reply::ok("already-unlocked");
@@ -117,13 +182,15 @@ impl KeyguardModule {
 
 impl ArbiterModule for KeyguardModule {
     fn verbs(&self) -> &[&'static str] {
-        &["lock", "unlock"]
+        &["lock", "unlock", "power-menu", "pm-dismiss"]
     }
 
     fn on_command(&mut self, verb: &str, _args: &str, ctx: &mut Ctx) -> Reply {
         match verb {
             "lock" => self.do_lock(ctx),
             "unlock" => self.do_unlock(ctx),
+            "power-menu" => self.do_show_menu(ctx),
+            "pm-dismiss" => self.do_hide_menu(ctx),
             other => Reply::err(format!("keyguard-unknown-verb {other}")),
         }
     }
@@ -136,10 +203,12 @@ impl ArbiterModule for KeyguardModule {
             }
             // The covered app exited while locked → unlock reveals home, not it.
             Event::SurfaceRemoved { pid } => {
-                if self.saved_fg.is_some()
-                    && ctx.store.app_by_pid(*pid).map(|a| &a.app_id) == self.saved_fg.as_ref()
-                {
+                let gone = ctx.store.app_by_pid(*pid).map(|a| a.app_id.clone());
+                if gone.as_ref() == self.saved_fg.as_ref() {
                     self.saved_fg = None;
+                }
+                if gone.as_ref() == self.menu_saved_fg.as_ref() {
+                    self.menu_saved_fg = None;
                 }
             }
             _ => {}

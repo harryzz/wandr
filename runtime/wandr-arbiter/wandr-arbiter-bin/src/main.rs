@@ -222,7 +222,11 @@ fn main() {
                     // sends evt-subscribe (host-config from package.toml). CLI forms
                     // for testing: `wandr-arbiter evt-publish <topic> <base64>`,
                     // `wandr-arbiter evt-subscribe <pid> <topic>`.
-                    | "evt-publish" | "evt-subscribe" | "evt-unsubscribe")) => {
+                    | "evt-publish" | "evt-subscribe" | "evt-unsubscribe"
+                    // Task 110 — power-menu (host sends power-menu/pm-* over the raw
+                    // socket; CLI forms for boot-hide + testing).
+                    | "power-menu" | "pm-dismiss" | "pm-lock" | "pm-poweroff"
+                    | "pm-restart" | "pm-emergency" | "power-down" | "power-up")) => {
             run_client_multi(verb, &args[1..])
         }
         Some(other) => {
@@ -509,6 +513,18 @@ fn handle_client(mut stream: UnixStream) -> Result<()> {
         // daemon. Combines a module query + a daemon relay, so it lives in the bin
         // (the orchestrator) rather than the pure module or the daemon.
         "wifi-connect-saved" => cmd_wifi_connect_saved(&mut stream, &rest),
+        // Task 110 — power-menu actions (the menu's `power-menu`/`pm-dismiss` show
+        // /hide are the keyguard module's verbs, routed above via module_owns).
+        // These compose hide + a system action, so they live in the bin.
+        "pm-lock"      => cmd_pm_action(&mut stream, "lock"),
+        "pm-poweroff"  => cmd_pm_action(&mut stream, "poweroff"),
+        "pm-restart"   => cmd_pm_action(&mut stream, "restart"),
+        "pm-emergency" => cmd_pm_action(&mut stream, "emergency"),
+        // Task 110 — POWER key DOWN/UP from the host(s); the arbiter is the single
+        // decider that dedups the fan-in + times the hold (short = panel toggle,
+        // ≥1 s = power menu).
+        "power-down"   => cmd_power_down(&mut stream),
+        "power-up"     => cmd_power_up(&mut stream),
         other => {
             writeln!(stream, "ERR unknown-command {other}")?;
             Ok(())
@@ -792,6 +808,90 @@ fn dispatch_foreground(app_id: &str) {
         execute_effects(effects);
     }
     reconcile_immersive();
+}
+
+/// Task 110 — a power-menu button action: hide the menu (keyguard module's
+/// `pm-dismiss`), then perform the system action. Caller holds `arbiter_lock`.
+fn cmd_pm_action(stream: &mut UnixStream, action: &str) -> Result<()> {
+    if let Some((_r, eff)) = run_module("pm-dismiss", "") {
+        execute_effects(eff);
+    }
+    let reply = match action {
+        "lock" => {
+            if let Some((_r, eff)) = run_module("lock", "") {
+                execute_effects(eff);
+            }
+            "OK pm-lock"
+        }
+        "poweroff" => {
+            do_reboot(true);
+            "OK pm-poweroff"
+        }
+        "restart" => {
+            do_reboot(false);
+            "OK pm-restart"
+        }
+        "emergency" => {
+            log::info!("arbiter: emergency (stub — no real call)");
+            "OK pm-emergency"
+        }
+        _ => "ERR pm-unknown",
+    };
+    writeln!(stream, "{reply}")?;
+    Ok(())
+}
+
+/// POWER long-press timing (task 110). The single decider for the multi-host
+/// fan-in: the first DOWN within the window starts the press; the first UP ends
+/// it. Hold ≥1 s → power menu; shorter → the existing panel toggle.
+fn power_down_at() -> &'static std::sync::Mutex<Option<std::time::Instant>> {
+    static P: std::sync::OnceLock<std::sync::Mutex<Option<std::time::Instant>>> =
+        std::sync::OnceLock::new();
+    P.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+fn cmd_power_down(stream: &mut UnixStream) -> Result<()> {
+    let mut g = power_down_at().lock().unwrap_or_else(|e| e.into_inner());
+    // Dedup the per-host fan-in: only the first DOWN within 2 s starts a press.
+    if g.map(|t| t.elapsed() > std::time::Duration::from_secs(2)).unwrap_or(true) {
+        *g = Some(std::time::Instant::now());
+    }
+    writeln!(stream, "OK power-down")?;
+    Ok(())
+}
+
+fn cmd_power_up(stream: &mut UnixStream) -> Result<()> {
+    let pressed = {
+        let mut g = power_down_at().lock().unwrap_or_else(|e| e.into_inner());
+        g.take()
+    };
+    if let Some(t) = pressed {
+        if t.elapsed() >= std::time::Duration::from_secs(1) {
+            // Long press → power menu (keyguard module's show).
+            if let Some((_r, eff)) = run_module("power-menu", "") {
+                execute_effects(eff);
+            }
+        } else {
+            // Short press → toggle the panel (the existing power-key behavior).
+            if let Some((_r, eff)) = run_module("power-key", "") {
+                execute_effects(eff);
+            }
+        }
+    }
+    writeln!(stream, "OK power-up")?;
+    Ok(())
+}
+
+/// Reboot (`reboot`) or power off (`reboot -p`). Root-only; works under --no-art.
+fn do_reboot(poweroff: bool) {
+    log::warn!("arbiter: {} via /system/bin/reboot", if poweroff { "POWER OFF" } else { "RESTART" });
+    let mut cmd = std::process::Command::new("/system/bin/reboot");
+    if poweroff {
+        cmd.arg("-p");
+    }
+    if let Err(e) = cmd.spawn() {
+        log::warn!("arbiter: reboot spawn failed: {e:#}");
+    }
 }
 
 /// True if the installed app's manifest declares `immersive = true`. Read live
