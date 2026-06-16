@@ -31,7 +31,7 @@ just the stock `wasi:cli/command`. The table below is graded on that bar.
 | **C# / .NET** | ✅ yes — best managed-language story | `componentize-dotnet` (one NuGet: NativeAOT-LLVM + wit-bindgen + wasm-tools + WASI SDK) | ✅ full WIT import/export | hidden by toolchain | Preview (~0.7), usable |
 | **Go (TinyGo)** | ✅ yes | `tinygo build -target=wasip2 --wit-package … --wit-world …` (shells out to wasm-tools embed+new) | ⚠️ yes, with friction¹ | hidden by toolchain | v0.34+ (use ≥0.39) |
 | **Zig** | 🟡 manual only | wit-bindgen **C** generator + Zig C-interop → wasm32-wasip1 → `wasm-tools component new` w/ adapter | ✅ but hand-wired | **explicit** (std is P1) | DIY |
-| **Java (JVM)** | 🟡 fork only | Fermyon **teavm-wasi** fork (bytecode → wasm + CM bindings; Maven `com.fermyon`) | ✅ via the fork | hidden by fork | Niche, not upstream |
+| **Java (JVM)** | 🔴 dormant | **teavm-wasi** forks (bytecode → wasm + CM bindings) | ✅ in the forks | hidden by fork | **Forks dormant (golem 2023 / fermyon 2022); wit-bindgen `teavm-java` gen removed** — see 2026 update below |
 | **Kotlin/Wasm** *(what wandr uses)* | 🟡 via hand-rolled pipeline | KGP `compileProductionExecutableKotlinWasmWasi` → `wasm-tools component embed` → `component new --adapt` | ✅ (our `skiko-ui`) | **explicit** (wandr-fork reactor adapter, KT-86415) | Shipping in wandr |
 
 ¹ TinyGo's `wasip2` target is hardwired to `wasi:cli/command`; a non-CLI world
@@ -65,6 +65,20 @@ arbitrary-world support is tracked in tinygo-org/tinygo#4843.
   because Java and Kotlin "both make JVM bytecode" does **not** imply a shared
   wasm path: Kotlin/Wasm compiles Kotlin *source* → WasmGC directly (never via
   bytecode), while the Java route goes bytecode → TeaVM → linear-memory wasm.
+  **2026 UPDATE — the Java→Component-Model path has stalled/regressed, not
+  advanced:** the CM-capable forks are dormant (**golemcloud/teavm-wasi** last
+  commit Sep 2023, **fermyon/teavm-wasi** Dec 2022), and **upstream wit-bindgen
+  removed the `teavm-java` generator** ("unmaintained for a long time and never at
+  feature parity"). So the one concrete Java→CM toolchain — which *could* export
+  custom WIT (`wit-bindgen guest teavm-java --export …`) — is gone from the
+  official tooling. Meanwhile **upstream TeaVM (`konsoletyper`) is very active**
+  (commit 2026-06-15) and gained a WasmGC backend, but it targets **core wasm /
+  WASI, not the Component Model**. Net: **no actively-maintained Java→CM toolchain
+  exists today.** The cheapest revival path for a Java guest on wandr is **TeaVM
+  core module + the same P1→P2 adapter wandr uses for Kotlin** (reuse the trick;
+  linear-memory, not WasmGC) — wandr's undertaking, not an off-the-shelf option.
+  GraalVM is not a candidate (it runs wasm *in* the JVM; native-image doesn't emit
+  wasm components).
 - **Kotlin/Wasm** (context) — our path: WasmGC output + a P1→P2 **reactor
   adapter** (wandr fork, the KT-86415 State-pin), hand-written `@WasmImport`/
   `@WasmExport` bindings. No native P2 target yet (watch KT-64568). Listed here
