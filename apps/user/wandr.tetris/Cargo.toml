@@ -1,0 +1,21 @@
+# wandr.tetris — task 109, the first wandr game. A pure wasi:canvas +
+# wasi:input-handlers reactor (no retained-mode framework) run as a game loop.
+# Self-contained Rust; no external deps (xorshift RNG inline). Build:
+#   cargo build --target wasm32-wasip2 --release
+#   cp target/wasm32-wasip2/release/wandr_tetris.wasm components/ui.wasm
+[package]
+name    = "wandr-tetris"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.46"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

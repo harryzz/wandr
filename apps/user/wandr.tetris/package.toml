@@ -1,0 +1,17 @@
+# wandr.tetris — task 109, the first wandr game. User app (no `kind` → installs
+# under apps/ and shows as a launcher tile, like wandr.audio.player). A
+# wasi:canvas UI reactor run as a game loop; the host UI path probes the
+# input-handlers exports, so the `world` field is informational.
+app_id      = "wandr.tetris"
+version     = "0.1.0"
+world       = "wandr:tetris-app/tetris-app"
+composition = "same-store"
+orientation = "portrait"
+label       = "Tetris"
+# 60 fps cap so the falling piece animates smoothly; the renderer is on-demand
+# (frame-pacing returns a long delay while paused/game-over), so idle stays cheap.
+max_fps     = 60
+background  = false
+
+[components]
+ui = "components/ui.wasm"

@@ -1,5 +1,5 @@
-TASK=107
-STEP=verify-done
+TASK=109
+STEP=M1-done
 STATUS=complete
-LAST_SUCCESS=Task 107 COMPLETE — Avalonia on wandr: device demo (scaling/mini/IME), reusable dotnet/avalonia-wandr lib + apps/user/wandr.avalonia.demo, IDLE CPU FIXED ~60%→~3% (on-demand rendering). Swift + Flutter feasibility memos.
-NOTES=CPU fix = incremental retention + skip present when nothing drew (MarkDrawn from CreateDrawingContext) + size from on-resize. Mini stays fixed by InFrame gate. Verified device ~3% idle, interaction fine. Further headroom: frame-pacing WIT to stop max_fps wake-ups (not wired). Possible next: theme/locale wiring; popup support.
+LAST_SUCCESS=Task 109 M1 COMPLETE + user-verified on desktop dev loop. wandr.tetris playable core (keys-only). Desktop loop HiDPI crash fixed in host (decorations off + present reconcile). Committed.
+NOTES=M2 next: 7-bag randomizer, SRS rotation + wall-kick tables (incl. I-piece), ghost piece, hold slot, next-queue (5), lock delay (~0.5s move-reset), gravity curve by level (level-up /10 lines), scoring (single/double/triple/tetris + back-to-back + combo + soft/hard-drop pts), high score in /state/highscore.json. Still desktop-verified. Then M3 device+touch.
