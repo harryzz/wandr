@@ -14,6 +14,11 @@
       <artifactId>teavm-classlib</artifactId>
       <version>${teavm.version}</version>
       <scope>provided</scope>
+      <exclusions>
+        <exclusion><groupId>org.teavm</groupId><artifactId>teavm-jso-impl</artifactId></exclusion>
+        <exclusion><groupId>org.teavm</groupId><artifactId>teavm-jso-apis</artifactId></exclusion>
+        <exclusion><groupId>org.teavm</groupId><artifactId>teavm-jso</artifactId></exclusion>
+      </exclusions>
     </dependency>
   </dependencies>
   <build>

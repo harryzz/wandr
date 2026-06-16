@@ -1,5 +1,5 @@
 TASK=112
-STEP=live-vs-dead-done
+STEP=build-phase-attempt1-failed
 STATUS=in-progress
-LAST_SUCCESS=Task 112: live-vs-dead test = LIVE. JSO bridge runs at module-init (WasmGCJsoCommonGenerator→stringToJs→js-string fromCharCode), unconditional even for pure compute. CORRECTED: js-string not moot (fallback also uses it). Patch precise+bounded: gate JSO out of non-JS-host WasmGC build; core String (WasmGCStringPool char-arrays) is JSO-independent.
-NOTES=Build phase next: patch TeaVM to exclude/gate JSO contribution for non-JS WasmGC build; rebuild spike.wasm; re-run repros/java-wasm-spike/stub-host harness; expect zero teavmJso/js-string imports → then floor→wasi + P1→P2 adapter. Harness builds + runs.
+LAST_SUCCESS=Task 112 build phase: JSO dependency-exclusion FAILS (JSString in reachable classlib core). Root cause: TeaVM 0.15 WasmGC java.lang.String is JS-string-backed by design (TString.nativeString()/substringJS + js-string builtins), no char-array flag. VERDICT: viable but a real project. Two paths: A patch TeaVM classlib (String→char-array, portable, deep); B host-side js-string builtins (standard proposal, host-provided, moderate) + stub teavmJso.
+NOTES=Go/no-go decision pending: which path (A deep/portable vs B moderate/host) or whether to commit. Path B fastest to a running module. repros/java-wasm-spike + stub-host ready.

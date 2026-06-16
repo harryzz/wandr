@@ -309,3 +309,45 @@ non-JS-host WasmGC build, rebuild `spike.wasm`, re-run the harness — expect ze
 `teavmJso`/`js-string` imports, leaving only the clean floor (console/clock/heap)
 to redirect to WASI. If pure-compute Java compiles + runs sans JSO → the floor
 redirects + P1→P2 adapter are the remaining mechanical work, and the spike PASSES.
+
+## Build phase (2026-06-16) — attempt 1 failed; root cause is fundamental
+
+**Attempt 1 (cheapest): exclude JSO from the dependency.** `mvn package` with
+`teavm-jso-impl`/`-apis` excluded from `teavm-classlib` → **FAILS**:
+`Class org.teavm.jso.core.JSString was not found`, reached via
+`WasmGCSupport.throwCloneNotSupportedException` (exception machinery). So JSString
+is referenced by reachable classlib **core**, not just the JSO plugin.
+
+**Root cause (decisive):** `classlib/.../java/lang/TString.java` shows TeaVM 0.15's
+WasmGC `java.lang.String` is **JS-string-backed by design**:
+`TString(Object nativeString)`, `native Object nativeString()`,
+`substringJS`/`stripJS`/`stripLeadingJS` — string ops route to the **native (JS)
+string** via the `wasm:js-string` builtins. No flag selects a char-array String;
+the JSO plugin is service-loader-registered (`JSOPlugin`); and core/exceptions
+reference `JSString`. The `WasmGCStringPool` (char-array) covers string *constants*
+only, not the String *type's* operations.
+
+**VERDICT — viable, but a real project, not a spike-sized win.** Java→wasm builds
+(✅), the floor is mechanical (✅), but a **clean non-JS WASI module needs one of two
+non-trivial paths:**
+
+- **Path A — patch TeaVM classlib** so `java.lang.String` is **char-array-backed**
+  (drop `nativeString()`/`substringJS`/js-string), making WasmGC output JS-free.
+  Portable / standard-WASI / the user's preference — but a **substantial TeaVM
+  classlib+backend fork** (touches String, exceptions, the JSO bridge).
+- **Path B — implement the `wasm:js-string` builtins host-side** in wandr's
+  wasmtime (over host-native strings in `externref`) + stub `teavmJso`. **Reframe:
+  `wasm:js-string` is a STANDARD wasm proposal designed to be *host-provided*
+  (incl. non-JS hosts) — so this is NOT the non-portable custom-glue we wanted to
+  avoid; it's implementing a standard proposal wasmtime will eventually ship.** With
+  `stringBuiltinsSupported=false`, only the simple ref-ops are needed (`fromCharCode`
+  /`concat`/`substring`/`charCodeAt`/`length`), no WasmGC-array host access. Gets the
+  *existing* module running; `teavmJso.*` stubbed for pure compute. Moderate effort;
+  per-host (but spec-standard).
+
+**Go/no-go decision needed:** the spike has answered its question — *viable, with the
+true cost now known* (a real project via A or B). Recommend deciding which path
+(or whether to commit) before sinking the multi-hour/day build work. Path B is
+likely fastest to a running module (spike PASS); Path A is the portable production
+direction. Note: js-string being a standard host-provided proposal softens the
+"patch-TeaVM-not-host" preference — host-side js-string is standards-aligned.
