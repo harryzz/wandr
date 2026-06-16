@@ -1,5 +1,5 @@
-TASK=112
-STEP=coupling-pinpointed
-STATUS=in-progress
-LAST_SUCCESS=Task 112: PINPOINTED the JSO coupling. NOT String — TString uses char-arrays on WasmGC (platform tags={WEBASSEMBLY_GC}, isJavaScript()=false). Real coupling: (1) TThrowable.java:121,134,160 stack-trace uses JSString/JSObject (reachable from every exception); (2) TObject.java:32 TimerHandler; (3) JSOPlugin always installs WasmGCJso for WasmGC. Path A re-scoped: de-JSO Throwable stack trace + Object timer + gate JSO plugin for non-JS WasmGC mode. Concentrated, not a String rewrite.
-NOTES=Path A surface: TThrowable (non-JS stack capture), TObject (timer), JSOPlugin install gate. String char-array path already exists (C backend). repros/java-wasm-spike + stub-host ready.
+TASK=113
+STEP=scoped
+STATUS=not-started
+LAST_SUCCESS=Task 112 investigate COMPLETE (verdict: viable; coupling pinpointed = Throwable+Object+JSO-plugin, NOT String). Path A spun out to task 113.
+NOTES=Task 113 = new TeaVM WEBASSEMBLY_GC_WASI target (JS-free WasmGC for WASI). 5 work items: target wiring, gate JSO plugin, Throwable non-JS stack, Object timer, floor→wasi. Acceptance = repros/java-wasm-spike/stub-host harness. Not started.
