@@ -180,3 +180,21 @@ the shape wandr consumes (a guest exporting a custom WIT). 5 patches preserved i
 - Allocating guests; consuming a Java component from wandr-host on device.
 - The bigger thesis (task 112 / `docs/java-framework-reuse-via-wasm.md`): entangled
   services via AIDL2WIT + the Looper shim — RILJ the marquee PoC.
+
+## Upstreaming setup (2026-06-17)
+
+TeaVM work now lives on the fork **`harryzz/teavm`**, branch **`wasmgc-wasi-poc`**
+(2 PoC commits off upstream master `d7467b4`) — preserved off ephemeral `/tmp` and
+PR-ready. Also mirrored as `.patch` files in `repros/java-wasm-spike/teavm-patches/`.
+
+- **CI:** TeaVM runs GitHub Actions (`ci.yml` = Gradle test matrix incl. a `wasi`
+  lane; `macos-c.yml`). A PR auto-runs it. Single-maintainer (Alexey Andreev);
+  fork→PR, no CLA/DCO (Apache-2.0).
+- **PR-when-ready compare:**
+  `https://github.com/konsoletyper/teavm/compare/master...harryzz:teavm:wasmgc-wasi-poc`
+- **Workflow:** clone `harryzz/teavm`; `origin`=upstream (fetch/rebase),
+  `fork`=harryzz (push). Iterate on `wasmgc-wasi-poc`; push to fork; PR from there.
+- **Before PR (productionize):** replace the `-Dteavm.wasmgc.nojso` gate with a
+  first-class `WEBASSEMBLY_GC_WASI` `TeaVMTargetType`; real non-JS stack trace; real
+  WASI floor (`clock_time_get`/`fd_write`/heap-grow); add a wasi-WasmGC CI test;
+  open a design issue first to align with the maintainer.
