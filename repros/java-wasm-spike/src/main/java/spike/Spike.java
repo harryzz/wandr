@@ -4,7 +4,7 @@ import org.teavm.interop.Export;
 
 public final class Spike {
     // Pure Java arithmetic (no console/heap/clock) — the host will call this.
-    @Export(name = "packed_len")
+    @Export(name = "packed-len")
     public static int packedLen(int septets) {
         return (septets * 7 + 7) / 8;
     }

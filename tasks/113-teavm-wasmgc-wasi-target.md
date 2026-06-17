@@ -148,3 +148,35 @@ M5 work is *packaging* as a component + WIT, gated entirely on M4:
 - `teavmMemory.{heapOffset,maxSize,notifyHeapResized}` → module-internal/self-managed
 - `teavmDate.currentTimeMillis` → `wasi clock_time_get`
 Then `component new --adapt` (P1→P2) + the embedded WIT yields a real component.
+
+## M4 + M5 DONE — full Java→JS-free-WasmGC→component→WIT→host-call (2026-06-17)
+
+**M4 (floor → self-contained):** 3 more patches (all gated on `teavm.wasmgc.nojso`,
+all in `core`): `env::memory` → module-defined memory; `teavmMemory.heapOffset`/
+`maxSize` → internal const globals; `teavmDate.currentTimeMillis` → local fn
+returning `f64 0`; `teavmMemory.notifyHeapResized` → no-op (Heap.java). Result: the
+pure-Java spike module imports **NOTHING** (0 imports, ~11 KB). Chose self-contained
+over `wasi_snapshot_preview1` because a pure-compute guest needs no host floor at
+all → no adapter required. (Real WASI floor — clock/stdout/heap-grow — is additive
+when a guest needs it; placeholder for now.)
+
+**M5 (component + WIT + host call):** `@Export(name="packed-len")` →
+`wasm-tools component embed wit/ + component new` → a **valid component**:
+`world root { export packed-len: func(septets: s32) -> s32; }`. A wasmtime
+**component-model** host (`repros/java-wasm-spike/stub-host`, `comp-host` bin)
+instantiates it (empty Linker — zero imports) and calls `packed-len` over the WIT →
+correct results: `1,3,5,7,9`.
+
+**Spike COMPLETE — the full chain works:** Java source → patched TeaVM (JS-free) →
+WasmGC core (zero imports) → WASM component (custom WIT) → wasmtime component model →
+host calls the Java fn via WIT. No JS, no host stubs, no adapter. This is exactly
+the shape wandr consumes (a guest exporting a custom WIT). 5 patches preserved in
+`repros/java-wasm-spike/teavm-patches/` + reproduce steps.
+
+### Remaining = productionization (not blockers)
+- First-class `WEBASSEMBLY_GC_WASI` `TeaVMTargetType` (vs the `-D` flag) + **upstream
+  to TeaVM** (fills the Java→WasmGC+WASI gap nothing else has).
+- Real WASI floor for guests that need it (clock/stdout/fs/heap-grow).
+- Allocating guests; consuming a Java component from wandr-host on device.
+- The bigger thesis (task 112 / `docs/java-framework-reuse-via-wasm.md`): entangled
+  services via AIDL2WIT + the Looper shim — RILJ the marquee PoC.

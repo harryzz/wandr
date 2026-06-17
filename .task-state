@@ -1,5 +1,5 @@
 TASK=113
-STEP=M2-M3-DONE-host-callable
+STEP=M4-M5-DONE-core-proven
 STATUS=in-progress
-LAST_SUCCESS=Task 113 M2+M3 DONE: 2 TeaVM patches (Throwable de-JSO + JSOPlugin gate) → JS-free WasmGC module (no teavmJso/js-string), instantiates on wasmtime, @Export packed_len CALLED from host with correct results (1,3,5,7,9). Go/no-go PASS. Patches saved in repros/java-wasm-spike/teavm-patches/.
-NOTES=Remaining M1 (package as WEBASSEMBLY_GC_WASI mode, gate Throwable patch), M4 (floor→wasi: currentTimeMillis/putcharStdout/heap), M5 (P1→P2 adapter + custom WIT). Build loop: /tmp/teavm publishToMavenLocal → mvn -Dteavm.wasmgc.nojso=true. /tmp/teavm is ephemeral; patches preserved in repo.
+LAST_SUCCESS=Task 113 CORE PROVEN: full Java→JS-free-WasmGC(0 imports)→wasm-tools component(custom WIT)→wasmtime component-model host call. packed-len(1,3,5,8,10)=1,3,5,7,9 via WIT. 5 TeaVM patches preserved in repros/java-wasm-spike/teavm-patches/.
+NOTES=Remaining = productionization: first-class WEBASSEMBLY_GC_WASI TeaVMTargetType + upstream to TeaVM; real WASI floor (clock/stdout/fs/heap-grow); allocating guests; consume a Java component from wandr-host on device. Build loop: /tmp/teavm publishToMavenLocal → mvn -Dteavm.wasmgc.nojso=true → component embed/new → comp-host.

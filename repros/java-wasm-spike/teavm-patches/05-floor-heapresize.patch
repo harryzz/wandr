@@ -1,0 +1,23 @@
+diff --git a/core/src/main/java/org/teavm/runtime/heap/Heap.java b/core/src/main/java/org/teavm/runtime/heap/Heap.java
+index bc29b03..e4664cc 100644
+--- a/core/src/main/java/org/teavm/runtime/heap/Heap.java
++++ b/core/src/main/java/org/teavm/runtime/heap/Heap.java
+@@ -17,7 +17,6 @@ package org.teavm.runtime.heap;
+ 
+ import org.teavm.interop.Address;
+ import org.teavm.interop.Export;
+-import org.teavm.interop.Import;
+ import org.teavm.interop.Intrinsified;
+ import org.teavm.interop.StaticInit;
+ import org.teavm.interop.Structure;
+@@ -212,8 +211,8 @@ public final class Heap {
+         return grownBytes >= bytes;
+     }
+ 
+-    @Import(module = "teavmMemory", name = "notifyHeapResized")
+-    private static native void notifyHeapResized();
++    private static void notifyHeapResized() { // task 113: self-managed heap, no host callback
++    }
+ 
+     private static HeapNode lastRecord() {
+         HeapRecord record = start.toStructure();
