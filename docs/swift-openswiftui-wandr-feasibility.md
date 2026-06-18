@@ -465,13 +465,32 @@ blockers one by one (each a bounded, mechanical fix — no fundamental wall):
    → llvm/ADT`** header chain (header-only LLVM ADT, vendorable from LLVM source). 🔴
 
 **Key structural finding:** OAG's Linux CI doesn't build its *own* Cxx engine — it
-builds against the **Compute backend (`jcmosc/Compute`)**, which ships a
-**self-contained `Sources/ComputeCxx/Swift/Metadata.h`** (its own metadata layer)
-and so avoids the heavy `swift/ABI`+`llvm` chain. So the **pragmatic OAG-on-WASI
-path is the Compute backend, not OAG's own Cxx** — fewer header deps. Either way the
-attempt cleared 3 real layers and hit only *bounded* walls (vendor LLVM ADT headers,
-or switch to Compute). No fundamental blocker surfaced; it's a multi-step port,
-upstream-shaped.
+builds against the **Compute backend (`jcmosc/Compute`)**. Its `swift-runtime-headers`
+submodule vendors **both** `include/swift/*` **and** `stdlib/include/llvm/*` (the
+LLVM ADT headers), and its Package `-isystem`'s both — so the `swift/ABI → llvm/ADT`
+chain that walled OAG's own Cxx **resolves cleanly**. So the **pragmatic OAG-on-WASI
+path is the Compute backend.**
+
+#### Compute backend WASI build attempt (2026-06-18) — got much further
+Built `jcmosc/Compute` directly for `wasm32-wasip1` (syslog shim + Foundation
+emulation + `-lswiftCxx -L`):
+- **Cleared the walls OAG's own Cxx hit**: Platform + Utilities compiled with **no
+  HashTable ABI-assert failures**, and `Metadata.cpp`/`MetadataVisitor.cpp`/
+  `ContextDescriptor.cpp` compiled — the full `swift/Runtime`+`llvm`+metadata chain
+  resolved via Compute's complete submodule. ✅✅✅
+- **Next walls (all bounded):** (a) CF shim `SwiftCorelibsCoreFoundation/*` was
+  `.when(platforms:[.linux])`-gated → enabling `.wasi` resolved it (Package edit);
+  (b) `Platform/sha.h` `#include <openssl/sha.h>` → needs a SHA shim/stub (WASI has
+  no openssl); (c) `Data/Page.h` `sizeof(IAG::data::page)==24` → Compute's *own*
+  wasm32 ABI assert (same class — guard on pointer width).
+
+**Verdict of the live attempt (two engines, many layers):** every wall is a bounded,
+mechanical fix — POSIX shims (`syslog`, `openssl/sha`), vendored Swift+LLVM headers
+(Compute's submodule, turnkey), Package platform conditions (`.wasi`), and a handful
+of pointer-width ABI-assert guards. **No fundamental blocker exists**; Compute is the
+right base, getting through the hard metadata/llvm layers with no header work. The
+remaining is a real but **bounded multi-step port** (finish the POSIX shims + assert
+guards, then link, then verify runtime correctness on wasm32) — upstream-shaped.
 
 So **every gating toolchain mechanism for OAG-on-WASI is now demonstrated feasible**:
 Swift C++ interop ✅ (compiles/links/runs on wasm), metadata ABI ✅ (present in the
