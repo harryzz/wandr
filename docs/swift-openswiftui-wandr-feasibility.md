@@ -352,7 +352,7 @@ probe below is of the RenderBox route + the shared reactive engine.
 |---|---|---|---|
 | **OpenCoreGraphics** | the `CGContext` render target | full CGContext on wasi:canvas | ✅ done |
 | **OpenRenderBox** | build `ORBDisplayList` + `render(in: CGContext)` that walks every item kind → CGContext | **`render(in:)` is `_openRenderBoxUnimplementedFailure()` — a STUB**; no display-list item/content model; ~935 LOC total, mostly `ORBPath*`/animation shells | 🔴 the rasterizer **doesn't exist yet** — the seam is our CGContext, but the walker + display-list content model are unwritten |
-| **OpenAttributeGraph** | functional reactive graph (attributes, rules, subgraphs, invalidation, type-metadata runtime) | **substantial real engine in progress** — ~1,956 Swift + ~4,733 C++ (`OAGGraph.cpp`/`OAGSubgraph.cpp`/`OAGAttribute.cpp`); very low unimplemented density (1 explicit unimplemented; minor TODOs) | 🟡 not a stub; a genuine AGGraph-style engine being built — completeness/correctness unverified, but far past "API-compatible only" |
+| **OpenAttributeGraph** | functional reactive graph (attributes, rules, subgraphs, invalidation, type-metadata runtime) | **released + actively developed** — v0.5.0, commits days old (2026-06-16); ~1,956 Swift + ~4,733 C++ (`OAGGraph`/`OAGSubgraph`/`OAGAttribute`); **23-file AttributeGraph compatibility test suite**; **builds + `swift test` on Linux in CI (`ubuntu.yml`, Swift 6.3.2)** via a setup script. Far past "API-compatible only". **Caveat for wandr:** the C++ engine reflects Swift's runtime type-metadata ABI (`#include <swift/Runtime/Metadata.h>`), so it needs Swift's *private runtime headers* at build (provided by their CI setup, not a stock toolchain — a naive `swift build` fails here on that header). **No WASI/wasm CI job** — WASI is a stated goal, not yet verified building for wasm; the metadata-header/ABI coupling is the open hurdle. | 🟡 mature on Linux/Apple; **unproven on WASI** (the wandr gate) |
 | **OpenSwiftUI** | the framework producing the display list via OAG | early off-Apple (text unsupported, GTK4 renderer) | 🔴 early |
 | **wandr driver** | drive a render pass on on-frame, feed input, present | we have the reactor (on-frame/pointer/frame-pacing) | 🟢 trivial |
 
@@ -366,3 +366,20 @@ renders into our CGContext) is the larger missing piece today, even though its
 bottom edge (CGContext) is solved. Of the four boxes: bottom done, driver trivial,
 **ORB rasterizer = biggest hole, OAG = substantial-but-unverified.** Still
 upstream-gated (don't fork the framework); revisit when ORB's `render(in:)` lands.
+
+### OAG status re-check (2026-06-18) — mature, but WASI is the wandr gate
+Prompted by recent GitHub activity: OpenAttributeGraph is **not** "in progress /
+unverified" — it's **released (v0.5.0), actively developed (commits days old), and
+builds + passes a 23-file AttributeGraph compatibility suite on Linux CI** (Swift
+6.3.2). So on Linux/Apple it's a real, tested engine. The wandr-specific blockers
+are narrower than "is the engine done":
+1. **No WASI build yet** — WASI is a stated project goal but there's no wasm CI job;
+   building for `wasm32-wasip1` is unproven.
+2. **Swift runtime-metadata coupling** — the C++ core `#include`s
+   `swift/Runtime/Metadata.h` (it reflects Swift's type-metadata ABI to apply
+   attribute rules), so it needs Swift's *private runtime headers* and a matching
+   metadata ABI. On a stock toolchain a naive `swift build` fails on that header;
+   on wasm those headers + ABI availability are the real question.
+So the OAG gate for wandr isn't "finish the engine" (it's largely done) — it's
+"**make the existing engine build + run on the WASI target**" (the metadata-ABI/
+header port). That's a more bounded, upstream-shaped task than reimplementing it.
