@@ -1,4 +1,4 @@
-From fd17b581bc1584be91a810b10f9e80f9b308a675 Mon Sep 17 00:00:00 2001
+From cdc64718bbf47c397ac50cac55c6391c36ca0a3e Mon Sep 17 00:00:00 2001
 From: Zahari Zahariev <harryzz@gmail.com>
 Date: Thu, 18 Jun 2026 07:46:45 +0300
 Subject: [PATCH] WasmGC: add WEBASSEMBLY_GC_WASI target (JS-free WasmGC + real
@@ -38,7 +38,7 @@ verbs) running under wasmtime.
  .../teavm/classlib/java/lang/TThrowable.java  | 42 ++++++-------
  .../teavm/backend/wasm/TeaVMWasmGCHost.java   |  3 +
  .../org/teavm/backend/wasm/WasmGCTarget.java  | 45 +++++++++++---
- .../wasm/dependencies/WasmGCDependencies.java |  6 ++
+ .../wasm/dependencies/WasmGCDependencies.java | 19 ++++++
  .../wasm/intrinsics/SystemIntrinsic.java      | 19 +++++-
  .../wasm/intrinsics/WasmGCIntrinsics.java     |  9 +--
  .../backend/wasm/runtime/WasmGCSupport.java   | 60 ++++++++++++++++++-
@@ -48,7 +48,7 @@ verbs) running under wasmtime.
  .../java/org/teavm/jso/impl/JSOPlugin.java    |  2 +-
  .../org/teavm/tooling/TeaVMTargetType.java    |  1 +
  .../java/org/teavm/tooling/TeaVMTool.java     |  8 ++-
- 13 files changed, 171 insertions(+), 39 deletions(-)
+ 13 files changed, 184 insertions(+), 39 deletions(-)
 
 diff --git a/classlib/src/main/java/org/teavm/classlib/java/lang/TThrowable.java b/classlib/src/main/java/org/teavm/classlib/java/lang/TThrowable.java
 index 0e7c91a..072d729 100644
@@ -239,17 +239,37 @@ index e221ffa..a557e55 100644
  
          dataSize = memorySize;
 diff --git a/core/src/main/java/org/teavm/backend/wasm/dependencies/WasmGCDependencies.java b/core/src/main/java/org/teavm/backend/wasm/dependencies/WasmGCDependencies.java
-index 638d291..b1355a4 100644
+index 638d291..3cfa222 100644
 --- a/core/src/main/java/org/teavm/backend/wasm/dependencies/WasmGCDependencies.java
 +++ b/core/src/main/java/org/teavm/backend/wasm/dependencies/WasmGCDependencies.java
-@@ -77,6 +77,12 @@ public class WasmGCDependencies {
+@@ -22,6 +22,7 @@ import org.teavm.backend.wasm.runtime.WasmGCSupport;
+ import org.teavm.dependency.AbstractDependencyListener;
+ import org.teavm.dependency.DependencyAgent;
+ import org.teavm.dependency.DependencyAnalyzer;
++import org.teavm.dependency.MethodDependency;
+ import org.teavm.interop.Address;
+ import org.teavm.model.MethodReader;
+ import org.teavm.model.MethodReference;
+@@ -77,6 +78,24 @@ public class WasmGCDependencies {
                  .use();
      }
  
-+    // task 113 WASI floor: clock helper is only reached from codegen (SystemIntrinsic), so it must
-+    // be linked explicitly; gated to WASI builds so the browser target keeps no clock_time_get import.
++    // task 113 WASI floor: the clock helper is reached only from codegen (SystemIntrinsic), so the
++    // dependency analyzer can't see it on its own. Link it precisely -- only when the guest actually
++    // references System.currentTimeMillis -- so guests that never read the clock import no
++    // clock_time_get. Gated to WASI builds (the browser target routes through teavmDate instead).
 +    public void contributeWasi() {
-+        analyzer.linkMethod(new MethodReference(WasmGCSupport.class, "currentTimeMillis", double.class)).use();
++        analyzer.addDependencyListener(new AbstractDependencyListener() {
++            @Override
++            public void methodReached(DependencyAgent agent, MethodDependency method) {
++                var ref = method.getReference();
++                if (ref.getClassName().equals(System.class.getName())
++                        && ref.getName().equals("currentTimeMillis")) {
++                    agent.linkMethod(new MethodReference(WasmGCSupport.class, "currentTimeMillis",
++                            double.class)).use();
++                }
++            }
++        });
 +    }
 +
      private void contributeWasmRuntime() {

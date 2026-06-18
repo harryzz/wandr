@@ -1,0 +1,4 @@
+package wandr:leak-repro;
+world leak-repro {
+  export run: func();
+}

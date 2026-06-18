@@ -89,7 +89,7 @@ step:
 `TeaVMTargetType.WEBASSEMBLY_GC_WASI` with a real `wasi_snapshot_preview1` floor
 (stdout `fd_write`, clock `clock_time_get`, self-managed heap); end-to-end Java →
 WasmGC-WASI → preview1 adapter → WASI 0.2 component → wasmtime, browser
-`WEBASSEMBLY_GC` unchanged. Banked as one compiling commit `fd17b58` on the fork +
+`WEBASSEMBLY_GC` unchanged. Banked as one compiling commit `cdc6471` on the fork +
 the combined patch. Remaining is polish-before-upstream-PR (gradle plugin, CI test,
 design issue) — see the dated sections below. **No upstream PR/issue without
 explicit user go-ahead.**
@@ -256,7 +256,7 @@ and `now-millis` (`currentTimeMillis`) alongside `packed-len`:
   epoch (`1781757914668` = 2026-06-18), `packed-len(10)`→`9`.
 
 **Banked:** fork `harryzz/teavm:wasmgc-wasi-poc` collapsed to **one complete,
-compiling commit** `fd17b58` (force-pushed; the prior `350a86f` had captured only
+compiling commit** `cdc6471` (force-pushed; the prior `350a86f` had captured only
 5 of the files and would not compile standalone). Combined patch refreshed
 (`repros/java-wasm-spike/teavm-patches/WEBASSEMBLY_GC_WASI.patch`, 540 lines).
 

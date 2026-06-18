@@ -1,0 +1,56 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>wandr.repro</groupId>
+  <artifactId>java-leak-repro</artifactId>
+  <version>0.1.0</version>
+  <packaging>jar</packaging>
+  <!--
+    Java analog of repros/wandr-leak-repro (which is Kotlin/Wasm). Built with the
+    TeaVM WEBASSEMBLY_GC_WASI target (task 113): pure Java -> JS-free WasmGC module
+    on the real wasi_snapshot_preview1 floor (System.out.println -> fd_write), no
+    host imports beyond WASI. Self-driving reproducer for the wasmtime DRC
+    sweep-cost issue (bytecodealliance/wasmtime#13403).
+  -->
+  <properties>
+    <maven.compiler.release>17</maven.compiler.release>
+    <teavm.version>0.16.0-SNAPSHOT</teavm.version>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>org.teavm</groupId>
+      <artifactId>teavm-classlib</artifactId>
+      <version>${teavm.version}</version>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.teavm</groupId>
+      <artifactId>teavm-interop</artifactId>
+      <version>${teavm.version}</version>
+      <scope>provided</scope>
+    </dependency>
+  </dependencies>
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.teavm</groupId>
+        <artifactId>teavm-maven-plugin</artifactId>
+        <version>${teavm.version}</version>
+        <executions>
+          <execution>
+            <id>wasm-gc</id>
+            <phase>package</phase>
+            <goals><goal>compile</goal></goals>
+            <configuration>
+              <targetType>WEBASSEMBLY_GC_WASI</targetType>
+              <mainClass>testapp.Main</mainClass>
+              <targetDirectory>${project.build.directory}/wasm</targetDirectory>
+              <targetFileName>java-leak-repro.wasm</targetFileName>
+              <minifying>false</minifying>
+              <optimizationLevel>SIMPLE</optimizationLevel>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>
