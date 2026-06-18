@@ -135,7 +135,14 @@ extern void __wasm_import_wasi_canvas_embedding_method_canvas_context_present(in
 __attribute__((__import_module__("wasi:canvas/embedding@0.0.2"), __import_name__("get-context")))
 extern int32_t __wasm_import_wasi_canvas_embedding_get_context(void);
 
-// Exported Functions from `swift-spike`
+// Exported Functions from `wasi:input-handlers/frame-handler@0.0.2`
+
+
+
+// Exported Functions from `wasi:input-handlers/pointer-handler@0.0.2`
+
+
+// Exported Functions from `wandr:ui-shell/frame-pacing@0.1.0`
 
 
 // Canonical ABI intrinsics
@@ -1262,9 +1269,45 @@ wasi_canvas_embedding_own_canvas_context_t wasi_canvas_embedding_get_context(voi
   return (wasi_canvas_embedding_own_canvas_context_t) { ret };
 }
 
-__attribute__((__export_name__("render")))
-void __wasm_export_exports_swift_spike_render(void) {
-  exports_swift_spike_render();
+__attribute__((__export_name__("wasi:input-handlers/frame-handler@0.0.2#on-frame")))
+void __wasm_export_exports_wasi_input_handlers_frame_handler_on_frame(int64_t arg) {
+  exports_wasi_input_handlers_frame_handler_on_frame((uint64_t) (arg));
+}
+
+__attribute__((__export_name__("wasi:input-handlers/frame-handler@0.0.2#on-resize")))
+void __wasm_export_exports_wasi_input_handlers_frame_handler_on_resize(int32_t arg, int32_t arg0) {
+  exports_wasi_input_handlers_frame_handler_on_resize((uint32_t) (arg), (uint32_t) (arg0));
+}
+
+__attribute__((__export_name__("wasi:input-handlers/pointer-handler@0.0.2#on-pointer")))
+void __wasm_export_exports_wasi_input_handlers_pointer_handler_on_pointer(uint8_t * arg) {
+  exports_wasi_input_handlers_pointer_handler_pointer_event_t arg0 = (exports_wasi_input_handlers_pointer_handler_pointer_event_t) {
+    (uint32_t) (uint32_t) (*((int32_t*) (arg + 0))),
+    (exports_wasi_input_handlers_pointer_handler_kind_t) (int32_t) *((uint8_t*) (arg + 4)),
+    (exports_wasi_input_handlers_pointer_handler_pointer_device_t) (int32_t) *((uint8_t*) (arg + 5)),
+    (float) *((float*) (arg + 8)),
+    (float) *((float*) (arg + 12)),
+    (float) *((float*) (arg + 16)),
+    (float) *((float*) (arg + 20)),
+    (float) *((float*) (arg + 24)),
+    (float) *((float*) (arg + 28)),
+    (float) *((float*) (arg + 32)),
+    (float) *((float*) (arg + 36)),
+    (exports_wasi_input_handlers_pointer_handler_button_t) (int32_t) *((uint8_t*) (arg + 40)),
+    (exports_wasi_input_handlers_pointer_handler_buttons_t) (int32_t) *((uint8_t*) (arg + 41)),
+    (bool) (int32_t) *((uint8_t*) (arg + 42)),
+    (bool) (int32_t) *((uint8_t*) (arg + 43)),
+    (bool) (int32_t) *((uint8_t*) (arg + 44)),
+    (bool) (int32_t) *((uint8_t*) (arg + 45)),
+  };
+  exports_wasi_input_handlers_pointer_handler_on_pointer(&arg0);
+  free(arg);
+}
+
+__attribute__((__export_name__("wandr:ui-shell/frame-pacing@0.1.0#next-frame-delay")))
+int32_t __wasm_export_exports_wandr_ui_shell_frame_pacing_next_frame_delay(void) {
+  uint32_t ret = exports_wandr_ui_shell_frame_pacing_next_frame_delay();
+  return (int32_t) (ret);
 }
 
 // Ensure that the *_component_type.o object is linked in

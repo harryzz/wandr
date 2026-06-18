@@ -64,14 +64,39 @@ scalars+string. Build: `./build.sh`.
   against `host/wit/`). The full P1 result is at git `1d4fa6a7`.
 - **P2** is the live direction (`wit/` = real wasi:canvas).
 
-### Next — P2.2 (render) and P2.3 (CGContext)
-- **P2.2 render:** add the `wasi:input-handlers/frame-handler` export (+
-  `frame-pacing`) and a `package.toml`, then run on **wandr-host** (which renders
-  `wasi:canvas` with skia) on the desktop dev loop (task 101) → real pixels. No
-  bespoke host needed — wandr-host already implements the contract.
-- **P2.3 CGContext:** implement OpenCoreGraphics's empty `CGContext` over exactly
-  these `wasi:canvas` calls (the mapping in
-  `docs/swift-openswiftui-wandr-feasibility.md`).
+## P2.2 (2026-06-18) — Swift renders on wandr-host
+
+`wit/` now exports the host-driven reactor surface
+(`wasi:input-handlers/frame-handler` + `pointer-handler` + `wandr:ui-shell/
+frame-pacing`) and imports `wasi:canvas`; `Sources/SwiftSpike/spike.swift`
+implements `on_frame` (acquire the embedding buffer → `clear` + `draw-rect` +
+`draw-path` → `present`). `package.toml` makes it the `wandr.swift.canvas.test`
+app; `build.sh` emits `components/ui.wasm`.
+
+Status: the component **instantiates on wandr-host and `on_frame` executes against
+the real skia `wasi:canvas` with no render error** (desktop dev loop). Pixels
+(blue rect + green triangle) are pending a human look (WSLg here can't be
+screenshotted from CI). Run it:
+
+```bash
+./build.sh                       # -> components/ui.wasm
+WANDR_DESKTOP_SIZE=480x800 \
+  ../../runtime/wandr-host/target/x86_64-unknown-linux-gnu/release/wasm-android-host \
+  components/ui.wasm
+```
+
+### Gotcha — don't cache the canvas-context `own` handle (from Swift)
+Caching the `get-context` `own` handle in a global and re-borrowing it each frame
+trapped on wandr-host with **`unknown handle index 0`** at `get_current_buffer`.
+Acquiring the context **fresh each frame** (`get-context` → use → drop) works.
+(The keyguard caches fine in Rust, so this is a wit-bindgen-c/Swift usage nuance —
+revisit only if per-frame `get-context` ever shows cost.)
+
+### Next — P2.3 (CGContext)
+Implement OpenCoreGraphics's empty `CGContext` over exactly these `wasi:canvas`
+calls (the mapping in `docs/swift-openswiftui-wandr-feasibility.md`):
+`CGPath`→SVG path-data serializer, the save/restore + CTM state stack, and CG
+graphics-state → `paint` resolution per draw.
 
 ## Prerequisite (the gate)
 

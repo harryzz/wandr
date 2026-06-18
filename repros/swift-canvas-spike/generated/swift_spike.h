@@ -331,6 +331,67 @@ typedef wasi_canvas_draw_own_graphics_t wasi_canvas_embedding_own_graphics_t;
 
 typedef wasi_canvas_draw_own_canvas_t wasi_canvas_embedding_own_canvas_t;
 
+typedef uint8_t exports_wasi_input_handlers_pointer_handler_kind_t;
+
+#define EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_DOWN 0
+#define EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_UP 1
+#define EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_MOVE 2
+#define EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_SCROLL 3
+#define EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_CANCEL 4
+#define EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_ENTER 5
+#define EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_LEAVE 6
+
+typedef uint8_t exports_wasi_input_handlers_pointer_handler_pointer_device_t;
+
+#define EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_POINTER_DEVICE_UNKNOWN 0
+#define EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_POINTER_DEVICE_MOUSE 1
+#define EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_POINTER_DEVICE_TOUCH 2
+#define EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_POINTER_DEVICE_PEN 3
+
+// The button that CHANGED (down/up); none for move/scroll.
+typedef uint8_t exports_wasi_input_handlers_pointer_handler_button_t;
+
+#define EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_BUTTON_NONE 0
+#define EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_BUTTON_PRIMARY 1
+#define EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_BUTTON_SECONDARY 2
+#define EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_BUTTON_MIDDLE 3
+#define EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_BUTTON_BACK 4
+#define EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_BUTTON_FORWARD 5
+
+// Buttons currently held.
+typedef uint8_t exports_wasi_input_handlers_pointer_handler_buttons_t;
+
+#define EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_BUTTONS_PRIMARY (1 << 0)
+#define EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_BUTTONS_SECONDARY (1 << 1)
+#define EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_BUTTONS_MIDDLE (1 << 2)
+#define EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_BUTTONS_BACK (1 << 3)
+#define EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_BUTTONS_FORWARD (1 << 4)
+
+typedef struct exports_wasi_input_handlers_pointer_handler_pointer_event_t {
+  uint32_t   id;
+  exports_wasi_input_handlers_pointer_handler_kind_t   kind;
+  exports_wasi_input_handlers_pointer_handler_pointer_device_t   device;
+  float   x;
+  float   y;
+  // 0.0..1.0; 0.0 when the device doesn't report pressure.
+  float   pressure;
+  // Pen tilt in degrees; 0 when unreported.
+  float   tilt_x;
+  float   tilt_y;
+  // Pen barrel rotation in degrees; 0 when unreported.
+  float   twist;
+  // Scroll deltas (kind == scroll only; surface units, W3C
+  // wheel sign: positive = content moves down/right).
+  float   scroll_dx;
+  float   scroll_dy;
+  exports_wasi_input_handlers_pointer_handler_button_t   button;
+  exports_wasi_input_handlers_pointer_handler_buttons_t   buttons;
+  bool   alt;
+  bool   ctrl;
+  bool   meta;
+  bool   shift;
+} exports_wasi_input_handlers_pointer_handler_pointer_event_t;
+
 // Imported Functions from `wasi:canvas/types@0.0.2`
 extern uint32_t wasi_canvas_types_method_image_width(wasi_canvas_types_borrow_image_t self);
 extern uint32_t wasi_canvas_types_method_image_height(wasi_canvas_types_borrow_image_t self);
@@ -430,8 +491,15 @@ extern void wasi_canvas_embedding_method_canvas_context_present(wasi_canvas_embe
 // come from `surface.connect-graphics-context`.
 extern wasi_canvas_embedding_own_canvas_context_t wasi_canvas_embedding_get_context(void);
 
-// Exported Functions from `swift-spike`
-void exports_swift_spike_render(void);
+// Exported Functions from `wasi:input-handlers/frame-handler@0.0.2`
+void exports_wasi_input_handlers_frame_handler_on_frame(uint64_t nanos);
+void exports_wasi_input_handlers_frame_handler_on_resize(uint32_t width, uint32_t height);
+
+// Exported Functions from `wasi:input-handlers/pointer-handler@0.0.2`
+void exports_wasi_input_handlers_pointer_handler_on_pointer(exports_wasi_input_handlers_pointer_handler_pointer_event_t *ev);
+
+// Exported Functions from `wandr:ui-shell/frame-pacing@0.1.0`
+uint32_t exports_wandr_ui_shell_frame_pacing_next_frame_delay(void);
 
 // Helper Functions
 

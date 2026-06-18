@@ -102,8 +102,17 @@ Swift handles wasi:canvas's rich ABI (flat `paint` struct, `rect`, resource
 own/borrow handles), not just P1's scalars+string. (P1 runner preserved,
 self-contained, in `host/` against `host/wit/`.)
 
-**Next: P2.2 (render)** — add `wasi:input-handlers/frame-handler` (+ frame-pacing)
-+ `package.toml`, run on **wandr-host** (skia wasi:canvas impl already exists,
-`runtime/wandr-host/src/wasi_canvas_002_impl.rs`) on the desktop dev loop → real
-pixels; then **P2.3** — implement OpenCoreGraphics's empty `CGContext` over these
-calls (mapping in the feasibility doc).
+🟢 **P2.2 (2026-06-18) — Swift renders on wandr-host.** `wit/` exports the reactor
+surface (`wasi:input-handlers/frame-handler` + `pointer-handler` +
+`wandr:ui-shell/frame-pacing`), imports `wasi:canvas`; Swift `on_frame` does the
+embedding handoff + `clear`/`draw-rect`/`draw-path`/`present`. `package.toml` =
+`wandr.swift.canvas.test`; `build.sh` → `components/ui.wasm`. The component
+**instantiates on wandr-host and `on_frame` executes against the real skia
+`wasi:canvas` with zero render error** (desktop dev loop). Pixels pending a human
+look (WSLg not screenshottable from CI — `[[feedback_visual_verification]]`).
+Gotcha fixed: caching the `get-context` `own` handle + re-borrow traps
+(`unknown handle index 0`); acquire fresh each frame.
+
+**Next: P2.3** — implement OpenCoreGraphics's empty `CGContext` over these
+`wasi:canvas` calls (`CGPath`→SVG path-data serializer; save/restore + CTM state
+stack; CG-state→`paint`); mapping in the feasibility doc.

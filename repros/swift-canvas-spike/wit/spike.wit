@@ -1,13 +1,15 @@
-// Task 114 P2 — Swift drives REAL wasi:canvas. The guest gets its canvas via the
-// embedding handoff (get-context -> get-current-buffer + graphics), draws, and
-// presents. Host implements wasi:canvas. P2 builds OpenCoreGraphics's CGContext
-// over these verbs; this world is the import surface.
+// Task 114 P2.2 — Swift renders on wandr-host. The guest exports the host-driven
+// reactor surface (frame-handler + frame-pacing + a pointer stub) and imports
+// wasi:canvas; on-frame it acquires the frame buffer via the embedding handoff,
+// draws, and presents. Runs unchanged on wandr-host (skia wasi:canvas) — desktop
+// dev loop, then device.
 package wandr:swift-spike;
 
 world swift-spike {
   import wasi:canvas/types@0.0.2;
   import wasi:canvas/draw@0.0.2;
   import wasi:canvas/embedding@0.0.2;
-  // Host calls this to let the guest render one frame.
-  export render: func();
+  export wasi:input-handlers/frame-handler@0.0.2;
+  export wasi:input-handlers/pointer-handler@0.0.2;
+  export wandr:ui-shell/frame-pacing@0.1.0;
 }

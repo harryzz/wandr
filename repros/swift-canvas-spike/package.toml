@@ -1,0 +1,13 @@
+# Task 114 P2.2 — Swift wasi:canvas render demo. User app (no `kind` → apps/).
+# A Swift guest (OpenCoreGraphics CGContext target lands in P2.3) that renders a
+# rect + path via wasi:canvas. Built from the Swift component (build.sh).
+app_id      = "wandr.swift.canvas.test"
+version     = "0.1.0"
+world       = "my:skiko-gfx/skiko-ui"
+composition = "same-store"
+orientation = "auto"
+label       = "Swift Canvas"
+max_fps     = 60
+
+[components]
+ui = "components/ui.wasm"

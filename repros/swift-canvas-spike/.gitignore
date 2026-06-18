@@ -3,3 +3,4 @@ spike.component.wasm
 spike.embed.wasm
 .build/
 host/target/
+components/
