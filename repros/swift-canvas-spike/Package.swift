@@ -8,12 +8,14 @@ let package = Package(
     targets: [
         // wit-bindgen-c generated surface (imports + the export trampolines).
         .target(name: "CSwiftSpike"),
-        // P2.3 — OpenCoreGraphics's CGContext implemented over wasi:canvas.
-        .target(name: "CoreGraphicsWasi", dependencies: ["CSwiftSpike"]),
+        // P2.3 — VENDORED OpenCoreGraphics (real upstream geometry/CGPath; see
+        // Sources/OpenCoreGraphics/VENDORED.txt), with its empty CGContext.swift
+        // implemented over wasi:canvas (hence the CSwiftSpike dep) + an added CGColor.
+        .target(name: "OpenCoreGraphics", dependencies: ["CSwiftSpike"]),
         // The guest: implements the reactor exports via @_cdecl, draws via CGContext.
         .executableTarget(
             name: "SwiftSpike",
-            dependencies: ["CSwiftSpike", "CoreGraphicsWasi"]
+            dependencies: ["CSwiftSpike", "OpenCoreGraphics"]
         ),
     ]
 )

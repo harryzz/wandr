@@ -123,6 +123,16 @@ now uses the CoreGraphics API only (no raw wasi:canvas). Device-verified on Pixe
 XL — same scene (blue rect + green triangle) via CGContext; eglSwapBuffers + frames,
 no traps.
 
+🟢 **P2.3b DONE (2026-06-18) — vendored REAL OpenCoreGraphics + merged CGContext.**
+`Sources/OpenCoreGraphics/` is the actual upstream OCG library target (MIT, see
+VENDORED.txt) with its empty `CGContext.swift` replaced by the wasi:canvas body and
+an added `CGColor`. The guest draws with OCG's own `CGPath`/`PathElement`/`CGLineCap`
++ Foundation's `CGPoint`/`CGRect`. Device-verified on Pixel 2 XL (same scene via
+genuine OpenCoreGraphics). Build note: OCG needs Foundation/CoreFoundation -> wasm
+WASI emulation shims (-D_WASI_EMULATED_{SIGNAL,MMAN,PROCESS_CLOCKS} + -lwasi-emulated-*
+in build.sh); cost = component ~7MB -> ~60MB (Foundation on wasm is heavy). A
+production guest would use a slim no-Foundation geometry shim (the self-contained
+P2.3 CoreGraphicsWasi variant, in git history).
+
 **Remaining (P2.3 cont.):** gradients, images, clipping, text; the 3 gaps (dash,
-offset-shadow, mask-clip); optionally vendor OpenCoreGraphics's real geometry and
-drop this body into its `CGContext.swift`. SwiftUI stays out of scope.
+offset-shadow, mask-clip). SwiftUI stays out of scope.

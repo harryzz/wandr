@@ -17,8 +17,14 @@ wit-bindgen c wit --out-dir generated
 cp generated/swift_spike.c Sources/CSwiftSpike/swift_spike.c
 cp generated/swift_spike.h Sources/CSwiftSpike/include/swift_spike.h
 
-# 1. SwiftPM cross-build to a wasip1 REACTOR (no _start; exports `render`).
+# 1. SwiftPM cross-build to a wasip1 REACTOR (no _start; exports the handlers).
+#    The vendored OpenCoreGraphics pulls in Foundation/CoreFoundation; on wasm that
+#    needs the WASI emulation shims (signal/mman/process-clocks) — defines for the C
+#    module builds + the matching link libs.
 swift build --swift-sdk "$SDK" \
+  -Xcc -D_WASI_EMULATED_SIGNAL -Xcc -D_WASI_EMULATED_MMAN -Xcc -D_WASI_EMULATED_PROCESS_CLOCKS \
+  -Xlinker -lwasi-emulated-signal -Xlinker -lwasi-emulated-mman \
+  -Xlinker -lwasi-emulated-process-clocks \
   -Xswiftc -Xclang-linker -Xswiftc -mexec-model=reactor \
   -Xlinker "$PWD/generated/swift_spike_component_type.o"
 

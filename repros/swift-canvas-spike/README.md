@@ -112,10 +112,28 @@ with the **CoreGraphics API only** — no raw `wasi:canvas` in the guest.
 ✅ **DEVICE-VERIFIED (Pixel 2 XL)** — same scene as P2.2 (dark bg + blue rect +
 green triangle), now via `CGContext`; `eglSwapBuffers` → rendered frames, no traps.
 
+## P2.3b (2026-06-18) — vendored REAL OpenCoreGraphics, CGContext merged in
+
+`Sources/OpenCoreGraphics/` is now the **actual upstream OpenCoreGraphics library
+target** (MIT; `VENDORED.txt` records the commit), with its empty `CGContext.swift`
+replaced by the wasi:canvas implementation and an added `CGColor` (upstream lacks
+one). So the guest draws with OpenCoreGraphics's *own* types — `CGPath`/
+`PathElement`/`CGLineCap`/`CGLineJoin` and Foundation's `CGPoint`/`CGRect` (OCG
+gets the base CG types from Foundation: `@_exported import Foundation`).
+
+✅ **DEVICE-VERIFIED (Pixel 2 XL)** — same scene, now via genuine OpenCoreGraphics.
+
+**Build note:** OCG pulls in **Foundation/CoreFoundation**, which on wasm needs the
+WASI emulation shims — `build.sh` adds `-D_WASI_EMULATED_{SIGNAL,MMAN,PROCESS_CLOCKS}`
++ `-lwasi-emulated-*`. **Cost:** the component jumps **~7 MB → ~60 MB** (Foundation
+on wasm is heavy). For a production guest you'd avoid Foundation (a slim geometry
+shim providing `CGFloat`/`CGPoint`/`CGRect`) — but that means patching OCG's
+`public import Foundation`, so it's a separate decision. The self-contained P2.3
+`CoreGraphicsWasi` variant (7 MB, no Foundation) is in git history if size matters.
+
 Next: extend the `CGContext` surface (gradients, images, clipping, text) and the 3
-known gaps (dash, offset-shadow, mask-clip); optionally vendor OpenCoreGraphics's
-real `CGRect`/`CGPath`/`CGAffineTransform` and drop this body into its stub.
-SwiftUI (OpenRenderBox + OpenSwiftUI) remains the out-of-scope wall.
+known gaps (dash, offset-shadow, mask-clip). SwiftUI (OpenRenderBox + OpenSwiftUI)
+remains the out-of-scope wall.
 
 ## Prerequisite (the gate)
 
