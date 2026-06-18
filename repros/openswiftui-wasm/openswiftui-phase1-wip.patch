@@ -100,6 +100,66 @@ index ad3ee3b..9800ad8 100644
          var swiftSettings = swiftSettings ?? []
          swiftSettings.append(.define("OPENSWIFTUI_OPENCOMBINE"))
          self.swiftSettings = swiftSettings
+diff --git a/Sources/OpenSwiftUI/Test/ViewTest.swift b/Sources/OpenSwiftUI/Test/ViewTest.swift
+index eb10ae0..b3aff19 100644
+--- a/Sources/OpenSwiftUI/Test/ViewTest.swift
++++ b/Sources/OpenSwiftUI/Test/ViewTest.swift
+@@ -223,6 +223,11 @@ extension _ViewTest {
+ 
+     public func loop() {
+         render()
++        #if os(WASI)
++        // No RunLoop on wasm; the host frame loop drives rendering. Drain any
++        // deferred main-run-loop work instead of pumping a (nonexistent) loop.
++        _ = _wasmDrainMainRunLoop()
++        #else
+         let defaultMode = RunLoop.Mode.default
+         let commonMode = RunLoop.Mode.common
+         var count: UInt = 0
+@@ -234,10 +239,14 @@ extension _ViewTest {
+             }
+             count += 1
+         }
++        #endif
+     }
+ 
+     public func turnRunloop(times: Int = 1) {
+         Swift.assert(times > 0)
++        #if os(WASI)
++        for _ in 0..<times { _ = _wasmDrainMainRunLoop() }
++        #else
+         let defaultMode = RunLoop.Mode.default
+         let commonMode = RunLoop.Mode.common
+         let interval = 0.001
+@@ -250,22 +259,25 @@ extension _ViewTest {
+                 Thread.sleep(forTimeInterval: interval)
+             }
+         }
++        #endif
+     }
+ 
+     private func turnRunLoopIfNeeded(host: any TestHost, seconds: Double, options: TestRenderOptions) {
+         guard CoreTesting.neeedsRunLoopTurn else {
+             return
+         }
+-        let defaultMode = RunLoop.Mode.default
+-        let commonMode = RunLoop.Mode.common
+         let interval = 0.001
+         var times = 17
+         while CoreTesting.needsRender || CoreTesting.neeedsRunLoopTurn {
++            #if os(WASI)
++            _ = _wasmDrainMainRunLoop()
++            #else
+             // let modes = [defaultMode, commonMode]
+             let date = Date(timeIntervalSinceNow: interval)
+-            if !RunLoop.current.run(mode: defaultMode, before: date) {
++            if !RunLoop.current.run(mode: .default, before: date) {
+                 Thread.sleep(forTimeInterval: interval)
+             }
++            #endif
+             render(host: host, seconds: seconds, options: options)
+             times &-= 1
+             if times <= 1 {
 diff --git a/Sources/OpenSwiftUICore/Animation/Animation/AnimationListener.swift b/Sources/OpenSwiftUICore/Animation/Animation/AnimationListener.swift
 index a048359..2c11295 100644
 --- a/Sources/OpenSwiftUICore/Animation/Animation/AnimationListener.swift
@@ -115,6 +175,51 @@ index a048359..2c11295 100644
  
  // MARK: - AnimationListener
  
+diff --git a/Sources/OpenSwiftUICore/Data/Combine/AttributeInvalidatingSubscriber.swift b/Sources/OpenSwiftUICore/Data/Combine/AttributeInvalidatingSubscriber.swift
+index bfcbd64..814576b 100644
+--- a/Sources/OpenSwiftUICore/Data/Combine/AttributeInvalidatingSubscriber.swift
++++ b/Sources/OpenSwiftUICore/Data/Combine/AttributeInvalidatingSubscriber.swift
+@@ -5,7 +5,9 @@
+ //  Audited for 6.5.4
+ //  Status: Complete
+ 
++#if !os(WASI)
+ import class Foundation.Thread
++#endif
+ import OpenAttributeGraphShims
+ #if OPENSWIFTUI_OPENCOMBINE
+ import OpenCombine
+diff --git a/Sources/OpenSwiftUICore/Data/Combine/StateObject.swift b/Sources/OpenSwiftUICore/Data/Combine/StateObject.swift
+index 65ee4eb..78a8c53 100644
+--- a/Sources/OpenSwiftUICore/Data/Combine/StateObject.swift
++++ b/Sources/OpenSwiftUICore/Data/Combine/StateObject.swift
+@@ -6,7 +6,9 @@
+ //  Status: Complete
+ //  ID: BDD24532CFCFEBA7264ABA5DE20A4002 (SwiftUICore)
+ 
++#if !os(WASI)
+ import class Foundation.Thread
++#endif
+ import OpenAttributeGraphShims
+ #if OPENSWIFTUI_OPENCOMBINE
+ public import OpenCombine
+diff --git a/Sources/OpenSwiftUICore/Util/RunLoopUtils.swift b/Sources/OpenSwiftUICore/Util/RunLoopUtils.swift
+index b63b980..bd96a17 100644
+--- a/Sources/OpenSwiftUICore/Util/RunLoopUtils.swift
++++ b/Sources/OpenSwiftUICore/Util/RunLoopUtils.swift
+@@ -24,7 +24,12 @@ extension CFRunLoopMode {
+ #endif
+ 
+ package func onNextMainRunLoop(do body: @escaping () -> Void) {
++    #if os(WASI)
++    // RunLoop is unavailable on WASI; defer to the host frame loop instead.
++    _wasmEnqueueMainRunLoop(body)
++    #else
+     RunLoop.main.perform(inModes: [.common], block: body)
++    #endif
+ }
+ 
+ private var observer: CFRunLoopObserver?
 diff --git a/Sources/OpenSwiftUICore/Util/StandardLibraryAdditions.swift b/Sources/OpenSwiftUICore/Util/StandardLibraryAdditions.swift
 index c314432..26ec7f7 100644
 --- a/Sources/OpenSwiftUICore/Util/StandardLibraryAdditions.swift
@@ -146,6 +251,174 @@ index c314432..26ec7f7 100644
          #else
          #error("Unsupported Platform")
          #endif
+diff --git a/Sources/OpenSwiftUICore/Util/TimerUtils.swift b/Sources/OpenSwiftUICore/Util/TimerUtils.swift
+index 6ce8a51..2ddb7e2 100644
+--- a/Sources/OpenSwiftUICore/Util/TimerUtils.swift
++++ b/Sources/OpenSwiftUICore/Util/TimerUtils.swift
+@@ -30,6 +30,12 @@ package func withDelay(_ timeInterval: TimeInterval, do body: @escaping () -> Vo
+     let timer = Timer(timeInterval: timeInterval, repeats: false) { _ in
+         body()
+     }
++    #if os(WASI)
++    // RunLoop is unavailable on WASI; timers are wired to the host frame clock
++    // in a later phase. Returning the (un-scheduled) timer keeps `withDelay` total.
++    _ = timer
++    #else
+     RunLoop.main.add(timer, forMode: .common)
++    #endif
+     return timer
+ }
+diff --git a/Sources/OpenSwiftUICore/Util/WasmDispatchShim.swift b/Sources/OpenSwiftUICore/Util/WasmDispatchShim.swift
+new file mode 100644
+index 0000000..b823485
+--- /dev/null
++++ b/Sources/OpenSwiftUICore/Util/WasmDispatchShim.swift
+@@ -0,0 +1,35 @@
++// WasmDispatchShim.swift — minimal single-threaded Dispatch for wasm (no libdispatch).
++//
++// wasm has no GCD. OpenSwiftUICore uses a tiny Dispatch surface on the scheduling/
++// animation path (DisplayListViewRenderer, CAHostingLayer, AnimationListener):
++// `DispatchQueue.main.async`/`.asyncAfter(deadline:)` + `DispatchTime`. This provides
++// just that surface. **Compile-focused**: closures run synchronously and `now()` is a
++// monotonic stub for now; real deferral/timing gets wired to the wandr frame loop in a
++// later phase (the renderer host drives `on_frame`).
++#if os(WASI)
++
++public struct DispatchTime: Comparable {
++    public var uptimeNanoseconds: UInt64
++    public init(uptimeNanoseconds: UInt64) { self.uptimeNanoseconds = uptimeNanoseconds }
++
++    public static func now() -> DispatchTime {
++        // TODO(phase 3+): drive from the host monotonic clock / frame nanos.
++        DispatchTime(uptimeNanoseconds: 0)
++    }
++    public static func < (a: DispatchTime, b: DispatchTime) -> Bool {
++        a.uptimeNanoseconds < b.uptimeNanoseconds
++    }
++    /// Dispatch's `DispatchTime + seconds` overload.
++    public static func + (t: DispatchTime, seconds: Double) -> DispatchTime {
++        DispatchTime(uptimeNanoseconds: t.uptimeNanoseconds &+ UInt64(max(0, seconds) * 1_000_000_000))
++    }
++}
++
++public final class DispatchQueue {
++    public static let main = DispatchQueue()
++    // Single-threaded: run now. (A frame-loop-backed pending queue replaces this later.)
++    public func async(execute work: () -> Void) { work() }
++    public func asyncAfter(deadline: DispatchTime, execute work: () -> Void) { work() }
++}
++
++#endif
+diff --git a/Sources/OpenSwiftUICore/Util/WasmThreadingShim.swift b/Sources/OpenSwiftUICore/Util/WasmThreadingShim.swift
+new file mode 100644
+index 0000000..b2bcbb7
+--- /dev/null
++++ b/Sources/OpenSwiftUICore/Util/WasmThreadingShim.swift
+@@ -0,0 +1,104 @@
++//
++//  WasmThreadingShim.swift
++//  OpenSwiftUICore
++//
++//  wandr (OpenSwiftUI-on-wasm phase 1): single-threaded WASI substitutes for the
++//  Foundation threading / run-loop primitives that swift-corelibs-foundation
++//  excludes on os(WASI). wasip1 is single-threaded, so "the main thread" is the
++//  only thread and thread-local storage degenerates to plain process globals.
++//
++//  Covers exactly the surface OpenSwiftUICore uses:
++//    - Thread.isMainThread          (ThreadUtils/MainActorUtils/ObservationUtils/…)
++//    - pthread TLS                  (ThreadSpecific in ThreadUtils.swift)
++//    - a main-run-loop enqueue seam (RunLoopUtils.swift / TimerUtils.swift)
++//
++//  RunLoop itself is `@available(*, unavailable)` on WASI (even `RunLoop.main`
++//  traps at type-check), so the RunLoop call sites are #if-guarded to route here
++//  instead of extending RunLoop.
++
++#if os(WASI)
++import Foundation
++
++// MARK: - Thread
++
++/// Single-threaded WASI shim for `Foundation.Thread` (absent on os(WASI)).
++/// Everything runs on the one and only (main) thread.
++package enum Thread {
++    package static var isMainThread: Bool { true }
++
++    /// No scheduler on single-threaded wasm — there is nothing to yield to, so
++    /// "sleeping" is a no-op. (Used only by test-harness run-loop pumping.)
++    /// `Double` not `TimeInterval`: Foundation is imported `internal` here, so a
++    /// `package` method can't expose the `TimeInterval` alias.
++    package static func sleep(forTimeInterval ti: Double) {}
++}
++
++// MARK: - pthread thread-local storage
++
++// wasi-libc declares these in <pthread.h> but they are not surfaced to Swift's
++// WASILibc module on the single-threaded SDK. Re-provide them in pure Swift:
++// with one thread, TLS is just a process-global keyed table. `pthread_key_t`
++// itself IS visible from WASILibc (typedef unsigned), so we reuse it.
++// (Internal, not package: imported C types are internal, and only this module
++// uses ThreadSpecific.)
++
++private final class _WasmTLS {
++    static let shared = _WasmTLS()
++    var next: pthread_key_t = 1
++    var values: [pthread_key_t: UnsafeMutableRawPointer] = [:]
++}
++
++@discardableResult
++func pthread_key_create(
++    _ key: UnsafeMutablePointer<pthread_key_t>,
++    _ destructor: (@convention(c) (UnsafeMutableRawPointer?) -> Void)?
++) -> Int32 {
++    // Destructors only run at thread exit; the single wasm thread never exits
++    // before process teardown, so we don't retain them (ThreadSpecific.deinit is
++    // a preconditionFailure anyway — these live for the process lifetime).
++    let tls = _WasmTLS.shared
++    key.pointee = tls.next
++    tls.next &+= 1
++    return 0
++}
++
++func pthread_getspecific(_ key: pthread_key_t) -> UnsafeMutableRawPointer? {
++    _WasmTLS.shared.values[key]
++}
++
++@discardableResult
++func pthread_setspecific(_ key: pthread_key_t, _ value: UnsafeMutableRawPointer?) -> Int32 {
++    if let value {
++        _WasmTLS.shared.values[key] = value
++    } else {
++        _WasmTLS.shared.values.removeValue(forKey: key)
++    }
++    return 0
++}
++
++// MARK: - Main run-loop enqueue seam
++
++// swift-corelibs-foundation makes `RunLoop` unavailable on WASI, so blocks that
++// the core would defer to `RunLoop.main.perform(inModes:block:)` are queued onto
++// a process-global pump drained by the host frame loop (phase 3). Timers are
++// no-ops until wired to the host frame clock.
++
++private var _wasmMainRunLoopQueue: [() -> Void] = []
++
++/// Enqueues a block for the next host frame (the WASI replacement for
++/// `RunLoop.main.perform(inModes:block:)`).
++func _wasmEnqueueMainRunLoop(_ block: @escaping () -> Void) {
++    _wasmMainRunLoopQueue.append(block)
++}
++
++/// Drains blocks scheduled via `_wasmEnqueueMainRunLoop`.
++/// The wandr host calls this once per frame (phase 3). Returns whether work ran.
++@discardableResult
++package func _wasmDrainMainRunLoop() -> Bool {
++    guard !_wasmMainRunLoopQueue.isEmpty else { return false }
++    let pending = _wasmMainRunLoopQueue
++    _wasmMainRunLoopQueue.removeAll(keepingCapacity: true)
++    for block in pending { block() }
++    return true
++}
++#endif
 diff --git a/Sources/OpenSwiftUI_SPI/Shims/CSymbols/OpenSwiftUI_CSymbols.c b/Sources/OpenSwiftUI_SPI/Shims/CSymbols/OpenSwiftUI_CSymbols.c
 index 3b97f1f..73edca5 100644
 --- a/Sources/OpenSwiftUI_SPI/Shims/CSymbols/OpenSwiftUI_CSymbols.c

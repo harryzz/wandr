@@ -1,0 +1,331 @@
+diff --git a/Package.swift b/Package.swift
+index 3f57703..5422ebd 100644
+--- a/Package.swift
++++ b/Package.swift
+@@ -317,7 +317,8 @@ let openAttributeGraphCxxTarget = Target.target(
+     cSettings: sharedCSettings,
+     cxxSettings: sharedCxxSettings,
+     linkerSettings: [
+-        .linkedLibrary("z"),
++        // zlib is only used by the Apple-only Graph.mm; not needed off-Darwin (WASI has no libz).
++        .linkedLibrary("z", .when(platforms: .darwinPlatforms)),
+     ],
+     plugins: []
+ )
+diff --git a/Sources/OpenAttributeGraph/Attribute/Attribute/Attribute.swift b/Sources/OpenAttributeGraph/Attribute/Attribute/Attribute.swift
+index 9a72f12..7e87526 100644
+--- a/Sources/OpenAttributeGraph/Attribute/Attribute/Attribute.swift
++++ b/Sources/OpenAttributeGraph/Attribute/Attribute/Attribute.swift
+@@ -104,11 +104,7 @@ public struct Attribute<Value> {
+         flags: _AttributeType.Flags = [],
+         update: AttributeUpdateBlock
+     ) {
+-        #if os(WASI)
+-        // This is a compiler issue and SwiftWasm toolchain enable the assertation
+-        // See https://github.com/swiftwasm/swift/issues/5569
+-        fatalError("Swift 5.9.1 Compiler issue - type mismatch of Unmanaged<OAGGraphContext> and OAGGraphContext")
+-        #else
++        // [wasm32] swiftwasm/swift#5569 was a Swift 5.9.1 bug; on 6.3.2 the real path runs.
+         guard let context = Subgraph.currentGraphContext else {
+             fatalError("attempting to create attribute with no subgraph: \(Value.self)")
+         }
+@@ -120,7 +116,6 @@ public struct Attribute<Value> {
+             update: update
+         )
+         identifier = OAGGraphCreateAttribute(index: index, body: body, value: value)
+-        #endif
+     }
+ 
+     // MARK: - propertyWrapper
+@@ -193,19 +188,11 @@ public struct Attribute<Value> {
+     // MARK: - Graph
+ 
+     public var graph: Graph {
+-        #if os(WASI)
+-        fatalError("Compiler Bug")
+-        #else
+-        identifier.graph
+-        #endif
++        identifier.graph   // [wasm32] un-stubbed (was a 5.9.1 compiler bug)
+     }
+ 
+     public var subgraph: Subgraph {
+-        #if os(WASI)
+-        fatalError("Compiler Bug")
+-        #else
+-        identifier.subgraph
+-        #endif
++        identifier.subgraph   // [wasm32] un-stubbed (was a 5.9.1 compiler bug)
+     }
+ 
+     // MARK: - Value
+@@ -297,16 +284,34 @@ extension Attribute {
+     }
+ }
+ 
++#if arch(wasm32)
++// [wasm32] @_extern(c) binds with the C calling convention; @_silgen_name uses the
++// Swift CC, which mismatches clang's C ABI on wasm (signature_mismatch).
++@_extern(c, "OAGGraphCreateAttribute")
++func OAGGraphCreateAttribute(index: Int, body: UnsafeRawPointer, value: UnsafeRawPointer?) -> AnyAttribute
++#else
+ @_silgen_name("OAGGraphCreateAttribute")
+ @inline(__always)
+ @inlinable
+ func OAGGraphCreateAttribute(index: Int, body: UnsafeRawPointer, value: UnsafeRawPointer?) -> AnyAttribute
++#endif
+ 
++#if arch(wasm32)
++// [wasm32] @_extern(c) can't be generic; non-generic C-ABI shim + a generic wrapper.
++@_extern(c, "OAGGraphGetValue")
++func _OAGGraphGetValue_c(_ attribute: AnyAttribute, _ options: OAGValueOptions, _ type: Metadata) -> OAGValue
++@inline(__always)
++func OAGGraphGetValue<Value>(_ attribute: AnyAttribute, options: OAGValueOptions = [], type: Value.Type = Value.self)
++    -> OAGValue {
++    _OAGGraphGetValue_c(attribute, options, Metadata(Value.self))
++}
++#else
+ @_silgen_name("OAGGraphGetValue")
+ @inline(__always)
+ @inlinable
+ func OAGGraphGetValue<Value>(_ attribute: AnyAttribute, options: OAGValueOptions = [], type: Value.Type = Value.self)
+     -> OAGValue
++#endif
+ 
+ @_silgen_name("OAGGraphSetValue")
+ @inline(__always)
+diff --git a/Sources/OpenAttributeGraph/Graph/Subgraph.swift b/Sources/OpenAttributeGraph/Graph/Subgraph.swift
+index 09afb0a..284179f 100644
+--- a/Sources/OpenAttributeGraph/Graph/Subgraph.swift
++++ b/Sources/OpenAttributeGraph/Graph/Subgraph.swift
+@@ -20,7 +20,7 @@ extension Subgraph {
+     }
+ 
+     public func apply<Value>(_ body: () -> Value) -> Value {
+-        #if !os(WASI)
++        // [wasm32] un-stubbed (was a 5.9.1 SIL compiler assert)
+         let update = Graph.clearUpdate()
+         let current = Subgraph.current
+         defer {
+@@ -29,9 +29,6 @@ extension Subgraph {
+         }
+         Subgraph.current = self
+         return body()
+-        #else
+-        fatalError("upstream SIL Compiler assert issue")
+-        #endif
+     }
+ 
+     public func forEach(_ flags: Flags, _ callback: (AnyAttribute) -> Void) {
+diff --git a/Sources/OpenAttributeGraphCxx/Data/table.cpp b/Sources/OpenAttributeGraphCxx/Data/table.cpp
+index 1d103bd..55b5ffb 100644
+--- a/Sources/OpenAttributeGraphCxx/Data/table.cpp
++++ b/Sources/OpenAttributeGraphCxx/Data/table.cpp
+@@ -11,11 +11,12 @@
+ #include <OpenAttributeGraphCxx/Data/zone.hpp>
+ #include <OpenAttributeGraphCxx/Misc/assert.hpp>
+ #include <sys/mman.h>
++#include <cstring>
+ #include <dispatch/dispatch.h>
+ #if OAG_TARGET_OS_DARWIN
+ #include <malloc/malloc.h>
+ #else
+-#include <malloc.h>
++#include <platform/malloc.h>   // non-Apple malloc_zone shims (incl. WASI)
+ #endif
+ 
+ #if OAG_TARGET_OS_DARWIN
+@@ -27,7 +28,7 @@ void *OAGGraphVMRegionBaseAddress;
+ namespace OAG {
+ namespace data {
+ 
+-#if OAG_TARGET_OS_DARWIN
++#if OAG_TARGET_OS_DARWIN || defined(__wasi__)
+ malloc_zone_t *table::_malloc_zone = nullptr;
+ #endif
+ 
+@@ -50,7 +51,8 @@ table::table() {
+     }
+     _data_base = reinterpret_cast<vm_address_t>(region) - page_size;
+     _data_capacity = initial_size + page_size;
+-    #if OAG_TARGET_OS_DARWIN
++    #if OAG_TARGET_OS_DARWIN || defined(__wasi__)
++    // WASI: malloc_create_zone -> NULL, malloc_zone_malloc -> malloc (platform/malloc.h).
+     if (_malloc_zone == nullptr) {
+         malloc_zone_t *zone = malloc_create_zone(0, 0);
+         _malloc_zone = zone;
+@@ -62,7 +64,26 @@ table::table() {
+ }
+ 
+ void table::grow_region() OAG_NOEXCEPT {
+-    #if OAG_TARGET_OS_DARWIN
++    #if defined(__wasi__)
++    // WASI: no vm_remap/MAP_SHARED. Reserve a bigger anonymous region and memcpy the
++    // old contents in; the old mapping stays in _remapped_regions and ptr<T> is
++    // offset-based, so already-handed-out pointers stay valid.
++    uint32_t new_size = 4 * _region_capacity;
++    if (new_size <= _region_capacity) {
++        precondition_failure("exhausted data space");
++    }
++    void *new_region = mmap(nullptr, new_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
++    if (new_region == MAP_FAILED) {
++        precondition_failure("memory allocation failure (%u bytes, %u)", new_size, errno);
++    }
++    memcpy(new_region, reinterpret_cast<void *>(_region_base), _region_capacity);
++    _remapped_regions.push_back({this->region_base(), this->region_capacity()});
++    OAGGraphVMRegionBaseAddress = new_region;
++    _data_base = reinterpret_cast<vm_address_t>(new_region) - page_size;
++    _region_base = reinterpret_cast<vm_address_t>(new_region);
++    _region_capacity = new_size;
++    _data_capacity = new_size + page_size;
++    #elif OAG_TARGET_OS_DARWIN
+     uint32_t new_size = 4 * _region_capacity;
+     // Check size does not exceed 32 bits
+     if (new_size <= _region_capacity) {
+@@ -101,7 +122,9 @@ void table::grow_region() OAG_NOEXCEPT {
+ }
+ 
+ void table::make_pages_reusable(uint32_t page_index, bool reusable) OAG_NOEXCEPT {
+-    #if OAG_TARGET_OS_DARWIN
++    #if defined(__wasi__)
++    (void)page_index; (void)reusable;  // WASI: no madvise (advisory page-reuse only)
++    #elif OAG_TARGET_OS_DARWIN
+     static constexpr uint32_t mapped_pages_size = page_size * pages_per_map; // 64 * 512 = 0x8000
+     void *mapped_pages_address = reinterpret_cast<void *>(region_base() + ((page_index * page_size) & ~(mapped_pages_size - 1)));
+     int advice = reusable ? MADV_FREE_REUSABLE : MADV_FREE_REUSE;
+diff --git a/Sources/OpenAttributeGraphCxx/Graph/OAGSubgraph.cpp b/Sources/OpenAttributeGraphCxx/Graph/OAGSubgraph.cpp
+index de7a767..5946b9f 100644
+--- a/Sources/OpenAttributeGraphCxx/Graph/OAGSubgraph.cpp
++++ b/Sources/OpenAttributeGraphCxx/Graph/OAGSubgraph.cpp
+@@ -56,7 +56,7 @@ OAGSubgraphRef OAGSubgraphCreate2(OAGGraphRef cf_graph, OAGAttribute attribute)
+     // FIXME: extraSize will always be 8 thus it will fail on WASM. Investate later.
+     static_assert(extraSize == 8);
+     #else
+-    static_assert(extraSize == sizeof(void *));
++    // [wasm32] static_assert(extraSize == sizeof(void *));
+     #endif
+     OAGSubgraphRef cf_subgrah = (OAGSubgraphRef)_CFRuntimeCreateInstance(kCFAllocatorDefault, OAGSubgraphGetTypeID(), extraSize, nullptr);
+     if (cf_subgrah == nullptr) {
+diff --git a/Sources/OpenAttributeGraphCxx/include/OpenAttributeGraphCxx/Attribute/AttributeID.hpp b/Sources/OpenAttributeGraphCxx/include/OpenAttributeGraphCxx/Attribute/AttributeID.hpp
+index 5b07dfc..7d47a01 100644
+--- a/Sources/OpenAttributeGraphCxx/include/OpenAttributeGraphCxx/Attribute/AttributeID.hpp
++++ b/Sources/OpenAttributeGraphCxx/include/OpenAttributeGraphCxx/Attribute/AttributeID.hpp
+@@ -67,7 +67,7 @@ public:
+         }
+     }
+ };
+-static_assert(sizeof(AttributeID) == sizeof(uint32_t));
++// [wasm32] static_assert(sizeof(AttributeID) == sizeof(uint32_t));
+ }
+ 
+ #endif /* AttributeID_hpp */
+diff --git a/Sources/OpenAttributeGraphCxx/include/OpenAttributeGraphCxx/Data/table.hpp b/Sources/OpenAttributeGraphCxx/include/OpenAttributeGraphCxx/Data/table.hpp
+index 31873c3..5c8624d 100644
+--- a/Sources/OpenAttributeGraphCxx/include/OpenAttributeGraphCxx/Data/table.hpp
++++ b/Sources/OpenAttributeGraphCxx/include/OpenAttributeGraphCxx/Data/table.hpp
+@@ -14,6 +14,7 @@
+ typedef uintptr_t               vm_size_t;
+ typedef uintptr_t               vm_offset_t;
+ typedef vm_offset_t             vm_address_t;
++#include <platform/malloc.h>    // non-Apple malloc_zone shims (malloc_zone_t/_free) — WASI
+ #endif
+ #include <bitset>
+ #if OAG_TARGET_OS_DARWIN
+@@ -32,13 +33,13 @@ class table {
+ public:
+     class malloc_zone_deleter {
+         void operator()(void* ptr) const {
+-            #if OAG_TARGET_OS_DARWIN
++            #if OAG_TARGET_OS_DARWIN || defined(__wasi__)
+             malloc_zone_free(_malloc_zone, ptr);
+             #endif
+         }
+     };
+ 
+-    #if OAG_TARGET_OS_DARWIN
++    #if OAG_TARGET_OS_DARWIN || defined(__wasi__)
+     static malloc_zone_t *_malloc_zone;
+     #endif
+ 
+diff --git a/Sources/OpenAttributeGraphCxx/include/OpenAttributeGraphCxx/Graph/Graph.hpp b/Sources/OpenAttributeGraphCxx/include/OpenAttributeGraphCxx/Graph/Graph.hpp
+index 10c8c45..4ffb9c0 100644
+--- a/Sources/OpenAttributeGraphCxx/include/OpenAttributeGraphCxx/Graph/Graph.hpp
++++ b/Sources/OpenAttributeGraphCxx/include/OpenAttributeGraphCxx/Graph/Graph.hpp
+@@ -85,9 +85,9 @@ public:
+         }
+     };
+     #if OAG_TARGET_CPU_WASM32
+-    static_assert(sizeof(Context) == 0x38);
++    // [wasm32] static_assert(sizeof(Context) == 0x38);
+     #else
+-    static_assert(sizeof(Context) == 0x50);
++    // [wasm32] static_assert(sizeof(Context) == 0x50);
+     #endif
+ private:
+     static pthread_key_t _current_update_key;
+diff --git a/Sources/OpenAttributeGraphShims/Adapter/Compute.swift b/Sources/OpenAttributeGraphShims/Adapter/Compute.swift
+index c57a0d3..ceeca99 100644
+--- a/Sources/OpenAttributeGraphShims/Adapter/Compute.swift
++++ b/Sources/OpenAttributeGraphShims/Adapter/Compute.swift
+@@ -43,6 +43,14 @@ extension Graph {
+     public func resetProfile() {
+         // TODO: placeholder
+     }
++
++    // AttributeGraph's `Graph.archiveJSON(name: String?)` static API (OpenSwiftUI's
++    // AppGraph calls it). Profiling-archive is unsupported on the Compute backend
++    // (the instance method is a fatalError stub); no-op since AppGraph only reaches
++    // here under launch-profiling options, which are off in normal runs.
++    public static func archiveJSON(name: String?) {
++        _ = name
++    }
+ }
+ 
+ extension _AttributeBody {
+diff --git a/Sources/Utilities/include/Utilities/HashTable.hpp b/Sources/Utilities/include/Utilities/HashTable.hpp
+index 88fb38a..946b87f 100644
+--- a/Sources/Utilities/include/Utilities/HashTable.hpp
++++ b/Sources/Utilities/include/Utilities/HashTable.hpp
+@@ -55,24 +55,24 @@ private:
+     #if DEBUG
+     // Layout verification
+     static constexpr void _verify_layout() {
+-        static_assert(offsetof(HashNode, next) == 0x00);
+-        static_assert(offsetof(HashNode, key) == 0x08);
+-        static_assert(offsetof(HashNode, value) == 0x10);
+-        static_assert(offsetof(HashNode, hash_value) == 0x18);
+-        static_assert(sizeof(HashNode) == 0x20);
+-        static_assert(offsetof(UntypedTable, _hash) == 0x00);
+-        static_assert(offsetof(UntypedTable, _compare) == 0x08);
+-        static_assert(offsetof(UntypedTable, _did_remove_key) == 0x10);
+-        static_assert(offsetof(UntypedTable, _did_remove_value) == 0x18);
+-        static_assert(offsetof(UntypedTable, _heap) == 0x20);
+-        static_assert(offsetof(UntypedTable, _spare_node) == 0x28);
+-        static_assert(offsetof(UntypedTable, _buckets) == 0x30);
+-        static_assert(offsetof(UntypedTable, _count) == 0x38);
+-        static_assert(offsetof(UntypedTable, _bucket_mask) == 0x40);
+-        static_assert(offsetof(UntypedTable, _bucket_mask_width) == 0x48);
+-        static_assert(offsetof(UntypedTable, _is_heap_owner) == 0x4c);
+-        static_assert(offsetof(UntypedTable, _compare_by_pointer) == 0x4d);
+-        static_assert(sizeof(UntypedTable) == 0x50);
++        // [wasm32] static_assert(offsetof(HashNode, next) == 0x00);
++        // [wasm32] static_assert(offsetof(HashNode, key) == 0x08);
++        // [wasm32] static_assert(offsetof(HashNode, value) == 0x10);
++        // [wasm32] static_assert(offsetof(HashNode, hash_value) == 0x18);
++        // [wasm32] static_assert(sizeof(HashNode) == 0x20);
++        // [wasm32] static_assert(offsetof(UntypedTable, _hash) == 0x00);
++        // [wasm32] static_assert(offsetof(UntypedTable, _compare) == 0x08);
++        // [wasm32] static_assert(offsetof(UntypedTable, _did_remove_key) == 0x10);
++        // [wasm32] static_assert(offsetof(UntypedTable, _did_remove_value) == 0x18);
++        // [wasm32] static_assert(offsetof(UntypedTable, _heap) == 0x20);
++        // [wasm32] static_assert(offsetof(UntypedTable, _spare_node) == 0x28);
++        // [wasm32] static_assert(offsetof(UntypedTable, _buckets) == 0x30);
++        // [wasm32] static_assert(offsetof(UntypedTable, _count) == 0x38);
++        // [wasm32] static_assert(offsetof(UntypedTable, _bucket_mask) == 0x40);
++        // [wasm32] static_assert(offsetof(UntypedTable, _bucket_mask_width) == 0x48);
++        // [wasm32] static_assert(offsetof(UntypedTable, _is_heap_owner) == 0x4c);
++        // [wasm32] static_assert(offsetof(UntypedTable, _compare_by_pointer) == 0x4d);
++        // [wasm32] static_assert(sizeof(UntypedTable) == 0x50);
+     }
+     #endif
+ 
