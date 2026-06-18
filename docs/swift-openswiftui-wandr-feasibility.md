@@ -756,3 +756,57 @@ into this drawer once OpenSwiftUICore builds on wasm.
    OpenCoreGraphics); then slot the real DisplayList types into the #3 drawer + a
    `WandrRenderer` host (like `StdoutRendererHost`)
 5. 🔲 `eleev/swiftui-2048`
+
+## Scope: the OpenSwiftUICore/OpenSwiftUI wasm port (step 4) — 2026-06-18
+
+Measured from the source. This is the **dominant remaining effort** of the whole stack.
+
+### Size
+- **OpenSwiftUICore: ~121k LOC / 557 files** (the engine: View/layout/state/DisplayList).
+- **OpenSwiftUI: ~31k LOC / 222 files** (the app layer: App/Scene + UIKit/AppKit glue).
+- ~150k LOC total — an order of magnitude larger than Compute (~5k) or OAG.
+
+### The key de-risk: it already builds non-Darwin
+There's a **`ubuntu.yml` CI** — OpenSwiftUI's non-Darwin path compiles on Linux. So this
+is a **Linux→wasm delta** (the proven Compute/OAG/OCG playbook), NOT a from-scratch
+off-Apple port. The 144 `canImport(Darwin)` guards already have working `#else` branches
+(Linux builds), so wasm ≈ Linux-non-Darwin for those.
+
+### Dependency tree (each needs a wasm build)
+- ✅ OpenAttributeGraph (Shims + Compute backend) — done (`harryzz/Compute@wasm32-wasip1-osp`)
+- ✅ OpenCoreGraphics (CGContext over wasi:canvas) — done (`harryzz/OpenCoreGraphics@wasm32-wasip1`)
+- 🔲 **OpenRenderBox** — we render via our own DisplayList backend, but OpenSwiftUICore
+  *imports* `OpenRenderBoxShims` for a few DisplayList types (`ORBDisplayListContents`,
+  `ORBPath`). So it must **compile** on wasm (render(in:) can stay a stub — we never call it).
+- 🔲 **OpenObservation** (`@Observable`) — wasm build.
+- 🔲 **OpenCombine** (`ObservableObject`/`@Published`) — wasm build (mature pure-Swift).
+- 🔲 swift-log / swift-crypto / swift-numerics — pure Swift, expected to build ~as-is.
+- **Host-side only (no wasm port):** swift-syntax + the OpenSwiftUI **macros** run at build
+  time on the host; SymbolLocator is a build tool. DarwinPrivateFrameworks = Darwin-only, excluded.
+
+### wasm-specific delta (the proven patterns)
+- **~70 `@_silgen_name`** → `@_extern(c)` (mostly non-generic, so clean; struct-returns
+  need the out-param-wrapper variant, generics need a thin wrapper — both already done for OAG).
+- **14 `os(WASI)`** stubs → un-stub (like OAG's 4 — old SwiftWasm 5.9.1 bugs, fixed on 6.3.2).
+- **Foundation + ICU** link (heavy; already wired for the OAG-Shims build).
+- **Renderer:** bring our validated **DisplayList→CGContext backend** (Option B) + a
+  `WandrRendererHost` modeled on `StdoutRendererHost` (the proven pluggable host). Set
+  `buildForDarwinPlatform=false`, no `RENDERBOX`/`RENDER_GTK`.
+
+### Phased plan
+0. **Dep forks on wasm**: OpenRenderBox(Shims, compile-only) + OpenObservation + OpenCombine
+   (+ confirm swift-log/crypto/numerics build); macros build for host.
+1. **OpenSwiftUICore compiles on wasm**: build config + 70 `@_extern(c)` + 14 un-stubs +
+   Foundation/ICU + iterate compile errors (the Linux path is the guide).
+2. **OpenSwiftUI (app layer) compiles on wasm**: the View/App/state subset.
+3. **WandrRendererHost** + wire the real `DisplayList.Item` types into the Option-B drawer.
+4. **Smoke test**: a hand-written `Text`+`@State`+`Button` view renders on device.
+5. **`eleev/swiftui-2048`** runs.
+
+### Effort / risk
+**Multi-week** (the largest phase by far). De-risked by: Linux CI (the path compiles),
+every wasm technique already proven (extern-c, Foundation link, un-stubs, our renderer +
+engine done). Main *unknown*: whether OpenSwiftUI's non-Darwin View/render path is as
+complete as it is *buildable* (OAG's engine compiled but was a stub — watch for the same
+in the render/layout paths). Recommend tackling phases 0→1 first and re-assessing at the
+first OpenSwiftUICore wasm build.
