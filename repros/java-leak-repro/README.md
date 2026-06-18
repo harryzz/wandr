@@ -66,6 +66,31 @@ leak-repro(java): tick #2000000 (sink=1999999000000)
 
 (`sink` accumulates each `Frame.value` so the allocation can't be optimized away.)
 
+### On device (Pixel 2 XL, aarch64)
+
+The core module needs only `fd_write` + `clock_time_get`, so a tiny wasmtime host
+that implements just those two against the guest's exported memory runs it on the
+phone — no component model, no `wasmtime-wasi`. That host is
+[`../java-wasm-spike/stub-host`](../java-wasm-spike/stub-host)'s `leak-host` bin.
+
+```bash
+# cross-compile the host for the device
+cd ../java-wasm-spike/stub-host
+source ../../../tools/scripts/env-android.sh
+cargo build --release --bin leak-host --target aarch64-linux-android
+
+# push host + the (portable) wasm and run on the phone
+adb shell mkdir -p /data/local/tmp/jleak
+adb push target/aarch64-linux-android/release/leak-host /data/local/tmp/jleak/leak-host
+adb push ../../java-leak-repro/target/wasm/java-leak-repro.wasm /data/local/tmp/jleak/
+adb shell chmod 755 /data/local/tmp/jleak/leak-host
+adb shell 'cd /data/local/tmp/jleak && timeout 6 ./leak-host java-leak-repro.wasm'
+```
+
+Verified on a Pixel 2 XL (taimen, aarch64) 2026-06-18: self-drives at ~9M
+ticks/6s (vs ~14M on desktop x86_64), identical `sink` values — same wasm, real
+arm64 CPU.
+
 ### As a component
 
 To run it the way wandr consumes guests (Component Model), embed the WIT

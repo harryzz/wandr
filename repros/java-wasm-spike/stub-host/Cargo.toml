@@ -12,3 +12,11 @@ path = "src/main.rs"
 [[bin]]
 name = "comp-host"
 path = "src/comp_host.rs"
+
+# Minimal WASI-floor host: implements just wasi_snapshot_preview1.{fd_write,
+# clock_time_get} against the guest's exported memory and calls an exported
+# entry. Runs a TeaVM WEBASSEMBLY_GC_WASI core module (e.g. java-leak-repro)
+# unchanged — including cross-compiled to aarch64-linux-android (on device).
+[[bin]]
+name = "leak-host"
+path = "src/leak_host.rs"

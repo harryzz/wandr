@@ -1,0 +1,10 @@
+# Android cross-compile for the leak-host (mirrors runtime/wandr-host's NDK setup,
+# minus the crypto cfgs). No [build] target on purpose: desktop builds stay the
+# default host; build for device with `--target aarch64-linux-android`.
+[target.aarch64-linux-android]
+ar = "/home/harry/android-ndk-r27d/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+linker = "/home/harry/android-ndk-r27d/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android30-clang"
+rustflags = [
+    "-C", "link-arg=--sysroot=/home/harry/android-ndk-r27d/toolchains/llvm/prebuilt/linux-x86_64/sysroot",
+    "-C", "link-arg=-fuse-ld=lld",
+]
