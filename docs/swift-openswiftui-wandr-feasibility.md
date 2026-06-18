@@ -810,3 +810,19 @@ engine done). Main *unknown*: whether OpenSwiftUI's non-Darwin View/render path 
 complete as it is *buildable* (OAG's engine compiled but was a stub — watch for the same
 in the render/layout paths). Recommend tackling phases 0→1 first and re-assessing at the
 first OpenSwiftUICore wasm build.
+
+### Phase 0 — dependency libs on wasm: ✅ DONE (2026-06-18)
+All build on `wasm32-wasip1` with the swift-6.3.2 SDK:
+- **OpenCombine** — builds **unmodified**. No fork needed.
+- **OpenObservation** — builds **unmodified**. No fork needed.
+- **OpenRenderBox** (compile-only; we render via our own DisplayList backend) — builds
+  with **no source edits**, via build config: `OPENRENDERBOX_LIB_SWIFT_PATH=<a
+  SwiftCorelibs/include with CoreFoundation+dispatch headers>` (reused the OAG fork's)
+  + the dispatch shim on `-Xcc -I` + `-fno-exceptions`/emulation flags. Its Cxx engine
+  only needs CF (5×) + dispatch (1×) headers — no allocator (lighter than OAG/Compute).
+- swift-log / swift-numerics — pure Swift, expected to build as-is (validate in phase 1).
+- **Risk flagged for phase 1: `swift-crypto`** (BoringSSL C/asm — historically hard on
+  wasm). It's a transitive OpenSwiftUI dep; may not be on the render path. Test when
+  OpenSwiftUICore pulls it; if it blocks, check whether the wasm path actually uses it.
+
+So phase 0 needed **zero forks** — these three build from upstream with build flags only.
