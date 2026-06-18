@@ -431,5 +431,26 @@ metadata coupling is the real wall.
 metadata ABI is present in the wasm runtime and the header is vendorable. So the OAG
 WASI port is a **bounded native-layer port** (syslog→`wasi:logging` + vendor the
 Swift internal headers + get cxx-interop to build for wasm32), upstream-shaped and
-*not blocked by metadata being absent* — though the Swift/C++-interop-on-wasm step
-is unproven and is the thing to spike next.
+*not blocked by metadata being absent*.
+
+#### Swift↔C++ interop on `wasm32-wasip1` — PROVEN (2026-06-18)
+The one genuinely-unverified link (OAG is a C++↔Swift interop project). Built a
+minimal SwiftPM package — a C++ target (`struct Adder` with state + a `.cpp`-defined
+method) and a Swift executable with `.interoperabilityMode(.Cxx)` constructing the
+C++ object and calling its method — for `wasm32-wasip1`:
+- **Compiles** (C++ → wasm object + cxx-interop Swift), **links**, and **runs under
+  wasmtime**: `swift↔C++ on wasi: 40 + 2 = 42`.
+- Only snag = a **packaging path quirk**: `libswiftCxx.a` ships in
+  `.../usr/lib/swift/wasi/` but the static link searches `.../swift_static/wasi/`
+  (which has `Cxx.swiftmodule` but not the archive) → `wasm-ld: unable to find
+  library -lswiftCxx`. Fixed with `-Xlinker -L.../usr/lib/swift/wasi`. Not a
+  fundamental gap.
+
+So **every gating toolchain mechanism for OAG-on-WASI is now demonstrated feasible**:
+Swift C++ interop ✅ (compiles/links/runs on wasm), metadata ABI ✅ (present in the
+wasm runtime), metadata header (vendorable), POSIX gaps (shimmable; logs →
+`wasi:logging`). The remaining OAG WASI work is **bounded engineering** — wire all
+its POSIX deps + vendor the Swift runtime-metadata header chain + the `-lswiftCxx`
+link path — **with no fundamental blocker**. That materially upgrades the whole
+OpenSwiftUI-on-wandr outlook: its deepest dependency (OAG on WASI) is now
+toolchain-de-risked.
