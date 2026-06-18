@@ -84,7 +84,10 @@ device.) Run it:
 
 ```bash
 ./build.sh                       # -> components/ui.wasm
-WANDR_DESKTOP_SIZE=480x800 \
+# On WSLg, force winit onto X11/Xwayland — WSLg's weston intermittently segfaults
+# in libpixman 0.43.2 on NATIVE-Wayland clients (microsoft/wslg#1386); X11 dodges
+# it (Signal/Chrome/etc. are X11 clients and never hit it). Verified stable here.
+WINIT_UNIX_BACKEND=x11 WANDR_DESKTOP_SIZE=480x800 \
   ../../runtime/wandr-host/target/x86_64-unknown-linux-gnu/release/wasm-android-host \
   components/ui.wasm
 ```
