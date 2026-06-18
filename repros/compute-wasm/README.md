@@ -17,9 +17,14 @@ hence this patch). Upstream PR target: **`jcmosc/Compute`**.
 
 | Repo | Rev | Notes |
 |---|---|---|
-| `github.com/jcmosc/Compute` | `86c38408` (Merge #43, release/0.3) | the engine; **patch applies here** |
+| **`github.com/harryzz/Compute`** | branch **`wasm32-wasip1`** | **the port, already applied** (fork of jcmosc/Compute) |
+| `github.com/jcmosc/Compute` | `86c38408` (Merge #43, release/0.3) | upstream base; `compute-wasm.patch` applies here |
 | `github.com/jcmosc/swift-runtime-headers` | `626688ce` (release/6.3) | Compute submodule; **unmodified** (vendors swift + llvm/ADT headers) |
 | Swift SDK | `swift-6.3.2-RELEASE_wasm` on Swift 6.3.2 | `swift sdk install` it first |
+
+The canonical home for the port is the **`harryzz/Compute` `wasm32-wasip1` branch**;
+`compute-wasm.patch` here is the same diff against the upstream base (kept for
+self-contained reproduction / the eventual upstream PR).
 
 ## Contents
 - `compute-wasm.patch` — the 17-file diff to `jcmosc/Compute` (the whole wasm port)
@@ -33,10 +38,12 @@ hence this patch). Upstream PR target: **`jcmosc/Compute`**.
 ## Reproduce
 
 ```bash
-# 1. Clone Compute at the pinned base + submodules, apply the port
-git clone https://github.com/jcmosc/Compute /tmp/Compute
-cd /tmp/Compute && git checkout 86c38408 && git submodule update --init --recursive
-git apply /home/harry/wandr/repros/compute-wasm/compute-wasm.patch
+# 1. Get Compute with the port. Easiest — clone the fork branch (port already applied):
+git clone -b wasm32-wasip1 --recurse-submodules https://github.com/harryzz/Compute /tmp/Compute
+#    OR from upstream + patch:
+#    git clone https://github.com/jcmosc/Compute /tmp/Compute
+#    cd /tmp/Compute && git checkout 86c38408 && git submodule update --init --recursive
+#    git apply /home/harry/wandr/repros/compute-wasm/compute-wasm.patch
 
 # 2. Build + run the harness (set computerun/Package.swift path to /tmp/Compute first)
 cd /home/harry/wandr/repros/compute-wasm/computerun
