@@ -295,3 +295,74 @@ OpenAttributeGraph) READMEs + Swift Package Index; wit-bindgen language
 list. Cross-checks against `docs/wasm-component-language-support.md`
 (Swift not first-class) and `[[reference_qt_wandr]]` /
 `[[reference_flutter_go_ui_wandr]]` (the "gated on upstream" pattern).
+
+## OpenSwiftUI integration architecture + ORB/OAG probe (2026-06-18)
+
+Added after the CGContext-on-wasi:canvas work (task 114): with OpenCoreGraphics's
+`CGContext` complete over `wasi:canvas`, this is exactly how OpenSwiftUI would sit
+on top — and a probe of how complete the two layers above it are.
+
+### The decisive seam
+`OpenRenderBox/Sources/OpenRenderBox/Render/ORBDisplayList.swift` exposes
+`public func render(in context: CGContext, options:)` (and
+`beginCGContext(withAlpha:) -> CGContext`). **The whole OpenSwiftUI stack
+rasterizes into a `CGContext`** — i.e. into the thing we implemented over
+`wasi:canvas`. So OpenCoreGraphics is the *bottom of OpenSwiftUI's pipeline*, not
+a parallel demo.
+
+### Layer stack (non-Darwin / wandr path; deps confirmed in OpenSwiftUI Package.swift)
+```
+OpenSwiftUI        View / @State / modifiers / layout / gestures
+  ├─ OpenAttributeGraph   reactive BRAIN: attributes/rules/subgraphs; @State →
+  │                        invalidate → recompute the render tree
+  └─ OpenRenderBox        render OUTPUT: ORBDisplayList (draw items) +
+        │                  ORBDisplayList.render(in: CGContext)  ◄── THE SEAM
+        ▼
+     OpenCoreGraphics  CGContext  ✅ (paths/fills/strokes/gradients/images/text/
+        │              clip/blend)  — done on wasi:canvas, device-verified
+        ▼
+     wasi:canvas → wandr-host (skia/EGL) → pixels
+  (OpenQuartzCore/CALayer sits beside ORB for the layer tree — currently a stub;
+   maps naturally onto wasi:canvas `scene.layer` if SwiftUI is layer-backed.)
+```
+
+### Per-frame data flow
+```
+wandr frame-handler.on-frame
+  → OpenSwiftUI render pass (bodies/layout/geometry are ATTRIBUTES)
+  → OpenAttributeGraph recomputes only what @State invalidated
+  → OpenRenderBox ORBDisplayList (the frame's draw items)
+  → displayList.render(in: cgContext)            ← our CGContext
+  → OpenCoreGraphics → wasi:canvas → skia/EGL → screen
+pointer/key (wasi:input-handlers) → OpenSwiftUI events → @State → next frame
+```
+
+### Two render routes (reconciles with "Why the *shape* is right" above)
+OpenSwiftUI selects a renderer per platform (`renderBoxCondition` / `renderGTKCondition`
+/ `swiftUIRenderCondition`); the **shipped non-Apple path is GTK4/Cairo**, and a Skia
+backend is diagram-only. The `ORBDisplayList.render(in: CGContext)` route is the
+**RenderBox-style** path. So a `WandrRenderer` could either (a) implement that route
+over our `CGContext`, or (b) slot in as a backend *beside* GTK forwarding to
+`wasi:canvas`. Either way it terminates in `wasi:canvas` (via our CGContext). The
+probe below is of the RenderBox route + the shared reactive engine.
+
+### Probe of the two layers above CGContext (clones @ HEAD, 2026-06-18)
+
+| Layer | What it must provide | Probe finding | Verdict |
+|---|---|---|---|
+| **OpenCoreGraphics** | the `CGContext` render target | full CGContext on wasi:canvas | ✅ done |
+| **OpenRenderBox** | build `ORBDisplayList` + `render(in: CGContext)` that walks every item kind → CGContext | **`render(in:)` is `_openRenderBoxUnimplementedFailure()` — a STUB**; no display-list item/content model; ~935 LOC total, mostly `ORBPath*`/animation shells | 🔴 the rasterizer **doesn't exist yet** — the seam is our CGContext, but the walker + display-list content model are unwritten |
+| **OpenAttributeGraph** | functional reactive graph (attributes, rules, subgraphs, invalidation, type-metadata runtime) | **substantial real engine in progress** — ~1,956 Swift + ~4,733 C++ (`OAGGraph.cpp`/`OAGSubgraph.cpp`/`OAGAttribute.cpp`); very low unimplemented density (1 explicit unimplemented; minor TODOs) | 🟡 not a stub; a genuine AGGraph-style engine being built — completeness/correctness unverified, but far past "API-compatible only" |
+| **OpenSwiftUI** | the framework producing the display list via OAG | early off-Apple (text unsupported, GTK4 renderer) | 🔴 early |
+| **wandr driver** | drive a render pass on on-frame, feed input, present | we have the reactor (on-frame/pointer/frame-pacing) | 🟢 trivial |
+
+### Corrected takeaway
+Earlier I framed OAG as the single gate and ORB as "in our control, builds on what
+we have." The probe flips that: **OAG is the more-built layer** (real Swift+C++
+engine in progress), while **OpenRenderBox's `render(in: CGContext)` rasterizer is
+an explicit stub** and its display-list content model is absent. So OpenSwiftUI on
+wandr is gated on BOTH maturing — and the *ORB display-list→CGContext walker* (which
+renders into our CGContext) is the larger missing piece today, even though its
+bottom edge (CGContext) is solved. Of the four boxes: bottom done, driver trivial,
+**ORB rasterizer = biggest hole, OAG = substantial-but-unverified.** Still
+upstream-gated (don't fork the framework); revisit when ORB's `render(in:)` lands.
