@@ -106,10 +106,11 @@ self-contained, in `host/` against `host/wit/`.)
 surface (`wasi:input-handlers/frame-handler` + `pointer-handler` +
 `wandr:ui-shell/frame-pacing`), imports `wasi:canvas`; Swift `on_frame` does the
 embedding handoff + `clear`/`draw-rect`/`draw-path`/`present`. `package.toml` =
-`wandr.swift.canvas.test`; `build.sh` → `components/ui.wasm`. The component
-**instantiates on wandr-host and `on_frame` executes against the real skia
-`wasi:canvas` with zero render error** (desktop dev loop). Pixels pending a human
-look (WSLg not screenshottable from CI — `[[feedback_visual_verification]]`).
+`wandr.swift.canvas.test`; `build.sh` → `components/ui.wasm`. ✅ **DEVICE-VERIFIED 2026-06-18 (Pixel 2 XL)** — installed + launched; logs show
+`eglSwapBuffers` → `rendered frame 0/1/2`, no traps; `screencap` confirms dark bg +
+blue filled rect + green stroked triangle = what `on_frame` draws. First Swift
+guest rendering on wandr. (WSLg desktop also runs it but weston crashes in its
+bundled libpixman 0.43.2 — WSLg bug, not the guest.)
 Gotcha fixed: caching the `get-context` `own` handle + re-borrow traps
 (`unknown handle index 0`); acquire fresh each frame.
 

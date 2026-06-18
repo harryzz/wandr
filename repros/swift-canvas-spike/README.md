@@ -73,10 +73,14 @@ implements `on_frame` (acquire the embedding buffer → `clear` + `draw-rect` +
 `draw-path` → `present`). `package.toml` makes it the `wandr.swift.canvas.test`
 app; `build.sh` emits `components/ui.wasm`.
 
-Status: the component **instantiates on wandr-host and `on_frame` executes against
-the real skia `wasi:canvas` with no render error** (desktop dev loop). Pixels
-(blue rect + green triangle) are pending a human look (WSLg here can't be
-screenshotted from CI). Run it:
+Status: ✅ **DEVICE-VERIFIED 2026-06-18 (Pixel 2 XL).** Installed via
+`wandr-host --install` and launched (`wandr-arbiter launch
+wandr.swift.canvas.test`); logs show `eglSwapBuffers first call` → `rendered frame
+0/1/2`, no traps. `adb exec-out screencap` confirms the pixels: dark background +
+blue filled rect + green stroked triangle — exactly what `on_frame` draws. First
+Swift guest rendering on wandr. (Desktop dev loop also runs it, but WSLg's weston
+crashes in its bundled libpixman 0.43.2 — a WSLg bug, not the guest; use the
+device.) Run it:
 
 ```bash
 ./build.sh                       # -> components/ui.wasm
