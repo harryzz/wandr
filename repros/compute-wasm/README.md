@@ -98,3 +98,29 @@ no storyboards, no 3rd-party deps; only AudioToolbox[stub]+Combine). Critical pa
 OpenAttributeGraph (port) -> OpenRenderBox `render(in: CGContext)` (new rasterizer onto
 our shipped CGContext) -> OpenSwiftUI + WandrRenderer -> swiftui-2048. OAG fork =
 github.com/harryzz/OpenAttributeGraph (port in progress).
+
+## Path B done (2026-06-18): OpenAttributeGraphShims + Compute backend on wasm
+OpenSwiftUI imports **OpenAttributeGraphShims**, not Compute directly — and OAG's own
+engine (`OpenAttributeGraphCxx`) is an **unfinished stub** (83 `// TODO`s; value
+get/set unimplemented), which is *why* it has a Compute backend. So the real path is
+OAG-Shims → Compute. Verified end-to-end on wasm:
+```
+OAGShims (Compute backend) on wasi: attribute.value = 42
+```
+Key facts:
+- Two Compute forks: **jcmosc/Compute** (upstream, `IAG*` names; `harryzz/Compute`
+  branch `wasm32-wasip1`) vs **OpenSwiftUIProject/Compute** (the fork OAG+OpenSwiftUI
+  build against, `AG*` names, 11 commits behind jcmosc). OAG's `Adapter/Compute.swift`
+  needs the `AG*` API.
+- So the OpenSwiftUI-aligned port lives on **`harryzz/Compute` branch
+  `wasm32-wasip1-osp`** (= OpenSwiftUIProject/Compute + the wasm port, AG*-named).
+- Build the Shims path: `OPENATTRIBUTEGRAPH_OPENATTRIBUTESHIMS_COMPUTE=1
+  OPENATTRIBUTEGRAPH_USE_LOCAL_DEPS=1` (the env var is **domain-prefixed**:
+  `OPENATTRIBUTEGRAPH_` + `OPENATTRIBUTESHIMS_COMPUTE`), Compute at `../Compute`.
+- harryzz/OpenAttributeGraph: un-stub the 4 `#if os(WASI)` guards (old SwiftWasm
+  5.9.1 bug #5569, fixed on 6.3.2); the engine = Compute backend (do NOT port
+  OpenAttributeGraphCxx — it's a stub).
+
+Remaining for `eleev/swiftui-2048`: OpenRenderBox `render(in: CGContext)` rasterizer
+(unimplemented stub — new code, onto our shipped CGContext) → OpenSwiftUI on wasm +
+WandrRenderer → the app.
