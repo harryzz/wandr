@@ -446,6 +446,33 @@ C++ object and calling its method — for `wasm32-wasip1`:
   library -lswiftCxx`. Fixed with `-Xlinker -L.../usr/lib/swift/wasi`. Not a
   fundamental gap.
 
+#### OAG WASI port — actual attempt, layers cleared (2026-06-18)
+Drove `swift build --swift-sdk swift-6.3.2-RELEASE_wasm` against OAG and cleared
+blockers one by one (each a bounded, mechanical fix — no fundamental wall):
+1. **`syslog.h`** → stderr/`static inline` shim on `-Xcc -I` (prod: → `wasi:logging`). ✅
+2. **`swift/Runtime/Metadata.h` + `HeapObject.h`** → vendored from **`jcmosc/swift-runtime-headers`
+   @ `release/6.3`** (a standalone, version-tagged package of exactly these Swift
+   internal headers) on `-Xcc -I…/include`. Build got *past* `metadata.hpp`. ✅
+3. **wasm32 ABI `static_assert`s** — `Utilities/HashTable.hpp` (+3 files) hardcode
+   64-bit field offsets/sizes to lock binary-compat with **Apple's** AttributeGraph
+   (`offsetof(HashNode,key)==8`, `sizeof(UntypedTable)==80`, …) → fail on wasm32
+   (ILP32). Only **22 asserts in 4 files**, and the tree already has a
+   `__POINTER_WIDTH__` macro to guard them (Apple-compat-only, irrelevant on wasm).
+   Neutralized → `HashTable.cpp`/`Heap.cpp`/`Subgraph.cpp`/`OAGGraphContext.cpp`
+   compile. ✅
+4. **next wall:** `swift/ABI/Metadata.h` `#include <llvm/ADT/ArrayRef.h>` — OAG's own
+   C++ engine (`OpenAttributeGraphCxx`) pulls the **full `swift/Runtime → swift/ABI
+   → llvm/ADT`** header chain (header-only LLVM ADT, vendorable from LLVM source). 🔴
+
+**Key structural finding:** OAG's Linux CI doesn't build its *own* Cxx engine — it
+builds against the **Compute backend (`jcmosc/Compute`)**, which ships a
+**self-contained `Sources/ComputeCxx/Swift/Metadata.h`** (its own metadata layer)
+and so avoids the heavy `swift/ABI`+`llvm` chain. So the **pragmatic OAG-on-WASI
+path is the Compute backend, not OAG's own Cxx** — fewer header deps. Either way the
+attempt cleared 3 real layers and hit only *bounded* walls (vendor LLVM ADT headers,
+or switch to Compute). No fundamental blocker surfaced; it's a multi-step port,
+upstream-shaped.
+
 So **every gating toolchain mechanism for OAG-on-WASI is now demonstrated feasible**:
 Swift C++ interop ✅ (compiles/links/runs on wasm), metadata ABI ✅ (present in the
 wasm runtime), metadata header (vendorable), POSIX gaps (shimmable; logs →
