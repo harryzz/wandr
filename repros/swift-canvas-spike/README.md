@@ -229,3 +229,12 @@ substitute straight into this drawer once OpenSwiftUICore builds on wasm.
 Deploy note: AOT-install via `wandr-host --install <pkg>` (needs
 `LD_LIBRARY_PATH=/data/local/tmp` for `libc++_shared.so`); on relaunch, **kill the old
 instance first** — the arbiter foregrounds a stale pid otherwise (which runs old code).
+
+## Canonical home for the OpenCoreGraphics changes (2026-06-18)
+The `Sources/OpenCoreGraphics/` here is a self-contained vendored copy (base
+`OpenSwiftUIProject/OpenCoreGraphics@050239b`). The library changes (CGContext over
+wasi:canvas + CGColor/CGGradient/CGImage) also live as a proper fork:
+**`github.com/harryzz/OpenCoreGraphics` branch `wasm32-wasip1`** — the third upstream
+fork, alongside `harryzz/Compute` and `harryzz/OpenAttributeGraph`. (It calls the
+consumer's wasi:canvas bindings, so it builds in the wandr context, not standalone.)
+The DisplayList prototype + spike glue stay here on wandr (codeberg).
