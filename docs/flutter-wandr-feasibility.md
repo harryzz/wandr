@@ -4,7 +4,9 @@
 > Avalonia feasible / Qt no — see the sibling memos). Grounded in Flutter's
 > documented web architecture + dart-lang/sdk upstream state.
 > Status: **analysis only — blocked on toolchain, but the gate is actively
-> CLOSING (deep dive 2026-06-13, see below); architecture favorable.**
+> CLOSING (deep dive 2026-06-13; re-examined 2026-06-18 — the blocker is "a WASI
+> stdlib + one EH codegen flip," both bounded/upstream-owned/host-unshimmable, not
+> a large effort; see that section below); architecture favorable.**
 
 ## Verdict
 
@@ -97,6 +99,75 @@ host-side via the embedder API (the flutter-pi model) — is still rejected on
 principle: a fat per-app native runtime with its own GPU context, bypassing
 the wasm sandbox, the component model, and `wasi:canvas`. That's "Flutter
 beside wandr," not a wandr guest.
+
+## Re-examined 2026-06-18 — the blocker is "a WASI stdlib + one codegen flip," not a large effort
+
+Prompted by the TeaVM `WEBASSEMBLY_GC_WASI` work shipping (see
+`reference_flutter_go_ui_wandr` / task 113), re-derived the Dart blocker from
+first principles instead of restating "big runtime floor." Correction: **the
+floor is mostly already built**, and the remaining work splits into exactly two
+bounded, upstream-owned pieces — **neither a stopper.** Upstream state unchanged
+since the 2026-06-13 deep dive (#53884 / #54394 both open, same two named
+blockers, still no wasmtime proof-of-life as of the May-2026 issue activity).
+
+**1. A "WASI stdlib" (the big piece — but mostly done, and library-shaped).**
+Removing the JS host means providing Dart's platform/runtime as in-wasm, JS-free
+code. That is exactly the in-tree `dart2wasm_standalone_platform.dill`. Item by
+item it is trivial-to-bounded, *not* primitives:
+
+| #53884 item | reality | note |
+|---|---|---|
+| printing / current time | trivial — `fd_write` / `clock_time_get` (we wrote these for TeaVM) | in `.dill` |
+| math / double→String | easy/bounded — libm; ryu/grisu | in `.dill` |
+| timers / event loop / async | bounded — in-wasm microtask queue; **maps onto wandr's step-executor coroutine pump** | in `.dill` |
+| stack traces / weak maps / finalizers | **degrade** (we degraded TeaVM stack traces too); Dart concedes partial | accepted |
+| regex | heaviest single item — but see below | tree-shakeable |
+| strings | in-wasm String variant (`stringref_platform.dill`) vs `wasm:js-string` | see codegen note |
+
+  *Regex specifically:* `RegExp` is a `dart:core` **API backed by the irregexp
+  engine** (a port of V8's), **not a language/word primitive**. In dart2js /
+  dart2wasm-on-browser it is **host-imported** (the JS engine's `RegExp`, itself
+  irregexp) — that import is the `dart:js_interop` dependency #53884 removes.
+  Standalone needs the engine *in* the module (compile irregexp-C++ via
+  Emscripten/LLVM — which emits correct `exnref` automatically — or reimplement in
+  Dart). It is also **tree-shaken if unused**, so a Flutter UI guest may never
+  pull it. So regex = "ship an existing engine, only if used," not a reinvention.
+
+**2. One codegen flip — exception handling (#54394) — the only non-stdlib gate.**
+Architecture point that kills the obvious shortcut: **dart2wasm is a
+Dart-written compiler that lowers Dart → WasmGC directly; it does NOT compile the
+C++ VM to wasm.** So the EH issue is not "C++ exceptions" and there is **no C++
+exnref lowering to drop in** — it is dart2wasm's *own* emitter currently producing
+**legacy** wasm EH (`try`/`catch`/`rethrow`) and needing the **new** opcodes
+(`try_table`/`catch_all`/`exnref`/`throw_ref`). That transform is mechanical and
+well-trodden (LLVM/Emscripten/V8/the spec all did it; simolus3 spells out the
+mapping), but it lives in the **Dart compiler**, not in reusable C++.
+
+  *Exceptions ≠ WASI.* EH is a **core-WebAssembly** proposal, so there is no "WASI
+  recommendation." The W3C wasm CG + engines are unambiguous: **legacy EH is
+  deprecated; the `exnref`/`try_table` model is the standard.** **Browsers keep
+  legacy for back-compat** (V8 accepts both) — which is exactly why dart2wasm got
+  away with emitting legacy and hasn't migrated. Standalone engines remove the
+  crutch.
+
+**Why this differs from TeaVM (the honest, checked reason — not "Dart is harder").**
+On wasmtime 45 I verified the host **cannot shim either gate**: `-W` exposes
+`exceptions` (exnref) with **no `legacy` flag** (and `wasm-tools` has no
+legacy→exnref transform), and **no js-string-builtins** exists in any option group
+(`-W/-O/-C/-S`). For TeaVM our blockers were inside a small forkable compiler
+*and/or* host-providable, so we had cheap leverage; for Dart the two gates are in
+dart2wasm's codegen + a stdlib `.dill`, both **host-unshimmable** and both
+**actively being closed upstream by Google.** So *waiting strictly dominates
+forking* — not because the work is large (the stdlib is mostly built; the EH flip
+is small) but because our leverage is ~zero and the prize (Flutter's ecosystem)
+lands without us.
+
+**wandr readiness / action.** The device runtime already runs WasmGC + the new
+`exnref` EH + function-references (the AOT flags enabled for Kotlin), so the moment
+dart2wasm emits `exnref` standalone output, **wandr loads it with nothing new**.
+Action stays: **track #53884 + #54394**; on landing, apply the proven Kotlin/TeaVM
+pipeline (standalone module → WASI floor → `wasm-tools component new --adapt` →
+WIT bindings). No fork.
 
 ## Rendering seam — one nuance the deep dive sharpened
 
