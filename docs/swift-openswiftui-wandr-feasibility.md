@@ -826,3 +826,29 @@ All build on `wasm32-wasip1` with the swift-6.3.2 SDK:
   OpenSwiftUICore pulls it; if it blocks, check whether the wasm path actually uses it.
 
 So phase 0 needed **zero forks** — these three build from upstream with build flags only.
+
+### Phase 1 — first wall (2026-06-18): Dispatch/GCD on wasm
+Set up the sibling-deps build (OAG-Shims+Compute backend, OpenRenderBox/OpenObservation
+/OpenCombine wasm, upstream OpenCoreGraphics for the Core compile) and attempted
+`swift build --target OpenSwiftUICore --swift-sdk …wasm`. First wall:
+
+**No libdispatch/GCD on wasm** — `DispatchQueue`/`DispatchTime`/`OperationQueue`/`Timer`
++ OpenCombine schedulers (`SchedulerTimeType`/`DataTaskPublisher`) not in scope. The
+wasm SDK ships no Dispatch module (Linux has swift-corelibs-libdispatch; wasm doesn't).
+
+**Bounded:** concentrated in **3 files**, all on the async/animation path:
+- `Render/DisplayList/DisplayListViewRenderer.swift` (1 `DispatchQueue` — async render)
+- `Render/DisplayList/CAHostingLayer.swift` (10 `Timer` + 2 `DispatchQueue` — CALayer
+  hosting + animation ticks)
+- `Animation/Animation/AnimationListener.swift` (`DispatchTime`/`DispatchQueue` — anim timing)
+
+So it's the **scheduling/animation** surface, not pervasive. Fix options:
+1. **Minimal single-threaded Dispatch shim** (wasm is single-threaded + wandr has a frame
+   loop): `DispatchQueue.main.async`→enqueue-to-next-frame, `asyncAfter`/`Timer`→driven by
+   `on_frame` nanos, `DispatchTime`→monotonic clock. Reusable; the right foundation for
+   `withAnimation`/`Timer` (which swiftui-2048 uses).
+2. Guard the 3 files' Dispatch paths on wasm (faster; static render only, no animation).
+
+Recommend (1) — a small `wasm-dispatch` shim driven by the frame loop. **More walls
+expected deeper** once these compile (the build only reached the first target's errors);
+this is the first of likely several, but the theme (Dispatch/scheduling) is now known.
