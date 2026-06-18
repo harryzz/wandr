@@ -1,0 +1,170 @@
+diff --git a/classlib/src/main/java/org/teavm/classlib/java/lang/TThrowable.java b/classlib/src/main/java/org/teavm/classlib/java/lang/TThrowable.java
+index 0e7c91a..9685217 100644
+--- a/classlib/src/main/java/org/teavm/classlib/java/lang/TThrowable.java
++++ b/classlib/src/main/java/org/teavm/classlib/java/lang/TThrowable.java
+@@ -27,7 +27,6 @@ import org.teavm.jso.JSBody;
+ import org.teavm.jso.JSIndexer;
+ import org.teavm.jso.JSObject;
+ import org.teavm.jso.JSProperty;
+-import org.teavm.jso.core.JSString;
+ import org.teavm.jso.impl.JSWrapper;
+ import org.teavm.runtime.ExceptionHandling;
+ 
+@@ -118,8 +117,7 @@ public class TThrowable extends RuntimeException {
+         if (PlatformDetector.isLowLevel()) {
+             stackTrace = (TStackTraceElement[]) (Object) ExceptionHandling.fillStackTrace();
+         } else if (PlatformDetector.isWebAssemblyGC()) {
+-            lazyStackTrace = takeWasmGCStack(JSString.valueOf(getClass().getName()));
+-            decorateException(this);
++            stackTrace = new TStackTraceElement[0]; // task 113 WASI: no JS stack capture
+         }
+         return this;
+     }
+@@ -137,28 +135,9 @@ public class TThrowable extends RuntimeException {
+     private static native void decorateException(Object obj);
+ 
+     private void ensureStackTrace() {
+-        if (PlatformDetector.isWebAssemblyGC()) {
+-            if (lazyStackTrace != null) {
+-                var supplier = lazyStackTrace;
+-                lazyStackTrace = null;
+-                var nativeStack = supplier.getStack();
+-                if (nativeStack == null) {
+-                    return;
+-                }
+-                var stack = new TStackTraceElement[nativeStack.getLength()];
+-                for (var i = 0; i < nativeStack.getLength(); ++i) {
+-                    var frame = nativeStack.get(i);
+-                    stack[i] = new TStackTraceElement(frame.getClassName(), frame.getMethod(), frame.getFile(),
+-                            frame.getLine());
+-                }
+-                stackTrace = stack;
+-            }
+-        }
++        // task 113 WASI: stackTrace set eagerly in fillInStackTrace; no lazy JSO supplier.
+     }
+ 
+-    @Import(name = "takeStackTrace")
+-    private static native LazyStackSupplier takeWasmGCStack(JSObject exceptionClassName);
+-
+     @Rename("getMessage")
+     public String getMessage0() {
+         return message;
+diff --git a/core/src/main/java/org/teavm/backend/wasm/WasmGCTarget.java b/core/src/main/java/org/teavm/backend/wasm/WasmGCTarget.java
+index e221ffa..29ff59a 100644
+--- a/core/src/main/java/org/teavm/backend/wasm/WasmGCTarget.java
++++ b/core/src/main/java/org/teavm/backend/wasm/WasmGCTarget.java
+@@ -54,6 +54,7 @@ import org.teavm.backend.wasm.intrinsics.WasmGCResourcesIntrinsic;
+ import org.teavm.backend.wasm.model.WasmCustomSection;
+ import org.teavm.backend.wasm.model.WasmFunction;
+ import org.teavm.backend.wasm.model.WasmGlobal;
++import org.teavm.backend.wasm.model.instruction.WasmInt32Constant;
+ import org.teavm.backend.wasm.model.WasmLocal;
+ import org.teavm.backend.wasm.model.WasmModule;
+ import org.teavm.backend.wasm.model.WasmTag;
+@@ -281,8 +282,10 @@ public class WasmGCTarget implements TeaVMTarget, TeaVMWasmGCHost {
+     @Override
+     public void emit(ListableClassHolderSource classes, BuildTarget buildTarget, String outputName) throws IOException {
+         var module = new WasmModule();
+-        module.memoryImportName = "memory";
+-        module.memoryImportModule = "env";
++        if (!Boolean.getBoolean("teavm.wasmgc.nojso")) {
++            module.memoryImportName = "memory";
++            module.memoryImportModule = "env";
++        }
+         addMethodsOnCallSites(reflection::getVirtualCallSites);
+         var inlineIntrinsics = new DefaultIntrinsicRegistry<WasmGCInlineIntrinsic>(classes);
+         var bodyIntrinsics = new DefaultIntrinsicRegistry<WasmGCBodyIntrinsic>(classes);
+@@ -495,16 +498,25 @@ public class WasmGCTarget implements TeaVMTarget, TeaVMWasmGCHost {
+             memorySize = Math.max(memorySize, segment.getOffset() + segment.getLength());
+         }
+ 
++        var nojso = Boolean.getBoolean("teavm.wasmgc.nojso");
+         var heapOffset = new WasmGlobal("heapOffset", WasmType.INT32);
+         heapOffset.setImmutable(true);
+-        heapOffset.setImportModule("teavmMemory");
+-        heapOffset.setImportName("heapOffset");
++        if (nojso) {
++            heapOffset.getInitialValue().add(new WasmInt32Constant(memorySize)); // task 113: heap starts past static data
++        } else {
++            heapOffset.setImportModule("teavmMemory");
++            heapOffset.setImportName("heapOffset");
++        }
+         module.globals.add(heapOffset);
+ 
+         var maxSize = new WasmGlobal("maxSize", WasmType.INT32);
+         maxSize.setImmutable(true);
+-        maxSize.setImportModule("teavmMemory");
+-        maxSize.setImportName("maxSize");
++        if (nojso) {
++            maxSize.getInitialValue().add(new WasmInt32Constant(0x7FFFFFFF));
++        } else {
++            maxSize.setImportModule("teavmMemory");
++            maxSize.setImportName("maxSize");
++        }
+         module.globals.add(maxSize);
+ 
+         dataSize = memorySize;
+diff --git a/core/src/main/java/org/teavm/backend/wasm/intrinsics/SystemIntrinsic.java b/core/src/main/java/org/teavm/backend/wasm/intrinsics/SystemIntrinsic.java
+index 99d4113..e295a55 100644
+--- a/core/src/main/java/org/teavm/backend/wasm/intrinsics/SystemIntrinsic.java
++++ b/core/src/main/java/org/teavm/backend/wasm/intrinsics/SystemIntrinsic.java
+@@ -21,6 +21,7 @@ import org.teavm.backend.wasm.model.WasmFunction;
+ import org.teavm.backend.wasm.model.WasmModule;
+ import org.teavm.backend.wasm.model.WasmNumType;
+ import org.teavm.backend.wasm.model.WasmType;
++import org.teavm.backend.wasm.model.instruction.WasmFloat64Constant;
+ import org.teavm.backend.wasm.model.instruction.WasmInstructionBuilder;
+ 
+ public class SystemIntrinsic implements WasmGCInlineIntrinsic {
+@@ -39,8 +40,12 @@ public class SystemIntrinsic implements WasmGCInlineIntrinsic {
+         if (workerFunction == null) {
+             workerFunction = new WasmFunction(functionTypes.of(WasmType.FLOAT64));
+             workerFunction.setName("teavm@currentTimeMillis");
+-            workerFunction.setImportName("currentTimeMillis");
+-            workerFunction.setImportModule("teavmDate");
++            if (Boolean.getBoolean("teavm.wasmgc.nojso")) {
++                workerFunction.getBody().add(new WasmFloat64Constant(0)); // task 113 WASI: no clock yet
++            } else {
++                workerFunction.setImportName("currentTimeMillis");
++                workerFunction.setImportModule("teavmDate");
++            }
+             module.functions.add(workerFunction);
+         }
+         builder.call(workerFunction).convert(WasmNumType.FLOAT64, WasmNumType.INT64, true);
+diff --git a/core/src/main/java/org/teavm/runtime/heap/Heap.java b/core/src/main/java/org/teavm/runtime/heap/Heap.java
+index bc29b03..e4664cc 100644
+--- a/core/src/main/java/org/teavm/runtime/heap/Heap.java
++++ b/core/src/main/java/org/teavm/runtime/heap/Heap.java
+@@ -17,7 +17,6 @@ package org.teavm.runtime.heap;
+ 
+ import org.teavm.interop.Address;
+ import org.teavm.interop.Export;
+-import org.teavm.interop.Import;
+ import org.teavm.interop.Intrinsified;
+ import org.teavm.interop.StaticInit;
+ import org.teavm.interop.Structure;
+@@ -212,8 +211,8 @@ public final class Heap {
+         return grownBytes >= bytes;
+     }
+ 
+-    @Import(module = "teavmMemory", name = "notifyHeapResized")
+-    private static native void notifyHeapResized();
++    private static void notifyHeapResized() { // task 113: self-managed heap, no host callback
++    }
+ 
+     private static HeapNode lastRecord() {
+         HeapRecord record = start.toStructure();
+diff --git a/jso/impl/src/main/java/org/teavm/jso/impl/JSOPlugin.java b/jso/impl/src/main/java/org/teavm/jso/impl/JSOPlugin.java
+index e918744..fd997ea 100644
+--- a/jso/impl/src/main/java/org/teavm/jso/impl/JSOPlugin.java
++++ b/jso/impl/src/main/java/org/teavm/jso/impl/JSOPlugin.java
+@@ -81,7 +81,7 @@ public class JSOPlugin implements TeaVMPlugin {
+             installForJS(jsHost);
+         }
+ 
+-        if (wasmGCHost != null) {
++        if (wasmGCHost != null && !Boolean.getBoolean("teavm.wasmgc.nojso")) {
+             classTransformer.setClassFilter(n -> !n.startsWith("java."));
+             classTransformer.forWasmGC();
+             WasmGCJso.install(host, wasmGCHost, repository);

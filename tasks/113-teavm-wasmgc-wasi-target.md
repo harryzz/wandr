@@ -198,3 +198,33 @@ PR-ready. Also mirrored as `.patch` files in `repros/java-wasm-spike/teavm-patch
   first-class `WEBASSEMBLY_GC_WASI` `TeaVMTargetType`; real non-JS stack trace; real
   WASI floor (`clock_time_get`/`fd_write`/heap-grow); add a wasi-WasmGC CI test;
   open a design issue first to align with the maintainer.
+
+## M1 PRODUCTIONIZED — first-class WEBASSEMBLY_GC_WASI target (2026-06-18)
+
+Replaced the `-Dteavm.wasmgc.nojso` spike hack with a **first-class target**, 11
+files, all gated so **browser `WEBASSEMBLY_GC` is unchanged** (verified):
+- `TeaVMTargetType.WEBASSEMBLY_GC_WASI` (maven `<targetType>`); `Platforms.
+  WEBASSEMBLY_GC_WASI` tag + `PlatformDetector.isWebAssemblyGCWasi()`;
+  `WasmGCTarget.setWasi`/`isWasi()` (added to `TeaVMWasmGCHost`); `TeaVMTool`
+  constructs the WasmGC target in WASI mode; `wasi` threaded through
+  `WasmGCIntrinsics`→`SystemIntrinsic`.
+- Backend gating on the `wasi` flag (memory/heap/clock + JSOPlugin via `isWasi()`);
+  classlib gating on the `isWebAssemblyGCWasi()` platform tag (`TThrowable`,
+  `Heap`) so the **browser JS stack-trace/heap paths are restored**.
+
+**Verified end-to-end via the real target** (no `-D`): `<targetType>WEBASSEMBLY_GC_
+WASI</targetType>` → spike module **0 imports** → component (`world root { export
+packed-len: func(septets: s32) -> s32 }`) → `comp-host` calls it over WIT →
+`1,3,5,7,9`. **Regression check:** plain `WEBASSEMBLY_GC` still emits the JS-coupled
+module (`teavmJso`×13, `js-string`×7) — no browser breakage.
+
+**Banked:** fork branch `harryzz/teavm:wasmgc-wasi-poc` collapsed to **one clean
+PR-ready commit** (`350a86f`, off upstream master); single combined patch +
+reproduce in `repros/java-wasm-spike/teavm-patches/WEBASSEMBLY_GC_WASI.patch`.
+PR compare URL recorded.
+
+### Remaining before an upstream PR (the floor placeholders + polish)
+Real WASI floor (`currentTimeMillis`→`clock_time_get`, stdout `putcharStdout`→
+`fd_write`, self-managed heap growth for allocating guests); optional non-empty
+WASI stack trace; gradle-plugin support for the new target; a wasi-WasmGC CI test;
+open a TeaVM design issue to align on target-vs-flag before PRing.

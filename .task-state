@@ -1,5 +1,5 @@
 TASK=113
-STEP=M4-M5-DONE-fork-branch-pushed
+STEP=M1-PRODUCTIONIZED
 STATUS=in-progress
-LAST_SUCCESS=Task 113 CORE PROVEN (Java→JS-free-WasmGC→component→WIT→host-call). TeaVM patches now on the fork: harryzz/teavm branch wasmgc-wasi-poc (2 PoC commits off upstream master d7467b4). Also preserved as .patch files in repros/java-wasm-spike/teavm-patches/.
-NOTES=Fork workflow: clone harryzz/teavm, origin=upstream konsoletyper, fork=harryzz; branch wasmgc-wasi-poc. PR-when-ready: github.com/konsoletyper/teavm/compare/master...harryzz:teavm:wasmgc-wasi-poc. Productionization before PR: first-class WEBASSEMBLY_GC_WASI TeaVMTargetType (not -D flag), real non-JS stack trace, real WASI floor (clock_time_get/fd_write/heap-grow), tests in the wasi CI lane. Build loop: publishToMavenLocal → mvn -Dteavm.wasmgc.nojso=true → component embed/new → comp-host.
+LAST_SUCCESS=Task 113 PRODUCTIONIZED: first-class TeaVMTargetType.WEBASSEMBLY_GC_WASI + platform tag (11 files, browser unchanged/verified). Real target (no -D): spike 0 imports → component → wasmtime host call 1,3,5,7,9. Fork branch harryzz/teavm:wasmgc-wasi-poc collapsed to one PR-ready commit 350a86f. Patch in repros/java-wasm-spike/teavm-patches/WEBASSEMBLY_GC_WASI.patch.
+NOTES=Remaining before upstream PR: real WASI floor (currentTimeMillis→clock_time_get, putcharStdout→fd_write, self-managed heap growth for allocating guests), gradle-plugin support, wasi-WasmGC CI test, TeaVM design issue. Build loop: /tmp/teavm publishToMavenLocal (+ :tools:core :tools:maven:plugin) → mvn package (pom uses WEBASSEMBLY_GC_WASI) → component embed/new → comp-host. /tmp/teavm ephemeral; work safe on fork + patch file.

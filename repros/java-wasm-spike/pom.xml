@@ -34,7 +34,7 @@
             <phase>package</phase>
             <goals><goal>compile</goal></goals>
             <configuration>
-              <targetType>WEBASSEMBLY_GC</targetType>
+              <targetType>WEBASSEMBLY_GC_WASI</targetType>
               <mainClass>spike.Spike</mainClass>
               <targetDirectory>${project.build.directory}/wasm</targetDirectory>
               <targetFileName>spike.wasm</targetFileName>
