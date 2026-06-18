@@ -1,0 +1,4 @@
+*.wasm
+spike.core.wasm
+spike.component.wasm
+.build/

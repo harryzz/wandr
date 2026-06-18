@@ -1,0 +1,4 @@
+module CSwiftSpike {
+    header "swift_spike.h"
+    export *
+}

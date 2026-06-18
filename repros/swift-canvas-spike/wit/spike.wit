@@ -1,0 +1,15 @@
+// Task 114 P1 — minimal Swift custom-WIT round trip (toolchain unknown killer).
+// Swift imports `host`, exports `run`; build wasm32-wasi -> component (adapter) ->
+// call from a wasmtime component host. P2 swaps `host` for real wasi:canvas.
+package wandr:swift-spike;
+
+interface host {
+  log: func(msg: string);
+  // stand-in for a wasi:canvas draw; argb = 0xAARRGGBB
+  draw-rect: func(x: f32, y: f32, w: f32, h: f32, argb: u32);
+}
+
+world swift-spike {
+  import host;
+  export run: func();
+}
