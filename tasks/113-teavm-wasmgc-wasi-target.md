@@ -85,10 +85,14 @@ step:
 
 ## Status
 
-🔲 Scoped 2026-06-16, not started — the funded build-out of task 112's Path A.
-Acceptance harness (`repros/java-wasm-spike/stub-host`) + the `spike.wasm` build
-(`repros/java-wasm-spike`) already exist. Effort: a real TeaVM fork, bounded to the
-five items above.
+🟢 **M1–M5 + real WASI floor DONE (2026-06-18).** First-class
+`TeaVMTargetType.WEBASSEMBLY_GC_WASI` with a real `wasi_snapshot_preview1` floor
+(stdout `fd_write`, clock `clock_time_get`, self-managed heap); end-to-end Java →
+WasmGC-WASI → preview1 adapter → WASI 0.2 component → wasmtime, browser
+`WEBASSEMBLY_GC` unchanged. Banked as one compiling commit `fd17b58` on the fork +
+the combined patch. Remaining is polish-before-upstream-PR (gradle plugin, CI test,
+design issue) — see the dated sections below. **No upstream PR/issue without
+explicit user go-ahead.**
 
 ## M2+M3 DONE — JS-free WasmGC, host-callable (2026-06-16)
 
@@ -223,8 +227,40 @@ PR-ready commit** (`350a86f`, off upstream master); single combined patch +
 reproduce in `repros/java-wasm-spike/teavm-patches/WEBASSEMBLY_GC_WASI.patch`.
 PR compare URL recorded.
 
-### Remaining before an upstream PR (the floor placeholders + polish)
-Real WASI floor (`currentTimeMillis`→`clock_time_get`, stdout `putcharStdout`→
-`fd_write`, self-managed heap growth for allocating guests); optional non-empty
-WASI stack trace; gradle-plugin support for the new target; a wasi-WasmGC CI test;
-open a TeaVM design issue to align on target-vs-flag before PRing.
+## M4-real — the real WASI floor (2026-06-18)
+
+Replaced the three floor placeholders with real `wasi_snapshot_preview1` calls,
+all gated so **browser `WEBASSEMBLY_GC` is unchanged** (re-verified: 0 wasi imports,
+keeps `teavmDate`/`teavmConsole`/`teavmJso`/`js-string`):
+
+- **stdout/stderr → `fd_write`.** `WasmGCSupport.putCharStdout/Stderr` branch on
+  `isWebAssemblyGCWasi()`: WASI builds write one byte via `fd_write` (a `Heap.alloc`
+  4-aligned iovec/nwritten scratch); browser keeps `teavmConsole.putchar*`. Required
+  exporting the module's linear `memory` (`WasmGCTarget`: `memoryExportName="memory"`)
+  so the host can read the iovec.
+- **wall clock → `clock_time_get`.** `System.currentTimeMillis` →
+  `WasmGCSupport.currentTimeMillis` (clock id 0, 8-aligned u64 scratch, ns/1e6 → f64).
+  `SystemIntrinsic` emits the `call` under `wasi`; linked as a dependency root via
+  `WasmGCDependencies.contributeWasi()` (gated by `WasmGCTarget` so browser keeps no
+  `clock_time_get`). Browser still imports `teavmDate.currentTimeMillis`.
+- **heap growth.** Already correct — `Heap.grow` is the `memory.grow` intrinsic;
+  only `notifyHeapResized` was JS-coupled and is gated off under WASI (self-managed).
+
+**Verified end-to-end via the real target** — spike now exports `greet` (println)
+and `now-millis` (`currentTimeMillis`) alongside `packed-len`:
+- core module imports **exactly** `wasi_snapshot_preview1.{fd_write, clock_time_get}`.
+- `wasm-tools component new --adapt …reactor.wasm` → valid WASI 0.2 component
+  importing `wasi:cli/{stdout,stderr,stdin}`, `wasi:io/{streams,error}`,
+  `wasi:clocks/{wall,monotonic}`, `wasi:filesystem/*`, exporting the 3 verbs.
+- `wasmtime run --invoke`: `greet`→`hello from java on wasi`, `now-millis`→real
+  epoch (`1781757914668` = 2026-06-18), `packed-len(10)`→`9`.
+
+**Banked:** fork `harryzz/teavm:wasmgc-wasi-poc` collapsed to **one complete,
+compiling commit** `fd17b58` (force-pushed; the prior `350a86f` had captured only
+5 of the files and would not compile standalone). Combined patch refreshed
+(`repros/java-wasm-spike/teavm-patches/WEBASSEMBLY_GC_WASI.patch`, 540 lines).
+
+### Remaining before an upstream PR (polish only — the floor is real now)
+Optional non-empty WASI stack trace; gradle-plugin support for the new target; a
+wasi-WasmGC CI test; **open a TeaVM design issue to align on target-vs-flag before
+PRing** (no upstream PR/issue without explicit user go-ahead).

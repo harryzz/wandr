@@ -1,4 +1,6 @@
 package wandr:spike;
 world spike {
   export packed-len: func(septets: s32) -> s32;
+  export greet: func();
+  export now-millis: func() -> s64;
 }

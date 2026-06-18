@@ -1,28 +1,81 @@
+From fd17b581bc1584be91a810b10f9e80f9b308a675 Mon Sep 17 00:00:00 2001
+From: Zahari Zahariev <harryzz@gmail.com>
+Date: Thu, 18 Jun 2026 07:46:45 +0300
+Subject: [PATCH] WasmGC: add WEBASSEMBLY_GC_WASI target (JS-free WasmGC + real
+ WASI floor)
+
+Adds a new TeaVMTargetType.WEBASSEMBLY_GC_WASI that emits a WasmGC module
+free of the JS-embedding runtime (no teavmJso, no wasm:js-string, no
+teavmConsole/teavmDate/teavmMemory host imports), suitable for non-JS
+component-model hosts (e.g. wasmtime via the preview1->preview2 adapter).
+
+Target plumbing:
+- Platforms.WEBASSEMBLY_GC_WASI + PlatformDetector.isWebAssemblyGCWasi()
+  @PlatformMarker, so classlib can branch at compile time.
+- TeaVMWasmGCHost.isWasi(); WasmGCTarget.setWasi(): adds WEBASSEMBLY_GC_WASI
+  to platform tags, drops the env memory import (memory becomes internal),
+  exports "memory" for WASI, makes heap globals internal consts, and routes
+  intrinsics with the wasi flag.
+- TeaVMTargetType.WEBASSEMBLY_GC_WASI + TeaVMTool wiring (reuses the WasmGC
+  target with setWasi(true), emits classes.wasm).
+- JSOPlugin and TThrowable skip JS interop / JS stack capture under WASI.
+
+Real WASI floor (only these two host imports, both wasi_snapshot_preview1):
+- stdout/stderr: WasmGCSupport.putChar* route to fd_write (gated on
+  isWebAssemblyGCWasi); browser keeps teavmConsole.
+- wall clock: System.currentTimeMillis -> WasmGCSupport.currentTimeMillis via
+  clock_time_get (SystemIntrinsic emits the call under wasi; linked through
+  WasmGCDependencies.contributeWasi so dependency analysis includes it);
+  browser keeps teavmDate.
+- heap growth: Heap.grow stays the memory.grow intrinsic; notifyHeapResized
+  is skipped under WASI (self-managed, no host callback).
+
+Browser WEBASSEMBLY_GC output is unchanged (still teavmJso/js-string/teavmDate,
+zero wasi imports). Verified end to end: Java -> WasmGC-WASI core -> preview1
+adapter -> WASI 0.2 component (imports wasi:cli/io/clocks, exports custom
+verbs) running under wasmtime.
+---
+ .../teavm/classlib/java/lang/TThrowable.java  | 42 ++++++-------
+ .../teavm/backend/wasm/TeaVMWasmGCHost.java   |  3 +
+ .../org/teavm/backend/wasm/WasmGCTarget.java  | 45 +++++++++++---
+ .../wasm/dependencies/WasmGCDependencies.java |  6 ++
+ .../wasm/intrinsics/SystemIntrinsic.java      | 19 +++++-
+ .../wasm/intrinsics/WasmGCIntrinsics.java     |  9 +--
+ .../backend/wasm/runtime/WasmGCSupport.java   | 60 ++++++++++++++++++-
+ .../org/teavm/classlib/PlatformDetector.java  |  5 ++
+ .../java/org/teavm/runtime/heap/Heap.java     |  9 ++-
+ .../java/org/teavm/interop/Platforms.java     |  1 +
+ .../java/org/teavm/jso/impl/JSOPlugin.java    |  2 +-
+ .../org/teavm/tooling/TeaVMTargetType.java    |  1 +
+ .../java/org/teavm/tooling/TeaVMTool.java     |  8 ++-
+ 13 files changed, 171 insertions(+), 39 deletions(-)
+
 diff --git a/classlib/src/main/java/org/teavm/classlib/java/lang/TThrowable.java b/classlib/src/main/java/org/teavm/classlib/java/lang/TThrowable.java
-index 0e7c91a..9685217 100644
+index 0e7c91a..072d729 100644
 --- a/classlib/src/main/java/org/teavm/classlib/java/lang/TThrowable.java
 +++ b/classlib/src/main/java/org/teavm/classlib/java/lang/TThrowable.java
-@@ -27,7 +27,6 @@ import org.teavm.jso.JSBody;
- import org.teavm.jso.JSIndexer;
- import org.teavm.jso.JSObject;
- import org.teavm.jso.JSProperty;
--import org.teavm.jso.core.JSString;
- import org.teavm.jso.impl.JSWrapper;
- import org.teavm.runtime.ExceptionHandling;
- 
-@@ -118,8 +117,7 @@ public class TThrowable extends RuntimeException {
+@@ -118,8 +118,12 @@ public class TThrowable extends RuntimeException {
          if (PlatformDetector.isLowLevel()) {
              stackTrace = (TStackTraceElement[]) (Object) ExceptionHandling.fillStackTrace();
          } else if (PlatformDetector.isWebAssemblyGC()) {
 -            lazyStackTrace = takeWasmGCStack(JSString.valueOf(getClass().getName()));
 -            decorateException(this);
-+            stackTrace = new TStackTraceElement[0]; // task 113 WASI: no JS stack capture
++            if (PlatformDetector.isWebAssemblyGCWasi()) {
++                stackTrace = new TStackTraceElement[0]; // task 113 WASI: no JS stack capture
++            } else {
++                lazyStackTrace = takeWasmGCStack(JSString.valueOf(getClass().getName()));
++                decorateException(this);
++            }
          }
          return this;
      }
-@@ -137,28 +135,9 @@ public class TThrowable extends RuntimeException {
+@@ -136,29 +140,27 @@ public class TThrowable extends RuntimeException {
+     @Import(name = "decorateException")
      private static native void decorateException(Object obj);
  
++    @Import(name = "takeStackTrace")
++    private static native LazyStackSupplier takeWasmGCStack(JSObject exceptionClassName);
++
      private void ensureStackTrace() {
 -        if (PlatformDetector.isWebAssemblyGC()) {
 -            if (lazyStackTrace != null) {
@@ -39,9 +92,21 @@ index 0e7c91a..9685217 100644
 -                            frame.getLine());
 -                }
 -                stackTrace = stack;
--            }
--        }
-+        // task 113 WASI: stackTrace set eagerly in fillInStackTrace; no lazy JSO supplier.
++        if (PlatformDetector.isWebAssemblyGC() && lazyStackTrace != null) {
++            var supplier = lazyStackTrace;
++            lazyStackTrace = null;
++            var nativeStack = supplier.getStack();
++            if (nativeStack == null) {
++                return;
++            }
++            var stack = new TStackTraceElement[nativeStack.getLength()];
++            for (var i = 0; i < nativeStack.getLength(); ++i) {
++                var frame = nativeStack.get(i);
++                stack[i] = new TStackTraceElement(frame.getClassName(), frame.getMethod(), frame.getFile(),
++                        frame.getLine());
+             }
++            stackTrace = stack;
+         }
      }
  
 -    @Import(name = "takeStackTrace")
@@ -50,8 +115,20 @@ index 0e7c91a..9685217 100644
      @Rename("getMessage")
      public String getMessage0() {
          return message;
+diff --git a/core/src/main/java/org/teavm/backend/wasm/TeaVMWasmGCHost.java b/core/src/main/java/org/teavm/backend/wasm/TeaVMWasmGCHost.java
+index e99ed96..ed25490 100644
+--- a/core/src/main/java/org/teavm/backend/wasm/TeaVMWasmGCHost.java
++++ b/core/src/main/java/org/teavm/backend/wasm/TeaVMWasmGCHost.java
+@@ -28,4 +28,7 @@ public interface TeaVMWasmGCHost extends TeaVMHostExtension {
+     void addMethodsOnCallSites(Supplier<Collection<MethodReference>> methodsOnCallSites);
+ 
+     void contributeToCodeGen(WasmGCCodeGenContributor contributor);
++
++    /** True when targeting a non-JS (WASI) host: no JSO interop, no js-string. */
++    boolean isWasi();
+ }
 diff --git a/core/src/main/java/org/teavm/backend/wasm/WasmGCTarget.java b/core/src/main/java/org/teavm/backend/wasm/WasmGCTarget.java
-index e221ffa..29ff59a 100644
+index e221ffa..a557e55 100644
 --- a/core/src/main/java/org/teavm/backend/wasm/WasmGCTarget.java
 +++ b/core/src/main/java/org/teavm/backend/wasm/WasmGCTarget.java
 @@ -54,6 +54,7 @@ import org.teavm.backend.wasm.intrinsics.WasmGCResourcesIntrinsic;
@@ -62,24 +139,80 @@ index e221ffa..29ff59a 100644
  import org.teavm.backend.wasm.model.WasmLocal;
  import org.teavm.backend.wasm.model.WasmModule;
  import org.teavm.backend.wasm.model.WasmTag;
-@@ -281,8 +282,10 @@ public class WasmGCTarget implements TeaVMTarget, TeaVMWasmGCHost {
+@@ -110,6 +111,7 @@ public class WasmGCTarget implements TeaVMTarget, TeaVMWasmGCHost {
+     private BoundCheckInsertion boundCheckInsertion = new BoundCheckInsertion();
+     private boolean strict;
+     private boolean obfuscated;
++    private boolean wasi;
+     private boolean debugInfo;
+     private boolean compactMode;
+     private SourceMapBuilder sourceMapBuilder;
+@@ -135,6 +137,15 @@ public class WasmGCTarget implements TeaVMTarget, TeaVMWasmGCHost {
+         this.obfuscated = obfuscated;
+     }
+ 
++    public void setWasi(boolean wasi) {
++        this.wasi = wasi;
++    }
++
++    @Override
++    public boolean isWasi() {
++        return wasi;
++    }
++
+     public void setStrict(boolean strict) {
+         this.strict = strict;
+     }
+@@ -220,6 +231,9 @@ public class WasmGCTarget implements TeaVMTarget, TeaVMWasmGCHost {
+         var deps = new WasmGCDependencies(dependencyAnalyzer);
+         deps.contribute();
+         deps.contributeStandardExports();
++        if (wasi) {
++            deps.contributeWasi(); // task 113 WASI floor: pull in the clock helper (clock_time_get)
++        }
+ 
+         var reflectionSuppliers = new ArrayList<ReflectionSupplier>();
+         for (var supplier : ServiceLoader.load(ReflectionSupplier.class, dependencyAnalyzer.getClassLoader())) {
+@@ -254,7 +268,9 @@ public class WasmGCTarget implements TeaVMTarget, TeaVMWasmGCHost {
+ 
+     @Override
+     public String[] getPlatformTags() {
+-        return new String[] { Platforms.WEBASSEMBLY_GC };
++        return wasi
++                ? new String[] { Platforms.WEBASSEMBLY_GC, Platforms.WEBASSEMBLY_GC_WASI }
++                : new String[] { Platforms.WEBASSEMBLY_GC };
+     }
+ 
+     @Override
+@@ -281,8 +297,12 @@ public class WasmGCTarget implements TeaVMTarget, TeaVMWasmGCHost {
      @Override
      public void emit(ListableClassHolderSource classes, BuildTarget buildTarget, String outputName) throws IOException {
          var module = new WasmModule();
 -        module.memoryImportName = "memory";
 -        module.memoryImportModule = "env";
-+        if (!Boolean.getBoolean("teavm.wasmgc.nojso")) {
++        if (!wasi) {
 +            module.memoryImportName = "memory";
 +            module.memoryImportModule = "env";
++        } else {
++            module.memoryExportName = "memory"; // task 113 WASI: export linear memory so wasi fd_write can read iovecs
 +        }
          addMethodsOnCallSites(reflection::getVirtualCallSites);
          var inlineIntrinsics = new DefaultIntrinsicRegistry<WasmGCInlineIntrinsic>(classes);
          var bodyIntrinsics = new DefaultIntrinsicRegistry<WasmGCBodyIntrinsic>(classes);
-@@ -495,16 +498,25 @@ public class WasmGCTarget implements TeaVMTarget, TeaVMWasmGCHost {
+@@ -318,7 +338,7 @@ public class WasmGCTarget implements TeaVMTarget, TeaVMWasmGCHost {
+         var codeGenContext = createCodeGenContext(classes, declarationsGenerator,
+                 asyncMethodFinder.getAsyncFamilyMethods());
+         var codeGenRegistry = createCodeGenRegistry(inlineIntrinsics, bodyIntrinsics);
+-        WasmGCIntrinsics.apply(reflection, codeGenContext, inlineIntrinsics, bodyIntrinsics);
++        WasmGCIntrinsics.apply(reflection, codeGenContext, inlineIntrinsics, bodyIntrinsics, wasi);
+         for (var contributor : intrinsicContributors) {
+             contributor.contribute(codeGenContext, codeGenRegistry);
+         }
+@@ -495,16 +515,25 @@ public class WasmGCTarget implements TeaVMTarget, TeaVMWasmGCHost {
              memorySize = Math.max(memorySize, segment.getOffset() + segment.getLength());
          }
  
-+        var nojso = Boolean.getBoolean("teavm.wasmgc.nojso");
++        var nojso = wasi;
          var heapOffset = new WasmGlobal("heapOffset", WasmType.INT32);
          heapOffset.setImmutable(true);
 -        heapOffset.setImportModule("teavmMemory");
@@ -105,58 +238,247 @@ index e221ffa..29ff59a 100644
          module.globals.add(maxSize);
  
          dataSize = memorySize;
+diff --git a/core/src/main/java/org/teavm/backend/wasm/dependencies/WasmGCDependencies.java b/core/src/main/java/org/teavm/backend/wasm/dependencies/WasmGCDependencies.java
+index 638d291..b1355a4 100644
+--- a/core/src/main/java/org/teavm/backend/wasm/dependencies/WasmGCDependencies.java
++++ b/core/src/main/java/org/teavm/backend/wasm/dependencies/WasmGCDependencies.java
+@@ -77,6 +77,12 @@ public class WasmGCDependencies {
+                 .use();
+     }
+ 
++    // task 113 WASI floor: clock helper is only reached from codegen (SystemIntrinsic), so it must
++    // be linked explicitly; gated to WASI builds so the browser target keeps no clock_time_get import.
++    public void contributeWasi() {
++        analyzer.linkMethod(new MethodReference(WasmGCSupport.class, "currentTimeMillis", double.class)).use();
++    }
++
+     private void contributeWasmRuntime() {
+         for (var cls : List.of(int.class, long.class, float.class, double.class)) {
+             analyzer.linkMethod(new MethodReference(WasmRuntime.class, "lt", cls, cls, boolean.class)).use();
 diff --git a/core/src/main/java/org/teavm/backend/wasm/intrinsics/SystemIntrinsic.java b/core/src/main/java/org/teavm/backend/wasm/intrinsics/SystemIntrinsic.java
-index 99d4113..e295a55 100644
+index 99d4113..823af77 100644
 --- a/core/src/main/java/org/teavm/backend/wasm/intrinsics/SystemIntrinsic.java
 +++ b/core/src/main/java/org/teavm/backend/wasm/intrinsics/SystemIntrinsic.java
-@@ -21,6 +21,7 @@ import org.teavm.backend.wasm.model.WasmFunction;
+@@ -16,26 +16,43 @@
+ package org.teavm.backend.wasm.intrinsics;
+ 
+ import org.teavm.ast.InvocationExpr;
++import org.teavm.backend.wasm.BaseWasmFunctionRepository;
+ import org.teavm.backend.wasm.WasmFunctionTypes;
+ import org.teavm.backend.wasm.model.WasmFunction;
  import org.teavm.backend.wasm.model.WasmModule;
  import org.teavm.backend.wasm.model.WasmNumType;
  import org.teavm.backend.wasm.model.WasmType;
-+import org.teavm.backend.wasm.model.instruction.WasmFloat64Constant;
++import org.teavm.backend.wasm.runtime.WasmGCSupport;
  import org.teavm.backend.wasm.model.instruction.WasmInstructionBuilder;
++import org.teavm.model.MethodReference;
  
  public class SystemIntrinsic implements WasmGCInlineIntrinsic {
-@@ -39,8 +40,12 @@ public class SystemIntrinsic implements WasmGCInlineIntrinsic {
++    private static final MethodReference WASI_CURRENT_TIME_MILLIS = new MethodReference(
++            WasmGCSupport.class, "currentTimeMillis", double.class);
++
+     private WasmFunctionTypes functionTypes;
+     private WasmModule module;
++    private final BaseWasmFunctionRepository functions;
+     private WasmFunction workerFunction;
++    private final boolean wasi;
+ 
+-    public SystemIntrinsic(WasmFunctionTypes functionTypes, WasmModule module) {
++    public SystemIntrinsic(WasmFunctionTypes functionTypes, WasmModule module,
++            BaseWasmFunctionRepository functions, boolean wasi) {
+         this.functionTypes = functionTypes;
+         this.module = module;
++        this.functions = functions;
++        this.wasi = wasi;
+     }
+ 
+     @Override
+     public void apply(InvocationExpr invocation, WasmGCInlineIntrinsicContext context,
+             WasmInstructionBuilder builder) {
++        if (wasi) {
++            // task 113 WASI floor: real wall clock via WasmGCSupport.currentTimeMillis (clock_time_get).
++            builder.call(functions.forStaticMethod(WASI_CURRENT_TIME_MILLIS))
++                    .convert(WasmNumType.FLOAT64, WasmNumType.INT64, true);
++            return;
++        }
          if (workerFunction == null) {
              workerFunction = new WasmFunction(functionTypes.of(WasmType.FLOAT64));
              workerFunction.setName("teavm@currentTimeMillis");
--            workerFunction.setImportName("currentTimeMillis");
--            workerFunction.setImportModule("teavmDate");
-+            if (Boolean.getBoolean("teavm.wasmgc.nojso")) {
-+                workerFunction.getBody().add(new WasmFloat64Constant(0)); // task 113 WASI: no clock yet
-+            } else {
-+                workerFunction.setImportName("currentTimeMillis");
-+                workerFunction.setImportModule("teavmDate");
-+            }
-             module.functions.add(workerFunction);
-         }
-         builder.call(workerFunction).convert(WasmNumType.FLOAT64, WasmNumType.INT64, true);
+diff --git a/core/src/main/java/org/teavm/backend/wasm/intrinsics/WasmGCIntrinsics.java b/core/src/main/java/org/teavm/backend/wasm/intrinsics/WasmGCIntrinsics.java
+index 6ecb9e5..8e826c1 100644
+--- a/core/src/main/java/org/teavm/backend/wasm/intrinsics/WasmGCIntrinsics.java
++++ b/core/src/main/java/org/teavm/backend/wasm/intrinsics/WasmGCIntrinsics.java
+@@ -79,12 +79,12 @@ public class WasmGCIntrinsics {
+ 
+     public static void apply(ReflectionDependencyListener reflection, WasmGCCodeGenContext ctx,
+             IntrinsicRegistry<WasmGCInlineIntrinsic> inlineReg,
+-            IntrinsicRegistry<WasmGCBodyIntrinsic> bodyReg) {
++            IntrinsicRegistry<WasmGCBodyIntrinsic> bodyReg, boolean wasi) {
+         inlineReg.registerIntrinsic(WasmRuntime.class, new WasmRuntimeIntrinsic());
+         inlineReg.registerIntrinsic(Object.class, new ObjectIntrinsic(ctx.classInfoProvider(), ctx.functionTypes()),
+                 "getClassInfo", "getMonitor", "setMonitor", "wasmGCIdentity", "setWasmGCIdentity",
+                 "cloneObject");
+-        fillSystem(inlineReg, ctx);
++        fillSystem(inlineReg, ctx, wasi);
+         inlineReg.registerIntrinsic(Heap.class, new HeapIntrinsic());
+         inlineReg.registerIntrinsic(Address.class, new AddressIntrinsic(ctx.classInfoProvider(), ctx.functions()));
+         inlineReg.registerIntrinsic(Structure.class, new StructureIntrinsic(ctx.classInfoProvider()));
+@@ -155,13 +155,14 @@ public class WasmGCIntrinsics {
+     }
+ 
+     private static void fillSystem(IntrinsicRegistry<WasmGCInlineIntrinsic> reg,
+-            WasmGCCodeGenContext ctx) {
++            WasmGCCodeGenContext ctx, boolean wasi) {
+         var arrayCopyIntrinsic = new SystemArrayCopyIntrinsic(ctx.hierarchy(), ctx.module(), ctx.functions(),
+                 ctx.classInfoProvider(), ctx.typeMapper(), ctx.functionTypes(), ctx.names(), ctx.exceptionTag());
+         reg.registerIntrinsic(new MethodReference(System.class, "arraycopy", Object.class, int.class, Object.class,
+                 int.class, int.class, void.class), arrayCopyIntrinsic);
+         reg.registerIntrinsic(new MethodReference(System.class, "doArrayCopy", Object.class, int.class, Object.class,
+                 int.class, int.class, void.class), arrayCopyIntrinsic);
+-        reg.registerIntrinsic(System.class, new SystemIntrinsic(ctx.functionTypes(), ctx.module()));
++        reg.registerIntrinsic(System.class, new SystemIntrinsic(ctx.functionTypes(), ctx.module(),
++                ctx.functions(), wasi));
+     }
+ }
+diff --git a/core/src/main/java/org/teavm/backend/wasm/runtime/WasmGCSupport.java b/core/src/main/java/org/teavm/backend/wasm/runtime/WasmGCSupport.java
+index 575a67a..9ab0cfb 100644
+--- a/core/src/main/java/org/teavm/backend/wasm/runtime/WasmGCSupport.java
++++ b/core/src/main/java/org/teavm/backend/wasm/runtime/WasmGCSupport.java
+@@ -15,8 +15,11 @@
+  */
+ package org.teavm.backend.wasm.runtime;
+ 
++import org.teavm.classlib.PlatformDetector;
++import org.teavm.interop.Address;
+ import org.teavm.interop.Import;
+ import org.teavm.interop.Intrinsified;
++import org.teavm.runtime.heap.Heap;
+ 
+ public class WasmGCSupport {
+     private static int lastObjectId = 1831433054;
+@@ -53,11 +56,64 @@ public class WasmGCSupport {
+         return x;
+     }
+ 
++    public static void putCharStdout(char c) {
++        if (PlatformDetector.isWebAssemblyGCWasi()) {
++            wasiWrite(1, c);
++        } else {
++            putCharStdoutJS(c);
++        }
++    }
++
++    public static void putCharStderr(char c) {
++        if (PlatformDetector.isWebAssemblyGCWasi()) {
++            wasiWrite(2, c);
++        } else {
++            putCharStderrJS(c);
++        }
++    }
++
+     @Import(name = "putcharStdout", module = "teavmConsole")
+-    public static native void putCharStdout(char c);
++    private static native void putCharStdoutJS(char c);
+ 
+     @Import(name = "putcharStderr", module = "teavmConsole")
+-    public static native void putCharStderr(char c);
++    private static native void putCharStderrJS(char c);
++
++    // task 113 WASI floor: write one byte to fd via wasi_snapshot_preview1.fd_write.
++    @Import(name = "fd_write", module = "wasi_snapshot_preview1")
++    private static native int wasiFdWrite(int fd, int iovs, int iovsLen, int nwrittenPtr);
++
++    private static int wasiScratch;
++
++    private static void wasiWrite(int fd, char c) {
++        var scratch = wasiScratch;
++        if (scratch == 0) {
++            // 4-aligned: [0..4]=iovec.buf, [4..8]=iovec.len, [8..12]=nwritten, [12]=byte
++            scratch = (Heap.alloc(20).toInt() + 3) & ~3;
++            wasiScratch = scratch;
++        }
++        Address.fromInt(scratch + 12).putByte((byte) c);
++        Address.fromInt(scratch).putInt(scratch + 12);
++        Address.fromInt(scratch + 4).putInt(1);
++        wasiFdWrite(fd, scratch, 1, scratch + 8);
++    }
++
++    // task 113 WASI floor: real wall clock via wasi_snapshot_preview1.clock_time_get.
++    // Returns milliseconds since the epoch as f64 (the SystemIntrinsic converts to long).
++    @Import(name = "clock_time_get", module = "wasi_snapshot_preview1")
++    private static native int wasiClockTimeGet(int clockId, long precision, int resultPtr);
++
++    private static int clockScratch;
++
++    public static double currentTimeMillis() {
++        var scratch = clockScratch;
++        if (scratch == 0) {
++            scratch = (Heap.alloc(16).toInt() + 7) & ~7; // 8-byte-aligned u64 timestamp slot
++            clockScratch = scratch;
++        }
++        wasiClockTimeGet(0, 1000, scratch); // clock id 0 = realtime, 1us precision
++        long ns = Address.fromInt(scratch).getLong();
++        return ns / 1_000_000.0;
++    }
+ 
+     public static char[] nextCharArray() {
+         var length = nextLEB();
+diff --git a/core/src/main/java/org/teavm/classlib/PlatformDetector.java b/core/src/main/java/org/teavm/classlib/PlatformDetector.java
+index 97110a1..08ed2f1 100644
+--- a/core/src/main/java/org/teavm/classlib/PlatformDetector.java
++++ b/core/src/main/java/org/teavm/classlib/PlatformDetector.java
+@@ -32,6 +32,11 @@ public final class PlatformDetector {
+         return false;
+     }
+ 
++    @PlatformMarker(Platforms.WEBASSEMBLY_GC_WASI)
++    public static boolean isWebAssemblyGCWasi() {
++        return false;
++    }
++
+     @PlatformMarker(Platforms.JAVASCRIPT)
+     public static boolean isJavaScript() {
+         return false;
 diff --git a/core/src/main/java/org/teavm/runtime/heap/Heap.java b/core/src/main/java/org/teavm/runtime/heap/Heap.java
-index bc29b03..e4664cc 100644
+index bc29b03..eddd111 100644
 --- a/core/src/main/java/org/teavm/runtime/heap/Heap.java
 +++ b/core/src/main/java/org/teavm/runtime/heap/Heap.java
-@@ -17,7 +17,6 @@ package org.teavm.runtime.heap;
+@@ -15,6 +15,7 @@
+  */
+ package org.teavm.runtime.heap;
  
++import org.teavm.classlib.PlatformDetector;
  import org.teavm.interop.Address;
  import org.teavm.interop.Export;
--import org.teavm.interop.Import;
- import org.teavm.interop.Intrinsified;
- import org.teavm.interop.StaticInit;
- import org.teavm.interop.Structure;
-@@ -212,8 +211,8 @@ public final class Heap {
+ import org.teavm.interop.Import;
+@@ -212,8 +213,14 @@ public final class Heap {
          return grownBytes >= bytes;
      }
  
--    @Import(module = "teavmMemory", name = "notifyHeapResized")
--    private static native void notifyHeapResized();
-+    private static void notifyHeapResized() { // task 113: self-managed heap, no host callback
++    private static void notifyHeapResized() {
++        if (!PlatformDetector.isWebAssemblyGCWasi()) {
++            notifyHeapResizedJS(); // task 113: WASI self-manages the heap, no host callback
++        }
 +    }
++
+     @Import(module = "teavmMemory", name = "notifyHeapResized")
+-    private static native void notifyHeapResized();
++    private static native void notifyHeapResizedJS();
  
      private static HeapNode lastRecord() {
          HeapRecord record = start.toStructure();
+diff --git a/interop/core/src/main/java/org/teavm/interop/Platforms.java b/interop/core/src/main/java/org/teavm/interop/Platforms.java
+index af8df85..149eaed 100644
+--- a/interop/core/src/main/java/org/teavm/interop/Platforms.java
++++ b/interop/core/src/main/java/org/teavm/interop/Platforms.java
+@@ -24,4 +24,5 @@ public final class Platforms {
+     public static final String LOW_LEVEL = "low_level";
+     public static final String OWN_GC = "own_gc";
+     public static final String WEBASSEMBLY_GC = "webassembly-gc";
++    public static final String WEBASSEMBLY_GC_WASI = "webassembly-gc-wasi";
+ }
 diff --git a/jso/impl/src/main/java/org/teavm/jso/impl/JSOPlugin.java b/jso/impl/src/main/java/org/teavm/jso/impl/JSOPlugin.java
-index e918744..fd997ea 100644
+index e918744..c02b174 100644
 --- a/jso/impl/src/main/java/org/teavm/jso/impl/JSOPlugin.java
 +++ b/jso/impl/src/main/java/org/teavm/jso/impl/JSOPlugin.java
 @@ -81,7 +81,7 @@ public class JSOPlugin implements TeaVMPlugin {
@@ -164,7 +486,55 @@ index e918744..fd997ea 100644
          }
  
 -        if (wasmGCHost != null) {
-+        if (wasmGCHost != null && !Boolean.getBoolean("teavm.wasmgc.nojso")) {
++        if (wasmGCHost != null && !wasmGCHost.isWasi()) {
              classTransformer.setClassFilter(n -> !n.startsWith("java."));
              classTransformer.forWasmGC();
              WasmGCJso.install(host, wasmGCHost, repository);
+diff --git a/tools/core/src/main/java/org/teavm/tooling/TeaVMTargetType.java b/tools/core/src/main/java/org/teavm/tooling/TeaVMTargetType.java
+index e81dc41..83e2a73 100644
+--- a/tools/core/src/main/java/org/teavm/tooling/TeaVMTargetType.java
++++ b/tools/core/src/main/java/org/teavm/tooling/TeaVMTargetType.java
+@@ -18,5 +18,6 @@ package org.teavm.tooling;
+ public enum TeaVMTargetType {
+     JAVASCRIPT,
+     WEBASSEMBLY_GC,
++    WEBASSEMBLY_GC_WASI,
+     C
+ }
+diff --git a/tools/core/src/main/java/org/teavm/tooling/TeaVMTool.java b/tools/core/src/main/java/org/teavm/tooling/TeaVMTool.java
+index ef73fb3..e88b120 100644
+--- a/tools/core/src/main/java/org/teavm/tooling/TeaVMTool.java
++++ b/tools/core/src/main/java/org/teavm/tooling/TeaVMTool.java
+@@ -358,7 +358,9 @@ public class TeaVMTool {
+             case JAVASCRIPT:
+                 return prepareJavaScriptTarget();
+             case WEBASSEMBLY_GC:
+-                return prepareWebAssemblyGCTarget();
++                return prepareWebAssemblyGCTarget(false);
++            case WEBASSEMBLY_GC_WASI:
++                return prepareWebAssemblyGCTarget(true);
+             case C:
+                 return prepareCTarget();
+         }
+@@ -379,8 +381,9 @@ public class TeaVMTool {
+         return javaScriptTarget;
+     }
+ 
+-    private WasmGCTarget prepareWebAssemblyGCTarget() {
++    private WasmGCTarget prepareWebAssemblyGCTarget(boolean wasi) {
+         var target = new WasmGCTarget();
++        target.setWasi(wasi);
+         target.setObfuscated(obfuscated);
+         target.setStrict(strict);
+         target.setDebugInfo(debugInformationGenerated);
+@@ -552,6 +555,7 @@ public class TeaVMTool {
+                 case JAVASCRIPT:
+                     return "classes.js";
+                 case WEBASSEMBLY_GC:
++                case WEBASSEMBLY_GC_WASI:
+                     return "classes.wasm";
+                 case C:
+                     return "classes.c";
+-- 
+2.47.3
+
