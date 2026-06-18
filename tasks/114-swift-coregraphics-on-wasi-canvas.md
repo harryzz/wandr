@@ -144,4 +144,14 @@ Gotcha: mask-clip needs mask-first + src-in; content-then-dst-in only DIMS the m
 region (a primitive's blend touches only its own pixels). => wasi:canvas is
 sufficient for the full CoreGraphics 2D CGContext.
 
-**Remaining (P2.3 cont.):** gradients, images, text. SwiftUI stays out of scope.
+🟢 **P2.3d/e DONE (2026-06-18) — gradients, clipping, images (device-verified).**
+CGContext gained: CGGradient + drawLinear/RadialGradient(in:) (graphics.{linear,radial}-
+gradient shaders); clip(to:)/clip() (clip-rect/clip-path); makeImage(rgba:) +
+draw(_:in:) (graphics.image-from-rgba8 + draw-image-rect; CGImage now holds the wasi
+image, dropped on deinit). Device-verified on Pixel 2 XL (linear gradient rect,
+radial gradient clipped to a triangle, an RGBA bitmap). GOTCHA: image draws need an
+opaque-WHITE paint color — the host multiplies color.alpha × paint.alpha
+([[feedback_paint_alpha_pipeline]]), so color=0 made the image fully transparent.
+
+**Remaining (P2.3 cont.):** text (needs the wasi:canvas/text world + a typeface).
+SwiftUI stays out of scope.

@@ -215,6 +215,35 @@ public final class CGContext: Hashable {
         wasi_canvas_types_point_t(x: Float(p.x), y: Float(p.y))
     }
 
+    // ── images ──────────────────────────────────────────────────────────────────
+    /// Upload tightly-packed non-premultiplied RGBA8 pixels to a host image.
+    public func makeImage(rgba: [UInt8], width: Int, height: Int) -> CGImage? {
+        var pixels = rgba
+        return pixels.withUnsafeMutableBufferPointer { buf -> CGImage? in
+            var list = swift_spike_list_u8_t(ptr: buf.baseAddress, len: buf.count)
+            var ret = wasi_canvas_draw_own_image_t()   // local: clean inout writeback
+            let ok = wasi_canvas_draw_method_graphics_image_from_rgba8(
+                graphics, UInt32(width), UInt32(height), &list, &ret)
+            return ok ? CGImage(handle: ret, width: width, height: height) : nil
+        }
+    }
+    /// CoreGraphics's `draw(_:in:)` — draw the whole image into `rect`.
+    public func draw(_ image: CGImage, in rect: CGRect) {
+        var src = wasi_canvas_types_rect_t(x: 0, y: 0,
+                                           width: Float(image.width), height: Float(image.height))
+        var dst = wasiRect(rect)
+        var sampling = wasi_canvas_types_sampling_t(
+            filter: UInt8(WASI_CANVAS_TYPES_FILTER_MODE_LINEAR),
+            mipmap: UInt8(WASI_CANVAS_TYPES_MIPMAP_MODE_NONE))
+        var p = wasi_canvas_types_paint_t()
+        p.color = 0xFFFF_FFFF   // opaque white: host multiplies color.alpha × paint.alpha
+        p.alpha = 255
+        p.anti_alias = true
+        p.blend = blendMode.wasi
+        let b = wasi_canvas_types_borrow_image_t(__handle: image.handle.__handle)
+        wasi_canvas_draw_method_canvas_draw_image_rect(canvas, b, &src, &dst, &sampling, &p)
+    }
+
     // ── lowering ─────────────────────────────────────────────────────────────────
     private func drawRect(_ r: CGRect, style: Int32, color: CGColor) {
         var rect = wasiRect(r)

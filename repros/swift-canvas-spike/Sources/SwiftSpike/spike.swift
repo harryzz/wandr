@@ -43,6 +43,23 @@ public func onFrame(_ nanos: UInt64) {
     cg.strokePath()
     cg.setLineDash(phase: 0, lengths: [])
 
+    // (1b) IMAGE — a generated RGBA8 bitmap (R ramps x, G ramps y) drawn inside
+    // the dashed border via makeImage + draw(_:in:).
+    let iw = 64, ih = 64
+    var px = [UInt8]()
+    px.reserveCapacity(iw * ih * 4)
+    for y in 0..<ih {
+        for x in 0..<iw {
+            px.append(UInt8(x * 255 / (iw - 1)))   // R
+            px.append(UInt8(y * 255 / (ih - 1)))   // G
+            px.append(160)                          // B
+            px.append(255)                          // A
+        }
+    }
+    if let img = cg.makeImage(rgba: px, width: iw, height: ih) {
+        cg.draw(img, in: CGRect(x: m * 1.5, y: h * 0.055, width: w - 3 * m, height: h * 0.075))
+    }
+
     // (2) SHADOW — blue rect with an offset, blurred, cyan shadow.
     cg.setShadow(offset: (w * 0.03, h * 0.01), blur: w * 0.02,
                  color: CGColor(red: 0.2, green: 0.9, blue: 1.0, alpha: 0.8))
