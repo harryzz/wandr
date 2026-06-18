@@ -852,3 +852,32 @@ So it's the **scheduling/animation** surface, not pervasive. Fix options:
 Recommend (1) — a small `wasm-dispatch` shim driven by the frame loop. **More walls
 expected deeper** once these compile (the build only reached the first target's errors);
 this is the first of likely several, but the theme (Dispatch/scheduling) is now known.
+
+### Phase 1 — in progress: walls cleared + remaining (2026-06-18)
+Iterating the OpenSwiftUICore wasm build. The blockers are **entirely the Foundation
+concurrency/threading/platform substrate** — *not* SwiftUI's View/layout/render logic
+(zero errors there so far, the encouraging signal: the framework code looks portable
+once the substrate is shimmed).
+
+**Cleared so far** (all in `/tmp/OpenSwiftUI`, to fold into an OpenSwiftUI fork later):
+- **Dispatch/GCD**: added `OpenSwiftUICore/Util/WasmDispatchShim.swift` (single-threaded
+  `DispatchQueue.main`/`DispatchTime`, compile-focused) + guarded `import Dispatch` in
+  `AnimationListener.swift` (`#if canImport(Dispatch)`).
+- **OpenCombineFoundation**: gated its dep off non-Darwin in `Package.swift`
+  (`addOpenCombineSettings`) — Core only imports `OpenCombine`, never the Foundation
+  bridge (which needs URLSession/OperationQueue/os_unfair_lock — absent on wasm).
+- **dladdr**: guarded `OpenSwiftUI_SPI/.../OpenSwiftUI_CSymbols.c` (`#if defined(__wasi__)`
+  → NULL; no dynamic linking on wasm).
+- **platform `#error`**: added `canImport(WASILibc)` branches to `StandardLibraryAdditions
+  .swift` (only ~4 files lacked them — upstream already added WASILibc to most).
+
+**Remaining (~8 files, the threading/observation layer)** — needs a wasm threading shim:
+`ThreadUtils` (Thread + `pthread_key_create/get/setspecific` TLS), `RunLoopUtils`
+(`RunLoop.perform/add/.common`), `TimerUtils`, `MainActorUtils`, `ObservationUtils`,
+`StateObject`, `ObjectLocation`, `AttributeInvalidatingSubscriber`. Fix = a single-
+threaded shim layer (Thread→main, pthread-TLS→a global, RunLoop→frame-loop/stub,
+MainActor→trivial) — bounded (~8 files), mechanical, same playbook.
+
+**Also confirmed:** swift-crypto/BoringSSL **compiles on wasm** (the flagged risk is
+passing). Net: phase 1 is a substrate-shim grind, not a SwiftUI-logic rewrite — the
+View/render code (where our Option-B DisplayList backend plugs in) hasn't thrown an error.
