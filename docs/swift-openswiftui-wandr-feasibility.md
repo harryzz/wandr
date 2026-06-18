@@ -678,6 +678,35 @@ take the same mechanical treatment as a full OpenSwiftUI app reaches them. But t
 **core question is now answered with a running engine**: OpenAttributeGraph executes
 on wasm — the deepest dependency of OpenSwiftUI-on-wandr is real, not hypothetical.
 
+#### ✅✅✅ REACTIVE RULE runs on wasm — `ruleAttr.value = 42` (2026-06-18)
+Exercised a *computed* rule (not a constant): an input `Attribute(value: 21)` and a
+`struct DoubleRule: Rule { @Attribute var input: Int; var value: Int { input*2 } }`;
+reading `Attribute(DoubleRule(input:)).value` drives the graph to **update** the rule
+attribute and yields **42** under wasmtime:
+```
+Compute rule on wasi: ruleAttr.value = 42
+```
+This exercises the **whole reactive path**: intern → retain → the C-CC `_update`
+trampoline **actually invoked by C++** → the rule body runs → it **reads its input
+dependency** (21) → computes → **writes the output value** → 42. So the stored-closure
+trampoline is validated *in execution*, not just wired.
+
+One more `@_silgen_name` boundary surfaced en route and took the same cure:
+`IAGGraphSetOutputValue` (the rule's output write) — a refined `@_silgen_name`
+function whose Swift-CC call mismatches clang's C ABI on wasm; fixed with a
+non-refined C-imported `IAGGraphSetOutputValueC` (header-declared), exactly like
+intern/retain. **This nails the general rule:** on wasm, every refined
+`@_silgen_name` C-bridge call needs the **C-import** form (header-declared, called
+with the C ABI); `@_silgen_name`'s Swift-CC lowering is what mismatches (proven
+repeatedly: intern, retain, setOutputValue — and a minimal C-import callback runs
+fine). The remaining ~15 `@_silgen_name` sites are the same mechanical conversion as
+a full app reaches them.
+
+**This is the headline:** OpenAttributeGraph — Apple's AttributeGraph reimplemented —
+now runs a **reactive, dependency-tracked graph computation on `wasm32-wasip1`**. The
+make-or-break layer of OpenSwiftUI-on-wandr is not just buildable but *functionally
+executing* on wandr's substrate.
+
 **Net:** the AttributeGraph engine **compiles + links for wasm32-wasip1** (bounded,
 documented fix-set), and consuming it is a normal Swift import (no cxx-interop, no
 module cycle). *Running* a graph is gated on porting Compute's `mmap`/`memfd`
