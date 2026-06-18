@@ -1,7 +1,13 @@
 # OpenSwiftUI on wasm — phase 1 resume point (2026-06-18)
 
-Goal: compile **OpenSwiftUICore** (then OpenSwiftUI) for `wasm32-wasip1`, then wire the
-validated DisplayList→CGContext renderer (Option B) + run `eleev/swiftui-2048`.
+## 🎯 TARGET GOAL: run **https://github.com/eleev/swiftui-2048** on wandr (Pixel 2 XL)
+A real, polished, pure-SwiftUI game (the locked "real app" target). Verified suitable:
+**40× `import SwiftUI`, no UIKit, no storyboards, no 3rd-party deps**; only `AudioToolbox`
+(stub on wasm) + `Combine`. It's the end-to-end proof — a real SwiftUI app rendering on
+the device through the whole stack.
+
+Path to it: compile **OpenSwiftUICore** (then OpenSwiftUI) for `wasm32-wasip1` → wire the
+validated DisplayList→CGContext renderer (Option B) → drop in swiftui-2048.
 Full plan + scope: `docs/swift-openswiftui-wandr-feasibility.md` (phases 0–5).
 
 ## What's done (proven, pushed)
