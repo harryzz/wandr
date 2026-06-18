@@ -58,6 +58,8 @@ public final class CGContext: Hashable {
     // The host-rendered target. CoreGraphics doesn't expose this; the wandr embedder
     // hands the guest a wasi:canvas buffer and wraps it (see the guest's on_frame).
     private let canvas: wasi_canvas_draw_borrow_canvas_t
+    // The wasi:canvas resource factory (gradients, images). From the embedding handoff.
+    let graphics: wasi_canvas_draw_borrow_graphics_t
 
     // Graphics state — CoreGraphics is imperative: a mutable current path + paint state.
     private var elements: [PathElement] = []
@@ -74,8 +76,12 @@ public final class CGContext: Hashable {
     // shadow
     private var shadow: (dx: CGFloat, dy: CGFloat, blur: CGFloat, color: CGColor)?
 
-    /// wandr extension: build a context over a wasi:canvas buffer.
-    public init(canvas: wasi_canvas_draw_borrow_canvas_t) { self.canvas = canvas }
+    /// wandr extension: build a context over a wasi:canvas buffer + resource factory.
+    public init(canvas: wasi_canvas_draw_borrow_canvas_t,
+                graphics: wasi_canvas_draw_borrow_graphics_t) {
+        self.canvas = canvas
+        self.graphics = graphics
+    }
 
     public func hash(into hasher: inout Hasher) { hasher.combine(ObjectIdentifier(self)) }
     public static func == (lhs: CGContext, rhs: CGContext) -> Bool { lhs === rhs }
@@ -155,6 +161,58 @@ public final class CGContext: Hashable {
     public func strokePath() {
         let svg = dashLengths.isEmpty ? svgPathData(elements) : dashedSVG()
         emitWithShadow(svg: svg, style: WASI_CANVAS_TYPES_PAINT_STYLE_STROKE, color: strokeColor)
+    }
+
+    // ── clipping (geometric; bracket with save/restoreGState) ───────────────────
+    public func clip(to rect: CGRect) {
+        var r = wasiRect(rect)
+        wasi_canvas_draw_method_canvas_clip_rect(canvas, &r, true)
+    }
+    /// Clip to the current path (consumes it, like CoreGraphics's `clip()`).
+    public func clip() {
+        let d = svgPathData(elements)
+        guard !d.isEmpty else { return }
+        var s = swift_spike_string_t()
+        d.withCString { swift_spike_string_set(&s, $0) }
+        wasi_canvas_draw_method_canvas_clip_path(canvas, &s, UInt8(WASI_CANVAS_TYPES_FILL_RULE_NONZERO), true)
+        beginPath()
+    }
+
+    // ── gradients (fill `rect` with the gradient) ───────────────────────────────
+    public func drawLinearGradient(_ g: CGGradient, start: CGPoint, end: CGPoint, in rect: CGRect) {
+        withStops(g) { stops, count in
+            var s = wasiPoint(start), e = wasiPoint(end)
+            let own = wasi_canvas_draw_method_graphics_linear_gradient(
+                graphics, &s, &e, stops, UInt8(WASI_CANVAS_TYPES_TILE_MODE_CLAMP), nil)
+            fillRect(rect, shaderOwn: own)
+            wasi_canvas_types_shader_drop_own(own)
+        }
+    }
+    public func drawRadialGradient(_ g: CGGradient, center: CGPoint, radius: CGFloat, in rect: CGRect) {
+        withStops(g) { stops, count in
+            var c = wasiPoint(center)
+            let own = wasi_canvas_draw_method_graphics_radial_gradient(
+                graphics, &c, Float(radius), stops, UInt8(WASI_CANVAS_TYPES_TILE_MODE_CLAMP), nil)
+            fillRect(rect, shaderOwn: own)
+            wasi_canvas_types_shader_drop_own(own)
+        }
+    }
+    private func withStops(_ g: CGGradient, _ body: (UnsafeMutablePointer<swift_spike_list_tuple2_f32_color_t>, Int) -> Void) {
+        var arr = g.stops().map { swift_spike_tuple2_f32_color_t(f0: Float($0.0), f1: $0.1.argb) }
+        arr.withUnsafeMutableBufferPointer { buf in
+            var list = swift_spike_list_tuple2_f32_color_t(ptr: buf.baseAddress, len: buf.count)
+            body(&list, buf.count)
+        }
+    }
+    private func fillRect(_ r: CGRect, shaderOwn: wasi_canvas_draw_own_shader_t) {
+        var p = paint(style: WASI_CANVAS_TYPES_PAINT_STYLE_FILL, color: fillColor, blur: nil)
+        p.shader.is_some = true
+        p.shader.val = wasi_canvas_types_borrow_shader_t(__handle: shaderOwn.__handle)
+        var rect = wasiRect(r)
+        wasi_canvas_draw_method_canvas_draw_rect(canvas, &rect, &p)
+    }
+    private func wasiPoint(_ p: CGPoint) -> wasi_canvas_types_point_t {
+        wasi_canvas_types_point_t(x: Float(p.x), y: Float(p.y))
     }
 
     // ── lowering ─────────────────────────────────────────────────────────────────
