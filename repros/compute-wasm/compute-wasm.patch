@@ -1,0 +1,505 @@
+diff --git a/Package.swift b/Package.swift
+index bcac032..5d08d24 100644
+--- a/Package.swift
++++ b/Package.swift
+@@ -24,7 +24,7 @@ let package = Package(
+         .target(
+             name: "Platform",
+             cSettings: [
+-                .define("_GNU_SOURCE", .when(platforms: [.linux]))
++                .define("_GNU_SOURCE", .when(platforms: [.linux, .wasi]))
+             ]
+         ),
+         .target(
+@@ -34,7 +34,7 @@ let package = Package(
+             name: "Utilities",
+             dependencies: [
+                 "Platform",
+-                .target(name: "SwiftCorelibsCoreFoundation", condition: .when(platforms: [.linux])),
++                .target(name: "SwiftCorelibsCoreFoundation", condition: .when(platforms: [.linux, .wasi])),
+             ]
+         ),
+         .testTarget(
+@@ -94,12 +94,12 @@ let package = Package(
+                 "Platform",
+                 "Utilities",
+                 "ComputeCxxSwiftSupport",
+-                .target(name: "SwiftCorelibsCoreFoundation", condition: .when(platforms: [.linux])),
++                .target(name: "SwiftCorelibsCoreFoundation", condition: .when(platforms: [.linux, .wasi])),
+             ],
+             cxxSettings: [
+                 .headerSearchPath(""),
+                 .headerSearchPath("internalInclude"),
+-                .define("_GNU_SOURCE", .when(platforms: [.linux])),
++                .define("_GNU_SOURCE", .when(platforms: [.linux, .wasi])),
+                 .unsafeFlags([
+                     "-static",
+                     "-DCOMPILED_WITH_SWIFT",
+diff --git a/Sources/Compute/Attribute/AttributeType.swift b/Sources/Compute/Attribute/AttributeType.swift
+index c55b8c0..a1d859b 100644
+--- a/Sources/Compute/Attribute/AttributeType.swift
++++ b/Sources/Compute/Attribute/AttributeType.swift
+@@ -20,11 +20,34 @@ extension IAGUnownedGraphContextRef {
+         type: Metadata,
+         makeAttributeType: () -> UnsafePointer<_AttributeType>
+     ) -> UInt32 {
++        #if arch(wasm32)
++        // WASI: call the C-imported IAGGraphInternAttributeTypeC (declared in the
++        // ComputeCxx header) so Swift lowers the @convention(c) thunk with the C ABI
++        // (@_silgen_name lowers it with the Swift CC -> call_indirect signature_mismatch).
++        // The Swift closure is invoked in-language via the context pointer.
++        return withoutActuallyEscaping(makeAttributeType) { escaping in
++            withUnsafePointer(to: escaping) { ctxPtr in
++                IAGGraphInternAttributeTypeC(
++                    self,
++                    type,
++                    { ctx in
++                        UnsafeRawPointer(
++                            ctx!.assumingMemoryBound(
++                                to: (() -> UnsafePointer<_AttributeType>).self
++                            ).pointee()
++                        )
++                    },
++                    UnsafeRawPointer(ctxPtr)
++                )
++            }
++        }
++        #else
+         return IAGGraphInternAttributeType(
+             unsafeBitCast(self, to: UnsafeRawPointer.self),
+             type: type,
+             makeAttributeType: makeAttributeType
+         )
++        #endif
+     }
+ 
+ }
+@@ -37,10 +60,25 @@ extension String {
+ 
+ }
+ 
++#if arch(wasm32)
++// WASI: stored closures are invoked LATER by C++, so the synchronous in-language trick
++// (used for intern) doesn't apply. Box the closure (a Swift heap object, so the
++// existing swift_retain/release in IAGRetainClosureC/IAGReleaseClosure own its
++// lifetime) and pass a non-capturing @convention(c) trampoline that re-enters Swift.
++private final class _UpdateBox {
++    let fn: (UnsafeMutableRawPointer, AnyAttribute) -> Void
++    init(_ f: @escaping (UnsafeMutableRawPointer, AnyAttribute) -> Void) { self.fn = f }
++}
++private let _updateTrampoline:
++    @convention(c) (UnsafeMutableRawPointer, AnyAttribute, UnsafeRawPointer?) -> Void = { body, attribute, context in
++        Unmanaged<_UpdateBox>.fromOpaque(context!).takeUnretainedValue().fn(body, attribute)
++    }
++#else
+ @_silgen_name("IAGRetainClosure")
+ func IAGRetainClosure(
+     _ closure: (UnsafeMutableRawPointer, AnyAttribute) -> Void
+ ) -> _IAGClosureStorage
++#endif
+ 
+ extension _AttributeType {
+ 
+@@ -109,7 +147,17 @@ extension _AttributeType {
+             flags.insert(.hasDestroySelf)
+         }
+ 
++        #if arch(wasm32)
++        let _updateBox = _UpdateBox(update)
++        let retainedUpdate = withExtendedLifetime(_updateBox) {
++            IAGRetainClosureC(
++                unsafeBitCast(_updateTrampoline, to: UnsafeRawPointer.self),
++                Unmanaged.passUnretained(_updateBox).toOpaque()
++            )
++        }
++        #else
+         let retainedUpdate = IAGRetainClosure(update)
++        #endif
+         let conformance = unsafeBitCast(
+             selfType as any _AttributeBody.Type,
+             to: ProtocolConformance.self
+diff --git a/Sources/Compute/Graph/Graph.swift b/Sources/Compute/Graph/Graph.swift
+index 82c9fec..8e8eb42 100644
+--- a/Sources/Compute/Graph/Graph.swift
++++ b/Sources/Compute/Graph/Graph.swift
+@@ -1,16 +1,23 @@
+ import ComputeCxx
+ 
++#if !arch(wasm32)
+ @_silgen_name("IAGGraphSetOutputValue")
+ @inline(__always)
+ @inlinable
+ func IAGGraphSetOutputValue(_ value: UnsafeRawPointer, of type: Metadata)
++#endif
+ 
+ extension Graph {
+ 
+     @inline(__always)
+-    @inlinable
+     public static func setOutputValue<Value>(_ value: UnsafePointer<Value>) {
++        #if arch(wasm32)
++        // WASI: call the C-imported IAGGraphSetOutputValueC (header-declared) so Swift
++        // uses the C ABI; @_silgen_name mislowers the call on wasm.
++        IAGGraphSetOutputValueC(UnsafeRawPointer(value), Metadata(Value.self))
++        #else
+         IAGGraphSetOutputValue(UnsafeRawPointer(value), of: Metadata(Value.self))
++        #endif
+     }
+ 
+     @_transparent
+diff --git a/Sources/ComputeCxx/Attribute/AttributeType/AttributeType.h b/Sources/ComputeCxx/Attribute/AttributeType/AttributeType.h
+index 73d59ce..08137d7 100644
+--- a/Sources/ComputeCxx/Attribute/AttributeType/AttributeType.h
++++ b/Sources/ComputeCxx/Attribute/AttributeType/AttributeType.h
+@@ -16,7 +16,13 @@ class AttributeType {
+   private:
+     swift::metadata *_body_metadata;
+     swift::metadata *_value_metadata;
++#if defined(__wasi__)
++    // WASI: plain C-CC thunk (Swift passes a @convention(c) trampoline; the swiftcall
++    // closure ABI mismatches across swiftc/clang on wasm).
++    void (*_update)(void *body, IAGAttribute attribute, void *context);
++#else
+     void (*_update)(void *body, IAGAttribute attribute, void *context IAG_SWIFT_CONTEXT) IAG_SWIFT_CC(swift);
++#endif
+     void *_update_context;
+     const IAGAttributeVTable *_vtable;
+     IAGAttributeTypeFlags _flags;
+diff --git a/Sources/ComputeCxx/Closure/IAGClosure.cpp b/Sources/ComputeCxx/Closure/IAGClosure.cpp
+index cc06871..363f046 100644
+--- a/Sources/ComputeCxx/Closure/IAGClosure.cpp
++++ b/Sources/ComputeCxx/Closure/IAGClosure.cpp
+@@ -11,6 +11,17 @@ IAGClosureStorage IAGRetainClosure(const void *thunk, const void *_Nullable cont
+     return IAGClosureStorage((void *)thunk, retained_context);
+ }
+ 
++#if defined(__wasi__)
++IAGClosureStorage IAGRetainClosureC(const void *thunk, const void *_Nullable context) {
++    const void *retained_context = context;
++    if (context) {
++        void *mutable_context = const_cast<void *>(context);
++        retained_context = ::swift::swift_retain(reinterpret_cast<::swift::HeapObject *>(mutable_context));
++    }
++    return IAGClosureStorage((void *)thunk, retained_context);
++}
++#endif
++
+ void IAGReleaseClosure(IAGClosureStorage closure) {
+     if (closure.context) {
+         void *mutable_context = const_cast<void *>(closure.context);
+diff --git a/Sources/ComputeCxx/Comparison/LayoutDescriptor.cpp b/Sources/ComputeCxx/Comparison/LayoutDescriptor.cpp
+index aaef2bb..e2170c9 100644
+--- a/Sources/ComputeCxx/Comparison/LayoutDescriptor.cpp
++++ b/Sources/ComputeCxx/Comparison/LayoutDescriptor.cpp
+@@ -1,3 +1,4 @@
++typedef unsigned int uint; // [wasm32] wasi-libc lacks the BSD alias
+ #include "LayoutDescriptor.h"
+ 
+ #include <cstring> 
+@@ -558,7 +559,7 @@ bool compare_indirect(ValueLayout *layout_ref, const swift::metadata &enum_type,
+ 
+         ValueLayout layout = *layout_ref == ValueLayoutTrivial ? nullptr : *layout_ref;
+ 
+-        static_assert(sizeof(::swift::HeapObject) == 0x10);
++        // [wasm32] static_assert(sizeof(::swift::HeapObject) == 0x10);
+         size_t alignment_mask = layout_type.getValueWitnesses()->getAlignmentMask();
+         size_t offset = (sizeof(::swift::HeapObject) + alignment_mask) & ~alignment_mask;
+         unsigned char *lhs_value = (unsigned char *)(*(unsigned char **)lhs_copy + offset);
+diff --git a/Sources/ComputeCxx/Data/Page.h b/Sources/ComputeCxx/Data/Page.h
+index 0c82918..db009e8 100644
+--- a/Sources/ComputeCxx/Data/Page.h
++++ b/Sources/ComputeCxx/Data/Page.h
+@@ -20,7 +20,7 @@ struct page {
+     uint16_t bytes_list;
+     uint16_t const_bytes_list;
+ };
+-static_assert(sizeof(page) == 0x18);
++// [wasm32] static_assert(sizeof(page) == 0x18);
+ 
+ class page_ptr_list {
+   public:
+diff --git a/Sources/ComputeCxx/Data/Table.cpp b/Sources/ComputeCxx/Data/Table.cpp
+index ce1d178..5f1207e 100644
+--- a/Sources/ComputeCxx/Data/Table.cpp
++++ b/Sources/ComputeCxx/Data/Table.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include <algorithm>
+ #include <cerrno>
++#include <cstring>
+ #include <sys/mman.h>
+ #if TARGET_OS_MAC
+ #include <mach/mach.h>
+@@ -46,7 +47,9 @@ std::unique_ptr<void, table::malloc_zone_deleter> table::alloc_persistent(size_t
+ table::table() {
+     constexpr vm_size_t initial_size = 32 * pages_per_map * page_size;
+ 
+-#if TARGET_OS_MAC
++#if TARGET_OS_MAC || defined(__wasi__)
++    // WASI: take the macOS-shaped anonymous-mmap path (wasi-libc's emulated mman
++    // honors MAP_PRIVATE|MAP_ANON). No memfd_create / MAP_SHARED (unsupported, WASI#304).
+     void *region = mmap(nullptr, initial_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+     if (region == MAP_FAILED) {
+         precondition_failure("memory allocation failure (%u bytes, %u)", initial_size, errno);
+@@ -82,7 +85,7 @@ table::table() {
+ }
+ 
+ table::~table() {
+-#if !TARGET_OS_MAC
++#if !TARGET_OS_MAC && !defined(__wasi__)
+     close(_vm_region_fd);
+ #endif
+     if (_malloc_zone) {
+@@ -104,7 +107,17 @@ void table::grow_region() {
+         precondition_failure("exhausted data space");
+     }
+ 
+-#if TARGET_OS_MAC
++#if defined(__wasi__)
++    // WASI: emulated mmap is anonymous-only (no vm_remap, no MAP_SHARED). Reserve a
++    // fresh, bigger anonymous region and memcpy the old contents in. The old mapping
++    // is retained in _remapped_regions and ptr<T> is offset-based, so already-handed-
++    // out pointers stay valid against whichever base resolved them.
++    void *new_region = mmap(nullptr, new_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
++    if (new_region == MAP_FAILED) {
++        precondition_failure("memory allocation failure (%u bytes, %u)", new_size, errno);
++    }
++    memcpy(new_region, reinterpret_cast<void *>(_vm_region_base_address), _vm_region_size);
++#elif TARGET_OS_MAC
+     void *new_region = mmap(nullptr, new_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+     if (new_region == MAP_FAILED) {
+         precondition_failure("memory allocation failure (%u bytes, %u)", new_size, errno);
+@@ -280,7 +293,11 @@ void table::make_pages_reusable(uint32_t page_index, bool reusable) {
+ #else
+     int advice = reusable ? MADV_FREE : MADV_NORMAL;
+ #endif
++#if !defined(__wasi__)
+     madvise(mapped_pages_address, mapped_pages_size, advice);
++#else
++    (void)mapped_pages_address; (void)advice;  // WASI: no madvise (advisory page-reuse only)
++#endif
+ 
+     static bool unmap_reusable = []() -> bool {
+         char *result = getenv("IAG_UNMAP_REUSABLE");
+diff --git a/Sources/ComputeCxx/Graph/Graph.cpp b/Sources/ComputeCxx/Graph/Graph.cpp
+index 01b773d..64c90fd 100644
+--- a/Sources/ComputeCxx/Graph/Graph.cpp
++++ b/Sources/ComputeCxx/Graph/Graph.cpp
+@@ -1,3 +1,4 @@
++typedef unsigned int uint; // [wasm32] wasi-libc lacks the BSD alias
+ #include "Graph.h"
+ 
+ #if TARGET_OS_MAC
+@@ -307,8 +308,23 @@ uint32_t Graph::intern_type(const swift::metadata *metadata, ClosureFunctionVP<c
+     if (type_id) {
+         return type_id;
+     }
++    return register_attribute_type(metadata, (AttributeType *)make_type());
++}
++
++#if defined(__wasi__)
++// WASI: invoke a plain C-CC callback to materialize the type (no swiftcall across the
++// language boundary), then register it the same way intern_type does.
++uint32_t Graph::intern_type_c(const swift::metadata *metadata,
++                              const void *(*make)(const void *), const void *ctx) {
++    uint32_t type_id = uint32_t(reinterpret_cast<uintptr_t>(_interned_types.lookup(metadata, nullptr)));
++    if (type_id) {
++        return type_id;
++    }
++    return register_attribute_type(metadata, (AttributeType *)make(ctx));
++}
++#endif
+ 
+-    AttributeType *type = (AttributeType *)make_type();
++uint32_t Graph::register_attribute_type(const swift::metadata *metadata, AttributeType *type) {
+     type->init_body_offset();
+ 
+     static bool prefetch_layouts = []() -> bool {
+@@ -322,7 +338,7 @@ uint32_t Graph::intern_type(const swift::metadata *metadata, ClosureFunctionVP<c
+         type->fetch_layout();
+     }
+ 
+-    type_id = _types.size();
++    uint32_t type_id = _types.size();
+     if (type_id >= 0xffffff) {
+         precondition_failure("overflowed max type id: %u", type_id);
+     }
+@@ -1821,7 +1837,7 @@ void Graph::propagate_dirty(AttributeID attribute) {
+ namespace {
+ 
+ inline size_t find_attribute(const AttributeID *attributes, AttributeID search, uint64_t count) {
+-    static_assert(sizeof(wchar_t) == sizeof(AttributeID));
++    // [wasm32] static_assert(sizeof(wchar_t) == sizeof(AttributeID));
+ 
+     const AttributeID *location = (const AttributeID *)wmemchr((const wchar_t *)attributes, search, count);
+     if (location == nullptr) {
+diff --git a/Sources/ComputeCxx/Graph/Graph.h b/Sources/ComputeCxx/Graph/Graph.h
+index e706329..faf1843 100644
+--- a/Sources/ComputeCxx/Graph/Graph.h
++++ b/Sources/ComputeCxx/Graph/Graph.h
+@@ -284,6 +284,13 @@ class Graph {
+     const AttributeType &attribute_ref(data::ptr<Node> attribute, const void *_Nullable *_Nullable ref_out) const;
+ 
+     uint32_t intern_type(const swift::metadata *metadata, ClosureFunctionVP<const IAGAttributeType *> make_type);
++    uint32_t register_attribute_type(const swift::metadata *metadata, AttributeType *type);
++#if defined(__wasi__)
++    // WASI: plain C-CC callback path (swiftcall closures don't lower consistently
++    // across swiftc/clang on wasm -> call_indirect signature_mismatch).
++    uint32_t intern_type_c(const swift::metadata *metadata,
++                           const void *(*make)(const void *), const void *ctx);
++#endif
+ 
+     // MARK: Attributes
+ 
+diff --git a/Sources/ComputeCxx/Graph/IAGGraph.cpp b/Sources/ComputeCxx/Graph/IAGGraph.cpp
+index c2f130a..ab95327 100644
+--- a/Sources/ComputeCxx/Graph/IAGGraph.cpp
++++ b/Sources/ComputeCxx/Graph/IAGGraph.cpp
+@@ -187,6 +187,18 @@ uint32_t IAGGraphInternAttributeType(IAGUnownedGraphContextRef unowned_graph, IA
+         metadata, IAG::ClosureFunctionVP<const IAGAttributeType *>(make_attribute_type, make_attribute_type_context));
+ }
+ 
++#if defined(__wasi__)
++// WASI: plain C-CC callback entry (the swiftcall closure ABI above does not lower
++// consistently across swiftc/clang on wasm). The Swift side keeps the closure call
++// in-language and passes a non-capturing @convention(c) thunk + a context pointer.
++extern "C" uint32_t IAGGraphInternAttributeTypeC(IAGUnownedGraphContextRef unowned_graph, IAGTypeID type,
++                                                 const void *(*make)(const void *), const void *ctx) {
++    auto metadata = reinterpret_cast<const IAG::swift::metadata *>(type);
++    IAG::Graph *graph = reinterpret_cast<IAG::Graph *>(unowned_graph);
++    return graph->intern_type_c(metadata, make, ctx);
++}
++#endif
++
+ void IAGGraphVerifyType(IAGAttribute attribute, IAGTypeID type) {
+     auto attribute_id = IAG::AttributeID(attribute);
+     attribute_id.validate_data_offset();
+@@ -899,6 +911,14 @@ void IAGGraphSetOutputValue(const void *value, IAGTypeID type) {
+     graph->value_set_internal(frame.attribute, *frame.attribute.get(), value, *metadata);
+ }
+ 
++#if defined(__wasi__)
++// WASI: non-refined C variant so Swift imports it with the C ABI (@_silgen_name
++// mislowers the call on wasm -> signature_mismatch).
++extern "C" void IAGGraphSetOutputValueC(const void *value, IAGTypeID type) {
++    IAGGraphSetOutputValue(value, type);
++}
++#endif
++
+ #pragma mark - Trace
+ 
+ void IAGGraphStartTracing(IAGGraphRef graph, IAGGraphTraceOptions trace_options) { IAGGraphStartTracing2(graph, trace_options, NULL); }
+diff --git a/Sources/ComputeCxx/Graph/Tree/TreeElement.h b/Sources/ComputeCxx/Graph/Tree/TreeElement.h
+index e920e13..98acf33 100644
+--- a/Sources/ComputeCxx/Graph/Tree/TreeElement.h
++++ b/Sources/ComputeCxx/Graph/Tree/TreeElement.h
+@@ -43,7 +43,7 @@ struct Graph::TreeElement {
+ 
+     Graph::TreeValueID first_value;
+ };
+-static_assert(sizeof(Graph::TreeElement) == 0x20);
++// [wasm32] static_assert(sizeof(Graph::TreeElement) == 0x20);
+ 
+ } // namespace IAG
+ 
+diff --git a/Sources/ComputeCxx/Graph/Tree/TreeValue.h b/Sources/ComputeCxx/Graph/Tree/TreeValue.h
+index a2aacdd..15442d1 100644
+--- a/Sources/ComputeCxx/Graph/Tree/TreeValue.h
++++ b/Sources/ComputeCxx/Graph/Tree/TreeValue.h
+@@ -37,7 +37,7 @@ struct Graph::TreeValue {
+     uint32_t flags;
+     TreeValueID next;
+ };
+-static_assert(sizeof(Graph::TreeValue) == 0x18);
++// [wasm32] static_assert(sizeof(Graph::TreeValue) == 0x18);
+ 
+ } // namespace IAG
+ 
+diff --git a/Sources/ComputeCxx/Graph/UpdateStack.cpp b/Sources/ComputeCxx/Graph/UpdateStack.cpp
+index d7b6270..e279fe1 100644
+--- a/Sources/ComputeCxx/Graph/UpdateStack.cpp
++++ b/Sources/ComputeCxx/Graph/UpdateStack.cpp
+@@ -105,7 +105,9 @@ bool Graph::UpdateStack::push_slow(data::ptr<Node> node_ptr, Node &node, bool ig
+         Frame *top = global_top();
+         if (top != nullptr && !top->cyclic) {
+             // First time we are detecting a cycle for this attribute
+-            this->_graph->print_cycle(node_ptr);
++#if !defined(__wasi__)
++            this->_graph->print_cycle(node_ptr);  // defined only in Apple-only Graph.mm
++#endif
+         }
+ 
+         if (node.is_value_initialized()) {
+diff --git a/Sources/ComputeCxx/Subgraph/NodeCache.h b/Sources/ComputeCxx/Subgraph/NodeCache.h
+index a1b4457..4893a3a 100644
+--- a/Sources/ComputeCxx/Subgraph/NodeCache.h
++++ b/Sources/ComputeCxx/Subgraph/NodeCache.h
+@@ -21,7 +21,7 @@ class Subgraph::NodeCache {
+         Item *lru;
+         uint32_t type_id;
+     };
+-    static_assert(sizeof(Type) == 40);
++    // [wasm32] static_assert(sizeof(Type) == 40);
+     struct Item {
+         uint64_t hash_and_age;
+         data::ptr<Type> type;
+@@ -32,7 +32,7 @@ class Subgraph::NodeCache {
+         void increment_age() { hash_and_age += 1; }
+         void reset_age() { hash_and_age &= 0xffffffffffffff00; }
+     };
+-    static_assert(sizeof(Item) == 32);
++    // [wasm32] static_assert(sizeof(Item) == 32);
+     struct ItemKey {
+         uint64_t hash_and_age; // age bits are ignored
+         data::ptr<Type> type;
+diff --git a/Sources/ComputeCxx/include/ComputeCxx/IAGClosure.h b/Sources/ComputeCxx/include/ComputeCxx/IAGClosure.h
+index adf8d04..e9f9388 100644
+--- a/Sources/ComputeCxx/include/ComputeCxx/IAGClosure.h
++++ b/Sources/ComputeCxx/include/ComputeCxx/IAGClosure.h
+@@ -15,6 +15,14 @@ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+ IAGClosureStorage IAGRetainClosure(const void *thunk, const void *_Nullable context);
+ 
++#if defined(__wasi__)
++// WASI: non-refined C variant so Swift imports it with the C ABI (passes a plain
++// @convention(c) trampoline as the thunk; @_silgen_name lowers the closure with the
++// Swift CC -> call_indirect signature_mismatch). Same retain semantics.
++IAG_EXPORT
++IAGClosureStorage IAGRetainClosureC(const void *thunk, const void *_Nullable context);
++#endif
++
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+ void IAGReleaseClosure(IAGClosureStorage closure);
+diff --git a/Sources/ComputeCxx/include/ComputeCxx/IAGGraph.h b/Sources/ComputeCxx/include/ComputeCxx/IAGGraph.h
+index 6879d30..7555b00 100644
+--- a/Sources/ComputeCxx/include/ComputeCxx/IAGGraph.h
++++ b/Sources/ComputeCxx/include/ComputeCxx/IAGGraph.h
+@@ -113,6 +113,15 @@ uint32_t IAGGraphInternAttributeType(IAGUnownedGraphContextRef graph, IAGTypeID
+                                         const void *_Nullable context IAG_SWIFT_CONTEXT) IAG_SWIFT_CC(swift),
+                                     const void *_Nullable make_attribute_type_context);
+ 
++#if defined(__wasi__)
++// WASI: plain C-CC variant (declared in the header so Swift imports it with the C
++// ABI; @_silgen_name lowers the function-pointer arg with the Swift CC and traps).
++IAG_EXPORT
++uint32_t IAGGraphInternAttributeTypeC(IAGUnownedGraphContextRef graph, IAGTypeID type,
++                                      const void *_Nullable (*_Nonnull make)(const void *_Nullable),
++                                      const void *_Nullable context);
++#endif
++
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+ void IAGGraphVerifyType(IAGAttribute attribute, IAGTypeID type) IAG_SWIFT_NAME(IAGAttribute.verifyType(self:type:));
+@@ -358,6 +367,11 @@ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+ void IAGGraphSetOutputValue(const void *value, IAGTypeID type);
+ 
++#if defined(__wasi__)
++IAG_EXPORT
++void IAGGraphSetOutputValueC(const void *value, IAGTypeID type);
++#endif
++
+ // MARK: Description
+ 
+ #if TARGET_OS_MAC
