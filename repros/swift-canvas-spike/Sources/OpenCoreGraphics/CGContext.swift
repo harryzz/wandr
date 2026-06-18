@@ -100,6 +100,14 @@ public final class CGContext: Hashable {
     public func rotate(by radians: CGFloat) {
         wasi_canvas_draw_method_canvas_rotate(canvas, Float(radians * 180.0 / .pi))
     }
+    /// Concatenate an affine transform onto the CTM (for DisplayList `.transform` effects).
+    public func concatenate(_ t: CGAffineTransform) {
+        var m = wasi_canvas_types_transform_t(
+            m00: Float(t.a),  m01: Float(t.c),  m02: Float(t.tx),
+            m10: Float(t.b),  m11: Float(t.d),  m12: Float(t.ty),
+            m20: 0,           m21: 0,           m22: 1)
+        wasi_canvas_draw_method_canvas_concat(canvas, &m)
+    }
 
     // ── paint state ─────────────────────────────────────────────────────────────
     public func setFillColor(_ c: CGColor) { fillColor = c }

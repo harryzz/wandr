@@ -34,75 +34,54 @@ public func onFrame(_ nanos: UInt64) {
     let m = max(16, w * 0.06)
     cg.clear(CGColor(red: 0.063, green: 0.078, blue: 0.094, alpha: 1)) // dark bg
 
-    // (1) DASH — dashed border via the CoreGraphics dash API.
-    cg.setStrokeColor(CGColor(red: 0.85, green: 0.85, blue: 0.9, alpha: 1))
-    cg.setLineWidth(max(3, w * 0.012))
-    cg.setLineDash(phase: 0, lengths: [w * 0.05, w * 0.03])
-    cg.beginPath()
-    cg.addRect(CGRect(x: m, y: h * 0.04, width: w - 2 * m, height: h * 0.10))
-    cg.strokePath()
-    cg.setLineDash(phase: 0, lengths: [])
+    // Option-B prototype: build an OpenSwiftUI-style DisplayList and render it through the
+    // wandr backend (render(_:into:)). Exercises content (color/shape/text) + the recursive
+    // effect tree (opacity/clip/transform, incl. nesting) → CGContext → wasi:canvas.
+    let blue  = CGColor(red: 0.20, green: 0.40, blue: 0.85, alpha: 1)
+    let green = CGColor(red: 0.20, green: 0.75, blue: 0.40, alpha: 1)
+    let amber = CGColor(red: 0.95, green: 0.65, blue: 0.20, alpha: 1)
+    let white = CGColor(red: 0.92, green: 0.94, blue: 1.00, alpha: 1)
+    let red   = CGColor(red: 0.90, green: 0.25, blue: 0.30, alpha: 1)
 
-    // (1b) IMAGE — a generated RGBA8 bitmap (R ramps x, G ramps y) drawn inside
-    // the dashed border via makeImage + draw(_:in:).
-    let iw = 64, ih = 64
-    var px = [UInt8]()
-    px.reserveCapacity(iw * ih * 4)
-    for y in 0..<ih {
-        for x in 0..<iw {
-            px.append(UInt8(x * 255 / (iw - 1)))   // R
-            px.append(UInt8(y * 255 / (ih - 1)))   // G
-            px.append(160)                          // B
-            px.append(255)                          // A
-        }
+    func rc(_ x: CGFloat, _ y: CGFloat, _ rw: CGFloat, _ rh: CGFloat) -> CGRect {
+        CGRect(x: x, y: y, width: rw, height: rh)
     }
-    if let img = cg.makeImage(rgba: px, width: iw, height: ih) {
-        cg.draw(img, in: CGRect(x: m * 1.5, y: h * 0.055, width: w - 3 * m, height: h * 0.075))
+    func tri(_ rw: CGFloat, _ rh: CGFloat) -> CGPath {   // triangle in a local rw×rh box
+        CGPath(elements: [.moveToPoint(CGPoint(x: rw / 2, y: 0)),
+                          .addLineToPoint(CGPoint(x: rw, y: rh)),
+                          .addLineToPoint(CGPoint(x: 0, y: rh)),
+                          .closeSubpath])
     }
+    let cw = w - 2 * m
 
-    // (2) SHADOW — blue rect with an offset, blurred, cyan shadow.
-    cg.setShadow(offset: (w * 0.03, h * 0.01), blur: w * 0.02,
-                 color: CGColor(red: 0.2, green: 0.9, blue: 1.0, alpha: 0.8))
-    cg.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.8, alpha: 1))
-    cg.fill(CGRect(x: w * 0.28, y: h * 0.18, width: w * 0.44, height: h * 0.09))
-    cg.clearShadow()
-
-    // (3) LINEAR GRADIENT — blue→cyan across a rect.
-    let lin = CGGradient(colors: [CGColor(red: 0.1, green: 0.3, blue: 0.9, alpha: 1),
-                                  CGColor(red: 0.1, green: 0.9, blue: 0.9, alpha: 1)])
-    cg.drawLinearGradient(lin, start: CGPoint(x: m, y: 0), end: CGPoint(x: w - m, y: 0),
-                          in: CGRect(x: m, y: h * 0.31, width: w - 2 * m, height: h * 0.10))
-
-    // (4) CLIP + RADIAL GRADIENT — radial gradient clipped to a triangle.
-    cg.saveGState()
-    cg.beginPath()
-    cg.move(to: CGPoint(x: m, y: h * 0.63))
-    cg.addLine(to: CGPoint(x: w - m, y: h * 0.63))
-    cg.addLine(to: CGPoint(x: w * 0.5, y: h * 0.45))
-    cg.closePath()
-    cg.clip()   // clip subsequent drawing to the triangle
-    let rad = CGGradient(colors: [CGColor(red: 1, green: 1, blue: 0.9, alpha: 1),
-                                  CGColor(red: 0.6, green: 0.2, blue: 0.8, alpha: 1)])
-    cg.drawRadialGradient(rad, center: CGPoint(x: w * 0.5, y: h * 0.57), radius: w * 0.45,
-                          in: CGRect(x: 0, y: h * 0.44, width: w, height: h * 0.20))
-    cg.restoreGState()
-
-    // (5) MASK-CLIP — green content clipped to a soft (60% alpha) oval mask.
-    cg.beginTransparencyLayer()
-    cg.setBlendMode(.normal)
-    cg.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.6))
-    cg.fillEllipse(in: CGRect(x: w * 0.22, y: h * 0.69, width: w * 0.56, height: h * 0.20))
-    cg.setBlendMode(.sourceIn)
-    cg.setFillColor(CGColor(red: 0.2, green: 0.7, blue: 0.35, alpha: 1))
-    cg.fill(CGRect(x: m, y: h * 0.67, width: w - 2 * m, height: h * 0.24))
-    cg.setBlendMode(.normal)
-    cg.endTransparencyLayer()
-
-    // (6) TEXT — host-shaped paragraph (wasi:canvas/layout) via CGContext.drawString.
-    cg.drawString("Swift · OpenCoreGraphics → wasi:canvas",
-                  at: CGPoint(x: m, y: h * 0.925), size: max(14, w * 0.05),
-                  color: CGColor(red: 0.92, green: 0.94, blue: 1.0, alpha: 1),
-                  maxWidth: w - 2 * m)
+    let list = DisplayList([
+        // .content(.color) — frame-filling solid
+        .init(.content(.color(blue)), frame: rc(m, h * 0.04, cw, h * 0.10)),
+        // .content(.shape) — filled triangle
+        .init(.content(.shape(tri(cw, h * 0.12), green)), frame: rc(m, h * 0.17, cw, h * 0.12)),
+        // .content(.text)
+        .init(.content(.text("DisplayList → CGContext → wasi:canvas", max(14, w * 0.045), white)),
+              frame: rc(m, h * 0.31, cw, h * 0.06)),
+        // .effect(.opacity) wrapping a sub-list (amber at 45%)
+        .init(.effect(.opacity(115), DisplayList([
+            .init(.content(.color(amber)), frame: rc(0, 0, cw, h * 0.10)),
+        ])), frame: rc(m, h * 0.39, cw, h * 0.10)),
+        // .effect(.clip) — red sub-list clipped to a triangle
+        .init(.effect(.clip(tri(cw, h * 0.12)), DisplayList([
+            .init(.content(.color(red)), frame: rc(0, 0, cw, h * 0.12)),
+        ])), frame: rc(m, h * 0.51, cw, h * 0.12)),
+        // .effect(.transform) — rotated sub-list, with a NESTED .opacity (recursion depth)
+        .init(.effect(.transform(CGAffineTransform(rotationAngle: 0.10)), DisplayList([
+            .init(.content(.color(green)), frame: rc(0, 0, cw * 0.5, h * 0.09)),
+            .init(.effect(.opacity(150), DisplayList([
+                .init(.content(.color(white)), frame: rc(0, 0, cw * 0.25, h * 0.05)),
+            ])), frame: rc(cw * 0.55, 0, cw * 0.25, h * 0.05)),
+        ])), frame: rc(m, h * 0.66, cw, h * 0.12)),
+        // bottom label
+        .init(.content(.text("wandr DisplayList backend (Option B)", max(12, w * 0.04), white)),
+              frame: rc(m, h * 0.90, cw, h * 0.06)),
+    ])
+    render(list, into: cg)
 
     wasi_canvas_draw_canvas_drop_own(bufOwn)
     wasi_canvas_embedding_method_canvas_context_present(ctx)

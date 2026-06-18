@@ -721,3 +721,38 @@ its POSIX deps + vendor the Swift runtime-metadata header chain + the `-lswiftCx
 link path — **with no fundamental blocker**. That materially upgrades the whole
 OpenSwiftUI-on-wandr outlook: its deepest dependency (OAG on WASI) is now
 toolchain-de-risked.
+
+## Rendering seam decided + Option-B prototype device-verified (2026-06-18)
+
+Explored how OpenSwiftUI renders before picking a rasterizer. Finding: OpenSwiftUI
+builds **its own `DisplayList`** (`OpenSwiftUICore/Render/DisplayList`) — a concrete
+item model (`.color`/`.image`/`.shape(Path,Paint,FillStyle)`/`.text` + effects
+`opacity`/`clip`/`blur`/`shadow`/`transform`) — and draws it via **pluggable backends**
+(`UIKitDisplayList`, `AppKitDisplayList`, `RenderBoxView`, GTK, `StdoutRendererHost`).
+
+So **OpenRenderBox is just the *Apple* backend** — implementing `OpenRenderBox.render(
+in:)` would be the wrong seam. The right move (Option B) is a **wandr DisplayList
+drawing backend** parallel to UIKit/GTK, mapping DisplayList → our **CGContext →
+wasi:canvas** (the renderer host is proven pluggable by `StdoutRendererHost`, not
+Apple-bound). Also note: OpenRenderBox has **no complete third-party engine** (unlike
+AttributeGraph's Compute) — its own `render(in:)` is a stub — which further rules out
+that path.
+
+**Prototyped Option B in isolation** (no full OpenSwiftUI build needed): a faithful
+`DisplayList` mirror + a recursive `render(_:into: CGContext)` drawer, on the task-114
+spike (`repros/swift-canvas-spike`, P4). ✅ **Device-verified (Pixel 2 XL)** — a scene
+of content (color/shape/text) + nested effects (an `.opacity` inside a `.transform`)
+renders correctly through CGContext→wasi:canvas, no traps. So OpenSwiftUI's DisplayList
+maps 1:1 onto our shipped CGContext; the real `DisplayList.Item` types drop straight
+into this drawer once OpenSwiftUICore builds on wasm.
+
+**Updated critical path to `eleev/swiftui-2048`:**
+1. ✅ Compute engine on wasm (`harryzz/Compute`, reactive `42`)
+2. ✅ OAG-Shims + Compute backend on wasm (reactive `42` via the API OpenSwiftUI uses;
+   `harryzz/Compute` branch `wasm32-wasip1-osp`)
+3. ✅ Rendering seam decided + the wandr DisplayList→CGContext backend prototyped &
+   device-verified (Option B)
+4. 🔲 **Port OpenSwiftUICore/OpenSwiftUI to wasm** — the big remaining lift (uses #2 +
+   OpenCoreGraphics); then slot the real DisplayList types into the #3 drawer + a
+   `WandrRenderer` host (like `StdoutRendererHost`)
+5. 🔲 `eleev/swiftui-2048`

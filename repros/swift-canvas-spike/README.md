@@ -203,3 +203,29 @@ A small wasmtime **component** host that implements `wandr:swift-spike/host`
 - `generated/` — `wit-bindgen c` output (the C ABI surface) + `module.modulemap`.
 - `Sources/spike.swift` — the guest: `@_cdecl` export + C-interop imports.
 - `build.sh` — Swift → wasip1 → component pipeline.
+
+## P4 (2026-06-18) — wandr DisplayList rendering backend (Option B), device-verified
+
+The renderer seam for OpenSwiftUI-on-wandr. OpenSwiftUI builds **its own**
+`DisplayList` (`OpenSwiftUICore/Render/DisplayList/DisplayList.swift`) and draws it via
+pluggable backends (`UIKitDisplayList`/`AppKitDisplayList`/RenderBox/GTK/Stdout).
+**RenderBox is just the Apple backend** — on wasm we add our own backend instead of
+implementing `OpenRenderBox.render(in:)`.
+
+Prototyped that backend in isolation (before OpenSwiftUI builds on wasm):
+- `Sources/SwiftSpike/DisplayList.swift` — faithful subset mirror of OpenSwiftUI's
+  model: `Item{frame, .content(.color/.shape/.text/.image) | .effect(.opacity/.clip/
+  .transform, childList)}` (same recursive item/effect shape).
+- `Sources/SwiftSpike/DisplayListRenderer.swift` — `render(_:into: CGContext)`, the
+  recursive drawer (analog of `UIKitDisplayList`) → our `CGContext` → `wasi:canvas`.
+- `CGContext.concatenate(_:)` added (via `canvas.concat`) for `.transform`.
+
+✅ **DEVICE-VERIFIED (Pixel 2 XL)** — a sample scene (color/shape/text + nested
+opacity/clip/transform effects, incl. an `.opacity` inside a `.transform`) renders
+correctly: `eglSwapBuffers` → `rendered frame 0/1/2`, no traps. Proves OpenSwiftUI's
+DisplayList maps 1:1 onto our shipped CGContext; the real `DisplayList.Item` types
+substitute straight into this drawer once OpenSwiftUICore builds on wasm.
+
+Deploy note: AOT-install via `wandr-host --install <pkg>` (needs
+`LD_LIBRARY_PATH=/data/local/tmp` for `libc++_shared.so`); on relaunch, **kill the old
+instance first** — the arbiter foregrounds a stale pid otherwise (which runs old code).
