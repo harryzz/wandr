@@ -99,11 +99,23 @@ Acquiring the context **fresh each frame** (`get-context` → use → drop) work
 (The keyguard caches fine in Rust, so this is a wit-bindgen-c/Swift usage nuance —
 revisit only if per-frame `get-context` ever shows cost.)
 
-### Next — P2.3 (CGContext)
-Implement OpenCoreGraphics's empty `CGContext` over exactly these `wasi:canvas`
-calls (the mapping in `docs/swift-openswiftui-wandr-feasibility.md`):
-`CGPath`→SVG path-data serializer, the save/restore + CTM state stack, and CG
-graphics-state → `paint` resolution per draw.
+## P2.3 (2026-06-18) — Swift draws via CoreGraphics (CGContext over wasi:canvas)
+
+`Sources/CoreGraphicsWasi/` implements OpenCoreGraphics's empty `CGContext` over
+`wasi:canvas`: state stack (`saveGState`/`restoreGState` → `canvas.save`/`restore`),
+CTM (`translateBy`/`scaleBy`/`rotate` → `translate`/`scale`/`rotate`), a current
+path serialized to SVG path-data (`move`/`addLine`/`addQuadCurve`/`addCurve`/
+`addRect`/`closePath`), fill/stroke color + line width resolved into a `paint`, and
+`fill`/`stroke`/`fillPath`/`strokePath`/`clear`. The guest's `on_frame` now draws
+with the **CoreGraphics API only** — no raw `wasi:canvas` in the guest.
+
+✅ **DEVICE-VERIFIED (Pixel 2 XL)** — same scene as P2.2 (dark bg + blue rect +
+green triangle), now via `CGContext`; `eglSwapBuffers` → rendered frames, no traps.
+
+Next: extend the `CGContext` surface (gradients, images, clipping, text) and the 3
+known gaps (dash, offset-shadow, mask-clip); optionally vendor OpenCoreGraphics's
+real `CGRect`/`CGPath`/`CGAffineTransform` and drop this body into its stub.
+SwiftUI (OpenRenderBox + OpenSwiftUI) remains the out-of-scope wall.
 
 ## Prerequisite (the gate)
 

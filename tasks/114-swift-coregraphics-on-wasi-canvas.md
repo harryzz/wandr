@@ -114,6 +114,15 @@ bundled libpixman 0.43.2 — WSLg bug, not the guest.)
 Gotcha fixed: caching the `get-context` `own` handle + re-borrow traps
 (`unknown handle index 0`); acquire fresh each frame.
 
-**Next: P2.3** — implement OpenCoreGraphics's empty `CGContext` over these
-`wasi:canvas` calls (`CGPath`→SVG path-data serializer; save/restore + CTM state
-stack; CG-state→`paint`); mapping in the feasibility doc.
+🟢 **P2.3 STARTED + DEVICE-VERIFIED (2026-06-18)** — Swift draws via
+**CoreGraphics**. `Sources/CoreGraphicsWasi/` implements OpenCoreGraphics's empty
+`CGContext` over `wasi:canvas`: state stack, CTM (translate/scale/rotate), current
+path → SVG path-data (move/addLine/addQuadCurve/addCurve/addRect/close), fill/stroke
+color + line width → `paint`, and fill/stroke/fillPath/strokePath/clear. `on_frame`
+now uses the CoreGraphics API only (no raw wasi:canvas). Device-verified on Pixel 2
+XL — same scene (blue rect + green triangle) via CGContext; eglSwapBuffers + frames,
+no traps.
+
+**Remaining (P2.3 cont.):** gradients, images, clipping, text; the 3 gaps (dash,
+offset-shadow, mask-clip); optionally vendor OpenCoreGraphics's real geometry and
+drop this body into its `CGContext.swift`. SwiftUI stays out of scope.

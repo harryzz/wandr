@@ -6,12 +6,14 @@ import PackageDescription
 let package = Package(
     name: "swift-canvas-spike",
     targets: [
-        // wit-bindgen-c generated surface (imports + the `run` export trampoline).
+        // wit-bindgen-c generated surface (imports + the export trampolines).
         .target(name: "CSwiftSpike"),
-        // The guest: implements exports_swift_spike_run via @_cdecl, calls imports.
+        // P2.3 — OpenCoreGraphics's CGContext implemented over wasi:canvas.
+        .target(name: "CoreGraphicsWasi", dependencies: ["CSwiftSpike"]),
+        // The guest: implements the reactor exports via @_cdecl, draws via CGContext.
         .executableTarget(
             name: "SwiftSpike",
-            dependencies: ["CSwiftSpike"]
+            dependencies: ["CSwiftSpike", "CoreGraphicsWasi"]
         ),
     ]
 )
