@@ -1,15 +1,13 @@
-// Task 114 P1 — minimal Swift custom-WIT round trip (toolchain unknown killer).
-// Swift imports `host`, exports `run`; build wasm32-wasi -> component (adapter) ->
-// call from a wasmtime component host. P2 swaps `host` for real wasi:canvas.
+// Task 114 P2 — Swift drives REAL wasi:canvas. The guest gets its canvas via the
+// embedding handoff (get-context -> get-current-buffer + graphics), draws, and
+// presents. Host implements wasi:canvas. P2 builds OpenCoreGraphics's CGContext
+// over these verbs; this world is the import surface.
 package wandr:swift-spike;
 
-interface host {
-  log: func(msg: string);
-  // stand-in for a wasi:canvas draw; argb = 0xAARRGGBB
-  draw-rect: func(x: f32, y: f32, w: f32, h: f32, argb: u32);
-}
-
 world swift-spike {
-  import host;
-  export run: func();
+  import wasi:canvas/types@0.0.2;
+  import wasi:canvas/draw@0.0.2;
+  import wasi:canvas/embedding@0.0.2;
+  // Host calls this to let the guest render one frame.
+  export render: func();
 }

@@ -44,9 +44,34 @@ Reproduce: `./build.sh` (builds the Swift component **and** runs it via the host
   `component new` needs no separate `embed`).
 - Target triple is `wasm32-unknown-wasip1`.
 
-Next: **P2** — swap the stand-in `host` interface for real `wasi:canvas` and
-implement OpenCoreGraphics's empty `CGContext` over it (see
-`tasks/114-swift-coregraphics-on-wasi-canvas.md`).
+## P2.1 DONE (2026-06-18) — Swift drives REAL wasi:canvas
+
+The spike's `wit/` now imports the real `wasi:canvas/{types,draw,embedding}@0.0.2`
+(subset copy in `wit/deps/`), and `Sources/SwiftSpike/spike.swift` exports
+`render`: it takes the embedding handoff (`get-context` → `get-current-buffer` +
+`present`), builds `paint` records, and calls `clear` / `draw-rect` / `draw-path`
+— all via Swift C-interop over the `wit-bindgen c` surface. It compiles and
+`wasm-tools component new --adapt` yields a **valid component importing
+`wasi:canvas/{types,draw,embedding}`** and exporting `render`.
+
+This answers the P2 de-risk: **Swift C-interop handles wasi:canvas's rich ABI**
+(flat `paint` struct, `rect`, resource own/borrow handles) — not just P1's
+scalars+string. Build: `./build.sh`.
+
+### P1 vs P2 in this repo
+- **P1** (custom-WIT round trip) is preserved: the self-contained runner is
+  `host/` (a wasmtime host implementing a toy `wandr:swift-spike/host`, frozen
+  against `host/wit/`). The full P1 result is at git `1d4fa6a7`.
+- **P2** is the live direction (`wit/` = real wasi:canvas).
+
+### Next — P2.2 (render) and P2.3 (CGContext)
+- **P2.2 render:** add the `wasi:input-handlers/frame-handler` export (+
+  `frame-pacing`) and a `package.toml`, then run on **wandr-host** (which renders
+  `wasi:canvas` with skia) on the desktop dev loop (task 101) → real pixels. No
+  bespoke host needed — wandr-host already implements the contract.
+- **P2.3 CGContext:** implement OpenCoreGraphics's empty `CGContext` over exactly
+  these `wasi:canvas` calls (the mapping in
+  `docs/swift-openswiftui-wandr-feasibility.md`).
 
 ## Prerequisite (the gate)
 

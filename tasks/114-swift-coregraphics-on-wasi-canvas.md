@@ -92,5 +92,18 @@ toolchain unknown is **killed**. Build facts (SwiftPM not raw swiftc; reactor vi
 `wasm32-unknown-wasip1`) captured in `repros/swift-canvas-spike/README.md` +
 `build.sh`. **P0 done** earlier (WIT + verified wit-bindgen-c surface).
 
-**Next: P2** — swap the stand-in `host` for real `wasi:canvas`; implement
-OpenCoreGraphics's empty `CGContext` over it (mapping in the feasibility doc).
+🟢 **P2.1 DONE (2026-06-18) — Swift drives REAL wasi:canvas.** The spike's `wit/`
+imports `wasi:canvas/{types,draw,embedding}@0.0.2` (subset in `wit/deps/`);
+`render` takes the embedding handoff and calls `clear`/`draw-rect`/`draw-path`
+with `paint` records, all via Swift C-interop over the `wit-bindgen c` surface.
+Compiles → `wasm-tools component new --adapt` → **valid component importing
+`wasi:canvas/{types,draw,embedding}`, exporting `render`**. De-risk answered:
+Swift handles wasi:canvas's rich ABI (flat `paint` struct, `rect`, resource
+own/borrow handles), not just P1's scalars+string. (P1 runner preserved,
+self-contained, in `host/` against `host/wit/`.)
+
+**Next: P2.2 (render)** — add `wasi:input-handlers/frame-handler` (+ frame-pacing)
++ `package.toml`, run on **wandr-host** (skia wasi:canvas impl already exists,
+`runtime/wandr-host/src/wasi_canvas_002_impl.rs`) on the desktop dev loop → real
+pixels; then **P2.3** — implement OpenCoreGraphics's empty `CGContext` over these
+calls (mapping in the feasibility doc).

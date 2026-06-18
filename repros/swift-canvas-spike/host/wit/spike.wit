@@ -1,0 +1,11 @@
+// P1 frozen world (the custom-WIT round-trip runner). The spike's top-level
+// wit/ moved on to P2 (real wasi:canvas); this keeps the P1 host self-contained.
+package wandr:swift-spike;
+interface host {
+  log: func(msg: string);
+  draw-rect: func(x: f32, y: f32, w: f32, h: f32, argb: u32);
+}
+world swift-spike {
+  import host;
+  export run: func();
+}

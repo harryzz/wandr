@@ -7,7 +7,7 @@ use wasmtime_wasi::p2::add_to_linker_sync;
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 mod bindings {
-    wasmtime::component::bindgen!({ world: "swift-spike", path: "../wit" });
+    wasmtime::component::bindgen!({ world: "swift-spike", path: "wit" });
 }
 use bindings::wandr::swift_spike::host::Host;
 
