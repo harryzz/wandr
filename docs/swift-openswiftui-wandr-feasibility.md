@@ -397,3 +397,39 @@ So OAG is **mature on Linux/Apple but not WASI-portable today** — the gate is 
 real native-layer port (POSIX shims for the Platform/Utilities C + the Swift
 runtime-metadata headers/ABI for the C++ core), upstream-shaped, not a wandr fork.
 This is the single biggest dependency for OpenSwiftUI-on-wandr.
+
+#### syslog shim probe + `Metadata.h` attainability (2026-06-18)
+Added a `syslog.h` shim (stderr-redirect, `static inline`) on the WASI build's
+include path → blocker #1 cleared; the build **marched straight to blocker #2**
+(`swift/Runtime/Metadata.h`), confirming the POSIX gaps are shimmable and the
+metadata coupling is the real wall.
+
+- **The right destination for that shim is `wasi:logging`, and wandr already
+  implements it** (`wit/deps-upstream/logging/logging.wit` @0.1.0-draft +
+  `runtime/wandr-host/src/consolidated_impl.rs`). So a production OAG-on-wandr
+  lowers `Platform/log.c` `syslog()` → `wasi:logging/logging.log(level, context,
+  message)` (`LOG_CRIT/ERR`→error/critical, `LOG_INFO`→info), reaching host
+  logging (logcat on device). Guest-side `wit-bindgen c` import; **host half done**.
+
+- **Is `Metadata.h` / the metadata ABI attainable on `wasm32-wasip1`? YES.**
+  Probed the wasm SDK's `libswiftCore.a` (wasi): it **defines 749 metadata symbols,
+  including the C++ `swift::TargetExistentialTypeMetadata<InProcess>` methods** that
+  `Metadata.h` declares — i.e. the exact runtime types OAG's C++ reflects, compiled
+  for wasm32. (Expected: WebAssembly is a tier-1 Swift target since 6.1; generics/
+  classes need metadata.) The runtime half is genuinely present.
+  - The **header itself isn't shipped** in the SDK (only `shims/Reflection.h`), but
+    it's **vendorable** from the matching Swift 6.3.2 compiler source via
+    `LIB_SWIFT_PATH` — exactly what OAG's Linux build already does. Mechanical
+    (a chain of internal headers), not a fundamental blocker.
+  - **Remaining real risk = Swift↔C++ interop on wasm.** OAG *is* a C++↔Swift
+    interop project; that interop is fragile even on Linux (OAG CI: Swift 6.2.4
+    crashed the frontend on C++ interop; 6.3.2 fixed) and is **unconfirmed for
+    wasm32** (no public statement; no wasm CI), with wasm32's 32-bit pointers a
+    further wrinkle for the internal metadata layout.
+
+**Net:** the deepest-seeming OAG blocker (`Metadata.h`) is **attainable** — the
+metadata ABI is present in the wasm runtime and the header is vendorable. So the OAG
+WASI port is a **bounded native-layer port** (syslog→`wasi:logging` + vendor the
+Swift internal headers + get cxx-interop to build for wasm32), upstream-shaped and
+*not blocked by metadata being absent* — though the Swift/C++-interop-on-wasm step
+is unproven and is the thing to spike next.
