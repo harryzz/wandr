@@ -6,9 +6,12 @@ set -euo pipefail
 cd "$(dirname "$0")"
 GEN=generated
 ADAPTER=../../external/skiko/wasi_snapshot_preview1.reactor.wasm
+# Recent Swift renamed the triple wasm32-unknown-wasi -> wasm32-unknown-wasip1.
+# Override for an older SDK: TRIPLE=wasm32-unknown-wasi ./build.sh
+TRIPLE="${TRIPLE:-wasm32-unknown-wasip1}"
 
 # 1. Swift + generated C glue + the component-type .o -> a wasip1 reactor module.
-swiftc -target wasm32-unknown-wasi \
+swiftc -target "$TRIPLE" \
   -I "$GEN" \
   Sources/spike.swift "$GEN/swift_spike.c" "$GEN/swift_spike_component_type.o" \
   -Xclang-linker -mexec-model=reactor \
