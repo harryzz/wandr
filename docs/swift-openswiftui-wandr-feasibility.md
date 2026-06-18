@@ -488,9 +488,41 @@ emulation + `-lswiftCxx -L`):
 mechanical fix — POSIX shims (`syslog`, `openssl/sha`), vendored Swift+LLVM headers
 (Compute's submodule, turnkey), Package platform conditions (`.wasi`), and a handful
 of pointer-width ABI-assert guards. **No fundamental blocker exists**; Compute is the
-right base, getting through the hard metadata/llvm layers with no header work. The
-remaining is a real but **bounded multi-step port** (finish the POSIX shims + assert
-guards, then link, then verify runtime correctness on wasm32) — upstream-shaped.
+right base, getting through the hard metadata/llvm layers with no header work.
+
+#### ✅ Compute (the AttributeGraph engine) BUILDS for wasm32-wasip1 (2026-06-18)
+`swift build --swift-sdk swift-6.3.2-RELEASE_wasm` of `jcmosc/Compute` → **`Build
+complete!`** (compiles **and links** the whole engine). The complete fix-set, all
+bounded/mechanical:
+1. `syslog` → header-only shim (prod → `wasi:logging`).
+2. `swift/Runtime`+`swift/ABI`+`llvm/ADT`+metadata chain → Compute's
+   `swift-runtime-headers` submodule (vendors `include/swift` *and*
+   `stdlib/include/llvm`, `-isystem`'d by its Package) — **turnkey, no hand-vendoring**.
+3. CoreFoundation shim → flip its target/define from `.when([.linux])` to
+   `[.linux, .wasi]` (one Package edit).
+4. `openssl/sha.h` → header-only real SHA-1 shim.
+5. **7** pointer-width ABI `static_assert`s (`sizeof(HeapObject)==16`,
+   `sizeof(page)==0x18`, …) → guarded (Apple-binary-compat-only, irrelevant on wasm).
+6. `uint` (BSD alias wasi-libc lacks) → `typedef unsigned int uint;` in the 2 files
+   that use it.
+That's the make-or-break dependency of the whole stack **building for WASI**.
+
+#### Runtime proof — blocked by a SwiftWasm toolchain bug (not Compute/wandr)
+Tried to *run* a minimal graph (`Graph()`/`Subgraph`/`Attribute(value:42).value`)
+via a consumer exe importing the cxx-interop Compute module. It fails in the
+consumer's module emit with a **clang-module cycle**: `WASI …/c++/v1/errno.h →
+SwiftWASILibc → std_inttypes_h → SwiftWASILibc` — i.e. the **C++ stdlib + WASI-libc
+overlay modularization** under cxx-interop. This is a **SwiftWasm toolchain rough
+edge**, independent of Compute and of wandr. (Compute's own library builds fine, and
+Swift↔C++ interop *without* the C++ stdlib already **runs** on wasm — the `Adder`
+proof above.) Working around it is a toolchain-config matter (module map / disable
+implicit C++ stdlib modules), not an engine-feasibility question.
+
+**Net:** the AttributeGraph engine **compiles + links for wasm32-wasip1** with a
+bounded, documented fix-set — the deepest dependency of OpenSwiftUI-on-wandr is
+demonstrably portable. The only thing left unproven is *executing* it from a
+consumer, gated on a SwiftWasm C++-interop/stdlib module-cycle bug (upstream
+toolchain), not on anything in Compute, OAG, or wandr.
 
 So **every gating toolchain mechanism for OAG-on-WASI is now demonstrated feasible**:
 Swift C++ interop ✅ (compiles/links/runs on wasm), metadata ABI ✅ (present in the
