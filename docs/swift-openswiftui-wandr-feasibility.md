@@ -601,6 +601,41 @@ Swift↔C++ `swiftcall` closure-ABI mismatch with a known bounded workaround. Th
 deepest dependency of OpenSwiftUI-on-wandr is no longer a question of *if* — it's
 down to one characterized interop detail.
 
+#### Root cause nailed + intern C-CC rework validated (2026-06-18)
+Reworked the intern site to a C-CC callback and the run **advanced past it** — the
+trap moved from `IAGGraphInternAttributeType` to the *next* closure site
+(`IAGRetainClosure`). So the rework is correct, and the root cause is now proven:
+- **Minimal test**: a plain C `int call_it(int(*f)(int),int)` calling a Swift
+  `@convention(c)` callback **runs fine on wasm** (`42`). So swiftc↔clang
+  function-pointer interop is NOT broken in general.
+- **The real culprit is `@_silgen_name`** (Compute's binding style): it lowers a
+  passed Swift closure with the **Swift** calling convention, whose wasm funcref
+  type ≠ what clang's `call_indirect` expects → `signature_mismatch`. Neither the
+  calling-convention attribute nor struct/pointer lowering was the cause (tested
+  both — same trap); switching to a **header-declared, C-imported** entry with a
+  plain `@convention(c)` thunk fixed the intern call.
+- **Fix shape (intern)**: add a C entry `IAGGraphInternAttributeTypeC(graph,type,
+  make,ctx)` to the ComputeCxx header (so Swift imports it with the C ABI, not
+  `@_silgen_name`); split `intern_type` into a reusable `register_attribute_type`
+  + a wasm `intern_type_c`; the Swift side passes a non-capturing `@convention(c)`
+  thunk + a pointer to the (in-language) closure, which `intern_type` invokes
+  synchronously. Plus the `__wasi__` allocator branch, `-fno-exceptions`,
+  `-DSWIFT_INLINE_NAMESPACE=__runtime`, and the mman/c++abi/swiftCore link libs.
+
+**Remaining (harder) class — stored closures.** `IAGRetainClosure` (and the rule
+`update` path) **retain a Swift closure and have C++ call it LATER**, so the
+synchronous in-language trick doesn't apply. The portable fix is a **Swift-side
+registry + C-CC trampoline**: Swift stores the closure, hands C++ a plain
+`@convention(c)` trampoline + token; C++ stores/calls the trampoline (C ABI); the
+trampoline re-enters Swift and invokes the closure in-language. Mechanical but it
+touches Compute's core `ClosureFunction` bridge and the ~18 `@_silgen_name`
+closure sites — a bounded engine-side port, not a toolchain wall.
+
+**Bottom line:** Compute on wasm runs real engine code; the intern closure path is
+fixed and validated; finishing a full graph run is a known, mechanical extension of
+the same C-import/trampoline pattern to the stored-closure sites — entirely
+engine-side, no toolchain or wandr blocker.
+
 **Net:** the AttributeGraph engine **compiles + links for wasm32-wasip1** (bounded,
 documented fix-set), and consuming it is a normal Swift import (no cxx-interop, no
 module cycle). *Running* a graph is gated on porting Compute's `mmap`/`memfd`
