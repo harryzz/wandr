@@ -27,24 +27,42 @@ public func onFrame(_ nanos: UInt64) {
     let canvas = wasi_canvas_draw_borrow_canvas(bufOwn)
 
     // From here on it's pure CoreGraphics — CGContext lowers to wasi:canvas.
+    // This scene exercises the 3 emulated gaps: dash, offset+color shadow, mask-clip.
     let cg = CGContext(canvas: canvas)
     let w = CGFloat(width), h = CGFloat(height)
+    let m = max(16, w * 0.06)
     cg.clear(CGColor(red: 0.063, green: 0.078, blue: 0.094, alpha: 1)) // dark bg
 
-    let m = max(16, w * 0.06)
-    // Filled blue rect, sized from the surface (no hardcoded layout).
-    cg.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.8, alpha: 1))
-    cg.fill(CGRect(x: m, y: m, width: max(0, w - 2 * m), height: h * 0.28))
-
-    // Green stroked triangle, built with the CoreGraphics path API.
-    cg.setStrokeColor(CGColor(red: 0.2, green: 0.667, blue: 0.333, alpha: 1))
-    cg.setLineWidth(max(2, w * 0.015))
+    // (1) DASH — a dashed rounded line border via the CoreGraphics dash API.
+    cg.setStrokeColor(CGColor(red: 0.85, green: 0.85, blue: 0.9, alpha: 1))
+    cg.setLineWidth(max(3, w * 0.012))
+    cg.setLineDash(phase: 0, lengths: [w * 0.05, w * 0.03])
     cg.beginPath()
-    cg.move(to: CGPoint(x: m, y: h * 0.74))
-    cg.addLine(to: CGPoint(x: w - m, y: h * 0.74))
-    cg.addLine(to: CGPoint(x: w * 0.5, y: h * 0.42))
-    cg.closePath()
+    cg.addRect(CGRect(x: m, y: h * 0.05, width: w - 2 * m, height: h * 0.14))
     cg.strokePath()
+    cg.setLineDash(phase: 0, lengths: [])   // solid again
+
+    // (2) SHADOW — a blue rect casting an offset, blurred, COLORED (cyan) shadow.
+    cg.setShadow(offset: (w * 0.03, h * 0.012), blur: w * 0.02,
+                 color: CGColor(red: 0.2, green: 0.9, blue: 1.0, alpha: 0.8))
+    cg.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.8, alpha: 1))
+    cg.fill(CGRect(x: w * 0.25, y: h * 0.28, width: w * 0.5, height: h * 0.14))
+    cg.clearShadow()
+
+    // (3) MASK-CLIP — clip a green rect to an oval ALPHA mask. Idiom: in a
+    // transparency layer, draw the mask (the oval) first, then draw the content
+    // with src-in so it survives only where the mask's alpha is (and at its alpha).
+    // The oval mask is 60% alpha → a soft, half-strength green oval (proves it's an
+    // alpha mask, not a binary clip).
+    cg.beginTransparencyLayer()
+    cg.setBlendMode(.normal)
+    cg.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.6)) // alpha mask
+    cg.fillEllipse(in: CGRect(x: w * 0.2, y: h * 0.55, width: w * 0.6, height: h * 0.24))
+    cg.setBlendMode(.sourceIn)
+    cg.setFillColor(CGColor(red: 0.2, green: 0.7, blue: 0.35, alpha: 1)) // content
+    cg.fill(CGRect(x: m, y: h * 0.52, width: w - 2 * m, height: h * 0.3))
+    cg.setBlendMode(.normal)
+    cg.endTransparencyLayer()
 
     wasi_canvas_draw_canvas_drop_own(bufOwn)
     wasi_canvas_embedding_method_canvas_context_present(ctx)

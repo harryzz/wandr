@@ -244,18 +244,26 @@ blocker.
 | CGLayer / CGBitmapContext (offscreen) | `graphics.new-offscreen` + `canvas.snapshot` |
 | PDF page ops / color-space mgmt / font smoothing | out of scope (not UI) / host-internal — not gaps |
 
-**The 3 real gaps (all minor, all already known-shaped):**
+**The 3 "gaps" — all emulated with EXISTING verbs, device-verified 2026-06-18**
+(task 114 P2.3c, in `repros/swift-canvas-spike`'s vendored `CGContext`; no
+`wasi:canvas` contract change — so the contract is *sufficient* for the full
+CoreGraphics 2D `CGContext`):
 
-1. **Line dash** (`CGContextSetLineDash`) — no dash field in `paint`. Guest
-   pre-computes dashed path geometry (Flutter does dashing in-framework too).
+1. **Line dash** (`CGContextSetLineDash`) — no dash field in `paint`. Emulated
+   guest-side: flatten the path to polylines, split into on/off runs per the
+   pattern+phase, emit "on" runs as sub-paths → `draw-path`. (Flutter dashes
+   in-framework too.)
 2. **Offset+color drop shadow** (`CGContextSetShadowWithColor`) — `paint.blur`
-   (mask-blur) has sigma+style but **no offset/color**; emulate by drawing the
-   shape twice (offset blurred copy). Already a named deferral in the Flutter
-   `dart:ui` mapping (`drawShadow`); `scene.layer.set-shadow-elevation` covers
-   layer elevation shadows.
-3. **Alpha-mask / text-as-clip** (`CGContextClipToMask`, text drawing mode
-   `.clip`) — no alpha-mask clip verb; emulate via `save-layer` + `dst-in` blend.
-   Niche.
+   (mask-blur) has sigma but **no offset/color**; emulated by drawing the shape
+   twice — a `translate`d copy in the shadow color with `paint.blur`, then the real
+   shape. (The Flutter `dart:ui` `drawShadow` deferral; `scene.layer.
+   set-shadow-elevation` covers layer elevation shadows.)
+3. **Alpha mask-clip** (`CGContextClipToMask`, text drawing mode `.clip`) — no
+   alpha-mask clip verb; emulated via `save-layer` + a blend mode. **Correct idiom:
+   mask-first, then content with `src-in`** (content covers the whole region so
+   `src-in` zeroes it outside the mask). The dual (content then mask with `dst-in`)
+   only *dims* the mask region — a drawn primitive's blend touches only its own
+   pixels.
 
 **Structural note (not a gap):** CG is an *imperative* model (mutable current-path
 + mutable graphics state); `wasi:canvas` is *value-paint + path-as-string*. So the

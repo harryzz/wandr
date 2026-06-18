@@ -131,9 +131,28 @@ shim providing `CGFloat`/`CGPoint`/`CGRect`) — but that means patching OCG's
 `public import Foundation`, so it's a separate decision. The self-contained P2.3
 `CoreGraphicsWasi` variant (7 MB, no Foundation) is in git history if size matters.
 
-Next: extend the `CGContext` surface (gradients, images, clipping, text) and the 3
-known gaps (dash, offset-shadow, mask-clip). SwiftUI (OpenRenderBox + OpenSwiftUI)
-remains the out-of-scope wall.
+## P2.3c (2026-06-18) — the 3 mapping "gaps" emulated (device-verified)
+
+All three CGContext features that `wasi:canvas` lacks a direct verb for are
+implemented in the vendored `CGContext` with **existing verbs only — no contract
+change** (device-verified on Pixel 2 XL):
+
+- **Line dash** (`setLineDash`) — guest-side path-walk: flatten to polylines, split
+  into on/off runs per the pattern+phase, emit "on" runs as sub-paths → `draw-path`.
+- **Offset+color drop shadow** (`setShadow`) — draw each shape twice: a `translate`d
+  copy in the shadow color with `paint.blur` (mask-blur), then the real shape.
+- **Alpha mask-clip** (`beginTransparencyLayer` + blend modes) — `save-layer`, draw
+  the mask, then draw the content with **`src-in`** so it survives only where (and
+  at the alpha) the mask covers. **Gotcha:** the dual order (content then mask with
+  `dst-in`) only *dims* the mask region — because a drawn primitive's blend touches
+  only its own pixels; mask-first + `src-in` (content covers the whole region) is
+  the correct idiom.
+
+So `wasi:canvas` is **sufficient for the full CoreGraphics 2D `CGContext`** — these
+were the only mapping gaps.
+
+Next: extend the `CGContext` surface (gradients, images, text). SwiftUI
+(OpenRenderBox + OpenSwiftUI) remains the out-of-scope wall.
 
 ## Prerequisite (the gate)
 

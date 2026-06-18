@@ -134,5 +134,14 @@ in build.sh); cost = component ~7MB -> ~60MB (Foundation on wasm is heavy). A
 production guest would use a slim no-Foundation geometry shim (the self-contained
 P2.3 CoreGraphicsWasi variant, in git history).
 
-**Remaining (P2.3 cont.):** gradients, images, clipping, text; the 3 gaps (dash,
-offset-shadow, mask-clip). SwiftUI stays out of scope.
+🟢 **P2.3c DONE (2026-06-18) — the 3 mapping gaps emulated, device-verified.**
+In the vendored `CGContext`, all 3 implemented with EXISTING wasi:canvas verbs (no
+contract change): line dash (guest path-walk -> draw-path), offset+color shadow
+(draw-twice: translate + mask-blur + color), alpha mask-clip (save-layer +
+mask-then-content-with-src-in). Device-verified on Pixel 2 XL (dashed border, cyan
+offset/blur shadow on a blue rect, green content clipped to a soft oval alpha mask).
+Gotcha: mask-clip needs mask-first + src-in; content-then-dst-in only DIMS the mask
+region (a primitive's blend touches only its own pixels). => wasi:canvas is
+sufficient for the full CoreGraphics 2D CGContext.
+
+**Remaining (P2.3 cont.):** gradients, images, text. SwiftUI stays out of scope.
