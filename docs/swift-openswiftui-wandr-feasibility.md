@@ -636,6 +636,48 @@ fixed and validated; finishing a full graph run is a known, mechanical extension
 the same C-import/trampoline pattern to the stored-closure sites — entirely
 engine-side, no toolchain or wandr blocker.
 
+#### ✅✅✅ FULL GRAPH RUN on wasm — `attribute.value = 42` (2026-06-18)
+Built the registry + C-CC trampoline for the stored-closure (`IAGRetainClosure`)
+path and the engine **executes a real graph on wasm32-wasip1**:
+```
+Compute AttributeGraph on wasi: attribute.value = 42
+```
+i.e. `Graph()` → `Subgraph(graph:)` → `Subgraph.current = …` → `Attribute(value: 42)`
+→ read `.value` == **42**, end to end under wasmtime. The complete, source-grounded
+fix-set (all bounded, no toolchain or wandr blocker):
+1. **Allocator**: `#if defined(__wasi__)` branch in `Table.cpp` — anonymous
+   `mmap(MAP_PRIVATE|MAP_ANON)` (wasi-emulated-mman) + `memcpy`-grow; `madvise`
+   no-op; `memfd_create` eliminated.
+2. **Exceptions**: `-fno-exceptions` (wasi SDK ships no exception runtime; Compute
+   has no explicit `throw`s).
+3. **Demangle**: `-DSWIFT_INLINE_NAMESPACE=__runtime` (header/lib inline-namespace
+   skew on `makeSymbolicMangledNameStringRef`).
+4. **Synchronous closure (intern)**: header-declared C-imported
+   `IAGGraphInternAttributeTypeC` + plain `@convention(c)` thunk; `intern_type` split
+   into `register_attribute_type` + `intern_type_c`; closure invoked in-language via
+   a context pointer.
+5. **Stored closure (retain/update)**: a `_UpdateBox` (Swift heap object) + a
+   non-capturing `@convention(c)` `_updateTrampoline`; a non-refined
+   `IAGRetainClosureC` C entry; `AttributeType::_update` made a plain C-CC pointer on
+   wasm so C++ invokes the trampoline with the C ABI. The box's lifetime rides the
+   existing `swift_retain`/`swift_release` (it's a Swift class).
+6. **Link**: `-lwasi-emulated-mman`, `-lc++abi`, static `-lswiftCore`; `syslog`/
+   `openssl-sha` shims; `uint` typedef; 7 guarded pointer-width ABI asserts;
+   `print_cycle` guard.
+
+**Root cause that drove 4–5**: `@_silgen_name` lowers a passed Swift closure with the
+*Swift* calling convention, whose wasm funcref type ≠ clang's `call_indirect` —
+proven by a minimal C-import `@convention(c)` callback running fine (`42`). The cure
+is C-import + `@convention(c)` everywhere a closure crosses to C++.
+
+**Scope honestly stated:** a *value* attribute is verified end-to-end. The
+*rule-execution* path (where `_update` is actually invoked) is now **wired** for
+C-CC (`_update` is plain C + the trampoline), but not yet exercised by a test; and
+the other `@_silgen_name` closure sites (~18, e.g. `Subgraph`/`Rule`/`AnyAttribute`)
+take the same mechanical treatment as a full OpenSwiftUI app reaches them. But the
+**core question is now answered with a running engine**: OpenAttributeGraph executes
+on wasm — the deepest dependency of OpenSwiftUI-on-wandr is real, not hypothetical.
+
 **Net:** the AttributeGraph engine **compiles + links for wasm32-wasip1** (bounded,
 documented fix-set), and consuming it is a normal Swift import (no cxx-interop, no
 module cycle). *Running* a graph is gated on porting Compute's `mmap`/`memfd`
