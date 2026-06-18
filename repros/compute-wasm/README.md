@@ -90,3 +90,11 @@ wasmtime run -W all-proposals=y .build/wasm32-unknown-wasip1/debug/computerun.wa
 - Fold the build flags + shims into `Package.swift` (`cxxSettings`/`linkerSettings`
   `.when(platforms: [.wasi])`) so a plain `swift build --swift-sdk` works.
 - Replace the `syslog` stderr stub with a `wasi:logging` lowering for production.
+
+## Locked target (2026-06-18): eleev/swiftui-2048
+The north-star "real Swift app" for the OpenSwiftUI-on-wandr path is the pure-SwiftUI,
+dependency-free game **eleev/swiftui-2048** (verified: 40× `import SwiftUI`, no UIKit,
+no storyboards, no 3rd-party deps; only AudioToolbox[stub]+Combine). Critical path:
+OpenAttributeGraph (port) -> OpenRenderBox `render(in: CGContext)` (new rasterizer onto
+our shipped CGContext) -> OpenSwiftUI + WandrRenderer -> swiftui-2048. OAG fork =
+github.com/harryzz/OpenAttributeGraph (port in progress).
