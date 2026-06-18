@@ -14,12 +14,32 @@ beyond WASI.
 
 ## What it does
 
-`run()` drives a tight unbounded loop. Each iteration allocates one short-lived
-`Frame` (the Java stand-in for the Kotlin reproducer's per-`suspendCoroutine`
-continuation / state-machine instance), reads it, then drops it — so it becomes
-unreachable WasmGC garbage. With wasmtime's DRC collector nothing sweeps until a
-GC-heap grow fails, so garbage piles up and each successive sweep walks an
-ever-larger over-approximated-roots list. Progress prints every 1,000,000 ticks.
+`run()` drives a tight unbounded loop. Each iteration allocates a `Frame` that
+**references itself** (`f.next = f`) — a reference cycle — then drops it, so it
+becomes unreachable *cyclic* WasmGC garbage. This mirrors the Kotlin reproducer's
+per-`suspendCoroutine` continuation/state-machine instance, whose
+continuation↔context structure is likewise cyclic. Progress prints every
+1,000,000 ticks.
+
+The cycle is the whole point — see "Does it actually leak?" below.
+
+## Does it actually leak?
+
+Yes — **but only because of the cycle.** wasmtime's default WasmGC collector is
+**deferred reference counting (DRC)**, which reclaims *acyclic* garbage promptly
+but **cannot collect cycles**. Measured RSS (`leak-host`, wasmtime 45):
+
+| variant | desktop x86_64 | device (Pixel 2 XL, 4 GB) |
+|---|---|---|
+| `Frame` with **no** `next` (acyclic) | **flat ~20 MB** over 92M ticks — no leak | flat |
+| `Frame.next = f` (cyclic, this repro) | **0 → ~4 GB in ~10 s**, then a multi-second sweep stalls ticks | **0.5 → 2.2 GB in 8 s** |
+
+So a naive "allocate and drop" loop does **not** leak under wasmtime — the DRC
+collector frees it. The leak (bytecodealliance/wasmtime#13403) needs cyclic
+garbage: DRC never reclaims it, so it piles up until a GC-heap-grow forces a sweep
+that walks an ever-larger over-approximated-roots list (visible as the periodic
+tick-stall). To watch the *non*-leaking baseline instead, drop the `f.next = f`
+line and rebuild.
 
 ## Imports
 
@@ -55,7 +75,8 @@ TeaVM's WASI target emits no `_start`, so (unlike the Kotlin repro's plain
 wasmtime run -W all-proposals=y --invoke run target/wasm/java-leak-repro.wasm
 ```
 
-Let it run a few minutes and watch sweep cost climb, then Ctrl-C. Expected output:
+Watch RSS climb (it reaches multiple GB within ~10 s on desktop), then Ctrl-C.
+Expected output:
 
 ```
 leak-repro(java): self-driving repro starting -- pure allocation loop, WASI stdout only
@@ -64,7 +85,9 @@ leak-repro(java): tick #2000000 (sink=1999999000000)
 ...
 ```
 
-(`sink` accumulates each `Frame.value` so the allocation can't be optimized away.)
+Ticks periodically stall for a second or two — that is the DRC sweep walking the
+accumulated roots. (`sink` accumulates each `Frame.value` so the field can't be
+optimized away.)
 
 ### On device (Pixel 2 XL, aarch64)
 
@@ -84,12 +107,15 @@ adb shell mkdir -p /data/local/tmp/jleak
 adb push target/aarch64-linux-android/release/leak-host /data/local/tmp/jleak/leak-host
 adb push ../../java-leak-repro/target/wasm/java-leak-repro.wasm /data/local/tmp/jleak/
 adb shell chmod 755 /data/local/tmp/jleak/leak-host
-adb shell 'cd /data/local/tmp/jleak && timeout 6 ./leak-host java-leak-repro.wasm'
+# run briefly and sample RSS (the leak grows fast on a 4 GB phone)
+adb shell 'cd /data/local/tmp/jleak && ./leak-host java-leak-repro.wasm & \
+  P=$(pidof leak-host); for i in $(seq 1 8); do sleep 1; \
+  grep VmRSS /proc/$P/status; done; pkill -9 leak-host'
 ```
 
-Verified on a Pixel 2 XL (taimen, aarch64) 2026-06-18: self-drives at ~9M
-ticks/6s (vs ~14M on desktop x86_64), identical `sink` values — same wasm, real
-arm64 CPU.
+Verified on a Pixel 2 XL (taimen, aarch64) 2026-06-18: same wasm, real arm64 CPU —
+RSS climbs **0.5 GB → 2.2 GB in 8 s** (the acyclic baseline stays flat). The leak
+is identical to desktop; the phone just hits memory pressure sooner.
 
 ### As a component
 
