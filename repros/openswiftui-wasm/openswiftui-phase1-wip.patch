@@ -1,0 +1,173 @@
+diff --git a/Package.resolved b/Package.resolved
+index 1d1c1b5..a7bb290 100644
+--- a/Package.resolved
++++ b/Package.resolved
+@@ -2,48 +2,39 @@
+   "originHash" : "9646970ccc24a2bec27adf297824b75c0f9fcd7974245ade131018c97dfae28b",
+   "pins" : [
+     {
+-      "identity" : "darwinprivateframeworks",
++      "identity" : "opencombine",
+       "kind" : "remoteSourceControl",
+-      "location" : "https://github.com/OpenSwiftUIProject/DarwinPrivateFrameworks.git",
++      "location" : "https://github.com/OpenSwiftUIProject/OpenCombine.git",
+       "state" : {
+-        "branch" : "main",
+-        "revision" : "b0c3d94ff6b7200754ad2adf948fd3c6ebaef956"
++        "revision" : "63aef318cb3a853bcb8d774cce15f4dcb1ccdfe4",
++        "version" : "0.15.1"
+       }
+     },
+     {
+-      "identity" : "openattributegraph",
++      "identity" : "swift-asn1",
+       "kind" : "remoteSourceControl",
+-      "location" : "https://github.com/OpenSwiftUIProject/OpenAttributeGraph",
++      "location" : "https://github.com/apple/swift-asn1.git",
+       "state" : {
+-        "branch" : "main",
+-        "revision" : "f20328ed3fb97159624c171e204dba29f942a1eb"
++        "revision" : "a9a5efd40eaf558a2bcd48d64b1d1646be686008",
++        "version" : "1.7.1"
+       }
+     },
+     {
+-      "identity" : "opencoregraphics",
++      "identity" : "swift-crypto",
+       "kind" : "remoteSourceControl",
+-      "location" : "https://github.com/OpenSwiftUIProject/OpenCoreGraphics",
++      "location" : "https://github.com/apple/swift-crypto.git",
+       "state" : {
+-        "branch" : "main",
+-        "revision" : "050239bd42b19a4c8b1ef3936bfb9f3589ecfc46"
++        "revision" : "95ba0316a9b733e92bb6b071255ff46263bbe7dc",
++        "version" : "3.15.1"
+       }
+     },
+     {
+-      "identity" : "openobservation",
++      "identity" : "swift-log",
+       "kind" : "remoteSourceControl",
+-      "location" : "https://github.com/OpenSwiftUIProject/OpenObservation",
++      "location" : "https://github.com/apple/swift-log",
+       "state" : {
+-        "branch" : "main",
+-        "revision" : "05e0581e76b7153338836469320a4789fd0257e2"
+-      }
+-    },
+-    {
+-      "identity" : "openrenderbox",
+-      "kind" : "remoteSourceControl",
+-      "location" : "https://github.com/OpenSwiftUIProject/OpenRenderBox",
+-      "state" : {
+-        "branch" : "main",
+-        "revision" : "38d099fb3144cc4b268de962658cf810a6144896"
++        "revision" : "92448c359f00ebe36ae97d3bd9086f13c7692b5a",
++        "version" : "1.13.2"
+       }
+     },
+     {
+@@ -63,15 +54,6 @@
+         "revision" : "f99ae8aa18f0cf0d53481901f88a0991dc3bd4a2",
+         "version" : "601.0.1"
+       }
+-    },
+-    {
+-      "identity" : "symbollocator",
+-      "kind" : "remoteSourceControl",
+-      "location" : "https://github.com/OpenSwiftUIProject/SymbolLocator.git",
+-      "state" : {
+-        "revision" : "546053c03f282df1a8270853da6692e1b078be09",
+-        "version" : "0.2.1"
+-      }
+     }
+   ],
+   "version" : 3
+diff --git a/Package.swift b/Package.swift
+index ad3ee3b..9800ad8 100644
+--- a/Package.swift
++++ b/Package.swift
+@@ -429,7 +429,11 @@ extension Target {
+ 
+     func addOpenCombineSettings() {
+         dependencies.append(.product(name: "OpenCombine", package: "OpenCombine"))
+-        dependencies.append(.product(name: "OpenCombineFoundation", package: "OpenCombine"))
++        // OpenCombineFoundation bridges Foundation (URLSession/OperationQueue/RunLoop +
++        // os_unfair_lock) — not available on wasm, and OpenSwiftUICore doesn't import it.
++        if buildForDarwinPlatform {
++            dependencies.append(.product(name: "OpenCombineFoundation", package: "OpenCombine"))
++        }
+         var swiftSettings = swiftSettings ?? []
+         swiftSettings.append(.define("OPENSWIFTUI_OPENCOMBINE"))
+         self.swiftSettings = swiftSettings
+diff --git a/Sources/OpenSwiftUICore/Animation/Animation/AnimationListener.swift b/Sources/OpenSwiftUICore/Animation/Animation/AnimationListener.swift
+index a048359..2c11295 100644
+--- a/Sources/OpenSwiftUICore/Animation/Animation/AnimationListener.swift
++++ b/Sources/OpenSwiftUICore/Animation/Animation/AnimationListener.swift
+@@ -6,7 +6,9 @@
+ //  Status: Complete
+ //  ID: 390609F81ACEBEAF00AD8179BD31E870 (SwiftUICore)
+ 
+-import Dispatch
++#if canImport(Dispatch)
++import Dispatch   // wasm: no Dispatch module — the in-module WasmDispatchShim provides the types
++#endif
+ 
+ // MARK: - AnimationListener
+ 
+diff --git a/Sources/OpenSwiftUICore/Util/StandardLibraryAdditions.swift b/Sources/OpenSwiftUICore/Util/StandardLibraryAdditions.swift
+index c314432..26ec7f7 100644
+--- a/Sources/OpenSwiftUICore/Util/StandardLibraryAdditions.swift
++++ b/Sources/OpenSwiftUICore/Util/StandardLibraryAdditions.swift
+@@ -10,6 +10,8 @@ package import Foundation
+ import Darwin
+ #elseif canImport(Glibc)
+ import Glibc
++#elseif canImport(WASILibc)
++import WASILibc
+ #else
+ #error("Unsupported Platform")
+ #endif
+@@ -55,6 +57,8 @@ extension Float {
+         Darwin.round(self * 256.0) / 256.0
+         #elseif canImport(Glibc)
+         Glibc.round(self * 256.0) / 256.0
++        #elseif canImport(WASILibc)
++        WASILibc.round(self * 256.0) / 256.0
+         #else
+         #error("Unsupported Platform")
+         #endif
+@@ -67,6 +71,8 @@ extension CGFloat {
+         Darwin.round(self * 256.0) / 256.0
+         #elseif canImport(Glibc)
+         Glibc.round(self * 256.0) / 256.0
++        #elseif canImport(WASILibc)
++        WASILibc.round(self * 256.0) / 256.0
+         #else
+         #error("Unsupported Platform")
+         #endif
+diff --git a/Sources/OpenSwiftUI_SPI/Shims/CSymbols/OpenSwiftUI_CSymbols.c b/Sources/OpenSwiftUI_SPI/Shims/CSymbols/OpenSwiftUI_CSymbols.c
+index 3b97f1f..73edca5 100644
+--- a/Sources/OpenSwiftUI_SPI/Shims/CSymbols/OpenSwiftUI_CSymbols.c
++++ b/Sources/OpenSwiftUI_SPI/Shims/CSymbols/OpenSwiftUI_CSymbols.c
+@@ -3,13 +3,20 @@
+ //  OpenSwiftUI_SPI
+ 
+ #include "OpenSwiftUI_CSymbols.h"
++#if !defined(__wasi__)
+ #include <dlfcn.h>
++#endif
+ 
+ const char * getSymbolPathName(const void *address) {
++#if defined(__wasi__)
++    (void)address;
++    return NULL;   // wasm: no dynamic linking (dladdr/Dl_info absent) — debug-only path
++#else
+     Dl_info info;
+     int result = dladdr(address, &info);
+     if (result == 0) {
+         return NULL;
+     }
+     return info.dli_fname;
++#endif
+ }
