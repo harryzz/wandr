@@ -532,11 +532,36 @@ Remaining = pure link resolution — **6 undefined symbols, all bounded**:
 libswiftCore.a`); `IAG::Graph::print_cycle` (defined only in Apple-only `Graph.mm`
 → stub on wasm); and `madvise`/`memfd_create` (POSIX — wasi-libc lacks them).
 
-**The one genuine functional gap (not a stub):** `Sources/ComputeCxx/Data/Table.cpp`
-backs the graph's data table with a **`memfd_create` + `mmap` growable VM region**
-(Linux-specific). WASI has no `mmap`/`memfd`, so the allocator needs a wasm backing
-(linear-memory region) for the engine to actually *run* a graph — a real, bounded
-port, the last functional piece.
+**The allocator gap — checked against WASI#304 + wasi-libc + the source (not assumed).**
+`Sources/ComputeCxx/Data/Table.cpp` backs the graph data table with a growable VM
+region. I first called this "needs an mmap port"; reading the source + the WASI state
+makes it much smaller:
+- **WASI#304**: full POSIX `mmap` (file-backed, `MAP_SHARED`, protection, `memfd`)
+  is *deliberately not* coming to WASI — only an anonymous "read into memory" MVP;
+  the caller owns address space (WebAssembly is one flat `memory.grow` space).
+- **But wasi-libc ships anonymous mmap**: `libwasi-emulated-mman.a` (in the SDK)
+  **defines `mmap`/`munmap`/`mprotect`**, honoring `MAP_PRIVATE|MAP_ANON`
+  (malloc-backed). Just `-D_WASI_EMULATED_MMAN -lwasi-emulated-mman`.
+- **And Compute already has a memfd-free path**: the **macOS** branch uses
+  `mmap(nullptr, size, …, MAP_PRIVATE|MAP_ANON, -1, 0)` for *both* the 1 MiB initial
+  region and `grow_region` — `memfd_create`/`ftruncate`/`MAP_SHARED` are **only the
+  Linux `#else`**. So wasm should take the *macOS-shaped* branch, which lands exactly
+  on wasi-libc's anonymous mmap. `memfd_create` is then **eliminated, not stubbed**.
+
+So the real port is a small `#if defined(__wasi__)` branch in `table()` /
+`grow_region()`:
+- initial + grow → `mmap(MAP_PRIVATE|MAP_ANON)` (emulated mman);
+- grow preserves handed-out offset-pointers by **`memcpy` old→new** (the macOS
+  `vm_remap`/Linux-`MAP_SHARED` equivalent) and keeps the old mapping in
+  `_remapped_regions` — no `mremap`/`MAP_SHARED` needed;
+- `madvise` (page-reuse hint, absent from emulated mman) → **no-op** (advisory; on
+  wasm the backing is malloc anyway); `mprotect` is only used under an off-by-default
+  env and is provided regardless.
+
+i.e. the "last functional gap" is **a ~one-branch allocator change using mmap that
+wasi-libc already provides**, not a from-scratch allocator and not blocked by WASI's
+lack of `MAP_SHARED`/`memfd`. (Reading first — per the project rule — turned "port
+the allocator" into "take the existing anonymous-mmap branch.")
 
 **Net:** the AttributeGraph engine **compiles + links for wasm32-wasip1** (bounded,
 documented fix-set), and consuming it is a normal Swift import (no cxx-interop, no
