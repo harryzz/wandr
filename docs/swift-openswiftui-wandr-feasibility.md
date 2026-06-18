@@ -383,3 +383,17 @@ are narrower than "is the engine done":
 So the OAG gate for wandr isn't "finish the engine" (it's largely done) — it's
 "**make the existing engine build + run on the WASI target**" (the metadata-ABI/
 header port). That's a more bounded, upstream-shaped task than reimplementing it.
+
+**WASI build attempted 2026-06-18 (`swift build --swift-sdk swift-6.3.2-RELEASE_wasm`
++ Foundation emulation flags) — fails fast in OAG's native layer.** Two concrete
+blockers pinned:
+1. **POSIX gap** — `Platform/include/platform/log.h` `#include <syslog.h>` →
+   `'syslog.h' file not found` (WASI has no syslog). The Platform/Utilities C layer
+   assumes a fuller POSIX than wasip1 provides.
+2. **Swift runtime-metadata coupling** — `metadata.cpp` `#include
+   <swift/Runtime/Metadata.h>` (absent from the toolchain *and* the wasm SDK; only
+   in the Swift compiler source) + a matching metadata ABI on wasm.
+So OAG is **mature on Linux/Apple but not WASI-portable today** — the gate is a
+real native-layer port (POSIX shims for the Platform/Utilities C + the Swift
+runtime-metadata headers/ABI for the C++ core), upstream-shaped, not a wandr fork.
+This is the single biggest dependency for OpenSwiftUI-on-wandr.
