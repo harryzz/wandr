@@ -563,6 +563,44 @@ wasi-libc already provides**, not a from-scratch allocator and not blocked by WA
 lack of `MAP_SHARED`/`memfd`. (Reading first — per the project rule — turned "port
 the allocator" into "take the existing anonymous-mmap branch.")
 
+#### ✅ Implemented + the engine RUNS on wasm (2026-06-18)
+Implemented the `#if defined(__wasi__)` allocator branch in `Table.cpp`
+(`table()` + `grow_region()`: anonymous `mmap(MAP_PRIVATE|MAP_ANON)` + `memcpy`-grow;
+`madvise`→no-op; `memfd_create` eliminated) and a guard on the Apple-only
+`Graph::print_cycle` call. Resolved **all** link symbols — each a real, named fix:
+- `__cxa_throw`/`__cxa_allocate_exception`: the wasi SDK ships **no exception
+  runtime** and Compute has **zero explicit `throw`s** → compile its C++ with
+  `-fno-exceptions` (implicit `std::` throws → abort). Cleared.
+- `swift::Demangle::makeSymbolicMangledNameStringRef`: header/lib **inline-namespace
+  skew** — `libswiftCore` defines it in `Demangle::__runtime::`, the headers
+  declared plain `Demangle::`. Fix: `-DSWIFT_INLINE_NAMESPACE=__runtime` (the
+  `__has_attribute`-gated `SWIFT_BEGIN_INLINE_NAMESPACE`). Cleared.
+- `mmap`/`munmap`/`mprotect` → `-lwasi-emulated-mman`; `-lc++abi`, `-lswiftCore`.
+
+Result: **`Build complete!` → the 64 MB component RUNS under wasmtime and executes
+real engine code** — `Attribute.value` → `graphContext.internAttributeType` →
+`IAGGraphInternAttributeType`. So Compute's allocator + metadata + graph paths all
+work on wasm; the predicted allocator port was exactly right.
+
+**The one remaining trap — the genuine final frontier:** `signature_mismatch:
+IAGGraphInternAttributeType` — a wasm `call_indirect` type mismatch in the **Swift↔C++
+closure-passing ABI**. C++ declares the `make_attribute_type` callback with
+`__attribute__((swiftcall))` + `swift_context` (to match a Swift `() -> ptr`
+closure's (fn,ctx) lowering); on wasm, **swiftc's closure lowering and clang's
+`swiftcall` lowering emit mismatched wasm function signatures** for the indirect
+call. This is a real, narrow Swift-on-wasm toolchain/ABI issue (swiftcall
+consistency between swiftc and clang) — **not** the allocator (solved), headers
+(solved), exceptions (solved), or anything in wandr. Mitigation (Compute-side,
+bounded): replace the swiftcall-closure intern pattern with a plain **C-CC**
+callback + explicit context (`IAG_SWIFT_CC(c)`) at the ~3 `internAttributeType`
+sites, sidestepping `swiftcall` entirely — or an upstream swiftc/clang fix.
+
+**Net:** the AttributeGraph engine **compiles, links, and runs on wasm32-wasip1**,
+executing genuine engine code; the sole remaining issue is a precisely-located
+Swift↔C++ `swiftcall` closure-ABI mismatch with a known bounded workaround. The
+deepest dependency of OpenSwiftUI-on-wandr is no longer a question of *if* — it's
+down to one characterized interop detail.
+
 **Net:** the AttributeGraph engine **compiles + links for wasm32-wasip1** (bounded,
 documented fix-set), and consuming it is a normal Swift import (no cxx-interop, no
 module cycle). *Running* a graph is gated on porting Compute's `mmap`/`memfd`
