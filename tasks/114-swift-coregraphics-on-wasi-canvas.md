@@ -80,5 +80,17 @@ is the follow-on, gated on those upstream projects maturing.
 
 ## Status
 
-🔲 Scoped 2026-06-18. P0 groundwork starting in `repros/swift-canvas-spike/`
-(WIT + wit-bindgen-c surface). P1+ gated on the Swift WASM SDK install.
+🟢 **P1 DONE (2026-06-18) — Swift is a working wandr custom-WIT component guest.**
+Verified end to end (Swift 6.3.2 + `swift-6.3.2-RELEASE_wasm`, wasmtime 45):
+Swift (`@_cdecl` export + C-interop imports over the `wit-bindgen c` surface) →
+SwiftPM wasip1 **reactor** → `wasm-tools component new --adapt …reactor.wasm` →
+valid WASI 0.2 component → wasmtime host (`repros/swift-canvas-spike/host/`)
+provides WASI, implements `wandr:swift-spike/host {log, draw-rect}`, calls `run`;
+Swift calls back with exact values. The "no public Swift custom-WIT precedent"
+toolchain unknown is **killed**. Build facts (SwiftPM not raw swiftc; reactor via
+`-Xclang-linker -mexec-model=reactor`; link the component-type `.o`;
+`wasm32-unknown-wasip1`) captured in `repros/swift-canvas-spike/README.md` +
+`build.sh`. **P0 done** earlier (WIT + verified wit-bindgen-c surface).
+
+**Next: P2** — swap the stand-in `host` for real `wasi:canvas`; implement
+OpenCoreGraphics's empty `CGContext` over it (mapping in the feasibility doc).

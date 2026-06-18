@@ -1,0 +1,13 @@
+[package]
+name = "swift-spike-host"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+wasmtime = "45"
+wasmtime-wasi = "45"
+anyhow = "1"
+
+[[bin]]
+name = "swift-spike-host"
+path = "src/main.rs"

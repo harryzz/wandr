@@ -10,17 +10,43 @@ interface, export one function, over a custom WIT, run as a component in wasmtim
 P2 swaps the stand-in `host` interface for real `wasi:canvas` and implements
 OpenCoreGraphics's (currently empty) `CGContext` over it.
 
-## Status
+## Status — ✅ P1 DONE (2026-06-18)
 
-- **P0 done (no Swift needed):** the WIT (`wit/spike.wit`) and the **C binding
-  surface** Swift imports are generated and verified — `wit-bindgen c` produced
-  `generated/swift_spike.{h,c}` + `swift_spike_component_type.o`. The surface is
-  clean C: imports Swift calls (`wandr_swift_spike_host_log`,
-  `wandr_swift_spike_host_draw_rect`) and one export it implements
-  (`exports_swift_spike_run`). The Swift side (`Sources/spike.swift`, via `@_cdecl`
-  + C-interop) and `build.sh` are written and ready.
-- **P1 blocked on the Swift WASM SDK** (not in this environment). Install, then run
-  `./build.sh`.
+**Swift is a working wandr custom-WIT component guest.** Verified end to end with
+Swift 6.3.2 + `swift-6.3.2-RELEASE_wasm` on wasmtime 45:
+
+```
+[host] calling Swift `run`…
+[swift→host] log: hello from swift -> wasi (custom-WIT round trip)
+[swift→host] draw-rect x=10 y=10 w=120 h=48 argb=0xFF3366CC
+[swift→host] draw-rect x=24 y=70 w=96 h=96 argb=0xFFCC6633
+[swift→host] draw-rect x=140 y=10 w=48 h=156 argb=0xFF33AA55
+[host] run returned OK
+```
+
+Chain: Swift (`@_cdecl` export + C-interop imports over the `wit-bindgen c`
+surface) → SwiftPM cross-build to a **wasip1 reactor** → `wasm-tools component new
+--adapt …reactor.wasm` → a valid WASI 0.2 component → a wasmtime host
+(`host/`) that provides WASI, implements `wandr:swift-spike/host`, and calls `run`.
+This kills the "no public Swift custom-WIT precedent" unknown.
+
+Reproduce: `./build.sh` (builds the Swift component **and** runs it via the host).
+
+### Key build facts (the non-obvious bits)
+- Use **SwiftPM** (`swift build --swift-sdk swift-6.3.2-RELEASE_wasm`), not raw
+  `swiftc` — the SDK's `toolset.json` wires the sysroot + clang-rt; bare `swiftc`
+  fails on `libclang_rt.builtins.a`.
+- **Reactor** model: `-Xswiftc -Xclang-linker -Xswiftc -mexec-model=reactor` →
+  `_initialize`, no `_start`, `run` stays exported (via the `wit-bindgen`
+  `__export_name__`).
+- **Link the component-type object:** `-Xlinker .../swift_spike_component_type.o`
+  (the generated `.c` references it; it carries the embedded component type so
+  `component new` needs no separate `embed`).
+- Target triple is `wasm32-unknown-wasip1`.
+
+Next: **P2** — swap the stand-in `host` interface for real `wasi:canvas` and
+implement OpenCoreGraphics's empty `CGContext` over it (see
+`tasks/114-swift-coregraphics-on-wasi-canvas.md`).
 
 ## Prerequisite (the gate)
 
