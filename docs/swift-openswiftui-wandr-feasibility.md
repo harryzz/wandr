@@ -507,22 +507,42 @@ bounded/mechanical:
    that use it.
 That's the make-or-break dependency of the whole stack **building for WASI**.
 
-#### Runtime proof — blocked by a SwiftWasm toolchain bug (not Compute/wandr)
-Tried to *run* a minimal graph (`Graph()`/`Subgraph`/`Attribute(value:42).value`)
-via a consumer exe importing the cxx-interop Compute module. It fails in the
-consumer's module emit with a **clang-module cycle**: `WASI …/c++/v1/errno.h →
-SwiftWASILibc → std_inttypes_h → SwiftWASILibc` — i.e. the **C++ stdlib + WASI-libc
-overlay modularization** under cxx-interop. This is a **SwiftWasm toolchain rough
-edge**, independent of Compute and of wandr. (Compute's own library builds fine, and
-Swift↔C++ interop *without* the C++ stdlib already **runs** on wasm — the `Adder`
-proof above.) Working around it is a toolchain-config matter (module map / disable
-implicit C++ stdlib modules), not an engine-feasibility question.
+#### Runtime proof — consumer build (corrected 2026-06-18; the "module cycle" was self-inflicted)
+First attempt to *run* a minimal graph (`Graph()`/`Subgraph`/`Attribute(value:42)
+.value`) via a consumer exe hit a clang-module cycle (`c++/v1/inttypes.h`/`errno.h`
+`#include_next` ↔ `SwiftWASILibc` ↔ `std_inttypes_h`). **I first wrote this off as a
+SwiftWasm toolchain bug — that was wrong.** Diagnosis (full include-trace +
+shim audit):
+- **Our POSIX/SHA shims are NOT involved** — the entire cycle is SDK-internal
+  (`WASI.sdk/include/c++/v1/*`, `swift_static/shims/LibcOverlayShims.h`,
+  `clang/include/inttypes.h`); `/tmp/oag-shims` appears nowhere, and none of our
+  shims defines/shadows `inttypes.h`/`errno.h`.
+- **It was self-inflicted:** my consumer target set `.interoperabilityMode(.Cxx)`,
+  which drags **libc++** into the *consumer's* clang-module graph, where its
+  `inttypes.h`/`errno.h` `#include_next` wrappers collide with the WASI-libc overlay
+  module. **Compute's own API is consumable WITHOUT cxx-interop** — its test targets
+  use `.enableExperimentalFeature("Extern")`, not `.interoperabilityMode(.Cxx)` (the
+  Swift `Compute` module exposes a pure-Swift API over the C++ engine).
+- **Fix = drop `.interoperabilityMode(.Cxx)` from the consumer.** The cycle vanished;
+  the consumer **compiles and reaches the linker**.
 
-**Net:** the AttributeGraph engine **compiles + links for wasm32-wasip1** with a
-bounded, documented fix-set — the deepest dependency of OpenSwiftUI-on-wandr is
-demonstrably portable. The only thing left unproven is *executing* it from a
-consumer, gated on a SwiftWasm C++-interop/stdlib module-cycle bug (upstream
-toolchain), not on anything in Compute, OAG, or wandr.
+Remaining = pure link resolution — **6 undefined symbols, all bounded**:
+`__cxa_allocate_exception`/`__cxa_throw` (link `libc++abi.a`, in the SDK);
+`swift::Demangle::makeSymbolicMangledNameStringRef` (in `swift_static/wasi/
+libswiftCore.a`); `IAG::Graph::print_cycle` (defined only in Apple-only `Graph.mm`
+→ stub on wasm); and `madvise`/`memfd_create` (POSIX — wasi-libc lacks them).
+
+**The one genuine functional gap (not a stub):** `Sources/ComputeCxx/Data/Table.cpp`
+backs the graph's data table with a **`memfd_create` + `mmap` growable VM region**
+(Linux-specific). WASI has no `mmap`/`memfd`, so the allocator needs a wasm backing
+(linear-memory region) for the engine to actually *run* a graph — a real, bounded
+port, the last functional piece.
+
+**Net:** the AttributeGraph engine **compiles + links for wasm32-wasip1** (bounded,
+documented fix-set), and consuming it is a normal Swift import (no cxx-interop, no
+module cycle). *Running* a graph is gated on porting Compute's `mmap`/`memfd`
+allocator to wasm — engineering in Compute, not a toolchain or wandr blocker. (My
+earlier "toolchain bug" claim is retracted.)
 
 So **every gating toolchain mechanism for OAG-on-WASI is now demonstrated feasible**:
 Swift C++ interop ✅ (compiles/links/runs on wasm), metadata ABI ✅ (present in the
