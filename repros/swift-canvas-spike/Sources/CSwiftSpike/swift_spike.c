@@ -135,6 +135,74 @@ extern void __wasm_import_wasi_canvas_embedding_method_canvas_context_present(in
 __attribute__((__import_module__("wasi:canvas/embedding@0.0.2"), __import_name__("get-context")))
 extern int32_t __wasm_import_wasi_canvas_embedding_get_context(void);
 
+// Imported Functions from `wasi:canvas/layout@0.0.2`
+
+__attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[method]paragraph.layout")))
+extern void __wasm_import_wasi_canvas_layout_method_paragraph_layout(int32_t, float);
+
+__attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[method]paragraph.paint")))
+extern void __wasm_import_wasi_canvas_layout_method_paragraph_paint(int32_t, int32_t, float, float);
+
+__attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[method]paragraph.height")))
+extern float __wasm_import_wasi_canvas_layout_method_paragraph_height(int32_t);
+
+__attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[method]paragraph.max-intrinsic-width")))
+extern float __wasm_import_wasi_canvas_layout_method_paragraph_max_intrinsic_width(int32_t);
+
+__attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[method]paragraph.min-intrinsic-width")))
+extern float __wasm_import_wasi_canvas_layout_method_paragraph_min_intrinsic_width(int32_t);
+
+__attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[method]paragraph.alphabetic-baseline")))
+extern float __wasm_import_wasi_canvas_layout_method_paragraph_alphabetic_baseline(int32_t);
+
+__attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[method]paragraph.ideographic-baseline")))
+extern float __wasm_import_wasi_canvas_layout_method_paragraph_ideographic_baseline(int32_t);
+
+__attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[method]paragraph.line-count")))
+extern int32_t __wasm_import_wasi_canvas_layout_method_paragraph_line_count(int32_t);
+
+__attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[method]paragraph.lines")))
+extern void __wasm_import_wasi_canvas_layout_method_paragraph_lines(int32_t, uint8_t *);
+
+__attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[method]paragraph.selection-boxes")))
+extern void __wasm_import_wasi_canvas_layout_method_paragraph_selection_boxes(int32_t, int32_t, int32_t, int32_t, int32_t, uint8_t *);
+
+__attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[method]paragraph.offset-at")))
+extern int32_t __wasm_import_wasi_canvas_layout_method_paragraph_offset_at(int32_t, float, float);
+
+__attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[method]paragraph.word-boundary")))
+extern void __wasm_import_wasi_canvas_layout_method_paragraph_word_boundary(int32_t, int32_t, uint8_t *);
+
+__attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[method]paragraph.did-exceed-max-lines")))
+extern int32_t __wasm_import_wasi_canvas_layout_method_paragraph_did_exceed_max_lines(int32_t);
+
+__attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[static]paragraph-builder.new")))
+extern int32_t __wasm_import_wasi_canvas_layout_static_paragraph_builder_new(uint8_t *);
+
+__attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[method]paragraph-builder.set-align")))
+extern void __wasm_import_wasi_canvas_layout_method_paragraph_builder_set_align(int32_t, int32_t);
+
+__attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[method]paragraph-builder.set-direction")))
+extern void __wasm_import_wasi_canvas_layout_method_paragraph_builder_set_direction(int32_t, int32_t);
+
+__attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[method]paragraph-builder.set-max-lines")))
+extern void __wasm_import_wasi_canvas_layout_method_paragraph_builder_set_max_lines(int32_t, int32_t);
+
+__attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[method]paragraph-builder.set-ellipsis")))
+extern void __wasm_import_wasi_canvas_layout_method_paragraph_builder_set_ellipsis(int32_t, uint8_t *, size_t);
+
+__attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[method]paragraph-builder.push-style")))
+extern void __wasm_import_wasi_canvas_layout_method_paragraph_builder_push_style(uint8_t *);
+
+__attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[method]paragraph-builder.pop-style")))
+extern void __wasm_import_wasi_canvas_layout_method_paragraph_builder_pop_style(int32_t);
+
+__attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[method]paragraph-builder.add-text")))
+extern void __wasm_import_wasi_canvas_layout_method_paragraph_builder_add_text(int32_t, uint8_t *, size_t);
+
+__attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[static]paragraph-builder.build")))
+extern int32_t __wasm_import_wasi_canvas_layout_static_paragraph_builder_build(int32_t);
+
 // Exported Functions from `wasi:input-handlers/frame-handler@0.0.2`
 
 
@@ -321,6 +389,83 @@ void wasi_canvas_embedding_canvas_context_drop_borrow(wasi_canvas_embedding_borr
 
 wasi_canvas_embedding_borrow_canvas_context_t wasi_canvas_embedding_borrow_canvas_context(wasi_canvas_embedding_own_canvas_context_t arg) {
   return (wasi_canvas_embedding_borrow_canvas_context_t) { arg.__handle };
+}
+
+void wasi_canvas_layout_option_decoration_free(wasi_canvas_layout_option_decoration_t *ptr) {
+  if (ptr->is_some) {
+  }
+}
+
+void wasi_canvas_layout_list_text_shadow_free(wasi_canvas_layout_list_text_shadow_t *ptr) {
+  size_t list_len = ptr->len;
+  if (list_len > 0) {
+    wasi_canvas_layout_text_shadow_t *list_ptr = ptr->ptr;
+    for (size_t i = 0; i < list_len; i++) {
+    }
+    free(list_ptr);
+  }
+}
+
+void swift_spike_option_color_free(swift_spike_option_color_t *ptr) {
+  if (ptr->is_some) {
+  }
+}
+
+void wasi_canvas_layout_text_style_free(wasi_canvas_layout_text_style_t *ptr) {
+  swift_spike_string_free(&ptr->family);
+  wasi_canvas_layout_option_decoration_free(&ptr->decoration);
+  wasi_canvas_layout_list_text_shadow_free(&ptr->shadows);
+  swift_spike_option_color_free(&ptr->background);
+}
+
+__attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[resource-drop]paragraph")))
+extern void __wasm_import_wasi_canvas_layout_paragraph_drop(int32_t handle);
+
+void wasi_canvas_layout_paragraph_drop_own(wasi_canvas_layout_own_paragraph_t handle) {
+  __wasm_import_wasi_canvas_layout_paragraph_drop(handle.__handle);
+}
+
+void wasi_canvas_layout_paragraph_drop_borrow(wasi_canvas_layout_borrow_paragraph_t handle) {
+  __wasm_import_wasi_canvas_layout_paragraph_drop(handle.__handle);
+}
+
+wasi_canvas_layout_borrow_paragraph_t wasi_canvas_layout_borrow_paragraph(wasi_canvas_layout_own_paragraph_t arg) {
+  return (wasi_canvas_layout_borrow_paragraph_t) { arg.__handle };
+}
+
+__attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[resource-drop]paragraph-builder")))
+extern void __wasm_import_wasi_canvas_layout_paragraph_builder_drop(int32_t handle);
+
+void wasi_canvas_layout_paragraph_builder_drop_own(wasi_canvas_layout_own_paragraph_builder_t handle) {
+  __wasm_import_wasi_canvas_layout_paragraph_builder_drop(handle.__handle);
+}
+
+void wasi_canvas_layout_paragraph_builder_drop_borrow(wasi_canvas_layout_borrow_paragraph_builder_t handle) {
+  __wasm_import_wasi_canvas_layout_paragraph_builder_drop(handle.__handle);
+}
+
+wasi_canvas_layout_borrow_paragraph_builder_t wasi_canvas_layout_borrow_paragraph_builder(wasi_canvas_layout_own_paragraph_builder_t arg) {
+  return (wasi_canvas_layout_borrow_paragraph_builder_t) { arg.__handle };
+}
+
+void wasi_canvas_layout_list_line_metrics_free(wasi_canvas_layout_list_line_metrics_t *ptr) {
+  size_t list_len = ptr->len;
+  if (list_len > 0) {
+    wasi_canvas_layout_line_metrics_t *list_ptr = ptr->ptr;
+    for (size_t i = 0; i < list_len; i++) {
+    }
+    free(list_ptr);
+  }
+}
+
+void wasi_canvas_layout_list_text_box_free(wasi_canvas_layout_list_text_box_t *ptr) {
+  size_t list_len = ptr->len;
+  if (list_len > 0) {
+    wasi_canvas_layout_text_box_t *list_ptr = ptr->ptr;
+    for (size_t i = 0; i < list_len; i++) {
+    }
+    free(list_ptr);
+  }
 }
 
 void swift_spike_string_set(swift_spike_string_t *ret, const char*s) {
@@ -1267,6 +1412,186 @@ void wasi_canvas_embedding_method_canvas_context_present(wasi_canvas_embedding_b
 wasi_canvas_embedding_own_canvas_context_t wasi_canvas_embedding_get_context(void) {
   int32_t ret = __wasm_import_wasi_canvas_embedding_get_context();
   return (wasi_canvas_embedding_own_canvas_context_t) { ret };
+}
+
+void wasi_canvas_layout_method_paragraph_layout(wasi_canvas_layout_borrow_paragraph_t self, float width) {
+  __wasm_import_wasi_canvas_layout_method_paragraph_layout((self).__handle, width);
+}
+
+void wasi_canvas_layout_method_paragraph_paint(wasi_canvas_layout_borrow_paragraph_t self, wasi_canvas_layout_borrow_canvas_t canvas, wasi_canvas_layout_point_t *at) {
+  __wasm_import_wasi_canvas_layout_method_paragraph_paint((self).__handle, (canvas).__handle, (*at).x, (*at).y);
+}
+
+float wasi_canvas_layout_method_paragraph_height(wasi_canvas_layout_borrow_paragraph_t self) {
+  float ret = __wasm_import_wasi_canvas_layout_method_paragraph_height((self).__handle);
+  return ret;
+}
+
+float wasi_canvas_layout_method_paragraph_max_intrinsic_width(wasi_canvas_layout_borrow_paragraph_t self) {
+  float ret = __wasm_import_wasi_canvas_layout_method_paragraph_max_intrinsic_width((self).__handle);
+  return ret;
+}
+
+float wasi_canvas_layout_method_paragraph_min_intrinsic_width(wasi_canvas_layout_borrow_paragraph_t self) {
+  float ret = __wasm_import_wasi_canvas_layout_method_paragraph_min_intrinsic_width((self).__handle);
+  return ret;
+}
+
+float wasi_canvas_layout_method_paragraph_alphabetic_baseline(wasi_canvas_layout_borrow_paragraph_t self) {
+  float ret = __wasm_import_wasi_canvas_layout_method_paragraph_alphabetic_baseline((self).__handle);
+  return ret;
+}
+
+float wasi_canvas_layout_method_paragraph_ideographic_baseline(wasi_canvas_layout_borrow_paragraph_t self) {
+  float ret = __wasm_import_wasi_canvas_layout_method_paragraph_ideographic_baseline((self).__handle);
+  return ret;
+}
+
+uint32_t wasi_canvas_layout_method_paragraph_line_count(wasi_canvas_layout_borrow_paragraph_t self) {
+  int32_t ret = __wasm_import_wasi_canvas_layout_method_paragraph_line_count((self).__handle);
+  return (uint32_t) (ret);
+}
+
+void wasi_canvas_layout_method_paragraph_lines(wasi_canvas_layout_borrow_paragraph_t self, wasi_canvas_layout_list_line_metrics_t *ret) {
+  __attribute__((__aligned__(sizeof(void*))))
+  uint8_t ret_area[(2*sizeof(void*))];
+  uint8_t *ptr = (uint8_t *) &ret_area;
+  __wasm_import_wasi_canvas_layout_method_paragraph_lines((self).__handle, ptr);
+  *ret = (wasi_canvas_layout_list_line_metrics_t) { (wasi_canvas_layout_line_metrics_t*)(*((uint8_t **) (ptr + 0))), (*((size_t*) (ptr + sizeof(void*)))) };
+}
+
+void wasi_canvas_layout_method_paragraph_selection_boxes(wasi_canvas_layout_borrow_paragraph_t self, uint32_t start, uint32_t end, wasi_canvas_layout_rect_height_style_t height, wasi_canvas_layout_rect_width_style_t width, wasi_canvas_layout_list_text_box_t *ret) {
+  __attribute__((__aligned__(sizeof(void*))))
+  uint8_t ret_area[(2*sizeof(void*))];
+  uint8_t *ptr = (uint8_t *) &ret_area;
+  __wasm_import_wasi_canvas_layout_method_paragraph_selection_boxes((self).__handle, (int32_t) (start), (int32_t) (end), (int32_t) height, (int32_t) width, ptr);
+  *ret = (wasi_canvas_layout_list_text_box_t) { (wasi_canvas_layout_text_box_t*)(*((uint8_t **) (ptr + 0))), (*((size_t*) (ptr + sizeof(void*)))) };
+}
+
+uint32_t wasi_canvas_layout_method_paragraph_offset_at(wasi_canvas_layout_borrow_paragraph_t self, wasi_canvas_layout_point_t *at) {
+  int32_t ret = __wasm_import_wasi_canvas_layout_method_paragraph_offset_at((self).__handle, (*at).x, (*at).y);
+  return (uint32_t) (ret);
+}
+
+void wasi_canvas_layout_method_paragraph_word_boundary(wasi_canvas_layout_borrow_paragraph_t self, uint32_t offset, swift_spike_tuple2_u32_u32_t *ret) {
+  __attribute__((__aligned__(4)))
+  uint8_t ret_area[8];
+  uint8_t *ptr = (uint8_t *) &ret_area;
+  __wasm_import_wasi_canvas_layout_method_paragraph_word_boundary((self).__handle, (int32_t) (offset), ptr);
+  *ret = (swift_spike_tuple2_u32_u32_t) {
+    (uint32_t) (uint32_t) (*((int32_t*) (ptr + 0))),
+    (uint32_t) (uint32_t) (*((int32_t*) (ptr + 4))),
+  };
+}
+
+bool wasi_canvas_layout_method_paragraph_did_exceed_max_lines(wasi_canvas_layout_borrow_paragraph_t self) {
+  int32_t ret = __wasm_import_wasi_canvas_layout_method_paragraph_did_exceed_max_lines((self).__handle);
+  return ret;
+}
+
+wasi_canvas_layout_own_paragraph_builder_t wasi_canvas_layout_static_paragraph_builder_new(wasi_canvas_layout_text_style_t *default_style) {
+  __attribute__((__aligned__(sizeof(void*))))
+  uint8_t ret_area[(56+4*sizeof(void*))];
+  uint8_t *ptr = (uint8_t *) &ret_area;
+  *((size_t*)(ptr + sizeof(void*))) = ((*default_style).family).len;
+  *((uint8_t **)(ptr + 0)) = (uint8_t *) ((*default_style).family).ptr;
+  *((float*)(ptr + (2*sizeof(void*)))) = (*default_style).size;
+  *((int32_t*)(ptr + (4+2*sizeof(void*)))) = (int32_t) ((*default_style).weight);
+  *((int8_t*)(ptr + (8+2*sizeof(void*)))) = (*default_style).italic;
+  *((int32_t*)(ptr + (12+2*sizeof(void*)))) = (int32_t) ((*default_style).color);
+  *((float*)(ptr + (16+2*sizeof(void*)))) = (*default_style).letter_spacing;
+  *((float*)(ptr + (20+2*sizeof(void*)))) = (*default_style).line_height;
+  *((float*)(ptr + (24+2*sizeof(void*)))) = (*default_style).baseline_shift;
+  if (((*default_style).decoration).is_some) {
+    const wasi_canvas_layout_decoration_t *payload0 = &((*default_style).decoration).val;
+    *((int8_t*)(ptr + (28+2*sizeof(void*)))) = 1;
+    *((int8_t*)(ptr + (32+2*sizeof(void*)))) = (*payload0).underline;
+    *((int8_t*)(ptr + (33+2*sizeof(void*)))) = (*payload0).overline;
+    *((int8_t*)(ptr + (34+2*sizeof(void*)))) = (*payload0).line_through;
+    *((int32_t*)(ptr + (36+2*sizeof(void*)))) = (int32_t) ((*payload0).color);
+    *((int8_t*)(ptr + (40+2*sizeof(void*)))) = (int32_t) (*payload0).style;
+    *((float*)(ptr + (44+2*sizeof(void*)))) = (*payload0).thickness;
+  } else {
+    *((int8_t*)(ptr + (28+2*sizeof(void*)))) = 0;
+  }
+  *((size_t*)(ptr + (48+3*sizeof(void*)))) = ((*default_style).shadows).len;
+  *((uint8_t **)(ptr + (48+2*sizeof(void*)))) = (uint8_t *) ((*default_style).shadows).ptr;
+  if (((*default_style).background).is_some) {
+    const wasi_canvas_layout_color_t *payload2 = &((*default_style).background).val;
+    *((int8_t*)(ptr + (48+4*sizeof(void*)))) = 1;
+    *((int32_t*)(ptr + (52+4*sizeof(void*)))) = (int32_t) (*payload2);
+  } else {
+    *((int8_t*)(ptr + (48+4*sizeof(void*)))) = 0;
+  }
+  int32_t ret = __wasm_import_wasi_canvas_layout_static_paragraph_builder_new(ptr);
+  return (wasi_canvas_layout_own_paragraph_builder_t) { ret };
+}
+
+void wasi_canvas_layout_method_paragraph_builder_set_align(wasi_canvas_layout_borrow_paragraph_builder_t self, wasi_canvas_layout_align_t a) {
+  __wasm_import_wasi_canvas_layout_method_paragraph_builder_set_align((self).__handle, (int32_t) a);
+}
+
+void wasi_canvas_layout_method_paragraph_builder_set_direction(wasi_canvas_layout_borrow_paragraph_builder_t self, wasi_canvas_layout_text_direction_t d) {
+  __wasm_import_wasi_canvas_layout_method_paragraph_builder_set_direction((self).__handle, (int32_t) d);
+}
+
+void wasi_canvas_layout_method_paragraph_builder_set_max_lines(wasi_canvas_layout_borrow_paragraph_builder_t self, uint32_t n) {
+  __wasm_import_wasi_canvas_layout_method_paragraph_builder_set_max_lines((self).__handle, (int32_t) (n));
+}
+
+void wasi_canvas_layout_method_paragraph_builder_set_ellipsis(wasi_canvas_layout_borrow_paragraph_builder_t self, swift_spike_string_t *e) {
+  __wasm_import_wasi_canvas_layout_method_paragraph_builder_set_ellipsis((self).__handle, (uint8_t *) (*e).ptr, (*e).len);
+}
+
+void wasi_canvas_layout_method_paragraph_builder_push_style(wasi_canvas_layout_borrow_paragraph_builder_t self, wasi_canvas_layout_text_style_t *style) {
+  __attribute__((__aligned__(sizeof(void*))))
+  uint8_t ret_area[(56+5*sizeof(void*))];
+  uint8_t *ptr = (uint8_t *) &ret_area;
+  *((int32_t*)(ptr + 0)) = (self).__handle;
+  *((size_t*)(ptr + (2*sizeof(void*)))) = ((*style).family).len;
+  *((uint8_t **)(ptr + sizeof(void*))) = (uint8_t *) ((*style).family).ptr;
+  *((float*)(ptr + (3*sizeof(void*)))) = (*style).size;
+  *((int32_t*)(ptr + (4+3*sizeof(void*)))) = (int32_t) ((*style).weight);
+  *((int8_t*)(ptr + (8+3*sizeof(void*)))) = (*style).italic;
+  *((int32_t*)(ptr + (12+3*sizeof(void*)))) = (int32_t) ((*style).color);
+  *((float*)(ptr + (16+3*sizeof(void*)))) = (*style).letter_spacing;
+  *((float*)(ptr + (20+3*sizeof(void*)))) = (*style).line_height;
+  *((float*)(ptr + (24+3*sizeof(void*)))) = (*style).baseline_shift;
+  if (((*style).decoration).is_some) {
+    const wasi_canvas_layout_decoration_t *payload0 = &((*style).decoration).val;
+    *((int8_t*)(ptr + (28+3*sizeof(void*)))) = 1;
+    *((int8_t*)(ptr + (32+3*sizeof(void*)))) = (*payload0).underline;
+    *((int8_t*)(ptr + (33+3*sizeof(void*)))) = (*payload0).overline;
+    *((int8_t*)(ptr + (34+3*sizeof(void*)))) = (*payload0).line_through;
+    *((int32_t*)(ptr + (36+3*sizeof(void*)))) = (int32_t) ((*payload0).color);
+    *((int8_t*)(ptr + (40+3*sizeof(void*)))) = (int32_t) (*payload0).style;
+    *((float*)(ptr + (44+3*sizeof(void*)))) = (*payload0).thickness;
+  } else {
+    *((int8_t*)(ptr + (28+3*sizeof(void*)))) = 0;
+  }
+  *((size_t*)(ptr + (48+4*sizeof(void*)))) = ((*style).shadows).len;
+  *((uint8_t **)(ptr + (48+3*sizeof(void*)))) = (uint8_t *) ((*style).shadows).ptr;
+  if (((*style).background).is_some) {
+    const wasi_canvas_layout_color_t *payload2 = &((*style).background).val;
+    *((int8_t*)(ptr + (48+5*sizeof(void*)))) = 1;
+    *((int32_t*)(ptr + (52+5*sizeof(void*)))) = (int32_t) (*payload2);
+  } else {
+    *((int8_t*)(ptr + (48+5*sizeof(void*)))) = 0;
+  }
+  __wasm_import_wasi_canvas_layout_method_paragraph_builder_push_style(ptr);
+}
+
+void wasi_canvas_layout_method_paragraph_builder_pop_style(wasi_canvas_layout_borrow_paragraph_builder_t self) {
+  __wasm_import_wasi_canvas_layout_method_paragraph_builder_pop_style((self).__handle);
+}
+
+void wasi_canvas_layout_method_paragraph_builder_add_text(wasi_canvas_layout_borrow_paragraph_builder_t self, swift_spike_string_t *text) {
+  __wasm_import_wasi_canvas_layout_method_paragraph_builder_add_text((self).__handle, (uint8_t *) (*text).ptr, (*text).len);
+}
+
+wasi_canvas_layout_own_paragraph_t wasi_canvas_layout_static_paragraph_builder_build(wasi_canvas_layout_own_paragraph_builder_t b) {
+  int32_t ret = __wasm_import_wasi_canvas_layout_static_paragraph_builder_build((b).__handle);
+  return (wasi_canvas_layout_own_paragraph_t) { ret };
 }
 
 __attribute__((__export_name__("wasi:input-handlers/frame-handler@0.0.2#on-frame")))

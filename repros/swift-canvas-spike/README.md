@@ -151,8 +151,20 @@ change** (device-verified on Pixel 2 XL):
 So `wasi:canvas` is **sufficient for the full CoreGraphics 2D `CGContext`** — these
 were the only mapping gaps.
 
-Next: extend the `CGContext` surface (gradients, images, text). SwiftUI
-(OpenRenderBox + OpenSwiftUI) remains the out-of-scope wall.
+## P2.3f (2026-06-18) — text → the CGContext 2D surface is COMPLETE
+
+`CGContext.drawString(_:at:size:color:maxWidth:)` lays out + paints host-shaped
+paragraphs via `wasi:canvas/layout` (paragraph-builder → add-text → build → layout
+→ paint), host-owned fonts (CoreText-style). Device-verified (wrapped label).
+
+✅ **The CoreGraphics 2D `CGContext` is complete over `wasi:canvas`** — all
+device-verified via real vendored OpenCoreGraphics: state stack, CTM, paths,
+fills/strokes, colors, cap/join/miter, **dash**, **offset+colour shadow**, blend
+modes, transparency layers, **geometric clip**, **alpha mask-clip**, **linear/
+radial gradients**, **images**, **text**.
+
+SwiftUI (OpenRenderBox display list + OpenSwiftUI + OpenAttributeGraph) remains the
+out-of-scope wall.
 
 ## Prerequisite (the gate)
 

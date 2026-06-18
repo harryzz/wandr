@@ -153,5 +153,15 @@ radial gradient clipped to a triangle, an RGBA bitmap). GOTCHA: image draws need
 opaque-WHITE paint color — the host multiplies color.alpha × paint.alpha
 ([[feedback_paint_alpha_pipeline]]), so color=0 made the image fully transparent.
 
-**Remaining (P2.3 cont.):** text (needs the wasi:canvas/text world + a typeface).
-SwiftUI stays out of scope.
+🟢 **P2.3f / P3 DONE (2026-06-18) — text (device-verified).** Added
+`import wasi:canvas/layout@0.0.2` + `CGContext.drawString(_:at:size:color:maxWidth:)`
+= host-shaped paragraphs (paragraph-builder -> add-text -> build -> layout -> paint),
+host-owned fonts (family "" = default), CoreText-style. Device-verified on Pixel 2
+XL (wrapped label with `·`/`→` glyphs).
+
+✅ **The CoreGraphics 2D `CGContext` is now COMPLETE over wasi:canvas** (all
+device-verified): state stack, CTM, paths, fills/strokes, colors, cap/join/miter,
+dash, offset+colour shadow, blend modes, transparency layers, geometric clip,
+alpha mask-clip, linear/radial gradients, images, and text — using REAL vendored
+OpenCoreGraphics types. SwiftUI (OpenRenderBox + OpenSwiftUI) remains the
+out-of-scope wall.

@@ -98,6 +98,12 @@ public func onFrame(_ nanos: UInt64) {
     cg.setBlendMode(.normal)
     cg.endTransparencyLayer()
 
+    // (6) TEXT — host-shaped paragraph (wasi:canvas/layout) via CGContext.drawString.
+    cg.drawString("Swift · OpenCoreGraphics → wasi:canvas",
+                  at: CGPoint(x: m, y: h * 0.925), size: max(14, w * 0.05),
+                  color: CGColor(red: 0.92, green: 0.94, blue: 1.0, alpha: 1),
+                  maxWidth: w - 2 * m)
+
     wasi_canvas_draw_canvas_drop_own(bufOwn)
     wasi_canvas_embedding_method_canvas_context_present(ctx)
     wasi_canvas_draw_graphics_drop_own(wasi_canvas_draw_own_graphics_t(__handle: gfxOwn.__handle))

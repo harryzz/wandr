@@ -331,6 +331,163 @@ typedef wasi_canvas_draw_own_graphics_t wasi_canvas_embedding_own_graphics_t;
 
 typedef wasi_canvas_draw_own_canvas_t wasi_canvas_embedding_own_canvas_t;
 
+typedef wasi_canvas_types_color_t wasi_canvas_layout_color_t;
+
+typedef wasi_canvas_types_rect_t wasi_canvas_layout_rect_t;
+
+typedef wasi_canvas_types_point_t wasi_canvas_layout_point_t;
+
+typedef uint8_t wasi_canvas_layout_decoration_line_style_t;
+
+#define WASI_CANVAS_LAYOUT_DECORATION_LINE_STYLE_SOLID 0
+#define WASI_CANVAS_LAYOUT_DECORATION_LINE_STYLE_DOUBLE 1
+#define WASI_CANVAS_LAYOUT_DECORATION_LINE_STYLE_DOTTED 2
+#define WASI_CANVAS_LAYOUT_DECORATION_LINE_STYLE_DASHED 3
+#define WASI_CANVAS_LAYOUT_DECORATION_LINE_STYLE_WAVY 4
+
+// Text decorations (Compose TextDecoration, dart:ui decorations).
+typedef struct wasi_canvas_layout_decoration_t {
+  bool   underline;
+  bool   overline;
+  bool   line_through;
+  // 0 = use the text color.
+  wasi_canvas_layout_color_t   color;
+  wasi_canvas_layout_decoration_line_style_t   style;
+  // Multiple of the font-suggested thickness.
+  float   thickness;
+} wasi_canvas_layout_decoration_t;
+
+typedef struct wasi_canvas_layout_text_shadow_t {
+  wasi_canvas_layout_color_t   color;
+  wasi_canvas_layout_point_t   offset;
+  float   sigma;
+} wasi_canvas_layout_text_shadow_t;
+
+typedef struct {
+  bool is_some;
+  wasi_canvas_layout_decoration_t val;
+} wasi_canvas_layout_option_decoration_t;
+
+typedef struct {
+  wasi_canvas_layout_text_shadow_t *ptr;
+  size_t len;
+} wasi_canvas_layout_list_text_shadow_t;
+
+typedef struct {
+  bool is_some;
+  wasi_canvas_layout_color_t val;
+} swift_spike_option_color_t;
+
+typedef struct wasi_canvas_layout_text_style_t {
+  // Font family name resolved by the HOST's font collection
+  // (host-owned fonts is the point of this layer). Empty = default.
+  swift_spike_string_t   family;
+  float   size;
+  // CSS-numeric weight (400 normal, 700 bold).
+  uint32_t   weight;
+  bool   italic;
+  wasi_canvas_layout_color_t   color;
+  float   letter_spacing;
+  // Line height as a multiple of the font size; 0 = font default.
+  float   line_height;
+  // Vertical run shift (superscript/subscript); 0 = none.
+  float   baseline_shift;
+  wasi_canvas_layout_option_decoration_t   decoration;
+  // Empty = none (a LIST — dart:ui carries multiple per span).
+  wasi_canvas_layout_list_text_shadow_t   shadows;
+  swift_spike_option_color_t   background;
+} wasi_canvas_layout_text_style_t;
+
+typedef uint8_t wasi_canvas_layout_align_t;
+
+#define WASI_CANVAS_LAYOUT_ALIGN_START 0
+#define WASI_CANVAS_LAYOUT_ALIGN_CENTER 1
+#define WASI_CANVAS_LAYOUT_ALIGN_END 2
+#define WASI_CANVAS_LAYOUT_ALIGN_JUSTIFY 3
+
+// Per-line metrics — the full editor-grade shape (cursor placement,
+// line hit-testing). Field provenance: skia textlayout LineMetrics,
+// which is what every shipped host-shaping engine exposes.
+typedef struct wasi_canvas_layout_line_metrics_t {
+  uint32_t   start_offset;
+  // UTF-8 byte offsets into the paragraph text
+  uint32_t   end_offset;
+  // `end-offset` with trailing whitespace excluded.
+  uint32_t   end_excluding_whitespace;
+  // `end-offset` including a trailing hard-break newline.
+  uint32_t   end_including_newline;
+  // True when the line ends in an explicit newline.
+  bool   hard_break;
+  float   ascent;
+  float   descent;
+  // Ascent before any line-height multiplier.
+  float   unscaled_ascent;
+  float   height;
+  float   width;
+  float   left;
+  float   baseline;
+  uint32_t   line_number;
+} wasi_canvas_layout_line_metrics_t;
+
+typedef uint8_t wasi_canvas_layout_text_direction_t;
+
+#define WASI_CANVAS_LAYOUT_TEXT_DIRECTION_LTR 0
+#define WASI_CANVAS_LAYOUT_TEXT_DIRECTION_RTL 1
+
+// How tall the rects returned by `selection-boxes` are (CSS caret /
+// selection-highlight distinctions; skparagraph RectHeightStyle).
+typedef uint8_t wasi_canvas_layout_rect_height_style_t;
+
+#define WASI_CANVAS_LAYOUT_RECT_HEIGHT_STYLE_TIGHT 0
+#define WASI_CANVAS_LAYOUT_RECT_HEIGHT_STYLE_MAX 1
+#define WASI_CANVAS_LAYOUT_RECT_HEIGHT_STYLE_INCLUDE_LINE_SPACING_MIDDLE 2
+#define WASI_CANVAS_LAYOUT_RECT_HEIGHT_STYLE_INCLUDE_LINE_SPACING_TOP 3
+#define WASI_CANVAS_LAYOUT_RECT_HEIGHT_STYLE_INCLUDE_LINE_SPACING_BOTTOM 4
+#define WASI_CANVAS_LAYOUT_RECT_HEIGHT_STYLE_STRUT 5
+
+typedef uint8_t wasi_canvas_layout_rect_width_style_t;
+
+#define WASI_CANVAS_LAYOUT_RECT_WIDTH_STYLE_TIGHT 0
+#define WASI_CANVAS_LAYOUT_RECT_WIDTH_STYLE_MAX 1
+
+typedef struct wasi_canvas_layout_text_box_t {
+  wasi_canvas_layout_rect_t   rect;
+  wasi_canvas_layout_text_direction_t   direction;
+} wasi_canvas_layout_text_box_t;
+
+typedef struct wasi_canvas_layout_own_paragraph_t {
+  int32_t __handle;
+} wasi_canvas_layout_own_paragraph_t;
+
+typedef struct wasi_canvas_layout_borrow_paragraph_t {
+  int32_t __handle;
+} wasi_canvas_layout_borrow_paragraph_t;
+
+typedef struct wasi_canvas_layout_own_paragraph_builder_t {
+  int32_t __handle;
+} wasi_canvas_layout_own_paragraph_builder_t;
+
+typedef struct wasi_canvas_layout_borrow_paragraph_builder_t {
+  int32_t __handle;
+} wasi_canvas_layout_borrow_paragraph_builder_t;
+
+typedef wasi_canvas_draw_borrow_canvas_t wasi_canvas_layout_borrow_canvas_t;
+
+typedef struct {
+  wasi_canvas_layout_line_metrics_t *ptr;
+  size_t len;
+} wasi_canvas_layout_list_line_metrics_t;
+
+typedef struct {
+  wasi_canvas_layout_text_box_t *ptr;
+  size_t len;
+} wasi_canvas_layout_list_text_box_t;
+
+typedef struct {
+  uint32_t f0;
+  uint32_t f1;
+} swift_spike_tuple2_u32_u32_t;
+
 typedef uint8_t exports_wasi_input_handlers_pointer_handler_kind_t;
 
 #define EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_DOWN 0
@@ -491,6 +648,37 @@ extern void wasi_canvas_embedding_method_canvas_context_present(wasi_canvas_embe
 // come from `surface.connect-graphics-context`.
 extern wasi_canvas_embedding_own_canvas_context_t wasi_canvas_embedding_get_context(void);
 
+// Imported Functions from `wasi:canvas/layout@0.0.2`
+extern void wasi_canvas_layout_method_paragraph_layout(wasi_canvas_layout_borrow_paragraph_t self, float width);
+extern void wasi_canvas_layout_method_paragraph_paint(wasi_canvas_layout_borrow_paragraph_t self, wasi_canvas_layout_borrow_canvas_t canvas, wasi_canvas_layout_point_t *at);
+extern float wasi_canvas_layout_method_paragraph_height(wasi_canvas_layout_borrow_paragraph_t self);
+extern float wasi_canvas_layout_method_paragraph_max_intrinsic_width(wasi_canvas_layout_borrow_paragraph_t self);
+extern float wasi_canvas_layout_method_paragraph_min_intrinsic_width(wasi_canvas_layout_borrow_paragraph_t self);
+extern float wasi_canvas_layout_method_paragraph_alphabetic_baseline(wasi_canvas_layout_borrow_paragraph_t self);
+extern float wasi_canvas_layout_method_paragraph_ideographic_baseline(wasi_canvas_layout_borrow_paragraph_t self);
+extern uint32_t wasi_canvas_layout_method_paragraph_line_count(wasi_canvas_layout_borrow_paragraph_t self);
+extern void wasi_canvas_layout_method_paragraph_lines(wasi_canvas_layout_borrow_paragraph_t self, wasi_canvas_layout_list_line_metrics_t *ret);
+// Caret/selection geometry for a UTF-8 byte range, with the
+// box-shape policy callers like text editors need.
+extern void wasi_canvas_layout_method_paragraph_selection_boxes(wasi_canvas_layout_borrow_paragraph_t self, uint32_t start, uint32_t end, wasi_canvas_layout_rect_height_style_t height, wasi_canvas_layout_rect_width_style_t width, wasi_canvas_layout_list_text_box_t *ret);
+// Nearest text position (UTF-8 byte offset) to a point.
+extern uint32_t wasi_canvas_layout_method_paragraph_offset_at(wasi_canvas_layout_borrow_paragraph_t self, wasi_canvas_layout_point_t *at);
+// [start, end) of the word containing `offset`.
+extern void wasi_canvas_layout_method_paragraph_word_boundary(wasi_canvas_layout_borrow_paragraph_t self, uint32_t offset, swift_spike_tuple2_u32_u32_t *ret);
+// True when max-lines truncated the layout.
+extern bool wasi_canvas_layout_method_paragraph_did_exceed_max_lines(wasi_canvas_layout_borrow_paragraph_t self);
+extern wasi_canvas_layout_own_paragraph_builder_t wasi_canvas_layout_static_paragraph_builder_new(wasi_canvas_layout_text_style_t *default_style);
+extern void wasi_canvas_layout_method_paragraph_builder_set_align(wasi_canvas_layout_borrow_paragraph_builder_t self, wasi_canvas_layout_align_t a);
+extern void wasi_canvas_layout_method_paragraph_builder_set_direction(wasi_canvas_layout_borrow_paragraph_builder_t self, wasi_canvas_layout_text_direction_t d);
+// 0 = unlimited.
+extern void wasi_canvas_layout_method_paragraph_builder_set_max_lines(wasi_canvas_layout_borrow_paragraph_builder_t self, uint32_t n);
+extern void wasi_canvas_layout_method_paragraph_builder_set_ellipsis(wasi_canvas_layout_borrow_paragraph_builder_t self, swift_spike_string_t *e);
+extern void wasi_canvas_layout_method_paragraph_builder_push_style(wasi_canvas_layout_borrow_paragraph_builder_t self, wasi_canvas_layout_text_style_t *style);
+extern void wasi_canvas_layout_method_paragraph_builder_pop_style(wasi_canvas_layout_borrow_paragraph_builder_t self);
+extern void wasi_canvas_layout_method_paragraph_builder_add_text(wasi_canvas_layout_borrow_paragraph_builder_t self, swift_spike_string_t *text);
+// Consumes the builder.
+extern wasi_canvas_layout_own_paragraph_t wasi_canvas_layout_static_paragraph_builder_build(wasi_canvas_layout_own_paragraph_builder_t b);
+
 // Exported Functions from `wasi:input-handlers/frame-handler@0.0.2`
 void exports_wasi_input_handlers_frame_handler_on_frame(uint64_t nanos);
 void exports_wasi_input_handlers_frame_handler_on_resize(uint32_t width, uint32_t height);
@@ -562,6 +750,30 @@ extern void wasi_canvas_embedding_canvas_context_drop_own(wasi_canvas_embedding_
 extern void wasi_canvas_embedding_canvas_context_drop_borrow(wasi_canvas_embedding_borrow_canvas_context_t handle);
 
 extern wasi_canvas_embedding_borrow_canvas_context_t wasi_canvas_embedding_borrow_canvas_context(wasi_canvas_embedding_own_canvas_context_t handle);
+
+void wasi_canvas_layout_option_decoration_free(wasi_canvas_layout_option_decoration_t *ptr);
+
+void wasi_canvas_layout_list_text_shadow_free(wasi_canvas_layout_list_text_shadow_t *ptr);
+
+void swift_spike_option_color_free(swift_spike_option_color_t *ptr);
+
+void wasi_canvas_layout_text_style_free(wasi_canvas_layout_text_style_t *ptr);
+
+extern void wasi_canvas_layout_paragraph_drop_own(wasi_canvas_layout_own_paragraph_t handle);
+
+extern void wasi_canvas_layout_paragraph_drop_borrow(wasi_canvas_layout_borrow_paragraph_t handle);
+
+extern wasi_canvas_layout_borrow_paragraph_t wasi_canvas_layout_borrow_paragraph(wasi_canvas_layout_own_paragraph_t handle);
+
+extern void wasi_canvas_layout_paragraph_builder_drop_own(wasi_canvas_layout_own_paragraph_builder_t handle);
+
+extern void wasi_canvas_layout_paragraph_builder_drop_borrow(wasi_canvas_layout_borrow_paragraph_builder_t handle);
+
+extern wasi_canvas_layout_borrow_paragraph_builder_t wasi_canvas_layout_borrow_paragraph_builder(wasi_canvas_layout_own_paragraph_builder_t handle);
+
+void wasi_canvas_layout_list_line_metrics_free(wasi_canvas_layout_list_line_metrics_t *ptr);
+
+void wasi_canvas_layout_list_text_box_free(wasi_canvas_layout_list_text_box_t *ptr);
 
 // Sets the string `ret` to reference the input string `s` without copying it
 void swift_spike_string_set(swift_spike_string_t *ret, const char*s);

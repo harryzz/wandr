@@ -302,6 +302,34 @@ public final class CGContext: Hashable {
                                  width: Float(r.size.width), height: Float(r.size.height))
     }
 
+    // ── text (host-shaped paragraph, à la CoreText) ─────────────────────────────
+    /// Lay out and paint a string at `p` (top-left), wrapping at `maxWidth`. The
+    /// HOST owns fonts (family "" = default); colour carries its own alpha.
+    public func drawString(_ s: String, at p: CGPoint, size: CGFloat, color: CGColor,
+                           maxWidth: CGFloat, family: String = "") {
+        family.withCString { famC in
+            var ts = wasi_canvas_layout_text_style_t()
+            ts.size = Float(size)
+            ts.weight = 400
+            ts.color = color.argb
+            swift_spike_string_set(&ts.family, famC)
+            let builder = wasi_canvas_layout_static_paragraph_builder_new(&ts)
+            let bb = wasi_canvas_layout_borrow_paragraph_builder(builder)
+            s.withCString { txtC in
+                var txt = swift_spike_string_t()
+                swift_spike_string_set(&txt, txtC)
+                wasi_canvas_layout_method_paragraph_builder_add_text(bb, &txt)
+            }
+            let para = wasi_canvas_layout_static_paragraph_builder_build(builder) // consumes builder
+            let pb = wasi_canvas_layout_borrow_paragraph(para)
+            wasi_canvas_layout_method_paragraph_layout(pb, Float(maxWidth))
+            var pt = wasi_canvas_layout_point_t(x: Float(p.x), y: Float(p.y))
+            let cb = wasi_canvas_layout_borrow_canvas_t(__handle: canvas.__handle)
+            wasi_canvas_layout_method_paragraph_paint(pb, cb, &pt)
+            wasi_canvas_layout_paragraph_drop_own(para)
+        }
+    }
+
     // ── path → SVG path-data (plain + dashed) ───────────────────────────────────
     private func svgPathData(_ els: [PathElement]) -> String {
         var out = ""
