@@ -1261,15 +1261,17 @@ index 749b97c..8894e9e 100644
              return localizedString.isEmpty
          }
 diff --git a/Sources/OpenSwiftUICore/View/Text/Text/Text+View.swift b/Sources/OpenSwiftUICore/View/Text/Text/Text+View.swift
-index daa834a..b5ed585 100644
+index daa834a..76bd0a7 100644
 --- a/Sources/OpenSwiftUICore/View/Text/Text/Text+View.swift
 +++ b/Sources/OpenSwiftUICore/View/Text/Text/Text+View.swift
-@@ -145,16 +145,25 @@ package struct AccessibilityStyledTextContentView<Provider>: View where Provider
+@@ -145,16 +145,29 @@ package struct AccessibilityStyledTextContentView<Provider>: View where Provider
  
      package var needsDrawingGroup: Bool
  
-+    // WASI: environment-resolved font size + foreground color (the off-Apple text resolution
-+    // is stubbed, so the build site resolves these and threads them to the leaf content).
++    // WASI: environment-resolved plain string (formats interpolated keys like "\(n)"→"2"),
++    // font size + foreground color (the off-Apple text resolution is stubbed, so the build
++    // site resolves these and threads them to the leaf content).
++    package var wasmPlainString: String = ""
 +    package var wasmFontSize: CGFloat = 17
 +    package var wasmColor: Color.Resolved? = nil
 +
@@ -1279,6 +1281,7 @@ index daa834a..b5ed585 100644
          renderer: TextRendererBoxBase? = nil,
 -        needsDrawingGroup: Bool = false
 +        needsDrawingGroup: Bool = false,
++        wasmPlainString: String = "",
 +        wasmFontSize: CGFloat = 17,
 +        wasmColor: Color.Resolved? = nil
      ) {
@@ -1286,24 +1289,25 @@ index daa834a..b5ed585 100644
          self.unresolvedText = unresolvedText
          self.renderer = renderer
          self.needsDrawingGroup = needsDrawingGroup
++        self.wasmPlainString = wasmPlainString
 +        self.wasmFontSize = wasmFontSize
 +        self.wasmColor = wasmColor
      }
  
      package var body: some View {
-@@ -162,7 +171,10 @@ package struct AccessibilityStyledTextContentView<Provider>: View where Provider
+@@ -162,7 +175,10 @@ package struct AccessibilityStyledTextContentView<Provider>: View where Provider
              content: StyledTextContentView(
                  text: text,
                  renderer: renderer,
 -                needsDrawingGroup: needsDrawingGroup
 +                needsDrawingGroup: needsDrawingGroup,
-+                wasmPlainString: unresolvedText.wasmPlainStringFallback,
++                wasmPlainString: wasmPlainString,
 +                wasmFontSize: wasmFontSize,
 +                wasmColor: wasmColor
              ),
              text: unresolvedText,
              resolved: text
-@@ -172,19 +184,76 @@ package struct AccessibilityStyledTextContentView<Provider>: View where Provider
+@@ -172,19 +188,76 @@ package struct AccessibilityStyledTextContentView<Provider>: View where Provider
  
  // MARK: - StyledTextContentView [WIP]
  
@@ -1381,7 +1385,7 @@ index daa834a..b5ed585 100644
      }
  
      package static var animatesSize: Bool {
-@@ -204,6 +273,14 @@ package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafV
+@@ -204,6 +277,14 @@ package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafV
          view: _GraphValue<Self>,
          inputs: _ViewInputs
      ) -> _ViewOutputs {
@@ -1396,7 +1400,7 @@ index daa834a..b5ed585 100644
          var newInputs = inputs
          if inputs.preferences.requiresViewResponders {
              newInputs.preferences.requiresViewResponders = false
-@@ -253,6 +330,7 @@ package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafV
+@@ -253,6 +334,7 @@ package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafV
          }
          // TODO: Text.Layout.Key
          return outputs
@@ -1404,7 +1408,7 @@ index daa834a..b5ed585 100644
      }
  
      package typealias Body = Never
-@@ -1026,11 +1104,21 @@ private struct TextChildQuery<P>: Rule, AsyncAttribute, ScrapeableAttribute wher
+@@ -1026,11 +1108,25 @@ private struct TextChildQuery<P>: Rule, AsyncAttribute, ScrapeableAttribute wher
      }
  
      var value: some View {
@@ -1413,6 +1417,9 @@ index daa834a..b5ed585 100644
 +        // content so the host draws at the right size/color. System fonts resolve without
 +        // CoreText (see Font.scaleFactor); fall back to SwiftUI's body size / sink default.
 +        let env = environment
++        // Resolve the plain string env-aware so interpolated keys format ("\(n)"→"2");
++        // verbatim text returns as-is.
++        let wasmPlainString = unresolvedText._resolveText(in: env)
 +        let resolvedSize = env.font?.resolveTraits(in: env).pointSize ?? 0
 +        let wasmFontSize: CGFloat = resolvedSize > 0 ? resolvedSize : 17
 +        let wasmColor: Color.Resolved? = env.foregroundColor?.resolve(in: env)
@@ -1422,6 +1429,7 @@ index daa834a..b5ed585 100644
              renderer: renderer,
 -            needsDrawingGroup: renderer != nil ? environment.textRendererAddsDrawingGroup : false
 +            needsDrawingGroup: renderer != nil ? environment.textRendererAddsDrawingGroup : false,
++            wasmPlainString: wasmPlainString,
 +            wasmFontSize: wasmFontSize,
 +            wasmColor: wasmColor
          )
