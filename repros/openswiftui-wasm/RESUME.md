@@ -39,10 +39,27 @@ sidesteps that wall AND flushes stdout. (a)+(b) were the same issue.
   `UnsafeRawPointer`, not `UnsafeRawPointer?`.
 - Earlier "custom View hangs" was a stale build; the real hang was @State, now fixed.
 
-### NEXT
-- Multi-child containers (`VStack`/`HStack`/`ZStack`, `TupleView`) → `swift_conformsToProtocol`
-  C-shim in `OpenSwiftUI_SPI`; then the bounded Compute set (ReadCachedAttribute/Search/
-  TupleWithBuffer/EnumData×2) as they're hit (validate each in the 4s harness).
+### 🔶 VStack/TupleView (2026-06-19): conformance wall cleared; new "undefined element" wall
+- ✅ **`swift_conformsToProtocol` C-shim DONE** (in `openswiftui-phase1-wip.patch`): it's
+  `C_CC` per Swift `RuntimeFunctions.def:1859` (NOT swiftcall — specialist was wrong), so
+  the `@_silgen_name` call mislowered. Added `_OpenSwiftUI_conformsToProtocol` plain-C
+  wrapper in `OpenSwiftUI_SPI/Util/ProtocolDescriptor.{h,c}` (forwards to the C_CC runtime
+  symbol) + `TypeConformance.swift` `#if os(WASI)` routes through it. The conformance trap
+  is GONE.
+- ⛔ **NEW WALL: `wasm trap: undefined element: out of bounds table access`** in
+  `DynamicViewContainer.updateValue` (a `StatefulRule`, in `Subgraph::update` →
+  `finishTransactionUpdate`). Hit by `VStack { Color.red; Color.blue }` (no @State/Text).
+  This is a `call_indirect` to a null/empty function-table slot — a function pointer/witness
+  that wasn't emitted (dead-stripped?) or a null vtable entry in the multi-child container
+  path. NOT a signature_mismatch and NOT a hang. DIAGNOSE: `WASMTIME_BACKTRACE_DETAILS=1`
+  for more frames; find the indirect call in DynamicViewContainer.updateValue (likely a
+  witness/closure pointer that's null on wasm). Separately, `VStack+@State+Text` HANGS
+  (different failure, after conformance) — revisit once the table-access wall clears.
+- Bounded Compute swiftcc set still pending IF hit (would TRAP, not seen yet):
+  `AGGraphReadCachedAttribute`, `AGGraphSearch`, `AGTupleWithBuffer`, `AGTypeApplyEnumData`/
+  `MutableEnumData` (validate each in the 4s harness `repros/compute-wasm/computerun`).
+
+### NEXT (other)
 - `Subgraph.forEach`/`AGSubgraphApply` `*C` variant for clean teardown (currently sidestepped
   by `exit(0)` in StdoutApp before deinit).
 - PHASE 4: wire the real `DisplayList` into the Option-B CGContext drawer → device. The

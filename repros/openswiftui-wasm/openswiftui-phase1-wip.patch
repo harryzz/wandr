@@ -240,6 +240,30 @@ index f97a860..2907fc2 100644
  
  extension _ViewInputs {
      package func makeIndirectOutputs() -> _ViewOutputs {
+diff --git a/Sources/OpenSwiftUICore/Runtime/TypeConformance.swift b/Sources/OpenSwiftUICore/Runtime/TypeConformance.swift
+index b167a59..7d1d943 100644
+--- a/Sources/OpenSwiftUICore/Runtime/TypeConformance.swift
++++ b/Sources/OpenSwiftUICore/Runtime/TypeConformance.swift
+@@ -16,9 +16,19 @@ package protocol ProtocolDescriptor {
+ 
+ extension ProtocolDescriptor {
+     package static func conformance(of type: any Any.Type) -> TypeConformance<Self>? {
++        #if os(WASI)
++        // WASI: route through the C-ABI shim (swift_conformsToProtocol is C_CC; the
++        // @_silgen_name call mislowers on wasm -> signature_mismatch).
++        guard let conformance = _OpenSwiftUI_conformsToProtocol(
++            unsafeBitCast(type, to: UnsafeRawPointer.self), descriptor
++        ) else {
++            return nil
++        }
++        #else
+         guard let conformance = swiftConformsToProtocol(type, descriptor) else {
+             return nil
+         }
++        #endif
+         return TypeConformance(storage: (type, conformance))
+     }
+ }
 diff --git a/Sources/OpenSwiftUICore/Util/RunLoopUtils.swift b/Sources/OpenSwiftUICore/Util/RunLoopUtils.swift
 index b63b980..1329a60 100644
 --- a/Sources/OpenSwiftUICore/Util/RunLoopUtils.swift
@@ -591,3 +615,42 @@ index 3b97f1f..73edca5 100644
      return info.dli_fname;
 +#endif
  }
+diff --git a/Sources/OpenSwiftUI_SPI/Util/ProtocolDescriptor.c b/Sources/OpenSwiftUI_SPI/Util/ProtocolDescriptor.c
+index a2e4d0b..4e2732c 100644
+--- a/Sources/OpenSwiftUI_SPI/Util/ProtocolDescriptor.c
++++ b/Sources/OpenSwiftUI_SPI/Util/ProtocolDescriptor.c
+@@ -67,3 +67,15 @@ const void *$s15OpenSwiftUICore12StyleContextMp;
+ const void *_OpenSwiftUI_styleContextProtocolDescriptor(void) {
+     return &$s15OpenSwiftUICore12StyleContextMp;
+ }
++
++#if defined(__wasi__)
++// swift_conformsToProtocol is declared C_CC in the Swift runtime
++// (RuntimeFunctions.def: `Swift, swift_conformsToProtocol, C_CC, ...`). Forward to it
++// with the C ABI so Swift's call lowers to a matching wasm signature (the direct
++// @_silgen_name call mislowers -> signature_mismatch on wasm).
++extern const void *swift_conformsToProtocol(const void *type, const void *protocolDescriptor);
++
++const void *_OpenSwiftUI_conformsToProtocol(const void *type, const void *protocolDescriptor) {
++    return swift_conformsToProtocol(type, protocolDescriptor);
++}
++#endif
+diff --git a/Sources/OpenSwiftUI_SPI/Util/ProtocolDescriptor.h b/Sources/OpenSwiftUI_SPI/Util/ProtocolDescriptor.h
+index aa1625e..91bac12 100644
+--- a/Sources/OpenSwiftUI_SPI/Util/ProtocolDescriptor.h
++++ b/Sources/OpenSwiftUI_SPI/Util/ProtocolDescriptor.h
+@@ -36,6 +36,14 @@ const void *_OpenSwiftUI_styleWriterOverrideModifierProtocolDescriptor(void) OPE
+ OPENSWIFTUI_EXPORT
+ const void *_OpenSwiftUI_styleContextProtocolDescriptor(void) OPENSWIFTUI_SWIFT_NAME(_styleContextProtocolDescriptor());
+ 
++#if defined(__wasi__)
++// WASI: swift_conformsToProtocol is C_CC (Swift RuntimeFunctions.def), but Swift's
++// @_silgen_name lowers the call with the Swift CC -> wasm `signature_mismatch`. This
++// plain-C wrapper is imported with the C ABI so the call lowers correctly.
++OPENSWIFTUI_EXPORT
++const void *_Nullable _OpenSwiftUI_conformsToProtocol(const void *type, const void *protocolDescriptor);
++#endif
++
+ OPENSWIFTUI_ASSUME_NONNULL_END
+ 
+ #endif /* ProtocolDescriptor_h */
