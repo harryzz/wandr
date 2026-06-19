@@ -458,10 +458,10 @@ index 95a6411..ee7313d 100644
                  }
 diff --git a/Sources/OpenSwiftUICore/Render/DisplayList/WandrDisplayListRenderer.swift b/Sources/OpenSwiftUICore/Render/DisplayList/WandrDisplayListRenderer.swift
 new file mode 100644
-index 0000000..acbb04f
+index 0000000..f5d892d
 --- /dev/null
 +++ b/Sources/OpenSwiftUICore/Render/DisplayList/WandrDisplayListRenderer.swift
-@@ -0,0 +1,212 @@
+@@ -0,0 +1,218 @@
 +//
 +//  WandrDisplayListRenderer.swift
 +//  OpenSwiftUICore
@@ -525,7 +525,13 @@ index 0000000..acbb04f
 +                opacity: opacity
 +            )
 +        case let .effect(effect, list):
-+            append(effect: effect, list: list, transform: transform, opacity: opacity)
++            // The effect item's frame.origin positions its content within the parent — the
++            // layout offset (rows/columns/sub-view placement) lives here, exactly as it does
++            // in a .content item's frame. Fold it into the transform before applying the
++            // effect, else nested/dynamic content (ForEach, stacks) collapses to the origin.
++            let framed = CGAffineTransform(translationX: item.frame.minX, y: item.frame.minY)
++                .concatenating(transform)
++            append(effect: effect, list: list, transform: framed, opacity: opacity)
 +        case let .states(states):
 +            for (_, list) in states {
 +                append(list: list, transform: transform, opacity: opacity)

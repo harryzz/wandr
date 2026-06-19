@@ -30,39 +30,36 @@ func tileColors(_ v: Int) -> (bg: Color, fg: Color) {
     }
 }
 
-// No ViewBuilder conditionals: dynamic content (if/ForEach) builds a DynamicViewList that
-// corrupts at scale via the stubbed Subgraph.index — so empty cells show "" via a ternary.
+// Idiomatic: ForEach + ViewBuilder conditionals now work (fixed indirect_pointer_vector
+// uninitialized _data, Subgraph.index shadow stub, and the .effect-frame offset in the walker).
 struct TileCell: View {
     let value: Int
     var body: some View {
         let colors = tileColors(value)
         return ZStack {
             RoundedRectangle(cornerRadius: 6).fill(colors.bg)
-            Text(value > 0 ? "\(value)" : "")
-                .font(.system(size: 30, weight: .bold))
-                .foregroundColor(colors.fg)
+            if value > 0 {
+                Text("\(value)")
+                    .font(.system(size: 30, weight: .bold))
+                    .foregroundColor(colors.fg)
+            }
         }
         .frame(width: 76, height: 76)
     }
 }
 
-struct Row: View {
-    let a: Int, b: Int, c: Int, d: Int
-    var body: some View {
-        HStack(spacing: 8) {
-            TileCell(value: a); TileCell(value: b); TileCell(value: c); TileCell(value: d)
-        }
-    }
-}
-
 struct ContentView: View {
+    let grid = [[2, 4, 8, 16], [32, 64, 128, 256], [512, 1024, 2048, 0], [0, 0, 2, 4]]
     var body: some View {
         VStack(spacing: 8) {
             Text("2048").font(.system(size: 44, weight: .bold)).foregroundColor(.white)
-            Row(a: 2, b: 4, c: 8, d: 16)
-            Row(a: 32, b: 64, c: 128, d: 256)
-            Row(a: 512, b: 1024, c: 2048, d: 0)
-            Row(a: 0, b: 0, c: 2, d: 4)
+            ForEach(0..<4, id: \.self) { r in
+                HStack(spacing: 8) {
+                    ForEach(0..<4, id: \.self) { c in
+                        TileCell(value: grid[r][c])
+                    }
+                }
+            }
         }
     }
 }
