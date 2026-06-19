@@ -72,6 +72,19 @@ sidesteps that wall AND flushes stdout. (a)+(b) were the same issue.
     witness. On wasm a witness-table function-pointer entry resolves to an OOB `call_indirect`
     (nondeterministic trap/hang = a wild funcref index). Single-view Content works (it doesn't
     take this runtime-conformance-per-element path); only TupleView does.
+  - 🔑 **KEY FINDING (hypothesis-(a) instrumentation attempt): it's MEMORY CORRUPTION, not a
+    static missing witness.** Adding `_wasmDiag` (unbuffered `write(2)`) prints at
+    `DynamicViewContainer.updateValue` / `tupleDescription` / `visitType` produced ZERO output
+    and made the binary hang IMMEDIATELY (before even the usual "HitTestBindingModifier
+    unimplemented" warning). I.e. **the failure point moves dramatically with any code change**
+    — the classic signature of a wild pointer from corrupted memory. Print-instrumentation
+    CANNOT localize it (adding a probe relocates the crash). The "undefined element" trap vs
+    hang nondeterminism is the same story. So the next approach must NOT be print-probing:
+    use memory bisection / a wasm memory sanitizer, or find the upstream ABI mismatch that
+    corrupts memory only on the multi-child (TupleView) path (single-child is clean). Prime
+    suspect: tuple metadata reflection (`Compute TupleType.type(at:)`/`AGTupleWithBuffer`) or
+    the `unsafeBitCast(storage, to: (any View.Type).self)` existential write, doing a
+    wrong-sized/wrong-offset read/write on wasm32. (Instrumentation reverted; tree clean.)
   - HYPOTHESES for the real fix (need Swift-runtime-on-wasm investigation):
     (a) the witness table from `swift_conformsToProtocol` for tuple element types may be an
         un-instantiated generic pattern on wasm (entries are bad) — may need
