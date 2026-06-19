@@ -10,57 +10,24 @@ import OpenSwiftUI
 
 // MARK: - The SwiftUI app
 
-// 2048 tile palette (the game's canonical look — one named source of truth).
-func tileColors(_ v: Int) -> (bg: Color, fg: Color) {
-    let dark = Color(red: 0.47, green: 0.43, blue: 0.40)
-    let light = Color(red: 0.98, green: 0.96, blue: 0.93)
-    switch v {
-    case 2:    return (Color(red: 0.93, green: 0.89, blue: 0.85), dark)
-    case 4:    return (Color(red: 0.93, green: 0.88, blue: 0.78), dark)
-    case 8:    return (Color(red: 0.95, green: 0.69, blue: 0.47), light)
-    case 16:   return (Color(red: 0.96, green: 0.58, blue: 0.39), light)
-    case 32:   return (Color(red: 0.96, green: 0.49, blue: 0.37), light)
-    case 64:   return (Color(red: 0.96, green: 0.37, blue: 0.23), light)
-    case 128:  return (Color(red: 0.93, green: 0.81, blue: 0.45), light)
-    case 256:  return (Color(red: 0.93, green: 0.80, blue: 0.38), light)
-    case 512:  return (Color(red: 0.93, green: 0.78, blue: 0.31), light)
-    case 1024: return (Color(red: 0.93, green: 0.77, blue: 0.25), light)
-    case 2048: return (Color(red: 0.93, green: 0.76, blue: 0.18), light)
-    default:   return (Color(red: 0.80, green: 0.76, blue: 0.71), dark) // empty
-    }
-}
-
-// Idiomatic: ForEach + ViewBuilder conditionals now work (fixed indirect_pointer_vector
-// uninitialized _data, Subgraph.index shadow stub, and the .effect-frame offset in the walker).
-struct TileCell: View {
-    let value: Int
-    var body: some View {
-        let colors = tileColors(value)
-        return ZStack {
-            RoundedRectangle(cornerRadius: 6).fill(colors.bg)
-            if value > 0 {
-                Text("\(value)")
-                    .font(.system(size: 30, weight: .bold))
-                    .foregroundColor(colors.fg)
-            }
-        }
-        .frame(width: 76, height: 76)
-    }
-}
-
+// Render eleev/swiftui-2048's ACTUAL TileBoardView (pulled verbatim into eleev/, imports
+// remapped SwiftUI→OpenSwiftUI) with the sample board from its PreviewProvider.
 struct ContentView: View {
-    let grid = [[2, 4, 8, 16], [32, 64, 128, 256], [512, 1024, 2048, 0], [0, 0, 2, 4]]
     var body: some View {
-        VStack(spacing: 8) {
-            Text("2048").font(.system(size: 44, weight: .bold)).foregroundColor(.white)
-            ForEach(0..<4, id: \.self) { r in
-                HStack(spacing: 8) {
-                    ForEach(0..<4, id: \.self) { c in
-                        TileCell(value: grid[r][c])
-                    }
-                }
-            }
-        }
+        TileBoardView(matrix: Self.sampleMatrix, tileEdge: .top, tileBoardSize: 4)
+    }
+
+    static var sampleMatrix: TileMatrix<IdentifiedTile> {
+        var board = TileMatrix<IdentifiedTile>()
+        board.add(IdentifiedTile(id: 1, value: 2), to: (2, 0))
+        board.add(IdentifiedTile(id: 2, value: 2), to: (3, 0))
+        board.add(IdentifiedTile(id: 3, value: 8), to: (1, 1))
+        board.add(IdentifiedTile(id: 4, value: 4), to: (2, 1))
+        board.add(IdentifiedTile(id: 5, value: 512), to: (3, 3))
+        board.add(IdentifiedTile(id: 6, value: 1024), to: (2, 3))
+        board.add(IdentifiedTile(id: 7, value: 16), to: (0, 3))
+        board.add(IdentifiedTile(id: 8, value: 8), to: (1, 3))
+        return board
     }
 }
 
