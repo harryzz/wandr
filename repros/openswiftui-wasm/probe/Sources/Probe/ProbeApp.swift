@@ -11,7 +11,9 @@ import WASILibc
 struct ContentView: View {
     var body: some View {
         VStack {
-            Color.red
+            Text("Hello wandr")
+                .font(.system(size: 64, weight: .bold))
+                .foregroundColor(.yellow)
             Color.blue
         }
     }
@@ -32,6 +34,12 @@ final class PrintSink: WandrDrawSink {
     ) {
         print(String(format: "wandr fillRect x:%.1f y:%.1f w:%.1f h:%.1f rgba(%.3f, %.3f, %.3f, %.3f)",
                      x, y, width, height, red, green, blue, opacity))
+    }
+    func drawText(
+        _ text: String, x: Double, y: Double, width: Double, height: Double,
+        fontSize: Double, red: Float, green: Float, blue: Float, opacity: Float
+    ) {
+        print("wandr drawText \"\(text)\" x:\(Int(x)) y:\(Int(y)) w:\(Int(width)) h:\(Int(height)) size:\(Int(fontSize)) rgba(\(red), \(green), \(blue), \(opacity))")
     }
     func endFrame() { print("wandr endFrame") }
 }

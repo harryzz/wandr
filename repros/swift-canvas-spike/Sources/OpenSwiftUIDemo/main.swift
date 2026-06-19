@@ -13,7 +13,9 @@ import OpenSwiftUI
 struct ContentView: View {
     var body: some View {
         VStack {
-            Color.red
+            Text("Hello wandr")
+                .font(.system(size: 64, weight: .bold))
+                .foregroundColor(.yellow)
             Color.blue
         }
     }
@@ -41,6 +43,23 @@ final class CGSink: WandrDrawSink {
             red: CGFloat(red), green: CGFloat(green), blue: CGFloat(blue), alpha: CGFloat(opacity)
         ))
         cg.fill(CGRect(x: CGFloat(x), y: CGFloat(y), width: CGFloat(width), height: CGFloat(height)))
+    }
+
+    func drawText(
+        _ text: String, x: Double, y: Double, width: Double, height: Double,
+        fontSize: Double, red: Float, green: Float, blue: Float, opacity: Float
+    ) {
+        guard let cg else { return }
+        // CGContext.drawString lowers to wasi:canvas text/paragraph (Skia shapes + draws).
+        // Draw at the given size (which matches the reserved band height), so the next VStack
+        // child fills BELOW the text rather than over it.
+        cg.drawString(
+            text,
+            at: CGPoint(x: CGFloat(x), y: CGFloat(y)),
+            size: CGFloat(fontSize),
+            color: CGColor(red: CGFloat(red), green: CGFloat(green), blue: CGFloat(blue), alpha: CGFloat(opacity)),
+            maxWidth: CGFloat(width)
+        )
     }
 
     func endFrame() {}

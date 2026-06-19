@@ -5,7 +5,25 @@
 red top / blue bottom, chrome intact, stable past 35 s (screenshot verified). End-to-end:
 OpenSwiftUI AttributeGraph → `DisplayList` → `WandrDrawSink` → CGContext → wasi:canvas →
 Skia/EGL. App = `apps`-installed `wandr.swiftui.demo` (built from `repros/swift-canvas-spike`
-`OpenSwiftUIDemo` target). Colors/shapes only — **Text is next** (still stubbed off-Apple).
+`OpenSwiftUIDemo` target).
+
+### ✅ TEXT now renders too (2026-06-19) — delegated to the host, no guest text engine
+`Text("…").font(.system(size:64,weight:.bold)).foregroundColor(.yellow)` renders correctly on
+device (size + color honored). OpenSwiftUI's off-Apple text path is stubbed (ResolvedStyledText
+storage nil, ShapeStyle/glyph rendering unimplemented), so instead of building a text engine we
+**emit a `.content(.text)` leaf and let the host (wasi:canvas paragraph / Skia) shape + draw it**:
+- `StyledTextContentView` routes `_makeView` through `RendererLeafView`/`LeafViewLayout` on wasm
+  (bypassing the stubbed ShapeStyle path), carrying `wasmPlainString` (from `Text._localizationInfo`
+  — safe; `AnyTextStorage.debugDescription` faults off-Apple), `wasmFontSize`, `wasmColor`.
+- `TextChildQuery.value` resolves the point size (`Font.resolveTraits(in:).pointSize`) + foreground
+  (`environment.foregroundColor?.resolve(in:)`) from the environment.
+- `Font.scaleFactor` got an off-Apple `#else` (identity at default Dynamic Type) so **system fonts
+  resolve without CoreText** (CoreText is unavailable on wasm; semantic styles need this).
+- `WandrDrawSink.drawText` + walker `.content(.text)` case → `CGContext.drawString` → wasi:canvas.
+- GOTCHA: the walker draws children in order, so the text's reserved band (size × 1.35) must match
+  the drawn size or the next sibling paints over it.
+Remaining polish: host-measure `sizeThatFits` (currently `chars × size × 0.6` estimate) for exact
+width; semantic text-style sizes assume the default Dynamic Type category.
 
 ### What unblocked on-device = CROSS-AOT (not footprint/crypto/threads/GC)
 The device can't fit the AOT compile of this 172k-function component: full-parallel
