@@ -47,10 +47,10 @@ index f36ae1c..2dbcce4 100644
  }
 diff --git a/Sources/OpenSwiftUI/App/App/Stdout/WandrApp.swift b/Sources/OpenSwiftUI/App/App/Stdout/WandrApp.swift
 new file mode 100644
-index 0000000..4c6bb0e
+index 0000000..545ccc9
 --- /dev/null
 +++ b/Sources/OpenSwiftUI/App/App/Stdout/WandrApp.swift
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,75 @@
 +//
 +//  WandrApp.swift
 +//  OpenSwiftUI
@@ -91,6 +91,14 @@ index 0000000..4c6bb0e
 +    _ app: some App,
 +    options: _RendererConfiguration.WandrOptions
 +) {
++    // The wandr renderer declares its capabilities here (the platform/renderer layer — NOT
++    // core view logic). The host shapes text itself (wasi:canvas paragraph / Skia) and view
++    // transitions aren't implemented yet, so core falls back accordingly. Apple builds never
++    // call this and keep the defaults (transitions on, in-framework glyph text).
++    _RenderingCapabilities.current = _RenderingCapabilities(
++        supportsViewTransitions: false,
++        usesHostShapedText: true
++    )
 +    Update.dispatchImmediately(reason: nil) {
 +        let graph = AppGraph(app: app)
 +        graph.instantiate()
@@ -411,6 +419,22 @@ index fee7caa..2118485 100644
              #endif
          }
      }
+diff --git a/Sources/OpenSwiftUICore/Layout/Dynamic/DynamicLayoutView.swift b/Sources/OpenSwiftUICore/Layout/Dynamic/DynamicLayoutView.swift
+index 0037280..fd310dc 100644
+--- a/Sources/OpenSwiftUICore/Layout/Dynamic/DynamicLayoutView.swift
++++ b/Sources/OpenSwiftUICore/Layout/Dynamic/DynamicLayoutView.swift
+@@ -240,7 +240,10 @@ struct DynamicLayoutViewAdaptor: DynamicContainerAdaptor {
+                 elementInputs.requestsLayoutComputer = true
+             }
+             let outputs: _ViewOutputs
+-            if let transition {
++            // Transitions go through ViewListContentTransition. A renderer that doesn't support
++            // them (capability declared by the platform layer) renders the element directly —
++            // otherwise the element body is never made and the view doesn't render at all.
++            if let transition, _RenderingCapabilities.current.supportsViewTransitions {
+                 var makeTransition = MakeTransition(
+                     containerInfo: containerInfo,
+                     uniqueId: uniqueId,
 diff --git a/Sources/OpenSwiftUICore/Layout/View/ViewTransform.swift b/Sources/OpenSwiftUICore/Layout/View/ViewTransform.swift
 index c8a2c9d..b5e55bb 100644
 --- a/Sources/OpenSwiftUICore/Layout/View/ViewTransform.swift
@@ -870,7 +894,7 @@ index 0000000..a94b305
 +private final class WandrPlatformViewDefinition: PlatformViewDefinition, @unchecked Sendable {}
 +#endif
 diff --git a/Sources/OpenSwiftUICore/Render/RendererConfiguration.swift b/Sources/OpenSwiftUICore/Render/RendererConfiguration.swift
-index 86bc757..9feaf36 100644
+index 86bc757..eaae356 100644
 --- a/Sources/OpenSwiftUICore/Render/RendererConfiguration.swift
 +++ b/Sources/OpenSwiftUICore/Render/RendererConfiguration.swift
 @@ -28,6 +28,12 @@ public struct _RendererConfiguration {
@@ -962,6 +986,36 @@ index 86bc757..9feaf36 100644
  /* OpenSwiftUI Addition End */
  
  // MARK: - RasterizationOptions + _RendererConfiguration.RasterizationOptions
+@@ -165,3 +226,29 @@ extension RasterizationOptions {
+         )
+     }
+ }
++
++// MARK: - _RenderingCapabilities
++
++/// Platform/renderer capabilities queried by core view logic INSTEAD of compile-time
++/// `#if os(WASI)`/`#if os(Linux)`. Core stays platform-agnostic and compiles unmodified on every
++/// platform; the WASI-vs-Linux-vs-Apple decision lives in the platform/renderer layer, which
++/// overrides these (e.g. the wandr wasi:canvas renderer in renderWandrAppOnce). Defaults are the
++/// Apple/CoreGraphics behavior, so unconfigured (Apple) builds are unaffected.
++package struct _RenderingCapabilities: Sendable {
++    /// Whether view transitions (insert/remove animations via `ViewListContentTransition`) are
++    /// available. When `false`, dynamic-container items carrying a `.transition` render directly.
++    package var supportsViewTransitions: Bool
++
++    /// Whether `Text` renders as a host-shaped `.content(.text)` display-list leaf (the renderer
++    /// shapes the glyphs) rather than the in-framework ShapeStyle glyph-layer path.
++    package var usesHostShapedText: Bool
++
++    package init(supportsViewTransitions: Bool = true, usesHostShapedText: Bool = false) {
++        self.supportsViewTransitions = supportsViewTransitions
++        self.usesHostShapedText = usesHostShapedText
++    }
++
++    /// Active capabilities; set once by the platform/renderer layer before rendering
++    /// (single-threaded on WASI). Apple builds use the defaults.
++    package nonisolated(unsafe) static var current = _RenderingCapabilities()
++}
 diff --git a/Sources/OpenSwiftUICore/Runtime/TypeConformance.swift b/Sources/OpenSwiftUICore/Runtime/TypeConformance.swift
 index b167a59..7d1d943 100644
 --- a/Sources/OpenSwiftUICore/Runtime/TypeConformance.swift
@@ -1358,7 +1412,7 @@ index 749b97c..8894e9e 100644
              return localizedString.isEmpty
          }
 diff --git a/Sources/OpenSwiftUICore/View/Text/Text/Text+View.swift b/Sources/OpenSwiftUICore/View/Text/Text/Text+View.swift
-index daa834a..76bd0a7 100644
+index daa834a..bc728b5 100644
 --- a/Sources/OpenSwiftUICore/View/Text/Text/Text+View.swift
 +++ b/Sources/OpenSwiftUICore/View/Text/Text/Text+View.swift
 @@ -145,16 +145,29 @@ package struct AccessibilityStyledTextContentView<Provider>: View where Provider
@@ -1404,7 +1458,7 @@ index daa834a..76bd0a7 100644
              ),
              text: unresolvedText,
              resolved: text
-@@ -172,19 +188,76 @@ package struct AccessibilityStyledTextContentView<Provider>: View where Provider
+@@ -172,19 +188,74 @@ package struct AccessibilityStyledTextContentView<Provider>: View where Provider
  
  // MARK: - StyledTextContentView [WIP]
  
@@ -1423,11 +1477,10 @@ index daa834a..76bd0a7 100644
 +    }
 +}
 +
-+#if os(WASI)
-+// WASI: route StyledTextContentView through the RendererLeafView / LeafViewLayout leaf path
-+// (see its `_makeView`) — emit `.content(.text)` for the host (wasi:canvas paragraph / Skia)
-+// to shape + draw, with a coarse size estimate for layout. Real metrics would come from a host
-+// paragraph measure (TODO); the estimate is enough to place the glyphs.
++// Host-shaped-text path: route StyledTextContentView through RendererLeafView / LeafViewLayout
++// (see its `_makeView`, gated on the usesHostShapedText capability) — emit `.content(.text)` for
++// the renderer (e.g. wasi:canvas paragraph / Skia) to shape + draw, with a coarse size estimate
++// for layout. The conformance is harmless on renderers that don't use it (Apple's glyph path).
 +extension StyledTextContentView: RendererLeafView, LeafViewLayout {
 +    private var wasmEstimatedSize: CGSize {
 +        CGSize(
@@ -1447,7 +1500,6 @@ index daa834a..76bd0a7 100644
 +        BitVector64()
 +    }
 +}
-+#endif
 +
  package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafView {
      package var text: ResolvedStyledText
@@ -1482,30 +1534,22 @@ index daa834a..76bd0a7 100644
      }
  
      package static var animatesSize: Bool {
-@@ -204,6 +277,14 @@ package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafV
+@@ -204,6 +275,14 @@ package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafV
          view: _GraphValue<Self>,
          inputs: _ViewInputs
      ) -> _ViewOutputs {
-+        #if os(WASI)
-+        // WASI: the ShapeStyle/glyph render path (ShapeStyleRendering) is stubbed off-Apple,
-+        // so emit a `.content(.text)` leaf (RendererLeafView) instead — the host (wasi:canvas
-+        // paragraph / Skia) does the shaping + drawing. Layout via the LeafViewLayout estimate.
-+        var outputs = makeLeafView(view: view, inputs: inputs)
-+        makeLeafLayout(&outputs, view: view, inputs: inputs)
-+        return outputs
-+        #else
++        if _RenderingCapabilities.current.usesHostShapedText {
++            // Renderer shapes text itself (e.g. wasi:canvas paragraph / Skia): emit a
++            // `.content(.text)` leaf (RendererLeafView) rather than the in-framework ShapeStyle
++            // glyph path. Layout via the LeafViewLayout estimate.
++            var outputs = makeLeafView(view: view, inputs: inputs)
++            makeLeafLayout(&outputs, view: view, inputs: inputs)
++            return outputs
++        }
          var newInputs = inputs
          if inputs.preferences.requiresViewResponders {
              newInputs.preferences.requiresViewResponders = false
-@@ -253,6 +334,7 @@ package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafV
-         }
-         // TODO: Text.Layout.Key
-         return outputs
-+        #endif
-     }
- 
-     package typealias Body = Never
-@@ -1026,11 +1108,25 @@ private struct TextChildQuery<P>: Rule, AsyncAttribute, ScrapeableAttribute wher
+@@ -1026,11 +1105,25 @@ private struct TextChildQuery<P>: Rule, AsyncAttribute, ScrapeableAttribute wher
      }
  
      var value: some View {
