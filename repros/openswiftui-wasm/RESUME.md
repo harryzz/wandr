@@ -20,6 +20,58 @@ TEARDOWN (`GraphHost.deinit → Subgraph.forEach`, an arg-closure swiftcall wall
 abort was happening before stdout flushed. Exiting before the closure's locals deinit
 sidesteps that wall AND flushes stdout. (a)+(b) were the same issue.
 
+### ⛔ CURRENT WALL (2026-06-19, refined): reading `@State` HANGS — root = onUpdate/onInvalidation no-op
+Progress toward Text+@State (all verified by running the probe):
+- Custom `View` with a reactive `body` **renders fine** (the earlier "custom View hangs"
+  was a STALE incremental build — confirmed `ContentView { Color.red }` renders 3/3).
+- Cleared two OpenSwiftUI off-Apple stubs (in `openswiftui-phase1-wip.patch`):
+  - `_GraphInputs.defaultInterfaceIdiom` (`InterfaceIdiomPredicate.swift:36`) was
+    `_openSwiftUIUnimplementedFailure()` on non-Apple → default to `.phone` (wandr is a
+    phone-class device). Needed by `Text.makeCommonAttributes`.
+  - `Text` localization hit `Bundle.main`, which CRASHES in Foundation's lazy `_mainBundle`
+    init on wasm. `Text+Localized.swift` (resolve + resolvesToEmpty) now `#if os(WASI)`
+    localize only if an explicit bundle was passed, else use the key literally (the
+    documented no-table fallback). No more Bundle.main on wasm.
+- **THE WALL: reading `@State` hangs.** `ContentView { @State count; Color.red.opacity(count>0 ?…) }`
+  → infinite loop (exit 124). Custom View *without* @State renders; adding @State + reading
+  it spins. The spin is NOT in `Update.dispatchActions` nor the render-driver loop (bounded
+  counters never tripped — instrumentation since removed). It's in the reactive
+  update/invalidation machinery → almost certainly the **`onUpdate`/`onInvalidation` no-op
+  shortcut** (Compute `Graph.swift`, `#if arch(wasm32)`): @State's dependency invalidation
+  can't propagate/settle, so the graph never reaches steady state.
+- **FIX (next): properly wire `onUpdate` AND `onInvalidation` as STORED plain-C callbacks.**
+  Unlike the synchronous callbacks (forEachField/mutateBody), these are stored and invoked
+  later by C++, so box the Swift closure (heap object) + pass a non-capturing
+  `@convention(c)` trampoline + retain/release the box. The Compute fork ALREADY has this
+  exact template: `_UpdateBox` + `AGRetainClosureC`/`AGReleaseClosure` in
+  `Attribute/AttributeType.swift` (used for the rule `_update` callback). Mirror it for
+  `AGGraphSetUpdateCallback`/`AGGraphSetInvalidationCallback` (need C++ `*C` setters that
+  store a plain-C fn+ctx and invoke plain-C in `Context::call_update`/invalidation).
+- Text itself: construction + resolution now work; whether Text *layout* (fonts/paragraph,
+  a `StatefulRule`) has further walls is UNKNOWN — @State hangs before we get there. Note
+  the stdout renderer doesn't emit `.text` items anyway (only fills); real glyphs come via
+  the phase-4 CGContext drawer.
+
+### ⛔ (earlier framing) custom `View` with a reactive `body` — RESOLVED (was a stale build)
+Isolated: `Color.red` DIRECTLY in `WindowGroup` renders ✅; wrapping it in
+`struct ContentView: View { var body: some View { Color.red } }` → **infinite loop**
+(wasmtime exit 124, no stderr). Independent of `@State`/`Text` (both also hang, same cause).
+- The render driver's outer `repeat…while true` is bounded (breaks in ≤2 iters); the spin
+  is INSIDE the update machinery. Prime suspect: `Update.dispatchActions()`
+  (`Data/Update.swift:191`) — `repeat { … } while !Update.actions.isEmpty` with **no
+  iteration bound**; if dispatched actions keep re-enqueuing, it never drains.
+- Likely root: the `onUpdate`/`onInvalidation` **no-op shortcut** (Compute `Graph.swift`,
+  `#if arch(wasm32)`) breaks the update-completion signal for reactive bodies; primitive
+  views don't exercise it, custom views do. This is the phase-3 follow-up previously
+  flagged as "owed".
+- DIAGNOSE NEXT: add a bounded counter + `preconditionFailure` in `dispatchActions`
+  (and/or `ViewGraph` transaction loop) to convert the hang into a backtrace and confirm
+  the spinner + the re-enqueuing action. Then FIX: properly wire `onUpdate` as a plain-C
+  callback variant (like `attribute_modify_c`/`AGGraphMutateAttributeC` — it's a STORED
+  callback, so box the closure: see the fork's existing `_UpdateBox` + `AGRetainClosureC`
+  pattern in compute-wasm) and/or drain `_wasmDrainMainRunLoop()` so transactions settle.
+- Minimal repro is the current `probe/Sources/Probe/ProbeApp.swift` (custom View, no State).
+
 ### NEXT (for richer UIs — Text / VStack / @State), all bounded + validatable in the 4s harness
 - `Subgraph.forEach`/`AGSubgraphApply` `*C` variant — for clean teardown + views that
   call forEach mid-render. (engine `Subgraph::apply_c`, like `attribute_modify_c`.)

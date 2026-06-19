@@ -518,6 +518,54 @@ index 0000000..1fb8546
 +    return true
 +}
 +#endif
+diff --git a/Sources/OpenSwiftUICore/View/InterfaceIdiom/InterfaceIdiomPredicate.swift b/Sources/OpenSwiftUICore/View/InterfaceIdiom/InterfaceIdiomPredicate.swift
+index ca08c58..db2047d 100644
+--- a/Sources/OpenSwiftUICore/View/InterfaceIdiom/InterfaceIdiomPredicate.swift
++++ b/Sources/OpenSwiftUICore/View/InterfaceIdiom/InterfaceIdiomPredicate.swift
+@@ -33,7 +33,9 @@ extension _GraphInputs {
+         #elseif os(iOS) || os(visionOS)
+         AnyInterfaceIdiom(.phone)
+         #else
+-        _openSwiftUIUnimplementedFailure()
++        // WASI/wandr (phone-class device): default to the phone idiom rather than the
++        // upstream unimplemented stub, so Text (and anything reading interfaceIdiom) works.
++        AnyInterfaceIdiom(.phone)
+         #endif
+     }
+ }
+diff --git a/Sources/OpenSwiftUICore/View/Text/Localized/Text+Localized.swift b/Sources/OpenSwiftUICore/View/Text/Localized/Text+Localized.swift
+index 749b97c..8894e9e 100644
+--- a/Sources/OpenSwiftUICore/View/Text/Localized/Text+Localized.swift
++++ b/Sources/OpenSwiftUICore/View/Text/Localized/Text+Localized.swift
+@@ -358,8 +358,15 @@ public struct LocalizedStringKey: Equatable, ExpressibleByStringInterpolation {
+             )
+         }
+         #else
++        #if os(WASI)
++        // WASI: Foundation's Bundle.main crashes on wasm and there are no localization
++        // tables; localize only if an explicit bundle was given, else use the key (the
++        // documented no-table fallback). Avoids touching Bundle.main.
++        let localizedString = bundle.map { _LocalizeString($0, key, table, environment.locale) } ?? key
++        #else
+         let bundle = bundle ?? .main
+         let localizedString = _LocalizeString(bundle, key, table, environment.locale)
++        #endif
+         guard hasFormatting else {
+             result.append(localizedString, in: environment, with: options)
+             return
+@@ -470,8 +477,12 @@ public struct LocalizedStringKey: Equatable, ExpressibleByStringInterpolation {
+         table: String?,
+         bundle: Bundle?
+     ) -> Bool {
++        #if os(WASI)
++        let localizedString = bundle.map { _LocalizeString($0, key, table, environment.locale) } ?? key
++        #else
+         let bundle = bundle ?? .main
+         let localizedString = _LocalizeString(bundle, key, table, environment.locale)
++        #endif
+         guard hasFormatting else {
+             return localizedString.isEmpty
+         }
 diff --git a/Sources/OpenSwiftUI_SPI/Shims/CSymbols/OpenSwiftUI_CSymbols.c b/Sources/OpenSwiftUI_SPI/Shims/CSymbols/OpenSwiftUI_CSymbols.c
 index 3b97f1f..73edca5 100644
 --- a/Sources/OpenSwiftUI_SPI/Shims/CSymbols/OpenSwiftUI_CSymbols.c
