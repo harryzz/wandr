@@ -46,15 +46,28 @@ sidesteps that wall AND flushes stdout. (a)+(b) were the same issue.
   wrapper in `OpenSwiftUI_SPI/Util/ProtocolDescriptor.{h,c}` (forwards to the C_CC runtime
   symbol) + `TypeConformance.swift` `#if os(WASI)` routes through it. The conformance trap
   is GONE.
-- ⛔ **NEW WALL: `wasm trap: undefined element: out of bounds table access`** in
-  `DynamicViewContainer.updateValue` (a `StatefulRule`, in `Subgraph::update` →
-  `finishTransactionUpdate`). Hit by `VStack { Color.red; Color.blue }` (no @State/Text).
-  This is a `call_indirect` to a null/empty function-table slot — a function pointer/witness
-  that wasn't emitted (dead-stripped?) or a null vtable entry in the multi-child container
-  path. NOT a signature_mismatch and NOT a hang. DIAGNOSE: `WASMTIME_BACKTRACE_DETAILS=1`
-  for more frames; find the indirect call in DynamicViewContainer.updateValue (likely a
-  witness/closure pointer that's null on wasm). Separately, `VStack+@State+Text` HANGS
-  (different failure, after conformance) — revisit once the table-access wall clears.
+- ⛔ **NEW WALL (diagnosed): `wasm trap: undefined element: out of bounds table access`**
+  in the **`DebugReplaceableView` type-eraser dispatch**. Hit by `VStack { Color.red; Color.blue }`
+  (no @State/Text needed). Consistent trap (nondeterministic trap-vs-hash → a WILD/uninitialized
+  function pointer: an OOB table index traps, a valid-but-wrong index hangs).
+  Path (verified backtrace): `ViewGraph.updateOutputs → Subgraph::update →
+  StatefulRule._update → DynamicViewContainer.updateValue` (`View/DynamicView/DynamicView.swift:73`)
+  → `view.makeChildView()` where `view: V = DebugReplaceableView` →
+  `DebugReplaceableView.makeChildView` (`DebugReplaceableView.swift:94`) →
+  `storage.makeChildView` (virtual dispatch into `DebugReplaceableViewStorage<Content>`) →
+  the type-erased indirect call to `Content`'s make-function is OOB on wasm (Content =
+  `TupleView<(Color,Color)>`). `@_typeEraser(DebugReplaceableView)` is gated on
+  `OPENSWIFTUI_SUPPORT_2025_API && compiler(>=6.2)` (NOT DEBUG) — so a release build won't
+  avoid it. Single views go through DebugReplaceableView fine; only multi-child OOBs.
+  - NEXT diagnosis: inspect `DebugReplaceableViewStorage` (the concrete subclass that stores
+    `Content` + makes the child) — find the stored/indirect function pointer (a
+    `@convention(thin)`/partial-apply/witness) that's null/OOB on wasm. Likely a generic
+    make-function reference not emitted, OR a function-pointer ABI that mislowers (akin to the
+    swiftcc story but in pure-Swift type-erasure). Candidate WORKAROUND to TEST: disable the
+    `@_typeEraser(DebugReplaceableView)` line (View.swift:48-50) so views fall back to AnyView
+    erasure, avoiding the DebugReplaceableView path entirely.
+  - Separately, `VStack+@State+Text` HANGS (valid-but-wrong fn ptr variant of the same wild
+    pointer) — same root; will clear together.
 - Bounded Compute swiftcc set still pending IF hit (would TRAP, not seen yet):
   `AGGraphReadCachedAttribute`, `AGGraphSearch`, `AGTupleWithBuffer`, `AGTypeApplyEnumData`/
   `MutableEnumData` (validate each in the 4s harness `repros/compute-wasm/computerun`).
