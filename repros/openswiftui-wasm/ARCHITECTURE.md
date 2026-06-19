@@ -300,7 +300,16 @@ WASI is otherwise undiscussed upstream.
      a time — and aren't wasm-SIMD as written.) **Integration:** (1) expose `sha.h` to
      OpenSwiftUICore on wasm via a tiny C module / the existing `-Xcc -isystem` shim path;
      (2) add the missing `#else` (wasm) branch in `StrongHash.swift` over `SHA_CTX`/`SHA1_*`;
-     (3) drop swift-crypto (`SWIFT_CRYPTO=0` on wasm) → eliminates BoringSSL.
+     (3) drop swift-crypto (default-off off-Darwin) → eliminates BoringSSL.
+     **✅ IMPLEMENTED + MEASURED (2026-06-19):** done as a pure-Swift `_OpenSwiftUIInsecureSHA1`
+     in `StrongHash.swift` + `swiftCryptoCondition` default→false. BoringSSL gone (0 symbols,
+     was 7691); builds clean. **BUT the stripped (DWARF+name) size dropped only ~1.3 MB
+     (70.1 MB → 68.8 MB)** — BoringSSL was almost all DWARF/symbol-name weight; its linked code
+     was ~1.3 MB (linker dead-strips the unused 99%). So **it does NOT clear the ~60 MB AOT cliff**
+     — the bulk is Foundation + the Swift runtime/stdlib baseline + framework code (the real
+     footprint target). (Gotcha hit: SPM caches the manifest by content-hash, so an env-only
+     `OPENSWIFTUI_SWIFT_CRYPTO=0` does nothing — a Package.swift *content* change + `--manifest-cache
+     none` + clearing resolved state is required to actually re-resolve.)
    - **Why (B) over (A):** `StrongHash` is hit per view-identity / display-list seed (likely hot),
      so (A)'s component-model call *per hash* would add boundary overhead; (B) has none. Switch to
      (A) only if profiling later shows SHA-1 is rare/large or you want the host HW path. (Audit

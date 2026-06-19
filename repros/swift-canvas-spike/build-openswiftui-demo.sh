@@ -24,8 +24,9 @@ cp generated/swift_spike.h Sources/CSwiftSpike/include/swift_spike.h
 OPENSWIFTUI_ANY_ATTRIBUTE_FIX=0 ANY_ATTRIBUTE_FIX=0 \
 OPENSWIFTUI_USE_LOCAL_DEPS=1 OPENATTRIBUTEGRAPH_OPENATTRIBUTESHIMS_COMPUTE=1 \
 OPENATTRIBUTEGRAPH_USE_LOCAL_DEPS=1 \
+OPENSWIFTUI_SWIFT_CRYPTO=0 \
 OPENRENDERBOX_LIB_SWIFT_PATH=/tmp/oag-fork/Sources/SwiftCorelibs/include \
-swift build --product OpenSwiftUIDemo --swift-sdk "$SDK" \
+swift build --product OpenSwiftUIDemo --swift-sdk "$SDK" --manifest-cache none \
   -Xcc -D_WASI_EMULATED_SIGNAL -Xcc -D_WASI_EMULATED_MMAN -Xcc -D_WASI_EMULATED_PROCESS_CLOCKS \
   -Xcc -I/tmp/oag-shims -Xcc -fno-exceptions -Xcc -DSWIFT_INLINE_NAMESPACE=__runtime
 

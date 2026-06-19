@@ -7,6 +7,7 @@
 - [RULE: always use latest versions](feedback_check_latest_versions.md) — check the latest crate/lib version online before use; don't trust stale pins or cached docs.
 - [RULE: read source/docs FIRST](feedback_read_source_first.md) — read the reference impl/docs end-to-end before patching; one grounded change beats ten speculative ones.
 - [RULE: shared WIT change → rebuild ALL consumers + restart zygote](feedback_shared_wit_rebuild_all_consumers.md) — shared-type ABI breaks every importer (skiko Kotlin binding is hand-maintained); run-hybrid-stack.sh re-preloads.
+- [RULE: capture full build output, don't grep-then-rerun](feedback_capture_build_output.md) — save a build's FULL output to a log and read THAT; never pre-filter a live build as the only sink (hides errors → wasted re-run); on a background-build failure Read its task file, don't re-run.
 
 ## Projects / tasks
 - [wasi:canvas + wasi:input-handlers — migration stages 1-3 ✅ + FINAL 0.0.2 design](project_wasi_canvas_migration.md) — GOAL fixed: clean/no-overlap/WASI-OK/100%-consumable; both REDESIGN-0.0.2.md docs acceptance-checked; path B next (0.0.2 side-by-side, then ONE Kotlin finale); old hook: drafts in proposals/, host impl default-on; Slint/dioxus(+Signal)/all-4-chrome migrated + device-verified; porting recipe + wit-bindgen multi-package gotchas (path order, qualified world, generate_all, textual export!).

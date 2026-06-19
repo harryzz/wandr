@@ -1,6 +1,46 @@
-# OpenSwiftUI on wasm — resume point (updated 2026-06-19, phase 3 MULTI-CHILD CLEARED)
+# OpenSwiftUI on wasm — resume point (updated 2026-06-19, ✅ FIRST ON-DEVICE PIXEL)
 
-## ▶ START HERE: ✅ MULTI-CHILD WALL CLEARED — VStack renders 2 fills on wasm
+## 🎉 MILESTONE (2026-06-19): real SwiftUI renders ON THE PIXEL 2 XL
+`VStack { Color.red; Color.blue }` (OpenSwiftUI, phases 1–4) renders on the device —
+red top / blue bottom, chrome intact, stable past 35 s (screenshot verified). End-to-end:
+OpenSwiftUI AttributeGraph → `DisplayList` → `WandrDrawSink` → CGContext → wasi:canvas →
+Skia/EGL. App = `apps`-installed `wandr.swiftui.demo` (built from `repros/swift-canvas-spike`
+`OpenSwiftUIDemo` target). Colors/shapes only — **Text is next** (still stubbed off-Apple).
+
+### What unblocked on-device = CROSS-AOT (not footprint/crypto/threads/GC)
+The device can't fit the AOT compile of this 172k-function component: full-parallel
+cranelift peaks **~2 GB RSS** (thread count barely matters — serial is still ~1.96 GB; it's
+the module, not parallelism) and the device process OOMs (~2.3 GB free, ~290 MB headroom).
+Dropping swift-crypto/BoringSSL saved only ~1.3 MB (it was mostly DWARF). The fix: compile
+the **aarch64 cwasm on the PC** and push it — the device just deserializes (`loader: cache
+fresh`, no recompile). Target is part of wasmtime's `precompile_compatibility_hash`, so the
+`aarch64-linux-android` triple matched the device's engine hash exactly. **This generalizes
+to any large guest that can't AOT on-device.**
+
+### CROSS-AOT deploy recipe (reproducible)
+```bash
+# 1. Build the desktop host WITH all cranelift ISA backends (one-time):
+cd runtime/wandr-host && cargo build --release --target x86_64-unknown-linux-gnu --features cross-aot
+# 2. Build the guest component (repros/swift-canvas-spike), strip, drop into a wandrpkg:
+cd repros/swift-canvas-spike && ./build-openswiftui-demo.sh    # -> .build/.../OpenSwiftUIDemo.wasm
+wasm-tools strip <core>.wasm -o x.wasm && wasm-tools strip --delete '^name$' x.wasm -o x2.wasm
+wasm-tools component new x2.wasm --adapt wasi_snapshot_preview1=<adapter> -o <pkg>/components/ui.wasm
+# 3. Cross-AOT FOR the device on the PC (WANDR_AOT_TARGET sets wasmtime's compile target):
+WANDR_AOT_TARGET=aarch64-linux-android WANDR_APPS_ROOT=/tmp/stage \
+  <x86_64-host> --install <pkg>          # -> /tmp/stage/apps/<id>/<ver>/{cache/ui.cwasm, cache-key.toml, ...}
+# 4. Push the staged install dir to the device apps root + launch:
+adb shell "su -c 'rm -rf $APPS/<id>'"; adb push /tmp/stage/apps/<id>/<ver> $APPS/<id>/<ver>
+adb shell "su -c 'WANDR_APPS_ROOT=... wandr-arbiter launch <id>'"
+```
+Host support: `make_config()` (shared engine config) + `WANDR_AOT_TARGET` override in
+`install_wandrpkg` (lib.rs) + the `cross-aot` Cargo feature (`wasmtime/all-arch`).
+
+### GOTCHA — `AppGraph.shared` is set once per process
+`renderWandrAppOnce` sets the once-only `AppGraph.shared`; calling it twice fatalErrors
+("may only be set once") → SIGILL. The guest must build the graph EXACTLY once and never
+rebuild (e.g. don't rebuild on resize). Cost us a ~10 s-in crash until fixed.
+
+## ▶ MULTI-CHILD WALL CLEARED — VStack renders 2 fills on wasm
 WORKING on wasm32-wasip1: primitive + custom Views, **@State (reactive)**, **Text
 (construction)**, single-type conformance, **DisplayList rendered**, AND NOW **multi-child
 `VStack`/`TupleView`**. `VStack { Color.red; Color.blue }` →

@@ -57,8 +57,10 @@ nonisolated(unsafe) private var built = false
 public func onResize(_ w: UInt32, _ h: UInt32) {
     width = Float(w)
     height = Float(h)
-    // A resize changes the surface the layout targets; rebuild on the next frame.
-    built = false
+    // NOTE: do NOT rebuild here. renderWandrAppOnce builds the AppGraph and sets the
+    // once-only `AppGraph.shared`; calling it twice fatalErrors ("may only be set once").
+    // The graph is built exactly once (first frame with valid dims); resizes just re-render
+    // at the original layout. (Proper resize-relayout = a setSize on WandrRendererHost — TODO.)
 }
 
 @_cdecl("exports_wasi_input_handlers_frame_handler_on_frame")
