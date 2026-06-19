@@ -1,5 +1,22 @@
 # OpenSwiftUI on wasm — resume point (updated 2026-06-19, phase 3 in progress)
 
+## ▶ START HERE (next session): multi-child views = MEMORY CORRUPTION
+WORKING & committed on wasm32-wasip1: primitive + custom Views, **@State (reactive)**,
+**Text**, single-type protocol conformance, **first DisplayList rendered**. (build/run:
+`repros/openswiftui-wasm/probe`, `ANY_ATTRIBUTE_FIX=0` REQUIRED — see "build the probe" below.)
+CURRENT WALL: `VStack { Color.red; Color.blue }` (any multi-child / `TupleView`) corrupts
+memory on the TupleView/conformance path (single-child is clean). It manifests as a wild
+function pointer → nondeterministic "undefined element" trap / hang, and **the failure point
+moves with ANY code change** — so PRINT-INSTRUMENTATION CANNOT LOCALIZE IT (proven, commit
+`44664f4f`). NEXT APPROACH (not print-probing): wasm memory sanitizer / `wasmtime` debugging,
+or bisect the upstream ABI mismatch that corrupts memory only on the tuple path. Prime
+suspects: Compute tuple metadata reflection (`TupleType.type(at:)` / `AGTupleWithBuffer` —
+the latter is in the UN-FIXED bounded swiftcc set, would be a natural corruption source) or
+the `unsafeBitCast(storage, to: (any View.Type).self)` existential write (View.swift:202)
+doing a wrong-size/offset read/write on wasm32. Full detail in the "VStack/TupleView" section
+below. Git tip = `44664f4f`; all patches match `/tmp` (openswiftui-phase1-wip + compute-wasm
++ oag-fork). Cheap-iteration harness for Compute-side ABI checks: `repros/compute-wasm/computerun` (~4s).
+
 ## 🎉 PHASE 3 FIRST PIXEL (2026-06-19): OpenSwiftUI renders a DisplayList on wasm
 `WindowGroup { Color.red }` → built + run under wasmtime → **clean exit 0**:
 ```
