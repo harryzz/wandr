@@ -1,12 +1,13 @@
 import OpenSwiftUI
-// MULTI-CHILD WALL CLEARED (2026-06-19): VStack { Color.red; Color.blue } => TupleView<(Color,Color)>
-// renders TWO fills (red top, blue bottom, 8pt VStack gap) and exits 0, deterministically.
-// The wall was NOT memory corruption / TupleView witness tables (the RESUME's prior hypothesis)
-// — it was the AGGraphReadCachedAttribute swiftcc closure-with-arg/return signature mismatch hit
-// by the LAYOUT engine on multi-child views. Diagnosed non-invasively via wasmtime -D coredump +
-// DWARF (frame 0 = signature_mismatch:AGGraphReadCachedAttribute). Fixed with the plain-C
-// AGGraphReadCachedAttributeC *C variant (compute-wasm.patch). @State + Text on the multi-child
-// path also run to exit 0 (Text emits no fill in the stdout renderer; glyphs = phase-4 drawer).
+@_spi(WandrRenderer) import OpenSwiftUI
+#if os(WASI)
+import WASILibc
+#endif
+
+// PHASE 4 (in progress): wire OpenSwiftUI's real DisplayList into a drawing sink.
+// Instead of the stdout renderer, drive the new `.wandr` renderer with a WandrDrawSink.
+// On device the sink draws into a wasi:canvas CGContext (skia/EGL); here a PrintSink
+// proves the SAME resolved fills flow through the new seam on desktop wasmtime.
 struct ContentView: View {
     var body: some View {
         VStack {
@@ -15,7 +16,35 @@ struct ContentView: View {
         }
     }
 }
-@main
+
 struct ProbeApp: App {
     var body: some Scene { WindowGroup { ContentView() } }
+}
+
+// Desktop validation sink: print what a CGContext sink would draw.
+final class PrintSink: WandrDrawSink {
+    func beginFrame(width: Double, height: Double, version: UInt32) {
+        print("wandr beginFrame \(Int(width))x\(Int(height)) v\(version)")
+    }
+    func fillRect(
+        x: Double, y: Double, width: Double, height: Double,
+        red: Float, green: Float, blue: Float, opacity: Float
+    ) {
+        print(String(format: "wandr fillRect x:%.1f y:%.1f w:%.1f h:%.1f rgba(%.3f, %.3f, %.3f, %.3f)",
+                     x, y, width, height, red, green, blue, opacity))
+    }
+    func endFrame() { print("wandr endFrame") }
+}
+
+@main
+struct Main {
+    static func main() {
+        let sink = PrintSink()
+        renderWandrAppOnce(ProbeApp(), options: .init(sink: sink))
+        #if os(WASI)
+        // Exit before any retained-graph teardown reaches the Subgraph.forEach swiftcall
+        // wall (the host is kept alive by the lib; this also flushes stdout).
+        exit(0)
+        #endif
+    }
 }

@@ -47,12 +47,35 @@ Established plain-C `*C`-variant pattern (mirrors `AGGraphInternAttributeTypeC`)
   `withoutActuallyEscaping(makeTypeID)` + `withExtendedLifetime(box)` keep it valid+alive.
 
 ### NEXT
-- **PHASE 4 (the payoff):** wire the real `DisplayList` into the device-verified Option-B
-  CGContext drawer (`repros/swift-canvas-spike/.../DisplayListRenderer.swift`) → wasi:canvas →
-  Skia/EGL on the Pixel 2 XL. The stdout renderer not emitting `.text` is fine — the CGContext
-  drawer handles `.text`; that's also where Text's unimplemented off-Apple layout stubs
-  (`Text+View.swift sizeThatFits/spacing/explicitAlignment`, `ResolvedText`, `ShapeStyleRendering`)
-  must be filled in for real glyphs.
+- **✅ PHASE 4a DONE — DisplayList wired into a drawing sink (desktop-verified).** Added a
+  `.wandr` renderer mirroring the `.stdout` trio (in `openswiftui-phase1-wip.patch`):
+  `RendererConfiguration.swift` (`case wandr(WandrOptions)` + factory + `public WandrOptions`
+  + `public protocol WandrDrawSink`), `WandrDisplayListRenderer.swift` (the recursive
+  `DisplayList`→sink walker, mirror of `StdoutRenderCommandVisitor`: resolves color / solid
+  shape / opacity / affine transform; clip/text/image/mask = TODO), `WandrRendererHost.swift`
+  (`package`, mirror of `StdoutRendererHost`, configures `.wandr`), `WandrApp.swift`
+  (`@_spi(WandrRenderer) renderWandrAppOnce`, retains the host to dodge the `Subgraph.forEach`
+  teardown wall). Probe now drives it with a `PrintSink` →
+  `wandr fillRect x:0 y:0 w:640 h:236 rgba(1.000,0.231,0.188,1.000)` (red) +
+  `… y:244 … rgba(0.000,0.478,1.000,1.000)` (blue), exit 0 — the real `DisplayList` resolves
+  to the exact fills (frames + sRGB) a CGContext would draw. `WandrDrawSink` is plain scalars
+  (no CoreGraphics types) so the guest stays decoupled. (Harmless stderr `DecodingError` =
+  AppGraph `archiveJSON` no-op stub; rendering unaffected.)
+- **PHASE 4b NEXT — implement `WandrDrawSink` over the spike's wasi:canvas `CGContext` in a
+  real guest, deploy, visual check.** The sink body is `cg.setFillColor(CGColor(red,green,blue,
+  alpha:opacity)); cg.fill(CGRect(x,y,w,h))` — exactly `repros/swift-canvas-spike`'s
+  `DisplayListRenderer`/`spike.swift` pattern (`on_frame` acquires the wasi:canvas context →
+  builds `CGContext` → draws). Make a guest app depending on OpenSwiftUI + the spike's
+  `OpenCoreGraphics`(over wasi:canvas) + `CSwiftSpike`; its `on_frame` calls `renderWandrAppOnce`
+  ONCE (host persists) — but per-frame re-render needs a `render(into:)`-on-existing-host API
+  (the one-shot host renders once then returns `.infinity`). Then component-package + deploy to
+  Pixel 2 XL; the red/blue split is the first on-device SwiftUI pixel (visual check = WITH USER,
+  per [[feedback_visual_verification]]).
+- **Then grow the sink + walker:** add `fillPath`/`pushClip`/`pushTransform`/`drawText` to
+  `WandrDrawSink` + the matching `DisplayList.Effect`/`Content` cases in
+  `WandrDisplayListRenderer` (clip/mask/blend/filter currently recurse unmodified; text/image
+  hit the `default: break`). Real glyphs also need Text's unimplemented off-Apple layout stubs
+  (`Text+View.swift sizeThatFits/spacing/explicitAlignment`, `ResolvedText`, `ShapeStyleRendering`).
 - **Remaining bounded swiftcc walls** (still in the linker `function signature mismatch`
   warnings; will TRAP only as richer views reach them — same `*C` fix each, validate in the 4s
   harness `repros/compute-wasm/computerun` first): `AGGraphSearch`, `AGTupleWithBuffer`,
