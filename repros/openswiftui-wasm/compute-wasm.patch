@@ -33,6 +33,93 @@ index 1467d39..95f5b67 100644
          }
      }
  
+diff --git a/Sources/Compute/Attribute/Rule/Rule.swift b/Sources/Compute/Attribute/Rule/Rule.swift
+index 002d2c8..ca7873f 100644
+--- a/Sources/Compute/Attribute/Rule/Rule.swift
++++ b/Sources/Compute/Attribute/Rule/Rule.swift
+@@ -62,6 +62,25 @@ func AGGraphReadCachedAttribute(
+     attributeTypeID: (AGUnownedGraphContextRef) -> UInt32
+ ) -> UnsafeRawPointer
+ 
++#if arch(wasm32)
++// WASI: AGGraphReadCachedAttribute takes a swiftcall closure-with-arg/return that
++// mislowers on wasm (the @_silgen_name above lowers to signature_mismatch and traps
++// on the VStack/layout cachedValue path). Route through the plain-C AGGraphReadCachedAttributeC
++// (declared in the ComputeCxx header). The closure is invoked SYNCHRONOUSLY inside
++// cache_fetch, but the engine's ClosureFunctionCI retains the context via swift_retain,
++// so we must pass a real heap object (a box) — not a stack pointer like internAttributeType
++// does. The box is kept alive for the duration of the call with withExtendedLifetime;
++// the engine's retain/release on it is balanced.
++private final class _CachedAttrBox {
++    let fn: (AGUnownedGraphContextRef) -> UInt32
++    init(_ f: @escaping (AGUnownedGraphContextRef) -> UInt32) { self.fn = f }
++}
++private let _cachedAttrTrampoline:
++    @convention(c) (AGUnownedGraphContextRef, UnsafeRawPointer?) -> UInt32 = { graph, ctx in
++        Unmanaged<_CachedAttrBox>.fromOpaque(ctx!).takeUnretainedValue().fn(graph)
++    }
++#endif
++
+ extension Rule where Self: Hashable {
+ 
+     public func cachedValue(options: CachedValueOptions, owner: AnyAttribute?) -> Value {
+@@ -101,15 +120,7 @@ extension Rule where Self: Hashable {
+         bodyPtr: UnsafeRawPointer,
+         update: () -> (UnsafeMutableRawPointer, AnyAttribute) -> Void
+     ) -> UnsafePointer<Value> {
+-        let value = AGGraphReadCachedAttribute(
+-            hash: hashValue,
+-            type: Metadata(Self.self),
+-            body: bodyPtr,
+-            valueType: Metadata(Value.self),
+-            options: options,
+-            owner: owner ?? .nil,
+-            changed: nil
+-        ) { graph in
++        func makeTypeID(_ graph: AGUnownedGraphContextRef) -> UInt32 {
+             return graph.internAttributeType(type: Metadata(Self.self)) {
+                 let attributeType = _AttributeType(
+                     selfType: Self.self,
+@@ -122,6 +133,39 @@ extension Rule where Self: Hashable {
+                 return UnsafePointer(pointer)
+             }
+         }
++        #if arch(wasm32)
++        // The closure is invoked synchronously inside AGGraphReadCachedAttributeC (it returns
++        // before withoutActuallyEscaping ends), so `update`/makeTypeID never truly escape.
++        let value: UnsafeRawPointer = withoutActuallyEscaping(makeTypeID) { escapingMakeTypeID in
++            let box = _CachedAttrBox(escapingMakeTypeID)
++            return withExtendedLifetime(box) {
++                UnsafeRawPointer(
++                    AGGraphReadCachedAttributeC(
++                        hashValue,
++                        Metadata(Self.self),
++                        bodyPtr,
++                        Metadata(Value.self),
++                        options,
++                        owner ?? .nil,
++                        nil,
++                        _cachedAttrTrampoline,
++                        Unmanaged.passUnretained(box).toOpaque()
++                    )
++                )
++            }
++        }
++        #else
++        let value = AGGraphReadCachedAttribute(
++            hash: hashValue,
++            type: Metadata(Self.self),
++            body: bodyPtr,
++            valueType: Metadata(Value.self),
++            options: options,
++            owner: owner ?? .nil,
++            changed: nil,
++            attributeTypeID: makeTypeID
++        )
++        #endif
+         return value.assumingMemoryBound(to: Value.self)
+     }
+ 
 diff --git a/Sources/Compute/Graph/Graph.swift b/Sources/Compute/Graph/Graph.swift
 index c763d24..9e75ce0 100644
 --- a/Sources/Compute/Graph/Graph.swift
@@ -170,7 +257,7 @@ index 44787fd..9caeb62 100644
  
  }
 diff --git a/Sources/ComputeCxx/Graph/AGGraph.cpp b/Sources/ComputeCxx/Graph/AGGraph.cpp
-index 75b45b3..2709039 100644
+index 75b45b3..81db9e0 100644
 --- a/Sources/ComputeCxx/Graph/AGGraph.cpp
 +++ b/Sources/ComputeCxx/Graph/AGGraph.cpp
 @@ -462,6 +462,28 @@ void AGGraphMutateAttribute(AGAttribute attribute, AGTypeID type, bool invalidat
@@ -202,7 +289,7 @@ index 75b45b3..2709039 100644
  #pragma mark - Value
  
  namespace {
-@@ -651,6 +673,17 @@ void AGGraphSetInvalidationCallback(AGGraphRef graph,
+@@ -651,14 +673,26 @@ void AGGraphSetInvalidationCallback(AGGraphRef graph,
      graph_context->set_invalidation_callback(AG::ClosureFunctionAV<void, AGAttribute>(callback, callback_context));
  }
  
@@ -220,7 +307,64 @@ index 75b45b3..2709039 100644
  #pragma mark - Cached value
  
  namespace {
-@@ -837,6 +870,17 @@ void AGGraphSetUpdateCallback(AGGraphRef graph,
+ 
++template <typename Getter>
+ void *read_cached_attribute(size_t hash, const AG::swift::metadata &metadata, const void *body,
+                             const AG::swift::metadata &value_metadata, AGCachedValueOptions options,
+                             AG::AttributeID owner_id, AGChangedValueFlags *flags_out,
+-                            AG::ClosureFunctionCI<uint32_t, AGUnownedGraphContextRef> get_attribute_type_id) {
++                            Getter get_attribute_type_id) {
+     auto update = AG::Graph::current_update();
+     auto update_stack = update.tag() == 0 ? update.get() : nullptr;
+ 
+@@ -714,6 +748,36 @@ void *AGGraphReadCachedAttribute(size_t hash, AGTypeID type, const void *body, A
+     return value;
+ }
+ 
++#if defined(__wasi__)
++// WASI: plain C-CC variant (the swiftcall closure-with-arg/return ABI does not lower
++// consistently across swiftc/clang on wasm -> the @_silgen_name import above mislowers
++// to a signature_mismatch:AGGraphReadCachedAttribute trap on the VStack/layout path).
++// On wasm AG_SWIFT_CC(swift)/AG_SWIFT_CONTEXT are empty, so ClosureFunctionCI already
++// stores a plain-C uint32_t(*)(AGUnownedGraphContextRef, const void*); the only fix
++// needed is a separate symbol the Swift side imports with the C ABI. The closure is
++// invoked SYNCHRONOUSLY inside cache_fetch, but ClosureFunctionCI retains the context
++// (swift_retain), so the Swift side must pass a real heap-boxed closure (not a stack
++// pointer) — see Rule.swift's _CachedAttrBox.
++extern "C" void *AGGraphReadCachedAttributeC(size_t hash, AGTypeID type, const void *body, AGTypeID value_type,
++                                             AGCachedValueOptions options, AGAttribute owner, bool *_Nullable changed_out,
++                                             uint32_t (*closure)(AGUnownedGraphContextRef graph_context,
++                                                                 const void *context),
++                                             const void *closure_context) {
++    auto metadata = reinterpret_cast<const AG::swift::metadata *>(type);
++    auto value_metadata = reinterpret_cast<const AG::swift::metadata *>(value_type);
++    auto owner_id = AG::AttributeID(owner);
++
++    AGChangedValueFlags flags = 0;
++    void *value =
++        read_cached_attribute(hash, *metadata, body, *value_metadata, options, owner_id, &flags,
++                              AG::Subgraph::PlainTypeIDGetter{closure, closure_context});
++    if (changed_out) {
++        *changed_out = flags & AGChangedValueFlagsChanged ? true : false;
++    }
++    return value;
++}
++#endif
++
+ void *AGGraphReadCachedAttributeIfExists(size_t hash, AGTypeID type, const void *body, AGTypeID value_type,
+                                          AGCachedValueOptions options, AGAttribute owner, bool *_Nullable changed_out) {
+ 
+@@ -722,7 +786,8 @@ void *AGGraphReadCachedAttributeIfExists(size_t hash, AGTypeID type, const void
+     auto owner_id = AG::AttributeID(owner);
+ 
+     AGChangedValueFlags flags = 0;
+-    void *value = read_cached_attribute(hash, *metadata, body, *value_metadata, options, owner_id, &flags, nullptr);
++    void *value = read_cached_attribute(hash, *metadata, body, *value_metadata, options, owner_id, &flags,
++                                        AG::ClosureFunctionCI<uint32_t, AGUnownedGraphContextRef>(nullptr));
+     if (changed_out) {
+         *changed_out = flags & AGChangedValueFlagsChanged ? true : false;
+     }
+@@ -837,6 +902,17 @@ void AGGraphSetUpdateCallback(AGGraphRef graph,
      graph_context->set_update_callback(AG::ClosureFunctionVV<void>(callback, callback_context));
  }
  
@@ -375,6 +519,58 @@ index 8ac9923..a1047c8 100644
      // MARK: Value
  
      bool value_exists(data::ptr<Node> node);
+diff --git a/Sources/ComputeCxx/Subgraph/Subgraph.cpp b/Sources/ComputeCxx/Subgraph/Subgraph.cpp
+index bc97769..629c381 100644
+--- a/Sources/ComputeCxx/Subgraph/Subgraph.cpp
++++ b/Sources/ComputeCxx/Subgraph/Subgraph.cpp
+@@ -725,6 +725,19 @@ void Subgraph::update(AGAttributeFlags mask) {
+ 
+ data::ptr<Node> Subgraph::cache_fetch(size_t hash, const swift::metadata &metadata, const void *body,
+                                       ClosureFunctionCI<uint32_t, AGUnownedGraphContextRef> get_attribute_type_id) {
++    return cache_fetch_tmpl(hash, metadata, body, get_attribute_type_id);
++}
++
++#if defined(__wasi__)
++data::ptr<Node> Subgraph::cache_fetch(size_t hash, const swift::metadata &metadata, const void *body,
++                                      PlainTypeIDGetter get_attribute_type_id) {
++    return cache_fetch_tmpl(hash, metadata, body, get_attribute_type_id);
++}
++#endif
++
++template <typename Getter>
++data::ptr<Node> Subgraph::cache_fetch_tmpl(size_t hash, const swift::metadata &metadata, const void *body,
++                                           Getter get_attribute_type_id) {
+     if (_cache == nullptr) {
+         _cache = alloc_bytes(sizeof(NodeCache), 7).unsafe_cast<NodeCache>();
+         new (_cache.get()) NodeCache();
+diff --git a/Sources/ComputeCxx/Subgraph/Subgraph.h b/Sources/ComputeCxx/Subgraph/Subgraph.h
+index 873f12c..949e039 100644
+--- a/Sources/ComputeCxx/Subgraph/Subgraph.h
++++ b/Sources/ComputeCxx/Subgraph/Subgraph.h
+@@ -210,6 +210,23 @@ class Subgraph : public data::zone {
+ 
+     data::ptr<Node> cache_fetch(size_t hash, const swift::metadata &metadata, const void *body,
+                                 ClosureFunctionCI<uint32_t, AGUnownedGraphContextRef> get_attribute_type_id);
++#if defined(__wasi__)
++    // WASI: the swiftcall ClosureFunctionCI cannot be built from the @convention(c) thunk
++    // the Swift side emits (swiftcall closures-with-arg/return mislower on wasm). This
++    // plain-C getter invokes the thunk via the C ABI (like Graph::intern_type_c). It feeds
++    // the same templated cache_fetch body. See AGGraphReadCachedAttributeC.
++    struct PlainTypeIDGetter {
++        uint32_t (*_Nullable fn)(AGUnownedGraphContextRef, const void *_Nullable) = nullptr;
++        const void *_Nullable ctx = nullptr;
++        explicit operator bool() const { return fn != nullptr; }
++        uint32_t operator()(AGUnownedGraphContextRef g) const { return fn(g, ctx); }
++    };
++    data::ptr<Node> cache_fetch(size_t hash, const swift::metadata &metadata, const void *body,
++                                PlainTypeIDGetter get_attribute_type_id);
++#endif
++    template <typename Getter>
++    data::ptr<Node> cache_fetch_tmpl(size_t hash, const swift::metadata &metadata, const void *body,
++                                     Getter get_attribute_type_id);
+     void cache_insert(data::ptr<Node> node);
+ 
+     void cache_collect();
 diff --git a/Sources/ComputeCxx/Swift/AGType.cpp b/Sources/ComputeCxx/Swift/AGType.cpp
 index 90c3834..9f81a18 100644
 --- a/Sources/ComputeCxx/Swift/AGType.cpp
@@ -486,7 +682,7 @@ index 90c3834..9f81a18 100644
                           void (*body)(uint32_t tag,
                                        AGTypeID field_type,
 diff --git a/Sources/ComputeCxx/include/ComputeCxx/AGGraph.h b/Sources/ComputeCxx/include/ComputeCxx/AGGraph.h
-index f7a7b1d..2848da8 100644
+index f7a7b1d..4ff0783 100644
 --- a/Sources/ComputeCxx/include/ComputeCxx/AGGraph.h
 +++ b/Sources/ComputeCxx/include/ComputeCxx/AGGraph.h
 @@ -211,6 +211,14 @@ void AGGraphMutateAttribute(AGAttribute attribute, AGTypeID type, bool invalidat
@@ -519,7 +715,26 @@ index f7a7b1d..2848da8 100644
  // MARK: Cached value
  
  CF_EXPORT
-@@ -347,6 +363,14 @@ void AGGraphSetUpdateCallback(AGGraphRef graph,
+@@ -280,6 +296,18 @@ void *AGGraphReadCachedAttribute(size_t hash, AGTypeID type, const void *body, A
+                                                      const void *context AG_SWIFT_CONTEXT) AG_SWIFT_CC(swift),
+                                  const void *closure_context);
+ 
++#if defined(__wasi__)
++// WASI: plain C-CC variant (declared in the header so Swift imports it with the C ABI;
++// the @_silgen_name import lowers the closure arg with the Swift CC and traps). See the
++// implementation in AGGraph.cpp and the Swift routing in Rule.swift.
++CF_EXPORT
++void *AGGraphReadCachedAttributeC(size_t hash, AGTypeID type, const void *body, AGTypeID value_type,
++                                  AGCachedValueOptions options, AGAttribute owner, bool *_Nullable changed_out,
++                                  uint32_t (*_Nonnull closure)(AGUnownedGraphContextRef graph_context,
++                                                               const void *_Nullable context),
++                                  const void *_Nullable closure_context);
++#endif
++
+ CF_EXPORT
+ CF_REFINED_FOR_SWIFT
+ void *_Nullable AGGraphReadCachedAttributeIfExists(size_t hash, AGTypeID type, const void *body, AGTypeID value_type,
+@@ -347,6 +375,14 @@ void AGGraphSetUpdateCallback(AGGraphRef graph,
                                void (*callback)(const void *context AG_SWIFT_CONTEXT) AG_SWIFT_CC(swift),
                                const void *callback_context);
  

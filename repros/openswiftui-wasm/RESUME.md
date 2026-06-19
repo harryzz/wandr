@@ -1,21 +1,65 @@
-# OpenSwiftUI on wasm — resume point (updated 2026-06-19, phase 3 in progress)
+# OpenSwiftUI on wasm — resume point (updated 2026-06-19, phase 3 MULTI-CHILD CLEARED)
 
-## ▶ START HERE (next session): multi-child views = MEMORY CORRUPTION
-WORKING & committed on wasm32-wasip1: primitive + custom Views, **@State (reactive)**,
-**Text**, single-type protocol conformance, **first DisplayList rendered**. (build/run:
-`repros/openswiftui-wasm/probe`, `ANY_ATTRIBUTE_FIX=0` REQUIRED — see "build the probe" below.)
-CURRENT WALL: `VStack { Color.red; Color.blue }` (any multi-child / `TupleView`) corrupts
-memory on the TupleView/conformance path (single-child is clean). It manifests as a wild
-function pointer → nondeterministic "undefined element" trap / hang, and **the failure point
-moves with ANY code change** — so PRINT-INSTRUMENTATION CANNOT LOCALIZE IT (proven, commit
-`44664f4f`). NEXT APPROACH (not print-probing): wasm memory sanitizer / `wasmtime` debugging,
-or bisect the upstream ABI mismatch that corrupts memory only on the tuple path. Prime
-suspects: Compute tuple metadata reflection (`TupleType.type(at:)` / `AGTupleWithBuffer` —
-the latter is in the UN-FIXED bounded swiftcc set, would be a natural corruption source) or
-the `unsafeBitCast(storage, to: (any View.Type).self)` existential write (View.swift:202)
-doing a wrong-size/offset read/write on wasm32. Full detail in the "VStack/TupleView" section
-below. Git tip = `44664f4f`; all patches match `/tmp` (openswiftui-phase1-wip + compute-wasm
-+ oag-fork). Cheap-iteration harness for Compute-side ABI checks: `repros/compute-wasm/computerun` (~4s).
+## ▶ START HERE: ✅ MULTI-CHILD WALL CLEARED — VStack renders 2 fills on wasm
+WORKING on wasm32-wasip1: primitive + custom Views, **@State (reactive)**, **Text
+(construction)**, single-type conformance, **DisplayList rendered**, AND NOW **multi-child
+`VStack`/`TupleView`**. `VStack { Color.red; Color.blue }` →
+```
+surface: 640.0x480.0
+display-list-version: 4
+rendered:
+  - fill x:0.0 y:0.0 w:640.0 h:236.0 #FF3B30FF      # Color.red, top half
+  - fill x:0.0 y:244.0 w:640.0 h:236.0 #007AFFFF     # Color.blue, bottom (8pt VStack gap)
+```
+exit 0, **deterministic across 5 runs** (the nondeterminism was the bug's fingerprint — gone).
+`VStack { Color.red.opacity(count>5 ?…); Text("count \(count)"); Color.blue }` with `@State
+count=7` also runs to exit 0 → `fill … #FF3B3040` (alpha 0x40 = 0.25; @State flows through the
+reactive graph on the multi-child path). Text emits no `fill` (Text layout/render are
+`unimplemented` stubs off-Apple — real glyphs = phase-4 CGContext drawer).
+
+### THE ROOT CAUSE (it was NOT memory corruption / TupleView witness tables)
+The prior "memory corruption, can't localize" framing was WRONG — that was the *symptom* of a
+swiftcc closure-with-arg/return signature mismatch seen through print-probing. Diagnosed
+**non-invasively** with `wasmtime run -D debug-info=y -D coredump=… -D max-backtrace=N` (no
+guest source change → immune to "instrumentation moves the crash"). Frame 0 of the
+DWARF-symbolized backtrace was literally **`signature_mismatch:AGGraphReadCachedAttribute`**,
+reached via `Compute.Rule._cachedValue` (Rule.swift:104) ← `SizeAndSpacingContext.dynamicMember`
+(PlacementContext.swift:47) ← `ViewLayoutEngine.layout` — i.e. the **layout engine** reading a
+cached environment attribute. Multi-child views run real layout; single-child (full-surface
+Color) didn't hit `cachedValue`. `AGGraphReadCachedAttribute` was exactly the symbol the
+"bounded swiftcc set — would TRAP if hit" list predicted. (`OAGTupleWithBuffer`, the witness
+tables, the `unsafeBitCast` existential write — all RULED OUT.)
+
+### THE FIX (in `compute-wasm.patch`, validated in the 4s harness then the probe)
+Established plain-C `*C`-variant pattern (mirrors `AGGraphInternAttributeTypeC`):
+- `extern "C" AGGraphReadCachedAttributeC` in `ComputeCxx/Graph/AGGraph.cpp` + header decl in
+  `AGGraph.h` (`#if defined(__wasi__)`) — a separate symbol (the RESUME-proven rule: a
+  `@convention(c)` thunk to the *original* symbol still traps; only a separate `*C` symbol works).
+- GOTCHA: on wasm `AG_SWIFT_CC(swift)`/`AG_SWIFT_CONTEXT` are NOT empty → `ClosureFunctionCI`
+  is hard-`swiftcall` and can't be built from the plain-C thunk. So **`Subgraph::cache_fetch`
+  was templatized** (`cache_fetch_tmpl<Getter>`) so a plain-C `Subgraph::PlainTypeIDGetter`
+  (calls `fn(graph, ctx)` directly, like `intern_type_c`) threads through alongside the
+  swiftcall `ClosureFunctionCI`. `read_cached_attribute` in AGGraph.cpp templatized likewise.
+- Swift `Rule._cachedValue` (`Compute/Attribute/Rule/Rule.swift`) routes `#if arch(wasm32)`
+  through `AGGraphReadCachedAttributeC` with a heap-boxed closure (`_CachedAttrBox`) + a
+  non-capturing `@convention(c)` trampoline. The closure is SYNCHRONOUS, but `ClosureFunctionCI`
+  `swift_retain`s the context → must pass a real heap object (box), not a stack pointer;
+  `withoutActuallyEscaping(makeTypeID)` + `withExtendedLifetime(box)` keep it valid+alive.
+
+### NEXT
+- **PHASE 4 (the payoff):** wire the real `DisplayList` into the device-verified Option-B
+  CGContext drawer (`repros/swift-canvas-spike/.../DisplayListRenderer.swift`) → wasi:canvas →
+  Skia/EGL on the Pixel 2 XL. The stdout renderer not emitting `.text` is fine — the CGContext
+  drawer handles `.text`; that's also where Text's unimplemented off-Apple layout stubs
+  (`Text+View.swift sizeThatFits/spacing/explicitAlignment`, `ResolvedText`, `ShapeStyleRendering`)
+  must be filled in for real glyphs.
+- **Remaining bounded swiftcc walls** (still in the linker `function signature mismatch`
+  warnings; will TRAP only as richer views reach them — same `*C` fix each, validate in the 4s
+  harness `repros/compute-wasm/computerun` first): `AGGraphSearch`, `AGTupleWithBuffer`,
+  `AGGraphWithUpdate`, `AGTypeApplyEnumData`/`AGTypeApplyMutableEnumData`, `AGSubgraphAddObserver`,
+  `AGSubgraphApply`.
+- Build/run + diagnosis recipe below. Patches match `/tmp` (openswiftui-phase1-wip + compute-wasm
+  + oag-fork); `compute-wasm.patch` base = `efb754b` (HEAD of harryzz/Compute `wasm32-wasip1-osp`).
 
 ## 🎉 PHASE 3 FIRST PIXEL (2026-06-19): OpenSwiftUI renders a DisplayList on wasm
 `WindowGroup { Color.red }` → built + run under wasmtime → **clean exit 0**:

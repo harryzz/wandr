@@ -16,6 +16,19 @@ let ruleAttr = Attribute(DoubleRule(input: inputAttr))
 // trampoline -> runs DoubleRule.value -> reads input (21) -> 42.
 print("Compute rule on wasi: ruleAttr.value = \(ruleAttr.value)")
 
+// CACHED-ATTRIBUTE TEST: cachedValue() calls AGGraphReadCachedAttribute, which takes a
+// swiftcc closure-with-arg/return. Before the AGGraphReadCachedAttributeC *C variant this
+// traps `signature_mismatch:AGGraphReadCachedAttribute` (the VStack/layout wall). It must
+// now run (it materializes the cached node's attribute type via the boxed closure).
+struct CachedConst: Rule, Hashable {
+    let key: Int
+    var value: Int { key * 10 }
+}
+print("cachedValue test:")
+let cached = CachedConst(key: 5).cachedValue(options: [], owner: nil)
+print("cachedValue on wasi: \(cached)")
+print("cachedValue OK")
+
 // MACRO-FLIP TEST: forEachField passes a Swift closure WITH ARGS to a swiftcc C
 // function. Before the AGBase.h macro flip this traps signature_mismatch:AGTypeApplyFields.
 // If it prints fields, raw Swift closures work plain-C — no per-function variant needed.
