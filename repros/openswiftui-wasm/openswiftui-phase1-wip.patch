@@ -120,10 +120,10 @@ index f36ae1c..2dbcce4 100644
  }
 diff --git a/Sources/OpenSwiftUI/App/App/Stdout/WandrApp.swift b/Sources/OpenSwiftUI/App/App/Stdout/WandrApp.swift
 new file mode 100644
-index 0000000..f344fc6
+index 0000000..4c6bb0e
 --- /dev/null
 +++ b/Sources/OpenSwiftUI/App/App/Stdout/WandrApp.swift
-@@ -0,0 +1,57 @@
+@@ -0,0 +1,67 @@
 +//
 +//  WandrApp.swift
 +//  OpenSwiftUI
@@ -153,10 +153,12 @@ index 0000000..f344fc6
 +// A guest keeps a single host alive across frames anyway, so never deinit it.
 +// (Remove the leak once Subgraph.forEach has a *C variant.)
 +nonisolated(unsafe) private var _wandrHostKeepAlive: AnyObject?
++nonisolated(unsafe) private var _wandrRedraw: (() -> Void)?
 +
-+/// Render `app`'s first scene once through the wandr renderer into `options.sink`.
-+/// Returns after the render pass (does NOT exit), so the caller (the guest frame
-+/// handler) can present + drop its wasi:canvas handles afterward.
++/// Build `app`'s graph + first scene and render it once through the wandr renderer
++/// into `options.sink`. The host is retained for the process lifetime (a guest keeps
++/// one host across frames; this also dodges the Subgraph.forEach teardown wall).
++/// Call `wandrRedraw()` each subsequent frame to repaint under double-buffering.
 +@_spi(WandrRenderer)
 +public func renderWandrAppOnce(
 +    _ app: some App,
@@ -177,8 +179,16 @@ index 0000000..f344fc6
 +            options: options
 +        )
 +        _wandrHostKeepAlive = host
++        _wandrRedraw = { host.redraw() }
 +        host.renderOnce()
 +    }
++}
++
++/// Re-walk the current display list into the sink passed to `renderWandrAppOnce`.
++/// The guest points the sink's CGContext at the new back-buffer, then calls this.
++@_spi(WandrRenderer)
++public func wandrRedraw() {
++    _wandrRedraw?()
 +}
 +#endif
 diff --git a/Sources/OpenSwiftUI/Test/ViewTest.swift b/Sources/OpenSwiftUI/Test/ViewTest.swift
@@ -555,10 +565,10 @@ index 0000000..8ce1e31
 +#endif
 diff --git a/Sources/OpenSwiftUICore/Render/DisplayList/WandrRendererHost.swift b/Sources/OpenSwiftUICore/Render/DisplayList/WandrRendererHost.swift
 new file mode 100644
-index 0000000..3cb31a5
+index 0000000..a94b305
 --- /dev/null
 +++ b/Sources/OpenSwiftUICore/Render/DisplayList/WandrRendererHost.swift
-@@ -0,0 +1,111 @@
+@@ -0,0 +1,121 @@
 +//
 +//  WandrRendererHost.swift
 +//  OpenSwiftUICore
@@ -608,6 +618,16 @@ index 0000000..3cb31a5
 +
 +    package func renderOnce() {
 +        render(interval: .zero, targetTimestamp: nil)
++    }
++
++    /// Re-walk the current (already-computed) display list into `options.sink`, without
++    /// re-running the graph. The guest calls this every frame (after pointing the sink's
++    /// CGContext at the new back-buffer) so a static scene repaints under double-buffering.
++    package func redraw() {
++        Update.begin()
++        let (list, version) = viewGraph.displayList()
++        Update.end()
++        list.renderToWandrSink(options.sink, surface: options.surface, version: version)
 +    }
 +
 +    package func updateRootView() {

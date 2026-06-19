@@ -6,7 +6,7 @@
 // `.content` draws; an `.effect` pushes graphics state (opacity layer / clip / transform)
 // and recurses into the wrapped sub-DisplayList. Every op here is an already-shipped,
 // device-verified CGContext call.
-import OpenCoreGraphics
+import WandrCG
 
 func render(_ list: DisplayList, into cg: CGContext) {
     for item in list.items {

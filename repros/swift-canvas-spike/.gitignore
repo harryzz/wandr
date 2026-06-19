@@ -1,6 +1,8 @@
 spike.core.wasm
 spike.component.wasm
 spike.embed.wasm
+openswiftui-demo.component.wasm
+Package.resolved
 .build/
 host/target/
 components/
