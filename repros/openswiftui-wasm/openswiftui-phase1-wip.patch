@@ -100,6 +100,24 @@ index ad3ee3b..9800ad8 100644
          var swiftSettings = swiftSettings ?? []
          swiftSettings.append(.define("OPENSWIFTUI_OPENCOMBINE"))
          self.swiftSettings = swiftSettings
+diff --git a/Sources/OpenSwiftUI/App/App/Stdout/StdoutApp.swift b/Sources/OpenSwiftUI/App/App/Stdout/StdoutApp.swift
+index f36ae1c..2dbcce4 100644
+--- a/Sources/OpenSwiftUI/App/App/Stdout/StdoutApp.swift
++++ b/Sources/OpenSwiftUI/App/App/Stdout/StdoutApp.swift
+@@ -43,6 +43,13 @@ func runStdoutApp(
+             options: options
+         )
+         host.renderOnce()
++        #if os(WASI)
++        // WASI: exit BEFORE the closure's locals (host/graph) deinit. Teardown runs
++        // GraphHost.invalidate -> Subgraph.forEach, an arg-closure that still hits the
++        // swiftcall mislowering; for a one-shot stdout render we don't need clean
++        // teardown. exit(0) also flushes stdout. (Remove once forEach has a *C variant.)
++        exit(0)
++        #endif
+     }
+     exit(0)
+ }
 diff --git a/Sources/OpenSwiftUI/Test/ViewTest.swift b/Sources/OpenSwiftUI/Test/ViewTest.swift
 index eb10ae0..b3aff19 100644
 --- a/Sources/OpenSwiftUI/Test/ViewTest.swift
@@ -203,12 +221,40 @@ index 65ee4eb..78a8c53 100644
  import OpenAttributeGraphShims
  #if OPENSWIFTUI_OPENCOMBINE
  public import OpenCombine
+diff --git a/Sources/OpenSwiftUICore/Data/Preference/View_Indirect.swift b/Sources/OpenSwiftUICore/Data/Preference/View_Indirect.swift
+index f97a860..2907fc2 100644
+--- a/Sources/OpenSwiftUICore/Data/Preference/View_Indirect.swift
++++ b/Sources/OpenSwiftUICore/Data/Preference/View_Indirect.swift
+@@ -5,11 +5,10 @@
+ //  Audited for 6.0.87
+ //  Status: Complete
+ 
+-#if canImport(Darwin)
++// Was `import` (internal) on non-Darwin, but `setIndirectDependency` exposes
++// AnyAttribute in a `package` signature — needs `package import` everywhere
++// (only surfaces with OPENSWIFTUI_ANY_ATTRIBUTE_FIX off, i.e. real OAG types).
+ package import OpenAttributeGraphShims
+-#else
+-import OpenAttributeGraphShims
+-#endif
+ 
+ extension _ViewInputs {
+     package func makeIndirectOutputs() -> _ViewOutputs {
 diff --git a/Sources/OpenSwiftUICore/Util/RunLoopUtils.swift b/Sources/OpenSwiftUICore/Util/RunLoopUtils.swift
-index b63b980..bd96a17 100644
+index b63b980..1329a60 100644
 --- a/Sources/OpenSwiftUICore/Util/RunLoopUtils.swift
 +++ b/Sources/OpenSwiftUICore/Util/RunLoopUtils.swift
-@@ -24,7 +24,12 @@ extension CFRunLoopMode {
+@@ -17,21 +17,35 @@ package func autoreleasepool<Result>(invoking body: () throws -> Result) rethrow
+     try body()
+ }
+ 
++#if !os(WASI)
+ extension CFRunLoopMode {
+     package static let defaultMode: CFRunLoopMode! = kCFRunLoopDefaultMode
+     package static let commonModes: CFRunLoopMode! = kCFRunLoopCommonModes
+ }
  #endif
++#endif
  
  package func onNextMainRunLoop(do body: @escaping () -> Void) {
 +    #if os(WASI)
@@ -219,7 +265,48 @@ index b63b980..bd96a17 100644
 +    #endif
  }
  
++#if !os(WASI)
  private var observer: CFRunLoopObserver?
++#endif
+ private var observerActions: [() -> Void] = []
+ 
+ extension RunLoop {
+     package static func addObserver(_ action: @escaping () -> Void) {
++        #if os(WASI)
++        // No CFRunLoop on wasm: just queue the action. The host frame loop drains
++        // it via flushObservers() (wired through _wasmDrainMainRunLoop in phase 3).
++        observerActions.append(action)
++        #else
+         let currentRunloop = CFRunLoopGetCurrent()
+         if observer == nil {
+             observer = CFRunLoopObserverCreate(
+@@ -55,6 +69,7 @@ extension RunLoop {
+             }
+         }
+         observerActions.append(action)
++        #endif
+     }
+ 
+     package static func flushObservers() {
+@@ -69,6 +84,12 @@ extension RunLoop {
+         }
+     }
+ 
++    #if os(WASI)
++    // No CFRunLoop to run on wasm; the host frame loop owns time. No-op.
++    package static func runAllowingEarlyExit(until deadline: Date, stopCondition: () -> Bool) {}
++
++    package static func runAllowingEarlyExit(until deadline: Date) {}
++    #else
+     package static func runAllowingEarlyExit(until deadline: Date, stopCondition: () -> Bool) {
+         repeat {
+             let diff = deadline.timeIntervalSinceReferenceDate - CFAbsoluteTimeGetCurrent()
+@@ -87,4 +108,5 @@ extension RunLoop {
+     package static func runAllowingEarlyExit(until deadline: Date) {
+         runAllowingEarlyExit(until: deadline) { false }
+     }
++    #endif
+ }
 diff --git a/Sources/OpenSwiftUICore/Util/StandardLibraryAdditions.swift b/Sources/OpenSwiftUICore/Util/StandardLibraryAdditions.swift
 index c314432..26ec7f7 100644
 --- a/Sources/OpenSwiftUICore/Util/StandardLibraryAdditions.swift
@@ -311,10 +398,10 @@ index 0000000..b823485
 +#endif
 diff --git a/Sources/OpenSwiftUICore/Util/WasmThreadingShim.swift b/Sources/OpenSwiftUICore/Util/WasmThreadingShim.swift
 new file mode 100644
-index 0000000..b2bcbb7
+index 0000000..1fb8546
 --- /dev/null
 +++ b/Sources/OpenSwiftUICore/Util/WasmThreadingShim.swift
-@@ -0,0 +1,104 @@
+@@ -0,0 +1,116 @@
 +//
 +//  WasmThreadingShim.swift
 +//  OpenSwiftUICore
@@ -391,6 +478,18 @@ index 0000000..b2bcbb7
 +        _WasmTLS.shared.values.removeValue(forKey: key)
 +    }
 +    return 0
++}
++
++// MARK: - Timer
++
++// Foundation.Timer compiles on WASI but its implementation references CFRunLoopTimer*
++// (unresolved at link). Shadow it module-wide with a minimal stand-in covering the
++// surface OpenSwiftUICore uses (TimerUtils.withDelay, EventBindingManager, the
++// hosting views). Timers are wired to the host frame clock in a later phase; for
++// now they never fire — only construction + invalidate must be total.
++package final class Timer {
++    package init(timeInterval: Double, repeats: Bool, block: @escaping (Timer) -> Void) {}
++    package func invalidate() {}
 +}
 +
 +// MARK: - Main run-loop enqueue seam

@@ -1,0 +1,389 @@
+diff --git a/Sources/Compute/Attribute/AnyAttribute.swift b/Sources/Compute/Attribute/AnyAttribute.swift
+index 1467d39..95f5b67 100644
+--- a/Sources/Compute/Attribute/AnyAttribute.swift
++++ b/Sources/Compute/Attribute/AnyAttribute.swift
+@@ -39,12 +39,30 @@ extension AnyAttribute {
+             let modify: (UnsafeMutableRawPointer) -> Void = { pointer in
+                 escapingMutator(&pointer.assumingMemoryBound(to: Body.self).pointee)
+             }
++            #if arch(wasm32)
++            // WASI: the swiftcall modify closure mislowers on wasm; route through the
++            // C-imported AGGraphMutateAttributeC with a non-capturing @convention(c)
++            // trampoline. `modify` is invoked synchronously, so pass it by pointer.
++            withUnsafePointer(to: modify) { ctxPtr in
++                AGGraphMutateAttributeC(
++                    self,
++                    Metadata(type),
++                    invalidating,
++                    { body, ctx in
++                        ctx.assumingMemoryBound(to: ((UnsafeMutableRawPointer) -> Void).self)
++                            .pointee(body)
++                    },
++                    UnsafeRawPointer(ctxPtr)
++                )
++            }
++            #else
+             AGGraphMutateAttribute(
+                 self,
+                 type: Metadata(type),
+                 invalidating: invalidating,
+                 modify: modify
+             )
++            #endif
+         }
+     }
+ 
+diff --git a/Sources/Compute/Graph/Graph.swift b/Sources/Compute/Graph/Graph.swift
+index c763d24..f63a41d 100644
+--- a/Sources/Compute/Graph/Graph.swift
++++ b/Sources/Compute/Graph/Graph.swift
+@@ -57,11 +57,23 @@ func AGGraphWithMainThreadHandler(
+ extension Graph {
+ 
+     public func onUpdate(_ handler: @escaping () -> Void) {
++        #if arch(wasm32)
++        // WASI: AGGraphSetUpdateCallback takes a swiftcall closure; that ABI mislowers
++        // across swiftc/clang on wasm (-> signature_mismatch trap). The update callback
++        // is unused on the one-shot render path; no-op until a plain-C callback variant
++        // is wired (needed for interactivity in a later phase).
++        _ = handler
++        #else
+         AGGraphSetUpdateCallback(unsafeBitCast(self, to: UnsafeRawPointer.self), callback: handler)
++        #endif
+     }
+ 
+     public func onInvalidation(_ handler: @escaping (AnyAttribute) -> Void) {
++        #if arch(wasm32)
++        _ = handler  // same swiftcall-mislowering reason as onUpdate; unused for one-shot render
++        #else
+         AGGraphSetInvalidationCallback(unsafeBitCast(self, to: UnsafeRawPointer.self), callback: handler)
++        #endif
+     }
+ 
+     public func withDeadline<T>(_ deadline: UInt64, _ body: () -> T) -> T {
+@@ -88,11 +100,18 @@ extension Graph {
+     }
+ 
+     public func withMainThreadHandler(_ mainThreadHandler: (() -> Void) -> Void, do body: () -> Void) {
++        #if arch(wasm32)
++        // WASI single-threaded: AGGraphWithMainThreadHandler's swiftcall closures mislower
++        // on wasm. There is only one thread, so run body directly (the main handler exists
++        // only to hop work onto the main thread).
++        body()
++        #else
+         AGGraphWithMainThreadHandler(
+             unsafeBitCast(self, to: UnsafeRawPointer.self),
+             body: body,
+             mainThreadHandler: mainThreadHandler
+         )
++        #endif
+     }
+ 
+ }
+diff --git a/Sources/Compute/Runtime/Metadata.swift b/Sources/Compute/Runtime/Metadata.swift
+index 44787fd..9caeb62 100644
+--- a/Sources/Compute/Runtime/Metadata.swift
++++ b/Sources/Compute/Runtime/Metadata.swift
+@@ -4,9 +4,28 @@ import ComputeCxx
+ func AGTypeApplyFields(_ type: Metadata, body: (UnsafePointer<CChar>, Int, Metadata) -> Void)
+ 
+ public func forEachField(of type: Any.Type, do body: (UnsafePointer<Int8>, Int, Any.Type) -> Void) {
++    #if arch(wasm32)
++    // WASI: route through the C-imported AGTypeApplyFieldsC so the field-visitor
++    // callback uses the C ABI (the swiftcall closure mislowers on wasm ->
++    // signature_mismatch). The callback fires synchronously during the call, so
++    // pass the closure by pointer + a non-capturing @convention(c) trampoline.
++    withoutActuallyEscaping(body) { escaping in
++        withUnsafePointer(to: escaping) { ctxPtr in
++            AGTypeApplyFieldsC(
++                Metadata(type),
++                { fieldName, fieldOffset, fieldType, ctx in
++                    ctx!.assumingMemoryBound(to: ((UnsafePointer<Int8>, Int, Any.Type) -> Void).self)
++                        .pointee(fieldName, fieldOffset, fieldType.type)
++                },
++                UnsafeRawPointer(ctxPtr)
++            )
++        }
++    }
++    #else
+     AGTypeApplyFields(Metadata(type)) { fieldName, fieldOffset, fieldType in
+         body(fieldName, fieldOffset, fieldType.type)
+     }
++    #endif
+ }
+ 
+ @_silgen_name("AGTypeApplyFields2")
+@@ -32,9 +51,25 @@ extension Metadata {
+     )
+         -> Bool
+     {
++        #if arch(wasm32)
++        return withoutActuallyEscaping(body) { escaping in
++            withUnsafePointer(to: escaping) { ctxPtr in
++                AGTypeApplyFields2C(
++                    self,
++                    options,
++                    { fieldName, fieldOffset, fieldType, ctx in
++                        ctx!.assumingMemoryBound(to: ((UnsafePointer<CChar>, Int, Any.Type) -> Bool).self)
++                            .pointee(fieldName, fieldOffset, fieldType.type)
++                    },
++                    UnsafeRawPointer(ctxPtr)
++                )
++            }
++        }
++        #else
+         return AGTypeApplyFields2(self, options: options) { fieldName, fieldOffset, fieldType in
+             return body(fieldName, fieldOffset, fieldType.type)
+         }
++        #endif
+     }
+ 
+ }
+diff --git a/Sources/ComputeCxx/Graph/AGGraph.cpp b/Sources/ComputeCxx/Graph/AGGraph.cpp
+index 75b45b3..9577707 100644
+--- a/Sources/ComputeCxx/Graph/AGGraph.cpp
++++ b/Sources/ComputeCxx/Graph/AGGraph.cpp
+@@ -462,6 +462,28 @@ void AGGraphMutateAttribute(AGAttribute attribute, AGTypeID type, bool invalidat
+                                         AG::ClosureFunctionPV<void, void *>(modify, modify_context), invalidating);
+ }
+ 
++#if defined(__wasi__)
++// WASI: plain-C modify callback (the swiftcall closure mislowers on wasm).
++extern "C" void AGGraphMutateAttributeC(AGAttribute attribute, AGTypeID type, bool invalidating,
++                                        void (*modify)(void *body, const void *context),
++                                        const void *modify_context) {
++    auto attribute_id = AG::AttributeID(attribute);
++    auto node = attribute_id.get_node();
++    if (!node) {
++        AG::precondition_failure("non-direct attribute id: %u", attribute);
++    }
++    attribute_id.validate_data_offset();
++
++    auto subgraph = attribute_id.subgraph();
++    if (!subgraph) {
++        AG::precondition_failure("no graph: %u", attribute);
++    }
++
++    subgraph->graph()->attribute_modify_c(node, *reinterpret_cast<const AG::swift::metadata *>(type), modify,
++                                          modify_context, invalidating);
++}
++#endif
++
+ #pragma mark - Value
+ 
+ namespace {
+diff --git a/Sources/ComputeCxx/Graph/Graph.cpp b/Sources/ComputeCxx/Graph/Graph.cpp
+index f9c8162..8b9f17e 100644
+--- a/Sources/ComputeCxx/Graph/Graph.cpp
++++ b/Sources/ComputeCxx/Graph/Graph.cpp
+@@ -1394,6 +1394,35 @@ void Graph::attribute_modify(data::ptr<Node> node, const swift::metadata &metada
+     }
+ }
+ 
++#if defined(__wasi__)
++// WASI: identical to attribute_modify but invokes a plain-C callback (the
++// swiftcall closure ABI mislowers across swiftc/clang on wasm -> signature_mismatch).
++void Graph::attribute_modify_c(data::ptr<Node> node, const swift::metadata &metadata,
++                               void (*modify)(void *body, const void *context), const void *modify_context,
++                               bool invalidating) {
++    if (!node->is_self_initialized()) {
++        precondition_failure("no self data: %u", node);
++    }
++
++    const AttributeType &type = attribute_type(node->type_id());
++    if (&type.body_metadata() != &metadata) {
++        precondition_failure("self type mismatch: %u", node);
++    }
++
++    foreach_trace([&node](Trace &trace) { trace.begin_modify(node); });
++
++    void *body = node->get_self(type);
++    modify(body, modify_context);
++
++    foreach_trace([&node](Trace &trace) { trace.end_modify(node); });
++
++    if (invalidating) {
++        node->set_self_modified(true);
++        mark_pending(node, node.get());
++    }
++}
++#endif
++
+ void Graph::mark_pending(data::ptr<Node> node_ptr, Node *node) {
+     if (!node->is_pending()) {
+         foreach_trace([&node_ptr](Trace &trace) { trace.set_pending(node_ptr, true); });
+diff --git a/Sources/ComputeCxx/Graph/Graph.h b/Sources/ComputeCxx/Graph/Graph.h
+index 8ac9923..a1047c8 100644
+--- a/Sources/ComputeCxx/Graph/Graph.h
++++ b/Sources/ComputeCxx/Graph/Graph.h
+@@ -320,6 +320,13 @@ class Graph {
+     void attribute_modify(data::ptr<Node> node, const swift::metadata &type, ClosureFunctionPV<void, void *> modify,
+                           bool invalidating);
+ 
++#if defined(__wasi__)
++    // WASI: plain-C modify callback (swiftcall closure ABI mislowers on wasm).
++    void attribute_modify_c(data::ptr<Node> node, const swift::metadata &type,
++                            void (*modify)(void *body, const void *context), const void *modify_context,
++                            bool invalidating);
++#endif
++
+     // MARK: Value
+ 
+     bool value_exists(data::ptr<Node> node);
+diff --git a/Sources/ComputeCxx/Swift/AGType.cpp b/Sources/ComputeCxx/Swift/AGType.cpp
+index 90c3834..9f81a18 100644
+--- a/Sources/ComputeCxx/Swift/AGType.cpp
++++ b/Sources/ComputeCxx/Swift/AGType.cpp
+@@ -216,6 +216,105 @@ bool AGTypeApplyFields2(AGTypeID typeID, AGTypeApplyOptions options,
+     }
+ }
+ 
++#if defined(__wasi__)
++// WASI: plain-C callback variants of AGTypeApplyFields/AGTypeApplyFields2. The
++// swiftcall closure ABI (AG_SWIFT_CC(swift)) does not lower consistently across
++// swiftc/clang on wasm (-> signature_mismatch trap), so the Swift side passes a
++// non-capturing @convention(c) thunk + a boxed context and we invoke it plain-C.
++void AGTypeApplyFieldsC(AGTypeID typeID,
++                        void (*apply)(const char *field_name, size_t field_offset,
++                                      AGTypeID field_type, const void *context),
++                        const void *apply_context) {
++    class VisitorC : public AG::swift::metadata_visitor {
++        void (*_body)(const char *, size_t, AGTypeID, const void *);
++        const void *_context;
++
++      public:
++        VisitorC(void (*body)(const char *, size_t, AGTypeID, const void *), const void *context)
++            : _body(body), _context(context) {}
++
++        bool unknown_result() override { return true; }
++        bool visit_field(const AG::swift::metadata &type, const AG::swift::field_record &field,
++                         size_t field_offset, size_t field_size) override {
++            auto mangled_name = field.MangledTypeName.get();
++            auto field_type = type.mangled_type_name_ref(mangled_name, true, nullptr);
++            if (field_type) {
++                _body(field.FieldName.get(), field_offset, AGTypeID(field_type), _context);
++            }
++            return true;
++        }
++    };
++
++    VisitorC visitor(apply, apply_context);
++    auto type = reinterpret_cast<const AG::swift::metadata *>(typeID);
++    type->visit(visitor);
++}
++
++bool AGTypeApplyFields2C(AGTypeID typeID, AGTypeApplyOptions options,
++                         bool (*apply)(const char *field_name, size_t field_offset,
++                                       AGTypeID field_type, const void *context),
++                         const void *apply_context) {
++    class VisitorC : public AG::swift::metadata_visitor {
++        AGTypeApplyOptions _options;
++        bool (*_body)(const char *, size_t, AGTypeID, const void *);
++        const void *_context;
++
++      public:
++        VisitorC(AGTypeApplyOptions options, bool (*body)(const char *, size_t, AGTypeID, const void *),
++                 const void *context)
++            : _options(options), _body(body), _context(context) {}
++
++        bool unknown_result() override { return _options & AGTypeApplyOptionsContinueAfterUnknownField; }
++        bool visit_field(const AG::swift::metadata &type, const AG::swift::field_record &field,
++                         size_t field_offset, size_t field_size) override {
++            auto mangled_name = field.MangledTypeName.get();
++            auto field_type = type.mangled_type_name_ref(mangled_name, true, nullptr);
++            if (!field_type) {
++                return unknown_result();
++            }
++            return _body(field.FieldName.get(), field_offset, AGTypeID(field_type), _context);
++        }
++        bool visit_case(const AG::swift::metadata &type, const AG::swift::field_record &field,
++                        uint32_t index) override {
++            auto mangled_name = field.MangledTypeName.get();
++            auto field_type = type.mangled_type_name_ref(mangled_name, true, nullptr);
++            if (!field_type) {
++                return unknown_result();
++            }
++            return _body(field.FieldName.get(), index, AGTypeID(field_type), _context);
++        }
++    };
++
++    VisitorC visitor(options, apply, apply_context);
++    auto type = reinterpret_cast<const AG::swift::metadata *>(typeID);
++    switch (type->getKind()) {
++    case ::swift::MetadataKind::Class:
++        if (options & AGTypeApplyOptionsEnumerateClassFields) {
++            return type->visit_heap(visitor, AG::LayoutDescriptor::HeapMode::Class);
++        }
++        return false;
++    case ::swift::MetadataKind::Struct:
++        if (!(options & AGTypeApplyOptionsEnumerateClassFields) && !(options & AGTypeApplyOptionsEnumerateEnumCases)) {
++            return type->visit(visitor);
++        }
++        return false;
++    case ::swift::MetadataKind::Enum:
++    case ::swift::MetadataKind::Optional:
++        if (options & AGTypeApplyOptionsEnumerateEnumCases) {
++            return type->visit(visitor);
++        }
++        return false;
++    case ::swift::MetadataKind::Tuple:
++        if (!(options & AGTypeApplyOptionsEnumerateClassFields) && !(options & AGTypeApplyOptionsEnumerateEnumCases)) {
++            return type->visit(visitor);
++        }
++        return false;
++    default:
++        return false;
++    }
++}
++#endif
++
+ bool AGTypeApplyEnumData(AGTypeID typeID, void *value,
+                          void (*body)(uint32_t tag,
+                                       AGTypeID field_type,
+diff --git a/Sources/ComputeCxx/include/ComputeCxx/AGGraph.h b/Sources/ComputeCxx/include/ComputeCxx/AGGraph.h
+index f7a7b1d..fe8a10e 100644
+--- a/Sources/ComputeCxx/include/ComputeCxx/AGGraph.h
++++ b/Sources/ComputeCxx/include/ComputeCxx/AGGraph.h
+@@ -211,6 +211,14 @@ void AGGraphMutateAttribute(AGAttribute attribute, AGTypeID type, bool invalidat
+                             void (*modify)(void *body, const void *context AG_SWIFT_CONTEXT) AG_SWIFT_CC(swift),
+                             const void *modify_context);
+ 
++#if defined(__wasi__)
++// WASI: plain-C modify callback (the swiftcall closure ABI mislowers on wasm).
++AG_EXPORT
++void AGGraphMutateAttributeC(AGAttribute attribute, AGTypeID type, bool invalidating,
++                             void (*modify)(void *body, const void *context),
++                             const void *modify_context);
++#endif
++
+ // MARK: Value
+ 
+ AG_EXPORT
+diff --git a/Sources/ComputeCxx/include/ComputeCxx/AGType.h b/Sources/ComputeCxx/include/ComputeCxx/AGType.h
+index d3f35bd..a675531 100644
+--- a/Sources/ComputeCxx/include/ComputeCxx/AGType.h
++++ b/Sources/ComputeCxx/include/ComputeCxx/AGType.h
+@@ -93,6 +93,23 @@ bool AGTypeApplyFields2(AGTypeID typeID, AGTypeApplyOptions options,
+                                                const void *context AG_SWIFT_CONTEXT) AG_SWIFT_CC(swift),
+                         const void *apply_context);
+ 
++#if defined(__wasi__)
++// WASI: plain-C callback variants (the swiftcall closure ABI mislowers across
++// swiftc/clang on wasm -> signature_mismatch). Swift passes a non-capturing
++// @convention(c) thunk + a boxed context; these invoke it with the C ABI.
++AG_EXPORT
++void AGTypeApplyFieldsC(AGTypeID typeID,
++                        void (*apply)(const char *field_name, size_t field_offset,
++                                      AGTypeID field_type, const void *_Nullable context),
++                        const void *apply_context);
++
++AG_EXPORT
++bool AGTypeApplyFields2C(AGTypeID typeID, AGTypeApplyOptions options,
++                         bool (*apply)(const char *field_name, size_t field_offset,
++                                       AGTypeID field_type, const void *_Nullable context),
++                         const void *apply_context);
++#endif
++
+ AG_EXPORT
+ AG_REFINED_FOR_SWIFT
+ bool AGTypeApplyEnumData(AGTypeID typeID, void *value,
