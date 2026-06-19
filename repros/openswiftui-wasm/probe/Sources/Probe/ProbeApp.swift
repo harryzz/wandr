@@ -32,14 +32,13 @@ struct TileCell: View {
     let value: Int
     var body: some View {
         let colors = tileColors(value)
-        // Static structure (ternary, no `if`): dynamic content (conditionals/ForEach) at scale
-        // still OOBs in the DynamicContainer path (a heap-corruption bug separate from the
-        // now-fixed Subgraph.index stub).
         return ZStack {
             RoundedRectangle(cornerRadius: 6).fill(colors.bg)
-            Text(value > 0 ? "\(value)" : "")
-                .font(.system(size: 30, weight: .bold))
-                .foregroundColor(colors.fg)
+            if value > 0 {   // conditional → DynamicContainer (the path we're fixing)
+                Text("\(value)")
+                    .font(.system(size: 30, weight: .bold))
+                    .foregroundColor(colors.fg)
+            }
         }
         .frame(width: 70, height: 70)
     }
@@ -57,14 +56,17 @@ struct Row: View {
 }
 
 struct ContentView: View {
+    let grid = [[2, 4, 8, 16], [32, 64, 128, 256], [512, 1024, 2048, 0], [0, 0, 2, 4]]
     var body: some View {
-        // Explicit rows (no ForEach) + conditional TileCell — tests whether the
-        // Subgraph.index fix unblocked conditionals (DynamicViewList) at scale.
+        // ForEach + conditional — the full dynamic-content path (the DynamicContainer fix).
         VStack(spacing: 8) {
-            Row(a: 2, b: 4, c: 8, d: 16)
-            Row(a: 32, b: 64, c: 128, d: 256)
-            Row(a: 512, b: 1024, c: 2048, d: 0)
-            Row(a: 0, b: 0, c: 2, d: 4)
+            ForEach(0..<4, id: \.self) { r in
+                HStack(spacing: 8) {
+                    ForEach(0..<4, id: \.self) { c in
+                        TileCell(value: grid[r][c])
+                    }
+                }
+            }
         }
     }
 }
