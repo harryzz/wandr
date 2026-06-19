@@ -32,8 +32,9 @@ struct TileCell: View {
     let value: Int
     var body: some View {
         let colors = tileColors(value)
-        // No conditional: empty cells show "" (avoids the DynamicViewList path that
-        // corrupts at scale via the Subgraph.index stub).
+        // Static structure (ternary, no `if`): dynamic content (conditionals/ForEach) at scale
+        // still OOBs in the DynamicContainer path (a heap-corruption bug separate from the
+        // now-fixed Subgraph.index stub).
         return ZStack {
             RoundedRectangle(cornerRadius: 6).fill(colors.bg)
             Text(value > 0 ? "\(value)" : "")
@@ -57,6 +58,8 @@ struct Row: View {
 
 struct ContentView: View {
     var body: some View {
+        // Explicit rows (no ForEach) + conditional TileCell — tests whether the
+        // Subgraph.index fix unblocked conditionals (DynamicViewList) at scale.
         VStack(spacing: 8) {
             Row(a: 2, b: 4, c: 8, d: 16)
             Row(a: 32, b: 64, c: 128, d: 256)
