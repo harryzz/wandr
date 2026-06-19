@@ -375,12 +375,32 @@ Path to it: compile **OpenSwiftUICore** (then OpenSwiftUI) for `wasm32-wasip1` �
 validated DisplayList→CGContext renderer (Option B) → drop in swiftui-2048.
 Full plan + scope: `docs/swift-openswiftui-wandr-feasibility.md` (phases 0–5).
 
-## What's done (proven, pushed)
-- Engine: `harryzz/Compute@wasm32-wasip1-osp` (AttributeGraph on wasm, reactive 42).
-- `harryzz/OpenAttributeGraph` (WASI un-stubs; engine = Compute backend).
+## What's done (proven, pushed — see the FORKS table below for branches/SHAs)
+- App+core: `harryzz/OpenSwiftUI@wasm32-wasip1` (`80d8fcf`) — phases 1–4, renders to a sink.
+- Engine: `harryzz/Compute@wasm32-wasip1-osp` (`f69881b`) (AttributeGraph on wasm, reactive 42).
+- `harryzz/OpenAttributeGraph@wasm32-wasip1` (`acf25d2`) (WASI un-stubs; engine = Compute backend).
 - `harryzz/OpenCoreGraphics@wasm32-wasip1` (CGContext over wasi:canvas, device-verified).
 - Renderer backend prototyped + device-verified: `repros/swift-canvas-spike` (P4).
 - Phase 0: OpenCombine/OpenObservation build unmodified; OpenRenderBox builds (compile-only).
+
+## 🌿 FORKS — canonical source (pushed 2026-06-19; branches match the patches)
+The full wasm work is now committed to fork branches on GitHub, not just the patches.
+Each branch sits on the base its patch is pinned to (older than the fork's upstream `main`):
+
+| Repo | Branch | HEAD | Base | Carries |
+|---|---|---|---|---|
+| **github.com/harryzz/OpenSwiftUI** | `wasm32-wasip1` | `80d8fcf` | upstream `bb31b59` | phases 1–4 (threading shims, swiftcc fixes, `.wandr` CGContext renderer). NEW fork. `Package.resolved` reset to base (no local pins). |
+| **github.com/harryzz/Compute** | `wasm32-wasip1-osp` | `f69881b` | `efb754b` | base wasm port + the phase 3/4 `AGGraphReadCachedAttributeC` `*C` variant + `cache_fetch` templatize. (older `wasm32-wasip1` branch = the jcmosc-AG-names variant) |
+| **github.com/harryzz/OpenAttributeGraph** | `wasm32-wasip1` | `acf25d2` | `f20328e` | WASI un-stubs + Compute backend + adapter `archiveJSON`. |
+
+Fresh clone of the build tree from the forks (instead of clone+patch):
+```
+git clone -b wasm32-wasip1     https://github.com/harryzz/OpenSwiftUI          /tmp/OpenSwiftUI
+git clone -b wasm32-wasip1-osp https://github.com/harryzz/Compute             /tmp/Compute
+git clone -b wasm32-wasip1     https://github.com/harryzz/OpenAttributeGraph  /tmp/oag-fork
+```
+The 3 base-pinned patches in this dir remain valid reproducer snapshots and match the
+branches above; regenerate a patch with `git -C /tmp/<repo> diff <base>` if a branch advances.
 
 ## Build environment (the /tmp layout the OpenSwiftUI build expects)
 OpenSwiftUI uses `USE_LOCAL_DEPS` → siblings at `../<Name>`. Recreate if /tmp was wiped:
@@ -400,7 +420,8 @@ Apply the WIP patches (both base-pinned):
   and carries the phase-1+2 OpenSwiftUICore/OpenSwiftUI edits (no manual file copy).
 - OAG fork (base `f20328e`): `cd /tmp/oag-fork && git apply repros/openswiftui-wasm/oag-fork.patch`
   — the full phase-0/1/2 OAG working-tree state (un-stubs + Compute-adapter `archiveJSON`).
-  /tmp is ephemeral, so this snapshot is the source of truth until pushed to the fork.
+- (Patches and the fork branches above are now in sync — pushed 2026-06-19. Prefer cloning the
+  fork branches; the patches remain as base-pinned snapshots / for regenerating against upstream.)
 
 ## The build command
 ```bash
