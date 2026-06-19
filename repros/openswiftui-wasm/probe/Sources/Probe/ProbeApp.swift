@@ -1,11 +1,15 @@
 import OpenSwiftUI
-// ISOLATE: VStack/TupleView/layout alone (no @State, no Text). Conformance shim cleared
-// the swift_conformsToProtocol trap; does multi-child layout itself render or hang?
+
+// WORKING on wasm: custom View + @State (reactive) + Text. (VStack/multi-child is
+// blocked on the TupleView per-element runtime-conformance witness dispatch — see RESUME.)
+struct ContentView: View {
+    @State private var count = 7
+    var body: some View {
+        Text("count \(count)")
+    }
+}
+
 @main
 struct ProbeApp: App {
-    var body: some Scene {
-        WindowGroup {
-            VStack(spacing: 10) { Color.red; Color.blue }
-        }
-    }
+    var body: some Scene { WindowGroup { ContentView() } }
 }

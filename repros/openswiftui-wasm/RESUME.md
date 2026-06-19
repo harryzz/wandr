@@ -59,15 +59,31 @@ sidesteps that wall AND flushes stdout. (a)+(b) were the same issue.
   `TupleView<(Color,Color)>`). `@_typeEraser(DebugReplaceableView)` is gated on
   `OPENSWIFTUI_SUPPORT_2025_API && compiler(>=6.2)` (NOT DEBUG) — so a release build won't
   avoid it. Single views go through DebugReplaceableView fine; only multi-child OOBs.
-  - NEXT diagnosis: inspect `DebugReplaceableViewStorage` (the concrete subclass that stores
-    `Content` + makes the child) — find the stored/indirect function pointer (a
-    `@convention(thin)`/partial-apply/witness) that's null/OOB on wasm. Likely a generic
-    make-function reference not emitted, OR a function-pointer ABI that mislowers (akin to the
-    swiftcc story but in pure-Swift type-erasure). Candidate WORKAROUND to TEST: disable the
-    `@_typeEraser(DebugReplaceableView)` line (View.swift:48-50) so views fall back to AnyView
-    erasure, avoiding the DebugReplaceableView path entirely.
-  - Separately, `VStack+@State+Text` HANGS (valid-but-wrong fn ptr variant of the same wild
-    pointer) — same root; will clear together.
+  - WORKAROUND TRIED & FAILED (reverted): disabling `@_typeEraser(DebugReplaceableView)` on
+    wasm (View.swift) only changed the symptom (OOB trap → hang) — because `AnyView` ALSO
+    routes through `makeDynamicView` → `DynamicViewContainer` (AnyView.swift:57). So the eraser
+    CHOICE isn't the cause.
+  - REAL ROOT (localized): the failure is the per-element **runtime-conformance witness
+    dispatch** for `TupleView` content, NOT the eraser. `TupleView._makeView`
+    (`View/TupleView.swift`) builds each child via `TypeConformance<ViewDescriptor>.visitType`
+    (`View/View.swift:201`) → `unsafeExistentialMetatype` does
+    `unsafeBitCast(storage, to: (any View.Type).self)` packing the witness table returned by
+    `swift_conformsToProtocol` into an existential metatype, then calls `_makeView` through that
+    witness. On wasm a witness-table function-pointer entry resolves to an OOB `call_indirect`
+    (nondeterministic trap/hang = a wild funcref index). Single-view Content works (it doesn't
+    take this runtime-conformance-per-element path); only TupleView does.
+  - HYPOTHESES for the real fix (need Swift-runtime-on-wasm investigation):
+    (a) the witness table from `swift_conformsToProtocol` for tuple element types may be an
+        un-instantiated generic pattern on wasm (entries are bad) — may need
+        `swift_conformsToProtocolCommon`/a different lookup, or instantiating the witness;
+    (b) the `unsafeBitCast(storage, to: (any View.Type).self)` existential-metatype layout or
+        the funcref representation differs on wasm (witness fn pointers are table indices);
+    (c) `ViewDescriptor.tupleDescription`/`TupleType` element enumeration yields wrong
+        conformances on wasm. Next: instrument `TypeConformance.visitType`/`tupleDescription`
+        to print the element type + witness, and check whether `_makeView` via the witness is
+        the exact OOB call.
+  - `VStack+@State+Text` HANGS = the valid-but-wrong-funcref variant of the same wild pointer;
+    same root, clears together.
 - Bounded Compute swiftcc set still pending IF hit (would TRAP, not seen yet):
   `AGGraphReadCachedAttribute`, `AGGraphSearch`, `AGTupleWithBuffer`, `AGTypeApplyEnumData`/
   `MutableEnumData` (validate each in the 4s harness `repros/compute-wasm/computerun`).
