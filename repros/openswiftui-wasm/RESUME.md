@@ -20,7 +20,35 @@ TEARDOWN (`GraphHost.deinit → Subgraph.forEach`, an arg-closure swiftcall wall
 abort was happening before stdout flushed. Exiting before the closure's locals deinit
 sidesteps that wall AND flushes stdout. (a)+(b) were the same issue.
 
-### ⛔ CURRENT WALL (2026-06-19, refined): reading `@State` HANGS — root = onUpdate/onInvalidation no-op
+### ✅ @State + Text WORK (2026-06-19): onUpdate/onInvalidation wired as stored plain-C callbacks
+`WindowGroup { ContentView() }` with `@State` renders on wasm, clean exit 0:
+- `ContentView { @State count=7; Text("count \(count)") }` → renders (empty `rendered:`
+  because the stdout renderer emits only fills, not `.text` — real glyphs = phase-4 drawer).
+- **Visible @State proof** (this exact view HUNG before the fix):
+  `Color.red.opacity(count > 5 ? 0.25 : 1.0)` with count=7 →
+  `fill … #FF3B3040` (red, alpha 0x40 = 0.25). @State is stored, read in `body`, and its
+  value flows through the reactive graph into the DisplayList. Deterministic (re-ran clean).
+- THE FIX (in `compute-wasm.patch`): `onUpdate`/`onInvalidation` were no-op'd; now wired as
+  STORED plain-C callbacks. C++ `Context` gets `_update_callback_c`/`_invalidation_callback_c`
+  (plain fn+ctx) + `set_*_callback_c`, invoked plain-C in `call_update`/`call_invalidation`;
+  `extern "C" AGGraphSet{Update,Invalidation}CallbackC` entry points; Swift `Graph.swift`
+  boxes the closure (`_GraphUpdateBox`/`_GraphInvalidationBox`) + passes a non-capturing
+  `@convention(c)` trampoline + `Unmanaged.passRetained` box ptr (lives for graph lifetime).
+  Mirrors the fork's existing `_UpdateBox`/`AGRetainClosureC` rule-update pattern. Gotcha:
+  the `*C` context param is non-optional (`const void*` w/o `_Nullable`) → trampolines take
+  `UnsafeRawPointer`, not `UnsafeRawPointer?`.
+- Earlier "custom View hangs" was a stale build; the real hang was @State, now fixed.
+
+### NEXT
+- Multi-child containers (`VStack`/`HStack`/`ZStack`, `TupleView`) → `swift_conformsToProtocol`
+  C-shim in `OpenSwiftUI_SPI`; then the bounded Compute set (ReadCachedAttribute/Search/
+  TupleWithBuffer/EnumData×2) as they're hit (validate each in the 4s harness).
+- `Subgraph.forEach`/`AGSubgraphApply` `*C` variant for clean teardown (currently sidestepped
+  by `exit(0)` in StdoutApp before deinit).
+- PHASE 4: wire the real `DisplayList` into the Option-B CGContext drawer → device. The
+  stdout renderer not emitting `.text` is fine — the CGContext drawer handles `.text`.
+
+### (historical) reading `@State` HANGS — root = onUpdate/onInvalidation no-op (NOW FIXED above)
 Progress toward Text+@State (all verified by running the probe):
 - Custom `View` with a reactive `body` **renders fine** (the earlier "custom View hangs"
   was a STALE incremental build — confirmed `ContentView { Color.red }` renders 3/3).

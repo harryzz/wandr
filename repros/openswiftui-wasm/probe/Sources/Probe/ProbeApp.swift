@@ -1,9 +1,10 @@
 import OpenSwiftUI
 
-// TARGET (next): custom View with @State + Text. Currently BLOCKED — reading @State
-// hangs (reactive update/invalidation never settles) because onUpdate/onInvalidation
-// are no-op'd on wasm. Fix = wire them as proper stored plain-C callbacks. Custom View
-// WITHOUT @State already renders; interfaceIdiom + Bundle.main walls are cleared.
+// ✅ Text + @State render on wasm (clean exit). @State is stored, read in body, and
+// drives the DisplayList via the reactive graph (onUpdate/onInvalidation now wired as
+// stored plain-C callbacks). The stdout renderer doesn't emit .text glyphs (only fills),
+// so a Text body shows an empty "rendered:"; the @State→Color.opacity variant shows the
+// state value visibly (alpha 0x40 = 0.25 for count>5). Real text = phase-4 CGContext drawer.
 struct ContentView: View {
     @State private var count = 7
     var body: some View {

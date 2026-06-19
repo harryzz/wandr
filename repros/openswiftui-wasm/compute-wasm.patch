@@ -34,19 +34,45 @@ index 1467d39..95f5b67 100644
      }
  
 diff --git a/Sources/Compute/Graph/Graph.swift b/Sources/Compute/Graph/Graph.swift
-index c763d24..f63a41d 100644
+index c763d24..9e75ce0 100644
 --- a/Sources/Compute/Graph/Graph.swift
 +++ b/Sources/Compute/Graph/Graph.swift
-@@ -57,11 +57,23 @@ func AGGraphWithMainThreadHandler(
+@@ -54,14 +54,53 @@ func AGGraphWithMainThreadHandler(
+     mainThreadHandler: (() -> Void) -> Void
+ )
+ 
++#if arch(wasm32)
++// WASI: AGGraphSetUpdate/InvalidationCallback take swiftcall closures that mislower on
++// wasm (-> signature_mismatch). These are STORED callbacks (invoked later by C++), so
++// box the Swift closure (heap object) and pass a non-capturing @convention(c) trampoline
++// + the box pointer to the plain-C *C setters. The box is passRetained so it lives for
++// the graph's lifetime (the host registers these once; replacing them would leak the old
++// box, which is acceptable for a process-lifetime graph host).
++private final class _GraphUpdateBox {
++    let fn: () -> Void
++    init(_ f: @escaping () -> Void) { self.fn = f }
++}
++private let _graphUpdateTrampoline: @convention(c) (UnsafeRawPointer) -> Void = { ctx in
++    Unmanaged<_GraphUpdateBox>.fromOpaque(ctx).takeUnretainedValue().fn()
++}
++private final class _GraphInvalidationBox {
++    let fn: (AnyAttribute) -> Void
++    init(_ f: @escaping (AnyAttribute) -> Void) { self.fn = f }
++}
++private let _graphInvalidationTrampoline: @convention(c) (AnyAttribute, UnsafeRawPointer) -> Void = { attr, ctx in
++    Unmanaged<_GraphInvalidationBox>.fromOpaque(ctx).takeUnretainedValue().fn(attr)
++}
++#endif
++
  extension Graph {
  
      public func onUpdate(_ handler: @escaping () -> Void) {
 +        #if arch(wasm32)
-+        // WASI: AGGraphSetUpdateCallback takes a swiftcall closure; that ABI mislowers
-+        // across swiftc/clang on wasm (-> signature_mismatch trap). The update callback
-+        // is unused on the one-shot render path; no-op until a plain-C callback variant
-+        // is wired (needed for interactivity in a later phase).
-+        _ = handler
++        AGGraphSetUpdateCallbackC(
++            self,
++            _graphUpdateTrampoline,
++            Unmanaged.passRetained(_GraphUpdateBox(handler)).toOpaque()
++        )
 +        #else
          AGGraphSetUpdateCallback(unsafeBitCast(self, to: UnsafeRawPointer.self), callback: handler)
 +        #endif
@@ -54,14 +80,18 @@ index c763d24..f63a41d 100644
  
      public func onInvalidation(_ handler: @escaping (AnyAttribute) -> Void) {
 +        #if arch(wasm32)
-+        _ = handler  // same swiftcall-mislowering reason as onUpdate; unused for one-shot render
++        AGGraphSetInvalidationCallbackC(
++            self,
++            _graphInvalidationTrampoline,
++            Unmanaged.passRetained(_GraphInvalidationBox(handler)).toOpaque()
++        )
 +        #else
          AGGraphSetInvalidationCallback(unsafeBitCast(self, to: UnsafeRawPointer.self), callback: handler)
 +        #endif
      }
  
      public func withDeadline<T>(_ deadline: UInt64, _ body: () -> T) -> T {
-@@ -88,11 +100,18 @@ extension Graph {
+@@ -88,11 +127,18 @@ extension Graph {
      }
  
      public func withMainThreadHandler(_ mainThreadHandler: (() -> Void) -> Void, do body: () -> Void) {
@@ -140,7 +170,7 @@ index 44787fd..9caeb62 100644
  
  }
 diff --git a/Sources/ComputeCxx/Graph/AGGraph.cpp b/Sources/ComputeCxx/Graph/AGGraph.cpp
-index 75b45b3..9577707 100644
+index 75b45b3..2709039 100644
 --- a/Sources/ComputeCxx/Graph/AGGraph.cpp
 +++ b/Sources/ComputeCxx/Graph/AGGraph.cpp
 @@ -462,6 +462,28 @@ void AGGraphMutateAttribute(AGAttribute attribute, AGTypeID type, bool invalidat
@@ -172,6 +202,121 @@ index 75b45b3..9577707 100644
  #pragma mark - Value
  
  namespace {
+@@ -651,6 +673,17 @@ void AGGraphSetInvalidationCallback(AGGraphRef graph,
+     graph_context->set_invalidation_callback(AG::ClosureFunctionAV<void, AGAttribute>(callback, callback_context));
+ }
+ 
++#if defined(__wasi__)
++// WASI: plain-C STORED callback (swiftcall closures mislower on wasm). The Swift side
++// boxes the closure and passes a non-capturing @convention(c) trampoline + the box ptr.
++extern "C" void AGGraphSetInvalidationCallbackC(AGGraphRef graph,
++                                                void (*callback)(AGAttribute, const void *context),
++                                                const void *callback_context) {
++    auto graph_context = AG::Graph::Context::from_cf(graph);
++    graph_context->set_invalidation_callback_c(callback, callback_context);
++}
++#endif
++
+ #pragma mark - Cached value
+ 
+ namespace {
+@@ -837,6 +870,17 @@ void AGGraphSetUpdateCallback(AGGraphRef graph,
+     graph_context->set_update_callback(AG::ClosureFunctionVV<void>(callback, callback_context));
+ }
+ 
++#if defined(__wasi__)
++// WASI: plain-C STORED callback (swiftcall closures mislower on wasm). The Swift side
++// boxes the closure and passes a non-capturing @convention(c) trampoline + the box ptr.
++extern "C" void AGGraphSetUpdateCallbackC(AGGraphRef graph,
++                                          void (*callback)(const void *context),
++                                          const void *callback_context) {
++    auto graph_context = AG::Graph::Context::from_cf(graph);
++    graph_context->set_update_callback_c(callback, callback_context);
++}
++#endif
++
+ AGAttribute AGGraphGetCurrentAttribute() {
+     auto update_ptr = AG::Graph::current_update();
+     if (update_ptr.tag() != 0 || update_ptr.get() == nullptr) {
+diff --git a/Sources/ComputeCxx/Graph/Context.cpp b/Sources/ComputeCxx/Graph/Context.cpp
+index 194f729..5ca7425 100644
+--- a/Sources/ComputeCxx/Graph/Context.cpp
++++ b/Sources/ComputeCxx/Graph/Context.cpp
+@@ -102,6 +102,18 @@ void Graph::Context::call_invalidation(AttributeID attribute) {
+ 
+         set_current_update(old_update);
+     }
++#if defined(__wasi__)
++    else if (_invalidation_callback_c) {
++        auto old_update = current_update();
++        if (old_update.value() != 0) {
++            set_current_update(old_update.with_tag(true));
++        }
++        _graph->foreach_trace([this, &attribute](Trace &trace) { trace.begin_invalidation(*this, attribute); });
++        _invalidation_callback_c(attribute, _invalidation_callback_c_context);
++        _graph->foreach_trace([this, &attribute](Trace &trace) { trace.end_invalidation(*this, attribute); });
++        set_current_update(old_update);
++    }
++#endif
+ }
+ 
+ void Graph::Context::call_update() {
+@@ -121,6 +133,17 @@ void Graph::Context::call_update() {
+ 
+         // ~UpdateStack()
+     }
++#if defined(__wasi__)
++    else if (_update_callback_c) {
++        auto update =
++            UpdateStack(_graph, AGGraphUpdateOptions(AGGraphUpdateOptionsInitializeCleared |
++                                                     AGGraphUpdateOptionsEndDeferringSubgraphInvalidationOnExit));
++        _graph->foreach_trace([this](Trace &trace) { trace.begin_update(*this); });
++        _update_callback_c(_update_callback_c_context);
++        _graph->foreach_trace([this](Trace &trace) { trace.end_update(*this); });
++        // ~UpdateStack()
++    }
++#endif
+ }
+ 
+ } // namespace AG
+diff --git a/Sources/ComputeCxx/Graph/Context.h b/Sources/ComputeCxx/Graph/Context.h
+index e3fbbfa..5d16987 100644
+--- a/Sources/ComputeCxx/Graph/Context.h
++++ b/Sources/ComputeCxx/Graph/Context.h
+@@ -25,6 +25,15 @@ class Graph::Context {
+     ClosureFunctionAV<void, AGAttribute> _invalidation_callback = {nullptr, nullptr};
+     ClosureFunctionVV<void> _update_callback = {nullptr, nullptr};
+ 
++#if defined(__wasi__)
++    // WASI: the swiftcall closure ABI mislowers on wasm, so store STORED callbacks as
++    // plain-C fn + context (set via the *C entry points) and invoke them plain-C.
++    void (*_update_callback_c)(const void *context) = nullptr;
++    const void *_update_callback_c_context = nullptr;
++    void (*_invalidation_callback_c)(AGAttribute attribute, const void *context) = nullptr;
++    const void *_invalidation_callback_c_context = nullptr;
++#endif
++
+     uint64_t _deadline = UINT64_MAX;
+     uint64_t _graph_version;
+     bool _needs_update;
+@@ -51,6 +60,17 @@ class Graph::Context {
+     }
+     void set_update_callback(AG::ClosureFunctionVV<void> callback) { _update_callback = callback; }
+ 
++#if defined(__wasi__)
++    void set_update_callback_c(void (*cb)(const void *), const void *ctx) {
++        _update_callback_c = cb;
++        _update_callback_c_context = ctx;
++    }
++    void set_invalidation_callback_c(void (*cb)(AGAttribute, const void *), const void *ctx) {
++        _invalidation_callback_c = cb;
++        _invalidation_callback_c_context = ctx;
++    }
++#endif
++
+     uint64_t deadline() const { return _deadline; };
+     void set_deadline(uint64_t deadline);
+ 
 diff --git a/Sources/ComputeCxx/Graph/Graph.cpp b/Sources/ComputeCxx/Graph/Graph.cpp
 index f9c8162..8b9f17e 100644
 --- a/Sources/ComputeCxx/Graph/Graph.cpp
@@ -341,7 +486,7 @@ index 90c3834..9f81a18 100644
                           void (*body)(uint32_t tag,
                                        AGTypeID field_type,
 diff --git a/Sources/ComputeCxx/include/ComputeCxx/AGGraph.h b/Sources/ComputeCxx/include/ComputeCxx/AGGraph.h
-index f7a7b1d..fe8a10e 100644
+index f7a7b1d..2848da8 100644
 --- a/Sources/ComputeCxx/include/ComputeCxx/AGGraph.h
 +++ b/Sources/ComputeCxx/include/ComputeCxx/AGGraph.h
 @@ -211,6 +211,14 @@ void AGGraphMutateAttribute(AGAttribute attribute, AGTypeID type, bool invalidat
@@ -359,6 +504,36 @@ index f7a7b1d..fe8a10e 100644
  // MARK: Value
  
  AG_EXPORT
+@@ -270,6 +278,14 @@ void AGGraphSetInvalidationCallback(AGGraphRef graph,
+                                         AG_SWIFT_CC(swift),
+                                     const void *callback_context);
+ 
++#if defined(__wasi__)
++// WASI: plain-C STORED invalidation callback (swiftcall closures mislower on wasm).
++AG_EXPORT
++void AGGraphSetInvalidationCallbackC(AGGraphRef graph,
++                                     void (*callback)(AGAttribute attribute, const void *context),
++                                     const void *callback_context);
++#endif
++
+ // MARK: Cached value
+ 
+ CF_EXPORT
+@@ -347,6 +363,14 @@ void AGGraphSetUpdateCallback(AGGraphRef graph,
+                               void (*callback)(const void *context AG_SWIFT_CONTEXT) AG_SWIFT_CC(swift),
+                               const void *callback_context);
+ 
++#if defined(__wasi__)
++// WASI: plain-C STORED update callback (swiftcall closures mislower on wasm).
++AG_EXPORT
++void AGGraphSetUpdateCallbackC(AGGraphRef graph,
++                               void (*callback)(const void *context),
++                               const void *callback_context);
++#endif
++
+ AG_EXPORT
+ AG_REFINED_FOR_SWIFT
+ AGAttribute AGGraphGetCurrentAttribute(void);
 diff --git a/Sources/ComputeCxx/include/ComputeCxx/AGType.h b/Sources/ComputeCxx/include/ComputeCxx/AGType.h
 index d3f35bd..a675531 100644
 --- a/Sources/ComputeCxx/include/ComputeCxx/AGType.h
