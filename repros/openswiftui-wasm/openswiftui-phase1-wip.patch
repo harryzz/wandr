@@ -1,1642 +1,257 @@
-diff --git a/Package.swift b/Package.swift
-index ad3ee3b..51d66cc 100644
---- a/Package.swift
-+++ b/Package.swift
-@@ -169,7 +169,10 @@ let linkTesting = envBoolValue("LINK_TESTING")
- let symbolLocatorCondition = envBoolValue("SYMBOL_LOCATOR", default: buildForDarwinPlatform)
- let openCombineCondition = envBoolValue("OPENCOMBINE", default: !buildForDarwinPlatform)
- let swiftLogCondition = envBoolValue("SWIFT_LOG", default: !buildForDarwinPlatform)
--let swiftCryptoCondition = envBoolValue("SWIFT_CRYPTO", default: !buildForDarwinPlatform)
-+// swift-crypto is needed ONLY for StrongHash's Insecure.SHA1, and it statically links all of
-+// BoringSSL (huge — blew past the on-device AOT footprint cliff). StrongHash now has a pure-Swift
-+// SHA-1 fallback (the `#else` branch), so default OFF off-Darwin too (Darwin uses CommonCrypto).
-+let swiftCryptoCondition = envBoolValue("SWIFT_CRYPTO", default: false)
- let renderGTKCondition = envBoolValue("RENDER_GTK", default: !buildForDarwinPlatform)
- 
- let swiftUIRenderCondition = envBoolValue("SWIFTUI_RENDERER", default: false)
-@@ -429,7 +432,11 @@ extension Target {
- 
-     func addOpenCombineSettings() {
-         dependencies.append(.product(name: "OpenCombine", package: "OpenCombine"))
--        dependencies.append(.product(name: "OpenCombineFoundation", package: "OpenCombine"))
-+        // OpenCombineFoundation bridges Foundation (URLSession/OperationQueue/RunLoop +
-+        // os_unfair_lock) — not available on wasm, and OpenSwiftUICore doesn't import it.
-+        if buildForDarwinPlatform {
-+            dependencies.append(.product(name: "OpenCombineFoundation", package: "OpenCombine"))
-+        }
-         var swiftSettings = swiftSettings ?? []
-         swiftSettings.append(.define("OPENSWIFTUI_OPENCOMBINE"))
-         self.swiftSettings = swiftSettings
-diff --git a/Sources/OpenSwiftUI/App/App/Stdout/StdoutApp.swift b/Sources/OpenSwiftUI/App/App/Stdout/StdoutApp.swift
-index f36ae1c..2dbcce4 100644
---- a/Sources/OpenSwiftUI/App/App/Stdout/StdoutApp.swift
-+++ b/Sources/OpenSwiftUI/App/App/Stdout/StdoutApp.swift
-@@ -43,6 +43,13 @@ func runStdoutApp(
-             options: options
-         )
-         host.renderOnce()
-+        #if os(WASI)
-+        // WASI: exit BEFORE the closure's locals (host/graph) deinit. Teardown runs
-+        // GraphHost.invalidate -> Subgraph.forEach, an arg-closure that still hits the
-+        // swiftcall mislowering; for a one-shot stdout render we don't need clean
-+        // teardown. exit(0) also flushes stdout. (Remove once forEach has a *C variant.)
-+        exit(0)
-+        #endif
-     }
-     exit(0)
- }
 diff --git a/Sources/OpenSwiftUI/App/App/Stdout/WandrApp.swift b/Sources/OpenSwiftUI/App/App/Stdout/WandrApp.swift
-new file mode 100644
-index 0000000..545ccc9
---- /dev/null
+index 545ccc9..258da46 100644
+--- a/Sources/OpenSwiftUI/App/App/Stdout/WandrApp.swift
 +++ b/Sources/OpenSwiftUI/App/App/Stdout/WandrApp.swift
-@@ -0,0 +1,75 @@
-+//
-+//  WandrApp.swift
-+//  OpenSwiftUI
-+//
-+//  Sibling of runStdoutApp — drives one render pass of an App through the wandr
-+//  Option-B renderer, pushing the resolved DisplayList into the caller's
-+//  WandrDrawSink. The wandr guest calls this from its frame handler (or once for
-+//  a static scene); the sink draws into a wasi:canvas CGContext.
-+
-+#if !OPENSWIFTUI_SWIFTUI_RENDERER
-+#if canImport(Darwin)
-+import Darwin
-+#elseif canImport(Glibc)
-+import Glibc
-+#elseif os(WASI)
-+import WASILibc
-+#endif
-+import Foundation
-+@_spi(ForOpenSwiftUIOnly)
-+import OpenSwiftUICore
-+
-+// MARK: - runWandrApp
-+
-+// The host is retained for the process lifetime: its teardown runs
-+// GraphHost.invalidate -> Subgraph.forEach, an arg-closure that still hits the
-+// swiftcall mislowering on wasm (the same wall runStdoutApp dodges with exit(0)).
-+// A guest keeps a single host alive across frames anyway, so never deinit it.
-+// (Remove the leak once Subgraph.forEach has a *C variant.)
-+nonisolated(unsafe) private var _wandrHostKeepAlive: AnyObject?
-+nonisolated(unsafe) private var _wandrRedraw: (() -> Void)?
-+
-+/// Build `app`'s graph + first scene and render it once through the wandr renderer
-+/// into `options.sink`. The host is retained for the process lifetime (a guest keeps
-+/// one host across frames; this also dodges the Subgraph.forEach teardown wall).
-+/// Call `wandrRedraw()` each subsequent frame to repaint under double-buffering.
-+@_spi(WandrRenderer)
-+public func renderWandrAppOnce(
-+    _ app: some App,
-+    options: _RendererConfiguration.WandrOptions
-+) {
-+    // The wandr renderer declares its capabilities here (the platform/renderer layer — NOT
-+    // core view logic). The host shapes text itself (wasi:canvas paragraph / Skia) and view
-+    // transitions aren't implemented yet, so core falls back accordingly. Apple builds never
-+    // call this and keep the defaults (transitions on, in-framework glyph text).
-+    _RenderingCapabilities.current = _RenderingCapabilities(
-+        supportsViewTransitions: false,
-+        usesHostShapedText: true
-+    )
-+    Update.dispatchImmediately(reason: nil) {
-+        let graph = AppGraph(app: app)
-+        graph.instantiate()
-+        AppGraph.shared = graph
-+        guard let item = graph.rootSceneList?.items.first else {
-+            return
-+        }
-+        let rootView = item.value.view
-+            .frame(width: options.surface.width, height: options.surface.height)
-+        let host = WandrRendererHost(
-+            rootView: rootView,
-+            environment: item.environment,
-+            options: options
-+        )
-+        _wandrHostKeepAlive = host
-+        _wandrRedraw = { host.redraw() }
-+        host.renderOnce()
-+    }
-+}
-+
-+/// Re-walk the current display list into the sink passed to `renderWandrAppOnce`.
-+/// The guest points the sink's CGContext at the new back-buffer, then calls this.
-+@_spi(WandrRenderer)
-+public func wandrRedraw() {
-+    _wandrRedraw?()
-+}
-+#endif
-diff --git a/Sources/OpenSwiftUI/Test/ViewTest.swift b/Sources/OpenSwiftUI/Test/ViewTest.swift
-index eb10ae0..b3aff19 100644
---- a/Sources/OpenSwiftUI/Test/ViewTest.swift
-+++ b/Sources/OpenSwiftUI/Test/ViewTest.swift
-@@ -223,6 +223,11 @@ extension _ViewTest {
+@@ -28,6 +28,7 @@ import OpenSwiftUICore
+ // (Remove the leak once Subgraph.forEach has a *C variant.)
+ nonisolated(unsafe) private var _wandrHostKeepAlive: AnyObject?
+ nonisolated(unsafe) private var _wandrRedraw: (() -> Void)?
++nonisolated(unsafe) private var _wandrRender: (() -> Void)?
  
-     public func loop() {
-         render()
-+        #if os(WASI)
-+        // No RunLoop on wasm; the host frame loop drives rendering. Drain any
-+        // deferred main-run-loop work instead of pumping a (nonexistent) loop.
-+        _ = _wasmDrainMainRunLoop()
-+        #else
-         let defaultMode = RunLoop.Mode.default
-         let commonMode = RunLoop.Mode.common
-         var count: UInt = 0
-@@ -234,10 +239,14 @@ extension _ViewTest {
-             }
-             count += 1
-         }
-+        #endif
-     }
- 
-     public func turnRunloop(times: Int = 1) {
-         Swift.assert(times > 0)
-+        #if os(WASI)
-+        for _ in 0..<times { _ = _wasmDrainMainRunLoop() }
-+        #else
-         let defaultMode = RunLoop.Mode.default
-         let commonMode = RunLoop.Mode.common
-         let interval = 0.001
-@@ -250,22 +259,25 @@ extension _ViewTest {
-                 Thread.sleep(forTimeInterval: interval)
-             }
-         }
-+        #endif
-     }
- 
-     private func turnRunLoopIfNeeded(host: any TestHost, seconds: Double, options: TestRenderOptions) {
-         guard CoreTesting.neeedsRunLoopTurn else {
-             return
-         }
--        let defaultMode = RunLoop.Mode.default
--        let commonMode = RunLoop.Mode.common
-         let interval = 0.001
-         var times = 17
-         while CoreTesting.needsRender || CoreTesting.neeedsRunLoopTurn {
-+            #if os(WASI)
-+            _ = _wasmDrainMainRunLoop()
-+            #else
-             // let modes = [defaultMode, commonMode]
-             let date = Date(timeIntervalSinceNow: interval)
--            if !RunLoop.current.run(mode: defaultMode, before: date) {
-+            if !RunLoop.current.run(mode: .default, before: date) {
-                 Thread.sleep(forTimeInterval: interval)
-             }
-+            #endif
-             render(host: host, seconds: seconds, options: options)
-             times &-= 1
-             if times <= 1 {
-diff --git a/Sources/OpenSwiftUICore/Animation/Animation/AnimationListener.swift b/Sources/OpenSwiftUICore/Animation/Animation/AnimationListener.swift
-index a048359..2c11295 100644
---- a/Sources/OpenSwiftUICore/Animation/Animation/AnimationListener.swift
-+++ b/Sources/OpenSwiftUICore/Animation/Animation/AnimationListener.swift
-@@ -6,7 +6,9 @@
- //  Status: Complete
- //  ID: 390609F81ACEBEAF00AD8179BD31E870 (SwiftUICore)
- 
--import Dispatch
-+#if canImport(Dispatch)
-+import Dispatch   // wasm: no Dispatch module — the in-module WasmDispatchShim provides the types
-+#endif
- 
- // MARK: - AnimationListener
- 
-diff --git a/Sources/OpenSwiftUICore/Data/Combine/AttributeInvalidatingSubscriber.swift b/Sources/OpenSwiftUICore/Data/Combine/AttributeInvalidatingSubscriber.swift
-index bfcbd64..814576b 100644
---- a/Sources/OpenSwiftUICore/Data/Combine/AttributeInvalidatingSubscriber.swift
-+++ b/Sources/OpenSwiftUICore/Data/Combine/AttributeInvalidatingSubscriber.swift
-@@ -5,7 +5,9 @@
- //  Audited for 6.5.4
- //  Status: Complete
- 
-+#if !os(WASI)
- import class Foundation.Thread
-+#endif
- import OpenAttributeGraphShims
- #if OPENSWIFTUI_OPENCOMBINE
- import OpenCombine
-diff --git a/Sources/OpenSwiftUICore/Data/Combine/StateObject.swift b/Sources/OpenSwiftUICore/Data/Combine/StateObject.swift
-index 65ee4eb..78a8c53 100644
---- a/Sources/OpenSwiftUICore/Data/Combine/StateObject.swift
-+++ b/Sources/OpenSwiftUICore/Data/Combine/StateObject.swift
-@@ -6,7 +6,9 @@
- //  Status: Complete
- //  ID: BDD24532CFCFEBA7264ABA5DE20A4002 (SwiftUICore)
- 
-+#if !os(WASI)
- import class Foundation.Thread
-+#endif
- import OpenAttributeGraphShims
- #if OPENSWIFTUI_OPENCOMBINE
- public import OpenCombine
-diff --git a/Sources/OpenSwiftUICore/Data/Preference/View_Indirect.swift b/Sources/OpenSwiftUICore/Data/Preference/View_Indirect.swift
-index f97a860..2907fc2 100644
---- a/Sources/OpenSwiftUICore/Data/Preference/View_Indirect.swift
-+++ b/Sources/OpenSwiftUICore/Data/Preference/View_Indirect.swift
-@@ -5,11 +5,10 @@
- //  Audited for 6.0.87
- //  Status: Complete
- 
--#if canImport(Darwin)
-+// Was `import` (internal) on non-Darwin, but `setIndirectDependency` exposes
-+// AnyAttribute in a `package` signature — needs `package import` everywhere
-+// (only surfaces with OPENSWIFTUI_ANY_ATTRIBUTE_FIX off, i.e. real OAG types).
- package import OpenAttributeGraphShims
--#else
--import OpenAttributeGraphShims
--#endif
- 
- extension _ViewInputs {
-     package func makeIndirectOutputs() -> _ViewOutputs {
-diff --git a/Sources/OpenSwiftUICore/Data/Util/StrongHash.swift b/Sources/OpenSwiftUICore/Data/Util/StrongHash.swift
-index fee7caa..2118485 100644
---- a/Sources/OpenSwiftUICore/Data/Util/StrongHash.swift
-+++ b/Sources/OpenSwiftUICore/Data/Util/StrongHash.swift
-@@ -86,13 +86,91 @@ package struct StrongHash: Hashable, StronglyHashableByBitPattern, Codable, Cust
-     }
- }
- 
-+#if !OPENSWIFTUI_SWIFT_CRYPTO && !canImport(CommonCrypto)
-+// Pure-Swift SHA-1 — a faithful port of `repros/compute-wasm/shims/openssl/sha.h`. Used off-Apple
-+// (e.g. wasm32-wasip1) so that StrongHash — OpenSwiftUI's ONLY use of crypto — no longer needs
-+// swift-crypto, which statically links all of BoringSSL (the AOT-footprint bloat). Produces the
-+// same 20-byte big-endian digest as the Crypto/CommonCrypto paths, so StrongHash values are
-+// backend-independent.
-+struct _OpenSwiftUIInsecureSHA1 {
-+    private var h: (UInt32, UInt32, UInt32, UInt32, UInt32) =
-+        (0x6745_2301, 0xEFCD_AB89, 0x98BA_DCFE, 0x1032_5476, 0xC3D2_E1F0)
-+    private var len: UInt64 = 0
-+    private var buf = [UInt8](repeating: 0, count: 64)
-+    private var blen: Int = 0
-+
-+    @inline(__always)
-+    private static func rol(_ v: UInt32, _ b: UInt32) -> UInt32 { (v << b) | (v >> (32 &- b)) }
-+
-+    private mutating func processBlock(_ p: UnsafePointer<UInt8>) {
-+        var w = [UInt32](repeating: 0, count: 80)
-+        for i in 0 ..< 16 {
-+            w[i] = (UInt32(p[i &* 4]) << 24) | (UInt32(p[i &* 4 &+ 1]) << 16)
-+                 | (UInt32(p[i &* 4 &+ 2]) << 8) | UInt32(p[i &* 4 &+ 3])
-+        }
-+        for i in 16 ..< 80 { w[i] = Self.rol(w[i &- 3] ^ w[i &- 8] ^ w[i &- 14] ^ w[i &- 16], 1) }
-+        var a = h.0, b = h.1, c = h.2, d = h.3, e = h.4
-+        for i in 0 ..< 80 {
-+            let f: UInt32, k: UInt32
-+            switch i {
-+            case 0 ..< 20:  f = (b & c) | (~b & d);          k = 0x5A82_7999
-+            case 20 ..< 40: f = b ^ c ^ d;                   k = 0x6ED9_EBA1
-+            case 40 ..< 60: f = (b & c) | (b & d) | (c & d); k = 0x8F1B_BCDC
-+            default:        f = b ^ c ^ d;                   k = 0xCA62_C1D6
-+            }
-+            let tmp = Self.rol(a, 5) &+ f &+ e &+ k &+ w[i]
-+            e = d; d = c; c = Self.rol(b, 30); b = a; a = tmp
-+        }
-+        h.0 = h.0 &+ a; h.1 = h.1 &+ b; h.2 = h.2 &+ c; h.3 = h.3 &+ d; h.4 = h.4 &+ e
-+    }
-+
-+    mutating func update(_ data: UnsafeRawBufferPointer) {
-+        guard let base = data.baseAddress, data.count > 0 else { return }
-+        let p = base.assumingMemoryBound(to: UInt8.self)
-+        len &+= UInt64(data.count)
-+        var off = 0
-+        var n = data.count
-+        while n > 0 {
-+            let take = Swift.min(n, 64 - blen)
-+            for i in 0 ..< take { buf[blen &+ i] = p[off &+ i] }
-+            blen &+= take; off &+= take; n &-= take
-+            if blen == 64 {
-+                buf.withUnsafeBufferPointer { processBlock($0.baseAddress!) }
-+                blen = 0
-+            }
-+        }
-+    }
-+
-+    /// Writes the 20-byte big-endian digest to `md` (mirrors SHA1_Final).
-+    mutating func finalize(into md: UnsafeMutablePointer<UInt8>) {
-+        let bits = len &* 8
-+        var pad: UInt8 = 0x80
-+        withUnsafeBytes(of: &pad) { update($0) }
-+        var zero: UInt8 = 0
-+        while blen != 56 { withUnsafeBytes(of: &zero) { update($0) } }
-+        var lb = [UInt8](repeating: 0, count: 8)
-+        for i in 0 ..< 8 { lb[i] = UInt8((bits >> UInt64(56 - i &* 8)) & 0xFF) }
-+        lb.withUnsafeBytes { update($0) }
-+        let arr = [h.0, h.1, h.2, h.3, h.4]
-+        for i in 0 ..< 5 {
-+            md[i &* 4]      = UInt8((arr[i] >> 24) & 0xFF)
-+            md[i &* 4 &+ 1] = UInt8((arr[i] >> 16) & 0xFF)
-+            md[i &* 4 &+ 2] = UInt8((arr[i] >> 8) & 0xFF)
-+            md[i &* 4 &+ 3] = UInt8(arr[i] & 0xFF)
-+        }
-+    }
-+}
-+#endif
-+
- package struct StrongHasher {
-     #if OPENSWIFTUI_SWIFT_CRYPTO
-     var state: Insecure.SHA1
-     #elseif canImport(CommonCrypto)
-     var state: CC_SHA1state_st
-+    #else
-+    var state: _OpenSwiftUIInsecureSHA1
-     #endif
--    
-+
-     package init() {
-         #if OPENSWIFTUI_SWIFT_CRYPTO
-         state = Insecure.SHA1()
-@@ -100,9 +178,11 @@ package struct StrongHasher {
-         var context = CC_SHA1_CTX()
-         CC_SHA1_Init(&context)
-         state = context
-+        #else
-+        state = _OpenSwiftUIInsecureSHA1()
-         #endif
-     }
--    
-+
-     package mutating func finalize() -> StrongHash {
-         #if OPENSWIFTUI_SWIFT_CRYPTO
-         var hash = StrongHash()
-@@ -122,41 +202,54 @@ package struct StrongHasher {
-             }
-             return hash
-         }
-+        #else
-+        return withUnsafeTemporaryAllocation(of: UInt8.self, capacity: 20) { pointer in
-+            state.finalize(into: pointer.baseAddress!)
-+            var hash = StrongHash()
-+            pointer.withMemoryRebound(to: UInt32.self) { buffer in
-+                hash.words = (buffer[0], buffer[1], buffer[2], buffer[3], buffer[4])
-+            }
-+            return hash
-+        }
-         #endif
-     }
--    
-+
-     mutating func combineBytes(_ ptr: UnsafeRawBufferPointer) {
-         #if OPENSWIFTUI_SWIFT_CRYPTO
-         state.update(bufferPointer: ptr)
-         #elseif canImport(CommonCrypto)
-         combineBytes(UnsafeRawPointer(ptr.baseAddress!), count: ptr.count)
-+        #else
-+        state.update(ptr)
-         #endif
-     }
--    
-+
-     #if !OPENSWIFTUI_SWIFT_CRYPTO && canImport(CommonCrypto)
-     package mutating func combineBytes(_ ptr: UnsafeRawPointer, count: Int) {
-         CC_SHA1_Update(&state, ptr, CC_LONG(count))
-     }
-     #endif
--    
-+
-     package mutating func combineBitPattern<T>(_ x: T) {
-         withUnsafeBytes(of: x) { buffer in
-             combineBytes(buffer)
-         }
-     }
--    
-+
-     package mutating func combine<T>(_ x: T) where T: StronglyHashable {
-         x.hash(into: &self)
-     }
--    
-+
-     package mutating func combineType(_ type: any Any.Type) {
-         let signature = Metadata(type).signature
-         _ = withUnsafePointer(to: signature.bytes) { ptr in
-             #if OPENSWIFTUI_SWIFT_CRYPTO
-             // TODO: Auditd signature API design
-             _openSwiftUIUnimplementedFailure()
--            #else
-+            #elseif canImport(CommonCrypto)
-             CC_SHA1_Update(&state, ptr, 20)
-+            #else
-+            state.update(UnsafeRawBufferPointer(start: UnsafeRawPointer(ptr), count: 20))
-             #endif
-         }
-     }
-diff --git a/Sources/OpenSwiftUICore/Layout/Dynamic/DynamicLayoutView.swift b/Sources/OpenSwiftUICore/Layout/Dynamic/DynamicLayoutView.swift
-index 0037280..fd310dc 100644
---- a/Sources/OpenSwiftUICore/Layout/Dynamic/DynamicLayoutView.swift
-+++ b/Sources/OpenSwiftUICore/Layout/Dynamic/DynamicLayoutView.swift
-@@ -240,7 +240,10 @@ struct DynamicLayoutViewAdaptor: DynamicContainerAdaptor {
-                 elementInputs.requestsLayoutComputer = true
-             }
-             let outputs: _ViewOutputs
--            if let transition {
-+            // Transitions go through ViewListContentTransition. A renderer that doesn't support
-+            // them (capability declared by the platform layer) renders the element directly —
-+            // otherwise the element body is never made and the view doesn't render at all.
-+            if let transition, _RenderingCapabilities.current.supportsViewTransitions {
-                 var makeTransition = MakeTransition(
-                     containerInfo: containerInfo,
-                     uniqueId: uniqueId,
-diff --git a/Sources/OpenSwiftUICore/Layout/View/ViewTransform.swift b/Sources/OpenSwiftUICore/Layout/View/ViewTransform.swift
-index c8a2c9d..b5e55bb 100644
---- a/Sources/OpenSwiftUICore/Layout/View/ViewTransform.swift
-+++ b/Sources/OpenSwiftUICore/Layout/View/ViewTransform.swift
-@@ -303,19 +303,52 @@ public struct ViewTransform: Equatable, CustomStringConvertible {
-         }
-     }
-     
-+    // Direction of the conversion through the root→view transform stack: forward (apply items
-+    // as stored) for *toSpace, inverse (reverse order + invert each op) for space→root/local.
-+    private func conversionIsInverted(_ conversion: ViewTransform.Conversion) -> Bool {
-+        switch conversion {
-+        case .rootToSpace, .localToSpace, .spaceToSpace: return false
-+        case .spaceToRoot, .spaceToLocal: return true
-+        }
-+    }
-+
-     package func convert(_ conversion: ViewTransform.Conversion, _ body: (ViewTransform.Item) -> Void) {
-         guard !isEmpty else { return }
--        _openSwiftUIUnimplementedFailure()
-+        forEach(inverted: conversionIsInverted(conversion)) { item, _ in body(item) }
-     }
--    
-+
-     package func convert(_ conversion: ViewTransform.Conversion, points: inout [CGPoint]) {
-         guard !isEmpty else { return }
--        _openSwiftUIUnimplementedFailure()
-+        for i in points.indices {
-+            points[i] = convert(conversion, point: points[i])
-+        }
-     }
--    
-+
-     package func convert(_ conversion: ViewTransform.Conversion, point: CGPoint) -> CGPoint {
-         guard !isEmpty else { return point }
--        _openSwiftUIUnimplementedFailure()
-+        let inverted = conversionIsInverted(conversion)
-+        var p = point
-+        forEach(inverted: inverted) { item, _ in
-+            switch item {
-+            case let .translation(offset):
-+                if inverted {
-+                    p.x -= offset.width; p.y -= offset.height
-+                } else {
-+                    p.x += offset.width; p.y += offset.height
-+                }
-+            case let .affineTransform(matrix, inverse):
-+                #if canImport(CoreGraphics)
-+                p = p.applying((inverse != inverted) ? matrix.inverted() : matrix)
-+                #else
-+                // Off-Apple CGAffineTransform.inverted() is unavailable; the wandr layout
-+                // transform stack is translations only, so non-identity affines are rare.
-+                if !(inverse != inverted) { p = p.applying(matrix) } else { _openSwiftUIPlatformUnimplementedWarning() }
-+                #endif
-+            default:
-+                break // coordinateSpace / sizedSpace / projection / scroll: no point change
-+            }
-+        }
-+        return p
-     }
-     
-     package var containingScrollGeometry: ScrollGeometry? {
-diff --git a/Sources/OpenSwiftUICore/Render/DisplayList/DisplayListViewRenderer.swift b/Sources/OpenSwiftUICore/Render/DisplayList/DisplayListViewRenderer.swift
-index 95a6411..ee7313d 100644
---- a/Sources/OpenSwiftUICore/Render/DisplayList/DisplayListViewRenderer.swift
-+++ b/Sources/OpenSwiftUICore/Render/DisplayList/DisplayListViewRenderer.swift
-@@ -77,6 +77,7 @@ extension DisplayList {
-             /* OpenSwiftUI Addition Begin */
-             #if !OPENSWIFTUI_SWIFTUI_RENDERER
-             case stdout
-+            case wandr
-             #endif
-             /* OpenSwiftUI Addition End */
-         }
-@@ -102,6 +103,7 @@ extension DisplayList {
-             /* OpenSwiftUI Addition Begin */
-             #if !OPENSWIFTUI_SWIFTUI_RENDERER
-             case .stdout: state == .stdout
-+            case .wandr: state == .wandr
-             #endif
-             /* OpenSwiftUI Addition End */
-             }
-@@ -126,6 +128,10 @@ extension DisplayList {
-                     let stdoutRenderer = renderer as! StdoutDisplayListRenderer
-                     stdoutRenderer.options = options
-                     stdoutRenderer.host = host
-+                case let .wandr(options):
-+                    let wandrRenderer = renderer as! WandrDisplayListRenderer
-+                    wandrRenderer.options = options
-+                    wandrRenderer.host = host
-                 #endif
-                 /* OpenSwiftUI Addition End */
-                 }
-@@ -153,6 +159,13 @@ extension DisplayList {
-                         options: options
-                     )
-                     state = .stdout
-+                case let .wandr(options):
-+                    renderer = WandrDisplayListRenderer(
-+                        platform: platform,
-+                        host: host,
-+                        options: options
-+                    )
-+                    state = .wandr
-                 #endif
-                 /* OpenSwiftUI Addition End */
-                 }
-diff --git a/Sources/OpenSwiftUICore/Render/DisplayList/WandrDisplayListRenderer.swift b/Sources/OpenSwiftUICore/Render/DisplayList/WandrDisplayListRenderer.swift
-new file mode 100644
-index 0000000..f5d892d
---- /dev/null
-+++ b/Sources/OpenSwiftUICore/Render/DisplayList/WandrDisplayListRenderer.swift
-@@ -0,0 +1,218 @@
-+//
-+//  WandrDisplayListRenderer.swift
-+//  OpenSwiftUICore
-+//
-+//  The wandr Option-B rendering backend: walk the resolved DisplayList and push
-+//  primitive draw commands into a WandrDrawSink (the guest implements the sink over
-+//  a wasi:canvas CGContext → skia/EGL). Parallel to the stdout renderer
-+//  (DisplayListStdoutRenderer) — same recursive resolution (opacity multiply,
-+//  affine transform, shape→solid-color), but emitting to a sink instead of text.
-+//
-+//  Status: WIP — colors + solid shapes + opacity/transform resolved today; clip,
-+//  text, images, masks are TODO (the sink protocol grows additively).
-+
-+#if !OPENSWIFTUI_SWIFTUI_RENDERER
-+package import Foundation
-+package import OpenCoreGraphicsShims
-+
-+// MARK: - DisplayList + wandr sink rendering
-+
-+extension DisplayList {
-+    package func renderToWandrSink(
-+        _ sink: WandrDrawSink,
-+        surface: CGSize,
-+        version: DisplayList.Version
-+    ) {
-+        sink.beginFrame(
-+            width: Double(surface.width),
-+            height: Double(surface.height),
-+            version: UInt32(truncatingIfNeeded: version.value)
-+        )
-+        var visitor = WandrSinkVisitor(sink: sink)
-+        visitor.append(list: self)
-+        sink.endFrame()
-+    }
-+}
-+
-+private struct WandrSinkVisitor {
-+    let sink: WandrDrawSink
-+
-+    mutating func append(
-+        list: DisplayList,
-+        transform: CGAffineTransform = .identity,
-+        opacity: Float = 1.0
-+    ) {
-+        for item in list.items {
-+            append(item: item, transform: transform, opacity: opacity)
-+        }
-+    }
-+
-+    private mutating func append(
-+        item: DisplayList.Item,
-+        transform: CGAffineTransform,
-+        opacity: Float
-+    ) {
-+        switch item.value {
-+        case let .content(content):
-+            append(
-+                content: content,
-+                frame: item.frame.applying(transform),
-+                transform: transform,
-+                opacity: opacity
-+            )
-+        case let .effect(effect, list):
-+            // The effect item's frame.origin positions its content within the parent — the
-+            // layout offset (rows/columns/sub-view placement) lives here, exactly as it does
-+            // in a .content item's frame. Fold it into the transform before applying the
-+            // effect, else nested/dynamic content (ForEach, stacks) collapses to the origin.
-+            let framed = CGAffineTransform(translationX: item.frame.minX, y: item.frame.minY)
-+                .concatenating(transform)
-+            append(effect: effect, list: list, transform: framed, opacity: opacity)
-+        case let .states(states):
-+            for (_, list) in states {
-+                append(list: list, transform: transform, opacity: opacity)
-+            }
-+        case .empty:
-+            break
-+        }
-+    }
-+
-+    private mutating func emitFill(frame: CGRect, color: Color.Resolved) {
-+        sink.fillRect(
-+            x: Double(frame.minX), y: Double(frame.minY),
-+            width: Double(frame.width), height: Double(frame.height),
-+            red: color.red, green: color.green, blue: color.blue, opacity: color.opacity
-+        )
-+    }
-+
-+    private mutating func append(
-+        content: DisplayList.Content,
-+        frame: CGRect,
-+        transform: CGAffineTransform,
-+        opacity: Float
-+    ) {
-+        switch content.value {
-+        case let .color(color):
-+            emitFill(frame: frame, color: color.multiplyingOpacity(by: opacity))
-+        case let .shape(_, paint, _):
-+            if let color = paint.wandrResolvedColor {
-+                emitFill(frame: frame, color: color.multiplyingOpacity(by: opacity))
-+            }
-+        case let .flattened(list, offset, _):
-+            append(
-+                list: list,
-+                transform: transform.concatenating(
-+                    CGAffineTransform(translationX: frame.minX + offset.x, y: frame.minY + offset.y)
-+                ),
-+                opacity: opacity
-+            )
-+        case let .text(textView, _):
-+            // The laid-out `frame` positions the text; the host shapes + draws the string.
-+            // Color is the environment-resolved foreground (white fallback when unset);
-+            // opacity carries the accumulated effect opacity.
-+            let c = textView.wasmColor
-+            sink.drawText(
-+                textView.wasmPlainString,
-+                x: Double(frame.minX), y: Double(frame.minY),
-+                width: Double(frame.width), height: Double(frame.height),
-+                fontSize: Double(textView.wasmFontSize),
-+                red: c?.red ?? 1.0, green: c?.green ?? 1.0, blue: c?.blue ?? 1.0,
-+                opacity: (c?.opacity ?? 1.0) * opacity
-+            )
-+        default:
-+            // TODO: image, shadow, backdrop, view, platform* — grow WandrDrawSink.
-+            break
-+        }
-+    }
-+
-+    private mutating func append(
-+        effect: DisplayList.Effect,
-+        list: DisplayList,
-+        transform: CGAffineTransform,
-+        opacity: Float
-+    ) {
-+        switch effect {
-+        case let .opacity(alpha):
-+            append(list: list, transform: transform, opacity: opacity * alpha)
-+        case let .transform(.affine(affine)):
-+            append(list: list, transform: transform.concatenating(affine), opacity: opacity)
-+        default:
-+            // TODO: clip, mask, blendMode, filter — recurse unmodified for now.
-+            append(list: list, transform: transform, opacity: opacity)
-+        }
-+    }
-+}
-+
-+private struct WandrColorPaintVisitor: ResolvedPaintVisitor {
-+    var color: Color.Resolved?
-+
-+    mutating func visitPaint<P>(_ paint: P) where P: ResolvedPaint {
-+        color = paint as? Color.Resolved
-+    }
-+}
-+
-+private extension AnyResolvedPaint {
-+    var wandrResolvedColor: Color.Resolved? {
-+        var visitor = WandrColorPaintVisitor()
-+        visit(&visitor)
-+        return visitor.color
-+    }
-+}
-+
-+// MARK: - WandrDisplayListRenderer
-+
-+final class WandrDisplayListRenderer: ViewRendererBase {
-+    let platform: DisplayList.ViewUpdater.Platform
-+    weak var host: (any ViewRendererHost)?
-+    var options: _RendererConfiguration.WandrOptions
-+    private var seed: DisplayList.Seed = .init()
-+    private var hasRendered = false
-+
-+    init(
-+        platform: DisplayList.ViewUpdater.Platform,
-+        host: (any ViewRendererHost)?,
-+        options: _RendererConfiguration.WandrOptions
-+    ) {
-+        self.platform = platform
-+        self.host = host
-+        self.options = options
-+    }
-+
-+    var exportedObject: AnyObject? { nil }
-+
-+    func render(
-+        rootView: AnyObject,
-+        from list: DisplayList,
-+        time: Time,
-+        version: DisplayList.Version,
-+        maxVersion: DisplayList.Version,
-+        environment: DisplayList.ViewRenderer.Environment
-+    ) -> Time {
-+        let nextSeed = DisplayList.Seed(version)
-+        guard !hasRendered || nextSeed != seed else {
-+            return .infinity
-+        }
-+        hasRendered = true
-+        seed = nextSeed
-+        list.renderToWandrSink(options.sink, surface: options.surface, version: version)
-+        if let host, let observer = host.as(ViewGraphRenderObserver.self) {
-+            observer.didRender()
-+        }
-+        return .infinity
-+    }
-+
-+    func renderAsync(
-+        to list: DisplayList,
-+        time: Time,
-+        targetTimestamp: Time?,
-+        version: DisplayList.Version,
-+        maxVersion: DisplayList.Version
-+    ) -> Time? {
-+        nil
-+    }
-+
-+    func destroy(rootView: AnyObject) {}
-+
-+    var viewCacheIsEmpty: Bool { true }
-+}
-+#endif
-diff --git a/Sources/OpenSwiftUICore/Render/DisplayList/WandrRendererHost.swift b/Sources/OpenSwiftUICore/Render/DisplayList/WandrRendererHost.swift
-new file mode 100644
-index 0000000..a94b305
---- /dev/null
-+++ b/Sources/OpenSwiftUICore/Render/DisplayList/WandrRendererHost.swift
-@@ -0,0 +1,121 @@
-+//
-+//  WandrRendererHost.swift
-+//  OpenSwiftUICore
-+//
-+//  Host for the wandr Option-B renderer — a sibling of StdoutRendererHost that
-+//  configures the ViewRenderer with `.wandr(options)` so a render pass walks the
-+//  resolved DisplayList into the caller's WandrDrawSink (→ wasi:canvas CGContext).
-+
-+#if !OPENSWIFTUI_SWIFTUI_RENDERER
-+import Foundation
-+
-+// MARK: - WandrRendererHost
-+
-+final package class WandrRendererHost<Content>: ViewRendererHost, ViewGraphRenderDelegate where Content: View {
-+    typealias RootView = ModifiedContent<Content, HitTestBindingModifier>
-+
-+    package let viewGraph: ViewGraph
-+    package let renderer: DisplayList.ViewRenderer
-+    package let rootView: Content
-+    package let environment: EnvironmentValues
-+    package let options: _RendererConfiguration.WandrOptions
-+
-+    package var currentTimestamp: Time = .zero
-+    package var propertiesNeedingUpdate: ViewRendererHostProperties = .all
-+    package var renderingPhase: ViewRenderingPhase = .none
-+    package var externalUpdateCount: Int = .zero
-+
-+    package init(
-+        rootView: Content,
-+        environment: EnvironmentValues,
-+        options: _RendererConfiguration.WandrOptions
-+    ) {
-+        self.rootView = rootView
-+        self.environment = environment
-+        self.options = options
-+        Update.begin()
-+        // The wandr renderer (like stdout) only needs layout + display list output.
-+        viewGraph = ViewGraph(rootViewType: RootView.self, requestedOutputs: [.displayList, .layout])
-+        renderer = DisplayList.ViewRenderer(
-+            platform: .init(definition: WandrPlatformViewDefinition.self)
-+        )
-+        renderer.configuration = .wandr(options)
-+        renderer.host = self
-+        initializeViewGraph()
-+        Update.end()
-+    }
-+
-+    package func renderOnce() {
-+        render(interval: .zero, targetTimestamp: nil)
-+    }
-+
-+    /// Re-walk the current (already-computed) display list into `options.sink`, without
-+    /// re-running the graph. The guest calls this every frame (after pointing the sink's
-+    /// CGContext at the new back-buffer) so a static scene repaints under double-buffering.
-+    package func redraw() {
-+        Update.begin()
-+        let (list, version) = viewGraph.displayList()
-+        Update.end()
-+        list.renderToWandrSink(options.sink, surface: options.surface, version: version)
-+    }
-+
-+    package func updateRootView() {
-+        viewGraph.setRootView(Self.makeRootView(rootView))
-+    }
-+
-+    package func updateEnvironment() {
-+        viewGraph.setEnvironment(environment)
-+    }
-+
-+    package func updateTransform() {
-+        viewGraph.invalidateTransform()
-+    }
-+
-+    package func updateSize() {
-+        viewGraph.setProposedSize(options.surface)
-+    }
-+
-+    package func updateSafeArea() {
-+        viewGraph.setSafeAreaInsets(.zero)
-+    }
-+
-+    package func updateContainerSize() {
-+        viewGraph.setContainerSize(.fixed(options.surface))
-+    }
-+
-+    package func updateFocusStore() {}
-+
-+    package func updateFocusedItem() {}
-+
-+    package func updateFocusedValues() {}
-+
-+    package func updateAccessibilityEnvironment() {}
-+
-+    package func `as`<T>(_ type: T.Type) -> T? {
-+        if ViewGraphRenderDelegate.self == T.self {
-+            return unsafeBitCast(self as any ViewGraphRenderDelegate, to: T.self)
-+        } else if DisplayList.ViewRenderer.self == T.self {
-+            return unsafeBitCast(renderer, to: T.self)
-+        } else {
-+            return nil
-+        }
-+    }
-+
-+    package func requestUpdate(after delay: Double) {}
-+
-+    package var renderingRootView: AnyObject {
-+        self
-+    }
-+
-+    package func updateRenderContext(_ context: inout ViewGraphRenderContext) {
-+        context.contentsScale = 1.0
-+        context.opaqueBackground = false
-+    }
-+
-+    package func withMainThreadRender(wasAsync: Bool, _ body: () -> Time) -> Time {
-+        body()
-+    }
-+}
-+
-+private final class WandrPlatformViewDefinition: PlatformViewDefinition, @unchecked Sendable {}
-+#endif
-diff --git a/Sources/OpenSwiftUICore/Render/RendererConfiguration.swift b/Sources/OpenSwiftUICore/Render/RendererConfiguration.swift
-index 86bc757..eaae356 100644
---- a/Sources/OpenSwiftUICore/Render/RendererConfiguration.swift
-+++ b/Sources/OpenSwiftUICore/Render/RendererConfiguration.swift
-@@ -28,6 +28,12 @@ public struct _RendererConfiguration {
-         /// to standard output.
-         @_spi(StdoutRenderer)
-         indirect case stdout(_ options: _RendererConfiguration.StdoutOptions = .init())
-+
-+        /// A renderer that walks the resolved display list and pushes primitive
-+        /// draw commands into a `WandrDrawSink` (the wandr Option-B backend: the
-+        /// guest implements the sink over a wasi:canvas CGContext). No default —
-+        /// the sink is required.
-+        indirect case wandr(_ options: _RendererConfiguration.WandrOptions)
-         #endif
-         /* OpenSwiftUI Addition End */
-     }
-@@ -59,6 +65,11 @@ public struct _RendererConfiguration {
-     public static func stdout(_ options: _RendererConfiguration.StdoutOptions = .init()) -> _RendererConfiguration {
-         _RendererConfiguration(renderer: .stdout(options))
-     }
-+
-+    /// Returns a configuration that renders the display list into a `WandrDrawSink`.
-+    public static func wandr(_ options: _RendererConfiguration.WandrOptions) -> _RendererConfiguration {
-+        _RendererConfiguration(renderer: .wandr(options))
-+    }
-     #endif
- 
-     /* OpenSwiftUI Addition End */
-@@ -79,6 +90,22 @@ public struct _RendererConfiguration {
-         public init() {}
-     }
- 
-+    // MARK: - _RendererConfiguration.WandrOptions
-+
-+    /// Options for the `wandr` renderer.
-+    public struct WandrOptions {
-+        /// The surface size the display list is laid out / rendered into.
-+        public var surface: CGSize = CGSize(width: 640.0, height: 480.0)
-+
-+        /// The sink that receives resolved primitive draw commands.
-+        public var sink: WandrDrawSink
-+
-+        public init(surface: CGSize = CGSize(width: 640.0, height: 480.0), sink: WandrDrawSink) {
-+            self.surface = surface
-+            self.sink = sink
-+        }
-+    }
-+
-     /* OpenSwiftUI Addition End */
- 
-     // MARK: - _RendererConfiguration.RasterizationOptions
-@@ -135,6 +162,40 @@ extension _RendererConfiguration.RasterizationOptions: Sendable {}
- @_spi(StdoutRenderer)
- @available(*, unavailable)
- extension _RendererConfiguration.StdoutOptions: Sendable {}
-+
-+@available(*, unavailable)
-+extension _RendererConfiguration.WandrOptions: Sendable {}
-+
-+// MARK: - WandrDrawSink
-+
-+/// The drawing sink for the `wandr` renderer (Option B). OpenSwiftUI walks the
-+/// resolved `DisplayList` and pushes primitive, fully-resolved draw commands here;
-+/// the wandr guest implements this over a wasi:canvas `CGContext`. Coordinates are
-+/// in surface space (top-left origin); colors are sRGB 0...1 with premultiplied
-+/// opacity already folded into `opacity`. Geometry/colors are plain scalars so the
-+/// sink stays independent of any CoreGraphics type.
-+public protocol WandrDrawSink: AnyObject {
-+    /// Called once at the start of a render pass with the surface size + display-list version.
-+    func beginFrame(width: Double, height: Double, version: UInt32)
-+
-+    /// Fill an axis-aligned rectangle (resolved from `.content(.color)` / `.shape`-with-solid-paint).
-+    func fillRect(
-+        x: Double, y: Double, width: Double, height: Double,
-+        red: Float, green: Float, blue: Float, opacity: Float
-+    )
-+
-+    /// Draw `text` within the given frame (from `.content(.text)`). The HOST does shaping +
-+    /// paragraph layout (wasi:canvas paragraph / Skia); the guest passes the plain string,
-+    /// the laid-out frame, the nominal font size, and the sRGB color.
-+    func drawText(
-+        _ text: String,
-+        x: Double, y: Double, width: Double, height: Double,
-+        fontSize: Double, red: Float, green: Float, blue: Float, opacity: Float
-+    )
-+
-+    /// Called once at the end of a render pass.
-+    func endFrame()
-+}
- /* OpenSwiftUI Addition End */
- 
- // MARK: - RasterizationOptions + _RendererConfiguration.RasterizationOptions
-@@ -165,3 +226,29 @@ extension RasterizationOptions {
+ /// Build `app`'s graph + first scene and render it once through the wandr renderer
+ /// into `options.sink`. The host is retained for the process lifetime (a guest keeps
+@@ -62,6 +63,10 @@ public func renderWandrAppOnce(
          )
+         _wandrHostKeepAlive = host
+         _wandrRedraw = { host.redraw() }
++        // Re-render must run inside an update transaction (like the initial render below) so a
++        // re-evaluated body that creates new attributes has a current subgraph — otherwise
++        // Attribute.init(value:) hits "attempting to create attribute with no subgraph".
++        _wandrRender = { Update.dispatchImmediately(reason: nil) { host.renderOnce() } }
+         host.renderOnce()
      }
  }
+@@ -72,4 +77,21 @@ public func renderWandrAppOnce(
+ public func wandrRedraw() {
+     _wandrRedraw?()
+ }
 +
-+// MARK: - _RenderingCapabilities
-+
-+/// Platform/renderer capabilities queried by core view logic INSTEAD of compile-time
-+/// `#if os(WASI)`/`#if os(Linux)`. Core stays platform-agnostic and compiles unmodified on every
-+/// platform; the WASI-vs-Linux-vs-Apple decision lives in the platform/renderer layer, which
-+/// overrides these (e.g. the wandr wasi:canvas renderer in renderWandrAppOnce). Defaults are the
-+/// Apple/CoreGraphics behavior, so unconfigured (Apple) builds are unaffected.
-+package struct _RenderingCapabilities: Sendable {
-+    /// Whether view transitions (insert/remove animations via `ViewListContentTransition`) are
-+    /// available. When `false`, dynamic-container items carrying a `.transition` render directly.
-+    package var supportsViewTransitions: Bool
-+
-+    /// Whether `Text` renders as a host-shaped `.content(.text)` display-list leaf (the renderer
-+    /// shapes the glyphs) rather than the in-framework ShapeStyle glyph-layer path.
-+    package var usesHostShapedText: Bool
-+
-+    package init(supportsViewTransitions: Bool = true, usesHostShapedText: Bool = false) {
-+        self.supportsViewTransitions = supportsViewTransitions
-+        self.usesHostShapedText = usesHostShapedText
-+    }
-+
-+    /// Active capabilities; set once by the platform/renderer layer before rendering
-+    /// (single-threaded on WASI). Apple builds use the defaults.
-+    package nonisolated(unsafe) static var current = _RenderingCapabilities()
++/// Apply a state mutation (e.g. a @State write from a raw reactor input handler) INSIDE an
++/// OpenSwiftUI update transaction, so the change is registered as a graph invalidation and the
++/// next `wandrRedraw()` re-evaluates the affected view bodies. The host calls input handlers
++/// outside any transaction, so a bare @State write would not invalidate anything.
++@_spi(WandrRenderer)
++public func wandrApplyChange(_ body: () -> Void) {
++    Update.dispatchImmediately(reason: nil, body)
 +}
-diff --git a/Sources/OpenSwiftUICore/Runtime/TypeConformance.swift b/Sources/OpenSwiftUICore/Runtime/TypeConformance.swift
-index b167a59..7d1d943 100644
---- a/Sources/OpenSwiftUICore/Runtime/TypeConformance.swift
-+++ b/Sources/OpenSwiftUICore/Runtime/TypeConformance.swift
-@@ -16,9 +16,19 @@ package protocol ProtocolDescriptor {
- 
- extension ProtocolDescriptor {
-     package static func conformance(of type: any Any.Type) -> TypeConformance<Self>? {
-+        #if os(WASI)
-+        // WASI: route through the C-ABI shim (swift_conformsToProtocol is C_CC; the
-+        // @_silgen_name call mislowers on wasm -> signature_mismatch).
-+        guard let conformance = _OpenSwiftUI_conformsToProtocol(
-+            unsafeBitCast(type, to: UnsafeRawPointer.self), descriptor
-+        ) else {
-+            return nil
-+        }
-+        #else
-         guard let conformance = swiftConformsToProtocol(type, descriptor) else {
-             return nil
-         }
-+        #endif
-         return TypeConformance(storage: (type, conformance))
++
++/// Re-RUN the graph (re-evaluate invalidated view bodies) and render the result into the sink.
++/// Unlike `wandrRedraw()` (which only re-walks the already-computed display list), this picks up
++/// state changes. Call it on the frame after a `wandrApplyChange`.
++@_spi(WandrRenderer)
++public func wandrRender() {
++    _wandrRender?()
++}
+ #endif
+diff --git a/Sources/OpenSwiftUICore/Data/Util/ScrapeableContent.swift b/Sources/OpenSwiftUICore/Data/Util/ScrapeableContent.swift
+index 206d2f2..4a5781e 100644
+--- a/Sources/OpenSwiftUICore/Data/Util/ScrapeableContent.swift
++++ b/Sources/OpenSwiftUICore/Data/Util/ScrapeableContent.swift
+@@ -185,6 +185,16 @@ package struct ScrapeableContent {
      }
  }
+ 
++// [wasm32] Subgraph identity token. Foreign-reference Subgraph doesn't support ObjectIdentifier on
++// non-Darwin, so use its stable storage-pointer bits (rawIdentity). On Darwin Subgraph is a CF class.
++#if arch(wasm32)
++private typealias _ScrapeSubgraphID = UInt
++private func _scrapeID(_ s: Subgraph) -> _ScrapeSubgraphID { s.rawIdentity }
++#else
++private typealias _ScrapeSubgraphID = ObjectIdentifier
++private func _scrapeID(_ s: Subgraph) -> _ScrapeSubgraphID { ObjectIdentifier(s) }
++#endif
++
+ extension Subgraph {
+     private struct Map {
+         struct Key: Hashable {
+@@ -193,11 +203,11 @@ extension Subgraph {
+             #if !canImport(Darwin)
+             // FIXME: Subgraph on non-Darwin platform does not conform to Hashable by default
+             func hash(into hasher: inout Hasher) {
+-                hasher.combine(ObjectIdentifier(subgraph))
++                hasher.combine(_scrapeID(subgraph))
+             }
+ 
+             static func == (a: Key, b: Key) -> Bool {
+-                ObjectIdentifier(a.subgraph) == ObjectIdentifier(b.subgraph)
++                _scrapeID(a.subgraph) == _scrapeID(b.subgraph)
+             }
+             #endif
+         }
+@@ -211,8 +221,8 @@ extension Subgraph {
+             map[key] = nodes
+         }
+ 
+-        func content(for subgraph: Subgraph, updated: inout Set<ObjectIdentifier>) -> ScrapeableContent? {
+-            let (isInserted, m) = updated.insert(ObjectIdentifier(subgraph))
++        func content(for subgraph: Subgraph, updated: inout Set<_ScrapeSubgraphID>) -> ScrapeableContent? {
++            let (isInserted, m) = updated.insert(_scrapeID(subgraph))
+             guard isInserted else {
+                 return nil
+             }
+@@ -236,7 +246,7 @@ extension Subgraph {
+             }
+             map.addItem(item, for: self)
+         }
+-        var updated: Set<ObjectIdentifier> = []
++        var updated: Set<_ScrapeSubgraphID> = []
+         return map.content(for: self, updated: &updated) ?? .init(nodes: [], children: [])
+     }
+ }
+diff --git a/Sources/OpenSwiftUICore/Layout/Dynamic/DynamicContainer.swift b/Sources/OpenSwiftUICore/Layout/Dynamic/DynamicContainer.swift
+index aba57af..e7c5891 100644
+--- a/Sources/OpenSwiftUICore/Layout/Dynamic/DynamicContainer.swift
++++ b/Sources/OpenSwiftUICore/Layout/Dynamic/DynamicContainer.swift
+@@ -444,7 +444,12 @@ struct DynamicContainerInfo<Adapter>: StatefulRule, AsyncAttribute, ObservedAttr
+                             target = i >= 0 ? i : info.items.count &- (info.unusedCount + info.removedCount)
+                         }
+                     }
+-                    info.items[target].subgraph.index = UInt32(index)
++                    // A pooled item whose subgraph was invalidated (refcount → 0) can still be in
++                    // range here; setting its index aborts with "accessing invalidated subgraph".
++                    // Skip it (the storage stays alive via the retain fix, so isValid is safe).
++                    if info.items[target].subgraph.isValid {
++                        info.items[target].subgraph.index = UInt32(index)
++                    }
+                 }
+             }
+         } else {
+diff --git a/Sources/OpenSwiftUICore/Layout/Geometry/GeometryReader.swift b/Sources/OpenSwiftUICore/Layout/Geometry/GeometryReader.swift
+index b74d292..43fe211 100644
+--- a/Sources/OpenSwiftUICore/Layout/Geometry/GeometryReader.swift
++++ b/Sources/OpenSwiftUICore/Layout/Geometry/GeometryReader.swift
+@@ -10,6 +10,7 @@ public import Foundation
+ package import OpenAttributeGraphShims
+ import OpenSwiftUI_SPI
+ 
++
+ // MARK: - GeometryReader
+ 
+ /// A container view that defines its content as a function of its own size and
+@@ -90,7 +91,7 @@ public struct GeometryReader<Content>: View, UnaryView, PrimitiveView where Cont
+             )
+             let content = withObservation {
+                 $view.syncMainIfReferences { v in
+-                    v.content(proxy)
++                    return v.content(proxy)
+                 }
+             }
+             value = .init(root: .init(GeometryReaderLayout()), content: content)
 diff --git a/Sources/OpenSwiftUICore/Util/AttributeGraphAdditions.swift b/Sources/OpenSwiftUICore/Util/AttributeGraphAdditions.swift
-index 441f54d..d7ab668 100644
+index d7ab668..a8244eb 100644
 --- a/Sources/OpenSwiftUICore/Util/AttributeGraphAdditions.swift
 +++ b/Sources/OpenSwiftUICore/Util/AttributeGraphAdditions.swift
-@@ -14,19 +14,11 @@ extension OAGInputOptions {
+@@ -126,12 +126,19 @@ extension Subgraph {
      }
- }
  
--// FIXME
--
--extension Subgraph {
--    var index: UInt32 {
--        get {
--            _openSwiftUIUnimplementedWarning()
--            return .zero
--        }
--        set {
--            _openSwiftUIUnimplementedWarning()
--        }
--    }
--}
-+// Subgraph.index intentionally NOT defined here: the AGSubgraph.h header already declares
-+// AGSubgraphGetIndex/SetIndex with AG_SWIFT_NAME(...index...), so the Clang importer provides
-+// a correctly-wired `Subgraph.index` (→ C++ Subgraph::index()/set_index()). The previous stub
-+// here (returning 0 / no-op) SHADOWED that import and corrupted DynamicViewList + ForEach
-+// child ordering, OOB'ing at scale. Removing the shadow lets the engine-backed index work.
- 
- // FIXME
- extension Graph {
-diff --git a/Sources/OpenSwiftUICore/Util/RunLoopUtils.swift b/Sources/OpenSwiftUICore/Util/RunLoopUtils.swift
-index b63b980..1329a60 100644
---- a/Sources/OpenSwiftUICore/Util/RunLoopUtils.swift
-+++ b/Sources/OpenSwiftUICore/Util/RunLoopUtils.swift
-@@ -17,21 +17,35 @@ package func autoreleasepool<Result>(invoking body: () throws -> Result) rethrow
-     try body()
- }
- 
-+#if !os(WASI)
- extension CFRunLoopMode {
-     package static let defaultMode: CFRunLoopMode! = kCFRunLoopDefaultMode
-     package static let commonModes: CFRunLoopMode! = kCFRunLoopCommonModes
- }
- #endif
-+#endif
- 
- package func onNextMainRunLoop(do body: @escaping () -> Void) {
-+    #if os(WASI)
-+    // RunLoop is unavailable on WASI; defer to the host frame loop instead.
-+    _wasmEnqueueMainRunLoop(body)
-+    #else
-     RunLoop.main.perform(inModes: [.common], block: body)
-+    #endif
- }
- 
-+#if !os(WASI)
- private var observer: CFRunLoopObserver?
-+#endif
- private var observerActions: [() -> Void] = []
- 
- extension RunLoop {
-     package static func addObserver(_ action: @escaping () -> Void) {
-+        #if os(WASI)
-+        // No CFRunLoop on wasm: just queue the action. The host frame loop drains
-+        // it via flushObservers() (wired through _wasmDrainMainRunLoop in phase 3).
-+        observerActions.append(action)
-+        #else
-         let currentRunloop = CFRunLoopGetCurrent()
-         if observer == nil {
-             observer = CFRunLoopObserverCreate(
-@@ -55,6 +69,7 @@ extension RunLoop {
+     package func willRemove() {
++        // Collect first, then process: each `removableType.willRemove` callback can free subgraphs,
++        // and the (fork's) `forEach`/`apply` iterates the subgraph tree LIVE (push children, pop
++        // later) — so freeing mid-traversal frees a subgraph still pending on the stack →
++        // `Subgraph::is_valid()` use-after-free. Decoupling iteration from the side effects fixes it.
++        var removables: [(RemovableAttribute.Type, AnyAttribute)] = []
+         forEach(.removable) { attribute in
+-            let type = attribute._bodyType
+-            if let removableType = type as? RemovableAttribute.Type {
+-                removableType.willRemove(attribute: attribute)
++            if let removableType = attribute._bodyType as? RemovableAttribute.Type {
++                removables.append((removableType, attribute))
              }
          }
-         observerActions.append(action)
-+        #endif
-     }
- 
-     package static func flushObservers() {
-@@ -69,6 +84,12 @@ extension RunLoop {
-         }
-     }
- 
-+    #if os(WASI)
-+    // No CFRunLoop to run on wasm; the host frame loop owns time. No-op.
-+    package static func runAllowingEarlyExit(until deadline: Date, stopCondition: () -> Bool) {}
-+
-+    package static func runAllowingEarlyExit(until deadline: Date) {}
-+    #else
-     package static func runAllowingEarlyExit(until deadline: Date, stopCondition: () -> Bool) {
-         repeat {
-             let diff = deadline.timeIntervalSinceReferenceDate - CFAbsoluteTimeGetCurrent()
-@@ -87,4 +108,5 @@ extension RunLoop {
-     package static func runAllowingEarlyExit(until deadline: Date) {
-         runAllowingEarlyExit(until: deadline) { false }
-     }
-+    #endif
- }
-diff --git a/Sources/OpenSwiftUICore/Util/StandardLibraryAdditions.swift b/Sources/OpenSwiftUICore/Util/StandardLibraryAdditions.swift
-index c314432..26ec7f7 100644
---- a/Sources/OpenSwiftUICore/Util/StandardLibraryAdditions.swift
-+++ b/Sources/OpenSwiftUICore/Util/StandardLibraryAdditions.swift
-@@ -10,6 +10,8 @@ package import Foundation
- import Darwin
- #elseif canImport(Glibc)
- import Glibc
-+#elseif canImport(WASILibc)
-+import WASILibc
- #else
- #error("Unsupported Platform")
- #endif
-@@ -55,6 +57,8 @@ extension Float {
-         Darwin.round(self * 256.0) / 256.0
-         #elseif canImport(Glibc)
-         Glibc.round(self * 256.0) / 256.0
-+        #elseif canImport(WASILibc)
-+        WASILibc.round(self * 256.0) / 256.0
-         #else
-         #error("Unsupported Platform")
-         #endif
-@@ -67,6 +71,8 @@ extension CGFloat {
-         Darwin.round(self * 256.0) / 256.0
-         #elseif canImport(Glibc)
-         Glibc.round(self * 256.0) / 256.0
-+        #elseif canImport(WASILibc)
-+        WASILibc.round(self * 256.0) / 256.0
-         #else
-         #error("Unsupported Platform")
-         #endif
-diff --git a/Sources/OpenSwiftUICore/Util/TimerUtils.swift b/Sources/OpenSwiftUICore/Util/TimerUtils.swift
-index 6ce8a51..2ddb7e2 100644
---- a/Sources/OpenSwiftUICore/Util/TimerUtils.swift
-+++ b/Sources/OpenSwiftUICore/Util/TimerUtils.swift
-@@ -30,6 +30,12 @@ package func withDelay(_ timeInterval: TimeInterval, do body: @escaping () -> Vo
-     let timer = Timer(timeInterval: timeInterval, repeats: false) { _ in
-         body()
-     }
-+    #if os(WASI)
-+    // RunLoop is unavailable on WASI; timers are wired to the host frame clock
-+    // in a later phase. Returning the (un-scheduled) timer keeps `withDelay` total.
-+    _ = timer
-+    #else
-     RunLoop.main.add(timer, forMode: .common)
-+    #endif
-     return timer
- }
-diff --git a/Sources/OpenSwiftUICore/Util/WasmDispatchShim.swift b/Sources/OpenSwiftUICore/Util/WasmDispatchShim.swift
-new file mode 100644
-index 0000000..b823485
---- /dev/null
-+++ b/Sources/OpenSwiftUICore/Util/WasmDispatchShim.swift
-@@ -0,0 +1,35 @@
-+// WasmDispatchShim.swift — minimal single-threaded Dispatch for wasm (no libdispatch).
-+//
-+// wasm has no GCD. OpenSwiftUICore uses a tiny Dispatch surface on the scheduling/
-+// animation path (DisplayListViewRenderer, CAHostingLayer, AnimationListener):
-+// `DispatchQueue.main.async`/`.asyncAfter(deadline:)` + `DispatchTime`. This provides
-+// just that surface. **Compile-focused**: closures run synchronously and `now()` is a
-+// monotonic stub for now; real deferral/timing gets wired to the wandr frame loop in a
-+// later phase (the renderer host drives `on_frame`).
-+#if os(WASI)
-+
-+public struct DispatchTime: Comparable {
-+    public var uptimeNanoseconds: UInt64
-+    public init(uptimeNanoseconds: UInt64) { self.uptimeNanoseconds = uptimeNanoseconds }
-+
-+    public static func now() -> DispatchTime {
-+        // TODO(phase 3+): drive from the host monotonic clock / frame nanos.
-+        DispatchTime(uptimeNanoseconds: 0)
-+    }
-+    public static func < (a: DispatchTime, b: DispatchTime) -> Bool {
-+        a.uptimeNanoseconds < b.uptimeNanoseconds
-+    }
-+    /// Dispatch's `DispatchTime + seconds` overload.
-+    public static func + (t: DispatchTime, seconds: Double) -> DispatchTime {
-+        DispatchTime(uptimeNanoseconds: t.uptimeNanoseconds &+ UInt64(max(0, seconds) * 1_000_000_000))
-+    }
-+}
-+
-+public final class DispatchQueue {
-+    public static let main = DispatchQueue()
-+    // Single-threaded: run now. (A frame-loop-backed pending queue replaces this later.)
-+    public func async(execute work: () -> Void) { work() }
-+    public func asyncAfter(deadline: DispatchTime, execute work: () -> Void) { work() }
-+}
-+
-+#endif
-diff --git a/Sources/OpenSwiftUICore/Util/WasmThreadingShim.swift b/Sources/OpenSwiftUICore/Util/WasmThreadingShim.swift
-new file mode 100644
-index 0000000..1fb8546
---- /dev/null
-+++ b/Sources/OpenSwiftUICore/Util/WasmThreadingShim.swift
-@@ -0,0 +1,116 @@
-+//
-+//  WasmThreadingShim.swift
-+//  OpenSwiftUICore
-+//
-+//  wandr (OpenSwiftUI-on-wasm phase 1): single-threaded WASI substitutes for the
-+//  Foundation threading / run-loop primitives that swift-corelibs-foundation
-+//  excludes on os(WASI). wasip1 is single-threaded, so "the main thread" is the
-+//  only thread and thread-local storage degenerates to plain process globals.
-+//
-+//  Covers exactly the surface OpenSwiftUICore uses:
-+//    - Thread.isMainThread          (ThreadUtils/MainActorUtils/ObservationUtils/…)
-+//    - pthread TLS                  (ThreadSpecific in ThreadUtils.swift)
-+//    - a main-run-loop enqueue seam (RunLoopUtils.swift / TimerUtils.swift)
-+//
-+//  RunLoop itself is `@available(*, unavailable)` on WASI (even `RunLoop.main`
-+//  traps at type-check), so the RunLoop call sites are #if-guarded to route here
-+//  instead of extending RunLoop.
-+
-+#if os(WASI)
-+import Foundation
-+
-+// MARK: - Thread
-+
-+/// Single-threaded WASI shim for `Foundation.Thread` (absent on os(WASI)).
-+/// Everything runs on the one and only (main) thread.
-+package enum Thread {
-+    package static var isMainThread: Bool { true }
-+
-+    /// No scheduler on single-threaded wasm — there is nothing to yield to, so
-+    /// "sleeping" is a no-op. (Used only by test-harness run-loop pumping.)
-+    /// `Double` not `TimeInterval`: Foundation is imported `internal` here, so a
-+    /// `package` method can't expose the `TimeInterval` alias.
-+    package static func sleep(forTimeInterval ti: Double) {}
-+}
-+
-+// MARK: - pthread thread-local storage
-+
-+// wasi-libc declares these in <pthread.h> but they are not surfaced to Swift's
-+// WASILibc module on the single-threaded SDK. Re-provide them in pure Swift:
-+// with one thread, TLS is just a process-global keyed table. `pthread_key_t`
-+// itself IS visible from WASILibc (typedef unsigned), so we reuse it.
-+// (Internal, not package: imported C types are internal, and only this module
-+// uses ThreadSpecific.)
-+
-+private final class _WasmTLS {
-+    static let shared = _WasmTLS()
-+    var next: pthread_key_t = 1
-+    var values: [pthread_key_t: UnsafeMutableRawPointer] = [:]
-+}
-+
-+@discardableResult
-+func pthread_key_create(
-+    _ key: UnsafeMutablePointer<pthread_key_t>,
-+    _ destructor: (@convention(c) (UnsafeMutableRawPointer?) -> Void)?
-+) -> Int32 {
-+    // Destructors only run at thread exit; the single wasm thread never exits
-+    // before process teardown, so we don't retain them (ThreadSpecific.deinit is
-+    // a preconditionFailure anyway — these live for the process lifetime).
-+    let tls = _WasmTLS.shared
-+    key.pointee = tls.next
-+    tls.next &+= 1
-+    return 0
-+}
-+
-+func pthread_getspecific(_ key: pthread_key_t) -> UnsafeMutableRawPointer? {
-+    _WasmTLS.shared.values[key]
-+}
-+
-+@discardableResult
-+func pthread_setspecific(_ key: pthread_key_t, _ value: UnsafeMutableRawPointer?) -> Int32 {
-+    if let value {
-+        _WasmTLS.shared.values[key] = value
-+    } else {
-+        _WasmTLS.shared.values.removeValue(forKey: key)
-+    }
-+    return 0
-+}
-+
-+// MARK: - Timer
-+
-+// Foundation.Timer compiles on WASI but its implementation references CFRunLoopTimer*
-+// (unresolved at link). Shadow it module-wide with a minimal stand-in covering the
-+// surface OpenSwiftUICore uses (TimerUtils.withDelay, EventBindingManager, the
-+// hosting views). Timers are wired to the host frame clock in a later phase; for
-+// now they never fire — only construction + invalidate must be total.
-+package final class Timer {
-+    package init(timeInterval: Double, repeats: Bool, block: @escaping (Timer) -> Void) {}
-+    package func invalidate() {}
-+}
-+
-+// MARK: - Main run-loop enqueue seam
-+
-+// swift-corelibs-foundation makes `RunLoop` unavailable on WASI, so blocks that
-+// the core would defer to `RunLoop.main.perform(inModes:block:)` are queued onto
-+// a process-global pump drained by the host frame loop (phase 3). Timers are
-+// no-ops until wired to the host frame clock.
-+
-+private var _wasmMainRunLoopQueue: [() -> Void] = []
-+
-+/// Enqueues a block for the next host frame (the WASI replacement for
-+/// `RunLoop.main.perform(inModes:block:)`).
-+func _wasmEnqueueMainRunLoop(_ block: @escaping () -> Void) {
-+    _wasmMainRunLoopQueue.append(block)
-+}
-+
-+/// Drains blocks scheduled via `_wasmEnqueueMainRunLoop`.
-+/// The wandr host calls this once per frame (phase 3). Returns whether work ran.
-+@discardableResult
-+package func _wasmDrainMainRunLoop() -> Bool {
-+    guard !_wasmMainRunLoopQueue.isEmpty else { return false }
-+    let pending = _wasmMainRunLoopQueue
-+    _wasmMainRunLoopQueue.removeAll(keepingCapacity: true)
-+    for block in pending { block() }
-+    return true
-+}
-+#endif
-diff --git a/Sources/OpenSwiftUICore/View/InterfaceIdiom/InterfaceIdiomPredicate.swift b/Sources/OpenSwiftUICore/View/InterfaceIdiom/InterfaceIdiomPredicate.swift
-index ca08c58..db2047d 100644
---- a/Sources/OpenSwiftUICore/View/InterfaceIdiom/InterfaceIdiomPredicate.swift
-+++ b/Sources/OpenSwiftUICore/View/InterfaceIdiom/InterfaceIdiomPredicate.swift
-@@ -33,7 +33,9 @@ extension _GraphInputs {
-         #elseif os(iOS) || os(visionOS)
-         AnyInterfaceIdiom(.phone)
-         #else
--        _openSwiftUIUnimplementedFailure()
-+        // WASI/wandr (phone-class device): default to the phone idiom rather than the
-+        // upstream unimplemented stub, so Text (and anything reading interfaceIdiom) works.
-+        AnyInterfaceIdiom(.phone)
-         #endif
-     }
- }
-diff --git a/Sources/OpenSwiftUICore/View/Text/Font/Font.swift b/Sources/OpenSwiftUICore/View/Text/Font/Font.swift
-index 715e961..3555ea1 100644
---- a/Sources/OpenSwiftUICore/View/Text/Font/Font.swift
-+++ b/Sources/OpenSwiftUICore/View/Text/Font/Font.swift
-@@ -303,7 +303,10 @@ extension Font {
-             return ratio
-         }
-         #else
--        _openSwiftUIPlatformUnimplementedFailure()
-+        // CoreText (the Dynamic Type ratio source) is unavailable off-Apple. At the default
-+        // content size the ratio is identity, which yields the correct base point sizes
-+        // (e.g. .body → 17, .largeTitle → 34) so system fonts resolve without CoreText.
-+        return 1.0
-         #endif
-     }
- }
-diff --git a/Sources/OpenSwiftUICore/View/Text/Localized/Text+Localized.swift b/Sources/OpenSwiftUICore/View/Text/Localized/Text+Localized.swift
-index 749b97c..8894e9e 100644
---- a/Sources/OpenSwiftUICore/View/Text/Localized/Text+Localized.swift
-+++ b/Sources/OpenSwiftUICore/View/Text/Localized/Text+Localized.swift
-@@ -358,8 +358,15 @@ public struct LocalizedStringKey: Equatable, ExpressibleByStringInterpolation {
-             )
-         }
-         #else
-+        #if os(WASI)
-+        // WASI: Foundation's Bundle.main crashes on wasm and there are no localization
-+        // tables; localize only if an explicit bundle was given, else use the key (the
-+        // documented no-table fallback). Avoids touching Bundle.main.
-+        let localizedString = bundle.map { _LocalizeString($0, key, table, environment.locale) } ?? key
-+        #else
-         let bundle = bundle ?? .main
-         let localizedString = _LocalizeString(bundle, key, table, environment.locale)
-+        #endif
-         guard hasFormatting else {
-             result.append(localizedString, in: environment, with: options)
-             return
-@@ -470,8 +477,12 @@ public struct LocalizedStringKey: Equatable, ExpressibleByStringInterpolation {
-         table: String?,
-         bundle: Bundle?
-     ) -> Bool {
-+        #if os(WASI)
-+        let localizedString = bundle.map { _LocalizeString($0, key, table, environment.locale) } ?? key
-+        #else
-         let bundle = bundle ?? .main
-         let localizedString = _LocalizeString(bundle, key, table, environment.locale)
-+        #endif
-         guard hasFormatting else {
-             return localizedString.isEmpty
-         }
-diff --git a/Sources/OpenSwiftUICore/View/Text/Text/Text+View.swift b/Sources/OpenSwiftUICore/View/Text/Text/Text+View.swift
-index daa834a..bc728b5 100644
---- a/Sources/OpenSwiftUICore/View/Text/Text/Text+View.swift
-+++ b/Sources/OpenSwiftUICore/View/Text/Text/Text+View.swift
-@@ -145,16 +145,29 @@ package struct AccessibilityStyledTextContentView<Provider>: View where Provider
- 
-     package var needsDrawingGroup: Bool
- 
-+    // WASI: environment-resolved plain string (formats interpolated keys like "\(n)"→"2"),
-+    // font size + foreground color (the off-Apple text resolution is stubbed, so the build
-+    // site resolves these and threads them to the leaf content).
-+    package var wasmPlainString: String = ""
-+    package var wasmFontSize: CGFloat = 17
-+    package var wasmColor: Color.Resolved? = nil
-+
-     package init(
-         text: ResolvedStyledText,
-         unresolvedText: Text,
-         renderer: TextRendererBoxBase? = nil,
--        needsDrawingGroup: Bool = false
-+        needsDrawingGroup: Bool = false,
-+        wasmPlainString: String = "",
-+        wasmFontSize: CGFloat = 17,
-+        wasmColor: Color.Resolved? = nil
-     ) {
-         self.text = text
-         self.unresolvedText = unresolvedText
-         self.renderer = renderer
-         self.needsDrawingGroup = needsDrawingGroup
-+        self.wasmPlainString = wasmPlainString
-+        self.wasmFontSize = wasmFontSize
-+        self.wasmColor = wasmColor
-     }
- 
-     package var body: some View {
-@@ -162,7 +175,10 @@ package struct AccessibilityStyledTextContentView<Provider>: View where Provider
-             content: StyledTextContentView(
-                 text: text,
-                 renderer: renderer,
--                needsDrawingGroup: needsDrawingGroup
-+                needsDrawingGroup: needsDrawingGroup,
-+                wasmPlainString: wasmPlainString,
-+                wasmFontSize: wasmFontSize,
-+                wasmColor: wasmColor
-             ),
-             text: unresolvedText,
-             resolved: text
-@@ -172,19 +188,74 @@ package struct AccessibilityStyledTextContentView<Provider>: View where Provider
- 
- // MARK: - StyledTextContentView [WIP]
- 
-+extension Text {
-+    /// Plain-string fallback that does NOT need an `EnvironmentValues` (unlike `_resolveText`),
-+    /// used on wasm to carry the verbatim string to the DisplayList text content. Best-effort
-+    /// for non-verbatim storages.
-+    package var wasmPlainStringFallback: String {
-+        // Use _localizationInfo (safe: verbatim string OR the literal key) — NOT
-+        // String(describing: storage), whose AnyTextStorage.debugDescription faults off-Apple.
-+        switch _localizationInfo {
-+        case .none: return ""
-+        case let .verbatim(string): return string
-+        case let .localized(key, _, _, _): return key
++        for (removableType, attribute) in removables {
++            removableType.willRemove(attribute: attribute)
 +        }
-+    }
-+}
-+
-+// Host-shaped-text path: route StyledTextContentView through RendererLeafView / LeafViewLayout
-+// (see its `_makeView`, gated on the usesHostShapedText capability) — emit `.content(.text)` for
-+// the renderer (e.g. wasi:canvas paragraph / Skia) to shape + draw, with a coarse size estimate
-+// for layout. The conformance is harmless on renderers that don't use it (Apple's glyph path).
-+extension StyledTextContentView: RendererLeafView, LeafViewLayout {
-+    private var wasmEstimatedSize: CGSize {
-+        CGSize(
-+            width: CGFloat(wasmPlainString.count) * wasmFontSize * 0.6,
-+            height: wasmFontSize * 1.35
-+        )
-+    }
-+    package func content() -> DisplayList.Content.Value {
-+        .text(self, wasmEstimatedSize)
-+    }
-+    package func sizeThatFits(in proposedSize: _ProposedSize) -> CGSize {
-+        wasmEstimatedSize
-+    }
-+    // Disambiguate ContentResponder.contains (ShapeStyledLeafView vs RendererLeafView both
-+    // vend a default); text isn't interactive here, so report no hit.
-+    package func contains(points: [PlatformPoint], size: CGSize) -> BitVector64 {
-+        BitVector64()
-+    }
-+}
-+
- package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafView {
-     package var text: ResolvedStyledText
-     package var renderer: TextRendererBoxBase?
-     package var needsDrawingGroup: Bool
-+    // WASI: the off-Apple text resolution (ResolvedStyledText.storage NSAttributedString) is
-+    // stubbed → nil, so carry the plain string + nominal font size from the unresolved Text so
-+    // the wasm RendererLeafView path can emit a `.content(.text)` the host (wasi:canvas
-+    // paragraph / Skia) shapes + draws. (Default empty so non-text construction is unaffected.)
-+    package var wasmPlainString: String = ""
-+    // Resolved from the environment at the build site (TextChildQuery): the font's point size
-+    // and the foreground color. 17 (SwiftUI body) is the fallback when no .font is set; nil
-+    // color means "use the sink default".
-+    package var wasmFontSize: CGFloat = 17
-+    package var wasmColor: Color.Resolved? = nil
- 
-     package init(
-         text: ResolvedStyledText,
-         renderer: TextRendererBoxBase? = nil,
--        needsDrawingGroup: Bool = false
-+        needsDrawingGroup: Bool = false,
-+        wasmPlainString: String = "",
-+        wasmFontSize: CGFloat = 17,
-+        wasmColor: Color.Resolved? = nil
-     ) {
-         self.text = text
-         self.renderer = renderer
-         self.needsDrawingGroup = needsDrawingGroup
-+        self.wasmPlainString = wasmPlainString
-+        self.wasmFontSize = wasmFontSize
-+        self.wasmColor = wasmColor
      }
  
-     package static var animatesSize: Bool {
-@@ -204,6 +275,14 @@ package struct StyledTextContentView: UnaryView, PrimitiveView, ShapeStyledLeafV
-         view: _GraphValue<Self>,
-         inputs: _ViewInputs
-     ) -> _ViewOutputs {
-+        if _RenderingCapabilities.current.usesHostShapedText {
-+            // Renderer shapes text itself (e.g. wasi:canvas paragraph / Skia): emit a
-+            // `.content(.text)` leaf (RendererLeafView) rather than the in-framework ShapeStyle
-+            // glyph path. Layout via the LeafViewLayout estimate.
-+            var outputs = makeLeafView(view: view, inputs: inputs)
-+            makeLeafLayout(&outputs, view: view, inputs: inputs)
-+            return outputs
+     package func didReinsert() {
+diff --git a/Sources/OpenSwiftUICore/View/DynamicView/DynamicView.swift b/Sources/OpenSwiftUICore/View/DynamicView/DynamicView.swift
+index c048566..6d6ce29 100644
+--- a/Sources/OpenSwiftUICore/View/DynamicView/DynamicView.swift
++++ b/Sources/OpenSwiftUICore/View/DynamicView/DynamicView.swift
+@@ -155,7 +155,11 @@ private struct DynamicViewList<V>: StatefulRule, AsyncAttribute where V: Dynamic
+ 
+         for item in allItems.wrappedValue {
+             let item = item.takeUnretainedValue()
+-            guard item.matches(type: type, id: id) else {
++            // A parent-subgraph cascade can invalidate an item's subgraph without calling
++            // Item.invalidate() (which removes it from allItems), leaving a stale entry whose
++            // subgraph._graph is NULL. Reusing it → AGSubgraphAddChild precondition failure
++            // ("child subgraph must have same graph"). Mirror the lastItem fast-path's isValid guard.
++            guard item.matches(type: type, id: id), item.isValid else {
+                 continue
+             }
+             item.retain()
+diff --git a/Sources/OpenSwiftUICore/View/DynamicViewContent/ForEach.swift b/Sources/OpenSwiftUICore/View/DynamicViewContent/ForEach.swift
+index ba15ff2..f5221f8 100644
+--- a/Sources/OpenSwiftUICore/View/DynamicViewContent/ForEach.swift
++++ b/Sources/OpenSwiftUICore/View/DynamicViewContent/ForEach.swift
+@@ -573,8 +573,14 @@ private class ForEachState<Data, ID, Content> where Data: RandomAccessCollection
+     }
+ 
+     func eraseItem(_ item: Item) {
+-        item.subgraph.willRemove()
+-        parentSubgraph.removeChild(item.subgraph)
++        // A stale item (seed != seed) may have had its subgraph invalidated already (refcount → 0
++        // via the parent cascade). willRemove() on an invalidated/freed subgraph faults in
++        // apply_tmpl. Mirror ViewList.Subgraph.remove(from:), which guards the same ops with isValid
++        // (the refcount==0 short-circuit makes it safe without dereferencing the subgraph).
++        if item.isValid {
++            item.subgraph.willRemove()
++            parentSubgraph.removeChild(item.subgraph)
 +        }
-         var newInputs = inputs
-         if inputs.preferences.requiresViewResponders {
-             newInputs.preferences.requiresViewResponders = false
-@@ -1026,11 +1105,25 @@ private struct TextChildQuery<P>: Rule, AsyncAttribute, ScrapeableAttribute wher
-     }
+         item.isRemoved = true
+         item.timeToLive = 0
+         item.invalidate(isInserted: true)
+diff --git a/Sources/OpenSwiftUICore/View/Input/ViewListContent.swift b/Sources/OpenSwiftUICore/View/Input/ViewListContent.swift
+index 9bc7632..ae99b4a 100644
+--- a/Sources/OpenSwiftUICore/View/Input/ViewListContent.swift
++++ b/Sources/OpenSwiftUICore/View/Input/ViewListContent.swift
+@@ -230,9 +230,17 @@ private struct PlaceholderInfo: StatefulRule, ObservedAttribute, AsyncAttribute
+         let child = Subgraph(graph: parentSubgraph.graph)
+         parentSubgraph.addChild(child)
+         let shouldParentToPlaceholder = inputs.base[ViewListShouldParentToPlaceholderSubgraph.self]
++        // [wasm32] Subgraph's foreign-reference class-ness doesn't cross module to this non-cxx-
++        // interop consumer, so `!==` is unavailable; use the Compute-provided identity helper.
++        #if arch(wasm32)
++        if !parentSubgraph.isIdentical(to: contentSubgraph), shouldParentToPlaceholder {
++            contentSubgraph.addChild(child, tag: 1)
++        }
++        #else
+         if parentSubgraph !== contentSubgraph, shouldParentToPlaceholder {
+             contentSubgraph.addChild(child, tag: 1)
+         }
++        #endif
+         child.apply {
+             // TODO: GraphReuseOptions on v7
+             let indirectMap = IndirectAttributeMap(subgraph: child)
+diff --git a/Sources/OpenSwiftUI_SPI/Util/TLS.c b/Sources/OpenSwiftUI_SPI/Util/TLS.c
+index d9a0067..0ede208 100644
+--- a/Sources/OpenSwiftUI_SPI/Util/TLS.c
++++ b/Sources/OpenSwiftUI_SPI/Util/TLS.c
+@@ -8,11 +8,21 @@
+ #include "TLS.h"
+ #include <stdatomic.h>
  
-     var value: some View {
-+        // WASI: resolve the font's point size + foreground color from the environment here
-+        // (the off-Apple ResolvedStyledText.storage is nil), and thread them to the leaf
-+        // content so the host draws at the right size/color. System fonts resolve without
-+        // CoreText (see Font.scaleFactor); fall back to SwiftUI's body size / sink default.
-+        let env = environment
-+        // Resolve the plain string env-aware so interpolated keys format ("\(n)"→"2");
-+        // verbatim text returns as-is.
-+        let wasmPlainString = unresolvedText._resolveText(in: env)
-+        let resolvedSize = env.font?.resolveTraits(in: env).pointSize ?? 0
-+        let wasmFontSize: CGFloat = resolvedSize > 0 ? resolvedSize : 17
-+        let wasmColor: Color.Resolved? = env.foregroundColor?.resolve(in: env)
-         let accessibilityView = AccessibilityStyledTextContentView<P>(
-             text: resolvedText,
-             unresolvedText: unresolvedText,
-             renderer: renderer,
--            needsDrawingGroup: renderer != nil ? environment.textRendererAddsDrawingGroup : false
-+            needsDrawingGroup: renderer != nil ? environment.textRendererAddsDrawingGroup : false,
-+            wasmPlainString: wasmPlainString,
-+            wasmFontSize: wasmFontSize,
-+            wasmColor: wasmColor
-         )
-         return accessibilityView.body
-     }
-diff --git a/Sources/OpenSwiftUI_SPI/Shims/CSymbols/OpenSwiftUI_CSymbols.c b/Sources/OpenSwiftUI_SPI/Shims/CSymbols/OpenSwiftUI_CSymbols.c
-index 3b97f1f..73edca5 100644
---- a/Sources/OpenSwiftUI_SPI/Shims/CSymbols/OpenSwiftUI_CSymbols.c
-+++ b/Sources/OpenSwiftUI_SPI/Shims/CSymbols/OpenSwiftUI_CSymbols.c
-@@ -3,13 +3,20 @@
- //  OpenSwiftUI_SPI
- 
- #include "OpenSwiftUI_CSymbols.h"
-+#if !defined(__wasi__)
- #include <dlfcn.h>
-+#endif
- 
- const char * getSymbolPathName(const void *address) {
+-static _Thread_local void * _perThreadGeometryProxyData = NULL;
+-static _Thread_local int64_t _perThreadUpdateCount = 0;
+-static _Thread_local uint32_t _perThreadTransactionID = 0;
+-static _Thread_local void * _perThreadTransactionData = NULL;
+-static _Thread_local void * _perThreadLayoutData = NULL;
++// [wasm32] wasm32-wasip1 is single-threaded and `_Thread_local` TLS is not initialized in this
++// toolchain (no TLS segment setup) → reads/writes hit a garbage/aliased slot, so the layout
++// `placementData` pointer does not round-trip and `setGeometry` sprays a ViewGeometry CGFloat over
++// adjacent (subgraph-pointer) memory → SIGSEGV. Single-threaded ⇒ a plain `static` global IS the TLS.
 +#if defined(__wasi__)
-+    (void)address;
-+    return NULL;   // wasm: no dynamic linking (dladdr/Dl_info absent) — debug-only path
++#define OPENSWIFTUI_TLS
 +#else
-     Dl_info info;
-     int result = dladdr(address, &info);
-     if (result == 0) {
-         return NULL;
-     }
-     return info.dli_fname;
++#define OPENSWIFTUI_TLS _Thread_local
 +#endif
- }
-diff --git a/Sources/OpenSwiftUI_SPI/Util/ProtocolDescriptor.c b/Sources/OpenSwiftUI_SPI/Util/ProtocolDescriptor.c
-index a2e4d0b..4e2732c 100644
---- a/Sources/OpenSwiftUI_SPI/Util/ProtocolDescriptor.c
-+++ b/Sources/OpenSwiftUI_SPI/Util/ProtocolDescriptor.c
-@@ -67,3 +67,15 @@ const void *$s15OpenSwiftUICore12StyleContextMp;
- const void *_OpenSwiftUI_styleContextProtocolDescriptor(void) {
-     return &$s15OpenSwiftUICore12StyleContextMp;
- }
 +
-+#if defined(__wasi__)
-+// swift_conformsToProtocol is declared C_CC in the Swift runtime
-+// (RuntimeFunctions.def: `Swift, swift_conformsToProtocol, C_CC, ...`). Forward to it
-+// with the C ABI so Swift's call lowers to a matching wasm signature (the direct
-+// @_silgen_name call mislowers -> signature_mismatch on wasm).
-+extern const void *swift_conformsToProtocol(const void *type, const void *protocolDescriptor);
-+
-+const void *_OpenSwiftUI_conformsToProtocol(const void *type, const void *protocolDescriptor) {
-+    return swift_conformsToProtocol(type, protocolDescriptor);
-+}
-+#endif
-diff --git a/Sources/OpenSwiftUI_SPI/Util/ProtocolDescriptor.h b/Sources/OpenSwiftUI_SPI/Util/ProtocolDescriptor.h
-index aa1625e..91bac12 100644
---- a/Sources/OpenSwiftUI_SPI/Util/ProtocolDescriptor.h
-+++ b/Sources/OpenSwiftUI_SPI/Util/ProtocolDescriptor.h
-@@ -36,6 +36,14 @@ const void *_OpenSwiftUI_styleWriterOverrideModifierProtocolDescriptor(void) OPE
- OPENSWIFTUI_EXPORT
- const void *_OpenSwiftUI_styleContextProtocolDescriptor(void) OPENSWIFTUI_SWIFT_NAME(_styleContextProtocolDescriptor());
++static OPENSWIFTUI_TLS void * _perThreadGeometryProxyData = NULL;
++static OPENSWIFTUI_TLS int64_t _perThreadUpdateCount = 0;
++static OPENSWIFTUI_TLS uint32_t _perThreadTransactionID = 0;
++static OPENSWIFTUI_TLS void * _perThreadTransactionData = NULL;
++static OPENSWIFTUI_TLS void * _perThreadLayoutData = NULL;
  
-+#if defined(__wasi__)
-+// WASI: swift_conformsToProtocol is C_CC (Swift RuntimeFunctions.def), but Swift's
-+// @_silgen_name lowers the call with the Swift CC -> wasm `signature_mismatch`. This
-+// plain-C wrapper is imported with the C ABI so the call lowers correctly.
-+OPENSWIFTUI_EXPORT
-+const void *_Nullable _OpenSwiftUI_conformsToProtocol(const void *type, const void *protocolDescriptor);
-+#endif
-+
- OPENSWIFTUI_ASSUME_NONNULL_END
- 
- #endif /* ProtocolDescriptor_h */
+ void _setThreadGeometryProxyData(void * data) {
+     _perThreadGeometryProxyData = data;

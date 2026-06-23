@@ -1,8 +1,8 @@
 diff --git a/Package.swift b/Package.swift
-index 56c0acf..81de973 100644
+index 8c7bb5b..ecc1aed 100644
 --- a/Package.swift
 +++ b/Package.swift
-@@ -24,7 +24,7 @@ let package = Package(
+@@ -25,7 +25,7 @@ let package = Package(
          .target(
              name: "Platform",
              cSettings: [
@@ -11,7 +11,7 @@ index 56c0acf..81de973 100644
              ]
          ),
          .target(
-@@ -34,7 +34,7 @@ let package = Package(
+@@ -35,7 +35,7 @@ let package = Package(
              name: "Utilities",
              dependencies: [
                  "Platform",
@@ -20,7 +20,7 @@ index 56c0acf..81de973 100644
              ]
          ),
          .testTarget(
-@@ -94,12 +94,12 @@ let package = Package(
+@@ -96,12 +96,12 @@ let package = Package(
                  "Platform",
                  "Utilities",
                  "ComputeCxxSwiftSupport",
@@ -36,7 +36,7 @@ index 56c0acf..81de973 100644
                      "-static",
                      "-DCOMPILED_WITH_SWIFT",
 diff --git a/Sources/Compute/Attribute/AnyAttribute.swift b/Sources/Compute/Attribute/AnyAttribute.swift
-index 1467d39..95f5b67 100644
+index 6b6677d..accbc63 100644
 --- a/Sources/Compute/Attribute/AnyAttribute.swift
 +++ b/Sources/Compute/Attribute/AnyAttribute.swift
 @@ -39,12 +39,30 @@ extension AnyAttribute {
@@ -45,10 +45,10 @@ index 1467d39..95f5b67 100644
              }
 +            #if arch(wasm32)
 +            // WASI: the swiftcall modify closure mislowers on wasm; route through the
-+            // C-imported AGGraphMutateAttributeC with a non-capturing @convention(c)
++            // C-imported IAGGraphMutateAttributeC with a non-capturing @convention(c)
 +            // trampoline. `modify` is invoked synchronously, so pass it by pointer.
 +            withUnsafePointer(to: modify) { ctxPtr in
-+                AGGraphMutateAttributeC(
++                IAGGraphMutateAttributeC(
 +                    self,
 +                    Metadata(type),
 +                    invalidating,
@@ -60,7 +60,7 @@ index 1467d39..95f5b67 100644
 +                )
 +            }
 +            #else
-             AGGraphMutateAttribute(
+             IAGGraphMutateAttribute(
                  self,
                  type: Metadata(type),
                  invalidating: invalidating,
@@ -71,52 +71,17 @@ index 1467d39..95f5b67 100644
      }
  
 diff --git a/Sources/Compute/Attribute/AttributeType.swift b/Sources/Compute/Attribute/AttributeType.swift
-index e533d18..e6152c3 100644
+index e327667..4c4fe90 100644
 --- a/Sources/Compute/Attribute/AttributeType.swift
 +++ b/Sources/Compute/Attribute/AttributeType.swift
-@@ -20,11 +20,34 @@ extension AGUnownedGraphContextRef {
-         type: Metadata,
-         makeAttributeType: () -> UnsafePointer<_AttributeType>
-     ) -> UInt32 {
-+        #if arch(wasm32)
-+        // WASI: call the C-imported AGGraphInternAttributeTypeC (declared in the
-+        // ComputeCxx header) so Swift lowers the @convention(c) thunk with the C ABI
-+        // (@_silgen_name lowers it with the Swift CC -> call_indirect signature_mismatch).
-+        // The Swift closure is invoked in-language via the context pointer.
-+        return withoutActuallyEscaping(makeAttributeType) { escaping in
-+            withUnsafePointer(to: escaping) { ctxPtr in
-+                AGGraphInternAttributeTypeC(
-+                    self,
-+                    type,
-+                    { ctx in
-+                        UnsafeRawPointer(
-+                            ctx!.assumingMemoryBound(
-+                                to: (() -> UnsafePointer<_AttributeType>).self
-+                            ).pointee()
-+                        )
-+                    },
-+                    UnsafeRawPointer(ctxPtr)
-+                )
-+            }
-+        }
-+        #else
-         return AGGraphInternAttributeType(
-             unsafeBitCast(self, to: UnsafeRawPointer.self),
-             type: type,
-             makeAttributeType: makeAttributeType
-         )
-+        #endif
-     }
- 
- }
-@@ -37,10 +60,25 @@ extension String {
+@@ -14,10 +14,25 @@ extension String {
  
  }
  
 +#if arch(wasm32)
 +// WASI: stored closures are invoked LATER by C++, so the synchronous in-language trick
 +// (used for intern) doesn't apply. Box the closure (a Swift heap object, so the
-+// existing swift_retain/release in AGRetainClosureC/AGReleaseClosure own its
++// existing swift_retain/release in IAGRetainClosureC/IAGReleaseClosure own its
 +// lifetime) and pass a non-capturing @convention(c) trampoline that re-enters Swift.
 +private final class _UpdateBox {
 +    let fn: (UnsafeMutableRawPointer, AnyAttribute) -> Void
@@ -127,55 +92,52 @@ index e533d18..e6152c3 100644
 +        Unmanaged<_UpdateBox>.fromOpaque(context!).takeUnretainedValue().fn(body, attribute)
 +    }
 +#else
- @_silgen_name("AGRetainClosure")
- func AGRetainClosure(
+ @_silgen_name("IAGRetainClosure")
+ func IAGRetainClosure(
      _ closure: (UnsafeMutableRawPointer, AnyAttribute) -> Void
- ) -> _AGClosureStorage
+ ) -> _IAGClosureStorage
 +#endif
  
  extension _AttributeType {
  
-@@ -109,7 +147,17 @@ extension _AttributeType {
+@@ -86,7 +101,17 @@ extension _AttributeType {
              flags.insert(.hasDestroySelf)
          }
  
 +        #if arch(wasm32)
 +        let _updateBox = _UpdateBox(update)
 +        let retainedUpdate = withExtendedLifetime(_updateBox) {
-+            AGRetainClosureC(
++            IAGRetainClosureC(
 +                unsafeBitCast(_updateTrampoline, to: UnsafeRawPointer.self),
 +                Unmanaged.passUnretained(_updateBox).toOpaque()
 +            )
 +        }
 +        #else
-         let retainedUpdate = AGRetainClosure(update)
+         let retainedUpdate = IAGRetainClosure(update)
 +        #endif
          let conformance = unsafeBitCast(
              selfType as any _AttributeBody.Type,
              to: ProtocolConformance.self
 diff --git a/Sources/Compute/Attribute/Rule/Rule.swift b/Sources/Compute/Attribute/Rule/Rule.swift
-index 002d2c8..ca7873f 100644
+index e2a9a57..d92da6c 100644
 --- a/Sources/Compute/Attribute/Rule/Rule.swift
 +++ b/Sources/Compute/Attribute/Rule/Rule.swift
-@@ -62,6 +62,25 @@ func AGGraphReadCachedAttribute(
-     attributeTypeID: (AGUnownedGraphContextRef) -> UInt32
+@@ -62,6 +62,22 @@ func IAGGraphReadCachedAttribute(
+     attributeTypeID: (UnownedGraphContext) -> UInt32
  ) -> UnsafeRawPointer
  
 +#if arch(wasm32)
-+// WASI: AGGraphReadCachedAttribute takes a swiftcall closure-with-arg/return that
-+// mislowers on wasm (the @_silgen_name above lowers to signature_mismatch and traps
-+// on the VStack/layout cachedValue path). Route through the plain-C AGGraphReadCachedAttributeC
-+// (declared in the ComputeCxx header). The closure is invoked SYNCHRONOUSLY inside
-+// cache_fetch, but the engine's ClosureFunctionCI retains the context via swift_retain,
-+// so we must pass a real heap object (a box) — not a stack pointer like internAttributeType
-+// does. The box is kept alive for the duration of the call with withExtendedLifetime;
-+// the engine's retain/release on it is balanced.
++// WASI: IAGGraphReadCachedAttribute takes a swiftcall closure-with-arg/return that mislowers on
++// wasm (@_silgen_name -> signature_mismatch, trapping on the layout cachedValue path). Route
++// through the header-declared plain-C IAGGraphReadCachedAttributeC. The closure is invoked
++// SYNCHRONOUSLY inside cache_fetch, but the engine retains the context, so pass a real heap box
++// (kept alive with withExtendedLifetime); the engine's retain/release on it is balanced.
 +private final class _CachedAttrBox {
-+    let fn: (AGUnownedGraphContextRef) -> UInt32
-+    init(_ f: @escaping (AGUnownedGraphContextRef) -> UInt32) { self.fn = f }
++    let fn: (UnownedGraphContext) -> UInt32
++    init(_ f: @escaping (UnownedGraphContext) -> UInt32) { self.fn = f }
 +}
 +private let _cachedAttrTrampoline:
-+    @convention(c) (AGUnownedGraphContextRef, UnsafeRawPointer?) -> UInt32 = { graph, ctx in
++    @convention(c) (UnownedGraphContext, UnsafeRawPointer?) -> UInt32 = { graph, ctx in
 +        Unmanaged<_CachedAttrBox>.fromOpaque(ctx!).takeUnretainedValue().fn(graph)
 +    }
 +#endif
@@ -183,11 +145,11 @@ index 002d2c8..ca7873f 100644
  extension Rule where Self: Hashable {
  
      public func cachedValue(options: CachedValueOptions, owner: AnyAttribute?) -> Value {
-@@ -101,15 +120,7 @@ extension Rule where Self: Hashable {
+@@ -101,15 +117,7 @@ extension Rule where Self: Hashable {
          bodyPtr: UnsafeRawPointer,
          update: () -> (UnsafeMutableRawPointer, AnyAttribute) -> Void
      ) -> UnsafePointer<Value> {
--        let value = AGGraphReadCachedAttribute(
+-        let value = IAGGraphReadCachedAttribute(
 -            hash: hashValue,
 -            type: Metadata(Self.self),
 -            body: bodyPtr,
@@ -196,22 +158,22 @@ index 002d2c8..ca7873f 100644
 -            owner: owner ?? .nil,
 -            changed: nil
 -        ) { graph in
-+        func makeTypeID(_ graph: AGUnownedGraphContextRef) -> UInt32 {
-             return graph.internAttributeType(type: Metadata(Self.self)) {
-                 let attributeType = _AttributeType(
-                     selfType: Self.self,
-@@ -122,6 +133,39 @@ extension Rule where Self: Hashable {
-                 return UnsafePointer(pointer)
-             }
++        func makeTypeID(_ graph: UnownedGraphContext) -> UInt32 {
+             return Graph.typeIndex(
+                 ctx: graph,
+                 body: Self.self,
+@@ -118,6 +126,39 @@ extension Rule where Self: Hashable {
+                 update: update
+             )
          }
 +        #if arch(wasm32)
-+        // The closure is invoked synchronously inside AGGraphReadCachedAttributeC (it returns
-+        // before withoutActuallyEscaping ends), so `update`/makeTypeID never truly escape.
-+        let value: UnsafeRawPointer = withoutActuallyEscaping(makeTypeID) { escapingMakeTypeID in
-+            let box = _CachedAttrBox(escapingMakeTypeID)
++        // The closure is invoked synchronously inside IAGGraphReadCachedAttributeC (returns before
++        // withoutActuallyEscaping ends), so makeTypeID never truly escapes.
++        let value: UnsafeRawPointer = withoutActuallyEscaping(makeTypeID) { escaping in
++            let box = _CachedAttrBox(escaping)
 +            return withExtendedLifetime(box) {
 +                UnsafeRawPointer(
-+                    AGGraphReadCachedAttributeC(
++                    IAGGraphReadCachedAttributeC(
 +                        hashValue,
 +                        Metadata(Self.self),
 +                        bodyPtr,
@@ -226,7 +188,7 @@ index 002d2c8..ca7873f 100644
 +            }
 +        }
 +        #else
-+        let value = AGGraphReadCachedAttribute(
++        let value = IAGGraphReadCachedAttribute(
 +            hash: hashValue,
 +            type: Metadata(Self.self),
 +            body: bodyPtr,
@@ -241,17 +203,57 @@ index 002d2c8..ca7873f 100644
      }
  
 diff --git a/Sources/Compute/Graph/Graph.swift b/Sources/Compute/Graph/Graph.swift
-index 097269e..9e75ce0 100644
+index d8a3594..f5e850e 100644
 --- a/Sources/Compute/Graph/Graph.swift
 +++ b/Sources/Compute/Graph/Graph.swift
-@@ -1,16 +1,23 @@
+@@ -1,11 +1,38 @@
  import ComputeCxx
  
++#if arch(wasm32)
++// WASI: IAGGraphInternAttributeType takes a swiftcall closure (makeAttributeType) that mislowers
++// on wasm (@_silgen_name -> signature_mismatch). Route through the header-declared plain-C
++// IAGGraphInternAttributeTypeC with a non-capturing @convention(c) thunk; the closure is invoked
++// synchronously, so pass it by stack pointer.
++public func internAttributeType(
++    ctx: UnownedGraphContext,
++    body: Metadata,
++    makeAttributeType: () -> UnsafePointer<_AttributeType>
++) -> UInt32 {
++    return withoutActuallyEscaping(makeAttributeType) { escaping in
++        withUnsafePointer(to: escaping) { ctxPtr in
++            IAGGraphInternAttributeTypeC(
++                ctx,
++                body,
++                { c in
++                    UnsafeRawPointer(
++                        c!.assumingMemoryBound(to: (() -> UnsafePointer<_AttributeType>).self).pointee()
++                    )
++                },
++                UnsafeRawPointer(ctxPtr)
++            )
++        }
++    }
++}
++#else
+ @_silgen_name("IAGGraphInternAttributeType")
+ public func internAttributeType(
+     ctx: UnownedGraphContext,
+     body: Metadata,
+     makeAttributeType: () -> UnsafePointer<_AttributeType>
+ ) -> UInt32
++#endif
+ 
+ extension Graph {
+     static func typeIndex(
+@@ -41,17 +68,23 @@ extension Graph {
+     }
+ }
+ 
 +#if !arch(wasm32)
- @_silgen_name("AGGraphSetOutputValue")
+ @_silgen_name("IAGGraphSetOutputValue")
  @inline(__always)
  @inlinable
- func AGGraphSetOutputValue(_ value: UnsafeRawPointer, of type: Metadata)
+ func IAGGraphSetOutputValue(_ value: UnsafeRawPointer, of type: Metadata)
 +#endif
  
  extension Graph {
@@ -260,21 +262,20 @@ index 097269e..9e75ce0 100644
 -    @inlinable
      public static func setOutputValue<Value>(_ value: UnsafePointer<Value>) {
 +        #if arch(wasm32)
-+        // WASI: call the C-imported AGGraphSetOutputValueC (header-declared) so Swift
-+        // uses the C ABI; @_silgen_name mislowers the call on wasm.
-+        AGGraphSetOutputValueC(UnsafeRawPointer(value), Metadata(Value.self))
++        // WASI: @_silgen_name mislowers the call on wasm; use the header-declared C variant.
++        IAGGraphSetOutputValueC(UnsafeRawPointer(value), Metadata(Value.self))
 +        #else
-         AGGraphSetOutputValue(UnsafeRawPointer(value), of: Metadata(Value.self))
+         IAGGraphSetOutputValue(UnsafeRawPointer(value), of: Metadata(Value.self))
 +        #endif
      }
  
      @_transparent
-@@ -47,14 +54,53 @@ func AGGraphWithMainThreadHandler(
+@@ -88,14 +121,53 @@ func IAGGraphWithMainThreadHandler(
      mainThreadHandler: (() -> Void) -> Void
  )
  
 +#if arch(wasm32)
-+// WASI: AGGraphSetUpdate/InvalidationCallback take swiftcall closures that mislower on
++// WASI: IAGGraphSetUpdate/InvalidationCallback take swiftcall closures that mislower on
 +// wasm (-> signature_mismatch). These are STORED callbacks (invoked later by C++), so
 +// box the Swift closure (heap object) and pass a non-capturing @convention(c) trampoline
 +// + the box pointer to the plain-C *C setters. The box is passRetained so it lives for
@@ -300,40 +301,40 @@ index 097269e..9e75ce0 100644
  
      public func onUpdate(_ handler: @escaping () -> Void) {
 +        #if arch(wasm32)
-+        AGGraphSetUpdateCallbackC(
++        IAGGraphSetUpdateCallbackC(
 +            self,
 +            _graphUpdateTrampoline,
 +            Unmanaged.passRetained(_GraphUpdateBox(handler)).toOpaque()
 +        )
 +        #else
-         AGGraphSetUpdateCallback(unsafeBitCast(self, to: UnsafeRawPointer.self), callback: handler)
+         IAGGraphSetUpdateCallback(unsafeBitCast(self, to: UnsafeRawPointer.self), callback: handler)
 +        #endif
      }
  
      public func onInvalidation(_ handler: @escaping (AnyAttribute) -> Void) {
 +        #if arch(wasm32)
-+        AGGraphSetInvalidationCallbackC(
++        IAGGraphSetInvalidationCallbackC(
 +            self,
 +            _graphInvalidationTrampoline,
 +            Unmanaged.passRetained(_GraphInvalidationBox(handler)).toOpaque()
 +        )
 +        #else
-         AGGraphSetInvalidationCallback(unsafeBitCast(self, to: UnsafeRawPointer.self), callback: handler)
+         IAGGraphSetInvalidationCallback(unsafeBitCast(self, to: UnsafeRawPointer.self), callback: handler)
 +        #endif
      }
  
      public func withDeadline<T>(_ deadline: UInt64, _ body: () -> T) -> T {
-@@ -81,11 +127,18 @@ extension Graph {
+@@ -122,11 +194,18 @@ extension Graph {
      }
  
      public func withMainThreadHandler(_ mainThreadHandler: (() -> Void) -> Void, do body: () -> Void) {
 +        #if arch(wasm32)
-+        // WASI single-threaded: AGGraphWithMainThreadHandler's swiftcall closures mislower
++        // WASI single-threaded: IAGGraphWithMainThreadHandler's swiftcall closures mislower
 +        // on wasm. There is only one thread, so run body directly (the main handler exists
 +        // only to hop work onto the main thread).
 +        body()
 +        #else
-         AGGraphWithMainThreadHandler(
+         IAGGraphWithMainThreadHandler(
              unsafeBitCast(self, to: UnsafeRawPointer.self),
              body: body,
              mainThreadHandler: mainThreadHandler
@@ -342,22 +343,157 @@ index 097269e..9e75ce0 100644
      }
  
  }
+diff --git a/Sources/Compute/Graph/Subgraph.swift b/Sources/Compute/Graph/Subgraph.swift
+index 546a965..6105780 100644
+--- a/Sources/Compute/Graph/Subgraph.swift
++++ b/Sources/Compute/Graph/Subgraph.swift
+@@ -36,7 +36,25 @@ extension Subgraph {
+         _ flags: Subgraph.Flags,
+         _ body: (AnyAttribute) -> Void
+     ) {
++        #if arch(wasm32)
++        // WASI: IAGSubgraphApply's swiftcall body mislowers; route through the header-declared C
++        // variant with a non-capturing @convention(c) thunk (body is invoked synchronously, so pass
++        // it by stack pointer). Same pattern as Rule._cachedValue / internAttributeType.
++        withoutActuallyEscaping(body) { escaping in
++            withUnsafePointer(to: escaping) { ctxPtr in
++                IAGSubgraphApplyC(
++                    self,
++                    UInt32(flags.rawValue),
++                    { attribute, ctx in
++                        ctx.assumingMemoryBound(to: ((AnyAttribute) -> Void).self).pointee(attribute)
++                    },
++                    UnsafeRawPointer(ctxPtr)
++                )
++            }
++        }
++        #else
+         IAGSubgraphApply(unsafeBitCast(self, to: UnsafeRawPointer.self), flags, body)
++        #endif
+     }
+ 
+ }
+@@ -73,3 +91,104 @@ extension Subgraph {
+     }
+ 
+ }
++
++#if arch(wasm32)
++// [wasm32] Subgraph is imported as a Swift FOREIGN-REFERENCE class (IAGSubgraph.h
++// IAG_SWIFT_SHARED_REFERENCE). A foreign-reference class's Clang-importer-synthesized members
++// (statics, nested Flags, and the self: instance members) are visible ONLY in modules that DIRECTLY
++// import ComputeCxx — they do NOT cross `@_exported import` the way the value-type import did.
++// OpenSwiftUICore sees the graph only via OpenAttributeGraphShims, so on wasm IAGSubgraph.h drops
++// the swift_name (IAG_SUBGRAPH_SELF_NAME) and these are re-declared here as Swift EXTENSION members
++// (which DO propagate cross-module), wrapping the refined free functions `__IAGSubgraph...`. Never
++// @_silgen_name a foreign-ref return — that bypasses the importer's retain/release ownership.
++extension Subgraph {
++    public typealias Flags = IAGAttributeFlags
++
++    public static var current: Subgraph? {
++        get { __IAGSubgraphGetCurrent() }
++        set { __IAGSubgraphSetCurrent(newValue) }
++    }
++
++    public static var currentGraphContext: UnownedGraphContext? {
++        __IAGSubgraphGetCurrentGraphContext()
++    }
++
++    public static var shouldRecordTree: Bool {
++        __IAGSubgraphShouldRecordTree()
++    }
++
++    public static func setShouldRecordTree() {
++        __IAGSubgraphSetShouldRecordTree()
++    }
++
++    public static var typeID: CFTypeID {
++        __IAGSubgraphGetTypeID()
++    }
++
++    // [wasm32] OpenSwiftUICore needs Subgraph identity (ObjectIdentifier / === / !==). Foreign-
++    // reference types don't support those operators, and the class-ness doesn't cross `@_exported
++    // import` to a non-cxx-interop consumer anyway. Provide identity via the underlying storage
++    // pointer (stable for the lifetime of the storage) so it crosses as plain Swift API.
++    public var rawIdentity: UInt {
++        UInt(bitPattern: unsafeBitCast(self, to: UnsafeRawPointer.self))
++    }
++    public func isIdentical(to other: Subgraph) -> Bool {
++        unsafeBitCast(self, to: UnsafeRawPointer.self) == unsafeBitCast(other, to: UnsafeRawPointer.self)
++    }
++
++    public var graph: Graph { __IAGSubgraphGetGraph(self) }
++
++    public var isValid: Bool { __IAGSubgraphIsValid(self) }
++
++    public func invalidate() { __IAGSubgraphInvalidate(self) }
++
++    public var index: UInt32 {
++        get { __IAGSubgraphGetIndex(self) }
++        set { __IAGSubgraphSetIndex(self, newValue) }
++    }
++
++    public func removeObserver(_ observerID: IAGUniqueID) {
++        __IAGSubgraphRemoveObserver(self, observerID)
++    }
++
++    public func addChild(_ child: Subgraph) { __IAGSubgraphAddChild(self, child) }
++
++    public func addChild(_ child: Subgraph, tag: UInt8) { __IAGSubgraphAddChild2(self, child, tag) }
++
++    public func removeChild(_ child: Subgraph) { __IAGSubgraphRemoveChild(self, child) }
++
++    public func child(at index: UInt32, tag: UnsafeMutablePointer<UInt8>?) -> Subgraph {
++        __IAGSubgraphGetChild(self, index, tag)
++    }
++
++    public var childCount: UInt32 { __IAGSubgraphGetChildCount(self) }
++
++    public func parent(at index: Int64) -> Subgraph { __IAGSubgraphGetParent(self, index) }
++
++    public var parentCount: UInt64 { __IAGSubgraphGetParentCount(self) }
++
++    public func isAncestor(of other: Subgraph) -> Bool { __IAGSubgraphIsAncestor(self, other) }
++
++    public func intersects(flags: IAGAttributeFlags) -> Bool { __IAGSubgraphIntersects(self, flags) }
++
++    public func isDirty(flags: IAGAttributeFlags) -> Bool { __IAGSubgraphIsDirty(self, flags) }
++
++    public func update(flags: IAGAttributeFlags) { __IAGSubgraphUpdate(self, flags) }
++
++    public var treeRoot: TreeElement? { __IAGSubgraphGetTreeRoot(self) }
++
++    public func setTreeOwner(_ owner: AnyAttribute) { __IAGSubgraphSetTreeOwner(self, owner) }
++}
++
++// Free-function "initializers" — a foreign-reference class can't have its importer init re-surfaced
++// cross-module as an extension init, so mirror OpenSwiftUI's AnyAttributeFix pattern
++// (`func Subgraph(graph:attribute:) -> Subgraph`). __IAGSubgraphCreate* are RETURNS_RETAINED so ARC
++// balances the +1 on return.
++public func Subgraph(graph: Graph) -> Subgraph {
++    __IAGSubgraphCreate(graph)
++}
++
++public func Subgraph(graph: Graph, attribute: AnyAttribute) -> Subgraph {
++    __IAGSubgraphCreate2(graph, attribute)
++}
++#endif
 diff --git a/Sources/Compute/Runtime/Metadata.swift b/Sources/Compute/Runtime/Metadata.swift
-index 44787fd..9caeb62 100644
+index b6494fb..ec558e5 100644
 --- a/Sources/Compute/Runtime/Metadata.swift
 +++ b/Sources/Compute/Runtime/Metadata.swift
 @@ -4,9 +4,28 @@ import ComputeCxx
- func AGTypeApplyFields(_ type: Metadata, body: (UnsafePointer<CChar>, Int, Metadata) -> Void)
+ func IAGTypeApplyFields(_ type: Metadata, body: (UnsafePointer<CChar>, Int, Metadata) -> Void)
  
  public func forEachField(of type: Any.Type, do body: (UnsafePointer<Int8>, Int, Any.Type) -> Void) {
 +    #if arch(wasm32)
-+    // WASI: route through the C-imported AGTypeApplyFieldsC so the field-visitor
++    // WASI: route through the C-imported IAGTypeApplyFieldsC so the field-visitor
 +    // callback uses the C ABI (the swiftcall closure mislowers on wasm ->
 +    // signature_mismatch). The callback fires synchronously during the call, so
 +    // pass the closure by pointer + a non-capturing @convention(c) trampoline.
 +    withoutActuallyEscaping(body) { escaping in
 +        withUnsafePointer(to: escaping) { ctxPtr in
-+            AGTypeApplyFieldsC(
++            IAGTypeApplyFieldsC(
 +                Metadata(type),
 +                { fieldName, fieldOffset, fieldType, ctx in
 +                    ctx!.assumingMemoryBound(to: ((UnsafePointer<Int8>, Int, Any.Type) -> Void).self)
@@ -368,13 +504,13 @@ index 44787fd..9caeb62 100644
 +        }
 +    }
 +    #else
-     AGTypeApplyFields(Metadata(type)) { fieldName, fieldOffset, fieldType in
+     IAGTypeApplyFields(Metadata(type)) { fieldName, fieldOffset, fieldType in
          body(fieldName, fieldOffset, fieldType.type)
      }
 +    #endif
  }
  
- @_silgen_name("AGTypeApplyFields2")
+ @_silgen_name("IAGTypeApplyFields2")
 @@ -32,9 +51,25 @@ extension Metadata {
      )
          -> Bool
@@ -382,7 +518,7 @@ index 44787fd..9caeb62 100644
 +        #if arch(wasm32)
 +        return withoutActuallyEscaping(body) { escaping in
 +            withUnsafePointer(to: escaping) { ctxPtr in
-+                AGTypeApplyFields2C(
++                IAGTypeApplyFields2C(
 +                    self,
 +                    options,
 +                    { fieldName, fieldOffset, fieldType, ctx in
@@ -394,7 +530,7 @@ index 44787fd..9caeb62 100644
 +            }
 +        }
 +        #else
-         return AGTypeApplyFields2(self, options: options) { fieldName, fieldOffset, fieldType in
+         return IAGTypeApplyFields2(self, options: options) { fieldName, fieldOffset, fieldType in
              return body(fieldName, fieldOffset, fieldType.type)
          }
 +        #endif
@@ -402,7 +538,7 @@ index 44787fd..9caeb62 100644
  
  }
 diff --git a/Sources/ComputeCxx/Attribute/AttributeType/AttributeType.h b/Sources/ComputeCxx/Attribute/AttributeType/AttributeType.h
-index ec0ad2e..fba90b8 100644
+index 73d59ce..08137d7 100644
 --- a/Sources/ComputeCxx/Attribute/AttributeType/AttributeType.h
 +++ b/Sources/ComputeCxx/Attribute/AttributeType/AttributeType.h
 @@ -16,7 +16,13 @@ class AttributeType {
@@ -412,35 +548,39 @@ index ec0ad2e..fba90b8 100644
 +#if defined(__wasi__)
 +    // WASI: plain C-CC thunk (Swift passes a @convention(c) trampoline; the swiftcall
 +    // closure ABI mismatches across swiftc/clang on wasm).
-+    void (*_update)(void *body, AGAttribute attribute, void *context);
++    void (*_update)(void *body, IAGAttribute attribute, void *context);
 +#else
-     void (*_update)(void *body, AGAttribute attribute, void *context AG_SWIFT_CONTEXT) AG_SWIFT_CC(swift);
+     void (*_update)(void *body, IAGAttribute attribute, void *context IAG_SWIFT_CONTEXT) IAG_SWIFT_CC(swift);
 +#endif
      void *_update_context;
-     const AGAttributeVTable *_vtable;
-     AGAttributeTypeFlags _flags;
-diff --git a/Sources/ComputeCxx/Closure/AGClosure.cpp b/Sources/ComputeCxx/Closure/AGClosure.cpp
-index d49fd86..5718dc4 100644
---- a/Sources/ComputeCxx/Closure/AGClosure.cpp
-+++ b/Sources/ComputeCxx/Closure/AGClosure.cpp
-@@ -23,6 +23,15 @@ AGClosureStorage AGRetainClosure(const void *thunk, const void *_Nullable contex
-     return AGClosureStorage((void *)thunk, retained_context);
+     const IAGAttributeVTable *_vtable;
+     IAGAttributeTypeFlags _flags;
+diff --git a/Sources/ComputeCxx/Closure/IAGClosure.cpp b/Sources/ComputeCxx/Closure/IAGClosure.cpp
+index cc06871..35092d1 100644
+--- a/Sources/ComputeCxx/Closure/IAGClosure.cpp
++++ b/Sources/ComputeCxx/Closure/IAGClosure.cpp
+@@ -11,6 +11,19 @@ IAGClosureStorage IAGRetainClosure(const void *thunk, const void *_Nullable cont
+     return IAGClosureStorage((void *)thunk, retained_context);
  }
  
 +#if defined(__wasi__)
 +// WASI: non-refined C variant so Swift imports it with the C ABI (the swiftcall
 +// closure ABI mismatches across swiftc/clang on wasm). Same retain semantics.
-+AGClosureStorage AGRetainClosureC(const void *thunk, const void *_Nullable context) {
-+    const void *retained_context = context ? AG::retain_swift_context(context) : nullptr;
-+    return AGClosureStorage((void *)thunk, retained_context);
++IAGClosureStorage IAGRetainClosureC(const void *thunk, const void *_Nullable context) {
++    const void *retained_context = context;
++    if (context) {
++        void *mutable_context = const_cast<void *>(context);
++        retained_context = ::swift::swift_retain(reinterpret_cast<::swift::HeapObject *>(mutable_context));
++    }
++    return IAGClosureStorage((void *)thunk, retained_context);
 +}
 +#endif
 +
- void AGReleaseClosure(AGClosureStorage closure) {
+ void IAGReleaseClosure(IAGClosureStorage closure) {
      if (closure.context) {
-         AG::release_swift_context(closure.context);
+         void *mutable_context = const_cast<void *>(closure.context);
 diff --git a/Sources/ComputeCxx/Comparison/LayoutDescriptor.cpp b/Sources/ComputeCxx/Comparison/LayoutDescriptor.cpp
-index 9e3fe73..3f1909e 100644
+index aaef2bb..e2170c9 100644
 --- a/Sources/ComputeCxx/Comparison/LayoutDescriptor.cpp
 +++ b/Sources/ComputeCxx/Comparison/LayoutDescriptor.cpp
 @@ -1,3 +1,4 @@
@@ -458,7 +598,7 @@ index 9e3fe73..3f1909e 100644
          size_t offset = (sizeof(::swift::HeapObject) + alignment_mask) & ~alignment_mask;
          unsigned char *lhs_value = (unsigned char *)(*(unsigned char **)lhs_copy + offset);
 diff --git a/Sources/ComputeCxx/Data/Page.h b/Sources/ComputeCxx/Data/Page.h
-index 84d1ef3..fd7c880 100644
+index 0c82918..db009e8 100644
 --- a/Sources/ComputeCxx/Data/Page.h
 +++ b/Sources/ComputeCxx/Data/Page.h
 @@ -20,7 +20,7 @@ struct page {
@@ -471,7 +611,7 @@ index 84d1ef3..fd7c880 100644
  class page_ptr_list {
    public:
 diff --git a/Sources/ComputeCxx/Data/Table.cpp b/Sources/ComputeCxx/Data/Table.cpp
-index 063f9a5..b4b86ce 100644
+index ce1d178..5f1207e 100644
 --- a/Sources/ComputeCxx/Data/Table.cpp
 +++ b/Sources/ComputeCxx/Data/Table.cpp
 @@ -2,6 +2,7 @@
@@ -532,169 +672,9 @@ index 063f9a5..b4b86ce 100644
 +#endif
  
      static bool unmap_reusable = []() -> bool {
-         char *result = getenv("AG_UNMAP_REUSABLE");
-diff --git a/Sources/ComputeCxx/Graph/AGGraph.cpp b/Sources/ComputeCxx/Graph/AGGraph.cpp
-index 9a48f2e..81db9e0 100644
---- a/Sources/ComputeCxx/Graph/AGGraph.cpp
-+++ b/Sources/ComputeCxx/Graph/AGGraph.cpp
-@@ -187,6 +187,18 @@ uint32_t AGGraphInternAttributeType(AGUnownedGraphContextRef unowned_graph, AGTy
-         metadata, AG::ClosureFunctionVP<const AGAttributeType *>(make_attribute_type, make_attribute_type_context));
- }
- 
-+#if defined(__wasi__)
-+// WASI: plain C-CC callback entry (the swiftcall closure ABI above does not lower
-+// consistently across swiftc/clang on wasm). The Swift side keeps the closure call
-+// in-language and passes a non-capturing @convention(c) thunk + a context pointer.
-+extern "C" uint32_t AGGraphInternAttributeTypeC(AGUnownedGraphContextRef unowned_graph, AGTypeID type,
-+                                                 const void *(*make)(const void *), const void *ctx) {
-+    auto metadata = reinterpret_cast<const AG::swift::metadata *>(type);
-+    AG::Graph *graph = reinterpret_cast<AG::Graph *>(unowned_graph);
-+    return graph->intern_type_c(metadata, make, ctx);
-+}
-+#endif
-+
- void AGGraphVerifyType(AGAttribute attribute, AGTypeID type) {
-     auto attribute_id = AG::AttributeID(attribute);
-     attribute_id.validate_data_offset();
-@@ -450,6 +462,28 @@ void AGGraphMutateAttribute(AGAttribute attribute, AGTypeID type, bool invalidat
-                                         AG::ClosureFunctionPV<void, void *>(modify, modify_context), invalidating);
- }
- 
-+#if defined(__wasi__)
-+// WASI: plain-C modify callback (the swiftcall closure mislowers on wasm).
-+extern "C" void AGGraphMutateAttributeC(AGAttribute attribute, AGTypeID type, bool invalidating,
-+                                        void (*modify)(void *body, const void *context),
-+                                        const void *modify_context) {
-+    auto attribute_id = AG::AttributeID(attribute);
-+    auto node = attribute_id.get_node();
-+    if (!node) {
-+        AG::precondition_failure("non-direct attribute id: %u", attribute);
-+    }
-+    attribute_id.validate_data_offset();
-+
-+    auto subgraph = attribute_id.subgraph();
-+    if (!subgraph) {
-+        AG::precondition_failure("no graph: %u", attribute);
-+    }
-+
-+    subgraph->graph()->attribute_modify_c(node, *reinterpret_cast<const AG::swift::metadata *>(type), modify,
-+                                          modify_context, invalidating);
-+}
-+#endif
-+
- #pragma mark - Value
- 
- namespace {
-@@ -639,14 +673,26 @@ void AGGraphSetInvalidationCallback(AGGraphRef graph,
-     graph_context->set_invalidation_callback(AG::ClosureFunctionAV<void, AGAttribute>(callback, callback_context));
- }
- 
-+#if defined(__wasi__)
-+// WASI: plain-C STORED callback (swiftcall closures mislower on wasm). The Swift side
-+// boxes the closure and passes a non-capturing @convention(c) trampoline + the box ptr.
-+extern "C" void AGGraphSetInvalidationCallbackC(AGGraphRef graph,
-+                                                void (*callback)(AGAttribute, const void *context),
-+                                                const void *callback_context) {
-+    auto graph_context = AG::Graph::Context::from_cf(graph);
-+    graph_context->set_invalidation_callback_c(callback, callback_context);
-+}
-+#endif
-+
- #pragma mark - Cached value
- 
- namespace {
- 
-+template <typename Getter>
- void *read_cached_attribute(size_t hash, const AG::swift::metadata &metadata, const void *body,
-                             const AG::swift::metadata &value_metadata, AGCachedValueOptions options,
-                             AG::AttributeID owner_id, AGChangedValueFlags *flags_out,
--                            AG::ClosureFunctionCI<uint32_t, AGUnownedGraphContextRef> get_attribute_type_id) {
-+                            Getter get_attribute_type_id) {
-     auto update = AG::Graph::current_update();
-     auto update_stack = update.tag() == 0 ? update.get() : nullptr;
- 
-@@ -702,6 +748,36 @@ void *AGGraphReadCachedAttribute(size_t hash, AGTypeID type, const void *body, A
-     return value;
- }
- 
-+#if defined(__wasi__)
-+// WASI: plain C-CC variant (the swiftcall closure-with-arg/return ABI does not lower
-+// consistently across swiftc/clang on wasm -> the @_silgen_name import above mislowers
-+// to a signature_mismatch:AGGraphReadCachedAttribute trap on the VStack/layout path).
-+// On wasm AG_SWIFT_CC(swift)/AG_SWIFT_CONTEXT are empty, so ClosureFunctionCI already
-+// stores a plain-C uint32_t(*)(AGUnownedGraphContextRef, const void*); the only fix
-+// needed is a separate symbol the Swift side imports with the C ABI. The closure is
-+// invoked SYNCHRONOUSLY inside cache_fetch, but ClosureFunctionCI retains the context
-+// (swift_retain), so the Swift side must pass a real heap-boxed closure (not a stack
-+// pointer) — see Rule.swift's _CachedAttrBox.
-+extern "C" void *AGGraphReadCachedAttributeC(size_t hash, AGTypeID type, const void *body, AGTypeID value_type,
-+                                             AGCachedValueOptions options, AGAttribute owner, bool *_Nullable changed_out,
-+                                             uint32_t (*closure)(AGUnownedGraphContextRef graph_context,
-+                                                                 const void *context),
-+                                             const void *closure_context) {
-+    auto metadata = reinterpret_cast<const AG::swift::metadata *>(type);
-+    auto value_metadata = reinterpret_cast<const AG::swift::metadata *>(value_type);
-+    auto owner_id = AG::AttributeID(owner);
-+
-+    AGChangedValueFlags flags = 0;
-+    void *value =
-+        read_cached_attribute(hash, *metadata, body, *value_metadata, options, owner_id, &flags,
-+                              AG::Subgraph::PlainTypeIDGetter{closure, closure_context});
-+    if (changed_out) {
-+        *changed_out = flags & AGChangedValueFlagsChanged ? true : false;
-+    }
-+    return value;
-+}
-+#endif
-+
- void *AGGraphReadCachedAttributeIfExists(size_t hash, AGTypeID type, const void *body, AGTypeID value_type,
-                                          AGCachedValueOptions options, AGAttribute owner, bool *_Nullable changed_out) {
- 
-@@ -710,7 +786,8 @@ void *AGGraphReadCachedAttributeIfExists(size_t hash, AGTypeID type, const void
-     auto owner_id = AG::AttributeID(owner);
- 
-     AGChangedValueFlags flags = 0;
--    void *value = read_cached_attribute(hash, *metadata, body, *value_metadata, options, owner_id, &flags, nullptr);
-+    void *value = read_cached_attribute(hash, *metadata, body, *value_metadata, options, owner_id, &flags,
-+                                        AG::ClosureFunctionCI<uint32_t, AGUnownedGraphContextRef>(nullptr));
-     if (changed_out) {
-         *changed_out = flags & AGChangedValueFlagsChanged ? true : false;
-     }
-@@ -825,6 +902,17 @@ void AGGraphSetUpdateCallback(AGGraphRef graph,
-     graph_context->set_update_callback(AG::ClosureFunctionVV<void>(callback, callback_context));
- }
- 
-+#if defined(__wasi__)
-+// WASI: plain-C STORED callback (swiftcall closures mislower on wasm). The Swift side
-+// boxes the closure and passes a non-capturing @convention(c) trampoline + the box ptr.
-+extern "C" void AGGraphSetUpdateCallbackC(AGGraphRef graph,
-+                                          void (*callback)(const void *context),
-+                                          const void *callback_context) {
-+    auto graph_context = AG::Graph::Context::from_cf(graph);
-+    graph_context->set_update_callback_c(callback, callback_context);
-+}
-+#endif
-+
- AGAttribute AGGraphGetCurrentAttribute() {
-     auto update_ptr = AG::Graph::current_update();
-     if (update_ptr.tag() != 0 || update_ptr.get() == nullptr) {
-@@ -899,6 +987,14 @@ void AGGraphSetOutputValue(const void *value, AGTypeID type) {
-     graph->value_set_internal(frame.attribute, *frame.attribute.get(), value, *metadata);
- }
- 
-+#if defined(__wasi__)
-+// WASI: non-refined C variant so Swift imports it with the C ABI (@_silgen_name
-+// mislowers the call on wasm -> signature_mismatch).
-+extern "C" void AGGraphSetOutputValueC(const void *value, AGTypeID type) {
-+    AGGraphSetOutputValue(value, type);
-+}
-+#endif
-+
- #pragma mark - Trace
- 
- void AGGraphStartTracing(AGGraphRef graph, AGGraphTraceOptions trace_options) { AGGraphStartTracing2(graph, trace_options, NULL); }
+         char *result = getenv("IAG_UNMAP_REUSABLE");
 diff --git a/Sources/ComputeCxx/Graph/Context.cpp b/Sources/ComputeCxx/Graph/Context.cpp
-index 194f729..5ca7425 100644
+index a986992..c82732c 100644
 --- a/Sources/ComputeCxx/Graph/Context.cpp
 +++ b/Sources/ComputeCxx/Graph/Context.cpp
 @@ -102,6 +102,18 @@ void Graph::Context::call_invalidation(AttributeID attribute) {
@@ -723,8 +703,8 @@ index 194f729..5ca7425 100644
 +#if defined(__wasi__)
 +    else if (_update_callback_c) {
 +        auto update =
-+            UpdateStack(_graph, AGGraphUpdateOptions(AGGraphUpdateOptionsInitializeCleared |
-+                                                     AGGraphUpdateOptionsEndDeferringSubgraphInvalidationOnExit));
++            UpdateStack(_graph, IAGGraphUpdateOptions(IAGGraphUpdateOptionsInitializeCleared |
++                                                     IAGGraphUpdateOptionsEndDeferringSubgraphInvalidationOnExit));
 +        _graph->foreach_trace([this](Trace &trace) { trace.begin_update(*this); });
 +        _update_callback_c(_update_callback_c_context);
 +        _graph->foreach_trace([this](Trace &trace) { trace.end_update(*this); });
@@ -733,13 +713,13 @@ index 194f729..5ca7425 100644
 +#endif
  }
  
- } // namespace AG
+ } // namespace IAG
 diff --git a/Sources/ComputeCxx/Graph/Context.h b/Sources/ComputeCxx/Graph/Context.h
-index e3fbbfa..5d16987 100644
+index 09abc56..324dd75 100644
 --- a/Sources/ComputeCxx/Graph/Context.h
 +++ b/Sources/ComputeCxx/Graph/Context.h
 @@ -25,6 +25,15 @@ class Graph::Context {
-     ClosureFunctionAV<void, AGAttribute> _invalidation_callback = {nullptr, nullptr};
+     ClosureFunctionAV<void, IAGAttribute> _invalidation_callback = {nullptr, nullptr};
      ClosureFunctionVV<void> _update_callback = {nullptr, nullptr};
  
 +#if defined(__wasi__)
@@ -747,7 +727,7 @@ index e3fbbfa..5d16987 100644
 +    // plain-C fn + context (set via the *C entry points) and invoke them plain-C.
 +    void (*_update_callback_c)(const void *context) = nullptr;
 +    const void *_update_callback_c_context = nullptr;
-+    void (*_invalidation_callback_c)(AGAttribute attribute, const void *context) = nullptr;
++    void (*_invalidation_callback_c)(IAGAttribute attribute, const void *context) = nullptr;
 +    const void *_invalidation_callback_c_context = nullptr;
 +#endif
 +
@@ -756,14 +736,14 @@ index e3fbbfa..5d16987 100644
      bool _needs_update;
 @@ -51,6 +60,17 @@ class Graph::Context {
      }
-     void set_update_callback(AG::ClosureFunctionVV<void> callback) { _update_callback = callback; }
+     void set_update_callback(IAG::ClosureFunctionVV<void> callback) { _update_callback = callback; }
  
 +#if defined(__wasi__)
 +    void set_update_callback_c(void (*cb)(const void *), const void *ctx) {
 +        _update_callback_c = cb;
 +        _update_callback_c_context = ctx;
 +    }
-+    void set_invalidation_callback_c(void (*cb)(AGAttribute, const void *), const void *ctx) {
++    void set_invalidation_callback_c(void (*cb)(IAGAttribute, const void *), const void *ctx) {
 +        _invalidation_callback_c = cb;
 +        _invalidation_callback_c_context = ctx;
 +    }
@@ -773,7 +753,7 @@ index e3fbbfa..5d16987 100644
      void set_deadline(uint64_t deadline);
  
 diff --git a/Sources/ComputeCxx/Graph/Graph.cpp b/Sources/ComputeCxx/Graph/Graph.cpp
-index 605c8e4..8b9f17e 100644
+index 01b773d..83f802c 100644
 --- a/Sources/ComputeCxx/Graph/Graph.cpp
 +++ b/Sources/ComputeCxx/Graph/Graph.cpp
 @@ -1,3 +1,4 @@
@@ -861,13 +841,13 @@ index 605c8e4..8b9f17e 100644
      const AttributeID *location = (const AttributeID *)wmemchr((const wchar_t *)attributes, search, count);
      if (location == nullptr) {
 diff --git a/Sources/ComputeCxx/Graph/Graph.h b/Sources/ComputeCxx/Graph/Graph.h
-index c503852..a1047c8 100644
+index e706329..cfdd70c 100644
 --- a/Sources/ComputeCxx/Graph/Graph.h
 +++ b/Sources/ComputeCxx/Graph/Graph.h
 @@ -284,6 +284,13 @@ class Graph {
      const AttributeType &attribute_ref(data::ptr<Node> attribute, const void *_Nullable *_Nullable ref_out) const;
  
-     uint32_t intern_type(const swift::metadata *metadata, ClosureFunctionVP<const AGAttributeType *> make_type);
+     uint32_t intern_type(const swift::metadata *metadata, ClosureFunctionVP<const IAGAttributeType *> make_type);
 +    uint32_t register_attribute_type(const swift::metadata *metadata, AttributeType *type);
 +#if defined(__wasi__)
 +    // WASI: plain C-CC callback path (swiftcall closures don't lower consistently
@@ -892,34 +872,196 @@ index c503852..a1047c8 100644
      // MARK: Value
  
      bool value_exists(data::ptr<Node> node);
+diff --git a/Sources/ComputeCxx/Graph/IAGGraph.cpp b/Sources/ComputeCxx/Graph/IAGGraph.cpp
+index c2f130a..f26a4bf 100644
+--- a/Sources/ComputeCxx/Graph/IAGGraph.cpp
++++ b/Sources/ComputeCxx/Graph/IAGGraph.cpp
+@@ -187,6 +187,18 @@ uint32_t IAGGraphInternAttributeType(IAGUnownedGraphContextRef unowned_graph, IA
+         metadata, IAG::ClosureFunctionVP<const IAGAttributeType *>(make_attribute_type, make_attribute_type_context));
+ }
+ 
++#if defined(__wasi__)
++// WASI: plain C-CC callback entry (the swiftcall closure ABI above does not lower
++// consistently across swiftc/clang on wasm). The Swift side keeps the closure call
++// in-language and passes a non-capturing @convention(c) thunk + a context pointer.
++extern "C" uint32_t IAGGraphInternAttributeTypeC(IAGUnownedGraphContextRef unowned_graph, IAGTypeID type,
++                                                 const void *(*make)(const void *), const void *ctx) {
++    auto metadata = reinterpret_cast<const IAG::swift::metadata *>(type);
++    IAG::Graph *graph = reinterpret_cast<IAG::Graph *>(unowned_graph);
++    return graph->intern_type_c(metadata, make, ctx);
++}
++#endif
++
+ void IAGGraphVerifyType(IAGAttribute attribute, IAGTypeID type) {
+     auto attribute_id = IAG::AttributeID(attribute);
+     attribute_id.validate_data_offset();
+@@ -450,6 +462,28 @@ void IAGGraphMutateAttribute(IAGAttribute attribute, IAGTypeID type, bool invali
+                                         IAG::ClosureFunctionPV<void, void *>(modify, modify_context), invalidating);
+ }
+ 
++#if defined(__wasi__)
++// WASI: plain-C modify callback (the swiftcall closure mislowers on wasm).
++extern "C" void IAGGraphMutateAttributeC(IAGAttribute attribute, IAGTypeID type, bool invalidating,
++                                        void (*modify)(void *body, const void *context),
++                                        const void *modify_context) {
++    auto attribute_id = IAG::AttributeID(attribute);
++    auto node = attribute_id.get_node();
++    if (!node) {
++        IAG::precondition_failure("non-direct attribute id: %u", attribute);
++    }
++    attribute_id.validate_data_offset();
++
++    auto subgraph = attribute_id.subgraph();
++    if (!subgraph) {
++        IAG::precondition_failure("no graph: %u", attribute);
++    }
++
++    subgraph->graph()->attribute_modify_c(node, *reinterpret_cast<const IAG::swift::metadata *>(type), modify,
++                                          modify_context, invalidating);
++}
++#endif
++
+ #pragma mark - Value
+ 
+ namespace {
+@@ -639,14 +673,26 @@ void IAGGraphSetInvalidationCallback(IAGGraphRef graph,
+     graph_context->set_invalidation_callback(IAG::ClosureFunctionAV<void, IAGAttribute>(callback, callback_context));
+ }
+ 
++#if defined(__wasi__)
++// WASI: plain-C STORED callback (swiftcall closures mislower on wasm). The Swift side
++// boxes the closure and passes a non-capturing @convention(c) trampoline + the box ptr.
++extern "C" void IAGGraphSetInvalidationCallbackC(IAGGraphRef graph,
++                                                void (*callback)(IAGAttribute, const void *context),
++                                                const void *callback_context) {
++    auto graph_context = IAG::Graph::Context::from_cf(graph);
++    graph_context->set_invalidation_callback_c(callback, callback_context);
++}
++#endif
++
+ #pragma mark - Cached value
+ 
+ namespace {
+ 
++template <typename Getter>
+ void *read_cached_attribute(size_t hash, const IAG::swift::metadata &metadata, const void *body,
+                             const IAG::swift::metadata &value_metadata, IAGCachedValueOptions options,
+                             IAG::AttributeID owner_id, IAGChangedValueFlags *flags_out,
+-                            IAG::ClosureFunctionCI<uint32_t, IAGUnownedGraphContextRef> get_attribute_type_id) {
++                            Getter get_attribute_type_id) {
+     auto update = IAG::Graph::current_update();
+     auto update_stack = update.tag() == 0 ? update.get() : nullptr;
+ 
+@@ -702,6 +748,36 @@ void *IAGGraphReadCachedAttribute(size_t hash, IAGTypeID type, const void *body,
+     return value;
+ }
+ 
++#if defined(__wasi__)
++// WASI: plain C-CC variant (the swiftcall closure-with-arg/return ABI does not lower
++// consistently across swiftc/clang on wasm -> the @_silgen_name import above mislowers
++// to a signature_mismatch:IAGGraphReadCachedAttribute trap on the VStack/layout path).
++// On wasm IAG_SWIFT_CC(swift)/IAG_SWIFT_CONTEXT are empty, so ClosureFunctionCI already
++// stores a plain-C uint32_t(*)(IAGUnownedGraphContextRef, const void*); the only fix
++// needed is a separate symbol the Swift side imports with the C ABI. The closure is
++// invoked SYNCHRONOUSLY inside cache_fetch, but ClosureFunctionCI retains the context
++// (swift_retain), so the Swift side must pass a real heap-boxed closure (not a stack
++// pointer) — see Rule.swift's _CachedAttrBox.
++extern "C" void *IAGGraphReadCachedAttributeC(size_t hash, IAGTypeID type, const void *body, IAGTypeID value_type,
++                                             IAGCachedValueOptions options, IAGAttribute owner, bool *_Nullable changed_out,
++                                             uint32_t (*closure)(IAGUnownedGraphContextRef graph_context,
++                                                                 const void *context),
++                                             const void *closure_context) {
++    auto metadata = reinterpret_cast<const IAG::swift::metadata *>(type);
++    auto value_metadata = reinterpret_cast<const IAG::swift::metadata *>(value_type);
++    auto owner_id = IAG::AttributeID(owner);
++
++    IAGChangedValueFlags flags = 0;
++    void *value =
++        read_cached_attribute(hash, *metadata, body, *value_metadata, options, owner_id, &flags,
++                              IAG::Subgraph::PlainTypeIDGetter{closure, closure_context});
++    if (changed_out) {
++        *changed_out = flags & IAGChangedValueFlagsChanged ? true : false;
++    }
++    return value;
++}
++#endif
++
+ void *IAGGraphReadCachedAttributeIfExists(size_t hash, IAGTypeID type, const void *body, IAGTypeID value_type,
+                                          IAGCachedValueOptions options, IAGAttribute owner, bool *_Nullable changed_out) {
+ 
+@@ -710,7 +786,8 @@ void *IAGGraphReadCachedAttributeIfExists(size_t hash, IAGTypeID type, const voi
+     auto owner_id = IAG::AttributeID(owner);
+ 
+     IAGChangedValueFlags flags = 0;
+-    void *value = read_cached_attribute(hash, *metadata, body, *value_metadata, options, owner_id, &flags, nullptr);
++    void *value = read_cached_attribute(hash, *metadata, body, *value_metadata, options, owner_id, &flags,
++                                        IAG::ClosureFunctionCI<uint32_t, IAGUnownedGraphContextRef>(nullptr));
+     if (changed_out) {
+         *changed_out = flags & IAGChangedValueFlagsChanged ? true : false;
+     }
+@@ -825,6 +902,17 @@ void IAGGraphSetUpdateCallback(IAGGraphRef graph,
+     graph_context->set_update_callback(IAG::ClosureFunctionVV<void>(callback, callback_context));
+ }
+ 
++#if defined(__wasi__)
++// WASI: plain-C STORED callback (swiftcall closures mislower on wasm). The Swift side
++// boxes the closure and passes a non-capturing @convention(c) trampoline + the box ptr.
++extern "C" void IAGGraphSetUpdateCallbackC(IAGGraphRef graph,
++                                          void (*callback)(const void *context),
++                                          const void *callback_context) {
++    auto graph_context = IAG::Graph::Context::from_cf(graph);
++    graph_context->set_update_callback_c(callback, callback_context);
++}
++#endif
++
+ IAGAttribute IAGGraphGetCurrentAttribute() {
+     auto update_ptr = IAG::Graph::current_update();
+     if (update_ptr.tag() != 0 || update_ptr.get() == nullptr) {
+@@ -899,6 +987,14 @@ void IAGGraphSetOutputValue(const void *value, IAGTypeID type) {
+     graph->value_set_internal(frame.attribute, *frame.attribute.get(), value, *metadata);
+ }
+ 
++#if defined(__wasi__)
++// WASI: non-refined C variant so Swift imports it with the C ABI (@_silgen_name
++// mislowers the call on wasm -> signature_mismatch).
++extern "C" void IAGGraphSetOutputValueC(const void *value, IAGTypeID type) {
++    IAGGraphSetOutputValue(value, type);
++}
++#endif
++
+ #pragma mark - Trace
+ 
+ void IAGGraphStartTracing(IAGGraphRef graph, IAGGraphTraceOptions trace_options) { IAGGraphStartTracing2(graph, trace_options, NULL); }
 diff --git a/Sources/ComputeCxx/Graph/Tree/TreeElement.h b/Sources/ComputeCxx/Graph/Tree/TreeElement.h
-index 704ca38..7adc287 100644
+index e920e13..708d3f6 100644
 --- a/Sources/ComputeCxx/Graph/Tree/TreeElement.h
 +++ b/Sources/ComputeCxx/Graph/Tree/TreeElement.h
-@@ -43,7 +43,7 @@ struct Graph::TreeElement {
+@@ -43,7 +43,9 @@ struct Graph::TreeElement {
  
      Graph::TreeValueID first_value;
  };
--static_assert(sizeof(Graph::TreeElement) == 0x20);
-+// [wasm32] static_assert(sizeof(Graph::TreeElement) == 0x20);
++#if !defined(__wasi__)
+ static_assert(sizeof(Graph::TreeElement) == 0x20);
++#endif
  
- } // namespace AG
+ } // namespace IAG
  
 diff --git a/Sources/ComputeCxx/Graph/Tree/TreeValue.h b/Sources/ComputeCxx/Graph/Tree/TreeValue.h
-index 3a010c4..9f03794 100644
+index a2aacdd..ed056a0 100644
 --- a/Sources/ComputeCxx/Graph/Tree/TreeValue.h
 +++ b/Sources/ComputeCxx/Graph/Tree/TreeValue.h
-@@ -37,7 +37,7 @@ struct Graph::TreeValue {
+@@ -37,7 +37,9 @@ struct Graph::TreeValue {
      uint32_t flags;
      TreeValueID next;
  };
--static_assert(sizeof(Graph::TreeValue) == 0x18);
-+// [wasm32] static_assert(sizeof(Graph::TreeValue) == 0x18);
++#if !defined(__wasi__)
+ static_assert(sizeof(Graph::TreeValue) == 0x18);
++#endif
  
- } // namespace AG
+ } // namespace IAG
  
 diff --git a/Sources/ComputeCxx/Graph/UpdateStack.cpp b/Sources/ComputeCxx/Graph/UpdateStack.cpp
-index e4724cd..aeb5cc5 100644
+index d7b6270..e279fe1 100644
 --- a/Sources/ComputeCxx/Graph/UpdateStack.cpp
 +++ b/Sources/ComputeCxx/Graph/UpdateStack.cpp
 @@ -105,7 +105,9 @@ bool Graph::UpdateStack::push_slow(data::ptr<Node> node_ptr, Node &node, bool ig
@@ -933,8 +1075,55 @@ index e4724cd..aeb5cc5 100644
          }
  
          if (node.is_value_initialized()) {
+diff --git a/Sources/ComputeCxx/Subgraph/IAGSubgraph.cpp b/Sources/ComputeCxx/Subgraph/IAGSubgraph.cpp
+index c719c31..7f89c9e 100644
+--- a/Sources/ComputeCxx/Subgraph/IAGSubgraph.cpp
++++ b/Sources/ComputeCxx/Subgraph/IAGSubgraph.cpp
+@@ -65,6 +65,25 @@ void IAGSubgraphSetCurrent(IAGSubgraphRef subgraph) {
+     }
+ }
+ 
++#if defined(__wasi__)
++// [wasm32] Backing for the IAG_SWIFT_SHARED_REFERENCE import (foreign-reference type). Swift ARC
++// calls these to retain/release every Subgraph reference (including struct-held ones); wrap the CF
++// refcount so the CF finalize (clear_object + invalidate_and_delete_) runs only when the last
++// reference drops — exactly the lifetime objc_bridge ARC gives on Apple.
++IAGSubgraphRef IAGSubgraphRetainRef(IAGSubgraphRef subgraph) {
++    if (subgraph) {
++        CFRetain(subgraph);
++    }
++    return subgraph;
++}
++
++void IAGSubgraphReleaseRef(IAGSubgraphRef subgraph) {
++    if (subgraph) {
++        CFRelease(subgraph);
++    }
++}
++#endif
++
+ #pragma mark - Graph context
+ 
+ IAGSubgraphRef IAGSubgraphCreate(IAGGraphRef graph) { return IAGSubgraphCreate2(graph, IAGAttributeNil); };
+@@ -291,6 +310,16 @@ void IAGSubgraphApply(IAGSubgraphRef subgraph, uint32_t options,
+     IAG::Subgraph::from_cf(subgraph)->apply(options, IAG::ClosureFunctionAV<void, unsigned int>(body, body_context));
+ }
+ 
++#if defined(__wasi__)
++void IAGSubgraphApplyC(IAGSubgraphRef subgraph, uint32_t options,
++                       void (*body)(IAGAttribute attribute, const void *context), const void *body_context) {
++    if (IAG::Subgraph::from_cf(subgraph) == nullptr) {
++        return;
++    }
++    IAG::Subgraph::from_cf(subgraph)->apply_c(options, body, body_context);
++}
++#endif
++
+ void IAGSubgraphUpdate(IAGSubgraphRef subgraph, IAGAttributeFlags flags) {
+     if (IAG::Subgraph::from_cf(subgraph) == nullptr) {
+         return;
 diff --git a/Sources/ComputeCxx/Subgraph/NodeCache.h b/Sources/ComputeCxx/Subgraph/NodeCache.h
-index 29dcc17..20a8112 100644
+index a1b4457..4893a3a 100644
 --- a/Sources/ComputeCxx/Subgraph/NodeCache.h
 +++ b/Sources/ComputeCxx/Subgraph/NodeCache.h
 @@ -21,7 +21,7 @@ class Subgraph::NodeCache {
@@ -956,13 +1145,40 @@ index 29dcc17..20a8112 100644
          uint64_t hash_and_age; // age bits are ignored
          data::ptr<Type> type;
 diff --git a/Sources/ComputeCxx/Subgraph/Subgraph.cpp b/Sources/ComputeCxx/Subgraph/Subgraph.cpp
-index bc97769..629c381 100644
+index fb4571b..f918970 100644
 --- a/Sources/ComputeCxx/Subgraph/Subgraph.cpp
 +++ b/Sources/ComputeCxx/Subgraph/Subgraph.cpp
-@@ -725,6 +725,19 @@ void Subgraph::update(AGAttributeFlags mask) {
+@@ -547,7 +547,7 @@ void Subgraph::add_indirect(data::ptr<IndirectNode> node, bool flag) {
+ 
+ std::atomic<uint32_t> Subgraph::_last_traversal_seed = {};
+ 
+-void Subgraph::apply(uint32_t options, ClosureFunctionAV<void, IAGAttribute> body) {
++template <typename Body> void Subgraph::apply_tmpl(uint32_t options, const Body &body) {
+     if (!is_valid()) {
+         return;
+     }
+@@ -617,6 +617,17 @@ void Subgraph::apply(uint32_t options, ClosureFunctionAV<void, IAGAttribute> bod
+     }
+ }
+ 
++void Subgraph::apply(uint32_t options, ClosureFunctionAV<void, IAGAttribute> body) {
++    apply_tmpl(options, body);
++}
++
++#if defined(__wasi__)
++void Subgraph::apply_c(uint32_t options, void (*body)(IAGAttribute attribute, const void *context),
++                       const void *context) {
++    apply_tmpl(options, [&](IAGAttribute attribute) { body(attribute, context); });
++}
++#endif
++
+ void Subgraph::update(IAGAttributeFlags mask) {
+     if (_graph->needs_update() && _graph->thread_is_updating()) {
+         _graph->call_update();
+@@ -725,6 +736,19 @@ void Subgraph::update(IAGAttributeFlags mask) {
  
  data::ptr<Node> Subgraph::cache_fetch(size_t hash, const swift::metadata &metadata, const void *body,
-                                       ClosureFunctionCI<uint32_t, AGUnownedGraphContextRef> get_attribute_type_id) {
+                                       ClosureFunctionCI<uint32_t, IAGUnownedGraphContextRef> get_attribute_type_id) {
 +    return cache_fetch_tmpl(hash, metadata, body, get_attribute_type_id);
 +}
 +
@@ -980,23 +1196,40 @@ index bc97769..629c381 100644
          _cache = alloc_bytes(sizeof(NodeCache), 7).unsafe_cast<NodeCache>();
          new (_cache.get()) NodeCache();
 diff --git a/Sources/ComputeCxx/Subgraph/Subgraph.h b/Sources/ComputeCxx/Subgraph/Subgraph.h
-index 873f12c..949e039 100644
+index a2a01bf..fc7e753 100644
 --- a/Sources/ComputeCxx/Subgraph/Subgraph.h
 +++ b/Sources/ComputeCxx/Subgraph/Subgraph.h
-@@ -210,6 +210,23 @@ class Subgraph : public data::zone {
+@@ -187,6 +187,16 @@ class Subgraph : public data::zone {
+ 
+     void apply(uint32_t options, ClosureFunctionAV<void, IAGAttribute> body);
+ 
++    // Shared traversal backing apply()/apply_c(); defined + instantiated only in Subgraph.cpp.
++    template <typename Body> void apply_tmpl(uint32_t options, const Body &body);
++
++#if defined(__wasi__)
++    // WASI: plain-C attribute visitor — the swiftcall ClosureFunctionAV mislowers on wasm, so
++    // Swift's Subgraph.forEach routes here via IAGSubgraphApplyC. Same traversal, C-ABI callback.
++    void apply_c(uint32_t options, void (*body)(IAGAttribute attribute, const void *context),
++                 const void *context);
++#endif
++
+     void update(IAGAttributeFlags mask);
+ 
+     // MARK: Cache
+@@ -210,6 +220,23 @@ class Subgraph : public data::zone {
  
      data::ptr<Node> cache_fetch(size_t hash, const swift::metadata &metadata, const void *body,
-                                 ClosureFunctionCI<uint32_t, AGUnownedGraphContextRef> get_attribute_type_id);
+                                 ClosureFunctionCI<uint32_t, IAGUnownedGraphContextRef> get_attribute_type_id);
 +#if defined(__wasi__)
 +    // WASI: the swiftcall ClosureFunctionCI cannot be built from the @convention(c) thunk
 +    // the Swift side emits (swiftcall closures-with-arg/return mislower on wasm). This
 +    // plain-C getter invokes the thunk via the C ABI (like Graph::intern_type_c). It feeds
-+    // the same templated cache_fetch body. See AGGraphReadCachedAttributeC.
++    // the same templated cache_fetch body. See IAGGraphReadCachedAttributeC.
 +    struct PlainTypeIDGetter {
-+        uint32_t (*_Nullable fn)(AGUnownedGraphContextRef, const void *_Nullable) = nullptr;
++        uint32_t (*_Nullable fn)(IAGUnownedGraphContextRef, const void *_Nullable) = nullptr;
 +        const void *_Nullable ctx = nullptr;
 +        explicit operator bool() const { return fn != nullptr; }
-+        uint32_t operator()(AGUnownedGraphContextRef g) const { return fn(g, ctx); }
++        uint32_t operator()(IAGUnownedGraphContextRef g) const { return fn(g, ctx); }
 +    };
 +    data::ptr<Node> cache_fetch(size_t hash, const swift::metadata &metadata, const void *body,
 +                                PlainTypeIDGetter get_attribute_type_id);
@@ -1007,104 +1240,104 @@ index 873f12c..949e039 100644
      void cache_insert(data::ptr<Node> node);
  
      void cache_collect();
-diff --git a/Sources/ComputeCxx/Swift/AGType.cpp b/Sources/ComputeCxx/Swift/AGType.cpp
-index 90c3834..9f81a18 100644
---- a/Sources/ComputeCxx/Swift/AGType.cpp
-+++ b/Sources/ComputeCxx/Swift/AGType.cpp
-@@ -216,6 +216,105 @@ bool AGTypeApplyFields2(AGTypeID typeID, AGTypeApplyOptions options,
+diff --git a/Sources/ComputeCxx/Swift/IAGType.cpp b/Sources/ComputeCxx/Swift/IAGType.cpp
+index 5c2622a..acdb4ae 100644
+--- a/Sources/ComputeCxx/Swift/IAGType.cpp
++++ b/Sources/ComputeCxx/Swift/IAGType.cpp
+@@ -216,6 +216,105 @@ bool IAGTypeApplyFields2(IAGTypeID typeID, IAGTypeApplyOptions options,
      }
  }
  
 +#if defined(__wasi__)
-+// WASI: plain-C callback variants of AGTypeApplyFields/AGTypeApplyFields2. The
-+// swiftcall closure ABI (AG_SWIFT_CC(swift)) does not lower consistently across
++// WASI: plain-C callback variants of IAGTypeApplyFields/IAGTypeApplyFields2. The
++// swiftcall closure ABI (IAG_SWIFT_CC(swift)) does not lower consistently across
 +// swiftc/clang on wasm (-> signature_mismatch trap), so the Swift side passes a
 +// non-capturing @convention(c) thunk + a boxed context and we invoke it plain-C.
-+void AGTypeApplyFieldsC(AGTypeID typeID,
++void IAGTypeApplyFieldsC(IAGTypeID typeID,
 +                        void (*apply)(const char *field_name, size_t field_offset,
-+                                      AGTypeID field_type, const void *context),
++                                      IAGTypeID field_type, const void *context),
 +                        const void *apply_context) {
-+    class VisitorC : public AG::swift::metadata_visitor {
-+        void (*_body)(const char *, size_t, AGTypeID, const void *);
++    class VisitorC : public IAG::swift::metadata_visitor {
++        void (*_body)(const char *, size_t, IAGTypeID, const void *);
 +        const void *_context;
 +
 +      public:
-+        VisitorC(void (*body)(const char *, size_t, AGTypeID, const void *), const void *context)
++        VisitorC(void (*body)(const char *, size_t, IAGTypeID, const void *), const void *context)
 +            : _body(body), _context(context) {}
 +
 +        bool unknown_result() override { return true; }
-+        bool visit_field(const AG::swift::metadata &type, const AG::swift::field_record &field,
++        bool visit_field(const IAG::swift::metadata &type, const IAG::swift::field_record &field,
 +                         size_t field_offset, size_t field_size) override {
 +            auto mangled_name = field.MangledTypeName.get();
 +            auto field_type = type.mangled_type_name_ref(mangled_name, true, nullptr);
 +            if (field_type) {
-+                _body(field.FieldName.get(), field_offset, AGTypeID(field_type), _context);
++                _body(field.FieldName.get(), field_offset, IAGTypeID(field_type), _context);
 +            }
 +            return true;
 +        }
 +    };
 +
 +    VisitorC visitor(apply, apply_context);
-+    auto type = reinterpret_cast<const AG::swift::metadata *>(typeID);
++    auto type = reinterpret_cast<const IAG::swift::metadata *>(typeID);
 +    type->visit(visitor);
 +}
 +
-+bool AGTypeApplyFields2C(AGTypeID typeID, AGTypeApplyOptions options,
++bool IAGTypeApplyFields2C(IAGTypeID typeID, IAGTypeApplyOptions options,
 +                         bool (*apply)(const char *field_name, size_t field_offset,
-+                                       AGTypeID field_type, const void *context),
++                                       IAGTypeID field_type, const void *context),
 +                         const void *apply_context) {
-+    class VisitorC : public AG::swift::metadata_visitor {
-+        AGTypeApplyOptions _options;
-+        bool (*_body)(const char *, size_t, AGTypeID, const void *);
++    class VisitorC : public IAG::swift::metadata_visitor {
++        IAGTypeApplyOptions _options;
++        bool (*_body)(const char *, size_t, IAGTypeID, const void *);
 +        const void *_context;
 +
 +      public:
-+        VisitorC(AGTypeApplyOptions options, bool (*body)(const char *, size_t, AGTypeID, const void *),
++        VisitorC(IAGTypeApplyOptions options, bool (*body)(const char *, size_t, IAGTypeID, const void *),
 +                 const void *context)
 +            : _options(options), _body(body), _context(context) {}
 +
-+        bool unknown_result() override { return _options & AGTypeApplyOptionsContinueAfterUnknownField; }
-+        bool visit_field(const AG::swift::metadata &type, const AG::swift::field_record &field,
++        bool unknown_result() override { return _options & IAGTypeApplyOptionsContinueAfterUnknownField; }
++        bool visit_field(const IAG::swift::metadata &type, const IAG::swift::field_record &field,
 +                         size_t field_offset, size_t field_size) override {
 +            auto mangled_name = field.MangledTypeName.get();
 +            auto field_type = type.mangled_type_name_ref(mangled_name, true, nullptr);
 +            if (!field_type) {
 +                return unknown_result();
 +            }
-+            return _body(field.FieldName.get(), field_offset, AGTypeID(field_type), _context);
++            return _body(field.FieldName.get(), field_offset, IAGTypeID(field_type), _context);
 +        }
-+        bool visit_case(const AG::swift::metadata &type, const AG::swift::field_record &field,
++        bool visit_case(const IAG::swift::metadata &type, const IAG::swift::field_record &field,
 +                        uint32_t index) override {
 +            auto mangled_name = field.MangledTypeName.get();
 +            auto field_type = type.mangled_type_name_ref(mangled_name, true, nullptr);
 +            if (!field_type) {
 +                return unknown_result();
 +            }
-+            return _body(field.FieldName.get(), index, AGTypeID(field_type), _context);
++            return _body(field.FieldName.get(), index, IAGTypeID(field_type), _context);
 +        }
 +    };
 +
 +    VisitorC visitor(options, apply, apply_context);
-+    auto type = reinterpret_cast<const AG::swift::metadata *>(typeID);
++    auto type = reinterpret_cast<const IAG::swift::metadata *>(typeID);
 +    switch (type->getKind()) {
 +    case ::swift::MetadataKind::Class:
-+        if (options & AGTypeApplyOptionsEnumerateClassFields) {
-+            return type->visit_heap(visitor, AG::LayoutDescriptor::HeapMode::Class);
++        if (options & IAGTypeApplyOptionsEnumerateClassFields) {
++            return type->visit_heap(visitor, IAG::LayoutDescriptor::HeapMode::Class);
 +        }
 +        return false;
 +    case ::swift::MetadataKind::Struct:
-+        if (!(options & AGTypeApplyOptionsEnumerateClassFields) && !(options & AGTypeApplyOptionsEnumerateEnumCases)) {
++        if (!(options & IAGTypeApplyOptionsEnumerateClassFields) && !(options & IAGTypeApplyOptionsEnumerateEnumCases)) {
 +            return type->visit(visitor);
 +        }
 +        return false;
 +    case ::swift::MetadataKind::Enum:
 +    case ::swift::MetadataKind::Optional:
-+        if (options & AGTypeApplyOptionsEnumerateEnumCases) {
++        if (options & IAGTypeApplyOptionsEnumerateEnumCases) {
 +            return type->visit(visitor);
 +        }
 +        return false;
 +    case ::swift::MetadataKind::Tuple:
-+        if (!(options & AGTypeApplyOptionsEnumerateClassFields) && !(options & AGTypeApplyOptionsEnumerateEnumCases)) {
++        if (!(options & IAGTypeApplyOptionsEnumerateClassFields) && !(options & IAGTypeApplyOptionsEnumerateEnumCases)) {
 +            return type->visit(visitor);
 +        }
 +        return false;
@@ -1114,11 +1347,11 @@ index 90c3834..9f81a18 100644
 +}
 +#endif
 +
- bool AGTypeApplyEnumData(AGTypeID typeID, void *value,
+ bool IAGTypeApplyEnumData(IAGTypeID typeID, void *value,
                           void (*body)(uint32_t tag,
-                                       AGTypeID field_type,
+                                       IAGTypeID field_type,
 diff --git a/Sources/ComputeCxx/Vector/IndirectPointerVector.h b/Sources/ComputeCxx/Vector/IndirectPointerVector.h
-index e289090..264192d 100644
+index 821c731..1e0783c 100644
 --- a/Sources/ComputeCxx/Vector/IndirectPointerVector.h
 +++ b/Sources/ComputeCxx/Vector/IndirectPointerVector.h
 @@ -30,7 +30,10 @@ class indirect_pointer_vector {
@@ -1133,146 +1366,415 @@ index e289090..264192d 100644
  
      using vector_type = vector<value_type, 4, size_type>;
  
-diff --git a/Sources/ComputeCxx/include/ComputeCxx/AGClosure.h b/Sources/ComputeCxx/include/ComputeCxx/AGClosure.h
-index 2c4edfa..28d1555 100644
---- a/Sources/ComputeCxx/include/ComputeCxx/AGClosure.h
-+++ b/Sources/ComputeCxx/include/ComputeCxx/AGClosure.h
-@@ -15,6 +15,14 @@ AG_EXPORT
- AG_REFINED_FOR_SWIFT
- AGClosureStorage AGRetainClosure(const void *thunk, const void *_Nullable context);
+diff --git a/Sources/ComputeCxx/include/ComputeCxx/IAGAttribute.h b/Sources/ComputeCxx/include/ComputeCxx/IAGAttribute.h
+index 8db7cdc..978ed7b 100644
+--- a/Sources/ComputeCxx/include/ComputeCxx/IAGAttribute.h
++++ b/Sources/ComputeCxx/include/ComputeCxx/IAGAttribute.h
+@@ -14,7 +14,14 @@ const IAGAttribute IAGAttributeNil;
+ typedef IAG_OPTIONS(uint8_t, IAGAttributeFlags) {
+     IAGAttributeFlagsNone = 0,
+     IAGAttributeFlagsAll = 0xFF,
+-} IAG_SWIFT_NAME(IAGSubgraphRef.Flags);
++}
++// [wasm32] On wasm Subgraph is a foreign-reference class, whose nested types don't import via
++// swift_name cross-module; drop the rename so it imports as `IAGAttributeFlags` and
++// Compute/Graph/Subgraph.swift re-declares `Subgraph.Flags` as a Swift typealias.
++#if !defined(__wasi__)
++IAG_SWIFT_NAME(IAGSubgraphRef.Flags)
++#endif
++;
+ 
+ IAG_EXTERN_C_END
+ 
+diff --git a/Sources/ComputeCxx/include/ComputeCxx/IAGBase.h b/Sources/ComputeCxx/include/ComputeCxx/IAGBase.h
+index eec69d3..30e61c5 100644
+--- a/Sources/ComputeCxx/include/ComputeCxx/IAGBase.h
++++ b/Sources/ComputeCxx/include/ComputeCxx/IAGBase.h
+@@ -203,8 +203,14 @@
+   __attribute__((swift_attr("import_reference")))                           \
+   __attribute__((swift_attr(_IAG_STRINGIFY(retain:_retain))))       \
+   __attribute__((swift_attr(_IAG_STRINGIFY(release:_release))))
++// Ownership annotations for functions returning a SWIFT_SHARED_REFERENCE type, so Swift ARC
++// balances +1 (RETAINED, e.g. factory create) vs +0 (UNRETAINED, e.g. get-current getters).
++#define IAG_SWIFT_RETURNS_RETAINED __attribute__((swift_attr("returns_retained")))
++#define IAG_SWIFT_RETURNS_UNRETAINED __attribute__((swift_attr("returns_unretained")))
+ #else
+ #define IAG_SWIFT_SHARED_REFERENCE(_retain, _release)
++#define IAG_SWIFT_RETURNS_RETAINED
++#define IAG_SWIFT_RETURNS_UNRETAINED
+ #endif
+ 
+ #if __has_include(<ptrcheck.h>)
+diff --git a/Sources/ComputeCxx/include/ComputeCxx/IAGClosure.h b/Sources/ComputeCxx/include/ComputeCxx/IAGClosure.h
+index adf8d04..e9f9388 100644
+--- a/Sources/ComputeCxx/include/ComputeCxx/IAGClosure.h
++++ b/Sources/ComputeCxx/include/ComputeCxx/IAGClosure.h
+@@ -15,6 +15,14 @@ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+ IAGClosureStorage IAGRetainClosure(const void *thunk, const void *_Nullable context);
  
 +#if defined(__wasi__)
 +// WASI: non-refined C variant so Swift imports it with the C ABI (passes a plain
 +// @convention(c) trampoline as the thunk; @_silgen_name lowers the closure with the
 +// Swift CC -> call_indirect signature_mismatch). Same retain semantics.
-+AG_EXPORT
-+AGClosureStorage AGRetainClosureC(const void *thunk, const void *_Nullable context);
++IAG_EXPORT
++IAGClosureStorage IAGRetainClosureC(const void *thunk, const void *_Nullable context);
 +#endif
 +
- AG_EXPORT
- AG_REFINED_FOR_SWIFT
- void AGReleaseClosure(AGClosureStorage closure);
-diff --git a/Sources/ComputeCxx/include/ComputeCxx/AGGraph.h b/Sources/ComputeCxx/include/ComputeCxx/AGGraph.h
-index e1a8089..4ff0783 100644
---- a/Sources/ComputeCxx/include/ComputeCxx/AGGraph.h
-+++ b/Sources/ComputeCxx/include/ComputeCxx/AGGraph.h
-@@ -113,6 +113,15 @@ uint32_t AGGraphInternAttributeType(AGUnownedGraphContextRef graph, AGTypeID typ
-                                         const void *_Nullable context AG_SWIFT_CONTEXT) AG_SWIFT_CC(swift),
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+ void IAGReleaseClosure(IAGClosureStorage closure);
+diff --git a/Sources/ComputeCxx/include/ComputeCxx/IAGGraph.h b/Sources/ComputeCxx/include/ComputeCxx/IAGGraph.h
+index f516e2d..1eee3f9 100644
+--- a/Sources/ComputeCxx/include/ComputeCxx/IAGGraph.h
++++ b/Sources/ComputeCxx/include/ComputeCxx/IAGGraph.h
+@@ -113,6 +113,15 @@ uint32_t IAGGraphInternAttributeType(IAGUnownedGraphContextRef graph, IAGTypeID
+                                         const void *_Nullable context IAG_SWIFT_CONTEXT) IAG_SWIFT_CC(swift),
                                      const void *_Nullable make_attribute_type_context);
  
 +#if defined(__wasi__)
 +// WASI: plain C-CC variant (declared in the header so Swift imports it with the C
 +// ABI; @_silgen_name lowers the function-pointer arg with the Swift CC and traps).
-+AG_EXPORT
-+uint32_t AGGraphInternAttributeTypeC(AGUnownedGraphContextRef graph, AGTypeID type,
++IAG_EXPORT
++uint32_t IAGGraphInternAttributeTypeC(IAGUnownedGraphContextRef graph, IAGTypeID type,
 +                                      const void *_Nullable (*_Nonnull make)(const void *_Nullable),
 +                                      const void *_Nullable context);
 +#endif
 +
- AG_EXPORT
- AG_REFINED_FOR_SWIFT
- void AGGraphVerifyType(AGAttribute attribute, AGTypeID type) AG_SWIFT_NAME(AGAttribute.verifyType(self:type:));
-@@ -202,6 +211,14 @@ void AGGraphMutateAttribute(AGAttribute attribute, AGTypeID type, bool invalidat
-                             void (*modify)(void *body, const void *context AG_SWIFT_CONTEXT) AG_SWIFT_CC(swift),
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+ void IAGGraphVerifyType(IAGAttribute attribute, IAGTypeID type) IAG_SWIFT_NAME(IAGAttribute.verifyType(self:type:));
+@@ -202,6 +211,14 @@ void IAGGraphMutateAttribute(IAGAttribute attribute, IAGTypeID type, bool invali
+                             void (*modify)(void *body, const void *context IAG_SWIFT_CONTEXT) IAG_SWIFT_CC(swift),
                              const void *modify_context);
  
 +#if defined(__wasi__)
 +// WASI: plain-C modify callback (the swiftcall closure ABI mislowers on wasm).
-+AG_EXPORT
-+void AGGraphMutateAttributeC(AGAttribute attribute, AGTypeID type, bool invalidating,
++IAG_EXPORT
++void IAGGraphMutateAttributeC(IAGAttribute attribute, IAGTypeID type, bool invalidating,
 +                             void (*modify)(void *body, const void *context),
 +                             const void *modify_context);
 +#endif
 +
  // MARK: Value
  
- AG_EXPORT
-@@ -261,6 +278,14 @@ void AGGraphSetInvalidationCallback(AGGraphRef graph,
-                                         AG_SWIFT_CC(swift),
+ IAG_EXPORT
+@@ -261,6 +278,14 @@ void IAGGraphSetInvalidationCallback(IAGGraphRef graph,
+                                         IAG_SWIFT_CC(swift),
                                      const void *callback_context);
  
 +#if defined(__wasi__)
 +// WASI: plain-C STORED invalidation callback (swiftcall closures mislower on wasm).
-+AG_EXPORT
-+void AGGraphSetInvalidationCallbackC(AGGraphRef graph,
-+                                     void (*callback)(AGAttribute attribute, const void *context),
++IAG_EXPORT
++void IAGGraphSetInvalidationCallbackC(IAGGraphRef graph,
++                                     void (*callback)(IAGAttribute attribute, const void *context),
 +                                     const void *callback_context);
 +#endif
 +
  // MARK: Cached value
  
  CF_EXPORT
-@@ -271,6 +296,18 @@ void *AGGraphReadCachedAttribute(size_t hash, AGTypeID type, const void *body, A
-                                                      const void *context AG_SWIFT_CONTEXT) AG_SWIFT_CC(swift),
+@@ -271,6 +296,18 @@ void *IAGGraphReadCachedAttribute(size_t hash, IAGTypeID type, const void *body,
+                                                      const void *context IAG_SWIFT_CONTEXT) IAG_SWIFT_CC(swift),
                                   const void *closure_context);
  
 +#if defined(__wasi__)
 +// WASI: plain C-CC variant (declared in the header so Swift imports it with the C ABI;
 +// the @_silgen_name import lowers the closure arg with the Swift CC and traps). See the
-+// implementation in AGGraph.cpp and the Swift routing in Rule.swift.
++// implementation in IAGGraph.cpp and the Swift routing in Rule.swift.
 +CF_EXPORT
-+void *AGGraphReadCachedAttributeC(size_t hash, AGTypeID type, const void *body, AGTypeID value_type,
-+                                  AGCachedValueOptions options, AGAttribute owner, bool *_Nullable changed_out,
-+                                  uint32_t (*_Nonnull closure)(AGUnownedGraphContextRef graph_context,
++void *IAGGraphReadCachedAttributeC(size_t hash, IAGTypeID type, const void *body, IAGTypeID value_type,
++                                  IAGCachedValueOptions options, IAGAttribute owner, bool *_Nullable changed_out,
++                                  uint32_t (*_Nonnull closure)(IAGUnownedGraphContextRef graph_context,
 +                                                               const void *_Nullable context),
 +                                  const void *_Nullable closure_context);
 +#endif
 +
  CF_EXPORT
  CF_REFINED_FOR_SWIFT
- void *_Nullable AGGraphReadCachedAttributeIfExists(size_t hash, AGTypeID type, const void *body, AGTypeID value_type,
-@@ -338,6 +375,14 @@ void AGGraphSetUpdateCallback(AGGraphRef graph,
-                               void (*callback)(const void *context AG_SWIFT_CONTEXT) AG_SWIFT_CC(swift),
+ void *_Nullable IAGGraphReadCachedAttributeIfExists(size_t hash, IAGTypeID type, const void *body, IAGTypeID value_type,
+@@ -338,6 +375,14 @@ void IAGGraphSetUpdateCallback(IAGGraphRef graph,
+                               void (*callback)(const void *context IAG_SWIFT_CONTEXT) IAG_SWIFT_CC(swift),
                                const void *callback_context);
  
 +#if defined(__wasi__)
 +// WASI: plain-C STORED update callback (swiftcall closures mislower on wasm).
-+AG_EXPORT
-+void AGGraphSetUpdateCallbackC(AGGraphRef graph,
++IAG_EXPORT
++void IAGGraphSetUpdateCallbackC(IAGGraphRef graph,
 +                               void (*callback)(const void *context),
 +                               const void *callback_context);
 +#endif
 +
- AG_EXPORT
- AG_REFINED_FOR_SWIFT
- AGAttribute AGGraphGetCurrentAttribute(void);
-@@ -358,6 +403,11 @@ AG_EXPORT
- AG_REFINED_FOR_SWIFT
- void AGGraphSetOutputValue(const void *value, AGTypeID type);
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+ IAGAttribute IAGGraphGetCurrentAttribute(void);
+@@ -358,6 +403,11 @@ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+ void IAGGraphSetOutputValue(const void *value, IAGTypeID type);
  
 +#if defined(__wasi__)
-+AG_EXPORT
-+void AGGraphSetOutputValueC(const void *value, AGTypeID type);
++IAG_EXPORT
++void IAGGraphSetOutputValueC(const void *value, IAGTypeID type);
 +#endif
 +
  // MARK: Description
  
  #if TARGET_OS_MAC
-diff --git a/Sources/ComputeCxx/include/ComputeCxx/AGType.h b/Sources/ComputeCxx/include/ComputeCxx/AGType.h
-index d3f35bd..a675531 100644
---- a/Sources/ComputeCxx/include/ComputeCxx/AGType.h
-+++ b/Sources/ComputeCxx/include/ComputeCxx/AGType.h
-@@ -93,6 +93,23 @@ bool AGTypeApplyFields2(AGTypeID typeID, AGTypeApplyOptions options,
-                                                const void *context AG_SWIFT_CONTEXT) AG_SWIFT_CC(swift),
+diff --git a/Sources/ComputeCxx/include/ComputeCxx/IAGSubgraph.h b/Sources/ComputeCxx/include/ComputeCxx/IAGSubgraph.h
+index 700a47d..52e2331 100644
+--- a/Sources/ComputeCxx/include/ComputeCxx/IAGSubgraph.h
++++ b/Sources/ComputeCxx/include/ComputeCxx/IAGSubgraph.h
+@@ -12,59 +12,83 @@ IAG_EXTERN_C_BEGIN
+ 
+ // MARK: CFType
+ 
++#if defined(__wasi__)
++// [wasm32] IAG_BRIDGED_TYPE(id) (objc_bridge) is empty off-Apple, so the CF type imports UNMANAGED
++// -> struct-held Subgraph refs don't keep the storage alive -> use-after-free. Import as a Swift
++// foreign-reference type (upstream SwiftBridging IAG_SWIFT_SHARED_REFERENCE) so memberwise ARC
++// retains/releases every reference (incl. struct-held), exactly as objc_bridge ARC does on Apple.
++// retain/release wrap CFRetain/CFRelease.
++typedef struct IAG_SWIFT_SHARED_REFERENCE(IAGSubgraphRetainRef, IAGSubgraphReleaseRef)
++    IAGSubgraphStorage *IAGSubgraphRef IAG_SWIFT_NAME(Subgraph);
++IAG_EXPORT IAGSubgraphRef IAGSubgraphRetainRef(IAGSubgraphRef subgraph);
++IAG_EXPORT void IAGSubgraphReleaseRef(IAGSubgraphRef subgraph);
++
++// [wasm32] A foreign-reference class's importer-synthesized members (self: members, statics, nested
++// Flags) are visible ONLY in modules that DIRECTLY import ComputeCxx; they do NOT cross
++// `@_exported import` (unlike the value-type import). OpenSwiftUICore sees the graph only via
++// OpenAttributeGraphShims, so drop the swift_name here -> each imports as a refined free func
++// __IAGSubgraph...; Compute/Graph/Subgraph.swift re-declares them as Swift EXTENSION members (which
++// DO cross-module). On Apple (value type) keep the importer members.
++#define IAG_SUBGRAPH_SELF_NAME(_name)
++#else
+ typedef struct IAG_BRIDGED_TYPE(id) IAGSubgraphStorage *IAGSubgraphRef IAG_SWIFT_NAME(Subgraph);
++#define IAG_SUBGRAPH_SELF_NAME(_name) IAG_SWIFT_NAME(_name)
++#endif
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+-CFTypeID IAGSubgraphGetTypeID(void) IAG_SWIFT_NAME(getter:IAGSubgraphRef.typeID());
++CFTypeID IAGSubgraphGetTypeID(void) IAG_SUBGRAPH_SELF_NAME(getter:IAGSubgraphRef.typeID());
+ 
+ // MARK: Current subgraph
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+-IAGSubgraphRef _Nullable IAGSubgraphGetCurrent(void) IAG_SWIFT_NAME(getter:IAGSubgraphRef.current());
++IAG_SWIFT_RETURNS_UNRETAINED
++IAGSubgraphRef _Nullable IAGSubgraphGetCurrent(void) IAG_SUBGRAPH_SELF_NAME(getter:IAGSubgraphRef.current());
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+-void IAGSubgraphSetCurrent(IAGSubgraphRef _Nullable subgraph) IAG_SWIFT_NAME(setter:IAGSubgraphRef.current(_:));
++void IAGSubgraphSetCurrent(IAGSubgraphRef _Nullable subgraph) IAG_SUBGRAPH_SELF_NAME(setter:IAGSubgraphRef.current(_:));
+ 
+ // MARK: Graph Context
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+-IAGSubgraphRef IAGSubgraphCreate(IAGGraphRef graph) IAG_SWIFT_NAME(IAGSubgraphRef.init(graph:));
++IAG_SWIFT_RETURNS_RETAINED
++IAGSubgraphRef IAGSubgraphCreate(IAGGraphRef graph) IAG_SUBGRAPH_SELF_NAME(IAGSubgraphRef.init(graph:));
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
++IAG_SWIFT_RETURNS_RETAINED
+ IAGSubgraphRef IAGSubgraphCreate2(IAGGraphRef graph, IAGAttribute attribute)
+-    IAG_SWIFT_NAME(IAGSubgraphRef.init(graph:attribute:));
++    IAG_SUBGRAPH_SELF_NAME(IAGSubgraphRef.init(graph:attribute:));
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+ IAGUnownedGraphContextRef _Nullable IAGSubgraphGetCurrentGraphContext(void)
+-    IAG_SWIFT_NAME(getter:IAGSubgraphRef.currentGraphContext());
++    IAG_SUBGRAPH_SELF_NAME(getter:IAGSubgraphRef.currentGraphContext());
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+-IAGGraphRef IAGSubgraphGetGraph(IAGSubgraphRef subgraph) IAG_SWIFT_NAME(getter:IAGSubgraphRef.graph(self:));
++IAGGraphRef IAGSubgraphGetGraph(IAGSubgraphRef subgraph) IAG_SUBGRAPH_SELF_NAME(getter:IAGSubgraphRef.graph(self:));
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+-bool IAGSubgraphIsValid(IAGSubgraphRef subgraph) IAG_SWIFT_NAME(getter:IAGSubgraphRef.isValid(self:));
++bool IAGSubgraphIsValid(IAGSubgraphRef subgraph) IAG_SUBGRAPH_SELF_NAME(getter:IAGSubgraphRef.isValid(self:));
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+-void IAGSubgraphInvalidate(IAGSubgraphRef subgraph) IAG_SWIFT_NAME(IAGSubgraphRef.invalidate(self:));
++void IAGSubgraphInvalidate(IAGSubgraphRef subgraph) IAG_SUBGRAPH_SELF_NAME(IAGSubgraphRef.invalidate(self:));
+ 
+ // MARK: Index
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+-uint32_t IAGSubgraphGetIndex(IAGSubgraphRef subgraph) IAG_SWIFT_NAME(getter:IAGSubgraphRef.index(self:));
++uint32_t IAGSubgraphGetIndex(IAGSubgraphRef subgraph) IAG_SUBGRAPH_SELF_NAME(getter:IAGSubgraphRef.index(self:));
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+-void IAGSubgraphSetIndex(IAGSubgraphRef subgraph, uint32_t index) IAG_SWIFT_NAME(setter:IAGSubgraphRef.index(self:_:));
++void IAGSubgraphSetIndex(IAGSubgraphRef subgraph, uint32_t index) IAG_SUBGRAPH_SELF_NAME(setter:IAGSubgraphRef.index(self:_:));
+ 
+ // MARK: Observers
+ 
+@@ -77,65 +101,69 @@ IAGUniqueID IAGSubgraphAddObserver(IAGSubgraphRef subgraph,
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+ void IAGSubgraphRemoveObserver(IAGSubgraphRef subgraph, IAGUniqueID observer_id)
+-    IAG_SWIFT_NAME(IAGSubgraphRef.removeObserver(self:_:));
++    IAG_SUBGRAPH_SELF_NAME(IAGSubgraphRef.removeObserver(self:_:));
+ 
+ // MARK: Children
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+-void IAGSubgraphAddChild(IAGSubgraphRef subgraph, IAGSubgraphRef child) IAG_SWIFT_NAME(IAGSubgraphRef.addChild(self:_:));
++void IAGSubgraphAddChild(IAGSubgraphRef subgraph, IAGSubgraphRef child) IAG_SUBGRAPH_SELF_NAME(IAGSubgraphRef.addChild(self:_:));
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+ void IAGSubgraphAddChild2(IAGSubgraphRef subgraph, IAGSubgraphRef child, uint8_t tag)
+-    IAG_SWIFT_NAME(IAGSubgraphRef.addChild(self:_:tag:));
++    IAG_SUBGRAPH_SELF_NAME(IAGSubgraphRef.addChild(self:_:tag:));
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+ void IAGSubgraphRemoveChild(IAGSubgraphRef subgraph, IAGSubgraphRef child)
+-    IAG_SWIFT_NAME(IAGSubgraphRef.removeChild(self:_:));
++    IAG_SUBGRAPH_SELF_NAME(IAGSubgraphRef.removeChild(self:_:));
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
++IAG_SWIFT_RETURNS_UNRETAINED
+ IAGSubgraphRef IAGSubgraphGetChild(IAGSubgraphRef subgraph, uint32_t index, uint8_t *_Nullable tag_out)
+-    IAG_SWIFT_NAME(IAGSubgraphRef.child(self:at:tag:));
++    IAG_SUBGRAPH_SELF_NAME(IAGSubgraphRef.child(self:at:tag:));
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+-uint32_t IAGSubgraphGetChildCount(IAGSubgraphRef subgraph) IAG_SWIFT_NAME(getter:IAGSubgraphRef.childCount(self:));
++uint32_t IAGSubgraphGetChildCount(IAGSubgraphRef subgraph) IAG_SUBGRAPH_SELF_NAME(getter:IAGSubgraphRef.childCount(self:));
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+-IAGSubgraphRef IAGSubgraphGetParent(IAGSubgraphRef subgraph, int64_t index) IAG_SWIFT_NAME(IAGSubgraphRef.parent(self:at:));
++IAG_SWIFT_RETURNS_UNRETAINED
++IAGSubgraphRef IAGSubgraphGetParent(IAGSubgraphRef subgraph, int64_t index) IAG_SUBGRAPH_SELF_NAME(IAGSubgraphRef.parent(self:at:));
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+-uint64_t IAGSubgraphGetParentCount(IAGSubgraphRef subgraph) IAG_SWIFT_NAME(getter:IAGSubgraphRef.parentCount(self:));
++uint64_t IAGSubgraphGetParentCount(IAGSubgraphRef subgraph) IAG_SUBGRAPH_SELF_NAME(getter:IAGSubgraphRef.parentCount(self:));
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+ bool IAGSubgraphIsAncestor(IAGSubgraphRef subgraph, IAGSubgraphRef other)
+-    IAG_SWIFT_NAME(IAGSubgraphRef.isAncestor(self:of:));
++    IAG_SUBGRAPH_SELF_NAME(IAGSubgraphRef.isAncestor(self:of:));
+ 
+ // MARK: Flags
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+ bool IAGSubgraphIntersects(IAGSubgraphRef subgraph, IAGAttributeFlags flags)
+-    IAG_SWIFT_NAME(IAGSubgraphRef.intersects(self:flags:));
++    IAG_SUBGRAPH_SELF_NAME(IAGSubgraphRef.intersects(self:flags:));
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+-bool IAGSubgraphIsDirty(IAGSubgraphRef subgraph, IAGAttributeFlags flags) IAG_SWIFT_NAME(IAGSubgraphRef.isDirty(self:flags:));
++bool IAGSubgraphIsDirty(IAGSubgraphRef subgraph, IAGAttributeFlags flags) IAG_SUBGRAPH_SELF_NAME(IAGSubgraphRef.isDirty(self:flags:));
+ 
+ // MARK: Attributes
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
++IAG_SWIFT_RETURNS_UNRETAINED
+ IAGSubgraphRef IAGGraphGetAttributeSubgraph(IAGAttribute attribute) IAG_SWIFT_NAME(getter:IAGAttribute.subgraph(self:));
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
++IAG_SWIFT_RETURNS_UNRETAINED
+ IAGSubgraphRef _Nullable IAGGraphGetAttributeSubgraph2(IAGAttribute attribute)
+     IAG_SWIFT_NAME(getter:IAGAttribute.subgraphOrNil(self:));
+ 
+@@ -145,15 +173,24 @@ void IAGSubgraphApply(IAGSubgraphRef subgraph, uint32_t options,
+                      void (*body)(IAGAttribute, const void *context IAG_SWIFT_CONTEXT) IAG_SWIFT_CC(swift),
+                      const void *body_context);
+ 
++#if defined(__wasi__)
++// WASI: plain-C apply (the swiftcall `body` above mislowers on wasm). Subgraph.forEach routes here
++// with a @convention(c) thunk; backed by Subgraph::apply_c.
++IAG_EXPORT
++void IAGSubgraphApplyC(IAGSubgraphRef subgraph, uint32_t options,
++                       void (*body)(IAGAttribute attribute, const void *context),
++                       const void *body_context);
++#endif
++
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+-void IAGSubgraphUpdate(IAGSubgraphRef subgraph, IAGAttributeFlags flags) IAG_SWIFT_NAME(IAGSubgraphRef.update(self:flags:));
++void IAGSubgraphUpdate(IAGSubgraphRef subgraph, IAGAttributeFlags flags) IAG_SUBGRAPH_SELF_NAME(IAGSubgraphRef.update(self:flags:));
+ 
+ // MARK: Tree
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+-_Nullable IAGTreeElement IAGSubgraphGetTreeRoot(IAGSubgraphRef subgraph) IAG_SWIFT_NAME(getter:IAGSubgraphRef.treeRoot(self:));
++_Nullable IAGTreeElement IAGSubgraphGetTreeRoot(IAGSubgraphRef subgraph) IAG_SUBGRAPH_SELF_NAME(getter:IAGSubgraphRef.treeRoot(self:));
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+@@ -166,7 +203,7 @@ void IAGSubgraphEndTreeElement(IAGAttribute value);
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+ void IAGSubgraphSetTreeOwner(IAGSubgraphRef subgraph, IAGAttribute owner)
+-    IAG_SWIFT_NAME(IAGSubgraphRef.setTreeOwner(self:_:));
++    IAG_SUBGRAPH_SELF_NAME(IAGSubgraphRef.setTreeOwner(self:_:));
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+@@ -174,11 +211,11 @@ void IAGSubgraphAddTreeValue(IAGAttribute value, IAGTypeID type, const char *key
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+-bool IAGSubgraphShouldRecordTree(void) IAG_SWIFT_NAME(getter:IAGSubgraphRef.shouldRecordTree());
++bool IAGSubgraphShouldRecordTree(void) IAG_SUBGRAPH_SELF_NAME(getter:IAGSubgraphRef.shouldRecordTree());
+ 
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+-void IAGSubgraphSetShouldRecordTree(void) IAG_SWIFT_NAME(IAGSubgraphRef.setShouldRecordTree());
++void IAGSubgraphSetShouldRecordTree(void) IAG_SUBGRAPH_SELF_NAME(IAGSubgraphRef.setShouldRecordTree());
+ 
+ IAG_EXTERN_C_END
+ 
+diff --git a/Sources/ComputeCxx/include/ComputeCxx/IAGType.h b/Sources/ComputeCxx/include/ComputeCxx/IAGType.h
+index 182a324..10e7e36 100644
+--- a/Sources/ComputeCxx/include/ComputeCxx/IAGType.h
++++ b/Sources/ComputeCxx/include/ComputeCxx/IAGType.h
+@@ -93,6 +93,23 @@ bool IAGTypeApplyFields2(IAGTypeID typeID, IAGTypeApplyOptions options,
+                                                const void *context IAG_SWIFT_CONTEXT) IAG_SWIFT_CC(swift),
                          const void *apply_context);
  
 +#if defined(__wasi__)
 +// WASI: plain-C callback variants (the swiftcall closure ABI mislowers across
 +// swiftc/clang on wasm -> signature_mismatch). Swift passes a non-capturing
 +// @convention(c) thunk + a boxed context; these invoke it with the C ABI.
-+AG_EXPORT
-+void AGTypeApplyFieldsC(AGTypeID typeID,
++IAG_EXPORT
++void IAGTypeApplyFieldsC(IAGTypeID typeID,
 +                        void (*apply)(const char *field_name, size_t field_offset,
-+                                      AGTypeID field_type, const void *_Nullable context),
++                                      IAGTypeID field_type, const void *_Nullable context),
 +                        const void *apply_context);
 +
-+AG_EXPORT
-+bool AGTypeApplyFields2C(AGTypeID typeID, AGTypeApplyOptions options,
++IAG_EXPORT
++bool IAGTypeApplyFields2C(IAGTypeID typeID, IAGTypeApplyOptions options,
 +                         bool (*apply)(const char *field_name, size_t field_offset,
-+                                       AGTypeID field_type, const void *_Nullable context),
++                                       IAGTypeID field_type, const void *_Nullable context),
 +                         const void *apply_context);
 +#endif
 +
- AG_EXPORT
- AG_REFINED_FOR_SWIFT
- bool AGTypeApplyEnumData(AGTypeID typeID, void *value,
+ IAG_EXPORT
+ IAG_REFINED_FOR_SWIFT
+ bool IAGTypeApplyEnumData(IAGTypeID typeID, void *value,

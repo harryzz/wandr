@@ -1,0 +1,17 @@
+diff --git a/Sources/OpenAttributeGraphShims/Adapter/Compute.swift b/Sources/OpenAttributeGraphShims/Adapter/Compute.swift
+index 6c392df..1f5597e 100644
+--- a/Sources/OpenAttributeGraphShims/Adapter/Compute.swift
++++ b/Sources/OpenAttributeGraphShims/Adapter/Compute.swift
+@@ -43,6 +43,12 @@ extension Graph {
+     public func resetProfile() {
+         // TODO: placeholder
+     }
++
++    // OpenSwiftUI's AppGraph calls Graph.archiveJSON(name:) statically; Compute exposes only the
++    // instance variant. Provide the static profiling shim (matches startProfiling/stopProfiling).
++    public static func archiveJSON(name: String?) {
++        // TODO: placeholder (archiving unimplemented in the Compute backend)
++    }
+ }
+ 
+ extension _AttributeBody {
