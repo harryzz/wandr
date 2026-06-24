@@ -60,7 +60,34 @@ WHAT CHANGED (the integration):
   cd /tmp/OpenSwiftUI && git apply <repo>/repros/openswiftui-wasm/openswiftui-phase1-wip.patch   # (fork already on wasm32-wasip1)
   ```
   (The old `oag-fork.patch` is the STALE AG*-era OAG-default-backend diff — superseded; not used by this Compute-backend integration.)
-  NEXT: cross-AOT aarch64 to the Pixel 2 XL (device play needs a physical swipe behind the keyguard).
+
+### ✅ DEVICE (Pixel 2 XL, cross-AOT aarch64) — renders, REDRAWS, no ghost, playable
+Cross-AOT'd the integrated stack to aarch64 + deployed (`wandr.swiftui.demo`). The 2048 board RENDERS and
+REDRAWS after moves (user-confirmed on-device), tiles clean (no merge ghost). Three device-session fixes
+on top of the integration (all in the patches):
+- **REDRAW fix (the re-port gap I missed):** the wasm `memcmp` comparison fallback was only in the
+  COMMITTED diff's `LayoutDescriptor.cpp`, NOT in `AttributeType.h` (`compare_values` +
+  `compare_values_partial`) or `IAGComparison.cpp` (`IAGCompareValues`) — those were in the working-tree
+  part. Without them `LayoutDescriptor::compare` returns "equal" for CHANGED non-trivial views on wasm32 →
+  no re-eval → board never repaints after a move. Re-added all 3 (compute-wasm.patch). `compare_values_partial`
+  also guards the pow-SIGILL (Equatable dispatched with a wrong pointer → OOB).
+- **MERGE-GHOST fix (`ForEach.eraseItem`, openswiftui-phase1-wip.patch):** the `isValid` guard (added to stop
+  the UAF) gated BOTH `willRemove()` AND `parentSubgraph.removeChild()`. When a consumed tile's subgraph was
+  already invalidated by the parent cascade, the whole erase was skipped → its subgraph stayed a child of the
+  parent → stale "2" rendered under the merged "4". Fix: guard ONLY `willRemove()` (the apply_tmpl traversal,
+  genuinely unsafe); run `removeChild()` UNCONDITIONALLY (just unlinks; safe with the foreign-ref keeping
+  storage alive). Verified: clean single-value tiles on device, no crash.
+- **ANIMATION disabled (TileBoardView.swift, in repros/swift-canvas-spike):** the position
+  `.animation(.interpolatingSpring, value:)` UAF (0.42=0x3ed70e9c over a Subgraph*) still CRASHES on aarch64
+  cross-AOT (the foreign-ref fixes it on x86 JIT/desktop but not on-device). Disabled the position spring
+  (kept the safe `.transition`) → tiles snap, board stays stable. Re-enable once aarch64-AOT is sorted.
+REMAINING device follow-ons (separate from the integration): (1) **aarch64-AOT animation UAF** (the real fix
+for the spring); (2) **proximity false-trigger** — the sensor blanks the panel OUTSIDE a call → auto-lock +
+`input: touch SUPPRESSED (proximity blank)`, which blocks physical swipes (the auto-move diagnostic in
+main.swift drives play without touch). Deploy = build-openswiftui-demo.sh → strip → component new →
+`WANDR_AOT_TARGET=aarch64-linux-android wasm-android-host --install /tmp/osui-pkg` → push to
+`$APPS/wandr.swiftui.demo/0.1.0` → `wandr-arbiter launch wandr.swiftui.demo` (kill the old pid first — the
+arbiter foregrounds a stale instance otherwise).
 
 ## 🎯 ISOLATED (2026-06-23): the move-5-7 crash = an ANIMATION-VALUE WILD WRITE
 DECISIVE bisection of the probe (10 fixed moves under bare `wasmtime`) pins the crash to ONE

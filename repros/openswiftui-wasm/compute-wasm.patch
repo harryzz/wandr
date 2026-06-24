@@ -538,7 +538,7 @@ index b6494fb..ec558e5 100644
  
  }
 diff --git a/Sources/ComputeCxx/Attribute/AttributeType/AttributeType.h b/Sources/ComputeCxx/Attribute/AttributeType/AttributeType.h
-index 73d59ce..08137d7 100644
+index 73d59ce..92d293b 100644
 --- a/Sources/ComputeCxx/Attribute/AttributeType/AttributeType.h
 +++ b/Sources/ComputeCxx/Attribute/AttributeType/AttributeType.h
 @@ -16,7 +16,13 @@ class AttributeType {
@@ -555,6 +555,47 @@ index 73d59ce..08137d7 100644
      void *_update_context;
      const IAGAttributeVTable *_vtable;
      IAGAttributeTypeFlags _flags;
+@@ -60,6 +66,14 @@ class AttributeType {
+     };
+ 
+     bool compare_values(const void *lhs, const void *rhs) {
++#if defined(__wasi__)
++        // [wasm32] LayoutDescriptor's field-walking uses 64-bit pointer/HeapObject sizes and
++        // mis-compares non-trivial types on wasm32 (returns "equal" for CHANGED view values →
++        // child views never re-evaluate on a parent change → board doesn't repaint after a move).
++        // Conservative byte compare: detects any change (incl. COW buffer-pointer changes), at
++        // worst over-reports equal-but-different-bytes as changed (safe over-re-eval).
++        return memcmp(lhs, rhs, value_metadata().vw_size()) == 0;
++#else
+         IAGComparisonOptions comparison_options = IAGComparisonOptions(_flags & IAGAttributeTypeFlagsComparisonModeMask) |
+                                                  IAGComparisonOptionsCopyOnWrite | IAGComparisonOptionsTraceCompareFailed;
+         if (_layout == nullptr) {
+@@ -69,9 +83,17 @@ class AttributeType {
+         ValueLayout layout = _layout == ValueLayoutTrivial ? nullptr : _layout;
+         return LayoutDescriptor::compare(layout, (const unsigned char *)lhs, (const unsigned char *)rhs,
+                                          value_metadata().vw_size(), comparison_options);
++#endif
+     }
+ 
+     bool compare_values_partial(const void *lhs, const void *rhs, size_t offset, size_t size) {
++#if defined(__wasi__)
++        // [wasm32] Same as compare_values: LayoutDescriptor walks fields with 64-bit pointer/offset
++        // assumptions, so on wasm32 it dispatches a field's Equatable (e.g. Text.==) with a WRONG
++        // pointer → out-of-bounds fault (SIGSEGV/SIGILL in pow/Text/value-witness depending on the
++        // type at the bad offset). Conservative byte compare of the sub-range.
++        return memcmp((const unsigned char *)lhs + offset, (const unsigned char *)rhs + offset, size) == 0;
++#else
+         IAGComparisonOptions comparison_options =
+             IAGComparisonOptions(_flags & IAGAttributeTypeFlagsComparisonModeMask) | IAGComparisonOptionsCopyOnWrite;
+         if (_layout == nullptr) {
+@@ -81,6 +103,7 @@ class AttributeType {
+         ValueLayout layout = _layout == ValueLayoutTrivial ? nullptr : _layout;
+         return LayoutDescriptor::compare_partial(layout, (const unsigned char *)lhs + offset,
+                                                  (const unsigned char *)rhs + offset, offset, size, comparison_options);
++#endif
+     }
+ 
+     void destroy_self(Node &node) const {
 diff --git a/Sources/ComputeCxx/Closure/IAGClosure.cpp b/Sources/ComputeCxx/Closure/IAGClosure.cpp
 index cc06871..35092d1 100644
 --- a/Sources/ComputeCxx/Closure/IAGClosure.cpp
@@ -579,6 +620,39 @@ index cc06871..35092d1 100644
  void IAGReleaseClosure(IAGClosureStorage closure) {
      if (closure.context) {
          void *mutable_context = const_cast<void *>(closure.context);
+diff --git a/Sources/ComputeCxx/Comparison/IAGComparison.cpp b/Sources/ComputeCxx/Comparison/IAGComparison.cpp
+index ef36937..e64862c 100644
+--- a/Sources/ComputeCxx/Comparison/IAGComparison.cpp
++++ b/Sources/ComputeCxx/Comparison/IAGComparison.cpp
+@@ -3,6 +3,7 @@
+ #include "Comparison/LayoutDescriptor.h"
+ #include "Swift/ContextDescriptor.h"
+ #include "Swift/Metadata.h"
++#include <cstring>
+ 
+ const void *IAGComparisonStateGetDestination(IAGComparisonState state) { return state->destination; }
+ 
+@@ -14,12 +15,20 @@ IAGTypeID IAGComparisonStateGetFieldType(IAGComparisonState state) { return stat
+ 
+ bool IAGCompareValues(const void *destination, const void *source, IAGTypeID type_id, IAGComparisonOptions options) {
+     auto type = reinterpret_cast<const IAG::swift::metadata *>(type_id);
++#if defined(__wasi__)
++    // [wasm32] LayoutDescriptor mis-compares non-trivial types on wasm32 (64-bit pointer/HeapObject
++    // size assumptions) → returns "equal" for CHANGED values, so changed views never re-render
++    // (board doesn't repaint after a move). Conservative byte compare instead. Mirrors
++    // AttributeType::compare_values. (See repros/openswiftui-wasm/RESUME.md — the re-render fix.)
++    return memcmp(destination, source, type->vw_size()) == 0;
++#else
+     auto layout = IAG::LayoutDescriptor::fetch(*type, options, 0);
+     if (layout == IAG::ValueLayoutTrivial) {
+         layout = nullptr;
+     }
+     return IAG::LayoutDescriptor::compare(layout, (const unsigned char *)destination, (const unsigned char *)source,
+                                          type->vw_size(), options);
++#endif
+ }
+ 
+ const unsigned char *IAGPrefetchCompareValues(IAGTypeID type_id, IAGComparisonOptions options, uint32_t priority) {
 diff --git a/Sources/ComputeCxx/Comparison/LayoutDescriptor.cpp b/Sources/ComputeCxx/Comparison/LayoutDescriptor.cpp
 index aaef2bb..e2170c9 100644
 --- a/Sources/ComputeCxx/Comparison/LayoutDescriptor.cpp

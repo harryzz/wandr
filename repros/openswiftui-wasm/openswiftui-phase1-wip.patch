@@ -182,26 +182,27 @@ index c048566..6d6ce29 100644
              }
              item.retain()
 diff --git a/Sources/OpenSwiftUICore/View/DynamicViewContent/ForEach.swift b/Sources/OpenSwiftUICore/View/DynamicViewContent/ForEach.swift
-index ba15ff2..f5221f8 100644
+index ba15ff2..56b8aa3 100644
 --- a/Sources/OpenSwiftUICore/View/DynamicViewContent/ForEach.swift
 +++ b/Sources/OpenSwiftUICore/View/DynamicViewContent/ForEach.swift
-@@ -573,8 +573,14 @@ private class ForEachState<Data, ID, Content> where Data: RandomAccessCollection
+@@ -573,7 +573,16 @@ private class ForEachState<Data, ID, Content> where Data: RandomAccessCollection
      }
  
      func eraseItem(_ item: Item) {
 -        item.subgraph.willRemove()
--        parentSubgraph.removeChild(item.subgraph)
 +        // A stale item (seed != seed) may have had its subgraph invalidated already (refcount → 0
-+        // via the parent cascade). willRemove() on an invalidated/freed subgraph faults in
-+        // apply_tmpl. Mirror ViewList.Subgraph.remove(from:), which guards the same ops with isValid
-+        // (the refcount==0 short-circuit makes it safe without dereferencing the subgraph).
++        // via the parent cascade). willRemove() on an invalidated subgraph faults in apply_tmpl
++        // (the traversal), so guard ONLY that. But removeChild must run UNCONDITIONALLY: it just
++        // unlinks the child from the parent (no traversal, safe with the foreign-ref keeping the
++        // storage alive). Skipping it leaves the invalidated item's subgraph as a child of the
++        // parent, so its stale output keeps rendering — e.g. the consumed tile of a 2048 merge
++        // ghosts under the merged tile ("2" drawn over "4"). See repros/openswiftui-wasm/RESUME.md.
 +        if item.isValid {
 +            item.subgraph.willRemove()
-+            parentSubgraph.removeChild(item.subgraph)
 +        }
+         parentSubgraph.removeChild(item.subgraph)
          item.isRemoved = true
          item.timeToLive = 0
-         item.invalidate(isInserted: true)
 diff --git a/Sources/OpenSwiftUICore/View/Input/ViewListContent.swift b/Sources/OpenSwiftUICore/View/Input/ViewListContent.swift
 index 9bc7632..ae99b4a 100644
 --- a/Sources/OpenSwiftUICore/View/Input/ViewListContent.swift
