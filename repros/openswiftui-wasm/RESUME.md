@@ -1,3 +1,342 @@
+# ✅✅ CRASH ROOT CAUSE FOUND + FIXED (2026-06-27 pm): unbounded existential-compare recursion → shadow-stack overflow into Swift metadata pool
+
+**The post-freeze `uninitialized element` crash was UNBOUNDED RECURSION in Compute's existential comparison.**
+`compare_existential_values` (LayoutDescriptor.cpp ~595) fetched the layout of the EXISTENTIAL CONTAINER
+type (`fetch(reinterpret_cast<const swift::metadata&>(type),...)`) and walked it over the PROJECTED payload.
+That layout's first entry is itself an `Existential`, so `compare()` re-entered `compare_existential_values`
+on the SAME type without bound → the wasm shadow stack (no guard page) overflowed INTO the Swift metadata
+pool → the shared `any ViewList` existential metadata's VWT slot (mem[meta-4]) was zeroed → the value-witness
+`destroy` in the `RuleContext.value` setter dispatched through a NULL funcref → `wasm trap: uninitialized element`.
+
+**THE FIX (LayoutDescriptor.cpp compare_existential_values):** compare the projected payload against its
+DYNAMIC type's layout/size, not the existential container's:
+```c
+  ValueLayout wrapped_layout = fetch(*lhs_dynamic_type, options, 0);          // was: (swift::metadata&)type
+  return compare(layout, lhs_value, rhs_value, lhs_dynamic_type->vw_size(), options);  // was: type.vw_size()
+```
+This bounds the recursion to the real nesting depth (WrappedList.base unwraps to EmptyViewList/array). PROVEN
+by a write-tripwire on the victim metadata's VWT slot (latched in value_set_internal): goes SILENT with the fix;
+board now plays (`MOVE 0 tiles=3`, `MOVE 1 tiles=4`) where it crashed at move 0 before.
+
+METHOD: a write-tripwire (`*((void*const*)&metadata - 1) == nullptr → __builtin_trap`) anchored on
+value_set_internal's `metadata` param + `-D max-backtrace` named the exact step (`compare_values`) and then the
+exact recursion site, after 4 agent theories (CoW destructive-compare, region relocation, immortal-Subgraph,
+InlineHeap) all FAILED their build-test. Lesson: when theories keep failing, instrument to catch the writer.
+
+Also applied (device-verified-correct per [[reference-openswiftui-immortal-fix]], but NOT this crash's cause):
+immortal Subgraph CF storage — gate `CFRelease` of IAGSubgraphStorage under `!__wasi__` (Subgraph.cpp clear_object,
+IAGSubgraph.cpp IAGSubgraphSetCurrent), since objc_bridge(id) is empty on wasm so Swift can't ARC-manage refs.
+
+## 🔲 NEXT (still RED): "reading from invalid source attribute" after move 2
+`DynamicLayoutViewChildGeometry.updateValue` (DynamicLayoutView.swift:108) reads `childGeometries.count` →
+`LayoutView` (LayoutView.swift:189) reads `layoutComputer` (an attr in an INVALIDATED subgraph) → add_input
+precondition (Graph.cpp:679). This is the DynamicLayoutViewChildGeometry/"accessing invalidated subgraph" family
+the immortal memo lists as band-aided. The CF immortal-storage fix keeps the STORAGE alive but the graph still
+invalidates the NODE, so it doesn't cover this. Needs the invalidation-lifecycle fix (or the guard the prior
+session used). TODO.
+
+### Triangulation (2026-06-27 pm) — move-2 root is Compute page-recycle, NOT the OpenSwiftUI reconciliation
+Diffed our OpenSwiftUI vs upstream OpenSwiftUIProject/main: the reconciliation LOGIC is upstream-faithful
+(DynamicContainer/DynamicView/ViewListContent = upstream `Status: Complete`; DynamicLayoutView identical
+except our transition-capability gate). The ONLY divergences we carry are BAND-AIDS for ONE family —
+"an invalidated subgraph referenced while its page is recycled": DynamicContainer `if subgraph.isValid`
+guard on `subgraph.index=`; DynamicView `item.isValid` guard; ViewListContent wasm `isIdentical` workaround.
+Apple/upstream needs none (Apple AG keeps an invalidated subgraph's storage alive PAST the readers); our
+wasm Compute recycles its PAGE eagerly (zone_id churn 205→141 under a live weak indirect = the move-2 fault).
+Band-aiding the un-guarded point (Compute add_input weak-indirect read) just MOVES the symptom to the next
+reader — guards can't fix it. REJECTED approaches: (a) add_input weak-tolerance (moved symptom LayoutView→
+RendererLeafView); (b) main-handler graft (Part A drain in Graph::with_main_handler + Part B
+WandrRendererHost.renderOnce withMainThreadHandler wrap) — REGRESSED to a move-0 crash because it grafts
+Apple's ASYNC-render main-handler onto our SYNC render path. **REAL FIX (in progress) = Table page-quarantine**
+(prior session's Table.h+Table.cpp; the immortal memo says it lets the band-aids be deleted): epoch-tag pages
+freed by a mid-update subgraph invalidation; alloc_page may only reuse pages from a strictly-earlier epoch;
+bump epoch at the outermost-update boundary → reuse always lands past the readers, render-path-agnostic,
+self-reclaiming (no leak). KEY LESSON (user, 30 yrs): OpenSwiftUICore is a REIMPLEMENTATION — "works on Apple"
+only proves the `Status: Complete` files; WIP/Blocked paths (and our band-aids) can diverge, so the fix may be
+in our Compute OR our OpenSwiftUI band-aids, just never in code that faithfully mirrors Apple.
+
+### ✅ move-2 FIXED + committed; move-4 = transition/animation (our refactor)
+move-2 fix LANDED (committed: OpenSwiftUI ae554150 — WandrRendererHost.renderOnce/redraw wrapped in
+`viewGraph.graph.withoutSubgraphInvalidation`; Compute 5b40c3c — reverted the per-update dtor flush). The
+side-effect-free deferral (toggles only _deferring_subgraph_invalidation, NOT main-thread dispatch like
+withMainThreadHandler which regressed move-0) holds invalidated-subgraph teardown across the whole render →
+no mid-render page free under live readers. Board now plays MOVE 0-3 (merges work, score=8).
+move-3→4 follow-on (UpdateStack::update updating an invalidated-DEFERRED subgraph) was RULED OUT — a dispatch-site
+`is_valid()` guard did NOT clear move-4 (failing node's subgraph is valid). **move-4 root = the tile
+ANIMATION/TRANSITION path**: failing rule = `ForEachChild<…ModifiedContent<…TileView,_FrameLayout>,_PositionLayout>,
+_TraitWritingModifier<TransitionTraitKey>>,_AnimationModifier<CGPoint>>>` dispatches an OOB funcref (node valid,
+type_id valid). Seat = OUR "rendering-capability" refactor: WandrApp sets `supportsViewTransitions: false`, the
+DynamicLayoutView gate (`if let transition, …supportsViewTransitions`) renders the element DIRECTLY but the content
+keeps the Transition/Animation modifiers. Our divergences vs upstream: RendererConfiguration.swift (−87),
+ForEach.swift (−10), DynamicLayoutView gate. Prior session ([[reference-openswiftui-immortal-fix]]) ran this demo
+with **transitions ON** (`supportsViewTransitions: true` + a DynamicContainer index fix, already present at :249).
+So move-4 = our incomplete/regressed transition-animation handling, NOT Compute.
+
+## ◀ REMAINING TASK (the ONLY thing between here and a fully-playable render) — 2026-06-27 consolidation
+**Everything deep is FIXED + COMMITTED. Engine + game logic + stability = SOLVED.** Proven: with
+`supportsViewTransitions:true` (WandrApp.swift:54) the demo plays ALL 60 moves, score=4264, exit 0, ZERO
+crashes. The remaining bug is ONLY the **animated-tile-content rendering** — our `[WIP] ContentTransition`
+machinery (DynamicLayoutView.swift: `MakeTransition`/`ViewListTransition`/`T.makeView`, lines ~121-163,246-259).
+It has TWO manifestations, ONE root:
+- **supportsViewTransitions=false (current committed baseline):** tiles render correctly (text+positions,
+  `rendered=["2@363,166",…]`) for moves 0-3, then the animated `ForEachChild` update OOBs at move 4:
+  `wasm trap: undefined element: out of bounds table access`, bounded 19-frame recursion (NOT a cycle),
+  bottom = `Rule.swift:29`/`UpdateStack.cpp:258` rule-body dispatch for
+  `type=ForEachChild<Array<IndexedTile<IdentifiedTile>>, Int, ModifiedContent<…TileView,_FrameLayout>,
+  _PositionLayout>, _TraitWritingModifier<TransitionTraitKey>>, _AnimationModifier<CGPoint>>>`. The failing
+  node has a VALID subgraph and VALID type_id (~75) — so it's a corrupt funcref in the content's update,
+  NOT an invalidated subgraph (a dispatch-site `is_valid()` guard did NOT help) and NOT a corrupt type_id.
+- **supportsViewTransitions=true:** no crash (all 60 moves) BUT the transition path drops the tile values
+  → `CREATEBLOCK val=nil`, no text drawn, `rendered=[]` (genuinely blank; bodies ARE evaluated [61 BODY-EVAL]
+  and blocks ARE created [1493], but with nil values). So the transition `T.makeView`/`ViewListTransition`
+  doesn't propagate the element's value/geometry to the display list.
+
+**TWO ways to finish (either gives renders + 60 moves):**
+  A. **Complete the transition value-propagation** (with transitions ON): fix `MakeTransition.visit` →
+     `T.makeView(view:inputs:body:)` / `ViewListTransition` so the element body's value/geometry reach the
+     display list (currently blocks come through val=nil). This is the prior session's path (transitions ON
+     worked there). Start: DynamicLayoutView.swift:130-153 + the Transition.makeView impl + ViewListTransition.
+  B. **Fix the ForEachChild OOB in the direct path** (transitions OFF, keeps the working render): coredump the
+     OOB call_indirect at the animated `ForEachChild` update (`-D coredump -D debug-info=y`; recover the OOB
+     funcref index + the node's `self`/content witness). The corrupt dispatch is reached only via the direct
+     render (`outputs = body(elementInputs)`, DynamicLayoutView.swift:258), NOT the transition path — so it's
+     in how the direct path constructs/updates the `_AnimationModifier<CGPoint>` content.
+  Recommend A (matches the prior working approach; transitions ON already proves the engine is solid).
+
+**Repro:** `cd repros/openswiftui-wasm/probe && bash build-wasi.sh && wasmtime run --env
+SWIFT_DETERMINISTIC_HASHING=1 -W max-wasm-stack=8388608 .build/wasm32-unknown-wasip1/debug/probe.wasm`.
+Flip WandrApp.swift:54 supportsViewTransitions true/false to switch manifestations. Method that works here:
+instrument/coredump to catch the exact writer (NOT theorize — relocation/main-handler theories both failed
+their build-test this session; the write-tripwire + the transitions-ON A/B are what actually localized things).
+
+---
+
+# ✅ ROOT CAUSE FOUND + FIXED (2026-06-27): existential compare_values copy-paste bug in Compute
+
+**The freeze was a one-line copy-paste bug in Compute's value comparison**, NOT in OpenSwiftUI.
+
+`Compute/Sources/ComputeCxx/Comparison/LayoutDescriptor.cpp`, `compare_existential_values` (~line 588):
+```cpp
+unsigned char *lhs_value = (unsigned char *)type.project_value((void *)lhs);
+unsigned char *rhs_value = (unsigned char *)type.project_value((void *)lhs);  // BUG: lhs → must be rhs
+```
+`rhs_value` was projected from `lhs`, so **every existential (`any ViewList`, `any View`, …) compared
+against itself → always "equal/unchanged."** The graph therefore never propagated changes through the
+existential-typed attributes the whole ViewList/DisplayList pipeline runs on → dynamic ForEach never
+re-materialized → board frozen at the 2 initial tiles. **Fix: `lhs` → `rhs`.** With the fix the probe's
+board grows (`items` 2 → 4 …).
+
+**SECOND issue, now unmasked** (prior session also found it): fixing the compare surfaces a
+`wasm trap: uninitialized element` in `ForEachList.Init.updateValue` → `RuleContext.value` setter
+(the StatefulRule update path). Prior (wiped) session attributed this to a **double-destroy** in
+`Compute/Sources/ComputeCxx/Subgraph/Subgraph.cpp` (indirect-node teardown — two passes: Loop1
+`remove_node`/`remove_indirect_node` @233-250, Loop2 `node->destroy` @253-279) + a `Data/Table.{h,cpp}`
+quarantine. STILL TO FIX. The crash is now reachable only because growth works.
+
+**Why it took so long (process lesson — see `[[feedback_read_source_first]]`):** the symptom is "change
+detection fails" → the governing primitive is `compare_values` in Compute. Instead of reading that
+primitive, ~16 rebuild-and-trace cycles were spent in OpenSwiftUI (ForEach/DynamicContainer/DynamicView
+isValid guards, render drive) chasing symptoms one layer up. The fix was only found after going DOWN
+to the Compute comparison code. **Rule: when change-detection misbehaves, test `compare_values` in
+isolation FIRST.**
+
+---
+
+# 🐞 OPEN REGRESSION: dynamic-ForEach render FREEZE on the clean-shim stack (2026-06-26)
+
+**Symptom:** the eleev/2048 demo renders a **static board** — the visual (wandr-host desktop) and
+the stdout probe both show only the **2 initial tiles, frozen at fixed positions**, while the game
+model advances normally. The board never updates as tiles spawn/slide/merge.
+
+**This is a NEW regression introduced TODAY by `0f4f20bf` (OpenSwiftUI "consumer-side integration
+for Compute's WasiClosureShim").** It is the ONLY OpenSwiftUI commit since the demo last animated
+("2 days ago" per user). Everything below `0f4f20bf` is dated 2026-06-19 and was working.
+
+## Stack / how to repro
+- Clean stack (persistent): `~/wandr/tests/OpenSwiftUIProject/{Compute,OpenAttributeGraph,OpenSwiftUI}`.
+  - `Compute` HEAD = the `WasiClosureShim` (`1a3c4a3`); `OpenSwiftUI` HEAD = `0f4f20bf`.
+- **Probe (fast, stdout, the diagnosis vehicle):** `repros/openswiftui-wasm/probe` →
+  `bash build-wasi.sh` then `wasmtime run --env SWIFT_DETERMINISTIC_HASHING=1 -W max-wasm-stack=8388608
+  .build/wasm32-unknown-wasip1/debug/probe.wasm`. Drives the EXACT demo render path
+  (`wandrApplyChange`→`wandrRender`→`wandrRedraw`), 60 moves, prints the rendered board.
+- **Visual demo:** `repros/swift-canvas-spike/build-openswiftui-demo.sh` → run on x86_64 wandr-host:
+  `env -u WAYLAND_DISPLAY DISPLAY=:0 WINIT_UNIX_BACKEND=x11 WANDR_DESKTOP_SIZE=500x1000 setsid
+  runtime/wandr-host/target/x86_64-unknown-linux-gnu/release/wasm-android-host
+  repros/swift-canvas-spike/openswiftui-demo.component.wasm` — **MUST run with Bash
+  `dangerouslyDisableSandbox:true`** (the sandbox SIGKILLs the GUI/X11 → exit 144). Wayland crashes
+  on WSLg; force X11.
+
+## Diagnosis (probe-proven — ruled OUT and CONFIRMED, layer by layer)
+- ❌ NOT the host present/redraw (earlier Slint/dioxus + 2-days-ago 2048 animated fine).
+- ❌ NOT the present rate / WSLg flooding (same uncapped auto-play worked 2 days ago).
+- ❌ NOT the `render(style:) is unimplemented` warning (benign — handles `.color` fills at
+  ShapeStyleRendering.swift:186-192; line 203 is a blanket shape-EFFECTS FIXME, fires on every shape).
+- ❌ NOT the `0f4f20bf` `isValid` guards — `Subgraph::is_valid()` = `_invalidation_state == None`,
+  correctly TRUE for live items.
+- ✅ `ContentView.body` re-evals every move (`BODY-EVAL` 61×, reads `tiles=2→11`).
+- ✅ `TileBoardView` re-renders with the **new matrix** (`TBV-BODY matrix=2→11` with live tile values).
+- ✅ The tiles `ForEach(matrix.flatten(), id: \.tile.id)` rule `update(view:)` gets the **new data**
+  (`FES-UPDATE n=5,6,7,8,9,10,11` all observed; `const=false` everywhere — NOT the constant-data path).
+- ✅ Items are **created and kept** (`FES-NEW=22`, `FES-ERASE=2`).
+- ❌ **The render walks a STALE `ForEachState`.** `FES-NEW` shows a state being updated with
+  `data=2` (the initial view) at the END of the run, while `update(view:)` elsewhere gets `n=11`.
+- **Render gate:** `ForEachChild.updateValue` (ForEach.swift:1486) emits a view only if
+  `state.items[id]` exists AND `item.seed == state.seed`. Only the stale state's 2 items pass.
+
+## ROOT HYPOTHESIS (where a fresh session should start)
+**The `ForEachState`/`Info` attribute IDENTITY is splitting under the clean-shim foreign-ref
+`Subgraph`.** `ForEachChild`'s `@Attribute var info` resolves to a DIFFERENT `ForEachState` instance
+(stale, `data=2`) than the one `update(view:)` mutates with the live data. The render therefore
+walks 2 frozen tiles. Suspect surface = exactly what `0f4f20bf` changed around Subgraph identity:
+`ScrapeableContent._scrapeID`/`rawIdentity`, `Subgraph.isIdentical`, `ViewListContent` child wiring.
+
+### Three concrete next experiments (cheapest discriminator first)
+1. **Bisect:** temporarily revert ONLY the `0f4f20bf` `ScrapeableContent._scrapeID`/`rawIdentity`
+   change (Data/Util/ScrapeableContent.swift) and re-run the probe. If tiles animate → culprit found.
+2. Trace `ForEachChild.info` attribute identity (the `Info` AGAttribute id) vs the id of the state
+   `update(view:)` mutates — confirm they diverge.
+3. Check `Subgraph.rawIdentity`/`isIdentical` stability for the ForEach child subgraph across moves
+   (is the foreign-ref identity unstable, splitting the StatefulRule state?).
+
+## Instrumentation STILL IN PLACE (remove or reuse)
+- `OpenSwiftUI/.../ForEach.swift`: `print()` traces — `FES-UPDATE` (~line 344), `FES-NEW`
+  (`item(at:)` else), `FES-ERASE` (`eraseItem`), `FES-WALK` (in `estimatedCount` — **never fires**,
+  delete it).
+- `probe/Sources/Probe/ProbeApp.swift`: `BODY-EVAL` in `ContentView.body`; `PrintSink.drawText`
+  records `"value@x,y"`; `wandrRedraw()` added to the 60-move loop (matches the demo paint path).
+- `probe/Sources/Probe/eleev/TileBoardView.swift`: `TBV-BODY` print at top of `body`.
+- `swift-canvas-spike`: demo build re-pointed to the persistent stack; `ComputeStubs` target added
+  (print_cycle stub, needs `include/` dir); `-Xcc -include wasi_compat.h` added to the build script
+  (the `uint` gap). The bounded-5000-move auto-play in `OpenSwiftUIDemo/main.swift` is intact.
+
+---
+
+# ✅ ALL THREE BUGS FIXED + DEVICE-VERIFIED (2026-06-25)
+
+**The aarch64 device `0.42` crash was NOT a "wasmtime Cranelift miscompile."** It was the
+cross-module foreign-reference **over-release** all along (a float `0.42` landing where a freed
+`Subgraph` storage pointer was reused). Proven by: making the CF storage **immortal** (Swift
+foreign-ref no-op retain/release) eliminates the crash on BOTH x86 (desktop) AND aarch64 (device,
+Pixel 2 XL cross-AOT), under the full auto-play + `interpolatingSpring` animation + transitions.
+
+## Root cause (unified for B1 over-release + B2 animation crash)
+Off-Apple there is no `objc_bridge` to unify Swift ARC with the CF refcount. The fork imported
+`Subgraph` as a foreign-reference type with `retain:IAGSubgraphRetainRef`/`release:...`, but the
+cross-module retain/release is **asymmetric** (e.g. `_ViewList_Subgraph.deinit` / `ItemInfo`
+array-destroy releases a storage the live graph node still references) → over-release → double-free
+/ UAF. The animation just amplifies the array churn (same root).
+
+## THE FIX (clean, no guards)
+1. **Immortal storage** — `IAGSubgraphRetainRef`/`ReleaseRef` are no-ops on wasm (a legitimate
+   Swift foreign-reference *immortal* mode). The small CF wrapper leaks (bounded); the `IAG::Subgraph`
+   node it points to is still freed normally by the graph. Eliminates over-release/double-free/UAF
+   for **every** Subgraph reference at once.
+2. **B3 transitions** — set `supportsViewTransitions: true` + fixed the upstream constant-index bug
+   at `DynamicContainer.swift` line ~440 (`displayMap[validCount]` → `displayMap[validCount + index]`;
+   only reachable when `removedCount != 0`, i.e. transitions on).
+3. Real roots still in place: `Data/Table.cpp` zone-zeroing (wasi mmap), Subgraph/Graph member inits.
+
+## ALL band-aids REMOVED (were dead code once immortal):
+`from_cf` liveness guard, all 11 softened "accessing invalidated subgraph" preconditions,
+`DynamicLayoutViewChildGeometry` offscreen/unconditional-set (reverted to upstream), the
+`DynamicContainer.swift:453` isValid guard. All debug instrumentation removed.
+
+## Verified
+- Desktop x86 JIT: 3/3 × 90s survive, animation + transitions ON, 0 faults, 0 dead-hits.
+- Device Pixel 2 XL aarch64 cross-AOT: deployed, auto-plays (move/3 frames, thousands of springs),
+  STABLE, NO `0.42`. The crash a prior session called an unfixable wasmtime miscompile is GONE.
+- Known tradeoff: immortal = small bounded leak (CF storage wrappers only). Future: real ref-counted
+  free if the leak ever matters.
+
+---
+(historical notes below)
+
+# OpenSwiftUI on wasm — resume point (updated 2026-06-24)
+
+## 🟢 DEVICE ROOT CAUSE FOUND — it's a Wasmtime aarch64 Cranelift MISCOMPILE, not our code (2026-06-24)
+The device `0.42` "UAF" (SIGSEGV, `x4=0x3ed70e9c` over a `Subgraph*`, in the geometry/display-list walk
+`function[3559]`/`[3564]`/`[3598]`) is **NOT a use-after-free in OpenSwiftUI/Compute and NOT a foreign-ref
+ARC bug.** It is an **aarch64-only Wasmtime Cranelift code-generation miscompile.** Proven by a clean A/B
+of the *identical* demo (real canvas renderer + interpolatingSpring animation + auto-moves):
+
+| Target | Renderer | Result |
+|---|---|---|
+| x86 **JIT** (desktop host) | real canvas | ✅ survives 45 s, no fault |
+| x86 **AOT** (`wasmtime compile` probe) | PrintSink | ✅ survives 60 moves, exit 0 |
+| **aarch64 AOT** (device) | real canvas | ❌ `0.42` SIGSEGV on manual play |
+
+So the only variable that flips survive→crash is the **target arch (x86 → aarch64)**; JIT-vs-AOT and our
+code are held identical. The foreign-ref machinery was verified CORRECT (CF `CFRuntimeBase` storage,
+`CFRetain`/`CFRelease`, right `RETURNS_RETAINED`/`UNRETAINED` annotations — Swift Forums + cxx-interop docs).
+
+RULED OUT:
+- **Not the foreign-ref/Subgraph lifetime** (machinery correct; x86 runs the identical path clean).
+- **Not CVE-2026-34971** (that aarch64 Cranelift load miscompile needs memory64 + was fixed ≤43.0.1; we're
+  wasm32 on 45→46). But it proves the *class* of aarch64 Cranelift miscompiles is real & recent.
+- **Not a Wasmtime version regression**: persists on **45.0.0 AND 46.0.0** (host bumped to 46 — clean, kept;
+  one API fix: `Component::exports` now yields `ComponentExtern`, fixed in `app_loader.rs`).
+- **opt-level=none does NOT fix it** (2026-06-24): re-AOT'd the device at `cranelift_opt_level(None)` →
+  the `0.42` didn't recur but a DIFFERENT aarch64 miscompile appeared (`0x690` SEGV_MAPERR, crash-loop in
+  the launcher's Compose code). So the aarch64 backend miscompiles at BOTH opt levels, different code. Not a
+  usable workaround → REVERTED (device restored to wasmtime-46 speed, stable).
+
+CONSEQUENCES — everything downstream was a SYMPTOM of garbage pointers, not real bugs:
+- The load-bearing `isValid` guards (ForEach.eraseItem, ViewList.remove, DynamicView×2, DynamicContainer)
+  STAY — they're the only on-device mitigation until the aarch64 codegen is fixed. (Stripping them →
+  immediate crash, confirmed.)
+- The merge-ghost and the "transitions blank off-Apple" are very likely the SAME garbage-pointer corruption,
+  not separate OpenSwiftUI gaps. Do not chase them as framework bugs until the codegen root is fixed.
+- Shippable device config = **animation OFF + guards** (mostly stable; the spring is the strongest trigger).
+
+NEXT: (1) minimize a repro + file upstream at github.com/bytecodealliance/wasmtime (the A/B + the `0.42`
+fault is the evidence); (2) try a Wasmtime git-main / nightly (a post-46 aarch64 Cranelift fix may exist);
+(3) commit the wasmtime-46 bump. The desktop integration remains the solid, shipped deliverable.
+
+---
+## (superseded) earlier guess — 2 deep off-Apple roots
+Desktop (x86 JIT) is fully green. On the **Pixel 2 XL (aarch64 cross-AOT)** the demo renders + redraws
++ is launch-stable, but TWO real off-Apple/wasm-platform gaps remain — both BELOW the OpenSwiftUI/Compute
+source we control, established by direct device experiments this session:
+
+1. **aarch64 `Subgraph`-lifetime UAF** (the crash + the merge-ghost share this root).
+   - Real play with the position `.animation(.interpolatingSpring…)` ON → SIGSEGV, `x4=0x3ed70e9c` (the
+     interpolated 0.42 CGFloat) over a `Subgraph*`, `ui.cwasm function[3598]+16` (a display-list/geometry
+     traversal walking a stale subgraph). **Auto-moves don't trip it; varied real moves do.**
+   - The foreign-ref `Subgraph` ARC (CFRetain/CFRelease) keeps storage alive on **x86 JIT** (probe survives
+     3/3 across heap layouts — robust, not luck) but **NOT under aarch64 cross-AOT** → storage freed/reused
+     (becomes the 0.42 ViewGeometry), later traversal faults. Same wasm bytecode, different wasmtime
+     compile → a **wasmtime aarch64-AOT codegen** (or CF-refcount-on-aarch64) issue. NEXT decisive probe:
+     cross-AOT the SAME wasm for x86 and run locally — if it crashes too → AOT-codegen bug, not aarch64.
+   - The `isValid` guards (ForEach.eraseItem, ViewList.remove, DynamicView lastItem+reuse, DynamicContainer
+     index) are **LOAD-BEARING on aarch64** — reverting them to upstream → crash returns on real play. They
+     are NOT redundant (the foreign-ref doesn't fully protect aarch64). Keep them until the root is fixed.
+   - **Merge-ghost** (old value drawn under merged tile, e.g. "8" under "16") = SAME root: a removed child
+     whose storage the aarch64 ARC freed leaves a stale parent `_children` entry that keeps rendering.
+     Traced ALL removal paths — `IAGSubgraphRemoveChild` (`if(child->subgraph)` no-ops on a nulled child),
+     `Subgraph::remove_child`, `invalidate_and_delete_` (does `for parent: parent->remove_child(*this)`) —
+     they all clean up correctly on a VALID lifecycle, so the ghost only appears once the aarch64 ARC has
+     already corrupted the lifecycle. Not cleanly fixable above the lifetime root.
+   - **MITIGATION (shipped):** `TileBoardView.swift` position `.animation` is DISABLED → no crash, tiles
+     snap, board redraws. Cosmetic ghost may still appear intermittently on merges.
+
+2. **Off-Apple transition rendering is a genuine gap** (separate from #1).
+   - `_RenderingCapabilities.supportsViewTransitions` is forced **false** in `WandrApp.swift`. Flipping it
+     **true** → the board renders as a **solid grey rectangle (no grid, no tiles)**: `Transition.makeView`
+     (pushes the element as a `PlaceholderContentView` modifier-body for the transition's `Body`) does NOT
+     produce the element output off-Apple. Confirmed NOT caused by our guards (stays blank with all guards
+     reverted) and NOT the crash (no crash, just blank). `Animation/Transition/*` is full of
+     `_openSwiftUIUnimplementedFailure()` stubs. Implementing this is the principled fix that would let
+     transitions render → proper insert/remove → no ghost, *if* #1 is also solved.
+
+   **Redraw was a real bug, now FIXED** (do not regress): off-Apple value comparison must `memcmp` —
+   `AttributeType.h::compare_values` + `compare_values_partial` and `IAGComparison.cpp::IAGCompareValues`
+   each have `#if defined(__wasi__) … memcmp(…vw_size())…`. Without it, @State changes don't re-render.
+
+   Principle (user, 2026-06-24): do NOT patch core OpenSwiftUI or hack one app to "work" — fix the
+   non-Apple path so all apps work. The guards are a tolerated stopgap ONLY because the aarch64 root is
+   below us; the two roots above are the real "make OpenSwiftUI work off-Apple" project.
+
+---
 # OpenSwiftUI on wasm — resume point (updated 2026-06-23, ✅ swiftui-2048 PLAYABLE on desktop)
 
 ## ✅✅✅ INTEGRATED onto UPSTREAM Compute (2026-06-23 latest) — foreign-ref the blessed way; 3/3 survive
