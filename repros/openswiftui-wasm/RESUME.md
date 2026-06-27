@@ -109,6 +109,28 @@ Flip WandrApp.swift:54 supportsViewTransitions true/false to switch manifestatio
 instrument/coredump to catch the exact writer (NOT theorize — relocation/main-handler theories both failed
 their build-test this session; the write-tripwire + the transitions-ON A/B are what actually localized things).
 
+### PATH A EXPLORED (2026-06-27 pm) — partial, reverted; key learnings
+Tried completing the transition render (transitions ON). Findings:
+- The blank-render root = `ApplyTransitionModifier._makeView` (Transition.swift:151) is an UPSTREAM STUB returning
+  `.init()` (drops the wrapped content; PlaceholderContentView never resolved → makeElt never called). Filling it
+  with the standard passthrough `body(_Graph(), inputs)` MAKES TRANSITIONS RENDER (tiles draw via the transition
+  path, MK-BODY fires). **But NOT keepable as-is for Path B:** the tile's `.transition(…)` modifier routes through
+  ApplyTransitionModifier._makeView in the DIRECT path too, so the passthrough changes direct-render behavior →
+  regressed. (Reverted; re-apply only alongside transitions-ON for a future animated renderer.)
+- With transitions ON + the _makeView fix, the next crash is a CHAIN of transition-machinery bugs: AnyTransition.swift:20
+  / CombiningTransition OOB-MEMORY evaluating the eleev tile's composed `AsymmetricTransition<Combining<Opacity,Move>,…>`
+  (AnyTransition+TileGenerator.swift:19). Transitions are genuinely WIP/unimplemented upstream → finishing them is a
+  multi-bug effort for an effect a STATIC snapshot renderer can't even show.
+- A probe-only debug print (TileBoardView.swift:70 `String(describing: block?.value)`) had its OWN value-witness OOB
+  (red herring; the eleev demo's debug line, not core).
+- **The move-2-4 crash is BUILD-LAYOUT-SENSITIVE** (recursive ForEach OOB-memory at move 2 ⟷ ForEachChild OOB-table at
+  move 4, varies per rebuild) = the signature of METADATA CORRUPTION (same family as the core existential-recursion
+  crash). So the remaining direct-path bug is a deep, build-sensitive metadata-corruption issue in the tile content
+  rendering (nested ForEach / animated `_AnimationModifier<CGPoint>` content) — needs the write-tripwire/coredump
+  method in a fresh focused session (a build-sensitive bug can't be pinned by reading/theorizing).
+RECOMMENDATION STANDS: static renderer doesn't need transitions; finish via Path B = pin the build-sensitive
+tile-content metadata-corruption crash with a write-tripwire on the corrupted metadata/funcref, like the core crash.
+
 ---
 
 # ✅ ROOT CAUSE FOUND + FIXED (2026-06-27): existential compare_values copy-paste bug in Compute
