@@ -315,6 +315,10 @@ public func nextFrameDelay() -> UInt32 { animPending ? 33 : 150 }
 // Swipe → GameLogic.move (down=0 start, up=1 release; dominant axis/sign picks direction).
 nonisolated(unsafe) private var swipeStartX: Float = 0
 nonisolated(unsafe) private var swipeStartY: Float = 0
+// [PHASE-A .active] track whether a button is held, so pointer MOVES are forwarded into the
+// gesture pipeline as .active phases only DURING a press (began → active… → ended) — a real drag
+// sequence, not hover. Without this the gesture pipeline only ever sees began → ended.
+nonisolated(unsafe) private var pointerPressing = false
 
 @_cdecl("exports_wasi_input_handlers_pointer_handler_on_pointer")
 public func onPointer(
@@ -324,8 +328,16 @@ public func onPointer(
     switch e.kind {
     case UInt8(EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_DOWN):
         swipeStartX = e.x; swipeStartY = e.y
+        pointerPressing = true
         wandrSendPointer(phase: 0, x: Double(e.x), y: Double(e.y), serial: ptrSerial)  // [PHASE-A PROBE]
+    case UInt8(EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_MOVE):
+        // [PHASE-A .active] forward moves DURING a press so OpenSwiftUI gestures receive .active
+        // phases (DragGesture). Additive: the hand-rolled swipe still uses the down→up delta.
+        if pointerPressing {
+            wandrSendPointer(phase: 1, x: Double(e.x), y: Double(e.y), serial: ptrSerial)
+        }
     case UInt8(EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_UP):
+        pointerPressing = false
         wandrSendPointer(phase: 2, x: Double(e.x), y: Double(e.y), serial: ptrSerial)  // [PHASE-A PROBE]
         ptrSerial &+= 1
         let dx = e.x - swipeStartX, dy = e.y - swipeStartY

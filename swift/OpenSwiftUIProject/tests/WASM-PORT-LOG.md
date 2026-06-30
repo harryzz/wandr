@@ -1435,6 +1435,28 @@ STATUS: root proven, NOT yet fixed. The generic IAG::vector push/pop/realloc all
     Deeper question for later: whether the input pipeline SHOULD emit an .active for a held press;
     the fix is correct regardless since an active-less gesture genuinely has zero duration.)
 
+  --- DRAGGESTURE PART A: the .active path (pointer moves → gesture pipeline) — DONE + VERIFIED ---
+    GOAL (split): Part A = make .active phases flow into OpenSwiftUI gestures (prereq for DragGesture);
+    Part B = implement `struct DragGesture` (NOT present in this port — only TapGesture/SpatialTapGesture/
+    DistanceGesture/DefaultLayoutGesture/SubviewsGesture exist; SpatialEvent + DistanceGesture primitives
+    are there to build on). FINDINGS (read end-to-end): the host→guest .active mapping already exists
+    (WandrApp.swift:97-101 — phase 1 → EventPhase.active) and the host dispatches KIND_MOVE on every
+    CursorMoved (lib.rs:969, regardless of button) / TouchPhase::Moved (lib.rs:943). The ONLY gap: the
+    demo's onPointer (repros/swift-canvas-spike/.../main.swift) handled only DOWN/UP and dropped
+    KIND_MOVE in `default: break`, so wandrSendPointer(phase:1) was never called → the gesture pipeline
+    only ever saw began → ended (this is also why G4's DurationGesture hit .ended with no .active).
+    FIX (Part A, demo only): track a `pointerPressing` flag (set on DOWN, cleared on UP) and forward
+    KIND_MOVE → wandrSendPointer(phase:1) WHILE pressing (a real began→active…→ended drag, not
+    hover-flooding). Purely additive — the hand-rolled swipe still uses the down→up delta.
+    VERIFIED on desktop (temp flushed [ELTRACE-A] in EventListener, since reverted): a press-drag-release
+    produced phase=began ×3 then phase=ACTIVE ×33, received by BOTH EventListener<TappableEvent> AND
+    EventListener<SpatialEvent> (the drag event type), no trap, and correctly NO TAP-FIRED (a moving drag
+    is not a tap). The .active path now flows end-to-end into the gesture pipeline.
+    NEXT = Part B: implement `struct DragGesture` faithfully on EventListener<SpatialEvent> + DistanceGesture
+    (min-distance), then drive a real drag in the demo. (Note: the hand-rolled draw-rect input routing in
+    onPointer STILL drives actual 2048 gameplay; the gesture pipeline remains a parallel probe until Part B
+    wires a real gesture to behavior.)
+
   METHOD / TOOLING (reusable, committed):
     * Fast symbolized backtrace, NO device round-trip / NO manual click:
       WANDR_DEBUG_SYNTH_TAP=1 (host hook in lib.rs, sibling of synth-key) fires a synthetic
