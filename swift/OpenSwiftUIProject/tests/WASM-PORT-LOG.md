@@ -1391,6 +1391,29 @@ STATUS: root proven, NOT yet fixed. The generic IAG::vector push/pop/realloc all
     different class from G1/G2. Next: implement LayoutGesture._makeGesture faithfully (read the
     DefaultLayoutGesture/LayoutGestureChildProxy path + how DefaultLayoutViewResponder expects the
     gesture outputs) rather than patch-to-green.
+    FIXED + VERIFIED (2026-06-30): LayoutGesture._makeGesture now returns `inputs.makeDefaultOutputs()`
+    (LayoutGesture.swift). Reasoning (read end-to-end, not guessed): the ACTUAL .onTapGesture is built
+    by GestureResponder.makeGesture (the override, GestureViewModifier.swift:374) via the modifier's
+    content gesture — NOT DefaultLayoutGesture. DefaultLayoutGesture._makeGesture (the stub) is reached
+    only on the BASE responder path (GestureResponder.makeSubviews → DefaultLayoutViewResponder.makeGesture
+    @63 → DefaultLayoutGesture._makeGesture) for plain non-gesture layout subviews, where the gesture has
+    Value==(), an empty updateEventBindings, and no phase behavior. makeDefaultOutputs() (GestureInputs.swift:113)
+    is the API's own factory for exactly that (a DefaultRule phase + indirect preference outputs); the caller
+    then overrideDefaultValues() with it. So it is the faithful minimal output, not a mask. The richer
+    LayoutGestureChildProxy/updateEventBindings machinery stays WIP upstream. Synth-tap: LayoutGesture.swift:24
+    trap GONE (grep 0); dispatch advances PAST graph BUILD into EVENT DISPATCH — GTRACE shows
+    VG.sendEvents → GestureGraph.sendEvents → runTransaction → (next trap). Tap event now flows through the
+    gesture pipeline.
+
+  --- BUG G4: DurationGesture.updateValue force-unwraps a nil `elapsed` during dispatch — NEXT TARGET ---
+    With G2+G3 fixed the synth-tap event reaches GestureGraph.sendEvents; during the transaction update,
+    `DurationGesture.updateValue` (DurationGesture.swift) traps at `let elapsed = elapsed!` (line ~112 .active /
+    ~120 .ended): "Unexpectedly found nil while unwrapping an Optional". elapsed is derived from `start`/`time`
+    (elapsed = time - start, else .zero/nil depending on childPhase) — nil here points at the gesture clock/
+    `time`/`start` wiring (consistent with the threading-shim note that withDelay timers don't fire yet on wasm).
+    Trips at a LATE frame (~12739), i.e. after the down dispatches, when the duration gesture's active/ended
+    timing is evaluated. Class = gesture timing/clock, distinct from G1-G3. NEXT (read source first): trace
+    DurationGesture's `time`/`start` attributes + how the gesture clock is fed on wasm before patching.
 
   METHOD / TOOLING (reusable, committed):
     * Fast symbolized backtrace, NO device round-trip / NO manual click:
