@@ -1,0 +1,5 @@
+TASK=Compute-wasm-correctness
+STEP=bug14+bug383-FIXED
+STATUS=complete
+LAST_SUCCESS=BOTH render-frame crashes fixed. #14=IndirectNode immutable ctor _mutable(false) init (uninitialized bitfield -> is_mutable() lie -> OOB). #383=Vector/Vector.h realloc_vector memset(_inline_buffer,0,...) after inline->heap memcpy (member-array auto-destruct re-ran ~cf_ptr -> double CFRelease -> subgraph-storage double-finalize). eleev 2048 demo now PLAYS CONTINUOUSLY on wasm: renders board to frame 6600+, AUTOPLAY 1000+/5000, 0 crashes. wasm oag-baseline 15/15.
+NOTES=Both fixes ASAN/measurement-proven + isolated. #383 isolated regression test = tests/OpenSwiftUIProject/vector-cfptr-test.cpp (clang++ -fsanitize=address,undefined; WITHOUT fix -> over-release, WITH -> balanced). wandr-host has env-gated WANDR_DEBUG_INFO (desktop-only, off by default) for gdb JIT symbols. cgwatch*.gdb scripts kept. Linux oag-baseline build blocked by pre-existing missing swift/Runtime/Metadata.h (unrelated). WASM-PORT-LOG.md has full #14+#383 writeups.
