@@ -77,6 +77,9 @@ struct ContentView: View {
                                 : "swipe to play  -  tap a score box = autoplay")
                     .font(.system(size: w * 0.032, weight: .medium))
                     .foregroundColor(hintColor)
+                    // [PHASE-A PROBE] the ONLY .onTapGesture in the tree — structural binding ignores
+                    // location, so any down→up routed via wandrSendPointer should fire this.
+                    .onTapGesture { tapCount &+= 1; wlog("TAP-FIRED count=\(tapCount)") }
                 ZStack {
                     TileBoardView(
                         matrix: game.tiles,     // read in BODY (game fully constructed), not in init
@@ -207,6 +210,9 @@ nonisolated(unsafe) private var titleRect: (x: Float, y: Float, w: Float, h: Flo
 nonisolated(unsafe) private var yesRect:   (x: Float, y: Float, w: Float, h: Float) = (0, 0, 0, 0)  // confirm YES
 nonisolated(unsafe) private var noRect:    (x: Float, y: Float, w: Float, h: Float) = (0, 0, 0, 0)  // confirm NO
 nonisolated(unsafe) private var confirmNewGame = false  // show the "New game?" yes/no dialog
+// [PHASE-A PROBE] does a tap routed through OpenSwiftUI's gesture pipeline fire a .onTapGesture?
+nonisolated(unsafe) private var tapCount = 0
+nonisolated(unsafe) private var ptrSerial = 0
 
 @_cdecl("exports_wasi_input_handlers_frame_handler_on_resize")
 public func onResize(_ w: UInt32, _ h: UInt32) {
@@ -318,7 +324,10 @@ public func onPointer(
     switch e.kind {
     case UInt8(EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_DOWN):
         swipeStartX = e.x; swipeStartY = e.y
+        wandrSendPointer(phase: 0, x: Double(e.x), y: Double(e.y), serial: ptrSerial)  // [PHASE-A PROBE]
     case UInt8(EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_UP):
+        wandrSendPointer(phase: 2, x: Double(e.x), y: Double(e.y), serial: ptrSerial)  // [PHASE-A PROBE]
+        ptrSerial &+= 1
         let dx = e.x - swipeStartX, dy = e.y - swipeStartY
         let t: Float = 24
         guard let game = sharedGame, boardRect.h > 0 else { break }   // board rect not captured yet
