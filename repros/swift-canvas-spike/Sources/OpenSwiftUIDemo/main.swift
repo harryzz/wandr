@@ -28,19 +28,51 @@ nonisolated(unsafe) var tickBinding: Binding<Int>?
 struct ContentView: View {
     let game: GameLogic                 // plain ref (no @ObservedObject → no OpenCombine path)
     @State private var tick = 0         // re-render trigger; on_pointer bumps it after a move
+
+    private var titleColor: Color { Color(red: 0.47, green: 0.43, blue: 0.40, opacity: 1) }
+    private var labelColor: Color { Color(red: 0.93, green: 0.89, blue: 0.85, opacity: 1) }
+    private var boxColor:   Color { Color(red: 0.73, green: 0.68, blue: 0.63, opacity: 1) }
+    private var hintColor:  Color { Color(red: 0.58, green: 0.56, blue: 0.53, opacity: 1) }
+
+    // A score/best readout box (mirrors eleev's ScoreView header).
+    private func scoreBox(_ label: String, _ value: Int, _ w: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            Text(label).font(.system(size: w * 0.026, weight: .medium)).foregroundColor(labelColor)
+            Text("\(value)").font(.system(size: w * 0.050, weight: .heavy)).foregroundColor(.white)
+        }
+        .frame(width: w * 0.25, height: w * 0.14)
+        .background(Rectangle().fill(boxColor).cornerRadius(w * 0.012))
+    }
+
     var body: some View {
         tickBinding = $tick             // expose so the reactor can request a re-render
-        _ = tick                        // depend on tick so a bump re-runs body (the memcmp compare
-                                        // fix makes the child TileBoardView re-eval on the new matrix
-                                        // WITHOUT .id, so tiles are REUSED not re-created). NB: the old
-                                        // note here blamed ".id → modalSpring transition → spring pow
-                                        // (broken on aarch64-AOT)" — FALSIFIED 2026-06-30: spring
-                                        // animation runs on aarch64 post-#14/#383 (see TileBoardView).
-        return TileBoardView(
-            matrix: game.tiles,         // read in BODY (game fully constructed), not in init
-            tileEdge: game.lastGestureDirection.invertedEdge,
-            tileBoardSize: game.boardSize
-        )
+        _ = tick                        // depend on tick so a bump re-runs body (the memcmp compare fix
+                                        // makes the child TileBoardView re-eval on the new matrix WITHOUT
+                                        // .id, so tiles are REUSED not re-created). The old "spring pow
+                                        // broken on aarch64-AOT" note here was FALSIFIED 2026-06-30.
+        return GeometryReader { proxy in
+            let w = proxy.size.width
+            VStack(spacing: w * 0.03) {
+                // Header: "2048" title + SCORE / BEST boxes (like the eleev gif).
+                HStack(alignment: .center, spacing: w * 0.015) {
+                    Text("2048").font(.system(size: w * 0.10, weight: .heavy)).foregroundColor(titleColor)
+                    Spacer()
+                    scoreBox("SCORE", game.score, w)
+                    scoreBox("BEST", max(bestScore, game.score), w)
+                }
+                .frame(height: w * 0.16)
+                // Mode hint + how to reach the autoplay/new-game controls (the top band, see onPointer).
+                Text(autoplayOn ? "AUTO ON  -  tap 2048 = new game  -  tap a score box = stop"
+                                : "swipe to play  -  tap a score box = autoplay")
+                    .font(.system(size: w * 0.032, weight: .medium))
+                    .foregroundColor(hintColor)
+                TileBoardView(
+                    matrix: game.tiles,     // read in BODY (game fully constructed), not in init
+                    tileEdge: game.lastGestureDirection.invertedEdge,
+                    tileBoardSize: game.boardSize
+                )
+            }
+        }
     }
 }
 
@@ -102,6 +134,10 @@ nonisolated(unsafe) private var lastMoveNanos: UInt64 = 0   // wall-clock of the
 nonisolated(unsafe) private var lastFrameNanos: UInt64 = 0  // wall-clock of the last frame (→ dt)
 nonisolated(unsafe) private var lastShapeCount = 0  // [wandr verify] draw-count delta baseline
 nonisolated(unsafe) private var lastTextCount = 0
+nonisolated(unsafe) private var autoplayOn = false  // demo autoplay — DEFAULT OFF (user plays by swiping)
+nonisolated(unsafe) private var bestScore = 0       // peak score across the session (header "BEST" box)
+private let headerFrac: CGFloat = 0.20              // top fraction of the surface = controls band (ONE
+                                                    // source of truth, shared by the header view + input)
 
 @_cdecl("exports_wasi_input_handlers_frame_handler_on_resize")
 public func onResize(_ w: UInt32, _ h: UInt32) {
@@ -124,25 +160,23 @@ public func onFrame(_ nanos: UInt64) {
     let dt = lastFrameNanos == 0 ? 0.0 : Double(nanos &- lastFrameNanos) / 1_000_000_000.0
     lastFrameNanos = nanos
 
-    // Wall-clock auto-play: one move every 450ms, DECOUPLED from the frame rate. The in-between
-    // frames run fast (see nextFrameDelay) so the spring animates smoothly between moves — the old
-    // frame-count cadence (every 3rd frame) sped the game up whenever we sped the frames up.
-    if built, let g = sharedGame, moveCount < 5000,
+    // Autoplay — DEFAULT OFF (toggled from the header, see onPointer). One move every 450ms,
+    // wall-clock paced and DECOUPLED from the frame rate so the spring animates smoothly between
+    // moves (the old frame-count cadence sped the game up whenever we sped the frames up).
+    if built, autoplayOn, let g = sharedGame,
        lastMoveNanos == 0 || nanos &- lastMoveNanos >= 450_000_000 {
-        // NB: gated on `built` — the first move must run AFTER renderWandrAppOnce sets up the graph
-        // (AppGraph.shared + a current subgraph), else the @State write has no subgraph and hangs.
+        // gated on `built` — the first move needs the graph's subgraph (AppGraph.shared) set up.
         lastMoveNanos = nanos
         moveCount &+= 1
         let n = moveCount
         let dirs: [Direction] = [.up, .left, .down, .right]
         wandrApplyChange {
             _ = g.move(dirs[n % 4])
-            if n % 64 == 0 { g.reset() }
+            if n % 128 == 0 { g.reset() }   // keep the demo lively (round-robin can stall a full board)
             tickBinding?.wrappedValue &+= 1
         }
-        animPending = true   // the move kicks off the position springs
-        if n % 500 == 0 { wlog("AUTOPLAY \(n)/5000  score=\(g.score)") }
-        if n == 5000 { wlog("AUTOPLAY: SURVIVED 5000 moves (no crash)") }
+        if g.score > bestScore { bestScore = g.score }
+        animPending = true
     }
 
     // Acquire the context + buffer fresh each frame (the keyguard pattern).
@@ -213,19 +247,35 @@ public func onPointer(
     case UInt8(EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_UP):
         let dx = e.x - swipeStartX, dy = e.y - swipeStartY
         let t: Float = 24
+        guard let game = sharedGame else { break }
+
+        // TAP (negligible movement) in the top controls band = a settings press, not a swipe:
+        //   left half  → new game (reset);   right half → toggle autoplay.
+        if abs(dx) < t, abs(dy) < t {
+            if swipeStartY < height * Float(headerFrac) {
+                wandrApplyChange {
+                    if swipeStartX < width * 0.5 { game.reset() } else { autoplayOn.toggle() }
+                    tickBinding?.wrappedValue &+= 1
+                }
+                animPending = true
+            }
+            break
+        }
+
+        // SWIPE = a move. Manual play takes control, so autoplay turns off.
         let dir: Direction?
         if abs(dx) > abs(dy) {
             dir = dx > t ? .right : (dx < -t ? .left : nil)
         } else {
             dir = dy > t ? .down : (dy < -t ? .up : nil)
         }
-        if let dir, let game = sharedGame {
-            // Mutate inside an Update transaction so the @State write invalidates the graph,
-            // then ask the next frame to re-RUN the graph (wandrRender) so the board repaints.
+        if let dir {
+            autoplayOn = false
             wandrApplyChange {
                 _ = game.move(dir)
                 tickBinding?.wrappedValue &+= 1
             }
+            if game.score > bestScore { bestScore = game.score }
             animPending = true   // kick off the spring; onFrame drives it to settle
         }
     default: break
