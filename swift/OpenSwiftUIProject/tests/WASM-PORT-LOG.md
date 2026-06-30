@@ -1476,6 +1476,46 @@ STATUS: root proven, NOT yet fixed. The generic IAG::vector push/pop/realloc all
     NEXT (optional): velocity/predicted-end estimation; coordinate-space transform; wire the demo's 2048 swipe
     onto DragGesture (retire the hand-rolled draw-rect swipe). The hand-rolled routing still drives gameplay.
 
+  --- DRAGGESTURE PART B / PATH 2: geometric (per-view) hit-testing — pieces 1+2+3 DONE + VERIFIED ---
+    GOAL: a gesture fires ONLY when its own view is hit (per-view location hit-testing), replacing the
+    structural "first gesture regardless of location" fallback. SCOPING (2 Explore agents): the WHOLE
+    SwiftUI responder/hit-test scaffolding is already ported + trap-free (ViewResponder.hitTest recursion,
+    containsGlobalPoints/BitVector64 mask, GestureResponder.bindEvent's geometric branch gated on
+    GestureContainerFeature, ContentResponder, ViewTransform convert). The ONLY gap: no geometry-carrying
+    leaf responder (RendererLeafView.makeLeafView emitted only a displayList, never a viewResponder) →
+    gestures had empty children → empty mask → structural fallback.
+    IMPLEMENTED (pieces 1+2+3):
+      1. RendererLeafViewResponder (RendererLeafView.swift): a ViewResponder carrying the leaf's global
+         frame; containsGlobalPoints sets mask bits for points inside the frame. Emitted from makeLeafView
+         via a LeafViewRespondersRule (Attribute<[ViewResponder]>) when inputs.preferences.requiresViewResponders,
+         using inputs.animatedPosition()/animatedCGSize() (the same geometry the display list draws with —
+         position is the global origin the event globalLocation is in).
+      2. GestureResponder.containsGlobalPoints (GestureViewModifier.swift): keep only AnyGestureResponder
+         descendants in the result.children, so ViewResponder.hitTest STOPS at the gesture (not its content
+         leaf) and returns the gesture — required because ViewGraph.sendEvents needs an AnyGestureResponder.
+      3. Flip GestureContainerFeature.isEnabled→true (CustomFeature.swift); gate the location-blind fallback
+         in EventBindingManager.bindResponder so a geometric miss returns nil (no first-gesture fallback).
+    VERIFIED (WANDR_DEBUG_SYNTH_TAP_XY, now down+up): the hint-Text gesture's leaf frame = (39,95,422,22);
+    synth-tap at (250,106) INSIDE → leaf hit=true, maskRaw=1, bound, TAP-FIRED=1; synth-tap at (200,300)
+    OUTSIDE → hit=false, geometric-miss, no fire. Location discrimination works.
+    KEY METHOD LESSON (cost ~6 build cycles): guest `print()` to stdout is block-buffered and LOST on
+    SIGTERM/pkill — my HITTEST/GCHILDREN diagnostics read as 0 (phantom). Use `_gtrace` (fputs stderr +
+    fflush) for any diagnostic you'll observe after killing the host. (Same class as the G4 abort-no-flush.)
+    DEFERRED (not blocking firing or the migration):
+      * PIECE 4 — global→local coordinate conversion. The injected MouseEvent.location == globalLocation
+        (WandrApp.swift); nothing converts it into the gesture's view-local space, so Value.location /
+        startLocation are reported in GLOBAL coords, not .local as SwiftUI specifies. Firing is unaffected
+        (1-3 decide routing). DragGesture.translation is a DELTA → coordinate-space-invariant for
+        untransformed views → board-swipe migration is correct without it. Per-view taps don't read the
+        absolute location (hit-testing already routes them). Matters only for gestures using the absolute
+        local point (e.g. SpatialTapGesture location, drawing). Machinery exists: ViewTransform.convert(.spaceToLocal).
+      * PIECE 5 — transform-aware hit regions + multi-gesture ARBITRATION. TWO gestures on ONE view (the
+        probe's hint Text has BOTH .onTapGesture and DragGesture) → geometric binding picks the FIRST and
+        starves the other (no simultaneous/exclusive arbitration; LayoutGestureChildProxy stubbed). The
+        gameplay migration (Part C) puts gestures on SEPARATE views, avoiding this. Harness: WANDR_DEBUG_SYNTH_TAP_XY / WANDR_DEBUG_SYNTH_DRAG_XY
+    set the synth point (lib.rs). NEXT: Part C — board swipe→DragGesture + header/dialog→located taps, then
+    retire the hand-rolled onPointer routing.
+
   METHOD / TOOLING (reusable, committed):
     * Fast symbolized backtrace, NO device round-trip / NO manual click:
       WANDR_DEBUG_SYNTH_TAP=1 (host hook in lib.rs, sibling of synth-key) fires a synthetic
