@@ -34,7 +34,7 @@ struct TileBoardView: View {
             ZStack {
                 Rectangle()
                     .fill(backgroundColor)
-                
+
                 ForEach(0..<tileBoardSize, id: \.self) { x in
                     ForEach(0..<tileBoardSize, id: \.self) { y in
                         createBlock(nil, at: (x, y), proxy: proxy)
@@ -90,10 +90,18 @@ struct TileBoardView: View {
                 position: CGPoint(x: position.x, y: position.y),
                 in: CGRect(x: 0, y: 0, width: frameSize, height: frameSize)
             ))
-            .animation(
-                .interpolatingSpring(stiffness: 800, damping: 200),
-                value: position
-            )
+            // [wandr] Spring animation — ON, and stable. Earlier notes here claimed this had to stay
+            // OFF because the interpolatingSpring churn faulted in `Subgraph::remove_child` on a
+            // partially-freed `_children` zone (Subgraph.cpp:429). That was TRUE only PRE-#383: the
+            // Compute Vector double-destruct (#383, member-array auto-destruct re-running ~T() on
+            // relocated cf_ptrs) was corrupting that same free()/heap region. With #14 (_mutable init)
+            // + #383 (vector memset-on-relocate) landed, the residual `_children` fault is GONE:
+            //   • x86 desktop, anim ON: 5000 auto-moves, exit 124, 0 traps.
+            //   • Pixel 2 XL aarch64 cross-AOT, anim ON: runs, plays, 0 crashes; DRAWCOUNT shows
+            //     shapes=48 mid-transition (vs steady ~22) → intermediate animation frames DO render.
+            // So the old "spring pow broken on aarch64-AOT" / "remove_child blocks animation" claims
+            // are FALSIFIED (2026-06-30) — both were symptoms of the #383 corruption, not arch bugs.
+            .animation(.interpolatingSpring(stiffness: 800, damping: 200), value: position)
     }
     
     // MARK: - Private Methods
