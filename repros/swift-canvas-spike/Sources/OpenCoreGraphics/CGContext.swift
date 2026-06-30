@@ -54,6 +54,13 @@ public enum CGBlendMode: Int32, Sendable {
     }
 }
 
+// [wandr verify] Global counters for actual draw verbs emitted to wasi:canvas this process.
+// rect/oval/path/image are shape fills; text is paragraph paints. onFrame logs the per-frame delta
+// to PROVE tiles render (a gray empty board emits ~1 clear + 0 shapes; a real 2048 board emits the
+// background grid + 16 cells + tile text => many shapes/texts per frame).
+nonisolated(unsafe) public var wandrDrawShapeCount: Int = 0
+nonisolated(unsafe) public var wandrDrawTextCount: Int = 0
+
 public final class CGContext: Hashable {
     // The host-rendered target. CoreGraphics doesn't expose this; the wandr embedder
     // hands the guest a wasi:canvas buffer and wraps it (see the guest's on_frame).
@@ -264,11 +271,13 @@ public final class CGContext: Hashable {
         }
         var p = paint(style: style, color: color, blur: nil)
         wasi_canvas_draw_method_canvas_draw_rect(canvas, &rect, &p)
+        wandrDrawShapeCount &+= 1
     }
     private func drawOval(_ r: CGRect, style: Int32, color: CGColor) {
         var rect = wasiRect(r)
         var p = paint(style: style, color: color, blur: nil)
         wasi_canvas_draw_method_canvas_draw_oval(canvas, &rect, &p)
+        wandrDrawShapeCount &+= 1
     }
     private func emitWithShadow(svg: String, style: Int32, color: CGColor) {
         guard !svg.isEmpty else { return }
@@ -286,6 +295,7 @@ public final class CGContext: Hashable {
         svg.withCString { swift_spike_string_set(&s, $0) }
         wasi_canvas_draw_method_canvas_draw_path(
             canvas, &s, UInt8(WASI_CANVAS_TYPES_FILL_RULE_NONZERO), &p)
+        wandrDrawShapeCount &+= 1
     }
     private func paint(style: Int32, color: CGColor, blur: CGFloat?) -> wasi_canvas_types_paint_t {
         var p = wasi_canvas_types_paint_t()        // zero-init: option fields = none
@@ -335,6 +345,7 @@ public final class CGContext: Hashable {
             let cb = wasi_canvas_layout_borrow_canvas_t(__handle: canvas.__handle)
             wasi_canvas_layout_method_paragraph_paint(pb, cb, &pt)
             wasi_canvas_layout_paragraph_drop_own(para)
+            wandrDrawTextCount &+= 1
         }
     }
 
