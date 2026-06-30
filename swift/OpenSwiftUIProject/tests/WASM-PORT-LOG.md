@@ -1457,6 +1457,25 @@ STATUS: root proven, NOT yet fixed. The generic IAG::vector push/pop/realloc all
     onPointer STILL drives actual 2048 gameplay; the gesture pipeline remains a parallel probe until Part B
     wires a real gesture to behavior.)
 
+  --- DRAGGESTURE PART B: implement `struct DragGesture` — DONE + VERIFIED ---
+    DragGesture did NOT exist in the port. Implemented it (OpenSwiftUICore/Event/Gesture/DragGesture.swift,
+    public) mirroring DistanceGesture: a GestureStateProtocol StateType (sticky startLocation + maxDistance
+    for the minimumDistance gate) + `body = StateType.gesture(content: EventListener<SpatialEvent>()) { state,
+    phase in … }` mapping SpatialEvent phases → GesturePhase<DragGesture.Value>. Value = SwiftUI-shaped
+    {time(Date from SpatialEvent.timestamp.seconds), location, startLocation, velocity(.zero — not yet
+    estimated), translation(computed), predictedEnd*(computed = current, no projection yet)}. Built on the
+    pieces already present: EventListener<SpatialEvent>, DistanceGesture's distance(_,_), GestureStateProtocol/
+    StateContainerGesture, CoordinateSpace, .onChanged/.onEnded (CallbacksGesture), .gesture<T>(_:) (GestureMask).
+    Demo probe: `.gesture(DragGesture(minimumDistance: 0).onChanged{…}.onEnded{…})` on the hint Text logs
+    DRAG-CHANGED/DRAG-ENDED with translation.
+    VERIFIED deterministically via a new host harness WANDR_DEBUG_SYNTH_DRAG=1 (lib.rs, sibling of synth-tap):
+    injects down@frame2, 8 moves@frames3-10 (+15px/step), up@frame11 — no dependence on flaky desktop window
+    focus (two interactive rounds saw 0 events; synth-drag is reliable). Result: DRAG-CHANGED dx=15…120 (8×,
+    one per move, correct cumulative translation from the start) then DRAG-ENDED dx=135, no trap. onChanged
+    streams during the drag + onEnded on release = the .active path drives a real DragGesture end-to-end.
+    NEXT (optional): velocity/predicted-end estimation; coordinate-space transform; wire the demo's 2048 swipe
+    onto DragGesture (retire the hand-rolled draw-rect swipe). The hand-rolled routing still drives gameplay.
+
   METHOD / TOOLING (reusable, committed):
     * Fast symbolized backtrace, NO device round-trip / NO manual click:
       WANDR_DEBUG_SYNTH_TAP=1 (host hook in lib.rs, sibling of synth-key) fires a synthetic

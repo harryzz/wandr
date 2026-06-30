@@ -80,6 +80,17 @@ struct ContentView: View {
                     // [PHASE-A PROBE] the ONLY .onTapGesture in the tree — structural binding ignores
                     // location, so any down→up routed via wandrSendPointer should fire this.
                     .onTapGesture { tapCount &+= 1; wlog("TAP-FIRED count=\(tapCount)") }
+                    // [PART-B PROBE] real DragGesture — moves (now forwarded as .active) should stream
+                    // onChanged with a translation, and onEnded on release. minimumDistance 0 = any move.
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { v in
+                                wlog("DRAG-CHANGED dx=\(Int(v.translation.width)) dy=\(Int(v.translation.height))")
+                            }
+                            .onEnded { v in
+                                wlog("DRAG-ENDED dx=\(Int(v.translation.width)) dy=\(Int(v.translation.height))")
+                            }
+                    )
                 ZStack {
                     TileBoardView(
                         matrix: game.tiles,     // read in BODY (game fully constructed), not in init
