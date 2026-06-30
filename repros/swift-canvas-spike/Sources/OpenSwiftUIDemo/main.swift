@@ -66,11 +66,23 @@ struct ContentView: View {
                                 : "swipe to play  -  tap a score box = autoplay")
                     .font(.system(size: w * 0.032, weight: .medium))
                     .foregroundColor(hintColor)
-                TileBoardView(
-                    matrix: game.tiles,     // read in BODY (game fully constructed), not in init
-                    tileEdge: game.lastGestureDirection.invertedEdge,
-                    tileBoardSize: game.boardSize
-                )
+                ZStack {
+                    TileBoardView(
+                        matrix: game.tiles,     // read in BODY (game fully constructed), not in init
+                        tileEdge: game.lastGestureDirection.invertedEdge,
+                        tileBoardSize: game.boardSize
+                    )
+                    // Game over (board full, no merges left) → dim + prompt. Any tap restarts (onPointer).
+                    if !game.tiles.isMovePossible() {
+                        Rectangle().fill(Color(red: 0.05, green: 0.06, blue: 0.07, opacity: 0.72))
+                        VStack(spacing: w * 0.025) {
+                            Text("GAME OVER")
+                                .font(.system(size: w * 0.10, weight: .heavy)).foregroundColor(.white)
+                            Text("tap to start a new game")
+                                .font(.system(size: w * 0.040, weight: .medium)).foregroundColor(labelColor)
+                        }
+                    }
+                }
             }
         }
     }
@@ -167,15 +179,18 @@ public func onFrame(_ nanos: UInt64) {
        lastMoveNanos == 0 || nanos &- lastMoveNanos >= 450_000_000 {
         // gated on `built` — the first move needs the graph's subgraph (AppGraph.shared) set up.
         lastMoveNanos = nanos
-        moveCount &+= 1
-        let n = moveCount
-        let dirs: [Direction] = [.up, .left, .down, .right]
-        wandrApplyChange {
-            _ = g.move(dirs[n % 4])
-            if n % 128 == 0 { g.reset() }   // keep the demo lively (round-robin can stall a full board)
-            tickBinding?.wrappedValue &+= 1
+        if !g.tiles.isMovePossible() {
+            // Board stuck (game over) → restart so autoplay keeps running.
+            wandrApplyChange { g.reset(); tickBinding?.wrappedValue &+= 1 }
+        } else {
+            moveCount &+= 1
+            let dirs: [Direction] = [.up, .left, .down, .right]
+            wandrApplyChange {
+                _ = g.move(dirs[moveCount % 4])
+                tickBinding?.wrappedValue &+= 1
+            }
+            if g.score > bestScore { bestScore = g.score }
         }
-        if g.score > bestScore { bestScore = g.score }
         animPending = true
     }
 
@@ -248,6 +263,14 @@ public func onPointer(
         let dx = e.x - swipeStartX, dy = e.y - swipeStartY
         let t: Float = 24
         guard let game = sharedGame else { break }
+
+        // Game over → any release (tap or swipe) starts a new game in manual mode.
+        if !game.tiles.isMovePossible() {
+            autoplayOn = false
+            wandrApplyChange { game.reset(); tickBinding?.wrappedValue &+= 1 }
+            animPending = true
+            break
+        }
 
         // TAP (negligible movement) in the top controls band = a settings press, not a swipe:
         //   left half  → new game (reset);   right half → toggle autoplay.
