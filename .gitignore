@@ -27,3 +27,6 @@ repros/avalonia-spike*/**/native/*.a
 # OpenSwiftUIProject test-harness build output + logs (the 6 library repos are submodules)
 swift/OpenSwiftUIProject/**/.build/
 swift/OpenSwiftUIProject/tests/logs/
+
+# cross-AOT deploy staging (regenerable: stripped wasm + aarch64 cwasm)
+swift/OpenSwiftUIProject/tests/deploy/
