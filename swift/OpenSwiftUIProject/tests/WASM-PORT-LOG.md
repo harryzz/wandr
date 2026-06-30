@@ -1414,6 +1414,26 @@ STATUS: root proven, NOT yet fixed. The generic IAG::vector push/pop/realloc all
     Trips at a LATE frame (~12739), i.e. after the down dispatches, when the duration gesture's active/ended
     timing is evaluated. Class = gesture timing/clock, distinct from G1-G3. NEXT (read source first): trace
     DurationGesture's `time`/`start` attributes + how the gesture clock is fed on wasm before patching.
+    FIXED + VERIFIED (2026-06-30): root cause MEASURED via flushed #if os(WASI) traces in
+    DurationGesture + EventListener (fflush(nil) — fatalError/abort does NOT flush guest stdout, so
+    traces near a crash are lost unless flushed; earlier GTRACE survived only by printing thousands of
+    frames before the trap). Trigger = a REAL window CLICK (user-confirmed: "trap only when I click"),
+    NOT the synth-tap (down-only = .began → .possible, never .ended). A quick click is down+up with NO
+    drag, so the pointer pipeline emits began → ended with NO intervening .active frame. EventListener
+    mirrors event phase → emits .ended directly (skipping .active). DurationPhase.updateValue then hits
+    `.ended` with start==nil (start is only set on .active, line 90) → `let elapsed = elapsed!` traps.
+    DurationGesture.swift is "Status: Complete" (faithful) but its `elapsed!` assumes an .active set
+    start first; an active-less click violates that. FIX (faithful, same decision point as line 89):
+    also start timing when `childPhase.isEnded` (not only .isActive/trackFromEventStart) — an active-less
+    terminal gesture has elapsed == 0, so .ended computes `.ended(0)` and (for a tap, minimumDuration 0)
+    SUCCEEDS. One-line change (+ comment) in DurationGesture.swift; EventListener trace reverted.
+    VERIFIED: clicking the desktop window now logs `WANDR-DEMO: TAP-FIRED count=1` (the .onTapGesture
+    FIRES) with NO trap and no log flood; GTRACE shows the full clean dispatch
+    GG.sendEvents → runTransaction → subgraph.update → TAP-FIRED, rendering continues. This is the
+    Phase-A GOAL: real OpenSwiftUI gesture hit-testing firing a tap from a host pointer event.
+    (Note: the down-only synth-tap can't reproduce the .ended path — a real click / down+up does.
+    Deeper question for later: whether the input pipeline SHOULD emit an .active for a held press;
+    the fix is correct regardless since an active-less gesture genuinely has zero duration.)
 
   METHOD / TOOLING (reusable, committed):
     * Fast symbolized backtrace, NO device round-trip / NO manual click:
