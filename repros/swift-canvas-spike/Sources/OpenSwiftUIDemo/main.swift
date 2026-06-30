@@ -95,8 +95,11 @@ nonisolated(unsafe) private let sink = CGSink()
 nonisolated(unsafe) private var width: Float = 0
 nonisolated(unsafe) private var height: Float = 0
 nonisolated(unsafe) private var built = false
-nonisolated(unsafe) private var needsRender = false  // set after a move → next frame re-evaluates
-nonisolated(unsafe) private var diagFrame = 0  // DIAGNOSTIC auto-move (device test w/o physical input)
+nonisolated(unsafe) private var animPending = false  // an animation is in flight → drive frames fast
+nonisolated(unsafe) private var diagFrame = 0        // frame counter (DRAWCOUNT logging only)
+nonisolated(unsafe) private var moveCount = 0        // auto-play move number (wall-clock paced)
+nonisolated(unsafe) private var lastMoveNanos: UInt64 = 0   // wall-clock of the last auto-move
+nonisolated(unsafe) private var lastFrameNanos: UInt64 = 0  // wall-clock of the last frame (→ dt)
 nonisolated(unsafe) private var lastShapeCount = 0  // [wandr verify] draw-count delta baseline
 nonisolated(unsafe) private var lastTextCount = 0
 
@@ -116,24 +119,30 @@ public func onFrame(_ nanos: UInt64) {
     // GameLogic.init (→ reset → tileMatrix) runs outside the OpenSwiftUI graph eval.
     if sharedGame == nil { sharedGame = GameLogic(size: 4) }
 
-    // [x86 repro] Drive the animation CONTINUOUSLY: a move every 3 frames, cycling all four
-    // directions, reset every 64 moves to keep the board live → thousands of interpolatingSpring
-    // animations, each firing the reentrant asyncAfter (WasmDispatchShim) on AnimationListener.
-    // If that reentrancy is the crash, it must reproduce here on x86 (the shim is arch-independent).
     diagFrame &+= 1
-    if diagFrame % 3 == 0, let g = sharedGame {
-        let n = diagFrame / 3
-        if n <= 5000 {  // bounded auto-play: 5000 moves then stop (desktop verification before device)
-            let dirs: [Direction] = [.up, .left, .down, .right]
-            wandrApplyChange {
-                _ = g.move(dirs[n % 4])
-                if n % 64 == 0 { g.reset() }
-                tickBinding?.wrappedValue &+= 1
-            }
-            needsRender = true
-            if n % 500 == 0 { wlog("AUTOPLAY \(n)/5000  score=\(g.score)") }
-            if n == 5000 { wlog("AUTOPLAY: SURVIVED 5000 moves (no crash)") }
+    // dt since the last frame → drives the animation clock so springs INTERPOLATE (vs snap).
+    let dt = lastFrameNanos == 0 ? 0.0 : Double(nanos &- lastFrameNanos) / 1_000_000_000.0
+    lastFrameNanos = nanos
+
+    // Wall-clock auto-play: one move every 450ms, DECOUPLED from the frame rate. The in-between
+    // frames run fast (see nextFrameDelay) so the spring animates smoothly between moves — the old
+    // frame-count cadence (every 3rd frame) sped the game up whenever we sped the frames up.
+    if built, let g = sharedGame, moveCount < 5000,
+       lastMoveNanos == 0 || nanos &- lastMoveNanos >= 450_000_000 {
+        // NB: gated on `built` — the first move must run AFTER renderWandrAppOnce sets up the graph
+        // (AppGraph.shared + a current subgraph), else the @State write has no subgraph and hangs.
+        lastMoveNanos = nanos
+        moveCount &+= 1
+        let n = moveCount
+        let dirs: [Direction] = [.up, .left, .down, .right]
+        wandrApplyChange {
+            _ = g.move(dirs[n % 4])
+            if n % 64 == 0 { g.reset() }
+            tickBinding?.wrappedValue &+= 1
         }
+        animPending = true   // the move kicks off the position springs
+        if n % 500 == 0 { wlog("AUTOPLAY \(n)/5000  score=\(g.score)") }
+        if n == 5000 { wlog("AUTOPLAY: SURVIVED 5000 moves (no crash)") }
     }
 
     // Acquire the context + buffer fresh each frame (the keyguard pattern).
@@ -156,15 +165,15 @@ public func onFrame(_ nanos: UInt64) {
             options: .init(surface: CGSize(width: CGFloat(width), height: CGFloat(height)), sink: sink)
         )
         built = true
-    } else if needsRender {
-        // State changed (a move): re-RUN the graph (body re-reads the board, display list updates),
-        // then redraw — wandrRender's own draw is skipped by the renderer's seed guard (the
-        // display-list version doesn't bump for a @State change), but redraw() paints unconditionally.
-        needsRender = false
-        wandrRender()
+    } else if animPending {
+        // An animation is in flight: advance the clock by dt, re-evaluate, interpolate the springs.
+        // The return value says whether anything is still animating — keep driving fast until it
+        // settles, then fall back to idle pacing. (renderFrame picks up @State moves too, since a
+        // move sets animPending; its display-list bump is painted by the redraw below.)
+        animPending = wandrRenderFrame(dt)
         wandrRedraw()
     } else {
-        // No change: cheap re-walk of the existing display list (double-buffering).
+        // Nothing animating: cheap re-walk of the existing display list (double-buffering).
         wandrRedraw()
     }
     sink.cg = nil
@@ -183,10 +192,11 @@ public func onFrame(_ nanos: UInt64) {
     wasi_canvas_embedding_canvas_context_drop_own(ctxOwn)
 }
 
-// Turn-based: poll gently (a swipe updates within ~150ms). Continuous high-fps GL on WSLg
-// drops the display connection ("Connection reset by peer"); the static board was stable at 1fps.
+// Idle = poll gently (150ms). While an animation is in flight, drive ~30fps so the springs are
+// smooth. (60fps continuous GL on WSLg can drop the display connection — "Connection reset by
+// peer"; 30fps is the desktop-safe ceiling. Real EGL on device handles faster fine.)
 @_cdecl("exports_wandr_ui_shell_frame_pacing_next_frame_delay")
-public func nextFrameDelay() -> UInt32 { 150 }
+public func nextFrameDelay() -> UInt32 { animPending ? 33 : 150 }
 
 // Swipe → GameLogic.move (down=0 start, up=1 release; dominant axis/sign picks direction).
 nonisolated(unsafe) private var swipeStartX: Float = 0
@@ -216,7 +226,7 @@ public func onPointer(
                 _ = game.move(dir)
                 tickBinding?.wrappedValue &+= 1
             }
-            needsRender = true
+            animPending = true   // kick off the spring; onFrame drives it to settle
         }
     default: break
     }
