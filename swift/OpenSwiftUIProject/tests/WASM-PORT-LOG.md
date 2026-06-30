@@ -1335,6 +1335,63 @@ STATUS: root proven, NOT yet fixed. The generic IAG::vector push/pop/realloc all
     Swift `&ptr.pointee` (_modify accessor) lowering on wasm; then fix PointerOffset.of/.offset to
     address fields without materializing the fake base.
 
+  --- BUG G2: DIAGNOSED (2026-06-30) — root cause MEASURED, not wasm-specific, blast radius = 1 site ---
+    Repro = repros/openswiftui-wasm/pointeroffset-probe/ (self-contained: vendors a VERBATIM copy of
+    Compute/.../PointerOffset.swift; pure-stdlib so it dual-builds native + wasm with zero deps).
+    It runs PointerOffset.offset { .of(&$0.field) } over 4 field shapes vs MemoryLayout.offset(of:)
+    (ground truth) + a materialization detector (inout base == invalidScenePointer?).
+    MEASURED MATRIX (identical conclusion native↔wasm):
+      | field shape              | native -Onone | native -O | wasm32         |
+      | trivial (Int)            | OK            | OK        | OK             |
+      | struct-holding-closure   | OK            | OK        | OK             |
+      | class reference          | OK            | OK        | OK             |
+      | BARE function (A,B)->C    | SEGFAULT      | SEGFAULT  | GARBAGE offset |
+    ROOT CAUSE (definitive): NOT a wasm codegen issue and NOT optimization-dependent. Taking the
+    address of a BARE FUNCTION-TYPED stored property reabstracts it: `&$0.body` (and
+    `MemoryLayout.offset(of: \.body)`) does NOT yield the in-place field address but a
+    reabstraction-thunk TEMPORARY. Proof: with a REAL zero-initialized Base buffer, `&buf.body`
+    returns an address ~168 B BELOW the buffer (a stack temp), not buf+8; `offset(of:\.body)`=nil
+    (while \.head=0 and struct/class fields are correct). So PointerOffset's `&...pointee.field`
+    trick CANNOT compute a bare-function field's offset on ANY platform — wasm just turns the
+    segfault into a readable-garbage offset (low linear-memory addr). The reabstraction temp is
+    formed at the CALL SITE `{ .of(&$0.body) }`, BEFORE `.of` runs → the Compute primitive cannot
+    fix it (plan Approach A dead); `offset(of:)`=nil → the `[keyPath:]` subscript can't either
+    (Approach B dead). OAG #70 ("PointerOffset.of crash", PR #71) fixed only the BY-VALUE-copy
+    instance (`withUnsafePointer(to: member)` → `to: &member`); our live Compute already has that —
+    necessary but insufficient for the function-field case (still open upstream).
+    BLAST RADIUS = exactly ONE site: `Map2Gesture.body` (Map2Gesture.swift:121, projected :134) is
+    the ONLY bare-function field projected via `.of` in the whole tree. MapGesture/VariadicView have
+    function-typed `body` fields but project STRUCTS (`_body.modifier`, `.root`), never the closure;
+    CallbacksGesture already wraps its body in a `_Body` STRUCT (projects fine) — the fix pattern the
+    codebase itself already uses.
+    FIX (Approach Z, faithful to that `_Body` convention): wrap `Map2Gesture.body`'s bare closure in
+    a single-field struct so the `.of` projection targets an addressable struct (proven correct).
+    Map2Phase then holds `@Attribute var body: <wrapper>` and invokes `body.call(phase1, phase2)`.
+    APPLIED + VERIFIED (2026-06-30): Map2Gesture.swift — added `fileprivate struct Map2GestureBody
+    <InputValue, ContentValue, OutputValue> { var call: (GesturePhase<InputValue>,
+    GesturePhase<ContentValue>) -> GesturePhase<OutputValue> }`; `body` field + Map2Phase `@Attribute
+    var body` retyped to it; construction site wraps `Map2GestureBody(call: body)`; Map2Phase reads
+    `body.call(phase1, phase2)`. NOTE: `modifier[offset:{...}].value` keeps the `.value` —
+    `modifier[offset:]` returns `_GraphValue<Member>` and `.value` is the underlying `Attribute<Member>`
+    (structurally required, NOT a probe artifact). OpenSwiftUICore+OpenSwiftUI compile clean for wasm.
+    SYNTH-TAP VERIFY (WANDR_DEBUG_SYNTH_TAP=1 WANDR_DEBUG_INFO=1, named component): the
+    `invalid size for indirect attribute` precondition (Graph.cpp:487) is GONE (grep count 0); the
+    Map2Gesture body indirect-attribute now builds and the tap dispatch advances PAST
+    Map2Gesture._makeGesture into the responder/gesture graph. Regression guard kept =
+    repros/openswiftui-wasm/pointeroffset-probe (dual native+wasm; `swift run <case>` /
+    `wasmtime run ... <case>`; cases: trivial struct func class wrapped offsetof func_* ).
+
+  --- BUG G3: LayoutGesture._makeGesture is an unimplemented stub — NEXT TARGET ---
+    With G2 fixed, the synth-tap symbolized backtrace now traps at
+    `OpenSwiftUICore/LayoutGesture.swift:24: Fatal error: Unimplemented yet` —
+    `_openSwiftUIUnimplementedFailure()` in `LayoutGesture._makeGesture(gesture:inputs:)`
+    (via DefaultLayoutGesture._makeGesture ← Gesture.makeDebuggableGesture ←
+    DefaultLayoutViewResponder.makeGesture ← GestureResponder.makeSubviews ← SubviewsPhase.updateValue).
+    This is a genuine STUB to IMPLEMENT (a real _makeGesture body), NOT a codegen/offset bug — a
+    different class from G1/G2. Next: implement LayoutGesture._makeGesture faithfully (read the
+    DefaultLayoutGesture/LayoutGestureChildProxy path + how DefaultLayoutViewResponder expects the
+    gesture outputs) rather than patch-to-green.
+
   METHOD / TOOLING (reusable, committed):
     * Fast symbolized backtrace, NO device round-trip / NO manual click:
       WANDR_DEBUG_SYNTH_TAP=1 (host hook in lib.rs, sibling of synth-key) fires a synthetic
