@@ -23,3 +23,7 @@
 **/obj/
 repros/avalonia-spike*/**/native/*.a
 **/generated/wit/
+
+# OpenSwiftUIProject test-harness build output + logs (the 6 library repos are submodules)
+swift/OpenSwiftUIProject/**/.build/
+swift/OpenSwiftUIProject/tests/logs/

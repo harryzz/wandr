@@ -12,14 +12,20 @@ let package = Package(
         .executable(name: "probe", targets: ["Probe"]),
     ],
     dependencies: [
-        .package(path: "/tmp/OpenSwiftUI"),
+        .package(path: "/home/harry/wandr/swift/OpenSwiftUIProject/OpenSwiftUI"),
     ],
     targets: [
+        // No-op stub for the Apple-only Graph.mm symbol print_cycle (linked, not imported).
+        .target(name: "ProbeStubs"),
         .executableTarget(
             name: "Probe",
             dependencies: [
                 .product(name: "OpenSwiftUI", package: "OpenSwiftUI"),
-            ]
+                "ProbeStubs",
+            ],
+            // eleev/swiftui-2048 is Swift-5-era; build in Swift 5 mode so Swift 6 strict
+            // concurrency doesn't reject it as-is (build setting, not edits to eleev).
+            swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]
 )

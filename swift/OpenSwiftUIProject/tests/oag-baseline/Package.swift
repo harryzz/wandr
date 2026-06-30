@@ -2,7 +2,7 @@
 import PackageDescription
 let package = Package(
   name: "oag-baseline",
-  dependencies: [ .package(path: "../OpenAttributeGraph") ],
+  dependencies: [ .package(path: "../../OpenAttributeGraph") ],
   targets: [
     .target(name: "CStubs"),
     .executableTarget(
@@ -127,6 +127,16 @@ let package = Package(
     ),
     .executableTarget(
       name: "oagsubgraph",
+      dependencies: [ .product(name: "OpenAttributeGraphShims", package: "OpenAttributeGraph"), "CStubs" ],
+      swiftSettings: [ .enableExperimentalFeature("Extern") ],
+      linkerSettings: [
+        .unsafeFlags(["-L", "/home/harry/.local/share/swiftly/toolchains/6.3.2/usr/lib"], .when(platforms: [.linux])),
+        .linkedLibrary("swiftDemangle", .when(platforms: [.linux])),
+        .linkedLibrary("crypto", .when(platforms: [.linux])),
+      ]
+    ),
+    .executableTarget(
+      name: "oagoffset",
       dependencies: [ .product(name: "OpenAttributeGraphShims", package: "OpenAttributeGraph"), "CStubs" ],
       swiftSettings: [ .enableExperimentalFeature("Extern") ],
       linkerSettings: [

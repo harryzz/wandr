@@ -64,3 +64,21 @@
 	path = external/rsbinder
 	url = https://codeberg.org/harryzz/rsbinder.git
 	branch = wandr-recursive
+[submodule "swift/OpenSwiftUIProject/Compute"]
+	path = swift/OpenSwiftUIProject/Compute
+	url = https://github.com/harryzz/Compute.git
+[submodule "swift/OpenSwiftUIProject/OpenSwiftUI"]
+	path = swift/OpenSwiftUIProject/OpenSwiftUI
+	url = https://github.com/harryzz/OpenSwiftUI.git
+[submodule "swift/OpenSwiftUIProject/OpenAttributeGraph"]
+	path = swift/OpenSwiftUIProject/OpenAttributeGraph
+	url = https://github.com/harryzz/OpenAttributeGraph.git
+[submodule "swift/OpenSwiftUIProject/OpenCoreGraphics"]
+	path = swift/OpenSwiftUIProject/OpenCoreGraphics
+	url = https://github.com/harryzz/OpenCoreGraphics.git
+[submodule "swift/OpenSwiftUIProject/OpenObservation"]
+	path = swift/OpenSwiftUIProject/OpenObservation
+	url = https://github.com/OpenSwiftUIProject/OpenObservation.git
+[submodule "swift/OpenSwiftUIProject/OpenRenderBox"]
+	path = swift/OpenSwiftUIProject/OpenRenderBox
+	url = https://github.com/OpenSwiftUIProject/OpenRenderBox.git

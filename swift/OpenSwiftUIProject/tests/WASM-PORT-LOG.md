@@ -1202,7 +1202,7 @@ METHOD (how it was pinned — reusable):
   - A temporary `data::vector::push_back` measurement (log when `_data` is a low/garbage
     pointer) revealed the null-_data + stale-_metadata state, which led to the
     is_mutable()/OOB-read root. All scaffolding removed after the fix.
-  - cgwatch*.gdb scripts live in tests/OpenSwiftUIProject/ (reusable for future
+  - cgwatch*.gdb scripts live in swift/OpenSwiftUIProject/ (reusable for future
     wasm-specific corruption hunts).
 
 RESULT: demo no longer crashes at frame 15. It RENDERS the real 2048 board
@@ -1248,7 +1248,7 @@ STATUS: root proven, NOT yet fixed. The generic IAG::vector push/pop/realloc all
   documented stopgap, NOT the fix (still latent for >cap and for other cf_ptr vectors).
 
   -------- #383 FIXED (2026-06-30) --------
-  EXACT BUG (isolated + ASAN-proven in tests/OpenSwiftUIProject/vector-cfptr-test.cpp): IAG::vector's
+  EXACT BUG (isolated + ASAN-proven in swift/OpenSwiftUIProject/vector-cfptr-test.cpp): IAG::vector's
   inline buffer is a `T _inline_buffer[_inline_capacity]` MEMBER ARRAY. On the first inline->heap grow,
   realloc_vector memcpy's the inline elements to the heap buffer but LEFT the inline source intact. The
   live elements now live on the heap (destructed by ~vector's explicit loop via data()==heap), but when
@@ -1282,7 +1282,7 @@ STATUS: root proven, NOT yet fixed. The generic IAG::vector push/pop/realloc all
          `T _inline_buffer[]` MEMBER ARRAY intact -> compiler auto-destructs it -> double ~cf_ptr
          -> double CFRelease -> subgraph-storage double-finalize -> abort.
          FIX: `memset(_inline_buffer, 0, ...)` after relocation (one line). Isolated ASAN repro =
-         tests/OpenSwiftUIProject/vector-cfptr-test.cpp.  Was: crash at render_frame #383.
+         swift/OpenSwiftUIProject/vector-cfptr-test.cpp.  Was: crash at render_frame #383.
 
   EVIDENCE: demo renders the live board to frame 6600+ (54 shapes / 52 texts), AUTOPLAY 1000+/5000,
   0 errors (timeout-bounded, not a fault). Regression: wasm oag-baseline 15/15 PASS, 0 FAIL.

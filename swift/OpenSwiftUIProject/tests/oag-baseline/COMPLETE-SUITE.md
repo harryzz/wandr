@@ -125,21 +125,64 @@ functional-coverage half is in: `oaggraph` (graph services), `oagsubgraph` (subg
 `oagdataflow`/`oagchurn`/`oagforeach`/`oagrender`.
 
 ### Crashers found (none seen by the old baseline)
-- **`oagupdate` → OOB memory on WASM, passes on linux.** A wasm-port defect in the update machinery
-  (deep recursion / changedValue / mutateBody / fan-in). **Highest priority — it's wasm, where the demo runs.**
-- **`oagteardown` → crash (Aborted) on LINUX, passes on wasm.** A teardown / value-witness-destroy
-  defect that surfaces on linux.
-- **`oagrender` → flaky on LINUX** (Signal 11 in one run, passed in another; same binary). Non-deterministic
-  = heap-layout-sensitive memory corruption.
+- **`oagupdate` → OOB memory on WASM, passes on linux.** ✅ **FIXED (2026-06-28).** Root cause was *not*
+  the update machinery's logic — it was the **guest shadow stack**. The wasi link-time default
+  (~128 KiB) is far below the host's wasm call-stack budget (`wandr-host` `max_wasm_stack`=4 MiB /
+  `async_stack_size`=8 MiB) and the 8 MiB native thread stack the linux build runs on. AttributeGraph
+  recurses on first evaluation (lazy input-edge creation: `input_value_ref_slow` → `update_attribute`
+  → `update` → rule → `input_value_ref_slow` …), so a deep attribute chain overflowed the tiny shadow
+  stack into the heap and faulted with a wild pointer. Controlling test: depth 50 OK, 200+ OOB; no zone
+  grow (`IAG_LOG_GROW`). Fix: (a) `-Xlinker -z -Xlinker stack-size=8388608` in `build-wasi.sh` (8 MiB
+  guest/host/native parity); (b) `UpdateStack::update()` made iterative (`goto restart_frame`, was
+  `return update()`) so the steady-state re-eval path no longer grows the C++ stack at all. Suite green
+  on wasm AND linux.
+- **`oagteardown` → crash (Aborted) on LINUX, passes on wasm.** ✅ **FIXED (2026-06-28).** Mis-titled
+  originally — it is *not* a teardown/CFRelease-reentrancy defect. The abort is at `value_ref_checked`
+  "attribute being read has no value", reached from the nested-tree / deferred-read block (not the 3000
+  teardown rounds, which all pass). Root cause: **Subgraph storage lifetime off Darwin.** The CF storage
+  is ARC-bridged (`objc_bridge(id)`) only on Apple; off Darwin Swift does NOT retain the handle/struct-held
+  refs, so the CF refcount is the sole owner. The immortal-storage guards keyed on `__wasi__`, so **linux**
+  still ran `CFRelease` (in `IAGSubgraphSetCurrent`/`Subgraph::clear_object`) — freeing a subgraph the live
+  graph still referenced. Proof: 3 value-attributes created in 3 separate subgraphs all aliased to the same
+  node id (536) on linux because each freed subgraph's page was recycled by the next; retaining the handles
+  → distinct ids. Note the `objc_bridge` attribute condition is *active on non-Apple clang too* (it parses),
+  so it is NOT a valid predictor — `__APPLE__` is. Fix: new single-source predicate
+  `IAG_CF_STORAGE_SWIFT_MANAGED` (= `defined(__APPLE__)`) in `IAGBase.h`; the two subgraph CFRelease gates
+  now use it → storage immortal on BOTH linux and wasm (bounded CF-wrapper leak; the IAG::Subgraph node is
+  still freed by the graph on invalidate). Suite green both platforms except oagrender (below).
+- **`oagrender` → flaky Sig11 on LINUX** (passes on wasm). ✅ **FIXED (2026-06-28).** Root: `Subgraph.forEach`
+  passed its **non-escaping** `body` to the swiftcall `IAGSubgraphApply`, which wraps it in a
+  `ClosureFunctionAV` whose ctor `swift_retain()`s the closure context (ClosureFunction.h:24). A
+  non-escaping closure's context is not a retainable heap object → `incrementSlow` derefs garbage →
+  flaky crash (the deref address varied run-to-run = heap-layout sensitive). wasm dodged it via the
+  plain-C `subgraphForEach` (no retain). Fix: wrap the non-wasm path in `withoutActuallyEscaping` so the
+  retain/release pair operates on a valid context. oagrender now 20/20 on linux (was ~13% Sig11), 10/10 wasm.
 
-### Real wasm gaps found (worked around in the tests, recorded here to fix)
-- **`onUpdate` AND `onInvalidation` graph callbacks do not fire on wasm** (both wired through
-  `WasiClosureShim`). Notable: the WasiClosureShim consumer integration (`0f4f20bf`, start of the
-  11-day regression) depends on these.
-- **`Subgraph.addObserver` traps** `signature_mismatch: IAGSubgraphAddObserver` — Swift binding vs host
-  import signature disagree (broken binding, not a stub).
-- **keyPath subscript `attr[keyPath: \.m]` traps** "non-direct attribute" on wasm, while the
-  dynamicMember spelling `attr.m` works — a divergence between the two projection paths.
+### Real gaps found — FIXED 2026-06-28 (persistent-callback wasm ABI family)
+Bugs (4) and (5) were ONE root: the **persistent swiftcc-`ClosureFunction` callback path is unusable on
+wasm**. `__has_attribute(swiftcall)` is true under Swift's wasm clang, so the stored callback is a
+swiftcall fn-ptr — but Swift emits a `@convention(c)` thunk for the closure, and firing the swiftcall
+pointer via the C ABI traps `indirect call type mismatch`. (onUpdate just never fired before, so its
+identical latent bug was invisible; addObserver fired on invalidation and trapped.) The synchronous
+shims already dodge this with plain-C `Plain*` bodies (PlainApplyBody / PlainTypeIDGetter).
+- **`onUpdate` / `onInvalidation`** ✅ — added `Graph::Context::PlainUpdateCallback` /
+  `PlainInvalidationCallback` (wasm storage) + plain-C `IAGGraphSetUpdateCallbackC` /
+  `IAGGraphSetInvalidationCallbackC`; `WasiClosureShim.onUpdate/onInvalidation` use them. **Plus** a
+  second wasm bug surfaced once onUpdate fired: `Table<uint64_t,Context*>::for_each` (HashTable.h)
+  type-puns the typed callback to the untyped `(const void*…)` signature — i64 key ≠ i32 on wasm →
+  `indirect call type mismatch` inside `Graph::call_update`. Fixed with a wasm trampoline in
+  `Table::for_each`. onUpdate now **fires on wasm AND linux** (verified via `setNeedsUpdate()`).
+  onInvalidation uses the identical mechanism (cross-context trigger not unit-tested; fixed by symmetry).
+- **`Subgraph.addObserver`** ✅ (was `signature_mismatch`) — added `Subgraph::PlainObserverBody` +
+  plain-C `IAGSubgraphAddObserverC`; the swiftcc `IAGSubgraphAddObserver` + its stale 2-arg silgen are
+  gated to non-wasm. Observer now **fires on wasm AND linux**.
+- **keyPath subscript `attr[keyPath: \.m]`** ✅ **re-verified working (2026-06-28)** on wasm AND linux —
+  the recorded "traps non-direct attribute" no longer reproduces. Both spellings share the same
+  `subscript(keyPath:)`; for stored-property keyPaths `MemoryLayout.offset(of:)` resolves → direct
+  `unsafeOffset` (no trap), and for computed/no-offset keyPaths → `Focus` indirect, which reads fine.
+  The "non-direct attribute id" precondition is only reachable via info/mutate ops
+  (`IAGGraphGetAttributeInfo`/`MutateAttributeC`) on an indirect attribute, not value reads. `oagattr`
+  now asserts the keyPath spelling directly (workaround removed); passes both platforms.
 
 ### Intentionally unimplemented on wasm (`fatalError("not implemented")` — not bugs, not tested)
 `Graph.print`, `archiveJSON`, `graphvizDescription`, `printStack`, `stackDescription`,

@@ -19,13 +19,15 @@ func run() {
     let pt = Attribute(Map(inp) { Pt(x: $0, y: $0 * 10) })
 
     // dynamicMember projection (Attribute<Value> → Attribute<Member>) — both members.
-    // FINDING: the keyPath subscript `pt[keyPath: \.y]` traps on wasm ("non-direct attribute id")
-    // while the dynamicMember spelling `pt.y` works — a real divergence between the two projection
-    // paths. Using the working one here; the keyPath path is logged as a separate gap to investigate.
     check(pt.x.value == 3, "dynamicMember pt.x = 3")
     check(pt.y.value == 30, "dynamicMember pt.y = 30")
     inp.value = 4
     check(pt.x.value == 4 && pt.y.value == 40, "dynamicMember projections propagate (4, 40)")
+    // keyPath subscript projection — previously logged as trapping "non-direct attribute id" on wasm;
+    // re-verified 2026-06-28 to work on wasm AND linux for stored-property keyPaths (offset(of:)
+    // resolves → direct unsafeOffset) and for computed/no-offset keyPaths (→ Focus indirect, reads fine).
+    check(pt[keyPath: \.x].value == 4, "keyPath pt[\\.x] = 4")
+    check(pt[keyPath: \.y].value == 40, "keyPath pt[\\.y] = 40")
 
     // valueAndFlags / prefetchValue / validate / invalidateValue on a DIRECT attribute.
     let vf = inp.valueAndFlags(options: IAGValueOptions())

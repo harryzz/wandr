@@ -25,10 +25,18 @@ OPENSWIFTUI_ANY_ATTRIBUTE_FIX=0 ANY_ATTRIBUTE_FIX=0 \
 OPENSWIFTUI_USE_LOCAL_DEPS=1 OPENATTRIBUTEGRAPH_OPENATTRIBUTESHIMS_COMPUTE=1 \
 OPENATTRIBUTEGRAPH_USE_LOCAL_DEPS=1 \
 OPENSWIFTUI_SWIFT_CRYPTO=0 \
-OPENRENDERBOX_LIB_SWIFT_PATH=/tmp/oag-fork/Sources/SwiftCorelibs/include \
+OPENRENDERBOX_LIB_SWIFT_PATH=/home/harry/wandr/swift/OpenSwiftUIProject/OpenAttributeGraph/Sources/SwiftCorelibs/include \
 swift build --product OpenSwiftUIDemo --swift-sdk "$SDK" --manifest-cache none \
   -Xcc -D_WASI_EMULATED_SIGNAL -Xcc -D_WASI_EMULATED_MMAN -Xcc -D_WASI_EMULATED_PROCESS_CLOCKS \
-  -Xcc -I/tmp/oag-shims -Xcc -fno-exceptions -Xcc -DSWIFT_INLINE_NAMESPACE=__runtime
+  -Xcc -I/home/harry/wandr/swift/OpenSwiftUIProject/wandr/wasi-shims \
+  -Xcc -include -Xcc /home/harry/wandr/swift/OpenSwiftUIProject/wandr/wasi-shims/wasi_compat.h \
+  -Xcc -fno-exceptions -Xcc -DSWIFT_INLINE_NAMESPACE=__runtime \
+  -Xlinker -z -Xlinker stack-size=8388608
+  # ^ Guest shadow stack = 8 MiB. The wasi default (~128 KiB) is far below the host's wasm call-stack
+  # budget (wandr-host max_wasm_stack=4 MiB / async 8 MiB) and the native parity Compute relies on.
+  # OpenSwiftUI + AttributeGraph recurse deeply on first evaluation of a real view tree (the "move-4
+  # deep-recursion OOB"); the tiny default shadow stack overflowed into the heap and faulted. Same fix
+  # as oag-baseline/build-wasi.sh. (Compute's UpdateStack::update() is also now iterative.)
 
 # 2. wrap as a component via the preview1 adapter.
 wasm-tools component new "$CORE" \

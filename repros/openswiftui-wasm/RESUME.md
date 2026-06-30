@@ -175,7 +175,7 @@ for Compute's WasiClosureShim").** It is the ONLY OpenSwiftUI commit since the d
 ("2 days ago" per user). Everything below `0f4f20bf` is dated 2026-06-19 and was working.
 
 ## Stack / how to repro
-- Clean stack (persistent): `~/wandr/tests/OpenSwiftUIProject/{Compute,OpenAttributeGraph,OpenSwiftUI}`.
+- Clean stack (persistent): `~/wandr/swift/OpenSwiftUIProject/{Compute,OpenAttributeGraph,OpenSwiftUI}`.
   - `Compute` HEAD = the `WasiClosureShim` (`1a3c4a3`); `OpenSwiftUI` HEAD = `0f4f20bf`.
 - **Probe (fast, stdout, the diagnosis vehicle):** `repros/openswiftui-wasm/probe` →
   `bash build-wasi.sh` then `wasmtime run --env SWIFT_DETERMINISTIC_HASHING=1 -W max-wasm-stack=8388608
