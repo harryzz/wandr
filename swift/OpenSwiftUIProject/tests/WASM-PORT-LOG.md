@@ -1289,3 +1289,71 @@ STATUS: root proven, NOT yet fixed. The generic IAG::vector push/pop/realloc all
   Method that cracked both: an env-gated wasmtime debug_info in wandr-host (desktop-only,
   WANDR_DEBUG_INFO=1) for gdb JIT symbols + hardware watchpoints, and isolating the primitive.
 ================================================================================
+
+================================================================================
+★★★ GESTURE / POINTER INPUT — Phase A (2026-06-30) — IN PROGRESS ★★★
+  GOAL: feed host pointer events into OpenSwiftUI's gesture pipeline so .onTapGesture /
+  DragGesture fire (real framework hit-testing), replacing the demo's hand-rolled draw-rect
+  input routing. The whole event->responder->gesture-graph subsystem was ~20
+  `_openSwiftUIUnimplementedFailure()` stubs; it is now implemented and COMPILES, and the
+  responder tree assembles, renders, and survives the wasm walls. A tap traps; we peel the
+  trap bugs one at a time. TWO found so far:
+
+  --- BUG G1: StatefulRule.attribute read inside Subgraph.apply — FIXED (OpenSwiftUI 2fa39812) ---
+    AnyGestureInfo.makeItem (AnyGesture.swift) read its own rule's `attribute`
+    (= Compute StatefulRule.attribute = Attribute(identifier: AnyAttribute.current!)) INSIDE
+    childGraph.apply { }. Subgraph.apply calls Graph.clearUpdate() which TAGS the current update
+    stack (IAGGraphClearUpdate, IAGGraph.cpp:768) so IAGGraphGetCurrentAttribute() returns nil
+    BY DESIGN (constructing a subgraph is not evaluating an attribute). The force-unwrap on nil
+    traps (SIGILL / `unreachable`).
+    FIX (faithful, no Compute change): capture `let containerAttribute = attribute` BEFORE
+    entering childGraph.apply (valid there — makeItem runs from updateValue, current == self),
+    use the captured value inside. VERIFIED: the dispatch crash moves PAST this point.
+    (Detour, reverted: a speculative "cross-graph call_update tagged-stack" hypothesis + a
+    Graph.cpp guard — WRONG path; the InTransaction update skips call_update entirely. Lesson:
+    the symbolized backtrace settled it instantly; go there BEFORE theorizing.)
+
+  --- BUG G2: PointerOffset.of returns a GARBAGE offset for non-trivial fields — NEXT TARGET ---
+    Map2Gesture._makeGesture (Map2Gesture.swift:130/134) projects its struct fields into indirect
+    attributes: `modifier[offset: { .of(&$0.content) }]` and `{ .of(&$0.body) }`. Compute rejects
+    it (Graph::add_indirect_attribute, Graph.cpp:487):
+        precondition failure: invalid size for indirect attribute:
+        attr_size=100 offset=48279392 size=8 base_off=16
+    offset=48279392 (~48 MB) is GARBAGE — a stack temporary address — and size=8 is the `body`
+    CLOSURE. ROOT CAUSE: PointerOffset computes offsetof(field) via the trick
+    `&invalidScenePointer().pointee.field - invalidScenePointer()` (Compute
+    Attribute/PointerOffset.swift), where invalidScenePointer() = a fake pointer at a fixed low
+    address (MemoryLayout<Base>.stride). The trick REQUIRES `&...pointee` to stay in-place. On
+    wasm, because Map2Gesture is NON-TRIVIAL (holds a closure), `&invalidScenePointer().pointee`
+    materializes a temporary COPY (~48 MB) instead of projecting in place, so the relative
+    subtraction yields garbage. (.content is deferred; .body — forced via `.value` — trips first,
+    but both are affected.) NOT gesture-specific or agent-introduced: a Swift/wasm codegen issue
+    in PointerOffset projection for ANY non-trivial type; gestures are just the first to project a
+    CLOSURE field this way. Likely broader blast radius. FIX = a materialization-free offset
+    computation (open). FIRST STEP next session: confirm whether PointerOffset.of works for
+    closure/non-trivial fields on LINUX (materializes there too, or wasm-only codegen?); read the
+    Swift `&ptr.pointee` (_modify accessor) lowering on wasm; then fix PointerOffset.of/.offset to
+    address fields without materializing the fake base.
+
+  METHOD / TOOLING (reusable, committed):
+    * Fast symbolized backtrace, NO device round-trip / NO manual click:
+      WANDR_DEBUG_SYNTH_TAP=1 (host hook in lib.rs, sibling of synth-key) fires a synthetic
+      pointer-down at frame 2 in the desktop `--app` window. With WANDR_DEBUG_INFO=1 AND a
+      component built with the NAME SECTION KEPT (run `wasm-tools strip` ONLY — SKIP the
+      `strip --delete '^name$'` step), the trap prints a fully symbolized wasm backtrace on
+      stderr. This pinned both G1 and G2.
+    * Desktop GL present on WSLg drops after a few frames ("Connection reset by peer") — hence the
+      frame-2 synthetic tap rather than a clickable window. Run the host detached, grep the log
+      for "synth-tap FAILED" then the backtrace; kill the looping process afterward.
+    * Demo probe: one .onTapGesture on the hint Text logs "TAP-FIRED"; the demo's on_pointer mirrors
+      down/up into wandrSendPointer (@_spi(WandrRenderer) SPI on WandrApp).
+    * Temp diagnostics still in tree (revert when G2+ done): #if os(WASI) [SRTRACE] in Compute
+      StatefulRule.swift; [GTRACE]/[WANDR] in OpenSwiftUI GestureGraph/EventBindingManager/ViewGraph/
+      GraphHost/WandrApp. The synth-tap + named backtrace supersedes these.
+
+  STATE: gesture subsystem committed WIP — OpenSwiftUI bc9cdec4 (impl) + 2fa39812 (G1 fix);
+  Compute 739cabe (traces) + 7bfeb9b (size-precondition diag); main 327a31d0 (synth-tap harness).
+  Safe fallback: working manual-input 2048 build at main 92b45e3f. Device deploy pipeline =
+  build-openswiftui-demo.sh -> wasm-tools component new --adapt -> WANDR_AOT_TARGET=
+  aarch64-linux-android --install -> adb push -> wandr-arbiter launch.
+================================================================================
