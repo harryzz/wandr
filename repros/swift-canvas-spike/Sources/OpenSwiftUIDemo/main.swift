@@ -42,6 +42,11 @@ struct ContentView: View {
         }
         .frame(width: w * 0.25, height: w * 0.14)
         .background(Rectangle().fill(boxColor).cornerRadius(w * 0.012))
+        // Real gesture: tap a score box → toggle autoplay (replaces the hand-rolled scoreRect hit-test).
+        .onTapGesture {
+            wandrApplyChange { autoplayOn.toggle(); tickBinding?.wrappedValue &+= 1 }
+            animPending = true
+        }
     }
 
     // Confirm-dialog button colors — distinct fills so the CGSink can recover their rects (the
@@ -67,6 +72,11 @@ struct ContentView: View {
                 // Header: "2048" title + SCORE / BEST boxes (like the eleev gif).
                 HStack(alignment: .center, spacing: w * 0.015) {
                     Text("2048").font(.system(size: w * 0.10, weight: .heavy)).foregroundColor(titleColor)
+                        // Real gesture: tap the title → open the new-game confirm dialog.
+                        .onTapGesture {
+                            wandrApplyChange { confirmNewGame = true; tickBinding?.wrappedValue &+= 1 }
+                            animPending = true
+                        }
                     Spacer()
                     scoreBox("SCORE", game.score, w)
                     scoreBox("BEST", max(bestScore, game.score), w)
@@ -77,29 +87,19 @@ struct ContentView: View {
                                 : "swipe to play  -  tap a score box = autoplay")
                     .font(.system(size: w * 0.032, weight: .medium))
                     .foregroundColor(hintColor)
-                    // [PHASE-A PROBE] the ONLY .onTapGesture in the tree — structural binding ignores
-                    // location, so any down→up routed via wandrSendPointer should fire this.
-                    .onTapGesture { tapCount &+= 1; wlog("TAP-FIRED count=\(tapCount)") }
-                    // [PART-B PROBE] real DragGesture — moves (now forwarded as .active) should stream
-                    // onChanged with a translation, and onEnded on release. minimumDistance 0 = any move.
-                    .gesture(
-                        DragGesture(minimumDistance: 0)
-                            .onChanged { v in
-                                wlog("DRAG-CHANGED dx=\(Int(v.translation.width)) dy=\(Int(v.translation.height))")
-                            }
-                            .onEnded { v in
-                                wlog("DRAG-ENDED dx=\(Int(v.translation.width)) dy=\(Int(v.translation.height))")
-                            }
-                    )
                 ZStack {
                     TileBoardView(
                         matrix: game.tiles,     // read in BODY (game fully constructed), not in init
                         tileEdge: game.lastGestureDirection.invertedEdge,
                         tileBoardSize: game.boardSize
                     )
-                    // Game over (board full, no merges left) → dim + prompt. Any tap restarts (onPointer).
+                    // Game over (board full, no merges left) → dim + prompt. Tap restarts (gesture below).
                     if !game.tiles.isMovePossible() {
                         Rectangle().fill(Color(red: 0.05, green: 0.06, blue: 0.07, opacity: 0.72))
+                            .onTapGesture {
+                                wandrApplyChange { autoplayOn = false; game.reset(); tickBinding?.wrappedValue &+= 1 }
+                                animPending = true
+                            }
                         VStack(spacing: w * 0.025) {
                             Text("GAME OVER")
                                 .font(.system(size: w * 0.10, weight: .heavy)).foregroundColor(.white)
@@ -108,15 +108,40 @@ struct ContentView: View {
                         }
                     }
                 }
+                // Real gesture: swipe the board → move (replaces the hand-rolled boardRect+delta).
+                // minimumDistance gates out taps, so only a real swipe moves; onEnded picks direction.
+                .gesture(
+                    DragGesture(minimumDistance: w * 0.05).onEnded { v in
+                        guard !confirmNewGame, game.tiles.isMovePossible() else { return }
+                        let t = v.translation
+                        let dir: Direction = abs(t.width) > abs(t.height)
+                            ? (t.width > 0 ? .right : .left)
+                            : (t.height > 0 ? .down : .up)
+                        wandrApplyChange { autoplayOn = false; _ = game.move(dir); tickBinding?.wrappedValue &+= 1 }
+                        if game.score > bestScore { bestScore = game.score }
+                        animPending = true
+                    }
+                )
             }
             // New-game confirmation (tapping "2048" opens this; nothing resets without a YES).
             if confirmNewGame {
+                // Dim backdrop — a modal no-op tap so taps that miss the buttons don't fall through
+                // to the board/header underneath.
                 Rectangle().fill(Color(red: 0.05, green: 0.06, blue: 0.07, opacity: 0.80))
+                    .onTapGesture { }
                 VStack(spacing: w * 0.06) {
                     Text("New game?").font(.system(size: w * 0.085, weight: .heavy)).foregroundColor(.white)
                     HStack(spacing: w * 0.07) {
                         confirmButton("NO", noColor, w)
+                            .onTapGesture {
+                                wandrApplyChange { confirmNewGame = false; tickBinding?.wrappedValue &+= 1 }
+                                animPending = true
+                            }
                         confirmButton("YES", yesColor, w)
+                            .onTapGesture {
+                                wandrApplyChange { autoplayOn = false; game.reset(); confirmNewGame = false; tickBinding?.wrappedValue &+= 1 }
+                                animPending = true
+                            }
                     }
                 }
             }
@@ -143,26 +168,6 @@ final class CGSink: WandrDrawSink {
         x: Double, y: Double, width: Double, height: Double,
         red: Float, green: Float, blue: Float, opacity: Float
     ) {
-        // [wandr no-hardcode input] recover where the board + score boxes draw, by their unique
-        // background fill colors (surface units, same space as pointer events). These literals mirror
-        // TileBoardView's board background and ContentView.boxColor.
-        func near(_ a: Float, _ b: Float) -> Bool { abs(a - b) < 0.02 }
-        if near(red, 0.76), near(green, 0.76), near(blue, 0.78) {        // board outer background
-            boardRect = (Float(x), Float(y), Float(width), Float(height))
-        } else if near(red, 0.73), near(green, 0.68), near(blue, 0.63) { // SCORE / BEST box background
-            let bx = Float(x), by = Float(y), bw = Float(width), bh = Float(height)
-            if scoreRect.h == 0 {
-                scoreRect = (bx, by, bw, bh)
-            } else {                                                    // union with the other box
-                let minX = min(scoreRect.x, bx), minY = min(scoreRect.y, by)
-                let maxX = max(scoreRect.x + scoreRect.w, bx + bw), maxY = max(scoreRect.y + scoreRect.h, by + bh)
-                scoreRect = (minX, minY, maxX - minX, maxY - minY)
-            }
-        } else if near(red, 0.30), near(green, 0.69), near(blue, 0.31) { // confirm-dialog YES button
-            yesRect = (Float(x), Float(y), Float(width), Float(height))
-        } else if near(red, 0.35), near(green, 0.38), near(blue, 0.45) { // confirm-dialog NO button
-            noRect = (Float(x), Float(y), Float(width), Float(height))
-        }
         guard let cg else { return }
         cg.setFillColor(CGColor(
             red: CGFloat(red), green: CGFloat(green), blue: CGFloat(blue), alpha: CGFloat(opacity)
@@ -174,9 +179,6 @@ final class CGSink: WandrDrawSink {
         _ text: String, x: Double, y: Double, width: Double, height: Double,
         fontSize: Double, red: Float, green: Float, blue: Float, opacity: Float
     ) {
-        // [wandr no-hardcode input] the "2048" title is text (no fill) — capture its rect so only
-        // the title (not the hint label beside it) opens the new-game dialog.
-        if text == "2048" { titleRect = (Float(x), Float(y), Float(width), Float(height)) }
         guard let cg else { return }
         // CGContext.drawString lowers to wasi:canvas text/paragraph (Skia shapes + draws).
         // Draw at the given size (which matches the reserved band height), so the next VStack
@@ -208,21 +210,8 @@ nonisolated(unsafe) private var lastShapeCount = 0  // [wandr verify] draw-count
 nonisolated(unsafe) private var lastTextCount = 0
 nonisolated(unsafe) private var autoplayOn = false  // demo autoplay — DEFAULT OFF (user plays by swiping)
 nonisolated(unsafe) private var bestScore = 0       // peak score across the session (header "BEST" box)
-// Input regions DERIVED from where the elements actually draw (no hardcoded positions): the CGSink
-// recovers each element's rect by its unique background fill color, in SURFACE units (the same space
-// as the pointer events). `boardRect` = the board square (swipe area); `scoreRect` = the union of the
-// SCORE/BEST boxes (autoplay-toggle area). A tap ABOVE the board and LEFT of the score boxes is the
-// "2048" title (new game). Tracks the real layout on any device/orientation. (Plain vars — a lazy
-// global `let` reads 0 on this wasm toolchain, and the match colors are inlined in fillRect for the
-// same reason; they mirror TileBoardView's board background and ContentView.boxColor.)
-nonisolated(unsafe) private var boardRect: (x: Float, y: Float, w: Float, h: Float) = (0, 0, 0, 0)
-nonisolated(unsafe) private var scoreRect: (x: Float, y: Float, w: Float, h: Float) = (0, 0, 0, 0)
-nonisolated(unsafe) private var titleRect: (x: Float, y: Float, w: Float, h: Float) = (0, 0, 0, 0)  // "2048" text
-nonisolated(unsafe) private var yesRect:   (x: Float, y: Float, w: Float, h: Float) = (0, 0, 0, 0)  // confirm YES
-nonisolated(unsafe) private var noRect:    (x: Float, y: Float, w: Float, h: Float) = (0, 0, 0, 0)  // confirm NO
 nonisolated(unsafe) private var confirmNewGame = false  // show the "New game?" yes/no dialog
 // [PHASE-A PROBE] does a tap routed through OpenSwiftUI's gesture pipeline fire a .onTapGesture?
-nonisolated(unsafe) private var tapCount = 0
 nonisolated(unsafe) private var ptrSerial = 0
 
 @_cdecl("exports_wasi_input_handlers_frame_handler_on_resize")
@@ -323,9 +312,6 @@ public func onFrame(_ nanos: UInt64) {
 @_cdecl("exports_wandr_ui_shell_frame_pacing_next_frame_delay")
 public func nextFrameDelay() -> UInt32 { animPending ? 33 : 150 }
 
-// Swipe → GameLogic.move (down=0 start, up=1 release; dominant axis/sign picks direction).
-nonisolated(unsafe) private var swipeStartX: Float = 0
-nonisolated(unsafe) private var swipeStartY: Float = 0
 // [PHASE-A .active] track whether a button is held, so pointer MOVES are forwarded into the
 // gesture pipeline as .active phases only DURING a press (began → active… → ended) — a real drag
 // sequence, not hover. Without this the gesture pipeline only ever sees began → ended.
@@ -335,83 +321,22 @@ nonisolated(unsafe) private var pointerPressing = false
 public func onPointer(
     _ ev: UnsafeMutablePointer<exports_wasi_input_handlers_pointer_handler_pointer_event_t>?
 ) {
+    // All gameplay input now flows through real OpenSwiftUI gestures (DragGesture for swipes,
+    // .onTapGesture on each control). This handler ONLY forwards host pointer events into the
+    // gesture pipeline: down → .began, move-while-pressed → .active, up → .ended.
     guard let e = ev?.pointee else { return }
     switch e.kind {
     case UInt8(EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_DOWN):
-        swipeStartX = e.x; swipeStartY = e.y
         pointerPressing = true
-        wandrSendPointer(phase: 0, x: Double(e.x), y: Double(e.y), serial: ptrSerial)  // [PHASE-A PROBE]
+        wandrSendPointer(phase: 0, x: Double(e.x), y: Double(e.y), serial: ptrSerial)
     case UInt8(EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_MOVE):
-        // [PHASE-A .active] forward moves DURING a press so OpenSwiftUI gestures receive .active
-        // phases (DragGesture). Additive: the hand-rolled swipe still uses the down→up delta.
         if pointerPressing {
             wandrSendPointer(phase: 1, x: Double(e.x), y: Double(e.y), serial: ptrSerial)
         }
     case UInt8(EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_UP):
         pointerPressing = false
-        wandrSendPointer(phase: 2, x: Double(e.x), y: Double(e.y), serial: ptrSerial)  // [PHASE-A PROBE]
+        wandrSendPointer(phase: 2, x: Double(e.x), y: Double(e.y), serial: ptrSerial)
         ptrSerial &+= 1
-        let dx = e.x - swipeStartX, dy = e.y - swipeStartY
-        let t: Float = 24
-        guard let game = sharedGame, boardRect.h > 0 else { break }   // board rect not captured yet
-        let px = swipeStartX, py = swipeStartY
-        func inRect(_ r: (x: Float, y: Float, w: Float, h: Float)) -> Bool {
-            r.h > 0 && px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h
-        }
-
-        // Confirmation dialog is up → only its YES / NO buttons respond.
-        if confirmNewGame {
-            if inRect(yesRect) {
-                autoplayOn = false
-                wandrApplyChange { game.reset(); confirmNewGame = false; tickBinding?.wrappedValue &+= 1 }
-                animPending = true
-            } else if inRect(noRect) {
-                wandrApplyChange { confirmNewGame = false; tickBinding?.wrappedValue &+= 1 }
-                animPending = true
-            }
-            break
-        }
-
-        // Game over → any release anywhere starts a new game (already a loss — no confirm needed).
-        if !game.tiles.isMovePossible() {
-            autoplayOn = false
-            wandrApplyChange { game.reset(); tickBinding?.wrappedValue &+= 1 }
-            animPending = true
-            break
-        }
-
-        // ABOVE THE BOARD = a header press (no movement threshold). Tap the SCORE/BEST boxes → toggle
-        // autoplay; tap the "2048" title → open the new-game confirm dialog. The hint label between
-        // them is NOT a control (neither rect contains it). All rects are where the elements drew.
-        if py < boardRect.y {
-            if inRect(scoreRect) {
-                wandrApplyChange { autoplayOn.toggle(); tickBinding?.wrappedValue &+= 1 }
-                animPending = true
-            } else if inRect(titleRect) {
-                wandrApplyChange { confirmNewGame = true; tickBinding?.wrappedValue &+= 1 }
-                animPending = true
-            }
-            break
-        }
-
-        // SWIPE — only if it STARTED inside the board square (the empty area below the board and the
-        // header are excluded). Manual play takes control, so autoplay turns off.
-        guard inRect(boardRect) else { break }
-        let dir: Direction?
-        if abs(dx) > abs(dy) {
-            dir = dx > t ? .right : (dx < -t ? .left : nil)
-        } else {
-            dir = dy > t ? .down : (dy < -t ? .up : nil)
-        }
-        if let dir {
-            autoplayOn = false
-            wandrApplyChange {
-                _ = game.move(dir)
-                tickBinding?.wrappedValue &+= 1
-            }
-            if game.score > bestScore { bestScore = game.score }
-            animPending = true   // kick off the spring; onFrame drives it to settle
-        }
     default: break
     }
 }

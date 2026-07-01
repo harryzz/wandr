@@ -1516,6 +1516,35 @@ STATUS: root proven, NOT yet fixed. The generic IAG::vector push/pop/realloc all
     set the synth point (lib.rs). NEXT: Part C — board swipe→DragGesture + header/dialog→located taps, then
     retire the hand-rolled onPointer routing.
 
+  --- GESTURE MIGRATION (Part C) + hit-testing completion — DONE + DEVICE-VERIFIED (2026-07-01) ---
+    The 2048 demo now plays ENTIRELY via real OpenSwiftUI gestures on device; the hand-rolled
+    draw-rect onPointer routing is DELETED (onPointer only forwards down→.began / move-while-pressed
+    →.active / up→.ended into the gesture pipeline). Board swipe = DragGesture(minimumDistance).onEnded
+    →game.move; SCORE/BEST boxes, "2048" title, dialog YES/NO, game-over = .onTapGesture on each view.
+    Each control on its OWN view ⇒ no overlapping gestures ⇒ arbitration not needed.
+    Fixes that made it work on device (all committed):
+      * Approach A (GestureViewModifier): each GestureResponder hit-tests its OWN layout frame (from
+        GestureFilter, graph-context), covering ANY content view type (shapes/stacks), not just the
+        Text/Color leaf responders of pieces 1-3. Device logs proved hit-testing is PIXEL-ACCURATE
+        (no coordinate offset — surface 1440px, frames match touch).
+      * Map2Gesture: with GestureContainerFeature on (for geometric binding) the combiner took
+        phase.paused() waiting for arbitration (stubbed) → gestures never completed. Dropped the flag
+        from the pause gate → advance immediately (restore with piece 5a).
+      * MultiViewResponder.bindEvent iterates children front-to-back → TOPMOST gesture wins (dialog
+        over board).
+      * GestureGraph re-arm: the reset-seed bump moved from AFTER the terminal to the START of the
+        next sequence (same transaction) — killed the intermittent "first tap/swipe misses, retry
+        works" race on device (post-terminal bump raced with the next down). THIS was the last blocker;
+        after it, swipes+taps respond first-try consistently (user-confirmed).
+    Cleanup: temp GTRACE/action-logs removed; WANDR_DEBUG_SYNTH_TAP/SYNTH_DRAG harness REMOVED from
+    wandr-host lib.rs (desktop debug path); dead rect-capture/onPointer remnants removed from the demo.
+    KNOWN / DEFERRED (documented, not blocking play): render lag ~130ms per state-change re-render
+    (view-tree re-eval cost, inherent — not pacing); PIECE 4 (local-space Value.location); PIECE 5a
+    (multi-gesture arbitration, LayoutGestureChildProxy); PIECE 5b (transform-aware hit regions);
+    DragGesture velocity/predictedEnd. Method note: device input reports continuous position while
+    held; the demo forwards moves only while pressed. LESSON (reused): observe device gesture state
+    with _gtrace (stderr+fflush), NEVER print() (stdout buffered, lost on kill).
+
   METHOD / TOOLING (reusable, committed):
     * Fast symbolized backtrace, NO device round-trip / NO manual click:
       WANDR_DEBUG_SYNTH_TAP=1 (host hook in lib.rs, sibling of synth-key) fires a synthetic
