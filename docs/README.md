@@ -9,7 +9,7 @@ reading the code. They are NOT user-facing reference. For setup +
 build instructions see `~/wandr/CLAUDE.md` and each subproject's
 `BUILD.md`. For the task narrative see `~/wandr/tasks/`.
 
-## Index
+## Core — read these first
 
 | Doc | Audience | What it answers |
 |---|---|---|
@@ -17,6 +17,57 @@ build instructions see `~/wandr/CLAUDE.md` and each subproject's
 | [`architecture-runtime.md`](architecture-runtime.md) | Anyone touching `wandr-host` / `wandr-arbiter`, or debugging app launch / focus / lifecycle | What are the three processes (zygote, arbiter, host child) and how do they talk? Full transport tables for the three UNIX sockets + the three signals. End-to-end trace of `wandr-arbiter launch <app>`. |
 | [`architecture-ime.md`](architecture-ime.md) | Anyone touching `wandr.ime.keyboard`, the lang plugins, or `ime_inbound` / `keyboard_host_impl` | How does a soft-keyboard tap become a Compose `KeyEvent` in the focused TextField? How are lang plugins (`wandr.lang.bg` / `.fr`) loaded, and what's TODO (task 51) to make plugin loading dynamic? |
 | [`repository-layout.md`](repository-layout.md) | Anyone adding a new app, system component, native binary, or vendored upstream | Where does it live? What do I name it? Canonical top-level categories (`apps/`, `runtime/`, `wit/`, `external/`, `tools/`, `repros/`) and the `wandr-*` vs `wandr.*` naming rule. Mid-migration as of 2026-05-28 — see task 52. |
+| [`build-pipeline.md`](build-pipeline.md) | Anyone building a guest or the host | Build pipeline, WIT-sync rule, cwasm/adapter/deploy, dev environment. |
+| [`host-rendering.md`](host-rendering.md) | Anyone touching `canvas_impl.rs` / skiko files / the Kotlin→WIT→host data flow | Host rendering + architecture notes. |
+
+## Runtime internals & `--no-art` native services
+
+| Doc | What it covers |
+|---|---|
+| [`artless-native-service-model.md`](artless-native-service-model.md) | The `--no-art` native-service model — why the bring-up is a mess, and the clean shape. |
+| [`sensor-access-conflicts-no-art.md`](sensor-access-conflicts-no-art.md) | Sensor access under `--no-art` — paths, Android cross-check, conflicts. |
+| [`device-hal-inventory.md`](device-hal-inventory.md) | Device HAL inventory — HIDL vs AIDL across wandr test devices. |
+| [`binder-abi-portability.md`](binder-abi-portability.md) | Binder ABI portability — generating rsbinder bindings across Android versions & devices. |
+| [`call-engine.md`](call-engine.md) | Call engine (`wandr-call`) — pure-Rust WebRTC internals. |
+
+## Rendering, canvas & WIT contracts
+
+| Doc | What it covers |
+|---|---|
+| [`skia-wit-mapping.md`](skia-wit-mapping.md) | Skia ↔ `my:skiko-gfx` mapping — the canonical contract. |
+| [`skiko-gfx-vs-wasi-gfx.md`](skiko-gfx-vs-wasi-gfx.md) | `my:skiko-gfx` vs wasi-gfx/wasi:webgpu — relationship, differences, standardization question. |
+| [`surface-convergence-proposal.md`](surface-convergence-proposal.md) | Converging wasi-gfx and the wandr canvas stack — both directions, one vocabulary. |
+| [`ui-shell-consolidation.md`](ui-shell-consolidation.md) | `wandr:ui-shell` + the consolidation event — retiring my:skiko-gfx AND wasi:canvas@0.0.1. |
+| [`wandr-media-scope.md`](wandr-media-scope.md) | `wandr:media` — scope decision (2026-06-12, not designed yet). |
+| [`visual-sizing-design-patterns.md`](visual-sizing-design-patterns.md) | Visual sizing — design patterns, and where wandr differs. |
+
+## Guest languages & UI-framework feasibility
+
+| Doc | What it covers |
+|---|---|
+| [`wasm-component-language-support.md`](wasm-component-language-support.md) | Guest-language support for WASI components (language neutrality). |
+| [`java-framework-reuse-via-wasm.md`](java-framework-reuse-via-wasm.md) | Reusing Android's Java framework logic as wasm components. |
+| [`swift-openswiftui-wandr-feasibility.md`](swift-openswiftui-wandr-feasibility.md) | Swift + OpenSwiftUI on wandr — feasibility memo (SPIKE WORKING). |
+| [`avalonia-wandr-feasibility.md`](avalonia-wandr-feasibility.md) | Avalonia on wandr — feasibility memo (SHIPPED). |
+| [`egui-wandr-feasibility.md`](egui-wandr-feasibility.md) | egui on wandr — mapping memo (belongs on wasi-webgpu). |
+| [`flutter-wandr-feasibility.md`](flutter-wandr-feasibility.md) | Flutter/Dart on wandr — feasibility memo (+ the Go UI question). |
+| [`qt-wandr-feasibility.md`](qt-wandr-feasibility.md) | Qt on wandr — feasibility memo (NOT practical). |
+| [`ruby-wandr-feasibility.md`](ruby-wandr-feasibility.md) | Ruby on wandr — feasibility memo (viable-but-DIY). |
+
+## Feature designs & portability
+
+| Doc | What it covers |
+|---|---|
+| [`audio-player-design.md`](audio-player-design.md) | Feature-rich audio player on wandr — layered capability-negotiated design (task 108). |
+| [`wandr-os-portability.md`](wandr-os-portability.md) | wandr OS portability — how the runtime plugs into existing OSes. |
+| [`redox-wandr-feasibility.md`](redox-wandr-feasibility.md) | Redox OS as a wandr host target — feasibility notes. |
+
+## Bug notes
+
+| Doc | What it covers |
+|---|---|
+| [`bug-keyguard-ime-overlay-and-audio.md`](bug-keyguard-ime-overlay-and-audio.md) | keyguard/IME overlay corruption + wandr-app audio UI-block + IME audio leak. |
+| [`kotlin-wasm-export-exit-pump-bug.md`](kotlin-wasm-export-exit-pump-bug.md) | K/Wasm: `onExportedFunctionExit` fires inside `cabi_realloc`, running user code while canonical-ABI realloc memory is pending. |
 
 ## Conventions
 
@@ -25,9 +76,8 @@ build instructions see `~/wandr/CLAUDE.md` and each subproject's
   rationale where it explains *why* the current code looks the
   way it does.
 - Link liberally to `tasks/<N>-*.md` for the historical task
-  context, and to `~/.claude/projects/-home-harry-wandr/memory/*.md`
-  via double-bracket `[[memory-slug]]` syntax for design notes
-  that aren't task-scoped.
+  context, and to `~/wandr/.claude/memory/*.md` via double-bracket
+  `[[memory-slug]]` syntax for design notes that aren't task-scoped.
 - Each doc opens with a TL;DR + an ASCII process / boundary
   diagram so the reader can build mental model before reading
   prose.
