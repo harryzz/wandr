@@ -93,26 +93,30 @@ struct ContentView: View {
                         tileEdge: game.lastGestureDirection.invertedEdge,
                         tileBoardSize: game.boardSize
                     )
-                    // Game over (board full, no merges left) → dim + prompt. Tap restarts (gesture below).
+                    // Game over (board full, no merges left) → dim + prompt. The board's DragGesture
+                    // below handles the restart on any swipe (no separate overlay gesture — two
+                    // gestures on one area would need arbitration, which is deferred).
                     if !game.tiles.isMovePossible() {
                         Rectangle().fill(Color(red: 0.05, green: 0.06, blue: 0.07, opacity: 0.72))
-                            .onTapGesture {
-                                wandrApplyChange { autoplayOn = false; game.reset(); tickBinding?.wrappedValue &+= 1 }
-                                animPending = true
-                            }
                         VStack(spacing: w * 0.025) {
                             Text("GAME OVER")
                                 .font(.system(size: w * 0.10, weight: .heavy)).foregroundColor(.white)
-                            Text("tap to start a new game")
+                            Text("swipe to play again")
                                 .font(.system(size: w * 0.040, weight: .medium)).foregroundColor(labelColor)
                         }
                     }
                 }
                 // Real gesture: swipe the board → move (replaces the hand-rolled boardRect+delta).
-                // minimumDistance gates out taps, so only a real swipe moves; onEnded picks direction.
+                // minimumDistance gates out taps, so only a real swipe acts; onEnded picks direction.
+                // At game over, any swipe restarts the game.
                 .gesture(
                     DragGesture(minimumDistance: w * 0.05).onEnded { v in
-                        guard !confirmNewGame, game.tiles.isMovePossible() else { return }
+                        guard !confirmNewGame else { return }
+                        if !game.tiles.isMovePossible() {
+                            wandrApplyChange { autoplayOn = false; game.reset(); tickBinding?.wrappedValue &+= 1 }
+                            animPending = true
+                            return
+                        }
                         let t = v.translation
                         let dir: Direction = abs(t.width) > abs(t.height)
                             ? (t.width > 0 ? .right : .left)
