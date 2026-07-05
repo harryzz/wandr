@@ -17,6 +17,8 @@ runtime → OS backends). If you're new, start with the overview.
 
 - [`overview.md`](overview.md) — **the front-door doc**: what wandr is, the
   four-layer model, and an honest per-backend / per-framework maturity matrix.
+- 🎥 [demo video](https://youtube.com/shorts/rR4TG-I5Y58) — screen recording of
+  wandr running on a Pixel 2 XL.
 
 ## Runtime & host — the core
 

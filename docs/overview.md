@@ -11,6 +11,9 @@ in `docs/` is a layer or a slice of it. If you read one thing first,
 read this, then jump to the layer you care about via the
 [index](README.md).
 
+> 🎥 **See it running:** [demo video](https://youtube.com/shorts/rR4TG-I5Y58)
+> — screen recording from a Pixel 2 XL.
+
 ## What wandr is
 
 wandr runs UI applications compiled to WASM components. A guest imports
