@@ -101,7 +101,7 @@ The bulk of the framework. Largest-first, with what matters for rendering:
 | **View/** (~136 files) | the view tree + declarative API | `View/Graph/ViewGraph.swift` (the reactive host, extends `GraphHost`); `View/View.swift` (`_makeView`, `@_typeEraser`); `View/TupleView.swift` (multi-child) |
 | **Data/** (~68) | @State, bindings, environment, preferences, observation | `Data/Update.swift` (update dispatch ↔ AG invalidation); `Data/State/State.swift`; `Data/Combine/*` (off-Darwin fallback) |
 | **Layout/** (~65) | geometry, alignment, stacks; AG-driven | `Layout/LayoutComputer/*` (where the layout engine reads cached attrs — the phase-3 wall lived here) |
-| **Event/** (~58) | gestures, responders, hit-testing | (needed for interactivity — not yet exercised on wasm) |
+| **Event/** (~58) | gestures, responders, hit-testing | exercised on wasm: pointer input arrives via `wasi:input-handlers/pointer-handler` → `on_pointer` SPI → `@State`, driving swipe-to-move (2048 is user-playable on device) |
 | **Animation/** (~54) | transactions, timelines, springs | |
 | **Render/** (~38) | **display-list construction + renderer vendors** | `Render/DisplayList/DisplayList.swift` (the model); `RendererConfiguration.swift` (renderer selection); the vendors below |
 | **Graphic/** (~32) | Color, Gradient, BlurStyle, Appearance | `Color.Resolved` (sRGB → the wandr sink reads these) |
