@@ -133,6 +133,47 @@ See the *Guest languages & UI-framework feasibility* section of the
 | `wasi:webgpu` (2nd rendering lane, guest-owns-renderer) | proposed / host-side |
 | `wandr:media` · audio player · `wasi:media-session` | designed / partial |
 
+## Demo apps — language/framework × contracts exercised
+
+The apps in `apps/user/` (and a couple of spikes in `repros/`) are the
+polyglot proof: different languages and UI frameworks, all coexisting behind
+the same WIT. A **†** marks a **proposed / WASI-track** contract (`wasi:*`);
+unmarked `wandr:*` interfaces are wandr host contracts (OS-agnostic, not yet
+proposed to WASI).
+
+Proposed-WASI contracts in play: `wasi:canvas@0.0.2`† (render) ·
+`wasi:input-handlers@0.0.2`† (pointer/key/IME input) · `wasi:audio/pcm@0.0.1`†
+· `wasi:media-session@0.0.1`† (← W3C Media Session) · `wasi:tls`† (guest TLS).
+
+### Interactive UI demos
+
+| App | Language / framework | Contracts exercised | Status |
+|---|---|---|---|
+| **wandr.signal** — Signal messenger, **fully functional incl. audio + video calls** | Rust (dioxus-canvas UI + pure-Rust WebRTC engine) | `wasi:canvas`† · `wasi:input-handlers`† · `wasi:tls`† (signaling/transport) · `wasi:audio/pcm`† · `wandr:crypto/aead` (SRTP HW-AES offload) · `wandr:video/encoder`+`decoder` (HW VP8 + PiP) · `wandr:audio-focus` · `wandr:chrome/status` · `wandr:notify` · `wandr:alarm` · `wandr:signal/chat` | live-verified both ways |
+| **2048** (`repros/openswiftui-wasm`) | **Swift / OpenSwiftUI** | `wasi:canvas`† (renders on device via a wasi:canvas CGContext; the in-tree probe has no `world.wit`, so its input binding isn't pinned here) | plays all moves, device-stable (spike) |
+| **wandr.tetris** — Tetris | Rust | `wasi:canvas`† (draw/embedding/layout) · `wasi:input-handlers`† · `wasi:audio/pcm`† (SFX) · `wandr:chrome/launcher` · `wandr:ui-shell` | playable |
+| **wandr.audio.player** — audio player | Rust | `wasi:audio/pcm`† · `wasi:media-session`† · `wandr:background` | task 108 |
+| **wandr.avalonia.demo** — Fluent controls | **.NET / C# (Avalonia)** | `wasi:canvas`† (draw/embedding/glyphs) · `wandr:ui-shell/ime`+`metrics` | shipped, device-verified |
+| **wandr.slint.test** | Rust / **Slint** | `wasi:canvas`† · `wasi:input-handlers`† · IME · emoji | shipped |
+| **wandr.dioxus.demo** | Rust / **dioxus** | `wasi:canvas`† · `wasi:input-handlers`† | production lib demo |
+| **wandr-app** — reference Compose app | **Kotlin / Compose Multiplatform** | `wasi:canvas`† · `wasi:input-handlers`† · IME | reference guest |
+| **wandr.ktcanvas.test** | Kotlin / Compose | `wasi:canvas`† | canvas test |
+| **wandr.taskmanager** | Rust / dioxus | `wandr:task-manager` | shipped |
+| **wandr.alarm.test** | Rust | `wandr:alarm/scheduler` · `wandr:audio-focus` · `wandr:notify` | test |
+
+### Capability tests & benches (headless — `wasi:cli/command`)
+
+| App | Language | Contracts exercised | Purpose |
+|---|---|---|---|
+| **wandr.video.test** | Rust | `wandr:video/encoder`+`decoder` | camera → HW VP8 → HW decode |
+| **wandr.crypto.test** | Rust | `wandr:crypto/{aead,hash,kdf,cipher,mac,key-exchange,signatures,caps}` | host crypto surface |
+| **wandr.srtp.bench** | Rust | `wandr:crypto/aead-oneshot` | SRTP HW-AES throughput bench |
+| **wandr.connectivity.test** | Rust | networking | link/connectivity probe |
+
+*(System chrome — launcher, statusbar, taskbar, IME keyboard, keyguard,
+powermenu, settings — are Rust guests on the same `wasi:canvas`† /
+`wasi:input-handlers`† contracts; see `apps/system/`.)*
+
 ## Where to go next
 
 - **The portable ABI** → *Contracts* in the [index](README.md)
