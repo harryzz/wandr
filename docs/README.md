@@ -1,15 +1,24 @@
 # wandr — architecture docs
 
-Living technical docs for the wandr runtime: a wasmtime-based
-replacement for Android's ART, running Compose Multiplatform apps
-compiled to WASM components on real device hardware.
+Living technical docs for the wandr runtime: a **portable UI runtime for
+WASM apps** — guests compiled once against OS-agnostic WIT contracts, run
+natively on any OS wandr has a backend for. Android is the production
+backend; Linux is a working desktop/dev backend.
 
 These docs answer the questions that come up repeatedly while
 reading the code. They are NOT user-facing reference. For setup +
 build instructions see `~/wandr/CLAUDE.md` and each subproject's
 `BUILD.md`. For the task narrative see `~/wandr/tasks/`.
 
-## Core — read these first
+The index below is organized by the **layer model** (guests → contracts →
+runtime → OS backends). If you're new, start with the overview.
+
+## Start here
+
+- [`overview.md`](overview.md) — **the front-door doc**: what wandr is, the
+  four-layer model, and an honest per-backend / per-framework maturity matrix.
+
+## Runtime & host — the core
 
 | Doc | Audience | What it answers |
 |---|---|---|
@@ -20,7 +29,22 @@ build instructions see `~/wandr/CLAUDE.md` and each subproject's
 | [`build-pipeline.md`](build-pipeline.md) | Anyone building a guest or the host | Build pipeline, WIT-sync rule, cwasm/adapter/deploy, dev environment. |
 | [`host-rendering.md`](host-rendering.md) | Anyone touching `canvas_impl.rs` / skiko files / the Kotlin→WIT→host data flow | Host rendering + architecture notes. |
 
-## Runtime internals & `--no-art` native services
+## Contracts & rendering — the portable ABI
+
+The OS-agnostic layer: the WIT the guest imports, and how it maps to Skia.
+
+| Doc | What it covers |
+|---|---|
+| [`skia-wit-mapping.md`](skia-wit-mapping.md) | Skia ↔ `my:skiko-gfx` mapping — the canonical rendering contract. |
+| [`ui-shell-consolidation.md`](ui-shell-consolidation.md) | `wandr:ui-shell` + the consolidation event — retiring my:skiko-gfx AND wasi:canvas@0.0.1. |
+| [`skiko-gfx-vs-wasi-gfx.md`](skiko-gfx-vs-wasi-gfx.md) | `my:skiko-gfx` vs wasi-gfx/wasi:webgpu — relationship, differences, standardization question. |
+| [`surface-convergence-proposal.md`](surface-convergence-proposal.md) | Converging wasi-gfx and the wandr canvas stack — both directions, one vocabulary. |
+| [`visual-sizing-design-patterns.md`](visual-sizing-design-patterns.md) | Visual sizing — design patterns, and where wandr differs. |
+
+## OS backends — Android subsystems & portability
+
+The OS-specific layer. Android is the production backend; the last two docs
+cover plugging wandr into other OSes.
 
 | Doc | What it covers |
 |---|---|
@@ -29,17 +53,8 @@ build instructions see `~/wandr/CLAUDE.md` and each subproject's
 | [`device-hal-inventory.md`](device-hal-inventory.md) | Device HAL inventory — HIDL vs AIDL across wandr test devices. |
 | [`binder-abi-portability.md`](binder-abi-portability.md) | Binder ABI portability — generating rsbinder bindings across Android versions & devices. |
 | [`call-engine.md`](call-engine.md) | Call engine (`wandr-call`) — pure-Rust WebRTC internals. |
-
-## Rendering, canvas & WIT contracts
-
-| Doc | What it covers |
-|---|---|
-| [`skia-wit-mapping.md`](skia-wit-mapping.md) | Skia ↔ `my:skiko-gfx` mapping — the canonical contract. |
-| [`skiko-gfx-vs-wasi-gfx.md`](skiko-gfx-vs-wasi-gfx.md) | `my:skiko-gfx` vs wasi-gfx/wasi:webgpu — relationship, differences, standardization question. |
-| [`surface-convergence-proposal.md`](surface-convergence-proposal.md) | Converging wasi-gfx and the wandr canvas stack — both directions, one vocabulary. |
-| [`ui-shell-consolidation.md`](ui-shell-consolidation.md) | `wandr:ui-shell` + the consolidation event — retiring my:skiko-gfx AND wasi:canvas@0.0.1. |
-| [`wandr-media-scope.md`](wandr-media-scope.md) | `wandr:media` — scope decision (2026-06-12, not designed yet). |
-| [`visual-sizing-design-patterns.md`](visual-sizing-design-patterns.md) | Visual sizing — design patterns, and where wandr differs. |
+| [`wandr-os-portability.md`](wandr-os-portability.md) | **How the runtime plugs into a new OS** — what a backend must provide. |
+| [`redox-wandr-feasibility.md`](redox-wandr-feasibility.md) | Redox OS as a wandr host target — feasibility notes. |
 
 ## Guest languages & UI-framework feasibility
 
@@ -54,13 +69,12 @@ build instructions see `~/wandr/CLAUDE.md` and each subproject's
 | [`qt-wandr-feasibility.md`](qt-wandr-feasibility.md) | Qt on wandr — feasibility memo (NOT practical). |
 | [`ruby-wandr-feasibility.md`](ruby-wandr-feasibility.md) | Ruby on wandr — feasibility memo (viable-but-DIY). |
 
-## Feature designs & portability
+## Feature designs & proposals
 
 | Doc | What it covers |
 |---|---|
 | [`audio-player-design.md`](audio-player-design.md) | Feature-rich audio player on wandr — layered capability-negotiated design (task 108). |
-| [`wandr-os-portability.md`](wandr-os-portability.md) | wandr OS portability — how the runtime plugs into existing OSes. |
-| [`redox-wandr-feasibility.md`](redox-wandr-feasibility.md) | Redox OS as a wandr host target — feasibility notes. |
+| [`wandr-media-scope.md`](wandr-media-scope.md) | `wandr:media` — scope decision (2026-06-12, not designed yet). |
 
 ## Bug notes
 

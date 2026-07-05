@@ -31,7 +31,7 @@ just the stock `wasi:cli/command`. The table below is graded on that bar.
 | **C# / .NET** | ✅ yes — best managed-language story | `componentize-dotnet` (one NuGet: NativeAOT-LLVM + wit-bindgen + wasm-tools + WASI SDK) | ✅ full WIT import/export | hidden by toolchain | Preview (~0.7), usable |
 | **Go (TinyGo)** | ✅ yes | `tinygo build -target=wasip2 --wit-package … --wit-world …` (shells out to wasm-tools embed+new) | ⚠️ yes, with friction¹ | hidden by toolchain | v0.34+ (use ≥0.39) |
 | **Zig** | 🟡 manual only | wit-bindgen **C** generator + Zig C-interop → wasm32-wasip1 → `wasm-tools component new` w/ adapter | ✅ but hand-wired | **explicit** (std is P1) | DIY |
-| **Java (JVM)** | 🔴 dormant | **teavm-wasi** forks (bytecode → wasm + CM bindings) | ✅ in the forks | hidden by fork | **Forks dormant (golem 2023 / fermyon 2022); wit-bindgen `teavm-java` gen removed** — see 2026 update below |
+| **Java (JVM)** | ✅ **proven in wandr** (spike) | patched **TeaVM `WEBASSEMBLY_GC_WASI`** (JS-free WasmGC) → `wasm-tools component new --adapt` | ✅ hand-ABI custom WIT | wandr-fork reactor adapter | **Spike proven end-to-end on desktop (tasks 112/113); productionization pending — see 2026-06 update below.** *(The old off-the-shelf `teavm-wasi` CM forks are dormant; wandr built its own path instead.)* |
 | **Kotlin/Wasm** *(what wandr uses)* | 🟡 via hand-rolled pipeline | KGP `compileProductionExecutableKotlinWasmWasi` → `wasm-tools component embed` → `component new --adapt` | ✅ (our `skiko-ui`) | **explicit** (wandr-fork reactor adapter, KT-86415) | Shipping in wandr |
 
 ¹ TinyGo's `wasip2` target is hardwired to `wasi:cli/command`; a non-CLI world
@@ -77,8 +77,29 @@ arbitrary-world support is tracked in tinygo-org/tinygo#4843.
   exists today.** The cheapest revival path for a Java guest on wandr is **TeaVM
   core module + the same P1→P2 adapter wandr uses for Kotlin** (reuse the trick;
   linear-memory, not WasmGC) — wandr's undertaking, not an off-the-shelf option.
-  GraalVM is not a candidate (it runs wasm *in* the JVM; native-image doesn't emit
-  wasm components).
+  **GraalVM update:** its new **Web Image** backend (`--tool:svm-wasm`, GraalVM
+  25e1+) *does* now AOT-compile Java → **WasmGC** — but it emits a **browser /
+  JS-host** module (a JS runtime wrapper for Node/browser), **not WASI / the
+  Component Model**, so it's the same JS-host gate as J2CL / dart2wasm, not a
+  wandr guest path today. (Separately, *GraalWasm* runs wasm *inside* the JVM —
+  the opposite direction.)
+
+  **2026-06 IN-TREE UPDATE — Java on wandr is now PROVEN, not dormant
+  (supersedes the "no path" reading above).** wandr didn't revive the old CM
+  forks; it built a **new TeaVM target, `WEBASSEMBLY_GC_WASI`** — a JS-free
+  WasmGC backend (sibling to TeaVM's browser WasmGC target, modeled on its C
+  backend). Task 112 (investigate, viable) → **task 113 (CORE PROVEN
+  2026-06-17, WASI FLOOR DONE 2026-06-18):** pure-Java → patched TeaVM → WasmGC
+  core with **zero JS imports** (~11 KB) → `wasm-tools` **component** exporting a
+  custom WIT → **wasmtime Component-Model host calls the Java fn over WIT with
+  correct results**; real WASI floor (`fd_write`, `clock_time_get`) wired. Fork
+  `harryzz/teavm:wasmgc-wasi-poc` (commit `cdc6471`), 540-line patch in
+  `repros/java-wasm-spike/teavm-patches/`. This is the **only** Java→WasmGC+WASI
+  path that exists anywhere (upstreamable; a TeaVM issue is filed first).
+  Remaining before a Java UI guest ships: gradle-plugin support, allocating
+  guests, and on-device consumption from `wandr-host`. See
+  `tasks/113-teavm-wasmgc-wasi-target.md` and
+  [`java-framework-reuse-via-wasm.md`](java-framework-reuse-via-wasm.md).
 - **Kotlin/Wasm** (context) — our path: WasmGC output + a P1→P2 **reactor
   adapter** (wandr fork, the KT-86415 State-pin), hand-written `@WasmImport`/
   `@WasmExport` bindings. No native P2 target yet (watch KT-64568). Listed here

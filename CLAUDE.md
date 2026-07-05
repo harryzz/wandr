@@ -1,4 +1,4 @@
-# WASM Android Runtime — Claude Code Master Guide
+# wandr — Portable WASM UI Runtime (Android-first) — Claude Code Master Guide
 
 > Lean router (slimmed 2026-05-30). Detail lives in `docs/`, `tasks/`, and the
 > project memory — read the relevant file on demand (see **Where to look**).
@@ -24,16 +24,28 @@
 
 ## What this project is
 
-Replace Android's ART runtime with a wasmtime-based host that:
-- Runs Kotlin/Compose apps compiled to WASM components
-- Renders via skia-safe (Skia C++) on real GPU hardware (EGL direct)
-- Targets aarch64 Android (root via ADB, no system modification)
-- Uses the WASM Component Model + WIT for all host/guest interfaces
+A **portable UI runtime for WASM apps.** A guest app — any language, any UI
+framework — is compiled once to a WASM component against OS-agnostic WIT
+contracts (render / input / IME / chrome / device / media / audio / events).
+`wandr-host` (wasmtime + component model + a Skia rendering core) implements
+those contracts and delegates only the OS-specific bits to a per-OS **backend**.
+The contracts are portable; only the backend is OS-specific — so the same guest
+`.wasm` runs wherever wandr has a backend.
+
+- **Android** (aarch64, root via ADB, no system modification) — the **production
+  backend**: replaces ART end-to-end. Renders via skia-safe on real GPU hardware
+  (EGL direct); full `--no-art` native-service stack.
+- **Linux** (x86_64, WSLg) — a **working desktop/dev backend**: the same guest
+  `.wasm` runs via the desktop dev loop (JIT).
 
 **Working end-to-end on a Pixel 2 XL (Android 15 / API 35).** Real Compose
 Multiplatform UIs render at ~10–20 ms/frame; a Hybrid zygote+arbiter runtime,
 system launcher/status-bar/taskbar/IME chrome, cross-app deps, and on-demand
-rendering are all shipped. Full per-task ledger: **`tasks/STATUS.md`**.
+rendering are all shipped. Shipped guest frameworks: Compose, Slint, dioxus,
+Avalonia, Swift/OpenSwiftUI. Full per-task ledger: **`tasks/STATUS.md`**.
+
+> **New here? Read [`docs/overview.md`](docs/overview.md) first** — the layer
+> model + honest per-backend/per-framework maturity matrix.
 
 ---
 
