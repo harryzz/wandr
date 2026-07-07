@@ -1,7 +1,10 @@
 # Task 115 — Retire `wandr-step-executor` on the Signal transport (wasip3 native async)
 
-> Scoped 2026-07-07. 🔲 not started — a **sketch / go-no-go**, gated on 0.3
-> networking availability (see "The real gate"). Outgrowth of the wasip3 async
+> Scoped 2026-07-07. 🔲 not started — a **sketch / go-no-go**. **M0 resolved
+> 2026-07-07: the 0.3 async `wasi:tls`+`wasi:sockets` host impls are already in
+> the pinned wasmtime 46** (wandr just links the p2 variant) — so this is
+> reachable now on the runtime we ship, gated only on RC-level API stability
+> (see "M0"). Outgrowth of the wasip3 async
 > analysis (`docs/shared-runtime-and-app-size.md` §"Composed components & the
 > wasip3 shared event loop"). Goal: replace the hand-rolled frame-stepped async
 > reactor on the **Signal transport** with **native Component-Model async**
@@ -60,22 +63,38 @@ trick.
   awaits the stream. Cleaner, but changes the guest↔host contract + the UI's
   consumption model. Consider after (A) proves out.
 
-## The real gate ⚠️ (not purely guest-side)
+## M0 — RESOLVED 2026-07-07: the 0.3 async impls are already in wandr's wasmtime 46 ✅
 
-The transport rides `wasi:tls`, and the host currently serves
-**`wasi:tls@0.2.0-draft`** (`wasmtime-wasi-tls = "46"`, `runtime/wandr-host/Cargo.toml`).
-Native async end-to-end wants **0.3-async networking** (`wasi:sockets` / `wasi:tls`
-in async form). Decision gate **before committing**:
+The transport rides `wasi:tls`, and wandr currently *links* the p2 variant
+(`wasmtime-wasi-tls = "46"` serving `wasi:tls@0.2.0-draft`,
+`runtime/wandr-host/Cargo.toml`). The open question was whether **0.3-async**
+networking (`wasi:sockets`/`wasi:tls` in async form) even exists in the pinned
+runtime. **It does** — verified against wasmtime upstream:
 
-- **0.3 async `wasi:tls`/`wasi:sockets` available in wasmtime 46** → full clean
-  retirement (guest awaits real async streams). ✅ preferred.
-- **Not yet** → can still make the **guest structure** async (async export +
-  spawn, removing the manual `step()` loop), but the bottom I/O edge may still
-  bridge a 0.2 pollable until async transport lands. Partial win.
+- **`wasi:tls` p3 (async) landed** — PR **#12834 "feat(p3): implement wasi:tls"**
+  (merged 2026-03-30), **#12896** "same view types for both p2 & p3" (2026-03-31),
+  **#12780** merged the crates into one with **feature flags**. All merged before
+  **v46.0.0** (2026-06-22). So the `wasmtime-wasi-tls 46.0.0` crate wandr already
+  depends on **ships both p2 and p3** — wandr just links p2 today. (The earlier
+  `feat(p3)` PR #12174 was closed *unmerged*; #12834 is the one that landed.)
+  Client-side TLS (all Signal needs) is covered.
+- **`wasi:sockets` 0.3 async** — present in wasmtime's P3 support (exercised in
+  wasmCloud fixtures), but **RC-status**: thin external docs, API names may still
+  shift.
 
-**M0 = confirm what 0.3 networking wasmtime 46 actually ships.** This decides
-whether the task is "full retire" or "restructure now, finish when transport
-lands."
+**So M0 is no longer "is it available?" (yes, in the runtime we ship) but a
+narrower wiring step:** switch `wandr-host` from the **p2** to the **p3**
+`wasmtime-wasi-tls` variant (+ p3 sockets) and expose the async `chat` — accepting
+**RC-level API churn** while wasi:tls (still a phase-2 *proposal*, not ratified
+core WASI 0.3) and wasi:sockets 0.3 settle.
+
+- **Full clean retirement** (guest awaits real async streams end-to-end) is
+  **reachable now** on the pinned wasmtime 46 — the runtime is not the blocker.
+- **Risk** = pre-stable API: pin exact wasmtime patch, expect churn, keep a p2
+  fallback path until the interfaces freeze. Prove it in M1 (spike) before
+  ripping out the executor.
+
+Evidence: wasmtime PRs #12834 / #12896 / #12780; issue #12102 (phase-2 tracker).
 
 ## Preserve these semantics (don't regress)
 
@@ -89,8 +108,9 @@ lands."
 
 ## Milestones (each a kill-gate)
 
-- **M0** — confirm 0.3 async networking surface in wasmtime 46 (full-retire vs
-  restructure-only). Decides scope.
+- **M0** — ✅ **DONE 2026-07-07:** 0.3 async `wasi:tls` (PR #12834) + `wasi:sockets`
+  are in the pinned wasmtime 46; scope = **full-retire**, gated on RC-API stability
+  (switch `wandr-host` p2→p3 `wasmtime-wasi-tls`). See the "M0" section above.
 - **M1** — spike: async-restructured transport in a `repros/wstd-wasitls-spike`
   analog (async export + spawn; no `step()`), desktop dev loop.
 - **M2** — shape (A) in the real engine: `async` `poll-events`, delete the
