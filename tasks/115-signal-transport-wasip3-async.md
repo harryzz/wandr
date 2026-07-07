@@ -96,6 +96,56 @@ core WASI 0.3) and wasi:sockets 0.3 settle.
 
 Evidence: wasmtime PRs #12834 / #12896 / #12780; issue #12102 (phase-2 tracker).
 
+## Blast radius — dual-serve guard (do NOT replace p2) ⚠️
+
+Switching the host wasi:tls/sockets impl from **p2 to p3 as a *replacement*** would
+break **every guest that still imports p2 — across languages**. The host provides
+the impl; each guest imports a specific version; an imported interface **must be
+satisfied at instantiation or the component fails to load** (importing ≠ using —
+see below). Ground truth from scanning the built components (`wasm-tools
+component wit`, **not** source grep — toolchains import networking implicitly):
+
+| Component | Lang | Imports | Real user? |
+|---|---|---|---|
+| wandr.signal | Rust | `wasi:sockets@0.2.9` + `wasi:tls@0.2.0-draft` | yes — chat + calls |
+| wandr.audio.player | Rust | `wasi:sockets@0.2.12` + `wasi:tls@0.2.0-draft` | yes — cover-art fetch |
+| wandr.video.test | Rust | `wasi:sockets@0.2.9` (tcp/udp) | probe/test |
+| **wandr.avalonia.demo** | **.NET/C#** | `wasi:sockets@0.2.0` (tcp/udp), no tls | **NO — dead import** |
+| repros/call-live, signal-engine-smoke | Rust | sockets (+tls) | test |
+
+**Importing ≠ using.** `wandr.avalonia.demo` is a UI-only demo, yet it imports the
+**entire standard WASI P2 world** (`cli`/`clocks`/`filesystem`/`io`/`random`/
+`sockets` + its real `wasi:canvas`). Reason: `componentize-dotnet` (NativeAOT-LLVM
++ WASI SDK) links the full `wasi:cli/command`-style world because the .NET
+runtime/BCL *references* those syscalls — regardless of whether the app calls
+them. **Managed / full-libc runtimes (.NET, TinyGo, anything on the full WASI SDK)
+declare the whole world; lean custom-world Rust guests (the chrome guests import
+just `wasi:cli/stderr`) do not.** The sockets import is a dead capability
+declaration — but linking is *by declaration*, so the host must still satisfy it.
+
+**Version fragmentation:** `wasi:sockets` appears at **0.2.0** (Avalonia), **0.2.9**
+(Signal/video/call), **0.2.12** (audio.player); `wasi:tls` at `0.2.0-draft`
+everywhere. The p2 host impl must keep satisfying that whole 0.2.x spread.
+
+**The guard (mandatory):** the host must **dual-serve** — keep the full **p2**
+`wasi:sockets`+`wasi:tls` surface (via `wasmtime_wasi`'s default linker, already
+in place) and **add p3 additively** (like the wasi-canvas default-on pattern that
+serves `my:skiko-gfx` *and* `wasi:canvas` at once). Add the p3 linker at **both**
+instantiate sites (`app_loader.rs:268`, `:390`) plus `run_once.rs`/`standalone.rs`/
+`lib.rs`. **Drop p2 only when the *last* importer — across all languages —
+migrates** (and note most sockets imports are dead, so some may never "migrate",
+they just need p2 satisfied). This keeps the migration incremental, not a
+big-bang rebuild-everything.
+
+**Method note:** audit consumers by scanning built components with `wasm-tools
+component wit`, not source grep — a source-level check misses toolchain-implicit
+imports (this is exactly how the .NET sockets dependency was nearly missed).
+
+**Capability-hygiene aside (separate task):** a UI guest importing raw TCP/UDP it
+never uses holds more authority than it should. If `componentize-dotnet` can emit
+a **narrower world** (trim unused `sockets`/`filesystem`), it shrinks both the
+attack surface and this blast radius. Worth checking — out of scope for 115.
+
 ## Preserve these semantics (don't regress)
 
 - **Device-suspend / battery** — today the loop only advances while the UI polls
