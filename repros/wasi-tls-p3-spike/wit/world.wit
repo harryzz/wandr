@@ -1,0 +1,14 @@
+package spike:tlsp3;
+
+// M1 spike guest: async TLS-over-TCP with NO step-executor — the whole flow is
+// native async (resolve.await / connect.await / handshake.await) driven by the
+// host's shared event loop. Imports the real p3 (0.3) tls + sockets contracts.
+world spike {
+  import wasi:tls/types@0.3.0-draft;
+  import wasi:tls/client@0.3.0-draft;
+  import wasi:sockets/types@0.3.0;
+  import wasi:sockets/ip-name-lookup@0.3.0;
+
+  // returns the first response line (e.g. "HTTP/1.0 200 OK") or an error string
+  export run: async func(host: string) -> result<string, string>;
+}

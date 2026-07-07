@@ -194,8 +194,16 @@ different gaps — use all three):
 - **M0** — ✅ **DONE 2026-07-07:** 0.3 async `wasi:tls` (PR #12834) + `wasi:sockets`
   are in the pinned wasmtime 46; scope = **full-retire**, gated on RC-API stability
   (switch `wandr-host` p2→p3 `wasmtime-wasi-tls`). See the "M0" section above.
-- **M1** — spike: async-restructured transport in a `repros/wstd-wasitls-spike`
-  analog (async export + spawn; no `step()`), desktop dev loop.
+- **M1** — 🟡 **IN PROGRESS (2026-07-07): guest half PROVEN.**
+  `repros/wasi-tls-p3-spike/` — a native-async TLS-over-TCP guest (`resolve.await`
+  / `connect.await` / handshake `.await`, **zero step-executor**) compiles to a
+  valid `wasm32-wasip2` component importing the real **0.3** interfaces
+  (`wasi:sockets@0.3.0`, `wasi:tls@0.3.0-draft`). Recon (full p3 tls/sockets API
+  map) + gotchas (`generate_all`; DON'T force `async: true`; `StreamWriter::
+  write_all`/`StreamReader::collect`) captured in the spike README. **Remaining:
+  the host** — wasmtime-46 binary linking `wasmtime_wasi::p3::add_to_linker` +
+  `wasmtime_wasi_tls::p3::add_to_linker`, `Store` on `call_async`, invoke
+  `run("example.com")` for a **live handshake** (sandbox network is open).
 - **M2** — shape (A) in the real engine: `async` `poll-events`, delete the
   `step()`/reactor path; send+receive+keepalive on the host loop; desktop.
 - **M3** — delete `wandr-step-executor` from the Signal build + the

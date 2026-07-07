@@ -1,0 +1,14 @@
+[package]
+name = "wasi-tls-p3-spike"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "0.53", features = ["async"] }
+
+[profile.release]
+opt-level = "s"
