@@ -204,6 +204,35 @@ different gaps — use all three):
   dropped events vs the `step()` baseline; battery behavior unchanged.
 - **M5 (optional)** — shape (B): `subscribe() -> stream<event>`.
 
+## M1 readiness (assessed 2026-07-07) — startable, gate = async codegen
+
+**Confirmed ready ✅:**
+- Runtime = crates.io **wasmtime 46** (no `[patch]` redirect — `external/wasmtime`
+  submodule is a read-only source ref at v45, NOT a build input, so no build-time
+  skew). p3 wasi-tls host API exists: `wasi_tls::p3::add_to_linker`
+  (`external/wasmtime/crates/wasi-tls/src/p3/mod.rs`, present since v45 → in 46).
+- Spike harness in-tree: `repros/wstd-wasitls-spike` (the M1 starting point) +
+  `repros/wasi-tls-probe` / `wasi-tls-runner`.
+- `wit-bindgen 0.53` in the Signal engine + `wandr-reqwest`. Desktop dev loop
+  exists (task 101).
+
+**Verify FIRST (M1 opening moves — this is what the spike proves):**
+1. ⚠️ **THE GATE — wit-bindgen 0.53 async codegen is unproven in this repo.** No
+   guest currently uses `generate!` with async (all sync + step-executor). Confirm
+   0.53 emits `async fn`/`stream<T>`/`future<T>` **in the first 30 min** — if not,
+   a wit-bindgen bump precedes everything else. Don't assume it works.
+2. **p3 wit async-shape unverified** — `p3::add_to_linker` exists, but the p3
+   `world.wit` read was a bindgen helper stub; confirm the real p3 `wit/deps` is
+   stream/future-shaped before writing the guest.
+3. **Spike host links p3, not p2** — wandr-host links p2 today; the M1 host wires
+   `wasi_tls::p3::add_to_linker` + runs the `Store` on `call_async`.
+4. **Bump `external/wasmtime` v45→46** — only to read the *exact* p3 API the build
+   links (not a build blocker; it's a source reference).
+
+**Verdict:** green to start — the two hard prerequisites (p3 host API + spike
+harness) are in place; nothing structural blocks. Not a rubber-stamp: #1
+(async codegen) is the true gate — verify it before assuming M1 can proceed.
+
 ## Scope / non-goals
 
 - **Rust guest only.** Signal engine is Rust → eligible. Kotlin/Compose guests
