@@ -8,7 +8,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = { version = "0.53", features = ["async"] }
+wit-bindgen = { version = "0.53", features = ["async", "async-spawn"] }
 
 [profile.release]
 opt-level = "s"

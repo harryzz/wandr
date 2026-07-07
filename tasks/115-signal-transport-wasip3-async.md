@@ -194,16 +194,18 @@ different gaps — use all three):
 - **M0** — ✅ **DONE 2026-07-07:** 0.3 async `wasi:tls` (PR #12834) + `wasi:sockets`
   are in the pinned wasmtime 46; scope = **full-retire**, gated on RC-API stability
   (switch `wandr-host` p2→p3 `wasmtime-wasi-tls`). See the "M0" section above.
-- **M1** — 🟡 **IN PROGRESS (2026-07-07): guest half PROVEN.**
-  `repros/wasi-tls-p3-spike/` — a native-async TLS-over-TCP guest (`resolve.await`
-  / `connect.await` / handshake `.await`, **zero step-executor**) compiles to a
-  valid `wasm32-wasip2` component importing the real **0.3** interfaces
-  (`wasi:sockets@0.3.0`, `wasi:tls@0.3.0-draft`). Recon (full p3 tls/sockets API
-  map) + gotchas (`generate_all`; DON'T force `async: true`; `StreamWriter::
-  write_all`/`StreamReader::collect`) captured in the spike README. **Remaining:
-  the host** — wasmtime-46 binary linking `wasmtime_wasi::p3::add_to_linker` +
-  `wasmtime_wasi_tls::p3::add_to_linker`, `Store` on `call_async`, invoke
-  `run("example.com")` for a **live handshake** (sandbox network is open).
+- **M1** — ✅ **DONE 2026-07-07 — END-TO-END VERIFIED, live.**
+  `repros/wasi-tls-p3-spike/`: a native-async TLS-over-TCP **guest** (`resolve.await`
+  / `connect.await` / handshake `.await`, **zero step-executor**) importing the real
+  **0.3** contracts (`wasi:sockets@0.3.0`, `wasi:tls@0.3.0-draft`), driven by a
+  wasmtime-46 **host** (links `wasmtime_wasi::p2`+`::p3` + `wasmtime_wasi_tls::p3`,
+  `Store` on `call_async`). Live result: `run("example.com")` → **`HTTP/1.1 200 OK`**
+  (real TLS 1.3 handshake + HTTPS GET, decrypted through the async receive pipe).
+  Gotchas captured in the spike README: `generate_all`; don't force `async: true`;
+  p3 modules behind a **`p3` cargo feature** + wasmtime **`component-model-async`**;
+  **dual-serve is mandatory even for one guest** (the guest pulls p2 `wasi:cli`/
+  `wasi:io@0.2.6` via Rust std → host links p2 AND p3 — a live confirmation of the
+  blast-radius rule); **don't `drop` the write stream before reading** the response.
 - **M2** — shape (A) in the real engine: `async` `poll-events`, delete the
   `step()`/reactor path; send+receive+keepalive on the host loop; desktop.
 - **M3** — delete `wandr-step-executor` from the Signal build + the

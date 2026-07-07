@@ -1,3 +1,5 @@
 /target
+/host/target
 /build.log
+/host/build.log
 Cargo.lock
