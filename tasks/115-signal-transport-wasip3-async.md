@@ -217,16 +217,19 @@ different gaps — use all three):
   exists (task 101).
 
 **Verify FIRST (M1 opening moves — this is what the spike proves):**
-1. ✅ **GATE CLEARED 2026-07-07 — wit-bindgen 0.53.1 async codegen works.** Ran
-   `wit-bindgen rust --async all` on a real async WIT (`async func` + `future<T>`
-   + `stream<T>`): emits `pub async fn` for both imports and exports, plus
-   `FutureReader/Writer` + `StreamReader/Writer` and the `async_support` runtime
-   refs, exit 0. **No wit-bindgen bump needed.** Evidence:
-   `repros/wit-bindgen-async-probe/`. Caveat: this proves *codegen*, not
-   *compile+link+run* — the generated code needs `wit_bindgen::rt::async_support`
-   (likely a runtime feature) and to run on wasmtime 46; that's what M1 proves.
-   Also exercise the `generate!` **macro** form (guests use it, not the CLI — same
-   generator/`AsyncFilterSet`, same `async` config).
+1. ✅ **GATE CLEARED 2026-07-07 — full async chain VERIFIED end-to-end.** On
+   wandr's exact toolchain (wit-bindgen 0.53.1, rustc 1.95, wasmtime 46.0.0,
+   wasm-tools 1.245.1): (a) **codegen** — `--async all` emits `async fn` +
+   `future`/`stream` (imports+exports); (b) **compile+link** — an `async fn run`
+   export via the `generate!` **macro** builds for `wasm32-wasip2` and links
+   `wit_bindgen::rt::async_support` (`async` is a default feature); (c)
+   **component** — valid; (d) **run** — `wasmtime run -W component-model-async=y
+   --invoke 'run(41)'` drove the async export to completion → `42`. **No
+   wit-bindgen bump needed; async needed only `-W component-model-async=y`, NOT
+   `-Sp3`** (the async ABI is orthogonal to importing WASI 0.3). Evidence +
+   reproduce: `repros/wit-bindgen-async-probe/`. Still M1's job: the p3
+   `wasi:tls`/`wasi:sockets` *transport* wiring — this probe covered the
+   toolchain/async-ABI gate, not the network edge.
 2. **p3 wit async-shape unverified** — `p3::add_to_linker` exists, but the p3
    `world.wit` read was a bindgen helper stub; confirm the real p3 `wit/deps` is
    stream/future-shaped before writing the guest.
@@ -236,9 +239,10 @@ different gaps — use all three):
    links (not a build blocker; it's a source reference).
 
 **Verdict:** green to start — the two hard prerequisites (p3 host API + spike
-harness) are in place, and **#1 (async codegen) — the true gate — is now
-CLEARED** (0.53.1 emits async fn/future/stream). Remaining M1 work is proving
-compile+link+run against wasmtime 46, not fighting the toolchain.
+harness) are in place, and **#1 (the async toolchain) — the true gate — is now
+CLEARED end-to-end**: codegen → compile → link → run all verified on the exact
+toolchain (`repros/wit-bindgen-async-probe/`). Remaining M1 work is the p3
+`wasi:tls`/`wasi:sockets` transport wiring, not the async toolchain.
 
 ## Scope / non-goals
 

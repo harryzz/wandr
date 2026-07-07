@@ -1,0 +1,15 @@
+[package]
+name = "wit-bindgen-async-probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "0.53", features = ["async"] }
+
+[profile.release]
+opt-level = "s"
+strip = true

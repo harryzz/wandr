@@ -1,0 +1,6 @@
+package test:async-probe@0.1.0;
+
+world probe {
+  // async export — proves async lift/lower + the async_support runtime at run time
+  export run: async func(x: u32) -> u32;
+}
