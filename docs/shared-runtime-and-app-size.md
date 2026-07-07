@@ -100,6 +100,67 @@ per app. That's the architecture that *does* get you "publish the shared part
 once, ship thin apps" — but it only applies to frameworks whose surface can be
 narrowed to a WIT contract.
 
+## Composed components & the wasip3 shared event loop (guest side)
+
+Sharing/reusing components raises a second question: when one component depends
+on another, how do they interact *concurrently*? WASI 0.3 / Component-Model async
+(wasip3) answers this with **one host-owned event loop**, and it's worth being
+precise about what that means **from a guest's point of view**.
+
+**The guest stops owning an executor.** In wasip2 a guest that wanted concurrency
+drove `wasi:io/poll` itself — wandr's `wandr-step-executor` is exactly that, a
+guest-side executor built to keep async alive across the host's per-frame export
+calls (the documented *"step-executor doesn't span component calls"* constraint).
+In wasip3 the guest just writes `async fn` + `.await`; **awaiting yields to the
+runtime**, which resumes the task when the awaited value is ready. No poll loop,
+no continuation stashing, and **async now spans the export call** — which is the
+whole reason the step-executor exists, removed (for Rust guests).
+
+**The loop spans guest↔guest, not just guest↔host** — that's the point of
+"shared." When guest A awaits an async import from guest B, A yields to the
+*runtime* (not to B); B runs (maybe awaiting host wasi or a third guest C); when
+B's `future<T>`/`stream<T>` resolves the runtime resumes A. A value can cross
+A→B→C boundaries and the one loop schedules whoever is waiting.
+
+**But "one loop" is scoped to one component graph / one Store — NOT device-wide:**
+
+```
+  ┌────────── ONE app process (one Store / one embedder) ──────────┐
+  │  guest A ──async──▶ guest B (composed dep) ──▶ host wasi        │
+  │        └──────── all on the SAME shared loop ────────┘         │
+  └────────────────────────────────────────────────────────────────┘
+
+  ┌── app X (process) ──┐   IPC   ┌── app Y (process) ──┐
+  │  its own loop        │ ◀─────▶ │  its own loop        │
+  └──────────────────────┘         └──────────────────────┘
+      separate embedders — talk via arbiter/event bus, NOT one loop
+```
+
+- **Two components composed into one app** (app + dep, wired by `link.wac` /
+  `wire_dep_into_linker`, which instantiates the dep **into the consumer's
+  Store**, `app_loader.rs:876`) → same graph, **same loop**. ✓
+- **Two separate apps** (each zygote-forked into its own process) → **separate
+  loops**; they use wandr IPC (arbiter sockets, event bus), and the shared-loop
+  model does not apply. ✗
+
+The deciding factor is **one Store / one instance graph**, not "is it a guest."
+
+**wandr status:** composed deps already live in the consumer's Store (so they'd
+share the loop), but the dep wiring is deliberately **sync-only today** —
+*"Resources, top-level exported functions, and async dispatch are out of scope"*
+(`app_loader.rs:858`), per-call `Val`-boxed at ~1 Hz. So wandr's cross-component
+calls don't use the shared async loop yet; **wasip3 async is the upgrade** that
+turns "composed dep, calls must be synchronous" into "dep exposes
+`async`/`stream`/`future`, and the caller awaits it on the one loop."
+
+**Caveats (guest side):** the loop is single-threaded and cooperative — a guest
+that does CPU work without awaiting **blocks every task on the loop**, so yield at
+suspension points. Rendering stays **host-pull / synchronous / frame-paced** (the
+`on_frame` export); async is for the **I/O side** (networking, media, events)
+running as cooperative tasks around frames. And this is **Rust-guests only**
+today — a Kotlin/Compose component can't participate natively (KT-64568), so it
+stays on the reactor/step-executor side even when composed with a Rust guest.
+
 ## Practical guidance
 
 - **Don't** promise "Compose as a shared linked component" — it's blocked at both
