@@ -87,7 +87,7 @@
 - [Ref: dioxus + taffy UI](reference_dioxus_taffy_rust_ui.md) — light Rust UI for guests; shipped as crates/dioxus-canvas.
 - [Ref: wasi-webgpu/wasi-gfx](reference_wasi_webgpu_gfx.md) — guest-owns-renderer model (Phase 2, unreleased); 2nd rendering path beside skiko-gfx; full comparison = docs/skiko-gfx-vs-wasi-gfx.md.
 - [Ref: Avalonia on wandr — SHIPPED](reference_avalonia_wandr.md) — Fluent demo works on device incl. DPI + IME, idle ~3%; lib = dotnet/avalonia-wandr, pin Avalonia 11.3.17 + ILC alpha; gotchas + memo = docs/avalonia-wandr-feasibility.md.
-- [Ref: Swift/OpenSwiftUI on wandr — eleev 2048 PLAYS, device-stable](reference_swift_openswiftui_wandr.md) — root cause = AGSubgraphStorage use-after-free (wasm lacks ARC for CF-bridged Subgraph); fix = faithful item-level CFRetain/Release + robust AGSubgraphIsValid (immortal-CF band-aid replaced, see [reference_openswiftui_immortal_fix.md](reference_openswiftui_immortal_fix.md)); memo = docs/swift-openswiftui-wandr-feasibility.md.
+- [Ref: Swift/OpenSwiftUI on wandr — eleev 2048 PLAYS, device-stable](reference_swift_openswiftui_wandr.md) — root cause = AGSubgraphStorage use-after-free (wasm lacks ARC for CF-bridged Subgraph); fix = faithful item-level CFRetain/Release + robust AGSubgraphIsValid (see [reference_openswiftui_immortal_fix.md](reference_openswiftui_immortal_fix.md)); memo = docs/swift-openswiftui-wandr-feasibility.md.
 - [Ref: egui on wandr](reference_egui_wandr.md) — belongs on wasi-webgpu (draw-mesh has no Canvas2D analog), NOT wasi:canvas; clean plug = host-impl the wasi:webgpu iface, zero egui/canvas changes; memo = docs/egui-wandr-feasibility.md.
 - [Ref: Flutter+Go UI on wandr](reference_flutter_go_ui_wandr.md) — Flutter = best arch fit (dart:ui→wasi:canvas seam) but dart2wasm is JS-env-only; standalone = active upstream (dart-lang/sdk#53884), not yet shipped; Go = no skia UI exists; memo = docs/flutter-wandr-feasibility.md.
 - [Ref: Qt on wandr — NOT practical](reference_qt_wandr.md) — no wasi port (Emscripten-only); Qt Quick = GPU scene graph (wrong shape); QPaintEngine seam would fit if wasi lands; Slint covers the niche; memo = docs/qt-wandr-feasibility.md.
@@ -125,6 +125,7 @@
 - [RenderNode.drawInto attributes](feedback_render_node_attributes.md) — bounds/clip/alpha/shadow all applied.
 - [Paint alpha pipeline](feedback_paint_alpha_pipeline.md) — multiply color.alpha × paint.alpha into one byte.
 - [identityHashCode must be stable](feedback_transition_animate_to_bug.md) — mutating counter froze Transition.animateTo.
+- [Audit WIT consumers: scan binaries not source](feedback_audit_wit_consumers_scan_binaries.md) — `wasm-tools component wit` on built components; managed runtimes (.NET) declare the full WASI world = dead imports source grep misses.
 - [Compose popup overlay on wasi](feedback_popup_overlay.md) — CanvasLayersComposeScene + real containerSize; layer-alpha fix.
 - [Compose scrolling on wasi](feedback_scrolling.md) — flush WasiFrameDispatcher after every pointer event.
 - [Host-side WasiDrawable transforms](feedback_host_side_transforms.md) — layer props live on host C++; setting never invalidates recordings.
