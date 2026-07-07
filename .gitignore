@@ -30,3 +30,6 @@ swift/OpenSwiftUIProject/tests/logs/
 
 # cross-AOT deploy staging (regenerable: stripped wasm + aarch64 cwasm)
 swift/OpenSwiftUIProject/tests/deploy/
+
+# Local pre-publication drafts for WASI proposal postings (never committed)
+future-postings/
