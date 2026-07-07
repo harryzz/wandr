@@ -146,6 +146,39 @@ never uses holds more authority than it should. If `componentize-dotnet` can emi
 a **narrower world** (trim unused `sockets`/`filesystem`), it shrinks both the
 attack surface and this blast radius. Worth checking — out of scope for 115.
 
+## Migration signposting — `#[deprecated]` + `p3-async` feature + scan-checklist
+
+Three complementary tools to drive the app-by-app migration off p2 (they cover
+different gaps — use all three):
+
+1. **`#[deprecated]` on wandr's own p2 crates (the Rust-guest nudge).** Mark the
+   items we own so a guest still on p2 gets a compile-time warning:
+   ```rust
+   #[deprecated(since = "0.x", note = "p2 async is being retired — migrate to \
+     native wasip3 async; see tasks/115")]
+   pub fn init() { … }   // wandr-step-executor; + the wandr-reqwest p2-TLS path
+   ```
+   Fitting since `wandr-step-executor` is meant to be retired. **Limits:** Rust
+   lint **only** (won't touch the .NET/Avalonia guest); can't annotate the
+   wit-bindgen imports or the external `wasmtime-wasi-tls` crate — only our own
+   wrappers/re-exports; it's a **warning, not enforcement** (doesn't remove p2,
+   doesn't change the dual-serve requirement). Expect noise on guests that can't
+   move yet (audio.player, signal-link) → `#[allow(deprecated)]` at those call
+   sites until they migrate. Optionally `#![deny(deprecated)]` in CI *later* to
+   hard-stop *new* p2 usage once the p3 path is proven.
+
+2. **A `p3-async` feature flag on `wandr-reqwest` (the actual toggle).** Select
+   the p2 vs p3 TLS/sockets backend per guest so migration is opt-in per app,
+   not big-bang. This is the real switch; `#[deprecated]` just discourages the
+   old side.
+
+3. **The binary-scan checklist (source of truth for ALL consumers).** The
+   blast-radius table above is authoritative — regenerate it with `wasm-tools
+   component wit` per release. **Non-Rust consumers (Avalonia) never appear in
+   Rust deprecation warnings**, so the scan is the only reliable "who still
+   imports p2" list. p2 can be dropped only when this list is empty (modulo dead
+   imports that just need p2 satisfied).
+
 ## Preserve these semantics (don't regress)
 
 - **Device-suspend / battery** — today the loop only advances while the UI polls
