@@ -30,6 +30,7 @@ runtime → OS backends). If you're new, start with the overview.
 | [`repository-layout.md`](repository-layout.md) | Anyone adding a new app, system component, native binary, or vendored upstream | Where does it live? What do I name it? Canonical top-level categories (`apps/`, `runtime/`, `wit/`, `external/`, `tools/`, `repros/`) and the `wandr-*` vs `wandr.*` naming rule. Mid-migration as of 2026-05-28 — see task 52. |
 | [`build-pipeline.md`](build-pipeline.md) | Anyone building a guest or the host | Build pipeline, WIT-sync rule, cwasm/adapter/deploy, dev environment. |
 | [`host-rendering.md`](host-rendering.md) | Anyone touching `canvas_impl.rs` / skiko files / the Kotlin→WIT→host data flow | Host rendering + architecture notes. |
+| [`shared-runtime-and-app-size.md`](shared-runtime-and-app-size.md) | Anyone asking "why are apps so big?" / "can we share Compose across apps?" | Why each app bundles its whole framework, why you can't publish a framework as a linked shared component, and the framework-base-zygote path to sharing a runtime in RAM. |
 
 ## Contracts & rendering — the portable ABI
 
