@@ -217,10 +217,16 @@ different gaps — use all three):
   exists (task 101).
 
 **Verify FIRST (M1 opening moves — this is what the spike proves):**
-1. ⚠️ **THE GATE — wit-bindgen 0.53 async codegen is unproven in this repo.** No
-   guest currently uses `generate!` with async (all sync + step-executor). Confirm
-   0.53 emits `async fn`/`stream<T>`/`future<T>` **in the first 30 min** — if not,
-   a wit-bindgen bump precedes everything else. Don't assume it works.
+1. ✅ **GATE CLEARED 2026-07-07 — wit-bindgen 0.53.1 async codegen works.** Ran
+   `wit-bindgen rust --async all` on a real async WIT (`async func` + `future<T>`
+   + `stream<T>`): emits `pub async fn` for both imports and exports, plus
+   `FutureReader/Writer` + `StreamReader/Writer` and the `async_support` runtime
+   refs, exit 0. **No wit-bindgen bump needed.** Evidence:
+   `repros/wit-bindgen-async-probe/`. Caveat: this proves *codegen*, not
+   *compile+link+run* — the generated code needs `wit_bindgen::rt::async_support`
+   (likely a runtime feature) and to run on wasmtime 46; that's what M1 proves.
+   Also exercise the `generate!` **macro** form (guests use it, not the CLI — same
+   generator/`AsyncFilterSet`, same `async` config).
 2. **p3 wit async-shape unverified** — `p3::add_to_linker` exists, but the p3
    `world.wit` read was a bindgen helper stub; confirm the real p3 `wit/deps` is
    stream/future-shaped before writing the guest.
@@ -230,8 +236,9 @@ different gaps — use all three):
    links (not a build blocker; it's a source reference).
 
 **Verdict:** green to start — the two hard prerequisites (p3 host API + spike
-harness) are in place; nothing structural blocks. Not a rubber-stamp: #1
-(async codegen) is the true gate — verify it before assuming M1 can proceed.
+harness) are in place, and **#1 (async codegen) — the true gate — is now
+CLEARED** (0.53.1 emits async fn/future/stream). Remaining M1 work is proving
+compile+link+run against wasmtime 46, not fighting the toolchain.
 
 ## Scope / non-goals
 
