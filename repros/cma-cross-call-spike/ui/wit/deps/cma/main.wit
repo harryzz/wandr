@@ -3,4 +3,6 @@ package demo:cma;
 interface chat {
   start: async func();
   poll: func() -> u32;
+  fetch: async func(host: string) -> result<string, string>;
+  fetch-chopped: async func(host: string) -> result<string, string>;
 }

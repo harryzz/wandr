@@ -62,17 +62,28 @@ gate C (sync instantiate+call on same engine):   PASS   <- pure-p2 app unaffecte
    wasmtime→anyhow fine, but don't let inference pick `wasmtime::Error` as a
    closure/block error type that anyhow errors then fail to convert into.
 
+## Phase-3 gates (added 2026-07-08) — the real wandr-reqwest p3 backend, live
+
+```
+gate D1 fetch (Client→http1→tls_p3): PASS — 200 OK (559 body bytes)
+gate D2 select-drop torture: PASS — HTTP/1.1 200 OK (559 body bytes, 26 dropped reads)
+```
+
+- **D1**: the engine component does a live HTTPS GET through the FULL
+  production stack — `wandr_reqwest::Client` → `http1` → `tls_p3` (the p3
+  backend behind the crate's `p3-async` feature) — zero step-executor.
+- **D2**: cancellation-safety torture. Raw `TlsStream`, the pending read
+  dropped on every 1 ms tick (the engine's `select_biased!` shape); 26 reads
+  dropped mid-flight, response still byte-perfect (Content-Length verified).
+  This is safe **by construction**: tls_p3's dedicated reader task owns the
+  `StreamReader`; `read_*` futures only wait on the shared pushback buffer.
+- Extra finding: wasmtime 46 deprecated `Config::async_support` (no-op) —
+  async availability is always-on; per-instance asyncness governs.
+
 ## Build + run
 
 ```bash
 ./build.sh
 ./host/target/release/cma-cross-call-spike-host composite.wasm \
-    p2sync/target/wasm32-wasip2/release/cma_p2sync.wasm
+    p2sync/target/wasm32-wasip2/release/cma_p2sync.wasm [host-to-fetch]
 ```
-
-## Still open (deliberately deferred to Phase 3 / tls_p3.rs)
-
-- select_biased-drop byte-loss test: dropping an in-flight p3 `StreamReader`
-  read mid-`select!` must not lose buffered bytes — test against the real
-  `wandr-reqwest` p3 `TlsStream` (whose struct must hold the in-flight read
-  future), where the fix would live anyway.

@@ -50,7 +50,12 @@ fn make_config() -> Config {
 
 fn new_state() -> HostState {
     HostState {
-        ctx: WasiCtxBuilder::new().inherit_stdio().build(),
+        ctx: WasiCtxBuilder::new()
+            .inherit_stdio()
+            .inherit_network()
+            .allow_ip_name_lookup(true)
+            .allow_tcp(true)
+            .build(),
         table: ResourceTable::new(),
         tls: WasiTlsCtxBuilder::new().build(),
     }
@@ -175,7 +180,38 @@ fn main() -> Result<()> {
         Err(e) => println!("gate C: FAIL — {e:#}"),
     }
 
-    if gate_a && quiesced && gate_c.is_ok() {
+    // ---- Gate D (phase 3): live HTTPS over the real wandr-reqwest p3 stack ----
+    println!("--- gate D: wandr-reqwest p3 backend (live HTTPS + select-drop torture) ---");
+    let target = std::env::args().nth(3).unwrap_or_else(|| "example.com".into());
+    let mut call_fetch = |name: &str, store: &mut Store<HostState>| -> Result<String> {
+        let idx = instance
+            .get_export_index(&mut *store, Some(&chat), name)
+            .ok_or_else(|| anyhow::anyhow!("chat export has no `{name}`"))?;
+        let f = instance.get_typed_func::<(String,), (Result<String, String>,)>(&mut *store, idx)?;
+        rt.block_on(async {
+            match tokio::time::timeout(Duration::from_secs(30), async {
+                let (r,) = f.call_async(&mut *store, (target.clone(),)).await?;
+                Ok::<Result<String, String>, anyhow::Error>(r)
+            })
+            .await
+            {
+                Ok(inner) => inner?.map_err(|e| anyhow::anyhow!("guest error: {e}")),
+                Err(_) => Err(anyhow::anyhow!("{name} timed out")),
+            }
+        })
+    };
+    let gate_d1 = call_fetch("fetch", &mut store);
+    match &gate_d1 {
+        Ok(line) => println!("gate D1 fetch (Client→http1→tls_p3): PASS — {line}"),
+        Err(e) => println!("gate D1 fetch: FAIL — {e:#}"),
+    }
+    let gate_d2 = call_fetch("fetch-chopped", &mut store);
+    match &gate_d2 {
+        Ok(line) => println!("gate D2 select-drop torture: PASS — {line}"),
+        Err(e) => println!("gate D2 select-drop torture: FAIL — {e:#}"),
+    }
+
+    if gate_a && quiesced && gate_c.is_ok() && gate_d1.is_ok() && gate_d2.is_ok() {
         println!("ALL GATES PASS");
         Ok(())
     } else {

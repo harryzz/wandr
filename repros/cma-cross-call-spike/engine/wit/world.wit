@@ -4,9 +4,16 @@ package demo:cma;
 /// `start` is async-lifted and called BY THE HOST (a sync-lifted UI export may
 /// not block on an async callee — wasmtime trap `CannotBlockSyncTask`);
 /// `poll` stays a plain sync drain the UI calls per frame.
+///
+/// `fetch` / `fetch-chopped` are the phase-3 kill-gate: a live HTTPS GET over
+/// the real wandr-reqwest p3 backend (Client→http1→tls_p3), and the same via
+/// raw TlsStream with reads repeatedly dropped mid-select (cancellation-safety
+/// torture — no byte may be lost).
 interface chat {
   start: async func();
   poll: func() -> u32;
+  fetch: async func(host: string) -> result<string, string>;
+  fetch-chopped: async func(host: string) -> result<string, string>;
 }
 
 world engine {

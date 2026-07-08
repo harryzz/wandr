@@ -18,8 +18,29 @@ wit_bindgen::generate!({
     generate_all,
 });
 
-#[cfg(target_arch = "wasm32")]
+// Task 115 — the WASI 0.3 bindings (native CM-async streams). Nested in `mod
+// p3` so its `wasi::*` modules don't collide with the p2 `generate!` above.
+#[cfg(all(target_arch = "wasm32", feature = "p3-async"))]
+pub mod p3 {
+    wit_bindgen::generate!({
+        world: "shim-p3",
+        path: "wit-p3",
+        generate_all,
+    });
+}
+
+// The `tls` module is the transport seam: same public API either way (see
+// Cargo.toml). p2 = tls.rs (step-executor reactor); p3-async = tls_p3.rs
+// (native async streams, drop-safe reads via a dedicated reader task).
+#[cfg(all(target_arch = "wasm32", not(feature = "p3-async")))]
 pub mod tls;
+#[cfg(all(target_arch = "wasm32", feature = "p3-async"))]
+#[path = "tls_p3.rs"]
+pub mod tls;
+/// Task 115 — the executor seam (`sleep`/`spawn`): step-executor on p2, native
+/// CM-async on p3. The Signal engine + libsignal fork call ONLY this.
+#[cfg(target_arch = "wasm32")]
+pub mod task;
 #[cfg(target_arch = "wasm32")]
 mod http1;
 #[cfg(target_arch = "wasm32")]

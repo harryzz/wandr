@@ -11,6 +11,10 @@ crate-type = ["cdylib"]
 # executor/rt must be this version when the engine migrates.
 [dependencies]
 wit-bindgen = { version = "0.53", features = ["async", "async-spawn"] }
+# Phase-3 kill-gate: the real p3 transport backend under test.
+wandr-reqwest = { path = "../../../crates/wandr-reqwest", features = ["p3-async"] }
+futures = "0.3"
+url = "2"
 
 [profile.release]
 opt-level = "s"

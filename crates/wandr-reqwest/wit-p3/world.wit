@@ -1,0 +1,14 @@
+// Task 115 — the WASI 0.3 (native CM-async) transport surface, generated only
+// under the `p3-async` cargo feature (a second `generate!` nested in `mod p3`,
+// src/lib.rs). Lives in its OWN wit dir: mixing 0.2 and 0.3 wasi packages in
+// one resolve makes wit-bindgen version-suffix the module names, breaking the
+// p2 `shim` world's `crate::wasi::*` paths.
+package wart:reqwest-wasi-shim-p3;
+
+world shim-p3 {
+    import wasi:sockets/types@0.3.0;
+    import wasi:sockets/ip-name-lookup@0.3.0;
+    import wasi:tls/types@0.3.0-draft;
+    import wasi:tls/client@0.3.0-draft;
+    import wasi:clocks/monotonic-clock@0.3.0;
+}
