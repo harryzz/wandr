@@ -1,0 +1,18 @@
+[package]
+name = "cma-engine"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+# 0.53 — same resolution as the real Signal engine tree (0.53.1); the async
+# executor/rt must be this version when the engine migrates.
+[dependencies]
+wit-bindgen = { version = "0.53", features = ["async", "async-spawn"] }
+
+[profile.release]
+opt-level = "s"
+
+[workspace]

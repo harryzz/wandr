@@ -1,0 +1,6 @@
+package demo:cma-ui;
+
+world ui {
+  import demo:cma/chat;
+  export run-frame: func() -> u32;
+}

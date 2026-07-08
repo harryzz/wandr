@@ -1,0 +1,11 @@
+// Task 115 M2a composition: like production `wac plug` (engine plugged into the
+// ui's chat import) PLUS re-exporting the engine's chat interface so the HOST
+// can call the async `start` export directly (a sync-lifted UI export may not
+// block on an async-lifted callee).
+package demo:composed;
+
+let engine = new demo:engine { ... };
+let ui = new demo:ui { "demo:cma/chat": engine["demo:cma/chat"], ... };
+
+export ui["run-frame"];
+export engine["demo:cma/chat"];

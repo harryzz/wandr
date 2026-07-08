@@ -1,0 +1,15 @@
+[package]
+name = "cma-cross-call-spike-host"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Same pins + feature set wandr-host's `p3-async` feature will use (task 115).
+[dependencies]
+wasmtime          = { version = "=46.0.0", features = ["component-model", "async", "component-model-async"] }
+wasmtime-wasi     = { version = "=46.0.0", features = ["p2", "p3"] }
+wasmtime-wasi-tls = { version = "=46.0.0", features = ["p2", "p3"] }
+tokio             = { version = "1", features = ["rt", "time"] }
+anyhow            = "1"
+
+[workspace]

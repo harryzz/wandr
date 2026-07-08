@@ -1,0 +1,15 @@
+package demo:cma;
+
+/// Mirror of the production `wandr:signal/chat` shape after task 115 M2:
+/// `start` is async-lifted and called BY THE HOST (a sync-lifted UI export may
+/// not block on an async callee — wasmtime trap `CannotBlockSyncTask`);
+/// `poll` stays a plain sync drain the UI calls per frame.
+interface chat {
+  start: async func();
+  poll: func() -> u32;
+}
+
+world engine {
+  import wasi:clocks/monotonic-clock@0.3.0;
+  export chat;
+}

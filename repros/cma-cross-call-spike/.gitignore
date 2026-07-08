@@ -1,0 +1,4 @@
+target/
+composite.wasm
+Cargo.lock
+build.log

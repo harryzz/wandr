@@ -1,0 +1,6 @@
+package demo:cma;
+
+interface chat {
+  start: async func();
+  poll: func() -> u32;
+}

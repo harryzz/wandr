@@ -1,0 +1,18 @@
+[package]
+name = "cma-ui"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+# 0.57 — same resolution as the real Signal UI (dioxus-canvas re-exports
+# wit-bindgen 0.57.1); models the production version mix across the wac seam.
+[dependencies]
+wit-bindgen = "0.57"
+
+[profile.release]
+opt-level = "s"
+
+[workspace]

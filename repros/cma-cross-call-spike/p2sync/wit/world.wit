@@ -1,0 +1,5 @@
+package demo:p2sync;
+
+world p2sync {
+  export run: func() -> u32;
+}
