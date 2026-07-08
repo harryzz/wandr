@@ -526,30 +526,45 @@ object ImeKeyboardDefaults {
 // editor-type (from ImeEventsImpl) AND the user's last cycle
 // position, return the layout name to display.
 
-internal fun pickLayout(
+/** The layout an editor-type OPENS on, or `null` for plain text (which keeps
+ *  the user's 🌐-cycled language). Seeded into `userRequestedLayout` when the
+ *  editor attaches — so a password field opens on Password, an email field on
+ *  Email, etc. — but for the SOFT types below the user may then switch away
+ *  (see `pickLayout`). */
+internal fun editorDefaultLayout(
     editorType: testapp.exports.ImeInputType,
-    userSelectedLang: String,
-    userRequestedLayout: String,
-): String = when (editorType) {
+): String? = when (editorType) {
     testapp.exports.ImeInputType.NUMBER   -> "Numeric"
     testapp.exports.ImeInputType.PHONE    -> "Phone"
     testapp.exports.ImeInputType.EMAIL    -> "Email"
     testapp.exports.ImeInputType.URL      -> "Url"
     testapp.exports.ImeInputType.PASSWORD -> "Password"
-    // TEXT and MULTILINE_TEXT honor the user's chosen layout (which
-    // is initialized to the cycled language).
+    else -> null
+}
+
+internal fun pickLayout(
+    editorType: testapp.exports.ImeInputType,
+    userRequestedLayout: String,
+): String = when (editorType) {
+    // STRICT — numeric-only fields: the layout is locked, a manual switch
+    // can't reach letters/symbols (there's nothing valid to type there).
+    testapp.exports.ImeInputType.NUMBER -> "Numeric"
+    testapp.exports.ImeInputType.PHONE  -> "Phone"
+    // SOFT (Password/Email/Url) + TEXT: honor `userRequestedLayout`. It's
+    // seeded to the editor's default on attach, but the 123/ABC keys must
+    // WORK from here — passwords/emails/urls contain digits and symbols, so
+    // locking the layout (the old bug, task 116) made those unreachable.
     else -> userRequestedLayout
 }
 
-/** True when the editor-type forces a layout — disables 🌐 cycle. */
+/** True when the editor-type forces a numeric-only layout — disables 🌐 cycle
+ *  (nothing to cycle to). Soft types (Password/Email/Url) are NOT locked: the
+ *  user reaches Symbols/letters via the 123/ABC keys. */
 internal fun isEditorTypeOverride(
     editorType: testapp.exports.ImeInputType,
 ): Boolean = when (editorType) {
     testapp.exports.ImeInputType.NUMBER,
-    testapp.exports.ImeInputType.PHONE,
-    testapp.exports.ImeInputType.EMAIL,
-    testapp.exports.ImeInputType.URL,
-    testapp.exports.ImeInputType.PASSWORD -> true
+    testapp.exports.ImeInputType.PHONE -> true
     else -> false
 }
 
@@ -570,9 +585,20 @@ fun ImeKeyboard(
     // invalidation — when the host calls on-editor-attached the
     // MutableState write triggers a recompose.
     val currentEditorType = testapp.ImeEventsImpl.currentInputType
+
+    // Task 116 — when a NEW editor type attaches, seed the user's layout with
+    // that editor's default (password field → Password, email → Email, …), so
+    // it OPENS on the right layout. After that the 123/ABC keys write
+    // `userRequestedLayout` and `pickLayout` honors it, so digits + symbols are
+    // reachable in soft (Password/Email/Url) fields. Number/Phone stay locked
+    // in `pickLayout` regardless. Detach resets the type to TEXT, so the next
+    // field's attach is a real change and re-seeds.
+    androidx.compose.runtime.LaunchedEffect(currentEditorType) {
+        editorDefaultLayout(currentEditorType)?.let { userRequestedLayout = it }
+    }
+
     val layoutName = pickLayout(
         editorType = currentEditorType,
-        userSelectedLang = userRequestedLayout,
         userRequestedLayout = userRequestedLayout,
     )
     val editorTypeOverridden = isEditorTypeOverride(currentEditorType)
