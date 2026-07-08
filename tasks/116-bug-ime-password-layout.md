@@ -1,9 +1,9 @@
 # Task 116 — BUG: IME password keyboard — `123` key dead, special symbols missing
 
 > Reported 2026-07-08 (user, on-device). **Pre-existing — NOT a task-115/p3
-> regression** (user-confirmed old). ✅ **FIXED 2026-07-08** — deployed to
-> device, IME running the new build; final visual confirm (tap 123 in a
-> password field → symbols) is the user's.
+> regression** (user-confirmed old). ✅ **FIXED + USER-VERIFIED 2026-07-08** —
+> deployed to device; user confirmed the 123 key works and symbols show in a
+> real password field.
 
 ## Symptoms (Pixel 2 XL, wandr.ime.keyboard)
 
@@ -53,9 +53,7 @@ preloaded cwasm → the forked child SIGSEGVs on the stale mapping
 (`run-hybrid-stack.sh --wandr-only`) after `pack-ime-keyboard.sh` so the zygote
 re-preloads. (pack-ime-keyboard.sh could do this itself — follow-up.)
 
-## Verify (user, interactive)
+## Verify — ✅ DONE (user, 2026-07-08)
 
-Unlock → WiFi app → tap a secured network → password prompt: the keyboard opens
-on Password (digits in the top row). Tap `123` → the Symbols page appears
-(-, /, :, ;, (, ), $, &, @, ", then `#+=` → Symbols2 for [ ] { } etc.); `ABC`
-returns to letters. Digits + symbols are now typeable into the password field.
+WiFi app → secured network → password prompt: tapping `123` shows the Symbols
+page; digits + symbols type into the password field. User-confirmed on device.

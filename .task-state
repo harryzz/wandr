@@ -1,5 +1,5 @@
 TASK=116
-STEP=fix-deployed-awaiting-user-visual-confirm
+STEP=DONE
 STATUS=complete
-LAST_SUCCESS=Task 116 fixed + deployed — IME password keyboard: pickLayout hard-locked PASSWORD (and EMAIL/URL) so the 123 key was dead + symbols unreachable. Fix: STRICT (Number/Phone locked) vs SOFT (Password/Email/Url open-on-default but honor 123/ABC switches); editorDefaultLayout() seeds userRequestedLayout on attach via LaunchedEffect. Gradle rebuilt, packed, installed, zygote bounced (stale-preload SIGSEGV avoided), IME alive on device (new build). Visual confirm (tap 123 -> symbols in a real password field) is the user's per the visual-verification rule.
-NOTES=Task 115 = COMPLETE (M0-M4). Follow-ups still open: pack-ime-keyboard.sh should auto-bounce zygote after install (stale-preload gotcha); ABC from Symbols in a password session returns to English not Password (minor, acceptable). Task 115 follow-ups unchanged (fg pump CPU, audio.player migration). wandr-net offline-scan fix also landed this session (efc82f6a).
+LAST_SUCCESS=Task 116 DONE + USER-VERIFIED — IME password keyboard 123 key works, symbols show in a real password field (user-confirmed on device). Fix: pickLayout split STRICT (Number/Phone locked) vs SOFT (Password/Email/Url open-on-default but honor 123/ABC); editorDefaultLayout() seeds userRequestedLayout on attach.
+NOTES=Session done: task 115 COMPLETE (M0-M4, calls verified), task 116 DONE (IME password), wandr-net offline-scan fix (efc82f6a). Open follow-ups (non-blocking): pack-ime-keyboard.sh should auto-bounce zygote after system-app install (stale-preload SIGSEGV); task 115 fg pump CPU tuning + audio.player p2->p3 migration.
