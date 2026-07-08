@@ -124,14 +124,13 @@ impl TlsStream {
         //    socket, which must outlive its child streams). Pushes chunks into
         //    the shared buffer and wakes waiting `read_*` futures.
         //
-        //    RUNTIME FLOOR: needs a wasmtime NEWER than 46.0.x on the host.
-        //    46 never completes a pending stream read on partially-available
+        //    TOOLCHAIN FLOOR: wit-bindgen 0.59+ (this crate pins it). On
+        //    0.53, a pending stream read never surfaces partially-available
         //    data while the stream stays open (only on buffer-full/EOF), so
         //    any keep-alive protocol — the Signal websocket included — stalls
-        //    here; 46 also hard-wedges on a second bindgen instance's
-        //    `wait-for`. Both fixed on wasmtime main (48-dev, verified in
-        //    repros/cma-cross-call-spike gates ka-probe/F together with
-        //    wit-bindgen 0.59). See tasks/115.
+        //    right here; 0.53 also wedges on a second bindgen instance's
+        //    `wait-for`. Guest-side bugs, NOT wasmtime (46.0.1 passes all
+        //    gates with 0.59 guests — repros/cma-cross-call-spike, tasks/115).
         let shared = Rc::new(RefCell::new(Shared::default()));
         let sh = Rc::clone(&shared);
         spawn(async move {

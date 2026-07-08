@@ -231,19 +231,20 @@ different gaps — use all three):
     `init` no-op / host-started `start()`, `poll_events` = pure drain, sleeps/
     spawns via the seam, `link()` restructured on `join!`, watchdog kept
     (re-rationalized). UI byte-identical across flavors. `P3=1 build.sh`.
-  - **⛔ THE BLOCKER (why not run-verified):** released wasmtime **46.0.x** has
-    two p3 bugs, both isolated in the spike and both **fixed on wasmtime main**
-    (48-dev, rev 30ea2ab5b41): (1) a pending guest stream read never completes
-    on partial data while the stream stays open — every keep-alive protocol
-    (incl. the Signal websocket) stalls; strace-verified the bytes reach the
-    host socket and are never delivered; (2) `wait-for` via a second bindgen
-    instance hard-wedges the loop. Guest side needs **wit-bindgen 0.59**
-    (`spawn_local`; 0.53 stalls sporadically on 48-dev) — engine tree bumped.
-    On 48-dev + 0.59 the FULL suite passes incl. live WSS 101 + first
-    provisioning frame from chat.signal.org, inline and across pumps.
-  - **NEXT:** when wasmtime >46 releases → bump the `=46.0.0` pins, rebuild
-    p3-async host, run the phase-5 desktop gates (link + send/receive +
-    keepalive-idle + watchdog + calls + dual-serve proof with the user).
+  - **✅ THE BLOCKER, RESOLVED — it was wit-bindgen 0.53, not wasmtime.** With
+    0.53 guests, keep-alive protocols stall (the Signal WSS included:
+    strace-verified the response bytes reach the host socket and never surface
+    in the guest) and a second bindgen instance's `wait-for` wedges the loop;
+    `Connection: close` flows pass (EOF flushes), which is why gates A–E
+    masked it. First mis-attributed to wasmtime 46 (testing against main
+    changed two variables at once); the clean matrix — 46.0.x+0.53 = stall,
+    46.0.1+**0.59** = **ALL GATES PASS** incl. live WSS 101 + first
+    provisioning frame from chat.signal.org, inline and across pumps. Fix =
+    **wit-bindgen 0.59** guests (`spawn` → `spawn_local`); engine tree bumped;
+    wandr-host pins bumped `=46.0.0`→`=46.0.1` (fs fix only; tested cell).
+  - **NEXT:** phase-5 desktop functional gates on the real app (link +
+    send/receive + keepalive-idle + watchdog + calls + dual-serve proof —
+    needs the user for the QR link + visual checks).
 - **M3** — delete `wandr-step-executor` from the Signal build + the
   `wandr-reqwest` poll bridge; confirm no other Signal-path consumer remains.
 - **M4** — Pixel 2 XL: messages send/receive + keepalive survive UI idle; no

@@ -1,30 +1,25 @@
-# CM-async cross-call spike (task 115 / M2a+M2b) — ALL GATES PASS on wasmtime main + wit-bindgen 0.59
+# CM-async cross-call spike (task 115 / M2a+M2b) — ALL GATES PASS on released wasmtime 46.0.1 + wit-bindgen 0.59
 
-> **UPDATE 2026-07-08 (the wasmtime-46 blocker story):** on the released
-> wasmtime **46.0.x** the full suite CANNOT pass — two runtime bugs, both
-> isolated here and both fixed on wasmtime **main** (48-dev,
-> rev 30ea2ab5b41):
+> **UPDATE 2026-07-08 — root cause was wit-bindgen 0.53, NOT wasmtime.** With
+> **wit-bindgen 0.53** guests, keep-alive protocols stall (`ka-probe`: HTTP/1.1
+> keep-alive to example.com hangs at read-headers; gate F: the real Signal
+> provisioning WSS hangs after the upgrade request — strace shows the response
+> bytes reaching the host socket, never surfacing in the guest) and a bare
+> `task::sleep` through a second `generate!` instance hard-wedges the loop.
+> Every `Connection: close` flow passes (EOF flushes), which is why gates A–E
+> masked it. First (wrongly) blamed on wasmtime 46 because testing against
+> wasmtime main changed two variables at once; the clean matrix:
 >
-> 1. **A pending guest stream read never completes on partially-available
->    data while the stream stays open** — only on buffer-full or EOF. Every
->    `Connection: close` flow works (EOF flushes), every keep-alive protocol
->    stalls: the `ka-probe` gate (HTTP/1.1 keep-alive to example.com) and the
->    real Signal provisioning WSS (gate F) both hang at the first read.
->    Wire-verified with strace: request out, response bytes INTO the host
->    socket, never delivered to the guest.
-> 2. **`wait-for` via a second bindgen instance hard-wedges the event loop**
->    (a bare `task::sleep` through wandr-reqwest's `generate!` instance froze
->    the process unkillably, while the same WIT function through the engine's
->    own instance worked).
+> | host \ guests        | wit-bindgen 0.53                   | wit-bindgen 0.59 |
+> |----------------------|------------------------------------|------------------|
+> | wasmtime 46.0.x      | A–E pass; ka/F stall; sleep wedge  | **ALL PASS** ✅  |
+> | wasmtime main 48-dev | A–E pass; F stall                  | ALL PASS         |
 >
-> Guest side must pair with **wit-bindgen 0.59** (`spawn` → `spawn_local`);
-> 0.53 stalls sporadically between adjacent pure-code lines on 48-dev.
-> **Full matrix:** 46.0.x + 0.53 = gates A–E pass, ka/F stall · 48-dev + 0.59
-> = ALL PASS incl. a live WSS 101 + first provisioning frame from
-> chat.signal.org, inline AND spawned-across-pumps.
->
-> ⇒ **M2's real-engine run is gated on the next wasmtime release** (>46).
-> The host/crate/engine wiring is complete and feature-flagged off until then.
+> ⇒ **Fix = wit-bindgen 0.59 guests** (`spawn` → `spawn_local`; the guest-side
+> async runtime between 0.53.1 and 0.59.0 is what changed). Released wasmtime
+> 46.0.1 is sufficient — no runtime bump needed. ALL PASS includes a live WSS
+> 101 + first provisioning frame from chat.signal.org, inline AND
+> spawned-across-pumps. The engine tree is on 0.59.
 
 Proves the mechanics M2 needs beyond the M1 transport spike: a **background guest
 task that survives and advances BETWEEN component-export calls**, in the exact

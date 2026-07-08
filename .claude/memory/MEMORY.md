@@ -74,7 +74,7 @@
 - [Project: overlay orientation (task 62)](project_overlay_orientation.md) — anchor-aware overlay_rect; redeploy with pkill -x.
 
 ## References / gotchas
-- [Ref: wasmtime 46 p3 stream bugs = task-115 M2 blocker](reference_wasmtime46_p3_stream_bugs.md) — partial reads never complete on open connections (keep-alive/WSS stall) + 2nd-bindgen-instance wait-for wedge; fixed on main (48-dev) + wit-bindgen 0.59; bump pins when >46 releases, then run phase-5 desktop gates.
+- [Ref: p3 keep-alive/WSS stalls = wit-bindgen 0.53 guest bug (NOT wasmtime)](reference_wasmtime46_p3_stream_bugs.md) — CM-async guests doing streaming I/O need wit-bindgen 0.59+ (spawn→spawn_local, ONE unified copy per component); wasmtime 46.0.1 sufficient; matrix in repros/cma-cross-call-spike.
 - [Ref: "resource implementation is missing" = stale zygote](reference_missing_instance_error_stale_zygote.md) — error means the WHOLE import instance is absent; apps fork the old zygote image after host redeploy; wac+resource works (repro).
 - [Ref: ART-off Magisk am-spin](reference_artoff_magisk_am_spin.md) — su -c spawns am-loop workers that starve HALs; `adb root` for probes; continuous sweep for the stack.
 - [Ref: wandr-host --install APPS_ROOT](reference_wandr_apps_root_install.md) — default root normalized; adb push nesting + chmod 755 traps; hot-reload recipe.
