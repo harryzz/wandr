@@ -289,6 +289,18 @@ different gaps — use all three):
     when the guest is idle — MUST be done together with the calls gate (the
     in-call 10 ms engine tick is driven ONLY by pumps on p3; bg-tick calls do
     not advance it).
+  - **Post-deploy fixes (2026-07-08, user-reported):** (1) the two apps with
+    CROSS-APP DEPS (wandr.ime.keyboard [lang plugins] + com.example.wandr-app
+    [markdown]) trapped at first render — `wire_dep_into_linker`'s proxies
+    made SYNC `func.call`s into the dep on the now async-required store
+    ("store configuration requires that `*_async` functions are used"). Fixed:
+    under p3-async the dep linker links p2 ASYNC, the dep instantiates via
+    `instantiate_async`, and proxies are `func_new_async` → `call_async`.
+    Both apps verified rendering. (2) wandr.swiftui.demo (65 MB Swift
+    component) OOMs on-device re-precompile (expected) — cross-AOT'd on the PC
+    (`WANDR_AOT_TARGET=aarch64-linux-android` with the p3-async x86 host,
+    which shares the device's precompile hash), pushed cwasm+cache-key →
+    "cache fresh", 2048 renders with prior game state.
   - **Open (user-assisted): (a)** live receive/send on device with a peer;
     **(b)** a call on the p3 flavor (tick-cadence risk above) — until (b)
     passes, calls on device should be treated as untested on p3.
