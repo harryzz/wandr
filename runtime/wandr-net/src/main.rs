@@ -368,7 +368,7 @@ fn radio_enabled() -> bool {
 /// <b64psk>` / `set-enabled <0|1>` / `is-enabled`), reply written back to EOF. The
 /// arbiter relays the host's `wifi-*` verbs here (task 90 M2). Runs in its own
 /// thread; the shared [`Link`] is the live association the daemon owns.
-fn serve_control(link: Arc<Mutex<Link>>) {
+fn serve_control(link: Arc<Mutex<Option<Link>>>) {
     let path = control_sock_path();
     let _ = std::fs::remove_file(&path);
     let listener = match UnixListener::bind(&path) {
@@ -393,7 +393,7 @@ fn serve_control(link: Arc<Mutex<Link>>) {
     }
 }
 
-fn handle_control_conn(s: &mut UnixStream, link: &Arc<Mutex<Link>>) -> std::io::Result<()> {
+fn handle_control_conn(s: &mut UnixStream, link: &Arc<Mutex<Option<Link>>>) -> std::io::Result<()> {
     let mut reader = BufReader::new(s.try_clone()?);
     let mut line = String::new();
     reader.read_line(&mut line)?;
@@ -405,7 +405,7 @@ fn handle_control_conn(s: &mut UnixStream, link: &Arc<Mutex<Link>>) -> std::io::
 
 /// Route one control line to its handler, returning the reply text (newline-
 /// terminated lines). Unknown verbs get an `err` line so the relay surfaces it.
-fn dispatch_control(line: &str, link: &Arc<Mutex<Link>>) -> String {
+fn dispatch_control(line: &str, link: &Arc<Mutex<Option<Link>>>) -> String {
     let (verb, rest) = line.split_once(' ').unwrap_or((line, ""));
     match verb {
         "scan" => control_scan(),
@@ -465,7 +465,7 @@ fn control_scan() -> String {
 /// network (`bring_up_with(force=true)`), swap it in as the daemon's owned link,
 /// and report the new state up. Holds the link lock for the bring-up so the
 /// monitor thread doesn't race a re-associate (low-frequency, user-initiated).
-fn control_connect(rest: &str, link: &Arc<Mutex<Link>>) -> String {
+fn control_connect(rest: &str, link: &Arc<Mutex<Option<Link>>>) -> String {
     let mut it = rest.split_whitespace();
     let (Some(bs), Some(bp)) = (it.next(), it.next()) else {
         return "err connect-usage <b64ssid> <b64psk>\n".to_string();
@@ -479,7 +479,7 @@ fn control_connect(rest: &str, link: &Arc<Mutex<Link>>) -> String {
     match bring_up_with(WifiCreds { ssid: ssid.clone(), psk }, true) {
         Ok(new) => {
             let status = new.status.clone();
-            *guard = new;
+            *guard = Some(new);
             drop(guard);
             report(&status);
             let ip = status.ip.map(|i| i.to_string()).unwrap_or_else(|| "-".into());
@@ -631,7 +631,7 @@ fn main() {
                 // Manual `--connect` test path: persist (hold the supplicant alive).
                 // It does NOT serve the control socket — the persistent daemon owns
                 // that; this is a one-off bring-up tool.
-                monitor(Arc::new(Mutex::new(link)));
+                monitor(Arc::new(Mutex::new(Some(link))));
                 return;
             }
             Err(e) => {
@@ -643,57 +643,85 @@ fn main() {
 
     let once = args.iter().any(|a| a == "--once");
 
-    match bring_up() {
+    let first = bring_up();
+    if once {
+        // Investigation / smoke mode: report once and exit (the supplicant
+        // child is dropped → killed, but the kernel keeps the lease/route).
+        match first {
+            Ok(link) => {
+                report(&link.status);
+                println!(
+                    "wandr-net: ONLINE ssid={:?} ip={:?} gw={:?} dns={:?}",
+                    link.status.ssid, link.status.ip, link.status.gateway, link.status.dns
+                );
+                return;
+            }
+            Err(e) => {
+                log::error!("wandr-net: bring-up failed: {e}");
+                report(&LinkStatus::default());
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // The persistent daemon owns the (optional) link; share it with the
+    // control-socket server (task 90 M2 wifi relay) and the monitor loop.
+    //
+    // settings.wifi bug (2026-07-08): the daemon used to `exit(1)` when the
+    // first bring-up failed, leaving NO control socket while disconnected —
+    // so `scan`/`connect`/`set-enabled` were unreachable exactly when the
+    // settings app needs them (offline, picking a network). Stay resident:
+    // the control plane serves regardless of link state, and the monitor
+    // loop keeps retrying the bring-up.
+    let shared: Arc<Mutex<Option<Link>>> = Arc::new(Mutex::new(None));
+    match first {
         Ok(link) => {
             report(&link.status);
             println!(
                 "wandr-net: ONLINE ssid={:?} ip={:?} gw={:?} dns={:?}",
                 link.status.ssid, link.status.ip, link.status.gateway, link.status.dns
             );
-            if once {
-                // Investigation / smoke mode: report once and exit (the supplicant
-                // child is dropped → killed, but the kernel keeps the lease/route).
-                return;
-            }
-            // The persistent daemon owns the link; share it with the control-socket
-            // server (task 90 M2 wifi relay) and the monitor loop.
-            let shared = Arc::new(Mutex::new(link));
-            {
-                let s = shared.clone();
-                std::thread::spawn(move || serve_control(s));
-            }
-            monitor(shared);
+            *shared.lock().unwrap_or_else(|e| e.into_inner()) = Some(link);
         }
         Err(e) => {
-            log::error!("wandr-net: bring-up failed: {e}");
+            log::warn!("wandr-net: bring-up failed: {e} — staying resident (control plane up; monitor retries)");
             report(&LinkStatus::default());
-            // Exit non-zero so the respawn supervisor retries after a short sleep.
-            std::process::exit(1);
         }
     }
+    {
+        let s = shared.clone();
+        std::thread::spawn(move || serve_control(s));
+    }
+    monitor(shared);
 }
 
 /// Steady state: hold the supplicant alive and watch carrier; on a drop, re-run
 /// the full bring-up. Periodically re-report so a freshly-(re)started arbiter
 /// learns the current state. Shares the live [`Link`] with the control-socket
 /// server (an explicit `connect` swaps it under the same lock).
-fn monitor(link: Arc<Mutex<Link>>) {
+fn monitor(link: Arc<Mutex<Option<Link>>>) {
     let mut ticks: u32 = 0;
     loop {
         std::thread::sleep(Duration::from_secs(5));
         ticks += 1;
 
-        if !has_carrier(WLAN_IF) {
-            log::warn!("wandr-net: {WLAN_IF} lost carrier — re-associating");
-            report(&LinkStatus::default());
+        let have_link = link.lock().unwrap_or_else(|e| e.into_inner()).is_some();
+        if !have_link || !has_carrier(WLAN_IF) {
+            if have_link {
+                log::warn!("wandr-net: {WLAN_IF} lost carrier — re-associating");
+                report(&LinkStatus::default());
+            }
             match bring_up() {
                 Ok(new) => {
                     let status = new.status.clone();
-                    *link.lock().unwrap_or_else(|e| e.into_inner()) = new;
+                    *link.lock().unwrap_or_else(|e| e.into_inner()) = Some(new);
                     report(&status);
                 }
                 Err(e) => {
-                    log::error!("wandr-net: re-bring-up failed: {e} — retrying next tick");
+                    // Offline (e.g. no saved network in range / radio off) —
+                    // stay resident, retry next tick; the control plane keeps
+                    // serving scan/connect/set-enabled meanwhile.
+                    log::debug!("wandr-net: bring-up retry failed: {e} — next tick");
                 }
             }
             continue;
@@ -701,7 +729,12 @@ fn monitor(link: Arc<Mutex<Link>>) {
 
         // Re-announce roughly every 30s so arbiter restarts pick us up.
         if ticks % 6 == 0 {
-            let status = link.lock().unwrap_or_else(|e| e.into_inner()).status.clone();
+            let status = link
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .map(|l| l.status.clone())
+                .unwrap_or_default();
             report(&status);
         }
     }
