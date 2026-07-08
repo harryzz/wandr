@@ -261,3 +261,21 @@ world signal-engine {
   import wandr:video/encoder@0.1.0;
   import wandr:video/decoder@0.1.0;
 }
+
+/// Task 115 (p3 flavor only) — the HOST-called async spawn point. A sync-lifted
+/// UI export may not block on an async-lifted callee (wasmtime
+/// `CannotBlockSyncTask`), so the host — whose event loop owns the engine's
+/// native async tasks — calls `start` once after instantiation, via the
+/// composite's re-export (see build.sh's wac compose). `chat.init` stays for
+/// the UI (a no-op in this flavor), keeping the UI byte-identical.
+interface engine-start {
+  start: async func();
+}
+
+/// The p3-async flavor: same engine + `engine-start`. Only this world carries
+/// async lifts, so the default (p2) composite stays loadable on hosts without
+/// component-model-async.
+world signal-engine-p3 {
+  include signal-engine;
+  export engine-start;
+}

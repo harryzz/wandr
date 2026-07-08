@@ -8,23 +8,44 @@
 #
 #   ./build.sh            # build the wandrpkg only
 #   ./build.sh --deploy   # build, then install + relaunch on device
+#   P3=1 ./build.sh       # task 115: native CM-async flavor (engine built with
+#                         # --features p3-async; wac compose re-exports the
+#                         # host-called engine-start). Desktop p3-async host
+#                         # only — NOT deployable until M4 (device cwasm hash).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROTOC="${PROTOC:-$HOME/tools/protoc/bin/protoc}"  # engine deps build protos
 PKG="$HERE/build/wandr.signal.wandrpkg"
+P3="${P3:-}"
 
-echo "▸ build engine (wasm32-wasip2)"
-( cd "$HERE/engine" && PROTOC="$PROTOC" cargo build --target wasm32-wasip2 --release )
+if [[ -n "$P3" && "${1:-}" == "--deploy" ]]; then
+  echo "ERROR: P3=1 --deploy is M4 (device host lacks p3-async; cwasm hash differs)" >&2
+  exit 1
+fi
+
+echo "▸ build engine (wasm32-wasip2${P3:+, p3-async})"
+( cd "$HERE/engine" && PROTOC="$PROTOC" cargo build --target wasm32-wasip2 --release ${P3:+--features p3-async} )
 echo "▸ build ui (wasm32-wasip2)"
 ( cd "$HERE/ui" && cargo build --target wasm32-wasip2 --release )
 
-echo "▸ wac plug ui ◁ engine"
 mkdir -p "$PKG/components"
-wac plug \
-  "$HERE/ui/target/wasm32-wasip2/release/signal_ui.wasm" \
-  --plug "$HERE/engine/target/wasm32-wasip2/release/signal_engine.wasm" \
-  -o "$PKG/components/ui.wasm"
-wasm-tools validate "$PKG/components/ui.wasm"
+if [[ -n "$P3" ]]; then
+  echo "▸ wac compose ui ◁ engine (+ engine-start re-export, p3)"
+  wac compose \
+    -d wandr:signal-engine="$HERE/engine/target/wasm32-wasip2/release/signal_engine.wasm" \
+    -d wandr:signal-ui="$HERE/ui/target/wasm32-wasip2/release/signal_ui.wasm" \
+    -o "$PKG/components/ui.wasm" \
+    "$HERE/compose-p3.wac"
+  # cm-async isn't in the validator's default feature set (wasm-tools 1.245).
+  wasm-tools validate -f cm-async "$PKG/components/ui.wasm"
+else
+  echo "▸ wac plug ui ◁ engine"
+  wac plug \
+    "$HERE/ui/target/wasm32-wasip2/release/signal_ui.wasm" \
+    --plug "$HERE/engine/target/wasm32-wasip2/release/signal_engine.wasm" \
+    -o "$PKG/components/ui.wasm"
+  wasm-tools validate "$PKG/components/ui.wasm"
+fi
 cp "$HERE/package.toml" "$PKG/package.toml"
 echo "✓ wandrpkg: $PKG ($(du -h "$PKG/components/ui.wasm" | cut -f1))"
 

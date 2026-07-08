@@ -10,8 +10,20 @@
 //! installed at `init` and advanced one non-blocking step per `poll-events` — so
 //! those tasks survive across frames. See `engine.rs`.
 
+// Task 115 — two flavors of the same engine. Default (p2): the step-executor
+// model described above. `p3-async`: native CM-async — the world adds the
+// host-called `engine-start.start` async export (the spawn point; the reactor
+// and its per-frame `step()` are gone), and the transport rides wandr-reqwest's
+// p3 backend (WASI 0.3 sockets/tls streams). See tasks/115.
+#[cfg(not(feature = "p3-async"))]
 wit_bindgen::generate!({
     world: "signal-engine",
+    path: "wit",
+    generate_all,
+});
+#[cfg(feature = "p3-async")]
+wit_bindgen::generate!({
+    world: "signal-engine-p3",
     path: "wit",
     generate_all,
 });
@@ -108,6 +120,14 @@ impl Guest for Component {
 
     fn video_status() -> (bool, bool) {
         engine::video_status()
+    }
+}
+
+/// Task 115 (p3 flavor) — the host-called async spawn point; see engine::start.
+#[cfg(feature = "p3-async")]
+impl exports::wandr::signal::engine_start::Guest for Component {
+    async fn start() {
+        engine::start().await;
     }
 }
 

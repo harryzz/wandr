@@ -28,5 +28,5 @@ pub fn spawn(fut: impl Future<Output = ()> + 'static) {
 }
 #[cfg(feature = "p3-async")]
 pub fn spawn(fut: impl Future<Output = ()> + 'static) {
-    wit_bindgen::rt::async_support::spawn(fut)
+    wit_bindgen::rt::async_support::spawn_local(fut)
 }

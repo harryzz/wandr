@@ -5,4 +5,10 @@ interface chat {
   poll: func() -> u32;
   fetch: async func(host: string) -> result<string, string>;
   fetch-chopped: async func(host: string) -> result<string, string>;
+  fetch-bg: async func(host: string);
+  fetch-bg-result: func() -> option<result<string, string>>;
+  ws-probe: async func(host: string) -> result<string, string>;
+  ws-probe-bg: async func(host: string);
+  ws-steps: async func(host: string) -> result<string, string>;
+  ka-probe: async func(host: string) -> result<string, string>;
 }

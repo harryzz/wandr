@@ -1,0 +1,11 @@
+// Task 115 (p3 flavor) — like the default `wac plug` (engine fused into the
+// ui's chat import) PLUS re-exporting the engine's `engine-start` so the HOST
+// can call the async `start` spawn point (a sync-lifted UI export may not
+// block on an async-lifted callee — see tasks/115 + repros/cma-cross-call-spike).
+package wandr:signal-composed;
+
+let engine = new wandr:signal-engine { ... };
+let ui = new wandr:signal-ui { "wandr:signal/chat@0.1.0": engine["wandr:signal/chat@0.1.0"], ... };
+
+export ui...;
+export engine["wandr:signal/engine-start@0.1.0"];

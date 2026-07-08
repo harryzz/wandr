@@ -18,7 +18,7 @@ use std::future::poll_fn;
 use std::rc::Rc;
 use std::task::{Poll, Waker};
 
-use wit_bindgen::rt::async_support::{spawn, StreamResult, StreamWriter};
+use wit_bindgen::rt::async_support::{spawn_local as spawn, StreamResult, StreamWriter};
 
 use crate::p3::wasi::sockets::ip_name_lookup::resolve_addresses;
 use crate::p3::wasi::sockets::types::{
@@ -73,6 +73,9 @@ pub struct TlsStream {
 
 impl TlsStream {
     pub async fn connect(host: &str, port: u16) -> Result<TlsStream, String> {
+        // Transport connects are rare; phase lines on stderr (host log /
+        // logcat) are the only visibility into a silent stall.
+        eprintln!("tls_p3: connect {host}:{port} — resolving");
         // 1. DNS — native async.
         let addrs = resolve_addresses(host.to_string())
             .await
@@ -80,10 +83,12 @@ impl TlsStream {
         let ip = addrs.into_iter().next().ok_or("DNS returned no addresses")?;
 
         // 2. TCP connect — async.
+        eprintln!("tls_p3: {host} resolved — tcp connect");
         let sock = TcpSocket::create(family_of(&ip)).map_err(|e| format!("create: {e:?}"))?;
         sock.connect(sock_addr(ip, port))
             .await
             .map_err(|e| format!("connect: {e:?}"))?;
+        eprintln!("tls_p3: {host} tcp up — handshake");
 
         // 3. Wire the TLS connector's stream transforms to the socket streams:
         //    app cleartext -> [conn.send] -> wire ciphertext -> socket, and
@@ -113,10 +118,20 @@ impl TlsStream {
         Connector::connect(conn, host.to_string())
             .await
             .map_err(|e| format!("tls handshake: {}", e.to_debug_string()))?;
+        eprintln!("tls_p3: {host} TLS established");
 
         // 5. The reader task: sole owner of the decrypted stream (and of the
         //    socket, which must outlive its child streams). Pushes chunks into
         //    the shared buffer and wakes waiting `read_*` futures.
+        //
+        //    RUNTIME FLOOR: needs a wasmtime NEWER than 46.0.x on the host.
+        //    46 never completes a pending stream read on partially-available
+        //    data while the stream stays open (only on buffer-full/EOF), so
+        //    any keep-alive protocol — the Signal websocket included — stalls
+        //    here; 46 also hard-wedges on a second bindgen instance's
+        //    `wait-for`. Both fixed on wasmtime main (48-dev, verified in
+        //    repros/cma-cross-call-spike gates ka-probe/F together with
+        //    wit-bindgen 0.59). See tasks/115.
         let shared = Rc::new(RefCell::new(Shared::default()));
         let sh = Rc::clone(&shared);
         spawn(async move {
@@ -125,20 +140,26 @@ impl TlsStream {
             loop {
                 let (status, buf) = rx.read(scratch).await;
                 match status {
-                    StreamResult::Complete(_) => {
-                        let mut s = sh.borrow_mut();
-                        s.buf.extend_from_slice(&buf);
-                        s.wake_all();
+                    StreamResult::Complete(_) | StreamResult::Cancelled => {
+                        {
+                            let mut s = sh.borrow_mut();
+                            if !buf.is_empty() {
+                                s.buf.extend_from_slice(&buf);
+                                s.wake_all();
+                            }
+                        }
                         scratch = buf;
                         scratch.clear();
                     }
                     StreamResult::Dropped => {
                         let mut s = sh.borrow_mut();
+                        if !buf.is_empty() {
+                            s.buf.extend_from_slice(&buf);
+                        }
                         s.eof = true;
                         s.wake_all();
                         break;
                     }
-                    StreamResult::Cancelled => unreachable!("read never cancelled"),
                 }
             }
             drop(sock); // keep the socket alive for the connection's lifetime

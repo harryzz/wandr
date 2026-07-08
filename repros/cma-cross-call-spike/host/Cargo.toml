@@ -6,10 +6,21 @@ publish = false
 
 # Same pins + feature set wandr-host's `p3-async` feature will use (task 115).
 [dependencies]
-wasmtime          = { version = "=46.0.0", features = ["component-model", "async", "component-model-async"] }
-wasmtime-wasi     = { version = "=46.0.0", features = ["p2", "p3"] }
-wasmtime-wasi-tls = { version = "=46.0.0", features = ["p2", "p3"] }
+# Pinned to wasmtime main (48-dev): 46.0.x has two blockers this spike proved
+# and main fixes — (1) a pending stream read never completes on partial data
+# while the stream stays open (any keep-alive protocol stalls; ka-probe /
+# gate F), (2) a second bindgen instance's `wait-for` hard-wedges the loop.
+# Bump wandr-host past 46 (next release) to run the real engine p3 flavor.
+wasmtime          = { git = "https://github.com/bytecodealliance/wasmtime", rev = "30ea2ab5b415ca75d15bb28fc80f264f30be52a9", features = ["component-model", "async", "component-model-async"] }
+wasmtime-wasi     = { git = "https://github.com/bytecodealliance/wasmtime", rev = "30ea2ab5b415ca75d15bb28fc80f264f30be52a9", features = ["p2", "p3"] }
+wasmtime-wasi-tls = { git = "https://github.com/bytecodealliance/wasmtime", rev = "30ea2ab5b415ca75d15bb28fc80f264f30be52a9", features = ["p2", "p3"] }
 tokio             = { version = "1", features = ["rt", "time"] }
 anyhow            = "1"
+# Production-parity TLS trust store (signal_tls.rs clone): webpki roots + the
+# pinned Signal CA, so gate F can reach the real provisioning endpoint.
+rustls            = { version = "0.23", default-features = false, features = ["ring", "tls12", "logging"] }
+tokio-rustls      = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+webpki-roots      = "0.26"
+rustls-pemfile    = "2"
 
 [workspace]

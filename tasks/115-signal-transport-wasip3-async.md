@@ -206,8 +206,44 @@ different gaps — use all three):
   **dual-serve is mandatory even for one guest** (the guest pulls p2 `wasi:cli`/
   `wasi:io@0.2.6` via Rust std → host links p2 AND p3 — a live confirmation of the
   blast-radius rule); **don't `drop` the write stream before reading** the response.
-- **M2** — shape (A) in the real engine: `async` `poll-events`, delete the
-  `step()`/reactor path; send+receive+keepalive on the host loop; desktop.
+- **M2** — 🟡 **CODE-COMPLETE 2026-07-08, run-gated on the next wasmtime release.**
+  All wiring landed, feature-flagged off (defaults byte-identical):
+  - **M2a spike** (`repros/cma-cross-call-spike`) — background task survives +
+    advances BETWEEN export calls; quiescent unpumped; p2 apps coexist. KEY
+    mechanics discovered: a sync-lifted export **cannot block on an
+    async-lifted callee** (`CannotBlockSyncTask`) ⇒ the HOST starts the engine
+    via a re-exported `engine-start.start: async func` (wac **compose** script,
+    not plug — plug can't add exports); `call_async` does NOT advance unrelated
+    pending host futures — **pumping (`run_concurrent`) is required wherever
+    the host idles** (standalone nap-pump + a per-frame pump in the winit
+    desktop loop); `wasm-tools validate` needs `-f cm-async`.
+  - **Host** (`wandr-host` `p3-async` cargo feature) — CMA config flag, p2
+    linked ASYNC (sync p2 host fns nest-panic under our driving runtime) + p3
+    additive (dual-serve; tls p3 shares SignalTlsProvider), async instantiate,
+    `exports:{default:async}` bindgen twins, `guest_call!` at all call sites,
+    `engine-start` probe, nap/frame pumps.
+  - **Transport** (`wandr-reqwest` `p3-async` feature) — `tls_p3.rs` (same API
+    as tls.rs; cancellation-safe by construction via a dedicated reader task —
+    select-drop torture: 26 dropped in-flight reads, zero byte loss) +
+    `task.rs` executor seam (step-executor ⟷ CM-async); websocket passthrough;
+    libsignal fork rebound to the seam (no direct executor dep).
+  - **Engine** — `p3-async` feature: world `signal-engine-p3` (+`engine-start`),
+    `init` no-op / host-started `start()`, `poll_events` = pure drain, sleeps/
+    spawns via the seam, `link()` restructured on `join!`, watchdog kept
+    (re-rationalized). UI byte-identical across flavors. `P3=1 build.sh`.
+  - **⛔ THE BLOCKER (why not run-verified):** released wasmtime **46.0.x** has
+    two p3 bugs, both isolated in the spike and both **fixed on wasmtime main**
+    (48-dev, rev 30ea2ab5b41): (1) a pending guest stream read never completes
+    on partial data while the stream stays open — every keep-alive protocol
+    (incl. the Signal websocket) stalls; strace-verified the bytes reach the
+    host socket and are never delivered; (2) `wait-for` via a second bindgen
+    instance hard-wedges the loop. Guest side needs **wit-bindgen 0.59**
+    (`spawn_local`; 0.53 stalls sporadically on 48-dev) — engine tree bumped.
+    On 48-dev + 0.59 the FULL suite passes incl. live WSS 101 + first
+    provisioning frame from chat.signal.org, inline and across pumps.
+  - **NEXT:** when wasmtime >46 releases → bump the `=46.0.0` pins, rebuild
+    p3-async host, run the phase-5 desktop gates (link + send/receive +
+    keepalive-idle + watchdog + calls + dual-serve proof with the user).
 - **M3** — delete `wandr-step-executor` from the Signal build + the
   `wandr-reqwest` poll bridge; confirm no other Signal-path consumer remains.
 - **M4** — Pixel 2 XL: messages send/receive + keepalive survive UI idle; no

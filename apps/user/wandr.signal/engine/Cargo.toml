@@ -14,13 +14,23 @@ publish = false
 crate-type = ["cdylib"]
 path = "src/lib.rs"
 
+# Task 115 — flavor switch: default = step-executor reactor (p2 wasi:tls);
+# `p3-async` = native CM-async (WASI 0.3 streams via wandr-reqwest's backend,
+# world signal-engine-p3 with the host-called `engine-start.start` export).
+# Build the p3 flavor with `P3=1 ../build.sh`.
+[features]
+p3-async = ["wandr-reqwest/p3-async"]
+
 [dependencies]
 libsignal-service = { path = "../../../../external/libsignal-service-rs", default-features = false }
 wandr-step-executor = { path = "../../../../crates/wandr-step-executor" }
+# The executor seam (task::sleep/spawn) + the flavor-selected TLS backend the
+# whole transport (incl. the libsignal fork) rides on.
+wandr-reqwest = { path = "../../../../crates/wandr-reqwest" }
 # The call engine (Phase 2b-ii): Signal 1:1 voice calls. `signal` pulls the opaque
 # codec + X25519-DH/GCM keying + the SignalCall driver.
 wandr-call = { path = "../../../../crates/wandr-call", features = ["signal", "host-aead"] }
-wit-bindgen = "0.53"
+wit-bindgen = "0.59"
 futures = "0.3"
 rand = "0.9"
 rand_chacha = "0.9"

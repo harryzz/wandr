@@ -28,7 +28,7 @@ p3-async = []
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wandr-step-executor = { path = "../wandr-step-executor" }
 wasip2 = "1"
-wit-bindgen = { version = "0.53", features = ["async", "async-spawn"] }
+wit-bindgen = { version = "0.59", features = ["async", "async-spawn"] }
 http = "1"
 bytes = "1"
 serde = { version = "1", features = ["derive"] }

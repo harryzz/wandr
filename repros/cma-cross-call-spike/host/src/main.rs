@@ -57,7 +57,81 @@ fn new_state() -> HostState {
             .allow_tcp(true)
             .build(),
         table: ResourceTable::new(),
-        tls: WasiTlsCtxBuilder::new().build(),
+        tls: WasiTlsCtxBuilder::new()
+            .provider(Box::new(signal_tls::SignalTlsProvider::new().expect("signal tls provider")))
+            .build(),
+    }
+}
+
+/// Clone of wandr-host `signal_tls.rs`'s provider (webpki + Signal CA) so gate
+/// F reaches the real provisioning endpoint like production.
+mod signal_tls {
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::task::{Context, Poll};
+    use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+    use wasmtime_wasi_tls::{Error as TlsError, TlsProvider, TlsStream, TlsTransport};
+
+    const SIGNAL_CA_PEM: &[u8] =
+        include_bytes!("../../../../runtime/wandr-host/certs/signal-messenger-ca.pem");
+
+    struct SignalTlsStream(tokio_rustls::client::TlsStream<Box<dyn TlsTransport>>);
+
+    impl AsyncRead for SignalTlsStream {
+        fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
+            Pin::new(&mut self.get_mut().0).poll_read(cx, buf)
+        }
+    }
+    impl AsyncWrite for SignalTlsStream {
+        fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
+            Pin::new(&mut self.get_mut().0).poll_write(cx, buf)
+        }
+        fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Pin::new(&mut self.get_mut().0).poll_flush(cx)
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Pin::new(&mut self.get_mut().0).poll_shutdown(cx)
+        }
+    }
+    impl TlsStream for SignalTlsStream {}
+
+    pub struct SignalTlsProvider {
+        config: Arc<rustls::ClientConfig>,
+    }
+
+    impl SignalTlsProvider {
+        pub fn new() -> anyhow::Result<Self> {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            let mut roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
+            let mut rd = std::io::BufReader::new(SIGNAL_CA_PEM);
+            for cert in rustls_pemfile::certs(&mut rd) {
+                roots.add(cert?)?;
+            }
+            let config = rustls::ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_no_client_auth();
+            Ok(Self { config: Arc::new(config) })
+        }
+    }
+
+    impl TlsProvider for SignalTlsProvider {
+        fn connect(
+            &self,
+            server_name: String,
+            transport: Box<dyn TlsTransport>,
+        ) -> Pin<Box<dyn Future<Output = Result<Box<dyn TlsStream>, TlsError>> + Send>> {
+            let config = Arc::clone(&self.config);
+            Box::pin(async move {
+                let domain = rustls::pki_types::ServerName::try_from(server_name)
+                    .map_err(|_| TlsError::msg("invalid server name"))?;
+                let stream = tokio_rustls::TlsConnector::from(config)
+                    .connect(domain, transport)
+                    .await
+                    .map_err(|e| TlsError::msg(e.to_string()))?;
+                Ok(Box::new(SignalTlsStream(stream)) as Box<dyn TlsStream>)
+            })
+        }
     }
 }
 
@@ -73,8 +147,11 @@ fn main() -> Result<()> {
 
     let engine = Engine::new(&make_config())?;
     let mut linker = Linker::<HostState>::new(&engine);
-    // Production dual-serve: p2 stays SYNC for every existing guest; p3 is additive.
-    wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
+    // Production p3-async linker set: p2 ASYNC (sync p2 host fns internally
+    // block_on wasmtime-wasi's own tokio and panic when we drive the store
+    // from our runtime — "cannot start a runtime from within a runtime");
+    // p3 additive.
+    wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
     wasmtime_wasi::p3::add_to_linker(&mut linker)?;
     wasmtime_wasi_tls::p3::add_to_linker(&mut linker)?;
 
@@ -123,6 +200,30 @@ fn main() -> Result<()> {
         })
     };
 
+    // WS_FIRST=1: run the WSS probe on the FRESH instance before anything
+    // else — discriminates "websocket path broken" from "prior activity
+    // wedges later operations" (cumulative executor state).
+    if std::env::var_os("WS_FIRST").is_some() {
+        let ws_host = std::env::args().nth(4).unwrap_or_else(|| "chat.signal.org".into());
+        let idx = instance
+            .get_export_index(&mut store, Some(&chat), "ka-probe")
+            .ok_or_else(|| anyhow::anyhow!("no ka-probe"))?;
+        let f = instance.get_typed_func::<(String,), (Result<String, String>,)>(&mut store, idx)?;
+        let r = rt.block_on(async {
+            match tokio::time::timeout(Duration::from_secs(30), async {
+                let (r,) = f.call_async(&mut store, (ws_host.clone(),)).await?;
+                Ok::<Result<String, String>, anyhow::Error>(r)
+            })
+            .await
+            {
+                Ok(inner) => inner,
+                Err(_) => Err(anyhow::anyhow!("ws-probe timed out (30s)")),
+            }
+        });
+        println!("WS_FIRST probe ({ws_host}): {r:?}");
+        return Ok(());
+    }
+
     // ---- Gate A: pumped frames — ticker must advance BETWEEN calls ----
     println!("--- gate A: 10 frames, 200ms PUMPED naps (run_concurrent) ---");
     let t0 = Instant::now();
@@ -164,19 +265,20 @@ fn main() -> Result<()> {
     }
     println!("gate B (quiescent when host does not pump): {}", if quiesced { "PASS" } else { "FAIL" });
 
-    // ---- Gate C: pure-p2 component stays SYNC on the same engine ----
-    println!("--- gate C: p2 sync coexistence ---");
+    // ---- Gate C: pure-p2 component on the same engine (uniform async path —
+    // with p2 host fns linked async, every instance is async-required, so all
+    // apps go through instantiate_async/call_async like production) ----
+    println!("--- gate C: p2 app on the uniform async path ---");
     let comp2 = Component::from_file(&engine, &p2sync)?;
     let mut store2 = Store::new(&engine, new_state());
     let gate_c = (|| -> Result<u32> {
-        let inst2 = linker.instantiate(&mut store2, &comp2)?; // SYNC instantiate
+        let inst2 = rt.block_on(linker.instantiate_async(&mut store2, &comp2))?;
         let run2 = inst2.get_typed_func::<(), (u32,)>(&mut store2, "run")?;
-        let (v,) = run2.call(&mut store2, ())?; // SYNC call
-        run2.post_return(&mut store2)?;
+        let (v,) = rt.block_on(run2.call_async(&mut store2, ()))?;
         Ok(v)
     })();
     match &gate_c {
-        Ok(v) => println!("gate C (sync instantiate+call on same engine): PASS (run() = {v})"),
+        Ok(v) => println!("gate C (p2 app via async path on same engine): PASS (run() = {v})"),
         Err(e) => println!("gate C: FAIL — {e:#}"),
     }
 
@@ -211,7 +313,107 @@ fn main() -> Result<()> {
         Err(e) => println!("gate D2 select-drop torture: FAIL — {e:#}"),
     }
 
-    if gate_a && quiesced && gate_c.is_ok() && gate_d1.is_ok() && gate_d2.is_ok() {
+    // ---- Gate E: background-spawned fetch driven ONLY by pumps ----
+    // (Gate D ran inside one call_async; the real engine's transport lives in
+    // a spawned task that must progress across pump windows.)
+    println!("--- gate E: spawned fetch across pump windows ---");
+    let gate_e = (|| -> Result<String> {
+        let bg_idx = instance
+            .get_export_index(&mut store, Some(&chat), "fetch-bg")
+            .ok_or_else(|| anyhow::anyhow!("no fetch-bg"))?;
+        let bg = instance.get_typed_func::<(String,), ()>(&mut store, bg_idx)?;
+        rt.block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), bg.call_async(&mut store, (target.clone(),))).await
+        })
+        .map_err(|_| anyhow::anyhow!("fetch-bg call timed out"))??;
+        let res_idx = instance
+            .get_export_index(&mut store, Some(&chat), "fetch-bg-result")
+            .ok_or_else(|| anyhow::anyhow!("no fetch-bg-result"))?;
+        let res = instance
+            .get_typed_func::<(), (Option<Result<String, String>>,)>(&mut store, res_idx)?;
+        // Drive with 2ms pumps + a poll per "frame", like the desktop loop.
+        for i in 0..1500 {
+            rt.block_on(store.run_concurrent(async |_| {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }))?;
+            let (r,) = rt.block_on(async {
+                tokio::time::timeout(Duration::from_secs(5), res.call_async(&mut store, ())).await
+            })
+            .map_err(|_| anyhow::anyhow!("fetch-bg-result timed out"))??;
+            if let Some(r) = r {
+                let line = r.map_err(|e| anyhow::anyhow!("guest error: {e}"))?;
+                return Ok(format!("{line} (completed after {} pump windows)", i + 1));
+            }
+        }
+        Err(anyhow::anyhow!("fetch never completed across 1500 pump windows — STALL REPRODUCED"))
+    })();
+    match &gate_e {
+        Ok(line) => println!("gate E spawned-fetch across pumps: PASS — {line}"),
+        Err(e) => println!("gate E spawned-fetch across pumps: FAIL — {e:#}"),
+    }
+
+    // ---- Gate F: the Signal engine's exact stalling path — WSS upgrade +
+    // first server frame via the reqwest-websocket shim ----
+    println!("--- gate F: WSS provisioning probe (inline, then spawned across pumps) ---");
+    let ws_host = std::env::args().nth(4).unwrap_or_else(|| "chat.signal.org".into());
+    let gate_f1 = (|| -> Result<String> {
+        let idx = instance
+            .get_export_index(&mut store, Some(&chat), "ws-probe")
+            .ok_or_else(|| anyhow::anyhow!("no ws-probe"))?;
+        let f = instance.get_typed_func::<(String,), (Result<String, String>,)>(&mut store, idx)?;
+        rt.block_on(async {
+            match tokio::time::timeout(Duration::from_secs(30), async {
+                let (r,) = f.call_async(&mut store, (ws_host.clone(),)).await?;
+                Ok::<Result<String, String>, anyhow::Error>(r)
+            })
+            .await
+            {
+                Ok(inner) => inner?.map_err(|e| anyhow::anyhow!("guest error: {e}")),
+                Err(_) => Err(anyhow::anyhow!("ws-probe timed out (30s)")),
+            }
+        })
+    })();
+    match &gate_f1 {
+        Ok(line) => println!("gate F1 inline WSS probe: PASS — {line}"),
+        Err(e) => println!("gate F1 inline WSS probe: FAIL — {e:#}"),
+    }
+    let gate_f2 = (|| -> Result<String> {
+        let idx = instance
+            .get_export_index(&mut store, Some(&chat), "ws-probe-bg")
+            .ok_or_else(|| anyhow::anyhow!("no ws-probe-bg"))?;
+        let f = instance.get_typed_func::<(String,), ()>(&mut store, idx)?;
+        rt.block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), f.call_async(&mut store, (ws_host.clone(),))).await
+        })
+        .map_err(|_| anyhow::anyhow!("ws-probe-bg call timed out"))??;
+        let res_idx = instance
+            .get_export_index(&mut store, Some(&chat), "fetch-bg-result")
+            .ok_or_else(|| anyhow::anyhow!("no fetch-bg-result"))?;
+        let res = instance
+            .get_typed_func::<(), (Option<Result<String, String>>,)>(&mut store, res_idx)?;
+        for i in 0..5000 {
+            rt.block_on(store.run_concurrent(async |_| {
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }))?;
+            let (r,) = rt.block_on(async {
+                tokio::time::timeout(Duration::from_secs(5), res.call_async(&mut store, ())).await
+            })
+            .map_err(|_| anyhow::anyhow!("fetch-bg-result timed out"))??;
+            if let Some(r) = r {
+                let line = r.map_err(|e| anyhow::anyhow!("guest error: {e}"))?;
+                return Ok(format!("{line} (completed after {} pump windows)", i + 1));
+            }
+        }
+        Err(anyhow::anyhow!("ws probe never completed across 5000 pump windows — STALL REPRODUCED"))
+    })();
+    match &gate_f2 {
+        Ok(line) => println!("gate F2 spawned WSS probe across pumps: PASS — {line}"),
+        Err(e) => println!("gate F2 spawned WSS probe across pumps: FAIL — {e:#}"),
+    }
+
+    if gate_a && quiesced && gate_c.is_ok() && gate_d1.is_ok() && gate_d2.is_ok() && gate_e.is_ok()
+        && gate_f1.is_ok() && gate_f2.is_ok()
+    {
         println!("ALL GATES PASS");
         Ok(())
     } else {

@@ -10,9 +10,10 @@ crate-type = ["cdylib"]
 # 0.53 — same resolution as the real Signal engine tree (0.53.1); the async
 # executor/rt must be this version when the engine migrates.
 [dependencies]
-wit-bindgen = { version = "0.53", features = ["async", "async-spawn"] }
+wit-bindgen = { version = "0.59", features = ["async", "async-spawn"] }
 # Phase-3 kill-gate: the real p3 transport backend under test.
 wandr-reqwest = { path = "../../../crates/wandr-reqwest", features = ["p3-async"] }
+wandr-reqwest-websocket = { path = "../../../crates/wandr-reqwest-websocket", features = ["p3-async"] }
 futures = "0.3"
 url = "2"
 

@@ -14,6 +14,24 @@ interface chat {
   poll: func() -> u32;
   fetch: async func(host: string) -> result<string, string>;
   fetch-chopped: async func(host: string) -> result<string, string>;
+  /// Gate E: SPAWN the fetch as a background task and return immediately;
+  /// the transport must then make progress across pump windows (the real
+  /// engine's shape — gate D ran entirely inside one call_async).
+  fetch-bg: async func(host: string);
+  /// Result of the background fetch: none = still pending.
+  fetch-bg-result: func() -> option<result<string, string>>;
+  /// Gate F: the exact call path the Signal engine stalls on — WSS upgrade
+  /// via the reqwest-websocket shim + first server frame. Inline (F1) and
+  /// background-spawned, pump-driven (F2, result via fetch-bg-result).
+  ws-probe: async func(host: string) -> result<string, string>;
+  ws-probe-bg: async func(host: string);
+  /// Step-bisect of the upgrade: connect / random / write / read-headers,
+  /// with a phase line after each — pinpoints the wedge in one run.
+  ws-steps: async func(host: string) -> result<string, string>;
+  /// Keep-alive discriminator: HTTP/1.1 GET with the connection KEPT OPEN —
+  /// isolates "guest stream read never completes on partial data while the
+  /// stream stays open" (every passing probe so far ended with server EOF).
+  ka-probe: async func(host: string) -> result<string, string>;
 }
 
 world engine {

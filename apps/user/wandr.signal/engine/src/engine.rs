@@ -206,10 +206,12 @@ fn to_wit_call_state(s: wandr_call::signal::CallState) -> CallState {
 /// relay (so a call connects across NAT). `None` on any failure — calls then fall
 /// back to host candidates only.
 /// If a single message-loop tick takes longer than this in real wall time, the
-/// device was suspended (the executor only runs while the UI polls us) and the
-/// message socket is almost certainly stale — force a reconnect. Comfortably
-/// above normal scheduling jitter, and below the libsignal 55 s keepalive so we
-/// recover before it would (and where, pre-supervisor, it never did).
+/// device was suspended and the message socket is almost certainly stale —
+/// force a reconnect. (The loop only advances while the host drives it: p2 =
+/// the UI's per-frame `step()`, p3 = the host's store event loop — a suspend
+/// freezes both the same way.) Comfortably above normal scheduling jitter, and
+/// below the libsignal 55 s keepalive so we recover before it would (and
+/// where, pre-supervisor, it never did).
 const WAKE_GAP_MS: u64 = 45_000;
 
 /// EXPERIMENT: when true, calls skip TURN entirely (host candidates only). Use to
@@ -242,7 +244,7 @@ async fn fetch_turn(push: &PushService) -> Option<wandr_call::turn::TurnConfig> 
                 return None;
             }
         },
-        _ = wandr_step_executor::sleep(Duration::from_secs(4)).fuse() => {
+        _ = wandr_reqwest::task::sleep(Duration::from_secs(4)).fuse() => {
             dbg_line("turn: get_calling_relays TIMEOUT (4s) — host-only");
             return None;
         }
@@ -297,7 +299,11 @@ impl Shared {
     }
 
     fn set_state(&self, s: impl Into<String>) {
-        *self.state.borrow_mut() = s.into();
+        let s = s.into();
+        // Low-frequency lifecycle transitions; stderr reaches the host log
+        // (logcat on device) — the only engine visibility besides the UI.
+        eprintln!("signal-engine state: {s}");
+        *self.state.borrow_mut() = s;
     }
 
     fn next_id(&self) -> u64 {
@@ -429,11 +435,39 @@ fn shared() -> Option<Rc<Shared>> {
 // ---- export entry points (called from the Guest impl in lib.rs) ------------
 
 pub fn init() {
+    // Task 115 (p3 flavor): the HOST is the spawn point — it calls the async
+    // `engine-start.start` export right after instantiation (a sync-lifted UI
+    // export may not block on an async callee). init stays in the chat
+    // contract so the UI is byte-identical across flavors; here it's a no-op.
+    #[cfg(feature = "p3-async")]
+    {
+        return;
+    }
+    #[cfg(not(feature = "p3-async"))]
+    {
+        if shared().is_some() {
+            return; // idempotent
+        }
+        wandr_step_executor::init();
+        load_state();
+        // Detach: the root task must outlive this call (it cancels on drop).
+        wandr_step_executor::spawn(run()).detach();
+    }
+}
+
+/// Task 115 (p3 flavor) — host-called async spawn point: load persisted state,
+/// then hand `run()` to the native CM-async executor. The task is suspended /
+/// resumed by the host's event loop from here on; no reactor, no `step()`.
+#[cfg(feature = "p3-async")]
+pub async fn start() {
     if shared().is_some() {
         return; // idempotent
     }
-    wandr_step_executor::init();
+    load_state();
+    wandr_reqwest::task::spawn(run());
+}
 
+fn load_state() {
     // Preload persisted history, assigning stable ids. Delivery state defaults to
     // `sent` (a persisted message was at least sent/received), overlaid by the
     // delivered/read states saved in statuses.json (keyed by wire ts).
@@ -542,16 +576,15 @@ pub fn init() {
         call_peer: RefCell::new(String::new()),
     });
     SHARED.with(|slot| *slot.borrow_mut() = Some(s));
-
-    // Detach: the root task must outlive this call (it cancels on drop).
-    wandr_step_executor::spawn(run()).detach();
 }
 
 pub fn poll_events() -> Vec<Event> {
     if shared().is_none() {
         return Vec::new();
     }
-    // Advance the background task(s) without blocking the frame.
+    // p2: advance the background task(s) without blocking the frame. p3: the
+    // host's event loop advances them natively — this is a pure queue drain.
+    #[cfg(not(feature = "p3-async"))]
     wandr_step_executor::step();
     shared()
         .map(|s| s.events.borrow_mut().drain(..).collect())
@@ -785,7 +818,7 @@ async fn run() {
         if now_ms().saturating_sub(started) > 60_000 {
             backoff_ms = 1_000;
         }
-        wandr_step_executor::sleep(Duration::from_millis(backoff_ms)).await;
+        wandr_reqwest::task::sleep(Duration::from_millis(backoff_ms)).await;
         backoff_ms = backoff_ms.saturating_mul(2).min(30_000);
     }
 }
@@ -812,7 +845,10 @@ async fn link(
         PushService::new(SignalServers::Production, None, "wandr-signal-engine");
     let (tx, mut rx) = futures::channel::mpsc::channel(1);
     let pw = password.clone();
-    let task = wandr_step_executor::spawn(async move {
+    // Run link_device concurrently with the provisioning-step consumer via
+    // join! (executor-agnostic — task 115: no spawn handle to await on the
+    // CM-async executor). The consumer ends when link_device drops `tx`.
+    let link_fut = async move {
         let mut csprng = seed_rng();
         link_device(
             &mut aci_for_task,
@@ -824,20 +860,23 @@ async fn link(
             tx,
         )
         .await
-    });
-
-    let mut registration = None;
-    while let Some(step) = rx.next().await {
-        match step {
-            SecondaryDeviceProvisioning::Url(url) => {
-                shared.push_event(Event::LinkUrl(url.to_string()));
-            },
-            SecondaryDeviceProvisioning::NewDeviceRegistration(reg) => {
-                registration = Some(reg);
-            },
+    };
+    let consume_fut = async {
+        let mut registration = None;
+        while let Some(step) = rx.next().await {
+            match step {
+                SecondaryDeviceProvisioning::Url(url) => {
+                    shared.push_event(Event::LinkUrl(url.to_string()));
+                },
+                SecondaryDeviceProvisioning::NewDeviceRegistration(reg) => {
+                    registration = Some(reg);
+                },
+            }
         }
-    }
-    task.await.map_err(|e| format!("link: {e}"))?;
+        registration
+    };
+    let (link_res, registration) = futures::join!(link_fut, consume_fut);
+    link_res.map_err(|e| format!("link: {e}"))?;
     let reg = registration.ok_or("no registration received")?;
 
     let identity =
@@ -1041,7 +1080,7 @@ async fn receive_and_send(
     let mut last_ticks: u64 = 0;
     loop {
         let tick_ms = if call_engine.is_active() { 10 } else { 200 };
-        let tick = wandr_step_executor::sleep(Duration::from_millis(tick_ms));
+        let tick = wandr_reqwest::task::sleep(Duration::from_millis(tick_ms));
         // BIASED: poll the websocket FIRST, then the tick. A call pumps the tick
         // at ~10 ms; with a fair select! the always-ready tick frequently won the
         // race and the dropped `stream.next()` future could strand a buffered
@@ -1247,8 +1286,9 @@ async fn receive_and_send(
             },
             _ = tick.fuse() => {
                 ticks += 1; // DIAG: pump-rate counter (see ticks/s in the media line)
-                // Wake-from-sleep watchdog. This loop only advances while the UI
-                // polls us, so a device suspend freezes it. If real wall time
+                // Wake-from-sleep watchdog. This loop only advances while the
+                // host drives it (p2: per-frame step(); p3: the store event
+                // loop), so a device suspend freezes it. If real wall time
                 // jumped far past the tick interval, we were suspended and the
                 // message socket is almost certainly half-open (dead) — bail so
                 // run()'s supervisor reconnects immediately, instead of waiting up
@@ -1586,12 +1626,13 @@ fn spawn_group_fetch(shared: &Rc<Shared>, push: &PushService, aci: Uuid, pni: Uu
     };
     let shared = shared.clone();
     let push = push.clone();
-    wandr_step_executor::spawn(async move {
+    // Detached fire-and-forget — the executor seam picks step-executor (p2) or
+    // the native CM-async executor (p3).
+    wandr_reqwest::task::spawn(async move {
         if let Err(e) = fetch_groups(&shared, &mk, aci, pni, push).await {
             shared.set_state(format!("groups: {e}"));
         }
-    })
-    .detach();
+    });
 }
 
 /// Fetch the Groups v2 list via the storage service: derive the storage key from
