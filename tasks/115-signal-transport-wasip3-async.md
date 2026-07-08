@@ -268,8 +268,30 @@ different gaps — use all three):
   own migration later) and `repros/signal-link` (**stale — superseded by the
   engine, scheduled for deletion**; pins `wandr-reqwest/p2` explicitly).
   Desktop smoke on the new default composite: `engine-start` → `connected` ✓.
-- **M4** — Pixel 2 XL: messages send/receive + keepalive survive UI idle; no
-  dropped events vs the `step()` baseline; battery behavior unchanged.
+- **M4** — 🟡 **DEPLOYED 2026-07-08 — device runs the p3 stack; two user-assisted
+  gates open.** Done + verified on the Pixel 2 XL:
+  - p3-async host built (codegen-crates cleaned first — the AOT-corruption
+    gotcha) and pushed via `run-hybrid-stack.sh --wandr-only`; rollback =
+    `/data/local/tmp/wandr-host.p2.bak` + the engine's `p2-legacy` flavor.
+  - The config-hash flip needed NO mass reinstall: the loader auto-re-precompiles
+    on cache-key mismatch — all 6 chrome apps re-AOT'd on first launch and run
+    (arbiter list + /proc + screenshot verified; zygote preload fails stale
+    cwasm gracefully).
+  - Signal p3 composite deployed (`./build.sh --deploy`, which now probes the
+    device binary for the 0.3 marker); desktop `/state` synced back first
+    (device pre-M4 state kept in `.signal-state-backups/pre-m4`). Engine came
+    up `connected` over the native-async transport ON DEVICE (logcat).
+  - **Idle/battery parity where it matters**: Signal in Background role =
+    0–1% CPU (== p2 baseline); chrome overlays unchanged. KNOWN COST: Signal
+    FOREGROUND idles at ~11.5% vs the ~1–3% fg baseline — the per-iteration
+    `run_concurrent` nap-pump at the fg poll cadence (~21 sweeps/s after
+    idle-decay, ~0.5%/sweep on the A73). Tuning follow-up: rate-limit fg pumps
+    when the guest is idle — MUST be done together with the calls gate (the
+    in-call 10 ms engine tick is driven ONLY by pumps on p3; bg-tick calls do
+    not advance it).
+  - **Open (user-assisted): (a)** live receive/send on device with a peer;
+    **(b)** a call on the p3 flavor (tick-cadence risk above) — until (b)
+    passes, calls on device should be treated as untested on p3.
 - **M5 (optional)** — shape (B): `subscribe() -> stream<event>`.
 
 ## M1 readiness (assessed 2026-07-07) — startable, gate = async codegen

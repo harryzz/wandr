@@ -8,9 +8,11 @@
 #
 #   ./build.sh            # build the wandrpkg (native CM-async / p3 — the
 #                         # DEFAULT since task 115 M3; zero step-executor)
-#   P2=1 ./build.sh       # legacy step-executor flavor — ONLY reason: a device
-#                         # deploy before M4 flips the device host to p3-async
-#   ./build.sh --deploy   # install + relaunch on device (requires P2=1 until M4)
+#   P2=1 ./build.sh       # legacy step-executor flavor (kept as the rollback
+#                         # pair for a non-p3 host binary)
+#   ./build.sh --deploy   # install + relaunch on device. The p3 flavor needs
+#                         # the p3-async device host (task 115 M4); the guard
+#                         # below checks the composite matches the host.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROTOC="${PROTOC:-$HOME/tools/protoc/bin/protoc}"  # engine deps build protos
@@ -18,8 +20,12 @@ PKG="$HERE/build/wandr.signal.wandrpkg"
 P2="${P2:-}"
 
 if [[ -z "$P2" && "${1:-}" == "--deploy" ]]; then
-  echo "ERROR: deploying the p3 flavor is M4 (device host lacks p3-async; cwasm hash differs). Use P2=1 ./build.sh --deploy" >&2
-  exit 1
+  # M4 guard: a p3 composite only loads on a p3-async host. The p3-async host
+  # embeds the 0.3 interface names it serves — probe the pushed binary.
+  if ! adb shell "su -c 'grep -aq \"wasi:sockets/types@0.3\" /data/local/tmp/wandr-host'" 2>/dev/null; then
+    echo "ERROR: device wandr-host is not the p3-async build — push it first (task 115 M4) or use P2=1" >&2
+    exit 1
+  fi
 fi
 
 echo "▸ build engine (wasm32-wasip2${P2:+, p2-legacy})"
