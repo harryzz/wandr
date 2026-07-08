@@ -206,8 +206,19 @@ different gaps — use all three):
   **dual-serve is mandatory even for one guest** (the guest pulls p2 `wasi:cli`/
   `wasi:io@0.2.6` via Rust std → host links p2 AND p3 — a live confirmation of the
   blast-radius rule); **don't `drop` the write stream before reading** the response.
-- **M2** — 🟡 **CODE-COMPLETE 2026-07-08, run-gated on the next wasmtime release.**
-  All wiring landed, feature-flagged off (defaults byte-identical):
+- **M2** — ✅ **DONE 2026-07-08 — DESKTOP-VERIFIED, live both-ways chat.**
+  The real engine on the desktop p3-async host (released wasmtime 46.0.1 +
+  wit-bindgen 0.59 guests), zero step-executor in the path: resumed the
+  device-linked account from copied `/state`, connected both Signal websockets,
+  ran the full storage.signal.org (contacts/groups) + cdn/cdn3 (avatars/
+  attachments) sync, **sent AND received messages with a live peer**, held the
+  socket through several 55 s keepalive cycles with no reconnects, and
+  exercised supervised reconnect correctly (a session-ownership fight with the
+  phone's auto-relaunched instance — server `4409 Connected elsewhere` — was
+  diagnosed via the ws-process exit instrumentation, not a transport bug; the
+  phone's bg-receipt alarm relaunches wandr.signal, so kill it when testing
+  desktop with the same credentials). Deferred to M4: calls, battery, device.
+  All wiring feature-flagged (defaults byte-identical):
   - **M2a spike** (`repros/cma-cross-call-spike`) — background task survives +
     advances BETWEEN export calls; quiescent unpumped; p2 apps coexist. KEY
     mechanics discovered: a sync-lifted export **cannot block on an
