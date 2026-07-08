@@ -1,10 +1,12 @@
 # Task 115 — Retire `wandr-step-executor` on the Signal transport (wasip3 native async)
 
-> Scoped 2026-07-07. 🔲 not started — a **sketch / go-no-go**. **M0 resolved
-> 2026-07-07: the 0.3 async `wasi:tls`+`wasi:sockets` host impls are already in
-> the pinned wasmtime 46** (wandr just links the p2 variant) — so this is
-> reachable now on the runtime we ship, gated only on RC-level API stability
-> (see "M0"). Outgrowth of the wasip3 async
+> Scoped 2026-07-07. ✅ **COMPLETE 2026-07-08 (M0–M4)** — the Signal transport
+> runs on native Component-Model async END-TO-END ON THE PIXEL 2 XL: zero
+> step-executor, live both-ways chat, audio AND video calls verified, chrome +
+> Compose + Swift + Avalonia guests all running on the p3-async host. M5
+> (streaming subscribe) remains optional/unplanned. Follow-ups at the bottom
+> of the M4 entry (fg pump CPU tuning; audio.player + stale signal-link are
+> the remaining p2 consumers). Outgrowth of the wasip3 async
 > analysis (`docs/shared-runtime-and-app-size.md` §"Composed components & the
 > wasip3 shared event loop"). Goal: replace the hand-rolled frame-stepped async
 > reactor on the **Signal transport** with **native Component-Model async**
@@ -268,8 +270,12 @@ different gaps — use all three):
   own migration later) and `repros/signal-link` (**stale — superseded by the
   engine, scheduled for deletion**; pins `wandr-reqwest/p2` explicitly).
   Desktop smoke on the new default composite: `engine-start` → `connected` ✓.
-- **M4** — 🟡 **DEPLOYED 2026-07-08 — device runs the p3 stack; two user-assisted
-  gates open.** Done + verified on the Pixel 2 XL:
+- **M4** — ✅ **DONE 2026-07-08 — device end-to-end, calls included.** Both
+  user-assisted gates CLOSED: live chat works and **audio + video calls work
+  on the p3 flavor** (the in-call 10 ms pump-driven tick is empirically fine
+  at the fg pump cadence — any future pump rate-limiting must re-verify
+  calls). Avalonia (.NET) also verified running. Done + verified on the
+  Pixel 2 XL:
   - p3-async host built (codegen-crates cleaned first — the AOT-corruption
     gotcha) and pushed via `run-hybrid-stack.sh --wandr-only`; rollback =
     `/data/local/tmp/wandr-host.p2.bak` + the engine's `p2-legacy` flavor.

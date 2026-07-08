@@ -14,6 +14,7 @@
 - [RULE: capture full build output, don't grep-then-rerun](feedback_capture_build_output.md) — save a build's FULL output to a log and read THAT; never pre-filter a live build as the only sink (hides errors → wasted re-run); on a background-build failure Read its task file, don't re-run.
 
 ## Projects / tasks
+- [✅ Task 115: Signal transport on native wasip3 async](project_task115_wasip3_async.md) — COMPLETE M0-M4, device-verified incl. audio/video calls; zero step-executor in Signal; 5 driving rules (host-started engine, pump-or-stall, async dep proxies, wit-bindgen 0.59 floor, auto-re-precompile); follow-ups: fg pump CPU, audio.player migration.
 - [wasi:canvas + wasi:input-handlers migration ✅ + 0.0.2 design](project_wasi_canvas_migration.md) — stages 1-3 shipped + device-verified (Slint/dioxus/all-4-chrome); 0.0.2 REDESIGN docs acceptance-checked, path B next; porting recipe + wit-bindgen multi-package gotchas in file.
 - [✅ Task 101: desktop dev loop + W3C key-input](project_desktop_dev_loop.md) — same wasm runs on x86_64 host (WSLg-verified) via WANDR_DESKTOP_SIZE + JIT; gotchas (softbuffer present path, on-resize gap, W3C key-input v3) in file.
 - [Project: WASM Android Runtime](project_wasm_runtime.md) — goals, stack, current status.
