@@ -9,7 +9,7 @@ use std::time::Duration;
 /// Async sleep. p2: parks on the step-executor's `wasi:io/poll` reactor.
 /// p3: `wasi:clocks@0.3` monotonic `wait-for` — a native async host call
 /// suspended/resumed by the host event loop.
-#[cfg(not(feature = "p3-async"))]
+#[cfg(feature = "p2")]
 pub async fn sleep(d: Duration) {
     wandr_step_executor::sleep(d).await
 }
@@ -22,7 +22,7 @@ pub async fn sleep(d: Duration) {
 /// the returned `async_task::Task` cancels on drop). p3: the CM-async
 /// executor; wit-bindgen's `spawn` returns no handle (detached by design), so
 /// callers needing cancellation wrap the future with a shared flag.
-#[cfg(not(feature = "p3-async"))]
+#[cfg(feature = "p2")]
 pub fn spawn(fut: impl Future<Output = ()> + 'static) {
     wandr_step_executor::spawn(fut).detach()
 }

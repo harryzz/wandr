@@ -16,17 +16,23 @@ path = "src/lib.rs"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls-manual-roots", "stream"] }
 
-# Task 115 — select the transport backend: default = p2 wasi:tls@0.2 driven by
-# the wandr-step-executor reactor; `p3-async` = WASI 0.3 native CM-async streams
-# (src/tls_p3.rs), zero step-executor on the read/write path. Same public API
-# (the `tls` module name is #[path]-switched), so http1/api/websocket consumers
-# compile unchanged. Per-guest opt-in — see tasks/115.
+# Task 115 — select the transport backend; exactly ONE of:
+#   `p2` (default)  — wasi:tls@0.2 driven by the wandr-step-executor reactor
+#                     (legacy; remaining consumers: wandr.audio.player,
+#                     repros/signal-link [stale, scheduled for deletion])
+#   `p3-async`      — WASI 0.3 native CM-async streams (src/tls_p3.rs), zero
+#                     step-executor anywhere (the Signal build since M3;
+#                     consumers set default-features = false)
+# Same public API either way (the `tls` module name is #[path]-switched), so
+# http1/api/websocket consumers compile unchanged. See tasks/115.
 [features]
+default = ["p2"]
+p2 = ["dep:wandr-step-executor"]
 p3-async = []
 
 # wasm32: the wasi:tls implementation.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wandr-step-executor = { path = "../wandr-step-executor" }
+wandr-step-executor = { path = "../wandr-step-executor", optional = true }
 wasip2 = "1"
 wit-bindgen = { version = "0.59", features = ["async", "async-spawn"] }
 http = "1"

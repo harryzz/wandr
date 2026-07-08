@@ -11,16 +11,20 @@ publish = false
 [lib]
 path = "src/lib.rs"
 
-# Task 115 — passthrough: select wandr-reqwest's p3 (native CM-async) TLS
-# backend. No source change here (the TlsStream API is identical).
+# Task 115 — passthroughs to wandr-reqwest's backend selection (this crate has
+# no flavored source; the TlsStream API is identical). Standalone builds get
+# p2 by default; inside the Signal graph everything is default-features=false
+# and the engine picks the flavor.
 [features]
+default = ["p2"]
+p2 = ["wandr-reqwest/p2"]
 p3-async = ["wandr-reqwest/p3-async"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 reqwest-websocket = { version = "0.4.2", features = ["json"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wandr-reqwest = { path = "../wandr-reqwest" }
+wandr-reqwest = { path = "../wandr-reqwest", default-features = false }
 base64 = "0.22"
 url = "2"
 

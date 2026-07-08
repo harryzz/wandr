@@ -6,30 +6,29 @@
 # protocol store) on-device, then does a per-app install that preserves /state.
 # Never use tools/scripts/build-system-wandrpkgs.sh for this — it wipes APPS_ROOT.
 #
-#   ./build.sh            # build the wandrpkg only
-#   ./build.sh --deploy   # build, then install + relaunch on device
-#   P3=1 ./build.sh       # task 115: native CM-async flavor (engine built with
-#                         # --features p3-async; wac compose re-exports the
-#                         # host-called engine-start). Desktop p3-async host
-#                         # only — NOT deployable until M4 (device cwasm hash).
+#   ./build.sh            # build the wandrpkg (native CM-async / p3 — the
+#                         # DEFAULT since task 115 M3; zero step-executor)
+#   P2=1 ./build.sh       # legacy step-executor flavor — ONLY reason: a device
+#                         # deploy before M4 flips the device host to p3-async
+#   ./build.sh --deploy   # install + relaunch on device (requires P2=1 until M4)
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROTOC="${PROTOC:-$HOME/tools/protoc/bin/protoc}"  # engine deps build protos
 PKG="$HERE/build/wandr.signal.wandrpkg"
-P3="${P3:-}"
+P2="${P2:-}"
 
-if [[ -n "$P3" && "${1:-}" == "--deploy" ]]; then
-  echo "ERROR: P3=1 --deploy is M4 (device host lacks p3-async; cwasm hash differs)" >&2
+if [[ -z "$P2" && "${1:-}" == "--deploy" ]]; then
+  echo "ERROR: deploying the p3 flavor is M4 (device host lacks p3-async; cwasm hash differs). Use P2=1 ./build.sh --deploy" >&2
   exit 1
 fi
 
-echo "▸ build engine (wasm32-wasip2${P3:+, p3-async})"
-( cd "$HERE/engine" && PROTOC="$PROTOC" cargo build --target wasm32-wasip2 --release ${P3:+--features p3-async} )
+echo "▸ build engine (wasm32-wasip2${P2:+, p2-legacy})"
+( cd "$HERE/engine" && PROTOC="$PROTOC" cargo build --target wasm32-wasip2 --release ${P2:+--no-default-features --features p2-legacy} )
 echo "▸ build ui (wasm32-wasip2)"
 ( cd "$HERE/ui" && cargo build --target wasm32-wasip2 --release )
 
 mkdir -p "$PKG/components"
-if [[ -n "$P3" ]]; then
+if [[ -z "$P2" ]]; then
   echo "▸ wac compose ui ◁ engine (+ engine-start re-export, p3)"
   wac compose \
     -d wandr:signal-engine="$HERE/engine/target/wasm32-wasip2/release/signal_engine.wasm" \
@@ -39,7 +38,7 @@ if [[ -n "$P3" ]]; then
   # cm-async isn't in the validator's default feature set (wasm-tools 1.245).
   wasm-tools validate -f cm-async "$PKG/components/ui.wasm"
 else
-  echo "▸ wac plug ui ◁ engine"
+  echo "▸ wac plug ui ◁ engine (p2-legacy)"
   wac plug \
     "$HERE/ui/target/wasm32-wasip2/release/signal_ui.wasm" \
     --plug "$HERE/engine/target/wasm32-wasip2/release/signal_engine.wasm" \

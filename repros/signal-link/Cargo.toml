@@ -8,6 +8,10 @@ publish = false
 # websocket (over our wasi:tls transport in the libsignal-service-rs fork) and
 # prints the secondary-device link QR. Proves the transport end-to-end against
 # real Signal servers + yields a scannable code.
+#
+# ⚠️ STALE / p2-legacy (task 115 M3) — superseded by the real engine; scheduled
+# for deletion. Pins wandr-reqwest's legacy `p2` backend explicitly (the fork
+# no longer selects a flavor; the consuming app does).
 
 [[bin]]
 name = "signal-link"
@@ -16,6 +20,7 @@ path = "src/main.rs"
 [dependencies]
 libsignal-service = { path = "../../external/libsignal-service-rs", default-features = false }
 wandr-step-executor = { path = "../../crates/wandr-step-executor" }
+wandr-reqwest = { path = "../../crates/wandr-reqwest", default-features = false, features = ["p2"] }
 futures = "0.3"
 rand = "0.9"
 rand_chacha = "0.9"

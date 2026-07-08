@@ -256,8 +256,18 @@ different gaps — use all three):
   - **NEXT:** phase-5 desktop functional gates on the real app (link +
     send/receive + keepalive-idle + watchdog + calls + dual-serve proof —
     needs the user for the QR link + visual checks).
-- **M3** — delete `wandr-step-executor` from the Signal build + the
-  `wandr-reqwest` poll bridge; confirm no other Signal-path consumer remains.
+- **M3** — ✅ **DONE 2026-07-08.** p3 is the DEFAULT Signal build; `cargo tree`
+  proves **zero `wandr-step-executor` in its graph** (dep now optional, and the
+  p2 poll bridge `tls.rs` is feature-gated out). Mechanics: `wandr-reqwest`
+  grew an explicit `p2` feature (default-on → audio.player untouched) with a
+  compile_error guard against none/both; the fork + engine + websocket declare
+  `default-features = false` so the consuming app picks exactly one backend;
+  engine `default = ["p3-async"]`, `p2-legacy` kept ONLY for pre-M4 device
+  deploys (`P2=1 ./build.sh`; plain `--deploy` refuses the p3 flavor until M4).
+  Remaining p2 consumers (not Signal-path): `wandr.audio.player` (real, its
+  own migration later) and `repros/signal-link` (**stale — superseded by the
+  engine, scheduled for deletion**; pins `wandr-reqwest/p2` explicitly).
+  Desktop smoke on the new default composite: `engine-start` → `connected` ✓.
 - **M4** — Pixel 2 XL: messages send/receive + keepalive survive UI idle; no
   dropped events vs the `step()` baseline; battery behavior unchanged.
 - **M5 (optional)** — shape (B): `subscribe() -> stream<event>`.

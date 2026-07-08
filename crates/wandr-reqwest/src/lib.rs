@@ -29,12 +29,18 @@ pub mod p3 {
     });
 }
 
+// Exactly one backend feature must be selected on wasm32 (see Cargo.toml).
+#[cfg(all(target_arch = "wasm32", not(any(feature = "p2", feature = "p3-async"))))]
+compile_error!("wandr-reqwest: select a transport backend — the default `p2` feature or `p3-async`");
+#[cfg(all(target_arch = "wasm32", feature = "p2", feature = "p3-async"))]
+compile_error!("wandr-reqwest: features `p2` and `p3-async` are mutually exclusive (use default-features = false with `p3-async`)");
+
 // The `tls` module is the transport seam: same public API either way (see
 // Cargo.toml). p2 = tls.rs (step-executor reactor); p3-async = tls_p3.rs
 // (native async streams, drop-safe reads via a dedicated reader task).
-#[cfg(all(target_arch = "wasm32", not(feature = "p3-async")))]
+#[cfg(all(target_arch = "wasm32", feature = "p2", not(feature = "p3-async")))]
 pub mod tls;
-#[cfg(all(target_arch = "wasm32", feature = "p3-async"))]
+#[cfg(all(target_arch = "wasm32", feature = "p3-async", not(feature = "p2")))]
 #[path = "tls_p3.rs"]
 pub mod tls;
 /// Task 115 — the executor seam (`sleep`/`spawn`): step-executor on p2, native

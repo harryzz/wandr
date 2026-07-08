@@ -7,6 +7,14 @@ metadata:
   originSessionId: 81538868-ab9d-48a4-8de3-a56739b11c3e
 ---
 
+**RETIREMENT STATUS (task 115 M3, 2026-07-08):** the Signal build no longer
+contains this crate AT ALL (native CM-async / p3 is its default flavor;
+`cargo tree` = 0 hits). Remaining consumers: `wandr.audio.player` (real — its
+own migration later) and `repros/signal-link` (STALE, superseded by the
+engine, scheduled for deletion). Delete this crate only after audio.player
+migrates. The p2 backend now lives behind wandr-reqwest's explicit `p2`
+feature (default-on). See [[reference_wasmtime46_p3_stream_bugs]].
+
 `wstd::runtime::block_on` builds a reactor, runs a future to completion, then
 clears it — so spawned tasks die between calls and **no guest code runs between
 component-export invocations**. For an export-driven engine (the Signal

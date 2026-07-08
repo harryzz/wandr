@@ -12,8 +12,8 @@ crate-type = ["cdylib"]
 [dependencies]
 wit-bindgen = { version = "0.59", features = ["async", "async-spawn"] }
 # Phase-3 kill-gate: the real p3 transport backend under test.
-wandr-reqwest = { path = "../../../crates/wandr-reqwest", features = ["p3-async"] }
-wandr-reqwest-websocket = { path = "../../../crates/wandr-reqwest-websocket", features = ["p3-async"] }
+wandr-reqwest = { path = "../../../crates/wandr-reqwest", default-features = false, features = ["p3-async"] }
+wandr-reqwest-websocket = { path = "../../../crates/wandr-reqwest-websocket", default-features = false, features = ["p3-async"] }
 futures = "0.3"
 url = "2"
 

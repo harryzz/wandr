@@ -15,7 +15,7 @@
 // host-called `engine-start.start` async export (the spawn point; the reactor
 // and its per-frame `step()` are gone), and the transport rides wandr-reqwest's
 // p3 backend (WASI 0.3 sockets/tls streams). See tasks/115.
-#[cfg(not(feature = "p3-async"))]
+#[cfg(feature = "p2-legacy")]
 wit_bindgen::generate!({
     world: "signal-engine",
     path: "wit",

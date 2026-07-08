@@ -14,19 +14,24 @@ publish = false
 crate-type = ["cdylib"]
 path = "src/lib.rs"
 
-# Task 115 — flavor switch: default = step-executor reactor (p2 wasi:tls);
-# `p3-async` = native CM-async (WASI 0.3 streams via wandr-reqwest's backend,
-# world signal-engine-p3 with the host-called `engine-start.start` export).
-# Build the p3 flavor with `P3=1 ../build.sh`.
+# Task 115 M3 — native CM-async (p3) is the DEFAULT Signal build: WASI 0.3
+# streams via wandr-reqwest's backend, world signal-engine-p3 with the
+# host-called `engine-start.start` export; wandr-step-executor is NOT in the
+# build. `p2-legacy` (P2=1 ../build.sh, mutually exclusive: use
+# --no-default-features) rebuilds the old reactor flavor — the only reason to
+# is a device deploy before M4 flips the device host to p3-async.
 [features]
+default = ["p3-async"]
 p3-async = ["wandr-reqwest/p3-async"]
+p2-legacy = ["dep:wandr-step-executor", "wandr-reqwest/p2"]
 
 [dependencies]
 libsignal-service = { path = "../../../../external/libsignal-service-rs", default-features = false }
-wandr-step-executor = { path = "../../../../crates/wandr-step-executor" }
+wandr-step-executor = { path = "../../../../crates/wandr-step-executor", optional = true }
 # The executor seam (task::sleep/spawn) + the flavor-selected TLS backend the
-# whole transport (incl. the libsignal fork) rides on.
-wandr-reqwest = { path = "../../../../crates/wandr-reqwest" }
+# whole transport (incl. the libsignal fork) rides on. default-features = false:
+# this crate's own features pick exactly one backend (see [features]).
+wandr-reqwest = { path = "../../../../crates/wandr-reqwest", default-features = false }
 # The call engine (Phase 2b-ii): Signal 1:1 voice calls. `signal` pulls the opaque
 # codec + X25519-DH/GCM keying + the SignalCall driver.
 wandr-call = { path = "../../../../crates/wandr-call", features = ["signal", "host-aead"] }

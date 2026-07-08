@@ -443,7 +443,7 @@ pub fn init() {
     {
         return;
     }
-    #[cfg(not(feature = "p3-async"))]
+    #[cfg(feature = "p2-legacy")]
     {
         if shared().is_some() {
             return; // idempotent
@@ -584,7 +584,7 @@ pub fn poll_events() -> Vec<Event> {
     }
     // p2: advance the background task(s) without blocking the frame. p3: the
     // host's event loop advances them natively — this is a pure queue drain.
-    #[cfg(not(feature = "p3-async"))]
+    #[cfg(feature = "p2-legacy")]
     wandr_step_executor::step();
     shared()
         .map(|s| s.events.borrow_mut().drain(..).collect())
