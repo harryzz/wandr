@@ -105,6 +105,7 @@
 - [Ref: guest-language support survey](../../docs/wasm-component-language-support.md) — Rust/C#/TinyGo first-class; Kotlin/Wasm only JVM-family WasmGC+WASI.
 
 ## Feedback / hard-won fixes (hooks only — read the file before touching the area)
+- [Device perf measurement traps](feedback_device_perf_measurement.md) — verify the app is FOREGROUND role before trusting a CPU number (keyguard demotes to Background = false "fixed"); instrument 1Hz counters, don't trust prior attributions; fg−bg=render; a change that doesn't move the number disproves the hypothesis.
 - [Visual verification needs the user](feedback_visual_verification.md) — subjective outcomes: set up the test, ask the user; CPU/logs ≠ "feels good".
 - [No posting without authorization](feedback_no_posting_without_authorization.md) — never publish to public remotes/issues without explicit per-action approval.
 - [wandr-zygote fork survival](feedback_wandr_zygote_fork_survival.md) — what's COW-safe; where preload savings come from.
