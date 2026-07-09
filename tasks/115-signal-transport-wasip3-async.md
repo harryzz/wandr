@@ -7,9 +7,11 @@
 > (streaming subscribe) remains optional/unplanned. **`wandr.audio.player`
 > migrated to p3 2026-07-09** (device-verified: metadata/cover-art fetch runs
 > live over the native-async transport, zero step-executor — see the "audio.player"
-> note under Scope). Remaining before the crate can be deleted: `repros/signal-link`
-> (stale) + dropping all `p2-legacy` rollback flavors. Other follow-up: fg pump
-> CPU tuning. Outgrowth of the wasip3 async
+> note under Scope). **All p2 remnants are now marked `⚠️ OBSOLETE` for future
+> deletion — see the "Retirement checklist" section** (signal-link + the
+> p2-legacy rollback flavors + wandr-reqwest `p2`/tls.rs + the step-executor
+> crate; delete in one pass when the p3 host is permanent). Other follow-up: fg
+> CPU is RENDER-bound not pump (see M4 entry). Outgrowth of the wasip3 async
 > analysis (`docs/shared-runtime-and-app-size.md` §"Composed components & the
 > wasip3 shared event loop"). Goal: replace the hand-rolled frame-stepped async
 > reactor on the **Signal transport** with **native Component-Model async**
@@ -403,6 +405,40 @@ Signal template (it's a **single Slint component**, no wac compose, HTTP-only):
   cover-art CDN over the native-async transport (3 albums, covers
   decoded+persisted, "library fetch complete"), media-session now-playing on the
   lockscreen, zero step-executor. (Audio playback = user's ear.)
+
+## Retirement checklist — OBSOLETE items scheduled for deletion ⚠️
+
+Everything below is `⚠️ OBSOLETE` (marked in-file), kept ONLY as the p2 rollback
+safety net while the p3-async host beds in. **Do NOT delete piecemeal** — the
+p2-legacy flavors are all-or-nothing (a guest's `p2-legacy` pulls
+`wandr-reqwest/p2` pulls `wandr-step-executor`). When confident the p3 device
+host is permanent (rollback no longer wanted), delete in ONE pass, in order:
+
+1. **`repros/signal-link/`** — delete the whole directory (stale reproducer,
+   superseded by the engine; independent of the flavors below).
+2. **Signal engine** (`apps/user/wandr.signal/engine/`): remove the `p2-legacy`
+   feature + optional `wandr-step-executor` dep from `Cargo.toml`; delete the
+   `#[cfg(feature = "p2-legacy")]` arms in `src/{lib,engine}.rs` (world
+   `signal-engine`, `init`'s reactor path, `poll_events`'s `step()`); drop the
+   `P2=1` branch + `compose-p3.wac`-vs-`plug` split in `build.sh` (p3 becomes
+   the only path).
+3. **audio.player** (`apps/user/wandr.audio.player/`): remove `p2-legacy` +
+   optional dep; delete the `#[cfg(feature = "p2-legacy")]` arms in `src/lib.rs`
+   and the sync-bg-tick `wit/` tree (keep `wit-p3/`); the p3 `generate!` becomes
+   unconditional.
+4. **`wandr-reqwest`** (`crates/wandr-reqwest/`): remove the `p2` feature +
+   `wandr-step-executor`/`wasip2` deps; delete `src/tls.rs` (the step-executor
+   pollable bridge) and the p2 arms in `src/{lib,task}.rs`; make `p3-async` the
+   default/only backend (drop the `#[path]` switch — `tls_p3.rs` becomes `tls`).
+   Same for `wandr-reqwest-websocket`'s `p2` passthrough.
+5. **libsignal fork** (`external/libsignal-service-rs`): it's already
+   flavor-neutral (`default-features = false`), but drop any `p2`-only cfgs.
+6. **`crates/wandr-step-executor/`** — delete the whole crate LAST (nothing
+   references it once 1–5 are done; verify with `cargo tree`).
+
+Also then: drop the on-device `wandr-host.p2.bak` rollback binary and the
+`P2=1`-related notes. Verify a clean `cargo tree` shows zero `wandr-step-executor`
+anywhere before deleting the crate.
 
 ## Watch
 

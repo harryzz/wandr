@@ -23,6 +23,10 @@ path = "src/lib.rs"
 [features]
 default = ["p3-async"]
 p3-async = ["wandr-reqwest/p3-async"]
+# ⚠️ OBSOLETE — scheduled for deletion (task 115 cleanup). Kept ONLY as the
+# rollback pair for a non-p3 device host; delete this feature + the optional
+# wandr-step-executor dep below + the `#[cfg(feature = "p2-legacy")]` arms in
+# src/{lib,engine}.rs once the p3 host is permanent. See tasks/115 "Retirement".
 p2-legacy = ["dep:wandr-step-executor", "wandr-reqwest/p2"]
 
 [dependencies]

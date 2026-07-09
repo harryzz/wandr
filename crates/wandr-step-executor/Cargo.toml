@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+# ⚠️ OBSOLETE — this whole crate is scheduled for deletion (task 115). It was
+# retired by native Component-Model async (wasip3): both Signal and audio.player
+# default to p3 with ZERO step-executor. It survives only behind the `p2-legacy`
+# rollback flavors + wandr-reqwest's `p2` feature + the stale repros/signal-link.
+# Delete the crate once those are gone. See tasks/115 "Retirement checklist".
+#
 # A persistent, frame-stepped single-threaded async executor for wasm32-wasip2.
 #
 # wstd::runtime::block_on builds a reactor, runs a future to completion, then

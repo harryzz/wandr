@@ -27,8 +27,12 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "mul
 # http1/api/websocket consumers compile unchanged. See tasks/115.
 [features]
 default = ["p2"]
-# `wasip2` (wit-bindgen 0.57.1 transitively) is only used by the p2 tls.rs
-# pollable bridge — gate it to p2 so a p3 build resolves ONE wit-bindgen (0.59).
+# ⚠️ OBSOLETE — the `p2` backend (src/tls.rs step-executor bridge) is scheduled
+# for deletion (task 115 cleanup). It's still the DEFAULT only because the
+# p2-legacy rollback flavors select it; once those go, delete this feature,
+# src/tls.rs, the wandr-step-executor + wasip2 deps, and make p3-async the
+# default (or the only) backend. `wasip2` (wit-bindgen 0.57.1 transitively) is
+# gated here so a p3 build resolves ONE wit-bindgen (0.59). See tasks/115.
 p2 = ["dep:wandr-step-executor", "dep:wasip2"]
 p3-async = []
 

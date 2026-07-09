@@ -20,6 +20,9 @@ crate-type = ["cdylib"]
 [features]
 default = ["p3-async"]
 p3-async = ["reqwest/p3-async"]
+# ⚠️ OBSOLETE — scheduled for deletion (task 115 cleanup). Rollback-only; delete
+# with the optional wandr-step-executor dep, the `wit/` (sync bg-tick) tree, and
+# the `#[cfg(feature = "p2-legacy")]` arms in src/lib.rs. See tasks/115.
 p2-legacy = ["dep:wandr-step-executor", "reqwest/p2"]
 
 [dependencies]

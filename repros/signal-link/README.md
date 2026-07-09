@@ -1,11 +1,12 @@
 # signal-link — task-67 Signal client (link + receive), wasm guest over wasi:tls
 
-> **⚠️ STALE / p2-legacy (task 115 M3, 2026-07-08).** This repro predates the
+> **⚠️ OBSOLETE — scheduled for deletion (task 115).** This repro predates the
 > real engine (`apps/user/wandr.signal/engine`, refactored out of it) and still
 > rides the p2 `wandr-step-executor` + p2 wasi:tls path. The production Signal
 > build is native CM-async (p3) since task 115 M2/M3. Kept only as the
-> historical link+receive reproducer — **scheduled for deletion**; do not
-> extend it, and do not count it as a blocking step-executor consumer.
+> historical link+receive reproducer — **delete the whole `repros/signal-link/`
+> dir** (it's in the task-115 "Retirement checklist"); do not extend it, and do
+> not count it as a blocking step-executor consumer.
 
 A `wasm32-wasip2` guest that links as a Signal **secondary device** and **receives +
 decrypts** an end-to-end-encrypted 1:1 text — with **no crypto or networking
