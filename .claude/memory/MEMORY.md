@@ -25,6 +25,7 @@
 - [✅ Task 98: AudioFlinger-direct backend](project_audioflinger_backend.md) — pure-Rust createTrack→cblk ring; 3 bugs.
 - [🔲 Task 108: audio player design](project_audio_player.md) — wasi:audio PCM floor + optional HW codec + media-session.
 - [✅ Desktop wasi:audio = cpal](project_desktop_audio_cpal.md) — WSLg: cpal `pulseaudio` feature (NOT pipewire/ALSA→Dummy); BufferSize::Fixed(40ms); desktop MUST pump bg-tick; $HOME/Music.
+- [✅ Desktop wandr:video = nokhwa+ffmpeg](project_desktop_video_nokhwa.md) — nokhwa camera + ffmpeg VP8 (video.test ALL PASS incl wandr-call SRTP/UDP); WSLg RDP cam truncates >640x480 (MJPEG); ffmpeg-next 7.1 codec+format+software-scaling; unsafe-Send; desktop --run-once + new_headless renderer.
 - [✅ Task 93/95: camera --no-art](project_artless_camera.md) — raw 29fps / HW VP8 17fps; EIS-gyro race.
 - [✅ Task 91: ART-off call audio](project_artless_call_audio.md) — earpiece un-duck + focus::call_start.
 - [ROOT: call silent = audioserver crash](project_call_audioserver_crash.md) — setPhoneState kills audio_policy; use setForceUse.

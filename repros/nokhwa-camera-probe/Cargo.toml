@@ -1,0 +1,19 @@
+# De-risk probe for the desktop camera backend (nokhwa) — task 108 / video roadmap.
+# Proves nokhwa opens the WSLg RDP-forwarded /dev/video0 and captures real frames
+# BEFORE integrating into runtime/wandr-host's VideoEncoder. Not part of the host
+# build. See project_desktop_audio_cpal (the cpal analog) + tasks video roadmap.
+[package]
+name = "nokhwa-camera-probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# input-native = per-OS capture backend (v4l2 Linux / AVFoundation mac / MediaFoundation win).
+nokhwa = { version = "0.10", features = ["input-native"] }
+image  = "0.25"
+# ffmpeg-next 7.1 matches the system ffmpeg 7.1 (libavcodec 61). Only codec
+# (VP8 via libvpx) + software-scaling (libswscale RGB->YUV420P) — disabling the
+# default filter/device/format components avoids needing libavfilter/libavdevice
+# dev headers. The desktop codec for wandr:video.
+ffmpeg-next = { version = "7.1", default-features = false, features = ["codec", "format", "software-scaling"] }
