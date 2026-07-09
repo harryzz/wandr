@@ -819,8 +819,12 @@ fn read_tags(path: &str) -> Tags {
 
 fn scan_library() -> Vec<LibTrack> {
     let mut out = Vec::new();
-    let Ok(albums) = std::fs::read_dir(MUSIC_DIR) else {
-        return out;
+    let albums = match std::fs::read_dir(MUSIC_DIR) {
+        Ok(rd) => rd,
+        Err(e) => {
+            log1(&format!("scan_library: read_dir({MUSIC_DIR}) failed: {e}"));
+            return out;
+        }
     };
     let mut album_dirs: Vec<std::path::PathBuf> = albums
         .flatten()
@@ -829,6 +833,7 @@ fn scan_library() -> Vec<LibTrack> {
         .filter(|p| !p.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(true))
         .collect();
     album_dirs.sort();
+    let n_albums = album_dirs.len();
     for apath in album_dirs {
         let dir_album = apath.file_name().unwrap().to_string_lossy().to_string();
         let art_path = ["albumart.jpg", "albumart.png", "cover.jpg", "cover.png", "folder.jpg"]
@@ -865,6 +870,7 @@ fn scan_library() -> Vec<LibTrack> {
             });
         }
     }
+    log1(&format!("scan_library: {} tracks across {} album dirs", out.len(), n_albums));
     out
 }
 
