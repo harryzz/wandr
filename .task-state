@@ -1,5 +1,5 @@
-TASK=116
-STEP=DONE
+TASK=115
+STEP=audio.player-migrated-off-p2
 STATUS=complete
-LAST_SUCCESS=Task 116 DONE + USER-VERIFIED — IME password keyboard 123 key works, symbols show in a real password field (user-confirmed on device). Fix: pickLayout split STRICT (Number/Phone locked) vs SOFT (Password/Email/Url open-on-default but honor 123/ABC); editorDefaultLayout() seeds userRequestedLayout on attach.
-NOTES=Session done: task 115 COMPLETE (M0-M4, calls verified), task 116 DONE (IME password), wandr-net offline-scan fix (efc82f6a). Open follow-ups (non-blocking): pack-ime-keyboard.sh should auto-bounce zygote after system-app install (stale-preload SIGSEGV); task 115 fg pump CPU tuning + audio.player p2->p3 migration.
+LAST_SUCCESS=Task 115 audio.player migration DONE + device-verified — the last real step-executor consumer now on native CM-async (p3). Metadata/cover-art fetch runs LIVE over the p3 transport (MusicBrainz/Deezer/iTunes/Last.fm + cover CDN, 3 albums fetched/decoded/persisted, "library fetch complete"), media-session now-playing on lockscreen, zero step-executor. Crux was wit-bindgen unification: bumped slint-wandr 0.57.1->0.59 (UI+transport share one runtime) + gated wandr-reqwest wasip2 to p2; bg-tick async-lifted via wit-p3/ copy (bg-tick: async func — wasmtime rejects async-lift of sync-typed func).
+NOTES=Task 115 COMPLETE (M0-M4) + audio.player migrated. Remaining cleanup (future): delete repros/signal-link (stale), drop all p2-legacy rollback flavors (Signal engine, audio.player, wandr-reqwest p2 feature), then delete wandr-step-executor crate + wandr-reqwest tls.rs. Residual light check: device re-test slint.test (slint-wandr 0.59 bump; compiles clean, pure-UI so low risk). Audio PLAYBACK (hearing) is user's to confirm. Other open: fg pump CPU tuning (re-verify calls). Rollback: audio.player P2=1 + wandr-host.p2.bak on device.

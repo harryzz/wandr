@@ -46,8 +46,15 @@ background guest async now natively spans export calls on the shipped runtime.
 **How to apply / follow-ups:** fg pump CPU tuning (Signal fg idles ~11.5% from
 ~21 `run_concurrent` sweeps/s vs 1–3% fg baseline; BACKGROUND = 0–1% parity) —
 must re-verify CALLS when touching pump cadence (the in-call 10 ms tick is
-pump-driven). Remaining p2 consumers: `wandr.audio.player` (next migration,
-same recipe) + `repros/signal-link` (STALE — delete). Then delete
-`wandr-step-executor` + `wandr-reqwest`'s `p2` feature/tls.rs. M5 (streaming
+pump-driven). **`wandr.audio.player` migrated to p3 2026-07-09** (device-verified: cover-art/
+metadata fetch runs live over the native-async transport, zero step-executor).
+It's a SINGLE Slint component — the crux was wit-bindgen UNIFICATION: bumped
+slint-wandr 0.57.1->0.59 (so the UI + transport share ONE runtime) and gated
+wandr-reqwest's `wasip2` dep to the `p2` feature. bg-tick is async-lifted via a
+separate `wit-p3/` copy declaring `bg-tick: async func` (wasmtime rejects an
+async LIFT of a sync-typed func; the `async:` generate! filter alone fails device
+precompile). Remaining before deleting the crate: `repros/signal-link` (STALE —
+delete) + dropping all `p2-legacy` rollback flavors, then `wandr-step-executor` +
+`wandr-reqwest`'s `p2` feature/tls.rs can go. M5 (streaming
 `subscribe()`) unplanned. Rollback assets: `wandr-host.p2.bak` on device,
 `P2=1` flavor, `.signal-state-backups/`.

@@ -1,0 +1,105 @@
+// wasi:media-session — DRAFT / SKETCH (wandr, 2026-06-14, task 108). NOT WIRED.
+//
+// The now-playing / transport primitive. Aligned 1:1 to the W3C
+// **Media Session API** (`navigator.mediaSession`): `metadata`,
+// `playbackState`, `setPositionState`, and `setActionHandler`.
+//
+// wasi: namespace — it mirrors a shipped W3C standard and the GUEST-FACING
+// contract is portable: every platform has a media-session analog (Linux
+// MPRIS, Windows SMTC, macOS Now Playing, Android MediaSession), so a guest
+// written to this runs anywhere. WHICH host surface renders it is an
+// implementation detail (wandr: the arbiter's lockscreen/notification + headset
+// MEDIA-BUTTON routing) — the normal WASI host-implements-the-capability model,
+// like wasi:audio's backend is AudioFlinger/PipeWire/etc.
+//
+// The red line still holds, but via the contract SHAPE, not the namespace: the
+// guest only PUBLISHES now-playing state + RECEIVES transport intents; it never
+// draws the transport UI (same as wasi:audio expresses routing intent while the
+// host owns route policy). Focus / route / volume stay in `wandr:audio-focus`
+// (which is `wandr:` precisely because it has NO W3C standard — platform-
+// idiosyncratic); this package is purely metadata + transport actions.
+//
+// Shape: a host-import `session` the guest drives, and an exported
+// `session-handler` the host calls (probed `.ok()` per instance, like
+// alarm-events).
+package wasi:media-session@0.0.1;
+
+interface session {
+    /// W3C MediaImage (artwork). Raw bytes (decoded host-side via
+    /// graphics.decode-image for the lockscreen) rather than a URL — guests
+    /// have no ambient fetch authority, and the art usually came from a tag.
+    record artwork {
+        /// "image/png" | "image/jpeg" | "image/webp".
+        mime: string,
+        data: list<u8>,
+    }
+
+    /// W3C MediaMetadata.
+    record metadata {
+        title: string,
+        artist: string,
+        album: string,
+        artwork: option<artwork>,
+    }
+
+    /// W3C MediaSessionPlaybackState.
+    enum playback-state { none, paused, playing }
+
+    /// W3C MediaPositionState (drives the scrubber). `position-s` is the
+    /// guest's current playhead — typically `wasi:audio playback.position`
+    /// converted to seconds.
+    record position-state {
+        duration-s: f64,
+        playback-rate: f64,
+        position-s: f64,
+    }
+
+    /// = navigator.mediaSession.metadata =.
+    set-metadata: func(meta: metadata);
+    /// = navigator.mediaSession.playbackState =.
+    set-playback-state: func(state: playback-state);
+    /// = navigator.mediaSession.setPositionState(...).
+    set-position: func(pos: position-state);
+    /// Playback ended / session torn down — clear the now-playing UI.
+    clear: func();
+}
+
+interface session-handler {
+    /// W3C MediaSessionAction (the player-relevant subset; call actions
+    /// like togglemicrophone/hangup live in the call path, not here).
+    enum action {
+        play,
+        pause,
+        stop,
+        seek-to,
+        seek-forward,
+        seek-backward,
+        previous-track,
+        next-track,
+    }
+
+    /// W3C MediaSessionActionDetails. `seek-time-s` carries the target for
+    /// `seek-to`, or the offset for seek-forward/backward (none = default step).
+    record action-details {
+        action: action,
+        seek-time-s: option<f64>,
+    }
+
+    /// The host delivers a transport intent (lockscreen tap / headset button /
+    /// BT AVRCP — wandr: routed by the arbiter). The guest applies it
+    /// (play/pause/seek/skip).
+    on-action: func(details: action-details);
+}
+
+/// Host-import side — the host implements `session` (wandr: forwarded to the
+/// arbiter's media-session module) and add_to_linkers it onto every guest
+/// (harmless for ones that don't import it).
+world media-session-host {
+    import session;
+}
+
+/// Export side — typed `on-action` for guests that export `session-handler`
+/// (probed `.ok()` per instance, like alarm-events).
+world media-session-events {
+    export session-handler;
+}

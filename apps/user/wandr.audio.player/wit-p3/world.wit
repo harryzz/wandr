@@ -1,0 +1,14 @@
+// wandr.audio.player — the player's non-UI contracts (task 108). The Slint UI +
+// canvas/input/frame-pacing come from slint_wandr::launch! (hermetic inline WIT);
+// THIS world is the second generate!/export!: import wasi:audio (decode→PCM) +
+// wasi:media-session/session (publish now-playing), export session-handler
+// (lockscreen transport intents) + wandr:background/background (run the audio
+// engine render-independently while backgrounded).
+package wandr:audio-player;
+
+world audio-extras {
+    import wasi:audio/pcm@0.0.1;
+    import wasi:media-session/session@0.0.1;
+    export wasi:media-session/session-handler@0.0.1;
+    export wandr:background/background@0.1.0;
+}

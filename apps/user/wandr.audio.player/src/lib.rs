@@ -1773,7 +1773,10 @@ fn engine_step(s: &mut State) -> u32 {
         load_eq(s);
         eq_recalc(s);
         load_config(s); // optional Last.fm API key
-        wandr_step_executor::init(); // Phase A — async metadata-fetch reactor
+        // Phase A metadata-fetch reactor. p2-legacy only — the p3 default runs
+        // the fetch on the host's store event loop (spawned from async bg-tick).
+        #[cfg(feature = "p2-legacy")]
+        wandr_step_executor::init();
         s.library = scan_library();
         // Phase A — per distinct album (akey): load the cached cover + cached
         // canonical names (applied before grouping so the library reflects them),
@@ -2270,7 +2273,10 @@ fn cmd_set_backgrounded(bg: bool) {
 fn engine_tick() -> u32 {
     let delay = STATE.with(|st| engine_step(&mut st.borrow_mut()));
     push_ui();
-    wandr_step_executor::step(); // advance any in-flight metadata fetch (non-blocking)
+    // p2: advance any in-flight metadata fetch one non-blocking step. p3: the
+    // host's store event loop advances the spawned fetch natively — no step.
+    #[cfg(feature = "p2-legacy")]
+    wandr_step_executor::step();
     delay
 }
 
@@ -2615,7 +2621,10 @@ fn spawn_library_fetch(albums: Vec<(String, String, String, bool)>, lastfm_key: 
     if albums.is_empty() {
         return;
     }
-    wandr_step_executor::spawn(async move {
+    // The executor seam: p2 = step-executor spawn+detach, p3 = the host's
+    // native CM-async executor (spawn_local — has a task context because the
+    // caller chain runs inside the async-lifted bg-tick export).
+    reqwest::task::spawn(async move {
         let client = match reqwest::Client::builder()
             .user_agent("wandr-audio-player/0.1 ( https://codeberg.org/harryzz/wandr )")
             .build()
@@ -2663,17 +2672,30 @@ fn spawn_library_fetch(albums: Vec<(String, String, String, bool)>, lastfm_key: 
                     }
                 }
             }
-            wandr_step_executor::sleep(Duration::from_millis(1100)).await;
+            reqwest::task::sleep(Duration::from_millis(1100)).await;
         }
         log1("[meta] library fetch complete");
-    })
-    .detach();
+    });
 }
 
 // ── WIT bindings (alongside slint_wandr::launch!) ────────────────────────────
 mod bindings {
+    // p2: all exports sync-lifted (the fetch runs on the step-executor).
+    #[cfg(feature = "p2-legacy")]
     slint_wandr::__wit_bindgen::generate!({
         path: "wit",
+        world: "audio-extras",
+        generate_all,
+        runtime_path: "::slint_wandr::__wit_bindgen::rt",
+    });
+    // p3: `wit-p3/` declares `bg-tick: async func` (wasmtime rejects an async
+    // LIFT of a sync-typed func), so wit-bindgen async-lifts it and it can
+    // `spawn_local` the metadata fetch onto the host's store event loop (task
+    // 115). Every other export (session-handler) stays sync; the host
+    // async-lowers each independently.
+    #[cfg(feature = "p3-async")]
+    slint_wandr::__wit_bindgen::generate!({
+        path: "wit-p3",
         world: "audio-extras",
         generate_all,
         runtime_path: "::slint_wandr::__wit_bindgen::rt",
@@ -2701,8 +2723,19 @@ mod bindings {
         }
     }
 
+    #[cfg(feature = "p2-legacy")]
     impl exports::wandr::background::background::Guest for Extras {
         fn bg_tick() -> u32 {
+            crate::engine_tick()
+        }
+    }
+    // p3 — async-lifted bg-tick. The synchronous body (engine_tick →
+    // engine_step → spawn_library_fetch) runs inside this export's task, so the
+    // metadata fetch's `spawn_local` has a live executor to attach to; the host
+    // then advances it via the store event loop between ticks.
+    #[cfg(feature = "p3-async")]
+    impl exports::wandr::background::background::Guest for Extras {
+        async fn bg_tick() -> u32 {
             crate::engine_tick()
         }
     }

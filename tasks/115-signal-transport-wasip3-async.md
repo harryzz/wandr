@@ -4,9 +4,12 @@
 > runs on native Component-Model async END-TO-END ON THE PIXEL 2 XL: zero
 > step-executor, live both-ways chat, audio AND video calls verified, chrome +
 > Compose + Swift + Avalonia guests all running on the p3-async host. M5
-> (streaming subscribe) remains optional/unplanned. Follow-ups at the bottom
-> of the M4 entry (fg pump CPU tuning; audio.player + stale signal-link are
-> the remaining p2 consumers). Outgrowth of the wasip3 async
+> (streaming subscribe) remains optional/unplanned. **`wandr.audio.player`
+> migrated to p3 2026-07-09** (device-verified: metadata/cover-art fetch runs
+> live over the native-async transport, zero step-executor — see the "audio.player"
+> note under Scope). Remaining before the crate can be deleted: `repros/signal-link`
+> (stale) + dropping all `p2-legacy` rollback flavors. Other follow-up: fg pump
+> CPU tuning. Outgrowth of the wasip3 async
 > analysis (`docs/shared-runtime-and-app-size.md` §"Composed components & the
 > wasip3 shared event loop"). Goal: replace the hand-rolled frame-stepped async
 > reactor on the **Signal transport** with **native Component-Model async**
@@ -360,6 +363,35 @@ toolchain (`repros/wit-bindgen-async-probe/`). Remaining M1 work is the p3
 - **Not the render path.** Frame-driven rendering is unchanged.
 - Other step-executor users (`wandr.audio.player`, `repros/signal-link`) are
   separate migrations — do them only after this proves the pattern.
+
+## audio.player — migrated to p3 (2026-07-09) ✅
+
+The last real step-executor consumer, migrated + device-verified. Deltas vs the
+Signal template (it's a **single Slint component**, no wac compose, HTTP-only):
+
+- **Cargo.toml**: `default = ["p3-async"]`, `p2-legacy` (rollback);
+  `reqwest = wandr-reqwest { default-features = false }` picks the backend;
+  `wandr-step-executor` → `optional` (p2-legacy only).
+- **wit-bindgen unification (the crux, unique to this app):** the Slint UI rides
+  `slint_wandr::__wit_bindgen` — bumped **slint-wandr 0.57.1 → 0.59** so the UI
+  and the p3 transport resolve ONE wit-bindgen (else two async runtimes → the
+  spawned fetch never advances, task-115 rule #4). Also gated `wandr-reqwest`'s
+  `wasip2` dep (→ wit-bindgen 0.57.1 transitively) to the `p2` feature, so a p3
+  build resolves a single 0.59. slint.test (the other slint guest) recompiles
+  clean; a full device re-test of slint.test is a light residual check.
+- **Driving:** `bg-tick` is **async-lifted** (its own `wit-p3/` copy declares
+  `bg-tick: async func` — wasmtime rejects an async LIFT of a sync-typed func;
+  the `async:` generate! filter alone fails device precompile). Its sync body
+  chain (`engine_tick → engine_step → spawn_library_fetch`) runs inside the
+  export's task, so the fetch's `spawn_local` (via the `reqwest::task` seam) has
+  a live executor. `step()` gone (host store loop drives it); `init()`/`step()`
+  p2-legacy-gated. The fetch's `spawn`/`sleep` route through `reqwest::task`
+  (flavor-agnostic).
+- **Verified on device (2026-07-09):** cleared the meta cache → launch →
+  bg-tick spawns the fetch → live HTTPS to MusicBrainz/Deezer/iTunes/Last.fm +
+  cover-art CDN over the native-async transport (3 albums, covers
+  decoded+persisted, "library fetch complete"), media-session now-playing on the
+  lockscreen, zero step-executor. (Audio playback = user's ear.)
 
 ## Watch
 

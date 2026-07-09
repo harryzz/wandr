@@ -30,7 +30,7 @@ features = ["std", "unicode", "shared-parley", "path"]
 
 [dependencies.wit-bindgen]
 # Same version as dioxus-canvas; re-exported as `__wit_bindgen` for launch!.
-version = "0.57.1"
+version = "0.59"
 
 [dependencies.lyon_path]
 # Path-event types from `Path::fitted_path_events` (M2 draw_path). Same
