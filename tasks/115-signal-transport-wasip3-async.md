@@ -291,13 +291,24 @@ different gaps — use all three):
     (device pre-M4 state kept in `.signal-state-backups/pre-m4`). Engine came
     up `connected` over the native-async transport ON DEVICE (logcat).
   - **Idle/battery parity where it matters**: Signal in Background role =
-    0–1% CPU (== p2 baseline); chrome overlays unchanged. KNOWN COST: Signal
-    FOREGROUND idles at ~11.5% vs the ~1–3% fg baseline — the per-iteration
-    `run_concurrent` nap-pump at the fg poll cadence (~21 sweeps/s after
-    idle-decay, ~0.5%/sweep on the A73). Tuning follow-up: rate-limit fg pumps
-    when the guest is idle — MUST be done together with the calls gate (the
-    in-call 10 ms engine tick is driven ONLY by pumps on p3; bg-tick calls do
-    not advance it).
+    0–1% CPU (== p2 baseline); chrome overlays unchanged. Signal FOREGROUND
+    idles at ~11.5% vs the ~1–3% fg baseline.
+    **CORRECTED 2026-07-09 — this is RENDER cost, NOT the pump** (the earlier
+    "run_concurrent sweeps" attribution was a misdiagnosis). MEASURED with 1 Hz
+    loop counters at fg idle: iters≈19/s, renders≈2/s, **pumps≈2–3/s**,
+    bg-ticks=1/s — i.e. the pump is already only ~2–3/s (it rides the guest's
+    bg-tick/render cadence via `call_async`, not the input cadence). A pump-rate
+    throttle (pump only on bg-tick/render iterations) was written + device-
+    tested: it cut pumps 21→2–3/s with **ZERO change to the 11.5%** → proof the
+    pump isn't the cost. The delta is fg(11%) − bg(0–1%) = the ~2 full-UI skia
+    repaints/s (each a few % on the A73). **REAL lever = the render**: Signal
+    repaints every ~500 ms even when nothing changed (its `set_min_frame_delay`
+    idle floor). Options: guest requests a longer idle cadence / true on-demand
+    (repaint only on `dirty`), or skia damage/partial repaint. Separate, larger,
+    UI-responsiveness-affecting work. The throttle was reverted (correct but
+    non-goal; its only unverified path — in-call 10 ms pumping — needs a call
+    gate, not worth carrying for ~0 headline gain). Re-introduce it WITH the
+    render work + a call test.
   - **Post-deploy fixes (2026-07-08, user-reported):** (1) the two apps with
     CROSS-APP DEPS (wandr.ime.keyboard [lang plugins] + com.example.wandr-app
     [markdown]) trapped at first render — `wire_dep_into_linker`'s proxies

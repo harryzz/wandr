@@ -43,10 +43,14 @@ mechanics spike (ALL GATES PASS): `repros/cma-cross-call-spike/README.md`.
 **Why:** this is the template for retiring frame-stepped reactors everywhere —
 background guest async now natively spans export calls on the shipped runtime.
 
-**How to apply / follow-ups:** fg pump CPU tuning (Signal fg idles ~11.5% from
-~21 `run_concurrent` sweeps/s vs 1–3% fg baseline; BACKGROUND = 0–1% parity) —
-must re-verify CALLS when touching pump cadence (the in-call 10 ms tick is
-pump-driven). **`wandr.audio.player` migrated to p3 2026-07-09** (device-verified: cover-art/
+**How to apply / follow-ups:** Signal fg idles ~11.5% (bg = 0–1% parity).
+**This is RENDER cost, NOT the pump — CORRECTED 2026-07-09** (measured: fg-idle
+pumps are only ~2–3/s, renders ~2/s; a pump throttle cut pumps 21→3/s with ZERO
+CPU change → pump isn't the cost). The lever is the render (Signal repaints
+~2/s even idle via its `set_min_frame_delay` floor); real fix = guest longer
+idle cadence / on-demand repaint-on-dirty, or skia damage/partial repaint —
+separate, larger. The pump throttle was correct but reverted (non-goal; its
+in-call 10 ms pump path needs a call gate). Details in tasks/115 M4 entry. **`wandr.audio.player` migrated to p3 2026-07-09** (device-verified: cover-art/
 metadata fetch runs live over the native-async transport, zero step-executor).
 It's a SINGLE Slint component — the crux was wit-bindgen UNIFICATION: bumped
 slint-wandr 0.57.1->0.59 (so the UI + transport share ONE runtime) and gated
