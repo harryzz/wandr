@@ -539,6 +539,23 @@ impl DomRenderer {
         }
     }
 
+    /// Mouse-wheel / trackpad scroll — the wheel counterpart of the drag-scroll
+    /// in `on_pointer_move`. The host sends W3C-signed pixel deltas (positive
+    /// `dy` = toward content bottom), so we ADD `dy` to `scroll_y` (drag pulls
+    /// content, so it subtracts; the wheel pushes the viewport, so it adds).
+    /// Only when the cursor is over the scroll viewport. `dx` is unused — the
+    /// model has a single vertical scroll region.
+    pub fn on_scroll(&mut self, x: f32, y: f32, _dx: f32, dy: f32) {
+        if !self.in_scroll_viewport(x, y) {
+            return;
+        }
+        let max = self.max_scroll();
+        self.scroll_y = (self.scroll_y + dy).clamp(0.0, max);
+        // Match drag's stick-to-bottom pin so wheel + drag agree.
+        self.stick_pinned = self.scroll_y >= max - SCROLL_THRESHOLD;
+        self.dirty = true;
+    }
+
     pub fn on_pointer_up(&mut self, x: f32, y: f32) {
         if let Some((eid, hx, hy, hw, hh, scrolled)) = self.captured.take() {
             let cy = if scrolled { y + self.scroll_y } else { y };

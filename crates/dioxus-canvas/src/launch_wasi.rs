@@ -850,9 +850,11 @@ world input-guest {
                         Kind::Down => r.on_pointer_down(ev.x, ev.y),
                         Kind::Move => r.on_pointer_move(ev.x, ev.y),
                         Kind::Up | Kind::Cancel => r.on_pointer_up(ev.x, ev.y),
-                        // Hover + wheel have no DomRenderer mapping (parity
-                        // with the 0.0.1 behavior — touch-first guests).
-                        Kind::Scroll | Kind::Enter | Kind::Leave => {}
+                        // Mouse-wheel / trackpad scroll → the scroll region under
+                        // the cursor (desktop; touch guests scroll by drag).
+                        Kind::Scroll => r.on_scroll(ev.x, ev.y, ev.scroll_dx, ev.scroll_dy),
+                        // Hover has no DomRenderer mapping.
+                        Kind::Enter | Kind::Leave => {}
                     });
                 }
             }
