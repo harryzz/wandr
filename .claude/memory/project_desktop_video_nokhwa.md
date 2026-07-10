@@ -67,6 +67,12 @@ the guest UI (= above-ui) before `flush_and_swap`. Android instead uses a
 SurfaceView child surface. Verify: `wasm-android-host --camera-shot <out.png>`
 (opens the camera encoder w/ a PiP rect, composites over a fake UI onto a
 headless raster surface via `SkiaRenderer::new_headless`+`snapshot_png`, writes
-PNG). STILL follow-up: remote **decode-to-surface** (incoming video composite) —
-`set_rect`/`set_visible` on the decoder are still no-ops (decode-to-buffer only).
-De-risk repro: `repros/nokhwa-camera-probe` (camera→VP8→decode, standalone).
+PNG). ✅ **decode-to-surface DONE**: the decoder decodes VP8→YUV→RGBA (swscale) and
+registers a compositing `VideoSurface` (one generalized registry for both the
+encoder PiP — `mirror=true` — and the decoder — `mirror=false`, `rotation`=peer
+CVO); `set_rect`/`set_visible`/`set_rotation` now live. Empty rect still =
+decode-to-buffer (Part 1). Verified via `--camera-shot` full loopback (camera→VP8
+enc→VP8 dec→composite): decoder output pixel-matches the encoder input (mock
+video-call frame — remote upright + PiP mirrored). De-risk repro:
+`repros/nokhwa-camera-probe`. STILL follow-up: on-screen z-layer (behind-ui hole)
+not distinguished — everything composites above-ui.
