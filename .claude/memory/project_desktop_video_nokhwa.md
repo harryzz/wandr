@@ -56,8 +56,17 @@ future movie player.
    satisfies HostState's non-Option renderer. `WANDR_APPS_ROOT=... wasm-android-
    host --run-once wandr.video.test`.
 
-Scope shipped = OUTGOING encoder (camera→VP8) + decode-to-BUFFER (frame counts).
-On-screen compositing (PiP self-view, decode-to-surface) is a follow-up — the
-Android SurfaceView child-surface model has no desktop analog yet; `set_preview_*`
-/`set_rect`/`set_visible` are recorded no-ops. De-risk repro:
-`repros/nokhwa-camera-probe` (camera→VP8→decode, standalone).
+Scope shipped = OUTGOING encoder (camera→VP8) + decode-to-BUFFER (frame counts)
++ **PiP self-view compositing** (the encoder's local camera drawn on-screen).
+Compositing model (no gstreamer/wgpu — reuse the host's Skia): the encoder pushes
+its latest camera frame as RGBA into a thread_local `PREVIEWS` registry
+(keyed per encoder, rect+visible from `set_preview_*`); `composite_previews(canvas)`
+draws each with `skia_safe::images::raster_from_data` + `draw_image_rect`,
+mirrored (self-view), and is called from the wasi:canvas host `present()` AFTER
+the guest UI (= above-ui) before `flush_and_swap`. Android instead uses a
+SurfaceView child surface. Verify: `wasm-android-host --camera-shot <out.png>`
+(opens the camera encoder w/ a PiP rect, composites over a fake UI onto a
+headless raster surface via `SkiaRenderer::new_headless`+`snapshot_png`, writes
+PNG). STILL follow-up: remote **decode-to-surface** (incoming video composite) —
+`set_rect`/`set_visible` on the decoder are still no-ops (decode-to-buffer only).
+De-risk repro: `repros/nokhwa-camera-probe` (camera→VP8→decode, standalone).
