@@ -34,8 +34,17 @@ interface frame-pacing {
     next-frame-delay: func() -> u32;
 }
 
+// Display metrics (wandr:ui-shell/metrics) — the host reports the real display
+// density so the UI scales to the panel/window instead of a hardcoded factor.
+interface metrics {
+    get-density:    func() -> f32;
+    get-font-scale: func() -> f32;
+    get-dpi:        func() -> u32;
+}
+
 world signal-ui-app {
     import ime;
+    import metrics;
     import wandr:chrome/status@0.1.0;
     import wandr:signal/chat@0.1.0;
     export shell-events;

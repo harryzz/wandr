@@ -87,7 +87,11 @@ const BG_COOL_AFTER: u32 = 8; // ticks of quiet before cooling
 const BG_IDLE_AFTER: u32 = 24; // ticks of quiet before fully idle
 
 dioxus_canvas::wire_wasi_canvas!(app, pre_frame: |r| {
-    r.set_scale(2.0); // hi-dpi panel — author px are small; 2× for readability
+    // Author px are small → scale for readability. Track the REAL display density
+    // (host metrics) instead of a hardcoded 2×, so a low-density desktop window
+    // (~1.0) isn't doubled. Cap at 2× — the hi-dpi readability ceiling — so a
+    // dense phone panel (device reports ~3.5) still lands on the intended 2×.
+    r.set_scale(crate::wandr::ui_shell::metrics::get_density().clamp(1.0, 2.0));
     // Pump the engine; a change resets the idle counter (and re-renders).
     let changed = pump();
     if changed {
