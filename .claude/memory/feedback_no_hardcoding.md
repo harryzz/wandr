@@ -36,6 +36,23 @@ it in a comment, and flag it to the user as a knob — don't silently bake it in
 Relptes to [[feedback_clean_library_usage]] (don't leak plumbing / keep it
 portable).
 
+**NO per-app hardcoding in `wandr-host` (user-taught 2026-07-10, BINDING —
+now CLAUDE.md working rule #3).** The host is app-agnostic: never bake an
+`app_id`, an app-specific path, or an `if app_id == "…"` branch into it. Concrete
+case: `standalone.rs` had `const MUSIC_DIR = "/data/media/0/Music"` preopened as
+`/music` — an audio.player-specific path living in the host. Fix = a docker-style
+`[[mounts]]` section in `package.toml` (host_dir → guest_dir; `~`/`$VAR` expanded;
+per-platform alternatives for one guest path — `~/Music` + `/data/media/0/Music`
+→ `/music`, host mounts whichever exists) parsed by `app_loader::mounts()` +
+`apply_mounts()`. audit result: the music dir was the SOLE per-app hardcode; no
+`if app_id ==` branches exist. Apps declare needs declaratively (`background`,
+`wifi-control`, `events.subscribe`, `max_fps`, `orientation`, `[[mounts]]`); the
+host reads them generically. System *infrastructure* paths (arbiter socket,
+`/dev/binder`, `/proc`, `/system/fonts`, the `/assets`·`/state`·`/system-fonts`
+preopen conventions) are universal, NOT per-app — those stay. `apply_mounts`
+gotcha: check host-dir existence BEFORE deduping guest paths, else an absent
+alternative consumes the slot and blocks the real one.
+
 **The rule generalizes to ASSUMPTIONS, not just numbers (user-taught
 2026-06-12, task 102).** "Kotlin stays on my:skiko-gfx" was a hardcode: a
 point-in-time TOOLING snapshot ("no Kotlin bindgen, list<record> too costly")

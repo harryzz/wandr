@@ -3,7 +3,7 @@
 ## ‼️ STANDING RULES (read every session — detail in each file)
 - [RULE: Compute goal + working rules](feedback_compute_goal_and_working_rules.md) — goal = bug-free AttributeGraph reimpl (demos/tests are probes); READ FIRST; never patch-to-green; ARC ruled out; keep WASM-PORT-LOG.md.
 - [RULE: NEVER work in /tmp](feedback_no_tmp_persistent_work.md) — repros/tests/source in repros/ or tests/ (scratch wiped on crash); capture to RESUME.md.
-- [RULE: do NOT hardcode](feedback_no_hardcoding.md) — derive from runtime inputs; constant = ONE named source in owning layer.
+- [RULE: do NOT hardcode](feedback_no_hardcoding.md) — derive from runtime inputs; constant = ONE named source in owning layer; NO per-app hardcode in wandr-host (apps declare via package.toml [[mounts]]/keys).
 - [RULE: build-system-wandrpkgs.sh WIPES apps root](feedback_build_system_wandrpkgs_wipes_apps_root.md) — use per-app `wandr-host --install`.
 - [RULE: clean library usage](feedback_clean_library_usage.md) — public API only; no WIT/codegen leak; ASK before widening.
 - [RULE: always use latest versions](feedback_check_latest_versions.md) — check latest version online; don't trust stale pins.
@@ -62,6 +62,7 @@
 - [overlay orientation (task 62)](project_overlay_orientation.md) — anchor-aware overlay_rect.
 
 ## References / gotchas
+- [Ref: host build scripts (linux/win/android/macos)](reference_host_build_scripts.md) — use the 4 committed scripts, never inline cargo build; p3-async ON by default; android from crate dir; Intel Mac cross-builds arm64 (Monterey 12.7.6=Xcode14.2) but compile-only ≠ works.
 - [Ref: p3 WSS stalls = wit-bindgen 0.53 bug](reference_wasmtime46_p3_stream_bugs.md) — CM-async streaming needs wit-bindgen 0.59+.
 - [Ref: "resource impl missing" = stale zygote](reference_missing_instance_error_stale_zygote.md) — apps forked old zygote image.
 - [Ref: ART-off Magisk am-spin](reference_artoff_magisk_am_spin.md) — am-loop workers starve HALs; adb root for probes.
