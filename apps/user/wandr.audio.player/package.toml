@@ -19,3 +19,13 @@ background  = true
 
 [components]
 ui = "components/ui.wasm"
+
+# Docker-style host→guest mount: expose the user's music library read-only at
+# /music, which the player scans (`/music/<album>/*`). `~` → the host home dir
+# ($HOME, or %USERPROFILE% on Windows). On Android the host also provides the
+# device library (/data/media/0/Music → /music) as a system default, so this
+# desktop mount is simply skipped there (no ~/Music).
+[[mounts]]
+host  = "~/Music"
+guest = "/music"
+mode  = "ro"
