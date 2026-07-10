@@ -21,11 +21,17 @@ background  = true
 ui = "components/ui.wasm"
 
 # Docker-style host→guest mount: expose the user's music library read-only at
-# /music, which the player scans (`/music/<album>/*`). `~` → the host home dir
-# ($HOME, or %USERPROFILE% on Windows). On Android the host also provides the
-# device library (/data/media/0/Music → /music) as a system default, so this
-# desktop mount is simply skipped there (no ~/Music).
+# /music, which the player scans (`/music/<album>/*`). Two per-platform host
+# paths for the same guest mount — the host mounts whichever exists on this OS
+# and skips the other (desktop has ~/Music, the Android device has the media
+# store), so there is no music path hardcoded in wandr-host.
+#   `~` → home dir ($HOME, or %USERPROFILE% on Windows).
 [[mounts]]
-host  = "~/Music"
+host  = "~/Music"               # desktop (Linux / Windows / macOS)
+guest = "/music"
+mode  = "ro"
+
+[[mounts]]
+host  = "/data/media/0/Music"   # Android device media store
 guest = "/music"
 mode  = "ro"

@@ -22,6 +22,17 @@
    justified source of truth in the layer that owns the policy. See
    `[[feedback_no_hardcoding]]`.
 
+3. **NO per-app hardcoding in `wandr-host`.** The host is app-agnostic: never
+   bake an `app_id`, an app-specific path (e.g. a music/photos dir), or an
+   `if app_id == "…"` branch into the host. An app declares what it needs in its
+   `package.toml` — capabilities/paths via `[[mounts]]` (docker-style host→guest
+   dirs, `~`/`$VAR` expanded, per-platform alternatives allowed), plus the
+   existing declarative keys (`background`, `wifi-control`, `events.subscribe`,
+   `max_fps`, `orientation`, deps) — and the host reads them generically. System
+   *infrastructure* paths (arbiter socket, `/dev/binder`, `/proc`, `/system/fonts`,
+   the `/assets`·`/state`·`/system-fonts` preopen conventions) are universal, not
+   per-app, and are fine. See `[[feedback_no_hardcoding]]`.
+
 ## What this project is
 
 A **portable UI runtime for WASM apps.** A guest app — any language, any UI
