@@ -14,7 +14,7 @@ REM Output: runtime\wandr-host\target\release\wasm-android-host.exe
 REM Run the exe with FFMPEG_DIR\bin on PATH (the avcodec-*.dll are load-time deps).
 setlocal
 if "%VCVARS%"==""        set "VCVARS=C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvarsall.bat"
-if "%FFMPEG_DIR%"==""    set "FFMPEG_DIR=C:\wandr-win\ff\ffmpeg-n7.1-latest-win64-gpl-shared-7.1"
+if "%FFMPEG_DIR%"==""    set "FFMPEG_DIR=C:\wandr-win\ff\ffmpeg-n8.1-latest-win64-gpl-shared-8.1"
 if "%LIBCLANG_PATH%"=="" set "LIBCLANG_PATH=C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Tools\Llvm\x64\bin"
 
 call "%VCVARS%" x64 >nul
