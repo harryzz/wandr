@@ -44,6 +44,39 @@ lock screen renders (clock + hint, status bar on top, app+nav covered); swipe up
 → launcher restored to fg. CLI `lock`/`unlock` also work. 8+ unit tests (keyguard 3
 + core/shell). Build host `build-host-android.sh`; deploy `run-hybrid-stack.sh`.
 
+**Power menu (task 110, 2026-06-16, device-verified):** a 2nd modal overlay
+(`wandr.powermenu`, 2×2 card: Emergency/Lockdown/Power off/Restart) in the SAME
+`wandr-arbiter-keyguard` module reusing the `wandr:keyguard/keyguard` channel
+(added `pm-*` verbs → no new host bindings). Long-press fires WHILE HELD (>1s):
+arbiter arms a 1s timer thread on power-down, shows if still held; short press =
+panel toggle on release. gen-counter (POWER_GEN) dedups the multi-host power-key
+fan-in. Wakes from screen-off via `panel on` first. ⚠️ **GOTCHA — modal over the
+lock screen:** keyguard AND powermenu both sit on `Role::Lockscreen` → identical
+input-z in `wm::input_window_block` → the dispatcher (first-match wins) routed ALL
+touch to the keyguard's swipe area, menu buttons dead. Fix: `do_show_menu` demotes
+the keyguard to `Background` (drops it out of the input window list) while the menu
+is up so the menu is the sole focusable Lockscreen surface; restored on dismiss
+(`menu_covered_keyguard` flag). Any future "modal over lockscreen" must do the same
+— equal-role surfaces share input-z and first-wins. Power off/Restart real
+(`/system/bin/reboot [-p]`); Emergency fake. Commits `0b01cbd3` + earlier `1999573a`.
+
+**⚠️ FBE / CE storage under --no-art (2026-06-16):** `/data/media/0`, `/data/user/0`,
+`/data/data` are FBE **Credential-Encrypted** (`ro.crypto.type=file`); they show
+ciphertext filenames (base64-ish gibberish) until user 0's CE key is installed in
+the kernel keyring (`sys.user.0.ce_available=true`). Normally LockSettingsService
+drives `vold` to install it after lockscreen auth. **The boot-default Magisk module
+(`service.sh`) kills system_server**, so if it kills BEFORE the unlock lands, the
+WHOLE stack (music/photos/app data) runs on ciphertext — data is NOT lost, just
+locked. Fix shipped: `service.sh` waits (bounded 20s) for `sys.user.0.ce_available
+=true` BEFORE stopping the framework. Crucial nuance: with **NO lockscreen
+credential** system_server unlocks user 0 automatically early in boot and the
+in-kernel fscrypt key SURVIVES system_server being killed → wait-then-kill works.
+With a **credential set**, ce_available never flips without authentication → CE
+stays locked under --no-art (the wait times out, proceeds). Unlocking CE *with* a
+PIN under --no-art = the deferred keyguard-PIN task below (collect PIN → Gatekeeper/
+Weaver verify → synthetic password → `vold` install CE key). Confirm data intact as
+ROOT (`adb root`; shell uid gets EPERM on `/data/media/0` even when decrypted).
+
 **Deferred (PIN/biometric is the real follow-up):** credential store in `/state` +
 keypad UI + verify + lockout + the keypad/IME over the lockscreen (the v1 swipe-lock
 has no editor focus so `reconcile_overlay` never engages the IME over the keyguard —

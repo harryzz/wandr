@@ -1,11 +1,28 @@
 ---
 name: reference_swift_openswiftui_wandr
-description: "Swift + OpenSwiftUI on wandr — UPGRADED from 'wait' to ACTIVE SPIKE WORKING (2026-06-19): OpenSwiftUICore+OpenSwiftUI COMPILE for wasm32-wasip1 and RENDER a DisplayList incl @State + multi-child VStack (2 fills); AttributeGraph runs on wasm. Live state = repros/openswiftui-wasm/RESUME.md (NOT this file). Phase 4 next = DisplayList -> Option-B CGContext drawer -> wasi:canvas -> device. memo = docs/swift-openswiftui-wandr-feasibility.md"
+description: "Swift + OpenSwiftUI on wandr — eleev/swiftui-2048 PLAYABLE on desktop (2026-06-20): swipe→move/merge/spawn→on-screen re-render. Two engine walls fixed in compute-wasm.patch: (1) Subgraph.forEach swiftcc wall → AGSubgraphApplyC/apply_c; (2) LayoutDescriptor value-comparison broken on wasm32 (64-bit ptr assumptions) returned 'equal' for changed views → children never re-eval → worked around with memcmp on wasm. Reactivity = reactor-driven @State tick (OpenCombine/@ObservedObject CRASH on wasm, stripped from GameLogic) via WandrApp SPIs wandrApplyChange/wandrRender. Renders on-device too BUT device-only blocker = SIGILL in pow (aarch64-AOT codegen, animations) after ~3-4 moves. Live state = repros/openswiftui-wasm/RESUME.md (NOT this file)."
 metadata: 
   node_type: memory
   type: reference
   originSessionId: 00de4e50-ab0d-4032-8361-7d93d41cf043
 ---
+
+## ⬆️ STATUS 2026-06-27 (swift/OpenSwiftUIProject tree, Compute backend) — engine SOLVED, only WIP transition-render left
+Big session on the `swift/OpenSwiftUIProject` tree (NOT /tmp). FIXED + COMMITTED: (1) freeze = `compare_existential_values`
+copy-paste `lhs`→`rhs` (LayoutDescriptor.cpp); (2) the `uninitialized element` crash = existential-compare UNBOUNDED
+RECURSION (fetched the existential CONTAINER's layout, re-entered itself → wasm shadow-stack overflow INTO the Swift
+metadata pool → null-funcref value-witness destroy) — fix = compare the projected payload vs its DYNAMIC type's layout/size
+(`fetch(*lhs_dynamic_type…)`, `lhs_dynamic_type->vw_size()`); (3) immortal IAGSubgraphStorage (objc_bridge(id) empty on
+wasm → gate CFRelease under !__wasi__); (4) move-2 "invalid source attribute" = wasm sync render frees an invalidated
+subgraph's page mid-render under a live weak/indirect reader → fix = wrap WandrRendererHost.renderOnce/redraw in
+`graph.withoutSubgraphInvalidation` (defers teardown across the render; the side-effect-free half of withMainThreadHandler,
+which REGRESSED move-0). Proven: `supportsViewTransitions:true` → plays ALL 60 moves, exit 0. REMAINING (only thing left) =
+the `[WIP] ContentTransition` render (DynamicLayoutView MakeTransition/ViewListTransition): transitions OFF renders but the
+animated ForEachChild OOBs at move 4; transitions ON no-crash but blank (values not propagated). FULL detail + 2 finish
+paths = repros/openswiftui-wasm/RESUME.md. METHOD LESSON: instrument/coredump to catch the writer — the relocation,
+main-handler, and page-reuse-quarantine theories ALL failed their build-test; the write-tripwire + transitions-ON A/B
+are what localized things. Also: OpenSwiftUICore is a REIMPLEMENTATION — "works on Apple" only covers `Status: Complete`
+files, not WIP/Blocked paths or our band-aids.
 
 ## ⬆️ STATUS UPGRADE 2026-06-19 — the "wait" verdict below is SUPERSEDED by a working spike
 The spike happened and got through **phase 3**. Live, authoritative state =
