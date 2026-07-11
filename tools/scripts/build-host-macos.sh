@@ -35,6 +35,20 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
+# ffmpeg for ffmpeg-sys-next: point pkg-config (version detect + link) and
+# bindgen's clang (header discovery) at Homebrew's ffmpeg. `ffmpeg-next = "8.1"`
+# binds ffmpeg 8.x (Homebrew's default `ffmpeg`) as well as 7.x, so the plain
+# formula is all that's needed — NO keg-only `ffmpeg@7` (that has no Monterey
+# bottle and source-builds its whole tree incl. LLVM = hours). `brew install ffmpeg`.
+if command -v brew >/dev/null 2>&1; then
+  FF="$(brew --prefix ffmpeg 2>/dev/null || true)"
+  if [[ -n "$FF" && -d "$FF/lib/pkgconfig" ]]; then
+    export PKG_CONFIG_PATH="$FF/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+    export BINDGEN_EXTRA_CLANG_ARGS="-I$FF/include ${BINDGEN_EXTRA_CLANG_ARGS:-}"
+    echo "ffmpeg: using $FF"
+  fi
+fi
+
 FEATURES=()
 [[ "${P3:-1}" == "1" ]] && FEATURES=(--features p3-async)
 
