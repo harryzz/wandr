@@ -35,13 +35,30 @@ struct ContentView: View {
     private var hintColor:  Color { Color(red: 0.58, green: 0.56, blue: 0.53, opacity: 1) }
 
     // A score/best readout box (mirrors eleev's ScoreView header).
-    private func scoreBox(_ label: String, _ value: Int, _ w: CGFloat) -> some View {
-        VStack(spacing: 0) {
-            Text(label).font(.system(size: w * 0.026, weight: .medium)).foregroundColor(labelColor)
-            Text("\(value)").font(.system(size: w * 0.050, weight: .heavy)).foregroundColor(.white)
+    private func scoreBox(_ label: String, _ value: Int, _ w: CGFloat, multiplier: Int = 0) -> some View {
+        // "Dancing score" — ported straight from eleev's HeaderView.scoreView using the SAME .id-swap
+        // transition our TileView already uses for tile numbers (TileView.swift:57-59): a fresh .id on
+        // each score change swaps the number, which slides up from the bottom + fades in
+        // (.move(.bottom)+.opacity, sprung). No scaleEffect (that grew the number out of the box to the
+        // right). The box is .clipped() so the roll stays inside. Colors stay legible white/cream; the
+        // live combo shows as "xN" in the label. BEST passes multiplier 0 (no badge).
+        let combo = multiplier > 0
+        return VStack(spacing: 0) {
+            HStack(spacing: w * 0.012) {
+                Text(label).font(.system(size: w * 0.026, weight: .medium)).foregroundColor(labelColor)
+                if combo {
+                    Text("x\(multiplier)").font(.system(size: w * 0.026, weight: .heavy)).foregroundColor(labelColor)
+                }
+            }
+            Text("\(value)")
+                .font(.system(size: w * 0.050, weight: .heavy))
+                .id(value)
+                .foregroundColor(.white)
+                .transition(AnyTransition.move(edge: .bottom).combined(with: .opacity).animation(.modalSpring(duration: 0.3)))
         }
         .frame(width: w * 0.25, height: w * 0.14)
         .background(Rectangle().fill(boxColor).cornerRadius(w * 0.012))
+        .clipped()
         // Real gesture: tap a score box → toggle autoplay (replaces the hand-rolled scoreRect hit-test).
         .onTapGesture {
             wandrApplyChange { autoplayOn.toggle(); tickBinding?.wrappedValue &+= 1 }
@@ -78,7 +95,7 @@ struct ContentView: View {
                             animPending = true
                         }
                     Spacer()
-                    scoreBox("SCORE", game.score, w)
+                    scoreBox("SCORE", game.score, w, multiplier: game.mergeMultiplier)
                     scoreBox("BEST", max(bestScore, game.score), w)
                 }
                 .frame(height: w * 0.16)
