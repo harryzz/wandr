@@ -25,6 +25,7 @@
 - [✅ Task 98: AudioFlinger-direct backend](project_audioflinger_backend.md) — pure-Rust createTrack→cblk ring; 3 bugs.
 - [🔲 Task 108: audio player design](project_audio_player.md) — wasi:audio PCM floor + optional HW codec + media-session.
 - [✅ Desktop wasi:audio = cpal](project_desktop_audio_cpal.md) — WSLg: cpal `pulseaudio` feature (NOT pipewire/ALSA→Dummy); BufferSize::Fixed(40ms); desktop MUST pump bg-tick; $HOME/Music.
+- [🔲 Desktop packaging (future)](project_desktop_packaging.md) — recorded-only: apps-as-zip + host+libs+install-script for easy desktop install; NOT started.
 - [✅ Desktop wandr:video = nokhwa+ffmpeg](project_desktop_video_nokhwa.md) — nokhwa camera + ffmpeg VP8 (video.test ALL PASS incl wandr-call SRTP/UDP); WSLg RDP cam truncates >640x480 (MJPEG); ffmpeg-next 7.1 codec+format+software-scaling; unsafe-Send; desktop --run-once + new_headless renderer.
 - [✅ Task 93/95: camera --no-art](project_artless_camera.md) — raw 29fps / HW VP8 17fps; EIS-gyro race.
 - [✅ Task 91: ART-off call audio](project_artless_call_audio.md) — earpiece un-duck + focus::call_start.
@@ -80,6 +81,7 @@
 - [Ref: Slint SHIPPED](reference_slint_wasip2.md) — crates/slint-wandr; docs/skia-wit-mapping.md. · [Ref: dioxus 0.7 subsecond wall](reference_dioxus_07_wasip2_subsecond.md) — narrow cfg + [patch.crates-io].
 - [Ref: wasmtime 44 debug APIs](reference_wasmtime_debug_apis.md) — call_hook/breakpoints for memory corruption.
 - [Ref: wandr wasi-tls transport](reference_wandr_wasi_tls_transport.md) — guest TLS; Signal CA via custom TlsProvider.
+- [Ref: Windows ARM64 buildable](reference_windows_arm64_buildable.md) — Snapdragon X Elite / aarch64-pc-windows-msvc; skia + ffmpeg winarm64 prebuilts exist; native build via build-host-windows.bat + winarm64 FFMPEG_DIR.
 - [Ref: Kotlin/Wasm CM status](reference_kotlin_wasm_component_model_status.md) — 2.4 same adapter; watch KT-64568. · [Ref: Kotlin version bump](feedback_kotlin_version_bump.md) — 13 pin sites.
 - [Ref: IME / soft-keyboard options](feedback_ime_options.md) — 4 integration paths. · [Ref: guest-language survey](../../docs/wasm-component-language-support.md) — Rust/C#/TinyGo first-class.
 
