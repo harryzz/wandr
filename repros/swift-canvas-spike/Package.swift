@@ -15,7 +15,8 @@ let package = Package(
         // OpenSwiftUI / OpenCombine unmodified. (OpenSwiftUI product carries OpenCombine transitively.)
         .target(name: "SwiftUI", dependencies: [.product(name: "OpenSwiftUI", package: "OpenSwiftUI")]),
         .target(name: "Combine", dependencies: [.product(name: "OpenSwiftUI", package: "OpenSwiftUI")]),
-        .executableTarget(name: "ShimTest", dependencies: ["SwiftUI", "Combine", "ComputeStubs"],
+        .target(name: "AudioToolbox"),   // Audio shim (AudioServices → wasi:audio, v1 silent)
+        .executableTarget(name: "ShimTest", dependencies: ["SwiftUI", "Combine", "AudioToolbox", "ComputeStubs"],
                           swiftSettings: [.swiftLanguageMode(.v5)]),
         // wit-bindgen-c generated surface (imports + the export trampolines).
         .target(name: "CSwiftSpike"),
