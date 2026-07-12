@@ -77,6 +77,7 @@
 - [Ref: Avalonia SHIPPED](reference_avalonia_wandr.md) — Fluent on device; pin Avalonia 11.3.17 + ILC alpha.
 - [Ref: Swift/OpenSwiftUI eleev 2048](reference_swift_openswiftui_wandr.md) — root = AGSubgraphStorage UAF; fix = [[reference_openswiftui_immortal_fix]].
 - [Ref: ObservableObject works on wasm](reference_observableobject_wasm_exclusivity.md) — @Published/@ObservedObject reactivity works (reactor incl.); the crash was Swift dynamic-exclusivity across export re-entry, NOT OpenCombine's (no-op WASI) lock; fix = build ALL modules (incl OpenCombine) with -enforce-exclusivity=unchecked.
+- [Ref: desktop font resolve-by-name](reference_desktop_font_resolve_by_name.md) — Skia system FontMgr resolves OS-installed fonts by name w/ real metrics on DESKTOP (Linux verified 263 families); zero-metrics ban is Android-only; get_typeface uses match_family_style on desktop; OpenSwiftUI uses typeface-from-bytes not this. `--font-probe`.
 - [Ref: egui](reference_egui_wandr.md) — wasi-webgpu, NOT wasi:canvas. · [Ref: Flutter+Go](reference_flutter_go_ui_wandr.md) — dart2wasm JS-only; Go no skia. · [Ref: Qt](reference_qt_wandr.md) — no wasi port; Slint covers.
 - [Ref: Ruby viable-DIY](reference_ruby_wandr.md) — wasip2 proven; no componentize-ruby. · [Ref: Redox host](reference_redox_wandr.md) — x86_64-VM plausible; arm64 moonshot.
 - [Ref: Slint SHIPPED](reference_slint_wasip2.md) — crates/slint-wandr; docs/skia-wit-mapping.md. · [Ref: dioxus 0.7 subsecond wall](reference_dioxus_07_wasip2_subsecond.md) — narrow cfg + [patch.crates-io].
