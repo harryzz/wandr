@@ -1,0 +1,15 @@
+# OpenSwiftUI eleev/swiftui-2048 demo — Swift guest: SwiftUI view -> OpenSwiftUI DisplayList ->
+# WandrDrawSink -> CGContext -> wasi:canvas (skia/EGL). User app (no `kind` -> apps/).
+# components/ui.wasm is a ~67 MB regenerable build output (git-ignored). Rebuild via
+# swift/OpenSwiftUIProject/tests/deploy/deploy-device.sh (wasm-tools component new from the
+# OpenSwiftUIDemo core); the Swift source lives under swift/OpenSwiftUIProject + repros/swift-canvas-spike.
+app_id      = "wandr.swiftui.demo"
+version     = "0.1.0"
+world       = "my:skiko-gfx/skiko-ui"
+composition = "same-store"
+orientation = "auto"
+label       = "SwiftUI 2048"
+max_fps     = 60
+
+[components]
+ui = "components/ui.wasm"

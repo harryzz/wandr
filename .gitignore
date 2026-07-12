@@ -33,3 +33,7 @@ swift/OpenSwiftUIProject/tests/deploy/
 
 # Local pre-publication drafts for WASI proposal postings (never committed)
 future-postings/
+
+# 2048 (OpenSwiftUI) app component — 67MB regenerable Swift build output; manifest is tracked,
+# the wasm is rebuilt via swift/OpenSwiftUIProject/tests/deploy/deploy-device.sh
+apps/user/wandr.swiftui.demo/components/ui.wasm
