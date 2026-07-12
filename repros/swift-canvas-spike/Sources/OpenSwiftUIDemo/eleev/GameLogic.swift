@@ -20,28 +20,24 @@ struct WandrDetRNG: RandomNumberGenerator {
 }
 nonisolated(unsafe) var wandrDetRNG = WandrDetRNG()
 
-// wandr: no-op stand-in for OpenCombine's ObservableObjectPublisher. GameLogic is NO LONGER
-// ObservableObject — OpenCombine's publisher/AnyCancellable allocate a C++ UnfairLock that
-// corrupts the Swift runtime's exclusivity state in the wasi reactor (works only in a command/
-// main). Reactivity is driven by the reactor via @State instead; objectWillChange.send() is kept
-// as a no-op so eleev's call sites compile unchanged.
-struct WandrNoOpWillChange { func send() {} }
+// [wandr VERIFICATION] Restored to eleev's real `ObservableObject` to test whether reactivity works
+// on the wasi reactor. The old "no-op stub" note claimed OpenCombine's UnfairLock corrupts the
+// reactor's exclusivity state — but OpenCombine 0.15.1 already ships a `#if os(WASI)` NO-OP lock, so
+// that mechanism can't apply on wasip1. Synthesized objectWillChange is used; eleev's explicit
+// .send() calls still compile/work.
+final class GameLogic: ObservableObject {
 
-final class GameLogic {
-
-    let objectWillChange = WandrNoOpWillChange()
-        
     // MARK: - Typealiases
     
     typealias TileMatrixType = TileMatrix<IdentifiedTile>
     
     // MARK: - Publishd Properties
     
-    private(set) var noPossibleMove: Bool = false
-    private(set) var score: Int = 0
-    private(set) var mergeMultiplier: Int = 0
-    private(set) var boardSize: Int
-    private(set) var hasMoveMergedTiles: Bool = false
+    @Published private(set) var noPossibleMove: Bool = false
+    @Published private(set) var score: Int = 0
+    @Published private(set) var mergeMultiplier: Int = 0
+    @Published private(set) var boardSize: Int
+    @Published private(set) var hasMoveMergedTiles: Bool = false
     
     private(set) var lastGestureDirection: Direction = .up
 

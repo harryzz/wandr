@@ -76,6 +76,7 @@
 - [Ref: dioxus + taffy UI](reference_dioxus_taffy_rust_ui.md) — crates/dioxus-canvas. · [Ref: wasi-webgpu/wasi-gfx](reference_wasi_webgpu_gfx.md) — guest-owns-renderer; 2nd path beside skiko-gfx.
 - [Ref: Avalonia SHIPPED](reference_avalonia_wandr.md) — Fluent on device; pin Avalonia 11.3.17 + ILC alpha.
 - [Ref: Swift/OpenSwiftUI eleev 2048](reference_swift_openswiftui_wandr.md) — root = AGSubgraphStorage UAF; fix = [[reference_openswiftui_immortal_fix]].
+- [Ref: ObservableObject works on wasm](reference_observableobject_wasm_exclusivity.md) — @Published/@ObservedObject reactivity works (reactor incl.); the crash was Swift dynamic-exclusivity across export re-entry, NOT OpenCombine's (no-op WASI) lock; fix = build ALL modules (incl OpenCombine) with -enforce-exclusivity=unchecked.
 - [Ref: egui](reference_egui_wandr.md) — wasi-webgpu, NOT wasi:canvas. · [Ref: Flutter+Go](reference_flutter_go_ui_wandr.md) — dart2wasm JS-only; Go no skia. · [Ref: Qt](reference_qt_wandr.md) — no wasi port; Slint covers.
 - [Ref: Ruby viable-DIY](reference_ruby_wandr.md) — wasip2 proven; no componentize-ruby. · [Ref: Redox host](reference_redox_wandr.md) — x86_64-VM plausible; arm64 moonshot.
 - [Ref: Slint SHIPPED](reference_slint_wasip2.md) — crates/slint-wandr; docs/skia-wit-mapping.md. · [Ref: dioxus 0.7 subsecond wall](reference_dioxus_07_wasip2_subsecond.md) — narrow cfg + [patch.crates-io].

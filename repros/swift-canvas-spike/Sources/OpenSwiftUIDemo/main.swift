@@ -26,7 +26,7 @@ nonisolated(unsafe) var sharedGame: GameLogic!
 nonisolated(unsafe) var tickBinding: Binding<Int>?
 
 struct ContentView: View {
-    let game: GameLogic                 // plain ref (no @ObservedObject → no OpenCombine path)
+    @ObservedObject var game: GameLogic // [VERIFY] real @ObservedObject — subscribes to game.objectWillChange
     @State private var tick = 0         // re-render trigger; on_pointer bumps it after a move
 
     private var titleColor: Color { Color(red: 0.47, green: 0.43, blue: 0.40, opacity: 1) }
@@ -123,7 +123,7 @@ struct ContentView: View {
                             let dir: Direction = abs(t.width) > abs(t.height)
                                 ? (t.width > 0 ? .right : .left)
                                 : (t.height > 0 ? .down : .up)
-                            wandrApplyChange { autoplayOn = false; _ = game.move(dir); tickBinding?.wrappedValue &+= 1 }
+                            wandrApplyChange { autoplayOn = false; _ = game.move(dir) }  // @ObservedObject re-renders (move fires objectWillChange)
                             if game.score > bestScore { bestScore = game.score }
                             animPending = true
                         }
@@ -268,9 +268,10 @@ public func onFrame(_ nanos: UInt64) {
             moveCount &+= 1
             let dirs: [Direction] = [.up, .left, .down, .right]
             var st: GameLogic.State = .none
+            // [VERIFY reactivity] NO tick bump — rely on @ObservedObject: g.move() fires
+            // objectWillChange.send() → @ObservedObject invalidates → renderFrame re-evals the board.
             wandrApplyChange {
                 st = g.move(dirs[moveCount % 4])
-                tickBinding?.wrappedValue &+= 1
             }
             wlog("AUTO n=\(moveCount) dir=\(dirs[moveCount % 4]) state=\(st) score=\(g.score) tiles=\(g.tiles.flatten().count)")
             if g.score > bestScore { bestScore = g.score }

@@ -27,6 +27,7 @@ OPENATTRIBUTEGRAPH_USE_LOCAL_DEPS=1 \
 OPENSWIFTUI_SWIFT_CRYPTO=0 \
 OPENRENDERBOX_LIB_SWIFT_PATH=/home/harry/wandr/swift/OpenSwiftUIProject/OpenAttributeGraph/Sources/SwiftCorelibs/include \
 swift build --product OpenSwiftUIDemo --swift-sdk "$SDK" --manifest-cache none \
+  -Xswiftc -enforce-exclusivity=unchecked \
   -Xcc -D_WASI_EMULATED_SIGNAL -Xcc -D_WASI_EMULATED_MMAN -Xcc -D_WASI_EMULATED_PROCESS_CLOCKS \
   -Xcc -I/home/harry/wandr/swift/OpenSwiftUIProject/wandr/wasi-shims \
   -Xcc -include -Xcc /home/harry/wandr/swift/OpenSwiftUIProject/wandr/wasi-shims/wasi_compat.h \
