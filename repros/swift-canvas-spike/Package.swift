@@ -18,6 +18,26 @@ let package = Package(
         .target(name: "AudioToolbox"),   // Audio shim (AudioServices → wasi:audio, v1 silent)
         .executableTarget(name: "ShimTest", dependencies: ["SwiftUI", "Combine", "AudioToolbox", "ComputeStubs"],
                           swiftSettings: [.swiftLanguageMode(.v5)]),
+        // [Phase 2] The REAL eleev/swiftui-2048 app, dropped in unmodified behind the shims.
+        // T2ilesApp.swift (@main, UserDefaults) is excluded — WandrReactor.swift is our entry.
+        .executableTarget(
+            name: "T2iles",
+            dependencies: [
+                "SwiftUI", "Combine", "AudioToolbox", "CSwiftSpike", "WandrCG", "ComputeStubs",
+                .product(name: "OpenSwiftUI", package: "OpenSwiftUI"),
+            ],
+            exclude: ["T2ilesApp.swift"],
+            swiftSettings: [.swiftLanguageMode(.v5)],
+            linkerSettings: [
+                .linkedLibrary("wasi-emulated-signal", .when(platforms: [.wasi])),
+                .linkedLibrary("wasi-emulated-mman", .when(platforms: [.wasi])),
+                .linkedLibrary("wasi-emulated-process-clocks", .when(platforms: [.wasi])),
+                .unsafeFlags([
+                    "-Xclang-linker", "-mexec-model=reactor",
+                    "-Xlinker", "generated/swift_spike_component_type.o",
+                ], .when(platforms: [.wasi])),
+            ]
+        ),
         // wit-bindgen-c generated surface (imports + the export trampolines).
         .target(name: "CSwiftSpike"),
         // No-op stub for the Apple-only Graph.mm symbol print_cycle (linked from UpdateStack.cpp, not called).
