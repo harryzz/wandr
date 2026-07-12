@@ -11,6 +11,12 @@ let package = Package(
         .package(path: "/home/harry/wandr/swift/OpenSwiftUIProject/OpenSwiftUI"),
     ],
     targets: [
+        // [Phase 2] shim modules so eleev's real `import SwiftUI` / `import Combine` resolve to
+        // OpenSwiftUI / OpenCombine unmodified. (OpenSwiftUI product carries OpenCombine transitively.)
+        .target(name: "SwiftUI", dependencies: [.product(name: "OpenSwiftUI", package: "OpenSwiftUI")]),
+        .target(name: "Combine", dependencies: [.product(name: "OpenSwiftUI", package: "OpenSwiftUI")]),
+        .executableTarget(name: "ShimTest", dependencies: ["SwiftUI", "Combine", "ComputeStubs"],
+                          swiftSettings: [.swiftLanguageMode(.v5)]),
         // wit-bindgen-c generated surface (imports + the export trampolines).
         .target(name: "CSwiftSpike"),
         // No-op stub for the Apple-only Graph.mm symbol print_cycle (linked from UpdateStack.cpp, not called).
