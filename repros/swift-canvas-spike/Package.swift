@@ -26,7 +26,9 @@ let package = Package(
                 "SwiftUI", "Combine", "AudioToolbox", "CSwiftSpike", "WandrCG", "ComputeStubs",
                 .product(name: "OpenSwiftUI", package: "OpenSwiftUI"),
             ],
-            exclude: ["T2ilesApp.swift"],
+            // T2ilesApp = @main/UserDefaults entry (WandrReactor replaces it);
+            // Audio/* = AudioToolbox-based Audio seam (WandrAudio replaces it).
+            exclude: ["T2ilesApp.swift", "Audio/Audio.swift", "Audio/AudioSource.swift"],
             swiftSettings: [.swiftLanguageMode(.v5)],
             linkerSettings: [
                 .linkedLibrary("wasi-emulated-signal", .when(platforms: [.wasi])),

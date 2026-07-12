@@ -14,7 +14,7 @@ public extension View {
     func previewLayout(_ value: PreviewLayout) -> some View { self }
     func previewDisplayName(_ value: String?) -> some View { self }
     // drawingGroup = Metal rasterization fast-path; a no-op is semantically fine off-Apple.
-    func drawingGroup(opaque: Bool = false) -> some View { self }
+    func drawingGroup(opaque: Bool = false, colorMode: ColorRenderingMode = .nonLinear) -> some View { self }
     // allowsHitTesting — TODO real gating; identity for now.
     func allowsHitTesting(_ enabled: Bool) -> some View { self }
 }
