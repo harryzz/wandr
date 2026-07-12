@@ -88,14 +88,32 @@ struct ContentView: View {
                     .font(.system(size: w * 0.032, weight: .medium))
                     .foregroundColor(hintColor)
                 ZStack {
+                    // The swipe gesture now rides on the DRAWN board square INSIDE TileBoardView (so
+                    // Approach-A binds its hit-frame to the tiles, not the greedy GeometryReader — a
+                    // swipe in the empty band above/below the board no longer moves tiles). onSwipe gets
+                    // the drag translation; the move / game-over-restart logic stays here.
                     TileBoardView(
                         matrix: game.tiles,     // read in BODY (game fully constructed), not in init
                         tileEdge: game.lastGestureDirection.invertedEdge,
-                        tileBoardSize: game.boardSize
+                        tileBoardSize: game.boardSize,
+                        onSwipe: { t in
+                            guard !confirmNewGame else { return }
+                            if !game.tiles.isMovePossible() {
+                                wandrApplyChange { autoplayOn = false; game.reset(); tickBinding?.wrappedValue &+= 1 }
+                                animPending = true
+                                return
+                            }
+                            let dir: Direction = abs(t.width) > abs(t.height)
+                                ? (t.width > 0 ? .right : .left)
+                                : (t.height > 0 ? .down : .up)
+                            wandrApplyChange { autoplayOn = false; _ = game.move(dir); tickBinding?.wrappedValue &+= 1 }
+                            if game.score > bestScore { bestScore = game.score }
+                            animPending = true
+                        }
                     )
-                    // Game over (board full, no merges left) → dim + prompt. The board's DragGesture
-                    // below handles the restart on any swipe (no separate overlay gesture — two
-                    // gestures on one area would need arbitration, which is deferred).
+                    // Game over (board full, no merges left) → dim + prompt. A swipe ON the board square
+                    // restarts (handled by onSwipe above); the dim overlay carries no gesture so it does
+                    // not block the board's gesture beneath it.
                     if !game.tiles.isMovePossible() {
                         Rectangle().fill(Color(red: 0.05, green: 0.06, blue: 0.07, opacity: 0.72))
                         VStack(spacing: w * 0.025) {
@@ -106,26 +124,6 @@ struct ContentView: View {
                         }
                     }
                 }
-                // Real gesture: swipe the board → move (replaces the hand-rolled boardRect+delta).
-                // minimumDistance gates out taps, so only a real swipe acts; onEnded picks direction.
-                // At game over, any swipe restarts the game.
-                .gesture(
-                    DragGesture(minimumDistance: w * 0.05).onEnded { v in
-                        guard !confirmNewGame else { return }
-                        if !game.tiles.isMovePossible() {
-                            wandrApplyChange { autoplayOn = false; game.reset(); tickBinding?.wrappedValue &+= 1 }
-                            animPending = true
-                            return
-                        }
-                        let t = v.translation
-                        let dir: Direction = abs(t.width) > abs(t.height)
-                            ? (t.width > 0 ? .right : .left)
-                            : (t.height > 0 ? .down : .up)
-                        wandrApplyChange { autoplayOn = false; _ = game.move(dir); tickBinding?.wrappedValue &+= 1 }
-                        if game.score > bestScore { bestScore = game.score }
-                        animPending = true
-                    }
-                )
             }
             // New-game confirmation (tapping "2048" opens this; nothing resets without a YES).
             if confirmNewGame {

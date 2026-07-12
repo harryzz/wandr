@@ -19,6 +19,10 @@ struct TileBoardView: View {
     let tileEdge: Edge
     
     var tileBoardSize: Int
+    // [wandr] Swipe handler — the DragGesture rides on the DRAWN board square (see body, before
+    // .center) so Approach-A hit-testing binds it to the tiles' frame, not the greedy GeometryReader.
+    // main.swift supplies the move / game-over logic; the argument is the drag translation.
+    var onSwipe: (CGSize) -> Void = { _ in }
     @Environment(\.colorScheme) var colorScheme: ColorScheme
     
     // MARK: - Computed Properties
@@ -55,6 +59,14 @@ struct TileBoardView: View {
             .clipped()
             .cornerRadius(proxy.size.width / CGFloat(5 * tileBoardSize * 2))
             /* .drawingGroup unsupported on OpenSwiftUI */
+            // [wandr] Swipe gesture on the DRAWN board square. MUST precede .center (= .position):
+            // Approach-A binds a gesture to its modified view's layout frame, so attaching here (before
+            // the square is .position-ed) makes the hit-frame the tiles' square. Attaching AFTER
+            // .position would bind to the greedy GeometryReader parent — the original too-tall band.
+            .gesture(
+                DragGesture(minimumDistance: calculateFrameSize(proxy) * 0.05)
+                    .onEnded { onSwipe($0.translation) }
+            )
             .center(in: .local, with: proxy)
         }
     }
