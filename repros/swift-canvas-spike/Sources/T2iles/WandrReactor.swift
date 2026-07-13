@@ -71,7 +71,6 @@ public func onFrame(_ nanos: UInt64) {
         renderWandrAppOnce(WandrHostApp(),
             options: .init(surface: CGSize(width: CGFloat(width), height: CGFloat(height)), sink: sink))
         built = true
-        wlog("built AppGraph — real CompositeView")
     } else if animPending {
         animPending = wandrRenderFrame(dt); wandrRedraw()
     } else {
