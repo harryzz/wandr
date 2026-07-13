@@ -53,14 +53,27 @@ leaf-conformance log guard) has been REMOVED — only the two fixes above remain
    `Utils/Plist/PlistConfiguration.swift`, added `Sources/T2iles/WandrPlist.swift`
    (API-identical, reads `/assets/<name>.plist` via POSIX). Callers already `?? default`
    on nil, so absence is graceful.
-4. **System-font resolution for text-style + non-default design is unimplemented on wasm**
-   (CURRENT WALL). eleev uses `.font(.system(.body, design: .monospaced))` (also `.title`,
-   `.callout`, `.largeTitle`, `.caption`, all `design: .monospaced`). Path:
-   `Font.resolveTraits` → `DefaultFontDefinition.resolveSystemFont(size:design:weight:in:)`
-   → `CTFontDescriptor.fontDescriptor(size:design:weight:legibilityWeight:)` → Swift
-   `_assertionFailure`. The custom demo only uses `.system(size:weight:)` (default design),
-   which works — so the gap is specifically the text-style and/or `.monospaced`-design
-   resolution. The CoreText shim is header-only; the CT create fns come from the wasm SDK's
-   Foundation (default design works at runtime; monospaced/text-style asserts). This is a
-   larger design task (map text-style + design → a real font, likely via our host font path
-   / a bundled monospace TTF through `typeface-from-bytes` + `draw-glyphs`).
+4. **System-font resolution + font modifiers unimplemented on wasm** (FIXED, fork b4412d49).
+   `canImport(CoreText)` is false on wasm, so the whole descriptor-producing path was
+   `_openSwiftUIPlatformUnimplementedFailure()`. Root, not the design constant. Fixed by
+   making the placeholder `CTFontDescriptor` carry the resolved traits (point size + weight),
+   a text-style→size table (WandrWasmFontMetrics.swift), real `#else` branches for
+   `resolveSystemFont`/`resolveTextStyleFont` + both `ResolvedTraits` inits, and a
+   `resolveTraits` on `ModifierProvider`/`StaticModifierProvider` that applies `modify(traits:)`
+   (the default `.init(resolve(...))` forced the unimplemented `modify(descriptor:)`, so
+   `.weight()`/`.bold()` trapped). Custom demo used only `.system(size:weight:)` (SystemProvider's
+   own resolveTraits) so it never hit this.
+
+## ✅ RESULT: the real eleev/swiftui-2048 app RENDERS on wasm32
+With all four fixes the real app (unmodified except the Audio + Bundle/Plist seams) builds its
+full view graph and renders — frames #0.. ok=true, 0 traps. Two OpenSwiftUI fork commits:
+81b68998 (conditional metadata) + b4412d49 (font path).
+
+### Remaining polish (non-fatal)
+- `ShapeStyleRendering.swift:203 render(style:) is unimplemented` warnings — gradient/complex
+  ShapeStyle fills (eleev's RoundedClippedBackground) fall back; backgrounds may be flat.
+- Font **design** (`.monospaced`) is dropped at the trait boundary — text renders at correct
+  size/weight in the host's default face, not a distinct monospace face. Real monospace needs
+  plumbing a face through the draw sink (`draw-glyphs` + a bundled TTF); the sink currently
+  takes only a size.
+- Interactivity (swipe/tap) on the real CompositeView not yet verified.
