@@ -27,3 +27,16 @@ public struct Section<Header: View, Content: View>: View {
 public extension Section where Header == EmptyView {
     init(@ViewBuilder content: () -> Content) { self.init(header: EmptyView(), content: content) }
 }
+
+// SwiftUI Link — renders the label (URL-open is a TODO; used only in AboutView).
+public struct Link<Label: View>: View {
+    private let label: Label
+    public init(destination: URL, @ViewBuilder label: () -> Label) { self.label = label() }
+    public var body: some View { label }
+}
+public extension Link where Label == Text {
+    init(_ title: String, destination: URL) { self.init(destination: destination) { Text(title) } }
+}
+public extension Color {
+    static var clear: Color { Color(red: 0, green: 0, blue: 0, opacity: 0) }
+}
