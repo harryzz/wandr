@@ -69,6 +69,52 @@ With all four fixes the real app (unmodified except the Audio + Bundle/Plist sea
 full view graph and renders — frames #0.. ok=true, 0 traps. Two OpenSwiftUI fork commits:
 81b68998 (conditional metadata) + b4412d49 (font path).
 
+### ✅ Split-board — FIXED (fork 740a4681): `.offset`+`.position` composition
+The board renders whole; the side menu hides off-screen. Two OpenSwiftUI bugs (both needed):
+1. `_OffsetEffect` used a custom `_makeView` mutating `inputs.position` (OffsetPosition) —
+   a no-op over a `.position()`/GeometryReader child that re-establishes its coordinate space.
+   Removed the override → uses the generic GeometryEffect render-transform path; the offset
+   now emits `.transform(.affine)` into the DisplayList and is applied by the walker.
+2. That exposed `ViewTransform.convert` applying the WHOLE transform stack for a `.local`
+   target. A view's `.local` frame is its own bounds and must exclude ancestor render
+   transforms (`.offset` shifts `.global`, not `.local`). So `proxy.frame(in:.local).midX`
+   picked up the offset (260→1080), and `.center(in:.local)` mis-placed the menu, cancelling
+   the offset (1080−780=260, visible). Made local↔local conversion the identity → `.center`=260,
+   offset −780 → −520 (hidden). Board unaffected (still x=26). Verified via draw-rect trace +
+   Windows screenshot (whole board).
+
+### (historical) original diagnosis of the split-board `.offset`+`.position` bug
+The 4×4 board renders perfectly (tiles at x=38/152/266/380, uniform spacing — verified via
+draw-rect dumps). The visual "split" is an **occluder**: eleev's side menu (`CompositeSideView`
+→ `SideMenuView`, an 80×904 panel) renders **centered at x=260 over the board** instead of
+hidden off-screen. It should hide via `.center(...)`(=`.position(260)`) then
+`.offset(x: -(width + width/2))` ≈ **-780**. The offset never moves it. Traced precisely:
+- GeometryReaders report correct sizes (520×1040), so the offset VALUE computes to -780.
+- Upstream `.offset` = `OffsetPosition` (mutates `inputs.position`). But `SideMenuView`'s OWN
+  inner `GeometryReader` **re-zeroes `inputs.position`** (establishes a local coord space,
+  GeometryReader.swift:50), discarding the enclosing offset; then `.center` places at 260 in
+  that zeroed space. So OffsetPosition is a no-op here.
+- Switching `_OffsetEffect` to the SwiftUI-correct **render-transform** path (generic
+  `GeometryEffect._makeView` → `DefaultGeometryEffectProvider` → `.transform(.affine(-780))`)
+  DOES emit the -780 affine to the DisplayList (walker applies `.transform(.affine)`), but the
+  menu fill still draws at x=260 across all 180 frames — i.e. the positioned menu content is
+  **not nested under the offset effect** in the DisplayList (`GeometryEffectDisplayList` wraps
+  `outputs.preferences.displayList`, but the `_PositionLayout` content lands in a separate/
+  sibling list, likely an async-attribute timing issue). Also the walker DROPS
+  `.transform(.projection)` and `.transform(.rotation3D)` (the menu's `.rotation3DEffect`), and
+  `.allowsHitTesting` is a no-op stub — all contributing to "can't play".
+- **Fix needed (deep):** make the GeometryEffect render-transform correctly nest a
+  `.position()`/GeometryReader child's content under the effect in the DisplayList, + handle
+  projection/3D-rotation/clip + real `.allowsHitTesting` in the walker. Scoped but non-trivial
+  AttributeGraph/DisplayList work; all experimental changes reverted (fork = committed fixes only).
+
+### Windows-only: DPI window-crop (separate, worked around)
+`win.inner_size()` reports 520×1040 while the real client is 346×693 (÷1.5 DPI) because the host
+process is DPI-unaware → softbuffer draws 520-wide into a 346-wide window (crop) + input mismap.
+Worked around per-user via AppCompat registry (`HIGHDPIAWARE`); permanent fix = embed a
+PerMonitorV2 manifest in the host build (Windows rebuild). Not the cause of the split (Linux
+DPI 1.0 shows the identical split).
+
 ### Remaining polish (non-fatal)
 - `ShapeStyleRendering.swift:203 render(style:) is unimplemented` warnings — gradient/complex
   ShapeStyle fills (eleev's RoundedClippedBackground) fall back; backgrounds may be flat.
