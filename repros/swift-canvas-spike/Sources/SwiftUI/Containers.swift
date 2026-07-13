@@ -4,8 +4,8 @@
 import OpenSwiftUI
 
 public extension View {
-    func buttonStyle<S>(_ style: S) -> some View { self }
-    func listStyle<S>(_ style: S) -> some View { self }
+    func buttonStyle<S>(_ style: S) -> some View { wandrShimWarnOnce("shim: .buttonStyle no-op (cosmetic)"); return self }
+    func listStyle<S>(_ style: S) -> some View { wandrShimWarnOnce("shim: .listStyle no-op (cosmetic)"); return self }
 }
 public struct InsetGroupedListStyle { public init() {} }
 public struct GroupedListStyle { public init() {} }

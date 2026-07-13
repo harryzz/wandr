@@ -11,6 +11,7 @@ public final class OperationQueue: @unchecked Sendable {
 }
 public extension NotificationCenter {
     func post(name: Notification.Name, object: Any?, userInfo: [AnyHashable: Any]?) {
+        wandrShimWarnOnce("shim: NotificationCenter.post NO-OP (no live listeners; board-size uses @AppStorage)")
         // TODO: real post (route to wandr:events?). Board-size change also uses @AppStorage.
     }
 }
