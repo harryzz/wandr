@@ -9,21 +9,28 @@ let package = Package(
     name: "swift-canvas-spike",
     dependencies: [
         .package(path: "/home/harry/wandr/swift/OpenSwiftUIProject/OpenSwiftUI"),
+        // Apple-compatibility shims (SwiftUI/Combine/AudioToolbox) — shared, out of the app.
+        .package(path: "/home/harry/wandr/swift/apple-compat"),
     ],
     targets: [
-        // [Phase 2] shim modules so eleev's real `import SwiftUI` / `import Combine` resolve to
-        // OpenSwiftUI / OpenCombine unmodified. (OpenSwiftUI product carries OpenCombine transitively.)
-        .target(name: "SwiftUI", dependencies: [.product(name: "OpenSwiftUI", package: "OpenSwiftUI")]),
-        .target(name: "Combine", dependencies: [.product(name: "OpenSwiftUI", package: "OpenSwiftUI")]),
-        .target(name: "AudioToolbox"),   // Audio shim (AudioServices → wasi:audio, v1 silent)
-        .executableTarget(name: "ShimTest", dependencies: ["SwiftUI", "Combine", "AudioToolbox", "ComputeStubs"],
+        // The Apple-compat shim modules moved to swift/apple-compat; consumed here as products
+        // (module names still SwiftUI/Combine/AudioToolbox so eleev's imports resolve unmodified).
+        .executableTarget(name: "ShimTest",
+                          dependencies: [
+                              .product(name: "SwiftUI", package: "apple-compat"),
+                              .product(name: "Combine", package: "apple-compat"),
+                              .product(name: "AudioToolbox", package: "apple-compat"),
+                          ],
                           swiftSettings: [.swiftLanguageMode(.v5)]),
         // [Phase 2] The REAL eleev/swiftui-2048 app, dropped in unmodified behind the shims.
         // T2ilesApp.swift (@main, UserDefaults) is excluded — WandrReactor.swift is our entry.
         .executableTarget(
             name: "T2iles",
             dependencies: [
-                "SwiftUI", "Combine", "AudioToolbox", "CSwiftSpike", "WandrCG", "ComputeStubs",
+                .product(name: "SwiftUI", package: "apple-compat"),
+                .product(name: "Combine", package: "apple-compat"),
+                .product(name: "AudioToolbox", package: "apple-compat"),
+                "CSwiftSpike", "WandrCG",
                 .product(name: "OpenSwiftUI", package: "OpenSwiftUI"),
             ],
             // T2ilesApp = @main/UserDefaults entry (WandrReactor replaces it);
@@ -43,8 +50,7 @@ let package = Package(
         ),
         // wit-bindgen-c generated surface (imports + the export trampolines).
         .target(name: "CSwiftSpike"),
-        // No-op stub for the Apple-only Graph.mm symbol print_cycle (linked from UpdateStack.cpp, not called).
-        .target(name: "ComputeStubs"),
+        // (ComputeStubs removed — Graph::print_cycle now lives in Compute's Graph.cpp under #if !TARGET_OS_MAC.)
         // P2.3 — VENDORED OpenCoreGraphics (real upstream geometry/CGPath; see
         // Sources/OpenCoreGraphics/VENDORED.txt), with its empty CGContext.swift
         // implemented over wasi:canvas (hence the CSwiftSpike dep) + an added CGColor.
@@ -64,7 +70,6 @@ let package = Package(
             dependencies: [
                 "CSwiftSpike",
                 "WandrCG",
-                "ComputeStubs",
                 .product(name: "OpenSwiftUI", package: "OpenSwiftUI"),
             ],
             // eleev/swiftui-2048 is Swift-5-era code; build it in Swift 5 language mode so

@@ -12,6 +12,7 @@
 - [RULE: humility — proven vs guessed](feedback_humility_proven_vs_guessed.md) — run the falsifying test FIRST; weigh user pushback.
 - [RULE: shared WIT change → rebuild ALL + restart zygote](feedback_shared_wit_rebuild_all_consumers.md) — shared-type ABI breaks every importer.
 - [RULE: capture full build output](feedback_capture_build_output.md) — save FULL build to a log; never pre-filter a live build.
+- [RULE: OpenSwiftUI app = ONLY Audio/Store/startup](feedback_openswiftui_app_only_audio_store_startup.md) — sink/reactor/render glue is shared runtime, NEVER per-app; render features (clip/blur/3D) added once; `Sources/T2iles/RULES.md`.
 
 ## Projects / tasks
 - [✅ Task 115: Signal native wasip3 async](project_task115_wasip3_async.md) — M0-M4 device-verified incl A/V; zero step-executor; fg-pump-CPU follow-up.
@@ -71,11 +72,14 @@
 - [Ref: host AOT codegen corruption](reference_host_aot_codegen_corruption.md) — SIGSEGV cwasm = cargo clean; ps|grep never matches guests.
 - [Ref: a-03 fast ninja rebuild](reference_a03_ninja_build.md) — direct-ninja the soong intermediate. · [Ref: rsbinder pinned](reference_rsbinder_version.md) — rev 5e999e04a; 0.8.0 mis-decodes AudioPortFw.
 - [Ref: on-demand rendering](reference_on_demand_rendering.md) — frame-pacing WIT; statusbar clock-refresh trap.
+- [Ref: WSLg Wayland resize crash](reference_wslg_wayland_resize_crash.md) — desktop host crashes on resize under Wayland; force WINIT_UNIX_BACKEND=x11.
 - [Ref: compose-wasi consumption](reference_compose_wasi_consumption.md) — use in-tree *-wasm-wasi:9999.0.0-SNAPSHOT.
 - [Ref: wandrpkg manifest convention](reference_wandrpkg_manifest_convention.md) — package.toml in app source dir. · [Ref: photon image lib](reference_photon_image_lib.md) — wasip2-fit image processing.
 - [Ref: dioxus + taffy UI](reference_dioxus_taffy_rust_ui.md) — crates/dioxus-canvas. · [Ref: wasi-webgpu/wasi-gfx](reference_wasi_webgpu_gfx.md) — guest-owns-renderer; 2nd path beside skiko-gfx.
 - [Ref: Avalonia SHIPPED](reference_avalonia_wandr.md) — Fluent on device; pin Avalonia 11.3.17 + ILC alpha.
 - [Ref: Swift/OpenSwiftUI eleev 2048](reference_swift_openswiftui_wandr.md) — root = AGSubgraphStorage UAF; fix = [[reference_openswiftui_immortal_fix]].
+- [Ref: OpenSwiftUI SF Symbols render off-Apple](reference_openswiftui_sfsymbols_rendering.md) — Image(systemName:) via OpenSFSymbols module + Tabler; 2 root causes: Button was EmptyView stub; resizable-symbol read resolved ViewSize → AG cycle (fill+size-at-draw); Image.Style stack always empty.
+- [Ref: OpenSwiftUI if/else view-list wasm crash](reference_openswiftui_conditional_wasm_metadata.md) — 2 hardcoded-64-bit metadata-ABI bugs FIXED (genericType ptr-size; access-fn-in-table); + Bundle.main seam + font-resolution wall.
 - [Ref: ObservableObject works on wasm](reference_observableobject_wasm_exclusivity.md) — @Published/@ObservedObject reactivity works (reactor incl.); the crash was Swift dynamic-exclusivity across export re-entry, NOT OpenCombine's (no-op WASI) lock; fix = build ALL modules (incl OpenCombine) with -enforce-exclusivity=unchecked.
 - [Ref: desktop font resolve-by-name](reference_desktop_font_resolve_by_name.md) — Skia system FontMgr resolves OS-installed fonts by name w/ real metrics on DESKTOP (Linux verified 263 families); zero-metrics ban is Android-only; get_typeface uses match_family_style on desktop; OpenSwiftUI uses typeface-from-bytes not this. `--font-probe`.
 - [Ref: egui](reference_egui_wandr.md) — wasi-webgpu, NOT wasi:canvas. · [Ref: Flutter+Go](reference_flutter_go_ui_wandr.md) — dart2wasm JS-only; Go no skia. · [Ref: Qt](reference_qt_wandr.md) — no wasi port; Slint covers.
@@ -91,7 +95,7 @@
 - [Device perf measurement traps](feedback_device_perf_measurement.md) — verify FOREGROUND role before trusting CPU; fg−bg=render.
 - [Visual verification needs the user](feedback_visual_verification.md) — subjective outcomes: ASK the user. · [No posting without authorization](feedback_no_posting_without_authorization.md) — never publish without per-action approval.
 - [wandr-zygote fork survival](feedback_wandr_zygote_fork_survival.md) — what's COW-safe. · [No ART-layer dependencies](feedback_no_art_layer_dependencies.md) — build on HAL/binder that survive post-ART. · [Arbiter death notification](feedback_arbiter_death_notification.md) — SUBSCRIBE_EXITS + poll.
-- [bionic_compat fixes](feedback_bionic_compat.md) — NDK linker gotchas. · [Android EGL/Skia](feedback_egl_skia.md) — context lifecycle + drop order. · [Android font loading](feedback_android_fonts.md) — FontMgr::default()=zero metrics; use new_from_data.
+- [bionic_compat fixes](feedback_bionic_compat.md) — NDK linker gotchas. · [Android EGL/Skia](feedback_egl_skia.md) — context lifecycle + drop order. · [Android font loading](feedback_android_fonts.md) — zero-metrics bug FIXED by skia-safe 0.99/m150 (match_family_style real metrics on device); by-name resolution now unified desktop+device.
 - [wasmtime AOT compile flags](feedback_wasmtime_compile.md) — gc/function-references/exceptions for Kotlin. · [Gradle build directory](feedback_gradle_build_dir.md) — build from skiko/skiko/.
 - [wasmWasi reallocAllocator pollution](feedback_wasi_realloc_allocator.md) — freeAll at start of EVERY WIT import. · [✅ host→guest records-with-strings WORK](feedback_wasi_cabi_realloc_export_block.md) — lift all args before scoped alloc.
 - [currentNanoTime traps WIT imports](feedback_currentnanotime_pollutes.md) — avoid near WIT imports. · [PathBuilder shim recursion](feedback_pathbuilder_recursion.md) — missing method → recursion → SIGSEGV.
