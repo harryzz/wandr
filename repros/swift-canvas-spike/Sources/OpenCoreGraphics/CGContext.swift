@@ -216,6 +216,26 @@ public final class CGContext: Hashable {
     public func fill(svgPath d: String) {
         emitWithShadow(svg: d, style: WASI_CANVAS_TYPES_PAINT_STYLE_FILL, color: fillColor)
     }
+    /// wandr: fill a raw SVG path (surface coords) OFFSET by (dx,dy) and blurred (mask-blur sigma)
+    /// with `color` — a drop shadow of a silhouette (the WandrDrawSink `.filter(.shadow)` path).
+    public func fillShadowPath(_ d: String, dx: CGFloat, dy: CGFloat, blur: CGFloat, color: CGColor) {
+        guard !d.isEmpty else { return }
+        wasi_canvas_draw_method_canvas_save(canvas)
+        wasi_canvas_draw_method_canvas_translate(canvas, Float(dx), Float(dy))
+        var p = wasi_canvas_types_paint_t()
+        p.style = UInt8(WASI_CANVAS_TYPES_PAINT_STYLE_FILL)
+        p.color = color.argb
+        p.alpha = 255
+        p.anti_alias = true
+        p.blend = blendMode.wasi
+        p.blur.is_some = true
+        p.blur.val.style = UInt8(WASI_CANVAS_TYPES_BLUR_STYLE_NORMAL)
+        p.blur.val.sigma = Float(blur)
+        var s = swift_spike_string_t()
+        d.withCString { swift_spike_string_set(&s, $0) }
+        wasi_canvas_draw_method_canvas_draw_path(canvas, &s, UInt8(WASI_CANVAS_TYPES_FILL_RULE_NONZERO), &p)
+        wasi_canvas_draw_method_canvas_restore(canvas)
+    }
 
     // ── gradients (fill `rect` with the gradient) ───────────────────────────────
     public func drawLinearGradient(_ g: CGGradient, start: CGPoint, end: CGPoint, in rect: CGRect) {

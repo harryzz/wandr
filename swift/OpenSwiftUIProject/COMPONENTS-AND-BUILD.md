@@ -67,6 +67,19 @@ So the wasi:canvas backend exists in **two copies that can drift**:
 > backend lives in `WandrCG` until the `CWASICanvas` split. **GOTCHA fixed here:** `Path.forEach`
 > is an unimplemented stub off-Apple (traps with `unreachable`); build SVG from `path.storage`
 > / `roundedRect()` instead. Verified on desktop: oval pill buttons + rounded tiles.
+>
+> **Visual effects landed** (all renderer → WandrDrawSink → CGContext, framework half on
+> `harryzz/OpenSwiftUI@wasm32-wasip1`, CGContext half in vendored `WandrCG`):
+> - **clip / solid-shape fill** — oval buttons, rounded tiles. ✅
+> - **3D tilt** — `rotation3DEffect` / projection via the canvas CTM (OpenSwiftUI computes the
+>   matrix; we map ProjectionTransform → wasi:canvas 3×3, a transpose). ✅
+> - **drop shadow** — `.filter(.shadow)` via the wrapped clip **silhouette** (blurred behind the
+>   clipped card). ✅
+>
+> **POLISH TODO:** shadow *contrast* (the blur `radius → sigma` mapping is `sigma = radius`, likely
+> needs tuning) and 3D-tilt *fidelity* vs the original. Still **dropped** (needs a WIT verb, not
+> a renderer change): the frosted **backdrop blur** behind modals (`.filter(.blur)` — the
+> wasi:canvas contract has no general layer/backdrop-blur verb, only per-paint `mask-blur`).
 
 ---
 

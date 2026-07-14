@@ -58,6 +58,11 @@ final class CGSink: WandrDrawSink {
                       CGFloat(m10), CGFloat(m11), CGFloat(m12),
                       CGFloat(m20), CGFloat(m21), CGFloat(m22))
     }
+    func fillPathShadow(svgPath: String, dx: Double, dy: Double, blur: Double,
+                        red: Float, green: Float, blue: Float, opacity: Float) {
+        cg?.fillShadowPath(svgPath, dx: CGFloat(dx), dy: CGFloat(dy), blur: CGFloat(blur),
+                           color: CGColor(red: CGFloat(red), green: CGFloat(green), blue: CGFloat(blue), alpha: CGFloat(opacity)))
+    }
     func endFrame() {}
 }
 
