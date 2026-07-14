@@ -2,8 +2,9 @@
 
 > Purpose: inspect **what is actually used, from where, on which branch**, how the
 > build is wired, and the one real divergence (the wasi:canvas `CGContext`).
-> Written from the on-disk state on 2026-07-14. Facts are read off `git`/`Package.swift`,
-> not memory. No code was changed to produce this doc.
+> Facts are read off `git`/`Package.swift`. Updated 2026-07-14 to reflect this session's
+> cleanup: `print_cycle` moved into Compute (`ComputeStubs` deleted), the Apple shims moved
+> to `swift/apple-compat/`, and the submodule `origin` remotes repointed to the harryzz forks.
 
 ---
 
@@ -14,8 +15,8 @@ All live under `swift/OpenSwiftUIProject/`. "Fork?" = did *we* (harryzz) modify 
 | Component | Remote (actual) | Branch | Commit | Ours? | What it provides |
 |---|---|---|---|---|---|
 | **OpenSwiftUI** | `harryzz/OpenSwiftUI` | `wasm32-wasip1` | `57d4c822` | **FORK** | The framework: OpenSwiftUICore (layout, DisplayList, **renderer + `WandrDrawSink`**), views, Button/gestures. |
-| **OpenAttributeGraph** | **`harryzz/OpenAttributeGraph`** (our fork) — but on-disk `origin` wrongly = `OpenSwiftUIProject/…` | local branch `wasm32-wasip1` | `6f2ab76` (= `harryzz/main`) | **FORK (ours)** | AttributeGraph **API shell** + shims → Compute. ⚠️ checked out at `harryzz/main`; `harryzz/wasm32-wasip1` (`acf25d27`) differs — pick one. |
-| **Compute** | **`harryzz/Compute`** (our fork) — but on-disk `origin` wrongly = `jcmosc/Compute` | `wasm32-wasip1` | `8fda2f4` (= `harryzz/wasm32-wasip1`) | **FORK (ours)** | The **real graph engine** — the **two-weeks AttributeGraph fix; upstream Compute does NOT work.** Has submodule `Submodules/swift-runtime-headers` → `jcmosc/swift-runtime-headers`. |
+| **OpenAttributeGraph** | `harryzz/OpenAttributeGraph` (`origin` ✅ repointed; `upstream` = OpenSwiftUIProject) | **`main`** | `6f2ab76` | **FORK (ours)** — 2 wasm commits over upstream | AttributeGraph **API shell** + shims → Compute. Newest wasm work is on `main`; the older `wasm32-wasip1` (`acf25d27`) is a superseded snapshot. |
+| **Compute** | `harryzz/Compute` (`origin` ✅ repointed; `upstream` = jcmosc) | `wasm32-wasip1` | `332444d` | **FORK (ours)** | The **real graph engine** — the **two-weeks AttributeGraph fix; upstream Compute does NOT work.** Now also owns `Graph::print_cycle` (non-Apple no-op). Submodule `Submodules/swift-runtime-headers` → `jcmosc/swift-runtime-headers`. |
 | **OpenCoreGraphics** | `harryzz/OpenCoreGraphics` @ `050239b` — **but `050239b` IS `OpenSwiftUIProject/OpenCoreGraphics` main, byte-identical** | detached @ `050239b` | `050239b` | **UPSTREAM, unmodified** (consumed). The harryzz repo only *parks* our wasi:canvas backend on a dormant side branch `wasm32-wasip1` (`00868a9`) that **nothing consumes**. | **GEOMETRY ONLY** as consumed: `CGRect`/`CGPoint`/`CGAffineTransform`/`CGPath`. `CGContext.swift` = empty 16-line stub (upstream). |
 | **OpenObservation** | `OpenSwiftUIProject/OpenObservation` | `main` | `05e0581` | upstream, unmodified | `@Observable`. |
 | **OpenRenderBox** | `OpenSwiftUIProject/OpenRenderBox` | `main` | `38d099f` | upstream, unmodified | ORB path storage / render primitives. |
@@ -23,6 +24,11 @@ All live under `swift/OpenSwiftUIProject/`. "Fork?" = did *we* (harryzz) modify 
 
 The app itself (eleev/swiftui-2048) is **not** here — it lives, UNMODIFIED, in
 `repros/swift-canvas-spike/Sources/T2iles` and compiles behind the shims.
+
+The **Apple-compatibility shims** (`SwiftUI`, `Combine`, `AudioToolbox`) now live in the shared
+in-tree package **`swift/apple-compat/`** (not a submodule — wandr-original code), vending
+Apple-named modules that forward to OpenSwiftUI / OpenCombine + fill gaps. Apps depend on its
+products so unmodified `import SwiftUI/Combine/AudioToolbox` resolve. See §7.
 
 ---
 
@@ -66,19 +72,21 @@ So the wasi:canvas backend exists in **two copies that can drift**:
 repros/swift-canvas-spike/Package.swift
 ├─ .package(path: swift/OpenSwiftUIProject/OpenSwiftUI)   [harryzz @ wasm32-wasip1]
 │    ├─ ../OpenCoreGraphics     [050239b — GEOMETRY only, empty CGContext]
-│    ├─ ../OpenAttributeGraph   [wasm32-wasip1] ──▶ ../Compute [jcmosc @ wasm32-wasip1]
+│    ├─ ../OpenAttributeGraph   [harryzz @ main, 6f2ab76] ──▶ ../Compute [harryzz @ wasm32-wasip1, 332444d]
 │    ├─ ../OpenRenderBox        [upstream main]
 │    ├─ ../OpenObservation      [upstream main]
 │    ├─ ../OpenSFSymbols        [ours]
 │    ├─ OpenCombine 0.15.0, SymbolLocator 0.2.0, swift-syntax 601, swift-numerics 1.0.3
 │    └─ (Darwin only) DarwinPrivateFrameworks
+├─ .package(path: swift/apple-compat)  ──▶ products: SwiftUI · Combine · AudioToolbox  [→ OpenSwiftUI/OpenCombine]
 └─ targets:
-     SwiftUI (shim → OpenSwiftUI) · Combine (shim → OpenSwiftUI) · AudioToolbox (Audio seam)
-     CSwiftSpike (wit-bindgen-c wasi:canvas/input surface) · ComputeStubs (no-op print_cycle)
+     CSwiftSpike (wit-bindgen-c wasi:canvas/input surface)
      WandrCG  ◀── VENDORED OpenCoreGraphics wasi:canvas CGContext (the divergent copy §2)
      T2iles (@main = WandrReactor; eleev sources unmodified; excludes T2ilesApp/Audio/Plist)
      OpenSwiftUIDemo · SwiftSpike · ShimTest
 ```
+(Removed from the spike this session: the `SwiftUI`/`Combine`/`AudioToolbox` shim targets — now
+`swift/apple-compat` products — and `ComputeStubs` — `print_cycle` now lives in Compute.)
 
 The app target (`T2iles`) per `Sources/T2iles/RULES.md` should carry ONLY **Audio /
 Store / startup**; the `CGSink` + reactor currently in `WandrReactor.swift` are generic
@@ -106,41 +114,31 @@ Explicit decisions from that session (verbatim intent):
 
 ---
 
-## 5. ⚠️ CRITICAL — OpenAttributeGraph + Compute MUST use our `harryzz` forks
+## 5. ✅ RESOLVED — OpenAttributeGraph + Compute now use our `harryzz` forks
 
-**Compute and OpenAttributeGraph are OUR forks. Upstream Compute does NOT work** — the
-fix took ~two weeks. `.gitmodules` correctly names `harryzz/...`, and the **code being
-built is our fix** (Compute HEAD `8fda2f4` == `harryzz/wasm32-wasip1`). But the on-disk
-`origin` remote in each submodule points at UPSTREAM, not harryzz:
+**Compute and OpenAttributeGraph are OUR forks. Upstream Compute does NOT work** — the fix
+took ~two weeks. Both were previously checked out with `origin` pointing at UPSTREAM (with
+`harryzz` only a *secondary* remote), so an in-tree `git submodule update` after a pin bump could
+fall back to the non-working upstream. **Fixed this session** — remotes repointed + tracking set:
 
-| Submodule | `.gitmodules` (correct) | on-disk `origin` (WRONG) | built HEAD |
-|---|---|---|---|
-| `Compute` | `harryzz/Compute` | ❌ `jcmosc/Compute` (upstream, no fix) | `8fda2f4` = `harryzz/wasm32-wasip1` ✅ |
-| `OpenAttributeGraph` | `harryzz/OpenAttributeGraph` | ❌ `OpenSwiftUIProject/OpenAttributeGraph` | `6f2ab76` = `harryzz/main` |
+| Submodule | `origin` (now) | `upstream` (kept) | branch → tracks | pin |
+|---|---|---|---|---|
+| `Compute` | ✅ `harryzz/Compute` | `jcmosc/Compute` | `wasm32-wasip1` → `origin/wasm32-wasip1` | `332444d` |
+| `OpenAttributeGraph` | ✅ `harryzz/OpenAttributeGraph` | `OpenSwiftUIProject/…` | `main` → `origin/main` | `6f2ab76` |
 
-**Scope of the risk (narrower than it first looks):** `.gitmodules` **committed at HEAD
-already names the harryzz URLs** (the consolidation commit added them). So a *truly fresh*
-`git clone --recurse-submodules` reads `.gitmodules` → clones from **harryzz** → correct.
-The stale `origin` lives only in **this existing checkout's** `.git/modules/*/config`; it bites
-when someone runs `git submodule update`/`fetch` **in the current tree** after a pin bump —
-git fetches upstream `origin`, can't find the harryzz-only commit, and either fails or leaves
-the old checkout. Annoying, not silently-wrong-at-runtime.
+`.gitmodules` already named the harryzz URLs (so a fresh `clone --recurse` was always fine); the
+repoint fixes the *existing* checkout's `.git/modules/*/config` and sets branch tracking. All of
+this is **local submodule config — no parent-repo commit** (the pins are unchanged / already
+committed). `OpenSwiftUI` and `OpenCoreGraphics` already had `origin` = `harryzz` (correct).
 
-**Fix:** `git submodule sync` resets each `origin` to the `.gitmodules` (harryzz) URL —
-or manually `git remote set-url origin https://github.com/harryzz/<repo>.git`. Then confirm
-the pinned commits are the harryzz ones.
-
-**OAG branch — RESOLVED by dates: keep `6f2ab76` (`harryzz/main`), it is correct.**
-The two harryzz OAG branches diverged, but the pinned one is the newer + chosen + working one:
-- `harryzz/main` = `6f2ab76`, **2026-06-26** ("wasm: Subgraph identity shim") — checked out,
-  un-stubbed + Compute-wired, **builds & works**, and deliberately pinned by the consolidation
-  commit `23c7d366` (2026-06-30). **← canonical.**
-- `harryzz/wasm32-wasip1` = `acf25d27`, **2026-06-19** ("un-stub OAG … Compute backend") — **6
-  days OLDER**, superseded snapshot. The branch *name* is misleading; do **not** pin it.
-
-So no pin change is needed — only the `origin`-remote repoint below.
-
-`OpenSwiftUI` and `OpenCoreGraphics` already have `origin` = `harryzz` (correct).
+**OAG branch — canonical is `6f2ab76`** (2026-06-26, "wasm: Subgraph identity shim"). The two
+harryzz OAG branches diverged; the newer + working one was on `main`, but the local checkout was
+confusingly on a branch *named* `wasm32-wasip1` that pointed at *main's* commit. **Fixed**: the
+local branch is now `main` @ `6f2ab76` tracking `origin/main`; the misleading `wasm32-wasip1` local
+branch was deleted; the stale local `main` (`ac5885b`, an ancestor) fast-forwarded up — no loss.
+`harryzz/wasm32-wasip1` = `acf25d27` (2026-06-19) stays a superseded snapshot, not pinned. Note
+OAG's wasm work lives on `main` (unlike Compute/OpenSwiftUI on `wasm32-wasip1`) — that's the real
+history; the fork branches were not rewritten.
 
 ---
 
@@ -218,26 +216,31 @@ reactor, `CSwiftSpike`, `WandrCG`) must still be **linked into** it. That is fin
   but never *named* or *imported* by app code. `@_cdecl` exports survive linking from a dependency
   (they are the component's exports, force-kept). This satisfies the rule with zero compromise.
 
-### How it is WIRED TODAY (the violation)
+### How it is WIRED TODAY (partially cleaned up)
 
-`repros/swift-canvas-spike/Package.swift`, target `T2iles` (line ~26):
+`repros/swift-canvas-spike/Package.swift`, target `T2iles`, after this session:
 
 ```swift
 dependencies: [
-    "SwiftUI", "Combine", "AudioToolbox",
-    "CSwiftSpike", "WandrCG", "ComputeStubs",   // ← app naming the wasi:canvas layer directly
+    .product(name: "SwiftUI",      package: "apple-compat"),   // ✅ shared package, not app code
+    .product(name: "Combine",      package: "apple-compat"),   // ✅
+    .product(name: "AudioToolbox", package: "apple-compat"),   // ✅
+    "CSwiftSpike", "WandrCG",      // ← STILL the violation: app names the wasi:canvas layer directly
     .product(name: "OpenSwiftUI", package: "OpenSwiftUI"),
 ]
 ```
-and `Sources/T2iles/WandrReactor.swift` does `import CSwiftSpike` + `import WandrCG`. So the app
-target reaches **down** into the bindings — the opposite of the rule. Same smell as
-`Sources/T2iles/RULES.md` (an app should carry only Audio / Store / startup).
+`ComputeStubs` is gone (folded into Compute) and the Apple shims are out (→ `swift/apple-compat`).
+What remains is `CSwiftSpike` + `WandrCG`: `Sources/T2iles/WandrReactor.swift` still `import`s both,
+so the app still reaches **down** into the bindings. Closing that is the `CWASICanvas`/`wandr-runtime`
+work below. Same smell as `Sources/T2iles/RULES.md` (an app should carry only Audio / Store / startup).
 
-### Enabling moves (recorded, not done)
+### Enabling moves — progress
 
-1. **`CSwiftSpike` → a standalone leaf `CWASICanvas`** (wasi:canvas bindings only; drop the
-   input/export trampolines into the runtime). Removes the package-cycle that blocks anything above
-   the app from importing the bindings (§6, and the package-vs-target cycle).
-2. **A `wandr-runtime` product** (imports OpenSwiftUI + `CWASICanvas`) holding the reactor + exports
-   + `CGSink`; add `runWandrApp` beside the framework's `runStdoutApp`.
-3. **App collapses to** `dependencies: [<one wandr product>]`, source `import OpenSwiftUI`.
+- ✅ **Done this session:** Apple shims (`SwiftUI`/`Combine`/`AudioToolbox`) → `swift/apple-compat`;
+  `ComputeStubs` → folded into Compute (`Graph::print_cycle`). The app no longer names those.
+- ⬜ **`CSwiftSpike` → a standalone leaf `CWASICanvas`** (wasi:canvas bindings only; drop the
+  input/export trampolines into the runtime). Removes the package-cycle that blocks anything above
+  the app from importing the bindings (§6, and the package-vs-target cycle).
+- ⬜ **A `wandr-runtime` product** (imports OpenSwiftUI + `CWASICanvas`) holding the reactor + exports
+  + `CGSink`; add `runWandrApp` beside the framework's `runStdoutApp`.
+- ⬜ **App collapses to** `dependencies: [<one wandr product>]`, source `import OpenSwiftUI`.
