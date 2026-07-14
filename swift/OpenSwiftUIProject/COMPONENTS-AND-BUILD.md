@@ -60,9 +60,13 @@ So the wasi:canvas backend exists in **two copies that can drift**:
    `wandrDrawShapeCount`/`wandrDrawTextCount` verify counters, and (this session) the
    new `clip(svgPath:)` / `fill(svgPath:)` methods.
 
-> **Consequence:** the clip/oval-button work added this session landed in copy (2),
-> the vendored one — NOT in the fork branch (1). To be correct it belongs on
-> `wasm32-wasip1`, and copy (2) should be replaced by *consuming* (1).
+> **clip/fill (this session, landed):** the renderer half (`WandrDisplayListRenderer` +
+> `WandrDrawSink`) is committed to `harryzz/OpenSwiftUI@wasm32-wasip1` (`54640751`). The
+> `CGContext` `clip(svgPath:)`/`fill(svgPath:)` half is in the vendored `WandrCG` (committed in
+> the wandr repo), **not** mirrored to OCG's dormant `wasm32-wasip1` — per §6 the CGContext
+> backend lives in `WandrCG` until the `CWASICanvas` split. **GOTCHA fixed here:** `Path.forEach`
+> is an unimplemented stub off-Apple (traps with `unreachable`); build SVG from `path.storage`
+> / `roundedRect()` instead. Verified on desktop: oval pill buttons + rounded tiles.
 
 ---
 

@@ -36,6 +36,18 @@ final class CGSink: WandrDrawSink {
                       color: CGColor(red: CGFloat(red), green: CGFloat(green), blue: CGFloat(blue), alpha: CGFloat(opacity)),
                       maxWidth: CGFloat(width), family: fontFamily)
     }
+    func fillPath(svgPath: String, x: Double, y: Double, width: Double, height: Double,
+                  red: Float, green: Float, blue: Float, opacity: Float) {
+        guard let cg else { return }
+        cg.setFillColor(CGColor(red: CGFloat(red), green: CGFloat(green), blue: CGFloat(blue), alpha: CGFloat(opacity)))
+        cg.fill(svgPath: svgPath)
+    }
+    func pushClip(svgPath: String) {
+        guard let cg else { return }
+        cg.saveGState()
+        cg.clip(svgPath: svgPath)
+    }
+    func popClip() { cg?.restoreGState() }
     func endFrame() {}
 }
 

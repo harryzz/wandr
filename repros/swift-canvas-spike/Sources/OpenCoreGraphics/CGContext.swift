@@ -192,6 +192,19 @@ public final class CGContext: Hashable {
         wasi_canvas_draw_method_canvas_clip_path(canvas, &s, UInt8(WASI_CANVAS_TYPES_FILL_RULE_NONZERO), true)
         beginPath()
     }
+    /// wandr: clip to a raw SVG path-data string already in surface coords (the WandrDrawSink
+    /// `.clip` path). Bracket with save/restoreGState — the OpenSwiftUI renderer does exactly that.
+    public func clip(svgPath d: String) {
+        guard !d.isEmpty else { return }
+        var s = swift_spike_string_t()
+        d.withCString { swift_spike_string_set(&s, $0) }
+        wasi_canvas_draw_method_canvas_clip_path(canvas, &s, UInt8(WASI_CANVAS_TYPES_FILL_RULE_NONZERO), true)
+    }
+    /// wandr: fill a raw SVG path-data string (surface coords) with the current fill color —
+    /// the WandrDrawSink `.shape` path (rounded rects / circles / capsules render their outline).
+    public func fill(svgPath d: String) {
+        emitWithShadow(svg: d, style: WASI_CANVAS_TYPES_PAINT_STYLE_FILL, color: fillColor)
+    }
 
     // ── gradients (fill `rect` with the gradient) ───────────────────────────────
     public func drawLinearGradient(_ g: CGGradient, start: CGPoint, end: CGPoint, in rect: CGRect) {
