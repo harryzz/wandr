@@ -1,0 +1,81 @@
+# OpenSwiftUI-on-wandr — next-session tasks (structural cleanup, then blur)
+
+> Ordered by dependency — each step unblocks the next. Full rationale is in
+> `COMPONENTS-AND-BUILD.md` (§ references below). The frosted backdrop **blur** is deliberately
+> LAST: it needs a `wasi:canvas` WIT verb + host change, which is far cleaner to do once the
+> package layering is normalized. Do not start blur before the structure work.
+>
+> Current state (end of the 2048 effects session): clip/fill, 3D tilt, and drop shadow are all
+> landed. The app (`repros/swift-canvas-spike`) still names the low-level layers directly
+> (`CSwiftSpike`, `WandrCG`) — that's what these tasks fix.
+
+---
+
+## 1. Split `CSwiftSpike` → a standalone leaf `CWASICanvas`  (unblocks everything) — §6, §7
+
+`CSwiftSpike` is a per-app generated blob holding BOTH the wasi:canvas *drawing* bindings AND the
+input/export trampolines. Because it lives inside the app package (which depends on OpenSwiftUI),
+nothing above the app can import it (package cycle).
+
+- Extract JUST the `wasi_canvas_*` (draw/types/layout/embedding) bindings into a standalone leaf
+  C module/package **`CWASICanvas`** (depends on nothing).
+- Leave the `exports_wasi_input_handlers_*` + `wandr:ui-shell/frame-pacing` export trampolines with
+  the reactor/runtime (task 3).
+- Verify: `CWASICanvas` builds standalone; the app still builds consuming it.
+
+## 2. Normalize OpenCoreGraphics — `CGContext` lives in OCG, retire vendored `WandrCG` — §2, §6, §7
+
+With `CWASICanvas` as a leaf, the wasi:canvas `CGContext` can finally live in OCG without breaking
+OpenSwiftUI's build.
+
+- Add a **separate target** in the OCG package (e.g. `OpenCoreGraphicsWASICanvas`) holding
+  `CGContext.swift`/`CGImage.swift`/`CGColor` etc., depending on OCG-geometry + `CWASICanvas`.
+  **Do NOT** put it in the `OpenCoreGraphics` or `OpenCoreGraphicsShims` targets — OpenSwiftUI
+  imports those 48×; adding a CSwiftSpike/CWASICanvas dep there re-breaks the build.
+- Consume that target instead of the vendored `repros/.../Sources/OpenCoreGraphics` (`WandrCG`).
+- Retire: the vendored `WandrCG` copy AND the dormant `harryzz/OpenCoreGraphics@wasm32-wasip1`
+  branch (its whole reason to exist). OpenSwiftUI keeps depending only on OCG-geometry (`050239b`).
+- Fold the effect work (clip/fill/shadow `CGContext` methods, `concat3x3`, `fillShadowPath`) into
+  that OCG target as it moves — currently they live in vendored `WandrCG` only.
+
+## 3. Move the runtime/plumbing OUT of the app — a shared `wandr-runtime` — §7, `Sources/T2iles/RULES.md`
+
+- Create a shared **`wandr-runtime`** product (imports OpenSwiftUI + `CWASICanvas`) holding: the
+  `@_cdecl` exports (`on_frame`/`on_pointer`/`on_resize`/`next_frame_delay`), the wasi:canvas
+  embedding handshake, the `CGSink` (`WandrDrawSink` conformer), frame pacing, and a **`runWandrApp`
+  runner** beside the framework's existing `runStdoutApp` (see `App/App/App.swift:153` dispatch +
+  `App/Stdout/StdoutApp.swift`).
+- The app then collapses to `dependencies: [<one wandr product>]`, source `import OpenSwiftUI`
+  only — carrying just **Audio / Store / startup** per `RULES.md`. No more `import CSwiftSpike` /
+  `import WandrCG` in `WandrReactor.swift`.
+
+## 4. Normalize OpenSwiftUIProject structure (finish) — §7
+
+- Apple-compat shims already extracted to `swift/apple-compat` ✅.
+- Confirm the final layering: app = views + Audio/Store/startup; framework = OpenSwiftUI; runtime =
+  `wandr-runtime` + `CWASICanvas`; geometry = OCG. Update `COMPONENTS-AND-BUILD.md` §3/§7 to match.
+- Optional: relocate the spike session docs (`HANDOFF-*.md`, `AUDIT-*.md`, `CONDITIONAL_WASM_*`,
+  `openswiftui_unimplemented.md`) into `swift/OpenSwiftUIProject/tests/` and retire
+  `repros/swift-canvas-spike` once the app has a real home under `apps/user/wandr.swiftui.demo`.
+
+## 5. THEN: frosted backdrop blur behind modals — §2 "POLISH TODO" / effects list
+
+The modals' background blur (`.filter(.blur)`) is still dropped. Unlike shadow, the wasi:canvas
+contract has **no general layer/backdrop-blur verb** (only per-paint `mask-blur`).
+
+- Add a WIT verb: an optional blur on `save-layer`, or a `set-backdrop-blur` on the scene `layer`
+  (`proposals/wasi-canvas/wit/{canvas,scene}.wit`); implement it in the host Skia sink
+  (`SkImageFilters::Blur` / backdrop filter).
+- Wire the renderer's `.filter(.blur(style))` case to it (parallel to the `.filter(.shadow)` case).
+- This is a shared-WIT change → rebuild all consumers + restart zygote on device
+  (`[[feedback_shared_wit_rebuild_all_consumers]]`).
+
+---
+
+## Polish items (independent, do anytime)
+
+- **Shadow contrast** — the blur `radius → sigma` mapping is `sigma = radius` in
+  `WandrDisplayListRenderer.wandrApplyProjection`/`CGContext.fillShadowPath`; tune (likely
+  `sigma = radius * 0.5` or add spread) for more contrast vs the original.
+- **3D-tilt fidelity** — the perspective reads but is "far from original"; compare against the
+  reference and tune (anchor/perspective, and add the card's own shadow under the tilt).

@@ -1,5 +1,10 @@
 # OpenSwiftUI-on-wandr — components, forks, branches & build map
 
+> **Next-session structural work is in [`NEXT-SESSION-TASKS.md`](NEXT-SESSION-TASKS.md)** —
+> ordered: split `CSwiftSpike`→leaf `CWASICanvas`, normalize OpenCoreGraphics, move the runtime out
+> of the app, then the frosted backdrop blur.
+
+
 > Purpose: inspect **what is actually used, from where, on which branch**, how the
 > build is wired, and the one real divergence (the wasi:canvas `CGContext`).
 > Facts are read off `git`/`Package.swift`. Updated 2026-07-14 to reflect this session's

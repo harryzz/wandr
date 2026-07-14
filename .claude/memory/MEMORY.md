@@ -16,6 +16,7 @@
 
 ## Projects / tasks
 - [✅ Task 115: Signal native wasip3 async](project_task115_wasip3_async.md) — M0-M4 device-verified incl A/V; zero step-executor; fg-pump-CPU follow-up.
+- [🔲 OpenSwiftUI structural cleanup + blur](project_openswiftui_structural_cleanup.md) — NEXT: CSwiftSpike→CWASICanvas leaf, OCG CGContext target, wandr-runtime out of app, THEN frosted backdrop blur; effects (clip/tilt/shadow) already landed.
 - [wasi:canvas + input-handlers migration](project_wasi_canvas_migration.md) — stages 1-3 device-verified; 0.0.2 path B next.
 - [✅ Task 101: desktop dev loop + keys](project_desktop_dev_loop.md) — same wasm on x86_64 via WANDR_DESKTOP_SIZE + JIT.
 - [Project: WASM Android Runtime](project_wasm_runtime.md) — goals, stack, status. · [✅ WART→WANDR rename](project_wandr_rename.md) — rename + --no-art redeploy.
