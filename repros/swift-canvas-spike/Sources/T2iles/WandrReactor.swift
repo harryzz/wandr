@@ -48,6 +48,16 @@ final class CGSink: WandrDrawSink {
         cg.clip(svgPath: svgPath)
     }
     func popClip() { cg?.restoreGState() }
+    var wandrSupportsProjection: Bool { true }
+    func saveState() { cg?.saveGState() }
+    func restoreState() { cg?.restoreGState() }
+    func concat(m00: Double, m01: Double, m02: Double,
+                m10: Double, m11: Double, m12: Double,
+                m20: Double, m21: Double, m22: Double) {
+        cg?.concat3x3(CGFloat(m00), CGFloat(m01), CGFloat(m02),
+                      CGFloat(m10), CGFloat(m11), CGFloat(m12),
+                      CGFloat(m20), CGFloat(m21), CGFloat(m22))
+    }
     func endFrame() {}
 }
 

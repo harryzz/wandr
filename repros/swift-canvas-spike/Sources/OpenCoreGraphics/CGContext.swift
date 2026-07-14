@@ -115,6 +115,17 @@ public final class CGContext: Hashable {
             m20: 0,           m21: 0,           m22: 1)
         wasi_canvas_draw_method_canvas_concat(canvas, &m)
     }
+    /// wandr: concatenate a full row-major 3×3 (with a perspective row) onto the CTM — for
+    /// `rotation3DEffect` / non-affine projections. Skia applies the perspective natively.
+    public func concat3x3(_ m00: CGFloat, _ m01: CGFloat, _ m02: CGFloat,
+                          _ m10: CGFloat, _ m11: CGFloat, _ m12: CGFloat,
+                          _ m20: CGFloat, _ m21: CGFloat, _ m22: CGFloat) {
+        var m = wasi_canvas_types_transform_t(
+            m00: Float(m00), m01: Float(m01), m02: Float(m02),
+            m10: Float(m10), m11: Float(m11), m12: Float(m12),
+            m20: Float(m20), m21: Float(m21), m22: Float(m22))
+        wasi_canvas_draw_method_canvas_concat(canvas, &m)
+    }
 
     // ── paint state ─────────────────────────────────────────────────────────────
     public func setFillColor(_ c: CGColor) { fillColor = c }
