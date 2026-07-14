@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>gameState</key>
+	<dict>
+		<key>gameOverTitle</key>
+		<string>Game Over</string>
+		<key>gameOverSubtitle</key>
+		<string>Your final score is </string>
+		<key>resetGameTitle</key>
+		<string>Reset Game</string>
+		<key>resetGameSubtitle</key>
+		<string>Are you sure you want to start a new game?</string>
+	</dict>
+	<key>about</key>
+	<dict>
+		<key>copyright</key>
+		<string>© 2020 Astemir Eleev</string>
+		<key>linkDescription</key>
+		<string>SwiftUI 2048 — open the repository on GitHub</string>
+		<key>linkUrl</key>
+		<string>https://github.com/eleev/swiftui-2048</string>
+	</dict>
+	<key>settings</key>
+	<dict>
+		<key>gameBoardSize</key>
+		<string>4x4</string>
+		<key>gameBoardDescription</key>
+		<string>Game Board Size</string>
+		<key>audio</key>
+		<string>Audio</string>
+		<key>audioDescription</key>
+		<string>Enable sound effects</string>
+	</dict>
+</dict>
+</plist>

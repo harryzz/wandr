@@ -29,11 +29,12 @@ final class CGSink: WandrDrawSink {
         cg.fill(CGRect(x: CGFloat(x), y: CGFloat(y), width: CGFloat(width), height: CGFloat(height)))
     }
     func drawText(_ text: String, x: Double, y: Double, width: Double, height: Double,
-                  fontSize: Double, red: Float, green: Float, blue: Float, opacity: Float) {
+                  fontSize: Double, red: Float, green: Float, blue: Float, opacity: Float,
+                  fontFamily: String) {
         guard let cg else { return }
         cg.drawString(text, at: CGPoint(x: CGFloat(x), y: CGFloat(y)), size: CGFloat(fontSize),
                       color: CGColor(red: CGFloat(red), green: CGFloat(green), blue: CGFloat(blue), alpha: CGFloat(opacity)),
-                      maxWidth: CGFloat(width))
+                      maxWidth: CGFloat(width), family: fontFamily)
     }
     func endFrame() {}
 }
@@ -102,4 +103,9 @@ public func onPointer(_ ev: UnsafeMutablePointer<exports_wasi_input_handlers_poi
         ptrSerial &+= 1
     default: break
     }
+    // A gesture action may have mutated state and/or scheduled a `withAnimation` transition
+    // (menu slide, tile move/merge). Kick the animation loop so onFrame re-runs the graph and
+    // ADVANCES the animation clock via wandrRenderFrame — otherwise the steady-state redraw-only
+    // path leaves animated properties frozen at their old values (the change never appears).
+    animPending = true
 }

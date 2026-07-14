@@ -31,8 +31,6 @@ public extension View {
     func drawingGroup(opaque: Bool = false, colorMode: ColorRenderingMode = .nonLinear) -> some View {
         wandrShimWarnOnce("shim: .drawingGroup no-op (Metal rasterization fast-path; harmless)"); return self
     }
-    // allowsHitTesting — TODO real gating; identity for now.
-    func allowsHitTesting(_ enabled: Bool) -> some View {
-        wandrShimWarnOnce("shim: .allowsHitTesting(\(enabled)) NO-OP — hit-testing NOT gated (affects gesture routing)"); return self
-    }
+    // allowsHitTesting is now implemented for real in OpenSwiftUI (AllowsHitTesting.swift),
+    // re-exported via `@_exported import OpenSwiftUI` — no shim stub needed.
 }

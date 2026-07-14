@@ -1,0 +1,67 @@
+OpenSFSymbols coverage — SF Symbols 7 (6984 names)  fonts: tabler, lucide, remix, mdi
+  mapped total : 1012
+    override   : 27
+    auto       : 985
+  MISSING      : 5972
+
+First 60 MISSING names:
+    0.circle
+    00.circle
+    0.circle.fill
+    00.circle.fill
+    0.square
+    00.square
+    0.square.fill
+    00.square.fill
+    1.brakesignal
+    1.calendar
+    1.circle
+    01.circle
+    1.circle.fill
+    01.circle.fill
+    1.lane
+    1.magnifyingglass
+    1.square
+    01.square
+    1.square.fill
+    01.square.fill
+    2.brakesignal
+    2.calendar
+    2.circle
+    02.circle
+    2.circle.fill
+    02.circle.fill
+    2.lane
+    2.square
+    02.square
+    2.square.fill
+    02.square.fill
+    2h
+    2h.circle
+    2h.circle.fill
+    3.calendar
+    3.circle
+    03.circle
+    3.circle.fill
+    03.circle.fill
+    3.lane
+    3.square
+    03.square
+    3.square.fill
+    03.square.fill
+    4.alt.circle
+    4.alt.circle.fill
+    4.alt.square
+    4.alt.square.fill
+    4.calendar
+    4.circle
+    04.circle
+    4.circle.fill
+    04.circle.fill
+    4.lane
+    4.square
+    04.square
+    4.square.fill
+    04.square.fill
+    4a
+    4a.circle
