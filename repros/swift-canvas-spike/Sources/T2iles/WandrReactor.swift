@@ -25,6 +25,10 @@ struct WandrHostApp: App {
 // MARK: - WandrDrawSink over a CGContext (OpenSwiftUI DisplayList → CoreGraphics → wasi:canvas)
 final class CGSink: WandrDrawSink {
     nonisolated(unsafe) var cg: CGContext?
+    // Decoded-image cache, keyed by the DisplayList's per-CGImage identity (see
+    // WandrDisplayListRenderer's `.image` case) — a static bundle image redraws every frame; decode
+    // host-side (wasi:canvas graphics.decode-image) once, reuse the resource handle thereafter.
+    nonisolated(unsafe) private var imageCache: [String: CGImage] = [:]
     func beginFrame(width: Double, height: Double, version: UInt32) {}
     func fillRect(x: Double, y: Double, width: Double, height: Double,
                   red: Float, green: Float, blue: Float, opacity: Float) {
@@ -66,6 +70,23 @@ final class CGSink: WandrDrawSink {
                         red: Float, green: Float, blue: Float, opacity: Float) {
         cg?.fillShadowPath(svgPath, dx: CGFloat(dx), dy: CGFloat(dy), blur: CGFloat(blur),
                            color: CGColor(red: CGFloat(red), green: CGFloat(green), blue: CGFloat(blue), alpha: CGFloat(opacity)))
+    }
+    func drawImage(data: [UInt8], name: String, pixelWidth: Int, pixelHeight: Int,
+                   x: Double, y: Double, width: Double, height: Double, opacity: Float) {
+        guard let cg else { return }
+        let image: CGImage?
+        if let cached = imageCache[name] {
+            image = cached
+        } else {
+            image = cg.decodeImage(encodedData: data, pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+            if image == nil {
+                wlog("drawImage: decodeImage FAILED for '\(name)' (\(data.count) bytes, \(pixelWidth)x\(pixelHeight))")
+            }
+            imageCache[name] = image
+        }
+        guard let image else { return }
+        cg.drawImageFitting(image, in: CGRect(x: CGFloat(x), y: CGFloat(y), width: CGFloat(width), height: CGFloat(height)),
+                            opacity: opacity)
     }
     func endFrame() {}
 }

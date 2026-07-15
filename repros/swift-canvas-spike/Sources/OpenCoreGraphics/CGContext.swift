@@ -275,6 +275,40 @@ public final class CGContext: Hashable {
     }
 
     // ── images ──────────────────────────────────────────────────────────────────
+    /// Decode an ENCODED image file (PNG/JPEG/WebP/GIF/BMP bytes) host-side (wasi:canvas
+    /// `graphics.decode-image`, Skia). `pixelWidth`/`pixelHeight` are the TRUE decoded pixel
+    /// dimensions, known ahead of time from the caller's own header parse (e.g. OpenCoreGraphics's
+    /// `CGImage(pngData:)` reads the PNG IHDR chunk) — `decode-image` itself returns only success +
+    /// an opaque image handle, no dimensions, and `draw-image-rect`'s `src` rect genuinely needs the
+    /// real pixel size (NOT a placeholder — verified against `wit/deps/wasi-canvas/canvas.wit`'s
+    /// `draw-image-rect` doc: "Draw `src` (image pixels) into `dst`").
+    public func decodeImage(encodedData: [UInt8], pixelWidth: Int, pixelHeight: Int) -> CGImage? {
+        var bytes = encodedData
+        return bytes.withUnsafeMutableBufferPointer { buf -> CGImage? in
+            var list = swift_spike_list_u8_t(ptr: buf.baseAddress, len: buf.count)
+            var ret = wasi_canvas_draw_own_image_t()
+            let ok = wasi_canvas_draw_method_graphics_decode_image(graphics, &list, &ret)
+            guard ok else { return nil }
+            return CGImage(handle: ret, width: pixelWidth, height: pixelHeight)
+        }
+    }
+    /// Draw a decoded image (its full extent, `image.width`×`image.height`) scaled to fit `rect`,
+    /// with `opacity` applied via the paint alpha.
+    public func drawImageFitting(_ image: CGImage, in rect: CGRect, opacity: Float) {
+        var src = wasi_canvas_types_rect_t(x: 0, y: 0, width: Float(image.width), height: Float(image.height))
+        var dst = wasiRect(rect)
+        var sampling = wasi_canvas_types_sampling_t(
+            filter: UInt8(WASI_CANVAS_TYPES_FILTER_MODE_LINEAR),
+            mipmap: UInt8(WASI_CANVAS_TYPES_MIPMAP_MODE_NONE))
+        var p = wasi_canvas_types_paint_t()
+        p.color = 0xFFFF_FFFF
+        p.alpha = UInt8(max(0, min(255, opacity * 255)))
+        p.anti_alias = true
+        p.blend = blendMode.wasi
+        let b = wasi_canvas_types_borrow_image_t(__handle: image.handle.__handle)
+        wasi_canvas_draw_method_canvas_draw_image_rect(canvas, b, &src, &dst, &sampling, &p)
+    }
+
     /// Upload tightly-packed non-premultiplied RGBA8 pixels to a host image.
     public func makeImage(rgba: [UInt8], width: Int, height: Int) -> CGImage? {
         var pixels = rgba
