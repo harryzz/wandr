@@ -172,10 +172,31 @@ its pages freed while every other structure still thinks it's alive. This exactl
     _invalidating_subgraphs.erase(iter2, _invalidating_subgraphs.end());
 }
 ```
-Added a matching **permanent, cheap regression guard** in `Graph::invalidate_subgraphs()`'s pop loop
-(`#if defined(__wasi__)`, wrapping a `contains_subgraph()` pointer-search-only check — never dereferences a
-possibly-stale pointer): `precondition_failure` if a popped queue entry is ever not a live, registered
-subgraph. Zero cost when the invariant holds; a hard, immediate signal if this bug class regresses.
+Added a matching **permanent, cheap regression guard** in `Graph::invalidate_subgraphs()`'s pop loop —
+before the popped pointer is dereferenced at all, confirm it's still a live, registered subgraph
+(`contains_subgraph` is a pure pointer search, never touches the pointee, so it's safe even if the pointer
+is dangling):
+```cpp
+while (!_invalidating_subgraphs.empty()) {
+    auto subgraph = _invalidating_subgraphs.back();
+    _invalidating_subgraphs.pop_back();
+
+#if defined(__wasi__)
+    if (!contains_subgraph(subgraph)) {
+        precondition_failure("stale entry in deferred-invalidation queue: subgraph %p is not a "
+                              "live, registered subgraph (regressed cross-linked-teardown bug — "
+                              "see tests/oag-baseline/CROSS-LINKED-PAGE-CHAIN-FINDINGS.md)",
+                              (void *)subgraph);
+    }
+#endif
+    subgraph->invalidate_now(*this);
+}
+```
+This is the tripwire for the fix above regressing: if some future change reintroduces a path that tears a
+subgraph down without removing its queue entry, this fires a hard, clearly-worded crash at the exact
+moment it goes wrong — instead of the corruption silently surfacing somewhere unrelated later (which is
+what made the original bug take so long to find). Zero cost when the invariant holds (one cheap pointer
+search on an infrequent path); it is a genuine assertion, not a fallback, so it cannot mask a regression.
 
 ### Fix 2 — `table::alloc_page` multi-page scan control-flow bug (Table.cpp)
 
