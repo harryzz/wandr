@@ -107,6 +107,39 @@ slot). Technique: a write-watchpoint / poison-on-free on the graph zone, or bise
 The 2026-07-15 gesture/ABI work ([[reference_openswiftui_gestures_offapple]]) is unrelated & shipped fine;
 this UAF predates it and surfaces only under heavy real play the old "reaches frame #14" tests never hit.
 
+## 2026-07-15 (deep, 3-agent) — mechanism NAILED + site-1 PROVEN & FIXED; still multi-surface
+Root class (all crash sites): a RAW reference into zone storage / the subgraph graph is dereferenced
+across a point that can realloc a data::vector, free a Node slot, or delete a Subgraph. Compute's own
+wasm suite (15/15) passes because its tests are STRAIGHT-LINE; the app's corruption needs OpenSwiftUI's
+DEFERRED + REENTRANT graph ops (continueTransaction/enqueueAction/onInvalidation) that no Compute test
+exercises. Only OpenSwiftUICore(178 files)+OpenSwiftUI(60) touch OAG/Compute directly; app/apple-compat/
+OpenCoreGraphics/Observation/RenderBox = 0.
+- **SITE 1 (propagate_dirty output_edges) — PROVEN + FIXED.** The ONLY thing that runs graph-mutating
+  Swift SYNCHRONOUSLY inside propagate_dirty is the invalidation callback (`call_invalidation_if_needed`
+  → `onInvalidation`), which fires ONLY across a CONTEXT boundary. `makeItem` lazily adds an edge to
+  `info` (a cross-context dependent) → `add_output_edge`→`push_back`→`realloc_bytes` MOVES `info.output_edges`
+  while propagate_dirty holds a raw `{&front(),size}` snapshot → recycled buffer overwritten → wild read.
+  REPRO: `tests/oag-baseline/Sources/oagdangling/main.swift` — needs TWO contexts (`Graph(shared:)`) +
+  cross-context dependent + `onInvalidation` that grows the walked node's output_edges. With the
+  `g_iag_graph_walk_depth` retain guard OFF it faults on a wild ptr (exit 134); ON it survives 2000 rounds.
+  Fix committed (Zone.cpp/Graph.cpp/Zone.h).
+- **SITE 3 (foreach_ancestor) — FIXED (gate).** `invalidate_and_delete_` unlinks the victim from its OWN
+  parents but leaves its CHILDREN's `_parents` pointing at it until the DEFERRED invalidate_now; in
+  OpenSwiftUI's deferred mode a live child holds a `_parents*` to a freed subgraph. Added a
+  `contains_subgraph` liveness gate in `Subgraph::foreach_ancestor` (Subgraph.h). Held in run-12.
+- **STILL CRASHES (site 5, run-12):** `StoredLocation.notifyObservers → invalidateValue → value_mark →
+  propagate_dirty` wild read — a torn-down view left in a @State/@Observable **observer list**. Different
+  structure again; no guard log.
+LIMIT OF THE GATE PATTERN: `contains_subgraph` catches a deleted-SUBGRAPH, but a **reused NODE slot in a
+LIVE subgraph** passes the gate → still crashes. Compute has zone-id versioning at the SUBGRAPH level but
+NO per-NODE generation stamp. So the remaining surfaces (StoredLocation observers, value_mark early
+derefs, attribute_view) need EITHER (a) a per-node generation/liveness stamp checked at every raw deref
+(big Compute change), OR (b) OpenSwiftUI teardown-HYGIENE: every subsystem that stores an attribute/
+subgraph reference (DynamicContainer, StoredLocation observers, preference/gesture graphs) must
+DEREGISTER it on teardown — the real root, spread across many OpenSwiftUICore subsystems. Per-site deref
+gates are a defensive backstop, not a cure. NEXT: pick (a) or (b); the oagdangling harness + this map are
+the anchor.
+
 USER HYPOTHESIS (strong, narrows the hunt): the app was played for HOURS with NO crash back when it was
 board+tiles ONLY — no side menu, no modals, no Settings/About, no buttons/rounded-rects. The crash
 appeared once those DYNAMIC elements were added. Fits the diagnosis exactly: the board is a STATIC view
