@@ -8,6 +8,9 @@
 
 import SwiftUI
 
+// [wandr] The real app entry. Under -DWANDR_HEADLESS the deterministic teardown-repro driver in
+// WandrHeadless.swift owns @main instead (temporary; remove the flag once the UAF is fixed & verified).
+#if !WANDR_HEADLESS
 @main
 struct T2ilesApp: App {
     
@@ -25,3 +28,4 @@ struct T2ilesApp: App {
         }
     }
 }
+#endif

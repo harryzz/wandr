@@ -3,7 +3,7 @@
 ## ‼️ STANDING RULES (read every session — detail in each file)
 - [RULE: Compute goal + working rules](feedback_compute_goal_and_working_rules.md) — goal = bug-free AttributeGraph reimpl (demos/tests are probes); READ FIRST; never patch-to-green; ARC ruled out; keep WASM-PORT-LOG.md.
 - [RULE: NEVER work in /tmp](feedback_no_tmp_persistent_work.md) — repros/tests/source in repros/ or tests/ (scratch wiped on crash); capture to RESUME.md.
-- [RULE: do NOT hardcode](feedback_no_hardcoding.md) — derive from runtime inputs; constant = ONE named source in owning layer; NO per-app hardcode in wandr-host (apps declare via package.toml [[mounts]]/keys).
+- [RULE: do NOT hardcode](feedback_no_hardcoding.md) — derive from runtime inputs; constant = ONE named source; NO per-app hardcode in wandr-host (apps declare via package.toml).
 - [RULE: build-system-wandrpkgs.sh WIPES apps root](feedback_build_system_wandrpkgs_wipes_apps_root.md) — use per-app `wandr-host --install`.
 - [RULE: clean library usage](feedback_clean_library_usage.md) — public API only; no WIT/codegen leak; ASK before widening.
 - [RULE: always use latest versions](feedback_check_latest_versions.md) — check latest version online; don't trust stale pins.
@@ -12,106 +12,97 @@
 - [RULE: humility — proven vs guessed](feedback_humility_proven_vs_guessed.md) — run the falsifying test FIRST; weigh user pushback.
 - [RULE: shared WIT change → rebuild ALL + restart zygote](feedback_shared_wit_rebuild_all_consumers.md) — shared-type ABI breaks every importer.
 - [RULE: capture full build output](feedback_capture_build_output.md) — save FULL build to a log; never pre-filter a live build.
-- [RULE: OpenSwiftUI app = ONLY Audio/Store/startup](feedback_openswiftui_app_only_audio_store_startup.md) — sink/reactor/render glue is shared runtime, NEVER per-app; render features (clip/blur/3D) added once; `Sources/T2iles/RULES.md`.
+- [RULE: OpenSwiftUI app = ONLY Audio/Store/startup](feedback_openswiftui_app_only_audio_store_startup.md) — sink/reactor/render glue is shared runtime, NEVER per-app; `Sources/T2iles/RULES.md`.
 
 ## Projects / tasks
-- [✅ Task 115: Signal native wasip3 async](project_task115_wasip3_async.md) — M0-M4 device-verified incl A/V; zero step-executor; fg-pump-CPU follow-up.
-- [🔲 OpenSwiftUI structural cleanup + blur](project_openswiftui_structural_cleanup.md) — NEXT: CSwiftSpike→CWASICanvas leaf, OCG CGContext target, wandr-runtime out of app, THEN frosted backdrop blur; effects (clip/tilt/shadow) already landed.
-- [wasi:canvas + input-handlers migration](project_wasi_canvas_migration.md) — stages 1-3 device-verified; 0.0.2 path B next.
-- [✅ Task 101: desktop dev loop + keys](project_desktop_dev_loop.md) — same wasm on x86_64 via WANDR_DESKTOP_SIZE + JIT.
-- [Project: WASM Android Runtime](project_wasm_runtime.md) — goals, stack, status. · [✅ WART→WANDR rename](project_wandr_rename.md) — rename + --no-art redeploy.
-- [✅ Task 93 P2: SRTP HW-AES offload](project_wandr_crypto_srtp_offload.md) — SRTP GCM on host ARMv8 AES; 3.0×/8.5×.
-- [✅ Task 93 P1+4: wandr:video host](project_wandr_video_host.md) — camera→HW-VP8→decode-to-SURFACE/PiP; Surface upcast gotcha.
+- [✅ Task 115: Signal wasip3 async](project_task115_wasip3_async.md) — M0-M4 device-verified incl A/V. · [wasi:canvas migration](project_wasi_canvas_migration.md) — stages 1-3 verified; 0.0.2 path B next.
+- [🔲 OpenSwiftUI structural cleanup + blur](project_openswiftui_structural_cleanup.md) — NEXT: CSwiftSpike→CWASICanvas leaf, OCG CGContext target, THEN frosted blur.
+- [✅ Task 101: desktop dev loop](project_desktop_dev_loop.md) — same wasm on x86_64 via WANDR_DESKTOP_SIZE + JIT.
+- [Project: WASM Android Runtime](project_wasm_runtime.md) — goals/stack/status. · [✅ WART→WANDR rename](project_wandr_rename.md) — rename + --no-art redeploy.
+- [✅ Task 93 P2: SRTP HW-AES](project_wandr_crypto_srtp_offload.md) — SRTP GCM on host ARMv8 AES, 3-8×. · [crypto HW roadmap](project_crypto_hw_offload.md) — 3 layers.
+- [✅ Task 93 P1+4: wandr:video host](project_wandr_video_host.md) — camera→HW-VP8→SURFACE/PiP; Surface upcast gotcha.
 - [✅ Task 93: Signal video calls](project_wandr_call_video_track.md) — RED PT-120, TWCC mandatory, rotation via container matrix.
-- [crypto HW offload roadmap](project_crypto_hw_offload.md) — host-side crypto; 3 layers; AIDL survivors.
-- [✅ Task 98: AudioFlinger-direct backend](project_audioflinger_backend.md) — pure-Rust createTrack→cblk ring; 3 bugs.
-- [🔲 Task 108: audio player design](project_audio_player.md) — wasi:audio PCM floor + optional HW codec + media-session.
-- [✅ Desktop wasi:audio = cpal](project_desktop_audio_cpal.md) — WSLg: cpal `pulseaudio` feature (NOT pipewire/ALSA→Dummy); BufferSize::Fixed(40ms); desktop MUST pump bg-tick; $HOME/Music.
-- [🔲 Desktop packaging (future)](project_desktop_packaging.md) — recorded-only: apps-as-zip + host+libs+install-script for easy desktop install; NOT started.
-- [✅ Desktop wandr:video = nokhwa+ffmpeg](project_desktop_video_nokhwa.md) — nokhwa camera + ffmpeg VP8 (video.test ALL PASS incl wandr-call SRTP/UDP); WSLg RDP cam truncates >640x480 (MJPEG); ffmpeg-next 7.1 codec+format+software-scaling; unsafe-Send; desktop --run-once + new_headless renderer.
-- [✅ Task 93/95: camera --no-art](project_artless_camera.md) — raw 29fps / HW VP8 17fps; EIS-gyro race.
-- [✅ Task 91: ART-off call audio](project_artless_call_audio.md) — earpiece un-duck + focus::call_start.
-- [ROOT: call silent = audioserver crash](project_call_audioserver_crash.md) — setPhoneState kills audio_policy; use setForceUse.
-- [✅ incoming-call answerer connect](project_incoming_call_answerer_bug.md) — self_select_best_pair + `accepted` RTP + device_id self-hangup.
-- [✅ Task 90 M1: wandr:events bus](project_event_bus.md) — generic host↔guest events; guest DIRTY-flag gotcha.
-- [✅ Task 92: wandr:task-manager](project_task_manager.md) — arbiter task-list/kill + /proc; bindgen gotchas.
+- [✅ Task 98: AudioFlinger-direct](project_audioflinger_backend.md) — pure-Rust createTrack→cblk ring. · [🔲 Task 108: audio player](project_audio_player.md) — wasi:audio PCM + HW codec.
+- [✅ Desktop wasi:audio=cpal](project_desktop_audio_cpal.md) — WSLg: `pulseaudio` feature (NOT pipewire/ALSA); desktop MUST pump bg-tick.
+- [🔲 Desktop packaging](project_desktop_packaging.md) — apps-as-zip + install-script; NOT started.
+- [✅ Desktop video=nokhwa+ffmpeg](project_desktop_video_nokhwa.md) — VP8 all-pass; WSLg RDP cam truncates >640x480; --run-once.
+- [✅ Task 93/95 camera --no-art](project_artless_camera.md) — 29fps raw/17fps VP8. · [✅ Task 91 ART-off call audio](project_artless_call_audio.md) — earpiece un-duck.
+- [ROOT: call silent=audioserver crash](project_call_audioserver_crash.md) — setPhoneState kills audio_policy; use setForceUse. · [✅ incoming-call connect](project_incoming_call_answerer_bug.md) — self_select_best_pair.
+- [✅ Task 90 events bus](project_event_bus.md) — host↔guest events; DIRTY-flag gotcha. · [✅ Task 92 task-manager](project_task_manager.md) — arbiter task-list/kill.
 - [✅ Task 71: keyboard/overlay lifecycle](project_keyboard_overlay_lifecycle.md) — IME sizing derived; focus-follows-fg.
-- [Design: arbiter-as-window-server](project_arbiter_window_server_design.md) — AMS+WMS+IMMS, decides-never-renders. · [✅ Task 73: modular arbiter + WM](project_task73_modular_arbiter_wm.md) — workspace split; host = applier.
-- [✅ Task 74: surface/role model](project_task74_surface_role_model.md) — per-display surface/role; reentrant-lock gotcha.
-- [✅ Keyguard/lockscreen](project_keyguard.md) — Role::Lockscreen + auto-lock; PIN deferred. · [✅ AlarmManager](project_alarm_manager.md) — wandr:alarm WIT + arbiter timer.
-- [✅ Signal background receipt](project_signal_bg_receipt.md) — wake + bg-tick + notify (M1-M4); bindgen-stale gotcha.
-- [✅ True-dp geometry](project_true_dp_geometry.md) — chrome heights in dp. · [✅ Chrome coherence](project_chrome_coherence.md) — chrome self-registers; arbiter = orientation authority.
-- [✅ wandr-arbiter-audio](project_arbiter_audio.md) — audio-focus + comms + keep-alive; restart-drops-chrome.
-- [wandr-call engine](project_wandr_call.md) — pure-Rust WebRTC for wasip2; external/rtc + wandr-rtc.patch.
-- [✅ Task 75: call audio output](project_call_audio_output.md) — USAGE_MEDIA-only on taimen; play_buf FIFO.
-- [✅ Task 77: arbiter-sensors](project_arbiter_sensors.md) — rsbinder sensors + ref-count + proximity hysteresis. · [✅ Task 78: proximity screen-off](project_proximity_screen_off.md) — SF setPowerMode; blank-only-during-call.
-- [ART shutdown](project_art_shutdown.md) — stop/start framework; magisk am-spin sweep; /proc/stat trap.
-- [Task 80: standalone input](../../tasks/80-standalone-input-art-less.md) — evdev-direct input, ART-off. · [✅ Task 84: wandr-inputflinger](project_pathA_inputflinger.md) — ART-off touch/keys; transform.set + refeed.
-- [✅ Task 85: ART-off sensors/rotation](project_artless_sensors.md) — C++ HIDL shim; fused orientation type 27. · [✅ Task 86: ART-off auto-brightness](project_artless_autobrightness.md) — lux→backlight; no-EMA.
-- [✅ Task 87: ART-off audio](project_artless_audio.md) — 4 binder stubs + init_audio_policy. · [✅ Task 88: ART-off networking](project_artless_network.md) — wpa_supplicant-direct; DNS→wandr-net.
-- [✅ 5s sensor lag = batterystats](project_artless_sensor_5s_batterystats.md) — blocking getService loop; GenericStub fix.
-- [Design: call screen-power](project_call_screen_power.md) — video>proximity>idle; latent blank bug.
-- [✅ Task 76: audio routing = arbiter](project_audio_routing_arbiter.md) — routing in arbiter. · [✅ Task 76 probe: audio caps](project_audio_capability_model.md) — deviceIds==port ids; F32-stereo-only.
+- [Design: arbiter=window-server](project_arbiter_window_server_design.md) — decides-never-renders. · [✅ Task 73 modular arbiter+WM](project_task73_modular_arbiter_wm.md) — host=applier.
+- [✅ Task 74: surface/role model](project_task74_surface_role_model.md) — per-display; reentrant-lock gotcha.
+- [✅ Keyguard/lockscreen](project_keyguard.md) — Role::Lockscreen + auto-lock. · [✅ AlarmManager](project_alarm_manager.md) — wandr:alarm WIT.
+- [✅ Signal bg receipt](project_signal_bg_receipt.md) — wake+bg-tick+notify; bindgen-stale gotcha.
+- [✅ True-dp geometry](project_true_dp_geometry.md) — chrome heights in dp. · [✅ Chrome coherence](project_chrome_coherence.md) — arbiter=orientation authority.
+- [✅ wandr-arbiter-audio](project_arbiter_audio.md) — audio-focus + keep-alive; restart-drops-chrome.
+- [wandr-call engine](project_wandr_call.md) — pure-Rust WebRTC wasip2. · [✅ Task 75 call audio out](project_call_audio_output.md) — USAGE_MEDIA-only; play_buf FIFO.
+- [✅ Task 77 arbiter-sensors](project_arbiter_sensors.md) — proximity hysteresis. · [✅ Task 78 proximity screen-off](project_proximity_screen_off.md) — blank-only-during-call.
+- [ART shutdown](project_art_shutdown.md) — magisk am-spin sweep; /proc/stat trap.
+- [Task 80 standalone input](../../tasks/80-standalone-input-art-less.md) — evdev-direct. · [✅ Task 84 inputflinger](project_pathA_inputflinger.md) — transform.set + refeed.
+- [✅ Task 85 ART-off sensors](project_artless_sensors.md) — C++ HIDL shim. · [✅ Task 86 auto-brightness](project_artless_autobrightness.md) — lux→backlight.
+- [✅ Task 87 ART-off audio](project_artless_audio.md) — 4 binder stubs. · [✅ Task 88 ART-off networking](project_artless_network.md) — wpa_supplicant-direct.
+- [✅ 5s sensor lag=batterystats](project_artless_sensor_5s_batterystats.md) — blocking getService loop fix.
+- [Design: call screen-power](project_call_screen_power.md) — video>proximity>idle. · [✅ Task 76 audio routing](project_audio_routing_arbiter.md) — routing in arbiter.
 - [Ref: AudioPolicy for calls](reference_audio_policy_calls.md) — setPhoneState/setForceUse; VOICE_COMMUNICATION.
-- [✅ Mic capture](project_audio_mic_capture.md) — open-capture WIT; downDataQueue quirk. · [✅ Idle-CPU 14→9%](project_idle_cpu_chrome.md) — clock_text date-fork + 60Hz poll.
-- [Signal app location](project_signal_app_location.md) — apps/user/wandr.signal/. · [Signal resume point](project_signal_resume_point.md) — paused features + next steps.
-- [Signal client architecture](project_signal_client_architecture.md) — guest-side over generic wasi:tls. · [Signal wasip2 transport swap](project_signal_wasip2_transport_swap.md) — libsignal on wasip2; reqwest over wasi:tls.
-- [wandr-step-executor](project_wandr_step_executor.md) — frame-stepped reactor; async survives export calls.
-- [Boot-model libgui build](project_boot_model_libgui_build.md) — a-03 = infra; check Rust/Skia first. · [Standalone orientation](project_standalone_orientation.md) — eglQuerySurface lies; use ANativeWindow geometry.
-- [✅ Standalone input (task 33)](project_standalone_input.md) — touch via BBQ-direct attach. · [✅ Standalone keys](project_standalone_keys.md) — SfInputEvent 10/11; periodic request_focus.
-- [IME options (no-Java)](project_ime_options.md) — in-canvas Compose keyboard; wasi-guest IME = north star.
-- [App lifecycle + packaging](project_app_lifecycle_and_packaging.md) — Hybrid zygote; fork survival ~180MB/app.
-- [✅ Task 36 step 7](project_task_36_step_7_pending.md) — cross-app dep chain; --run-once. · [✅ Task 38: wandrpkg assets](project_task_38_wandrpkg_assets.md) — assets/ auto-copied; assets.read verb.
-- [overlay orientation (task 62)](project_overlay_orientation.md) — anchor-aware overlay_rect.
+- [✅ Mic capture](project_audio_mic_capture.md) — open-capture WIT quirk. · [✅ Idle-CPU 14→9%](project_idle_cpu_chrome.md) — clock_text date-fork + 60Hz poll.
+- [Signal app location](project_signal_app_location.md) — apps/user/wandr.signal/. · [Signal resume point](project_signal_resume_point.md) — paused features.
+- [Signal client arch](project_signal_client_architecture.md) — guest-side wasi:tls. · [Signal wasip2 transport](project_signal_wasip2_transport_swap.md) — libsignal + reqwest.
+- [wandr-step-executor](project_wandr_step_executor.md) — frame-stepped reactor. · [IME options](project_ime_options.md) — in-canvas Compose keyboard.
+- [Boot-model libgui build](project_boot_model_libgui_build.md) — a-03=infra. · [Standalone orientation](project_standalone_orientation.md) — use ANativeWindow geometry.
+- [✅ Standalone input (33)](project_standalone_input.md) — BBQ-direct. · [✅ Standalone keys](project_standalone_keys.md) — SfInputEvent 10/11.
+- [App lifecycle+packaging](project_app_lifecycle_and_packaging.md) — Hybrid zygote fork ~180MB/app. · [overlay orientation (62)](project_overlay_orientation.md) — anchor-aware.
+- [✅ Task 36 step 7](project_task_36_step_7_pending.md) — cross-app dep chain. · [✅ Task 38 wandrpkg assets](project_task_38_wandrpkg_assets.md) — assets.read verb.
 
 ## References / gotchas
-- [Ref: host build scripts (linux/win/android/macos)](reference_host_build_scripts.md) — use the 4 committed scripts, never inline cargo build; p3-async ON by default; android from crate dir; Intel Mac cross-builds arm64 (Monterey 12.7.6=Xcode14.2) but compile-only ≠ works.
-- [Ref: p3 WSS stalls = wit-bindgen 0.53 bug](reference_wasmtime46_p3_stream_bugs.md) — CM-async streaming needs wit-bindgen 0.59+.
-- [Ref: "resource impl missing" = stale zygote](reference_missing_instance_error_stale_zygote.md) — apps forked old zygote image.
+- [Ref: host build scripts](reference_host_build_scripts.md) — use the 4 committed scripts, never inline cargo build; p3-async ON by default.
+- [Ref: p3 WSS stalls](reference_wasmtime46_p3_stream_bugs.md) — wit-bindgen 0.53 bug; needs 0.59+.
+- [Ref: "resource impl missing"](reference_missing_instance_error_stale_zygote.md) — apps forked old zygote image.
 - [Ref: ART-off Magisk am-spin](reference_artoff_magisk_am_spin.md) — am-loop workers starve HALs; adb root for probes.
-- [Ref: wandr-host --install APPS_ROOT](reference_wandr_apps_root_install.md) — adb push nesting + chmod 755 traps.
-- [Ref: host AOT codegen corruption](reference_host_aot_codegen_corruption.md) — SIGSEGV cwasm = cargo clean; ps|grep never matches guests.
-- [Ref: a-03 fast ninja rebuild](reference_a03_ninja_build.md) — direct-ninja the soong intermediate. · [Ref: rsbinder pinned](reference_rsbinder_version.md) — rev 5e999e04a; 0.8.0 mis-decodes AudioPortFw.
+- [Ref: --install APPS_ROOT](reference_wandr_apps_root_install.md) — adb push nesting + chmod 755 traps.
+- [Ref: host AOT codegen corruption](reference_host_aot_codegen_corruption.md) — SIGSEGV cwasm = cargo clean.
+- [Ref: a-03 fast ninja](reference_a03_ninja_build.md) — direct-ninja soong intermediate. · [Ref: rsbinder pinned](reference_rsbinder_version.md) — 0.8.0 mis-decodes AudioPortFw.
 - [Ref: on-demand rendering](reference_on_demand_rendering.md) — frame-pacing WIT; statusbar clock-refresh trap.
-- [Ref: WSLg Wayland resize crash](reference_wslg_wayland_resize_crash.md) — desktop host crashes on resize under Wayland; force WINIT_UNIX_BACKEND=x11.
+- [Ref: WSLg Wayland resize crash](reference_wslg_wayland_resize_crash.md) — force WINIT_UNIX_BACKEND=x11.
 - [Ref: compose-wasi consumption](reference_compose_wasi_consumption.md) — use in-tree *-wasm-wasi:9999.0.0-SNAPSHOT.
-- [Ref: wandrpkg manifest convention](reference_wandrpkg_manifest_convention.md) — package.toml in app source dir. · [Ref: photon image lib](reference_photon_image_lib.md) — wasip2-fit image processing.
-- [Ref: dioxus + taffy UI](reference_dioxus_taffy_rust_ui.md) — crates/dioxus-canvas. · [Ref: wasi-webgpu/wasi-gfx](reference_wasi_webgpu_gfx.md) — guest-owns-renderer; 2nd path beside skiko-gfx.
-- [Ref: Avalonia SHIPPED](reference_avalonia_wandr.md) — Fluent on device; pin Avalonia 11.3.17 + ILC alpha.
-- [Ref: Swift/OpenSwiftUI eleev 2048](reference_swift_openswiftui_wandr.md) — root = AGSubgraphStorage UAF; fix = [[reference_openswiftui_immortal_fix]].
-- [Ref: OpenSwiftUI SF Symbols render off-Apple](reference_openswiftui_sfsymbols_rendering.md) — Image(systemName:) via OpenSFSymbols module + Tabler; 2 root causes: Button was EmptyView stub; resizable-symbol read resolved ViewSize → AG cycle (fill+size-at-draw); Image.Style stack always empty.
-- [Ref: OpenSwiftUI if/else view-list wasm crash](reference_openswiftui_conditional_wasm_metadata.md) — 2 hardcoded-64-bit metadata-ABI bugs FIXED (genericType ptr-size; access-fn-in-table); + Bundle.main seam + font-resolution wall.
-- [Ref: ObservableObject works on wasm](reference_observableobject_wasm_exclusivity.md) — @Published/@ObservedObject reactivity works (reactor incl.); the crash was Swift dynamic-exclusivity across export re-entry, NOT OpenCombine's (no-op WASI) lock; fix = build ALL modules (incl OpenCombine) with -enforce-exclusivity=unchecked.
-- [Ref: desktop font resolve-by-name](reference_desktop_font_resolve_by_name.md) — Skia system FontMgr resolves OS-installed fonts by name w/ real metrics on DESKTOP (Linux verified 263 families); zero-metrics ban is Android-only; get_typeface uses match_family_style on desktop; OpenSwiftUI uses typeface-from-bytes not this. `--font-probe`.
-- [Ref: egui](reference_egui_wandr.md) — wasi-webgpu, NOT wasi:canvas. · [Ref: Flutter+Go](reference_flutter_go_ui_wandr.md) — dart2wasm JS-only; Go no skia. · [Ref: Qt](reference_qt_wandr.md) — no wasi port; Slint covers.
-- [Ref: Ruby viable-DIY](reference_ruby_wandr.md) — wasip2 proven; no componentize-ruby. · [Ref: Redox host](reference_redox_wandr.md) — x86_64-VM plausible; arm64 moonshot.
-- [Ref: Slint SHIPPED](reference_slint_wasip2.md) — crates/slint-wandr; docs/skia-wit-mapping.md. · [Ref: dioxus 0.7 subsecond wall](reference_dioxus_07_wasip2_subsecond.md) — narrow cfg + [patch.crates-io].
+- [Ref: wandrpkg manifest](reference_wandrpkg_manifest_convention.md) — package.toml in app dir. · [Ref: photon image lib](reference_photon_image_lib.md) — wasip2-fit.
+- [Ref: dioxus+taffy](reference_dioxus_taffy_rust_ui.md) — crates/dioxus-canvas. · [Ref: wasi-webgpu/gfx](reference_wasi_webgpu_gfx.md) — guest-owns-renderer.
+- [Ref: Avalonia SHIPPED](reference_avalonia_wandr.md) — pin Avalonia 11.3.17 + ILC alpha.
+- [Ref: Swift/OpenSwiftUI eleev 2048](reference_swift_openswiftui_wandr.md) — port overview; UAF fix → [[reference_openswiftui_headless_uaf_repro]].
+- [Ref: SF Symbols off-Apple](reference_openswiftui_sfsymbols_rendering.md) — OpenSFSymbols+Tabler; Button was EmptyView stub; AG cycle from ViewSize read.
+- [✅ FIXED: eleev-2048 AttributeGraph UAF](reference_openswiftui_headless_uaf_repro.md) — 2 real Compute defects (remove_subgraph missing erase; alloc_page scan bug); deployed.
+- [Ref: if/else view-list wasm crash](reference_openswiftui_conditional_wasm_metadata.md) — 2 hardcoded-64-bit metadata-ABI bugs FIXED.
+- [Ref: ObservableObject works](reference_observableobject_wasm_exclusivity.md) — crash was Swift dynamic-exclusivity; fix = -enforce-exclusivity=unchecked on ALL modules.
+- [Ref: desktop font resolve-by-name](reference_desktop_font_resolve_by_name.md) — Skia FontMgr real metrics on DESKTOP; zero-metrics ban is Android-only.
+- [Ref: egui](reference_egui_wandr.md) — wasi-webgpu. · [Ref: Flutter+Go](reference_flutter_go_ui_wandr.md) — no skia. · [Ref: Qt](reference_qt_wandr.md) — Slint covers.
+- [Ref: Ruby viable-DIY](reference_ruby_wandr.md) — wasip2 proven. · [Ref: Redox host](reference_redox_wandr.md) — arm64 moonshot.
+- [Ref: Slint SHIPPED](reference_slint_wasip2.md) — crates/slint-wandr. · [Ref: dioxus 0.7 wall](reference_dioxus_07_wasip2_subsecond.md) — narrow cfg + patch.crates-io.
 - [Ref: wasmtime 44 debug APIs](reference_wasmtime_debug_apis.md) — call_hook/breakpoints for memory corruption.
-- [Ref: wandr wasi-tls transport](reference_wandr_wasi_tls_transport.md) — guest TLS; Signal CA via custom TlsProvider.
-- [Ref: Windows ARM64 buildable](reference_windows_arm64_buildable.md) — Snapdragon X Elite / aarch64-pc-windows-msvc; skia + ffmpeg winarm64 prebuilts exist; native build via build-host-windows.bat + winarm64 FFMPEG_DIR.
-- [Ref: Kotlin/Wasm CM status](reference_kotlin_wasm_component_model_status.md) — 2.4 same adapter; watch KT-64568. · [Ref: Kotlin version bump](feedback_kotlin_version_bump.md) — 13 pin sites.
-- [Ref: IME / soft-keyboard options](feedback_ime_options.md) — 4 integration paths. · [Ref: guest-language survey](../../docs/wasm-component-language-support.md) — Rust/C#/TinyGo first-class.
+- [Ref: wasi-tls transport](reference_wandr_wasi_tls_transport.md) — Signal CA via custom TlsProvider.
+- [Ref: Windows ARM64 buildable](reference_windows_arm64_buildable.md) — skia+ffmpeg winarm64 prebuilts; build-host-windows.bat.
+- [Ref: Kotlin/Wasm CM](reference_kotlin_wasm_component_model_status.md) — watch KT-64568. · [Ref: Kotlin bump](feedback_kotlin_version_bump.md) — 13 pin sites.
+- [Ref: IME options](feedback_ime_options.md) — 4 paths. · [Ref: guest-language survey](../../docs/wasm-component-language-support.md) — Rust/C#/TinyGo first-class.
 
 ## Feedback / hard-won fixes (hooks only — read the file before touching the area)
-- [Device perf measurement traps](feedback_device_perf_measurement.md) — verify FOREGROUND role before trusting CPU; fg−bg=render.
-- [Visual verification needs the user](feedback_visual_verification.md) — subjective outcomes: ASK the user. · [No posting without authorization](feedback_no_posting_without_authorization.md) — never publish without per-action approval.
-- [wandr-zygote fork survival](feedback_wandr_zygote_fork_survival.md) — what's COW-safe. · [No ART-layer dependencies](feedback_no_art_layer_dependencies.md) — build on HAL/binder that survive post-ART. · [Arbiter death notification](feedback_arbiter_death_notification.md) — SUBSCRIBE_EXITS + poll.
-- [bionic_compat fixes](feedback_bionic_compat.md) — NDK linker gotchas. · [Android EGL/Skia](feedback_egl_skia.md) — context lifecycle + drop order. · [Android font loading](feedback_android_fonts.md) — zero-metrics bug FIXED by skia-safe 0.99/m150 (match_family_style real metrics on device); by-name resolution now unified desktop+device.
-- [wasmtime AOT compile flags](feedback_wasmtime_compile.md) — gc/function-references/exceptions for Kotlin. · [Gradle build directory](feedback_gradle_build_dir.md) — build from skiko/skiko/.
-- [wasmWasi reallocAllocator pollution](feedback_wasi_realloc_allocator.md) — freeAll at start of EVERY WIT import. · [✅ host→guest records-with-strings WORK](feedback_wasi_cabi_realloc_export_block.md) — lift all args before scoped alloc.
-- [currentNanoTime traps WIT imports](feedback_currentnanotime_pollutes.md) — avoid near WIT imports. · [PathBuilder shim recursion](feedback_pathbuilder_recursion.md) — missing method → recursion → SIGSEGV.
-- [Compose child-layer drawLayer break](feedback_compose_interactivity.md) — child OwnedLayers never drawn. · [Compose popup overlay](feedback_popup_overlay.md) — CanvasLayersComposeScene + real containerSize. · [Compose scrolling](feedback_scrolling.md) — flush WasiFrameDispatcher after pointer event.
-- [WasiLifecycle owner bridge](feedback_lifecycle_owner_bridge.md) — LifecycleOwner from host events. · [Lifecycle via Focused proxy](feedback_lifecycle_focus_proxy.md) — winit drops onPause/onResume; use Focused(bool). · [Warm-resume preserves state](feedback_warm_resume.md) — keep Store alive; no eglTerminate in drop.
-- [RenderNode WasiDrawable](feedback_compose_render_node_picture.md) — swappable-inner SkDrawable. · [RenderNode.drawInto attributes](feedback_render_node_attributes.md) — bounds/clip/alpha/shadow applied. · [Paint alpha pipeline](feedback_paint_alpha_pipeline.md) — color.alpha × paint.alpha into one byte.
-- [identityHashCode must be stable](feedback_transition_animate_to_bug.md) — mutating counter froze animateTo. · [Audit WIT consumers: scan binaries](feedback_audit_wit_consumers_scan_binaries.md) — .NET declares full WASI world.
-- [Host-side WasiDrawable transforms](feedback_host_side_transforms.md) — layer props on host C++; never invalidates recordings. · [BasicTextField freeze](feedback_basictextfield_freeze.md) — use TextFieldState + on-key-event-v2.
-- [Continuous-animation wasm leak](feedback_indeterminate_progress_leak.md) — withFrameNanos leaks ~0.4MB/s. · [In-canvas soft keyboard](feedback_softkeyboard.md) — retired by task 49. · [IME layout arbitration](feedback_ime_layout_arbitration.md) — editor-type override vs 🌐.
-- [pointerInput stale closure](feedback_pointer_input_stale_closure.md) — wrap in rememberUpdatedState. · [wasmWasi single-thread = Kotlin](feedback_wasi_threading.md) — frame races on lone dispatcher.
-- [rsbinder @nullable callback](feedback_rsbinder_nullable_callback.md) — hand-build parcel with None. · [rsbinder recursive parcelable](feedback_rsbinder_aidl_recursive.md) — Vec<Box<Self>> won't compile; hand-encode. · [AAudio direct-binder](feedback_aaudio_gotchas.md) — 5 traps (reversed enums…).
-- [suspendCoroutine leak → DRC](feedback_kotlin_wasm_suspendcoroutine_leak.md) — leak is DRC scheduling. · [wasmtime DRC no auto-sweep](feedback_wasmtime_drc_no_autoschedule.md) — periodic Store::gc. · [Don't fix DRC first_fit alone](feedback_drc_first_fit_alone_backfires.md) — backfires.
-- [Rebuild compose-*-wasi after skiko](feedback_rebuild_compose_after_skiko.md) — skip = subtle drift. · [Don't delete app cache/ dir](feedback_dont_delete_app_cache_dir.md) — refresh by REINSTALL.
-- [compose-*-wasi dirs are bundlers](feedback_compose_wasi_srcdirs.md) — source in compose-multiplatform-core/ only. · [Prefer wandr-app edits](feedback_prefer_wandr_app_edits.md) — touch compose-core only when forced. · [compose-*-wasi out of scope](feedback_compose_wasi_out_of_scope.md) — will be deleted.
-- [Worker-thread Store backfires](feedback_worker_thread_backfires.md) — input-lag; ANR better. · [Don't no-op Canvas stubs](feedback_canvas_stub_noop_traps.md) — silent no-ops SIGILL later.
-- [TooltipBox SIGILL superseded](feedback_tooltip_sigill_wasi.md) — cause = adapter State corruption. · [wasi adapter State corruption](feedback_wasi_adapter_state_corruption.md) — magic1 clobber; fixed partition. · [KT-86415 ScopedMemory UAF](feedback_kotlin_wasm_scopedmemory_destroy_bug.md) — fixed linear-memory partition.
-- [Kotlin println throws](feedback_kotlin_wasm_println_throws_wasmtime.md) — use @WasmImport host-log. · [wit-bindgen no Kotlin generator](feedback_wit_bindgen_no_kotlin_generator.md) — skiko binding hand-written. · [Canonical-ABI asymmetry](feedback_canonical_abi_import_export_asymmetry.md) — prepend return-area ptr.
-- [Rust component as CLI smoke](feedback_rust_component_as_cli_smoke.md) — wasi:cli smokes in Rust. · [adb push dir nesting](feedback_adb_push_dir_nesting.md) — push into existing dir NESTS; rm -rf first. · [Compose Row weight](feedback_compose_row_weight_pattern.md) — fillMaxWidth + inner weight(1f).
+- [Device perf measurement traps](feedback_device_perf_measurement.md) — verify FOREGROUND role before trusting CPU.
+- [Visual verification needs user](feedback_visual_verification.md) — ASK the user. · [No posting w/o authorization](feedback_no_posting_without_authorization.md) — never publish without approval.
+- [wandr-zygote fork survival](feedback_wandr_zygote_fork_survival.md) — what's COW-safe. · [No ART-layer deps](feedback_no_art_layer_dependencies.md) — build on surviving HAL/binder. · [Arbiter death](feedback_arbiter_death_notification.md) — SUBSCRIBE_EXITS.
+- [bionic_compat fixes](feedback_bionic_compat.md) — NDK linker gotchas. · [Android EGL/Skia](feedback_egl_skia.md) — lifecycle+drop order. · [Android font loading](feedback_android_fonts.md) — FIXED by skia-safe 0.99/m150.
+- [wasmtime AOT flags](feedback_wasmtime_compile.md) — gc/function-refs/exceptions. · [Gradle build dir](feedback_gradle_build_dir.md) — build from skiko/skiko/.
+- [wasmWasi realloc pollution](feedback_wasi_realloc_allocator.md) — freeAll at start of EVERY WIT import. · [✅ records-with-strings WORK](feedback_wasi_cabi_realloc_export_block.md) — lift args before scoped alloc.
+- [currentNanoTime traps imports](feedback_currentnanotime_pollutes.md) — avoid near WIT imports. · [PathBuilder recursion](feedback_pathbuilder_recursion.md) — missing method → SIGSEGV.
+- [Compose drawLayer break](feedback_compose_interactivity.md) — child OwnedLayers never drawn. · [Compose popup](feedback_popup_overlay.md) — real containerSize. · [Compose scroll](feedback_scrolling.md) — flush after pointer event.
+- [WasiLifecycle bridge](feedback_lifecycle_owner_bridge.md) — from host events. · [Focused proxy](feedback_lifecycle_focus_proxy.md) — winit drops onPause; use Focused(bool). · [Warm-resume](feedback_warm_resume.md) — no eglTerminate in drop.
+- [RenderNode WasiDrawable](feedback_compose_render_node_picture.md) — swappable-inner SkDrawable. · [drawInto attrs](feedback_render_node_attributes.md) — bounds/clip/alpha/shadow. · [Paint alpha](feedback_paint_alpha_pipeline.md) — color×paint into one byte.
+- [identityHashCode stable](feedback_transition_animate_to_bug.md) — mutating counter froze animateTo. · [Audit WIT consumers](feedback_audit_wit_consumers_scan_binaries.md) — .NET declares full WASI world.
+- [Host-side transforms](feedback_host_side_transforms.md) — layer props on host C++. · [BasicTextField freeze](feedback_basictextfield_freeze.md) — use TextFieldState.
+- [Continuous-anim wasm leak](feedback_indeterminate_progress_leak.md) — withFrameNanos ~0.4MB/s. · [Soft keyboard](feedback_softkeyboard.md) — retired. · [IME arbitration](feedback_ime_layout_arbitration.md) — editor-type vs 🌐.
+- [pointerInput stale closure](feedback_pointer_input_stale_closure.md) — wrap rememberUpdatedState. · [wasi single-thread](feedback_wasi_threading.md) — frame races on lone dispatcher.
+- [rsbinder @nullable](feedback_rsbinder_nullable_callback.md) — hand-build parcel. · [recursive parcelable](feedback_rsbinder_aidl_recursive.md) — hand-encode. · [AAudio](feedback_aaudio_gotchas.md) — 5 traps.
+- [suspendCoroutine leak](feedback_kotlin_wasm_suspendcoroutine_leak.md) — DRC scheduling. · [DRC no auto-sweep](feedback_wasmtime_drc_no_autoschedule.md) — periodic Store::gc. · [Don't fix first_fit alone](feedback_drc_first_fit_alone_backfires.md).
+- [Rebuild compose after skiko](feedback_rebuild_compose_after_skiko.md) — skip=drift. · [Don't delete cache/](feedback_dont_delete_app_cache_dir.md) — refresh by REINSTALL.
+- [compose-*-wasi are bundlers](feedback_compose_wasi_srcdirs.md) — source elsewhere only. · [Prefer wandr-app edits](feedback_prefer_wandr_app_edits.md). · [compose-wasi out of scope](feedback_compose_wasi_out_of_scope.md) — will be deleted.
+- [Worker-thread Store backfires](feedback_worker_thread_backfires.md) — ANR better. · [Don't no-op Canvas stubs](feedback_canvas_stub_noop_traps.md) — SIGILL later.
+- [TooltipBox SIGILL superseded](feedback_tooltip_sigill_wasi.md) — adapter State corruption. · [State corruption](feedback_wasi_adapter_state_corruption.md) — magic1 clobber. · [ScopedMemory UAF](feedback_kotlin_wasm_scopedmemory_destroy_bug.md) — fixed partition.
+- [Kotlin println throws](feedback_kotlin_wasm_println_throws_wasmtime.md) — use @WasmImport host-log. · [No Kotlin bindgen](feedback_wit_bindgen_no_kotlin_generator.md) — hand-written. · [Canonical-ABI](feedback_canonical_abi_import_export_asymmetry.md) — prepend return-area ptr.
+- [Rust CLI smoke](feedback_rust_component_as_cli_smoke.md) — wasi:cli. · [adb push nesting](feedback_adb_push_dir_nesting.md) — rm -rf first. · [Compose Row weight](feedback_compose_row_weight_pattern.md) — fillMaxWidth + inner weight(1f).

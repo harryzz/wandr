@@ -18,6 +18,10 @@ struct WandrHostApp: App {
     var body: some Scene { WindowGroup { CompositeView(board: sharedGame) } }
 }
 
+// [wandr] Everything below TOUCHES wasi:canvas (the CGSink over CGContext + the reactor @_cdecl
+// frame/pointer exports). The -DWANDR_HEADLESS deterministic driver has no canvas, so gate it out —
+// otherwise the module still imports wasi:canvas and wasmtime refuses to instantiate the plain command.
+#if !WANDR_HEADLESS
 // MARK: - WandrDrawSink over a CGContext (OpenSwiftUI DisplayList → CoreGraphics → wasi:canvas)
 final class CGSink: WandrDrawSink {
     nonisolated(unsafe) var cg: CGContext?
@@ -136,3 +140,4 @@ public func onPointer(_ ev: UnsafeMutablePointer<exports_wasi_input_handlers_poi
     // path leaves animated properties frozen at their old values (the change never appears).
     animPending = true
 }
+#endif // !WANDR_HEADLESS

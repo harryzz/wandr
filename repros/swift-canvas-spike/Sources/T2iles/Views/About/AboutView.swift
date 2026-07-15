@@ -48,7 +48,10 @@ struct AboutView: View {
                 .cornerRadius(proxy.size.width / 50)
                 .aspectRatio(contentMode: .fit)
             Link(about[PlistConfigurationKeyPath.about.rawValue]?[PlistConfigurationKeyPath.linkDescription.rawValue] ?? "[Missing Information]",
-                 destination: URL(string: about[PlistConfigurationKeyPath.about.rawValue]?[PlistConfigurationKeyPath.linkUrl.rawValue] ?? "")!)
+                 // Safe fallback: URL(string:) is nil for an empty string, and the original force-unwrap
+                 // crashed when the Strings plist was absent (e.g. no assets/). Fall back to a valid URL.
+                 destination: URL(string: about[PlistConfigurationKeyPath.about.rawValue]?[PlistConfigurationKeyPath.linkUrl.rawValue] ?? "")
+                     ?? URL(string: "https://github.com/eleev/swiftui-2048")!)
                 .multilineTextAlignment(.center)
         }
         .padding(.all, spacing)
