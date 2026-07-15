@@ -11,6 +11,45 @@
 
 ---
 
+## 0. Gesture / interaction bugs (user-facing — likely do FIRST)
+
+Reported after the effects session. All cluster around **hit-testing using a flat layout `hitFrame`
+that ignores render transforms** (`.offset`, modal positioning), plus **modals not blocking
+background input**. Fragile subsystem: `EventBindingManager` / `GestureViewModifier` /
+`HitTestBindingModifier` / the `ViewResponder` tree. Prior root-cause analysis is in
+`repros/swift-canvas-spike/HANDOFF-eleev-openswiftui.md` ("REMAINING PROBLEMS") and the memory
+[[reference_openswiftui_gestures_offapple]].
+
+**READ FIRST — do NOT patch-and-cycle (this area burned days before):** trace how `.offset` →
+GeometryEffect → (render vs event) transform flows, and how `ViewResponder.containsGlobalPoints`
+already does transform-aware containment. The likely single fix is to route hit-testing through the
+transform-aware responder tree instead of the flat `hitFrame` for offset/modal subtrees.
+
+1. **Swipe registers above the board (outside it).** Board-drag `hitFrame` is greedy `(0,0,460,734)`
+   — includes the header. Constrain the board DragGesture's hitFrame to the board square (commit
+   c7a0a71b tried, didn't fully constrain).
+2. **Board swipe intermittently freezes; recovers after tap-a-tile-then-swipe; a header-area swipe
+   never freezes.** The board subtree's responders rebuild every tile-animation frame, dropping the
+   in-flight drag binding. Keep the active drag's binding alive across animation re-renders.
+3. **Modal buttons + menu items don't accept clicks (no Settings, no About).** Two causes:
+   (a) modal buttons sit in `.offset(y:)`; the gesture `hitFrame` is the un-offset LAYOUT frame, so
+   the visible button ignores taps (and the stale frame lands elsewhere — see bug 4). (b) Settings/
+   About: the tap FIRES (menu closes) but `switch selectedView` doesn't swap the shown view — a
+   wasm conditional-view metadata-ABI issue ([[reference_openswiftui_conditional_wasm_metadata]]),
+   NOT gestures.
+4. **Game-over dialog isn't modal — background stays interactive.** Can click the (invisible)
+   hamburger behind it; clicking it then "T2iles" starts a new game; sometimes clicking the board
+   starts a new game (a stale/mis-placed `.offset` hitFrame from the modal buttons landing on the
+   board/hamburger area). Fix: the modal must BLOCK background input (`.allowsHitTesting(false)` on
+   the background when a modal is up — the mechanism exists, verify it covers the game-over modal),
+   AND fix the `.offset` hitFrame misplacement (3a) so phantom frames stop landing on the board.
+
+**Root theme:** one transform-aware-hit-testing fix (responder-tree `containsGlobalPoints` instead
+of flat `hitFrame` for offset/modal subtrees) likely resolves 1, 3a, and 4 together. 2 is
+responder-stability-during-animation; 3b is the separate conditional-view ABI issue.
+
+---
+
 ## 1. Split `CSwiftSpike` → a standalone leaf `CWASICanvas`  (unblocks everything) — §6, §7
 
 `CSwiftSpike` is a per-app generated blob holding BOTH the wasi:canvas *drawing* bindings AND the
