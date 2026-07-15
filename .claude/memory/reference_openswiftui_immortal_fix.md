@@ -140,3 +140,22 @@ the pool REUSES subgraphs (`unremoveItem` phase==nil) which is risky for heterog
 a detach-only leak (removeChild, never invalidate, never reuse) — safe from dangling edges & reuse bugs
 but leaks every removed subgraph (unbounded; big views leak fast). (A) is most semantics-faithful and
 matches the existing guards; (B)/(C) are immortal-philosophy stopgaps.
+
+REPRO ON WASM + REFINEMENT (2026-07-15) — added a headless standalone repro
+`tests/oag-baseline/Sources/oagdangling/main.swift` (executableTarget `oagdangling`; build with
+build-wasi.sh flags, run `wasmtime run -W max-wasm-stack=8388608 .build/wasm32-unknown-wasip1/debug/
+oagdangling.wasm`). It does exactly crash-B's chain 2000×: parent A survives, child B depends on A
+(edge A→B), `child.invalidate()`, then `a.value=…` → propagate_dirty walks A's output_edges incl the
+dangling A→B. **KEY RESULT: it PASSES on wasm even with the propagate_dirty guards DISABLED.** So a plain
+"dangling edge to a freed subgraph" is BENIGN on wasm — the data::table zone keeps freed slots MAPPED
+(free returns the slot to a freelist; the mmap region isn't unmapped), so reading the dead node reads
+stale-but-valid memory and propagate_dirty just sets a harmless dirty flag. The real app crash is a WILD
+offset (e.g. `0x5e80fa8`, `0x22e775c0` — far PAST the region), i.e. the output-edge ENTRY's offset was
+overwritten with garbage — a DEEPER corruption (edge-list/heap buffer overwrite, or freed-slot REUSE that
+scribbles the edge) under heavy churn, NOT a plain dangling read. So the bisection correctly found the
+CHURN LOCUS (eraseItem/invalidate on every dynamic-view removal), but the crash MECHANISM is edge-buffer
+corruption, not benign dangling. The propagate_dirty guards mitigate the deleted-subgraph + wild-offset
+READ, but do not stop whatever WRITES the wild offset. NEXT: strengthen the repro to force slot-reuse /
+edge-buffer corruption (allocate churn between invalidate and propagate so the freed slot is reused; or
+grow output_edges past a realloc boundary during teardown) to catch the writer; a poison-on-free +
+write-watchpoint on the graph zone is the technique. `oagdangling` is the ready harness to iterate in.
