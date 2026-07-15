@@ -121,3 +121,22 @@ UAF the static board never triggered. NEXT-SESSION BISECTION: (1) confirm board-
 settings/about ×N) to see which triggers the wild pointer — that localizes the corruption to a specific
 DynamicContainer teardown, a much smaller haystack than "the whole engine". Prime suspect = the transition
 teardown in `Layout/Dynamic/DynamicContainer.swift` + the conditional view-swap subgraph lifecycle.
+
+BISECTED (2026-07-15, source-level) — the trigger is `DynamicContainer.eraseItem`
+(`Layout/Dynamic/DynamicContainer.swift:701`). It has two teardown paths gated on
+`unusedCount < Adapter.maxUnusedItems`: POOL (`parentSubgraph.removeChild(subgraph)` — subgraph
+detached but KEPT ALIVE, nodes survive → safe) vs INVALIDATE (`subgraph.invalidate()` → destroyed →
+deferred-teardown window → dangling cross-subgraph edges → the crashes). CRUX: `maxUnusedItems`
+defaults to **`.zero`** (`DynamicContainerAdaptor.swift:61`) and NO conformer overrides it, so
+`unusedCount < 0` is always false → the pool path is NEVER taken → **every** dynamic-view removal
+invalidates. Static board never removes a dynamic view → never invalidates → the hours-crash-free
+behavior. Menu/modal/Settings-swap remove views constantly → constant invalidate → the wild-pointer
+crashes. FIX OPTIONS (a genuine tradeoff, user's call): (A) complete the [#12]-style liveness guards at
+the remaining graph-walk sites (propagate_dirty done; add Subgraph::update/attribute_view for crash D,
+etc.) — keeps AG invalidate semantics, bounded whack-a-mole; (B) give wasm dynamic containers a positive
+`maxUnusedItems` so removals POOL (keep alive) instead of invalidate — avoids the window at the root, but
+the pool REUSES subgraphs (`unremoveItem` phase==nil) which is risky for heterogeneous swaps
+(game↔settings↔about reuse a subgraph across different content); (C) on wasm make eraseItem's invalidate
+a detach-only leak (removeChild, never invalidate, never reuse) — safe from dangling edges & reuse bugs
+but leaks every removed subgraph (unbounded; big views leak fast). (A) is most semantics-faithful and
+matches the existing guards; (B)/(C) are immortal-philosophy stopgaps.
