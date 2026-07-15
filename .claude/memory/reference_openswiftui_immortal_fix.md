@@ -43,8 +43,66 @@ DynamicContainer.swift:453 isValid guard) — all dead code once refcounting is 
 (`DynamicContainer.swift` ~line 440: `displayMap[validCount]` → `displayMap[validCount + index]`;
 only reachable when removedCount!=0 = transitions on).
 
-Still-needed real roots: `Data/Table.cpp` zone-zeroing (wasi mmap not zeroed), Subgraph/Graph member
-inits. Method that cracked it: per-storage over-release trap (trap AT the ReleaseRef that drops a
+Zone-zeroing: ✅ DONE (2026-07-15 confirmed) — `ComputeCxx/Data/Table.cpp:57`
+`memset(region, 0, initial_size); // wasi emulated mmap is NOT zeroed` on the initial region, and
+`grow_region` (:121) zeroes the grown tail. Do NOT re-file this as a "still-needed root" — it is fixed.
+Same wasm binary runs on wasmtime on ALL platforms (linux/windows/device), so there is no
+"linux-mmap-zeroes / wasi-doesn't" platform split at the guest level. Remaining suspected root:
+Subgraph/Graph member inits.
+
+Method that cracked the original UAF: per-storage over-release trap (trap AT the ReleaseRef that drops a
 long-lived storage to rc0) → DWARF backtrace named `_ViewList_Subgraph.deinit`. See
 repros/openswiftui-wasm/RESUME.md (top) + the 7hr worklog /tmp/wandr-7hr-worklog.md.
 Supersedes the band-aid era of [[reference_swift_openswiftui_wandr]].
+
+## 2026-07-15 — INTERMITTENT node-level UAF still present under heavy real play
+The eleev 2048 demo, played hard (many moves + menu/modal/settings/about/new-game churn), crashes
+**intermittently on every platform** (same wasm), NOT the Subgraph-storage over-release this memory
+fixed — a **node/attribute-level** dangling reference. Two observed surfaces, same family:
+- `DynamicAnimationListener.animationWasRemoved → Attribute.invalidateValue → IAGGraphInvalidateValue →
+  Graph::value_mark → propagate_dirty → IAG::Node::state()` → **OOB read** (animation removed invalidates
+  a target attribute whose node was already freed/recycled).
+- `GestureGraph.sendEvents → Attribute.setValue → Graph::value_set_internal` → `&type.value_metadata() !=
+  &metadata` (reads garbage on a recycled node) → `precondition_failure` → `metadata::name()` →
+  `swift_getTypeName` → wasm demangler `abort()` (Demangler.cpp:373) → component poisoned ("cannot enter
+  component instance" flood). The demangler abort is COLLATERAL; the mismatch is the real fault. NB the
+  error path calls the demangler and so tells us nothing — make it demangler-free before diagnosing.
+Root: a freed AG node's slot is reused, then something still holding its `AttributeID` invalidates/sets
+it. Intermittent = depends on reuse timing; needs heavy churn to hit. NOT caused by the 2026-07-15
+gesture work ([[reference_openswiftui_gestures_offapple]]) — both crash paths are outside it (that work
+only adds nodes/churn, which could nudge frequency).
+
+TRACED (2026-07-15) — crash B mechanism: `DynamicAnimationListener.animationWasRemoved`
+(`OpenSwiftUICore/Layout/Dynamic/DynamicContainer.swift:215`) DEFERS `asyncSignal.attribute?.invalidateValue()`
+(`asyncSignal: WeakAttribute<Void>`) into `viewGraph.continueTransaction{…}`. The weak-liveness gate
+`WeakAttributeID::expired()` (`ComputeCxx/Attribute/AttributeID/WeakAttributeID.cpp`) already applies the
+`[#12]` rule — alive iff `zone_info.zone_id() == _seed && !zone_info.is_deleted()`. But it returned
+false (alive) for a ref whose node resolves to a WILD pointer (`0x5ccc768` ≫ region end `0x3130000`). So
+`expired()` PASSED yet the node is garbage → two residual edge cases: (1) **zone-id `_seed` COLLISION** —
+a freed subgraph's zone-id reused by a live (not-deleted) subgraph, so the seed check spuriously passes;
+or (2) a teardown path that frees the subgraph WITHOUT setting the deleted-bit (`mark_deleted` not called
+there — the `[#12]` comment flags this was once dead code). The engine primitive (`expired`) is correct &
+test-covered; the gap is teardown-ordering / zone-reuse the suite doesn't exercise, driven by how
+OpenSwiftUI tears down animated subgraphs. NEXT: at the deref sites (`propagate_dirty` initial-node access
+~Graph.cpp:1815-1820, `value_mark`), RANGE-check the resolved node ptr vs the region before deref +
+mirror the `[#12]` `contains_subgraph` guard; on invalid, log the identifier/seed/zone-id and skip (or
+trap demangler-free) — that both stops the OOB and reveals whether it's seed-collision vs missing
+mark_deleted. Also make `value_set_internal` (Graph.cpp:1710) print pointers not `metadata.name()`
+(avoids the wasm demangler `abort()` that currently destroys crash-A's info).
+
+## 2026-07-15 (later) — per-site deref guards are WHACK-A-MOLE; it's pervasive corruption
+Added Compute guards (Graph.cpp): value_set_internal non-fatal+demangler-free (crash A);
+propagate_dirty initial-node + loop wild-output range guards (crash B) — the [#12] loop guard had a
+hole: it only `continue`d for an IN-RANGE offset with a deleted subgraph, so a WILD offset
+(`>= ptr_max_offset`, = `_vm_region_size+page`) made the outer `if` false and fell through to the OOB
+deref; fixed to skip wild offsets FIRST. RESULT: crash B stopped recurring but the crash just MOVED to a
+4th surface — `IAG::attribute_view::begin() → Subgraph::update` (OOB `0x22e775c0`). So there are ≥4
+surfaces (A value_set, B propagate_dirty, C Map→EnvironmentValues `swift_retain`, D
+attribute_view/Subgraph::update), ALL reading wild pointers far past the region — pervasive graph-memory
+corruption, NOT a single bad deref. Per-site guards can't win. Wild addrs vary by surface (D recurs at
+`0x22e77xxx` — also the very first crash seen this session; B gets `0x5exxxxx`; C `0x20080134`).
+REAL FIX = find the CORRUPTION SOURCE (what writes a wild pointer into a graph node/edge/attribute-list
+slot). Technique: a write-watchpoint / poison-on-free on the graph zone, or bisect what produces
+`0x22e77xxx`, NOT more deref guards. This is the port's central hard problem = dedicated deep session.
+The 2026-07-15 gesture/ABI work ([[reference_openswiftui_gestures_offapple]]) is unrelated & shipped fine;
+this UAF predates it and surfaces only under heavy real play the old "reaches frame #14" tests never hit.
