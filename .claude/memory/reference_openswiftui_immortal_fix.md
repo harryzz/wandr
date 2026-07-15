@@ -106,3 +106,18 @@ slot). Technique: a write-watchpoint / poison-on-free on the graph zone, or bise
 `0x22e77xxx`, NOT more deref guards. This is the port's central hard problem = dedicated deep session.
 The 2026-07-15 gesture/ABI work ([[reference_openswiftui_gestures_offapple]]) is unrelated & shipped fine;
 this UAF predates it and surfaces only under heavy real play the old "reaches frame #14" tests never hit.
+
+USER HYPOTHESIS (strong, narrows the hunt): the app was played for HOURS with NO crash back when it was
+board+tiles ONLY — no side menu, no modals, no Settings/About, no buttons/rounded-rects. The crash
+appeared once those DYNAMIC elements were added. Fits the diagnosis exactly: the board is a STATIC view
+tree (tiles animate position but the container never appears/disappears), so it barely churns subgraphs.
+The new elements — SideMenuView (slide in/out), BottomSlidableModalModifier (game-over/reset), and the
+FactoryContentView `switch selectedView` game/settings/about SWAP — are DynamicContainer-backed views that
+get created+destroyed WITH transitions as you navigate. That create/destroy-with-transition churn is
+exactly the `DynamicAnimationListener.animationWasRemoved → invalidateValue` teardown path crash B lives in.
+So the new UI doesn't CREATE the bug — it's the first thing to heavily EXERCISE a latent subgraph-teardown
+UAF the static board never triggered. NEXT-SESSION BISECTION: (1) confirm board-only stays stable long;
+(2) then hammer ONE dynamic element at a time (open/close side menu ×N; open/close a modal ×N; swap
+settings/about ×N) to see which triggers the wild pointer — that localizes the corruption to a specific
+DynamicContainer teardown, a much smaller haystack than "the whole engine". Prime suspect = the transition
+teardown in `Layout/Dynamic/DynamicContainer.swift` + the conditional view-swap subgraph lifecycle.
