@@ -24,6 +24,32 @@ Note: `SkFontMgr_New_AndroidNDK` is NOT exposed by skia-safe 0.99 — `NewSystem
 `SkFontMgr_New_Android(nullptr, FreeType)`, and that's sufficient. See `[[reference_desktop_font_resolve_by_name]]`.
 
 ---
+## Custom icon fonts (e.g. tabler-icons) need BOTH /system/fonts AND /product — 2026-07-16
+Installing a custom font (OpenSFSymbols' tabler-icons*) for by-name `match_family_style` resolution
+on the real device needs it in **two places**, or resolution silently returns `None` (falls back to
+a generic system font, e.g. Roboto) with no error:
+1. `/product/fonts/<font>.ttf` **+** a matching `<family customizationType="new-named-family"
+   name="...">` entry in `/product/etc/fonts_customization.xml` (declares the family name).
+2. `/system/fonts/<font>.ttf` — the actual file Skia's Android font scanner reads. Without this
+   copy, resolution fails even with a correct, verified fonts_customization.xml entry AND after a
+   full device reboot (ruled out caching/merge-timing as the cause — confirmed via `--font-probe`
+   before/after reboot, both `None`). Copying the file to `/system/fonts/` too (matching where the
+   working `tabler-icons` outline font ALSO already lived) immediately fixed it, no reboot needed.
+
+Both paths are on the same read-only root filesystem on a system-as-root device (`/product` is a
+symlink to `/system/product`) — `mount -o remount,rw /` (root shell), copy with `chown root:root` +
+`chmod 644` matching the existing file, `mount -o remount,ro /` immediately after. Verify with
+`touch <dir>/.rw-test` (expect "Read-only file system") after restoring ro.
+
+Diagnose with the on-device `--font-probe` tool (extra family names as argv), reading logcat (NOT
+stdout — `android_logger` output only shows in `adb logcat`, not the shell response):
+```
+adb logcat -c
+adb shell "su -c 'LD_LIBRARY_PATH=/data/local/tmp /data/local/tmp/wandr-host --font-probe <family1> <family2>'"
+adb logcat -d | grep "match '"
+```
+
+---
 ## Historical (skia-safe 0.93.1 / m144) — the bug this replaced
 `FontMgr::default().match_family_style()` on Android with the m144 Skia/NDK build returns typefaces with zero glyph advance widths. TextBlob is created successfully (`blob=true`) but `bounds()` returns `(0,0,0,0)` so all text is invisible.
 

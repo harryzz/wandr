@@ -88,7 +88,7 @@
 - [Device perf measurement traps](feedback_device_perf_measurement.md) — verify FOREGROUND role before trusting CPU.
 - [Visual verification needs user](feedback_visual_verification.md) — ASK the user. · [No posting w/o authorization](feedback_no_posting_without_authorization.md) — never publish without approval.
 - [wandr-zygote fork survival](feedback_wandr_zygote_fork_survival.md) — what's COW-safe. · [No ART-layer deps](feedback_no_art_layer_dependencies.md) — build on surviving HAL/binder. · [Arbiter death](feedback_arbiter_death_notification.md) — SUBSCRIBE_EXITS.
-- [bionic_compat fixes](feedback_bionic_compat.md) — NDK linker gotchas. · [Android EGL/Skia](feedback_egl_skia.md) — lifecycle+drop order. · [Android font loading](feedback_android_fonts.md) — FIXED by skia-safe 0.99/m150.
+- [bionic_compat fixes](feedback_bionic_compat.md) — NDK linker gotchas. · [Android EGL/Skia](feedback_egl_skia.md) — lifecycle+drop order. · [Android font loading](feedback_android_fonts.md) — FIXED by skia-safe 0.99/m150; custom fonts need BOTH /system/fonts + /product.
 - [wasmtime AOT flags](feedback_wasmtime_compile.md) — gc/function-refs/exceptions. · [Gradle build dir](feedback_gradle_build_dir.md) — build from skiko/skiko/.
 - [wasmWasi realloc pollution](feedback_wasi_realloc_allocator.md) — freeAll at start of EVERY WIT import. · [✅ records-with-strings WORK](feedback_wasi_cabi_realloc_export_block.md) — lift args before scoped alloc.
 - [currentNanoTime traps imports](feedback_currentnanotime_pollutes.md) — avoid near WIT imports. · [PathBuilder recursion](feedback_pathbuilder_recursion.md) — missing method → SIGSEGV.
