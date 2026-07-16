@@ -1,5 +1,7 @@
 {
   "_comment": "Curated SF-name -> [[font-id, glyph-name], ...] overrides. Highest priority, hand-verified against Data/fonts/<font>.json (each font's own webfont glyph table). glyph-name resolves to that font's codepoint at generate time -> the SF-name -> font -> unicode chain. Multiple candidates = cross-font fallback. Grow as apps need symbols; run Tools/generate.py.",
+  "speaker.3":                     [["tabler","volume"]],
+  "speaker.slash":                 [["tabler","volume-off"]],
   "text.justify":                  [["tabler","menu-2"]],
   "line.3.horizontal":             [["tabler","menu-2"]],
   "line.horizontal.3":             [["tabler","menu-2"]],
@@ -15,7 +17,7 @@
   "minus":                         [["tabler","minus"]],
   "checkmark":                     [["tabler","check"]],
   "checkmark.circle":              [["tabler","circle-check"]],
-  "checkmark.circle.fill":         [["tabler","circle-check"]],
+  "checkmark.circle.fill":         [["tabler-filled","circle-check"]],
   "chevron.left":                  [["tabler","chevron-left"]],
   "chevron.right":                 [["tabler","chevron-right"]],
   "chevron.up":                    [["tabler","chevron-up"]],

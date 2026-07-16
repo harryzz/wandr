@@ -23,6 +23,12 @@ from collections import OrderedDict
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def load(p): return json.load(open(os.path.join(ROOT, p)))
 
+# Almost entirely the real 6984-name Apple universe. A very small number of non-canonical names
+# some apps actually pass to Image(systemName:) get appended too (e.g. "speaker.3" — eleev/
+# swiftui-2048 uses it; not real SF Symbols API, likely meant "speaker.wave.3") — otherwise a
+# real app's override in Data/overrides.json is silently unreachable (this loop only ever visits
+# names in this list, so an override for a name absent here never applies). Their placeholder
+# codepoint is never consumed downstream — only each font's own glyph codepoint drives rendering.
 sf_names = [n for n, _ in load("Data/sf-symbols-7.json")]
 
 fonts = {}   # font-id -> {"file":..., "glyphs":{name:hexstr}}

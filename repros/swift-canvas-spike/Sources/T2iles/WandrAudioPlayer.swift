@@ -126,8 +126,7 @@ final class WandrAudioPlayer {
 
     private var started = false
 
-    // 44.1kHz, not 48kHz — a known-bad rate on this device/HAL for this path.
-    private static let sampleRate = 44100.0
+    private static let sampleRate = 48000.0
 
     private func ensurePlayback() -> wasi_audio_pcm_own_playback_t? {
         if let playback { return playback }

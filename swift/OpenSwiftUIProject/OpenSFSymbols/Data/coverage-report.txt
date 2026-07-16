@@ -1,7 +1,7 @@
-OpenSFSymbols coverage — SF Symbols 7 (6984 names)  fonts: tabler, lucide, remix, mdi
-  mapped total : 1012
-    override   : 27
-    auto       : 985
+OpenSFSymbols coverage — SF Symbols 7 (6985 names)  fonts: tabler, lucide, remix, mdi, tabler-filled
+  mapped total : 1013
+    override   : 29
+    auto       : 984
   MISSING      : 5972
 
 First 60 MISSING names:
