@@ -13,6 +13,7 @@
 - [RULE: shared WIT change → rebuild ALL + restart zygote](feedback_shared_wit_rebuild_all_consumers.md) — shared-type ABI breaks every importer.
 - [RULE: capture full build output](feedback_capture_build_output.md) — save FULL build to a log; never pre-filter a live build.
 - [RULE: OpenSwiftUI app = ONLY Audio/Store/startup](feedback_openswiftui_app_only_audio_store_startup.md) — sink/reactor/render glue is shared runtime, NEVER per-app; `Sources/T2iles/RULES.md`.
+- [RULE: never create branches unasked](feedback_no_new_branches.md) — work on current/main by default; merge+delete promptly once done, don't let branches accumulate.
 
 ## Projects / tasks
 - [✅ Task 115: Signal wasip3 async](project_task115_wasip3_async.md) — M0-M4 device-verified incl A/V. · [wasi:canvas migration](project_wasi_canvas_migration.md) — stages 1-3 verified; 0.0.2 path B next.
