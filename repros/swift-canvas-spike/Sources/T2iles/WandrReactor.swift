@@ -106,7 +106,15 @@ public func onResize(_ w: UInt32, _ h: UInt32) { width = Float(w); height = Floa
 
 @_cdecl("exports_wasi_input_handlers_frame_handler_on_frame")
 public func onFrame(_ nanos: UInt64) {
-    if sharedGame == nil { sharedGame = GameLogic(size: BoardSize.fourByFour.rawValue) }
+    if sharedGame == nil {
+        // [wandr] Mirror eleev's own T2ilesApp.mainView (excluded from this build — WandrReactor
+        // replaces it as the platform entry): read the board size the user picked in Settings
+        // (GameBoardSizeState persists it via WandrBoardSizeStore — UserDefaults has no durable
+        // backing on wasm) instead of hardcoding 4x4.
+        let rawValue = WandrBoardSizeStore.read() ?? BoardSize.fourByFour.rawValue
+        let boardSize = BoardSize(rawValue: rawValue) ?? .fourByFour
+        sharedGame = GameLogic(size: boardSize.rawValue)
+    }
     let dt = lastFrameNanos == 0 ? 0.0 : Double(nanos &- lastFrameNanos) / 1_000_000_000.0
     lastFrameNanos = nanos
 
