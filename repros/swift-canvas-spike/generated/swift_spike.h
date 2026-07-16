@@ -797,6 +797,11 @@ extern uint32_t wasi_audio_pcm_method_capture_available_frames(wasi_audio_pcm_bo
 extern bool wasi_audio_pcm_method_capture_start(wasi_audio_pcm_borrow_capture_t self, wasi_audio_pcm_audio_error_t *err);
 extern bool wasi_audio_pcm_method_capture_pause(wasi_audio_pcm_borrow_capture_t self, wasi_audio_pcm_audio_error_t *err);
 
+// Imported Functions from `wandr:ui-shell/metrics@0.1.0`
+extern float wandr_ui_shell_metrics_get_density(void);
+extern float wandr_ui_shell_metrics_get_font_scale(void);
+extern uint32_t wandr_ui_shell_metrics_get_dpi(void);
+
 // Exported Functions from `wasi:input-handlers/frame-handler@0.0.2`
 void exports_wasi_input_handlers_frame_handler_on_frame(uint64_t nanos);
 void exports_wasi_input_handlers_frame_handler_on_resize(uint32_t width, uint32_t height);

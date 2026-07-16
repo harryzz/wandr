@@ -6,7 +6,10 @@ set -euo pipefail
 cd "$(dirname "$0")"
 SDK="${SWIFT_WASM_SDK:-swift-6.3.2-RELEASE_wasm}"
 ADAPTER=../../external/skiko/wasi_snapshot_preview1.reactor.wasm
-CORE=.build/wasm32-unknown-wasip1/debug/T2iles.wasm
+# Debug is unusably slow on real device hardware (unoptimized AttributeGraph). Release is the
+# default; set WANDR_T2ILES_CONFIG=debug for fast-iteration diagnostic builds.
+CONFIG="${WANDR_T2ILES_CONFIG:-release}"
+CORE=".build/wasm32-unknown-wasip1/$CONFIG/T2iles.wasm"
 OUT=t2iles.component.wasm
 LINUX_UI=/home/harry/wandr-desktop-apps/apps/wandr.swiftui.demo/0.1.0/components/ui.wasm
 WIN_UI=/mnt/c/wandr-win/apps/apps/wandr.swiftui.demo/0.1.0/components/ui.wasm
@@ -22,7 +25,7 @@ OPENSWIFTUI_USE_LOCAL_DEPS=1 OPENATTRIBUTEGRAPH_OPENATTRIBUTESHIMS_COMPUTE=1 \
 OPENATTRIBUTEGRAPH_USE_LOCAL_DEPS=1 \
 OPENSWIFTUI_SWIFT_CRYPTO=0 \
 OPENRENDERBOX_LIB_SWIFT_PATH=/home/harry/wandr/swift/OpenSwiftUIProject/OpenAttributeGraph/Sources/SwiftCorelibs/include \
-swift build --product T2iles --swift-sdk "$SDK" --manifest-cache none \
+swift build --product T2iles --swift-sdk "$SDK" --manifest-cache none -c "$CONFIG" \
   -Xswiftc -enforce-exclusivity=unchecked \
   -Xcc -D_WASI_EMULATED_SIGNAL -Xcc -D_WASI_EMULATED_MMAN -Xcc -D_WASI_EMULATED_PROCESS_CLOCKS \
   -Xcc -I/home/harry/wandr/swift/OpenSwiftUIProject/wandr/wasi-shims \

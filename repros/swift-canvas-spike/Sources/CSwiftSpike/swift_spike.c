@@ -244,6 +244,17 @@ extern void __wasm_import_wasi_audio_pcm_method_capture_start(int32_t, uint8_t *
 __attribute__((__import_module__("wasi:audio/pcm@0.0.1"), __import_name__("[method]capture.pause")))
 extern void __wasm_import_wasi_audio_pcm_method_capture_pause(int32_t, uint8_t *);
 
+// Imported Functions from `wandr:ui-shell/metrics@0.1.0`
+
+__attribute__((__import_module__("wandr:ui-shell/metrics@0.1.0"), __import_name__("get-density")))
+extern float __wasm_import_wandr_ui_shell_metrics_get_density(void);
+
+__attribute__((__import_module__("wandr:ui-shell/metrics@0.1.0"), __import_name__("get-font-scale")))
+extern float __wasm_import_wandr_ui_shell_metrics_get_font_scale(void);
+
+__attribute__((__import_module__("wandr:ui-shell/metrics@0.1.0"), __import_name__("get-dpi")))
+extern int32_t __wasm_import_wandr_ui_shell_metrics_get_dpi(void);
+
 // Exported Functions from `wasi:input-handlers/frame-handler@0.0.2`
 
 
@@ -1881,6 +1892,21 @@ bool wasi_audio_pcm_method_capture_pause(wasi_audio_pcm_borrow_capture_t self, w
     *err = result.val.err;
     return 0;
   }
+}
+
+float wandr_ui_shell_metrics_get_density(void) {
+  float ret = __wasm_import_wandr_ui_shell_metrics_get_density();
+  return ret;
+}
+
+float wandr_ui_shell_metrics_get_font_scale(void) {
+  float ret = __wasm_import_wandr_ui_shell_metrics_get_font_scale();
+  return ret;
+}
+
+uint32_t wandr_ui_shell_metrics_get_dpi(void) {
+  int32_t ret = __wasm_import_wandr_ui_shell_metrics_get_dpi();
+  return (uint32_t) (ret);
 }
 
 __attribute__((__export_name__("wasi:input-handlers/frame-handler@0.0.2#on-frame")))

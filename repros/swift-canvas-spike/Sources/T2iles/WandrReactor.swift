@@ -100,9 +100,28 @@ nonisolated(unsafe) private var animPending = false
 nonisolated(unsafe) private var lastFrameNanos: UInt64 = 0
 nonisolated(unsafe) private var pointerPressing = false
 nonisolated(unsafe) private var ptrSerial = 0
+// [wandr] onResize/onPointer deliver RAW PHYSICAL pixels (confirmed via device probe: 1440x2596 on
+// a Pixel 2 XL, not the ~411x741 a density-corrected logical canvas would report) — the host does
+// NOT scale these for a normal app; wandr:ui-shell/metrics.get-density() is the guest's own signal
+// to do it (the same contract dioxus/Slint guests already use). 1.0 on desktop (get-density returns
+// 1.0 there), so this is a no-op off-device. Queried once — density doesn't change mid-session.
+nonisolated(unsafe) private var density: Float = 1.0
+nonisolated(unsafe) private var densityInitialized = false
+
+private func ensureDensity() -> Float {
+    if !densityInitialized {
+        let d = wandr_ui_shell_metrics_get_density()
+        density = d > 0 ? d : 1.0
+        densityInitialized = true
+    }
+    return density
+}
 
 @_cdecl("exports_wasi_input_handlers_frame_handler_on_resize")
-public func onResize(_ w: UInt32, _ h: UInt32) { width = Float(w); height = Float(h) }
+public func onResize(_ w: UInt32, _ h: UInt32) {
+    let d = ensureDensity()
+    width = Float(w) / d; height = Float(h) / d
+}
 
 @_cdecl("exports_wasi_input_handlers_frame_handler_on_frame")
 public func onFrame(_ nanos: UInt64) {
@@ -117,6 +136,10 @@ public func onFrame(_ nanos: UInt64) {
     }
     let dt = lastFrameNanos == 0 ? 0.0 : Double(nanos &- lastFrameNanos) / 1_000_000_000.0
     lastFrameNanos = nanos
+    // Drain any audio still queued from a recent play() — a single write() only fills what
+    // currently fits the ring (confirmed on-device: ~19% of a short SFX in one call), so the
+    // remainder is pumped in a bit more each frame as the device consumes it.
+    WandrAudioPlayer.shared.pump()
 
     let ctxOwn = wasi_canvas_embedding_get_context()
     let ctx = wasi_canvas_embedding_borrow_canvas_context(ctxOwn)
@@ -126,6 +149,11 @@ public func onFrame(_ nanos: UInt64) {
     let gfx = wasi_canvas_draw_borrow_graphics_t(__handle: gfxOwn.__handle)
     let cg = CGContext(canvas: canvas, graphics: gfx)
     cg.clear(CGColor(red: 0.063, green: 0.078, blue: 0.094, alpha: 1))
+    // Draw commands below are issued in LOGICAL points (width/height, already density-divided in
+    // onResize) — scale them back up so they fill the physical canvas. Fresh CGContext every frame,
+    // so this must be re-applied every frame (nothing persists across onFrame calls).
+    let d = CGFloat(ensureDensity())
+    cg.concat3x3(d, 0, 0, 0, d, 0, 0, 0, 1)
     sink.cg = cg
 
     if !built, width > 0, height > 0 {
@@ -146,20 +174,25 @@ public func onFrame(_ nanos: UInt64) {
 }
 
 @_cdecl("exports_wandr_ui_shell_frame_pacing_next_frame_delay")
-public func nextFrameDelay() -> UInt32 { animPending ? 33 : 150 }
+public func nextFrameDelay() -> UInt32 { (animPending || WandrAudioPlayer.shared.isActive) ? 33 : 150 }
 
 @_cdecl("exports_wasi_input_handlers_pointer_handler_on_pointer")
 public func onPointer(_ ev: UnsafeMutablePointer<exports_wasi_input_handlers_pointer_handler_pointer_event_t>?) {
     guard let e = ev?.pointee else { return }
+    // Pointer coordinates arrive in the same RAW PHYSICAL pixel space as onResize's w/h — convert
+    // to logical points (matching the CGContext draw-scale above) so hit-testing lines up with
+    // where SwiftUI actually laid out its views.
+    let d = Double(ensureDensity())
+    let x = Double(e.x) / d, y = Double(e.y) / d
     switch e.kind {
     case UInt8(EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_DOWN):
         pointerPressing = true
-        wandrSendPointer(phase: 0, x: Double(e.x), y: Double(e.y), serial: ptrSerial)
+        wandrSendPointer(phase: 0, x: x, y: y, serial: ptrSerial)
     case UInt8(EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_MOVE):
-        if pointerPressing { wandrSendPointer(phase: 1, x: Double(e.x), y: Double(e.y), serial: ptrSerial) }
+        if pointerPressing { wandrSendPointer(phase: 1, x: x, y: y, serial: ptrSerial) }
     case UInt8(EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_UP):
         pointerPressing = false
-        wandrSendPointer(phase: 2, x: Double(e.x), y: Double(e.y), serial: ptrSerial)
+        wandrSendPointer(phase: 2, x: x, y: y, serial: ptrSerial)
         ptrSerial &+= 1
     default: break
     }
