@@ -568,6 +568,18 @@ typedef struct {
   } val;
 } wasi_audio_pcm_result_own_capture_audio_error_t;
 
+typedef uint8_t wandr_ui_shell_lifecycle_state_t;
+
+#define WANDR_UI_SHELL_LIFECYCLE_STATE_INITIALIZED 0
+#define WANDR_UI_SHELL_LIFECYCLE_STATE_CREATED 1
+#define WANDR_UI_SHELL_LIFECYCLE_STATE_STARTED 2
+#define WANDR_UI_SHELL_LIFECYCLE_STATE_RESUMED 3
+#define WANDR_UI_SHELL_LIFECYCLE_STATE_PAUSED 4
+#define WANDR_UI_SHELL_LIFECYCLE_STATE_STOPPED 5
+#define WANDR_UI_SHELL_LIFECYCLE_STATE_DESTROYED 6
+
+typedef wandr_ui_shell_lifecycle_state_t exports_wandr_ui_shell_shell_events_state_t;
+
 typedef uint8_t exports_wasi_input_handlers_pointer_handler_kind_t;
 
 #define EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_DOWN 0
@@ -801,6 +813,13 @@ extern bool wasi_audio_pcm_method_capture_pause(wasi_audio_pcm_borrow_capture_t 
 extern float wandr_ui_shell_metrics_get_density(void);
 extern float wandr_ui_shell_metrics_get_font_scale(void);
 extern uint32_t wandr_ui_shell_metrics_get_dpi(void);
+
+// Imported Functions from `wandr:ui-shell/lifecycle@0.1.0`
+extern wandr_ui_shell_lifecycle_state_t wandr_ui_shell_lifecycle_get_state(void);
+
+// Exported Functions from `wandr:ui-shell/shell-events@0.1.0`
+void exports_wandr_ui_shell_shell_events_on_scheduled_callback(uint32_t callback_id);
+void exports_wandr_ui_shell_shell_events_on_lifecycle_changed(exports_wandr_ui_shell_shell_events_state_t new_state);
 
 // Exported Functions from `wasi:input-handlers/frame-handler@0.0.2`
 void exports_wasi_input_handlers_frame_handler_on_frame(uint64_t nanos);

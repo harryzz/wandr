@@ -109,6 +109,21 @@ final class WandrAudioPlayer {
         }
     }
 
+    /// Drop any open track and discard whatever was queued — called on a background/foreground
+    /// transition (see WandrReactor's onLifecycleChanged). Matches wandr.audio.player's
+    /// reopen_at_current: a track can go stale across a role transition (the OS may reclaim the
+    /// AAudio stream, or the ring depth the host grants differs by role), so a bare write() into
+    /// the old handle afterward doesn't reliably work — the next play() call reopens fresh.
+    func reset() {
+        if let pb = playback {
+            wasi_audio_pcm_playback_drop_own(pb)
+        }
+        playback = nil
+        started = false
+        pending.removeAll()
+        graceTicks = 0
+    }
+
     private var started = false
 
     // 44.1kHz, not 48kHz — a known-bad rate on this device/HAL for this path.

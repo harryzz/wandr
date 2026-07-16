@@ -12,6 +12,7 @@ world swift-spike {
   import wasi:canvas/layout@0.0.2;
   import wasi:audio/pcm@0.0.1;
   import wandr:ui-shell/metrics@0.1.0;
+  export wandr:ui-shell/shell-events@0.1.0;
   export wasi:input-handlers/frame-handler@0.0.2;
   export wasi:input-handlers/pointer-handler@0.0.2;
   export wandr:ui-shell/frame-pacing@0.1.0;

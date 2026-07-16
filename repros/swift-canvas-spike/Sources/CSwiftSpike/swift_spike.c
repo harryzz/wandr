@@ -255,6 +255,15 @@ extern float __wasm_import_wandr_ui_shell_metrics_get_font_scale(void);
 __attribute__((__import_module__("wandr:ui-shell/metrics@0.1.0"), __import_name__("get-dpi")))
 extern int32_t __wasm_import_wandr_ui_shell_metrics_get_dpi(void);
 
+// Imported Functions from `wandr:ui-shell/lifecycle@0.1.0`
+
+__attribute__((__import_module__("wandr:ui-shell/lifecycle@0.1.0"), __import_name__("get-state")))
+extern int32_t __wasm_import_wandr_ui_shell_lifecycle_get_state(void);
+
+// Exported Functions from `wandr:ui-shell/shell-events@0.1.0`
+
+
+
 // Exported Functions from `wasi:input-handlers/frame-handler@0.0.2`
 
 
@@ -1907,6 +1916,21 @@ float wandr_ui_shell_metrics_get_font_scale(void) {
 uint32_t wandr_ui_shell_metrics_get_dpi(void) {
   int32_t ret = __wasm_import_wandr_ui_shell_metrics_get_dpi();
   return (uint32_t) (ret);
+}
+
+wandr_ui_shell_lifecycle_state_t wandr_ui_shell_lifecycle_get_state(void) {
+  int32_t ret = __wasm_import_wandr_ui_shell_lifecycle_get_state();
+  return ret;
+}
+
+__attribute__((__export_name__("wandr:ui-shell/shell-events@0.1.0#on-scheduled-callback")))
+void __wasm_export_exports_wandr_ui_shell_shell_events_on_scheduled_callback(int32_t arg) {
+  exports_wandr_ui_shell_shell_events_on_scheduled_callback((uint32_t) (arg));
+}
+
+__attribute__((__export_name__("wandr:ui-shell/shell-events@0.1.0#on-lifecycle-changed")))
+void __wasm_export_exports_wandr_ui_shell_shell_events_on_lifecycle_changed(int32_t arg) {
+  exports_wandr_ui_shell_shell_events_on_lifecycle_changed(arg);
 }
 
 __attribute__((__export_name__("wasi:input-handlers/frame-handler@0.0.2#on-frame")))

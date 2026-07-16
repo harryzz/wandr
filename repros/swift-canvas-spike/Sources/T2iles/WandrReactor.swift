@@ -202,4 +202,21 @@ public func onPointer(_ ev: UnsafeMutablePointer<exports_wasi_input_handlers_poi
     // path leaves animated properties frozen at their old values (the change never appears).
     animPending = true
 }
+
+@_cdecl("exports_wandr_ui_shell_shell_events_on_scheduled_callback")
+public func onScheduledCallback(_ callbackId: UInt32) {}
+
+@_cdecl("exports_wandr_ui_shell_shell_events_on_lifecycle_changed")
+public func onLifecycleChanged(_ newState: exports_wandr_ui_shell_shell_events_state_t) {
+    // A track can go stale across a background/foreground transition (the OS may reclaim the
+    // AAudio stream while backgrounded, or the ring depth the host grants differs by role) —
+    // matches wandr.audio.player's reopen_at_current. Drop on the transition either direction so
+    // the next play() call always opens fresh rather than writing into a possibly-dead handle.
+    switch newState {
+    case UInt8(WANDR_UI_SHELL_LIFECYCLE_STATE_PAUSED), UInt8(WANDR_UI_SHELL_LIFECYCLE_STATE_STOPPED),
+         UInt8(WANDR_UI_SHELL_LIFECYCLE_STATE_RESUMED):
+        WandrAudioPlayer.shared.reset()
+    default: break
+    }
+}
 #endif // !WANDR_HEADLESS
