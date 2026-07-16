@@ -1,6 +1,6 @@
 // [wandr Phase 2 · Audio substitution] Replaces eleev's AudioToolbox-based Audio/AudioSource
-// (excluded from the target — the sanctioned Audio seam). Same public API; v1 plays SILENTLY.
-// TODO: route to wasi:audio (a short PCM blip per merge/add), gated on the @AppStorage audio flag.
+// (excluded from the target — the sanctioned Audio seam). Same public API, now routed through
+// WandrAudioPlayer (wasi:audio/pcm) instead of AudioToolbox's silent stub.
 import Foundation
 
 enum AudioSource: String {
@@ -13,7 +13,6 @@ enum AudioSource: String {
         play(from: .merged)
     }
     static func play(from source: GameLogic.State) {
-        // v1: silent. TODO: wasi:audio blip for .merged / .moved.
         switch source {
         case .merged: Audio.play(fileNamed: AudioSource.merge.rawValue)
         case .moved:  Audio.play(fileNamed: AudioSource.add.rawValue)
@@ -23,7 +22,9 @@ enum AudioSource: String {
 }
 
 enum Audio {
+    // Assets are pre-decoded WAV (see WandrAudioPlayer) — `type` kept for API parity with eleev's
+    // call sites (which pass "mp3") but is otherwise unused; the file on disk is always .wav.
     static func play(fileNamed file: String, of type: String = "mp3") {
-        // v1: silent. TODO: decode /assets/audio/<file>.<type> and play via wasi:audio.
+        WandrAudioPlayer.shared.play(fileNamed: file)
     }
 }

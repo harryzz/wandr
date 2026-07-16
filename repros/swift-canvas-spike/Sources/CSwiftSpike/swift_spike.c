@@ -203,6 +203,47 @@ extern void __wasm_import_wasi_canvas_layout_method_paragraph_builder_add_text(i
 __attribute__((__import_module__("wasi:canvas/layout@0.0.2"), __import_name__("[static]paragraph-builder.build")))
 extern int32_t __wasm_import_wasi_canvas_layout_static_paragraph_builder_build(int32_t);
 
+// Imported Functions from `wasi:audio/pcm@0.0.1`
+
+__attribute__((__import_module__("wasi:audio/pcm@0.0.1"), __import_name__("[static]playback.open")))
+extern void __wasm_import_wasi_audio_pcm_static_playback_open(int32_t, int32_t, int32_t, int32_t, uint8_t *);
+
+__attribute__((__import_module__("wasi:audio/pcm@0.0.1"), __import_name__("[method]playback.write")))
+extern int32_t __wasm_import_wasi_audio_pcm_method_playback_write(int32_t, uint8_t *, size_t);
+
+__attribute__((__import_module__("wasi:audio/pcm@0.0.1"), __import_name__("[method]playback.buffered-frames")))
+extern int32_t __wasm_import_wasi_audio_pcm_method_playback_buffered_frames(int32_t);
+
+__attribute__((__import_module__("wasi:audio/pcm@0.0.1"), __import_name__("[method]playback.position")))
+extern int64_t __wasm_import_wasi_audio_pcm_method_playback_position(int32_t);
+
+__attribute__((__import_module__("wasi:audio/pcm@0.0.1"), __import_name__("[method]playback.start")))
+extern void __wasm_import_wasi_audio_pcm_method_playback_start(int32_t, uint8_t *);
+
+__attribute__((__import_module__("wasi:audio/pcm@0.0.1"), __import_name__("[method]playback.pause")))
+extern void __wasm_import_wasi_audio_pcm_method_playback_pause(int32_t, uint8_t *);
+
+__attribute__((__import_module__("wasi:audio/pcm@0.0.1"), __import_name__("[method]playback.flush")))
+extern void __wasm_import_wasi_audio_pcm_method_playback_flush(int32_t);
+
+__attribute__((__import_module__("wasi:audio/pcm@0.0.1"), __import_name__("[method]playback.drain")))
+extern void __wasm_import_wasi_audio_pcm_method_playback_drain(int32_t);
+
+__attribute__((__import_module__("wasi:audio/pcm@0.0.1"), __import_name__("[static]capture.open")))
+extern void __wasm_import_wasi_audio_pcm_static_capture_open(int32_t, int32_t, int32_t, int32_t, uint8_t *);
+
+__attribute__((__import_module__("wasi:audio/pcm@0.0.1"), __import_name__("[method]capture.read")))
+extern void __wasm_import_wasi_audio_pcm_method_capture_read(int32_t, int32_t, uint8_t *);
+
+__attribute__((__import_module__("wasi:audio/pcm@0.0.1"), __import_name__("[method]capture.available-frames")))
+extern int32_t __wasm_import_wasi_audio_pcm_method_capture_available_frames(int32_t);
+
+__attribute__((__import_module__("wasi:audio/pcm@0.0.1"), __import_name__("[method]capture.start")))
+extern void __wasm_import_wasi_audio_pcm_method_capture_start(int32_t, uint8_t *);
+
+__attribute__((__import_module__("wasi:audio/pcm@0.0.1"), __import_name__("[method]capture.pause")))
+extern void __wasm_import_wasi_audio_pcm_method_capture_pause(int32_t, uint8_t *);
+
 // Exported Functions from `wasi:input-handlers/frame-handler@0.0.2`
 
 
@@ -465,6 +506,64 @@ void wasi_canvas_layout_list_text_box_free(wasi_canvas_layout_list_text_box_t *p
     for (size_t i = 0; i < list_len; i++) {
     }
     free(list_ptr);
+  }
+}
+
+__attribute__((__import_module__("wasi:audio/pcm@0.0.1"), __import_name__("[resource-drop]playback")))
+extern void __wasm_import_wasi_audio_pcm_playback_drop(int32_t handle);
+
+void wasi_audio_pcm_playback_drop_own(wasi_audio_pcm_own_playback_t handle) {
+  __wasm_import_wasi_audio_pcm_playback_drop(handle.__handle);
+}
+
+void wasi_audio_pcm_playback_drop_borrow(wasi_audio_pcm_borrow_playback_t handle) {
+  __wasm_import_wasi_audio_pcm_playback_drop(handle.__handle);
+}
+
+wasi_audio_pcm_borrow_playback_t wasi_audio_pcm_borrow_playback(wasi_audio_pcm_own_playback_t arg) {
+  return (wasi_audio_pcm_borrow_playback_t) { arg.__handle };
+}
+
+__attribute__((__import_module__("wasi:audio/pcm@0.0.1"), __import_name__("[resource-drop]capture")))
+extern void __wasm_import_wasi_audio_pcm_capture_drop(int32_t handle);
+
+void wasi_audio_pcm_capture_drop_own(wasi_audio_pcm_own_capture_t handle) {
+  __wasm_import_wasi_audio_pcm_capture_drop(handle.__handle);
+}
+
+void wasi_audio_pcm_capture_drop_borrow(wasi_audio_pcm_borrow_capture_t handle) {
+  __wasm_import_wasi_audio_pcm_capture_drop(handle.__handle);
+}
+
+wasi_audio_pcm_borrow_capture_t wasi_audio_pcm_borrow_capture(wasi_audio_pcm_own_capture_t arg) {
+  return (wasi_audio_pcm_borrow_capture_t) { arg.__handle };
+}
+
+void wasi_audio_pcm_result_own_playback_audio_error_free(wasi_audio_pcm_result_own_playback_audio_error_t *ptr) {
+  if (!ptr->is_err) {
+  } else {
+  }
+}
+
+void swift_spike_list_f32_free(swift_spike_list_f32_t *ptr) {
+  size_t list_len = ptr->len;
+  if (list_len > 0) {
+    float *list_ptr = ptr->ptr;
+    for (size_t i = 0; i < list_len; i++) {
+    }
+    free(list_ptr);
+  }
+}
+
+void wasi_audio_pcm_result_void_audio_error_free(wasi_audio_pcm_result_void_audio_error_t *ptr) {
+  if (!ptr->is_err) {
+  } else {
+  }
+}
+
+void wasi_audio_pcm_result_own_capture_audio_error_free(wasi_audio_pcm_result_own_capture_audio_error_t *ptr) {
+  if (!ptr->is_err) {
+  } else {
   }
 }
 
@@ -1592,6 +1691,196 @@ void wasi_canvas_layout_method_paragraph_builder_add_text(wasi_canvas_layout_bor
 wasi_canvas_layout_own_paragraph_t wasi_canvas_layout_static_paragraph_builder_build(wasi_canvas_layout_own_paragraph_builder_t b) {
   int32_t ret = __wasm_import_wasi_canvas_layout_static_paragraph_builder_build((b).__handle);
   return (wasi_canvas_layout_own_paragraph_t) { ret };
+}
+
+bool wasi_audio_pcm_static_playback_open(wasi_audio_pcm_stream_config_t *config, wasi_audio_pcm_own_playback_t *ret, wasi_audio_pcm_audio_error_t *err) {
+  __attribute__((__aligned__(4)))
+  uint8_t ret_area[8];
+  uint8_t *ptr = (uint8_t *) &ret_area;
+  __wasm_import_wasi_audio_pcm_static_playback_open((int32_t) ((*config).sample_rate), (int32_t) (*config).channel_layout, (int32_t) (*config).format, (int32_t) (*config).class_, ptr);
+  wasi_audio_pcm_result_own_playback_audio_error_t result;
+  switch ((int32_t) *((uint8_t*) (ptr + 0))) {
+    case 0: {
+      result.is_err = false;
+      result.val.ok = (wasi_audio_pcm_own_playback_t) { *((int32_t*) (ptr + 4)) };
+      break;
+    }
+    case 1: {
+      result.is_err = true;
+      result.val.err = (int32_t) *((uint8_t*) (ptr + 4));
+      break;
+    }
+  }
+  if (!result.is_err) {
+    *ret = result.val.ok;
+    return 1;
+  } else {
+    *err = result.val.err;
+    return 0;
+  }
+}
+
+uint32_t wasi_audio_pcm_method_playback_write(wasi_audio_pcm_borrow_playback_t self, swift_spike_list_f32_t *samples) {
+  int32_t ret = __wasm_import_wasi_audio_pcm_method_playback_write((self).__handle, (uint8_t *) (*samples).ptr, (*samples).len);
+  return (uint32_t) (ret);
+}
+
+uint32_t wasi_audio_pcm_method_playback_buffered_frames(wasi_audio_pcm_borrow_playback_t self) {
+  int32_t ret = __wasm_import_wasi_audio_pcm_method_playback_buffered_frames((self).__handle);
+  return (uint32_t) (ret);
+}
+
+uint64_t wasi_audio_pcm_method_playback_position(wasi_audio_pcm_borrow_playback_t self) {
+  int64_t ret = __wasm_import_wasi_audio_pcm_method_playback_position((self).__handle);
+  return (uint64_t) (ret);
+}
+
+bool wasi_audio_pcm_method_playback_start(wasi_audio_pcm_borrow_playback_t self, wasi_audio_pcm_audio_error_t *err) {
+  __attribute__((__aligned__(1)))
+  uint8_t ret_area[2];
+  uint8_t *ptr = (uint8_t *) &ret_area;
+  __wasm_import_wasi_audio_pcm_method_playback_start((self).__handle, ptr);
+  wasi_audio_pcm_result_void_audio_error_t result;
+  switch ((int32_t) *((uint8_t*) (ptr + 0))) {
+    case 0: {
+      result.is_err = false;
+      break;
+    }
+    case 1: {
+      result.is_err = true;
+      result.val.err = (int32_t) *((uint8_t*) (ptr + 1));
+      break;
+    }
+  }
+  if (!result.is_err) {
+    return 1;
+  } else {
+    *err = result.val.err;
+    return 0;
+  }
+}
+
+bool wasi_audio_pcm_method_playback_pause(wasi_audio_pcm_borrow_playback_t self, wasi_audio_pcm_audio_error_t *err) {
+  __attribute__((__aligned__(1)))
+  uint8_t ret_area[2];
+  uint8_t *ptr = (uint8_t *) &ret_area;
+  __wasm_import_wasi_audio_pcm_method_playback_pause((self).__handle, ptr);
+  wasi_audio_pcm_result_void_audio_error_t result;
+  switch ((int32_t) *((uint8_t*) (ptr + 0))) {
+    case 0: {
+      result.is_err = false;
+      break;
+    }
+    case 1: {
+      result.is_err = true;
+      result.val.err = (int32_t) *((uint8_t*) (ptr + 1));
+      break;
+    }
+  }
+  if (!result.is_err) {
+    return 1;
+  } else {
+    *err = result.val.err;
+    return 0;
+  }
+}
+
+void wasi_audio_pcm_method_playback_flush(wasi_audio_pcm_borrow_playback_t self) {
+  __wasm_import_wasi_audio_pcm_method_playback_flush((self).__handle);
+}
+
+void wasi_audio_pcm_method_playback_drain(wasi_audio_pcm_borrow_playback_t self) {
+  __wasm_import_wasi_audio_pcm_method_playback_drain((self).__handle);
+}
+
+bool wasi_audio_pcm_static_capture_open(wasi_audio_pcm_stream_config_t *config, wasi_audio_pcm_own_capture_t *ret, wasi_audio_pcm_audio_error_t *err) {
+  __attribute__((__aligned__(4)))
+  uint8_t ret_area[8];
+  uint8_t *ptr = (uint8_t *) &ret_area;
+  __wasm_import_wasi_audio_pcm_static_capture_open((int32_t) ((*config).sample_rate), (int32_t) (*config).channel_layout, (int32_t) (*config).format, (int32_t) (*config).class_, ptr);
+  wasi_audio_pcm_result_own_capture_audio_error_t result;
+  switch ((int32_t) *((uint8_t*) (ptr + 0))) {
+    case 0: {
+      result.is_err = false;
+      result.val.ok = (wasi_audio_pcm_own_capture_t) { *((int32_t*) (ptr + 4)) };
+      break;
+    }
+    case 1: {
+      result.is_err = true;
+      result.val.err = (int32_t) *((uint8_t*) (ptr + 4));
+      break;
+    }
+  }
+  if (!result.is_err) {
+    *ret = result.val.ok;
+    return 1;
+  } else {
+    *err = result.val.err;
+    return 0;
+  }
+}
+
+void wasi_audio_pcm_method_capture_read(wasi_audio_pcm_borrow_capture_t self, uint32_t max_frames, swift_spike_list_f32_t *ret) {
+  __attribute__((__aligned__(sizeof(void*))))
+  uint8_t ret_area[(2*sizeof(void*))];
+  uint8_t *ptr = (uint8_t *) &ret_area;
+  __wasm_import_wasi_audio_pcm_method_capture_read((self).__handle, (int32_t) (max_frames), ptr);
+  *ret = (swift_spike_list_f32_t) { (float*)(*((uint8_t **) (ptr + 0))), (*((size_t*) (ptr + sizeof(void*)))) };
+}
+
+uint32_t wasi_audio_pcm_method_capture_available_frames(wasi_audio_pcm_borrow_capture_t self) {
+  int32_t ret = __wasm_import_wasi_audio_pcm_method_capture_available_frames((self).__handle);
+  return (uint32_t) (ret);
+}
+
+bool wasi_audio_pcm_method_capture_start(wasi_audio_pcm_borrow_capture_t self, wasi_audio_pcm_audio_error_t *err) {
+  __attribute__((__aligned__(1)))
+  uint8_t ret_area[2];
+  uint8_t *ptr = (uint8_t *) &ret_area;
+  __wasm_import_wasi_audio_pcm_method_capture_start((self).__handle, ptr);
+  wasi_audio_pcm_result_void_audio_error_t result;
+  switch ((int32_t) *((uint8_t*) (ptr + 0))) {
+    case 0: {
+      result.is_err = false;
+      break;
+    }
+    case 1: {
+      result.is_err = true;
+      result.val.err = (int32_t) *((uint8_t*) (ptr + 1));
+      break;
+    }
+  }
+  if (!result.is_err) {
+    return 1;
+  } else {
+    *err = result.val.err;
+    return 0;
+  }
+}
+
+bool wasi_audio_pcm_method_capture_pause(wasi_audio_pcm_borrow_capture_t self, wasi_audio_pcm_audio_error_t *err) {
+  __attribute__((__aligned__(1)))
+  uint8_t ret_area[2];
+  uint8_t *ptr = (uint8_t *) &ret_area;
+  __wasm_import_wasi_audio_pcm_method_capture_pause((self).__handle, ptr);
+  wasi_audio_pcm_result_void_audio_error_t result;
+  switch ((int32_t) *((uint8_t*) (ptr + 0))) {
+    case 0: {
+      result.is_err = false;
+      break;
+    }
+    case 1: {
+      result.is_err = true;
+      result.val.err = (int32_t) *((uint8_t*) (ptr + 1));
+      break;
+    }
+  }
+  if (!result.is_err) {
+    return 1;
+  } else {
+    *err = result.val.err;
+    return 0;
+  }
 }
 
 __attribute__((__export_name__("wasi:input-handlers/frame-handler@0.0.2#on-frame")))
