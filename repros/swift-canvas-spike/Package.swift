@@ -15,9 +15,12 @@ let package = Package(
         // once and shared (NEXT-SESSION-TASKS.md #1). CSwiftSpike no longer generates its own
         // copy of these (same C symbol names would collide if both were linked).
         .package(path: "/home/harry/wandr/swift/OpenSwiftUIProject/CWASICanvas"),
-        // CGContext/CGImage/CGColor/CGGradient — real, wasi:canvas-backed, now live in
-        // OpenCoreGraphics itself (OpenCoreGraphicsShims re-exports the working implementation
-        // on os(WASI)) instead of a per-app vendored copy. NEXT-SESSION-TASKS.md #2.
+        // CGContext/CGImageHandle/CGColor/CGGradient — real, wasi:canvas-backed, now live in
+        // OpenCoreGraphics itself as the OpenCoreGraphicsWASICanvas target, instead of a per-app
+        // vendored copy. Consumed directly (not via OpenCoreGraphicsShims): these render-glue
+        // files are wasm32-wasip1-only, so Shims' cross-platform backend selection is never
+        // exercised for them — only OpenSwiftUI itself (genuinely multi-platform) needs Shims.
+        // NEXT-SESSION-TASKS.md #2.
         .package(path: "/home/harry/wandr/swift/OpenSwiftUIProject/OpenCoreGraphics"),
     ],
     targets: [
@@ -40,7 +43,7 @@ let package = Package(
                 .product(name: "AudioToolbox", package: "apple-compat"),
                 "CSwiftSpike",
                 .product(name: "CWASICanvas", package: "CWASICanvas"),
-                .product(name: "OpenCoreGraphicsShims", package: "OpenCoreGraphics"),
+                .product(name: "OpenCoreGraphicsWASICanvas", package: "OpenCoreGraphics"),
                 .product(name: "OpenSwiftUI", package: "OpenSwiftUI"),
             ],
             // T2ilesApp = @main/UserDefaults entry (WandrReactor replaces it);
@@ -74,7 +77,7 @@ let package = Package(
             dependencies: [
                 "CSwiftSpike",
                 .product(name: "CWASICanvas", package: "CWASICanvas"),
-                .product(name: "OpenCoreGraphicsShims", package: "OpenCoreGraphics"),
+                .product(name: "OpenCoreGraphicsWASICanvas", package: "OpenCoreGraphics"),
             ]
         ),
         // Phase 4b: OpenSwiftUI renders its DisplayList through a WandrDrawSink → CGContext.
@@ -85,7 +88,7 @@ let package = Package(
             dependencies: [
                 "CSwiftSpike",
                 .product(name: "CWASICanvas", package: "CWASICanvas"),
-                .product(name: "OpenCoreGraphicsShims", package: "OpenCoreGraphics"),
+                .product(name: "OpenCoreGraphicsWASICanvas", package: "OpenCoreGraphics"),
                 .product(name: "OpenSwiftUI", package: "OpenSwiftUI"),
             ],
             // eleev/swiftui-2048 is Swift-5-era code; build it in Swift 5 language mode so

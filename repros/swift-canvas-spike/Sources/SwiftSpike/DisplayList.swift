@@ -11,7 +11,7 @@
 // This mirror keeps the same SHAPE (recursive items + effect-wrapped sub-lists) and the
 // drawable/effect kinds that map onto our CGContext, so the renderer's design transfers
 // 1:1 to the real types later.
-import OpenCoreGraphicsShims
+import OpenCoreGraphicsWASICanvas
 
 struct DisplayList {
     var items: [Item]

@@ -5,7 +5,7 @@
 // the SwiftUI/Combine/AudioToolbox shims.
 import CSwiftSpike
 import CWASICanvas
-import OpenCoreGraphicsShims
+import OpenCoreGraphicsWASICanvas
 import OpenSwiftUI
 @_spi(WandrRenderer) import OpenSwiftUI
 #if canImport(WASILibc)

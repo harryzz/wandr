@@ -8,7 +8,7 @@
 // to the deployed view tree; it only scripts the navigation the user drives by hand.
 #if WANDR_HEADLESS
 import CSwiftSpike  // pointer_event_t type for the inert export stubs (no wasi:canvas calls)
-import OpenCoreGraphicsShims  // CGSize (value type; avoids the WASICanvas-backed CGContext code)
+import OpenCoreGraphicsWASICanvas  // CGSize (value type; avoids the WASICanvas-backed CGContext code)
 import SwiftUI       // apple-compat shim (re-exports OpenSwiftUI types the eleev views are written against)
 import Combine       // ObservableObject / @Published (apple-compat)
 import OpenSwiftUI
