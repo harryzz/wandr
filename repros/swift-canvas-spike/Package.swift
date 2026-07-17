@@ -63,6 +63,9 @@ let package = Package(
             // already declares a same-named replacement (see that file's own doc comment) —
             // un-excluding this one would locally shadow it right back to the broken,
             // Bundle.main-trapping original (same-module declarations always win over imports).
+            // Also: even routed around Bundle, this original uses FileManager.contents(atPath:),
+            // which has its own separate silent-empty-data bug on this target — see
+            // swiftlang/swift-foundation#2120, tracked in apple-compat's PlistConfiguration.swift.
             exclude: ["T2ilesApp.swift", "Utils/Plist/PlistConfiguration.swift"],
             swiftSettings: [.swiftLanguageMode(.v5)],
             linkerSettings: [

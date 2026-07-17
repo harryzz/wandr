@@ -10,6 +10,16 @@
 //  name, e.g. eleev's own excluded `Utils/Plist/PlistConfiguration.swift`), so there's no real
 //  type to shadow here — this is just declared directly in this target so any app code that
 //  `import SwiftUI` sees it by bare name, same as `UserDefaults.swift`'s shim in this directory.
+//
+//  Also deliberately avoids `FileManager.default.contents(atPath:)` even as a Bundle-free
+//  read path: confirmed (2026-07-17) it silently returns EMPTY Data (not nil, not a throw) for
+//  real, non-empty files on this target, when `fstat`'s st_size comes back 0 for a wasi:filesystem
+//  preopen. Root cause identified in swift-foundation's Data+Reading.swift — the `fileSize == 0`
+//  fallback-chunked-read exists only for `#if os(Linux) || os(Android)`, `os(WASI)` isn't
+//  included. Filed upstream: https://github.com/swiftlang/swift-foundation/issues/2120 — once
+//  fixed, `readAsset` below could plausibly be replaced by plain `FileManager.default.contents`,
+//  but there's no real benefit to doing so (this POSIX version already works); don't bother
+//  unless the fix comes with some other reason to prefer FileManager specifically.
 import Foundation
 #if canImport(WASILibc)
 import WASILibc

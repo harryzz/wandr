@@ -56,6 +56,7 @@
 - [✅ Task 36 step 7](project_task_36_step_7_pending.md) — cross-app dep chain. · [✅ Task 38 wandrpkg assets](project_task_38_wandrpkg_assets.md) — assets.read verb.
 
 ## References / gotchas
+- [Ref: swift-foundation WASI FileManager bug](reference_swift_foundation_wasi_filemanager_bug.md) — filed upstream#2120, contents(atPath:) silently empty; check periodically.
 - [Ref: host build scripts](reference_host_build_scripts.md) — use the 4 committed scripts, never inline cargo build; p3-async ON by default.
 - [Ref: p3 WSS stalls](reference_wasmtime46_p3_stream_bugs.md) — wit-bindgen 0.53 bug; needs 0.59+.
 - [Ref: "resource impl missing"](reference_missing_instance_error_stale_zygote.md) — apps forked old zygote image.
