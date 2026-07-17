@@ -80,20 +80,38 @@ nothing above the app can import it (package cycle).
   the reactor/runtime (task 3).
 - Verify: `CWASICanvas` builds standalone; the app still builds consuming it.
 
-## 2. Normalize OpenCoreGraphics — `CGContext` lives in OCG, retire vendored `WandrCG` — §2, §6, §7
+## 2. ✅ DONE (2026-07-17) Normalize OpenCoreGraphics — `CGContext` lives in OCG, retired vendored `WandrCG` — §2, §6, §7
 
-With `CWASICanvas` as a leaf, the wasi:canvas `CGContext` can finally live in OCG without breaking
-OpenSwiftUI's build.
+Added `OpenCoreGraphicsWASICanvas` (new target in the OCG submodule) holding
+`CGContext.swift`/`CGImageHandle.swift`/`CGColor.swift`/`CGGradient.swift`, depending on
+`OpenCoreGraphics` (geometry) + `CWASICanvas`. Wired through `OpenCoreGraphicsShims`'
+pre-existing `#if OPENCOREGRAPHICS_COREGRAPHICS / #elseif os(WASI) / #else` platform-select —
+NOT a new public product, matching upstream's own `<X>Shims` convention (confirmed against the
+upstream repo: 15/15 import sites use `OpenCoreGraphicsShims` directly, never a bare
+`OpenCoreGraphics`). All 6 consumers in `swift-canvas-spike` (`T2iles`, `SwiftSpike`,
+`OpenSwiftUIDemo`) now `import OpenCoreGraphicsShims`; the vendored
+`repros/swift-canvas-spike/Sources/OpenCoreGraphics` (`WandrCG`) directory is deleted.
 
-- Add a **separate target** in the OCG package (e.g. `OpenCoreGraphicsWASICanvas`) holding
-  `CGContext.swift`/`CGImage.swift`/`CGColor` etc., depending on OCG-geometry + `CWASICanvas`.
-  **Do NOT** put it in the `OpenCoreGraphics` or `OpenCoreGraphicsShims` targets — OpenSwiftUI
-  imports those 48×; adding a CSwiftSpike/CWASICanvas dep there re-breaks the build.
-- Consume that target instead of the vendored `repros/.../Sources/OpenCoreGraphics` (`WandrCG`).
-- Retire: the vendored `WandrCG` copy AND the dormant `harryzz/OpenCoreGraphics@wasm32-wasip1`
-  branch (its whole reason to exist). OpenSwiftUI keeps depending only on OCG-geometry (`050239b`).
-- Fold the effect work (clip/fill/shadow `CGContext` methods, `concat3x3`, `fillShadowPath`) into
-  that OCG target as it moves — currently they live in vendored `WandrCG` only.
+Gotcha worth knowing: the vendored image type was previously named `CGImage`, same as
+`OpenCoreGraphics`'s own portable, `encodedData`-based `CGImage` (added separately for
+`NamedImage.swift`'s off-Apple bitmap resolve). Declaring a second `CGImage` in
+`OpenCoreGraphicsWASICanvas` shadowed the real one through the `@_exported import
+OpenCoreGraphics` re-export chain and silently broke named-image loading. Renamed the
+wasi:canvas-internal handle type to `CGImageHandle` — it's a `CGContext`-internal
+implementation detail (`decodeImage`/`makeImage`/`drawImageFitting`/`draw`), never crosses the
+`WandrDrawSink` boundary (which passes raw encoded bytes), so the rename had no other call sites
+beyond `CGContext.swift` and the app's own `CGSink`/`DisplayList` glue.
+
+Verified end-to-end on desktop (Linux + Windows, same wasm, checksum-matched): the game renders,
+including the newly-working bitmap assets (`Icon`/`3x3`/`4x4`/`5x5`) and audio, no regressions.
+(The "no images / maybe crashed" scare mid-session was a self-inflicted desktop-launch mistake —
+a bare `.wasm` positional arg hits `AppRef::DevCwasm` mode, which skips the installed-app loader
+and never preopens `/assets`; the fix is `--app <id>` with the correct `WANDR_APPS_ROOT`, not a
+code change.)
+
+Retiring the dormant `harryzz/OpenCoreGraphics@wasm32-wasip1` branch (a GitHub branch deletion)
+was intentionally left undone — a destructive, hard-to-reverse action outside this task's scope
+without explicit confirmation.
 
 ## 3. Move the runtime/plumbing OUT of the app — a shared `wandr-runtime` — §7, `Sources/T2iles/RULES.md`
 
