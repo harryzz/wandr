@@ -15,6 +15,9 @@ let package = Package(
         // once and shared (NEXT-SESSION-TASKS.md #1). CSwiftSpike no longer generates its own
         // copy of these (same C symbol names would collide if both were linked).
         .package(path: "/home/harry/wandr/swift/OpenSwiftUIProject/CWASICanvas"),
+        // The wasi:audio/pcm bindings — same standalone-leaf treatment, for wandr-runtime's
+        // WandrAudioPlayer. CSwiftSpike no longer generates its own copy of these either.
+        .package(path: "/home/harry/wandr/swift/OpenSwiftUIProject/CWasiAudio"),
         // CGContext/CGImageHandle/CGColor/CGGradient — real, wasi:canvas-backed, now live in
         // OpenCoreGraphics itself as the OpenCoreGraphicsWASICanvas target, instead of a per-app
         // vendored copy. Consumed directly (not via OpenCoreGraphicsShims): these render-glue
@@ -64,13 +67,15 @@ let package = Package(
                 .linkedLibrary("wasi-emulated-process-clocks", .when(platforms: [.wasi])),
                 .unsafeFlags([
                     "-Xclang-linker", "-mexec-model=reactor",
-                    // Two component-type object files, one per WIT world actually generated:
-                    // this app's own (exports + audio + metrics, no wasi:canvas anymore) and
-                    // CWASICanvas's (wasi:canvas draw/types/embedding/layout). Both are pure
-                    // metadata (no code symbols), so wasm-tools composes them into one
-                    // component's declared import/export surface — see NEXT-SESSION-TASKS.md #1.
+                    // Three component-type object files, one per WIT world actually generated:
+                    // this app's own (exports + metrics, no wasi:canvas/audio anymore),
+                    // CWASICanvas's (wasi:canvas draw/types/embedding/layout), and CWasiAudio's
+                    // (wasi:audio/pcm, via wandr-runtime's WandrAudioPlayer). All pure metadata
+                    // (no code symbols), so wasm-tools composes them into one component's
+                    // declared import/export surface — see NEXT-SESSION-TASKS.md #1.
                     "-Xlinker", "generated/swift_spike_component_type.o",
                     "-Xlinker", "/home/harry/wandr/swift/OpenSwiftUIProject/CWASICanvas/generated/cwasi_canvas_component_type.o",
+                    "-Xlinker", "/home/harry/wandr/swift/OpenSwiftUIProject/CWasiAudio/generated/cwasi_audio_component_type.o",
                 ], .when(platforms: [.wasi])),
             ]
         ),
@@ -109,6 +114,7 @@ let package = Package(
                     "-Xclang-linker", "-mexec-model=reactor",
                     "-Xlinker", "generated/swift_spike_component_type.o",
                     "-Xlinker", "/home/harry/wandr/swift/OpenSwiftUIProject/CWASICanvas/generated/cwasi_canvas_component_type.o",
+                    "-Xlinker", "/home/harry/wandr/swift/OpenSwiftUIProject/CWasiAudio/generated/cwasi_audio_component_type.o",
                 ], .when(platforms: [.wasi])),
             ]
         ),

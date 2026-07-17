@@ -11,11 +11,12 @@
 // world) if both were linked together. See NEXT-SESSION-TASKS.md #1. The
 // component-level import declaration for wasi:canvas now comes from linking
 // CWASICanvas's own generated component_type.o alongside this world's — see
-// build-t2iles.sh step 2's -Xlinker flags.
+// build-t2iles.sh step 2's -Xlinker flags. wasi:audio/pcm@0.0.1 is likewise NOT
+// imported here anymore — CWasiAudio supplies it (wandr-runtime's WandrAudioPlayer),
+// same duplicate-symbol-collision reasoning.
 package wandr:swift-spike;
 
 world swift-spike {
-  import wasi:audio/pcm@0.0.1;
   import wandr:ui-shell/metrics@0.1.0;
   export wandr:ui-shell/shell-events@0.1.0;
   export wasi:input-handlers/frame-handler@0.0.2;

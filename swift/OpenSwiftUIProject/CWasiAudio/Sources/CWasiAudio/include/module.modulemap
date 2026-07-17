@@ -1,0 +1,4 @@
+module CWasiAudio {
+    header "cwasi_audio.h"
+    export *
+}

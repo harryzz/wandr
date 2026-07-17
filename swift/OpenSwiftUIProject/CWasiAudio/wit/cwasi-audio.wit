@@ -1,0 +1,10 @@
+// CWasiAudio — a standalone leaf module holding ONLY the wasi:audio/pcm bindings, with no
+// exports and no other imports. Extracted from the per-app CSwiftSpike blob
+// (repros/swift-canvas-spike) so a shared audio player (wandr-runtime's WandrAudioPlayer) can
+// depend on the wasi:audio/pcm bindings without a package cycle through the app itself — same
+// rationale as CWASICanvas for wasi:canvas (see NEXT-SESSION-TASKS.md #1).
+package wandr:cwasi-audio;
+
+world cwasi-audio {
+  import wasi:audio/pcm@0.0.1;
+}

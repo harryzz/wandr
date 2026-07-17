@@ -1,7 +1,10 @@
 // [wandr Phase 2 · Audio substitution] Replaces eleev's AudioToolbox-based Audio/AudioSource
-// (excluded from the target — the sanctioned Audio seam). Same public API, now routed through
-// WandrAudioPlayer (wasi:audio/pcm) instead of AudioToolbox's silent stub.
+// (excluded from the target — the sanctioned Audio seam). eleev's own (unmodified) views
+// reference `Audio`/`AudioSource` BY BARE NAME — same-module visibility, no import — so these
+// two types stay in this target; the actual playback engine (WandrAudioPlayer, generic
+// wasi:audio/pcm) lives once in WandrRuntime.
 import Foundation
+import WandrRuntime
 
 enum AudioSource: String {
     case merge = "Merge"

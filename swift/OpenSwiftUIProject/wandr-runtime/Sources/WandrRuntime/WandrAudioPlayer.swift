@@ -1,10 +1,13 @@
-// [wandr Phase 2 · Audio substitution] Real playback for eleev's Audio/AudioSource seam, via
-// wasi:audio/pcm. Swift has no MP3 decoder available on wasm (Symphonia — the guest decoder the
-// wasi:audio design assumes — is Rust-only), so the merge/add SFX ship pre-decoded to mono 44.1kHz
-// PCM16 WAV (converted once, offline, from eleev's real Kenney CC0 mp3s — see Audio/Merge.wav,
-// Audio/Add.wav) instead of decoding at runtime. Duplicated to stereo at load time — confirmed
-// on-device: this HAL's MMAP path only accepted writes (nonzero `accepted`) once switched from
-// mono to stereo. 48kHz is refused too — 44.1kHz is what this device's path actually accepts.
+// The shared WandrAudioPlayer — plays pre-decoded WAV SFX via wasi:audio/pcm. Generic: takes an
+// arbitrary asset name, has no game-specific logic. Originally written for eleev's Audio/
+// AudioSource seam (T2iles/WandrAudio.swift still supplies that thin, eleev-API-shaped wrapper —
+// see its own file), but nothing HERE depends on that; any wandr app can call
+// WandrAudioPlayer.shared.play(fileNamed:) directly. Swift has no MP3 decoder available on wasm
+// (Symphonia — the guest decoder the wasi:audio design assumes — is Rust-only), so SFX ship
+// pre-decoded to mono 44.1kHz PCM16 WAV instead of decoding at runtime. Duplicated to stereo at
+// load time — confirmed on-device: this HAL's MMAP path only accepted writes (nonzero `accepted`)
+// once switched from mono to stereo. 48kHz is refused too — 44.1kHz is what this device's path
+// actually accepts.
 //
 // Playback architecture synthesizes the two proven Rust/Kotlin references (neither alone fits a
 // multi-write one-shot SFX):
@@ -23,13 +26,18 @@
 // passed for the clip's own duration to elapse (borrowed from wandr-app, sized per-clip rather
 // than a fixed 400ms).
 import Foundation
-import CSwiftSpike
+import CWasiAudio
 #if canImport(WASILibc)
 import WASILibc
 #endif
 
-final class WandrAudioPlayer {
-    static let shared = WandrAudioPlayer()
+public final class WandrAudioPlayer {
+    // wasm32-wasip1 is single-threaded — this project's established pattern for reactor-global
+    // mutable state (see WandrRuntime.swift's own private globals) is a manual nonisolated(unsafe)
+    // opt-out of Swift 6 strict concurrency checking rather than an actor, which would add real
+    // hop overhead this single-threaded target never needs.
+    public nonisolated(unsafe) static let shared = WandrAudioPlayer()
+    private init() {}
 
     private var playback: wasi_audio_pcm_own_playback_t?
     private var cache: [String: [Float]] = [:]
@@ -47,15 +55,15 @@ final class WandrAudioPlayer {
 
     /// True while pump() needs fast (~33ms) frame-pacing to keep the ring fed. False once fully
     /// idle — pump() becomes a cheap no-op and the caller can drop back to slow/idle cadence.
-    var isActive: Bool { !pending.isEmpty || graceTicks > 0 }
+    public var isActive: Bool { !pending.isEmpty || graceTicks > 0 }
 
-    func play(fileNamed name: String) {
+    public func play(fileNamed name: String) {
         let samples: [Float]
         if let cached = cache[name] {
             samples = cached
         } else {
             guard let loaded = Self.loadStereoPCM16Wav("/assets/\(name).wav") else {
-                wlog("audio: failed to load /assets/\(name).wav")
+                rlog("audio: failed to load /assets/\(name).wav")
                 return
             }
             cache[name] = loaded
@@ -71,7 +79,7 @@ final class WandrAudioPlayer {
     /// otherwise). Matches wandr.tetris's proven per-tick keep-alive; closes the track once
     /// `graceTicks` reaches zero, matching wandr-app's proven delayed-close.
     /// write-then-start ([[feedback_aaudio_gotchas]] #5) — prime the ring before starting.
-    func pump() {
+    public func pump() {
         guard isActive, let pb = ensurePlayback() else { return }
         let borrowed = wasi_audio_pcm_borrow_playback(pb)
         if pending.isEmpty {
@@ -80,12 +88,12 @@ final class WandrAudioPlayer {
             // over-buffering (real SFX data must not queue up behind a large silence pad).
             var silence = [Float](repeating: 0, count: 960)
             silence.withUnsafeMutableBufferPointer { buf in
-                var list = swift_spike_list_f32_t(ptr: buf.baseAddress, len: buf.count)
+                var list = cwasi_audio_list_f32_t(ptr: buf.baseAddress, len: buf.count)
                 _ = wasi_audio_pcm_method_playback_write(borrowed, &list)
             }
         } else {
             let accepted = pending.withUnsafeMutableBufferPointer { buf -> UInt32 in
-                var list = swift_spike_list_f32_t(ptr: buf.baseAddress, len: buf.count)
+                var list = cwasi_audio_list_f32_t(ptr: buf.baseAddress, len: buf.count)
                 return wasi_audio_pcm_method_playback_write(borrowed, &list)
             }
             if accepted > 0 {
@@ -114,7 +122,7 @@ final class WandrAudioPlayer {
     /// reopen_at_current: a track can go stale across a role transition (the OS may reclaim the
     /// AAudio stream, or the ring depth the host grants differs by role), so a bare write() into
     /// the old handle afterward doesn't reliably work — the next play() call reopens fresh.
-    func reset() {
+    public func reset() {
         if let pb = playback {
             wasi_audio_pcm_playback_drop_own(pb)
         }
@@ -139,7 +147,7 @@ final class WandrAudioPlayer {
         var ret = wasi_audio_pcm_own_playback_t()
         var err = wasi_audio_pcm_audio_error_t()
         guard wasi_audio_pcm_static_playback_open(&config, &ret, &err) else {
-            wlog("audio: playback open failed, err=\(err)")
+            rlog("audio: playback open failed, err=\(err)")
             return nil
         }
         playback = ret

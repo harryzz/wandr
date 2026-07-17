@@ -1,32 +1,19 @@
 // [wandr Phase 2] Store-class seam substitution for eleev's Utils/Plist/PlistConfiguration.
-// eleev reads `Strings.plist` via `Bundle.main.path(forResource:ofType:)`, but `Bundle.main`
-// traps on wasm (swift-corelibs-Foundation stubs the main-bundle lookup → `unreachable`
-// inside its `swift_once` initializer, before the failable init can return nil). This
-// replacement is API-identical (`init?(name:)` + `getItem(named:)`) so eleev's views compile
-// UNMODIFIED, but reads the plist from the host `/assets` preopen via POSIX — no Bundle.
-// If the resource is absent, init returns nil and the callers fall back to their defaults.
+// eleev's own (unmodified) views reference `PlistConfiguration` BY BARE NAME — same-module
+// visibility, no import — so the type itself must stay in this target; the actual POSIX
+// `/assets` read (the generic Bundle.main-traps-on-wasm workaround every wandr app needs) lives
+// once in WandrRuntime's `wandrReadAsset`. This file is just the eleev-API-shaped wrapper
+// (`init?(name:)` + `getItem(named:)`) so eleev's views compile UNMODIFIED.
 import Foundation
-#if canImport(WASILibc)
-import WASILibc
-#endif
+import WandrRuntime
 
 struct PlistConfiguration {
     let name: String
     let xml: Data
 
     init?(name: String) {
+        guard let data = wandrReadAsset(name: name, ext: "plist") else { return nil }
         self.name = name
-        // Apps declare their asset mounts in package.toml; the host preopens them at /assets.
-        guard let file = fopen("/assets/\(name).plist", "rb") else { return nil }
-        defer { fclose(file) }
-        var data = Data()
-        var buffer = [UInt8](repeating: 0, count: 8192)
-        while true {
-            let read = buffer.withUnsafeMutableBytes { fread($0.baseAddress, 1, $0.count, file) }
-            if read <= 0 { break }
-            data.append(contentsOf: buffer[0..<read])
-        }
-        guard !data.isEmpty else { return nil }
         self.xml = data
     }
 

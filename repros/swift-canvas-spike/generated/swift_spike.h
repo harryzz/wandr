@@ -9,86 +9,6 @@ extern "C" {
 #include <stdbool.h>
 #include <stddef.h>
 
-// Sample formats. R1: enums are a BREAKING class, so this ships at
-// the known union (every audio API carries both; hosts convert).
-typedef uint8_t wasi_audio_pcm_format_t;
-
-#define WASI_AUDIO_PCM_FORMAT_PCM_F32 0
-#define WASI_AUDIO_PCM_FORMAT_PCM_I16 1
-
-typedef uint8_t wasi_audio_pcm_channel_layout_t;
-
-#define WASI_AUDIO_PCM_CHANNEL_LAYOUT_MONO 0
-#define WASI_AUDIO_PCM_CHANNEL_LAYOUT_STEREO 1
-
-// Routing INTENT (not policy): `media` → the embedder's default
-// output; `voice-call` → the embedder's current call route;
-// `notification` → the alert output. Ignored for capture.
-typedef uint8_t wasi_audio_pcm_stream_class_t;
-
-#define WASI_AUDIO_PCM_STREAM_CLASS_MEDIA 0
-#define WASI_AUDIO_PCM_STREAM_CLASS_VOICE_CALL 1
-#define WASI_AUDIO_PCM_STREAM_CLASS_NOTIFICATION 2
-
-typedef uint8_t wasi_audio_pcm_audio_error_t;
-
-#define WASI_AUDIO_PCM_AUDIO_ERROR_UNAVAILABLE 0
-#define WASI_AUDIO_PCM_AUDIO_ERROR_PERMISSION_DENIED 1
-#define WASI_AUDIO_PCM_AUDIO_ERROR_CONFIG_REJECTED 2
-
-// `sample-rate`: the device-native rate is always accepted
-// (48000 universally; hosts may resample others).
-typedef struct wasi_audio_pcm_stream_config_t {
-  uint32_t   sample_rate;
-  wasi_audio_pcm_channel_layout_t   channel_layout;
-  wasi_audio_pcm_format_t   format;
-  wasi_audio_pcm_stream_class_t   class_;
-} wasi_audio_pcm_stream_config_t;
-
-typedef struct wasi_audio_pcm_own_playback_t {
-  int32_t __handle;
-} wasi_audio_pcm_own_playback_t;
-
-typedef struct wasi_audio_pcm_borrow_playback_t {
-  int32_t __handle;
-} wasi_audio_pcm_borrow_playback_t;
-
-typedef struct wasi_audio_pcm_own_capture_t {
-  int32_t __handle;
-} wasi_audio_pcm_own_capture_t;
-
-typedef struct wasi_audio_pcm_borrow_capture_t {
-  int32_t __handle;
-} wasi_audio_pcm_borrow_capture_t;
-
-typedef struct {
-  bool is_err;
-  union {
-    wasi_audio_pcm_own_playback_t ok;
-    wasi_audio_pcm_audio_error_t err;
-  } val;
-} wasi_audio_pcm_result_own_playback_audio_error_t;
-
-typedef struct {
-  float *ptr;
-  size_t len;
-} swift_spike_list_f32_t;
-
-typedef struct {
-  bool is_err;
-  union {
-    wasi_audio_pcm_audio_error_t err;
-  } val;
-} wasi_audio_pcm_result_void_audio_error_t;
-
-typedef struct {
-  bool is_err;
-  union {
-    wasi_audio_pcm_own_capture_t ok;
-    wasi_audio_pcm_audio_error_t err;
-  } val;
-} wasi_audio_pcm_result_own_capture_audio_error_t;
-
 typedef uint8_t wandr_ui_shell_lifecycle_state_t;
 
 #define WANDR_UI_SHELL_LIFECYCLE_STATE_INITIALIZED 0
@@ -162,44 +82,6 @@ typedef struct exports_wasi_input_handlers_pointer_handler_pointer_event_t {
   bool   shift;
 } exports_wasi_input_handlers_pointer_handler_pointer_event_t;
 
-// Imported Functions from `wasi:audio/pcm@0.0.1`
-extern bool wasi_audio_pcm_static_playback_open(wasi_audio_pcm_stream_config_t *config, wasi_audio_pcm_own_playback_t *ret, wasi_audio_pcm_audio_error_t *err);
-// Append interleaved samples (f32 wire type regardless of
-// `format`; pcm-i16 streams convert host-side). Returns FRAMES
-// accepted — may be fewer than offered when the ring is full;
-// the guest retries the remainder (the proven backpressure
-// model).
-extern uint32_t wasi_audio_pcm_method_playback_write(wasi_audio_pcm_borrow_playback_t self, swift_spike_list_f32_t *samples);
-// Frames written but not yet consumed by the device; 0 = a
-// near-underrun cue (write more per call).
-extern uint32_t wasi_audio_pcm_method_playback_buffered_frames(wasi_audio_pcm_borrow_playback_t self);
-// Total frames consumed by the device since `open` — the monotonic
-// playback clock (seekbar position + A/V-sync master). Derived as
-// frames-written − buffered-frames, so it advances at the device
-// rate and never exceeds what was written. Promoted 2026-06-14
-// (task 108); the player is the promoting consumer.
-extern uint64_t wasi_audio_pcm_method_playback_position(wasi_audio_pcm_borrow_playback_t self);
-extern bool wasi_audio_pcm_method_playback_start(wasi_audio_pcm_borrow_playback_t self, wasi_audio_pcm_audio_error_t *err);
-// Stops flow without dropping buffered frames; start resumes.
-extern bool wasi_audio_pcm_method_playback_pause(wasi_audio_pcm_borrow_playback_t self, wasi_audio_pcm_audio_error_t *err);
-// Discard all buffered (unplayed) frames immediately — the seek/flush
-// primitive (no need to close+reopen the stream). `position` stays
-// continuous: the dropped frames count as neither played nor pending,
-// so the playhead does not jump. Added 2026-06-14 (task 108; the
-// player's tap-seek is the promoting consumer).
-extern void wasi_audio_pcm_method_playback_flush(wasi_audio_pcm_borrow_playback_t self);
-// Play out the buffered frames, then stop (clickless end-of-track) —
-// vs `pause` (stops now, keeps buffer) and `flush` (drops now).
-extern void wasi_audio_pcm_method_playback_drain(wasi_audio_pcm_borrow_playback_t self);
-extern bool wasi_audio_pcm_static_capture_open(wasi_audio_pcm_stream_config_t *config, wasi_audio_pcm_own_capture_t *ret, wasi_audio_pcm_audio_error_t *err);
-// Drain up to `max-frames` × channels interleaved samples;
-// fewer (or empty) if the device hasn't produced them yet.
-extern void wasi_audio_pcm_method_capture_read(wasi_audio_pcm_borrow_capture_t self, uint32_t max_frames, swift_spike_list_f32_t *ret);
-// Frames ready to read.
-extern uint32_t wasi_audio_pcm_method_capture_available_frames(wasi_audio_pcm_borrow_capture_t self);
-extern bool wasi_audio_pcm_method_capture_start(wasi_audio_pcm_borrow_capture_t self, wasi_audio_pcm_audio_error_t *err);
-extern bool wasi_audio_pcm_method_capture_pause(wasi_audio_pcm_borrow_capture_t self, wasi_audio_pcm_audio_error_t *err);
-
 // Imported Functions from `wandr:ui-shell/metrics@0.1.0`
 extern float wandr_ui_shell_metrics_get_density(void);
 extern float wandr_ui_shell_metrics_get_font_scale(void);
@@ -221,29 +103,6 @@ void exports_wasi_input_handlers_pointer_handler_on_pointer(exports_wasi_input_h
 
 // Exported Functions from `wandr:ui-shell/frame-pacing@0.1.0`
 uint32_t exports_wandr_ui_shell_frame_pacing_next_frame_delay(void);
-
-// Helper Functions
-
-extern void wasi_audio_pcm_playback_drop_own(wasi_audio_pcm_own_playback_t handle);
-
-extern void wasi_audio_pcm_playback_drop_borrow(wasi_audio_pcm_borrow_playback_t handle);
-
-extern wasi_audio_pcm_borrow_playback_t wasi_audio_pcm_borrow_playback(wasi_audio_pcm_own_playback_t handle);
-
-extern void wasi_audio_pcm_capture_drop_own(wasi_audio_pcm_own_capture_t handle);
-
-extern void wasi_audio_pcm_capture_drop_borrow(wasi_audio_pcm_borrow_capture_t handle);
-
-extern wasi_audio_pcm_borrow_capture_t wasi_audio_pcm_borrow_capture(wasi_audio_pcm_own_capture_t handle);
-
-void wasi_audio_pcm_result_own_playback_audio_error_free(wasi_audio_pcm_result_own_playback_audio_error_t *ptr);
-
-void swift_spike_list_f32_free(swift_spike_list_f32_t *ptr);
-
-void wasi_audio_pcm_result_void_audio_error_free(wasi_audio_pcm_result_void_audio_error_t *ptr);
-
-void wasi_audio_pcm_result_own_capture_audio_error_free(wasi_audio_pcm_result_own_capture_audio_error_t *ptr);
-
 
 #ifdef __cplusplus
 }
