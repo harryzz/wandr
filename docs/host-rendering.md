@@ -15,6 +15,40 @@ and the skiko wasmWasiMain file map. Read for canvas_impl / skiko / rendering wo
   zero-metrics typefaces on this device. Always load fonts via
   `FontMgr::new_from_data(&ttf_bytes, None)` after reading raw TTF bytes.
 
+- **App-bundled fonts:** an app can ship its own `.ttf`/`.otf` in `assets/fonts/` — no
+  system-level font install needed on any platform. See "App-bundled fonts" below.
+
+## App-bundled fonts (`assets/fonts/`)
+
+`SkiaRenderer::load_asset_fonts` (`canvas_impl.rs`) scans an installed app's own
+`assets/fonts/*.{ttf,otf}` once at cold start (called right after the `/assets` WASI preopen is
+set up, in both `lib.rs`'s desktop+Android GUI path and `standalone.rs`'s boot-model path — not
+`run_once.rs`, which is for non-drawing `wasi:cli/command` guests). Each file is loaded via
+`FontMgr::new_from_data`, registered into a `skia_safe::textlayout::TypefaceFontProvider` under
+its own embedded name-table family (no manifest, no declared name — `register_typeface(tf,
+None)`), and the resulting `FontMgr` is:
+- consulted first in `get_typeface` (ahead of the system FontMgr — an app that bundles its own
+  font wants THAT one used, not a same-named system font), and
+- registered as `FontCollection::set_asset_font_manager`, so regular text-layout/paragraph
+  fallback benefits too — this mirrors exactly how Flutter uses `TypefaceFontProvider` for
+  app-bundled fonts.
+
+**Why this exists:** before this, a bundled icon font (e.g. OpenSFSymbols' `tabler-icons`) needed
+manual, per-platform system-level installation to be resolvable by name — Linux fontconfig
+(`~/.local/share/fonts/` + `fc-cache`), Windows (right-click Install / registry), and on Android
+**both** `/product/fonts/` + a `fonts_customization.xml` entry **and** `/system/fonts/` (the
+actual file Skia's Android font scanner reads — missing this half silently returns `None` with no
+error, even after a full device reboot; see `[[feedback_android_fonts]]`). None of that is needed
+anymore for a NEW font: drop it in the app's `assets/fonts/`, rebuild, done — verified end-to-end
+on desktop (`load_asset_fonts: N app-bundled font(s) registered...` + `get_typeface:
+app-asset-resolved '<family>' → ...` in the log) 2026-07-17. The existing OpenSFSymbols icon fonts
+(`tabler-icons`, `tabler-icons-filled`) still have system-level installs sitting around from
+before this landed — harmless, just redundant now; new fonts/apps don't need it.
+
+Font-vendoring notes specific to OpenSFSymbols (including the "sibling styles sharing the same
+internal name-table family" collision gotcha) live in
+`swift/OpenSwiftUIProject/OpenSFSymbols/README.md`.
+
 - **Text rendering:** CPU rasterize on `raster_n32_premul` surface → blit to GPU
   canvas via `draw_image`. Required because GPU text path needs a different
   skia-safe setup.
