@@ -22,6 +22,11 @@ let package = Package(
         // exercised for them — only OpenSwiftUI itself (genuinely multi-platform) needs Shims.
         // NEXT-SESSION-TASKS.md #2.
         .package(path: "/home/harry/wandr/swift/OpenSwiftUIProject/OpenCoreGraphics"),
+        // The shared OpenSwiftUI-on-wandr reactor loop (WandrDrawSink conformer, wasi:canvas
+        // embedding handshake, frame pacing, pointer forwarding) — per Sources/T2iles/RULES.md,
+        // an app carries only Audio/Store/startup; everything else lives here, once.
+        // NEXT-SESSION-TASKS.md #3.
+        .package(path: "/home/harry/wandr/swift/OpenSwiftUIProject/wandr-runtime"),
     ],
     targets: [
         // The Apple-compat shim modules moved to swift/apple-compat; consumed here as products
@@ -42,8 +47,10 @@ let package = Package(
                 .product(name: "Combine", package: "apple-compat"),
                 .product(name: "AudioToolbox", package: "apple-compat"),
                 "CSwiftSpike",
-                .product(name: "CWASICanvas", package: "CWASICanvas"),
+                // WandrHeadless.swift (the -DWANDR_HEADLESS deterministic test driver, which
+                // bypasses wasi:canvas/WandrRuntime entirely) needs CGSize directly.
                 .product(name: "OpenCoreGraphicsWASICanvas", package: "OpenCoreGraphics"),
+                .product(name: "WandrRuntime", package: "wandr-runtime"),
                 .product(name: "OpenSwiftUI", package: "OpenSwiftUI"),
             ],
             // T2ilesApp = @main/UserDefaults entry (WandrReactor replaces it);
@@ -87,8 +94,7 @@ let package = Package(
             name: "OpenSwiftUIDemo",
             dependencies: [
                 "CSwiftSpike",
-                .product(name: "CWASICanvas", package: "CWASICanvas"),
-                .product(name: "OpenCoreGraphicsWASICanvas", package: "OpenCoreGraphics"),
+                .product(name: "WandrRuntime", package: "wandr-runtime"),
                 .product(name: "OpenSwiftUI", package: "OpenSwiftUI"),
             ],
             // eleev/swiftui-2048 is Swift-5-era code; build it in Swift 5 language mode so

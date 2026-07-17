@@ -33,6 +33,10 @@ nonisolated(unsafe) var hlStarted = false
 public func hlOnPointer(_ ev: UnsafeMutablePointer<exports_wasi_input_handlers_pointer_handler_pointer_event_t>?) {}
 @_cdecl("exports_wandr_ui_shell_frame_pacing_next_frame_delay")
 public func hlNextFrameDelay() -> UInt32 { 0 }
+@_cdecl("exports_wandr_ui_shell_shell_events_on_scheduled_callback")
+public func hlOnScheduledCallback(_ callbackId: UInt32) {}
+@_cdecl("exports_wandr_ui_shell_shell_events_on_lifecycle_changed")
+public func hlOnLifecycleChanged(_ newState: exports_wandr_ui_shell_shell_events_state_t) {}
 #if canImport(WASILibc)
 import WASILibc
 #endif

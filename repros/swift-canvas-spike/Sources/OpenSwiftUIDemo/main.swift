@@ -1,13 +1,12 @@
-// Phase 4b — OpenSwiftUI renders on wandr THROUGH a WandrDrawSink → CGContext → wasi:canvas.
+// Phase 4b — OpenSwiftUI renders on wandr THROUGH the shared WandrRuntime reactor loop (wasi:canvas
+// embedding handshake, frame pacing, pointer forwarding — see that package's own doc comment).
 // The OpenSwiftUI engine (AttributeGraph/Compute on wasm) lays out a real SwiftUI view, emits
-// a DisplayList, and the new `.wandr` renderer walks it into our CGSink, which draws with the
-// CoreGraphics API (OpenCoreGraphics's CGContext over wasi:canvas). Same frame plumbing as the
-// hand-built spike (spike.swift) — only the draw source changed (SwiftUI instead of hand-coded).
+// a DisplayList, and WandrRuntime's CGSink walks it into a CGContext (OpenCoreGraphics over
+// wasi:canvas). Same frame plumbing as the hand-built spike (spike.swift) — only the draw
+// source changed (SwiftUI instead of hand-coded).
 import CSwiftSpike
-import CWASICanvas
-import OpenCoreGraphicsWASICanvas
+import WandrRuntime
 import OpenSwiftUI
-@_spi(WandrRenderer) import OpenSwiftUI
 #if canImport(WASILibc)
 import WASILibc
 #endif
@@ -62,8 +61,7 @@ struct ContentView: View {
         .clipped()
         // Real gesture: tap a score box → toggle autoplay (replaces the hand-rolled scoreRect hit-test).
         .onTapGesture {
-            wandrApplyChange { autoplayOn.toggle(); tickBinding?.wrappedValue &+= 1 }
-            animPending = true
+            wandrRuntimeApplyChange { autoplayOn.toggle(); tickBinding?.wrappedValue &+= 1 }
         }
     }
 
@@ -92,8 +90,7 @@ struct ContentView: View {
                     Text("2048").font(.system(size: w * 0.10, weight: .heavy)).foregroundColor(titleColor)
                         // Real gesture: tap the title → open the new-game confirm dialog.
                         .onTapGesture {
-                            wandrApplyChange { confirmNewGame = true; tickBinding?.wrappedValue &+= 1 }
-                            animPending = true
+                            wandrRuntimeApplyChange { confirmNewGame = true; tickBinding?.wrappedValue &+= 1 }
                         }
                     Spacer()
                     scoreBox("SCORE", game.score, w, multiplier: game.mergeMultiplier)
@@ -117,16 +114,14 @@ struct ContentView: View {
                         onSwipe: { t in
                             guard !confirmNewGame else { return }
                             if !game.tiles.isMovePossible() {
-                                wandrApplyChange { autoplayOn = false; game.reset(); tickBinding?.wrappedValue &+= 1 }
-                                animPending = true
+                                wandrRuntimeApplyChange { autoplayOn = false; game.reset(); tickBinding?.wrappedValue &+= 1 }
                                 return
                             }
                             let dir: Direction = abs(t.width) > abs(t.height)
                                 ? (t.width > 0 ? .right : .left)
                                 : (t.height > 0 ? .down : .up)
-                            wandrApplyChange { autoplayOn = false; _ = game.move(dir) }  // @ObservedObject re-renders (move fires objectWillChange)
+                            wandrRuntimeApplyChange { autoplayOn = false; _ = game.move(dir) }  // @ObservedObject re-renders (move fires objectWillChange)
                             if game.score > bestScore { bestScore = game.score }
-                            animPending = true
                         }
                     )
                     // Game over (board full, no merges left) → dim + prompt. A swipe ON the board square
@@ -154,13 +149,11 @@ struct ContentView: View {
                     HStack(spacing: w * 0.07) {
                         confirmButton("NO", noColor, w)
                             .onTapGesture {
-                                wandrApplyChange { confirmNewGame = false; tickBinding?.wrappedValue &+= 1 }
-                                animPending = true
+                                wandrRuntimeApplyChange { confirmNewGame = false; tickBinding?.wrappedValue &+= 1 }
                             }
                         confirmButton("YES", yesColor, w)
                             .onTapGesture {
-                                wandrApplyChange { autoplayOn = false; game.reset(); confirmNewGame = false; tickBinding?.wrappedValue &+= 1 }
-                                animPending = true
+                                wandrRuntimeApplyChange { autoplayOn = false; game.reset(); confirmNewGame = false; tickBinding?.wrappedValue &+= 1 }
                             }
                     }
                 }
@@ -174,190 +167,85 @@ struct DemoApp: App {
     var body: some Scene { WindowGroup { ContentView(game: sharedGame) } }
 }
 
-// MARK: - WandrDrawSink over a CGContext
+// MARK: - Reactor glue — see WandrRuntime's own doc comment for why these four `@_cdecl` stubs
+// can't move into the shared package (each app's exported-function parameter types are
+// generated fresh from its own wit world). Everything else — the WandrDrawSink conformer, the
+// wasi:canvas handshake, frame pacing, pointer forwarding — lives in WandrRuntime.
 
-// The sink receives fully-resolved primitives from OpenSwiftUI's DisplayList walk and draws
-// them with CoreGraphics. `cg` is repointed at the current back-buffer each frame.
-final class CGSink: WandrDrawSink {
-    nonisolated(unsafe) var cg: CGContext?
-
-
-    func beginFrame(width: Double, height: Double, version: UInt32) {}
-
-    func fillRect(
-        x: Double, y: Double, width: Double, height: Double,
-        red: Float, green: Float, blue: Float, opacity: Float
-    ) {
-        guard let cg else { return }
-        cg.setFillColor(CGColor(
-            red: CGFloat(red), green: CGFloat(green), blue: CGFloat(blue), alpha: CGFloat(opacity)
-        ))
-        cg.fill(CGRect(x: CGFloat(x), y: CGFloat(y), width: CGFloat(width), height: CGFloat(height)))
-    }
-
-    func drawText(
-        _ text: String, x: Double, y: Double, width: Double, height: Double,
-        fontSize: Double, red: Float, green: Float, blue: Float, opacity: Float
-    ) {
-        guard let cg else { return }
-        // CGContext.drawString lowers to wasi:canvas text/paragraph (Skia shapes + draws).
-        // Draw at the given size (which matches the reserved band height), so the next VStack
-        // child fills BELOW the text rather than over it.
-        cg.drawString(
-            text,
-            at: CGPoint(x: CGFloat(x), y: CGFloat(y)),
-            size: CGFloat(fontSize),
-            color: CGColor(red: CGFloat(red), green: CGFloat(green), blue: CGFloat(blue), alpha: CGFloat(opacity)),
-            maxWidth: CGFloat(width)
-        )
-    }
-
-    func endFrame() {}
-}
-
-// MARK: - Reactor state (wasm32-wasip1 single-threaded ⇒ globals are safe)
-
-nonisolated(unsafe) private let sink = CGSink()
-nonisolated(unsafe) private var width: Float = 0
-nonisolated(unsafe) private var height: Float = 0
-nonisolated(unsafe) private var built = false
-nonisolated(unsafe) private var animPending = false  // an animation is in flight → drive frames fast
-nonisolated(unsafe) private var diagFrame = 0        // frame counter (DRAWCOUNT logging only)
 nonisolated(unsafe) private var moveCount = 0        // auto-play move number (wall-clock paced)
 nonisolated(unsafe) private var lastMoveNanos: UInt64 = 0   // wall-clock of the last auto-move
-nonisolated(unsafe) private var lastFrameNanos: UInt64 = 0  // wall-clock of the last frame (→ dt)
-nonisolated(unsafe) private var lastShapeCount = 0  // [wandr verify] draw-count delta baseline
-nonisolated(unsafe) private var lastTextCount = 0
 nonisolated(unsafe) private var autoplayOn = false  // demo autoplay — DEFAULT OFF (user plays by swiping)
 nonisolated(unsafe) private var bestScore = 0       // peak score across the session (header "BEST" box)
 nonisolated(unsafe) private var confirmNewGame = false  // show the "New game?" yes/no dialog
-// [PHASE-A PROBE] does a tap routed through OpenSwiftUI's gesture pipeline fire a .onTapGesture?
-nonisolated(unsafe) private var ptrSerial = 0
+
+private func bootRuntime() {
+    runWandrApp(
+        background: CGColor(red: 0.063, green: 0.078, blue: 0.094, alpha: 1),
+        willRenderFrame: { nanos, hasBuilt in
+            // Construct the game HERE, in the plain reactor context, before the graph is built —
+            // so GameLogic.init (→ reset → tileMatrix) runs outside the OpenSwiftUI graph eval.
+            if sharedGame == nil { sharedGame = GameLogic(size: 4) }
+
+            // Autoplay — DEFAULT OFF (toggled from the header, see the score-box tap gesture).
+            // One move every 450ms, wall-clock paced (using the host's own frame timestamp, not
+            // a second clock source) and DECOUPLED from the frame rate so the spring animates
+            // smoothly between moves (a frame-count cadence would speed the game up whenever the
+            // frames sped up). Gated on `hasBuilt` — the first move needs the graph's subgraph
+            // (AppGraph.shared) set up.
+            guard hasBuilt, autoplayOn, let g = sharedGame else { return }
+            guard lastMoveNanos == 0 || nanos &- lastMoveNanos >= 450_000_000 else { return }
+            lastMoveNanos = nanos
+            if !g.tiles.isMovePossible() {
+                // Board stuck (game over) → restart so autoplay keeps running.
+                wandrRuntimeApplyChange { g.reset(); tickBinding?.wrappedValue &+= 1 }
+            } else {
+                moveCount &+= 1
+                let dirs: [Direction] = [.up, .left, .down, .right]
+                var st: GameLogic.State = .none
+                // [VERIFY reactivity] NO tick bump — rely on @ObservedObject: g.move() fires
+                // objectWillChange.send() → @ObservedObject invalidates → renderFrame re-evals
+                // the board.
+                wandrRuntimeApplyChange { st = g.move(dirs[moveCount % 4]) }
+                wlog("AUTO n=\(moveCount) dir=\(dirs[moveCount % 4]) state=\(st) score=\(g.score) tiles=\(g.tiles.flatten().count)")
+                if g.score > bestScore { bestScore = g.score }
+            }
+        },
+        makeApp: { DemoApp() }
+    )
+}
+nonisolated(unsafe) private var runtimeBooted = false
 
 @_cdecl("exports_wasi_input_handlers_frame_handler_on_resize")
 public func onResize(_ w: UInt32, _ h: UInt32) {
-    width = Float(w)
-    height = Float(h)
-    // NOTE: do NOT rebuild here. renderWandrAppOnce builds the AppGraph and sets the
-    // once-only `AppGraph.shared`; calling it twice fatalErrors ("may only be set once").
-    // The graph is built exactly once (first frame with valid dims); resizes just re-render
-    // at the original layout. (Proper resize-relayout = a setSize on WandrRendererHost — TODO.)
+    wandrRuntimeOnResize(width: w, height: h)
 }
 
 @_cdecl("exports_wasi_input_handlers_frame_handler_on_frame")
 public func onFrame(_ nanos: UInt64) {
-    // Construct the game HERE, in the plain reactor context, before the graph is built — so
-    // GameLogic.init (→ reset → tileMatrix) runs outside the OpenSwiftUI graph eval.
-    if sharedGame == nil { sharedGame = GameLogic(size: 4) }
-
-    diagFrame &+= 1
-    // dt since the last frame → drives the animation clock so springs INTERPOLATE (vs snap).
-    let dt = lastFrameNanos == 0 ? 0.0 : Double(nanos &- lastFrameNanos) / 1_000_000_000.0
-    lastFrameNanos = nanos
-
-    // Autoplay — DEFAULT OFF (toggled from the header, see onPointer). One move every 450ms,
-    // wall-clock paced and DECOUPLED from the frame rate so the spring animates smoothly between
-    // moves (the old frame-count cadence sped the game up whenever we sped the frames up).
-    if built, autoplayOn, let g = sharedGame,
-       lastMoveNanos == 0 || nanos &- lastMoveNanos >= 450_000_000 {
-        // gated on `built` — the first move needs the graph's subgraph (AppGraph.shared) set up.
-        lastMoveNanos = nanos
-        if !g.tiles.isMovePossible() {
-            // Board stuck (game over) → restart so autoplay keeps running.
-            wandrApplyChange { g.reset(); tickBinding?.wrappedValue &+= 1 }
-        } else {
-            moveCount &+= 1
-            let dirs: [Direction] = [.up, .left, .down, .right]
-            var st: GameLogic.State = .none
-            // [VERIFY reactivity] NO tick bump — rely on @ObservedObject: g.move() fires
-            // objectWillChange.send() → @ObservedObject invalidates → renderFrame re-evals the board.
-            wandrApplyChange {
-                st = g.move(dirs[moveCount % 4])
-            }
-            wlog("AUTO n=\(moveCount) dir=\(dirs[moveCount % 4]) state=\(st) score=\(g.score) tiles=\(g.tiles.flatten().count)")
-            if g.score > bestScore { bestScore = g.score }
-        }
-        animPending = true
-    }
-
-    // Acquire the context + buffer fresh each frame (the keyguard pattern).
-    let ctxOwn = wasi_canvas_embedding_get_context()
-    let ctx = wasi_canvas_embedding_borrow_canvas_context(ctxOwn)
-    let bufOwn = wasi_canvas_embedding_method_canvas_context_get_current_buffer(ctx)
-    let canvas = wasi_canvas_draw_borrow_canvas(bufOwn)
-    let gfxOwn = wasi_canvas_embedding_method_canvas_context_graphics(ctx)
-    let gfx = wasi_canvas_draw_borrow_graphics_t(__handle: gfxOwn.__handle)
-
-    let cg = CGContext(canvas: canvas, graphics: gfx)
-    cg.clear(CGColor(red: 0.063, green: 0.078, blue: 0.094, alpha: 1)) // dark bg
-    sink.cg = cg
-
-    if !built, width > 0, height > 0 {
-        // Build the OpenSwiftUI graph + render once. The host is retained for the
-        // process lifetime; subsequent frames just re-walk the display list.
-        renderWandrAppOnce(
-            DemoApp(),
-            options: .init(surface: CGSize(width: CGFloat(width), height: CGFloat(height)), sink: sink)
-        )
-        built = true
-    } else if animPending {
-        // An animation is in flight: advance the clock by dt, re-evaluate, interpolate the springs.
-        // The return value says whether anything is still animating — keep driving fast until it
-        // settles, then fall back to idle pacing. (renderFrame picks up @State moves too, since a
-        // move sets animPending; its display-list bump is painted by the redraw below.)
-        animPending = wandrRenderFrame(dt)
-        wandrRedraw()
-    } else {
-        // Nothing animating: cheap re-walk of the existing display list (double-buffering).
-        wandrRedraw()
-    }
-    sink.cg = nil
-
-    // [wandr verify] Prove tiles actually render: log shapes/texts drawn THIS frame. A gray empty
-    // board would show ~0 shapes; a live 2048 board shows the grid + 16 cells + tile labels.
-    if diagFrame % 200 == 0 {
-        wlog("DRAWCOUNT frame=\(diagFrame) shapes=\(wandrDrawShapeCount - lastShapeCount) texts=\(wandrDrawTextCount - lastTextCount)")
-    }
-    lastShapeCount = wandrDrawShapeCount
-    lastTextCount = wandrDrawTextCount
-
-    wasi_canvas_draw_canvas_drop_own(bufOwn)
-    wasi_canvas_embedding_method_canvas_context_present(ctx)
-    wasi_canvas_draw_graphics_drop_own(wasi_canvas_draw_own_graphics_t(__handle: gfxOwn.__handle))
-    wasi_canvas_embedding_canvas_context_drop_own(ctxOwn)
+    if !runtimeBooted { bootRuntime(); runtimeBooted = true }
+    wandrRuntimeOnFrame(nanos: nanos)
 }
 
-// Idle = poll gently (150ms). While an animation is in flight, drive ~30fps so the springs are
-// smooth. (60fps continuous GL on WSLg can drop the display connection — "Connection reset by
-// peer"; 30fps is the desktop-safe ceiling. Real EGL on device handles faster fine.)
 @_cdecl("exports_wandr_ui_shell_frame_pacing_next_frame_delay")
-public func nextFrameDelay() -> UInt32 { animPending ? 33 : 150 }
-
-// [PHASE-A .active] track whether a button is held, so pointer MOVES are forwarded into the
-// gesture pipeline as .active phases only DURING a press (began → active… → ended) — a real drag
-// sequence, not hover. Without this the gesture pipeline only ever sees began → ended.
-nonisolated(unsafe) private var pointerPressing = false
+public func nextFrameDelay() -> UInt32 { wandrRuntimeNextFrameDelay() }
 
 @_cdecl("exports_wasi_input_handlers_pointer_handler_on_pointer")
-public func onPointer(
-    _ ev: UnsafeMutablePointer<exports_wasi_input_handlers_pointer_handler_pointer_event_t>?
-) {
-    // All gameplay input now flows through real OpenSwiftUI gestures (DragGesture for swipes,
-    // .onTapGesture on each control). This handler ONLY forwards host pointer events into the
-    // gesture pipeline: down → .began, move-while-pressed → .active, up → .ended.
+public func onPointer(_ ev: UnsafeMutablePointer<exports_wasi_input_handlers_pointer_handler_pointer_event_t>?) {
     guard let e = ev?.pointee else { return }
+    let phase: Int
     switch e.kind {
-    case UInt8(EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_DOWN):
-        pointerPressing = true
-        wandrSendPointer(phase: 0, x: Double(e.x), y: Double(e.y), serial: ptrSerial)
-    case UInt8(EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_MOVE):
-        if pointerPressing {
-            wandrSendPointer(phase: 1, x: Double(e.x), y: Double(e.y), serial: ptrSerial)
-        }
-    case UInt8(EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_UP):
-        pointerPressing = false
-        wandrSendPointer(phase: 2, x: Double(e.x), y: Double(e.y), serial: ptrSerial)
-        ptrSerial &+= 1
-    default: break
+    case UInt8(EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_DOWN): phase = 0
+    case UInt8(EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_MOVE): phase = 1
+    case UInt8(EXPORTS_WASI_INPUT_HANDLERS_POINTER_HANDLER_KIND_UP): phase = 2
+    default: phase = 3
     }
+    wandrRuntimeOnPointer(phase: phase, x: Double(e.x), y: Double(e.y))
 }
+
+// This demo has no audio, but wit/spike.wit (shared with T2iles) exports shell-events — the
+// wit-bindgen-c reactor glue hard-references these symbols regardless, so provide inert stubs.
+@_cdecl("exports_wandr_ui_shell_shell_events_on_scheduled_callback")
+public func onScheduledCallback(_ callbackId: UInt32) {}
+
+@_cdecl("exports_wandr_ui_shell_shell_events_on_lifecycle_changed")
+public func onLifecycleChanged(_ newState: exports_wandr_ui_shell_shell_events_state_t) {}
