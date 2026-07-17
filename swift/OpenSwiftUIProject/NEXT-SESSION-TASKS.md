@@ -113,16 +113,31 @@ Retiring the dormant `harryzz/OpenCoreGraphics@wasm32-wasip1` branch (a GitHub b
 was intentionally left undone — a destructive, hard-to-reverse action outside this task's scope
 without explicit confirmation.
 
-## 3. Move the runtime/plumbing OUT of the app — a shared `wandr-runtime` — §7, `Sources/T2iles/RULES.md`
+## 3. ✅ DONE (2026-07-17) Move the runtime/plumbing OUT of the app — a shared `wandr-runtime` — §7, `Sources/T2iles/RULES.md`
 
-- Create a shared **`wandr-runtime`** product (imports OpenSwiftUI + `CWASICanvas`) holding: the
-  `@_cdecl` exports (`on_frame`/`on_pointer`/`on_resize`/`next_frame_delay`), the wasi:canvas
-  embedding handshake, the `CGSink` (`WandrDrawSink` conformer), frame pacing, and a **`runWandrApp`
-  runner** beside the framework's existing `runStdoutApp` (see `App/App/App.swift:153` dispatch +
-  `App/Stdout/StdoutApp.swift`).
-- The app then collapses to `dependencies: [<one wandr product>]`, source `import OpenSwiftUI`
-  only — carrying just **Audio / Store / startup** per `RULES.md`. No more `import CSwiftSpike` /
-  `import WandrCG` in `WandrReactor.swift`.
+New package `swift/OpenSwiftUIProject/wandr-runtime` (plain directory in the main repo, like
+`CWASICanvas` — not a submodule) holds the `CGSink` (`WandrDrawSink` conformer), the wasi:canvas
+embedding handshake, frame pacing, density-aware resize/pointer scaling, and pointer-phase
+forwarding — one `runWandrApp(background:getDensity:willRenderFrame:isBusy:makeApp:)` entry
+point. `makeApp` is called lazily on the first real-sized frame, so an app can defer constructing
+its own model (GameLogic-style) to that moment, mirroring how `renderWandrAppOnce` already defers
+building the OpenSwiftUI graph.
+
+What did NOT move: the four `@_cdecl` WASI export symbols themselves
+(`on_resize`/`on_frame`/`on_pointer`/`next_frame_delay`). wit-bindgen-c generates each app's
+exported-function *parameter types* (e.g. the pointer-event struct) fresh from that app's own wit
+world (its `CSwiftSpike`), so the exact struct type isn't visible to a sibling package — each app
+keeps four ONE-LINE forwarding stubs that unwrap its own generated types into plain values and
+call straight into `WandrRuntime`. `T2iles`/`OpenSwiftUIDemo` now carry only Audio/Store/startup
+(+ those 4 stubs) per `RULES.md`; `WandrHeadless.swift` (the `-DWANDR_HEADLESS` deterministic test
+driver, which bypasses wasi:canvas/`WandrRuntime` entirely) is unaffected.
+
+Found and fixed two pre-existing, unrelated build breaks while verifying no regressions:
+`WandrHeadless.swift` was missing `shell-events` stubs (link error since `wit/spike.wit` started
+exporting that interface a few commits back), and `OpenSwiftUIDemo`'s own `CGSink` no longer
+conformed to `WandrDrawSink` (stale, missing methods added later) — now fixed for free by reusing
+the shared one. Verified: `T2iles`, the headless target, and `OpenSwiftUIDemo` all build clean;
+`T2iles` confirmed rendering end-to-end on desktop Linux.
 
 ## 4. Normalize OpenSwiftUIProject structure (finish) — §7
 
