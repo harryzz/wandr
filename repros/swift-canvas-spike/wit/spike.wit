@@ -1,15 +1,20 @@
 // Task 114 P2.2 — Swift renders on wandr-host. The guest exports the host-driven
-// reactor surface (frame-handler + frame-pacing + a pointer stub) and imports
-// wasi:canvas; on-frame it acquires the frame buffer via the embedding handoff,
-// draws, and presents. Runs unchanged on wandr-host (skia wasi:canvas) — desktop
-// dev loop, then device.
+// reactor surface (frame-handler + frame-pacing + a pointer stub); on-frame it
+// acquires the frame buffer via the embedding handoff, draws, and presents.
+// Runs unchanged on wandr-host (skia wasi:canvas) — desktop dev loop, then device.
+//
+// wasi:canvas/{types,draw,embedding,layout} are NOT imported here anymore — the
+// app links CWASICanvas (swift/OpenSwiftUIProject/CWASICanvas) for those symbols
+// instead, so the wasi:canvas bindings are generated exactly once and shared with
+// OpenCoreGraphics, rather than this app generating its own duplicate copy that
+// would collide (same C symbol names — wit-bindgen names by interface, not by
+// world) if both were linked together. See NEXT-SESSION-TASKS.md #1. The
+// component-level import declaration for wasi:canvas now comes from linking
+// CWASICanvas's own generated component_type.o alongside this world's — see
+// build-t2iles.sh step 2's -Xlinker flags.
 package wandr:swift-spike;
 
 world swift-spike {
-  import wasi:canvas/types@0.0.2;
-  import wasi:canvas/draw@0.0.2;
-  import wasi:canvas/embedding@0.0.2;
-  import wasi:canvas/layout@0.0.2;
   import wasi:audio/pcm@0.0.1;
   import wandr:ui-shell/metrics@0.1.0;
   export wandr:ui-shell/shell-events@0.1.0;

@@ -4,6 +4,7 @@
 // CoreGraphics API (OpenCoreGraphics's CGContext over wasi:canvas). Same frame plumbing as the
 // hand-built spike (spike.swift) — only the draw source changed (SwiftUI instead of hand-coded).
 import CSwiftSpike
+import CWASICanvas
 import WandrCG
 import OpenSwiftUI
 @_spi(WandrRenderer) import OpenSwiftUI

@@ -4,6 +4,7 @@
 // the wasi:input-handlers reactor exports. Eleev's own Sources compile UNMODIFIED behind
 // the SwiftUI/Combine/AudioToolbox shims.
 import CSwiftSpike
+import CWASICanvas
 import WandrCG
 import OpenSwiftUI
 @_spi(WandrRenderer) import OpenSwiftUI

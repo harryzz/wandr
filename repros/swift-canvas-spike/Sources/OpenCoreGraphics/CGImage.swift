@@ -5,7 +5,7 @@
 //  Created by Kyle on 1/11/26.  (upstream: an empty Hashable stub)
 //  wandr fork (task 114): backed by a wasi:canvas host image resource. Create via
 //  CGContext.makeImage(rgba:width:height:); the handle is dropped on deinit.
-import CSwiftSpike
+import CWASICanvas
 
 public final class CGImage: Hashable, @unchecked Sendable {
     let handle: wasi_canvas_draw_own_image_t

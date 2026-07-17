@@ -50,7 +50,25 @@ responder-stability-during-animation; 3b is the separate conditional-view ABI is
 
 ---
 
-## 1. Split `CSwiftSpike` → a standalone leaf `CWASICanvas`  (unblocks everything) — §6, §7
+## 1. ✅ DONE (2026-07-17) Split `CSwiftSpike` → a standalone leaf `CWASICanvas`  (unblocks everything) — §6, §7
+
+New package `swift/OpenSwiftUIProject/CWASICanvas` (own `wit/cwasi-canvas.wit`, imports only
+wasi:canvas/{types,draw,embedding,layout}). `WandrCG`, `T2iles`, `SwiftSpike`, `OpenSwiftUIDemo` now
+depend on it instead of getting those bindings from the app's own `CSwiftSpike`. The app's
+`wit/spike.wit` was shrunk to exports + audio/metrics only (no more wasi:canvas — avoids a
+duplicate-symbol link error, since wit-bindgen names functions by interface, not by world, so both
+generations would define identical C symbols if both were linked). The two worlds' generated
+`component_type.o` files are linked together at the final link step and compose correctly — verified
+both by successful `wasm-tools component new`/`validate` AND by actually running T2iles (rendered
+frames, app-bundled fonts still loaded, full gameplay confirmed working).
+
+One gotcha worth knowing for #2/#3: wit-bindgen's *generic helper* types (`string`/`list`/`tuple`/
+`option` wrappers, e.g. what was `swift_spike_string_t`) are prefixed by **world name**, not
+interface name — unlike the `wasi_canvas_*` interface-level symbols, which matched exactly across
+both worlds. `CGContext.swift`/`CGImage.swift` needed their `swift_spike_string_t` etc. references
+renamed to `cwasi_canvas_string_t` etc. to match CWASICanvas's own generated names.
+
+---
 
 `CSwiftSpike` is a per-app generated blob holding BOTH the wasi:canvas *drawing* bindings AND the
 input/export trampolines. Because it lives inside the app package (which depends on OpenSwiftUI),

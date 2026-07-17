@@ -10,7 +10,7 @@
 //  (draw-twice + mask-blur), and alpha mask-clip (save-layer + dst-in blend).
 
 public import Foundation
-import CSwiftSpike
+import CWASICanvas
 
 /// CoreGraphics blend modes, mapped to wasi:canvas blend-mode. Raw values match
 /// Apple's CGBlendMode.
@@ -198,8 +198,8 @@ public final class CGContext: Hashable {
     public func clip() {
         let d = svgPathData(elements)
         guard !d.isEmpty else { return }
-        var s = swift_spike_string_t()
-        d.withCString { swift_spike_string_set(&s, $0) }
+        var s = cwasi_canvas_string_t()
+        d.withCString { cwasi_canvas_string_set(&s, $0) }
         wasi_canvas_draw_method_canvas_clip_path(canvas, &s, UInt8(WASI_CANVAS_TYPES_FILL_RULE_NONZERO), true)
         beginPath()
     }
@@ -207,8 +207,8 @@ public final class CGContext: Hashable {
     /// `.clip` path). Bracket with save/restoreGState — the OpenSwiftUI renderer does exactly that.
     public func clip(svgPath d: String) {
         guard !d.isEmpty else { return }
-        var s = swift_spike_string_t()
-        d.withCString { swift_spike_string_set(&s, $0) }
+        var s = cwasi_canvas_string_t()
+        d.withCString { cwasi_canvas_string_set(&s, $0) }
         wasi_canvas_draw_method_canvas_clip_path(canvas, &s, UInt8(WASI_CANVAS_TYPES_FILL_RULE_NONZERO), true)
     }
     /// wandr: fill a raw SVG path-data string (surface coords) with the current fill color —
@@ -231,8 +231,8 @@ public final class CGContext: Hashable {
         p.blur.is_some = true
         p.blur.val.style = UInt8(WASI_CANVAS_TYPES_BLUR_STYLE_NORMAL)
         p.blur.val.sigma = Float(blur)
-        var s = swift_spike_string_t()
-        d.withCString { swift_spike_string_set(&s, $0) }
+        var s = cwasi_canvas_string_t()
+        d.withCString { cwasi_canvas_string_set(&s, $0) }
         wasi_canvas_draw_method_canvas_draw_path(canvas, &s, UInt8(WASI_CANVAS_TYPES_FILL_RULE_NONZERO), &p)
         wasi_canvas_draw_method_canvas_restore(canvas)
     }
@@ -256,10 +256,10 @@ public final class CGContext: Hashable {
             wasi_canvas_types_shader_drop_own(own)
         }
     }
-    private func withStops(_ g: CGGradient, _ body: (UnsafeMutablePointer<swift_spike_list_tuple2_f32_color_t>, Int) -> Void) {
-        var arr = g.stops().map { swift_spike_tuple2_f32_color_t(f0: Float($0.0), f1: $0.1.argb) }
+    private func withStops(_ g: CGGradient, _ body: (UnsafeMutablePointer<cwasi_canvas_list_tuple2_f32_color_t>, Int) -> Void) {
+        var arr = g.stops().map { cwasi_canvas_tuple2_f32_color_t(f0: Float($0.0), f1: $0.1.argb) }
         arr.withUnsafeMutableBufferPointer { buf in
-            var list = swift_spike_list_tuple2_f32_color_t(ptr: buf.baseAddress, len: buf.count)
+            var list = cwasi_canvas_list_tuple2_f32_color_t(ptr: buf.baseAddress, len: buf.count)
             body(&list, buf.count)
         }
     }
@@ -285,7 +285,7 @@ public final class CGContext: Hashable {
     public func decodeImage(encodedData: [UInt8], pixelWidth: Int, pixelHeight: Int) -> CGImage? {
         var bytes = encodedData
         return bytes.withUnsafeMutableBufferPointer { buf -> CGImage? in
-            var list = swift_spike_list_u8_t(ptr: buf.baseAddress, len: buf.count)
+            var list = cwasi_canvas_list_u8_t(ptr: buf.baseAddress, len: buf.count)
             var ret = wasi_canvas_draw_own_image_t()
             let ok = wasi_canvas_draw_method_graphics_decode_image(graphics, &list, &ret)
             guard ok else { return nil }
@@ -313,7 +313,7 @@ public final class CGContext: Hashable {
     public func makeImage(rgba: [UInt8], width: Int, height: Int) -> CGImage? {
         var pixels = rgba
         return pixels.withUnsafeMutableBufferPointer { buf -> CGImage? in
-            var list = swift_spike_list_u8_t(ptr: buf.baseAddress, len: buf.count)
+            var list = cwasi_canvas_list_u8_t(ptr: buf.baseAddress, len: buf.count)
             var ret = wasi_canvas_draw_own_image_t()   // local: clean inout writeback
             let ok = wasi_canvas_draw_method_graphics_image_from_rgba8(
                 graphics, UInt32(width), UInt32(height), &list, &ret)
@@ -369,8 +369,8 @@ public final class CGContext: Hashable {
     }
     private func emitPath(_ svg: String, style: Int32, color: CGColor, blur: CGFloat?) {
         var p = paint(style: style, color: color, blur: blur)
-        var s = swift_spike_string_t()
-        svg.withCString { swift_spike_string_set(&s, $0) }
+        var s = cwasi_canvas_string_t()
+        svg.withCString { cwasi_canvas_string_set(&s, $0) }
         wasi_canvas_draw_method_canvas_draw_path(
             canvas, &s, UInt8(WASI_CANVAS_TYPES_FILL_RULE_NONZERO), &p)
         wandrDrawShapeCount &+= 1
@@ -408,12 +408,12 @@ public final class CGContext: Hashable {
             ts.size = Float(size)
             ts.weight = 400
             ts.color = color.argb
-            swift_spike_string_set(&ts.family, famC)
+            cwasi_canvas_string_set(&ts.family, famC)
             let builder = wasi_canvas_layout_static_paragraph_builder_new(&ts)
             let bb = wasi_canvas_layout_borrow_paragraph_builder(builder)
             s.withCString { txtC in
-                var txt = swift_spike_string_t()
-                swift_spike_string_set(&txt, txtC)
+                var txt = cwasi_canvas_string_t()
+                cwasi_canvas_string_set(&txt, txtC)
                 wasi_canvas_layout_method_paragraph_builder_add_text(bb, &txt)
             }
             let para = wasi_canvas_layout_static_paragraph_builder_build(builder) // consumes builder

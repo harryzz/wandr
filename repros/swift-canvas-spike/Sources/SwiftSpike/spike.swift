@@ -3,6 +3,7 @@
 // (OpenCoreGraphics's CGContext implemented over wasi:canvas, see CoreGraphicsWasi),
 // and draws with the CoreGraphics API — no raw wasi:canvas calls in the guest.
 import CSwiftSpike
+import CWASICanvas
 import WandrCG   // vendored; CGContext implemented over wasi:canvas (re-exports Foundation's CGPoint/CGRect)
 
 // The canvas-context is stable across frames — acquire once, re-borrow per frame

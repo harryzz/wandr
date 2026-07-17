@@ -11,6 +11,10 @@ let package = Package(
         .package(path: "/home/harry/wandr/swift/OpenSwiftUIProject/OpenSwiftUI"),
         // Apple-compatibility shims (SwiftUI/Combine/AudioToolbox) — shared, out of the app.
         .package(path: "/home/harry/wandr/swift/apple-compat"),
+        // The wasi:canvas draw/types/embedding/layout bindings — a standalone leaf, generated
+        // once and shared (NEXT-SESSION-TASKS.md #1). CSwiftSpike no longer generates its own
+        // copy of these (same C symbol names would collide if both were linked).
+        .package(path: "/home/harry/wandr/swift/OpenSwiftUIProject/CWASICanvas"),
     ],
     targets: [
         // The Apple-compat shim modules moved to swift/apple-compat; consumed here as products
@@ -31,6 +35,7 @@ let package = Package(
                 .product(name: "Combine", package: "apple-compat"),
                 .product(name: "AudioToolbox", package: "apple-compat"),
                 "CSwiftSpike", "WandrCG",
+                .product(name: "CWASICanvas", package: "CWASICanvas"),
                 .product(name: "OpenSwiftUI", package: "OpenSwiftUI"),
             ],
             // T2ilesApp = @main/UserDefaults entry (WandrReactor replaces it);
@@ -44,23 +49,30 @@ let package = Package(
                 .linkedLibrary("wasi-emulated-process-clocks", .when(platforms: [.wasi])),
                 .unsafeFlags([
                     "-Xclang-linker", "-mexec-model=reactor",
+                    // Two component-type object files, one per WIT world actually generated:
+                    // this app's own (exports + audio + metrics, no wasi:canvas anymore) and
+                    // CWASICanvas's (wasi:canvas draw/types/embedding/layout). Both are pure
+                    // metadata (no code symbols), so wasm-tools composes them into one
+                    // component's declared import/export surface — see NEXT-SESSION-TASKS.md #1.
                     "-Xlinker", "generated/swift_spike_component_type.o",
+                    "-Xlinker", "/home/harry/wandr/swift/OpenSwiftUIProject/CWASICanvas/generated/cwasi_canvas_component_type.o",
                 ], .when(platforms: [.wasi])),
             ]
         ),
-        // wit-bindgen-c generated surface (imports + the export trampolines).
+        // wit-bindgen-c generated surface for THIS app's own exports + audio/metrics imports.
+        // wasi:canvas bindings come from the CWASICanvas package instead (NEXT-SESSION-TASKS.md #1).
         .target(name: "CSwiftSpike"),
         // (ComputeStubs removed — Graph::print_cycle now lives in Compute's Graph.cpp under #if !TARGET_OS_MAC.)
         // P2.3 — VENDORED OpenCoreGraphics (real upstream geometry/CGPath; see
         // Sources/OpenCoreGraphics/VENDORED.txt), with its empty CGContext.swift
-        // implemented over wasi:canvas (hence the CSwiftSpike dep) + an added CGColor.
+        // implemented over wasi:canvas (hence the CWASICanvas dep) + an added CGColor.
         // Module renamed WandrCG (dir kept) to avoid colliding with OpenSwiftUI's own
         // `OpenCoreGraphics` stub package once OpenSwiftUI is in the graph.
-        .target(name: "WandrCG", dependencies: ["CSwiftSpike"], path: "Sources/OpenCoreGraphics"),
+        .target(name: "WandrCG", dependencies: [.product(name: "CWASICanvas", package: "CWASICanvas")], path: "Sources/OpenCoreGraphics"),
         // The original spike: hand-built DisplayList drawn via CGContext.
         .executableTarget(
             name: "SwiftSpike",
-            dependencies: ["CSwiftSpike", "WandrCG"]
+            dependencies: ["CSwiftSpike", "WandrCG", .product(name: "CWASICanvas", package: "CWASICanvas")]
         ),
         // Phase 4b: OpenSwiftUI renders its DisplayList through a WandrDrawSink → CGContext.
         // The wasm-only link flags live here scoped to .wasi so they DON'T leak to the host
@@ -70,6 +82,7 @@ let package = Package(
             dependencies: [
                 "CSwiftSpike",
                 "WandrCG",
+                .product(name: "CWASICanvas", package: "CWASICanvas"),
                 .product(name: "OpenSwiftUI", package: "OpenSwiftUI"),
             ],
             // eleev/swiftui-2048 is Swift-5-era code; build it in Swift 5 language mode so
@@ -83,6 +96,7 @@ let package = Package(
                 .unsafeFlags([
                     "-Xclang-linker", "-mexec-model=reactor",
                     "-Xlinker", "generated/swift_spike_component_type.o",
+                    "-Xlinker", "/home/harry/wandr/swift/OpenSwiftUIProject/CWASICanvas/generated/cwasi_canvas_component_type.o",
                 ], .when(platforms: [.wasi])),
             ]
         ),

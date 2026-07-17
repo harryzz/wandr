@@ -1,0 +1,13 @@
+// CWASICanvas — a standalone leaf module holding ONLY the wasi:canvas *drawing* bindings
+// (types/draw/embedding/layout), with no exports and no other imports. Extracted from the
+// per-app CSwiftSpike blob (repros/swift-canvas-spike) so packages ABOVE any one app — e.g.
+// OpenCoreGraphics's CGContext — can depend on the wasi:canvas bindings without a package cycle
+// through the app itself. See swift/OpenSwiftUIProject/NEXT-SESSION-TASKS.md #1/#2.
+package wandr:cwasi-canvas;
+
+world cwasi-canvas {
+  import wasi:canvas/types@0.0.2;
+  import wasi:canvas/draw@0.0.2;
+  import wasi:canvas/embedding@0.0.2;
+  import wasi:canvas/layout@0.0.2;
+}
