@@ -15,9 +15,6 @@ struct GameBoardSizeState {
     private(set) var boardSize: BoardSize = .fourByFour {
         didSet {
             defaults.set(boardSize.rawValue, forKey: Notification.Name.gameBoardSize.rawValue)
-            // [wandr] UserDefaults has no durable backing on wasm (see WandrBoardSizeStore) — persist
-            // to /state directly so the choice survives a process restart.
-            WandrBoardSizeStore.write(boardSize.rawValue)
             publishState()
         }
     }
@@ -74,8 +71,8 @@ struct GameBoardSizeState {
     
     init(suit: Suit = .production) {
         defaults = suit.userDefaults ?? .standard
-
-        let rawValue = WandrBoardSizeStore.read() ?? defaults.integer(forKey: Notification.Name.gameBoardSize.rawValue)
+        
+        let rawValue = defaults.integer(forKey: Notification.Name.gameBoardSize.rawValue)
         self.boardSize = BoardSize(rawValue: rawValue) ?? BoardSize.fourByFour
         
         switch boardSize {

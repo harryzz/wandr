@@ -36,10 +36,9 @@ private func bootRuntime() {
             if sharedGame == nil {
                 // [wandr] Mirror eleev's own T2ilesApp.mainView (excluded from this build —
                 // WandrReactor replaces it as the platform entry): read the board size the user
-                // picked in Settings (GameBoardSizeState persists it via WandrBoardSizeStore —
-                // UserDefaults has no durable backing on wasm) instead of hardcoding 4x4.
-                let rawValue = WandrBoardSizeStore.read() ?? BoardSize.fourByFour.rawValue
-                let boardSize = BoardSize(rawValue: rawValue) ?? .fourByFour
+                // picked in Settings by asking eleev's OWN GameBoardSizeState — it already knows
+                // how to read+fall back, no need to re-derive that logic here.
+                let boardSize = GameBoardSizeState().boardSize
                 sharedGame = GameLogic(size: boardSize.rawValue)
             }
             // Drain any audio still queued from a recent play() — a single write() only fills
