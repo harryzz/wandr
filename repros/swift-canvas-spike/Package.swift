@@ -15,6 +15,10 @@ let package = Package(
         // once and shared (NEXT-SESSION-TASKS.md #1). CSwiftSpike no longer generates its own
         // copy of these (same C symbol names would collide if both were linked).
         .package(path: "/home/harry/wandr/swift/OpenSwiftUIProject/CWASICanvas"),
+        // CGContext/CGImage/CGColor/CGGradient — real, wasi:canvas-backed, now live in
+        // OpenCoreGraphics itself (OpenCoreGraphicsShims re-exports the working implementation
+        // on os(WASI)) instead of a per-app vendored copy. NEXT-SESSION-TASKS.md #2.
+        .package(path: "/home/harry/wandr/swift/OpenSwiftUIProject/OpenCoreGraphics"),
     ],
     targets: [
         // The Apple-compat shim modules moved to swift/apple-compat; consumed here as products
@@ -34,8 +38,9 @@ let package = Package(
                 .product(name: "SwiftUI", package: "apple-compat"),
                 .product(name: "Combine", package: "apple-compat"),
                 .product(name: "AudioToolbox", package: "apple-compat"),
-                "CSwiftSpike", "WandrCG",
+                "CSwiftSpike",
                 .product(name: "CWASICanvas", package: "CWASICanvas"),
+                .product(name: "OpenCoreGraphicsShims", package: "OpenCoreGraphics"),
                 .product(name: "OpenSwiftUI", package: "OpenSwiftUI"),
             ],
             // T2ilesApp = @main/UserDefaults entry (WandrReactor replaces it);
@@ -63,16 +68,14 @@ let package = Package(
         // wasi:canvas bindings come from the CWASICanvas package instead (NEXT-SESSION-TASKS.md #1).
         .target(name: "CSwiftSpike"),
         // (ComputeStubs removed — Graph::print_cycle now lives in Compute's Graph.cpp under #if !TARGET_OS_MAC.)
-        // P2.3 — VENDORED OpenCoreGraphics (real upstream geometry/CGPath; see
-        // Sources/OpenCoreGraphics/VENDORED.txt), with its empty CGContext.swift
-        // implemented over wasi:canvas (hence the CWASICanvas dep) + an added CGColor.
-        // Module renamed WandrCG (dir kept) to avoid colliding with OpenSwiftUI's own
-        // `OpenCoreGraphics` stub package once OpenSwiftUI is in the graph.
-        .target(name: "WandrCG", dependencies: [.product(name: "CWASICanvas", package: "CWASICanvas")], path: "Sources/OpenCoreGraphics"),
         // The original spike: hand-built DisplayList drawn via CGContext.
         .executableTarget(
             name: "SwiftSpike",
-            dependencies: ["CSwiftSpike", "WandrCG", .product(name: "CWASICanvas", package: "CWASICanvas")]
+            dependencies: [
+                "CSwiftSpike",
+                .product(name: "CWASICanvas", package: "CWASICanvas"),
+                .product(name: "OpenCoreGraphicsShims", package: "OpenCoreGraphics"),
+            ]
         ),
         // Phase 4b: OpenSwiftUI renders its DisplayList through a WandrDrawSink → CGContext.
         // The wasm-only link flags live here scoped to .wasi so they DON'T leak to the host
@@ -81,8 +84,8 @@ let package = Package(
             name: "OpenSwiftUIDemo",
             dependencies: [
                 "CSwiftSpike",
-                "WandrCG",
                 .product(name: "CWASICanvas", package: "CWASICanvas"),
+                .product(name: "OpenCoreGraphicsShims", package: "OpenCoreGraphics"),
                 .product(name: "OpenSwiftUI", package: "OpenSwiftUI"),
             ],
             // eleev/swiftui-2048 is Swift-5-era code; build it in Swift 5 language mode so

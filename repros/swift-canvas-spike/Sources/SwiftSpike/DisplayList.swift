@@ -11,7 +11,7 @@
 // This mirror keeps the same SHAPE (recursive items + effect-wrapped sub-lists) and the
 // drawable/effect kinds that map onto our CGContext, so the renderer's design transfers
 // 1:1 to the real types later.
-import WandrCG
+import OpenCoreGraphicsShims
 
 struct DisplayList {
     var items: [Item]
@@ -32,7 +32,7 @@ struct DisplayList {
         case color(CGColor)               // ← .color(Color.Resolved): fill the item frame
         case shape(CGPath, CGColor)       // ← .shape(Path, AnyResolvedPaint, FillStyle)
         case text(String, CGFloat, CGColor) // ← .text(StyledTextContentView, CGSize)
-        case image(CGImage)               // ← .image(GraphicsImage)
+        case image(CGImageHandle)         // ← .image(GraphicsImage)
     }
 
     enum Effect {

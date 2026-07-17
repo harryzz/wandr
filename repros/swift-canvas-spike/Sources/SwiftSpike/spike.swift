@@ -4,7 +4,7 @@
 // and draws with the CoreGraphics API — no raw wasi:canvas calls in the guest.
 import CSwiftSpike
 import CWASICanvas
-import WandrCG   // vendored; CGContext implemented over wasi:canvas (re-exports Foundation's CGPoint/CGRect)
+import OpenCoreGraphicsShims
 
 // The canvas-context is stable across frames — acquire once, re-borrow per frame
 // (the keyguard pattern). wasm is single-threaded, so a global is fine.

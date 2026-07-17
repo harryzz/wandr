@@ -5,7 +5,7 @@
 // the SwiftUI/Combine/AudioToolbox shims.
 import CSwiftSpike
 import CWASICanvas
-import WandrCG
+import OpenCoreGraphicsShims
 import OpenSwiftUI
 @_spi(WandrRenderer) import OpenSwiftUI
 #if canImport(WASILibc)
@@ -29,7 +29,7 @@ final class CGSink: WandrDrawSink {
     // Decoded-image cache, keyed by the DisplayList's per-CGImage identity (see
     // WandrDisplayListRenderer's `.image` case) — a static bundle image redraws every frame; decode
     // host-side (wasi:canvas graphics.decode-image) once, reuse the resource handle thereafter.
-    nonisolated(unsafe) private var imageCache: [String: CGImage] = [:]
+    nonisolated(unsafe) private var imageCache: [String: CGImageHandle] = [:]
     func beginFrame(width: Double, height: Double, version: UInt32) {}
     func fillRect(x: Double, y: Double, width: Double, height: Double,
                   red: Float, green: Float, blue: Float, opacity: Float) {
@@ -75,7 +75,7 @@ final class CGSink: WandrDrawSink {
     func drawImage(data: [UInt8], name: String, pixelWidth: Int, pixelHeight: Int,
                    x: Double, y: Double, width: Double, height: Double, opacity: Float) {
         guard let cg else { return }
-        let image: CGImage?
+        let image: CGImageHandle?
         if let cached = imageCache[name] {
             image = cached
         } else {

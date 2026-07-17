@@ -5,7 +5,7 @@
 // hand-built spike (spike.swift) — only the draw source changed (SwiftUI instead of hand-coded).
 import CSwiftSpike
 import CWASICanvas
-import WandrCG
+import OpenCoreGraphicsShims
 import OpenSwiftUI
 @_spi(WandrRenderer) import OpenSwiftUI
 #if canImport(WASILibc)
