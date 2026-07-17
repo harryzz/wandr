@@ -7,11 +7,12 @@
 //
 
 import AudioToolbox
+import SwiftUI
 
 class Audio {
     private static var cachedURLs: [String : URL] = [:]
     
-    static func play(fileNamed file: String, of type: String = "mp3") {
+    static func play(fileNamed file: String, of type: String = "wav") {
         func _play(file url: URL) {
             var sound: SystemSoundID = 0
             AudioServicesCreateSystemSoundID(url as CFURL, &sound)

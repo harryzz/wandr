@@ -6,7 +6,7 @@
 //  Copyright © 2020 Astemir Eleev. All rights reserved.
 //
 
-import Foundation
+import SwiftUI
 
 enum AudioSource: String {
     case merge = "Merge"

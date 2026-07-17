@@ -20,6 +20,9 @@ let package = Package(
         // Absolute path to match the consumer packages exactly, so SwiftPM dedupes OpenSwiftUI
         // to a single package node in the graph.
         .package(path: "/home/harry/wandr/swift/OpenSwiftUIProject/OpenSwiftUI"),
+        // For AudioToolbox's AudioServices shim to actually play sound (via WandrAudioPlayer)
+        // instead of being silent.
+        .package(path: "/home/harry/wandr/swift/OpenSwiftUIProject/wandr-runtime"),
     ],
     targets: [
         // `import SwiftUI` → OpenSwiftUI + API OpenSwiftUI still lacks (List/Section/Link/
@@ -28,7 +31,7 @@ let package = Package(
         // `import Combine` → OpenCombine (carried transitively by OpenSwiftUI) + a
         // NotificationCenter bridge.
         .target(name: "Combine", dependencies: [.product(name: "OpenSwiftUI", package: "OpenSwiftUI")]),
-        // `import AudioToolbox` → the AudioServices surface eleev uses (silent v1; → wasi:audio later).
-        .target(name: "AudioToolbox"),
+        // `import AudioToolbox` → the AudioServices surface eleev uses, routed to WandrAudioPlayer.
+        .target(name: "AudioToolbox", dependencies: [.product(name: "WandrRuntime", package: "wandr-runtime")]),
     ]
 )

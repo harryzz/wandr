@@ -56,10 +56,14 @@ let package = Package(
                 .product(name: "WandrRuntime", package: "wandr-runtime"),
                 .product(name: "OpenSwiftUI", package: "OpenSwiftUI"),
             ],
-            // T2ilesApp = @main/UserDefaults entry (WandrReactor replaces it);
-            // Audio/* = AudioToolbox-based Audio seam (WandrAudio replaces it).
-            exclude: ["T2ilesApp.swift", "Audio/Audio.swift", "Audio/AudioSource.swift",
-                      "Utils/Plist/PlistConfiguration.swift"],
+            // T2ilesApp = @main/UserDefaults entry (WandrReactor replaces it). Audio/* is
+            // eleev's own UNMODIFIED original now — apple-compat's Bundle/AudioToolbox shims
+            // make it work as-is (no more per-app WandrAudio.swift replacement target needed).
+            // Utils/Plist/PlistConfiguration.swift stays excluded: apple-compat's SwiftUI
+            // already declares a same-named replacement (see that file's own doc comment) —
+            // un-excluding this one would locally shadow it right back to the broken,
+            // Bundle.main-trapping original (same-module declarations always win over imports).
+            exclude: ["T2ilesApp.swift", "Utils/Plist/PlistConfiguration.swift"],
             swiftSettings: [.swiftLanguageMode(.v5)],
             linkerSettings: [
                 .linkedLibrary("wasi-emulated-signal", .when(platforms: [.wasi])),
