@@ -1,0 +1,4 @@
+module CWandrExports {
+    header "cwandr_exports.h"
+    export *
+}

@@ -1,0 +1,17 @@
+// CWandrExports — a standalone leaf holding ONLY the reactor export surface (frame/pointer input
+// handlers + shell-events/frame-pacing/startup) plus the metrics import, generated via
+// `wit-bindgen c wit --out-dir generated`. Extracted from the per-app CSwiftSpike blob so the shared
+// WandrReactorExports library can define the @_cdecl export implementations once (instead of each app
+// carrying its own reactor stubs). Mirrors CWASICanvas/CWasiAudio (see NEXT-SESSION-TASKS.md #1); the
+// world is identical to the app's own swift-spike reactor surface, so an app that links this leaf's
+// component_type.o no longer declares these itself.
+package wandr:cwandr-exports;
+
+world cwandr-exports {
+  import wandr:ui-shell/metrics@0.1.0;
+  export wandr:ui-shell/shell-events@0.1.0;
+  export wasi:input-handlers/frame-handler@0.0.2;
+  export wasi:input-handlers/pointer-handler@0.0.2;
+  export wandr:ui-shell/frame-pacing@0.1.0;
+  export wandr:ui-shell/startup@0.1.0;
+}

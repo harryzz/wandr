@@ -41,19 +41,22 @@ let package = Package(
                               .product(name: "AudioToolbox", package: "apple-compat"),
                           ],
                           swiftSettings: [.swiftLanguageMode(.v5)]),
-        // [Phase 2] The REAL eleev/swiftui-2048 app, dropped in unmodified behind the shims.
-        // T2ilesApp.swift (@main, UserDefaults) is excluded — WandrReactor.swift is our entry.
+        // [Phase 2] The REAL eleev/swiftui-2048 app, dropped in UNMODIFIED behind the shims. The app
+        // dir is now ONLY eleev's own sources (+ the temporary WandrHeadless UAF harness): its @main
+        // T2ilesApp is the entry, and the whole reactor export surface lives in the shared
+        // WandrReactorExports library (no per-app @_cdecl stubs, no CSwiftSpike).
         .executableTarget(
             name: "T2iles",
             dependencies: [
                 .product(name: "SwiftUI", package: "apple-compat"),
                 .product(name: "Combine", package: "apple-compat"),
                 .product(name: "AudioToolbox", package: "apple-compat"),
-                "CSwiftSpike",
-                // WandrHeadless.swift (the -DWANDR_HEADLESS deterministic test driver, which
-                // bypasses wasi:canvas/WandrRuntime entirely) needs CGSize directly.
+                // WandrHeadless.swift (the -DWANDR_HEADLESS deterministic test driver) needs CGSize.
                 .product(name: "OpenCoreGraphicsWASICanvas", package: "OpenCoreGraphics"),
                 .product(name: "WandrRuntime", package: "wandr-runtime"),
+                // The reactor's WASI exports (frame/pointer/shell-events/frame-pacing/startup→boot),
+                // provided once — replaces this app's old per-app WandrReactor.swift stubs + CSwiftSpike.
+                .product(name: "WandrReactorExports", package: "wandr-runtime"),
                 .product(name: "OpenSwiftUI", package: "OpenSwiftUI"),
             ],
             // T2ilesApp.swift is eleev's ORIGINAL @main, used VERBATIM — the reactor now boots it via
@@ -75,13 +78,14 @@ let package = Package(
                 .linkedLibrary("wasi-emulated-process-clocks", .when(platforms: [.wasi])),
                 .unsafeFlags([
                     "-Xclang-linker", "-mexec-model=reactor",
-                    // Three component-type object files, one per WIT world actually generated:
-                    // this app's own (exports + metrics, no wasi:canvas/audio anymore),
+                    // Three component-type object files, one per WIT world actually linked:
+                    // CWandrExports' (the reactor exports + metrics import — the app no longer
+                    // generates its own swift_spike world; those come from WandrReactorExports),
                     // CWASICanvas's (wasi:canvas draw/types/embedding/layout), and CWasiAudio's
                     // (wasi:audio/pcm, via wandr-runtime's WandrAudioPlayer). All pure metadata
                     // (no code symbols), so wasm-tools composes them into one component's
                     // declared import/export surface — see NEXT-SESSION-TASKS.md #1.
-                    "-Xlinker", "generated/swift_spike_component_type.o",
+                    "-Xlinker", "/home/harry/wandr/swift/OpenSwiftUIProject/CWandrExports/generated/cwandr_exports_component_type.o",
                     "-Xlinker", "/home/harry/wandr/swift/OpenSwiftUIProject/CWASICanvas/generated/cwasi_canvas_component_type.o",
                     "-Xlinker", "/home/harry/wandr/swift/OpenSwiftUIProject/CWasiAudio/generated/cwasi_audio_component_type.o",
                 ], .when(platforms: [.wasi])),

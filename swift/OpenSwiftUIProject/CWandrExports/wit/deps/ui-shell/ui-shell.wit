@@ -1,0 +1,136 @@
+// wandr:ui-shell — DRAFT (2026-06-12). NOT WIRED.
+//
+// The UNIVERSAL UI-guest shell contract: everything a UI framework needs
+// from the embedder that is neither drawing (wasi:canvas) nor input
+// delivery (wasi:input-handlers) nor an app/OS service (wandr:* packages).
+// Cross-checked against the reference libraries: slint-wandr consumes
+// metrics+theme+ime today; dioxus ime; Compose all of it; Avalonia/
+// Flutter/egui map onto the same set (memos). Shapes are the de-warted
+// my:skiko-gfx slices, proven in production — this package is how
+// my:skiko-gfx RETIRES rather than lives forever as "the rest".
+//
+// Bound by the wasi-canvas REDESIGN rules (R1-R5). R5 notes: scheduler
+// stays host-side because a timer must WAKE a frame-paced (idle) host
+// loop — not derivable from frame ticks that aren't arriving;
+// segmentation is the managed-runtime ICU capability gap.
+package wandr:ui-shell@0.1.0;
+
+/// Ambient display metrics (the density side of configure; surface
+/// size arrives via canvas/configure events).
+interface metrics {
+    get-density:    func() -> f32;
+    get-font-scale: func() -> f32;
+    get-dpi:        func() -> u32;
+}
+
+/// Ambient appearance configuration.
+interface theme {
+    enum night-mode { auto, off, on }
+    get-night-mode: func() -> night-mode;
+    /// System accent as ARGB; 0 = none exposed (caller falls back).
+    get-accent-color: func() -> u32;
+}
+
+/// Ambient locale configuration.
+interface locale {
+    enum layout-direction { ltr, rtl }
+    /// BCP-47 tag, e.g. "en-US"; "en-US" if unset.
+    primary-locale: func() -> string;
+    is-twenty-four-hour-format: func() -> bool;
+    get-layout-direction: func() -> layout-direction;
+}
+
+interface clipboard {
+    get-text: func() -> string;
+    set-text: func(text: string);
+    has-text: func() -> bool;
+    clear:    func();
+}
+
+/// The APP side of the editor protocol (focus notifications toward the
+/// embedder's IME). The IME-app side stays in wandr:ime.
+interface ime {
+    notify-editor-attached: func(
+        input-type: string,
+        hint: string,
+        initial-text: string,
+        selection-start: u32,
+        selection-end: u32,
+    );
+    notify-editor-detached: func();
+}
+
+interface lifecycle {
+    enum state { initialized, created, started, resumed, paused, stopped, destroyed }
+    get-state: func() -> state;
+}
+
+/// Host-timer wake for frame-paced guests: schedule-delayed fires
+/// shell-events.on-scheduled-callback at ~frame granularity, WAKING an
+/// idle (frame-paced) render loop — the part a guest cannot derive from
+/// frame ticks it isn't receiving.
+interface scheduler {
+    schedule-delayed: func(delay-ms: u32, callback-id: u32) -> u32;
+    cancel:           func(handle: u32);
+}
+
+/// Unicode text segmentation (host ICU) — the managed-runtime
+/// capability gap (Kotlin/Compose word iterators; others bring their own).
+interface text-segmentation {
+    enum boundary-kind { grapheme, word, line, sentence }
+    /// Offsets are UTF-8 bytes.
+    next-boundary: func(text: string, kind: boundary-kind, start-offset: u32) -> u32;
+    prev-boundary: func(text: string, kind: boundary-kind, end-offset: u32) -> u32;
+}
+
+/// EXPORTS — the non-input legs of the legacy renderer export, so the
+/// legacy export can retire: frames/input live in wasi:input-handlers;
+/// these are the shell's own callbacks.
+interface shell-events {
+    use lifecycle.{state};
+    on-scheduled-callback: func(callback-id: u32);
+    on-lifecycle-changed:  func(new-state: state);
+}
+
+/// A guaranteed-once, host-driven "app entry point" for reactor-model guests
+/// (which never get WASI's `_start` — the host just calls exported functions
+/// on its own schedule, forever). The host calls `on-init` exactly once,
+/// immediately after instantiation, before the first `wasi:input-handlers`
+/// call (on-resize/on-frame/...) — so a guest can do one-time setup here
+/// instead of faking it with a "have I booted yet?" flag checked on every
+/// frame. A SEPARATE interface/probe-only world from `shell-events`
+/// (deliberately NOT added as a new function on that interface) — see that
+/// probe's `.ok()`-swallowed `WorldName::new()` call in wandr-host: it's an
+/// all-or-nothing match on the WHOLE interface, so adding a function there
+/// would silently break `on-scheduled-callback`/`on-lifecycle-changed` for
+/// every guest that doesn't ALSO implement the new function. TODO: once
+/// every current guest framework (Compose/Slint/dioxus/Avalonia/OpenSwiftUI)
+/// has been rebuilt against this, consider folding `on-init` into
+/// `shell-events` proper for one less probe — not before then.
+interface startup {
+    on-init: func();
+}
+
+/// On-demand rendering hint (moved verbatim from my:skiko-gfx).
+interface frame-pacing {
+    /// ms until the next wanted frame: 0 = animating; N = timed wake;
+    /// large = idle (host clamps to its idle cap).
+    next-frame-delay: func() -> u32;
+}
+
+/// Everything a full UI guest imports from the shell.
+world ui-shell-imports {
+    import metrics;
+    import theme;
+    import locale;
+    import clipboard;
+    import ime;
+    import lifecycle;
+    import scheduler;
+    import text-segmentation;
+}
+
+/// Probe-only export worlds (the input-handlers pattern).
+world shell-events-world { export shell-events; }
+world frame-pacing-world { export frame-pacing; }
+world startup-world { export startup; }
