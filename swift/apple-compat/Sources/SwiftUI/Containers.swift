@@ -13,10 +13,20 @@ public struct GroupedListStyle { public init() {} }
 public struct PlainListStyle { public init() {} }
 public struct DefaultListStyle { public init() {} }
 
+// List is still a shim (upstream OpenSwiftUI has no List — sections/styles/selection are a big
+// surface), but it is now SCROLLABLE: its content is wrapped in OpenSwiftUI's real ScrollView
+// (OpenSwiftUICore/View/Scroll/ScrollView.swift), so tall content (e.g. the 2048 Settings list,
+// whose audio section sits below the board preview) can be reached.
+// TODO: fold List itself into OpenSwiftUI the same way ScrollView was — a real view in the library,
+// backed by this ScrollView — once its section/style/selection surface is covered.
 public struct List<Content: View>: View {
     private let content: Content
     public init(@ViewBuilder content: () -> Content) { self.content = content() }
-    public var body: some View { VStack(alignment: .leading, spacing: 0) { content } }
+    public var body: some View {
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 0) { content }
+        }
+    }
 }
 
 public struct Section<Header: View, Content: View>: View {
