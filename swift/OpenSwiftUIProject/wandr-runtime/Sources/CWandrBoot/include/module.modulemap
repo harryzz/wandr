@@ -1,0 +1,4 @@
+module CWandrBoot {
+    header "cwandr_boot.h"
+    export *
+}

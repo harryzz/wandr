@@ -15,6 +15,7 @@
 //  into the functions below — no logic, just the unavoidable per-world type boundary.
 
 import CWASICanvas
+import CWandrBoot
 // Re-exported so a consumer's single `import WandrRuntime` also gives it CGColor (needed for
 // runWandrApp's `background:` argument) without a second explicit import — the same pattern
 // OpenCoreGraphicsShims already uses for OpenSwiftUICore.
@@ -98,6 +99,30 @@ public func runWandrApp<A: App>(
     }
 }
 
+
+/// Boot an app that keeps its OWN unmodified `@main struct App` (eleev-style) — no per-app reactor
+/// glue. Call ONCE from the guest's `on-init`. Arms the reactor so `App.main()` takes the
+/// register-and-return path, runs the @main entry (which calls `registerWandrApp` and returns), then
+/// wires the lazy first-real-sized-frame build to the registered launcher (same machinery
+/// `runWandrApp` uses, only the app now comes from the registry instead of a passed-in closure).
+///
+/// - Parameters mirror `runWandrApp`'s ambient ones; the app's root View/Scene, model boot, etc. all
+///   come from the app's own `@main` body, so there is no `makeApp`/`willRenderFrame` here.
+public func bootWandrReactorApp(
+    background: CGColor = CGColor(red: 0, green: 0, blue: 0, alpha: 1),
+    getDensity: (() -> Float)? = nil
+) {
+    backgroundColor = background
+    getDensityHook = getDensity
+    armWandrReactor()
+    _ = wandr_run_app_main()   // C shim → app's __main_argc_argv → App.main() → registerWandrApp → returns
+    makeAppBox = {
+        launchRegisteredWandrApp(
+            options: .init(surface: CGSize(width: CGFloat(surfaceWidth), height: CGFloat(surfaceHeight)), sink: sink)
+        )
+    }
+}
+
 /// Forward a resize. `w`/`h` are RAW PHYSICAL pixels — divided by the app-supplied density (if
 /// any) into the logical surface size the graph lays out against.
 public func wandrRuntimeOnResize(width w: UInt32, height h: UInt32) {
@@ -110,6 +135,9 @@ public func wandrRuntimeOnResize(width w: UInt32, height h: UInt32) {
 /// frame (or re-render/redraw on every frame after), present.
 public func wandrRuntimeOnFrame(nanos: UInt64) {
     willRenderFrameHook?(nanos, built)
+    // Audio is the library's own concern (WandrAudioPlayer lives here) — drain any queued SFX a bit
+    // more each frame as the device consumes the ring, whether or not the app supplied a frame hook.
+    WandrAudioPlayer.shared.pump()
 
     let dt = lastFrameNanos == 0 ? 0.0 : Double(nanos &- lastFrameNanos) / 1_000_000_000.0
     lastFrameNanos = nanos
@@ -156,7 +184,9 @@ public func wandrRuntimeOnFrame(nanos: UInt64) {
 /// Idle = poll gently; while an animation is in flight (or the app reports `isBusy`), drive
 /// faster so springs interpolate smoothly. 33ms/150ms mirrors the tuning already verified across
 /// both prior per-app copies.
-public func wandrRuntimeNextFrameDelay() -> UInt32 { (animPending || (isBusyHook?() ?? false)) ? 33 : 150 }
+public func wandrRuntimeNextFrameDelay() -> UInt32 {
+    (animPending || WandrAudioPlayer.shared.isActive || (isBusyHook?() ?? false)) ? 33 : 150
+}
 
 /// Forward one raw pointer event, in the SAME raw physical-pixel space `onResize` receives its
 /// `w`/`h` in — divided here by density to match the logical points OpenSwiftUI laid out

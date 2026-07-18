@@ -22,4 +22,5 @@ world swift-spike {
   export wasi:input-handlers/frame-handler@0.0.2;
   export wasi:input-handlers/pointer-handler@0.0.2;
   export wandr:ui-shell/frame-pacing@0.1.0;
+  export wandr:ui-shell/startup@0.1.0;
 }

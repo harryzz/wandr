@@ -43,6 +43,13 @@ import WASILibc
 
 @inline(never) func hlog(_ s: String) { fputs("HEADLESS: \(s)\n", stderr); fflush(stderr) }
 
+// [wandr] Self-contained view seam for the headless driver (the real app entry is now eleev's own
+// @main T2ilesApp; this harness builds the SAME CompositeView directly, without the reactor path).
+nonisolated(unsafe) var sharedGame: GameLogic!
+struct WandrHostApp: App {
+    var body: some Scene { WindowGroup { CompositeView(board: sharedGame) } }
+}
+
 // A canvas-free WandrDrawSink: records item frames + text so we can (a) confirm the render happened and
 // (b) locate on-screen tap targets (hamburger, "Settings" row) for scripted pointer injection.
 final class HeadlessSink: WandrDrawSink {

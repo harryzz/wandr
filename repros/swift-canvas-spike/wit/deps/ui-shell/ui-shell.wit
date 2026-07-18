@@ -92,6 +92,25 @@ interface shell-events {
     on-lifecycle-changed:  func(new-state: state);
 }
 
+/// A guaranteed-once, host-driven "app entry point" for reactor-model guests
+/// (which never get WASI's `_start` — the host just calls exported functions
+/// on its own schedule, forever). The host calls `on-init` exactly once,
+/// immediately after instantiation, before the first `wasi:input-handlers`
+/// call (on-resize/on-frame/...) — so a guest can do one-time setup here
+/// instead of faking it with a "have I booted yet?" flag checked on every
+/// frame. A SEPARATE interface/probe-only world from `shell-events`
+/// (deliberately NOT added as a new function on that interface) — see that
+/// probe's `.ok()`-swallowed `WorldName::new()` call in wandr-host: it's an
+/// all-or-nothing match on the WHOLE interface, so adding a function there
+/// would silently break `on-scheduled-callback`/`on-lifecycle-changed` for
+/// every guest that doesn't ALSO implement the new function. TODO: once
+/// every current guest framework (Compose/Slint/dioxus/Avalonia/OpenSwiftUI)
+/// has been rebuilt against this, consider folding `on-init` into
+/// `shell-events` proper for one less probe — not before then.
+interface startup {
+    on-init: func();
+}
+
 /// On-demand rendering hint (moved verbatim from my:skiko-gfx).
 interface frame-pacing {
     /// ms until the next wanted frame: 0 = animating; N = timed wake;
@@ -114,3 +133,4 @@ world ui-shell-imports {
 /// Probe-only export worlds (the input-handlers pattern).
 world shell-events-world { export shell-events; }
 world frame-pacing-world { export frame-pacing; }
+world startup-world { export startup; }

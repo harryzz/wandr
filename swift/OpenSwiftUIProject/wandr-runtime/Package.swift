@@ -25,7 +25,11 @@ let package = Package(
                 .product(name: "CWASICanvas", package: "CWASICanvas"),
                 .product(name: "CWasiAudio", package: "CWasiAudio"),
                 .product(name: "OpenCoreGraphicsWASICanvas", package: "OpenCoreGraphics"),
+                "CWandrBoot",
             ]
         ),
+        // Tiny C shim that calls the app's @main-generated `__main_argc_argv` reactor entry with the
+        // correct C calling convention (a Swift-side decl mis-lowers it — see the header).
+        .target(name: "CWandrBoot"),
     ]
 )

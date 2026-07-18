@@ -56,17 +56,18 @@ let package = Package(
                 .product(name: "WandrRuntime", package: "wandr-runtime"),
                 .product(name: "OpenSwiftUI", package: "OpenSwiftUI"),
             ],
-            // T2ilesApp = @main/UserDefaults entry (WandrReactor replaces it). Audio/* is
-            // eleev's own UNMODIFIED original now — apple-compat's Bundle/AudioToolbox shims
-            // make it work as-is (no more per-app WandrAudio.swift replacement target needed).
-            // Utils/Plist/PlistConfiguration.swift stays excluded: apple-compat's SwiftUI
-            // already declares a same-named replacement (see that file's own doc comment) —
-            // un-excluding this one would locally shadow it right back to the broken,
-            // Bundle.main-trapping original (same-module declarations always win over imports).
-            // Also: even routed around Bundle, this original uses FileManager.contents(atPath:),
-            // which has its own separate silent-empty-data bug on this target — see
-            // swiftlang/swift-foundation#2120, tracked in apple-compat's PlistConfiguration.swift.
-            exclude: ["T2ilesApp.swift", "Utils/Plist/PlistConfiguration.swift"],
+            // T2ilesApp.swift is eleev's ORIGINAL @main, used VERBATIM — the reactor now boots it via
+            // WandrRuntime.bootWandrReactorApp() (OpenSwiftUI's App.main() takes a register-and-return
+            // path when the wandr reactor is armed; see WandrReactor.swift + OpenSwiftUI/WandrApp.swift).
+            // Its UserDefaults board-size read works via apple-compat's UserDefaults shim; Audio/* is
+            // eleev's UNMODIFIED original too (apple-compat's Bundle/AudioToolbox shims).
+            // Utils/Plist/PlistConfiguration.swift stays excluded: apple-compat's SwiftUI already
+            // declares a same-named replacement (see that file's own doc comment) — un-excluding this
+            // one would locally shadow it right back to the broken, Bundle.main-trapping original
+            // (same-module declarations always win over imports). Also: even routed around Bundle, this
+            // original uses FileManager.contents(atPath:), which has its own separate silent-empty-data
+            // bug on this target — see swiftlang/swift-foundation#2120, tracked in apple-compat's copy.
+            exclude: ["Utils/Plist/PlistConfiguration.swift"],
             swiftSettings: [.swiftLanguageMode(.v5)],
             linkerSettings: [
                 .linkedLibrary("wasi-emulated-signal", .when(platforms: [.wasi])),

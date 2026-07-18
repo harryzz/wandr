@@ -32,6 +32,9 @@ extern int32_t __wasm_import_wandr_ui_shell_lifecycle_get_state(void);
 // Exported Functions from `wandr:ui-shell/frame-pacing@0.1.0`
 
 
+// Exported Functions from `wandr:ui-shell/startup@0.1.0`
+
+
 // Canonical ABI intrinsics
 
 __attribute__((__weak__, __export_name__("cabi_realloc")))
@@ -114,6 +117,11 @@ __attribute__((__export_name__("wandr:ui-shell/frame-pacing@0.1.0#next-frame-del
 int32_t __wasm_export_exports_wandr_ui_shell_frame_pacing_next_frame_delay(void) {
   uint32_t ret = exports_wandr_ui_shell_frame_pacing_next_frame_delay();
   return (int32_t) (ret);
+}
+
+__attribute__((__export_name__("wandr:ui-shell/startup@0.1.0#on-init")))
+void __wasm_export_exports_wandr_ui_shell_startup_on_init(void) {
+  exports_wandr_ui_shell_startup_on_init();
 }
 
 // Ensure that the *_component_type.o object is linked in

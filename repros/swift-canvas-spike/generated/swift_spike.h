@@ -104,6 +104,9 @@ void exports_wasi_input_handlers_pointer_handler_on_pointer(exports_wasi_input_h
 // Exported Functions from `wandr:ui-shell/frame-pacing@0.1.0`
 uint32_t exports_wandr_ui_shell_frame_pacing_next_frame_delay(void);
 
+// Exported Functions from `wandr:ui-shell/startup@0.1.0`
+void exports_wandr_ui_shell_startup_on_init(void);
+
 #ifdef __cplusplus
 }
 #endif
