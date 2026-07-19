@@ -23,7 +23,7 @@ wit_bindgen::generate!({
     // skiko-gfx.wit, which wit-bindgen 0.46 rejects on `matrix-3x3`
     // (numeric chars mid-identifier — wasmtime's host bindgen accepts
     // them, but the guest bindgen is stricter on the current spec).
-    path: "../../../wit/markdown.wit",
+    path: "../../../contracts/wit/markdown.wit",
 });
 
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};

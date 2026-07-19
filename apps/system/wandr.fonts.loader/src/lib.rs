@@ -13,7 +13,7 @@
 
 wit_bindgen::generate!({
     world: "loader-world",
-    path: "../../../wit/system-fonts.wit",
+    path: "../../../contracts/wit/system-fonts.wit",
 });
 
 use exports::wandr::fonts::loader::{FontInfo, Guest};
