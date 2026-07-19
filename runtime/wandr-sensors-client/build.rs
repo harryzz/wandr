@@ -1,9 +1,9 @@
 // wandr-sensors-client build.rs — codegen the `ISensorManager` AIDL closure (task 77).
 //
-// The sensors-only subset of wandr-host/build.rs's recipe. Reuses the AIDL
-// vendored under wandr-host/vendor (one vendored copy; referenced by relative
-// path) so there is no second submodule. Runs only when cross-compiling for
-// Android — off-android the crate is stubs and needs no bindings.
+// The sensors-only subset of wandr-host/build.rs's recipe. Reuses the AOSP AIDL that
+// wandr-host vendors (one vendored copy, referenced by path) so there is no second set
+// of multi-GB submodules. Runs only when cross-compiling for Android — off-android the
+// crate is stubs and needs no bindings, so a desktop build never needs the AIDL at all.
 
 fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
@@ -17,8 +17,28 @@ fn main() {
     // The binder runtime (frameworks-layer libbinder_ndk) for the final link.
     println!("cargo:rustc-link-lib=binder_ndk");
 
-    // Vendored AIDL lives in the sibling wandr-host crate (one copy).
-    let host_vendor = PathBuf::from("../wandr-host/vendor");
+    // Locate wandr-host's vendored AOSP AIDL. This crate ships standalone
+    // (github.com/harryzz/wandr-sensors-client) but is consumed from two different
+    // layouts, so probe both rather than assuming one:
+    //   monorepo   wandr/runtime/wandr-sensors-client  -> ../wandr-host/vendor
+    //   submodule  wandr-host/crates/wandr-sensors-client -> ../../vendor
+    // WANDR_AOSP_VENDOR overrides for anyone vendoring the AIDL elsewhere.
+    println!("cargo:rerun-if-env-changed=WANDR_AOSP_VENDOR");
+    let host_vendor = std::env::var("WANDR_AOSP_VENDOR")
+        .map(PathBuf::from)
+        .ok()
+        .or_else(|| {
+            ["../wandr-host/vendor", "../../vendor"]
+                .iter()
+                .map(PathBuf::from)
+                .find(|p| p.join("aosp-frameworks-hardware-interfaces").is_dir())
+        })
+        .expect(
+            "AOSP AIDL vendor dir not found. Android builds need wandr-host's vendored \
+             AIDL — initialize the submodules (git submodule update --init --recursive) \
+             or set WANDR_AOSP_VENDOR to a directory containing \
+             aosp-hardware-interfaces/ and aosp-frameworks-hardware-interfaces/.",
+        );
     let hw_vendor = host_vendor.join("aosp-hardware-interfaces");
     let fwk_vendor = host_vendor.join("aosp-frameworks-hardware-interfaces");
 
@@ -42,8 +62,9 @@ fn main() {
 package android.frameworks.sensorservice;
 interface IDirectReportChannel {}
 ";
-    std::fs::write(&direct_channel_path, direct_channel_stub)
-        .expect("patch IDirectReportChannel.aidl");
+    std::fs::write(&direct_channel_path, direct_channel_stub).unwrap_or_else(|e| {
+        panic!("patch IDirectReportChannel.aidl at {}: {e}", direct_channel_path.display())
+    });
 
     rsbinder_aidl::Builder::new()
         .source(sensorsvc_aidl.join("android/frameworks/sensorservice/ISensorManager.aidl"))
