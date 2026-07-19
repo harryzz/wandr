@@ -5,11 +5,17 @@ openswiftui-demo.component.wasm
 # per-app build outputs (regenerable via build-*.sh / deploy-*-device.sh)
 t2iles.component.wasm
 calc.component.wasm
+memorize.component.wasm
 stage-device/
 stage-device-calc/
+stage-device-memorize/
 wandr.calc/
+wandr.memorize/
 build-calc.log
 build-calc-release.log
+build-calc-regress.log
+build-memorize.log
+build-t2iles-regress.log
 Package.resolved
 .build/
 host/target/

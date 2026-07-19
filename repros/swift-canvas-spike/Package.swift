@@ -118,6 +118,35 @@ let package = Package(
                 ], .when(platforms: [.wasi])),
             ]
         ),
+        // [wandr portability test #2] mollybeach/memorizwift — the canonical Stanford CS193p "Memorize"
+        // memory game, dropped in UNMODIFIED (all 9 files verbatim, INCLUDING its own @main
+        // MemorizwiftApp — zero added files). Harder animation exercise than the calculator: MVVM
+        // (@StateObject/@ObservedObject/ObservableObject), a custom `Pie` Shape (Path arcs), an
+        // `AspectVGrid` built on GeometryReader+LazyVGrid+GridItem(.adaptive), a `Cardify`
+        // ViewModifier+Animatable driving rotation3DEffect, and withAnimation flips/shuffle.
+        .executableTarget(
+            name: "Memorizwift",
+            dependencies: [
+                .product(name: "SwiftUI", package: "apple-compat"),
+                .product(name: "Combine", package: "apple-compat"),
+                .product(name: "OpenCoreGraphicsWASICanvas", package: "OpenCoreGraphics"),
+                .product(name: "WandrRuntime", package: "wandr-runtime"),
+                .product(name: "WandrReactorExports", package: "wandr-runtime"),
+                .product(name: "OpenSwiftUI", package: "OpenSwiftUI"),
+            ],
+            swiftSettings: [.swiftLanguageMode(.v5)],
+            linkerSettings: [
+                .linkedLibrary("wasi-emulated-signal", .when(platforms: [.wasi])),
+                .linkedLibrary("wasi-emulated-mman", .when(platforms: [.wasi])),
+                .linkedLibrary("wasi-emulated-process-clocks", .when(platforms: [.wasi])),
+                .unsafeFlags([
+                    "-Xclang-linker", "-mexec-model=reactor",
+                    "-Xlinker", "/home/harry/wandr/swift/OpenSwiftUIProject/CWandrExports/generated/cwandr_exports_component_type.o",
+                    "-Xlinker", "/home/harry/wandr/swift/OpenSwiftUIProject/CWASICanvas/generated/cwasi_canvas_component_type.o",
+                    "-Xlinker", "/home/harry/wandr/swift/OpenSwiftUIProject/CWasiAudio/generated/cwasi_audio_component_type.o",
+                ], .when(platforms: [.wasi])),
+            ]
+        ),
         // wit-bindgen-c generated surface for THIS app's own exports + audio/metrics imports.
         // wasi:canvas bindings come from the CWASICanvas package instead (NEXT-SESSION-TASKS.md #1).
         .target(name: "CSwiftSpike"),

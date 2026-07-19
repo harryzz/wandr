@@ -24,10 +24,15 @@ let package = Package(
         // instead of being silent.
         .package(path: "/home/harry/wandr/swift/OpenSwiftUIProject/wandr-runtime"),
     ],
+    // NOTE: deliberately NO module named `CoreGraphics` here. Providing one flips
+    // `#if canImport(CoreGraphics)` to true across the WHOLE graph, activating OpenSwiftUICore's
+    // Apple-only CG code paths (full CGContext/CGColorSpace/CGDataConsumer) that the WASI canvas
+    // backend doesn't implement → build breaks. Stock code that `import CoreGraphics` for CGRect/
+    // CGPoint/CGFloat should import Foundation instead (those types + trig live there off-Apple).
     targets: [
         // `import SwiftUI` → OpenSwiftUI + API OpenSwiftUI still lacks (List/Section/Link/
         // AppStorage/PreviewLayout/UIColor/UIUserInterfaceIdiom…).
-        .target(name: "SwiftUI", dependencies: [.product(name: "OpenSwiftUI", package: "OpenSwiftUI")]),
+        .target(name: "SwiftUI", dependencies: [.product(name: "OpenSwiftUI", package: "OpenSwiftUI"), "Combine"]),
         // `import Combine` → OpenCombine (carried transitively by OpenSwiftUI) + a
         // NotificationCenter bridge.
         .target(name: "Combine", dependencies: [.product(name: "OpenSwiftUI", package: "OpenSwiftUI")]),
