@@ -23,6 +23,16 @@ export CC_aarch64_linux_android="${CC_aarch64_linux_android:-$_WANDR_TC/aarch64-
 export CXX_aarch64_linux_android="${CXX_aarch64_linux_android:-$_WANDR_TC/aarch64-linux-android${_WANDR_API}-clang++}"
 export AR_aarch64_linux_android="${AR_aarch64_linux_android:-$_WANDR_TC/llvm-ar}"
 
+# rustc's linker for the target. This used to live in wandr-host/.cargo/config.toml as an
+# absolute path, which made that crate un-clonable once it became its own repo
+# (github.com/harryzz/wandr-host) — a fresh checkout on any other machine pointed at
+# /home/harry/android-ndk-r27d. It belongs here, with the rest of the NDK env, derived
+# from $ANDROID_NDK_HOME. The versioned clang driver supplies its own sysroot and
+# defaults to lld, so the old explicit --sysroot / -fuse-ld=lld link-args are not needed
+# (and we must NOT set *_RUSTFLAGS here: that would clobber the aes_armv8 / polyval_armv8
+# cfgs the crate's config.toml sets for the ARMv8 crypto backends).
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER:-$_WANDR_TC/aarch64-linux-android${_WANDR_API}-clang}"
+
 case ":$PATH:" in
     *":$_WANDR_TC:"*) ;;
     *) export PATH="$_WANDR_TC:$PATH" ;;
