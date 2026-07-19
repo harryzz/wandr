@@ -34,7 +34,7 @@ wandr-arbiter-audio = { path = "../wandr-arbiter-audio" }
 wandr-arbiter-sensors = { path = "../wandr-arbiter-sensors" }
 wandr-arbiter-net = { path = "../wandr-arbiter-net" }
 wandr-arbiter-events = { path = "../wandr-arbiter-events" }
-wandr-hal-sensors = { path = "../../wandr-hal-sensors" }
+wandr-sensors-client = { path = "../../wandr-sensors-client" }
 wandr-hal-display = { path = "../../wandr-hal-display" }
 wandr-hal-lights  = { path = "../../wandr-hal-lights" }
 anyhow         = { workspace = true }

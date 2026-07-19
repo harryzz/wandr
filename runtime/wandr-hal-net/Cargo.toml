@@ -15,7 +15,7 @@ edition = "2021"
 #
 # Standalone package (own [workspace] table) so it can be path-depended from the
 # wandr-net daemon (and, later, the arbiter / wandr-host) without being absorbed
-# into either virtual workspace — mirrors wandr-hal-sensors.
+# into either virtual workspace — mirrors wandr-sensors-client.
 
 [workspace]
 

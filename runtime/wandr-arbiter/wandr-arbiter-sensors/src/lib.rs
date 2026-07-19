@@ -18,7 +18,7 @@
 //!      (no hardcoded distance — [[feedback_no_hardcoding]]).
 //!
 //! The HAL mechanism (rsbinder `ISensorManager`) lives in the binary +
-//! `wandr-hal-sensors`; this module is desktop-testable via the `report-sensor`
+//! `wandr-sensors-client`; this module is desktop-testable via the `report-sensor`
 //! sim verb (mirrors `report-orientation`) with no device.
 
 use std::collections::HashMap;
@@ -42,7 +42,7 @@ const PROXIMITY_NEAR_FRACTION: f32 = 0.5;
 const PROXIMITY_HYST_FRACTION: f32 = 0.1;
 
 /// Requested HAL sample rate when enabling a sensor, Hz. `0` = "no preference".
-/// NOTE the device reality: `wandr-hal-sensors::period_us` maps `0` to a **1000 ms**
+/// NOTE the device reality: `wandr-sensors-client::period_us` maps `0` to a **1000 ms**
 /// sampling period, and this qcom sensor HAL honors that period even for on-change
 /// sensors — so `0` is effectively a *slow* 1 Hz cadence, not "report on crossing
 /// ASAP". Fine for sensors where latency doesn't matter; NOT for proximity (see

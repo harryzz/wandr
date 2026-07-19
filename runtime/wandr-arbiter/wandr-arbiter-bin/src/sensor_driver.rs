@@ -1,11 +1,11 @@
 //! The arbiter's sensor-driver thread (task 77) — the ONLY place that touches
-//! the sensor HAL. Mirrors `spawn_alarm_timer` / `spawn_screen_poller`: a
-//! background thread that drains samples off the HAL event queue and
+//! the sensor service. Mirrors `spawn_alarm_timer` / `spawn_screen_poller`: a
+//! background thread that drains samples off the sensorservice event queue and
 //! `bus_emit`s `Event::SensorReading`, plus a `set_sensor` entry the effect
 //! executor calls to apply the pure module's `Effect::SetSensor` (enable /
 //! disable on demand — the battery contract).
 //!
-//! The binder mechanism lives in the shared `wandr-hal-sensors` crate (also used
+//! The binder mechanism lives in the shared `wandr-sensors-client` crate (also used
 //! by wandr-host); this file owns only the arbiter-side wiring: the kind↔handle
 //! maps (built once from `enumerate`), the descriptor seed into the core Store
 //! (so the sensors module derives the proximity threshold from real hardware),
@@ -18,7 +18,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use wandr_arbiter_core::SensorKind;
-use wandr_hal_sensors::HalSensor;
+use wandr_sensors_client::SensorDesc;
 
 /// How often the driver drains the HAL event queue while ≥1 sensor is enabled.
 /// On-change sensors (proximity) push events to our callback asynchronously; this
@@ -45,12 +45,12 @@ fn aidl_type_to_kind(aidl_type: i32) -> Option<SensorKind> {
 /// (the rate only bounds latency, not power), so a low rate is plenty.
 const ORIENTATION_RATE_HZ: u32 = 5;
 
-/// `kind → HalSensor` for every recognized sensor, built once at `spawn`.
-fn sensors() -> &'static HashMap<SensorKind, HalSensor> {
-    static MAP: OnceLock<HashMap<SensorKind, HalSensor>> = OnceLock::new();
+/// `kind → SensorDesc` for every recognized sensor, built once at `spawn`.
+fn sensors() -> &'static HashMap<SensorKind, SensorDesc> {
+    static MAP: OnceLock<HashMap<SensorKind, SensorDesc>> = OnceLock::new();
     MAP.get_or_init(|| {
         let mut m = HashMap::new();
-        for s in wandr_hal_sensors::enumerate() {
+        for s in wandr_sensors_client::enumerate() {
             if let Some(kind) = aidl_type_to_kind(s.aidl_type) {
                 // First sensor of each kind wins (devices rarely report duplicates).
                 m.entry(kind).or_insert(s);
@@ -110,12 +110,12 @@ fn apply_set_sensor(kind: SensorKind, on: bool, rate_hz: u32) {
         return;
     };
     if on {
-        if wandr_hal_sensors::enable(sensor.handle, rate_hz) {
+        if wandr_sensors_client::enable(sensor.handle, rate_hz) {
             ENABLED.fetch_add(1, Ordering::Relaxed);
             log::info!("sensor_driver: enabled {} (handle {})", kind.as_wire(), sensor.handle);
         }
     } else {
-        wandr_hal_sensors::disable(sensor.handle);
+        wandr_sensors_client::disable(sensor.handle);
         // Saturating decrement (never below 0 if a disable arrives unmatched).
         let _ = ENABLED.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| Some(n.saturating_sub(1)));
         log::info!("sensor_driver: disabled {} (handle {})", kind.as_wire(), sensor.handle);
@@ -184,8 +184,8 @@ pub fn spawn() {
             // healthy). If wandr-sensormanager/sensorservice restarted, this recreates
             // the event queue and replays our always-on enables (orientation, etc.),
             // so sensors recover without a full stack re-bringup.
-            wandr_hal_sensors::ensure_connected();
-            let samples = wandr_hal_sensors::drain_samples();
+            wandr_sensors_client::ensure_connected();
+            let samples = wandr_sensors_client::drain_samples();
             if samples.is_empty() {
                 continue;
             }

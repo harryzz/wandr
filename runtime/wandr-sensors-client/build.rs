@@ -1,4 +1,4 @@
-// wandr-hal-sensors build.rs — codegen the `ISensorManager` AIDL closure (task 77).
+// wandr-sensors-client build.rs — codegen the `ISensorManager` AIDL closure (task 77).
 //
 // The sensors-only subset of wandr-host/build.rs's recipe. Reuses the AIDL
 // vendored under wandr-host/vendor (one vendored copy; referenced by relative
@@ -36,7 +36,7 @@ fn main() {
     let direct_channel_path =
         sensorsvc_aidl.join("android/frameworks/sensorservice/IDirectReportChannel.aidl");
     let direct_channel_stub = b"\
-// Auto-patched by wandr-hal-sensors/build.rs because the real definition
+// Auto-patched by wandr-sensors-client/build.rs because the real definition
 // references android.hardware.sensors.ISensors.RateLevel which rsbinder-aidl
 // doesn't resolve. We don't use direct channels.
 package android.frameworks.sensorservice;

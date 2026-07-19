@@ -1,15 +1,20 @@
-//! wandr-hal-sensors — shared sensor HAL access (task 77).
+//! wandr-sensors-client — shared `sensorservice` client (task 77).
 //!
-//! Wraps `android.frameworks.sensorservice.ISensorManager` (the frameworks-layer
-//! wrapper present on every Android 11+ device, bridging to the vendor sensors
-//! HAL) over rsbinder. The single owner of the binder mechanism for sensors,
-//! used by both wandr-host (guest-facing `sensors` WIT) and the arbiter's
-//! sensor-driver thread. Exposes **neutral** structs ([`HalSensor`],
-//! [`HalSample`]) — each consumer maps them to its own vocabulary (WIT `Kind`,
-//! arbiter `SensorKind`).
+//! A CLIENT of `android.frameworks.sensorservice.ISensorManager` (the
+//! frameworks-layer service present on every Android 11+ device) over rsbinder —
+//! NOT a HAL client. `sensorservice` owns the single-client vendor sensors HAL
+//! (`android.hardware.sensors@1.0::ISensors`) and multiplexes it, which is why
+//! several wandr processes can read sensors concurrently; opening the HAL
+//! directly is what caused the task-94 `DEAD_OBJECT` conflict.
+//!
+//! Shared by the two independent consumers: wandr-host (guest-facing `sensors`
+//! WIT — per-app + ephemeral) and the arbiter's sensor-driver thread (the
+//! persistent system coordinator; see task 77 on why it needs its own access).
+//! Exposes **neutral** structs ([`SensorDesc`], [`SensorEvent`]) — each consumer
+//! maps them to its own vocabulary (WIT `Kind`, arbiter `SensorKind`).
 //!
 //! Mechanism (lifted from the original `wandr-host/src/sensors_impl.rs`): a `Bn`
-//! event-queue callback (`BnEventQueueCallback`) lets the HAL deliver `Event`
+//! event-queue callback (`BnEventQueueCallback`) lets the service deliver `Event`
 //! records into our process; the latest sample per sensor handle is accumulated
 //! in a map and drained on demand. Off-android every entry point is a no-op stub
 //! so callers need no `cfg` gates.
@@ -19,7 +24,7 @@
 /// proximity, 1 = accelerometer, 5 = light) so device-private sensors stay
 /// visible.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct HalSensor {
+pub struct SensorDesc {
     pub handle: u32,
     pub aidl_type: i32,
     /// Saturation value (proximity: the "far" distance; the threshold source).
@@ -35,7 +40,7 @@ pub struct HalSensor {
 /// One sensor reading (the payload's x/y/z scalars + the HAL timestamp). A
 /// `ts_ns == 0` sentinel means "no sample" where it can occur.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct HalSample {
+pub struct SensorEvent {
     pub handle: u32,
     pub ts_ns: u64,
     pub x: f32,
@@ -51,7 +56,7 @@ mod binder_aidl {
 
 #[cfg(target_os = "android")]
 mod binder_path {
-    use super::{HalSample, HalSensor};
+    use super::{SensorEvent, SensorDesc};
     use super::binder_aidl::android::{
         frameworks::sensorservice::{
             IEventQueue::IEventQueue,
@@ -71,7 +76,7 @@ mod binder_path {
     /// Extract x/y/z scalar values from the event's payload union. Only vec3 and
     /// scalar variants are interpreted (everything else returns zeros; the
     /// timestamp still marks the sensor alive).
-    fn extract_sample(event: &Event) -> HalSample {
+    fn extract_sample(event: &Event) -> SensorEvent {
         let (x, y, z) = match &event.r#payload {
             EventPayload::EventPayload::Vec3(v) => (v.r#x, v.r#y, v.r#z),
             EventPayload::EventPayload::Vec4(v) => (v.r#x, v.r#y, v.r#z), // drop w
@@ -79,7 +84,7 @@ mod binder_path {
             EventPayload::EventPayload::Uncal(u) => (u.r#x, u.r#y, u.r#z),
             _ => (0.0, 0.0, 0.0),
         };
-        HalSample {
+        SensorEvent {
             handle: event.r#sensorHandle as u32,
             ts_ns: event.r#timestamp as u64,
             x,
@@ -88,7 +93,7 @@ mod binder_path {
         }
     }
 
-    type SampleMap = Arc<Mutex<HashMap<i32, HalSample>>>;
+    type SampleMap = Arc<Mutex<HashMap<i32, SensorEvent>>>;
 
     struct EventCollector {
         latest: SampleMap,
@@ -131,7 +136,7 @@ mod binder_path {
         static INIT: OnceLock<()> = OnceLock::new();
         INIT.get_or_init(|| {
             if !std::path::Path::new("/dev/binder").exists() {
-                log::warn!("wandr-hal-sensors: /dev/binder absent — sensors unavailable");
+                log::warn!("wandr-sensors-client: /dev/binder absent — sensors unavailable");
                 return;
             }
             // Ok → we performed the init, so we own starting the thread pool.
@@ -161,7 +166,7 @@ mod binder_path {
             if svc.as_binder().ping_binder().is_ok() {
                 return Some(svc.clone());
             }
-            log::warn!("wandr-hal-sensors: ISensorManager handle dead (wandr-sensormanager \
+            log::warn!("wandr-sensors-client: ISensorManager handle dead (wandr-sensormanager \
                         restarted?) — re-resolving");
             *guard = None;
         }
@@ -212,7 +217,7 @@ mod binder_path {
         // hung fd from the shared looper → stops the spin).
         if let Some(q) = guard.as_ref() {
             if q.as_binder().ping_binder().is_err() {
-                log::warn!("wandr-hal-sensors: event queue dead — recreating + replaying enables");
+                log::warn!("wandr-sensors-client: event queue dead — recreating + replaying enables");
                 *guard = None;
             }
         }
@@ -228,23 +233,23 @@ mod binder_path {
                     let enabled = enabled_sensors().lock().map(|m| m.clone()).unwrap_or_default();
                     for (handle, rate_hz) in &enabled {
                         if let Err(e) = q.r#enableSensor(*handle as i32, period_us(*rate_hz), 0_i64) {
-                            log::warn!("wandr-hal-sensors: replay enable({handle}) failed: {e:?}");
+                            log::warn!("wandr-sensors-client: replay enable({handle}) failed: {e:?}");
                         }
                     }
-                    log::info!("wandr-hal-sensors: event queue created (replayed {} enables)", enabled.len());
+                    log::info!("wandr-sensors-client: event queue created (replayed {} enables)", enabled.len());
                     *guard = Some(q);
                 }
-                Err(e) => log::warn!("wandr-hal-sensors: createEventQueue failed: {e:?}"),
+                Err(e) => log::warn!("wandr-sensors-client: createEventQueue failed: {e:?}"),
             }
         }
         guard.clone()
     }
 
-    pub fn enumerate() -> Vec<HalSensor> {
+    pub fn enumerate() -> Vec<SensorDesc> {
         let Some(svc) = service() else { return Vec::new() };
         let Ok(list) = svc.r#getSensorList() else { return Vec::new() };
         list.into_iter()
-            .map(|s: AidlSensorInfo| HalSensor {
+            .map(|s: AidlSensorInfo| SensorDesc {
                 handle: s.r#sensorHandle as u32,
                 aidl_type: s.r#type.0,
                 max_range: s.r#maxRange,
@@ -273,7 +278,7 @@ mod binder_path {
         match q.r#enableSensor(handle as i32, period_us(rate_hz), 0_i64) {
             Ok(_) => true,
             Err(e) => {
-                log::warn!("wandr-hal-sensors: enableSensor({handle}, {rate_hz}Hz) err={e:?}");
+                log::warn!("wandr-sensors-client: enableSensor({handle}, {rate_hz}Hz) err={e:?}");
                 false
             }
         }
@@ -296,7 +301,7 @@ mod binder_path {
     }
 
     /// Remove + return the latest sample for `handle`, if a fresh one arrived.
-    pub fn poll_latest(handle: u32) -> Option<HalSample> {
+    pub fn poll_latest(handle: u32) -> Option<SensorEvent> {
         if let Ok(mut map) = sample_map().lock() {
             return map.remove(&(handle as i32));
         }
@@ -305,7 +310,7 @@ mod binder_path {
 
     /// Remove + return every fresh sample accumulated since the last drain (used
     /// by the arbiter driver to fan all enabled sensors in one poll).
-    pub fn drain_samples() -> Vec<HalSample> {
+    pub fn drain_samples() -> Vec<SensorEvent> {
         if let Ok(mut map) = sample_map().lock() {
             return map.drain().map(|(_, s)| s).collect();
         }
@@ -317,7 +322,7 @@ mod binder_path {
 
 /// Enumerate every sensor the HAL reports (descriptor only). Empty off-android
 /// or if the service is unavailable.
-pub fn enumerate() -> Vec<HalSensor> {
+pub fn enumerate() -> Vec<SensorDesc> {
     #[cfg(target_os = "android")]
     {
         binder_path::enumerate()
@@ -382,7 +387,7 @@ pub fn ensure_connected() {
 
 /// Poll the latest sample for `handle`, or `None` if no fresh event arrived
 /// since the last poll (or off-android). Callers keep their last known value.
-pub fn poll_latest(handle: u32) -> Option<HalSample> {
+pub fn poll_latest(handle: u32) -> Option<SensorEvent> {
     #[cfg(target_os = "android")]
     {
         binder_path::poll_latest(handle)
@@ -395,7 +400,7 @@ pub fn poll_latest(handle: u32) -> Option<HalSample> {
 }
 
 /// Drain every fresh sample across all enabled sensors since the last call.
-pub fn drain_samples() -> Vec<HalSample> {
+pub fn drain_samples() -> Vec<SensorEvent> {
     #[cfg(target_os = "android")]
     {
         binder_path::drain_samples()

@@ -8,7 +8,7 @@ edition = "2021"
 # battery contract), raw→semantic translation with descriptor-derived hysteresis
 # (e.g. proximity near/far), and the last-reading Store cache. The HAL mechanism
 # (rsbinder ISensorManager) lives in the binary's sensor-driver thread + the
-# shared `wandr-hal-sensors` crate; this module never touches binder — it emits
+# shared `wandr-sensors-client` crate; this module never touches binder — it emits
 # `Effect::SetSensor` and reacts to `Event::SensorReading`. Wired in with one line.
 
 [dependencies]

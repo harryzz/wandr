@@ -28,7 +28,7 @@ mod binder_path {
     use std::sync::OnceLock;
 
     /// Ensure rsbinder's `ProcessState` + thread pool are up before any binder
-    /// call (same as wandr-hal-sensors — idempotent per process).
+    /// call (same as wandr-sensors-client — idempotent per process).
     fn ensure_process_state() {
         static INIT: OnceLock<()> = OnceLock::new();
         INIT.get_or_init(|| {

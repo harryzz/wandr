@@ -5,7 +5,7 @@ edition = "2021"
 
 # wandr-hal-display — shared SurfaceFlinger display-power access (task 78). The one
 # binder owner of the `android.gui.ISurfaceComposer` `setPowerMode` path (the
-# proper panel-off), used by the arbiter's power applier. Mirrors wandr-hal-sensors:
+# proper panel-off), used by the arbiter's power applier. Mirrors wandr-sensors-client:
 # standalone package, AIDL codegen in build.rs (android only), off-android stubs.
 #
 # build.rs codegens the FULL ISurfaceComposer (un-trimmed) from the vendored

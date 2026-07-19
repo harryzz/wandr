@@ -1,9 +1,9 @@
 [package]
-name    = "wandr-hal-sensors"
+name    = "wandr-sensors-client"
 version = "0.0.1"
 edition = "2021"
 
-# wandr-hal-sensors — shared sensor HAL access (task 77). The ONE binder-touching
+# wandr-sensors-client — shared `sensorservice` (ISensorManager) client, task 77. The ONE binder-touching
 # crate for the `android.frameworks.sensorservice.ISensorManager` path
 # (enumerate / enable / disable / poll), used by BOTH the wandr-host guest-facing
 # sensors WIT impl and the arbiter's sensor-driver thread. Exposes neutral
