@@ -40,6 +40,17 @@ per-platform crates exist, so this is wiring, not writing codecs:
 Rejected: **oxideav** (MIT) claims all backends but has **27 downloads** — an experiment,
 not a dependency. **avio** (582 dl) *wraps FFmpeg*, so it changes nothing about licensing.
 
+**video-rs** (MIT/Apache, **301K downloads**, maintained since 2022) deserves a specific
+note because it looks like the answer and is not:
+- It is a high-level API *over* `ffmpeg-next` (pins `=8.0.0`) — so it inherits every
+  licensing and distribution problem above unchanged. Ergonomics, not independence.
+- HW **decode** only: `Cuda, D3D11Va, Drm, Dxva2, MediaCodec, OpenCL, Qsv, Vdpau,
+  VideoToolbox` (`src/hwaccel.rs`). `encode.rs` has **zero** hwaccel references, and
+  **VAAPI is absent** — the mainstream Linux path for VP8/VP9 on Intel/AMD.
+- Signal calls need HW *encode* (camera → VP8 → peer), which is exactly the gap.
+Worth revisiting if HW-accelerated *playback* is ever wanted: it beats hand-rolling
+`ffmpeg-next` decode paths, and its binding licence is friendlier than ffmpeg-next's WTFPL.
+
 Also permissive if a software fallback is wanted: libvpx (BSD-3, VP8/VP9), libyuv (BSD-3,
 replaces swscale), dav1d (BSD-2) / SVT-AV1 / rav1e (AV1). None give HW accel.
 
