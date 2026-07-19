@@ -1,0 +1,41 @@
+wandr — a portable WASM UI runtime
+Copyright 2025-2026 Zahari Zahariev
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+this file except in compliance with the License. You may obtain a copy of the
+License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed
+under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+
+--------------------------------------------------------------------------------
+
+This product includes software developed by
+The Android Open Source Project (https://source.android.com/),
+licensed under the Apache License, Version 2.0.
+
+Parts of the native runtime are derived from AOSP sources and interface
+definitions — the libgui/SurfaceFlinger C++ shims, the binder/AIDL bindings, and
+the vendored `.aidl` interfaces they are generated from. The AOSP trees
+themselves are consumed as submodules and retain their own copyright headers.
+
+--------------------------------------------------------------------------------
+
+Third-party components used by this project keep their own licenses, including:
+
+  wasmtime            Apache-2.0 WITH LLVM-exception
+  skia / skia-safe    BSD-3-Clause / MIT
+  winit, cpal, nokhwa Apache-2.0
+  image               MIT OR Apache-2.0
+  rsbinder            Apache-2.0
+  libvpx              BSD-3-Clause
+
+The desktop build links FFmpeg. FFmpeg is licensed LGPL-2.1-or-later, but a
+distribution built with `--enable-gpl` (as most Linux distributions ship it) is
+GPL. Anyone redistributing binaries of this project should link an
+LGPL-configured FFmpeg (`--disable-gpl --disable-nonfree`) and comply with the
+LGPL, or omit the video backend.
