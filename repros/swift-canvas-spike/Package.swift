@@ -91,6 +91,33 @@ let package = Package(
                 ], .when(platforms: [.wasi])),
             ]
         ),
+        // [wandr portability test] andreiui/swift-calculator — 9 pure-SwiftUI view files dropped in
+        // UNMODIFIED; the ONLY added file is CalcApp.swift (@main, replacing the original's UIKit
+        // AppDelegate/SceneDelegate). Same shim + reactor wiring as T2iles. Purpose: measure how much
+        // real-world SwiftUI compiles on OpenSwiftUI-on-wandr with zero view edits.
+        .executableTarget(
+            name: "SwiftCalc",
+            dependencies: [
+                .product(name: "SwiftUI", package: "apple-compat"),
+                .product(name: "Combine", package: "apple-compat"),
+                .product(name: "OpenCoreGraphicsWASICanvas", package: "OpenCoreGraphics"),
+                .product(name: "WandrRuntime", package: "wandr-runtime"),
+                .product(name: "WandrReactorExports", package: "wandr-runtime"),
+                .product(name: "OpenSwiftUI", package: "OpenSwiftUI"),
+            ],
+            swiftSettings: [.swiftLanguageMode(.v5)],
+            linkerSettings: [
+                .linkedLibrary("wasi-emulated-signal", .when(platforms: [.wasi])),
+                .linkedLibrary("wasi-emulated-mman", .when(platforms: [.wasi])),
+                .linkedLibrary("wasi-emulated-process-clocks", .when(platforms: [.wasi])),
+                .unsafeFlags([
+                    "-Xclang-linker", "-mexec-model=reactor",
+                    "-Xlinker", "/home/harry/wandr/swift/OpenSwiftUIProject/CWandrExports/generated/cwandr_exports_component_type.o",
+                    "-Xlinker", "/home/harry/wandr/swift/OpenSwiftUIProject/CWASICanvas/generated/cwasi_canvas_component_type.o",
+                    "-Xlinker", "/home/harry/wandr/swift/OpenSwiftUIProject/CWasiAudio/generated/cwasi_audio_component_type.o",
+                ], .when(platforms: [.wasi])),
+            ]
+        ),
         // wit-bindgen-c generated surface for THIS app's own exports + audio/metrics imports.
         // wasi:canvas bindings come from the CWASICanvas package instead (NEXT-SESSION-TASKS.md #1).
         .target(name: "CSwiftSpike"),
