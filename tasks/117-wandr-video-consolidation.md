@@ -477,6 +477,39 @@ Real content is H.264/HEVC/AV1, so playback forces what M1 deferred:
 FFmpeg audit table above under "easily forgotten" and will otherwise present as "HW decode
 silently outputs nothing".
 
+## Step 1 result (2026-07-20) — contract added, and one thing it CANNOT prove
+
+The playback shape is implemented in `wandr-video` and green on desktop/VP9:
+`Chunk{data, timestamp_us: i64}` in, `I420Ref.timestamp_us` out, plus `flush()`
+and `reset()`. PTS rides through libvpx in `user_priv` (the exact mechanism —
+libvpx guarantees PTS-order output and a packet may yield zero frames, so an
+external FIFO would silently desync). `tests/playback.rs` covers PTS survival,
+seek, EOS, awkward/large PTS values, and pacing against an external clock.
+
+‼️ **`flush()` and `reset()` are NOT proven by step 1, and cannot be.** Each was
+verified by injecting a no-op implementation: every test still passed. That is
+not a test defect — on libvpx VP8/VP9 both verbs genuinely have nothing to do:
+
+- a keyframe resets all references by definition, so once the caller honours
+  "feed a keyframe after reset" there is no observable difference. (Probing with
+  a delta frame instead does not work either — measured: libvpx rejects an
+  out-of-order delta with `BadFrame` whether or not reset ran.)
+- with `g_lag_in_frames = 0` and realtime CBR, VP9 emits no alt-ref/hidden
+  frames, so the decoder never holds a tail for `flush` to drain.
+
+Both verbs earn their place on backends that queue work asynchronously, where
+they map to a real discard — `AMediaCodec_flush` drops in-flight buffers, and a
+HW decoder with B-frames genuinely holds a tail. **So the matrix below must
+validate flush/reset on MediaCodec (step 2+), and the desktop row cannot stand in
+for it.** The tests carry this limitation in their doc comments so the next
+person does not read green as proof.
+
+What step 1 DID prove, and it is the load-bearing part: presentation timestamps
+survive the codec unchanged and correctly paired, seek-by-reset resumes at the
+right frame with the right PTS, and frames can be paced against an external clock
+within one 60 Hz tick — i.e. **A/V sync is expressible**, which is exactly what
+the call-shaped decoder made impossible.
+
 ## Done when — the proving matrix
 
 One player on one backend proves nothing portable. Both axes must be green, which is the
