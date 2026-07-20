@@ -130,9 +130,42 @@ backend.** That is what FFmpeg was doing for us, minus the licence and the `.so`
 3. Add HW backends per platform (task 117's research), keeping libvpx as the fallback.
 4. H.264/AV1 only when an app needs them.
 
+## What else FFmpeg gives us (the "did we miss something" check)
+
+Codecs are the small part of FFmpeg. Everything else it provides, and what covers it:
+
+**A/V sync — FFmpeg does NOT do this.** A common misconception worth stating plainly:
+`libavformat` hands you PTS/DTS plus a time base; the *application* (ffplay, mpv, VLC)
+implements the clock, the drift correction and the frame dropping. So sync is player code
+we would write either way — dropping FFmpeg loses nothing here.
+
+| FFmpeg piece | Needed for calls? | Needed for playback? | Permissive replacement |
+|---|---|---|---|
+| Demuxers (MP4/MKV/WebM) | ❌ RTP, guest packetizes | ✅ | `symphonia` (MPL-2.0, 8.6M dl), `mp4` (MIT, 11.4M), `matroska` (MIT), `mp4parse` (MPL-2.0, Firefox's) |
+| Audio decode (AAC/MP3/FLAC/Vorbis) | ❌ Opus lives in the guest's WebRTC stack | ✅ | `symphonia`; Opus via `audiopus` (ISC) |
+| Resample (`libswresample`) | ❌ | ✅ | `rubato` (MIT/Apache, 8M dl) |
+| Scale / YUV↔RGB (`libswscale`) | ✅ | ✅ | `libyuv` (BSD-3) or a Rust YUV crate |
+| Subtitles | ❌ | ✅ | `subparse` (MPL-2.0) for srt/ass; rendering via **libass — ISC**, `libass-sys` |
+| HLS / DASH | ❌ | ⚪ if streaming | `hls_m3u8` (MIT/Apache), `dash-mpd` (MIT) |
+| HTTP(S) protocol | ❌ | ✅ | already have reqwest/hyper in-tree |
+| Seeking / probing / metadata | ❌ | ✅ | comes with the demuxers above |
+| **Bitstream filters** (`h264_mp4toannexb`) | ❌ | ⚠️ **easily forgotten** — required to feed a HW decoder from MP4 (length-prefixed → Annex-B). No crate; ~100 lines to write |
+| Filters (`libavfilter`: crop/deinterlace/overlay) | ❌ | ❌ not for basic playback | — |
+| RTSP / RTMP | ❌ | ⚪ only for IP-camera/live-ingest | separate crates; out of scope |
+
+**Conclusion for calls: nothing is missing.** No containers, no subtitles, no resampling —
+RTP carries raw frames, the guest packetizes, and sync is WebRTC's job. FFmpeg's entire
+extra surface is unused today.
+
+**Conclusion for playback:** the pieces all exist permissively, but it is assembling ~6
+crates instead of using one. The genuine gaps are (a) bitstream filters, small but
+essential for HW decode from MP4, and (b) FFmpeg's long-tail robustness against malformed
+or unusual files, which is real and hard to reproduce.
+
 ### Explicitly NOT doing
 
 - Containers/muxing (FFmpeg's `libavformat`). WebRTC carries raw frames over RTP; the
-  guest already packetizes. Add `muxide`/`symphonia` only if file playback lands.
+  guest already packetizes. See the table above for what playback would need — but build
+  none of it until an app actually asks for playback.
 - Filters, scaling beyond YUV↔RGB (use `libyuv` or a Rust YUV crate).
 - Audio — `symphonia` (MPL-2.0) covers that if ever needed; wandr uses `wasi:audio`/cpal.
