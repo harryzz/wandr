@@ -53,15 +53,40 @@ h264, h265 }`) and its device notes.
 
 ### Streaming media playback (a video player app)
 
-| Codec | Encode | Decode | Why |
-|---|---|---|---|
-| H.264 | ❌ | ✅ required | still the dominant format |
-| H.265 | ❌ | ⚪ desirable | 4K / newer content; patents matter for *distribution* |
-| VP9 | ❌ | ✅ required | WebM / YouTube |
-| AV1 | ❌ | ⚪ growing | `dav1d`/`rav1d` |
+**Decode only — no encoder at all.** Preference order is pure Rust → permissive C
+(static) → LGPL → HW-only.
 
-**Playback needs decode only** — no encoder at all. Note this use case does not exist in
-wandr today; do not build for it until an app needs it.
+| Codec | HW decode | Software fallback | Licence | Maturity |
+|---|---|---|---|---|
+| **H.264** | ✅ every platform | `openh264` (Cisco) — verify the Rust binding exposes decode, it is encode-focused; else `rust_h264` | BSD-2 / MIT+Apache | openh264 mature (546K dl); rust_h264 v0.4, first published **2026-04** |
+| **H.265** | ✅ every modern GPU/SoC | ⚠️ **GAP** — `rust_h265` (Main/Main10) or `libde265` (**LGPL**, which is what we are trying to escape) | MIT+Apache / LGPL | rust_h265 v0.1, 10K dl, **2026-04** — too young to rely on |
+| **VP9** | ✅ | **libvpx** | BSD-3 | mature |
+| **AV1** | ⚪ newer GPUs only | **dav1d** (C, static) or `rav1d` (pure Rust) | BSD-2 | dav1d mature; rav1d 20K dl, young |
+
+**The H.265 software gap is real** and there is no mature permissive option — every
+alternative is either months old or LGPL. Mitigations, in order:
+1. **Lean on HW.** Every GPU/SoC since ~2015 decodes HEVC; for *playback* HW is the right
+   path anyway (power, 4K). A software HEVC fallback is only needed on machines without HW
+   support, which are rare.
+2. Ship without software HEVC and report `no-hw-codec` (the WIT error already exists).
+3. Revisit `rust_h265` once it has a track record — pure Rust would be ideal here.
+
+### Patents — a separate axis from the code licence
+
+Worth deciding before distributing binaries, because a permissive *code* licence does not
+grant *patent* rights:
+
+| Codec | Patent status |
+|---|---|
+| **VP8 / VP9 / AV1** | royalty-free by design (AOMedia / Google) — no exposure |
+| **H.264** | MPEG-LA pool. Cisco's OpenH264 royalty coverage applies **only to Cisco's prebuilt binary**, NOT to source you compile yourself — the reason Firefox downloads that binary at runtime |
+| **H.265** | most encumbered: multiple pools (MPEG-LA, HEVC Advance, Velos) |
+
+This is a strong argument for **HW decode** on H.264/H.265: the codec then lives in the
+user's OS/driver, already licensed by the hardware vendor, rather than in our binary.
+
+Note the use case does not exist in wandr today — no app needs playback. Do not build it
+until one does.
 
 ### Screen recording / casting (hypothetical)
 
