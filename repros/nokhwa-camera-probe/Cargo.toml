@@ -14,8 +14,7 @@ nokhwa = { version = "0.10", features = ["input-native"] }
 image  = "0.25"
 # Task 117: was ffmpeg-next 7.1 (which had already drifted from the host's 8.1).
 # Now uses the SAME crate the host does, so this probe can no longer test a
-# different implementation than the one that ships. Build the static lib first:
-#   runtime/wandr-host/scripts/build-libvpx.sh
-# then export VPX_LIB_DIR / VPX_INCLUDE_DIR / VPX_VERSION / VPX_STATIC — or just
-# source runtime/wandr-host/scripts/libvpx-env.sh.
+# different implementation than the one that ships. No setup needed: wandr-vpx-sys
+# compiles the vendored libvpx on first build (`nasm` on PATH is its only
+# prerequisite). Just `cargo run --release`.
 wandr-video = { path = "../../runtime/wandr-host/crates/wandr-video", features = ["libvpx"] }
