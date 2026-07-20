@@ -510,6 +510,28 @@ right frame with the right PTS, and frames can be paced against an external cloc
 within one 60 Hz tick — i.e. **A/V sync is expressible**, which is exactly what
 the call-shaped decoder made impossible.
 
+### Step 1b result (2026-07-20) — desktop cell GREEN
+
+`--video-playback-test` drives the playback path end-to-end headlessly: encodes a
+synthetic VP9 clip, decodes ahead into a cushion, and presents each frame when an
+independent clock reaches its PTS.
+
+    150/150 presented, 0 dropped | drift avg 1.2 ms / max 8.9 ms
+    (frame interval 33 ms) | wall 4.97 s vs media 5.00 s | order OK
+
+Teeth-checked: with the PTS dropped it fails on four independent signals at once
+(38/150 presented, 112 dropped, wall 0.41 s vs media 5.00 s, order BROKEN).
+
+The desktop decoder now carries `submit_for_playback` / `present_due` /
+`finish_playback` / `seek_reset`. Frame-drop policy (present the newest due
+frame, count the rest dropped) lives on the host adapter, NOT in the codec —
+different players want different policy, which is why sync is guest-side.
+
+Desktop holds a queue of RGBA because frames return to the CPU. **Android will
+not**: `AMediaCodec_releaseOutputBufferAtTime` hands the PTS straight to the HW
+compositor and the pixels never leave the GPU. The desktop queue is the stand-in
+for that primitive, and step 2 should use the native one rather than porting this.
+
 ## Done when — the proving matrix
 
 One player on one backend proves nothing portable. Both axes must be green, which is the
