@@ -1,12 +1,15 @@
 # Task 117 — `wandr-video`: consolidate video, drop the FFmpeg dependency
 
-> Status: ✅ **DONE 2026-07-20** — FFmpeg is out; VP8/VP9 is statically-linked libvpx
+> **M1 — drop FFmpeg: ✅ DONE 2026-07-20.** VP8/VP9 is statically-linked libvpx
 > (BSD-3) via the new `wandr-video` + `wandr-vpx-sys` crates. All four CI legs green;
 > a Signal desktop **video call works on Windows** (user-verified). Merges the former
 > task 119 (retired; this file is canonical). Unblocks task 118 by removing the
 > LGPL + soname problem at its root rather than packaging around it.
 >
-> **What shipped** (see "Outcome" at the end for the deltas from this proposal):
+> **M2 — media playback: 🔲 NEXT.** The codec lane is done but the decoder is still
+> RTP-shaped, so it cannot play a *file*. See **"M2 — media playback"** below.
+>
+> **What shipped in M1** (see "Outcome (M1)" for the deltas from this proposal):
 > `runtime/wandr-host/crates/wandr-video` (desktop-only codec dispatch) +
 > `crates/wandr-vpx-sys` (own Apache-2.0 bindings; builds `vendor/libvpx` v1.16.0
 > from source). `video_desktop.rs` is now a thin adapter; `video.rs` and the whole
@@ -220,12 +223,12 @@ Everything needed is in-tree; this task is self-contained.
 2. `repros/nokhwa-camera-probe` — the standalone camera→VP8→decode reproducer.
 3. A real Signal desktop video call — the acceptance test.
 
-**Done when:** `ffmpeg-next` is out of `Cargo.toml`, a Signal desktop call works, and a
-plain `cargo build` needs no system media library. — ✅ all three met.
+**Done when (M1):** `ffmpeg-next` is out of `Cargo.toml`, a Signal desktop call works,
+and a plain `cargo build` needs no system media library. — ✅ all three met.
 
 ---
 
-## Outcome (2026-07-20) — where the implementation DIVERGED from this proposal
+## Outcome (M1, 2026-07-20) — where the implementation DIVERGED from this proposal
 
 Read this before trusting the design sketch above; four things changed.
 
@@ -274,3 +277,156 @@ An earlier guessed threshold of 20 passed both bugs.
 
 Not covered: HW backends (VAAPI/VideoToolbox/MediaFoundation) — still the sequencing
 step 3 above, with libvpx as the fallback. H.264/AV1 remain unbuilt until an app asks.
+**M2 below is that ask.**
+
+---
+
+# M2 — media playback (🔲 NEXT)
+
+> Scoped 2026-07-20. Order is deliberate: **make the host able to play media, prove it
+> end-to-end with real apps, then propose upstream** — the `wasi:canvas` path (it earned
+> its shape carrying Compose, Slint, dioxus, Avalonia and OpenSwiftUI before it was ever
+> a proposal document). We are NOT building host capability because a Jellyfin client
+> needs it; a Jellyfin client is how we prove the host capability is right.
+
+## The gap: the decoder is RTP-shaped, so it cannot play a file
+
+M1 finished the *codec* lane. What is missing is the *playback* shape. Today
+`wandr:video`'s decoder takes only `{data, timestamp: u32 (90 kHz RTP), keyframe}`:
+
+- **No PTS.** That `u32` is a transport clock that wraps every ~13.25 h, not a
+  presentation time.
+- **No present feedback.** The only observability is `ready() -> bool` and
+  `decoded-frames() -> u64` (a diagnostic counter). The guest cannot learn what is on
+  screen, so **it cannot slave video to `wasi:audio playback.position()`** — the only
+  real media clock in the system. A/V sync is therefore impossible today.
+- **No flush/reset**, so a seek means dropping and reopening the decoder.
+- **No EOS, pause, or rate control.**
+- `queue-full` is documented as *"frame dropped, resend after a keyframe"* — lossy by
+  design. Correct for RTP, wrong for a file.
+
+Concrete evidence this is real rather than theoretical: **`wasi:media-session` (shipped,
+wired both directions — `media_session_host_impl.rs`) already delivers a `seek-to`
+transport intent that the video decoder has no verb to honor.** The transport vocabulary
+arrived before the decoder could implement it.
+
+## What already exists (do NOT rebuild)
+
+| Need | Status |
+|---|---|
+| PCM out + media clock (`position()`) | ✅ shipped, device-verified (`wasi:audio`) |
+| Guest-side audio decode | ✅ shipped — Symphonia in `wandr.audio.player` (FLAC/MP3/AAC/WAV/OGG/MP4) |
+| Now-playing + transport intents | ✅ **shipped and wired** (`wasi:media-session`) |
+| Demux / containers / HLS / DASH / ABR | ✅ deliberately **guest-side** — see `proposals/wasi-media-source/NOTES.md`; no host contract needed |
+| HTTPS + range requests | ✅ works (`wandr-reqwest`; arbitrary headers pass through) |
+| Frame callback + on-demand pacing | ✅ `on-frame(nanos)`, `next-frame-delay` |
+| DRM | 🔲 `wasi:eme` sketch, ClearKey-only |
+| HW audio decode offload | 🔲 `wasi:audio-codec` sketch — optional, Symphonia already suffices |
+
+Two stale doc claims found while scoping: `wasi:media-session`'s header says `NOT WIRED`
+(it *is* wired — host impl + `.ok()`-probed guest export), and task 108 M2 is unmarked in
+`STATUS.md`. Fix both.
+
+`proposals/wasi-media-source/NOTES.md` item 3 already anticipated this milestone:
+*"a real A/V MSE player would exercise it and may surface a need for a true presentation
+timestamp."* It does. That is M2.
+
+## The delta — extend `wandr:video` first
+
+`wasi:audio-codec` is the in-tree precedent and already has the right shape (it calls
+itself "the audio sibling of the in-tree `wasi:video-decoder`"): `timestamp-us: s64`
+(WebCodecs unit), a real `flush()`, `probe()` = `isConfigSupported`, and the
+TRANSCODE-vs-TUNNEL duality. Video kept the call shape because it was factored out of
+the call contract. Bring them into symmetry.
+
+**W3C has two models and neither fits alone.** WebCodecs `VideoDecoder` gives the app
+frames (`decode(chunk)` → `output` callback with `VideoFrame{timestamp}`, plus `flush()`,
+`reset()`, `decodeQueueSize`) and the **app presents** — but that means pixels crossing
+the boundary, which kills decode-to-surface. `HTMLMediaElement` (`<video>`) keeps pixels
+host-side but the **UA owns the clock** (`currentTime`, `playbackRate`) — one sync policy
+for every player. wandr is `<video>`-shaped with *no* clock: currently the worst of both.
+
+The resolution is what the hardware already does — **Android
+`MediaCodec.releaseOutputBuffer(index, renderTimestampNs)`**, Apple
+`AVSampleBufferDisplayLayer` (enqueue `CMSampleBuffer` with a presentation time), and the
+Media Foundation / VAAPI equivalents: **the app schedules presentation of an opaque
+buffer by timestamp, without ever seeing pixels.** WebCodecs' control flow, `<video>`'s
+zero-copy.
+
+```wit
+/// Opaque — pixels never cross the boundary.
+resource decoded-frame {
+    timestamp-us: func() -> s64;
+    /// Schedule presentation (= releaseOutputBuffer(idx, renderTimestampNs)).
+    present: func(at-ns: u64);
+    /// Late frame, or dropped by a seek.
+    discard: func();
+}
+
+submit:     func(chunk: encoded-chunk) -> result<_, codec-error>;  // timestamp-us
+next-frame: func() -> option<decoded-frame>;
+flush:      func();               // = WebCodecs flush()  — end of stream
+reset:      func();               // = WebCodecs reset()  — SEEK
+queue-size: func() -> u32;        // backpressure, replacing the lossy queue-full
+```
+
+**Sync stays guest-side** — the guest slaves `present(at-ns)` to
+`wasi:audio playback.position()`. Not because of any dependency rule, but because sync
+POLICY differs per player: live vs VOD, frame-drop vs audio-stretch, seek-accuracy vs
+latency. A host-owned clock gives every player one policy. The guest already has
+`on-frame(nanos)` + `next-frame-delay` to pace with, and the audio player already does
+anchor-based clock work guest-side.
+
+Keep the frame **opaque** (a resource handle, not a pointer or fd) — that is what leaves
+interposition/virtualization open later, and it costs nothing now.
+
+**Order:** extend the fused, shipping `wandr:video` → prove → *then* factor into
+`proposals/wasi-video-decoder` (which today is a re-factoring of the same call shape and
+does NOT close this gap) for the eventual upstream proposal.
+
+## Codecs — M1's sequencing steps 3 and 4, now triggered
+
+Real content is H.264/HEVC/AV1, so playback forces what M1 deferred:
+
+1. **H.264 decode** — HW on every platform; `openh264` (BSD-2) as the software floor.
+2. **H.265 decode** — HW everywhere since ~2015; the software gap is real and documented
+   above (`rust_h265` v0.1 / LGPL `libde265`). Mitigation stands: lean on HW, else return
+   `no-hw-codec`. Patents are an axis separate from the code licence — HW decode also puts
+   the codec in the user's already-licensed driver rather than in our binary.
+3. **HW backends** — VAAPI (`cros-codecs`) / VideoToolbox / MediaFoundation / MediaCodec,
+   with libvpx as the software fallback. `present(at-ns)` maps onto each natively.
+4. **AV1** — `dav1d` decode when something needs it.
+
+‼️ **Do not forget the bitstream filter.** Feeding a HW decoder from MP4 needs
+`h264_mp4toannexb` (length-prefixed → Annex-B). No crate exists; ~100 lines. It is in the
+FFmpeg audit table above under "easily forgotten" and will otherwise present as "HW decode
+silently outputs nothing".
+
+## Done when — the proving matrix
+
+One player on one backend proves nothing portable. Both axes must be green, which is the
+same bar `wasi:canvas` cleared with five UI frameworks:
+
+| | libvpx (desktop SW) | MediaCodec (Android HW) | VideoToolbox / MF |
+|---|---|---|---|
+| Local file (MP4/MKV) | | | |
+| Jellyfin (direct-play **and** server-transcode) | | | |
+| YouTube (adaptive / DASH) | | | |
+
+Plus, on every cell: **A/V stays in sync over a long play**, **seek is accurate and fast**
+(`reset()`, not reopen), **pause/resume**, and **EOS is clean**.
+
+Jellyfin is the richer first client — its `DeviceProfile` lets the client declare codec
+support and the server transcodes the rest, so it exercises both direct-play (real H.264/
+HEVC decode) and a fallback path we control. YouTube adds adaptive bitrate and segment
+switching.
+
+## Explicitly NOT in M2
+
+- Containers/demux/HLS/DASH host-side — guest work, per `wasi-media-source/NOTES.md`.
+- DRM beyond the existing ClearKey sketch (`wasi:eme`); Widevine needs a TEE + a
+  Google-provisioned CDM and is device-only.
+- HW audio decode (`wasi:audio-codec`) — Symphonia already carries audio; offload only if
+  M1's decode-CPU/battery numbers justify it (task 108 M4's trigger).
+- Encoding anything. Playback is decode-only.
+- Posting to WASI. Prove first.
