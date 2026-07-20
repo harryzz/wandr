@@ -134,7 +134,9 @@ See the *Guest languages & UI-framework feasibility* section of the
 | `wasi:canvas` + `wasi:input-handlers` | in use, device-verified; 0.0.2 redesign underway |
 | `wandr:*` (ui-shell / device / chrome / assets / ime) | in use |
 | `wasi:webgpu` (2nd rendering lane, guest-owns-renderer) | proposed / host-side |
-| `wandr:media` · audio player · `wasi:media-session` | designed / partial |
+| `wasi:audio` + `wasi:media-session` · audio player | shipped, device-verified (task 108) |
+| `wandr:video` — calls (VP8/VP9, libvpx) | shipped; **media playback = task 117 M2** |
+| `wasi:audio-codec` · `wasi:audio-effects` · `wasi:eme` | sketched, unwired — optional lanes |
 
 ## Demo apps — language/framework × contracts exercised
 

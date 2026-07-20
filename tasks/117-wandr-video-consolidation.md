@@ -384,6 +384,50 @@ interposition/virtualization open later, and it costs nothing now.
 `proposals/wasi-video-decoder` (which today is a re-factoring of the same call shape and
 does NOT close this gap) for the eventual upstream proposal.
 
+## Contract hygiene M2 must fix while it is in there
+
+A deep audit of the whole `wasi:audio*` / `wasi:media-*` / `wasi:video-*` /
+`wasi:eme` family (2026-07-20) turned up three things M2 touches anyway. Fix them
+here rather than leaving them to be discovered by the next consumer.
+
+1. **The "same error vocabulary" claim is FALSE.** `wasi:audio-codec` states
+   *"Same vocabulary as wasi:video-decoder so guest fallback is uniform"* — but
+   audio has `bad-data` + `sink-unavailable` while video has `bad-frame` +
+   `surface-unavailable`. A guest cannot write one match arm across both, which
+   was the entire stated goal. M2 already replaces the lossy `queue-full` with
+   `queue-size` backpressure, so it is editing this enum — converge the two.
+
+2. **Timebase sprawl: four units across five packages, no conversion authority.**
+   device frames (`wasi:audio`), microseconds (`wasi:audio-codec`), 90 kHz `u32`
+   (`wandr:video` / `wasi:video-decoder`), `f64` seconds (`wasi:media-session`).
+   M2's move to `timestamp-us: s64` on video is not just a fix for the wrapping
+   `u32` — it **collapses this to three and aligns video with its audio sibling**.
+   State that as an explicit goal so it is not undone later. Seconds stay at the
+   `media-session` edge (W3C-mandated) and frames stay at the `wasi:audio` edge
+   (device-mandated); µs becomes the one codec-lane unit.
+
+3. **`playback-rate` is an orphan.** `wasi:media-session`'s `position-state`
+   *publishes* a rate, but no package has a verb to SET or APPLY one — repo-wide
+   there is exactly one mention. M2 lists rate control, so it must either claim
+   the verb or explicitly defer it. (Note rate also implies audio resampling, so
+   it is not a video-only decision.)
+
+## Open questions inherited from `wasi-media-source` (closed 2026-07-20)
+
+That package is now formally closed — no WIT will be written. Two of its four
+"needs talks" questions were unowned and move here:
+
+- **Live / LL-HLS jitter buffering** — host primitive, or is
+  `buffered-frames` + `position()` enough for the guest to self-pace? Recorded
+  lean: guest is enough, *unproven*. The YouTube/adaptive cell of the matrix
+  below is what settles it.
+- **Container/segment edge formats** — confirm no codec needs HW-only init data
+  that cannot pass through `decoder-config.description` (fMP4/CMAF init segments,
+  HLS TS). Expected answer: no host work.
+
+(The other two are resolved: DRM → `wasi:eme` ClearKey-only; presentation
+timestamp → this milestone.)
+
 ## Codecs — M1's sequencing steps 3 and 4, now triggered
 
 Real content is H.264/HEVC/AV1, so playback forces what M1 deferred:
@@ -423,6 +467,17 @@ switching.
 
 ## Explicitly NOT in M2
 
+- **A `wandr:media` composition package.** RETIRED 2026-07-20 — see
+  `docs/wandr-media-scope.md`. It reserved A/V sync + transport, but transport
+  went to the shipped `wasi:media-session` and its sync justification (*"neither
+  side can see the other's clock from the guest"*) was dissolved by its own
+  prerequisite: `playback.position()` shipped in task 108 M1. Do not resurrect it
+  as a home for M2's verbs — that is the duplicate this audit was run to prevent.
+- **Re-opening `wasi:audio-codec` / `wasi:audio-effects`.** Their original
+  trigger was task 108 M4's battery problem, which was solved by a *different*
+  mechanism (role-based deep-buffer) after measurement showed the Pixel 2 XL has
+  no HW audio decoder and no `COMPRESS_OFFLOAD` at all. Symphonia already carries
+  audio. Reopening them needs a NEW justification.
 - Containers/demux/HLS/DASH host-side — guest work, per `wasi-media-source/NOTES.md`.
 - DRM beyond the existing ClearKey sketch (`wasi:eme`); Widevine needs a TEE + a
   Google-provisioned CDM and is device-only.
