@@ -556,6 +556,32 @@ Four HW backends is the real work in step 3; the codec libraries are the easy pa
 * **Desktop HW** — only Intel Xe/Arc, NVIDIA 30-series+, AMD RDNA2+. Most
   existing laptops will decode AV1 in software regardless.
 
+### Step 2 result (2026-07-21) — backend registry + software H.264
+
+**The registry (the decoupling seam).** Runtime codec selection modelled on
+oxideav's design: `CodecBackend` (name / kind{Hw|Sw} / priority / supports /
+open_*), a `Registry` that walks candidates by priority and falls to the next on
+`Err`, and `Preferences { no_hardware, require_hardware }`. Adding a backend — a
+HW lane, or oxideav once its fallback bug is fixed — is one new file + one line in
+`default_registry()`. The spike's lesson is the registry's **fallback contract**:
+a backend must return `Err` from `open_*` if it will not actually work, because
+the registry can only fall through on `Err`; `require_hardware` surfaces the HW
+error instead of silently degrading.
+
+**Software H.264 via openh264** (Cisco, BSD-2, built from source; desktop-only —
+Android uses MediaCodec). Decode MAE 1.64 (VP9 is 1.68), PTS preserved+monotonic,
+registry routing + the require_hardware guard all teeth-checked. openh264 encodes
+too, so the test round-trips in-process with no file or demuxer.
+
+‼️ **KNOWN LIMIT → step 2b.** openh264's decoder returns no per-frame timestamp,
+so PTS is paired by FIFO — valid ONLY without B-frames. Our encoder is
+`CameraVideoRealTime` (no B-frames) so the round-trip is sound, but a real H.264
+*file* can carry B-frames (decode order != presentation order) where the FIFO
+mispairs. The reorder buffer + feeding a real MP4 (the `h264_mp4toannexb`
+question) is **step 2b**, still to do. Also not yet done: **wiring H.264 into the
+host** (extend `video::Codec`, enable the `openh264` feature on the host dep) —
+the equivalent of step 1b for H.264.
+
 ### The steps
 
 Real content is H.264/HEVC/AV1, so playback forces what M1 deferred:
