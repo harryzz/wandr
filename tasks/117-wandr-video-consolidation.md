@@ -51,6 +51,12 @@ Researched crates.io 2026-07-20. Preference order is **pure Rust → permissive 
 VP8 — the codec Signal negotiates and the SoC HW-encodes — has **no** pure-Rust
 implementation. So "rewrite in pure Rust" is off the table.
 
+‼️ **The `oxideav` line below is OUT OF DATE — see "Correction: OxideAV
+re-evaluated" in M2.** Re-checked 2026-07-20: the org has 145 crates, the video
+decoders claim conformance-corpus byte-exact output, and the HW bridges
+(`oxideav-vaapi` et al.) are real and well-designed. Still not adopted, but for
+maturity reasons, not because it is vapourware.
+
 Also evaluated and rejected as the answer: **`video-rs`** (MIT/Apache, 301K dl, mature) is
 a high-level API *over* `ffmpeg-next` (pins `=8.0.0`), so it inherits every licensing and
 distribution problem unchanged; its hwaccel is **decode-only** (`Cuda, D3D11Va, Drm,
@@ -458,6 +464,84 @@ Two consequences for the plan below:
 Caveat: `configure`+`start` proves the component opens and the HAL is reachable
 under `--no-art`. It does NOT prove it survives a real bitstream — that is what
 step 1 of the matrix exercises.
+
+### Correction (2026-07-20): OxideAV re-evaluated — M1's dismissal was wrong
+
+M1's Finding 1 dismissed `oxideav` in one line ("27 dl, claims every backend but
+is an experiment"). Re-checked in depth; that is no longer accurate and was
+unfair even then. **Note the GitHub repo *descriptions* are stale — read the
+READMEs.** Actual claimed state (145 repos in the org, MIT, pushed daily):
+
+| Crate | Description says | README says |
+|---|---|---|
+| `oxideav-h264` | "I-slice only" | I/P/B, CAVLC+CABAC, MBAFF, PAFF, 4:2:0/4:2:2/4:4:4, **byte-exact vs a reference binary** |
+| `oxideav-h265` | "NAL/SPS/PPS parse" | end-to-end, **16/16 conformance fixtures byte-exact**, I/P/B pyramid, SAO |
+| `oxideav-av1` | "partial intra" | **16/16 independent corpus byte-identical to a third-party decoder**, KEY+P inter, 10/12-bit |
+| `oxideav-vp9` | "partial intra" | intra + inter P-frame end-to-end, pixel-accurate encoder |
+
+More interesting for us than the codecs: **the HW bridges exist and are real** —
+`oxideav-vaapi` (~130 KB of Rust: `decoder.rs` 48 KB, `sys.rs` 27 KB), plus
+`-videotoolbox`, `-nvidia`, `-vdpau`, `-vulkan-video`. The design is exactly what
+step 3 needs and is worth reading before we write ours:
+
+* **runtime `libloading`** — no compile-time `libva` dep, no `*-sys`, no headers
+  shipped; the build works on a machine with no GPU stack at all;
+* **priority registry** — HW factories register at priority 10, pure-Rust at 100+,
+  lower wins, so HW-first is the default and fallback is automatic;
+* **two distinct fallback paths** — load failure (no `libva.so`, no `/dev/dri`)
+  and init failure (`VAStatus` != 0 for this resolution/profile);
+* `require_hardware: true` to opt OUT of silent degradation.
+
+**Decision: do NOT adopt the SW codecs for M2. Do read the HW bridge design.**
+Reasons, in order:
+1. libvpx is BSD-3, statically linked, ~20 years of production hardening, and is
+   already shipped and verified on 5 platforms. Replacing it with a 3-month-old
+   decoder is strictly more risk for no requirement — 117's own preference order
+   says pure Rust is *preferred, not required*.
+2. Codecs are the component class where bugs produce **plausible-looking wrong
+   output** rather than errors. This task hit that twice (kilobits-vs-bits,
+   BT.601-vs-709) and only pixel-level checks caught it.
+3. Maturity is genuinely early: the org is 3 months old, `oxideav-vaapi` is
+   v0.0.3 with ~181 downloads, `oxideav-h264` ~1000. Conformance corpora are
+   16 fixtures where the real suites (JCT-VC, Argon) run to hundreds/thousands.
+   The "round 420 / Hat-2 clean" cadence indicates heavily automated development.
+
+**Revisit when** the corpora and adoption grow — the AV1 + H.265 story in
+particular could delete real work. A cheap near-term use with none of the risk:
+run `oxideav-vp9` as an independent **cross-check oracle** against our libvpx
+output in tests; two independent decoders disagreeing is an excellent bug
+detector.
+
+### Correction: LGPL is a preference, not a wall
+
+M2 earlier wrote off software H.265 partly because `libde265` is LGPL. That
+over-hardened M1's own rule — the stated order is **pure Rust → permissive C
+(static) → LGPL → HW-only**, so LGPL is third choice, *allowed*. `libde265`
+therefore stays on the table as the H.265 software fallback if HW is
+unavailable and we decide we need one.
+
+### Correction: openh264 and libde265 are SOFTWARE-ONLY
+
+They are not "libraries that handle HW/SW" — Cisco's openh264 is a software H.264
+codec and libde265 a software HEVC codec. Neither touches VAAPI / VideoToolbox /
+Media Foundation. So the HW lane is a **separate, per-platform thing we write**:
+
+| Platform | HW lane (we implement) | SW fallback |
+|---|---|---|
+| Linux | VA-API — `cros-codecs` (BSD-3), or the `oxideav-vaapi` design | openh264 / libde265 |
+| macOS | VideoToolbox (also has native `present-at-time`) | " |
+| Windows | Media Foundation / D3D11VA | " |
+| Android | MediaCodec — ✅ already shipped | platform's own |
+
+Four HW backends is the real work in step 3; the codec libraries are the easy part.
+
+### AV1, per platform
+
+* **Android** — nothing to do: the device already ships
+  `c2.android.av1-dav1d.decoder` (measured above).
+* **Desktop SW** — `dav1d` (BSD-2, mature) via `libdav1d-sys`.
+* **Desktop HW** — only Intel Xe/Arc, NVIDIA 30-series+, AMD RDNA2+. Most
+  existing laptops will decode AV1 in software regardless.
 
 ### The steps
 
