@@ -180,3 +180,37 @@ Linux-only. The unifying layer is ours to write — and we already own it as `wa
 - Audio: `symphonia` (MPL-2.0) if ever needed; wandr uses `wasi:audio`/cpal.
 - Removing FFmpeg wholesale before the native paths are proven on real hardware. Make it
   optional; keep it as the long-tail fallback.
+
+## Starting points (for whoever picks this up)
+
+Everything needed is in-tree; this task is self-contained.
+
+**Read first** (memory, recalled by relevance):
+- `[[project_desktop_video_nokhwa]]` — the current desktop path. Records that VP8 is
+  all-pass, that the **WSLg RDP camera truncates above 640x480**, and the `--run-once`
+  harness. That camera caveat will otherwise look like a codec bug.
+- `[[project_wandr_video_host]]` — the Android HW path (camera→HW-VP8→SURFACE/PiP) and the
+  Surface upcast gotcha. The MediaCodec backend to preserve.
+- `[[project_wandr_call_video_track]]` — Signal specifics: RED PT-120, TWCC mandatory,
+  rotation via the container matrix. Constrains what the encoder must emit.
+
+**The code:**
+- `runtime/wandr-host/src/video_desktop.rs` (561 lines) — the ONLY file using FFmpeg. The
+  surface is ~12 APIs: `codec::{context::Context, Id}`, `decoder::{find, Video}`,
+  `encoder::{find_by_name, video::Encoder}`, `format::Pixel`, `software::scaling`,
+  `util::frame::video::Video`, `util::picture`, `init`.
+- `runtime/wandr-host/src/video.rs`, `video_host_impl.rs` — WIT plumbing; should not need
+  to change, the trait boundary stays.
+- `contracts/wit/video.wit` — the abstraction. **Do not change it**; the point is that the
+  backend swaps underneath.
+- `runtime/wandr-host/Cargo.toml` lines ~141-151 — the `nokhwa` + `ffmpeg-next` block to
+  replace. `image` stays (it serves `decode-image` independently — verified).
+
+**Verify with:**
+1. `wandr-host --probe-video` (`main.rs:205`) — camera → encode → decode, reports fps and
+   first-frame latency. Fastest signal.
+2. `repros/nokhwa-camera-probe` — the standalone camera→VP8→decode reproducer.
+3. A real Signal desktop video call — the acceptance test.
+
+**Done when:** `ffmpeg-next` is out of `Cargo.toml`, a Signal desktop call works, and a
+plain `cargo build` needs no system media library.
