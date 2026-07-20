@@ -430,6 +430,37 @@ timestamp → this milestone.)
 
 ## Codecs — M1's sequencing steps 3 and 4, now triggered
 
+### Device capability — MEASURED 2026-07-20, not read from a config file
+
+`wandr-host --probe-video codecs` (new) opens each MIME, asks
+`AMediaCodec_getName` which component answered, then configures + starts it at
+1920x1080. Pixel 2 XL / msm8998, under `--no-art`:
+
+| Codec | Decode | Encode |
+|---|---|---|
+| H.264 | ✅ **HW** `OMX.qcom.video.decoder.avc` | ✅ HW |
+| H.265 | ✅ **HW** `OMX.qcom.video.decoder.hevc` | ✅ HW |
+| VP8 | ✅ HW | ✅ HW |
+| VP9 | ✅ HW | ⚠️ SW `c2.android.vp9.encoder` |
+| **AV1** | ✅ **SW** `c2.android.av1-dav1d.decoder` | SW |
+| MPEG-4, H.263 | ✅ HW | ✅ HW |
+
+‼️ **AV1 decode exists on device and the vendor XML does not mention it.**
+`/vendor/etc/media_codecs*.xml` declares no AV1 at all, and lists only `OMX.*`
+entries so every Codec2 (`c2.*`) component is invisible to it. Trusting the file
+would have led to bundling dav1d for Android unnecessarily. **Ask the API.**
+
+Two consequences for the plan below:
+- **The H.265 software gap is DESKTOP-ONLY.** On device it is hardware.
+- **Do not bundle dav1d for Android** — the platform already ships it. Desktop
+  still needs its own AV1 decoder if we ever want AV1 there.
+
+Caveat: `configure`+`start` proves the component opens and the HAL is reachable
+under `--no-art`. It does NOT prove it survives a real bitstream — that is what
+step 1 of the matrix exercises.
+
+### The steps
+
 Real content is H.264/HEVC/AV1, so playback forces what M1 deferred:
 
 1. **H.264 decode** — HW on every platform; `openh264` (BSD-2) as the software floor.
