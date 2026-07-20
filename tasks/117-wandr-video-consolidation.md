@@ -1,8 +1,16 @@
 # Task 117 — `wandr-video`: consolidate video, drop the FFmpeg dependency
 
-> Status: 🔲 PROPOSAL — researched 2026-07-19/20. Merges the former task 119 (which is
-> retired; this file is canonical). Unblocks task 118 by removing the LGPL + soname
-> problem at its root rather than packaging around it.
+> Status: ✅ **DONE 2026-07-20** — FFmpeg is out; VP8/VP9 is statically-linked libvpx
+> (BSD-3) via the new `wandr-video` + `wandr-vpx-sys` crates. All four CI legs green;
+> a Signal desktop **video call works on Windows** (user-verified). Merges the former
+> task 119 (retired; this file is canonical). Unblocks task 118 by removing the
+> LGPL + soname problem at its root rather than packaging around it.
+>
+> **What shipped** (see "Outcome" at the end for the deltas from this proposal):
+> `runtime/wandr-host/crates/wandr-video` (desktop-only codec dispatch) +
+> `crates/wandr-vpx-sys` (own Apache-2.0 bindings; builds `vendor/libvpx` v1.16.0
+> from source). `video_desktop.rs` is now a thin adapter; `video.rs` and the whole
+> Android MediaCodec path are UNTOUCHED.
 
 ## Why
 
@@ -213,4 +221,56 @@ Everything needed is in-tree; this task is self-contained.
 3. A real Signal desktop video call — the acceptance test.
 
 **Done when:** `ffmpeg-next` is out of `Cargo.toml`, a Signal desktop call works, and a
-plain `cargo build` needs no system media library.
+plain `cargo build` needs no system media library. — ✅ all three met.
+
+---
+
+## Outcome (2026-07-20) — where the implementation DIVERGED from this proposal
+
+Read this before trusting the design sketch above; four things changed.
+
+1. **The crate is DESKTOP-ONLY and `video.rs` was NOT touched.** The plan had the
+   shared types moving into `wandr-video`. Wrong: Android encodes *and* decodes in
+   HW via MediaCodec and must not link a codec library. `wandr-video` sits in the
+   same `cfg(not(target_os = "android"))` table `ffmpeg-next` did and owns only a
+   *codec* vocabulary (`Codec`/`CodecError`/`EncoderParams`/`DecoderParams`/`Packet`);
+   the host keeps its WIT-shaped types and `video_desktop.rs` maps at the boundary.
+   Camera facing, preview rects and z-layer never belonged in a codec crate.
+2. **Own `wandr-vpx-sys` instead of `env-libvpx-sys`.** That crate is MPL-2.0 (odd
+   in a licence-driven task) and its build script can only *consume* a prebuilt
+   libvpx. Ours compiles `vendor/libvpx` into `OUT_DIR`, or honors `VPX_LIB_DIR`
+   (the Windows/vcpkg path). This is what makes a plain `cargo build` self-contained.
+3. **Windows uses vcpkg** `libvpx[core,realtime]:x64-windows-static-md`, because
+   libvpx's build is a POSIX configure emitting `vpx.sln` for msbuild. The triplet
+   matters: `-static-md` = static lib + *dynamic* CRT (`/MD`), matching rustc's
+   msvc target. Plain `-static` (`/MT`) → LNK4098; plain `x64-windows` → a `vpx.dll`,
+   reintroducing the very problem this task removed.
+4. **`set_bitrate` is now REAL** (`vpx_codec_enc_config_set`) — it was a no-op under
+   ffmpeg-next, so desktop never honored REMB/TWCC. Also, a camera frame whose size
+   differs from the encode size is now resized rather than dropped.
+
+### Four gotchas that cost time — see `[[reference_libvpx_wandr_video]]`
+
+* `rc_target_bitrate` is **kilobits/s**; ffmpeg's `set_bit_rate` took bits/s.
+* Colorspace must be **BT.601 + limited range on BOTH directions** (swscale's default).
+* `vpx_enc_frame_flags_t` is C `long` → **64-bit on LP64, 32-bit on LLP64**. A
+  hand-written `i64` constant compiles on Linux and fails Windows with E0308.
+* `mem::zeroed()` on `vpx_codec_enc_cfg_t` is **UB** (niche field) and aborts.
+
+None of the first three *error* — they produce well-formed packets and plausible-looking
+video — which is why `tests/roundtrip.rs` asserts on decoded PIXELS with an empirically
+measured threshold (correct 1.68 MAE; BT.709 mixup 7.93; full-range mixup 9.36 → bar 4.0).
+An earlier guessed threshold of 20 passed both bugs.
+
+### Verified
+
+| Platform | Evidence |
+|---|---|
+| linux-x86_64 | CI ✓ · selfview 59.1/60 fps · camera→VP8→decode 60/60/60 · `ldd` clean |
+| macos-x86_64 | Intel Mac (macOS 12.7.6) ✓ build + 5/5 codec tests + camera selfview 52 fps; `otool -L` shows **only system frameworks**; `minos 12.0` |
+| macos-aarch64 | CI ✓ |
+| windows-x86_64 | CI ✓ · **Signal video call works (user-verified)** |
+| android-aarch64 | CI ✓ (MediaCodec path unaffected) |
+
+Not covered: HW backends (VAAPI/VideoToolbox/MediaFoundation) — still the sequencing
+step 3 above, with libvpx as the fallback. H.264/AV1 remain unbuilt until an app asks.

@@ -20,13 +20,15 @@
 - [🔲 OpenSwiftUI structural cleanup + blur](project_openswiftui_structural_cleanup.md) — NEXT: CSwiftSpike→CWASICanvas leaf, OCG CGContext target, THEN frosted blur.
 - [✅ Task 101: desktop dev loop](project_desktop_dev_loop.md) — same wasm on x86_64 via WANDR_DESKTOP_SIZE + JIT.
 - [Project: WASM Android Runtime](project_wasm_runtime.md) — goals/stack/status. · [✅ WART→WANDR rename](project_wandr_rename.md) — rename + --no-art redeploy.
+- [✅ Repo split: host/wit/sensors-client](project_repo_split_host_wit_sensors.md) — 3 GitHub repos as submodules (runtime/wandr-host, contracts/, runtime/wandr-sensors-client); CI builds 4 platforms; NEVER wipe host vendor/ (4 untracked dirs); CI needs --features p3-async.
 - [✅ Task 93 P2: SRTP HW-AES](project_wandr_crypto_srtp_offload.md) — SRTP GCM on host ARMv8 AES, 3-8×. · [crypto HW roadmap](project_crypto_hw_offload.md) — 3 layers.
 - [✅ Task 93 P1+4: wandr:video host](project_wandr_video_host.md) — camera→HW-VP8→SURFACE/PiP; Surface upcast gotcha.
 - [✅ Task 93: Signal video calls](project_wandr_call_video_track.md) — RED PT-120, TWCC mandatory, rotation via container matrix.
 - [✅ Task 98: AudioFlinger-direct](project_audioflinger_backend.md) — pure-Rust createTrack→cblk ring. · [🔲 Task 108: audio player](project_audio_player.md) — wasi:audio PCM + HW codec.
 - [✅ Desktop wasi:audio=cpal](project_desktop_audio_cpal.md) — WSLg: `pulseaudio` feature (NOT pipewire/ALSA); desktop MUST pump bg-tick.
 - [🔲 Desktop packaging](project_desktop_packaging.md) — apps-as-zip + install-script; NOT started.
-- [✅ Desktop video=nokhwa+ffmpeg](project_desktop_video_nokhwa.md) — VP8 all-pass; WSLg RDP cam truncates >640x480; --run-once.
+- [✅ Desktop video=nokhwa+ffmpeg](project_desktop_video_nokhwa.md) — VP8 all-pass; WSLg RDP cam truncates >640x480; --run-once. **ffmpeg REPLACED by libvpx (task 117) → [[reference_libvpx_wandr_video]]**.
+- [✅ Task 117: FFmpeg→static libvpx](reference_libvpx_wandr_video.md) — 4 traps (kilobits, BT.601-limited, c_long LP64-vs-LLP64, zeroed()=UB); 3 produce plausible-looking video, so test on PIXELS with a measured threshold; crate is DESKTOP-ONLY (android=MediaCodec).
 - [✅ Task 93/95 camera --no-art](project_artless_camera.md) — 29fps raw/17fps VP8. · [✅ Task 91 ART-off call audio](project_artless_call_audio.md) — earpiece un-duck.
 - [ROOT: call silent=audioserver crash](project_call_audioserver_crash.md) — setPhoneState kills audio_policy; use setForceUse. · [✅ incoming-call connect](project_incoming_call_answerer_bug.md) — self_select_best_pair.
 - [✅ Task 90 events bus](project_event_bus.md) — host↔guest events; DIRTY-flag gotcha. · [✅ Task 92 task-manager](project_task_manager.md) — arbiter task-list/kill.
@@ -71,7 +73,10 @@
 - [Ref: dioxus+taffy](reference_dioxus_taffy_rust_ui.md) — crates/dioxus-canvas. · [Ref: wasi-webgpu/gfx](reference_wasi_webgpu_gfx.md) — guest-owns-renderer.
 - [Ref: Avalonia SHIPPED](reference_avalonia_wandr.md) — pin Avalonia 11.3.17 + ILC alpha.
 - [Ref: Swift/OpenSwiftUI eleev 2048](reference_swift_openswiftui_wandr.md) — port overview; UAF fix → [[reference_openswiftui_headless_uaf_repro]].
+- [Ref: OpenSwiftUI reactor @main boot](reference_openswiftui_reactor_main_boot.md) — unmodified @main App on a reactor; on-init→bootWandrReactorApp→CWandrBoot(__main_argc_argv)→armed App.main()→register; WandrReactorExports/CWandrExports opt-in libs; app dir = zero reactor stubs.
+- [Ref: OpenSwiftUI Scroll/List TODO](reference_openswiftui_scroll_list_todo.md) — minimal ScrollView+priority-arbitration SHIPS/works; FUTURE = ScrollGeometry-backed ScrollView + real List + full gesture arbitration (parent/nextResponder unwired); + radio-button all-off follow-up.
 - [Ref: SF Symbols off-Apple](reference_openswiftui_sfsymbols_rendering.md) — OpenSFSymbols+Tabler; Button was EmptyView stub; AG cycle from ViewSize read.
+- [Ref: custom Path + stroke off-Apple](reference_openswiftui_custom_path_wandr.md) — wandrElements storage (whole mutable Path API was stubbed); strokedPath-as-fill; flat rotation3D drew off-screen; minimumScaleFactor traps (min(w,h) clamp regressed calc; emoji width ≠ 0.6em); NEVER name a shim module `CoreGraphics`.
 - [✅ FIXED: eleev-2048 AttributeGraph UAF](reference_openswiftui_headless_uaf_repro.md) — 2 real Compute defects (remove_subgraph missing erase; alloc_page scan bug); deployed.
 - [Ref: if/else view-list wasm crash](reference_openswiftui_conditional_wasm_metadata.md) — 2 hardcoded-64-bit metadata-ABI bugs FIXED.
 - [Ref: ObservableObject works](reference_observableobject_wasm_exclusivity.md) — crash was Swift dynamic-exclusivity; fix = -enforce-exclusivity=unchecked on ALL modules.
