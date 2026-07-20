@@ -11,18 +11,17 @@ REM The window auto-fits: a phone shape (520x1040) with its height capped to 90%
 REM of the primary screen's work area, so it never runs off a small laptop screen
 REM (the Signal QR/link screen). Set WANDR_DESKTOP_SIZE to override.
 REM
-REM Env overrides: WANDR_HOST, WANDR_APPS_ROOT, FFMPEG_DIR, WANDR_DESKTOP_SIZE
+REM Env overrides: WANDR_HOST, WANDR_APPS_ROOT, WANDR_DESKTOP_SIZE
+REM
+REM Task 117: no FFMPEG_DIR / PATH setup any more. Video is libvpx linked
+REM statically, so the exe has no media DLL as a load-time dependency.
 setlocal
 set "APP=%~1"
 if "%APP%"=="" set "APP=wandr.audio.player"
 
 if "%WANDR_HOST%"==""      set "WANDR_HOST=%~dp0..\..\runtime\wandr-host\target\release\wasm-android-host.exe"
 if "%WANDR_APPS_ROOT%"=="" set "WANDR_APPS_ROOT=%USERPROFILE%\wandr-apps"
-if "%FFMPEG_DIR%"==""      set "FFMPEG_DIR=C:\wandr-win\ff\ffmpeg-n8.1-latest-win64-gpl-shared-8.1"
 if "%RUST_LOG%"==""        set "RUST_LOG=info"
-
-REM ffmpeg DLLs (avcodec-62 etc.) are load-time deps — put its bin on PATH.
-set "PATH=%FFMPEG_DIR%\bin;%PATH%"
 
 REM Auto-fit the window height to the screen (phone aspect preserved).
 if "%WANDR_DESKTOP_SIZE%"=="" (
