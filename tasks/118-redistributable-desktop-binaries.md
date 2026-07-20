@@ -43,6 +43,17 @@ Visual C++ Redistributable — another classic "install this first" failure.
 
 ## macOS — .app bundle, and Gatekeeper is the real problem
 
+> SCOPE (2026-07-20): the `macos-x86_64` CI job was dropped — it produced an artifact that
+> could not run on an older macOS anyway. x86_64 is tested by **building locally on the
+> target Mac**, where brew installs a matching bottle; that removes the `minos` mismatch
+> entirely for local use, because build machine == target machine.
+>
+> This section therefore applies ONLY IF macOS binaries are ever *published*. Note the
+> remaining macOS CI job is `macos-latest` = **aarch64** (macOS 14/15), so its artifact
+> carries an even higher `minos` than the retired macos-13 one did. If macOS stays
+> local-build-only, this whole section — **including the Gatekeeper signing decision** —
+> is moot: quarantine is applied to downloads, not to locally-built binaries.
+
 1. Put dylibs in `Contents/Frameworks/`, rewrite install names to `@rpath` /
    `@executable_path/../Frameworks` (`install_name_tool`).
 2. Build on the OLDEST runner available with `MACOSX_DEPLOYMENT_TARGET` set (already
