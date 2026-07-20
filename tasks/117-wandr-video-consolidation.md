@@ -506,6 +506,19 @@ Reasons, in order:
    16 fixtures where the real suites (JCT-VC, Argon) run to hundreds/thousands.
    The "round 420 / Hat-2 clean" cadence indicates heavily automated development.
 
+**SPIKE RUN 2026-07-20 — `repros/oxideav-spike/` (FINDINGS.md).** Evaluated it as
+a ready component on two machines (WSL2/no-GPU, and Pop!_OS with a real Intel+NVIDIA
+GPU). The pure-Rust decoders are real (H.265 + AV1 decoded 300/300 frames from
+actual clips), but the integration layer is early and has one showstopper:
+**H.264 with HW enabled decodes 0 frames and reports SUCCESS, on both machines,
+across NVDEC/VAAPI/Vulkan — `--no-hwaccel` fixes it at 300/300.** That is exactly
+the silent-HW-failure the priority-registry design is meant to prevent, and it
+doesn't. Plus VP9 registers nothing (`oxideav-vp9/src/lib.rs:867` is an empty
+`register()`), and H.265 is mis-typed as Audio. Conclusion holds: libvpx stays;
+re-run `run-spike.sh` per oxideav release; the silent-failure bug is the precise
+risk to design against in our OWN step-3 HW lane — **fallback must key on frames
+produced, not on the absence of an error return.**
+
 **Revisit when** the corpora and adoption grow — the AV1 + H.265 story in
 particular could delete real work. A cheap near-term use with none of the risk:
 run `oxideav-vp9` as an independent **cross-check oracle** against our libvpx
