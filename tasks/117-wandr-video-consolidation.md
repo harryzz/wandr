@@ -642,6 +642,45 @@ Codec status after this step: **VP8/VP9 (libvpx), H.264 (openh264), H.265
 (oxideav-h265) all decode real files on desktop; HW backends are the remaining
 work for real-time HEVC/AV1.**
 
+### Step 2d result (2026-07-21) — real-time HEVC (libde265) + AV1 (dav1d)
+
+Step 2c's honest caveat — pure-Rust `oxideav-h265` decodes correctly but at ~4–6
+fps, too slow to *play* — pushed the software floor to two mature C decoders,
+both **built from source and linked statically** (no runtime `.so`), added as
+registry backends with no change to the call path:
+
+* **H.265 real-time — `libde265` (LGPL-2.1).** ~60 fps single-thread / ~107 fps
+  multi-thread @720p vs oxideav-h265's ~4 fps (`repros/libde265-bench`). LGPL is
+  task 117's third-choice tier, allowed for a real need; static linking carries a
+  §6 relink obligation that wandr's open-source build satisfies (packaging detail
+  is a task-118 concern — see the backend's module doc). Registered at **priority
+  50**, so when both HEVC software decoders are compiled in, the real-time one
+  wins and `oxideav-h265` remains the permissive-MIT correctness fallback.
+
+* **AV1 — `dav1d` (BSD-2).** ~258–355 fps @720p (`repros/av1-bench`), and unlike
+  `oxideav-av1` — which fails outright on standard matroska AV1 framing
+  (`UnexpectedEnd`) — it decodes the whole file. BSD-2 is the permissive-static
+  tier, so AV1 is licence-cleaner than HEVC. New `Codec::Av1` (`"video/av01"`)
+  threaded through `wandr-video` → `video.rs` → `codec2b`/`codec_of`; the
+  `Dav1dBackend` (priority 50, `BackendKind::Software`, decode-only) repacks 8-bit
+  I420 and passes PTS natively via `Picture::timestamp()` (no FIFO — dav1d emits
+  display order). Built statically by `dav1d-sys`'s internal meson path
+  (`SYSTEM_DEPS_DAV1D_BUILD_INTERNAL=always`, now set in all three desktop build
+  scripts + CI; Windows uses that same meson path, NOT vcpkg, because meson is
+  MSVC-native unlike libvpx's POSIX configure).
+
+**MEASURED, `bbb-av1.webm` (1280×720, 300 frames):** the WIRED path
+(`open_decoder(Av1)` → registry → `Dav1dBackend` → dav1d) decodes **300/300**, all
+1280×720, PTS preserved in display order, Y plane tightly packed — and its
+`flush()` recovers the one trailing frame a naïve raw-dav1d drain loop drops
+(299→300). Both platforms build (Android never enables these features — it decodes
+HEVC in MediaCodec HW and AV1 via `c2.android.av1-dav1d.decoder`).
+
+Codec status after this step: **VP8/VP9 (libvpx), H.264 (openh264), H.265
+(libde265 real-time + oxideav-h265 fallback), AV1 (dav1d) all decode real files on
+desktop.** The software matrix is complete; **HW backends (VAAPI first — confirmed
+on fedora) are the remaining work**, for battery and 4K real-time.
+
 ### The steps
 
 Real content is H.264/HEVC/AV1, so playback forces what M1 deferred:

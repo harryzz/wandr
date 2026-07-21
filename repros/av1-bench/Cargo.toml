@@ -12,3 +12,7 @@ publish = false
 oxideav-av1 = "0.1"
 dav1d = "0.11"
 matroska-demuxer = "0.8"
+# Verify the WIRED backend (registry → Dav1dBackend → dav1d), not just raw dav1d:
+# this is the path the host takes. dav1d feature builds dav1d statically (needs
+# SYSTEM_DEPS_DAV1D_BUILD_INTERNAL=always in the build env).
+wandr-video = { path = "../../runtime/wandr-host/crates/wandr-video", default-features = false, features = ["dav1d"] }
