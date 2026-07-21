@@ -1,0 +1,14 @@
+# AV1 decode performance: oxideav-av1 (pure-Rust) vs dav1d (mature C) vs rav1d
+# (Rust port of dav1d). Same real file, same machine. Mirrors libde265-bench for
+# HEVC — decides whether oxideav-av1 is real-time or (like oxideav-h265) needs a
+# mature decoder for playback. Not part of the host build.
+[package]
+name = "av1-bench"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+oxideav-av1 = "0.1"
+dav1d = "0.11"
+matroska-demuxer = "0.8"
