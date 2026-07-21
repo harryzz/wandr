@@ -614,6 +614,34 @@ STILL OPEN in M2: HW backends (VAAPI on popos first), and H.265 (HW-only on
 desktop). The `--video-decode-file` diagnostic + reorder buffer are the reusable
 scaffolding for the rest of the matrix.
 
+### Step 2c result (2026-07-21) — software H.265 via oxideav-h265
+
+The H.265 software gap is FILLED, and without LGPL. Adopted `oxideav-h265`
+(pure-Rust MIT, ~99% conformance) as a wandr-video backend — using ONLY the codec
+crate, bypassing oxideav's registry and its unfinished HW backends. Wired into the
+host exactly like H.264: `video::Codec::H265`, `"video/hevc"`, the openh264-style
+adapter, and `--video-decode-file` extended to parse hvcC.
+
+**MEASURED, bbb-h265.mp4 (1280x720, real B-frames): 300/300 decoded, presentation
+order OK, snapshot pixel-correct.** Both platforms build (Android decodes HEVC in
+MediaCodec HW).
+
+Two things this surfaced:
+* **A latent PTS-mispairing bug, caught by verification.** oxideav-h265's doc says
+  `take_decoded` returns display order; measured (POC 0,5,3,1,2,4,…) it returns
+  DECODE order. The first cut used pop-min pairing, which would have silently
+  desynced A/V while passing a no-loss check. Fixed to FIFO (like openh264). Only
+  found by reading the decoder's POC sequence — a green "no loss" was not enough.
+* **Software HEVC is not real-time here.** ~6 fps for 720p on an i7-8565U, so the
+  paced player drops most frames. Decode is CORRECT; it is just slow. This is why
+  HEVC playback should lean on HW — VAAPI (hardware confirmed on fedora via
+  vainfo) / MediaCodec is the real-time path; oxideav-h265 is the correctness
+  fallback for non-real-time or lower resolutions.
+
+Codec status after this step: **VP8/VP9 (libvpx), H.264 (openh264), H.265
+(oxideav-h265) all decode real files on desktop; HW backends are the remaining
+work for real-time HEVC/AV1.**
+
 ### The steps
 
 Real content is H.264/HEVC/AV1, so playback forces what M1 deferred:

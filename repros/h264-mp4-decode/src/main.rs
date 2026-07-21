@@ -49,6 +49,33 @@ fn to_annex_b(sample: &[u8], sps: &[u8], pps: &[u8], keyframe: bool, len_size: u
     out
 }
 
+/// Extract VPS+SPS+PPS from the raw `hvcC` box (the mp4 crate stubs it out) and
+/// return them start-code-prefixed, ready to prepend to each HEVC keyframe. Also
+/// returns the NAL length size. Layout per ISO 14496-15 §8.3.3.
+fn parse_hvcc(file: &[u8]) -> Option<(Vec<u8>, usize)> {
+    let p = file.windows(4).position(|w| w == b"hvcC")?;
+    let payload = &file[p + 4..]; // box: [size:4][type:4='hvcC'][payload]
+    let len_size = (payload.get(21)? & 0x3) as usize + 1;
+    let num_arrays = *payload.get(22)? as usize;
+    let mut out = Vec::new();
+    let mut i = 23;
+    for _ in 0..num_arrays {
+        // array header: (completeness<<7 | reserved | NAL_unit_type)(1), numNalus(2)
+        let _nal_type = payload.get(i)? & 0x3f;
+        let num = u16::from_be_bytes([*payload.get(i + 1)?, *payload.get(i + 2)?]) as usize;
+        i += 3;
+        for _ in 0..num {
+            let l = u16::from_be_bytes([*payload.get(i)?, *payload.get(i + 1)?]) as usize;
+            i += 2;
+            let nal = payload.get(i..i + l)?;
+            out.extend_from_slice(&START_CODE);
+            out.extend_from_slice(nal);
+            i += l;
+        }
+    }
+    Some((out, len_size))
+}
+
 /// A bounded reorder buffer: hold up to `depth` frames, then always emit the
 /// smallest PTS. Turns decode order into presentation order for a B-frame stream
 /// — presentation policy that belongs in the player, not the codec.
@@ -71,30 +98,46 @@ fn main() {
     let path = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "../oxideav-spike/samples/bbb-h264.mp4".to_string());
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     eprintln!("h264-mp4-decode: {path}");
 
-    let f = std::fs::File::open(&path).expect("open mp4");
-    let size = f.metadata().unwrap().len();
-    let mut mp4 = Mp4Reader::read_header(BufReader::new(f), size).expect("parse mp4");
+    let file_bytes = std::fs::read(&path).expect("read mp4");
+    let size = file_bytes.len() as u64;
+    let mut mp4 = Mp4Reader::read_header(std::io::Cursor::new(&file_bytes[..]), size).expect("parse mp4");
 
-    let (track_id, timescale, sps, pps) = {
+    // Handle H.264 (avcC SPS/PPS extractable) OR H.265 (hev1 sample entry —
+    // param sets are typically in-band, and the mp4 crate can't read hvcC arrays
+    // anyway, so we prepend nothing and rely on the stream carrying VPS/SPS/PPS).
+    let (track_id, timescale, codec, sps, pps) = {
         let track = mp4
             .tracks()
             .values()
-            .find(|t| matches!(t.media_type(), Ok(mp4::MediaType::H264)))
-            .expect("no H.264 track");
+            .find(|t| matches!(t.media_type(), Ok(mp4::MediaType::H264 | mp4::MediaType::H265)))
+            .expect("no H.264/H.265 track");
+        let is_h264 = matches!(track.media_type(), Ok(mp4::MediaType::H264));
         (
             track.track_id(),
             track.timescale() as i64,
-            track.sequence_parameter_set().expect("sps").to_vec(),
-            track.picture_parameter_set().expect("pps").to_vec(),
+            if is_h264 { Codec::H264 } else { Codec::H265 },
+            if is_h264 { track.sequence_parameter_set().expect("sps").to_vec() } else { Vec::new() },
+            if is_h264 { track.picture_parameter_set().expect("pps").to_vec() } else { Vec::new() },
         )
     };
     let n = mp4.tracks()[&track_id].sample_count();
-    eprintln!("track {track_id}: {n} samples, timescale {timescale}");
 
-    let mut dec = open_decoder(&DecoderParams { codec: Codec::H264, width: 0, height: 0 })
-        .expect("open h264 decoder");
+    // H.265 param sets live in hvcC (not in-band, not exposed by the mp4 crate),
+    // so parse them from the raw box. Also gives the correct NAL length size.
+    let (hevc_prefix, len_size) = if codec == Codec::H265 {
+        let (blob, ls) = parse_hvcc(&file_bytes).expect("parse hvcC (VPS/SPS/PPS)");
+        eprintln!("hvcC: {} bytes of VPS/SPS/PPS, len_size {ls}", blob.len());
+        (blob, ls)
+    } else {
+        (Vec::new(), 4)
+    };
+    eprintln!("track {track_id}: {n} samples, timescale {timescale}, codec {codec:?}");
+
+    let mut dec = open_decoder(&DecoderParams { codec, width: 0, height: 0 })
+        .expect("open decoder");
 
     // Feed in FILE order (= decode order). True presentation time is
     // start_time + rendering_offset (DTS + the ctts CTS-DTS delta).
@@ -107,7 +150,15 @@ fn main() {
         let s = mp4.read_sample(track_id, sid).expect("read").expect("sample");
         any_bframe |= s.rendering_offset != 0;
         let pts_us = ts_to_us(s.start_time as i64 + s.rendering_offset as i64);
-        let annexb = to_annex_b(&s.bytes, &sps, &pps, s.is_sync, 4);
+        // H.264: prepend SPS/PPS (from avcC) at each keyframe. H.265: prepend the
+        // start-coded VPS/SPS/PPS blob (from hvcC) at each keyframe, then convert.
+        let mut annexb = Vec::new();
+        if s.is_sync {
+            if codec == Codec::H265 {
+                annexb.extend_from_slice(&hevc_prefix);
+            }
+        }
+        annexb.extend_from_slice(&to_annex_b(&s.bytes, &sps, &pps, s.is_sync && codec == Codec::H264, len_size));
         fed += 1;
         match dec.decode(Chunk::new(&annexb, pts_us)) {
             Ok(()) => {

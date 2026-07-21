@@ -14,5 +14,6 @@ publish = false
 # Pure-Rust MP4 demuxer (MIT). Gives per-sample DTS (start_time), the CTS-DTS
 # delta (rendering_offset — the B-frame tell), is_sync, and the avcC SPS/PPS.
 mp4 = "0.14"
+env_logger = "0.11"
 # The codec under test, with its software H.264 backend.
-wandr-video = { path = "../../runtime/wandr-host/crates/wandr-video", features = ["libvpx", "openh264"] }
+wandr-video = { path = "../../runtime/wandr-host/crates/wandr-video", features = ["libvpx", "openh264", "oxideav-h265"] }
