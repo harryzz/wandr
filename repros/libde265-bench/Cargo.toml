@@ -1,0 +1,15 @@
+# HEVC decode performance: oxideav-h265 (pure-Rust) vs libde265 (mature C, LGPL).
+# Same file, same machine, tight decode loops. Answers whether the ~6 fps of the
+# pure-Rust decoder is "software HEVC is just slow at 720p" or "this decoder is
+# immature". Not part of the host build. libde265-sys builds libde265 1.0.15 from
+# source (downloads it) — needs network + a C compiler.
+[package]
+name = "libde265-bench"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+libde265 = "0.2"
+mp4 = "0.14"
+wandr-video = { path = "../../runtime/wandr-host/crates/wandr-video", features = ["oxideav-h265"] }
