@@ -42,20 +42,49 @@ Two lessons already banked:
 The H.264 bitstream also parses correctly end to end:
 `format: NV12 coded 1280x720 display 1280x720`, `Decode picture POC 0`.
 
-## ❌ Where it stops (open)
+## ✅ PASS on fedora (Ivybridge / i965) — 300/300 frames
 
-After `Finishing picture POC 0` the process **hangs** (`vaEndPicture` /
-submission). Isolated: it still hangs with `sync()` **and** readback skipped
-(`WANDR_SKIP_SYNC=1` in the isolation build), so it is **not** the readback path
-— it is the decode submission against the D3D12 driver.
+```
+driver resolution limits: min=[]x[] max=[4096]x[4096]
+driver memory types: ["VA", "KERNEL_DRM", "DRM_PRIME"] (raw 0x30000001)
+  tier 1 (export_prime -> DMA-buf): AVAILABLE (1 dma-buf object)
+  tier 2 (derive_from):             AVAILABLE
+  tier 3 (vaGetImage):              USED
+format: NV12 coded 1280x720 display 1280x720
+decoded 300 frames, 1280x720, non-black luma: true
+PASS — VA-API HW H.264 decode works (tier 3 readback, VA-allocated surfaces)
+```
 
-Leading hypothesis: we allocate a **fresh VA surface per frame** with no pooling
-(`VaSurfaceFrame::to_native_handle` calls `vaCreateSurfaces` every time). D3D12
-video decoders generally want output surfaces from a **fixed pool bound to the
-decode heap**; unbounded fresh allocations mid-stream plausibly wedge it. Next
-step is a real surface pool (which the eventual backend needs anyway). Other
-angles: compare against a known-good `ccdec` run on this driver; check whether
-D3D12 wants surfaces created with specific attributes.
+**Phase A goal met:** VA-API HARDWARE H.264 decode, end to end, on real hardware,
+with NO GBM anywhere — the exact blocker that stopped cros-codecs. **No surface
+pool was needed.**
+
+Two things the probe caught that a hardcoded implementation would not:
+* fedora reports **no minimum resolution at all** (`min=[]`), so the vendored
+  patch's single named fallback (`PLACEHOLDER_FALLBACK_DIM`) is what makes it
+  work — while WSL/D3D12 reports 64x64. Neither machine matches upstream's
+  hardcoded 16x16.
+* **tier 1 zero-copy is AVAILABLE on fedora but FAILS on WSL** — the exact
+  inverse of what the advertised memory-type bits suggest on WSL (which claims
+  `DRM_PRIME_2` and then errors). Probe, never trust the bits.
+
+## ❌ WSL / D3D12: driver decode is broken (not our code)
+
+On WSL the probe hangs after `Finishing picture POC 0` (`vaEndPicture`).
+**This is a driver bug, not our code** — proven by elimination:
+
+| test | WSL / d3d12 | fedora / i965 |
+|---|---|---|
+| `vainfo` capabilities | ✅ H264+HEVC+VP9 | ✅ H264 |
+| **ffmpeg** `-hwaccel vaapi` (30 frames) | ❌ **hangs >2 min** | ✅ 0.32s, exit 0 |
+| ffmpeg software (control) | ✅ fast | ✅ 0.32s |
+| this probe | ❌ hangs | ✅ **300/300 PASS** |
+
+ffmpeg is a mature, battle-tested VA-API client; it hangs on the same driver, so
+the Mesa **d3d12 VA-API decode submission is broken** for this UHD 620 / WSL
+GPU-PV setup. It enumerates capabilities perfectly and then wedges on real
+decode. A surface pool was hypothesised and is **NOT** the cause — the cheap
+falsifying test (run ffmpeg) killed that theory before any code was written.
 
 ## Vendored cros-codecs patches (`vendor/cros-codecs`, via `[patch.crates-io]`)
 
