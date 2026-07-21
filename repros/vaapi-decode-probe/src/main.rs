@@ -187,8 +187,40 @@ fn probe_tiers(display: &Rc<Display>) {
 
 // ── tier-3 readback: vaGetImage the decoded surface into NV12 bytes ──────────
 
+/// NV12 -> RGB24 PPM. Written so we can LOOK at what the hardware decoded rather
+/// than trust a frame counter: a mean-luma check passes just as happily on
+/// garbage as on a correct picture. BT.601 limited range, which is what these
+/// VLD decoders emit for SD/HD H.264.
+fn dump_ppm(
+    path: &str,
+    data: &[u8],
+    y_off: usize,
+    y_pitch: usize,
+    uv_off: usize,
+    uv_pitch: usize,
+    w: usize,
+    h: usize,
+) -> std::io::Result<()> {
+    let mut out = Vec::with_capacity(w * h * 3 + 32);
+    out.extend_from_slice(format!("P6\n{w} {h}\n255\n").as_bytes());
+    for y in 0..h {
+        for x in 0..w {
+            let yy = data[y_off + y * y_pitch + x] as f32;
+            // NV12: one interleaved UV pair per 2x2 luma block.
+            let ci = uv_off + (y / 2) * uv_pitch + (x / 2) * 2;
+            let (u, v) = (data[ci] as f32 - 128.0, data[ci + 1] as f32 - 128.0);
+            let yv = (yy - 16.0) * 1.164;
+            let px = [yv + 1.596 * v, yv - 0.392 * u - 0.813 * v, yv + 2.017 * u];
+            for c in px {
+                out.push(c.clamp(0.0, 255.0) as u8);
+            }
+        }
+    }
+    std::fs::write(path, out)
+}
+
 /// Returns (width, height, mean luma) for the decoded surface.
-fn readback_mean_luma(surface: &Surface<()>, res: (u32, u32)) -> Result<f64, String> {
+fn readback_mean_luma(surface: &Surface<()>, res: (u32, u32), frame_no: usize) -> Result<f64, String> {
     // Tier 2 first (cheaper when it works), then fall back to the real tier 3.
     // This fallback is load-bearing, not belt-and-braces: NVDEC decodes into CUDA
     // memory and rejects vaDeriveImage outright (VaError(1)), so on a whole
@@ -228,6 +260,20 @@ fn readback_mean_luma(surface: &Surface<()>, res: (u32, u32)) -> Result<f64, Str
         }
         row += 7;
     }
+    // VISUAL PROOF: dump a few frames spread across the clip so the pictures can
+    // be inspected directly. Opt-in via WANDR_DUMP_DIR so normal runs stay cheap.
+    if let Ok(dir) = std::env::var("WANDR_DUMP_DIR") {
+        if matches!(frame_no, 0 | 60 | 150 | 240) {
+            let uv_off = va_image.offsets[1] as usize;
+            let uv_pitch = va_image.pitches[1] as usize;
+            let path = format!("{dir}/frame_{frame_no:04}.ppm");
+            match dump_ppm(&path, data, y_off, y_pitch, uv_off, uv_pitch, w, h) {
+                Ok(()) => eprintln!("dumped {path}"),
+                Err(e) => eprintln!("dump {path} failed: {e}"),
+            }
+        }
+    }
+
     if n == 0 {
         return Err("no luma sampled".into());
     }
@@ -283,7 +329,7 @@ fn main() {
                     let r = handle.display_resolution();
                     *dims = (r.width, r.height);
                     let inner = handle.borrow();
-                    match readback_mean_luma(inner.surface(), (r.width, r.height)) {
+                    match readback_mean_luma(inner.surface(), (r.width, r.height), *frames) {
                         Ok(mean) => {
                             if mean > 2.0 {
                                 *nonblack = true;
