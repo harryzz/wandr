@@ -92,6 +92,16 @@ HEVC/VP9). The default `iHD` (nonfree) driver fails to init on this GPU (it is
 Broadwell+); libva falls back to `i965`, the correct driver. Our backend should
 prefer `LIBVA_DRIVER_NAME=i965` on Ivy Bridge / let libva auto-fall-back.
 
+**Ruled out driver selection (2026-07-21).** fedora's default libva tries the
+`iHD` nonfree driver first, which fails to init on Ivy Bridge, then falls back to
+`i965`. So the earlier 0/300 could have been a wrong-driver artifact. It was not:
+forcing `LIBVA_DRIVER_NAME=i965` — with libva confirming `va_openDriver() returns
+0` (i965 loads) and vainfo confirming H.264 VLD profiles — still gives **0/300**.
+The `--debug` output shows oxideav-vaapi trying to open a nonexistent
+`hybrid_drv_video.so` and never creating a surface/context. So oxideav's VAAPI
+decode is broken in its own data path, independent of driver — the same
+silent-0-frame as nvdec and vulkan, now confirmed against a driver we KNOW works.
+
 **Two conclusions for wandr's VAAPI plan:**
 1. The hardware + i965/iHD driver + render-node access on fedora are ready; VAAPI
    H.264 decode is available on this GPU. fedora is the target box (popos was
