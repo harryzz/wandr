@@ -1,5 +1,85 @@
 TASK=117
-STEP=M2-step2c-h265-software-done
-STATUS=complete
-LAST_SUCCESS=Task 117 M2 step 2c DONE — software H.265 via oxideav-h265 (pure-Rust MIT), wired into the host. bbb-h265.mp4 (1280x720, real B-frames): 300/300 decoded, presentation order OK, snapshot PIXEL-CORRECT. Uses ONLY the oxideav-h265 codec crate (bypasses oxideav registry + unfinished HW). Host: video::Codec::H265 + video/hevc mime, codec2b/codec_of, openh264-style adapter, --video-decode-file parses hvcC. Both platforms build (Android=MediaCodec HEVC HW).
-NOTES=CAUGHT a latent PTS-mispairing bug: oxideav-h265 doc says take_decoded=display order but measured POC 0,5,3,1,2,4 = DECODE order; pop-min pairing would silently desync A/V while passing no-loss. Fixed to FIFO (like openh264), verified by reading POC. PERF: oxideav-h265 ~6fps @720p on i7-8565U = NOT real-time (paced player drops most frames); decode is CORRECT, just slow -> HEVC real-time needs HW. Codecs now: VP8/VP9(libvpx), H.264(openh264), H.265(oxideav-h265) all decode real files on desktop. NEXT: HW backends for real-time — VAAPI (fedora confirmed: vainfo H264 VLD, va_openDriver=0; oxideav vaapi is 🚧/broken so we write our own) OR adopt oxideav-av1 SW decoder next. repros/h264-mp4-decode now does both H.264 and H.265.
+STEP=M2-stage2-onscreen-BLOCKED
+STATUS=in-progress
+LAST_SUCCESS=Task 117 M2 stage 2 PASSES in CLI form (commit 3619370a): guest drives submit-timed->next-decoded->present->flush->reset, 300/300 AUs, 300 frames, PTS monotonic in DISPLAY order (B-frame reorder survives the WIT), reset accepted. HW decode separately PROVEN on fedora with visual proof (PNG frames verified: correct colour, no corruption, inter-prediction working).
+NOTES=RESUME HERE — detailed block below.
+
+=== WHERE WE ARE (task 117 M2) ===
+DONE:
+ * M1 — FFmpeg dropped for static libvpx. Shipped.
+ * Software codec matrix COMPLETE: VP8/VP9 (libvpx), H.264 (openh264),
+   H.265 (libde265 real-time + oxideav-h265 fallback), AV1 (dav1d). All decode
+   real files; permissive/static; no runtime .so.
+ * Phase A HW decode PROVEN on fedora: cros-libva-direct (vaCreateSurfaces, NO
+   GBM), 300/300 frames + dumped PNGs visually verified.
+ * Stage 1 CONTRACT: wandr:video additive playback lane — timed-frame
+   {timestamp-us: s64}, opaque decoded-frame {timestamp-us, present(at-ns),
+   discard}, submit-timed / next-decoded / flush / reset, av1 appended to codec.
+   Desktop AND android aarch64 build clean. Shipping RTP call path untouched.
+ * Stage 2 CLI player PASSES (3619370a).
+
+BLOCKED / DO THIS FIRST:
+ * Player as a UI app does NOT run. ROOT CAUSE PROVEN at
+   runtime/wandr-host/src/input.rs:185 — the host drives UI guests via
+   wasi:input-handlers/frame-handler.on-frame(nanos). The app exports
+   my:skiko-gfx/renderer.render-frame, RETIRED in Phase C (task 105), so the host
+   never calls the guest at all (no output, failsafe window). my:skiko-gfx/canvas
+   also cannot be imported (host does not link it) — already removed; geometry
+   now comes from the exported on-resize.
+   FIX (mechanical, ~30 min):
+     1. world: export wasi:input-handlers/frame-handler (on-frame) instead of
+        my:skiko-gfx/renderer; keep frame-pacing.
+     2. copy wasi-input-handlers WIT into apps/user/wandr.video.player/wit/deps/
+        (canonical: contracts/proposals/wasi-input-handlers/wit).
+     3. move the pump body render_frame -> on_frame (logic unchanged; both give nanos).
+   Launch: WANDR_APPS_ROOT=~/.local/share/wandr-apps WINIT_UNIX_BACKEND=x11
+           wasm-android-host --install apps/user/wandr.video.player
+           wasm-android-host --app wandr.video.player      (--app, NOT a bare id)
+   NOTE: guest println does NOT reach host stdout for reactor apps — verify on
+   screen (ask the user) or add host-side logging.
+
+=== TWO CONTRACT FINDINGS (fix before stage 4 / WASI factoring) ===
+ 1. present(at-ns) IS NOT USABLE. A guest cannot name a host monotonic instant
+    sharing an origin with the host clock (host monotonic_now_ns uses its own
+    Instant origin). Player passes at_ns=0 and self-paces. LEAD: on-frame hands
+    the guest `nanos` — likely the shared timeline; verify and make
+    monotonic_now_ns use the SAME source, or add a now()-style verb.
+ 2. Decode-ahead is UNBOUNDED (back-pressure hits = 0). queue-full is specified
+    but nothing triggers it; a guest could decode a whole file into host memory.
+ 3. (stage-1 gap, CONFIRMED) the SCHEDULED queue is drained ONLY by
+    composite_video_surfaces, so surfaceless/--run-once guests never present
+    scheduled frames. --run-once is a deliberate special case: DO NOT change it.
+
+=== HARDWARE PICTURE (three drivers, three different answers) ===
+ fedora i965 : min none    | VA|KERNEL_DRM|DRM_PRIME | t1 OK   t2 OK   t3 OK | 300/300 PASS
+ WSL d3d12   : min 64x64   | advertises DRM_PRIME_2  | t1 FAIL t2 OK   t3 OK | DECODE HANGS
+ popos NVDEC : min 48x16   | reports NO mem types    | t1 FAIL t2 FAIL t3 OK | 32/300 then DPB errors
+ * WSL/d3d12 decode is broken AT THE DRIVER (ffmpeg -hwaccel vaapi hangs too; sw
+   decode 0.32s). Not our bug. Do not sink more time there.
+ * NVDEC 32/300 + "No ShortTerm reference found": hypothesis = we allocate a FRESH
+   VA surface per frame and never pool, exhausting NVDEC's decode-surface pool
+   (~32 = typical NVDEC DPB). A surface pool now looks REQUIRED for NVDEC (it was
+   correctly ruled out as the cause of the WSL hang).
+ * Upstream cros-codecs hardcodes a 16x16 placeholder context — WRONG on 2 of 3
+   drivers. Our vendored patch queries the driver. Capability bits lie in BOTH
+   directions; always probe.
+
+=== STAGE PLAN ===
+ stage 1 contract + host wiring   DONE
+ stage 2 player proves it         CLI DONE / on-screen BLOCKED (fix above)
+ stage 3 VaapiBackend into wandr-video (BackendKind::Hardware, priority 10,
+         capability-probed supports_decode; software backends stay as fallback;
+         needs the surface pool for NVDEC). Host currently ALWAYS software-decodes.
+ stage 4 factor into wasi:video-decoder + resolve its flagged z-order OPEN issue,
+         add av1, then propose upstream.
+
+=== HOUSEKEEPING ===
+ * contracts commit e8ed7fe is LOCAL ONLY (never pushed). Root contracts/ clone
+   still at 95542a1. CI would fetch a SHA it cannot see — reconcile before CI.
+ * wandr.alarm.test uses the same RETIRED my:skiko-gfx interfaces and is very
+   likely broken on desktop too; other apps from that template may be affected.
+ * Host built with scripts/build-host-linux.sh (sets SYSTEM_DEPS_DAV1D_BUILD_INTERNAL).
+ * popos now has rustup + libva-dev/libclang-dev/libgbm-dev; probe source at
+   ~/vaapi-probe there and on fedora. glibc: popos 2.39 < WSL 2.41 < fedora 2.42,
+   so a WSL-built binary runs on fedora but NOT popos (build natively, or target
+   the oldest glibc — cargo-zigbuild / old-distro container).
