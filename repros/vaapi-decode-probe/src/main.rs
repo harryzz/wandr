@@ -189,10 +189,24 @@ fn probe_tiers(display: &Rc<Display>) {
 
 /// Returns (width, height, mean luma) for the decoded surface.
 fn readback_mean_luma(surface: &Surface<()>, res: (u32, u32)) -> Result<f64, String> {
-    // Tier 3. derive_from is tried first since when it works it is cheaper; both
-    // land in the same VAImage shape.
-    let image = libva::Image::derive_from(surface, res)
-        .map_err(|e| format!("derive_from failed: {e:?}"))?;
+    // Tier 2 first (cheaper when it works), then fall back to the real tier 3.
+    // This fallback is load-bearing, not belt-and-braces: NVDEC decodes into CUDA
+    // memory and rejects vaDeriveImage outright (VaError(1)), so on a whole
+    // vendor class tier 2 is simply unavailable and vaGetImage is the only CPU
+    // readback there is.
+    let image = match libva::Image::derive_from(surface, res) {
+        Ok(img) => img,
+        Err(_) => {
+            // vaGetImage needs an explicit target format; NV12 is what every
+            // VLD decoder here produces.
+            let mut fmt: libva::VAImageFormat = unsafe { std::mem::zeroed() };
+            fmt.fourcc = u32::from(Fourcc::from(b"NV12"));
+            fmt.byte_order = 1; // VA_LSB_FIRST
+            fmt.bits_per_pixel = 12;
+            libva::Image::create_from(surface, fmt, res, res)
+                .map_err(|e| format!("both derive_from and create_from failed: {e:?}"))?
+        }
+    };
     let va_image = *image.image();
     let data: &[u8] = image.as_ref();
     let y_off = va_image.offsets[0] as usize;
