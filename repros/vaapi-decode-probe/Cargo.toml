@@ -1,0 +1,23 @@
+# Task 117 M2 Phase A — prove VA-API HARDWARE H.264 decode via cros-codecs on a
+# real GPU, in isolation, before wiring a VaapiBackend into wandr-video.
+#
+# BUILDS on any Linux with libva headers (compile-check on the WSL dev box);
+# RUNS only where there is a real GPU + VA driver + /dev/dri/renderD128 (the
+# fedora box: Intel Ivybridge / i965, which reports H.264 VLD — see task 117).
+#
+# cros-codecs 0.0.6 is the crates.io release; its PUBLIC decode path is the
+# C2Wrapper (the raw StatelessVideoDecoder + owned-frame readback helper is
+# #[cfg(test)]-only), so this probe mirrors examples/ccdec's VAAPI H.264 path.
+[package]
+name = "vaapi-decode-probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+cros-codecs = { version = "0.0.6", features = ["vaapi"] }
+libva = { package = "cros-libva", version = "0.0.12" }
+env_logger = "0.11"
+
+[patch.crates-io]
+cros-codecs = { path = "vendor/cros-codecs" }
