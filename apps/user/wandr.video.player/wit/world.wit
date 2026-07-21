@@ -1,8 +1,75 @@
-// wandr.video.player guest world (task 117 M2 stage 2) — a wasi:cli command
-// (`fn main` provides cli/run on wasm32-wasip2) that drives the wandr:video
-// PLAYBACK lane. Decoder only: a player decodes, it never encodes.
-package wandr:video-player;
+// wandr.video.player — UI reactor world (task 117 M2 stage 2, on-screen proof).
+//
+// Converted from a wasi:cli command because `--run-once` guests are SURFACELESS:
+// the host stores decoded frames but never runs composite_video_surfaces, so
+// nothing is displayed and the SCHEDULED queue behind present(at-ns) is never
+// drained. A UI reactor has a render loop, which is what actually puts video on
+// screen. (--run-once is a deliberate special case and is left untouched.)
+//
+// canvas/renderer/frame-pacing are the trimmed my:skiko-gfx subset the guest
+// wit-bindgen accepts — same rationale as wandr.alarm.test / wandr.statusbar.
 
-world video-player {
+package my:skiko-gfx@0.1.0;
+
+interface canvas {
+    enum paint-style { fill, stroke, fill-and-stroke }
+    enum stroke-cap  { butt, round, square }
+    enum stroke-join { miter, round, bevel }
+    enum blend-mode {
+        src-over, src, dst-in, dst-out, src-atop, dst-atop, xor,
+        multiply, screen, overlay, darken, lighten, color-dodge,
+        color-burn, hard-light, soft-light, difference, exclusion, clear,
+    }
+    enum color-filter-kind { none, blend, invert }
+    record paint-attrs {
+        color:              u32,
+        style:              paint-style,
+        stroke-width:       f32,
+        stroke-miter:       f32,
+        stroke-cap:         stroke-cap,
+        stroke-join:        stroke-join,
+        anti-alias:         bool,
+        alpha:              u8,
+        blend-mode:         blend-mode,
+        shader-id:          u32,
+        color-filter-kind:  color-filter-kind,
+        color-filter-color: u32,
+    }
+
+    surface-width:  func() -> u32;
+    surface-height: func() -> u32;
+    begin-frame: func();
+    end-frame:   func();
+    clear:       func(argb: u32);
+    draw-rect:   func(x: f32, y: f32, w: f32, h: f32, paint: paint-attrs);
+}
+
+interface renderer {
+    enum pointer-kind { down, up, move, scroll }
+    enum key-kind     { down, up }
+    render-frame:          func(nanos: u64);
+    on-pointer-event:      func(kind: pointer-kind, x: f32, y: f32);
+    on-key-event:          func(kind: key-kind, key-code: u32);
+    on-resize:             func(w: u32, h: u32);
+    on-scheduled-callback: func(callback-id: u32);
+    on-pointer-event-v2:   func(pointer-id: u32, kind: pointer-kind, x: f32, y: f32, pressure: f32);
+    on-key-event-v2:       func(kind: key-kind, code-point: u32, key-id: u32);
+    on-lifecycle-changed:  func(state: u32);
+}
+
+interface frame-pacing {
+    next-frame-delay: func() -> u32;
+}
+
+world video-player-app {
+    // NOTE: my:skiko-gfx/canvas is NOT imported. It was retired in Phase C
+    // (task 105) in favour of wasi:canvas, and the host no longer links it —
+    // importing it fails instantiation with "surface-width implementation is
+    // missing". This app does not need to draw anyway: the video composites
+    // ABOVE the UI buffer inside its own rect, and surface dimensions arrive via
+    // the exported on-resize callback.
+    // The playback lane under test (task 117 M2).
     import wandr:video/decoder@0.1.0;
+    export renderer;
+    export frame-pacing;
 }

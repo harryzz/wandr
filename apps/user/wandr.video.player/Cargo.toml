@@ -9,6 +9,11 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+# A REACTOR (cdylib), not a command: the host calls our exported render-frame,
+# we do not own a main loop.
+[lib]
+crate-type = ["cdylib"]
+
 [dependencies]
 wit-bindgen = "0.57"
 

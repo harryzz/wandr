@@ -5,12 +5,18 @@
 # it compiles and wires, not that a guest can play with it. Anything awkward here
 # is a CONTRACT bug, not a client bug; that is the point of building it.
 #
-# A wasi:cli command (run-once), not a UI app:
-#   wandr-host --run-once wandr.video.player
+# A UI REACTOR, not a run-once command: `--run-once` guests are surfaceless, so
+# the host never composites and nothing is displayed. A render loop is what puts
+# video on screen. (--run-once is a deliberate special case, left untouched.)
 app_id      = "wandr.video.player"
 version     = "0.1.0"
-world       = "wasi:cli/command"
+world       = "my:skiko-gfx/skiko-ui"
 composition = "same-store"
+orientation = "auto"
+label       = "Video Player"
+# The clip is 30 fps; the renderer is on-demand (next-frame-delay), so this cap
+# only bounds how often we may pump — it does not spin.
+max_fps     = 30
 
 [components]
 ui = "components/ui.wasm"
