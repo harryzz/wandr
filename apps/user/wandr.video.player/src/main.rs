@@ -92,10 +92,23 @@ fn access_units(buf: &[u8]) -> Vec<(Vec<u8>, bool)> {
 /// this passes 0 = "present as soon as possible" and paces itself instead. That
 /// still exercises submit-timed -> next-decoded -> present -> flush end to end;
 /// it does NOT exercise host-side scheduling. See the report at the end.
-fn drain(dec: &VideoDecoder, seen: &mut Vec<i64>) -> usize {
+fn drain(dec: &VideoDecoder, seen: &mut Vec<i64>, started: Instant, pace: bool) -> usize {
     let mut n = 0;
     while let Some(frame) = dec.next_decoded() {
-        seen.push(frame.timestamp_us());
+        let pts = frame.timestamp_us();
+        // Guest-side pacing. present(at-ns) is the verb that SHOULD do this
+        // host-side, but a guest cannot currently name a host monotonic instant
+        // (stage-2 finding #1), so we hold the frame until its PTS is due and
+        // then present immediately. This is exactly the workaround a real player
+        // should NOT have to write — which is the argument for fixing at-ns.
+        if pace {
+            let due = Duration::from_micros(pts.max(0) as u64);
+            let now = started.elapsed();
+            if due > now {
+                std::thread::sleep(due - now);
+            }
+        }
+        seen.push(pts);
         frame.present(0);
         n += 1;
     }
@@ -120,13 +133,25 @@ fn main() {
         std::process::exit(1);
     }
 
-    // Decode-to-buffer (empty rect): this is a run-once CLI probe with no
-    // surface, so we are proving the CONTROL path, not pixels on screen.
+    // DECODE-TO-SURFACE by default: a real rect makes the host composite decoded
+    // frames into a surface, i.e. actual pixels on screen. The guest never sees
+    // them — `decoded-frame` is opaque by design — so on-screen output is the
+    // ONLY visual proof a guest can produce, and it is the honest one: it proves
+    // the whole path (guest -> WIT -> host decode -> surface -> display).
+    //
+    // WANDR_PLAYER_HEADLESS=1 falls back to an empty rect = decode-to-buffer,
+    // which exercises the control path only (what stage 2 originally measured).
+    let headless = std::env::var("WANDR_PLAYER_HEADLESS").is_ok();
+    let rect = if headless {
+        VideoRect { x: 0, y: 0, width: 0, height: 0 }
+    } else {
+        VideoRect { x: 0, y: 0, width: 1280, height: 720 }
+    };
     let dec = match VideoDecoder::open(DecoderConfig {
         codec: Codec::H264,
         width: 1280,
         height: 720,
-        rect: VideoRect { x: 0, y: 0, width: 0, height: 0 },
+        rect,
         rotation: 0,
         layer: ZLayer::AboveUi,
     }) {
@@ -136,13 +161,18 @@ fn main() {
             std::process::exit(1);
         }
     };
-    println!("decoder OPEN ✓ (H.264, decode-to-buffer)");
+    println!(
+        "decoder OPEN ✓ (H.264, {})",
+        if headless { "decode-to-buffer" } else { "decode-to-surface 1280x720" }
+    );
 
     let started = Instant::now();
     let mut submitted = 0usize;
     let mut presented = 0usize;
     let mut backpressure = 0usize;
     let mut seen: Vec<i64> = Vec::new();
+    let pace = !headless;
+    let _ = pace;
 
     for (i, (data, keyframe)) in aus.iter().enumerate() {
         let frame = TimedFrame {
@@ -162,7 +192,7 @@ fn main() {
                 }
                 Err(VideoError::QueueFull) => {
                     backpressure += 1;
-                    presented += drain(&dec, &mut seen);
+                    presented += drain(&dec, &mut seen, started, !headless);
                     attempts += 1;
                     if attempts > 64 {
                         println!("FAIL: still queue-full after draining 64x at AU {i}");
@@ -175,7 +205,7 @@ fn main() {
                 }
             }
         }
-        presented += drain(&dec, &mut seen);
+        presented += drain(&dec, &mut seen, started, !headless);
 
         // Keep a bounded decode-ahead cushion. Without a real clock to pace
         // against (see the note on `drain`), this stands in for playback timing.
@@ -190,7 +220,7 @@ fn main() {
         println!("FAIL: flush: {e:?}");
         std::process::exit(1);
     }
-    presented += drain(&dec, &mut seen);
+    presented += drain(&dec, &mut seen, started, !headless);
 
     // Seek path: reset must be accepted and leave the decoder usable.
     let reset_ok = dec.reset().is_ok();
