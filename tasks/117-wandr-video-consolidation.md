@@ -582,6 +582,38 @@ question) is **step 2b**, still to do. Also not yet done: **wiring H.264 into th
 host** (extend `video::Codec`, enable the `openh264` feature on the host dep) —
 the equivalent of step 1b for H.264.
 
+### Step 2b result (2026-07-21) — H.264 wired into the host, real MP4 plays
+
+H.264 is now decodable end-to-end through the actual host, on real content:
+
+* **Host codec path wired** — `video::Codec::H264` + `"video/avc"`, `codec2b`
+  accepts it, `codec_of` maps it, the desktop dep enables the `openh264` feature.
+  This lights up H.264 on BOTH backends: desktop software (openh264), Android
+  MediaCodec HW. H.265 stays rejected (no desktop software decoder).
+* **`h264_mp4toannexb`** implemented (~40 lines, no crate) — MP4's length-prefixed
+  avcC NALs → Annex-B, SPS/PPS at each keyframe.
+* **Reorder buffer** — the desktop present queue now inserts in PTS order, so
+  B-frame streams (decode order != presentation order) present correctly. VP8/VP9
+  pay nothing (they always append).
+* **`--video-decode-file <mp4>`** plays a real file through the host VideoDecoder.
+
+**MEASURED, bbb-h264.mp4 (1280x720, real B-frames): 300 samples → 300 decoded,
+300 presented, 0 dropped, presentation order OK, drift avg 0.8 ms.** The desktop
+"local file" matrix cell is green on real content, and the snapshot is a correct
+decoded frame.
+
+**Real bug found and fixed along the way:** openh264 defaults to flushing after
+every decode, which the crate's own docs warn against; on a real B-frame file it
+overflows the reorder buffer at the 2nd GOP and loses 236/300 frames while
+returning success per frame. The backend now opens with `Flush::NoFlush` +
+`flush_remaining` at EOS. This is exactly the "real files are a different test
+than a self-encoded loopback" lesson — the in-crate round-trip never hit it. See
+`repros/h264-mp4-decode`.
+
+STILL OPEN in M2: HW backends (VAAPI on popos first), and H.265 (HW-only on
+desktop). The `--video-decode-file` diagnostic + reorder buffer are the reusable
+scaffolding for the rest of the matrix.
+
 ### The steps
 
 Real content is H.264/HEVC/AV1, so playback forces what M1 deferred:

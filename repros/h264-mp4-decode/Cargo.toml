@@ -1,0 +1,18 @@
+# Real-MP4 H.264 decode probe (task 117 M2 step 2b). Not part of the host build.
+#
+# Answers the question the in-crate round-trip test can't: does our openh264
+# backend decode a REAL H.264 file — with real SPS/PPS, real GOP structure, and
+# (crucially) B-frames — correctly? And does the container's PTS come out in the
+# right order, or do we need a reorder buffer?
+[package]
+name = "h264-mp4-decode"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# Pure-Rust MP4 demuxer (MIT). Gives per-sample DTS (start_time), the CTS-DTS
+# delta (rendering_offset — the B-frame tell), is_sync, and the avcC SPS/PPS.
+mp4 = "0.14"
+# The codec under test, with its software H.264 backend.
+wandr-video = { path = "../../runtime/wandr-host/crates/wandr-video", features = ["libvpx", "openh264"] }
