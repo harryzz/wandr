@@ -60,6 +60,34 @@ The nvidia kernel driver was not actually up (`nvidia-smi` failed), so `h264_nvd
 at priority 5 wins dispatch, produces nothing, and never falls through to the four
 lower-priority backends behind it — including `h264_sw`, which works.
 
+## Follow-up (2026-07-21): a THIRD machine, and the HW bug is systemic
+
+Ran the same probe on **fedora** (Fedora 43, Intel HD 4000 Ivy Bridge, real
+`/dev/dri/renderD128`, i965+iHD drivers, world-accessible render node, no NVIDIA).
+
+`oxideav list` registered `vaapi-h264` at priority 10 — and that registration is
+**proof the hardware VAAPI H.264 decode path is real**: `oxideav-vaapi/src/lib.rs:101`
+gates registration on `host_supports_codec_decode("h264")`, a real
+`vaQueryConfigEntrypoints` for `VAEntrypointVLD`. On WSL that returned false and it
+*skipped*; on fedora it returned true and *registered*. So libva initialized, the
+driver advertises an H.264 VLD **decode** profile, and `vaGetConfigAttributes`
+succeeded — the capability is there.
+
+But the decode itself: **auto (vaapi-h264 wins) = 0/300; `--no-hwaccel` = 300/300.**
+Identical to nvdec on popos and vulkan on WSL. So the silent-HW-failure is
+**systemic across all three of oxideav's HW backends** (NVDEC, Vulkan, VAAPI), not
+one bad path — a registry that never falls back when a HW decoder yields zero
+frames.
+
+**Two conclusions for wandr's VAAPI plan:**
+1. The hardware + i965/iHD driver + render-node access on fedora are ready; VAAPI
+   H.264 decode is available on this GPU. fedora is the target box (popos was
+   down; its NVIDIA driver was dead anyway).
+2. oxideav cannot be leaned on for HW decode yet, so **we must write our own VAAPI
+   backend** — and it must key fallback on frames produced, exactly the contract
+   the wandr-video registry already enforces. This probe de-risked it: only a
+   correct decode data-path remains.
+
 ## Three concrete bugs (upstream-reportable)
 
 1. **H.264 HW decode = silent 0-frame success, no fallback.** Reproduced on two
