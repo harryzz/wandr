@@ -1,0 +1,259 @@
+// wandr:video — host-side hardware video codec for calls. (Drafted 2026-06-08;
+// host impl task 93 Phase 1 — encoder + decode-to-buffer. Phase 4 SHIPPED
+// decode-to-surface, but as CHILD surfaces of the app's own surface, NOT the
+// arbiter `Role::Video` this header used to promise — see the design decision on
+// `world video-client` below, which is the authority.) See
+// project_crypto_hw_offload (offload layer 2), task 93/95.
+//
+// WHY. A wasm guest cannot encode/decode VP8/VP9 in real time and can't reach the
+// hardware codec. This interface drives the device's HW MediaCodec (NDK AMediaCodec
+// -> Codec2 HAL android.hardware.media.c2, which SURVIVES --no-art — proven by
+// `wandr-host --probe-video`: camera->HW VP8 encode 17.4 fps). The guest does only RTP
+// framing + SRTP (wandr:crypto); the pixels never enter the wasm sandbox.
+//
+// BIDIRECTIONAL (both need HW):
+//   * encoder (OUTGOING, our camera): host captures (camera NDK) + HW-encodes; the
+//     guest PULLS encoded frames to RTP-packetize + SRTP-seal + send.
+//   * decoder (INCOMING, peer): the guest PUSHES reassembled encoded frames; the host
+//     HW-decodes and COMPOSITES to a video surface (decode-to-surface — zero per-frame
+//     copy, the right choice at 30 fps; decoded pixels do NOT return to the guest).
+//
+// DEVICE HW (confirmed 2026-06-08, /vendor/etc/media_codecs*.xml): clear HW
+// OMX.qcom.video.decoder.{vp9,vp8} + .encoder.vp8 (avc/hevc too). NOTE: VP9 HW ENCODE
+// is software-only on this SoC (only OMX.google.vp9.encoder) — so OUTGOING should
+// prefer VP8 HW; INCOMING decodes VP9 or VP8 in HW.
+
+package wandr:video@0.1.0;
+
+interface types {
+    /// `av1` is PLAYBACK-only here (task 117 M2): the host decodes it in
+    /// software via dav1d (BSD-2) on desktop and MediaCodec on Android, and
+    /// never encodes it. APPENDED last on purpose — existing discriminants
+    /// (vp8=0…h265=3) are unchanged, so shipped call guests keep working.
+    enum codec { vp8, vp9, h264, h265, av1 }
+
+    /// Which camera feeds the encoder (a call self-view wants front).
+    enum camera-facing { front, back }
+
+    /// Where a video surface composites relative to the app's own UI buffer
+    /// (the guest owns this policy). `behind-ui` = the SurfaceView model: the
+    /// UI punches a transparent hole and may draw controls OVER the video
+    /// (host clears the layer's opaque flag while video is up). `above-ui` =
+    /// video covers the rect; the UI lays out around it — no hole needed.
+    enum z-layer { behind-ui, above-ui }
+
+    enum video-error {
+        unsupported-codec,
+        no-hw-codec,         // only a software codec exists (e.g. VP9 encode here)
+        codec-init-failed,
+        bad-frame,
+        queue-full,          // decoder input queue full — frame dropped, resend after a keyframe
+        surface-unavailable,
+    }
+
+    /// One compressed frame between the guest's RTP layer and the host codec.
+    record encoded-frame {
+        data: list<u8>,
+        timestamp: u32,      // 90 kHz RTP timestamp
+        keyframe: bool,      // true = IDR / VP8 key; decoders need one to start
+    }
+
+    /// One compressed frame for FILE PLAYBACK (task 117 M2) — the additive
+    /// sibling of `encoded-frame` above, which is RTP-shaped.
+    ///
+    /// The difference that matters: `timestamp-us` is a real PRESENTATION
+    /// timestamp in microseconds — the WebCodecs unit, matching
+    /// `wasi:audio-codec`'s `timestamp-us: s64` — not a 90 kHz transport clock
+    /// that wraps every ~13.25 h. Signed, because containers legitimately carry
+    /// negative PTS (encoder delay / edit lists).
+    ///
+    /// Decode order, not display order: a stream with B-frames is submitted in
+    /// the order it is stored, and the host emits `decoded-frame`s in DISPLAY
+    /// order. A submit may yield zero, one or several decoded frames.
+    record timed-frame {
+        data: list<u8>,
+        timestamp-us: s64,
+        keyframe: bool,
+    }
+
+    /// Where the host paints video, in the GUEST'S OWN surface pixels (the same
+    /// coordinate space the guest draws in). The host realizes it as a child of
+    /// the app's SurfaceFlinger surface (the SurfaceView model), so it moves,
+    /// hides, rotates and z-orders with the app automatically; it composites
+    /// BELOW the app's UI buffer, which punches a transparent hole where video
+    /// should show and may draw controls over it. (In a surfaceless process —
+    /// `--run-once` diagnostics — the rect is panel pixels on a top-level layer.)
+    record video-rect { x: u32, y: u32, width: u32, height: u32 }
+
+    record encoder-config {
+        codec: codec,
+        width: u32, height: u32,
+        bitrate-bps: u32,
+        framerate: u32,
+        /// true = camera frames captured host-side (the call self-view), the default.
+        /// false (future) = guest supplies YUV (screen-share).
+        source-camera: bool,
+        /// Which camera to capture from when source-camera (falls back to the
+        /// first camera if the requested facing doesn't exist).
+        facing: camera-facing,
+        /// PiP self-view: where to composite the local camera preview (the
+        /// camera streams to a second surface host-side; frames never cross
+        /// the boundary). `none` = no self-view. Move via set-preview-rect.
+        preview: option<video-rect>,
+        /// Compositing layer for the self-view (see `z-layer`).
+        preview-layer: z-layer,
+    }
+
+    record decoder-config {
+        codec: codec,
+        /// Coded-size hint for codec init (from signaling); the stream's actual
+        /// size wins — VP8/VP9 keyframes carry their own dimensions.
+        width: u32, height: u32,
+        rect: video-rect,    // initial geometry; resizable via set-rect
+        /// Degrees CW to rotate decoded frames for upright display — the
+        /// peer's CVO rotation (wandr-call `VideoFrame.rotation`). Fixed at
+        /// open (MediaCodec rotation-degrees); reopen if the peer rotates.
+        rotation: u32,
+        /// Compositing layer for the remote video (see `z-layer`).
+        layer: z-layer,
+    }
+}
+
+interface encoder {
+    use types.{encoder-config, encoded-frame, video-error, video-rect};
+
+    /// Opens the camera (if source-camera) + a HW encoder. One per outgoing stream.
+    resource video-encoder {
+        open: static func(config: encoder-config) -> result<video-encoder, video-error>;
+        /// Pull the next encoded frame (non-blocking; none if not ready). The guest
+        /// then RTP-packetizes + SRTP-seals (wandr:crypto) + sends. (A callback export
+        /// is the alternative if polling proves wasteful at the frame cadence.)
+        next-frame: func() -> option<encoded-frame>;
+        /// Force a keyframe (on the receiver's RTCP PLI/FIR).
+        request-keyframe: func();
+        /// Adapt to congestion (the guest drives this from REMB/TWCC).
+        set-bitrate: func(bitrate-bps: u32);
+        /// Move/resize the PiP self-view (no-op if opened without `preview`).
+        set-preview-rect: func(rect: video-rect);
+        /// Show/hide the PiP self-view (no-op if opened without `preview`).
+        set-preview-visible: func(visible: bool);
+        /// Degrees CW a receiver must rotate our frames for upright display
+        /// (the facing-adjusted camera sensor orientation) — feed it to the
+        /// call engine's outgoing CVO (`set_video_rotation`). The PiP
+        /// self-view already compensates host-side.
+        display-rotation: func() -> u32;
+    }
+}
+
+interface decoder {
+    use types.{decoder-config, encoded-frame, timed-frame, video-rect, video-error};
+
+    /// A frame the host has decoded and still holds (task 117 M2).
+    ///
+    /// OPAQUE BY DESIGN — pixels never cross the boundary; that is exactly what
+    /// keeps decode-to-surface zero-copy. The guest decides only *WHEN* a frame
+    /// is shown. *WHERE* it appears remains the surface's vocabulary
+    /// (`set-rect`/`set-visible` on the decoder today, one `connect(ctx)` once
+    /// this is factored into `wasi:video-decoder`) — so this resource stays on
+    /// the correct side of that split and factors without rework.
+    ///
+    /// This is the shape the hardware already exposes: Android
+    /// `MediaCodec.releaseOutputBuffer(index, renderTimestampNs)`, Apple
+    /// `AVSampleBufferDisplayLayer` (enqueue with a presentation time), and the
+    /// VA-API / Media Foundation equivalents. It gives WebCodecs' control flow
+    /// with `<video>`'s zero-copy, which neither W3C model provides alone.
+    ///
+    /// Dropping the resource without `present` or `discard` is equivalent to
+    /// `discard` — the buffer is released either way, never leaked.
+    resource decoded-frame {
+        /// The presentation timestamp carried through from `timed-frame`, in
+        /// DISPLAY order (the host reorders B-frames; a guest never has to).
+        timestamp-us: func() -> s64;
+
+        /// Schedule presentation at `at-ns` on the `wasi:clocks`
+        /// monotonic timeline — the clock a player converts into from
+        /// `wasi:audio` `playback.position()`, which is the only real media
+        /// clock in the system. That conversion is what makes A/V sync
+        /// possible: video is slaved to the audio master clock.
+        /// `0` = present as soon as possible.
+        present: func(at-ns: u64);
+
+        /// Release without showing it — arrived too late, or invalidated by a
+        /// seek. A player that falls behind discards rather than accumulating
+        /// latency.
+        discard: func();
+    }
+
+    /// Opens a HW decoder + a compositing surface at `rect`. Decode-to-surface: the
+    /// host decodes + paints directly; frames do not return to the guest.
+    resource video-decoder {
+        open: static func(config: decoder-config) -> result<video-decoder, video-error>;
+        /// Push a reassembled encoded frame (after SRTP-open + RTP depacketize).
+        submit: func(frame: encoded-frame) -> result<_, video-error>;
+        /// Move/resize the video surface (layout change, rotation).
+        set-rect: func(rect: video-rect);
+        /// Show/hide the video surface (e.g. the peer paused video).
+        set-visible: func(visible: bool);
+        /// Update the peer's CVO rotation live (applied at the compositor —
+        /// no codec reconfigure; pairs with the engine's VideoFrame.rotation).
+        set-rotation: func(degrees: u32);
+        /// true once >=1 keyframe has decoded (UI can drop the placeholder).
+        ready: func() -> bool;
+        /// Frames decoded so far (diagnostics; Phase 1 decode-to-buffer counts
+        /// + drops them — Phase 4 composites instead).
+        decoded-frames: func() -> u64;
+
+        // ── PLAYBACK (task 117 M2) — additive; everything above is the
+        // shipping, live-call-verified RTP path and is untouched. A guest uses
+        // one lane or the other, never both on the same decoder.
+
+        /// Push a frame carrying a real presentation timestamp.
+        ///
+        /// ‼️ `queue-full` means BACK-PRESSURE here, not loss: retry the SAME
+        /// frame once `next-decoded` has drained one. This inverts `submit`'s
+        /// RTP semantics ("frame dropped, resend after a keyframe"), which is
+        /// correct for a lossy transport and wrong for a file — a player cannot
+        /// resync on the next keyframe without visibly skipping.
+        submit-timed: func(frame: timed-frame) -> result<_, video-error>;
+
+        /// Take the next decoded frame in DISPLAY order, if one is ready
+        /// (non-blocking; `none` = not yet). Pair with `next-frame-delay` /
+        /// `on-frame` for pacing rather than spinning.
+        next-decoded: func() -> option<decoded-frame>;
+
+        /// End of stream: finish decoding everything queued so the tail of the
+        /// file is emitted via `next-decoded` (without this, the frames a codec
+        /// holds for reordering are never released). A keyframe is required to
+        /// resume decoding afterwards.
+        flush: func() -> result<_, video-error>;
+
+        /// Seek: discard queued input, held reference frames and any scheduled
+        /// presentations, and return to the pre-keyframe state. Cheaper and far
+        /// less disruptive than closing and reopening the decoder — which is
+        /// the only option this contract offered before.
+        reset: func() -> result<_, video-error>;
+    }
+}
+
+/// Imported by a call-engine guest (crates/wandr-call). The host implements both.
+///
+/// DESIGN DECISION (task 93 Phase 4, was an open question): video surfaces are
+/// CHILDREN of the app's own SurfaceFlinger surface (Android's SurfaceView
+/// model — `sf_media_*` in the libgui shim), NOT separate arbiter
+/// `Role::Video` surfaces. Z-order/visibility/rotation/occlusion are inherited
+/// from the app's existing role for free — backgrounding the app hides its
+/// video, no new arbiter state or IPC. Remote video sits at child z = -2, the
+/// PiP self-view at -1, both BELOW the app's UI buffer; while a decoder
+/// surface is up the host clears the layer's opaque flag so the guest's
+/// transparent hole blends (controls can overlap video). Rects are
+/// guest-surface pixels (see `video-rect`).
+world video-client {
+    import encoder;
+    import decoder;
+}
+
+/// Host-side import world the runtime `add_to_linker`s (the host implements all of it).
+world video-host {
+    import encoder;
+    import decoder;
+}

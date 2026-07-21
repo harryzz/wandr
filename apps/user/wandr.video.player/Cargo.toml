@@ -1,0 +1,17 @@
+# wandr.video.player — the first consumer of wandr:video's PLAYBACK lane
+# (task 117 M2 stage 2). Deliberately dependency-free beyond wit-bindgen: the
+# point is to exercise the CONTRACT, so anything it needs that the contract
+# cannot express is a finding, not something to paper over with a crate.
+#   cargo build --target wasm32-wasip2 --release
+[package]
+name    = "wandr-video-player"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+wit-bindgen = "0.57"
+
+[profile.release]
+opt-level = "s"
+strip = true

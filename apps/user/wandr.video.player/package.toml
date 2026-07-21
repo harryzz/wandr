@@ -1,0 +1,26 @@
+# wandr.video.player — task 117 M2 stage 2. The FIRST consumer of wandr:video's
+# playback lane (submit-timed / next-decoded / present(at-ns) / flush / reset).
+#
+# Its whole job is to answer "does the contract actually work?" — stage 1 proved
+# it compiles and wires, not that a guest can play with it. Anything awkward here
+# is a CONTRACT bug, not a client bug; that is the point of building it.
+#
+# A wasi:cli command (run-once), not a UI app:
+#   wandr-host --run-once wandr.video.player
+app_id      = "wandr.video.player"
+version     = "0.1.0"
+world       = "wasi:cli/command"
+composition = "same-store"
+
+[components]
+ui = "components/ui.wasm"
+
+# Docker-style host→guest mount. Demux/containers are deliberately GUEST-side in
+# wandr (proposals/wasi-media-source/NOTES.md), so the player reads media files
+# itself rather than the host handing it frames. Read-only: a player never writes
+# its source. Per-platform alternatives are allowed; the host mounts whichever
+# path exists and skips the rest, so no sample path is baked into wandr-host.
+[[mounts]]
+host  = "~/wandr/repros/oxideav-spike/samples"
+guest = "/samples"
+mode  = "ro"

@@ -1,0 +1,8 @@
+// wandr.video.player guest world (task 117 M2 stage 2) — a wasi:cli command
+// (`fn main` provides cli/run on wasm32-wasip2) that drives the wandr:video
+// PLAYBACK lane. Decoder only: a player decodes, it never encodes.
+package wandr:video-player;
+
+world video-player {
+    import wandr:video/decoder@0.1.0;
+}
