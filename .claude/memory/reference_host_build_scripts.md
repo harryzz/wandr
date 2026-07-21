@@ -5,6 +5,7 @@ metadata:
   node_type: memory
   type: reference
   originSessionId: 60b1802d-eb7e-41f1-b233-3fecc364fe2d
+  modified: 2026-07-21T19:53:02.213Z
 ---
 
 **Build wandr-host ONLY through these committed scripts** (`tools/scripts/`) —
@@ -25,6 +26,15 @@ instantiate with `component imports instance wasi:sockets/types@0.3.0 … resour
 implementation is missing`. Current guests that NEED p3: Signal AND
 audio.player (audio.player fetches album metadata over wasi:sockets/tls@0.3 to
 musicbrainz.org). See [[project_task115_wasip3_async]].
+
+**The stale-binary trap (task 117 M2, 2026-07-21):** the scripts build to the
+EXPLICIT-target path — linux = `runtime/wandr-host/target/x86_64-unknown-linux-gnu/release/wasm-android-host`
+— but an OLD host-triple build may still sit at `runtime/wandr-host/target/release/wasm-android-host`
+and it is the one you reach for by habit. Running it fails at instantiate with
+`resource implementation is missing` for a resource the host DOES implement,
+which reads exactly like the stale-zygote error ([[reference_missing_instance_error_stale_zygote]])
+and sends you diagnosing the wrong thing. Check the binary's mtime against the
+source you just changed BEFORE believing any "missing implementation" error.
 
 **Per-target gotchas (each cost real time this session):**
 - **Android: run from the crate dir**, not the repo root with `--manifest-path`.

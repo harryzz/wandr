@@ -1,85 +1,94 @@
 TASK=117
-STEP=M2-stage2-onscreen-BLOCKED
-STATUS=in-progress
-LAST_SUCCESS=Task 117 M2 stage 2 PASSES in CLI form (commit 3619370a): guest drives submit-timed->next-decoded->present->flush->reset, 300/300 AUs, 300 frames, PTS monotonic in DISPLAY order (B-frame reorder survives the WIT), reset accepted. HW decode separately PROVEN on fedora with visual proof (PNG frames verified: correct colour, no corruption, inter-prediction working).
-NOTES=RESUME HERE — detailed block below.
+STEP=M2-stage2-COMPLETE
+STATUS=complete
+LAST_SUCCESS=Task 117 M2 stage 2 verified ON SCREEN — wandr.video.player plays /samples/bbb.h264 as a UI reactor: 300/300 frames, out-of-order 0 (display order OK), wall 9992 ms vs clip 10000 ms (real-time), captured stills at t=3s/t=9s show correct colour + real motion; user confirmed on screen.
+NOTES=RESUME AT STAGE 3.
 
-=== WHERE WE ARE (task 117 M2) ===
-DONE:
- * M1 — FFmpeg dropped for static libvpx. Shipped.
- * Software codec matrix COMPLETE: VP8/VP9 (libvpx), H.264 (openh264),
-   H.265 (libde265 real-time + oxideav-h265 fallback), AV1 (dav1d). All decode
-   real files; permissive/static; no runtime .so.
- * Phase A HW decode PROVEN on fedora: cros-libva-direct (vaCreateSurfaces, NO
-   GBM), 300/300 frames + dumped PNGs visually verified.
- * Stage 1 CONTRACT: wandr:video additive playback lane — timed-frame
-   {timestamp-us: s64}, opaque decoded-frame {timestamp-us, present(at-ns),
-   discard}, submit-timed / next-decoded / flush / reset, av1 appended to codec.
-   Desktop AND android aarch64 build clean. Shipping RTP call path untouched.
- * Stage 2 CLI player PASSES (3619370a).
+=== WHAT THE EXPORT FIX WAS (stage 2 unblock) ===
+ The app exported the RETIRED my:skiko-gfx/renderer.render-frame, so the host
+ never ticked it (input.rs::dispatch_frame drives UI guests through
+ wasi:input-handlers/frame-handler ONLY). Now:
+   world  wandr:video-player-app/video-player-app  (was my:skiko-gfx/skiko-ui;
+          package.toml `world` updated to match)
+   export wasi:input-handlers/frame-handler@0.0.2  (on-frame + on-resize)
+   export wandr:ui-shell/frame-pacing@0.1.0
+   import wasi:canvas/{types,draw,embedding}@0.0.2 + wandr:video/decoder@0.1.0
+ wit/deps/ gained input-handlers-002, ui-shell, wasi-canvas (copied from
+ wandr.powermenu, the reference reactor).
 
-BLOCKED / DO THIS FIRST:
- * Player as a UI app does NOT run. ROOT CAUSE PROVEN at
-   runtime/wandr-host/src/input.rs:185 — the host drives UI guests via
-   wasi:input-handlers/frame-handler.on-frame(nanos). The app exports
-   my:skiko-gfx/renderer.render-frame, RETIRED in Phase C (task 105), so the host
-   never calls the guest at all (no output, failsafe window). my:skiko-gfx/canvas
-   also cannot be imported (host does not link it) — already removed; geometry
-   now comes from the exported on-resize.
-   FIX (mechanical, ~30 min):
-     1. world: export wasi:input-handlers/frame-handler (on-frame) instead of
-        my:skiko-gfx/renderer; keep frame-pacing.
-     2. copy wasi-input-handlers WIT into apps/user/wandr.video.player/wit/deps/
-        (canonical: contracts/proposals/wasi-input-handlers/wit).
-     3. move the pump body render_frame -> on_frame (logic unchanged; both give nanos).
-   Launch: WANDR_APPS_ROOT=~/.local/share/wandr-apps WINIT_UNIX_BACKEND=x11
-           wasm-android-host --install apps/user/wandr.video.player
-           wasm-android-host --app wandr.video.player      (--app, NOT a bare id)
-   NOTE: guest println does NOT reach host stdout for reactor apps — verify on
-   screen (ask the user) or add host-side logging.
+=== TWO NEW STAGE-2 FINDINGS (from making it actually show pixels) ===
+ 4. DECODE-TO-SURFACE IS NOT SELF-DRIVING — it rides the guest's canvas present.
+    On desktop the host composites video surfaces inside
+    wasi_canvas_002_impl.rs:1377 `context.present()`. The first cut imported NO
+    canvas ("we draw nothing, the video is above-ui") and the window stayed
+    blank white while the control path reported a perfect 300/300. A video guest
+    MUST import wasi:canvas and present every frame; the player now clears to
+    opaque black and presents, so every pixel of picture on screen came from the
+    decoder. Same root shape as stage-1 gap #3 (surfaceless guests never
+    composite). Worth stating explicitly in the contract docs.
+ 5. HOLDING the decoded-frame handle is the ONLY way a guest can delay a frame,
+    and it is what makes playback real-time. Presenting everything drained per
+    tick raced 10 s of video through in <1 s; the first cut "solved" that by
+    DISCARDING future frames (and still counting them presented — a lying
+    metric). The player now keeps one pending frame and presents it when the
+    clock catches up, which also back-pressures decode for free (`presented`
+    stops advancing -> the DECODE_AHEAD gate stops feeding). This is finding #1
+    (present(at-ns) unusable) seen from the client side.
 
-=== TWO CONTRACT FINDINGS (fix before stage 4 / WASI factoring) ===
- 1. present(at-ns) IS NOT USABLE. A guest cannot name a host monotonic instant
-    sharing an origin with the host clock (host monotonic_now_ns uses its own
-    Instant origin). Player passes at_ns=0 and self-paces. LEAD: on-frame hands
-    the guest `nanos` — likely the shared timeline; verify and make
-    monotonic_now_ns use the SAME source, or add a now()-style verb.
- 2. Decode-ahead is UNBOUNDED (back-pressure hits = 0). queue-full is specified
-    but nothing triggers it; a guest could decode a whole file into host memory.
- 3. (stage-1 gap, CONFIRMED) the SCHEDULED queue is drained ONLY by
-    composite_video_surfaces, so surfaceless/--run-once guests never present
-    scheduled frames. --run-once is a deliberate special case: DO NOT change it.
+=== EARLIER FINDINGS (unchanged, still open) ===
+ 1. present(at-ns) IS NOT USABLE — a guest cannot name a host monotonic instant.
+    Player passes at_ns=0 and self-paces. LEAD: on-frame's `nanos` is likely the
+    shared timeline; make monotonic_now_ns use the SAME source, or add now().
+ 2. Decode-ahead is UNBOUNDED at the CONTRACT level (queue-full never triggers);
+    the player bounds it guest-side. A guest could still decode a whole file into
+    host memory.
+ 3. The SCHEDULED queue is drained ONLY by composite_video_surfaces, so
+    surfaceless/--run-once guests never present. --run-once is a deliberate
+    special case: DO NOT change it.
+
+=== HOW TO RUN / VERIFY (both traps cost time — read before rerunning) ===
+ HOST BINARY: runtime/wandr-host/target/x86_64-unknown-linux-gnu/release/wasm-android-host
+   NOT target/release/ — a stale host-triple build lives there and fails at
+   instantiate with "decoded-frame ... resource implementation is missing",
+   which mimics the stale-zygote error. Check mtime first.
+   ([[reference_host_build_scripts]] now records this.)
+ BUILD+INSTALL:
+   (cd apps/user/wandr.video.player && cargo build --target wasm32-wasip2 --release)
+   cp apps/user/wandr.video.player/target/wasm32-wasip2/release/wandr_video_player.wasm \
+      apps/user/wandr.video.player/components/ui.wasm     # cdylib = UNDERSCORES
+   WANDR_APPS_ROOT=~/.local/share/wandr-apps $HOST --install apps/user/wandr.video.player
+   WANDR_APPS_ROOT=~/.local/share/wandr-apps $HOST --app wandr.video.player
+ VISUAL PROOF WITHOUT A HUMAN WATCHING: WSLg is ROOTLESS, so ffmpeg x11grab of
+   the root captures BLACK. Run with WAYLAND_DISPLAY unset (forces winit X11),
+   find the window by WM_CLASS ("wasm-android-host") in `xwininfo -root -tree`,
+   then `xwd -id <wid>` -> ffmpeg -> png. Script kept at scratchpad/capture2.sh;
+   worth promoting into repros/ if reused.
+
+=== NEXT: STAGE 3 ===
+ VaapiBackend into wandr-video (BackendKind::Hardware, priority 10,
+ capability-probed supports_decode; software backends stay as fallback; needs a
+ VA surface POOL for NVDEC — 32/300 + "No ShortTerm reference found" is almost
+ certainly per-frame surface allocation exhausting NVDEC's DPB). The host
+ currently ALWAYS software-decodes (this run: "H264 decode via openh264").
+ stage 4 = factor into wasi:video-decoder + resolve its flagged z-order OPEN
+ issue, add av1, then propose upstream.
 
 === HARDWARE PICTURE (three drivers, three different answers) ===
  fedora i965 : min none    | VA|KERNEL_DRM|DRM_PRIME | t1 OK   t2 OK   t3 OK | 300/300 PASS
  WSL d3d12   : min 64x64   | advertises DRM_PRIME_2  | t1 FAIL t2 OK   t3 OK | DECODE HANGS
  popos NVDEC : min 48x16   | reports NO mem types    | t1 FAIL t2 FAIL t3 OK | 32/300 then DPB errors
- * WSL/d3d12 decode is broken AT THE DRIVER (ffmpeg -hwaccel vaapi hangs too; sw
-   decode 0.32s). Not our bug. Do not sink more time there.
- * NVDEC 32/300 + "No ShortTerm reference found": hypothesis = we allocate a FRESH
-   VA surface per frame and never pool, exhausting NVDEC's decode-surface pool
-   (~32 = typical NVDEC DPB). A surface pool now looks REQUIRED for NVDEC (it was
-   correctly ruled out as the cause of the WSL hang).
+ * WSL/d3d12 decode is broken AT THE DRIVER (ffmpeg -hwaccel vaapi hangs too).
+   Not our bug. Do not sink more time there.
  * Upstream cros-codecs hardcodes a 16x16 placeholder context — WRONG on 2 of 3
    drivers. Our vendored patch queries the driver. Capability bits lie in BOTH
    directions; always probe.
 
-=== STAGE PLAN ===
- stage 1 contract + host wiring   DONE
- stage 2 player proves it         CLI DONE / on-screen BLOCKED (fix above)
- stage 3 VaapiBackend into wandr-video (BackendKind::Hardware, priority 10,
-         capability-probed supports_decode; software backends stay as fallback;
-         needs the surface pool for NVDEC). Host currently ALWAYS software-decodes.
- stage 4 factor into wasi:video-decoder + resolve its flagged z-order OPEN issue,
-         add av1, then propose upstream.
-
 === HOUSEKEEPING ===
  * contracts commit e8ed7fe is LOCAL ONLY (never pushed). Root contracts/ clone
    still at 95542a1. CI would fetch a SHA it cannot see — reconcile before CI.
- * wandr.alarm.test uses the same RETIRED my:skiko-gfx interfaces and is very
-   likely broken on desktop too; other apps from that template may be affected.
- * Host built with scripts/build-host-linux.sh (sets SYSTEM_DEPS_DAV1D_BUILD_INTERNAL).
- * popos now has rustup + libva-dev/libclang-dev/libgbm-dev; probe source at
-   ~/vaapi-probe there and on fedora. glibc: popos 2.39 < WSL 2.41 < fedora 2.42,
-   so a WSL-built binary runs on fedora but NOT popos (build natively, or target
-   the oldest glibc — cargo-zigbuild / old-distro container).
+ * wandr.alarm.test still exports the RETIRED my:skiko-gfx interfaces and is very
+   likely dead on desktop for the same reason stage 2 was; other apps from that
+   template may be too. The fix is the one applied here.
+ * popos has rustup + libva-dev/libclang-dev/libgbm-dev; probe at ~/vaapi-probe
+   there and on fedora. glibc: popos 2.39 < WSL 2.41 < fedora 2.42, so a
+   WSL-built binary runs on fedora but NOT popos (build natively).

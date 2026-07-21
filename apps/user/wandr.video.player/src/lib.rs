@@ -11,24 +11,29 @@
 //! guest itself never sees a pixel (`decoded-frame` is opaque by design), so
 //! decode-to-surface is the only visual proof a guest can produce.
 //!
-//! PUMPED FROM `render-frame`, not a blocking loop: a reactor must return
-//! promptly or the whole UI stalls. Each callback submits a bounded amount of
-//! input and presents whatever is due — which is how a real player works anyway.
+//! PUMPED FROM `on-frame`, not a blocking loop: a reactor must return promptly
+//! or the whole UI stalls. Each callback submits a bounded amount of input and
+//! presents whatever is due — which is how a real player works anyway.
+//!
+//! The tick arrives on `wasi:input-handlers/frame-handler` — the ONLY interface
+//! the host drives UI guests through (`input.rs::dispatch_frame`). The retired
+//! `my:skiko-gfx/renderer` this app first exported was never called at all.
 //!
 //! Input: `/samples/bbb.h264` (Annex-B), via a read-only `[[mounts]]` entry in
 //! package.toml. Demux is guest-side by design, so no sample path is baked into
 //! the host.
 
 wit_bindgen::generate!({
-    world: "video-player-app",
+    world: "wandr:video-player-app/video-player-app",
     path: "wit",
     generate_all,
 });
 
-use crate::exports::my::skiko_gfx::frame_pacing::Guest as PacingGuest;
-use crate::exports::my::skiko_gfx::renderer::{Guest as RendererGuest, KeyKind, PointerKind};
-use crate::wandr::video::decoder::VideoDecoder;
+use crate::exports::wandr::ui_shell::frame_pacing::Guest as PacingGuest;
+use crate::exports::wasi::input_handlers::frame_handler::Guest as FrameGuest;
+use crate::wandr::video::decoder::{DecodedFrame, VideoDecoder};
 use crate::wandr::video::types::{Codec, DecoderConfig, TimedFrame, VideoError, VideoRect, ZLayer};
+use crate::wasi::canvas::embedding as wembed;
 use std::cell::RefCell;
 
 const CLIP: &str = "/samples/bbb.h264";
@@ -96,6 +101,13 @@ struct Player {
     done: bool,
     last_pts: i64,
     out_of_order: usize,
+    /// The decoded frame we have taken from the host but whose PTS is not due
+    /// yet. HOLDING the handle is the only way a guest can delay a frame:
+    /// `present(at-ns)` is unusable (finding #1 — a guest cannot name a host
+    /// monotonic instant), so we keep it and present it when the wall clock
+    /// catches up. Holding also back-pressures decode: `presented` stops
+    /// advancing, so the DECODE_AHEAD gate stops feeding.
+    pending: Option<DecodedFrame>,
     /// Surface geometry, learned from on-resize.
     surface: (u32, u32),
 }
@@ -114,6 +126,7 @@ impl Player {
             done: false,
             last_pts: -1,
             out_of_order: 0,
+            pending: None,
             surface: (1280, 720),
         }
     }
@@ -196,37 +209,53 @@ impl Player {
             self.flushed = true;
         }
 
-        // Present everything whose PTS is due against the HOST clock.
+        // Present every frame whose PTS is due against the HOST clock, one at a
+        // time: we may only take the next one once the one we hold has gone out,
+        // or a fast decoder would race ahead of real time and we would have to
+        // throw frames away to keep up (which is what the first cut did — 10 s of
+        // video "played" in under a second).
+        //
+        // ‼️ Stage-2 finding #1 in practice: with a usable `present(at-ns)` we
+        // would hand every frame straight to the host with its display deadline
+        // and let the host pace it. Instead the guest holds and self-paces.
         let elapsed_us = (nanos.saturating_sub(self.origin_ns) / 1_000) as i64;
-        while let Some(frame) = dec.next_decoded() {
-            let pts = frame.timestamp_us();
-            if pts <= self.last_pts {
-                self.out_of_order += 1;
+        loop {
+            if self.pending.is_none() {
+                let Some(frame) = dec.next_decoded() else { break };
+                let pts = frame.timestamp_us();
+                if pts <= self.last_pts {
+                    self.out_of_order += 1;
+                }
+                self.last_pts = pts;
+                self.pending = Some(frame);
             }
-            self.last_pts = pts;
-            self.presented += 1;
-            if pts > elapsed_us + 250_000 {
-                // Too far in the future: hold it by NOT presenting. `present` is
-                // the only way to hand it back, so drop the handle instead —
-                // which the contract defines as equivalent to `discard`.
-                //
-                // ‼️ This is the shape of stage-2 finding #1: with a usable
-                // `present(at-ns)` we would simply schedule it and let the host
-                // show it on time, instead of discarding and re-deciding.
-                continue;
+            // `pending` is Some here.
+            let due = self.pending.as_ref().map(|f| f.timestamp_us()).unwrap_or(0) <= elapsed_us;
+            if !due {
+                break;
             }
-            frame.present(0);
+            if let Some(frame) = self.pending.take() {
+                frame.present(0);
+                self.presented += 1;
+            }
         }
 
         if self.flushed && self.next_au >= self.aus.len() && !self.done {
             // Everything fed and drained.
             if self.presented >= self.aus.len() {
                 self.done = true;
+                // Wall time vs clip duration is the pacing proof: a run that
+                // finishes far short of the clip's length did not PLAY it, it
+                // raced through it.
+                let clip_ms = self.aus.len() as i64 * 1000 / FPS;
                 println!(
-                    "player: DONE — presented {}/{} frames, out-of-order {} (0 = display order OK)",
+                    "player: DONE — presented {}/{} frames, out-of-order {} (0 = display order OK), \
+                     wall {} ms vs clip {} ms",
                     self.presented,
                     self.aus.len(),
-                    self.out_of_order
+                    self.out_of_order,
+                    elapsed_us / 1000,
+                    clip_ms,
                 );
             }
         }
@@ -235,12 +264,24 @@ impl Player {
 
 thread_local! {
     static PLAYER: RefCell<Player> = const { RefCell::new(Player::new()) };
+    static WCTX: RefCell<Option<wembed::CanvasContext>> = const { RefCell::new(None) };
+}
+
+/// The canvas context, created once and kept — `get-context` is the embedding
+/// handshake, not a per-frame call.
+fn wctx<R>(f: impl FnOnce(&wembed::CanvasContext) -> R) -> R {
+    WCTX.with(|c| {
+        if c.borrow().is_none() {
+            *c.borrow_mut() = Some(wembed::get_context());
+        }
+        f(c.borrow().as_ref().unwrap())
+    })
 }
 
 struct Component;
 
-impl RendererGuest for Component {
-    fn render_frame(nanos: u64) {
+impl FrameGuest for Component {
+    fn on_frame(nanos: u64) {
         PLAYER.with(|p| {
             let mut p = p.borrow_mut();
             if !p.started {
@@ -249,23 +290,21 @@ impl RendererGuest for Component {
             p.pump(nanos);
         });
 
-        // No drawing: we import no canvas (see world.wit). The video surface is
-        // composited by the host ABOVE our UI buffer, so an empty UI is exactly
-        // what we want for a clean proof — anything on screen came from the
-        // decoder, not from us.
+        // We draw nothing but an opaque black background — every pixel of picture
+        // on screen therefore came from the decoder, not from us, which is what
+        // makes this a proof. But we MUST still present: the host composites the
+        // video surface (above-ui) into this same frame inside `present`.
+        let cv = wctx(|x| x.get_current_buffer());
+        cv.clear(0xff00_0000);
+        drop(cv);
+        wctx(|x| x.present());
     }
 
-    fn on_pointer_event(_kind: PointerKind, _x: f32, _y: f32) {}
-    fn on_key_event(_kind: KeyKind, _key_code: u32) {}
     /// The host tells us the surface size here — this is how we learn the
     /// geometry without importing a canvas interface.
     fn on_resize(w: u32, h: u32) {
         PLAYER.with(|p| p.borrow_mut().surface = (w.max(1), h.max(1)));
     }
-    fn on_scheduled_callback(_id: u32) {}
-    fn on_pointer_event_v2(_id: u32, _kind: PointerKind, _x: f32, _y: f32, _pressure: f32) {}
-    fn on_key_event_v2(_kind: KeyKind, _code_point: u32, _key_id: u32) {}
-    fn on_lifecycle_changed(_state: u32) {}
 }
 
 impl PacingGuest for Component {
