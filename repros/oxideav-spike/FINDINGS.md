@@ -79,6 +79,19 @@ Identical to nvdec on popos and vulkan on WSL. So the silent-HW-failure is
 one bad path — a registry that never falls back when a HW decoder yields zero
 frames.
 
+**vainfo (2026-07-21, user installed it + joined `render`) — direct confirmation:**
+```
+Driver: Intel i965 driver for Ivybridge Mobile 2.4.0.pre1
+  VAProfileH264ConstrainedBaseline : VAEntrypointVLD
+  VAProfileH264Main                : VAEntrypointVLD
+  VAProfileH264High                : VAEntrypointVLD   <- bbb is High
+  VAProfileH264StereoHigh          : VAEntrypointVLD
+```
+No HEVC/VP9/AV1 VLD → HD 4000 is **H.264-decode-only** (Ivy Bridge predates HW
+HEVC/VP9). The default `iHD` (nonfree) driver fails to init on this GPU (it is
+Broadwell+); libva falls back to `i965`, the correct driver. Our backend should
+prefer `LIBVA_DRIVER_NAME=i965` on Ivy Bridge / let libva auto-fall-back.
+
 **Two conclusions for wandr's VAAPI plan:**
 1. The hardware + i965/iHD driver + render-node access on fedora are ready; VAAPI
    H.264 decode is available on this GPU. fedora is the target box (popos was
