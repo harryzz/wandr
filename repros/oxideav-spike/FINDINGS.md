@@ -111,6 +111,33 @@ silent-0-frame as nvdec and vulkan, now confirmed against a driver we KNOW works
    the wandr-video registry already enforces. This probe de-risked it: only a
    correct decode data-path remains.
 
+## The README's own HW table confirms it (found 2026-07-21)
+
+oxideav's README has a hardware-backend table (behind a collapsed "Hardware
+acceleration" section). **Every HW backend is marked 🚧 in-progress, none ✅**;
+encode is mostly "— stub" / "— empty":
+
+| Module | Decode | Encode |
+|---|---|---|
+| oxideav-videotoolbox (macOS) | 🚧 H.264+HEVC+ProRes+… | 🚧 |
+| oxideav-vaapi (Linux) | 🚧 H.264 | — stub |
+| oxideav-vdpau (NVIDIA legacy) | 🚧 H.264+HEVC+VP9+MPEG2 | — stub |
+| oxideav-nvidia (NVENC/NVDEC) | 🚧 VP9+AV1+MPEG2 | — |
+| oxideav-vulkan-video | 🚧 H.264+HEVC+AV1 *capability queries* | — empty |
+
+The vaapi/vulkan notes describe **capability probing** ("EntrypointMatrix …
+capability probe", "capability queries") — NOT a working decode loop. So the 🚧
+is honest: the piece that's done is the probe (which is exactly what registered
+`vaapi-h264` and passed the registration check), while the decode data-path is
+unfinished. That fully explains the 0/300 on all three machines: an incomplete HW
+backend registers at priority 10, wins dispatch, and can't decode — with no
+fallback.
+
+So this is less "a bug in finished code" and more "unfinished HW that registers
+and wins dispatch anyway". Either way, for wandr: **do not wait for oxideav HW —
+build our own VAAPI backend** (hardware + i965 driver + H.264 VLD are confirmed
+working). The value from oxideav is its mature SOFTWARE decoders, next section.
+
 ## Three concrete bugs (upstream-reportable)
 
 1. **H.264 HW decode = silent 0-frame success, no fallback.** Reproduced on two
