@@ -53,10 +53,25 @@ const CLIPS: &[&str] = &["/samples/bbb-h264.mp4", "/samples/bbb.h264"];
 /// Fallback frame rate, used ONLY to synthesise timestamps for an elementary
 /// stream, which has none. An MP4 tells us the real ones and this is unused.
 const FPS: i64 = 30;
-/// Decode-ahead cushion, in frames. Must exceed the stream's reorder depth or a
-/// late earlier-PTS frame arrives after its slot has passed; unbounded would
-/// decode the whole file into host memory before showing frame one.
-const DECODE_AHEAD: usize = 8;
+/// H.264 allows up to 16 frames in the DPB (Annex A, MaxDpbMbs), so a conformant
+/// decoder may legally consume 17 access units before it emits its first picture.
+const MAX_H264_DPB: usize = 16;
+/// Decode-ahead cushion, in frames — how far ahead of what we have SHOWN we are
+/// willing to feed. Unbounded would decode a whole file into host memory before
+/// showing frame one.
+///
+/// ‼️ IT MUST EXCEED THE DECODER'S REORDER DEPTH OR PLAYBACK DEADLOCKS, and this
+/// was set to 8 for exactly that reason — too small. openh264 emits early enough
+/// that 8 worked; the VA-API decoder holds more, so the guest fed 8, waited for
+/// output that could only come from more input, and stalled forever at
+/// `presented 0` while the pump ticked 1000+ times. Nothing errored.
+///
+/// The deeper problem is a CONTRACT gap, not a constant: a guest cannot ask how
+/// deep a decoder's pipeline is, and the host never reports `queue-full` (stage-1
+/// finding #2), so there is no back-pressure signal to feed against either. Until
+/// one of those exists, the only safe cushion is the codec's SPEC maximum — which
+/// is at least derived rather than guessed.
+const DECODE_AHEAD: usize = MAX_H264_DPB + 4;
 /// Cap the work done per render-frame so a reactor callback never runs long.
 const MAX_SUBMITS_PER_FRAME: usize = 4;
 
@@ -258,6 +273,10 @@ struct Player {
     pending: Option<DecodedFrame>,
     /// Surface geometry, learned from on-resize.
     surface: (u32, u32),
+    /// How many times `on-frame` has driven us. A player that stalls needs to be
+    /// able to say WHICH thing stopped — the ticks, the decoder, or the clock —
+    /// and without this the three are indistinguishable from the outside.
+    pumps: u64,
 }
 
 impl Player {
@@ -277,6 +296,7 @@ impl Player {
             out_of_order: 0,
             pending: None,
             surface: (1280, 720),
+            pumps: 0,
         }
     }
 
@@ -338,6 +358,19 @@ impl Player {
     /// One pump step. Submits a bounded amount, then presents everything due.
     fn pump(&mut self, nanos: u64) {
         let Some(dec) = self.dec.as_ref() else { return };
+        self.pumps += 1;
+        if self.pumps % 120 == 0 && !self.done {
+            println!(
+                "player: pump {} — clock {} ms, fed {}/{}, decoded-out {}, presented {}, holding {}",
+                self.pumps,
+                (nanos.saturating_sub(self.origin_ns) / 1_000_000) as i64,
+                self.next_au,
+                self.aus.len(),
+                self.submitted,
+                self.presented,
+                self.pending.is_some() as u8,
+            );
+        }
 
         // Feed, keeping only a bounded cushion ahead of what we've shown.
         let mut submits = 0;

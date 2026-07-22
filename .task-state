@@ -137,10 +137,70 @@ NOTES=RESUME AT STAGE 3.
      builds the Linux leg with p3-async,vaapi so the shipped config is the
      compiled one.
 
+=== STAGE 3 VERIFIED ON SCREEN + MP4 (2026-07-22, popos i965) ===
+ The player now plays a REAL MP4 through HARDWARE decode, on screen, in real time:
+ 300/300 presented, wall 10038 ms vs clip 10033 ms, "H264 decode via vaapi",
+ stills captured and eyeballed (correct colour, no corruption). The same run with
+ WANDR_DRM_DEVICE=/nonexistent forces the software path for a same-box A/B — that
+ env knob makes the VA display fail to open, so the backend declines and openh264
+ serves it. Both paths look correct.
+
+ THREE BUGS THIS FOUND — each invisible to the counters we had:
+  A. openh264 MISPAIRED container PTS (102/300). Its FIFO gave the i-th input
+     timestamp to the i-th output frame; valid only when decode order == display
+     order. FIXED (host d1bca25) by taking the SMALLEST outstanding timestamp,
+     since the codec emits in display order. ‼️ The host sorts decoded frames by
+     the timestamp the codec reports (video_desktop.rs::queue_decoded), so a
+     mispairing yields ASCENDING timestamps over REORDERED pictures — the player's
+     `out-of-order` counter was measuring the host's own sort and could only ever
+     read zero. Regression test: crates/wandr-video/tests/h264_pts_pairing.rs.
+     The elementary-stream path had been working BY ACCIDENT: DTS-shaped tags fed
+     to a reordering FIFO cancel out. Feeding BETTER data (real PTS) broke it.
+  B. vaapi read back with vaDeriveImage (tier 2). On Intel that memory is TILED and
+     CPU reads of it are catastrophic: 16.6 s vs 1.15 s for 300 frames — 14x, the
+     difference between dropping 251/300 and running at ~260 fps. FIXED (host
+     d077a88) to vaGetImage-first. SELF-INFLICTED: the probe used vaGetImage all
+     along; I "optimised" it in the port on the reasoning that a map beats a copy,
+     and never measured. Frame counters showed 300/300 decoded either way.
+  C. DECODE_AHEAD=8 DEADLOCKED the guest against the HW decoder. The player fed 8,
+     waited for output, and the decoder needed more input before emitting its first
+     picture: `fed 8/300, presented 0` for 1000+ pumps, nothing errored. Now
+     derived as MAX_H264_DPB(16)+4 rather than guessed. openh264 emits early
+     enough that 8 worked, which is why it never showed up before.
+
+ ‼️ FINDING #7 — NO WAY TO NEGOTIATE PIPELINE DEPTH. Bug C is a contract gap, not
+ a constant. A guest cannot ask how deep a decoder's pipeline is, and the host
+ never reports `queue-full` (finding #2), so there is no back-pressure signal to
+ feed against either. Feeding until queue-full would be the natural rule and it is
+ unimplementable today. Every guest must therefore guess a cushion, and guessing
+ too small deadlocks SILENTLY. Resolve in stage 4: either the host signals
+ queue-full, or the decoder exposes its minimum input depth (WebCodecs-style
+ `decodeQueueSize` / VA `min_num_surfaces`), or both.
+
+ HOW TO RUN IT ON POPOS:
+   ~/wandr-host                (clone of github wandr-host; build with
+                                scripts/build-host-linux.sh — auto-detects libva)
+   ~/wandr-player-src          (package.toml + components/ui.wasm; --install this)
+   ~/wandr/repros/oxideav-spike/samples/   (the manifest's mount path; MP4 + h264)
+   ~/popos-capture2.sh <tag> <secs...>     (runs + grabs stills)
+   DISPLAY=:1 — popos is a WAYLAND session with rootless XWayland on :1, and it
+   needs NO xauth. Capture MUST use `ffmpeg -f x11grab -window_id <wid>`: a region
+   grab of the X root returns BLACK because the root holds no composited content
+   (same trap as WSLg). xwd is NOT installed there; ffmpeg 6.1 is and supports
+   -window_id, which also means we never capture the rest of the desktop.
+   glibc: popos 2.39 < WSL 2.41, so binaries must be built natively on popos.
+
 === NEXT: STAGE 4 ===
  Factor into wasi:video-decoder + resolve its flagged z-order OPEN issue, add av1,
- settle the timestamp-semantics wording (finding #6) and fix openh264 to match,
- then propose upstream. The cros-codecs surface() visibility patch is worth
+ then propose upstream. Two things are now SETTLED BY EVIDENCE rather than open:
+   * finding #6 (timestamp semantics) — "carried through unchanged" is correct,
+     vaapi was right, openh264 was wrong and is FIXED. Write that into the draft.
+   * the draft still carries `timestamp: u32` (90 kHz RTP), which cannot express
+     file playback and wraps every ~13.25 h — it predates the whole M2 playback
+     lane (no timed-frame/decoded-frame, no flush/reset). Folding that in IS the
+     bulk of stage 4.
+ Add finding #7 (no pipeline-depth negotiation) to that list — it is a contract
+ gap that silently deadlocks guests. The cros-codecs surface() visibility patch is worth
  proposing upstream too — it is a no-semantic-change widening.
 
 === HARDWARE PICTURE (2026-07-22: NVDEC RETIRED — card was too old/unstable) ===
