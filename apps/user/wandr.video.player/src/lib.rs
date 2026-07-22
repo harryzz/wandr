@@ -19,9 +19,19 @@
 //! the host drives UI guests through (`input.rs::dispatch_frame`). The retired
 //! `my:skiko-gfx/renderer` this app first exported was never called at all.
 //!
-//! Input: `/samples/bbb.h264` (Annex-B), via a read-only `[[mounts]]` entry in
-//! package.toml. Demux is guest-side by design, so no sample path is baked into
-//! the host.
+//! Input: whichever of `CLIPS` is present, via a read-only `[[mounts]]` entry in
+//! package.toml. Demux is GUEST-SIDE by design (proposals/wasi-media-source),
+//! so no sample path and no container knowledge is baked into the host.
+//!
+//! ‼️ TWO CONTAINERS, ON PURPOSE — this is the finding-#6 experiment, not
+//! completeness for its own sake. An Annex-B ELEMENTARY STREAM CARRIES NO
+//! TIMESTAMPS: the best a player can do is synthesise one from bitstream
+//! position, which is a DTS, and on a B-frame stream that is simply the wrong
+//! quantity. An MP4 carries a real per-sample presentation time (DTS + ctts).
+//! Feeding the same content both ways is what distinguishes a decoder that
+//! carries timestamps through unchanged from one that reorders them, which is
+//! exactly where the vaapi and openh264 backends disagree. The player REPORTS
+//! which kind it got, so a run is self-describing.
 
 wit_bindgen::generate!({
     world: "wandr:video-player-app/video-player-app",
@@ -36,7 +46,12 @@ use crate::wandr::video::types::{Codec, DecoderConfig, TimedFrame, VideoError, V
 use crate::wasi::canvas::embedding as wembed;
 use std::cell::RefCell;
 
-const CLIP: &str = "/samples/bbb.h264";
+/// Tried in order; the first that opens wins. MP4 first because it carries real
+/// presentation times — swap the order to run the elementary-stream half of the
+/// finding-#6 comparison against identical content.
+const CLIPS: &[&str] = &["/samples/bbb-h264.mp4", "/samples/bbb.h264"];
+/// Fallback frame rate, used ONLY to synthesise timestamps for an elementary
+/// stream, which has none. An MP4 tells us the real ones and this is unused.
 const FPS: i64 = 30;
 /// Decode-ahead cushion, in frames. Must exceed the stream's reorder depth or a
 /// late earlier-PTS frame arrives after its slot has passed; unbounded would
@@ -45,8 +60,139 @@ const DECODE_AHEAD: usize = 8;
 /// Cap the work done per render-frame so a reactor callback never runs long.
 const MAX_SUBMITS_PER_FRAME: usize = 4;
 
-fn pts_us(index: i64) -> i64 {
+/// One access unit, ready to submit: Annex-B bytes, its presentation time in
+/// microseconds, and whether it can start a decode.
+struct Au {
+    data: Vec<u8>,
+    pts_us: i64,
+    keyframe: bool,
+}
+
+/// Where an access unit's timestamp came from. Worth carrying rather than
+/// assuming: a synthesised timestamp is a DTS wearing a PTS's clothes, and every
+/// ordering question downstream depends on knowing which one you have.
+#[derive(Clone, Copy, PartialEq)]
+enum Timing {
+    /// Real presentation times, from the container's sample table.
+    Container,
+    /// Synthesised from bitstream position at `FPS` — an elementary stream has
+    /// nothing better to offer.
+    SynthesizedDts,
+}
+
+impl Timing {
+    fn label(self) -> &'static str {
+        match self {
+            Timing::Container => "container PTS (real)",
+            Timing::SynthesizedDts => "synthesised from bitstream order (a DTS)",
+        }
+    }
+}
+
+fn synth_pts_us(index: i64) -> i64 {
     index * 1_000_000 / FPS
+}
+
+/// Demux by CONTENT, not by file extension: an `ftyp` box at offset 4 is the
+/// ISO-BMFF signature. A player that trusts the name is a player that crashes on
+/// a mislabelled file.
+fn demux(bytes: &[u8]) -> Result<(Vec<Au>, Timing), String> {
+    if bytes.len() > 8 && &bytes[4..8] == b"ftyp" {
+        demux_mp4(bytes).map(|aus| (aus, Timing::Container))
+    } else {
+        Ok((
+            access_units(bytes)
+                .into_iter()
+                .enumerate()
+                .map(|(i, (data, keyframe))| Au { data, pts_us: synth_pts_us(i as i64), keyframe })
+                .collect(),
+            Timing::SynthesizedDts,
+        ))
+    }
+}
+
+const START: [u8; 4] = [0, 0, 0, 1];
+
+/// MP4 (ISO-BMFF) → Annex-B access units with REAL presentation times.
+///
+/// Three things a container gives us that an elementary stream cannot:
+///   * sample boundaries — no need to infer AUs by scanning for VCL NALs
+///   * `is_sync` — which samples are true random-access points
+///   * PTS = DTS + composition offset (`ctts`). That offset is precisely the
+///     B-frame reordering delta, so this is the only way to get a presentation
+///     time that is actually ascending in display order.
+fn demux_mp4(bytes: &[u8]) -> Result<Vec<Au>, String> {
+    let size = bytes.len() as u64;
+    let mut mp4 = mp4::Mp4Reader::read_header(std::io::Cursor::new(bytes), size)
+        .map_err(|e| format!("mp4 header: {e}"))?;
+
+    let (tid, timescale, sps, pps, nal_len, count) = {
+        let t = mp4
+            .tracks()
+            .values()
+            .find(|t| matches!(t.media_type(), Ok(mp4::MediaType::H264)))
+            .ok_or("no H.264 track")?;
+        (
+            t.track_id(),
+            t.timescale() as i64,
+            t.sequence_parameter_set().map_err(|e| format!("sps: {e}"))?.to_vec(),
+            t.picture_parameter_set().map_err(|e| format!("pps: {e}"))?.to_vec(),
+            // The NAL length prefix is 1..4 bytes, declared per file in avcC's
+            // lengthSizeMinusOne. Almost always 4 — but "almost always" is how you
+            // get a decoder fed garbage on the one file that differs, so read it.
+            avcc_nal_length_size(bytes).unwrap_or(4),
+            t.sample_count(),
+        )
+    };
+    if timescale <= 0 {
+        return Err("track timescale is zero".into());
+    }
+
+    let mut out = Vec::with_capacity(count as usize);
+    for sid in 1..=count {
+        let s = mp4
+            .read_sample(tid, sid)
+            .map_err(|e| format!("sample {sid}: {e}"))?
+            .ok_or_else(|| format!("sample {sid} missing"))?;
+        // PTS, not DTS: start_time is the decode time, rendering_offset is ctts.
+        let pts_us = (s.start_time as i64 + s.rendering_offset as i64) * 1_000_000 / timescale;
+
+        let mut au = Vec::with_capacity(s.bytes.len() + 64);
+        // Parameter sets ride with every sync sample: the decoder must be able to
+        // start from any of them, and after a `reset` it will have forgotten them.
+        if s.is_sync {
+            au.extend_from_slice(&START);
+            au.extend_from_slice(&sps);
+            au.extend_from_slice(&START);
+            au.extend_from_slice(&pps);
+        }
+        let mut i = 0usize;
+        while i + nal_len <= s.bytes.len() {
+            let mut n = 0usize;
+            for b in &s.bytes[i..i + nal_len] {
+                n = (n << 8) | *b as usize;
+            }
+            i += nal_len;
+            if n == 0 || i + n > s.bytes.len() {
+                break;
+            }
+            au.extend_from_slice(&START);
+            au.extend_from_slice(&s.bytes[i..i + n]);
+            i += n;
+        }
+        out.push(Au { data: au, pts_us, keyframe: s.is_sync });
+    }
+    Ok(out)
+}
+
+/// `lengthSizeMinusOne` from the avcC box: the low 2 bits of the byte at offset 4
+/// of the box payload, plus one. The `mp4` crate parses avcC but does not expose
+/// this field, so read it from the raw box — the same shape as the host's hvcC
+/// parser, and for the same reason.
+fn avcc_nal_length_size(file: &[u8]) -> Option<usize> {
+    let p = file.windows(4).position(|w| w == b"avcC")?;
+    let payload = file.get(p + 4..)?;
+    Some((*payload.get(4)? & 0b11) as usize + 1)
 }
 
 /// Split Annex-B into ACCESS UNITS (one coded picture each): a new AU begins at a
@@ -89,7 +235,9 @@ fn access_units(buf: &[u8]) -> Vec<(Vec<u8>, bool)> {
 
 struct Player {
     dec: Option<VideoDecoder>,
-    aus: Vec<(Vec<u8>, bool)>,
+    aus: Vec<Au>,
+    /// Whether `aus` carry real presentation times or synthesised ones.
+    timing: Timing,
     next_au: usize,
     submitted: usize,
     presented: usize,
@@ -117,6 +265,7 @@ impl Player {
         Self {
             dec: None,
             aus: Vec::new(),
+            timing: Timing::SynthesizedDts,
             next_au: 0,
             submitted: 0,
             presented: 0,
@@ -134,16 +283,33 @@ impl Player {
     fn start(&mut self, nanos: u64) {
         self.started = true;
         self.origin_ns = nanos;
-        let buf = match std::fs::read(CLIP) {
-            Ok(b) => b,
+        // First clip that opens wins; a missing one is not an error, a missing
+        // mount is.
+        let Some((path, buf)) = CLIPS.iter().find_map(|p| std::fs::read(p).ok().map(|b| (*p, b)))
+        else {
+            println!("player: none of {CLIPS:?} could be read — is the /samples mount resolving?");
+            self.done = true;
+            return;
+        };
+        match demux(&buf) {
+            Ok((aus, timing)) => {
+                self.aus = aus;
+                self.timing = timing;
+            }
             Err(e) => {
-                println!("player: cannot read {CLIP}: {e} (is the /samples mount resolving?)");
+                println!("player: demux {path} failed: {e}");
                 self.done = true;
                 return;
             }
-        };
-        self.aus = access_units(&buf);
-        println!("player: {} bytes -> {} access units", buf.len(), self.aus.len());
+        }
+        let span_ms = self.aus.last().map(|a| a.pts_us / 1000).unwrap_or(0);
+        println!(
+            "player: {path} — {} bytes -> {} access units, timing = {}, last PTS {} ms",
+            buf.len(),
+            self.aus.len(),
+            self.timing.label(),
+            span_ms
+        );
 
         // Decode-to-surface: a REAL rect is what makes the host composite video.
         // above-ui = the video covers its rect and the UI lays out around it, so
@@ -179,11 +345,11 @@ impl Player {
             && submits < MAX_SUBMITS_PER_FRAME
             && self.submitted < self.presented + DECODE_AHEAD
         {
-            let (data, keyframe) = &self.aus[self.next_au];
+            let au = &self.aus[self.next_au];
             let frame = TimedFrame {
-                data: data.clone(),
-                timestamp_us: pts_us(self.next_au as i64),
-                keyframe: *keyframe,
+                data: au.data.clone(),
+                timestamp_us: au.pts_us,
+                keyframe: au.keyframe,
             };
             match dec.submit_timed(&frame) {
                 Ok(()) => {
@@ -247,15 +413,38 @@ impl Player {
                 // Wall time vs clip duration is the pacing proof: a run that
                 // finishes far short of the clip's length did not PLAY it, it
                 // raced through it.
-                let clip_ms = self.aus.len() as i64 * 1000 / FPS;
+                // Clip length comes from the LAST PTS, not from a frame count and
+                // an assumed rate — with container timing the file is the
+                // authority on how long it runs.
+                let clip_ms = self.aus.iter().map(|a| a.pts_us).max().unwrap_or(0) / 1000;
                 println!(
-                    "player: DONE — presented {}/{} frames, out-of-order {} (0 = display order OK), \
-                     wall {} ms vs clip {} ms",
+                    "player: DONE — presented {}/{} frames, wall {} ms vs clip {} ms",
                     self.presented,
                     self.aus.len(),
-                    self.out_of_order,
                     elapsed_us / 1000,
                     clip_ms,
+                );
+                // ‼️ THE FINDING-#6 MEASUREMENT. `out-of-order` counts frames whose
+                // PTS did not advance. It is only a DEFECT when the timestamps fed
+                // in were real presentation times: with container PTS a correct
+                // decoder must hand frames back in ascending order, so anything
+                // above zero means the decoder reordered or mispaired them. With
+                // synthesised bitstream-order tags a non-zero count is EXPECTED on
+                // a B-frame stream and says nothing about the decoder — which is
+                // exactly why the two runs are worth comparing.
+                println!(
+                    "player: timing = {} | out-of-order {} ({})",
+                    self.timing.label(),
+                    self.out_of_order,
+                    match (self.timing, self.out_of_order) {
+                        (Timing::Container, 0) => "0 = display order OK",
+                        (Timing::Container, _) =>
+                            "‼️ NON-ZERO WITH REAL PTS — decoder reordered or mispaired timestamps",
+                        (Timing::SynthesizedDts, 0) =>
+                            "0, but the tags were DTS-shaped — this says the decoder REORDERED them to ascending",
+                        (Timing::SynthesizedDts, _) =>
+                            "expected: DTS-shaped tags on a B-frame stream come back permuted",
+                    }
                 );
             }
         }

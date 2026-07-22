@@ -1,7 +1,8 @@
 # wandr.video.player — the first consumer of wandr:video's PLAYBACK lane
-# (task 117 M2 stage 2). Deliberately dependency-free beyond wit-bindgen: the
-# point is to exercise the CONTRACT, so anything it needs that the contract
-# cannot express is a finding, not something to paper over with a crate.
+# (task 117 M2 stage 2). Near dependency-free: the point is to exercise the
+# CONTRACT, so anything the contract cannot express is a finding, not something
+# to paper over with a crate. The one dependency is a DEMUXER, which is not
+# papering over anything — guest-side demux is the design.
 #   cargo build --target wasm32-wasip2 --release
 [package]
 name    = "wandr-video-player"
@@ -9,14 +10,20 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# A REACTOR (cdylib), not a command: the host calls our exported render-frame,
+# A REACTOR (cdylib), not a command: the host calls our exported on-frame,
 # we do not own a main loop.
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
 wit-bindgen = "0.57"
+# Guest-side MP4 demux (task 117 M2 stage 4 prep). Demux belongs in the GUEST by
+# design — proposals/wasi-media-source/NOTES.md — so the host never learns about
+# containers. Pure Rust, so it cross-compiles to wasm32-wasip2 unchanged; same
+# version the host's --video-decode-file diagnostic uses.
+mp4 = "0.14"
 
 [profile.release]
 opt-level = "s"
 strip = true
+
