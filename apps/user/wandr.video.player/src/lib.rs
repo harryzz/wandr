@@ -276,6 +276,10 @@ struct Player {
     done: bool,
     last_pts: i64,
     out_of_order: usize,
+    /// How many times the host said `queue-full`. Proof the back-pressure
+    /// conversation is actually happening rather than the timing merely looking
+    /// right for some other reason.
+    queue_full_hits: u64,
     /// PTS of the first frame, subtracted so playback starts immediately.
     /// Container PTS need not start at zero — this clip's does not (MP4 `ctts`
     /// offsets are non-negative, so the whole timeline is shifted by the reorder
@@ -311,6 +315,7 @@ impl Player {
             done: false,
             last_pts: -1,
             out_of_order: 0,
+            queue_full_hits: 0,
             first_pts_us: None,
             surface: (1280, 720),
             accel: Acceleration::NoPreference,
@@ -465,7 +470,10 @@ impl Player {
                 }
                 // Back-pressure, NOT loss: retry this same frame next pump. A file
                 // player cannot resync at the next keyframe the way RTP can.
-                Err(VideoError::QueueFull) => break,
+                Err(VideoError::QueueFull) => {
+                    self.queue_full_hits += 1;
+                    break;
+                }
                 Err(e) => {
                     println!("player: submit-timed failed at AU {}: {e:?}", self.next_au);
                     self.done = true;
@@ -531,6 +539,11 @@ impl Player {
                 // synthesised bitstream-order tags a non-zero count is EXPECTED on
                 // a B-frame stream and says nothing about the decoder — which is
                 // exactly why the two runs are worth comparing.
+                println!(
+                    "player: back-pressure — host said queue-full {} times \
+                     (0 = the host never pushed back; decode ran unbounded)",
+                    self.queue_full_hits
+                );
                 println!(
                     "player: timing = {} | out-of-order {} ({})",
                     self.timing.label(),

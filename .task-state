@@ -48,17 +48,26 @@ NOTES=RESUME AT STAGE 3.
     scheduler. PROVEN: the player hands off all 300 frames by 5.3 s yet the host
     is still changing the picture at t=8 s (mean luma diff 12.4 between t=3 s and
     t=8 s captures).
- 2. ‼️ WORSE AFTER step 0, and now the TOP PRIORITY. `queue-full` is specified on
-    submit-timed but the desktop host NEVER returns it (submit_for_playback
-    always returns Ok). The player used to throttle by ACCIDENT — holding a frame
-    until due stalled `presented`, so its own DECODE_AHEAD gate stopped feeding.
-    Now that it hands frames straight over, `presented` counts HAND-OFFS, the
-    gate never bites, and it decodes the whole file in 5.3 s and queues 300
-    frames in the host's SCHEDULED list. Nothing bounds host memory. THE FIX IS
-    ALREADY IN THE CONTRACT: honour queue-full ("back-pressure, NOT loss: retry
-    the SAME frame"), bounded by a new `Decoder::frames_in_flight_limit()`. No
-    WIT change. It also retires finding #7's silent deadlock — a guest told when
-    to stop never has to guess a cushion.
+ 2. ✅ RESOLVED 2026-07-22 (host aa47499). The host now HONOURS `queue-full`,
+    which the contract has specified since stage 1 and the desktop host had never
+    once returned. Refused BEFORE decoding (decoding first would materialise the
+    frame there is no room for); the guest retries the same access unit.
+    Bounded in BYTES not frames — MAX_IN_FLIGHT_BYTES (64 MiB) / real frame size,
+    so 18 frames at 720p and ~4 at 4K for the same footprint — with a floor of
+    MIN_IN_FLIGHT_FRAMES = 17, because H.264 allows 16 in the DPB and a cap below
+    the reorder depth DEADLOCKS the codec. A backend with a hard pool (MediaCodec
+    indices, VA surfaces) overrides via the new `Decoder::frames_in_flight_limit()`
+    (default None = bounded only by memory, the honest answer for software).
+    Accounting is an InFlight(Arc<AtomicUsize>) guard that MOVES from PendingFrame
+    into TakenFrame and decrements on drop, so it counts frames the guest holds
+    AND frames parked in SCHEDULED awaiting a deadline — the case that matters,
+    since presenting with a future deadline is how a player accumulates frames in
+    the host. VERIFIED: guest reports queue-full 110 times; wall 5.3 s -> 9.4 s
+    against a 10.03 s clip; 300/300, order intact; all 15 tests pass.
+    ‼️ This also RETIRES FINDING #7 (no pipeline-depth negotiation): a guest that
+    is told when to stop never has to guess a cushion. The player's
+    MAX_H264_DPB+4 constant is now a belt-and-braces floor rather than the only
+    thing standing between it and a silent deadlock.
  3. The SCHEDULED queue is drained ONLY by composite_video_surfaces, so
     surfaceless/--run-once guests never present. --run-once is a deliberate
     special case: DO NOT change it.
