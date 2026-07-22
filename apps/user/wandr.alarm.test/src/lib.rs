@@ -6,25 +6,24 @@
 //! alarm in the arbiter, which relaunches the guest at the next fire.
 
 wit_bindgen::generate!({
-    world: "alarm-test-app",
+    world: "wandr:alarm-test-app/alarm-test-app",
     path: "wit",
     generate_all,
 });
 
 use std::cell::RefCell;
 
-use crate::exports::my::skiko_gfx::frame_pacing::Guest as FramePacingGuest;
-use crate::exports::my::skiko_gfx::renderer::{Guest as RendererGuest, KeyKind, PointerKind};
 use crate::exports::wandr::alarm::alarm_handler::Guest as AlarmGuest;
 use crate::exports::wandr::audio_focus::focus_handler::{FocusChange, Guest as FocusHandlerGuest};
 use crate::exports::wandr::background::background::Guest as BackgroundGuest;
 use crate::exports::wandr::notify::notify_handler::Guest as NotifyHandlerGuest;
+use crate::exports::wandr::ui_shell::frame_pacing::Guest as FramePacingGuest;
+use crate::exports::wasi::input_handlers::frame_handler::Guest as FrameGuest;
+use crate::wandr::alarm::scheduler;
 use crate::wandr::audio_focus::focus::{self, FocusKind};
 use crate::wandr::notify::notifier;
-use crate::my::skiko_gfx::canvas::{
-    self, BlendMode, ColorFilterKind, PaintAttrs, PaintStyle, StrokeCap, StrokeJoin,
-};
-use crate::wandr::alarm::scheduler;
+use crate::wasi::canvas::embedding as wembed;
+use crate::wasi::canvas::types as wtypes;
 
 const ALARM_ID: u64 = 1;
 const PERIOD_MS: u64 = 5000;
@@ -47,29 +46,41 @@ struct State {
 
 thread_local! {
     static STATE: RefCell<State> = RefCell::new(State::default());
+    static WCTX: RefCell<Option<wembed::CanvasContext>> = const { RefCell::new(None) };
 }
 
-fn paint(color: u32) -> PaintAttrs {
-    PaintAttrs {
+/// The canvas context, created once and kept — `get-context` is the embedding
+/// handshake, not a per-frame call.
+fn wctx<R>(f: impl FnOnce(&wembed::CanvasContext) -> R) -> R {
+    WCTX.with(|c| {
+        if c.borrow().is_none() {
+            *c.borrow_mut() = Some(wembed::get_context());
+        }
+        f(c.borrow().as_ref().unwrap())
+    })
+}
+
+fn paint(color: u32) -> wtypes::Paint<'static> {
+    wtypes::Paint {
+        style: wtypes::PaintStyle::Fill,
         color,
-        style: PaintStyle::Fill,
-        stroke_width: 0.0,
-        stroke_miter: 4.0,
-        stroke_cap: StrokeCap::Butt,
-        stroke_join: StrokeJoin::Miter,
-        anti_alias: true,
         alpha: 255,
-        blend_mode: BlendMode::SrcOver,
-        shader_id: 0,
-        color_filter_kind: ColorFilterKind::None,
-        color_filter_color: 0,
+        blend: wtypes::BlendMode::SrcOver,
+        anti_alias: true,
+        shader: None,
+        stroke_width: 0.0,
+        stroke_cap: wtypes::StrokeCap::Butt,
+        stroke_join: wtypes::StrokeJoin::Miter,
+        stroke_miter: 4.0,
+        blur: None,
+        filter: None,
     }
 }
 
 struct Component;
 
-impl RendererGuest for Component {
-    fn render_frame(_nanos: u64) {
+impl FrameGuest for Component {
+    fn on_frame(_nanos: u64) {
         STATE.with(|s| {
             let mut s = s.borrow_mut();
             // Schedule the repeating alarm once (idempotent on id arbiter-side too).
@@ -89,9 +100,11 @@ impl RendererGuest for Component {
                 s.focus_requested = true;
                 let _ = r; // host logs the granted/failed result
             }
-            let (w, h) = (s.w.max(1.0), s.h.max(1.0));
-            canvas::begin_frame();
-            canvas::clear(0xFF12121C);
+            // The buffer knows its own size; on-resize is a hint that may not have
+            // arrived yet on the first frame, so take whichever is larger.
+            let cv = wctx(|x| x.get_current_buffer());
+            let (w, h) = (s.w.max(cv.width()).max(1.0), s.h.max(cv.height()).max(1.0));
+            cv.clear(0xFF12121C);
             // Growing bar: width tracks the alarm count (wraps to stay on-screen).
             // Colour tracks the audio-focus state — green=owner/gain, amber=duck,
             // grey=loss/loss-transient — visible proof of on-focus-changed.
@@ -101,8 +114,14 @@ impl RendererGuest for Component {
                 _     => 0xFF40C040, // gain (owner)
             };
             let bar_w = ((s.count as f32) * 24.0) % (w - 40.0).max(24.0);
-            canvas::draw_rect(20.0, h * 0.4, bar_w + 24.0, 60.0, paint(bar_color));
-            canvas::end_frame();
+            cv.draw_rect(
+                wtypes::Rect { x: 20.0, y: h * 0.4, width: bar_w + 24.0, height: 60.0 },
+                &paint(bar_color),
+            );
+            drop(cv);
+            // The frame only reaches the screen on present (begin-frame/end-frame
+            // had no equivalent obligation — this is the wasi:canvas swap).
+            wctx(|x| x.present());
         });
     }
 
@@ -113,13 +132,6 @@ impl RendererGuest for Component {
             s.h = h as f32;
         });
     }
-
-    fn on_pointer_event(_kind: PointerKind, _x: f32, _y: f32) {}
-    fn on_key_event(_kind: KeyKind, _key_code: u32) {}
-    fn on_scheduled_callback(_callback_id: u32) {}
-    fn on_pointer_event_v2(_pointer_id: u32, _kind: PointerKind, _x: f32, _y: f32, _pressure: f32) {}
-    fn on_key_event_v2(_kind: KeyKind, _code_point: u32, _key_id: u32) {}
-    fn on_lifecycle_changed(_state: u32) {}
 }
 
 impl FramePacingGuest for Component {

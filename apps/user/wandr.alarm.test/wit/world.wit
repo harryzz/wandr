@@ -1,69 +1,30 @@
-// Trimmed `my:skiko-gfx` (canvas + renderer + frame-pacing subset) for the Rust
-// alarm test guest — same rationale as wandr.statusbar's: the guest wit-bindgen
-// rejects the canonical skiko-gfx.wit (matrix-3x3), so redeclare just the subset
-// used. The world additionally imports `wandr:alarm/scheduler` + exports
-// `wandr:alarm/alarm-handler` (the package under wit/deps/alarm).
-
-package my:skiko-gfx@0.1.0;
-
-interface canvas {
-    enum paint-style { fill, stroke, fill-and-stroke }
-    enum stroke-cap  { butt, round, square }
-    enum stroke-join { miter, round, bevel }
-    enum blend-mode {
-        src-over, src, dst-in, dst-out, src-atop, dst-atop, xor,
-        multiply, screen, overlay, darken, lighten, color-dodge,
-        color-burn, hard-light, soft-light, difference, exclusion, clear,
-    }
-    enum color-filter-kind { none, blend, invert }
-    record paint-attrs {
-        color:              u32,
-        style:              paint-style,
-        stroke-width:       f32,
-        stroke-miter:       f32,
-        stroke-cap:         stroke-cap,
-        stroke-join:        stroke-join,
-        anti-alias:         bool,
-        alpha:              u8,
-        blend-mode:         blend-mode,
-        shader-id:          u32,
-        color-filter-kind:  color-filter-kind,
-        color-filter-color: u32,
-    }
-
-    surface-width:  func() -> u32;
-    surface-height: func() -> u32;
-    begin-frame: func();
-    end-frame:   func();
-    clear:       func(argb: u32);
-    draw-rect:   func(x: f32, y: f32, w: f32, h: f32, paint: paint-attrs);
-}
-
-interface renderer {
-    enum pointer-kind { down, up, move, scroll }
-    enum key-kind     { down, up }
-    render-frame:          func(nanos: u64);
-    on-pointer-event:      func(kind: pointer-kind, x: f32, y: f32);
-    on-key-event:          func(kind: key-kind, key-code: u32);
-    on-resize:             func(w: u32, h: u32);
-    on-scheduled-callback: func(callback-id: u32);
-    on-pointer-event-v2:   func(pointer-id: u32, kind: pointer-kind, x: f32, y: f32, pressure: f32);
-    on-key-event-v2:       func(kind: key-kind, code-point: u32, key-id: u32);
-    on-lifecycle-changed:  func(state: u32);
-}
-
-interface frame-pacing {
-    next-frame-delay: func() -> u32;
-}
+// wandr.alarm.test — the wandr:alarm timed-wake test guest (Arbiter Inc. 3c).
+//
+// Was a `my:skiko-gfx` guest (its own trimmed canvas + renderer + frame-pacing
+// copy). That whole package RETIRED in Phase C (task 105): the host neither
+// links `my:skiko-gfx/canvas` (instantiation fails, "surface-width
+// implementation is missing") nor calls `renderer.render-frame` (UI guests are
+// driven through `wasi:input-handlers/frame-handler` — input.rs::dispatch_frame).
+// Migrated to the live contracts, same as wandr.video.player (task 117 M2).
+package wandr:alarm-test-app@0.1.0;
 
 world alarm-test-app {
-    import canvas;
+    // Drawing (replaces the trimmed my:skiko-gfx/canvas). `embedding` is not
+    // optional: the host composites and swaps the frame inside `context.present`,
+    // so a guest that never presents shows nothing.
+    import wasi:canvas/types@0.0.2;
+    import wasi:canvas/draw@0.0.2;
+    import wasi:canvas/embedding@0.0.2;
+
     import wandr:alarm/scheduler@0.1.0;
-    export renderer;
-    export frame-pacing;
+
+    // Render driving (replaces the retired my:skiko-gfx/renderer + frame-pacing).
+    export wasi:input-handlers/frame-handler@0.0.2;
+    export wandr:ui-shell/frame-pacing@0.1.0;
+
     export wandr:alarm/alarm-handler@0.1.0;
     // M2 — also a background-service: the host calls bg-tick while we're
-    // backgrounded (in place of render-frame) so we can verify the pump fires.
+    // backgrounded (in place of on-frame) so we can verify the pump fires.
     export wandr:background/background@0.1.0;
     // M3 — notifications: post one + receive taps (on-notification-click).
     import wandr:notify/notifier@0.1.0;
