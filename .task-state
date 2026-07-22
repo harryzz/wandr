@@ -87,6 +87,24 @@ NOTES=RESUME AT STAGE 3.
                     ConstrainedBaseline/Main/High + EncSlice, MPEG2, VC1, JPEG,
                     VideoProc. vainfo clean (iHD init-fail above it is EXPECTED —
                     iHD is Gen8+, Ivybridge is Gen7; libva falls through to i965).
+                    ‼️ PROBE RUN 2026-07-22 — 300/300 PASS, VERIFIED ON PIXELS
+                    (dumped frame_0150 pulled back and eyeballed: sharp, correct
+                    colour, mid-clip so inter-prediction is proven — a counter
+                    alone would not have shown this).
+                    min=[]x[] (none) max=4096x4096 | VA|KERNEL_DRM|DRM_PRIME
+                    (0x30000001) | t1 AVAILABLE (1 dma-buf obj) t2 AVAILABLE
+                    t3 USED. Byte-for-byte the same capability profile as fedora.
+                    t3 is USED BY DESIGN, not by failure: the I420Ref contract
+                    forces a readback today, so t1/t2 are probed only. t1 being
+                    available on BOTH boxes is what the future zero-copy present
+                    path needs.
+                    Probe at ~/vaapi-probe was STALE (364-line pre-fallback-fix
+                    version, no dumping); synced from repros/vaapi-decode-probe
+                    2026-07-22, old one kept as src/main.rs.bak-20260722. DO NOT
+                    trust the remote copies to be current — checksum first.
+                    cargo is NOT on the non-interactive ssh PATH:
+                    `export PATH=$HOME/.cargo/bin:$PATH` first.
+                    User is in video+render; /dev/dri/renderD128 present.
  WSL    d3d12     : DECODE HANGS AT THE DRIVER (ffmpeg -hwaccel vaapi hangs too).
                     Not our bug. Do not sink more time there.
  * bbb.h264 is High profile 1280x720 yuv420p level 5.0 -> covered by popos H264 High VLD.
