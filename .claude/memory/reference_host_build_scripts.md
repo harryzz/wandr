@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: reference
   originSessionId: 60b1802d-eb7e-41f1-b233-3fecc364fe2d
-  modified: 2026-07-21T19:53:02.213Z
+  modified: 2026-07-22T08:21:39.145Z
 ---
 
 **Build wandr-host ONLY through these committed scripts** (`tools/scripts/`) —
@@ -35,6 +35,19 @@ and it is the one you reach for by habit. Running it fails at instantiate with
 which reads exactly like the stale-zygote error ([[reference_missing_instance_error_stale_zygote]])
 and sends you diagnosing the wrong thing. Check the binary's mtime against the
 source you just changed BEFORE believing any "missing implementation" error.
+
+**Clean-machine Linux deps are WIDER than CI's list (2026-07-22, popos):** CI's
+apt line is not a complete set — GitHub's ubuntu runners preinstall things a real
+machine does not, so `build-host-linux.sh` fails on a fresh box with packages CI
+never names. Found so far, beyond the CI list: **`libssl-dev`**, pulled in by
+`openssl-sys` <- `curl` <- **build-dependency of `libde265-sys`**, whose build
+script DOWNLOADS the libde265 source. So the host build needs OpenSSL headers and
+NETWORK ACCESS purely to fetch a tarball for the LGPL H.265 decoder — nothing in
+wandr uses OpenSSL at runtime (TLS is rustls, see [[reference_wandr_wasi_tls_transport]]).
+Drop the `libde265` feature and the requirement goes with it. `libva-dev` is also
+needed for the `vaapi` feature (task 117 stage 3). NOT needed despite being absent:
+libudev-dev, libdbus-1-dev — no matching `-sys` crate is in the graph. Diagnose
+this class with `cargo tree -i <sys-crate>`; it names the real culprit in one shot.
 
 **Per-target gotchas (each cost real time this session):**
 - **Android: run from the crate dir**, not the repo root with `--manifest-path`.

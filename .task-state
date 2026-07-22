@@ -187,8 +187,15 @@ NOTES=RESUME AT STAGE 3.
    lie in BOTH directions" lapse. Keep probing.
 
 === HOUSEKEEPING ===
- * contracts commit e8ed7fe is LOCAL ONLY (never pushed). Root contracts/ clone
-   still at 95542a1. CI would fetch a SHA it cannot see — reconcile before CI.
+ * RESOLVED 2026-07-22: contracts e8ed7fe IS published (ancestor of wandr-wit
+   main), and the root contracts/ clone at 95542a1 likewise. The old "CI would
+   fetch a SHA it cannot see" blocker is gone. Verify this class with
+   `git merge-base --is-ancestor HEAD origin/main`, NOT by grepping ls-remote for
+   the SHA — a published commit is usually not a ref TIP, so the grep says
+   "unpublished" for perfectly fine commits.
+ * PUSHED 2026-07-22 (user-authorised): wandr-host -> github d1bca25,
+   wandr -> codeberg 2c5662b0. Push the SUBMODULE FIRST, then the parent, or the
+   parent points at a SHA nobody else can fetch.
  * wandr.alarm.test still exports the RETIRED my:skiko-gfx interfaces and is very
    likely dead on desktop for the same reason stage 2 was; other apps from that
    template may be too. The fix is the one applied here.
