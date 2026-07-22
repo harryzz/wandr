@@ -42,7 +42,7 @@ wit_bindgen::generate!({
 use crate::exports::wandr::ui_shell::frame_pacing::Guest as PacingGuest;
 use crate::exports::wasi::input_handlers::frame_handler::Guest as FrameGuest;
 use crate::exports::wasi::input_handlers::key_handler::{Guest as KeyGuest, KeyEvent};
-use crate::wandr::video::decoder::{self as decoder_api, Acceleration, DecodedFrame, VideoDecoder};
+use crate::wandr::video::decoder::{self as decoder_api, Acceleration, VideoDecoder};
 use crate::wandr::video::types::{Codec, DecoderConfig, TimedFrame, VideoError, VideoRect, ZLayer};
 use crate::wasi::canvas::embedding as wembed;
 use std::cell::RefCell;
@@ -276,13 +276,11 @@ struct Player {
     done: bool,
     last_pts: i64,
     out_of_order: usize,
-    /// The decoded frame we have taken from the host but whose PTS is not due
-    /// yet. HOLDING the handle is the only way a guest can delay a frame:
-    /// `present(at-ns)` is unusable (finding #1 — a guest cannot name a host
-    /// monotonic instant), so we keep it and present it when the wall clock
-    /// catches up. Holding also back-pressures decode: `presented` stops
-    /// advancing, so the DECODE_AHEAD gate stops feeding.
-    pending: Option<DecodedFrame>,
+    /// PTS of the first frame, subtracted so playback starts immediately.
+    /// Container PTS need not start at zero — this clip's does not (MP4 `ctts`
+    /// offsets are non-negative, so the whole timeline is shifted by the reorder
+    /// depth: the first frame is at 66666 us, not 0).
+    first_pts_us: Option<i64>,
     /// Surface geometry, learned from on-resize.
     surface: (u32, u32),
     /// Which acceleration the next decoder open should ask for. Switched live by
@@ -313,7 +311,7 @@ impl Player {
             done: false,
             last_pts: -1,
             out_of_order: 0,
-            pending: None,
+            first_pts_us: None,
             surface: (1280, 720),
             accel: Acceleration::NoPreference,
             restart: false,
@@ -412,7 +410,7 @@ impl Player {
     /// would keep the SAME backend, which is precisely what we want to change.
     fn restart(&mut self, nanos: u64) {
         self.dec = None;
-        self.pending = None;
+        self.first_pts_us = None;
         self.next_au = 0;
         self.submitted = 0;
         self.presented = 0;
@@ -436,14 +434,14 @@ impl Player {
         self.pumps += 1;
         if self.pumps % 120 == 0 && !self.done {
             println!(
-                "player: pump {} — clock {} ms, fed {}/{}, decoded-out {}, presented {}, holding {}",
+                "player: pump {} — clock {} ms, fed {}/{}, decoded-out {}, presented {}, held {}",
                 self.pumps,
                 (nanos.saturating_sub(self.origin_ns) / 1_000_000) as i64,
                 self.next_au,
                 self.aus.len(),
                 self.submitted,
                 self.presented,
-                self.pending.is_some() as u8,
+0u8,
             );
         }
 
@@ -483,35 +481,27 @@ impl Player {
             self.flushed = true;
         }
 
-        // Present every frame whose PTS is due against the HOST clock, one at a
-        // time: we may only take the next one once the one we hold has gone out,
-        // or a fast decoder would race ahead of real time and we would have to
-        // throw frames away to keep up (which is what the first cut did — 10 s of
-        // video "played" in under a second).
+        // Hand every decoded frame to the host WITH ITS DEADLINE and let the host
+        // show it on time. This is what `present(at-ns)` was always for, and it
+        // only became usable once the host had ONE timeline (task 117 step 0):
+        // `nanos` here, `wasi:clocks`, and the host's presentation scheduler now
+        // read the same CLOCK_MONOTONIC, so an instant we name is one the host
+        // understands. Before that they were three unrelated origins and a
+        // deadline landed ~55 years out, silently.
         //
-        // ‼️ Stage-2 finding #1 in practice: with a usable `present(at-ns)` we
-        // would hand every frame straight to the host with its display deadline
-        // and let the host pace it. Instead the guest holds and self-paces.
-        let elapsed_us = (nanos.saturating_sub(self.origin_ns) / 1_000) as i64;
-        loop {
-            if self.pending.is_none() {
-                let Some(frame) = dec.next_decoded() else { break };
-                let pts = frame.timestamp_us();
-                if pts <= self.last_pts {
-                    self.out_of_order += 1;
-                }
-                self.last_pts = pts;
-                self.pending = Some(frame);
+        // The guest therefore no longer holds a frame or self-paces. Decode stays
+        // bounded because `presented` counts hand-offs and the DECODE_AHEAD gate
+        // is measured against it.
+        while let Some(frame) = dec.next_decoded() {
+            let pts = frame.timestamp_us();
+            if pts <= self.last_pts {
+                self.out_of_order += 1;
             }
-            // `pending` is Some here.
-            let due = self.pending.as_ref().map(|f| f.timestamp_us()).unwrap_or(0) <= elapsed_us;
-            if !due {
-                break;
-            }
-            if let Some(frame) = self.pending.take() {
-                frame.present(0);
-                self.presented += 1;
-            }
+            self.last_pts = pts;
+            let first = *self.first_pts_us.get_or_insert(pts);
+            let at_ns = self.origin_ns.saturating_add(((pts - first).max(0) as u64) * 1_000);
+            frame.present(at_ns);
+            self.presented += 1;
         }
 
         if self.flushed && self.next_au >= self.aus.len() && !self.done {
@@ -524,12 +514,13 @@ impl Player {
                 // Clip length comes from the LAST PTS, not from a frame count and
                 // an assumed rate — with container timing the file is the
                 // authority on how long it runs.
+                let elapsed_ms = (nanos.saturating_sub(self.origin_ns) / 1_000_000) as i64;
                 let clip_ms = self.aus.iter().map(|a| a.pts_us).max().unwrap_or(0) / 1000;
                 println!(
                     "player: DONE — presented {}/{} frames, wall {} ms vs clip {} ms",
                     self.presented,
                     self.aus.len(),
-                    elapsed_us / 1000,
+                    elapsed_ms,
                     clip_ms,
                 );
                 // ‼️ THE FINDING-#6 MEASUREMENT. `out-of-order` counts frames whose
