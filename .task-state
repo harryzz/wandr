@@ -216,6 +216,68 @@ NOTES=RESUME AT STAGE 3.
    -window_id, which also means we never capture the rest of the desktop.
    glibc: popos 2.39 < WSL 2.41, so binaries must be built natively on popos.
 
+=== ZERO-COPY: REVISED STEP 3 (research-grounded, 2026-07-22) ===
+ Steps 1+2 DONE and HW-verified (host 794bc08): `Frame` is opaque over CPU/GPU,
+ vaapi exports DMA-bufs, every frame arrives as Gpu on popos i965, both lanes
+ give byte-identical pixels, WANDR_VIDEO_ZEROCOPY=0 rolls back.
+
+ ‼️ STEP 3 WAS REDESIGNED AFTER READING THE REAL PLAYERS —
+ [[reference_vaapi_zerocopy_real_players]]. My per-frame export/import plan was
+ the shape mpv/VLC/Firefox use, and they use it ONLY because they sit downstream
+ of ffmpeg's dynamic unbounded AVBufferPool where surface identity is not stable.
+ GStreamer and Chromium, which OWN their pools like we do, cache per surface.
+
+ THE PLAN:
+  1. SURFACE POOL at `VaSurfaceFrame::to_native_handle` (our code — today it
+     allocates a fresh surface per picture). Fixed, allocated up front, sized
+     GStreamer-style: dpb_size + 4 + compositor depth (gstvah264dec.c:744).
+     This is also what `Decoder::frames_in_flight_limit()` finally reports for
+     real instead of None.
+  2. PER SURFACE, ONCE at pool init: export_prime -> keep the OwnedFds ->
+     eglCreateImageKHR per plane -> glGenTextures + glEGLImageTargetTexture2DOES
+     -> cache (VASurfaceID -> [GLuint; 2]). HOT PATH BECOMES: look up id,
+     vaSyncSurface, draw. Zero VA/EGL/GL object churn per frame.
+  3. NV12 AS TWO TEXTURES (R8 + GR88), NOT GL_TEXTURE_EXTERNAL_OES. Unanimous
+     among mpv/VLC/Firefox/GStreamer-indirect, because the external path can only
+     pass colour as a HINT that drivers ignore (they default to BT.601 limited
+     regardless of content).
+  4. SKIA CONSUMES IT NATIVELY — verified in skia-safe 0.99:
+       YUVAInfo::new(dims, PlaneConfig::Y_UV, Subsampling::k420,
+                     YUVColorSpace::<from VUI>, origin, siting)
+       YUVABackendTextures::new(...)
+       gpu::ganesh::image_ganesh::texture_from_yuva_textures(ctx, &tex, cs)
+     No SkRuntimeEffect needed. We control matrix + range + chroma siting, which
+     is strictly MORE control than the external sampler would give.
+  5. MODIFIERS ARE LOAD-BEARING ON OUR HARDWARE. i965 Gen7 allocates NV12 decode
+     surfaces Y-TILED (i965_surface_native_memory + HAS_TILED_SURFACE). Query
+     EGL_EXT_image_dma_buf_import_modifiers; pass MODIFIER_LO/HI when present
+     (skip MOD_INVALID); if ABSENT omit the attribs entirely and let GEM tiling
+     carry it. NEVER substitute LINEAR — that renders silent garbage.
+  6. SYNC WITH vaSyncSurface, NO FENCE. Nobody uses fences (zero EGLSync in mpv,
+     GStreamer, VLC, ffmpeg). Retry VA_STATUS_ERROR_HW_BUSY 10x/1ms (GStreamer).
+     What prevents overwrite is REFCOUNTING on the frame, not the sync — our
+     InFlight guard already is that refcount.
+  7. FIREFOX'S COPY-VALVE against fixed-pool deadlock: when the compositor holds
+     more than ~3/4 of the pool, GPU-copy the frame to a private buffer so the VA
+     surface returns immediately (FFmpegVideoFramePool::ShouldCopySurface,
+     SURFACE_COPY_THRESHOLD 1/4). Zero-copy degrades to one-copy under pressure
+     instead of stalling the decoder. A fixed pool WITHOUT this deadlocks the
+     first time a frame is held too long.
+  8. CPU LANE STAYS LIVE. canvas.direct_context() returns None on the headless
+     raster surface that ALL FOUR diagnostics and --run-once use, so the import
+     must be chosen at runtime, never at compile time.
+
+ GOTCHAS ALREADY KNOWN:
+  * cros-libva's export_prime hardcodes COMPOSED_LAYERS — one NV12 layer with two
+    planes, not two R8/GR88 layers. Call vaExportSurfaceHandle directly for
+    SEPARATE_LAYERS, or use the composed offsets/pitches (i965 is one BO anyway).
+  * Skia caches GL binding state: call DirectContext::reset_context() after ANY
+    raw GL sequence or the next Skia draw samples the wrong texture —
+    intermittent and invisible to frame counters.
+  * Rust reference for the EGL attribs + workarounds (NOT its per-frame caching):
+    n0-computer/iroh-live, rusty-codecs/src/render/gles_dmabuf.rs.
+  * WSL cannot exercise ANY of this (no VA display) — every step needs popos.
+
 === NEXT: STAGE 4 ===
  Factor into wasi:video-decoder + resolve its flagged z-order OPEN issue, add av1,
  then propose upstream. Two things are now SETTLED BY EVIDENCE rather than open:
