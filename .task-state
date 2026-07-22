@@ -66,22 +66,45 @@ NOTES=RESUME AT STAGE 3.
 
 === NEXT: STAGE 3 ===
  VaapiBackend into wandr-video (BackendKind::Hardware, priority 10,
- capability-probed supports_decode; software backends stay as fallback; needs a
- VA surface POOL for NVDEC — 32/300 + "No ShortTerm reference found" is almost
- certainly per-frame surface allocation exhausting NVDEC's DPB). The host
+ capability-probed supports_decode; software backends stay as fallback). The host
  currently ALWAYS software-decodes (this run: "H264 decode via openh264").
+ The seam already exists: Registry/CodecBackend in
+ runtime/wandr-host/crates/wandr-video/src/lib.rs sorts by ascending priority()
+ and all 5 current backends are Software — so this is ONE line in
+ default_registry() plus the backend itself, no call-site changes. The algorithm
+ is already PROVEN in repros/vaapi-decode-probe (cros-libva direct,
+ vaCreateSurfaces, NO GBM, 300/300 + dumped PNGs verified); stage 3 is the port,
+ not new research. HONOUR THE FALLBACK CONTRACT documented on CodecBackend: a HW
+ backend that cannot reach its device MUST return Err from open_decoder — the
+ oxideav spike had one return success while producing zero frames and the
+ registry never fell back. Surface pool: no longer required (see HARDWARE).
  stage 4 = factor into wasi:video-decoder + resolve its flagged z-order OPEN
  issue, add av1, then propose upstream.
 
-=== HARDWARE PICTURE (three drivers, three different answers) ===
- fedora i965 : min none    | VA|KERNEL_DRM|DRM_PRIME | t1 OK   t2 OK   t3 OK | 300/300 PASS
- WSL d3d12   : min 64x64   | advertises DRM_PRIME_2  | t1 FAIL t2 OK   t3 OK | DECODE HANGS
- popos NVDEC : min 48x16   | reports NO mem types    | t1 FAIL t2 FAIL t3 OK | 32/300 then DPB errors
- * WSL/d3d12 decode is broken AT THE DRIVER (ffmpeg -hwaccel vaapi hangs too).
-   Not our bug. Do not sink more time there.
- * Upstream cros-codecs hardcodes a 16x16 placeholder context — WRONG on 2 of 3
-   drivers. Our vendored patch queries the driver. Capability bits lie in BOTH
-   directions; always probe.
+=== HARDWARE PICTURE (2026-07-22: NVDEC RETIRED — card was too old/unstable) ===
+ fedora i965      : min none | VA|KERNEL_DRM|DRM_PRIME | t1 OK t2 OK t3 OK | 300/300 PASS
+ popos  i965 (NEW): Ivybridge Mobile, i965 2.4.1, libva 1.20. H264 VLD
+                    ConstrainedBaseline/Main/High + EncSlice, MPEG2, VC1, JPEG,
+                    VideoProc. vainfo clean (iHD init-fail above it is EXPECTED —
+                    iHD is Gen8+, Ivybridge is Gen7; libva falls through to i965).
+ WSL    d3d12     : DECODE HANGS AT THE DRIVER (ffmpeg -hwaccel vaapi hangs too).
+                    Not our bug. Do not sink more time there.
+ * bbb.h264 is High profile 1280x720 yuv420p level 5.0 -> covered by popos H264 High VLD.
+ * NO VP8/VP9/HEVC/AV1 decode on Gen7. The HW backend on BOTH linux boxes covers
+   H264/MPEG2/VC1/JPEG only. VP8/VP9 — the codecs the CALL path uses — fall back
+   to software here; only the Pixel exercises HW VP8/VP9. Fine for the M2
+   playback proof, useless for validating calls.
+ * popos ALSO advertises H264 EncSlice (HW encode) — not previously recorded
+   anywhere; relevant to the wandr:video ENCODER lane, not to stage 3.
+ * The NVDEC surface-pool hypothesis (32/300 + "No ShortTerm reference found" =
+   per-frame VA surface allocation exhausting NVDEC's ~32-surface DPB) is now
+   PERMANENTLY UNTESTABLE and no longer blocks stage 3. A pool is good hygiene,
+   not a prerequisite. Do not carry it as an open blocker.
+ * ‼️ The fleet is now TWO i965 boxes + one broken driver. We LOST the driver
+   diversity that caught upstream cros-codecs' hardcoded 16x16 placeholder
+   context (wrong on 2 of the old 3 drivers; our vendored patch queries the
+   driver). Two agreeing boxes make it easy to let "always probe, capability bits
+   lie in BOTH directions" lapse. Keep probing.
 
 === HOUSEKEEPING ===
  * contracts commit e8ed7fe is LOCAL ONLY (never pushed). Root contracts/ clone
