@@ -26,5 +26,9 @@ world video-player-app {
     // world used to export was RETIRED in Phase C (task 105) — the host never
     // calls it, so the app ran but was never ticked.
     export wasi:input-handlers/frame-handler@0.0.2;
+    // Keys switch the decoder between hardware and software AT RUNTIME (H/S/N),
+    // which is the only way to A/B them without a rebuild — and the guest half of
+    // what `--list-codecs` + WANDR_VIDEO_BACKEND do for the operator.
+    export wasi:input-handlers/key-handler@0.0.2;
     export wandr:ui-shell/frame-pacing@0.1.0;
 }

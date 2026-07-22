@@ -13,6 +13,7 @@
 - [RULE: shared WIT change → rebuild ALL + restart zygote](feedback_shared_wit_rebuild_all_consumers.md) — shared-type ABI breaks every importer.
 - [RULE: capture full build output](feedback_capture_build_output.md) — save FULL build to a log; never pre-filter a live build.
 - [RULE: OpenSwiftUI app = ONLY Audio/Store/startup](feedback_openswiftui_app_only_audio_store_startup.md) — sink/reactor/render glue is shared runtime, NEVER per-app; `Sources/T2iles/RULES.md`.
+- [RULE: WIT changes need APPROVAL](feedback_wit_changes_need_approval.md) — never edit wit/contracts/proposals without asking; additive counts; say what/why/who-consumes then wait.
 - [RULE: never create branches unasked](feedback_no_new_branches.md) — work on current/main by default; merge+delete promptly once done, don't let branches accumulate.
 
 ## Projects / tasks

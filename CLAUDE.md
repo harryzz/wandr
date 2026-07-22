@@ -33,6 +33,25 @@
    the `/assets`·`/state`·`/system-fonts` preopen conventions) are universal, not
    per-app, and are fine. See `[[feedback_no_hardcoding]]`.
 
+4. **NEVER change a WIT contract without explicit approval — ASK FIRST.** Any
+   edit under `wit/`, `contracts/`, or `proposals/*/wit/` — new verb, new record,
+   new field, renamed type, changed enum — stops and asks, even when it is
+   additive and even when it is obviously needed. A contract is not code: it is
+   the boundary every guest and every language binding is compiled against, so a
+   change ripples into apps, ABIs, cached `.cwasm`, and the standards proposals
+   this project intends to publish. "Additive so nothing breaks" is a claim to be
+   approved, not an exemption — record layout is positional, and additive changes
+   are exactly the ones that look free and are not. Say what verb/type you want,
+   why the existing contract cannot express it, and who else consumes it; then
+   wait. See `[[feedback_wit_changes_need_approval]]`, and
+   `[[feedback_shared_wit_rebuild_all_consumers]]` for the rebuild fallout once
+   approved.
+
+5. **NEVER create a new git branch without asking first.** Work directly on the
+   current branch (usually `main`) unless the user explicitly requests a branch.
+   The user prefers few long-lived branches — merge-and-delete promptly once work
+   lands, don't let feature branches accumulate.
+
 ## What this project is
 
 A **portable UI runtime for WASM apps.** A guest app — any language, any UI

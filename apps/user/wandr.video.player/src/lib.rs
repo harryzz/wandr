@@ -41,7 +41,8 @@ wit_bindgen::generate!({
 
 use crate::exports::wandr::ui_shell::frame_pacing::Guest as PacingGuest;
 use crate::exports::wasi::input_handlers::frame_handler::Guest as FrameGuest;
-use crate::wandr::video::decoder::{DecodedFrame, VideoDecoder};
+use crate::exports::wasi::input_handlers::key_handler::{Guest as KeyGuest, KeyEvent};
+use crate::wandr::video::decoder::{self as decoder_api, Acceleration, DecodedFrame, VideoDecoder};
 use crate::wandr::video::types::{Codec, DecoderConfig, TimedFrame, VideoError, VideoRect, ZLayer};
 use crate::wasi::canvas::embedding as wembed;
 use std::cell::RefCell;
@@ -101,6 +102,17 @@ impl Timing {
             Timing::Container => "container PTS (real)",
             Timing::SynthesizedDts => "synthesised from bitstream order (a DTS)",
         }
+    }
+}
+
+/// `{:?}` on the WIT enum renders `Codec::H265`; this is the name a person reads.
+fn codec_name(c: Codec) -> &'static str {
+    match c {
+        Codec::Vp8 => "vp8",
+        Codec::Vp9 => "vp9",
+        Codec::H264 => "h264",
+        Codec::H265 => "h265",
+        Codec::Av1 => "av1",
     }
 }
 
@@ -273,6 +285,13 @@ struct Player {
     pending: Option<DecodedFrame>,
     /// Surface geometry, learned from on-resize.
     surface: (u32, u32),
+    /// Which acceleration the next decoder open should ask for. Switched live by
+    /// the H/S/N keys — the guest-side counterpart of the host's
+    /// WANDR_VIDEO_BACKEND knob, and the only way to A/B hardware against
+    /// software without a rebuild.
+    accel: Acceleration,
+    /// Set by a key press; the next pump tears the decoder down and starts over.
+    restart: bool,
     /// How many times `on-frame` has driven us. A player that stalls needs to be
     /// able to say WHICH thing stopped — the ticks, the decoder, or the clock —
     /// and without this the three are indistinguishable from the outside.
@@ -296,6 +315,8 @@ impl Player {
             out_of_order: 0,
             pending: None,
             surface: (1280, 720),
+            accel: Acceleration::NoPreference,
+            restart: false,
             pumps: 0,
         }
     }
@@ -331,21 +352,51 @@ impl Player {
             span_ms
         );
 
+        // What can this MACHINE actually decode? Probed host-side, so an empty
+        // list for a codec means "not decodable here" — not "not built in".
+        let available = decoder_api::list_decoders();
+        if available.is_empty() {
+            println!("player: host reports NO enumerable decoders");
+        } else {
+            println!("player: decoders available here:");
+            for d in &available {
+                println!(
+                    "player:   {:<5} {:<10} {}",
+                    codec_name(d.codec),
+                    d.name,
+                    if d.hardware { "HARDWARE" } else { "software" }
+                );
+            }
+        }
+        println!("player: keys — [h] hardware  [s] software  [n] no-preference  (restarts playback)");
+
         // Decode-to-surface: a REAL rect is what makes the host composite video.
         // above-ui = the video covers its rect and the UI lays out around it, so
         // we don't need the transparent-hole dance behind-ui requires.
         let (w, h) = self.surface;
         let vh = (w * 9 / 16).min(h);
-        match VideoDecoder::open(DecoderConfig {
-            codec: Codec::H264,
-            width: 1280,
-            height: 720,
-            rect: VideoRect { x: 0, y: (h.saturating_sub(vh)) / 2, width: w, height: vh },
-            rotation: 0,
-            layer: ZLayer::AboveUi,
-        }) {
+        match VideoDecoder::open_accelerated(
+            DecoderConfig {
+                codec: Codec::H264,
+                width: 1280,
+                height: 720,
+                rect: VideoRect { x: 0, y: (h.saturating_sub(vh)) / 2, width: w, height: vh },
+                rotation: 0,
+                layer: ZLayer::AboveUi,
+            },
+            self.accel,
+        ) {
             Ok(d) => {
-                println!("player: decoder OPEN ✓ decode-to-surface {w}x{vh}");
+                // Report what we GOT, not what we asked for: `prefer-*` is a hint,
+                // so a request for hardware can be quietly served by software and
+                // the difference is exactly what we are here to measure.
+                let got = d.implementation();
+                println!(
+                    "player: decoder OPEN ✓ decode-to-surface {w}x{vh} — asked {:?}, got {} ({})",
+                    self.accel,
+                    got.name,
+                    if got.hardware { "HARDWARE" } else { "software" }
+                );
                 self.dec = Some(d);
             }
             Err(e) => {
@@ -355,8 +406,32 @@ impl Player {
         }
     }
 
+    /// Tear down and replay from the top with the currently selected
+    /// acceleration. Dropping the decoder is what releases the host's surface and
+    /// any frames it still holds — there is no reopen-in-place verb, and `reset`
+    /// would keep the SAME backend, which is precisely what we want to change.
+    fn restart(&mut self, nanos: u64) {
+        self.dec = None;
+        self.pending = None;
+        self.next_au = 0;
+        self.submitted = 0;
+        self.presented = 0;
+        self.last_pts = -1;
+        self.out_of_order = 0;
+        self.flushed = false;
+        self.done = false;
+        self.restart = false;
+        println!("player: restarting with {:?}", self.accel);
+        // `start` re-reads and re-demuxes; wasteful, but this is a diagnostic
+        // path and correctness beats cleverness in one.
+        self.start(nanos);
+    }
+
     /// One pump step. Submits a bounded amount, then presents everything due.
     fn pump(&mut self, nanos: u64) {
+        if self.restart {
+            self.restart(nanos);
+        }
         let Some(dec) = self.dec.as_ref() else { return };
         self.pumps += 1;
         if self.pumps % 120 == 0 && !self.done {
@@ -529,11 +604,43 @@ impl FrameGuest for Component {
     }
 }
 
+impl KeyGuest for Component {
+    /// H / S / N pick the acceleration and replay. Down-edge only — a key repeat
+    /// would otherwise restart playback continuously while held.
+    fn on_key(ev: KeyEvent) {
+        if !ev.down || ev.repeat {
+            return;
+        }
+        let want = match ev.text.to_ascii_lowercase().as_str() {
+            "h" => Some(Acceleration::PreferHardware),
+            "s" => Some(Acceleration::PreferSoftware),
+            "n" => Some(Acceleration::NoPreference),
+            _ => None,
+        };
+        if let Some(accel) = want {
+            PLAYER.with(|p| {
+                let mut p = p.borrow_mut();
+                p.accel = accel;
+                p.restart = true;
+            });
+        }
+    }
+}
+
 impl PacingGuest for Component {
     /// Drive at the clip's frame rate while playing; idle afterwards. On-demand
     /// pacing is the host's contract — asking for 0 would spin a core.
     fn next_frame_delay() -> u32 {
-        PLAYER.with(|p| if p.borrow().done { 250 } else { (1000 / FPS) as u32 })
+        PLAYER.with(|p| {
+            let p = p.borrow();
+            // A pending restart must not wait out the idle delay — the keypress
+            // would feel dead for a quarter second after playback finished.
+            if p.done && !p.restart {
+                250
+            } else {
+                (1000 / FPS) as u32
+            }
+        })
     }
 }
 

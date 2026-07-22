@@ -146,7 +146,46 @@ interface encoder {
 }
 
 interface decoder {
-    use types.{decoder-config, encoded-frame, timed-frame, video-rect, video-error};
+    use types.{codec, decoder-config, encoded-frame, timed-frame, video-rect, video-error};
+
+    /// Whether a decoder should run on a hardware block or in software.
+    ///
+    /// Mirrors WebCodecs' `hardwareAcceleration` rather than inventing a third
+    /// spelling. `prefer-*` are hints — the host falls back if the preference
+    /// cannot be met, because a player that refuses to play is worse than one
+    /// that plays in software. `require-hardware` is the honest opt-out for a
+    /// caller that would rather fail than silently pay CPU it cannot afford, and
+    /// it is the ONLY value that can turn a working decode into an error.
+    enum acceleration {
+        no-preference,
+        prefer-hardware,
+        prefer-software,
+        require-hardware,
+    }
+
+    /// One decoder implementation the host can offer for a codec.
+    record decoder-info {
+        codec: codec,
+        /// Implementation name — `vaapi`, `openh264`, `mediacodec`… Diagnostic
+        /// only: a guest should choose on `hardware`, not on this string, which
+        /// is per-platform and not part of any compatibility promise.
+        name: string,
+        hardware: bool,
+    }
+
+    /// What this host can ACTUALLY decode, on THIS machine, right now.
+    ///
+    /// ‼️ PROBED, NOT DECLARED. A hardware backend asks its driver; a build that
+    /// contains a VA-API backend on a machine with no VA driver reports nothing
+    /// for it. So an empty result for a codec means "not decodable here", which
+    /// is the only form of the answer a guest can actually act on — a build-time
+    /// capability list would be a promise the machine may not keep.
+    ///
+    /// WHY A GUEST NEEDS THIS: to choose a stream it can play (the
+    /// `isConfigSupported` role in WebCodecs) before committing to a download,
+    /// and to tell the user why playback will be expensive. It does NOT let the
+    /// guest pin an implementation — see `open-accelerated`.
+    list-decoders: func() -> list<decoder-info>;
 
     /// A frame the host has decoded and still holds (task 117 M2).
     ///
@@ -188,6 +227,17 @@ interface decoder {
     /// host decodes + paints directly; frames do not return to the guest.
     resource video-decoder {
         open: static func(config: decoder-config) -> result<video-decoder, video-error>;
+        /// `open` with an explicit hardware/software preference.
+        ///
+        /// ADDITIVE, deliberately: `open` and `decoder-config` are unchanged,
+        /// because adding a field to that record would break the ABI of every
+        /// shipped consumer — including the call path, which is in production.
+        /// A guest that does not care keeps calling `open` and keeps getting the
+        /// host's default policy: hardware first, software fallback.
+        open-accelerated: static func(
+            config: decoder-config,
+            accel: acceleration,
+        ) -> result<video-decoder, video-error>;
         /// Push a reassembled encoded frame (after SRTP-open + RTP depacketize).
         submit: func(frame: encoded-frame) -> result<_, video-error>;
         /// Move/resize the video surface (layout change, rotation).
@@ -232,7 +282,15 @@ interface decoder {
         /// less disruptive than closing and reopening the decoder — which is
         /// the only option this contract offered before.
         reset: func() -> result<_, video-error>;
+
+        /// Which implementation this decoder actually got. Needed because
+        /// `acceleration` is a preference: a guest that asked for hardware and
+        /// silently received software would otherwise have no way to know, and
+        /// "why is this dropping frames" becomes unanswerable from inside the
+        /// app.
+        implementation: func() -> decoder-info;
     }
+
 }
 
 /// Imported by a call-engine guest (crates/wandr-call). The host implements both.
