@@ -36,12 +36,29 @@ NOTES=RESUME AT STAGE 3.
     (present(at-ns) unusable) seen from the client side.
 
 === EARLIER FINDINGS (unchanged, still open) ===
- 1. present(at-ns) IS NOT USABLE — a guest cannot name a host monotonic instant.
-    Player passes at_ns=0 and self-paces. LEAD: on-frame's `nanos` is likely the
-    shared timeline; make monotonic_now_ns use the SAME source, or add now().
- 2. Decode-ahead is UNBOUNDED at the CONTRACT level (queue-full never triggers);
-    the player bounds it guest-side. A guest could still decode a whole file into
-    host memory.
+ 1. ✅ RESOLVED 2026-07-22 (host b9f4fd9) — and it was NEVER a contract flaw.
+    There were THREE monotonic clocks with three origins: on-frame(nanos) was
+    SystemTime (UNIX epoch ~1.75e18), wasi:clocks was wasmtime-wasi's default
+    (zero = when THAT guest's WasiCtx was built), monotonic_now_ns was its own
+    Instant. A deadline derived from on-frame landed ~55 years out and the frame
+    silently never appeared. src/host_clock.rs is now the ONE source
+    (CLOCK_MONOTONIC — chosen because Android's releaseOutputBufferAtTime takes
+    exactly that, so the Android lane needs no conversion), read by wasi:clocks
+    (installed on every WasiCtxBuilder), on-frame, and the presentation
+    scheduler. PROVEN: the player hands off all 300 frames by 5.3 s yet the host
+    is still changing the picture at t=8 s (mean luma diff 12.4 between t=3 s and
+    t=8 s captures).
+ 2. ‼️ WORSE AFTER step 0, and now the TOP PRIORITY. `queue-full` is specified on
+    submit-timed but the desktop host NEVER returns it (submit_for_playback
+    always returns Ok). The player used to throttle by ACCIDENT — holding a frame
+    until due stalled `presented`, so its own DECODE_AHEAD gate stopped feeding.
+    Now that it hands frames straight over, `presented` counts HAND-OFFS, the
+    gate never bites, and it decodes the whole file in 5.3 s and queues 300
+    frames in the host's SCHEDULED list. Nothing bounds host memory. THE FIX IS
+    ALREADY IN THE CONTRACT: honour queue-full ("back-pressure, NOT loss: retry
+    the SAME frame"), bounded by a new `Decoder::frames_in_flight_limit()`. No
+    WIT change. It also retires finding #7's silent deadlock — a guest told when
+    to stop never has to guess a cushion.
  3. The SCHEDULED queue is drained ONLY by composite_video_surfaces, so
     surfaceless/--run-once guests never present. --run-once is a deliberate
     special case: DO NOT change it.
