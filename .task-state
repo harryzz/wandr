@@ -64,22 +64,84 @@ NOTES=RESUME AT STAGE 3.
    then `xwd -id <wid>` -> ffmpeg -> png. Script kept at scratchpad/capture2.sh;
    worth promoting into repros/ if reused.
 
-=== NEXT: STAGE 3 ===
- VaapiBackend into wandr-video (BackendKind::Hardware, priority 10,
- capability-probed supports_decode; software backends stay as fallback). The host
- currently ALWAYS software-decodes (this run: "H264 decode via openh264").
- The seam already exists: Registry/CodecBackend in
- runtime/wandr-host/crates/wandr-video/src/lib.rs sorts by ascending priority()
- and all 5 current backends are Software — so this is ONE line in
- default_registry() plus the backend itself, no call-site changes. The algorithm
- is already PROVEN in repros/vaapi-decode-probe (cros-libva direct,
- vaCreateSurfaces, NO GBM, 300/300 + dumped PNGs verified); stage 3 is the port,
- not new research. HONOUR THE FALLBACK CONTRACT documented on CodecBackend: a HW
- backend that cannot reach its device MUST return Err from open_decoder — the
- oxideav spike had one return success while producing zero frames and the
- registry never fell back. Surface pool: no longer required (see HARDWARE).
- stage 4 = factor into wasi:video-decoder + resolve its flagged z-order OPEN
- issue, add av1, then propose upstream.
+=== STAGE 3 DONE (2026-07-22, host commit 6a5178f) ===
+ crates/wandr-video/src/backends/vaapi.rs — HW H.264 via cros-codecs + cros-libva,
+ VA-allocated surfaces (no GBM), registered at priority 10 so HW is tried first.
+ VERIFIED on popos i965: 300/300 AUs under require_hardware (so software could NOT
+ have silently served it), every PTS tag back exactly once, frame 150 pulled back
+ and EYEBALLED (sharp, correct colour, no U/V swap). tests/vaapi_hw.rs is that
+ run; it SKIPS without a GPU. All 14 pre-existing wandr-video tests still pass.
+ Fallback proven live: on WSL (no VA display) it declines and openh264 plays
+ 300/300 in real time.
+
+ ‼️ NEW FINDING #6 — THE TWO BACKENDS DISAGREE ON TIMESTAMP SEMANTICS.
+   The Decoder contract says I420Ref.timestamp_us is the chunk's timestamp
+   "carried through the codec unchanged". vaapi does exactly that: cros-codecs
+   carries the tag on the decoded handle, so frames come out in DISPLAY order each
+   holding the tag of the AU that DECODED it. openh264 instead pairs the i-th
+   input tag to the i-th output frame with a FIFO, i.e. it REORDERS tags to
+   ascending — its own module header admits that is valid only without B-frames.
+   Same input, two meanings; a player switching HW<->SW sees its timestamps change
+   meaning underneath it.
+   Root cause is upstream of both: an Annex-B ELEMENTARY STREAM HAS NO PTS. The
+   player and the test synthesise `index * 1/30` from BITSTREAM order — a DTS.
+   bbb.h264 is 247 B-frames deep (ffprobe: 1 I, 51 P, 247 B), so decode order !=
+   display order and the synthesised tag is simply the wrong quantity.
+   PROVEN, not assumed: output tag order is 0, 100000, 133333, 66666, … and the AU
+   at bitstream index 1 (tag 33333) surfaces at display position 6 — exactly the
+   I,P,B,B,B,B,B decode order -> I,B,B,B,B,B,P display order of a 5-B GOP.
+   THE FIX IS A CONTAINER, NOT A CODEC: real PTS per AU from the demuxer (guest-
+   side by design — proposals/wasi-media-source/NOTES.md). Feed true PTS and
+   vaapi's output is naturally monotonic while openh264's FIFO becomes the broken
+   one. Settle the contract wording in stage 4 and fix openh264 to match.
+
+ NOT DONE ON PURPOSE (each is a decision, not a forgotten TODO):
+   * H.264 ONLY. cros-codecs also does VP8/VP9/HEVC/AV1 and adding them is
+     mechanical, but BOTH boxes are Intel Gen7 with no decode block for any of
+     them — an unrunnable HW lane that claims a codec is the exact trap the
+     fallback contract exists for. Add each when there is hardware to prove it.
+   * NO ENCODE. Both boxes advertise H264 VAEntrypointEncSlice so it is a real gap,
+     not an impossible one — but the encoder lane feeds live calls (congestion
+     control, forced keyframes, bitrate retune) and playback exercises none of it.
+     openh264 keeps encoding until a test exists that would catch a HW regression.
+   * NO SURFACE POOL. Only ever required by NVDEC, which is gone from the fleet.
+     Hygiene now, not a blocker.
+   * TIER 1 (zero-copy export_prime -> DMA-buf) is probed-AVAILABLE on both boxes
+     but NOT consumed: the I420Ref contract forces a CPU readback regardless. That
+     is the prize for the zero-copy present path and it belongs with finding #1
+     (present(at-ns)), not here.
+
+ HOW TO RUN THE HW TEST (needs a GPU; skips without one):
+   WANDR_TEST_H264=<annex-b .h264> [WANDR_DUMP_DIR=dump] \
+     cargo test --features vaapi --test vaapi_hw -- --nocapture
+   On popos the synced crate is at ~/wandr-video-hwtest (crates/wandr-video +
+   crates/wandr-vpx-sys + vendor/cros-codecs; the [patch.crates-io] path is
+   ../../vendor/cros-codecs, so that layout matters). Build NATIVELY there —
+   popos glibc 2.39 < WSL 2.41, so a WSL-built binary will not run.
+
+ GOTCHAS BAKED IN:
+   * vendor/cros-codecs = crates.io 0.0.6 + TWO patches, both marked `wandr patch`
+     in-source and documented in vendor/cros-codecs/WANDR-PATCHES.md. On an
+     upgrade, losing patch 1 is a SILENT regression and losing patch 2 is a build
+     error. The load-bearing one widens VaapiDecodedHandle::surface() to pub —
+     with a custom VA-allocated VideoFrame there is NO other route to the pixels
+     (to_native_handle MOVES the Surface into the backend and Surface is not
+     cloneable; upstream's own frame types dodge this by being GBM-backed, which
+     is exactly what fails on every machine here).
+   * wandr-host has NO [workspace] — crates/wandr-video is standalone with its own
+     Cargo.lock, so [patch.crates-io] had to go in BOTH Cargo.tomls; with only the
+     host's, a standalone `cargo build` silently uses the UNPATCHED crates.io copy.
+   * The `vaapi` feature is OFF by default — the only codec feature linking a
+     SYSTEM library (libva). build-host-linux.sh PROBES pkg-config and enables it
+     only when libva is present (VAAPI=0/1 to force). CI installs libva-dev and
+     builds the Linux leg with p3-async,vaapi so the shipped config is the
+     compiled one.
+
+=== NEXT: STAGE 4 ===
+ Factor into wasi:video-decoder + resolve its flagged z-order OPEN issue, add av1,
+ settle the timestamp-semantics wording (finding #6) and fix openh264 to match,
+ then propose upstream. The cros-codecs surface() visibility patch is worth
+ proposing upstream too — it is a no-semantic-change widening.
 
 === HARDWARE PICTURE (2026-07-22: NVDEC RETIRED — card was too old/unstable) ===
  fedora i965      : min none | VA|KERNEL_DRM|DRM_PRIME | t1 OK t2 OK t3 OK | 300/300 PASS
