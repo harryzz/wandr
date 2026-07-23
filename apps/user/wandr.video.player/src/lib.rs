@@ -77,7 +77,15 @@ const MAX_H264_DPB: usize = 16;
 /// is at least derived rather than guessed.
 const DECODE_AHEAD: usize = MAX_H264_DPB + 4;
 /// Cap the work done per render-frame so a reactor callback never runs long.
-const MAX_SUBMITS_PER_FRAME: usize = 4;
+/// Submits allowed per `on_frame`. Must let ONE on_frame fill the whole
+/// decode-ahead cushion, or playback cannot get a lead: a player that only
+/// submits a few AUs per callback stays behind realtime, so every frame's
+/// deadline is already past and gets presented immediately rather than SCHEDULED
+/// — and with nothing scheduled, the host has no video wake source and the video
+/// runs at the guest's idle UI rate instead of the frame rate. `DECODE_AHEAD`
+/// (with the host's in-flight cap) is the real bound; this just must not be
+/// smaller than it.
+const MAX_SUBMITS_PER_FRAME: usize = DECODE_AHEAD;
 
 /// One access unit, ready to submit: Annex-B bytes, its presentation time in
 /// microseconds, and whether it can start a decode.
@@ -609,6 +617,16 @@ impl Player {
                      (0 = the host never pushed back; decode ran unbounded)",
                     self.queue_full_hits
                 );
+                // on_frame ran `pumps` times over `elapsed_ms`. We ASKED the host
+                // for a 5 Hz UI cadence, so if on_frame ran at ~30 Hz the host
+                // woke us for VIDEO independently — the decoupling works. ~5 Hz
+                // would mean it did not and playback stuttered.
+                let hz = if elapsed_ms > 0 { self.pumps as f64 * 1000.0 / elapsed_ms as f64 } else { 0.0 };
+                println!(
+                    "player: on_frame ran {} times in {} ms = {:.0} Hz \
+                     (asked host for 5 Hz UI; ~30 Hz here means video woke us independently)",
+                    self.pumps, elapsed_ms, hz
+                );
                 println!(
                     "player: timing = {} | out-of-order {} ({})",
                     self.timing.label(),
@@ -799,7 +817,16 @@ impl PacingGuest for Component {
             if p.done && !p.restart {
                 250
             } else {
-                (1000 / FPS) as u32
+                // ‼️ IDLE-PACE DURING PLAYBACK. A video player's UI is static while
+                // the picture moves — only the progress bar and subtitles change,
+                // a few times a second at most. So we ask the host for a lazy UI
+                // cadence (~5 Hz) and let it wake us at the VIDEO frame rate on its
+                // own: the scheduled-frame deadline is an independent wake source
+                // (video_desktop::time_until_next_scheduled). If that decoupling
+                // works, on_frame still runs at ~30 Hz even though we asked for 5,
+                // and playback stays smooth; if it did not, we would stutter to
+                // 5 fps. The `pumps` count at DONE is the proof either way.
+                200
             }
         })
     }
