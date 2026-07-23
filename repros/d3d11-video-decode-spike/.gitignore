@@ -1,0 +1,6 @@
+# Generated decode dumps / renders (proof artifacts, not source).
+*.bmp
+*.png
+*.nv12
+*.log
+/target/

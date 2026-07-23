@@ -1,0 +1,30 @@
+[package]
+name = "d3d11-video-decode-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Phase-0 spike for task 117 Windows HW decode. Proves:
+#   1. cros-codecs' pure-Rust H.264 parser builds + runs on native Windows
+#      (validates the "reuse cros-codecs across Linux+Windows" plan).
+#   2. DXVA2 / ID3D11VideoDecoder can HW-decode one H.264 IDR frame on the same
+#      D3D11 device our ANGLE renderer uses, then read it back to a viewable BMP.
+# See .claude/memory/reference_media_codec_strategy.md (DXVA2 decision, 2026-07-23).
+
+[dependencies]
+anyhow = "1"
+# default = [] => only the pure-Rust codec parsers (no vaapi/v4l2/nix/drm/gbm).
+cros-codecs = { path = "../../runtime/wandr-host/vendor/cros-codecs", default-features = false }
+
+[dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+]
+
+[profile.release]
+debug = true
