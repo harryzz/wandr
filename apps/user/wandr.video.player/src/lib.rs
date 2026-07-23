@@ -45,6 +45,7 @@ use crate::exports::wasi::input_handlers::key_handler::{Guest as KeyGuest, KeyEv
 use crate::wandr::video::decoder::{self as decoder_api, Acceleration, VideoDecoder};
 use crate::wandr::video::types::{Codec, DecoderConfig, TimedFrame, VideoError, VideoRect, ZLayer};
 use crate::wasi::canvas::embedding as wembed;
+use crate::wasi::canvas::types as wtypes;
 use std::cell::RefCell;
 
 /// Tried in order; the first that opens wins. MP4 first because it carries real
@@ -385,7 +386,9 @@ impl Player {
                 height: 720,
                 rect: VideoRect { x: 0, y: (h.saturating_sub(vh)) / 2, width: w, height: vh },
                 rotation: 0,
-                layer: ZLayer::AboveUi,
+                // behind-ui: the video sits UNDER our UI, so the caption bar we draw
+                // below lands on top of the picture. This is what a real player wants.
+                layer: ZLayer::BehindUi,
             },
             self.accel,
         ) {
@@ -570,6 +573,24 @@ thread_local! {
 
 /// The canvas context, created once and kept — `get-context` is the embedding
 /// handshake, not a per-frame call.
+/// A solid ARGB fill — the caption bar / progress line drawn over the video.
+fn bar_paint(argb: u32) -> wtypes::Paint<'static> {
+    wtypes::Paint {
+        style: wtypes::PaintStyle::Fill,
+        color: argb,
+        alpha: (argb >> 24) as u8,
+        blend: wtypes::BlendMode::SrcOver,
+        anti_alias: true,
+        shader: None,
+        stroke_width: 0.0,
+        stroke_cap: wtypes::StrokeCap::Butt,
+        stroke_join: wtypes::StrokeJoin::Miter,
+        stroke_miter: 4.0,
+        blur: None,
+        filter: None,
+    }
+}
+
 fn wctx<R>(f: impl FnOnce(&wembed::CanvasContext) -> R) -> R {
     WCTX.with(|c| {
         if c.borrow().is_none() {
@@ -591,12 +612,23 @@ impl FrameGuest for Component {
             p.pump(nanos);
         });
 
-        // We draw nothing but an opaque black background — every pixel of picture
-        // on screen therefore came from the decoder, not from us, which is what
-        // makes this a proof. But we MUST still present: the host composites the
-        // video surface (above-ui) into this same frame inside `present`.
+        // behind-ui proof: clear TRANSPARENT so the host's video shows through
+        // everywhere we do not paint, then draw one opaque caption bar. If the
+        // bar appears OVER the picture, guest-UI-on-top-of-video works — which is
+        // what subtitles and controls need. (A real player would lay out text
+        // here; a solid bar is enough to prove the compositing order.)
         let cv = wctx(|x| x.get_current_buffer());
-        cv.clear(0xff00_0000);
+        cv.clear(0x0000_0000);
+        let (w, h) = PLAYER.with(|p| p.borrow().surface);
+        let bar_h = (h as f32 * 0.14).max(48.0);
+        cv.draw_rect(
+            wtypes::Rect { x: 0.0, y: h as f32 - bar_h, width: w as f32, height: bar_h },
+            &bar_paint(0xC8000000),
+        );
+        cv.draw_rect(
+            wtypes::Rect { x: 0.0, y: h as f32 - bar_h, width: w as f32 * 0.62, height: 6.0 },
+            &bar_paint(0xFF40C0FF),
+        );
         drop(cv);
         wctx(|x| x.present());
     }
