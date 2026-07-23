@@ -216,6 +216,21 @@ NOTES=RESUME AT STAGE 3.
    -window_id, which also means we never capture the rest of the desktop.
    glibc: popos 2.39 < WSL 2.41, so binaries must be built natively on popos.
 
+=== PER-SURFACE TEXTURE POOL: MEASURED, NOT WORTH IT (2026-07-23) ===
+ The research (reference_vaapi_zerocopy_real_players) said GStreamer/Chromium
+ cache a texture per pooled surface, and I planned to do the same via a THIRD
+ cros-codecs patch (VaapiPicture holds Surface by value -> Rc<Surface> so
+ VASurfaceIDs are stable enough to key a cache on). Before taking that debt I
+ MEASURED the per-frame cost the pool would remove, on popos i965:
+   export_prime 0.011 ms + eglCreateImage/import 0.062 ms = 0.073 ms/frame.
+ The pipeline spends ~2.4 ms/frame of CPU total (0.72 s / 300 frames), so the
+ per-frame import is ~3% of it — and a pool would not recover all of that (the
+ cache lookup and Skia's YUV->RGB draw remain). A third vendored-dependency patch
+ plus upgrade fragility to save ~3% of a tiny budget is a bad trade. DECISION: do
+ NOT build the pool. The per-frame export/import path (mpv/VLC/Firefox's own
+ shape) stays. Revisit only if a profile ever shows import dominating — it does
+ not. Instrumentation was a throwaway probe and was reverted.
+
 === ZERO-COPY: REVISED STEP 3 (research-grounded, 2026-07-22) ===
  Steps 1+2 DONE and HW-verified (host 794bc08): `Frame` is opaque over CPU/GPU,
  vaapi exports DMA-bufs, every frame arrives as Gpu on popos i965, both lanes

@@ -132,6 +132,17 @@ and `src/render/gles_dmabuf.rs` (`import_nv12` / `create_plane_image`: R8 + GR88
 full EGL attrib construction). Take its attribs and workarounds, NOT its
 per-frame caching strategy.
 
+## ‼️ POOL DECISION (wandr, 2026-07-23): MEASURED, not worth it
+
+The pool-with-cache is the "right" shape for stacks that own their surfaces
+(GStreamer/Chromium), and it needs a third cros-codecs patch here (Surface by
+value -> Rc<Surface> for stable VASurfaceIDs). Before taking that debt, MEASURED
+the per-frame cost it would remove on popos i965: export_prime 0.011 ms +
+eglCreateImage import 0.062 ms = 0.073 ms/frame, against ~2.4 ms/frame of total
+pipeline CPU — ~3%, and a pool recovers less than that. Decision: keep the
+per-frame export/import (mpv/VLC/Firefox's shape), do NOT patch cros-codecs a
+third time. Measure before optimising; the import is not the cost.
+
 ## 8. wandr specifics
 
 * `cros-libva 0.0.12`'s `Surface::export_prime()` (`src/surface.rs:350`)
