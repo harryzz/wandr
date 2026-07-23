@@ -283,6 +283,16 @@ struct Cue {
 /// HH:MM:SS,mmm` / text lines / blank — and a real player would use a subtitle
 /// crate, but the point here is the COMPOSITING, not the format zoo. Malformed
 /// blocks are skipped, not fatal: a bad cue should lose one line, not playback.
+///
+/// FUTURE — richer formats. SRT (and WebVTT, which is the same shape plus inline
+/// styling) is enough for plain captions and covers the common case. ASS/SSA —
+/// positioned, styled, animated "signs" subtitles — is deliberately OUT OF SCOPE:
+/// it is a whole layout engine, and the production answer is libass via FFI
+/// (mpv/VLC/Kodi all bind it; the one pure-Rust attempt, subrandr, does WebVTT
+/// only and its own README says "do not use from Rust"). Nothing in the pipeline
+/// blocks it — captions already render in the guest UI layer over `presented-rect`
+/// at display resolution, so an ASS renderer would be a drop-in producer of the
+/// same styled runs. It is added when a real ASS need appears, not before.
 fn parse_srt(text: &str) -> Vec<Cue> {
     fn ts(s: &str) -> Option<i64> {
         // HH:MM:SS,mmm

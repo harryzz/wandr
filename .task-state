@@ -216,6 +216,17 @@ NOTES=RESUME AT STAGE 3.
    -window_id, which also means we never capture the rest of the desktop.
    glibc: popos 2.39 < WSL 2.41, so binaries must be built natively on popos.
 
+=== FOLLOW-UPS STATUS (task 117 media pipeline) ===
+ ✅ colour matrix from stream (frame-exact test)   host 2b40e79
+ ✅ on-demand rendering + video damage (self-pace)  host 696de11
+ ✅ per-surface texture pool — MEASURED, declined    (see below)
+ 🔲 ASS subtitles — FUTURE, deferred by user 2026-07-23. SRT/WebVTT is enough for
+    now. ASS is a whole layout engine; production answer is libass via FFI (the
+    only pure-Rust option, subrandr, is WebVTT-only and "do not use from Rust").
+    Nothing blocks it: captions already render guest-side over presented-rect at
+    display resolution, so an ASS renderer drops in as another producer of styled
+    runs. Add when a real ASS need appears. Note in the player's parse_srt doc.
+
 === PER-SURFACE TEXTURE POOL: MEASURED, NOT WORTH IT (2026-07-23) ===
  The research (reference_vaapi_zerocopy_real_players) said GStreamer/Chromium
  cache a texture per pooled surface, and I planned to do the same via a THIRD
