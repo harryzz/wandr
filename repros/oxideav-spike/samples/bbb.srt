@@ -1,0 +1,12 @@
+1
+00:00:00,500 --> 00:00:03,000
+A big buck bunny wakes at dawn
+
+2
+00:00:03,200 --> 00:00:06,000
+and steps out of the great tree
+
+3
+00:00:06,200 --> 00:00:09,500
+— rendered here as guest-side subtitles,
+on top of hardware-decoded video

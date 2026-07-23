@@ -19,6 +19,7 @@ world video-player-app {
     // decode-to-surface is not self-driving; it rides the guest's canvas present.)
     import wasi:canvas/types@0.0.2;
     import wasi:canvas/draw@0.0.2;
+    import wasi:canvas/layout@0.0.2;  // subtitle text layout (host-owned fonts)
     import wasi:canvas/embedding@0.0.2;
     //
     // The host drives UI guests through `wasi:input-handlers/frame-handler`

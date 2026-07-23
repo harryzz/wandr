@@ -46,6 +46,8 @@ use crate::wandr::video::decoder::{self as decoder_api, Acceleration, VideoDecod
 use crate::wandr::video::types::{Codec, DecoderConfig, TimedFrame, VideoError, VideoRect, ZLayer};
 use crate::wasi::canvas::embedding as wembed;
 use crate::wasi::canvas::types as wtypes;
+use crate::wasi::canvas::layout as wlayout;
+use crate::wasi::canvas::draw::Canvas;
 use std::cell::RefCell;
 
 /// Tried in order; the first that opens wins. MP4 first because it carries real
@@ -261,6 +263,48 @@ fn access_units(buf: &[u8]) -> Vec<(Vec<u8>, bool)> {
     aus
 }
 
+/// One subtitle cue: an inclusive-start/exclusive-end window in microseconds and
+/// the text to show. Media-timeline µs, same clock as the video PTS.
+struct Cue {
+    start_us: i64,
+    end_us: i64,
+    text: String,
+}
+
+/// Parse SubRip (.srt). Deliberately tiny — SRT is index / `HH:MM:SS,mmm -->
+/// HH:MM:SS,mmm` / text lines / blank — and a real player would use a subtitle
+/// crate, but the point here is the COMPOSITING, not the format zoo. Malformed
+/// blocks are skipped, not fatal: a bad cue should lose one line, not playback.
+fn parse_srt(text: &str) -> Vec<Cue> {
+    fn ts(s: &str) -> Option<i64> {
+        // HH:MM:SS,mmm
+        let (hms, ms) = s.trim().split_once(',')?;
+        let mut it = hms.split(':');
+        let h: i64 = it.next()?.trim().parse().ok()?;
+        let m: i64 = it.next()?.parse().ok()?;
+        let sec: i64 = it.next()?.parse().ok()?;
+        let ms: i64 = ms.parse().ok()?;
+        Some(((h * 3600 + m * 60 + sec) * 1000 + ms) * 1000)
+    }
+    let mut cues = Vec::new();
+    for block in text.split("\n\n") {
+        let mut lines = block.lines().filter(|l| !l.trim().is_empty());
+        let Some(first) = lines.next() else { continue };
+        // The index line is optional in the wild; if the first line is the time
+        // range, use it, else the second line is.
+        let timing = if first.contains("-->") { first } else { lines.next().unwrap_or("") };
+        let Some((a, b)) = timing.split_once("-->") else { continue };
+        let (Some(start_us), Some(end_us)) = (ts(a), ts(b)) else { continue };
+        let body: Vec<&str> = lines.collect();
+        if body.is_empty() {
+            continue;
+        }
+        cues.push(Cue { start_us, end_us, text: body.join("\n") });
+    }
+    cues.sort_by_key(|c| c.start_us);
+    cues
+}
+
 struct Player {
     dec: Option<VideoDecoder>,
     aus: Vec<Au>,
@@ -286,6 +330,10 @@ struct Player {
     /// offsets are non-negative, so the whole timeline is shifted by the reorder
     /// depth: the first frame is at 66666 us, not 0).
     first_pts_us: Option<i64>,
+    /// Subtitle cues (sidecar .srt), sorted by start. Empty if none loaded.
+    /// Rendered GUEST-SIDE at display resolution over the video's placed rect —
+    /// which is where every mature player puts them (never baked into the frame).
+    cues: Vec<Cue>,
     /// Surface geometry, learned from on-resize.
     surface: (u32, u32),
     /// Which acceleration the next decoder open should ask for. Switched live by
@@ -318,6 +366,7 @@ impl Player {
             out_of_order: 0,
             queue_full_hits: 0,
             first_pts_us: None,
+            cues: Vec::new(),
             surface: (1280, 720),
             accel: Acceleration::NoPreference,
             restart: false,
@@ -347,6 +396,19 @@ impl Player {
                 return;
             }
         }
+        // Sidecar subtitles: same basename, .srt. Optional — a missing file is not
+        // an error, just a video with no captions.
+        let srt_path = format!("{}.srt", path.rsplit_once('.').map(|(b, _)| b).unwrap_or(path));
+        // The clip is /samples/bbb-h264.mp4 but the sidecar is /samples/bbb.srt,
+        // so also try the directory's bbb.srt.
+        for candidate in [srt_path.as_str(), "/samples/bbb.srt"] {
+            if let Ok(txt) = std::fs::read_to_string(candidate) {
+                self.cues = parse_srt(&txt);
+                println!("player: subtitles {} — {} cues", candidate, self.cues.len());
+                break;
+            }
+        }
+
         let span_ms = self.aus.last().map(|a| a.pts_us / 1000).unwrap_or(0);
         println!(
             "player: {path} — {} bytes -> {} access units, timing = {}, last PTS {} ms",
@@ -591,6 +653,52 @@ fn bar_paint(argb: u32) -> wtypes::Paint<'static> {
     }
 }
 
+/// Draw one subtitle cue centered along the bottom of the video rect.
+///
+/// This is the whole subtitle pipeline the compositing work was for: text laid
+/// out GUEST-SIDE with host-owned fonts (`wasi:canvas/layout`), at DISPLAY
+/// resolution, over the video's placed rect. A drop shadow keeps it legible over
+/// bright or busy frames — the black-outline trick every player uses, done here
+/// with a shadow because that is what the contract exposes. Multi-line cues wrap
+/// and each line centers.
+fn draw_subtitle(cv: &Canvas, text: &str, vx: f32, vy: f32, vw: f32, vh: f32) {
+    // Size relative to the VIDEO height (media3's DEFAULT_TEXT_SIZE_FRACTION is
+    // 0.0533 of the view; a touch smaller reads well here).
+    let size = (vh * 0.05).clamp(16.0, 48.0);
+    let style = wlayout::TextStyle {
+        family: "sans-serif".into(),
+        size,
+        weight: 600,
+        italic: false,
+        color: 0xFFFFFFFF,
+        letter_spacing: 0.0,
+        line_height: 1.15,
+        baseline_shift: 0.0,
+        decoration: None,
+        // Soft black shadow = the legibility outline, in the one primitive the
+        // layout contract gives us.
+        shadows: vec![wlayout::TextShadow {
+            color: 0xE0000000,
+            offset: wtypes::Point { x: 0.0, y: 0.0 },
+            sigma: size * 0.14,
+        }],
+        background: None,
+    };
+    let b = wlayout::ParagraphBuilder::new(&style);
+    b.set_align(wlayout::Align::Center);
+    b.add_text(text);
+    let para = wlayout::ParagraphBuilder::build(b);
+    // Lay out to ~90% of the video width, so long lines wrap inside the picture.
+    let wrap_w = vw * 0.9;
+    para.layout(wrap_w);
+    // Baseline near the bottom of the video rect, with a margin. Multi-line cues
+    // grow upward from there.
+    let margin = vh * 0.06;
+    let x = vx + (vw - wrap_w) * 0.5;
+    let y = vy + vh - margin - para.height();
+    para.paint(cv, wtypes::Point { x, y });
+}
+
 fn wctx<R>(f: impl FnOnce(&wembed::CanvasContext) -> R) -> R {
     WCTX.with(|c| {
         if c.borrow().is_none() {
@@ -613,34 +721,39 @@ impl FrameGuest for Component {
         });
 
         // behind-ui: clear TRANSPARENT so the host's video shows through where we
-        // do not paint, then draw the caption bar OVER the picture. The bar is
-        // anchored to the video's PLACED rect (presented-rect), not the window —
-        // which is where a subtitle belongs: along the bottom of the picture, or
-        // in a letterbox bar. That the host stretches to the rect today makes the
-        // two coincide, but the guest asks for the placed rect rather than
-        // assuming, so it stays correct once aspect-correct letterboxing lands.
+        // do not paint, then draw SUBTITLES over the picture. Guest-side, at
+        // display resolution, positioned against the video's PLACED rect
+        // (presented-rect) — exactly what mpv/VLC/media3 do, and the whole reason
+        // for the behind-ui + presented-rect work. The decoded pixels never
+        // reach us; the captions never reach the video surface.
         let cv = wctx(|x| x.get_current_buffer());
         cv.clear(0x0000_0000);
+
         let (sw, sh) = PLAYER.with(|p| p.borrow().surface);
-        // Placed rect if the host has one yet, else the whole surface.
-        let (vx, vy, vw, vh) = PLAYER.with(|p| {
-            p.borrow()
+        // Placed video rect if the host has one yet, else the whole surface.
+        let (clock_us, text, (vx, vy, vw, vh)) = PLAYER.with(|p| {
+            let p = p.borrow();
+            let clock_us = (nanos.saturating_sub(p.origin_ns) / 1_000) as i64;
+            let rect = p
                 .dec
                 .as_ref()
                 .and_then(|d| d.presented_rect())
                 .map(|r| (r.x as f32, r.y as f32, r.width as f32, r.height as f32))
-                .unwrap_or((0.0, 0.0, sw as f32, sh as f32))
+                .unwrap_or((0.0, 0.0, sw as f32, sh as f32));
+            // The active cue for `clock_us`. Cues are short and few; a linear
+            // scan is right, and a binary search would be premature.
+            let text = p
+                .cues
+                .iter()
+                .find(|c| clock_us >= c.start_us && clock_us < c.end_us)
+                .map(|c| c.text.clone());
+            (clock_us, text, rect)
         });
-        let bar_h = (vh * 0.14).max(48.0);
-        let bar_y = vy + vh - bar_h;
-        cv.draw_rect(
-            wtypes::Rect { x: vx, y: bar_y, width: vw, height: bar_h },
-            &bar_paint(0xC8000000),
-        );
-        cv.draw_rect(
-            wtypes::Rect { x: vx, y: bar_y, width: vw * 0.62, height: 6.0 },
-            &bar_paint(0xFF40C0FF),
-        );
+        let _ = clock_us;
+
+        if let Some(text) = text {
+            draw_subtitle(&cv, &text, vx, vy, vw, vh);
+        }
         drop(cv);
         wctx(|x| x.present());
     }
