@@ -242,6 +242,17 @@ interface decoder {
         submit: func(frame: encoded-frame) -> result<_, video-error>;
         /// Move/resize the video surface (layout change, rotation).
         set-rect: func(rect: video-rect);
+        /// Where the host has ACTUALLY placed the video, in guest-surface pixels,
+        /// after letterboxing/pillarboxing and rotation — `none` until the first
+        /// frame is composited. A guest asks `set-rect` where it WANTS the video;
+        /// this reports where it LANDED, which is not the same once aspect
+        /// correction is applied. It is what a guest needs to position subtitles
+        /// and controls over the picture (and in the black bars): every mature
+        /// player carries the equivalent — mpv's `mp_osd_res`, Kodi's three rects.
+        /// Subtitles are drawn in the GUEST's UI layer at display resolution, not
+        /// baked into the decoded frame, so the guest needs this rect to place
+        /// them; the pixels never cross the boundary.
+        presented-rect: func() -> option<video-rect>;
         /// Show/hide the video surface (e.g. the peer paused video).
         set-visible: func(visible: bool);
         /// Update the peer's CVO rotation live (applied at the compositor —

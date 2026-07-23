@@ -612,21 +612,33 @@ impl FrameGuest for Component {
             p.pump(nanos);
         });
 
-        // behind-ui proof: clear TRANSPARENT so the host's video shows through
-        // everywhere we do not paint, then draw one opaque caption bar. If the
-        // bar appears OVER the picture, guest-UI-on-top-of-video works — which is
-        // what subtitles and controls need. (A real player would lay out text
-        // here; a solid bar is enough to prove the compositing order.)
+        // behind-ui: clear TRANSPARENT so the host's video shows through where we
+        // do not paint, then draw the caption bar OVER the picture. The bar is
+        // anchored to the video's PLACED rect (presented-rect), not the window —
+        // which is where a subtitle belongs: along the bottom of the picture, or
+        // in a letterbox bar. That the host stretches to the rect today makes the
+        // two coincide, but the guest asks for the placed rect rather than
+        // assuming, so it stays correct once aspect-correct letterboxing lands.
         let cv = wctx(|x| x.get_current_buffer());
         cv.clear(0x0000_0000);
-        let (w, h) = PLAYER.with(|p| p.borrow().surface);
-        let bar_h = (h as f32 * 0.14).max(48.0);
+        let (sw, sh) = PLAYER.with(|p| p.borrow().surface);
+        // Placed rect if the host has one yet, else the whole surface.
+        let (vx, vy, vw, vh) = PLAYER.with(|p| {
+            p.borrow()
+                .dec
+                .as_ref()
+                .and_then(|d| d.presented_rect())
+                .map(|r| (r.x as f32, r.y as f32, r.width as f32, r.height as f32))
+                .unwrap_or((0.0, 0.0, sw as f32, sh as f32))
+        });
+        let bar_h = (vh * 0.14).max(48.0);
+        let bar_y = vy + vh - bar_h;
         cv.draw_rect(
-            wtypes::Rect { x: 0.0, y: h as f32 - bar_h, width: w as f32, height: bar_h },
+            wtypes::Rect { x: vx, y: bar_y, width: vw, height: bar_h },
             &bar_paint(0xC8000000),
         );
         cv.draw_rect(
-            wtypes::Rect { x: 0.0, y: h as f32 - bar_h, width: w as f32 * 0.62, height: 6.0 },
+            wtypes::Rect { x: vx, y: bar_y, width: vw * 0.62, height: 6.0 },
             &bar_paint(0xFF40C0FF),
         );
         drop(cv);
