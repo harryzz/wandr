@@ -53,7 +53,7 @@ use std::cell::RefCell;
 /// Tried in order; the first that opens wins. MP4 first because it carries real
 /// presentation times — swap the order to run the elementary-stream half of the
 /// finding-#6 comparison against identical content.
-const CLIPS: &[&str] = &["/samples/bbb-h264.mp4", "/samples/bbb.h264"];
+const CLIPS: &[&str] = &["/samples/bbb-h265.mp4", "/samples/bbb-h264.mp4", "/samples/bbb.h264"];
 /// Fallback frame rate, used ONLY to synthesise timestamps for an elementary
 /// stream, which has none. An MP4 tells us the real ones and this is unused.
 const FPS: i64 = 30;
@@ -134,10 +134,11 @@ fn synth_pts_us(index: i64) -> i64 {
 /// Demux by CONTENT, not by file extension: an `ftyp` box at offset 4 is the
 /// ISO-BMFF signature. A player that trusts the name is a player that crashes on
 /// a mislabelled file.
-fn demux(bytes: &[u8]) -> Result<(Vec<Au>, Timing), String> {
+fn demux(bytes: &[u8]) -> Result<(Vec<Au>, Timing, Codec), String> {
     if bytes.len() > 8 && &bytes[4..8] == b"ftyp" {
-        demux_mp4(bytes).map(|aus| (aus, Timing::Container))
+        demux_mp4(bytes).map(|(aus, codec)| (aus, Timing::Container, codec))
     } else {
+        // Raw Annex-B elementary stream — only our H.264 test clip takes this path.
         Ok((
             access_units(bytes)
                 .into_iter()
@@ -145,6 +146,7 @@ fn demux(bytes: &[u8]) -> Result<(Vec<Au>, Timing), String> {
                 .map(|(i, (data, keyframe))| Au { data, pts_us: synth_pts_us(i as i64), keyframe })
                 .collect(),
             Timing::SynthesizedDts,
+            Codec::H264,
         ))
     }
 }
@@ -159,26 +161,41 @@ const START: [u8; 4] = [0, 0, 0, 1];
 ///   * PTS = DTS + composition offset (`ctts`). That offset is precisely the
 ///     B-frame reordering delta, so this is the only way to get a presentation
 ///     time that is actually ascending in display order.
-fn demux_mp4(bytes: &[u8]) -> Result<Vec<Au>, String> {
+fn demux_mp4(bytes: &[u8]) -> Result<(Vec<Au>, Codec), String> {
     let size = bytes.len() as u64;
     let mut mp4 = mp4::Mp4Reader::read_header(std::io::Cursor::new(bytes), size)
         .map_err(|e| format!("mp4 header: {e}"))?;
 
-    let (tid, timescale, sps, pps, nal_len, count) = {
+    // The keyframe parameter-set prefix, ALREADY start-coded (Annex-B). For H.264
+    // it is SPS+PPS from avcC's typed accessors; for H.265 it is VPS+SPS+PPS from
+    // the raw hvcC box, which the `mp4` crate does not expose (mirrors the host's
+    // parse_hvcc). Both codecs prepend this blob at every sync sample.
+    let (tid, timescale, codec, ps_prefix, nal_len, count) = {
         let t = mp4
             .tracks()
             .values()
-            .find(|t| matches!(t.media_type(), Ok(mp4::MediaType::H264)))
-            .ok_or("no H.264 track")?;
+            .find(|t| matches!(t.media_type(), Ok(mp4::MediaType::H264 | mp4::MediaType::H265)))
+            .ok_or("no H.264/H.265 track")?;
+        let is264 = matches!(t.media_type(), Ok(mp4::MediaType::H264));
+        let ps_prefix = if is264 {
+            let mut p = Vec::new();
+            p.extend_from_slice(&START);
+            p.extend_from_slice(&t.sequence_parameter_set().map_err(|e| format!("sps: {e}"))?);
+            p.extend_from_slice(&START);
+            p.extend_from_slice(&t.picture_parameter_set().map_err(|e| format!("pps: {e}"))?);
+            p
+        } else {
+            parse_hvcc(bytes).ok_or("could not parse hvcC")?
+        };
         (
             t.track_id(),
             t.timescale() as i64,
-            t.sequence_parameter_set().map_err(|e| format!("sps: {e}"))?.to_vec(),
-            t.picture_parameter_set().map_err(|e| format!("pps: {e}"))?.to_vec(),
-            // The NAL length prefix is 1..4 bytes, declared per file in avcC's
+            if is264 { Codec::H264 } else { Codec::H265 },
+            ps_prefix,
+            // The NAL length prefix is 1..4 bytes, declared per file in avcC/hvcC's
             // lengthSizeMinusOne. Almost always 4 — but "almost always" is how you
             // get a decoder fed garbage on the one file that differs, so read it.
-            avcc_nal_length_size(bytes).unwrap_or(4),
+            nal_length_size(bytes, is264).unwrap_or(4),
             t.sample_count(),
         )
     };
@@ -199,10 +216,7 @@ fn demux_mp4(bytes: &[u8]) -> Result<Vec<Au>, String> {
         // Parameter sets ride with every sync sample: the decoder must be able to
         // start from any of them, and after a `reset` it will have forgotten them.
         if s.is_sync {
-            au.extend_from_slice(&START);
-            au.extend_from_slice(&sps);
-            au.extend_from_slice(&START);
-            au.extend_from_slice(&pps);
+            au.extend_from_slice(&ps_prefix);
         }
         let mut i = 0usize;
         while i + nal_len <= s.bytes.len() {
@@ -220,17 +234,42 @@ fn demux_mp4(bytes: &[u8]) -> Result<Vec<Au>, String> {
         }
         out.push(Au { data: au, pts_us, keyframe: s.is_sync });
     }
-    Ok(out)
+    Ok((out, codec))
 }
 
-/// `lengthSizeMinusOne` from the avcC box: the low 2 bits of the byte at offset 4
-/// of the box payload, plus one. The `mp4` crate parses avcC but does not expose
-/// this field, so read it from the raw box — the same shape as the host's hvcC
-/// parser, and for the same reason.
-fn avcc_nal_length_size(file: &[u8]) -> Option<usize> {
-    let p = file.windows(4).position(|w| w == b"avcC")?;
+/// `lengthSizeMinusOne` (low 2 bits, +1) from avcC (H.264, payload offset 4) or
+/// hvcC (H.265, payload offset 21). The `mp4` crate parses neither field, so read
+/// it from the raw box; feeding a decoder the wrong prefix width is silent garbage.
+fn nal_length_size(file: &[u8], is264: bool) -> Option<usize> {
+    let (tag, off): (&[u8], usize) = if is264 { (b"avcC", 4) } else { (b"hvcC", 21) };
+    let p = file.windows(4).position(|w| w == tag)?;
     let payload = file.get(p + 4..)?;
-    Some((*payload.get(4)? & 0b11) as usize + 1)
+    Some((*payload.get(off)? & 0b11) as usize + 1)
+}
+
+/// H.265 param sets live in the hvcC box (ISO 14496-15 §8.3.3.1), which the `mp4`
+/// crate does not expose. Parse the raw box for the start-coded VPS/SPS/PPS blob —
+/// a faithful port of the host's `parse_hvcc` (runtime/wandr-host/src/lib.rs).
+/// Layout after the "hvcC" tag: 22 fixed bytes, then numOfArrays at 22, then each
+/// array is {type(1), numNalus(2)} followed by numNalus × {len(2), nalu}.
+fn parse_hvcc(file: &[u8]) -> Option<Vec<u8>> {
+    let p = file.windows(4).position(|w| w == b"hvcC")?;
+    let pl = file.get(p + 4..)?;
+    let num_arrays = *pl.get(22)? as usize;
+    let mut out = Vec::new();
+    let mut i = 23;
+    for _ in 0..num_arrays {
+        let num = u16::from_be_bytes([*pl.get(i + 1)?, *pl.get(i + 2)?]) as usize;
+        i += 3;
+        for _ in 0..num {
+            let l = u16::from_be_bytes([*pl.get(i)?, *pl.get(i + 1)?]) as usize;
+            i += 2;
+            out.extend_from_slice(&START);
+            out.extend_from_slice(pl.get(i..i + l)?);
+            i += l;
+        }
+    }
+    Some(out)
 }
 
 /// Split Annex-B into ACCESS UNITS (one coded picture each): a new AU begins at a
@@ -365,6 +404,9 @@ struct Player {
     /// able to say WHICH thing stopped — the ticks, the decoder, or the clock —
     /// and without this the three are indistinguishable from the outside.
     pumps: u64,
+    /// Codec of the loaded clip, learned from the container in `demux` and used to
+    /// open the decoder (H.264/H.265 today; both decode on the desktop host).
+    codec: Codec,
 }
 
 /// The decode-to-surface rect for a `w`×`h` surface: a 16:9 letterbox centered
@@ -397,6 +439,7 @@ impl Player {
             accel: Acceleration::NoPreference,
             restart: false,
             pumps: 0,
+            codec: Codec::H264,
         }
     }
 
@@ -414,9 +457,10 @@ impl Player {
             return;
         };
         match demux(&buf) {
-            Ok((aus, timing)) => {
+            Ok((aus, timing, codec)) => {
                 self.aus = aus;
                 self.timing = timing;
+                self.codec = codec;
             }
             Err(e) => {
                 println!("player: demux {path} failed: {e}");
@@ -472,7 +516,7 @@ impl Player {
         let vh = rect.height;
         match VideoDecoder::open_accelerated(
             DecoderConfig {
-                codec: Codec::H264,
+                codec: self.codec,
                 width: 1280,
                 height: 720,
                 rect,
