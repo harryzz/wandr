@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: reference
   originSessionId: 25b6eb4c-9122-4870-8734-7e515af11a68
-  modified: 2026-07-23T14:49:29.187Z
+  modified: 2026-07-23T17:05:05.273Z
 ---
 
 Researched 2026-07-23 when Windows/macOS CI broke on the C-source codec builds
@@ -261,7 +261,83 @@ Note: per-frame texture = a GPU copy, not literal zero-copy (sampling the pool s
 would need pool-refcounting + the DPB); the win is "GPU-resident, no CPU readback", the
 standard video-output pattern. True zero-copy is a Phase-2b refinement if measured worth it.
 
-## Phase 2b = host ANGLE import of the D3D11 texture (NEEDS THE HOST ON WINDOWS + VISUAL CHECK)
+## ✅ Phase 2b interop DE-RISKED — D3D11→ANGLE import proven bit-exact (2026-07-23)
+Standalone headless spike `repros/d3d11-angle-import-spike/` (uncommitted): create a
+64x64 NV12 D3D11 texture with a known pattern ON ANGLE's OWN device, import it into GL,
+read both planes back, assert byte-exact. PASSES (Y 0 differ, UV 0 differ) on Intel UHD
+620. This is the whole risk of Phase 2b, now proven — not written blind. THE RECIPE:
+- ANGLE available from Edge (`C:\Program Files (x86)\Microsoft\Edge\Application\<ver>\
+  libEGL.dll` + libGLESv2.dll + d3dcompiler_47.dll) — load at runtime, copy next to the
+  exe. Headless: `eglGetPlatformDisplayEXT(EGL_PLATFORM_ANGLE_ANGLE, .., [ANGLE_TYPE,
+  D3D11])` → pbuffer surface + GLES context, no window.
+- ‼️ DEVICE SHARING (path A, no cross-device handle): ANGLE's D3D11 device =
+  `eglQueryDisplayAttribEXT(dpy, EGL_DEVICE_EXT=0x322C, &devEXT)` then
+  `eglQueryDeviceAttribEXT(devEXT, EGL_D3D11_DEVICE_ANGLE=0x33A1, &ptr)` →
+  `ID3D11Device::from_raw_borrowed(&ptr).clone()`. Create/decode the NV12 texture on THIS
+  device and the import is a plain same-device alias — no shared NT handle, no keyed mutex.
+- ‼️ IMPORT MECHANISM = `EGL_ANGLE_image_d3d11_texture`, NOT `d3d_texture_client_buffer`.
+  The pbuffer/`eglCreatePbufferFromClientBuffer(EGL_D3D_TEXTURE_ANGLE)` + eglBindTexImage
+  path is for RENDERING TO a texture — reading it back gave all-zeros (wrong tool; cost an
+  hour). The right path: per plane,
+  `eglCreateImageKHR(dpy, EGL_NO_CONTEXT, EGL_D3D11_TEXTURE_ANGLE=0x3484, texture_raw_ptr,
+  [EGL_D3D11_TEXTURE_PLANE_ANGLE=0x3492, plane, EGL_TEXTURE_INTERNAL_FORMAT_ANGLE=0x345D,
+  GL_R8(0x8229 for Y)/GL_RG8(0x822B for UV), EGL_NONE])` →
+  `glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, image)` → a sampleable GL texture (Y=R8,
+  UV=RG8). Direct ANGLE analog of the Linux dma-buf→EGLImage tail in `src/video_gl.rs`.
+- ‼️ The NV12 texture must be `BIND_SHADER_RESOURCE | BIND_RENDER_TARGET` (ANGLE needs the
+  per-plane R8/RG8 views render-targetable). So `backend/d3d11.rs::export_texture` must add
+  BIND_RENDER_TARGET (currently SHADER_RESOURCE only).
+## Phase-2b steps 1-2 WRITTEN (2026-07-23, uncommitted) — host bring-up remains
+- Step 1 (device handoff): `backend/d3d11.rs` has `set_angle_d3d11_device(*mut c_void)`
+  (thread-local, re-exported from lib.rs) + `Dxva::new` decodes on ANGLE's device when set
+  (else own device = CPU-readback lane). `export_texture` now `SHADER_RESOURCE |
+  RENDER_TARGET` (ANGLE needs the plane views renderable). `D3d11View::texture_ptr()` added
+  (keeps windows-crate inside wandr-video). COMPILE-VERIFIED: wandr-video builds Windows +
+  Linux; d3d11_hw test still 250/250 (own-device path unregressed).
+- Step 2 (host import): `src/video_gl.rs` — `build()` now succeeds on either dma-buf OR
+  `EGL_ANGLE_image_d3d11_texture` (adds `d3d11_image` flag); `import_nv12` tries
+  `import_d3d11(frame)` first on Windows (`frame.d3d11()` → per-plane
+  `eglCreateImageKHR(EGL_D3D11_TEXTURE_ANGLE, texture_ptr, [plane, R8/RG8])` →
+  `glEGLImageTargetTexture2DOES` → 2 GL textures, reusing the module's existing EGL fns);
+  `register()` extracts ANGLE's device (eglQueryDisplayAttribEXT/DeviceAttribEXT) and calls
+  `set_angle_d3d11_device`. Host `Cargo.toml`: new `d3d11 = ["wandr-video/d3d11"]` feature.
+  All Windows-specific code is `#[cfg(all(feature="d3d11", target_os="windows"))]`.
+  COMPILE-VERIFIED: host builds on Linux (unconditional parts) AND on Windows with
+  `--features p3-async,d3d11` (the D3D11 branch + register_angle_d3d11_device compiled,
+  exit 0). x86_64 Windows ABI makes the module's `extern "C"` EGL fns fine. ‼️ To
+  compile-check the host on Windows from WSL you must sidestep the codec build toolchains
+  (libvpx=vcpkg, dav1d=meson/nasm, libde265=cc): TEMPORARILY set the host Cargo.toml
+  `wandr-video` dep `features = []` (d3d11 comes via `--features d3d11`), check, then RESTORE
+  the features + `git checkout Cargo.lock` (the check mutates the lock: drops codec edges,
+  adds windows/anyhow). skia is a prebuilt DOWNLOAD on x86_64-windows (not a source build),
+  so the host check is ~fast once deps cache. ANGLE DLLs provisioned to
+  `%TEMP%\wandr-host-target\{release,debug}\` (from Edge). ‼️ A `--locked` Windows d3d11
+  build needs a ONE-TIME lock regen (build once without --locked, commit the lock) since
+  enabling d3d11 adds wandr-video→windows/anyhow edges the committed lock lacks.
+## ✅ Host runs d3d11 decode on Windows — end-to-end (2026-07-23, uncommitted)
+`tools/scripts/run-host-windows.ps1` (one command): builds the host `--release` with
+`--features p3-async,d3d11` (H.264-only by default = temp-drops libvpx/dav1d/libde265 via a
+Cargo.toml regex, backup+restore in `finally`, so NO vcpkg/meson/nasm needed — d3d11 covers
+H.264), provisions ANGLE from Edge next to the exe, and runs `--video-decode-file`. VERIFIED
+END-TO-END: release build OK (18m41s over UNC), then `wandr-video: H264 decode via d3d11`
+and `250 samples -> 250 decoded, presentation order OK -- ok` on a real 320x240 MP4
+(repros/samples/test-25fps.mp4, generated via `ffmpeg -i test-25fps.h264 -c copy`). So the
+d3d11 HW backend decodes real H.264 inside the host on Windows. ‼️ Traps for the script:
+(1) .ps1 must be ASCII — Windows PowerShell reads it as the system codepage w/o a BOM, so
+em-dash/box-drawing chars corrupt string parsing (PARSE errors). (2) The host hardcodes the
+PNG to UNIX `/tmp/decode-file.png` (best-effort `let _ = fs::write`), which on Windows =
+`<drive>\tmp`; the script `mkdir C:\tmp` + runs from `C:\` so it lands. NOTE:
+`--video-decode-file` is HEADLESS raster (no GL) — it proves DECODE, not the ANGLE zero-copy
+import; the decoded PNG looked washed/greenish = the diagnostic's I420->RGBA raster
+compositing of the last-presented frame, NOT the decode (which is bit-exact per d3d11_hw).
+
+REMAINING = the WINDOWED zero-copy bring-up (needs the Windows box + a VISUAL check): build the host on
+Windows with `--features ...,d3d11` (compile-checks the branch; will also need the root
+Cargo.lock refreshed since d3d11 pulls windows/anyhow edges for wandr-video), provision
+ANGLE (libEGL/libGLESv2 next to the exe — Edge's copy works), run it with a video, and
+confirm on screen. This is the first-time x86_64-host-on-Windows-with-a-window bring-up.
+
+## Phase 2b host wiring (NEEDS THE HOST ON WINDOWS + VISUAL CHECK)
 Fundamentally different from everything above (which was codec-only + standalone-testable).
 Requires: (1) generalize `GpuFrame` in wandr-video/lib.rs — today dma-buf-specific
 (`planes: Vec<DmabufPlane>`, DRM fourcc/modifier) — to also carry a D3D11 texture / DXGI
