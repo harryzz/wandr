@@ -58,3 +58,32 @@ the guest `wandr.video.player` on screen; default is a headless
 `--video-decode-file` PNG). Beware PowerShell `-Stop` + `2>&1 | cmdlet` turning
 cargo's stderr warning into a terminating error — redirect native output to a file
 under `EAP=Continue` instead.
+
+## ✅ DXVA HEVC/H.265 too (2026-07-25, wandr-host 669af40 — pixel-correct)
+`backends/hevc.rs` + `hevc_dxva.rs`: the H.265 peer, SAME architecture — reuse the
+D3D11 device/pool/submit/readback, drive cros-codecs' pure-Rust HEVC parser +
+`PictureData::new_from_slice` (POC free), fill `DXVA_PicParams_HEVC` from the VA-API
+HEVC backend's field mapping (`decoder/stateless/h265/vaapi.rs`), let the driver
+build RefPicListL0/L1 from the `RefPicSetStCurrBefore/After/LtCurr` sets you fill.
+Get `DXVA_PicParams_HEVC`/qmatrix from mingw-w64 `dxva.h` (bitfield unions → pack
+LSB-first by hand). FOUR bring-up bugs, each caught by the decode/pixel loop:
+(1) never called `dpb.set_max_num_pics` → store fails immediately; (2) re-prime the
+fresh Parser from `nalu.data` (has the start code) NOT `nalu.as_ref()` → else PPS
+never re-registers; (3) keep the RPS **`foll`** sets, not just the current pic's
+curr sets → else you evict refs a LATER picture needs ("no ref" on future frames);
+(4) do the C.5.2.2 before-decoding `remove_unused` + bump to make room. Boundary
+"unavailable ref" logs are spec-expected (cros logs them too); diagnostic frame
+drops = 1080p CPU-readback pacing, not a defect.
+
+## Fast Windows iteration WITHOUT a GUI (huge)
+D3D11 device creation + DXVA decode need NO desktop window (unlike GL/EGL), so the
+headless `--video-decode-file <mp4>` loop runs the whole HW decode from WSL over the
+Windows GPU: edit → `cargo build --features p3-async,d3d11` (via vcvars64 cmd.exe) →
+`--video-decode-file` → check RESULT + the dumped PNG. To skip cmake/nasm/meson/vcpkg
+entirely, build **`d3d11`-only**: set the host's `wandr-video` dep `features = []`
+(drops libvpx/openh264/libde265/dav1d) — MSVC + the pure-Rust `windows` crate is all
+you need; skia-safe downloads prebuilts. NEVER commit that Cargo.toml edit (CI/full
+builds keep the software fallbacks). Fresh clone: `git submodule update --init
+--depth 1` bails on `vendor/skia-src` (pinned SHA not at the shallow tip) — fetch the
+exact SHA (`git fetch --depth 1 origin <sha>`); headers-only, so the branch tip is
+fine if the pin won't check out.
