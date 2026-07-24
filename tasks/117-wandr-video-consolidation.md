@@ -6,8 +6,21 @@
 > task 119 (retired; this file is canonical). Unblocks task 118 by removing the
 > LGPL + soname problem at its root rather than packaging around it.
 >
-> **M2 — media playback: 🔲 NEXT.** The codec lane is done but the decoder is still
-> RTP-shaped, so it cannot play a *file*. See **"M2 — media playback"** below.
+> **M2 — media playback: 🟡 IN PROGRESS.** The decoder is no longer RTP-shaped —
+> opaque `decoded-frame` + `present(at-ns)` + `timestamp-us`/`flush` shipped, and
+> `apps/user/wandr.video.player` plays a real MP4 on-screen with **HW decode +
+> zero-copy** on all three desktop backends: **macOS** VideoToolbox (IOSurface→
+> `GL_TEXTURE_RECTANGLE`), **Windows** d3d11/DXVA (ANGLE), **Linux** VAAPI — each
+> **smooth and tear-free, user-verified 2026-07-24**. Two fixes landed it:
+> (1) anchor the guest playback clock at the FIRST decoded frame, not decode-start,
+> so HW reorder-window latency doesn't peg every `present(at-ns)` in the past and
+> starve the host loop to ~5Hz (`e0cb6114`); (2) desktop GL surface to vsync
+> (`SwapInterval::Wait`) to kill tearing during the present-rate ramp (`fc2df90`).
+> See `[[reference_video_player_present_clock_anchor]]`. **Remaining: Android**
+> MediaCodec player path (`present(at-ns)` → `AMediaCodec_releaseOutputBufferAtTime`)
+> — next session. Also open (pre-existing, not a regression): the player fits the
+> video to a placeholder rect at `start()` and only reconciles to the real window
+> size on restart. Then the Jellyfin/YouTube real-client proof + upstream proposal.
 >
 > **What shipped in M1** (see "Outcome (M1)" for the deltas from this proposal):
 > `runtime/wandr-host/crates/wandr-video` (desktop-only codec dispatch) +
