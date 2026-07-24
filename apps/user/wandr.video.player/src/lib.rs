@@ -394,6 +394,8 @@ impl Player {
 
     fn start(&mut self, nanos: u64) {
         self.started = true;
+        // Provisional — re-anchored to the first frame's emergence in `pump` once
+        // the decoder's reorder/startup latency has passed (see the note there).
         self.origin_ns = nanos;
         // First clip that opens wins; a missing one is not an error, a missing
         // mount is.
@@ -519,6 +521,13 @@ impl Player {
             self.restart(nanos);
         }
         let Some(dec) = self.dec.as_ref() else { return };
+        // `nanos` is sampled by the host at the TOP of this render-frame, but the
+        // first pump then decodes the whole reorder window synchronously before a
+        // frame surfaces (HW decode ~28 ms/frame × ~16 ≈ 0.4 s), so `nanos` is
+        // stale by that much when we anchor the clock below. `Instant` here shares
+        // the wasi:clocks monotonic timeline with `nanos`, so its elapsed measures
+        // exactly that staleness and lets us anchor to the REAL now-at-first-frame.
+        let pump_t0 = std::time::Instant::now();
         self.pumps += 1;
         if self.pumps % 120 == 0 && !self.done {
             println!(
@@ -589,7 +598,28 @@ impl Player {
                 self.out_of_order += 1;
             }
             self.last_pts = pts;
-            let first = *self.first_pts_us.get_or_insert(pts);
+            // Anchor the playback clock to the FIRST frame's actual emergence, not
+            // to decode-start. The HW decoder holds a reorder window (VideoToolbox
+            // ~16 frames) and decode has latency, so the first frame surfaces
+            // hundreds of ms after we begin submitting. If `origin_ns` were pinned
+            // at decode-start (as `start()` provisionally does), every deadline
+            // would be born already in the past — measured at -456 ms and GROWING,
+            // because a host that has no future frame scheduled idles its render
+            // loop at the guest UI rate (~5 Hz), which pumps us slower still, so we
+            // fall further behind: the vicious cycle that made playback choppy on
+            // macOS while Linux (shorter reorder path) stayed smooth. Re-anchoring
+            // at first output turns that startup latency into a one-time delay;
+            // steady-state frames then land in the FUTURE, so `present(at-ns)`
+            // schedules them and the host wakes at the frame rate. This is why
+            // mpv/ffplay start the master clock at first output, not at open.
+            let first = match self.first_pts_us {
+                Some(f) => f,
+                None => {
+                    self.first_pts_us = Some(pts);
+                    self.origin_ns = nanos + pump_t0.elapsed().as_nanos() as u64;
+                    pts
+                }
+            };
             let at_ns = self.origin_ns.saturating_add(((pts - first).max(0) as u64) * 1_000);
             frame.present(at_ns);
             self.presented += 1;
