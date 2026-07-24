@@ -367,6 +367,14 @@ struct Player {
     pumps: u64,
 }
 
+/// The decode-to-surface rect for a `w`×`h` surface: a 16:9 letterbox centered
+/// vertically, full width. One source of truth so `start()` (initial open) and
+/// `on_resize` (live reconcile) place the video identically.
+fn video_rect(w: u32, h: u32) -> VideoRect {
+    let vh = (w * 9 / 16).min(h);
+    VideoRect { x: 0, y: (h.saturating_sub(vh)) / 2, width: w, height: vh }
+}
+
 impl Player {
     const fn new() -> Self {
         Self {
@@ -460,16 +468,19 @@ impl Player {
         // above-ui = the video covers its rect and the UI lays out around it, so
         // we don't need the transparent-hole dance behind-ui requires.
         let (w, h) = self.surface;
-        let vh = (w * 9 / 16).min(h);
+        let rect = video_rect(w, h);
+        let vh = rect.height;
         match VideoDecoder::open_accelerated(
             DecoderConfig {
                 codec: Codec::H264,
                 width: 1280,
                 height: 720,
-                rect: VideoRect { x: 0, y: (h.saturating_sub(vh)) / 2, width: w, height: vh },
+                rect,
                 rotation: 0,
                 // behind-ui: the video sits UNDER our UI, so the caption bar we draw
                 // below lands on top of the picture. This is what a real player wants.
+                // (Needs the app EGL surface to carry alpha + sf_set_opaque(false) so
+                // the transparent hole reveals the video — see egl.rs EGL_ALPHA_SIZE.)
                 layer: ZLayer::BehindUi,
             },
             self.accel,
@@ -819,7 +830,22 @@ impl FrameGuest for Component {
     /// The host tells us the surface size here — this is how we learn the
     /// geometry without importing a canvas interface.
     fn on_resize(w: u32, h: u32) {
-        PLAYER.with(|p| p.borrow_mut().surface = (w.max(1), h.max(1)));
+        let (w, h) = (w.max(1), h.max(1));
+        PLAYER.with(|p| {
+            let mut p = p.borrow_mut();
+            if p.surface == (w, h) {
+                return;
+            }
+            p.surface = (w, h);
+            // Reconcile a LIVE decoder's surface to the new geometry instead of
+            // waiting for a restart: `start()` fixed the rect from whatever
+            // `surface` was at open (a placeholder until the first resize), so a
+            // resize/rotation would otherwise leave the video mis-placed until
+            // the next replay. `set_rect` is exactly the live-reconcile verb.
+            if let Some(dec) = p.dec.as_ref() {
+                dec.set_rect(video_rect(w, h));
+            }
+        });
     }
 }
 
@@ -859,14 +885,23 @@ impl PacingGuest for Component {
             } else {
                 // ‼️ IDLE-PACE DURING PLAYBACK. A video player's UI is static while
                 // the picture moves — only the progress bar and subtitles change,
-                // a few times a second at most. So we ask the host for a lazy UI
-                // cadence (~5 Hz) and let it wake us at the VIDEO frame rate on its
-                // own: the scheduled-frame deadline is an independent wake source
-                // (video_desktop::time_until_next_scheduled). If that decoupling
-                // works, on_frame still runs at ~30 Hz even though we asked for 5,
-                // and playback stays smooth; if it did not, we would stutter to
-                // 5 fps. The `pumps` count at DONE is the proof either way.
-                200
+                // a few times a second at most.
+                //
+                // ‼️ But the guest MUST pump at the video frame rate, because
+                // pumping is what pulls decoded frames and schedules their
+                // presentation. On DESKTOP a lazy UI cadence (~5 Hz) was enough
+                // because the host had an INDEPENDENT video wake source — the
+                // scheduled-frame deadline (video_desktop::time_until_next_scheduled)
+                // drained the present queue at frame rate on its own. ON ANDROID
+                // THAT SOURCE DOES NOT EXIST: present(at-ns) hands the buffer
+                // straight to SurfaceFlinger (AMediaCodec_releaseOutputBufferAtTime),
+                // so there is no host-side queue to wake on. If we idle at 5 Hz here
+                // the guest pumps at ~5 Hz, cannot feed/pull/schedule fast enough to
+                // stay ahead of real time, every deadline lands in the past and
+                // playback runs at ~0.5x. So ask for a frame-rate cadence directly.
+                // ~60 Hz gives headroom over 30 fps content and is harmless on
+                // desktop (it just wakes at 60 Hz instead of relying on the queue).
+                16
             }
         })
     }

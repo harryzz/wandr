@@ -30,3 +30,15 @@ ui = "components/ui.wasm"
 host  = "~/wandr/repros/oxideav-spike/samples"
 guest = "/samples"
 mode  = "ro"
+
+# Android (--no-art) alternative for the SAME guest `/samples`. On device the
+# runtime runs with HOME=/, so the `~` path above resolves to `/wandr/…`
+# (absent, read-only rootfs) and is skipped; the host claims a guest with the
+# FIRST existing host, so this writable device path wins there. On desktop this
+# path does not exist, so the `~` block above (listed first) still wins. Push
+# the clips here on device: `adb push repros/oxideav-spike/samples/. \
+# /data/local/tmp/wandr-samples/`.
+[[mounts]]
+host  = "/data/local/tmp/wandr-samples"
+guest = "/samples"
+mode  = "ro"

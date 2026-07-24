@@ -16,11 +16,37 @@
 > so HW reorder-window latency doesn't peg every `present(at-ns)` in the past and
 > starve the host loop to ~5Hz (`e0cb6114`); (2) desktop GL surface to vsync
 > (`SwapInterval::Wait`) to kill tearing during the present-rate ramp (`fc2df90`).
-> See `[[reference_video_player_present_clock_anchor]]`. **Remaining: Android**
-> MediaCodec player path (`present(at-ns)` → `AMediaCodec_releaseOutputBufferAtTime`)
-> — next session. Also open (pre-existing, not a regression): the player fits the
-> video to a placeholder rect at `start()` and only reconciles to the real window
-> size on restart. Then the Jellyfin/YouTube real-client proof + upstream proposal.
+> See `[[reference_video_player_present_clock_anchor]]`. **Android MediaCodec
+> player path — ✅ VERIFIED ON SCREEN, Pixel 2 XL / --no-art 2026-07-24.**
+> `bbb-h264.mp4` plays on the panel: HW decode (`OMX.qcom.video.decoder.avc`)
+> decode-to-surface, **real-time 30 fps** (measured 30.2/30.0/29.3 fps across the
+> run, `at_ns` a stable +120–170 ms ahead), behind-ui hole-punch showing the video
+> under the guest's captions, correct colour. Three fixes landed it:
+> (1) **present-path wiring** — `present(at-ns)` →
+> `AMediaCodec_releaseOutputBufferAtTime(codec, idx, at_ns)` (zero-copy; `at_ns`
+> is already CLOCK_MONOTONIC so no conversion — the reason `host_clock` chose it);
+> `submit-timed`/`next-decoded`/`flush`(EOS)/`reset`(`AMediaCodec_flush`) all in
+> `src/video.rs` `mod android`. `decoded-frame` on Android is a HELD MediaCodec
+> output-buffer index (not CPU pixels), guarded by an `Arc<AtomicBool>` liveness
+> flag so a frame outliving its decoder no-ops instead of UAF-releasing a stale
+> index; holding the index is itself the back-pressure. `video_host_impl.rs`
+> needed zero changes (already generic), and the guest already emits Annex-B with
+> in-band SPS/PPS, so **no host `mp4toannexb`/CSD wiring was needed**.
+> (2) **pacing** (`wandr.video.player` `next_frame_delay` 200 ms→16 ms) — on
+> Android present is HW-scheduled by SurfaceFlinger, so there is NO host-side
+> scheduled queue and thus NO independent video wake source (unlike desktop's
+> `time_until_next_scheduled`); the guest MUST request a frame-rate cadence or it
+> pumps at ~5 Hz and runs at ~0.5×, every deadline in the past.
+> (3) **behind-ui transparency** (`src/egl.rs` +`EGL_ALPHA_SIZE, 8`) — the
+> standalone EGL config requested no alpha, so `eglChooseConfig` picked an RGBX
+> config and Skia's transparent clear stored opaque → the hole-punch composited
+> black over the video; adding alpha + the existing `sf_set_opaque(false)` reveals
+> it (safe — the app SF layer is `eLayerOpaque` by default, so opaque-clearing
+> apps are unaffected). Also: the player reconciles its video rect via `set-rect`
+> in `on_resize` (no restart, fixing the placeholder-rect issue), and gained a
+> device `[[mounts]]` alt (`~` resolves to `/wandr/…` under `HOME=/` on device).
+> **All three desktop backends + Android now play a real MP4.** Remaining: the
+> Jellyfin/YouTube real-client proof + upstream proposal.
 >
 > **What shipped in M1** (see "Outcome (M1)" for the deltas from this proposal):
 > `runtime/wandr-host/crates/wandr-video` (desktop-only codec dispatch) +
