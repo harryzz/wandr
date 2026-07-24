@@ -720,6 +720,40 @@ Codec status after this step: **VP8/VP9 (libvpx), H.264 (openh264), H.265
 desktop.** The software matrix is complete; **HW backends (VAAPI first — confirmed
 on fedora) are the remaining work**, for battery and 4K real-time.
 
+### HW HEVC on Windows via DXVA2 (2026-07-25) — pixel-correct
+
+The Windows DXVA `d3d11` backend, which shipped H.264 HW decode, now decodes
+**H.265 in hardware** (`wandr-host` 669af40). New `backends/hevc_dxva.rs`
+(exact `DXVA_PicParams_HEVC`/qmatrix/short-slice from dxva.h + LSB-first bitfield
+packers) + `backends/hevc.rs` (`HevcDxva`): reuses the H.264 backend's D3D11
+device/pool/submit/readback, drives cros-codecs' pure-Rust HEVC parser +
+`PictureData::new_from_slice` (POC 8.3.1), and a thin driver for the RPS
+derivation (8.3.2), the DPB (make-room bump C.5.2.2 + display-order bumping),
+and RASL drop (8.1.3). The driver builds RefPicListL0/L1 from the DXVA
+`RefPicSetStCurrBefore/After/LtCurr` sets we fill. `d3d11.rs` probes
+`HEVC_VLD_MAIN(10)` and routes `Codec::H265` to it; H.264 path unchanged.
+
+VERIFIED pixel-correct via `--video-decode-file` (headless, from WSL over the
+Windows GPU): `bbb-h265.mp4` (1920×1080, B-frames) → **300/300 decoded,
+presentation order OK**, decoded snapshot eyeballed clean, logs clean.
+
+Four bugs found+fixed in the bring-up, each caught by the pixel/decode loop:
+(1) DPB `max_num_pics` never set → store failed immediately; (2) parser
+re-priming stored `nalu.as_ref()` (no start code) not `nalu.data` → PPS not
+re-registered; (3) only the *current* picture's RPS sets were kept, evicting the
+`foll` references a later picture needs → "no ref" on future frames; (4)
+before-decoding `remove_unused` + C.5.2.2 bump was missing.
+
+‼️ The "unavailable ref" debug lines at stream/GOP boundaries are spec-expected
+(generic RPS entries pointing before the IRAP / across POC-wrap; the accelerator
+handles them — cros-codecs logs the same). The frame drops in the diagnostic are
+**1080p CPU-readback pacing** in the strict real-time harness (non-deterministic
+run-to-run), not a decode defect; the zero-copy present path removes the readback.
+The build is `d3d11`-only locally (drops libvpx/dav1d/etc. to skip
+cmake/nasm/vcpkg) — CI/full builds keep the software fallbacks.
+
+Remaining HW: VAAPI (Linux, confirmed on fedora), on-screen HEVC player proof.
+
 ### The steps
 
 Real content is H.264/HEVC/AV1, so playback forces what M1 deferred:
