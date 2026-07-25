@@ -407,6 +407,9 @@ struct Player {
     /// Codec of the loaded clip, learned from the container in `demux` and used to
     /// open the decoder (H.264/H.265 today; both decode on the desktop host).
     codec: Codec,
+    /// Clip pinned by the 4/5 keys (`bbb-h264.mp4` / `bbb-h265.mp4`), so you can
+    /// A/B all SW/HW × H.264/H.265 combos live. `None` = the CLIPS default order.
+    clip: Option<&'static str>,
 }
 
 /// The decode-to-surface rect for a `w`×`h` surface: a 16:9 letterbox centered
@@ -440,6 +443,7 @@ impl Player {
             restart: false,
             pumps: 0,
             codec: Codec::H264,
+            clip: None,
         }
     }
 
@@ -448,11 +452,15 @@ impl Player {
         // Provisional — re-anchored to the first frame's emergence in `pump` once
         // the decoder's reorder/startup latency has passed (see the note there).
         self.origin_ns = nanos;
-        // First clip that opens wins; a missing one is not an error, a missing
-        // mount is.
-        let Some((path, buf)) = CLIPS.iter().find_map(|p| std::fs::read(p).ok().map(|b| (*p, b)))
+        // A 4/5 keypress pins one clip; otherwise the first readable CLIPS entry
+        // wins. A missing clip is not an error, a missing mount is.
+        let candidates: Vec<&str> = match self.clip {
+            Some(c) => vec![c],
+            None => CLIPS.to_vec(),
+        };
+        let Some((path, buf)) = candidates.iter().find_map(|p| std::fs::read(p).ok().map(|b| (*p, b)))
         else {
-            println!("player: none of {CLIPS:?} could be read — is the /samples mount resolving?");
+            println!("player: none of {candidates:?} could be read — is the /samples mount resolving?");
             self.done = true;
             return;
         };
@@ -506,7 +514,7 @@ impl Player {
                 );
             }
         }
-        println!("player: keys — [h] hardware  [s] software  [n] no-preference  (restarts playback)");
+        println!("player: keys — [h] hardware  [s] software  [n] no-preference  [4] bbb-h264  [5] bbb-h265  (restarts playback)");
 
         // Decode-to-surface: a REAL rect is what makes the host composite video.
         // above-ui = the video covers its rect and the UI lays out around it, so
@@ -894,25 +902,25 @@ impl FrameGuest for Component {
 }
 
 impl KeyGuest for Component {
-    /// H / S / N pick the acceleration and replay. Down-edge only — a key repeat
-    /// would otherwise restart playback continuously while held.
+    /// H/S/N pick the acceleration; 4/5 pick the clip (bbb-h264 / bbb-h265) — so
+    /// every SW/HW × H.264/H.265 combo is one keypress away. All replay from the
+    /// top. Down-edge only — a key repeat would restart continuously while held.
     fn on_key(ev: KeyEvent) {
         if !ev.down || ev.repeat {
             return;
         }
-        let want = match ev.text.to_ascii_lowercase().as_str() {
-            "h" => Some(Acceleration::PreferHardware),
-            "s" => Some(Acceleration::PreferSoftware),
-            "n" => Some(Acceleration::NoPreference),
-            _ => None,
-        };
-        if let Some(accel) = want {
-            PLAYER.with(|p| {
-                let mut p = p.borrow_mut();
-                p.accel = accel;
-                p.restart = true;
-            });
-        }
+        PLAYER.with(|p| {
+            let mut p = p.borrow_mut();
+            match ev.text.to_ascii_lowercase().as_str() {
+                "h" => p.accel = Acceleration::PreferHardware,
+                "s" => p.accel = Acceleration::PreferSoftware,
+                "n" => p.accel = Acceleration::NoPreference,
+                "4" => p.clip = Some("/samples/bbb-h264.mp4"),
+                "5" => p.clip = Some("/samples/bbb-h265.mp4"),
+                _ => return, // ignore other keys (no replay)
+            }
+            p.restart = true;
+        });
     }
 }
 
