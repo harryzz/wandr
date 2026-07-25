@@ -752,7 +752,31 @@ run-to-run), not a decode defect; the zero-copy present path removes the readbac
 The build is `d3d11`-only locally (drops libvpx/dav1d/etc. to skip
 cmake/nasm/vcpkg) — CI/full builds keep the software fallbacks.
 
-Remaining HW: VAAPI (Linux, confirmed on fedora), on-screen HEVC player proof.
+### On-screen + zero-copy (2026-07-25) — user-verified
+
+The full guest player (`wandr.video.player`) plays `bbb-h265.mp4` on the Windows
+desktop through the DXVA HEVC HW decoder, decode-to-surface at real-time 30 fps —
+**user-confirmed looking correct on screen** (the last visual glance; the
+`--video-decode-file` PNG had already proven the pixels, and the windowed run
+proved the HW path end-to-end: `h265 d3d11 HARDWARE`, `decoder OPEN ✓
+decode-to-surface`).
+
+**Zero-copy present path DONE + verified** (wandr-host 21231bd): the HEVC backend
+now emits `Frame::gpu` (a D3D11 NV12 texture on ANGLE's device) instead of the CPU
+readback — the host imports it into ANGLE GL via `EGL_ANGLE_image_d3d11_texture`
+(pixels never leave the GPU). Proven from the log: `d3d11 decode will use ANGLE's
+device` + `live textures 18` (the CPU lane shows `live textures 0`), i.e. the
+decoded textures ARE imported into GL. This also removes the per-frame 1080p
+readback that caused the diagnostic's frame-drop edge. Decode-on-ANGLE's-device +
+`export_texture` + shared `D3d11Owner`/`GpuTex`, mirroring the H.264 backend.
+
+‼️ WSL-launch capture gotcha: a GL window launched via WSL→Windows interop does
+NOT present to the visible window (renders white for ALL codecs — H.264 too, so
+not codec-specific); run on the real desktop to SEE it. Headless
+`--video-decode-file` + the log signals fully verify the HW path from WSL.
+
+Remaining HW: VAAPI HW HEVC on Linux (confirmed on fedora via vainfo; not yet
+wired). Windows HW H.265 is COMPLETE — decode pixel-correct, zero-copy, on-screen.
 
 ### The steps
 

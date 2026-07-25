@@ -1,6 +1,6 @@
 TASK=117
-STEP=M2-windows-hw-hevc-DXVA-pixel-correct
+STEP=M2-windows-hw-hevc-COMPLETE-onscreen-zerocopy
 STATUS=complete
-LAST_SUCCESS=Task 117 M2: Windows HW HEVC via DXVA2 pixel-correct + committed. bbb-h265.mp4 1080p 300/300 decoded, order OK, snapshot clean. wandr-host 669af40, wandr 207e979b.
+LAST_SUCCESS=Task 117 M2 Windows HW HEVC COMPLETE: DXVA decode pixel-correct (300/300), zero-copy GPU-texture output (live textures 18, ANGLE GL import), on-screen player user-verified. wandr-host 21231bd, wandr 9cec9b18+ledger.
 NOTES=Session delivered: Android MediaCodec HW playback (pushed), SW H265 guest demux (pushed), Windows HW H264 verified, Windows HW HEVC DXVA2 pixel-correct (pushed). HEVC = backends/{hevc.rs,hevc_dxva.rs} + d3d11.rs probe/route. Detail: tasks/117 "HW HEVC on Windows via DXVA2" + [[reference_dxva_h264_windows_decode]] (appended HEVC + fast-iteration section).
 FOLLOWUPS: (1) on-screen HEVC player proof on Windows desktop (run-host-windows.ps1 -Window; needs real session). (2) zero-copy present path to remove 1080p CPU-readback drop-edge. (3) VAAPI HW HEVC on Linux. (4) commit the d3d11-only build hack is NOT committed (local only). Windows build clone at C:\Users\harry\wandr-host-build (d3d11-only). Test loop: --video-decode-file from WSL over the GPU (D3D11 needs no window).
