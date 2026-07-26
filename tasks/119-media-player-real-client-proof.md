@@ -47,16 +47,34 @@ Stable, self-hostable, well-specified. OpenAPI 3.0 at <https://api.jellyfin.org/
 interactive Swagger/ReDoc served by any instance at
 `http://<host>:8096/api-docs/swagger/index.html`.
 
-### Rust crates (evaluate; may prefer hand-rolling the ~4 endpoints)
-- [`jellyfin-sdk`](https://crates.io/crates/jellyfin-sdk) — async, reqwest-based.
-- [`jellyfin_api`](https://docs.rs/jellyfin_api/) — auto-generated from the OpenAPI spec (large surface).
+### Rust crates — DECISION: hand-roll over the in-tree HTTP client
+- [`jellyfin-sdk`](https://crates.io/crates/jellyfin-sdk) — newest (0.1.0, 2026-01-03),
+  best-built: reqwest 0.13 + **rustls**, retries/backoff, pagination, streaming download,
+  `set_token`/`clear_token`, raw escape hatch. BUT built on **tokio** (`time`/`fs`/`io-util`)
+  + reqwest's native connector — **no wasm32/wasip2 positioning** (confirmed on lib.rs).
+- [`jellyfin_api`](https://docs.rs/jellyfin_api/) — OpenAPI-generated, large surface, reqwest.
 - [`jellyfin-sdk-rust`](https://docs.rs/jellyfin-sdk-rust) — async, reqwest-based.
 
-⚠️ All are `reqwest`-based. Under wasip2 we go through `wandr-reqwest` (`wasi:tls`), so a
-crate that hard-pins reqwest's native-TLS/tokio features may not build for the guest. The
-Jellyfin surface we actually need is tiny (auth + list + PlaybackInfo + stream URL), so
-**hand-rolling those calls with the in-tree HTTP client is likely cleaner** than adopting a
-generated SDK. Decide once the guest reqwest constraint is checked.
+⚠️ Our client is a **wasip2 guest** → HTTP goes through `wandr-reqwest`/`wasi:tls`, no tokio
+runtime; all three SDKs are tokio+reqwest-native and won't drop in. The surface we need is
+tiny (auth + list + PlaybackInfo + stream URL + image), so **hand-roll those calls** over the
+in-tree HTTP client and use `jellyfin-sdk` / the OpenAPI types only as a SHAPE reference.
+
+### Client state & thumbnail cache — all guest-side in the `/state` preopen (no host change)
+Both persistence needs sit in the guest's private `/state` preopen (the universal
+`/assets`·`/state`·`/system-fonts` convention) — no new WIT, no host code, no per-app
+hardcoding; same pattern Signal uses for its session.
+- **Token / session** — `/state/jellyfin/session.json` = `{ server_url, user_id, device_id,
+  access_token }`. `device_id` is stable per install (part of the `MediaBrowser` auth header)
+  — generate once, keep. Jellyfin tokens are long-lived (no expiry unless revoked / password
+  change) → store-once; on `401`, re-run `AuthenticateByName` and rewrite the blob.
+- **Cover thumbnails** — `/state/cache/thumbs/<itemId>_<imageTag>_<w>.webp`. Jellyfin's image
+  URL (`/Items/{id}/Images/Primary?tag=<imageTag>&maxWidth=…&format=Webp`) carries an image
+  **`tag`** (content hash) = a BUILT-IN cache-busting key (tag change ⇒ refetch). Request
+  **WebP + capped `maxWidth`** to keep disk/bandwidth small; guest-side decode; simple
+  size-capped LRU sweep so the cache can't grow unbounded. ‼️ Server-side IMAGE resize is
+  fine — it's poster scaling, NOT media transcoding; the "DirectPlay, never transcode" rule
+  is about the VIDEO stream only.
 
 ### The 4-call flow
 1. **Auth** — `POST /Users/AuthenticateByName` `{ "Username":…, "Pw":… }` → `AuthenticationResult`
