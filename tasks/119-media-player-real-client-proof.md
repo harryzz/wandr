@@ -74,6 +74,26 @@ generated SDK. Decide once the guest reqwest constraint is checked.
    guest demux → host decode. (Transcode fallback, which we AVOID, is the `master.m3u8` /
    `stream` non-static variants.)
 
+### Transport / seek — static + HTTP Range, NOT HLS
+Pause / FF / REW do **not** need HLS. `static=true` serves the raw file with
+`Accept-Ranges: bytes`, and all three controls are guest-side over Range:
+- **Pause** = stop the clock + stop pulling bytes (no request).
+- **Seek/rewind** = new `GET` with `Range: bytes=N-` (→ `206`), then decoder
+  `flush`/`reset` (already shipped, 117 M2) + re-anchor the clock.
+- **Fast-forward** = same seek; visible FF = feed **keyframes only** (demux decision).
+
+The ONE requirement: byte offset ≠ time offset, so the demuxer needs the container
+**index** to map timestamp→byte→nearest keyframe — MP4 `moov`/`stss`, MKV/WebM `Cues`.
+⚠️ MP4 gotcha: if the file isn't faststart, `moov` is at the END → range-fetch the tail
+first to get the index (Jellyfin serves whatever's stored — don't assume faststart).
+This is the guest-side demux job; the host only decodes.
+
+‼️ HLS is the WRONG tool here: on Jellyfin, HLS (`master.m3u8`/segments) means the
+server transcodes/segments — i.e. the server does the decode, which DEFEATS the
+DirectPlay proof. HLS exists for adaptive-bitrate / transcode / live, none of which a
+static VOD file needs. (The legitimate adaptive/DASH case is Part B YouTube, where the
+"two streams" are still each range-fetched and muxed guest-side.)
+
 ### Jellyfin milestones
 - A1: auth + browse + resolve a DirectPlay MP4/H.264 URL from the guest.
 - A2: range-fetch + guest demux + host GStreamer decode → plays on-screen, A/V synced.
