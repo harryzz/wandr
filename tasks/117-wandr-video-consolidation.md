@@ -6,7 +6,7 @@
 > task 119 (retired; this file is canonical). Unblocks task 118 by removing the
 > LGPL + soname problem at its root rather than packaging around it.
 >
-> **M2 — media playback: 🟡 IN PROGRESS.** The decoder is no longer RTP-shaped —
+> **M2 — media playback: 🟢 CORE DONE / real-client proof + upstream remain.** The decoder is no longer RTP-shaped —
 > opaque `decoded-frame` + `present(at-ns)` + `timestamp-us`/`flush` shipped, and
 > `apps/user/wandr.video.player` plays a real MP4 on-screen with **HW decode +
 > zero-copy** on all three desktop backends: **macOS** VideoToolbox (IOSurface→
@@ -45,8 +45,29 @@
 > apps are unaffected). Also: the player reconciles its video rect via `set-rect`
 > in `on_resize` (no restart, fixing the placeholder-rect issue), and gained a
 > device `[[mounts]]` alt (`~` resolves to `/wandr/…` under `HOME=/` on device).
-> **All three desktop backends + Android now play a real MP4.** Remaining: the
-> Jellyfin/YouTube real-client proof + upstream proposal.
+> **All three desktop backends + Android now play a real MP4.**
+>
+> **Decode consolidation — ✅ DONE 2026-07-26.** The desktop decode side is now a
+> SINGLE **GStreamer** backend (`crates/wandr-video/src/backends/gstreamer.rs`,
+> `gstreamer-hw` prio 15 / `gstreamer-sw` prio 95): one library wrapping every OS's
+> HW+SW decoders (VA / DXVA / VideoToolbox + `avdec_*`) via
+> `appsrc→parser→decoder→appsink`, with per-OS zero-copy — Linux **dma-buf**,
+> Windows **D3D11** texture (ANGLE device-inject), macOS **IOSurface**
+> (`GstCoreVideoMeta`→`CVPixelBuffer`→existing `import_iosurface`, no host change).
+> The hand-written per-OS decoders this proposal's codec matrix called for
+> (`openh264`/`libde265`/`oxideav`/`dav1d` SW + `vaapi`/`d3d11`/`videotoolbox` HW)
+> were **RETIRED and deleted** — the "H.265 software gap" and the `libde265` LGPL
+> exposure are gone (GStreamer's `avdec_h265` covers SW HEVC; HW covers the rest).
+> The GPU zero-copy glue moved into `backends/gpu_interop.rs`, gated on the
+> `gstreamer` feature. `libvpx` stays — VP8/VP9 **encode** for Signal, which
+> GStreamer does not do. One feature set — `--features p3-async,gstreamer` — builds
+> the full decode stack on Linux/Windows/macOS; all CI legs green. Build guide:
+> `runtime/wandr-host/docs/building-desktop.md`. See
+> `[[reference_gstreamer_desktop_backend_spike]]`, `[[reference_libde265_windows_win32cond_crash]]`.
+> ⚠️ The "Codec matrix" and "M2 — media playback (🔲 NEXT)" sections below are
+> SUPERSEDED by this consolidation — kept for the sequencing history only.
+>
+> **Remaining:** the Jellyfin/YouTube real-client proof + upstream proposal.
 >
 > **What shipped in M1** (see "Outcome (M1)" for the deltas from this proposal):
 > `runtime/wandr-host/crates/wandr-video` (desktop-only codec dispatch) +
@@ -139,6 +160,11 @@ decoder = INCOMING (guest pushes, host HW-decodes **to surface**, zero copy).
 **Minimum viable for calls: VP8 encode + VP8/VP9 decode — one library, libvpx.**
 
 ### Streaming media playback (no app needs this yet)
+
+> ⚠️ **SUPERSEDED 2026-07-26.** This per-crate decode matrix was NOT what shipped:
+> desktop decode is now the single GStreamer backend (SW `avdec_*` + HW
+> va/d3d11/vtdec), so `openh264`/`libde265`/`dav1d` were never adopted / were deleted,
+> and the H.265 software gap below is closed by `avdec_h265`. See the M2 header block.
 
 **Decode only — no encoder at all.**
 

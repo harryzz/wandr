@@ -1,11 +1,11 @@
 ---
 name: reference_gstreamer_desktop_backend_spike
-description: "GStreamer as a candidate DESKTOP video backend (replace per-OS d3d11/vaapi/vt + libde265/dav1d/etc). Spike PROVEN end-to-end incl zero-copy GL-context-sharing. Working recipe + traps. Read before revisiting the \"one library for OS video\" question or the libde265 pain."
+description: "GStreamer is the SOLE desktop video-DECODE backend (2026-07-26) — the per-OS handwritten decoders (d3d11/vaapi/vt + libde265/dav1d/openh264/oxideav) are RETIRED+deleted; libvpx kept for VP8/VP9 encode only. Zero-copy on all 3 OSes (Linux dma-buf / Windows D3D11-ANGLE / macOS IOSurface). Working recipe + traps + the retirement/decouple. Read before touching desktop video decode or revisiting \"one library for OS video\"."
 metadata: 
   node_type: memory
   type: reference
   originSessionId: 215f1733-fbc2-4004-aac8-cacd9719553d
-  modified: 2026-07-25T19:11:30.911Z
+  modified: 2026-07-26T06:08:39.442Z
 ---
 
 Motivated by the libde265-Windows pain ([[reference_libde265_windows_win32cond_crash]]).
@@ -199,9 +199,29 @@ an erratic clock jumping to tens of seconds. Native vaapi (sync + fast) masked a
   ‼️ Build with `--features d3d11,gstreamer` (gstreamer d3d11 lane reuses d3d11.rs's `angle_d3d11_device`
   + `readback_nv12_texture`, both pub(crate)). ANGLE (libEGL/libGLESv2) ships next to the host exe.
 
-## Status: CPU + GPU-zero-copy backends wired + PLAY on-screen. Linux dma-buf VERIFIED on i965 @4% CPU; Windows D3D11 zero-copy VERIFIED on UHD 620 @10.5% CPU (both default-on). Family-select + probe-gate landed. macOS (IOSurface/VideoToolbox) + native-backend retirement + commit are next.
-Remaining = wrap as a real `wandr-video` `CodecBackend`/WIT backend using the actual ANGLE
-context (not the stand-in), optional `gstreamer-play` for host-side subtitles/transport,
-and desktop GStreamer-runtime packaging. Prior decision to keep hand-rolled backends
-([[reference_media_codec_strategy]] 2026-07-23) stands UNLESS the goal becomes exiting
-codec maintenance wholesale — in which case this spike is the green light.
+## macOS: IOSurface zero-copy DONE (2026-07-26) — H.265 via `vtdec`, 300/300, 10.7% ZC vs 26.5% readback.
+Same backend, `mod iosurface_gpu`: appsink `caps="video/x-raw,format=NV12"` (VideoToolbox keeps
+CVPixelBuffers), read the `GstCoreVideoMeta` (`g_type_from_name("GstCoreVideoMetaAPI")` +
+`gst_buffer_get_meta`, repr(C) `{GstMetaHdr, cvbuf, pixbuf}`) → `CVPixelBuffer` → the host's
+EXISTING `import_iosurface` (`CGLTexImageIOSurface2D` → `GL_TEXTURE_RECTANGLE`), NO host change.
+IOSurface is a shareable GPU resource → race-free. Reuses the videotoolbox.rs import path exactly.
+
+## ✅ CONSOLIDATION COMPLETE + hand-written decoders RETIRED (2026-07-26, wandr-host `a63e3ae`).
+The "user intends to eventually DROP the hand-written backends" gating seam was EXERCISED:
+`vaapi`/`d3d11`/`hevc`/`hevc_dxva`/`videotoolbox`/`libde265`/`dav1d`/`openh264`/`oxideav_h265`
+backends + their tests DELETED; GStreamer is the SOLE desktop decode path. `libvpx` KEPT (VP8/VP9
+ENCODE for Signal — GStreamer doesn't encode). The per-OS GPU zero-copy glue those decoders carried
+(ANGLE `ID3D11Device` handoff + D3D11 NV12 readback; CVPixelBuffer readback) was DECOUPLED into
+`backends/gpu_interop.rs`, gated on the `gstreamer` feature (not the retired `d3d11`/`videotoolbox`
+features); the `IOSurfaceView`/`D3d11View` host handles + `import_iosurface`/`import_d3d11` re-gated
+the same way (macOS handle needs no crate → `target_os="macos"`; Windows `D3d11View` needs the
+`windows` crate, now pulled by the `gstreamer` feature on Windows). ONE feature set
+`--features p3-async,gstreamer` builds the full decode stack on all 3 desktop OSes — verified
+building Linux + Windows (libvpx via vcpkg `VPX_LIB_DIR`) + macOS; all CI legs green. Cargo.toml
+dropped the retired features/deps (cros-codecs, libva, openh264, oxideav, libde265, dav1d,
+core-foundation, anyhow) + their `[patch]`. RETIRING the decoders also fixed the Windows "Could not
+allocate vertices" flood: it was the PRIORITY MISHMASH (handwritten d3d11 + libde265 registered
+ABOVE gstreamer), NOT a device race — with no handwritten decoder registered, `gstreamer-hw` always
+wins. Build guide: `runtime/wandr-host/docs/building-desktop.md`. Supersedes the "keep hand-rolled
+backends" decision in [[reference_media_codec_strategy]]. Task-117 tail: Jellyfin/YouTube
+real-client proof + upstream `wandr:video` proposal (see task doc).
