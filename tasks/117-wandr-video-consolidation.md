@@ -67,7 +67,10 @@
 > ⚠️ The "Codec matrix" and "M2 — media playback (🔲 NEXT)" sections below are
 > SUPERSEDED by this consolidation — kept for the sequencing history only.
 >
-> **Remaining:** the Jellyfin/YouTube real-client proof + upstream proposal.
+> **Remaining:** the Jellyfin/YouTube real-client proof + upstream proposal —
+> split out to **`tasks/119-media-player-real-client-proof.md`** (Jellyfin DirectPlay
+> first, then YouTube via the Invidious REST API; both feed the upstream `wandr:video`
+> proposal). 117's engine work is DONE; 119 is the "prove with real consumers" tail.
 >
 > **What shipped in M1** (see "Outcome (M1)" for the deltas from this proposal):
 > `runtime/wandr-host/crates/wandr-video` (desktop-only codec dispatch) +
