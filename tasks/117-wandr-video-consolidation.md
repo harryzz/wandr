@@ -72,6 +72,18 @@
 > first, then YouTube via the Invidious REST API; both feed the upstream `wandr:video`
 > proposal). 117's engine work is DONE; 119 is the "prove with real consumers" tail.
 >
+> **M3 — output-format negotiation (10-bit): 🔲 SCOPED 2026-07-27.** Real Jellyfin
+> testing surfaced that **10-bit** titles freeze (Carry-On HEVC Main 10, Measure
+> AV1 10-bit) while 8-bit plays — the host pins the appsink to 8-bit `NV12`, so a
+> 10-bit `P010`/`I420_10LE` decode returns `not-negotiated`. Proven with
+> `gst-launch` on the real file (not container/keyframe — an earlier guest fix on
+> that wrong hypothesis was reverted). **M3 decision: "play most videos" via an
+> explicit, LOGGED 8-bit down-convert** (each down-converted stream emits one
+> `warn!` naming codec+format — quality reduced); 8-bit keeps its zero-copy path.
+> True 10-bit precision + zero-copy + HDR are **deferred to M3b/M4** (this runtime
+> may drive a 10-bit/HDR panel). Full scope + the `gst-launch` proof:
+> **`tasks/117-M3-output-format-negotiation.md`**.
+>
 > **What shipped in M1** (see "Outcome (M1)" for the deltas from this proposal):
 > `runtime/wandr-host/crates/wandr-video` (desktop-only codec dispatch) +
 > `crates/wandr-vpx-sys` (own Apache-2.0 bindings; builds `vendor/libvpx` v1.16.0
