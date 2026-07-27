@@ -1,0 +1,21 @@
+# wandr.jellyfin — task 119 Part A. A real Jellyfin DirectPlay client.
+#
+# No [[mounts]]: the media arrives over HTTPS and all persistence (session token,
+# thumbnail cache) lives in the automatic per-app /state preopen — so nothing
+# app-specific is baked into the host, and there is no local sample path.
+app_id      = "wandr.jellyfin"
+version     = "0.1.0"
+world       = "wandr:jellyfin/jellyfin-app"
+composition = "same-store"
+orientation = "auto"
+label       = "Jellyfin"
+# Content is 24-30 fps; 60 gives the pump headroom over the frame rate (the
+# frame-pacing export asks for a frame-rate cadence during playback so the guest
+# can feed/pull/schedule fast enough — see wandr.video.player's note).
+max_fps     = 60
+# Enables the host's bg-tick pump — our async network+decode engine runs there,
+# render-independently, exactly like wandr.audio.player.
+background  = true
+
+[components]
+ui = "components/ui.wasm"

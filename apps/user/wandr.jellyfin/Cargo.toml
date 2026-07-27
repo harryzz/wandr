@@ -1,0 +1,68 @@
+# wandr.jellyfin — task 119 Part A. A real Jellyfin streaming client that plays
+# DirectPlay media through the shipped wandr:video + wasi:audio pipeline.
+#
+#   cargo build --target wasm32-wasip2 --release
+#   cp target/wasm32-wasip2/release/wandr_jellyfin.wasm components/ui.wasm
+#
+# A REACTOR (cdylib): the host drives us through frame-handler (render) and
+# bg-tick (the async network+decode engine). No main loop of our own.
+[package]
+name    = "wandr-jellyfin"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+# p3-async is what gives us wasi:tls 0.3 async streams through reqwest — the same
+# flavor wandr.signal and wandr.audio.player ship. There is no meaningful p2 path
+# for this app, so p3-async is the only feature and the default.
+default  = ["p3-async"]
+p3-async = ["reqwest/p3-async"]
+
+[dependencies]
+wit-bindgen = "0.59"
+
+# HTTPS over wasi:tls (auth + browse + PlaybackInfo + byte-range media). Same
+# in-tree client Signal and audio.player use; renamed to `reqwest` so call sites
+# read naturally. Trust is host-delegated (webpki public roots — Let's Encrypt
+# included — so movies.zaharievi.eu is trusted without any host change).
+reqwest = { path = "../../../crates/wandr-reqwest", package = "wandr-reqwest", default-features = false }
+
+# Guest-side container demux (MP4/MOV sample table -> Annex-B AUs with real PTS).
+# Demux is GUEST-side by design (proposals/wasi-media-source); host never learns
+# containers. Same crate + version wandr.video.player and the host diagnostic use.
+mp4 = "0.14"
+matroska-demuxer = "0.6"
+
+# Guest-side audio decode (AAC/MP3-in-MP4 -> interleaved f32 PCM). Same crate +
+# features wandr.audio.player uses; defaults add FLAC/WAV/Vorbis, and these add
+# MP3 + AAC.
+symphonia = { version = "0.5", features = ["mp3", "aac", "isomp4"] }
+
+# Pure-Rust AC-3/E-AC-3 + Opus decoders (OxideAV) — Symphonia has NEITHER, and the
+# alternatives are C (libopus/liba52, and liba52 is GPL). These are from-scratch
+# spec implementations (MIT), so no C bindings and no GPL. oxideav-ac3 even ships a
+# 5.1→stereo LoRo/LtRt downmix. Pinned EXACT: they are young 0.0.x crates whose API
+# will churn. Both pull `oxideav-core` (their Packet/Frame/Decoder types).
+oxideav-core = "0.1"
+oxideav-ac3  = "=0.0.10"
+
+# Opus: pure-Rust `ropus` (full xiph/opus port) — bit-exact conformant (all 24
+# RFC 6716/8251 vectors + all 7 xiph reference test binaries) AND fast: measured
+# 117× realtime native decode (≈1× libopus), 40–42 dB SNR clean, via the `wide`
+# portable-SIMD crate (→ wasm simd128, enabled in .cargo/config.toml). Ends the
+# decoder saga: opus-rs=noise, oxideav & opus-decoder=too slow (~1× realtime).
+# Only dep is `wide`; its optional DNN/PLC C shim is off (no weights → no cc).
+ropus = "0.12"
+
+# JSON for the Jellyfin REST API; Url for reqwest.
+serde_json = "1"
+url        = "2"
+
+[profile.release]
+opt-level = "s"
+lto       = true
+strip     = true
