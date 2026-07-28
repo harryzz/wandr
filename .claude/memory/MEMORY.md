@@ -17,6 +17,7 @@
 - [RULE: never create branches unasked](feedback_no_new_branches.md) — work on current/main; merge+delete promptly, don't accumulate branches.
 
 ## Projects / tasks
+- [✅ Codeberg→GitHub migration](project_codeberg_to_github_migration.md) — canonical remote now github.com/harryzz (Codeberg banned LLM code); compose history stripped of 100MB blob; check forks for >100MB files before mirroring.
 - [✅ Task 115: Signal wasip3 async](project_task115_wasip3_async.md) — M0-M4 device-verified incl A/V. · [wasi:canvas migration](project_wasi_canvas_migration.md)
 - [🔲 OpenSwiftUI structural cleanup + blur](project_openswiftui_structural_cleanup.md) — NEXT: CSwiftSpike→CWASICanvas leaf, OCG CGContext target, THEN frosted blur.
 - [✅ Task 101: desktop dev loop](project_desktop_dev_loop.md) — same wasm on x86_64 via WANDR_DESKTOP_SIZE + JIT.
@@ -90,7 +91,9 @@
 - [Ref: wasmtime 44 debug APIs](reference_wasmtime_debug_apis.md) — call_hook/breakpoints for memory corruption.
 - [Ref: wasi-tls transport](reference_wandr_wasi_tls_transport.md) — Signal CA via custom TlsProvider.
 - [Ref: Windows ARM64 buildable](reference_windows_arm64_buildable.md) — skia+ffmpeg winarm64 prebuilts; build-host-windows.bat.
-- [Ref: Kotlin/Wasm CM](reference_kotlin_wasm_component_model_status.md) — watch KT-64568. · [Ref: Kotlin bump](feedback_kotlin_version_bump.md)
+- [Ref: Kotlin/Wasm CM](reference_kotlin_wasm_component_model_status.md) — native-P2 path live (KT-87801/87723) but KT-86415 blocker unchanged; still P1 adapter. · [Ref: Kotlin bump](feedback_kotlin_version_bump.md)
+- [Ref: Swift/Wasm WASI status](reference_swift_wasm_wasi_status.md) — P1-only; CM=future; WIT experimental in WasmKit wit-tool; no adapter escape. · [Ref: Dart→Wasm components](reference_dart_wasm_component_status.md) — NEW prototype path: simolus3 wasm_tools + Dart 3.13 → wasmtime components; WasmGC; not tried on wandr.
+- [Ref: Floem wandr candidate](reference_floem_wandr_candidate.md) — SPIKE: renderer A+ decoupled (peniko/kurbo trait, 4 backends incl Skia+CPU); reactive+renderer+tiny_skia PROVEN wasip2 after 1-file winit-cut; obstacle=winit in core window/event layer (23/131 files), bounded fork. Leptos ruled out (deleted renderer seam).
 - [Ref: IME options](feedback_ime_options.md) — 4 paths. · [Ref: guest-language survey](../../docs/wasm-component-language-support.md)
 
 ## Feedback / hard-won fixes (hooks only — read the file before touching the area)
@@ -124,3 +127,4 @@
 - [✅ GStreamer = SOLE desktop decode; handwritten decoders RETIRED](reference_gstreamer_desktop_backend_spike.md) — one lib replaced per-OS handwritten codecs (d3d11/vaapi/vt/libde265/dav1d/openh264/oxideav DELETED `a63e3ae`); libvpx kept for VP8/VP9 encode. `gstreamer-hw`/`gstreamer-sw` lanes; `WANDR_VIDEO_BACKEND=gstreamer` = family (h/s keys). ZERO-COPY default-on + VERIFIED all 3 OSes: Linux dma-buf @4% (i965), Windows D3D11-texture @10.5% (UHD 620, ANGLE inject), macOS IOSurface @10.7% (UHD, vtdec). GPU glue decoupled → `backends/gpu_interop.rs` (gstreamer feature). ONE feature set `--features p3-async,gstreamer` builds all 3; all CI green. ‼️`not-negotiated`≠HW-limit (VideoMeta bug); Win "Could not allocate vertices" flood = priority mishmash not device-race. Guide: `docs/building-desktop.md`. DESKTOP only.
 - [Ref: install dav1ddec (AV1 SW) for GStreamer](reference_dav1ddec_gstreamer_install.md) — NOT in Debian plugins-bad; build gst-plugin-dav1d from in-repo gst-plugins-rs (needs libdav1d-dev), `sudo cp libgstdav1d.so` to system plugin dir; else AV1 falls to slow aom `av1dec`.
 - [Ref: jellyfin Opus decoder = ropus](reference_jellyfin_opus_ropus.md) — pure-Rust `ropus` (xiph port) + wasm `simd128`; opus-rs=noise, oxideav/opus-decoder=too slow. 5.1 Opus TODO.
+- [Ref: jellyfin container demux + MKV seek](reference_jellyfin_container_demux_and_mkv_seek.md) — symphonia demux is AUDIO-ONLY (no video) → use mp4-crate/matroska-demuxer; MKV seek needs matroska-demuxer 0.8 + one-line cue-relative patch (else only Home works).
