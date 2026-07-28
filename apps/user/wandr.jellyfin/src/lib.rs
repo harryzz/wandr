@@ -24,7 +24,7 @@ wit_bindgen::generate!({
 
 mod jellyfin;
 mod streaming;
-mod mkv; // parse_avcc / parse_hvcc codec-config helpers (demux now via matroska-demuxer)
+mod mkv; // parse_avcc / parse_hvcc codec-config helpers (demux via matroska-demuxer)
 mod httprange;
 use jellyfin::{Item, Playback, Session};
 
@@ -118,6 +118,34 @@ struct Engine {
     /// reader, which is only legal in the async bg-tick, not on-frame.
     /// (url, total_len, item, surface, is_mkv).
     pending_open: Option<(String, u64, Item, (u32, u32), bool)>,
+
+    // ---- playback controls (Part B, task 119) -----------------------------
+    // Command channel: input handlers set these; the pump reads them each tick
+    // and applies them to the active StreamPlayer / wasi:audio device. Input and
+    // engine share the single store thread, so plain fields (no queue) are safe.
+    /// Transport paused (user intent). The pump pauses the audio device and
+    /// freezes the clock; resume shifts the anchors so `media_now` stays continuous.
+    paused: bool,
+    /// Muted (gain 0) — independent of `volume`, so unmute restores the level.
+    muted: bool,
+    /// Output gain, 0.0..=1.0. Applied to PCM at the ring-write.
+    volume: f32,
+    /// Transport bar auto-hide (A2): visible while `nanos < controls_until_ns`.
+    /// Input sets `controls_bump`; the pump (which has the host clock) timestamps
+    /// it to `now + 3 s` — input handlers get no `nanos`, hence the bump indirection.
+    controls_until_ns: u64,
+    controls_bump: bool,
+    /// Absolute seek target (movie µs, Chunk B). Input sets it; bg-tick executes
+    /// the reposition + reset (MKV seek does blocking I/O, so it can't run on-frame).
+    seek_request: Option<i64>,
+    /// Scrub drag (B2): true while dragging the scrub bar; `scrub_frac` (0..1) is the
+    /// live drag position. The playhead previews `scrub_frac` during the drag; the
+    /// seek commits on pointer-up.
+    scrubbing: bool,
+    scrub_frac: f32,
+    /// B3: media-time (µs) of the last progress report to Jellyfin — throttles
+    /// reporting to ~10 s intervals; reset to 0 when a new stream starts.
+    last_report_us: i64,
 }
 
 impl Engine {
@@ -138,6 +166,15 @@ impl Engine {
             scroll_accum: 0.0,
             stop_requested: false,
             pending_open: None,
+            paused: false,
+            muted: false,
+            volume: 1.0,
+            controls_until_ns: 0,
+            controls_bump: false,
+            seek_request: None,
+            scrubbing: false,
+            scrub_frac: 0.0,
+            last_report_us: 0,
         }
     }
 }
@@ -269,7 +306,7 @@ async fn driver() {
             id: String::new(), name: "LOCAL FILE".into(),
             media_source_id: String::new(), container: if is_mkv { "mkv" } else { "mp4" }.into(),
             video_codec: "h264".into(), audio_codec: String::new(),
-            size, run_time_ticks: 0, image_tag: None,
+            size, run_time_ticks: 0, image_tag: None, resume_ticks: 0,
         };
         let surface = ENGINE.with(|e| e.borrow().surface);
         set_phase(Phase::Ready);
@@ -439,7 +476,7 @@ enum Demux {
     /// fetches through it). Random-access, so we pull whichever track is behind.
     Mp4(Box<Mp4Source>),
     /// MKV/WebM: the matroska-demuxer library over a blocking HTTP-Range reader.
-    /// It handles all the container detail (lacing, block groups, seeking) that a
+    /// It handles all the container detail (lacing, block groups, Cues seek) that a
     /// hand-rolled parser misses. Boxed because MatroskaFile is large.
     Mkv(Box<MkvSource>),
 }
@@ -541,6 +578,13 @@ struct StreamPlayer {
     /// Handle to the container reader's shared cache, so bg-tick can drive async
     /// prefetch (keeping the reader's block_on fallback from firing = no hiccup).
     prefetch: Option<httprange::PrefetchHandle>,
+
+    /// Pause state applied by the pump (Part B): `paused` = currently honoring a
+    /// pause (audio device paused, clock frozen); `paused_at_ns` = host time it
+    /// began, so resume shifts `audio_start_ns`/`origin_ns` forward by the elapsed
+    /// pause and `media_now` stays continuous.
+    paused: bool,
+    paused_at_ns: u64,
 }
 
 /// Demux no more than this far ahead of the playback clock (µs). Capping by TIME
@@ -699,6 +743,42 @@ async fn prepare_stream(url: String, item: Item, surface: (u32, u32)) {
 
 /// Common tail: open the decoder, set up audio, install the StreamPlayer, Playing.
 #[allow(clippy::too_many_arguments)]
+// ---- Jellyfin session reporting + resume (B3) -------------------------------
+
+enum Report { Playing, Progress, Stopped }
+
+/// Spawn a `/Sessions/Playing{,/Progress,/Stopped}` report for the active stream.
+/// Reads the resolved item/playback + session; no-ops if nothing is playing.
+fn spawn_report(kind: Report, position_us: i64, paused: bool) {
+    let info = ENGINE.with(|e| {
+        let e = e.borrow();
+        e.resolved.clone().map(|(item, pb, _)| (item, pb)).zip(e.session.clone())
+    });
+    let (Some(((item, pb), session)), Some(client)) = (info, build_client()) else { return };
+    let (id, msid, psid, ticks) =
+        (item.id, pb.media_source_id, pb.play_session_id, position_us.max(0) * 10);
+    match kind {
+        Report::Playing => { reqwest::task::spawn(jellyfin::report_playing(client, session, id, msid, psid, ticks)); }
+        Report::Progress => { reqwest::task::spawn(jellyfin::report_progress(client, session, id, msid, psid, ticks, paused)); }
+        Report::Stopped => { reqwest::task::spawn(jellyfin::report_stopped(client, session, id, msid, psid, ticks)); }
+    }
+}
+
+/// Called when a fresh stream reaches Playing (B3): resume to the saved position
+/// (only for a meaningful mid-file point) and report playback start.
+fn on_stream_started() {
+    ENGINE.with(|e| e.borrow_mut().last_report_us = 0);
+    if let Some(item) = ENGINE.with(|e| e.borrow().resolved.clone().map(|(i, _, _)| i)) {
+        let dur_us = (item.duration_s() * 1e6) as i64;
+        let resume_us = item.resume_ticks / 10; // 100 ns ticks → µs
+        if resume_us > 5_000_000 && (dur_us == 0 || resume_us < dur_us * 9 / 10) {
+            ENGINE.with(|e| e.borrow_mut().seek_request = Some(resume_us));
+            log(format!("resume: seeking to {:.0}s", resume_us as f64 / 1e6));
+        }
+    }
+    spawn_report(Report::Playing, 0, false);
+}
+
 fn install_player(
     url: String, total_len: u64, demux: Demux, ps_prefix: Vec<u8>, nal_len: usize,
     video_annexb: bool, codec: Codec, width: u32, height: u32, surface: (u32, u32),
@@ -731,6 +811,7 @@ fn install_player(
             audio_dec, has_audio, resampler, dev_start: 0, dev_start_set: false, audio_start_ns: 0,
             audio_first_pts_us: 0, audio_first_pts_known: false, audio_pts_known: false, pending_pcm: Vec::new(),
             prefetch: None,
+            paused: false, paused_at_ns: 0,
         });
         // A new stream starts clean: drop any audio the previous stream left in
         // the shared device ring (the device itself stays open).
@@ -1094,6 +1175,7 @@ fn open_mp4_sync(url: String, total_len: u64, item: Item, surface: (u32, u32)) {
         Ok(name) => {
             STREAM.with(|s| if let Some(p) = s.borrow_mut().as_mut() { p.prefetch = handle; });
             log(format!("streaming \"{title}\" (mp4): {} frames, {}x{}, decoder={name}", v.count, v.w, v.h));
+            on_stream_started(); // B3: resume + report /Sessions/Playing
         }
         Err(e) => { log(e); set_phase(Phase::Browse); }
     }
@@ -1125,10 +1207,9 @@ fn fetch_moov_for_config(url: &str, total_len: u64) -> Option<Vec<u8>> {
 
 /// MKV/WebM setup: fetch the EBML header region, parse Info + Tracks, install.
 /// Open an MKV/WebM stream via the matroska-demuxer library. SYNCHRONOUS: the
-/// library pulls bytes through a blocking HTTP-Range reader (block_on), which
-/// must run in a sync context — so this is called from on-frame, not a task.
-/// It handles all the container detail (lacing, block groups, seeking) a
-/// hand-rolled parser missed.
+/// library pulls bytes through a blocking HTTP-Range reader (block_on), which must
+/// run in a sync context — so this is called from bg-tick's open path. It handles
+/// all the container detail (lacing, block groups, Cues seek) a hand-rolled parser missed.
 fn open_mkv_sync(url: String, total_len: u64, item: Item, surface: (u32, u32)) {
     let fail = |msg: String| {
         log(msg);
@@ -1253,6 +1334,7 @@ fn open_mkv_sync(url: String, total_len: u64, item: Item, surface: (u32, u32)) {
         Ok(impl_name) => {
             STREAM.with(|s| if let Some(p) = s.borrow_mut().as_mut() { p.prefetch = handle; });
             log(format!("streaming \"{title}\" (mkv): {width}x{height}, decoder={impl_name}"));
+            on_stream_started(); // B3: resume + report /Sessions/Playing
         }
         Err(e) => { log(e); set_phase(Phase::Browse); }
     }
@@ -1291,6 +1373,130 @@ async fn fetch_window(url: String, start: u64) {
 /// there is no external RollingBuffer to fill or reclaim — nothing to prefetch.
 fn demux_cursor(_d: &Demux) -> u64 {
     u64::MAX
+}
+
+// ---- seek (Chunk B) --------------------------------------------------------
+
+/// Walk an `stts` table (entries = (sample_count, sample_delta); the crate's
+/// `SttsEntry` is `pub(crate)`, so we pass the fields as tuples) → (1-based sample
+/// id, its start tick) for the sample whose [start, start+delta) contains `target`.
+fn stts_sample_at(entries: &[(u32, u32)], target_tick: u64) -> (u32, u64) {
+    let mut sid: u32 = 1;
+    let mut t: u64 = 0;
+    for &(count, delta) in entries {
+        let d = delta as u64;
+        let span = d * count as u64;
+        if d > 0 && target_tick < t + span {
+            let n = (target_tick - t) / d;
+            return (sid + n as u32, t + n * d);
+        }
+        t += span;
+        sid += count;
+    }
+    (sid.saturating_sub(1).max(1), t)
+}
+
+/// Start tick of a 1-based `sample_id` (walk `stts` tuples).
+fn stts_time_of(entries: &[(u32, u32)], sample_id: u32) -> u64 {
+    let before = sample_id.saturating_sub(1); // samples before it
+    let mut seen: u32 = 0;
+    let mut t: u64 = 0;
+    for &(count, delta) in entries {
+        if seen + count >= before {
+            return t + (before - seen) as u64 * delta as u64;
+        }
+        t += delta as u64 * count as u64;
+        seen += count;
+    }
+    t
+}
+
+/// Current playback clock + `delta_us`, clamped to [0, duration]. Read from the
+/// active stream so input handlers (which have no `nanos`) can build a seek target.
+fn seek_from_clock(delta_us: i64) -> i64 {
+    STREAM.with(|s| {
+        s.borrow()
+            .as_ref()
+            .map(|p| (p.clock_us + delta_us).clamp(0, p.duration_us.max(0)))
+            .unwrap_or(0)
+    })
+}
+
+/// Seek the active stream to `target_us` (absolute movie µs). Repositions the demux
+/// to a keyframe at/just-before the target (MP4: `stts`/`stss` → sample id; MKV:
+/// `MatroskaFile::seek` via Cues), drops the queues + audio ring, resets the
+/// decoder, and clears the A/V clock anchors so `media_now` re-anchors at the landed
+/// time. Returns the landed time (µs). Runs in bg-tick (MKV seek does I/O).
+fn do_seek(p: &mut StreamPlayer, target_us: i64) -> i64 {
+    let target_us = target_us.clamp(0, p.duration_us.max(0));
+    let landed_us = match &mut p.demux {
+        Demux::Mp4(src) => {
+            let (kf, land_us, a_sid) = {
+                let tracks = src.reader.tracks();
+                let vstbl = &tracks[&src.video_track_id].trak.mdia.minf.stbl;
+                let v_stts: Vec<(u32, u32)> =
+                    vstbl.stts.entries.iter().map(|e| (e.sample_count, e.sample_delta)).collect();
+                let v_raw = (target_us - src.video_edit_us).max(0) as u64;
+                let v_tick = v_raw.saturating_mul(src.timescale_v as u64) / 1_000_000;
+                let (s_at, _) = stts_sample_at(&v_stts, v_tick);
+                // Largest sync sample ≤ s_at (no stss ⇒ every sample is a keyframe).
+                let kf = match &vstbl.stss {
+                    Some(stss) => stss.entries.iter().rev().copied().find(|&s| s <= s_at).unwrap_or(1),
+                    None => s_at.max(1),
+                };
+                let land_tick = stts_time_of(&v_stts, kf);
+                let land_us = land_tick as i64 * 1_000_000 / src.timescale_v.max(1) as i64
+                    + src.video_edit_us;
+                // Audio: the sample at the landed time (no keyframe constraint).
+                let a_sid = if src.audio_track_id != 0 {
+                    let astbl = &tracks[&src.audio_track_id].trak.mdia.minf.stbl;
+                    let a_stts: Vec<(u32, u32)> =
+                        astbl.stts.entries.iter().map(|e| (e.sample_count, e.sample_delta)).collect();
+                    let a_raw = (land_us - src.audio_edit_us).max(0) as u64;
+                    let a_tick = a_raw.saturating_mul(src.timescale_a as u64) / 1_000_000;
+                    stts_sample_at(&a_stts, a_tick).0
+                } else {
+                    1
+                };
+                (kf, land_us, a_sid)
+            };
+            src.next_v = kf;
+            src.next_a = a_sid;
+            land_us
+        }
+        Demux::Mkv(src) => {
+            let ticks = (target_us.max(0) as u64) * 1000 / src.ts_scale_ns.max(1);
+            if let Err(e) = src.file.seek(ticks) {
+                log(format!("seek: mkv seek to {ticks} ticks failed: {e:?}"));
+            }
+            target_us
+        }
+    };
+    // Discontinuity reset: drop queued frames + buffered PCM, the audio ring, and
+    // the decoder's reorder state; clear the clock anchors so the pump re-anchors
+    // `media_now` at the first frame after the seek.
+    p.video_q.clear();
+    p.audio_q.clear();
+    p.pending_pcm.clear();
+    let _ = p.dec.reset();
+    with_audio(|pb| pb.flush());
+    p.first_pts_us = None;
+    p.origin_ns = 0;
+    p.audio_pts_known = false;
+    p.audio_first_pts_known = false;
+    p.audio_first_pts_us = 0;
+    p.audio_start_ns = 0;
+    p.dev_start = 0;
+    p.dev_start_set = false;
+    p.submitted = 0;
+    p.presented = 0;
+    p.last_pres_pts = 0;
+    p.flushed = false;
+    p.done = false;
+    p.demux_done = false;
+    p.clock_us = landed_us;
+    log(format!("seek → {:.1}s (asked {:.1}s)", landed_us as f64 / 1e6, target_us as f64 / 1e6));
+    landed_us
 }
 
 /// Demux buffered bytes into the frame queues (bounded by the queue caps). Both
@@ -1385,6 +1591,8 @@ fn fill_queues(p: &mut StreamPlayer) {
             }
             // matroska-demuxer pulls a frame (blocking on its Range reader as
             // needed); it handles lacing / block groups / seeking internally.
+            // matroska-demuxer pulls a frame (blocking on its Range reader as
+            // needed); it handles lacing / block groups / seeking internally.
             Demux::Mkv(src) => match src.file.next_frame(&mut src.frame) {
                 Ok(true) => {
                     let f = &src.frame;
@@ -1470,6 +1678,40 @@ fn pump_stream(nanos: u64) {
         let Some(p) = guard.as_mut() else { return };
         if p.t0_ns == 0 {
             p.t0_ns = nanos;
+            // Reveal the transport bar briefly when playback starts (A2).
+            ENGINE.with(|e| e.borrow_mut().controls_until_ns = nanos + 3_000_000_000);
+        }
+
+        // 0. Pause + control-bar reveal (Part B). The pump owns applying the
+        //    Engine's intents. Pause: pause/resume the wasi:audio device (pause
+        //    keeps the ring; start resumes) and, on RESUME, shift the clock anchors
+        //    forward by the paused duration so the audio-master / free-run
+        //    `media_now` stays continuous. While paused we return early: last video
+        //    frame stays, and the clock/decode/present/PCM-write are all idle.
+        //    Reveal: input sets `controls_bump`; timestamp it to now + 3 s here.
+        let want_pause = ENGINE.with(|e| {
+            let mut e = e.borrow_mut();
+            if e.controls_bump {
+                e.controls_until_ns = nanos + 3_000_000_000;
+                e.controls_bump = false;
+            }
+            e.paused
+        });
+        if want_pause && !p.paused {
+            p.paused = true;
+            p.paused_at_ns = nanos;
+            let _ = with_audio(|pb| pb.pause());
+        } else if !want_pause && p.paused {
+            let dt = nanos.saturating_sub(p.paused_at_ns);
+            if p.audio_start_ns > 0 {
+                p.audio_start_ns = p.audio_start_ns.saturating_add(dt);
+            }
+            p.origin_ns = p.origin_ns.saturating_add(dt);
+            p.paused = false;
+            let _ = with_audio(|pb| pb.start());
+        }
+        if p.paused {
+            return;
         }
 
         // (Demux/fill runs in bg-tick — see the note there. on-frame is sync and
@@ -1511,7 +1753,17 @@ fn pump_stream(nanos: u64) {
             if p.audio_pts_known && !p.pending_pcm.is_empty() {
                 // Backpressure: write returns frames accepted; the rest waits for the
                 // next pump (the ring caps ~0.5 s and paces itself at realtime).
-                let accepted = with_audio(|pb| pb.write(&p.pending_pcm)).unwrap_or(0) as usize;
+                // Mute/volume (Part B) is a GAIN on the slice handed to the device,
+                // applied here (not in decode) so a level change takes effect on the
+                // still-buffered pending PCM; the ~0.5 s already in the ring keeps
+                // its gain. gain==1.0 writes the buffer directly (no copy).
+                let gain = ENGINE.with(|e| { let e = e.borrow(); if e.muted { 0.0 } else { e.volume } });
+                let accepted = if (gain - 1.0).abs() < f32::EPSILON {
+                    with_audio(|pb| pb.write(&p.pending_pcm)).unwrap_or(0) as usize
+                } else {
+                    let scaled: Vec<f32> = p.pending_pcm.iter().map(|s| s * gain).collect();
+                    with_audio(|pb| pb.write(&scaled)).unwrap_or(0) as usize
+                };
                 let consumed = (accepted * 2).min(p.pending_pcm.len());
                 p.pending_pcm.drain(0..consumed);
             }
@@ -1751,12 +2003,62 @@ fn fmt_dur(s: f64) -> String {
 /// The Playing overlay: transparent clear reveals the host video surface behind
 /// the UI (behind-ui), with a title bar + progress bar drawn on top — exactly the
 /// wandr.video.player compositing model.
-fn render_playing() {
+/// Transport-bar geometry (A2). Shared by `render_playing` (draw) and `on_pointer`
+/// (hit-test) so buttons line up with clicks. Rects are (x, y, w, h).
+struct CtlBar {
+    panel: (f32, f32, f32, f32),
+    scrub: (f32, f32, f32, f32),
+    playpause: (f32, f32, f32, f32),
+    stop: (f32, f32, f32, f32),
+    mute: (f32, f32, f32, f32),
+    vol: (f32, f32, f32, f32),
+}
+
+fn control_bar(sw: f32, sh: f32) -> CtlBar {
+    let ph = 78.0;
+    let py = sh - ph;
+    CtlBar {
+        panel:     (0.0,        py,        sw,        ph),
+        scrub:     (16.0,       py + 16.0, sw - 32.0, 6.0),
+        playpause: (16.0,       py + 38.0, 34.0,      34.0),
+        stop:      (58.0,       py + 38.0, 34.0,      34.0),
+        mute:      (sw - 150.0, py + 40.0, 30.0,      30.0),
+        vol:       (sw - 112.0, py + 50.0, 96.0,      8.0),
+    }
+}
+
+fn hit(x: f32, y: f32, r: (f32, f32, f32, f32)) -> bool {
+    x >= r.0 && x <= r.0 + r.2 && y >= r.1 && y <= r.1 + r.3
+}
+
+/// Right-pointing play triangle from vertical rects (font-independent).
+fn draw_play(cv: &Canvas, x: f32, y: f32, s: f32, color: u32) {
+    let n = 12usize;
+    let cw = s / n as f32;
+    for i in 0..n {
+        let t = i as f32 / (n - 1) as f32;
+        let h = s * (1.0 - t);
+        draw_rect(cv, x + i as f32 * cw, y + (s - h) / 2.0, cw + 0.6, h, color);
+    }
+}
+
+/// Two-bar pause glyph.
+fn draw_pause(cv: &Canvas, x: f32, y: f32, s: f32, color: u32) {
+    let bw = s * 0.28;
+    draw_rect(cv, x, y, bw, s, color);
+    draw_rect(cv, x + s - bw, y, bw, s, color);
+}
+
+fn render_playing(nanos: u64) {
     let cv = wctx(|x| x.get_current_buffer());
     cv.clear(0x0000_0000); // transparent — the decoded video shows through
 
     let (sw, sh) = ENGINE.with(|e| e.borrow().surface);
     let (sw, sh) = (sw as f32, sh as f32);
+    let (paused, muted, volume, controls_until_ns, scrubbing, scrub_frac) = ENGINE.with(|e| {
+        let e = e.borrow();
+        (e.paused, e.muted, e.volume, e.controls_until_ns, e.scrubbing, e.scrub_frac)
+    });
 
     let (title, clock_us, dur_us, presented, total, aud_buf_s, audio_pos_us) = STREAM.with(|s| {
         let b = s.borrow();
@@ -1772,35 +2074,89 @@ fn render_playing() {
         }
     });
 
-    // Title bar.
-    draw_rect(&cv, 0.0, 0.0, sw, 46.0, 0xC010_1216);
-    draw_text(&cv, &title, 16.0, 12.0, 20.0, 700, 0xFFFF_FFFF, sw - 120.0);
-    draw_text(&cv, "Esc: list", sw - 96.0, 15.0, 14.0, 500, 0xFF8A_9098, 96.0);
-
-    // Progress bar + counters.
+    // ---- transport chrome (A2): title bar + bottom control panel, auto-hiding
+    //      after ~3 s; any key/pointer (or being paused) reveals it.
+    let show = paused || scrubbing || nanos < controls_until_ns;
     let pct = if dur_us > 0 { (clock_us as f32 / dur_us as f32).clamp(0.0, 1.0) } else { 0.0 };
-    let bar_y = sh - 34.0;
-    draw_rect(&cv, 16.0, bar_y, sw - 32.0, 4.0, 0x60FF_FFFF);
-    draw_rect(&cv, 16.0, bar_y, (sw - 32.0) * pct, 4.0, 0xFF7B_FFB0);
-    let frames = if total > 0 {
-        format!("{presented}/{total} frames")
-    } else {
-        format!("{presented} frames")
-    };
-    let line = format!(
-        "{} / {}   ·   {frames}   ·   {:.1}s audio buffered",
-        fmt_dur(clock_us as f64 / 1e6), fmt_dur(dur_us as f64 / 1e6), aud_buf_s
-    );
-    draw_text(&cv, &line, 16.0, sh - 24.0, 13.0, 400, 0xFFB0_B4BC, sw - 32.0);
-    // On-screen A/V-sync readout: the VIDEO clock (what the picture is timed to)
-    // vs the AUDIO device's own played position. Kept for verifying sync visually
-    // across formats. Δ near 0 = in sync.
+
+    // Always-on: a thin progress sliver at the very bottom + the small A/V-sync
+    // dev readout (VIDEO clock vs AUDIO device position; Δ≈0 = in sync).
+    draw_rect(&cv, 0.0, sh - 3.0, sw, 3.0, 0x40FF_FFFF);
+    draw_rect(&cv, 0.0, sh - 3.0, sw * pct, 3.0, 0xFF7B_FFB0);
     let diag = format!(
-        "VIDEO clk {:.2}s   |   AUDIO pos {:.2}s   |   Δ {:+.2}s",
+        "V {:.2}s | A {:.2}s | Δ {:+.2}s",
         clock_us as f64 / 1e6, audio_pos_us as f64 / 1e6,
         (audio_pos_us - clock_us) as f64 / 1e6,
     );
-    draw_text(&cv, &diag, 16.0, 52.0, 15.0, 600, 0xFFFF_D060, sw - 32.0);
+    draw_text(&cv, &diag, 12.0, 8.0, 12.0, 600, 0xC0FF_D060, sw - 24.0);
+
+    if show {
+        // Title bar.
+        draw_rect(&cv, 0.0, 0.0, sw, 44.0, 0xCC10_1216);
+        draw_text(&cv, &title, 16.0, 12.0, 20.0, 700, 0xFFFF_FFFF, sw - 120.0);
+        draw_text(&cv, "Esc: list", sw - 92.0, 15.0, 14.0, 500, 0xFF8A_9098, 92.0);
+
+        // Bottom transport panel.
+        let c = control_bar(sw, sh);
+        draw_rect(&cv, c.panel.0, c.panel.1, c.panel.2, c.panel.3, 0xCC10_1216);
+
+        // Scrub: track + buffered-ahead + played + knob (display only in A2; drag
+        // → seek comes in Chunk B).
+        let buf_pct = if dur_us > 0 {
+            ((clock_us as f64 + aud_buf_s as f64 * 1e6) / dur_us as f64).clamp(0.0, 1.0) as f32
+        } else { 0.0 };
+        // While dragging (B2), the played fill + knob preview the drag position.
+        let disp_frac = if scrubbing { scrub_frac } else { pct };
+        draw_rect(&cv, c.scrub.0, c.scrub.1, c.scrub.2, c.scrub.3, 0x40FF_FFFF);
+        draw_rect(&cv, c.scrub.0, c.scrub.1, c.scrub.2 * buf_pct, c.scrub.3, 0x66FF_FFFF);
+        draw_rect(&cv, c.scrub.0, c.scrub.1, c.scrub.2 * disp_frac, c.scrub.3,
+            if scrubbing { 0xFFFF_D060 } else { 0xFF7B_FFB0 });
+        let kx = c.scrub.0 + c.scrub.2 * disp_frac;
+        draw_rect(&cv, kx - 3.0, c.scrub.1 - 4.0, 6.0, c.scrub.3 + 8.0, 0xFFFF_FFFF);
+
+        // Times + frame counter. While scrubbing, show the DRAG-TARGET time.
+        let frames = if total > 0 { format!("{presented}/{total}") } else { format!("{presented}") };
+        let tline = if scrubbing {
+            format!("→ {} / {}", fmt_dur(scrub_frac as f64 * dur_us as f64 / 1e6), fmt_dur(dur_us as f64 / 1e6))
+        } else {
+            format!(
+                "{} / {}   ·   {frames} fr   ·   {:.1}s buf",
+                fmt_dur(clock_us as f64 / 1e6), fmt_dur(dur_us as f64 / 1e6), aud_buf_s
+            )
+        };
+        draw_text(&cv, &tline, c.scrub.0, c.scrub.1 + 11.0, 12.0, 400, 0xFFB0_B4BC, sw - 32.0);
+
+        // Play/pause button — icon shows the ACTION (play when paused, else pause).
+        draw_rect(&cv, c.playpause.0, c.playpause.1, c.playpause.2, c.playpause.3, 0x33FF_FFFF);
+        if paused {
+            draw_play(&cv, c.playpause.0 + 11.0, c.playpause.1 + 8.0, 18.0, 0xFFFF_FFFF);
+        } else {
+            draw_pause(&cv, c.playpause.0 + 10.0, c.playpause.1 + 8.0, 18.0, 0xFFFF_FFFF);
+        }
+        // Stop button (filled square).
+        draw_rect(&cv, c.stop.0, c.stop.1, c.stop.2, c.stop.3, 0x33FF_FFFF);
+        draw_rect(&cv, c.stop.0 + 10.0, c.stop.1 + 10.0, 14.0, 14.0, 0xFFFF_FFFF);
+
+        // Mute button + volume slider (red when muted).
+        let vcol: u32 = if muted { 0xFFE0_5050 } else { 0xFFFF_FFFF };
+        draw_rect(&cv, c.mute.0, c.mute.1, c.mute.2, c.mute.3, 0x33FF_FFFF);
+        draw_rect(&cv, c.mute.0 + 9.0, c.mute.1 + 10.0, 12.0, 10.0, vcol);
+        draw_rect(&cv, c.vol.0, c.vol.1, c.vol.2, c.vol.3, 0x40FF_FFFF);
+        let vlev = if muted { 0.0 } else { volume };
+        draw_rect(&cv, c.vol.0, c.vol.1, c.vol.2 * vlev, c.vol.3, vcol);
+    }
+
+    // Paused overlay (Part B, A1): a centered pill with a font-independent
+    // two-bar pause glyph. A2 replaces this with the full clickable transport bar.
+    if paused {
+        let (pw, ph) = (150.0_f32, 46.0_f32);
+        let px = (sw - pw) / 2.0;
+        let py = (sh - ph) / 2.0;
+        draw_rect(&cv, px, py, pw, ph, 0xB01A_1D22);
+        draw_rect(&cv, px + 20.0, py + 13.0, 7.0, 20.0, 0xFFFF_FFFF);
+        draw_rect(&cv, px + 32.0, py + 13.0, 7.0, 20.0, 0xFFFF_FFFF);
+        draw_text(&cv, "PAUSED", px + 54.0, py + 14.0, 18.0, 700, 0xFFFF_FFFF, pw - 54.0);
+    }
 
     drop(cv);
     wctx(|x| x.present());
@@ -1818,7 +2174,7 @@ impl FrameGuest for Component {
         let playing = ENGINE.with(|e| e.borrow().phase == Phase::Playing);
         if playing {
             pump_stream(nanos);
-            render_playing();
+            render_playing(nanos);
         } else {
             render();
         }
@@ -1866,9 +2222,33 @@ impl KeyGuest for Component {
         }
         ENGINE.with(|e| {
             let mut e = e.borrow_mut();
-            // While Playing (or resolving), Escape/Backspace/q stops and returns
-            // to the list. The actual teardown happens in bg-tick.
-            if matches!(e.phase, Phase::Playing | Phase::Resolving | Phase::Ready) {
+            // While Playing: transport controls (Part B). Escape/Backspace/q stop
+            // (teardown happens in bg-tick); Space/k toggle pause; ↑/↓ adjust
+            // volume (and un-mute on up); m toggles mute. Any other key is consumed.
+            if e.phase == Phase::Playing {
+                e.controls_bump = true; // any key reveals the transport bar
+                if matches!(ev.code.as_str(), "Escape" | "Backspace") || ev.text.eq_ignore_ascii_case("q") {
+                    e.stop_requested = true;
+                } else if ev.code == "Space" || ev.code == "KeyK" || ev.text == " " {
+                    e.paused = !e.paused;
+                } else if ev.code == "ArrowUp" {
+                    e.muted = false;
+                    e.volume = (e.volume + 0.1).min(1.0);
+                } else if ev.code == "ArrowDown" {
+                    e.volume = (e.volume - 0.1).max(0.0);
+                } else if ev.code == "KeyM" || ev.text.eq_ignore_ascii_case("m") {
+                    e.muted = !e.muted;
+                } else if ev.code == "ArrowRight" || ev.text.eq_ignore_ascii_case("l") {
+                    e.seek_request = Some(seek_from_clock(10_000_000)); // +10 s
+                } else if ev.code == "ArrowLeft" || ev.text.eq_ignore_ascii_case("j") {
+                    e.seek_request = Some(seek_from_clock(-10_000_000)); // −10 s
+                } else if ev.code == "Home" {
+                    e.seek_request = Some(0); // restart
+                }
+                return;
+            }
+            // Resolving/Ready: Escape/Backspace/q aborts back to the list.
+            if matches!(e.phase, Phase::Resolving | Phase::Ready) {
                 if matches!(ev.code.as_str(), "Escape" | "Backspace")
                     || ev.text.eq_ignore_ascii_case("q")
                 {
@@ -1903,6 +2283,42 @@ impl PointerGuest for Component {
     fn on_pointer(ev: PointerEvent) {
         ENGINE.with(|e| {
             let mut e = e.borrow_mut();
+            // Playing: transport bar. Any pointer reveals it; primary-press hit-tests
+            // the buttons + volume slider; the scrub track is a DRAG (B2) — down
+            // starts it, move previews, up commits the seek. A plain click = down+up
+            // at one spot, so it still seeks there.
+            if e.phase == Phase::Playing {
+                e.controls_bump = true;
+                let c = control_bar(e.surface.0 as f32, e.surface.1 as f32);
+                let scrub_hit = (c.scrub.0, c.scrub.1 - 8.0, c.scrub.2, c.scrub.3 + 16.0);
+                let scrub_frac = ((ev.x - c.scrub.0) / c.scrub.2).clamp(0.0, 1.0);
+                match ev.kind {
+                    PtrKind::Down if matches!(ev.button, Button::Primary) => {
+                        if hit(ev.x, ev.y, c.playpause) {
+                            e.paused = !e.paused;
+                        } else if hit(ev.x, ev.y, c.stop) {
+                            e.stop_requested = true;
+                        } else if hit(ev.x, ev.y, c.mute) {
+                            e.muted = !e.muted;
+                        } else if hit(ev.x, ev.y, c.vol) {
+                            e.muted = false;
+                            e.volume = ((ev.x - c.vol.0) / c.vol.2).clamp(0.0, 1.0);
+                        } else if hit(ev.x, ev.y, scrub_hit) {
+                            e.scrubbing = true;
+                            e.scrub_frac = scrub_frac;
+                        }
+                    }
+                    PtrKind::Move if e.scrubbing => e.scrub_frac = scrub_frac,
+                    PtrKind::Up if e.scrubbing => {
+                        e.scrubbing = false;
+                        let dur = STREAM.with(|s| s.borrow().as_ref().map(|p| p.duration_us).unwrap_or(0));
+                        e.seek_request = Some((e.scrub_frac as f64 * dur as f64) as i64);
+                    }
+                    PtrKind::Cancel | PtrKind::Leave if e.scrubbing => e.scrubbing = false, // abort
+                    _ => {}
+                }
+                return;
+            }
             if e.phase != Phase::Browse && e.phase != Phase::Ready {
                 return;
             }
@@ -1995,6 +2411,10 @@ impl BgGuest for Component {
             }
         });
         if stop {
+            // B3: report the final position to Jellyfin before tearing down (saves
+            // the resume point + watched status). `resolved` still holds this item.
+            let final_us = STREAM.with(|s| s.borrow().as_ref().map(|p| p.clock_us).unwrap_or(0));
+            spawn_report(Report::Stopped, final_us, false);
             STREAM.with(|s| *s.borrow_mut() = None);
             // Drop the stream's audio still buffered in the shared device, but
             // keep the device OPEN (reopening churns COM on Windows/WASAPI).
@@ -2024,12 +2444,27 @@ impl BgGuest for Component {
             if let Some(h) = handle {
                 httprange::drive_prefetch(&h);
             }
+            let seek = ENGINE.with(|e| e.borrow_mut().seek_request.take());
             STREAM.with(|s| {
                 if let Some(p) = s.borrow_mut().as_mut() {
+                    if let Some(target) = seek {
+                        do_seek(p, target); // reposition + reset before refilling
+                    }
                     fill_queues(p);   // demux → raw video/audio queues
                     decode_audio(p);  // raw audio → decoded PCM (off the on-frame path)
                 }
             });
+            // B3: report progress every ~10 s of MEDIA time (bg-tick has no wall
+            // clock, so throttle on the playback clock, not real time).
+            let clk = STREAM.with(|s| s.borrow().as_ref().map(|p| p.clock_us).unwrap_or(0));
+            let due = ENGINE.with(|e| {
+                let mut e = e.borrow_mut();
+                if clk - e.last_report_us >= 10_000_000 { e.last_report_us = clk; true } else { false }
+            });
+            if due {
+                let paused = ENGINE.with(|e| e.borrow().paused);
+                spawn_report(Report::Progress, clk, paused);
+            }
             return 16;
         }
         match phase {

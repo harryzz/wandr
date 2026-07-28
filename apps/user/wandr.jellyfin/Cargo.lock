@@ -583,9 +583,7 @@ dependencies = [
 
 [[package]]
 name = "matroska-demuxer"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd68bc2fedd44f3d60d15fdbabe62ac7c33d4073d8db7c365fba9d72cfe6e5f6"
+version = "0.8.0"
 
 [[package]]
 name = "memchr"

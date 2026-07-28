@@ -35,7 +35,12 @@ reqwest = { path = "../../../crates/wandr-reqwest", package = "wandr-reqwest", d
 # Demux is GUEST-side by design (proposals/wasi-media-source); host never learns
 # containers. Same crate + version wandr.video.player and the host diagnostic use.
 mp4 = "0.14"
-matroska-demuxer = "0.6"
+# MKV/WebM container demux. Header-only open (streaming-friendly over HTTP-Range,
+# unlike oxideav-mkv 0.0.9 whose open scans to EOF for Cues). The stock crate's
+# seek() mis-resolves CueRelativePosition Cues → patched via a [patch.crates-io]
+# fork (harryzz/matroska-demuxer, one-line fix). Revisit oxideav-mkv once its open
+# is lazy/streaming. See [[reference_jellyfin_container_demux_and_mkv_seek]].
+matroska-demuxer = "0.8"
 
 # Guest-side audio decode (AAC/MP3-in-MP4 -> interleaved f32 PCM). Same crate +
 # features wandr.audio.player uses; defaults add FLAC/WAV/Vorbis, and these add
@@ -66,3 +71,13 @@ url        = "2"
 opt-level = "s"
 lto       = true
 strip     = true
+
+# One-line fix for matroska-demuxer 0.8.0's CueRelativePosition seek bug:
+# seek_broad_phase resolved CueRelativePosition against the FIRST cluster instead
+# of the cue's own cluster → the reader landed mid-element → InvalidEbmlDataSize on
+# every non-zero seek ("only Home works"). Fix (verified in repros/mkv-seek-probe):
+# pass point.track_position.cluster_position to get_cluster_offset_and_timestamp.
+# Vendored as a temporary bridge; promote to a GitHub fork (harryzz/matroska-demuxer)
+# for upstreaming when convenient. Revisit oxideav-mkv once its open is streaming-lazy.
+[patch.crates-io]
+matroska-demuxer = { path = "vendor/matroska-demuxer" }

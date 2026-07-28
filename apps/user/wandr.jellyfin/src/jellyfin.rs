@@ -142,6 +142,9 @@ pub struct Item {
     pub run_time_ticks: i64,
     /// Primary-image content hash = built-in cache-busting key for the thumb cache.
     pub image_tag: Option<String>,
+    /// Resume point (UserData.PlaybackPositionTicks, 100 ns ticks) — where the user
+    /// last stopped; 0 = start from the beginning. B3: seek here on open.
+    pub resume_ticks: i64,
 }
 
 impl Item {
@@ -159,7 +162,7 @@ fn first_stream_codec<'a>(ms: &'a Value, kind: &str) -> &'a str {
 pub async fn browse_movies(client: &Client, s: &Session, limit: u32) -> Result<Vec<Item>, String> {
     let path = format!(
         "/Items?IncludeItemTypes=Movie&Recursive=true&Limit={limit}\
-         &Fields=MediaSources&SortBy=SortName&userId={}",
+         &Fields=MediaSources,UserData&SortBy=SortName&userId={}",
         s.user_id
     );
     let v: Value = client
@@ -183,6 +186,8 @@ pub async fn browse_movies(client: &Client, s: &Session, limit: u32) -> Result<V
             run_time_ticks: it.get("RunTimeTicks").and_then(|s| s.as_i64()).unwrap_or(0),
             image_tag: it.get("ImageTags").and_then(|t| t.get("Primary"))
                 .and_then(|s| s.as_str()).map(|s| s.to_string()),
+            resume_ticks: it.get("UserData").and_then(|u| u.get("PlaybackPositionTicks"))
+                .and_then(|t| t.as_i64()).unwrap_or(0),
         });
     }
     Ok(out)
@@ -241,6 +246,43 @@ pub async fn playback_info(client: &Client, s: &Session, item_id: &str) -> Resul
         direct_play: ms.get("SupportsDirectPlay").and_then(|b| b.as_bool()).unwrap_or(false),
         transcode_url: ms.get("TranscodingUrl").and_then(|s| s.as_str()).map(|s| s.to_string()),
     })
+}
+
+// ---- session playback reporting (B3: progress · resume · watched) ----------
+
+fn playing_body(item_id: &str, media_source_id: &str, play_session_id: &str, ticks: i64, paused: bool) -> Value {
+    json!({
+        "ItemId": item_id,
+        "MediaSourceId": media_source_id,
+        "PlaySessionId": play_session_id,
+        "PositionTicks": ticks.max(0),
+        "IsPaused": paused,
+        "CanSeek": true,
+        "PlayMethod": "DirectPlay",
+    })
+}
+
+async fn post_session(client: &Client, s: &Session, path: &str, body: Value) {
+    let Ok(u) = url(&s.server_url, path) else { return };
+    let _ = client
+        .request(Method::POST, u)
+        .header("Authorization", auth_header(&s.device_id, Some(&s.access_token)))
+        .json(&body)
+        .send()
+        .await;
+}
+
+/// POST /Sessions/Playing — playback started (marks the item in-progress).
+pub async fn report_playing(client: Client, s: Session, item_id: String, msid: String, psid: String, ticks: i64) {
+    post_session(&client, &s, "/Sessions/Playing", playing_body(&item_id, &msid, &psid, ticks, false)).await;
+}
+/// POST /Sessions/Playing/Progress — periodic position + pause state.
+pub async fn report_progress(client: Client, s: Session, item_id: String, msid: String, psid: String, ticks: i64, paused: bool) {
+    post_session(&client, &s, "/Sessions/Playing/Progress", playing_body(&item_id, &msid, &psid, ticks, paused)).await;
+}
+/// POST /Sessions/Playing/Stopped — playback ended (saves resume point / watched).
+pub async fn report_stopped(client: Client, s: Session, item_id: String, msid: String, psid: String, ticks: i64) {
+    post_session(&client, &s, "/Sessions/Playing/Stopped", playing_body(&item_id, &msid, &psid, ticks, false)).await;
 }
 
 /// The raw byte-stream URL. `static=true` = original file, no transcode, honors
