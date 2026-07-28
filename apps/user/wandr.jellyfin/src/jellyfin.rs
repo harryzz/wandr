@@ -158,11 +158,12 @@ fn first_stream_codec<'a>(ms: &'a Value, kind: &str) -> &'a str {
     }).unwrap_or("?")
 }
 
-/// Browse Movies (recursive) with MediaSources so we can filter by codec.
+/// Browse Movies + Episodes (recursive) with MediaSources so we can filter by codec.
+/// Episodes are the multi-audio-track content; `SeriesName`/index give a readable name.
 pub async fn browse_movies(client: &Client, s: &Session, limit: u32) -> Result<Vec<Item>, String> {
     let path = format!(
-        "/Items?IncludeItemTypes=Movie&Recursive=true&Limit={limit}\
-         &Fields=MediaSources,UserData&SortBy=SortName&userId={}",
+        "/Items?IncludeItemTypes=Movie,Episode&Recursive=true&Limit={limit}\
+         &Fields=MediaSources,UserData,SeriesName&SortBy=SortName&userId={}",
         s.user_id
     );
     let v: Value = client
@@ -174,9 +175,21 @@ pub async fn browse_movies(client: &Client, s: &Session, limit: u32) -> Result<V
     for it in v.get("Items").and_then(|i| i.as_array()).cloned().unwrap_or_default() {
         let ms = it.get("MediaSources").and_then(|m| m.as_array())
             .and_then(|a| a.first()).cloned().unwrap_or(json!({}));
+        // Episodes get "Series · SxxExx Title"; movies keep their name.
+        let name = if it.get("Type").and_then(|t| t.as_str()) == Some("Episode") {
+            let series = it.get("SeriesName").and_then(|x| x.as_str()).unwrap_or("");
+            let epname = it.get("Name").and_then(|x| x.as_str()).unwrap_or("");
+            match (it.get("ParentIndexNumber").and_then(|n| n.as_i64()),
+                   it.get("IndexNumber").and_then(|n| n.as_i64())) {
+                (Some(se), Some(ep)) => format!("{series} · S{se:02}E{ep:02} {epname}"),
+                _ => format!("{series} · {epname}"),
+            }
+        } else {
+            it.get("Name").and_then(|x| x.as_str()).unwrap_or("?").to_string()
+        };
         out.push(Item {
             id: it.get("Id").and_then(|s| s.as_str()).unwrap_or("").to_string(),
-            name: it.get("Name").and_then(|s| s.as_str()).unwrap_or("?").to_string(),
+            name,
             media_source_id: ms.get("Id").and_then(|s| s.as_str())
                 .or_else(|| it.get("Id").and_then(|s| s.as_str())).unwrap_or("").to_string(),
             container: ms.get("Container").and_then(|s| s.as_str()).unwrap_or("").to_string(),
