@@ -1,12 +1,12 @@
 [submodule "external/skiko"]
 	path = external/skiko
-	url = https://codeberg.org/harryzz/skiko.git
+	url = https://github.com/harryzz/skiko.git
 [submodule "external/wasmtime"]
 	path = external/wasmtime
-	url = https://codeberg.org/harryzz/wasmtime.git
+	url = https://github.com/harryzz/wasmtime.git
 [submodule "external/compose-multiplatform-core"]
 	path = external/compose-multiplatform-core
-	url = https://codeberg.org/harryzz/compose-multiplatform-core.git
+	url = https://github.com/harryzz/compose-multiplatform-core.git
 [submodule "external/kotlin"]
 	path = external/kotlin
 	url = https://github.com/JetBrains/kotlin.git
@@ -19,17 +19,17 @@
 # not auto-fetched.
 [submodule "external/libsignal-service-rs"]
 	path = external/libsignal-service-rs
-	url = https://codeberg.org/harryzz/libsignal-service-rs.git
+	url = https://github.com/harryzz/libsignal-service-rs.git
 	branch = wandr-wasi-transport
 [submodule "external/rtc"]
 	path = external/rtc
 	url = https://github.com/webrtc-rs/rtc
 [submodule "external/audioclient-rs"]
 	path = external/audioclient-rs
-	url = https://codeberg.org/harryzz/audioclient-rs.git
+	url = https://github.com/harryzz/audioclient-rs.git
 [submodule "external/rsbinder"]
 	path = external/rsbinder
-	url = https://codeberg.org/harryzz/rsbinder.git
+	url = https://github.com/harryzz/rsbinder.git
 	branch = wandr-recursive
 [submodule "swift/OpenSwiftUIProject/Compute"]
 	path = swift/OpenSwiftUIProject/Compute
