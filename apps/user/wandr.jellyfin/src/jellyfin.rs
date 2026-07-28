@@ -204,6 +204,16 @@ pub struct Playback {
     pub play_session_id: String,
     pub direct_play: bool,
     pub transcode_url: Option<String>,
+    /// Subtitle tracks (Tier 3) — any Type=Subtitle MediaStream; Jellyfin serves
+    /// each as WebVTT on demand (converting SRT/ASS/PGS), so DirectPlay is unaffected.
+    pub subtitles: Vec<SubStream>,
+}
+
+/// One subtitle track: the MediaStream `Index` (for the VTT URL) + a display label.
+#[derive(Clone, Debug)]
+pub struct SubStream {
+    pub index: i64,
+    pub label: String,
 }
 
 /// The DeviceProfile we advertise: exactly the containers/codecs the shipped
@@ -239,13 +249,44 @@ pub async fn playback_info(client: &Client, s: &Session, item_id: &str) -> Resul
     let play_session_id = v.get("PlaySessionId").and_then(|s| s.as_str()).unwrap_or("").to_string();
     let ms = v.get("MediaSources").and_then(|m| m.as_array())
         .and_then(|a| a.first()).cloned().ok_or("PlaybackInfo: no MediaSources")?;
+    let subtitles = ms.get("MediaStreams").and_then(|s| s.as_array()).map(|arr| {
+        arr.iter()
+            .filter(|s| s.get("Type").and_then(|t| t.as_str()) == Some("Subtitle"))
+            .filter_map(|s| {
+                let index = s.get("Index").and_then(|i| i.as_i64())?;
+                let label = s.get("DisplayTitle").and_then(|t| t.as_str())
+                    .or_else(|| s.get("Title").and_then(|t| t.as_str()))
+                    .or_else(|| s.get("Language").and_then(|l| l.as_str()))
+                    .unwrap_or("Subtitle").to_string();
+                Some(SubStream { index, label })
+            }).collect()
+    }).unwrap_or_default();
     Ok(Playback {
         media_source_id: ms.get("Id").and_then(|s| s.as_str()).unwrap_or(item_id).to_string(),
         container: ms.get("Container").and_then(|s| s.as_str()).unwrap_or("").to_string(),
         play_session_id,
         direct_play: ms.get("SupportsDirectPlay").and_then(|b| b.as_bool()).unwrap_or(false),
         transcode_url: ms.get("TranscodingUrl").and_then(|s| s.as_str()).map(|s| s.to_string()),
+        subtitles,
     })
+}
+
+/// Jellyfin serves any subtitle track as WebVTT here (converting SRT/ASS/PGS→VTT).
+pub fn subtitle_vtt_url(s: &Session, item_id: &str, media_source_id: &str, stream_index: i64) -> String {
+    format!(
+        "{}/Videos/{item_id}/{media_source_id}/Subtitles/{stream_index}/Stream.vtt?api_key={}",
+        s.server_url.trim_end_matches('/'), s.access_token
+    )
+}
+
+/// Fetch a whole subtitle track as WebVTT text.
+pub async fn fetch_vtt(client: &Client, vtt_url: String) -> Result<String, String> {
+    let u = Url::parse(&vtt_url).map_err(|e| format!("vtt url: {e}"))?;
+    let r = client.get(u).send().await.map_err(|e| format!("vtt: {e}"))?;
+    if r.status() != StatusCode::OK {
+        return Err(format!("vtt status {}", r.status()));
+    }
+    r.text().await.map_err(|e| format!("vtt text: {e}"))
 }
 
 // ---- session playback reporting (B3: progress · resume · watched) ----------

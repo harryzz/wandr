@@ -146,6 +146,10 @@ struct Engine {
     /// B3: media-time (µs) of the last progress report to Jellyfin — throttles
     /// reporting to ~10 s intervals; reset to 0 when a new stream starts.
     last_report_us: i64,
+    /// Subtitles (Tier 3): selected track = index into `resolved.1.subtitles`
+    /// (None = off); `sub_dirty` flags a change for bg-tick to (re)fetch the VTT.
+    sub_sel: Option<usize>,
+    sub_dirty: bool,
 }
 
 impl Engine {
@@ -175,6 +179,8 @@ impl Engine {
             scrubbing: false,
             scrub_frac: 0.0,
             last_report_us: 0,
+            sub_sel: None,
+            sub_dirty: false,
         }
     }
 }
@@ -743,6 +749,83 @@ async fn prepare_stream(url: String, item: Item, surface: (u32, u32)) {
 
 /// Common tail: open the decoder, set up audio, install the StreamPlayer, Playing.
 #[allow(clippy::too_many_arguments)]
+// ---- subtitles (Tier 3: Jellyfin VTT overlay) ------------------------------
+
+/// One timed subtitle cue (µs).
+struct Cue { start_us: i64, end_us: i64, text: String }
+
+thread_local! {
+    /// The currently-loaded subtitle track's cues (sorted by start). Swapped
+    /// wholesale when the track changes/clears; read by render_playing.
+    static SUBTITLES: RefCell<Vec<Cue>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Parse a WebVTT timestamp `[HH:]MM:SS.mmm` → µs.
+fn vtt_ts(s: &str) -> Option<i64> {
+    let s = s.trim();
+    let (hms, frac) = s.split_once('.').or_else(|| s.split_once(','))?;
+    let ms: i64 = frac.get(..3).unwrap_or(frac).parse().ok()?;
+    let p: Vec<&str> = hms.split(':').collect();
+    let (h, m, sec): (i64, i64, i64) = match p.as_slice() {
+        [h, m, s] => (h.parse().ok()?, m.parse().ok()?, s.parse().ok()?),
+        [m, s] => (0, m.parse().ok()?, s.parse().ok()?),
+        _ => return None,
+    };
+    Some(((h * 3600 + m * 60 + sec) * 1000 + ms) * 1000)
+}
+
+/// Strip inline VTT tags (`<c>`, `<i>`, `<00:00:00.000>`…) from a cue line.
+fn strip_vtt_tags(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for ch in s.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Minimal WebVTT → timed cues. Ignores the WEBVTT header, NOTE blocks and cue ids.
+fn parse_vtt(text: &str) -> Vec<Cue> {
+    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    let mut cues = Vec::new();
+    let mut it = text.lines().peekable();
+    while let Some(line) = it.next() {
+        let Some((a, rest)) = line.split_once("-->") else { continue };
+        let Some(start) = vtt_ts(a) else { continue };
+        let end = rest.trim().split_whitespace().next().and_then(vtt_ts).unwrap_or(start + 3_000_000);
+        let mut buf = String::new();
+        while let Some(t) = it.peek() {
+            if t.trim().is_empty() { break; }
+            if !buf.is_empty() { buf.push('\n'); }
+            buf.push_str(strip_vtt_tags(t).trim());
+            it.next();
+        }
+        if !buf.is_empty() {
+            cues.push(Cue { start_us: start, end_us: end.max(start), text: buf });
+        }
+    }
+    cues.sort_by_key(|c| c.start_us);
+    cues
+}
+
+/// Fetch + parse a subtitle track into SUBTITLES (spawned from bg-tick).
+async fn fetch_subtitles(client: reqwest::Client, vtt_url: String) {
+    match jellyfin::fetch_vtt(&client, vtt_url).await {
+        Ok(text) => {
+            let cues = parse_vtt(&text);
+            let n = cues.len();
+            SUBTITLES.with(|s| *s.borrow_mut() = cues);
+            log(format!("subtitles: {n} cues loaded"));
+        }
+        Err(e) => log(format!("subtitles: {e}")),
+    }
+}
+
 // ---- Jellyfin session reporting + resume (B3) -------------------------------
 
 enum Report { Playing, Progress, Stopped }
@@ -2055,9 +2138,9 @@ fn render_playing(nanos: u64) {
 
     let (sw, sh) = ENGINE.with(|e| e.borrow().surface);
     let (sw, sh) = (sw as f32, sh as f32);
-    let (paused, muted, volume, controls_until_ns, scrubbing, scrub_frac) = ENGINE.with(|e| {
+    let (paused, muted, volume, controls_until_ns, scrubbing, scrub_frac, subs_on) = ENGINE.with(|e| {
         let e = e.borrow();
-        (e.paused, e.muted, e.volume, e.controls_until_ns, e.scrubbing, e.scrub_frac)
+        (e.paused, e.muted, e.volume, e.controls_until_ns, e.scrubbing, e.scrub_frac, e.sub_sel.is_some())
     });
 
     let (title, clock_us, dur_us, presented, total, aud_buf_s, audio_pos_us) = STREAM.with(|s| {
@@ -2144,6 +2227,29 @@ fn render_playing(nanos: u64) {
         draw_rect(&cv, c.vol.0, c.vol.1, c.vol.2, c.vol.3, 0x40FF_FFFF);
         let vlev = if muted { 0.0 } else { volume };
         draw_rect(&cv, c.vol.0, c.vol.1, c.vol.2 * vlev, c.vol.3, vcol);
+    }
+
+    // Subtitles (Tier 3): the active cue at the current clock, bottom-center,
+    // lifted above the control bar when it's visible. Centering is approximate
+    // (no text-measure API): estimate width at ~0.52·fontsize per char.
+    if subs_on {
+        let cue = SUBTITLES.with(|s| {
+            s.borrow().iter().find(|c| clock_us >= c.start_us && clock_us < c.end_us).map(|c| c.text.clone())
+        });
+        if let Some(text) = cue {
+            let lines: Vec<&str> = text.lines().collect();
+            let fs = 22.0_f32;
+            let lh = fs + 8.0;
+            let bottom = sh - if show { 90.0 } else { 28.0 };
+            let base_y = (bottom - lines.len() as f32 * lh).max(48.0);
+            for (i, ln) in lines.iter().enumerate() {
+                let y = base_y + i as f32 * lh;
+                let w = (ln.chars().count() as f32 * fs * 0.52).min(sw - 24.0);
+                let x = ((sw - w) / 2.0).max(12.0);
+                draw_rect(&cv, x - 8.0, y - 2.0, w + 16.0, lh, 0xA000_0000);
+                draw_text(&cv, ln, x, y, fs, 600, 0xFFFF_FFFF, sw - 24.0);
+            }
+        }
     }
 
     // Paused overlay (Part B, A1): a centered pill with a font-independent
@@ -2244,6 +2350,15 @@ impl KeyGuest for Component {
                     e.seek_request = Some(seek_from_clock(-10_000_000)); // −10 s
                 } else if ev.code == "Home" {
                     e.seek_request = Some(0); // restart
+                } else if ev.code == "KeyS" || ev.text.eq_ignore_ascii_case("s") {
+                    // Cycle subtitles: off → track0 → track1 → … → off.
+                    let n = e.resolved.as_ref().map(|(_, pb, _)| pb.subtitles.len()).unwrap_or(0);
+                    e.sub_sel = match e.sub_sel {
+                        None if n > 0 => Some(0),
+                        Some(i) if i + 1 < n => Some(i + 1),
+                        _ => None,
+                    };
+                    e.sub_dirty = true;
                 }
                 return;
             }
@@ -2443,6 +2558,29 @@ impl BgGuest for Component {
             let handle = STREAM.with(|s| s.borrow().as_ref().and_then(|p| p.prefetch.clone()));
             if let Some(h) = handle {
                 httprange::drive_prefetch(&h);
+            }
+            // Tier 3: subtitle track change → fetch + parse the VTT (or clear).
+            if ENGINE.with(|e| std::mem::take(&mut e.borrow_mut().sub_dirty)) {
+                let sel = ENGINE.with(|e| {
+                    let e = e.borrow();
+                    e.sub_sel
+                        .and_then(|i| e.resolved.as_ref().and_then(|(item, pb, _)| {
+                            pb.subtitles.get(i).map(|st|
+                                (item.id.clone(), pb.media_source_id.clone(), st.index, st.label.clone()))
+                        }))
+                        .zip(e.session.clone())
+                });
+                SUBTITLES.with(|s| s.borrow_mut().clear());
+                match sel {
+                    Some(((id, msid, idx, label), session)) => {
+                        log(format!("subtitles: {label} …"));
+                        if let Some(client) = build_client() {
+                            reqwest::task::spawn(fetch_subtitles(
+                                client, jellyfin::subtitle_vtt_url(&session, &id, &msid, idx)));
+                        }
+                    }
+                    None => log("subtitles: off"),
+                }
             }
             let seek = ENGINE.with(|e| e.borrow_mut().seek_request.take());
             STREAM.with(|s| {

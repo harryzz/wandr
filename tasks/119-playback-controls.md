@@ -158,7 +158,13 @@ keyboard shortcuts, and Jellyfin resume/progress so it behaves like a real clien
     the resume point (>5 s, <90 %) + POSTs `/Sessions/Playing`; bg-tick posts
     `/Progress` every ~10 s of media time (position + paused); stop posts `/Stopped`
     with the final position. Reports = detached `reqwest::task::spawn`; ticks = µs·10.
-- **C — Tier 3**: subtitles (VTT overlay), audio-track switch (re-open at position).
+- **C — Tier 3**:
+  - **C1 ✅ DONE — subtitles (Jellyfin VTT overlay).** `Playback.subtitles` (Type=Subtitle
+    MediaStreams); `s` cycles off→track→…→off (`Engine.sub_sel`/`sub_dirty`); bg-tick fetches
+    `/Videos/{id}/{msid}/Subtitles/{idx}/Stream.vtt`, `parse_vtt` → timed cues in a `SUBTITLES`
+    thread_local; render draws the active cue bottom-center (approx-centered, no text-measure
+    API). Handles `[HH:]MM:SS.mmm`, multi-line, strips inline tags.
+  - **C2 — next — audio-track switch** (re-open at position; enumerate audio MediaStreams).
 
 ## Notes / risks
 - The **clock re-anchor on seek and on pause/resume** is the subtlest part — the
