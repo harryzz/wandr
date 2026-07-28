@@ -159,7 +159,7 @@ The longer-term north star is `post-art-roadmap.md`.
 
 ## Repository layout (brief)
 
-Single git repo (`https://codeberg.org/harryzz/wandr`), post-monorepo-merge.
+Single git repo (`https://github.com/harryzz/wandr`), post-monorepo-merge.
 Canonical map: **`docs/repository-layout.md`**. Top level:
 
 ```

@@ -141,13 +141,13 @@ contract changes, edit it here, then sync mirrors.
 
 ```
 external/
-├── skiko/                          # codeberg.org/harryzz/skiko (fork)
-├── wasmtime/                       # codeberg.org/harryzz/wasmtime (fork — was wasmtime-src/)
-├── compose-multiplatform-core/     # codeberg.org/harryzz/compose-multiplatform-core (fork)
-└── kotlin/                         # codeberg.org/harryzz/kotlin (build override)
+├── skiko/                          # github.com/harryzz/skiko (fork)
+├── wasmtime/                       # github.com/harryzz/wasmtime (fork — was wasmtime-src/)
+├── compose-multiplatform-core/     # github.com/harryzz/compose-multiplatform-core (fork)
+└── kotlin/                         # github.com/JetBrains/kotlin (build override)
 ```
 
-Each is a **git submodule** pointing at our codeberg fork. The
+Each is a **git submodule** pointing at our GitHub fork. The
 fork tracks upstream + carries any local patches (e.g.
 `external/wasmtime/` carries the KT-86415 adapter-State fix).
 Bumping a fork is one explicit operation:
@@ -163,7 +163,7 @@ git commit -m "external/wasmtime: bump to <sha>"
 Cloning the monorepo:
 
 ```
-git clone --recurse-submodules https://codeberg.org/harryzz/wandr.git
+git clone --recurse-submodules https://github.com/harryzz/wandr.git
 # or, after a non-recursive clone:
 git submodule update --init --recursive
 ```
