@@ -86,13 +86,29 @@ enum Phase {
     Failed,
 }
 
+/// Browse tabs.
+#[derive(Clone, Copy, PartialEq)]
+enum Tab { Movies, Shows }
+
 struct Engine {
     phase: Phase,
     session: Option<Session>,
     /// The Quick Connect code to type into the Jellyfin web UI (Pairing phase).
     pairing_code: Option<String>,
+    /// The CURRENT playable list: movies (Movies tab) OR the open series' episodes.
     items: Vec<Item>,
     selected: usize,
+    /// Browse tabs (little-polish): Movies = flat list; Shows = Series → Episodes.
+    tab: Tab,
+    movies: Vec<Item>,
+    series: Vec<Item>,            // Shows level 0: Series rows
+    seasons: Vec<Item>,           // Shows level 1: Seasons of the open series
+    series_open: Option<usize>,   // index into `series` (None = series list)
+    season_open: Option<usize>,   // index into `seasons` (None = seasons list; episodes in `items`)
+    /// Pending async drill fetches (bg-tick): (series idx, series id) → Seasons;
+    /// (season idx, series id, season id) → Episodes.
+    pending_seasons: Option<(usize, String)>,
+    pending_episodes: Option<(usize, String, String)>,
     /// Set by on-key (Enter): the engine picks it up next tick and resolves it.
     /// Kept as an index so on-key never touches the network.
     pending_resolve: Option<usize>,
@@ -164,6 +180,14 @@ impl Engine {
             pairing_code: None,
             items: Vec::new(),
             selected: 0,
+            tab: Tab::Movies,
+            movies: Vec::new(),
+            series: Vec::new(),
+            seasons: Vec::new(),
+            series_open: None,
+            season_open: None,
+            pending_seasons: None,
+            pending_episodes: None,
             pending_resolve: None,
             resolved: None,
             driver_spawned: false,
@@ -263,6 +287,7 @@ fn load_or_make_device_id() -> String {
 /// first proof lands on AAC/MP3 titles; that is a client filter, not a server
 /// transcode.)
 fn is_playable(it: &Item) -> bool {
+    if it.is_series { return true; } // Series rows drill into episodes, not greyed
     // Container + video-codec gate. Audio is best-effort: a title with a
     // supported video codec still plays (video-only) when its audio is 5.1 AAC /
     // Opus / Dolby that the guest can't decode — so audio does NOT gate here.
@@ -318,7 +343,7 @@ async fn driver() {
             id: String::new(), name: "LOCAL FILE".into(),
             media_source_id: String::new(), container: if is_mkv { "mkv" } else { "mp4" }.into(),
             video_codec: "h264".into(), audio_codec: String::new(),
-            size, run_time_ticks: 0, image_tag: None, resume_ticks: 0,
+            size, run_time_ticks: 0, image_tag: None, resume_ticks: 0, is_series: false,
         };
         let surface = ENGINE.with(|e| e.borrow().surface);
         set_phase(Phase::Ready);
@@ -354,25 +379,24 @@ async fn driver() {
     // Browse.
     set_phase(Phase::LoadingLibrary);
     log("browsing library…");
-    match jellyfin::browse_movies(&client, &session, 200).await {
-        Ok(items) => {
-            let playable = items.iter().filter(|i| is_playable(i)).count();
-            log(format!("library: {} movies ({} DirectPlay-able here)", items.len(), playable));
-            ENGINE.with(|e| {
-                let mut e = e.borrow_mut();
-                // Sort playable first so the default selection lands on one.
-                let mut items = items;
-                items.sort_by_key(|i| !is_playable(i));
-                e.selected = 0;
-                e.items = items;
-            });
-            set_phase(Phase::Browse);
-        }
-        Err(e) => {
-            log(format!("browse failed: {e}"));
-            set_phase(Phase::Failed);
-        }
-    }
+    let movies = match jellyfin::browse_movies(&client, &session, 500).await {
+        Ok(mut m) => { m.sort_by_key(|i| !is_playable(i)); m } // playable first
+        Err(e) => { log(format!("browse movies failed: {e}")); set_phase(Phase::Failed); return; }
+    };
+    let series = jellyfin::browse_series(&client, &session, 500).await.unwrap_or_else(|e| {
+        log(format!("browse series failed: {e}")); Vec::new()
+    });
+    log(format!("library: {} movies · {} series", movies.len(), series.len()));
+    ENGINE.with(|e| {
+        let mut e = e.borrow_mut();
+        e.items = movies.clone(); // default tab = Movies
+        e.movies = movies;
+        e.series = series;
+        e.tab = Tab::Movies;
+        e.series_open = None;
+        e.selected = 0;
+    });
+    set_phase(Phase::Browse);
 }
 
 /// Quick Connect pairing: initiate → show code → poll → exchange → persist.
@@ -451,6 +475,43 @@ async fn resolve(index: usize) {
             ENGINE.with(|en| en.borrow_mut().resolving = false);
             set_phase(Phase::Browse);
         }
+    }
+}
+
+/// Shows drill-in level 1: fetch a series' Seasons.
+async fn open_seasons(idx: usize, series_id: String) {
+    let (client, session) = ENGINE.with(|e| { let e = e.borrow(); (build_client(), e.session.clone()) });
+    let (Some(client), Some(session)) = (client, session) else { return };
+    match jellyfin::browse_seasons(&client, &session, &series_id).await {
+        Ok(seasons) => {
+            log(format!("series: {} seasons", seasons.len()));
+            ENGINE.with(|e| {
+                let mut e = e.borrow_mut();
+                e.seasons = seasons;
+                e.series_open = Some(idx);
+                e.season_open = None;
+                e.selected = 0;
+            });
+        }
+        Err(e) => log(format!("seasons: {e}")),
+    }
+}
+
+/// Shows drill-in level 2: fetch a season's Episodes (kept in order).
+async fn open_episodes(idx: usize, series_id: String, season_id: String) {
+    let (client, session) = ENGINE.with(|e| { let e = e.borrow(); (build_client(), e.session.clone()) });
+    let (Some(client), Some(session)) = (client, session) else { return };
+    match jellyfin::browse_episodes(&client, &session, &series_id, &season_id).await {
+        Ok(eps) => {
+            log(format!("season: {} episodes", eps.len()));
+            ENGINE.with(|e| {
+                let mut e = e.borrow_mut();
+                e.items = eps;
+                e.season_open = Some(idx);
+                e.selected = 0;
+            });
+        }
+        Err(e) => log(format!("episodes: {e}")),
     }
 }
 
@@ -2105,28 +2166,58 @@ fn render() {
     wctx(|x| x.present());
 }
 
+/// Tab-bar hit-test (shared by render + on_pointer): the Tab under (x,y), if any.
+/// Tabs sit BELOW the "Jellyfin" header (which occupies ~pad..pad+40).
+fn tab_hit(x: f32, y: f32, pad: f32) -> Option<Tab> {
+    if y < pad + 44.0 || y > pad + 76.0 { return None; }
+    if x >= pad && x < pad + 92.0 { Some(Tab::Movies) }
+    else if x >= pad + 100.0 && x < pad + 192.0 { Some(Tab::Shows) }
+    else { None }
+}
+
 fn render_list(cv: &Canvas, sw: f32, sh: f32, pad: f32) {
-    let top = pad + 50.0;
+    // Tabs (below the header) + a breadcrumb when drilled into a series.
+    ENGINE.with(|e| {
+        let e = e.borrow();
+        let ty = pad + 46.0;
+        for (i, (tab, label)) in [(Tab::Movies, "Movies"), (Tab::Shows, "Shows")].iter().enumerate() {
+            let x = pad + i as f32 * 100.0;
+            let active = e.tab == *tab;
+            draw_rect(cv, x, ty, 92.0, 28.0, if active { 0xFF3A_4560 } else { 0xFF20_242C });
+            draw_text(cv, label, x + 14.0, ty + 4.0, 18.0, if active { 700 } else { 500 },
+                if active { 0xFFFF_FFFF } else { 0xFF9A_9EA6 }, 80.0);
+        }
+        if let Some(crumb) = shows_crumb(&e) {
+            draw_text(cv, &crumb, pad + 210.0, ty + 6.0, 15.0, 500, 0xFF8A_9098, sw - pad - 210.0);
+        }
+    });
+
+    let top = pad + 88.0;
     let row_h = 46.0;
-    let visible = (((sh - top - 50.0) / row_h) as usize).max(1);
+    let rows = (((sh - top - 50.0) / row_h) as usize).max(1);
     ENGINE.with(|e| {
         let mut e = e.borrow_mut();
-        let sel = e.selected.min(e.items.len().saturating_sub(1));
+        let n = visible(&e).len();
+        let sel = e.selected.min(n.saturating_sub(1));
         // Scroll window keeps the selection visible.
-        let first = sel.saturating_sub(visible.saturating_sub(1).min(sel));
+        let first = sel.saturating_sub(rows.saturating_sub(1).min(sel));
         // Publish the layout so on-pointer can map a click y → row index.
-        e.list_view = (top, row_h, first, visible);
+        e.list_view = (top, row_h, first, rows);
         let e = &*e;
-        for (row, it) in e.items.iter().enumerate().skip(first).take(visible) {
+        let folder_word = if e.series_open.is_none() { "seasons" } else { "episodes" };
+        for (row, it) in visible(e).iter().enumerate().skip(first).take(rows) {
             let y = top + (row - first) as f32 * row_h;
             if row == sel {
                 draw_rect(cv, pad - 6.0, y - 4.0, sw - 2.0 * pad + 12.0, row_h - 6.0, 0xFF2A_3550);
             }
-            let playable = is_playable(it);
-            let name_color = if playable { 0xFFFF_FFFF } else { 0xFF70_747C };
+            let name_color = if is_playable(it) { 0xFFFF_FFFF } else { 0xFF70_747C };
             draw_text(cv, &it.name, pad, y, 19.0, 600, name_color, sw - 2.0 * pad - 160.0);
-            let cont = if it.container.is_empty() { "?" } else { it.container.as_str() };
-            let meta = format!("{} · {} {}/{}", fmt_dur(it.duration_s()), cont, it.video_codec, it.audio_codec);
+            let meta = if it.is_series {
+                format!("{} {folder_word}  >", it.run_time_ticks)
+            } else {
+                let cont = if it.container.is_empty() { "?" } else { it.container.as_str() };
+                format!("{} · {} {}/{}", fmt_dur(it.duration_s()), cont, it.video_codec, it.audio_codec)
+            };
             draw_text(cv, &meta, sw - pad - 190.0, y + 2.0, 13.0, 400, 0xFF8A_9098, 190.0);
         }
     });
@@ -2355,28 +2446,91 @@ impl FrameGuest for Component {
     }
 }
 
+/// The currently VISIBLE rows: Series (Shows/L0), Seasons (Shows/L1), else the
+/// playable `items` (Movies, or a season's Episodes).
+fn visible(e: &Engine) -> &[Item] {
+    match (e.tab, e.series_open, e.season_open) {
+        (Tab::Shows, None, _) => &e.series,
+        (Tab::Shows, Some(_), None) => &e.seasons,
+        _ => &e.items,
+    }
+}
+
+/// Shows-tab breadcrumb ("series > season"), or None.
+fn shows_crumb(e: &Engine) -> Option<String> {
+    if e.tab != Tab::Shows { return None; }
+    let si = e.series_open?;
+    let sname = e.series.get(si).map(|s| s.name.as_str()).unwrap_or("");
+    Some(match e.season_open {
+        Some(sei) => format!("< Esc   ·   {sname}  >  {}", e.seasons.get(sei).map(|s| s.name.as_str()).unwrap_or("")),
+        None => format!("< Esc   ·   {sname}"),
+    })
+}
+
 /// Move the selection by `delta` rows (clamped). Shared by keys and scroll.
 fn nav(e: &mut Engine, delta: i64) {
-    let n = e.items.len();
+    let n = visible(e).len();
     if n == 0 {
         return;
     }
     e.selected = (e.selected as i64 + delta).clamp(0, n as i64 - 1) as usize;
 }
 
-/// Activate the selected item — resolve its DirectPlay URL (A2: start playing).
-/// Shared by Enter and click-on-selected.
+/// Switch browse tab, resetting to its top.
+fn set_tab(e: &mut Engine, tab: Tab) {
+    e.tab = tab;
+    e.series_open = None;
+    e.season_open = None;
+    e.selected = 0;
+    if tab == Tab::Movies {
+        e.items = e.movies.clone();
+    }
+}
+
+/// Go up one Shows level (Episodes → Seasons → Series). True if it moved.
+fn back_up(e: &mut Engine) -> bool {
+    if e.tab != Tab::Shows {
+        return false;
+    }
+    if e.season_open.is_some() {
+        e.season_open = None;
+        e.selected = 0;
+        true
+    } else if e.series_open.is_some() {
+        e.series_open = None;
+        e.selected = 0;
+        true
+    } else {
+        false
+    }
+}
+
+/// Activate the selected row — Series → its Seasons, Season → its Episodes, a
+/// playable item → resolve + play. Shared by Enter and click-on-selected.
 fn activate(e: &mut Engine) {
-    if e.items.is_empty() || e.resolving {
+    if e.resolving {
         return;
     }
-    // Ignore unplayable (greyed) items — MKV/WebM or 5.1/Opus/Dolby audio the
-    // guest can't yet demux/decode. (Can't log here: ENGINE is already borrowed.)
-    if !is_playable(&e.items[e.selected]) {
-        return;
+    let sel = e.selected;
+    match (e.tab, e.series_open, e.season_open) {
+        (Tab::Shows, None, _) => {
+            if let Some(sr) = e.series.get(sel) {
+                e.pending_seasons = Some((sel, sr.id.clone()));
+            }
+        }
+        (Tab::Shows, Some(si), None) => {
+            let series_id = e.series.get(si).map(|s| s.id.clone()).unwrap_or_default();
+            if let Some(se) = e.seasons.get(sel) {
+                e.pending_episodes = Some((sel, series_id, se.id.clone()));
+            }
+        }
+        _ => {
+            if sel < e.items.len() && is_playable(&e.items[sel]) {
+                e.resolving = true;
+                e.pending_resolve = Some(sel);
+            }
+        }
     }
-    e.resolving = true;
-    e.pending_resolve = Some(e.selected);
 }
 
 impl KeyGuest for Component {
@@ -2452,6 +2606,11 @@ impl KeyGuest for Component {
                 "Home" => e.selected = 0,
                 "End" => nav(&mut e, i64::MAX),
                 "Enter" | "NumpadEnter" | "Space" => activate(&mut e),
+                "Tab" => {
+                    let t = if e.tab == Tab::Movies { Tab::Shows } else { Tab::Movies };
+                    set_tab(&mut e, t);
+                }
+                "Escape" | "Backspace" => { back_up(&mut e); } // up one Shows level
                 _ => match ev.text.as_str() {
                     "j" => nav(&mut e, 1),
                     "k" => nav(&mut e, -1),
@@ -2527,16 +2686,21 @@ impl PointerGuest for Component {
                     }
                 }
                 PtrKind::Down if matches!(ev.button, Button::Primary) => {
-                    let (top, row_h, first, visible) = e.list_view;
-                    if ev.y >= top && row_h > 0.0 {
-                        let row = first + ((ev.y - top) / row_h) as usize;
-                        if row < first + visible && row < e.items.len() {
-                            // First click selects; clicking the already-selected
-                            // row plays it (tap-to-select, tap-again-to-play).
-                            if row == e.selected {
-                                activate(&mut e);
-                            } else {
-                                e.selected = row;
+                    if let Some(t) = tab_hit(ev.x, ev.y, 20.0) {
+                        set_tab(&mut e, t);
+                    } else {
+                        let (top, row_h, first, vis) = e.list_view;
+                        let n = visible(&e).len();
+                        if ev.y >= top && row_h > 0.0 {
+                            let row = first + ((ev.y - top) / row_h) as usize;
+                            if row < first + vis && row < n {
+                                // First click selects; clicking the already-selected
+                                // row activates it (drill a series / play an item).
+                                if row == e.selected {
+                                    activate(&mut e);
+                                } else {
+                                    e.selected = row;
+                                }
                             }
                         }
                     }
@@ -2578,6 +2742,13 @@ impl BgGuest for Component {
         // Pick up a pending resolve request from on-key.
         if let Some(idx) = ENGINE.with(|e| e.borrow_mut().pending_resolve.take()) {
             reqwest::task::spawn(resolve(idx));
+        }
+        // Drill into the Shows hierarchy (async fetches): Series → Seasons → Episodes.
+        if let Some((idx, sid)) = ENGINE.with(|e| e.borrow_mut().pending_seasons.take()) {
+            reqwest::task::spawn(open_seasons(idx, sid));
+        }
+        if let Some((idx, series_id, season_id)) = ENGINE.with(|e| e.borrow_mut().pending_episodes.take()) {
+            reqwest::task::spawn(open_episodes(idx, series_id, season_id));
         }
 
         // Stop requested (Escape/Backspace while Playing): tear the stream down

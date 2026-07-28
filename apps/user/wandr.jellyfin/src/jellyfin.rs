@@ -145,6 +145,9 @@ pub struct Item {
     /// Resume point (UserData.PlaybackPositionTicks, 100 ns ticks) — where the user
     /// last stopped; 0 = start from the beginning. B3: seek here on open.
     pub resume_ticks: i64,
+    /// A Series row (Shows tab) — not directly playable; activating it drills into
+    /// its episodes. `id` is the series id. (`run_time_ticks` holds the episode count.)
+    pub is_series: bool,
 }
 
 impl Item {
@@ -158,52 +161,97 @@ fn first_stream_codec<'a>(ms: &'a Value, kind: &str) -> &'a str {
     }).unwrap_or("?")
 }
 
-/// Browse Movies + Episodes (recursive) with MediaSources so we can filter by codec.
-/// Episodes are the multi-audio-track content; `SeriesName`/index give a readable name.
-pub async fn browse_movies(client: &Client, s: &Session, limit: u32) -> Result<Vec<Item>, String> {
-    let path = format!(
-        "/Items?IncludeItemTypes=Movie,Episode&Recursive=true&Limit={limit}\
-         &Fields=MediaSources,UserData,SeriesName&SortBy=SortName&userId={}",
-        s.user_id
-    );
-    let v: Value = client
-        .get(url(&s.server_url, &path)?)
+async fn get_json(client: &Client, s: &Session, path: &str) -> Result<Value, String> {
+    client.get(url(&s.server_url, path)?)
         .header("Authorization", auth_header(&s.device_id, Some(&s.access_token)))
         .send().await.map_err(|e| format!("browse: {e}"))?
-        .json().await.map_err(|e| format!("browse json: {e}"))?;
-    let mut out = Vec::new();
-    for it in v.get("Items").and_then(|i| i.as_array()).cloned().unwrap_or_default() {
-        let ms = it.get("MediaSources").and_then(|m| m.as_array())
-            .and_then(|a| a.first()).cloned().unwrap_or(json!({}));
-        // Episodes get "Series · SxxExx Title"; movies keep their name.
-        let name = if it.get("Type").and_then(|t| t.as_str()) == Some("Episode") {
-            let series = it.get("SeriesName").and_then(|x| x.as_str()).unwrap_or("");
-            let epname = it.get("Name").and_then(|x| x.as_str()).unwrap_or("");
-            match (it.get("ParentIndexNumber").and_then(|n| n.as_i64()),
-                   it.get("IndexNumber").and_then(|n| n.as_i64())) {
-                (Some(se), Some(ep)) => format!("{series} · S{se:02}E{ep:02} {epname}"),
-                _ => format!("{series} · {epname}"),
-            }
-        } else {
-            it.get("Name").and_then(|x| x.as_str()).unwrap_or("?").to_string()
-        };
-        out.push(Item {
-            id: it.get("Id").and_then(|s| s.as_str()).unwrap_or("").to_string(),
-            name,
-            media_source_id: ms.get("Id").and_then(|s| s.as_str())
-                .or_else(|| it.get("Id").and_then(|s| s.as_str())).unwrap_or("").to_string(),
-            container: ms.get("Container").and_then(|s| s.as_str()).unwrap_or("").to_string(),
-            video_codec: first_stream_codec(&ms, "Video").to_string(),
-            audio_codec: first_stream_codec(&ms, "Audio").to_string(),
-            size: ms.get("Size").and_then(|s| s.as_u64()).unwrap_or(0),
-            run_time_ticks: it.get("RunTimeTicks").and_then(|s| s.as_i64()).unwrap_or(0),
-            image_tag: it.get("ImageTags").and_then(|t| t.get("Primary"))
-                .and_then(|s| s.as_str()).map(|s| s.to_string()),
-            resume_ticks: it.get("UserData").and_then(|u| u.get("PlaybackPositionTicks"))
-                .and_then(|t| t.as_i64()).unwrap_or(0),
-        });
+        .json().await.map_err(|e| format!("browse json: {e}"))
+}
+
+/// Parse one Movie/Episode Value → a playable Item. `episode` = format the name as
+/// "SxxExx Title" (the series is already the current view's context).
+fn parse_playable(it: &Value, episode: bool) -> Item {
+    let ms = it.get("MediaSources").and_then(|m| m.as_array())
+        .and_then(|a| a.first()).cloned().unwrap_or(json!({}));
+    let name = if episode {
+        let epname = it.get("Name").and_then(|x| x.as_str()).unwrap_or("?");
+        match (it.get("ParentIndexNumber").and_then(|n| n.as_i64()),
+               it.get("IndexNumber").and_then(|n| n.as_i64())) {
+            (Some(se), Some(ep)) => format!("S{se:02}E{ep:02}  {epname}"),
+            (_, Some(ep)) => format!("E{ep:02}  {epname}"),
+            _ => epname.to_string(),
+        }
+    } else {
+        it.get("Name").and_then(|x| x.as_str()).unwrap_or("?").to_string()
+    };
+    Item {
+        id: it.get("Id").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+        name,
+        media_source_id: ms.get("Id").and_then(|s| s.as_str())
+            .or_else(|| it.get("Id").and_then(|s| s.as_str())).unwrap_or("").to_string(),
+        container: ms.get("Container").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+        video_codec: first_stream_codec(&ms, "Video").to_string(),
+        audio_codec: first_stream_codec(&ms, "Audio").to_string(),
+        size: ms.get("Size").and_then(|s| s.as_u64()).unwrap_or(0),
+        run_time_ticks: it.get("RunTimeTicks").and_then(|s| s.as_i64()).unwrap_or(0),
+        image_tag: it.get("ImageTags").and_then(|t| t.get("Primary"))
+            .and_then(|s| s.as_str()).map(|s| s.to_string()),
+        resume_ticks: it.get("UserData").and_then(|u| u.get("PlaybackPositionTicks"))
+            .and_then(|t| t.as_i64()).unwrap_or(0),
+        is_series: false,
     }
-    Ok(out)
+}
+
+/// Movies tab: all Movies (recursive, with MediaSources for the codec filter).
+pub async fn browse_movies(client: &Client, s: &Session, limit: u32) -> Result<Vec<Item>, String> {
+    let path = format!("/Items?IncludeItemTypes=Movie&Recursive=true&Limit={limit}\
+        &Fields=MediaSources,UserData&SortBy=SortName&userId={}", s.user_id);
+    let v = get_json(client, s, &path).await?;
+    Ok(v.get("Items").and_then(|i| i.as_array())
+        .map(|a| a.iter().map(|it| parse_playable(it, false)).collect())
+        .unwrap_or_default())
+}
+
+/// A navigable folder row (Series or Season) — `is_series` = drill target, not playable.
+/// `run_time_ticks` holds the child count for the "N episodes/seasons" meta.
+fn parse_folder(it: &Value) -> Item {
+    Item {
+        id: it.get("Id").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        name: it.get("Name").and_then(|x| x.as_str()).unwrap_or("?").to_string(),
+        media_source_id: String::new(), container: String::new(),
+        video_codec: String::new(), audio_codec: String::new(), size: 0,
+        run_time_ticks: it.get("ChildCount").and_then(|c| c.as_i64()).unwrap_or(0),
+        image_tag: it.get("ImageTags").and_then(|t| t.get("Primary"))
+            .and_then(|x| x.as_str()).map(|x| x.to_string()),
+        resume_ticks: 0, is_series: true,
+    }
+}
+
+fn parse_folders(v: &Value) -> Vec<Item> {
+    v.get("Items").and_then(|i| i.as_array())
+        .map(|a| a.iter().map(parse_folder).collect()).unwrap_or_default()
+}
+
+/// Shows tab · level 0: the Series.
+pub async fn browse_series(client: &Client, s: &Session, limit: u32) -> Result<Vec<Item>, String> {
+    let path = format!("/Items?IncludeItemTypes=Series&Recursive=true&Limit={limit}\
+        &Fields=ChildCount&SortBy=SortName&userId={}", s.user_id);
+    Ok(parse_folders(&get_json(client, s, &path).await?))
+}
+
+/// Shows tab · level 1: the Seasons of one series (ordered).
+pub async fn browse_seasons(client: &Client, s: &Session, series_id: &str) -> Result<Vec<Item>, String> {
+    let path = format!("/Shows/{series_id}/Seasons?userId={}&Fields=ChildCount", s.user_id);
+    Ok(parse_folders(&get_json(client, s, &path).await?))
+}
+
+/// Shows tab · level 2: the Episodes of ONE season (ordered), with MediaSources.
+pub async fn browse_episodes(client: &Client, s: &Session, series_id: &str, season_id: &str) -> Result<Vec<Item>, String> {
+    let path = format!("/Shows/{series_id}/Episodes?seasonId={season_id}&userId={}&Fields=MediaSources,UserData", s.user_id);
+    let v = get_json(client, s, &path).await?;
+    Ok(v.get("Items").and_then(|i| i.as_array())
+        .map(|a| a.iter().map(|it| parse_playable(it, true)).collect())
+        .unwrap_or_default())
 }
 
 // ---- DirectPlay negotiation ------------------------------------------------
