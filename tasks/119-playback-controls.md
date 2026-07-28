@@ -164,7 +164,14 @@ keyboard shortcuts, and Jellyfin resume/progress so it behaves like a real clien
     `/Videos/{id}/{msid}/Subtitles/{idx}/Stream.vtt`, `parse_vtt` → timed cues in a `SUBTITLES`
     thread_local; render draws the active cue bottom-center (approx-centered, no text-measure
     API). Handles `[HH:]MM:SS.mmm`, multi-line, strips inline tags.
-  - **C2 — next — audio-track switch** (re-open at position; enumerate audio MediaStreams).
+  - **C2 ✅ DONE — audio-track switch (MKV, IN-PLACE — not re-open).** MKV open now
+    collects ALL audio tracks (`MkvSource.audio_tracks`: track_num/codec/private/
+    rate/channels/language); `a` cycles (`Engine.audio_pref`/`audio_switch`); bg-tick
+    `switch_audio` re-routes `src.audio_track` + rebuilds `AudioDec` (`setup_mkv_audio`)
+    + flushes ring/queue + re-anchors — **video keeps playing** (no re-fetch, chosen
+    over the earlier "re-open" lock because the demux already routes all tracks by id).
+    Browse now includes Episodes (the multi-audio content). MP4 stays single-track
+    (AAC) — multi-audio MP4 is a follow-up.
 
 ## Notes / risks
 - The **clock re-anchor on seek and on pause/resume** is the subtlest part — the
