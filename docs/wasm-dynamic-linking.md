@@ -172,5 +172,7 @@ Existence proof: **none for dynamic linking** — but the compiler can now *emit
 [SEDL]: https://github.com/WebAssembly/component-model/blob/main/design/mvp/examples/SharedEverythingDynamicLinking.md
 
 ## See also
+- [`kotlin-wasm-multimodule.md`](kotlin-wasm-multimodule.md) — the KT-86919 multi-module
+  findings in depth (the 3 modes, maturity, and *where* the wasm-js-only gate sits).
 - [`shared-runtime-and-app-size.md`](shared-runtime-and-app-size.md) — the app-size / zygote-COW story.
 - Memory: `[[reference_wasm_dynamic_linking_shared_libs]]`, `[[reference_kotlin_wasm_component_model_status]]`.

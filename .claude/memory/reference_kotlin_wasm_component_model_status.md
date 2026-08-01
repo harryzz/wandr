@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: reference
   originSessionId: 2b58a1a7-2e85-4748-b34a-e9b89ab2de87
-  modified: 2026-07-28T19:03:13.325Z
+  modified: 2026-08-01T13:36:30.717Z
 ---
 
 Investigated 2026-05-30 (after adopting wasmtime 45, task 65) whether new Kotlin
@@ -99,5 +99,22 @@ so a reactor export mode is the thing to confirm. **Re-check trigger:** KT-87801
 + KT-87723 → Fixed; then verify reactor support AND that the adapter is actually
 gone. New watch list: KT-86415, KT-87801, KT-87723, KT-88027, KT-87224.
 
-Related: [[wit-bindgen-no-kotlin-generator]], [[wasi-realloc-allocator-pollution]],
+**UPDATE 2026-08-01 (multi-module compilation — relevant to the shared-lib/app-size
+story, NOT the adapter).** **KT-86919 = Fixed** (~mid-2026, ~2.4.x): Gradle
+`kotlin.wasm.compilationMode = monolith | multimodule-open-world |
+multimodule-closed-world` → a separate wasm(+mjs) file per klib. First crack in the
+"whole-program-compiles the framework into each app" wall. **BUT wasm-JS-target
+ONLY** — inter-module linking = **JS ES-modules** (`.mjs` glue, "Js module imports"
+KT-81564, js-builtins.mjs, nodejs, Index.html); **zero `wasmWasi` support**; motivated
+by **build speed**, not distribution/shared-libs. The gate is 100% Kotlin-side
+(backend emits JS-wired multimodule + KGP JS-pipeline-only + wasi target = single
+component, downstream of Component Model KT-64569) — NOT the wasm platform and NOT
+wandr's host (which already composes components via `wire_dep_into_linker` / `link.wac`).
+Maturity: ~15 Fixed / 6 Open (cross-module exports KT-81595 + closed-world KGP KT-84108
+Open). Sub-finding: KT-75871 (new RTTI) + KT-74992 (interface virtual calls) = Kotlin
+DID build cross-module WasmGC dispatch, but Kotlin-internal + JS-target. Full writeup:
+`docs/kotlin-wasm-multimodule.md`. Not usable/testable for wandr guests yet; actionable
+= ask JetBrains re: wasmWasi multimodule + distribution intent.
+
+Related: [[reference_wasm_dynamic_linking_shared_libs]], [[wit-bindgen-no-kotlin-generator]], [[wasi-realloc-allocator-pollution]],
 [[kotlin-wasm-scopedmemory-destroy-bug]].
