@@ -63,8 +63,9 @@
 
 ## References / gotchas
 - [Ref: swift-foundation WASI FileManager bug](reference_swift_foundation_wasi_filemanager_bug.md) — upstream#2120; contents(atPath:) empty.
-- [Ref: host build scripts](reference_host_build_scripts.md) — use the 4 committed scripts, not inline cargo; p3-async ON.
+- [Ref: host build scripts](reference_host_build_scripts.md) — use the 4 committed scripts, not inline cargo; p3-async ON
 - [Ref: p3 WSS stalls](reference_wasmtime46_p3_stream_bugs.md) — wit-bindgen 0.53 bug; needs 0.59+.
+- [Ref: wasmtime version status](reference_wasmtime_version_status.md) — PINNED =46.0.1 (harryzz fork); 47.x worth-it-not-urgent; 47.0.3/46.0.2=2 Low GHSAs NOT affected; bumps invalidate cwasm.
 - [Ref: "resource impl missing"](reference_missing_instance_error_stale_zygote.md) — forked old zygote image
 - [Ref: ART-off Magisk am-spin](reference_artoff_magisk_am_spin.md) — am-loop starves HALs; adb root to probe.
 - [Ref: --install APPS_ROOT](reference_wandr_apps_root_install.md) — adb push nesting + chmod 755 traps.
@@ -91,12 +92,12 @@
 - [Ref: wasmtime 44 debug APIs](reference_wasmtime_debug_apis.md) — call_hook/breakpoints for corruption.
 - [Ref: wasi-tls transport](reference_wandr_wasi_tls_transport.md) — custom TlsProvider.
 - [Ref: Windows ARM64 buildable](reference_windows_arm64_buildable.md) — winarm64 prebuilts; build-host-windows.bat.
-- [Ref: Kotlin/Wasm CM](reference_kotlin_wasm_component_model_status.md) — native-P2 subtasks (KT-87801); KT-86415 unchanged; P1 adapter. · [bump](feedback_kotlin_version_bump.md)
-- [Ref: Swift/Wasm WASI status](reference_swift_wasm_wasi_status.md) — P1-only; CM=future; WasmKit wit-tool. · [Dart→Wasm](reference_dart_wasm_component_status.md) — prototype wasm_tools+Dart 3.13; untried.
-- [Ref: Floem candidate](reference_floem_wandr_candidate.md) — SPIKE (121): renderer A+ decoupled; reactive+renderer+tiny_skia wasip2 after 1-file winit-cut; obstacle=winit.
-- [Ref: Bluesky/atproto client](reference_bluesky_atproto_wandr.md) — Atrium (atrium-api/atrium-xrpc): pluggable HttpClient → ~40-line client over wandr-reqwest. wasip2 unproven.
-- [Ref: Web browser on wandr](reference_web_browser_wandr.md) — real browser=HOST WebView (Proposal B; Servo/WKWebView/WebView2; new wandr:webview contract). Blitz=GUEST HTML/CSS lane → wasi:canvas.
-- [Ref: wasm dynamic-linking / shared libs](reference_wasm_dynamic_linking_shared_libs.md) — wasm linking traditional but LINEAR-MEM only; WasmGC (Compose) no mechanism; Swift/.NET toolchain-blocked.
+- [Ref: Kotlin/Wasm CM](reference_kotlin_wasm_component_model_status.md) — native-P2 subtasks (KT-87801); KT-86415 unchanged; P1 adapter.
+- [Ref: Swift/Wasm WASI status](reference_swift_wasm_wasi_status.md) — P1-only; CM=future; WasmKit wit-tool. · [Dart→Wasm](reference_dart_wasm_component_status.md) — wasm_tools+Dart 3.13; untried.
+- [Ref: Floem candidate](reference_floem_wandr_candidate.md) — SPIKE (121): renderer A+ decoupled; reactive+renderer+tiny_skia wasip2 after 1-file winit-cut.
+- [Ref: Bluesky/atproto client](reference_bluesky_atproto_wandr.md) — Atrium: pluggable HttpClient → ~40-line client over wandr-reqwest. wasip2 unproven.
+- [Ref: Web browser on wandr](reference_web_browser_wandr.md) — real browser=HOST WebView (Proposal B); Blitz=GUEST HTML/CSS → wasi:canvas.
+- [Ref: wasm dynamic-linking / shared libs](reference_wasm_dynamic_linking_shared_libs.md) — wasm linking traditional but LINEAR-MEM only; WasmGC (Compose) no mechanism; Swift/.NET toolchain-blocked
 - [Ref: IME options](feedback_ime_options.md) — 4 paths. · [guest-language survey](../../docs/wasm-component-language-support.md)
 
 ## Feedback / hard-won fixes (hooks only — read the file before touching the area)
@@ -119,15 +120,15 @@
 - [Rebuild compose after skiko](feedback_rebuild_compose_after_skiko.md) — skip=drift. · [Don't delete cache/](feedback_dont_delete_app_cache_dir.md)
 - [compose-*-wasi are bundlers](feedback_compose_wasi_srcdirs.md) — source elsewhere. · [Prefer wandr-app edits](feedback_prefer_wandr_app_edits.md) · [out of scope](feedback_compose_wasi_out_of_scope.md)
 - [Worker-thread Store backfires](feedback_worker_thread_backfires.md) — ANR better. · [Don't no-op Canvas stubs](feedback_canvas_stub_noop_traps.md)
-- [TooltipBox SIGILL superseded](feedback_tooltip_sigill_wasi.md) — adapter State corrupt. · [State](feedback_wasi_adapter_state_corruption.md) · [ScopedMem UAF](feedback_kotlin_wasm_scopedmemory_destroy_bug.md)
-- [Kotlin println throws](feedback_kotlin_wasm_println_throws_wasmtime.md) — @WasmImport log. · [No Kotlin bindgen](feedback_wit_bindgen_no_kotlin_generator.md) · [Canon-ABI](feedback_canonical_abi_import_export_asymmetry.md)
+- [TooltipBox SIGILL superseded](feedback_tooltip_sigill_wasi.md) — State corrupt. · [State](feedback_wasi_adapter_state_corruption.md) · [ScopedMem UAF](feedback_kotlin_wasm_scopedmemory_destroy_bug.md)
+- [Kotlin println throws](feedback_kotlin_wasm_println_throws_wasmtime.md) — @WasmImport log. · [No bindgen](feedback_wit_bindgen_no_kotlin_generator.md) · [Canon-ABI](feedback_canonical_abi_import_export_asymmetry.md)
 - [Rust CLI smoke](feedback_rust_component_as_cli_smoke.md) — wasi:cli. · [adb push nesting](feedback_adb_push_dir_nesting.md) · [Compose Row weight](feedback_compose_row_weight_pattern.md)
 - [Ref: media codec STRATEGY](reference_media_codec_strategy.md) — OS-native bindings raw; gate libde265+dav1d to Linux.
 - [✅ Windows DXVA2 H.264 HW decode](reference_dxva_h264_windows_decode.md) — pixel-exact; 4 traps (slice/Dpb/SPS-pool/wBitFields-b14).
-- [Ref: VA-API zero-copy players](reference_vaapi_zerocopy_real_players.md) — pool+cache iff own pool; NV12=2 textures; i965 Y-TILED.
+- [Ref: VA-API zero-copy players](reference_vaapi_zerocopy_real_players.md) — pool+cache iff own pool; NV12=2 tex; i965 Y-TILED.
 - [Ref: WSL2 VA-API via d3d12](reference_wsl_vaapi_d3d12_hw_decode.md) — vgem+MESA_LOADER_DRIVER_OVERRIDE + GALLIUM_DRIVER=d3d12
 - [✅ libde265 Windows crash FIXED](reference_libde265_windows_win32cond_crash.md) — SW H.265 crash = racy win32cond; single-thread Windows.
-- [✅ GStreamer = SOLE desktop decode](reference_gstreamer_desktop_backend_spike.md) — replaced per-OS codecs (`a63e3ae`); libvpx=encode; ZERO-COPY.
+- [✅ GStreamer = SOLE desktop decode](reference_gstreamer_desktop_backend_spike.md) — replaced per-OS codecs (`a63e3ae`); ZERO-COPY.
 - [Ref: dav1ddec (AV1 SW) GStreamer](reference_dav1ddec_gstreamer_install.md) — build gst-plugin-dav1d (libdav1d-dev)
 - [Ref: jellyfin Opus = ropus](reference_jellyfin_opus_ropus.md) — pure-Rust ropus (xiph) + simd128.
 - [Ref: jellyfin demux + MKV seek](reference_jellyfin_container_demux_and_mkv_seek.md) — symphonia demux AUDIO-ONLY → mp4/matroska; MKV seek=0.8 patched
