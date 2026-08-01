@@ -1,11 +1,11 @@
 ---
 name: reference_bluesky_atproto_wandr
-description: "Bluesky/atproto client on wandr = clean fit via Atrium (sugyan/atrium). atrium-xrpc's HttpClient trait is transport-agnostic (http::Request→http::Response); atrium-api + atrium-xrpc are reqwest/TLS-free → plug our wandr-reqwest (wasi:tls) via a ~40-line WandrXrpcClient, same pattern as Signal/jellyfin. NOT built — wasip2 build of atrium-api unproven."
+description: "Bluesky/atproto client on wandr = clean fit via Atrium (sugyan/atrium). atrium-xrpc's HttpClient trait is transport-agnostic (http::Request→http::Response); atrium-api + atrium-xrpc are reqwest/TLS-free → plug our wandr-reqwest (wasi:tls) via a ~40-line WandrXrpcClient, same pattern as Signal/jellyfin. SPIKE 2026-08-01: atrium-api+atrium-xrpc PROVEN wasip2; bsky-sdk fails (hardcoded Send+Sync, single-thread wasm) → skip it, hand-roll sessions."
 metadata:
   node_type: memory
   type: reference
   originSessionId: 8f923d2a-de3d-450d-8444-07ecb72775c5
-  modified: 2026-08-01T09:38:36.461Z
+  modified: 2026-08-01T14:03:58.059Z
 ---
 
 Researched 2026-08-01 (source-grounded, "little research"). **A Bluesky client is
@@ -62,13 +62,21 @@ Two bonuses (verified in Cargo.tomls):
   Poll `getTimeline`/`listNotifications` (or Jetstream JSON-over-WS) first.
 - **UI:** any shipped framework (dioxus-canvas/Slint/Compose) — separate choice.
 
-## Confidence + open probe
-Architecture fit = source-verified (pluggable trait; core crates reqwest/TLS-free;
-features gate size + drop native client). **UNPROVEN = the `wasm32-wasip2` build of
-`atrium-api` + `atrium-xrpc`** — all deps pure Rust (chrono/serde, ipld-core, regex,
-langtag) so very likely clean, but chrono-on-wasip2 + ipld-core are worth a build
-probe (Floem-style) before committing. Repro to create if pursued:
-`repros/atrium-wasip2-probe`.
+## Confidence + SPIKE RESULT (2026-08-01, `repros/atrium-wasip2-probe`)
+Architecture fit = source-verified. **wasip2 build PROVEN:**
+- ✅ **`atrium-xrpc` + `atrium-api` (bluesky+agent) COMPILE for `wasm32-wasip2`** —
+  the whole dep chain (chrono, ipld-core, regex, langtag, tokio/sync) builds clean.
+  The chrono/ipld-core unknown is RESOLVED. The recommended stack (atrium-api +
+  atrium-xrpc + our WandrXrpcClient) is de-risked.
+- ❌ **`bsky-sdk` does NOT compile on wasip2** — it hardcodes `T: XrpcClient + Send +
+  Sync` (`BskyAtpAgentBuilder::new`, `detect_facets`), but on single-threaded wasm the
+  async client is `!Send` → E0277. Classic single-thread-wasm snag ([[feedback_wasi_threading]]).
+**⇒ Plan: SKIP bsky-sdk.** Build on atrium-api + atrium-xrpc directly and do session
+management (`com.atproto.server.createSession`/`refreshSession` + JWT) ourselves in
+the client (minimal deps, full control — same as Signal/jellyfin). If bsky-sdk's
+niceties (rich-text facets) are ever wanted: vendored patch relaxing `Send+Sync`→
+`?Send` behind a wasm cfg (matroska-demuxer-style). Follow-up: confirm atrium-api's
+own `AtpAgent` is `!Send`-friendly, or just hand-roll sessions.
 
 Related: [[reference_wandr_wasi_tls_transport]], [[project_signal_client_architecture]]
 (same wasi:tls transport pattern), [[reference_jellyfin_container_demux_and_mkv_seek]]

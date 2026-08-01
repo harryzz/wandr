@@ -39,13 +39,13 @@
 - [✅ keyboard/overlay lifecycle](project_keyboard_overlay_lifecycle.md) — focus-follows-fg.
 - [Design: arbiter=window-server](project_arbiter_window_server_design.md) — decides-never-renders · [✅ modular arbiter+WM](project_task73_modular_arbiter_wm.md)
 - [✅ surface/role model](project_task74_surface_role_model.md) — per-display; reentrant-lock
-- [✅ Keyguard/lockscreen](project_keyguard.md) — Role::Lockscreen + auto-lock · [✅ AlarmManager](project_alarm_manager.md)
+- [✅ Keyguard/lockscreen](project_keyguard.md) — Role::Lockscreen+auto-lock · [✅ AlarmManager](project_alarm_manager.md)
 - [✅ Signal bg receipt](project_signal_bg_receipt.md) — wake+bg-tick+notify; bindgen-stale.
 - [✅ True-dp geometry](project_true_dp_geometry.md) — chrome heights in dp · [✅ Chrome coherence](project_chrome_coherence.md)
 - [✅ wandr-arbiter-audio](project_arbiter_audio.md) — restart-drops-chrome
 - [wandr-call engine](project_wandr_call.md) — WebRTC wasip2. · [✅ call audio out](project_call_audio_output.md)
 - [✅ arbiter-sensors](project_arbiter_sensors.md) — proximity hysteresis · [✅ proximity screen-off](project_proximity_screen_off.md)
-- [ART shutdown](project_art_shutdown.md) — am-spin sweep; /proc/stat trap.
+- [ART shutdown](project_art_shutdown.md) — am-spin sweep; proc/stat trap.
 - [80 standalone input](../../tasks/80-standalone-input-art-less.md) — evdev. · [✅ inputflinger](project_pathA_inputflinger.md)
 - [✅ ART-off sensors](project_artless_sensors.md) — C++ HIDL shim · [✅ auto-brightness](project_artless_autobrightness.md)
 - [✅ ART-off audio](project_artless_audio.md) — 4 binder stubs · [✅ ART-off networking](project_artless_network.md)
@@ -70,9 +70,9 @@
 - [Ref: ART-off Magisk am-spin](reference_artoff_magisk_am_spin.md) — am-loop starves HALs; adb root to probe.
 - [Ref: --install APPS_ROOT](reference_wandr_apps_root_install.md) — adb push nesting + chmod 755 traps.
 - [Ref: host AOT codegen corruption](reference_host_aot_codegen_corruption.md) — SIGSEGV cwasm = cargo clean.
-- [Ref: a-03 fast ninja](reference_a03_ninja_build.md) — direct-ninja soong. · [rsbinder pin](reference_rsbinder_version.md)
-- [Ref: on-demand rendering](reference_on_demand_rendering.md) — statusbar clock-refresh.
-- [Ref: WSLg Wayland resize crash](reference_wslg_wayland_resize_crash.md) — force WINIT_UNIX_BACKEND=x11.
+- [Ref: a-03 fast ninja](reference_a03_ninja_build.md) — direct-ninja. · [rsbinder pin](reference_rsbinder_version.md)
+- [Ref: on-demand rendering](reference_on_demand_rendering.md) — statusbar clock-refresh
+- [Ref: WSLg Wayland resize crash](reference_wslg_wayland_resize_crash.md) — WINIT_UNIX_BACKEND=x11.
 - [Ref: compose-wasi consumption](reference_compose_wasi_consumption.md) — use in-tree *-wasm-wasi:9999.0.0-SNAPSHOT.
 - [Ref: wandrpkg manifest](reference_wandrpkg_manifest_convention.md) — package.toml in app dir. · [photon image](reference_photon_image_lib.md)
 - [Ref: dioxus+taffy](reference_dioxus_taffy_rust_ui.md) — crates/dioxus-canvas. · [wasi-webgpu/gfx](reference_wasi_webgpu_gfx.md) — COMPLEMENTS wasi:canvas (WebGPU vs Canvas2D), not competitors.
@@ -95,7 +95,7 @@
 - [Ref: Kotlin/Wasm CM](reference_kotlin_wasm_component_model_status.md) — native-P2 subtasks (KT-87801); KT-86415 unchanged; P1 adapter.
 - [Ref: Swift/Wasm WASI status](reference_swift_wasm_wasi_status.md) — P1-only; CM=future; WasmKit wit-tool. · [Dart→Wasm](reference_dart_wasm_component_status.md) — wasm_tools+Dart 3.13; untried.
 - [Ref: Floem candidate](reference_floem_wandr_candidate.md) — SPIKE (121): renderer A+ decoupled; reactive+renderer+tiny_skia wasip2 after 1-file winit-cut.
-- [Ref: Bluesky/atproto client](reference_bluesky_atproto_wandr.md) — Atrium: pluggable HttpClient → ~40-line client over wandr-reqwest. wasip2 unproven.
+- [Ref: Bluesky/atproto client](reference_bluesky_atproto_wandr.md) — Atrium (atrium-api/atrium-xrpc): pluggable HttpClient → ~40-line client over wandr-reqwest SPIKE: core wasip2 OK, bsky-sdk fails Send.
 - [Ref: Web browser on wandr](reference_web_browser_wandr.md) — real browser=HOST WebView (Proposal B); Blitz=GUEST HTML/CSS → wasi:canvas.
 - [Ref: wasm dynamic-linking / shared libs](reference_wasm_dynamic_linking_shared_libs.md) — wasm linking traditional but LINEAR-MEM only; WasmGC (Compose) no mechanism; Swift/.NET toolchain-blocked
 - [Ref: IME options](feedback_ime_options.md) — 4 paths. · [guest-language survey](../../docs/wasm-component-language-support.md)
@@ -124,11 +124,11 @@
 - [Kotlin println throws](feedback_kotlin_wasm_println_throws_wasmtime.md) — @WasmImport log. · [No bindgen](feedback_wit_bindgen_no_kotlin_generator.md) · [Canon-ABI](feedback_canonical_abi_import_export_asymmetry.md)
 - [Rust CLI smoke](feedback_rust_component_as_cli_smoke.md) — wasi:cli. · [adb push nesting](feedback_adb_push_dir_nesting.md) · [Compose Row weight](feedback_compose_row_weight_pattern.md)
 - [Ref: media codec STRATEGY](reference_media_codec_strategy.md) — OS-native bindings raw; gate libde265+dav1d to Linux.
-- [✅ Windows DXVA2 H.264 HW decode](reference_dxva_h264_windows_decode.md) — pixel-exact; 4 traps (slice/Dpb/SPS-pool/wBitFields-b14).
+- [✅ Windows DXVA2 H.264 HW decode](reference_dxva_h264_windows_decode.md) — pixel-exact; 4 traps (slice/Dpb/SPS-pool/wBitFields).
 - [Ref: VA-API zero-copy players](reference_vaapi_zerocopy_real_players.md) — pool+cache iff own pool; NV12=2 tex; i965 Y-TILED.
 - [Ref: WSL2 VA-API via d3d12](reference_wsl_vaapi_d3d12_hw_decode.md) — vgem+MESA_LOADER_DRIVER_OVERRIDE + GALLIUM_DRIVER=d3d12
 - [✅ libde265 Windows crash FIXED](reference_libde265_windows_win32cond_crash.md) — SW H.265 crash = racy win32cond; single-thread Windows.
 - [✅ GStreamer = SOLE desktop decode](reference_gstreamer_desktop_backend_spike.md) — replaced per-OS codecs (`a63e3ae`); ZERO-COPY.
-- [Ref: dav1ddec (AV1 SW) GStreamer](reference_dav1ddec_gstreamer_install.md) — build gst-plugin-dav1d (libdav1d-dev)
-- [Ref: jellyfin Opus = ropus](reference_jellyfin_opus_ropus.md) — pure-Rust ropus (xiph) + simd128.
+- [Ref: dav1ddec (AV1 SW) GStreamer](reference_dav1ddec_gstreamer_install.md) — build gst-plugin-dav1d
+- [Ref: jellyfin Opus = ropus](reference_jellyfin_opus_ropus.md) — ropus (xiph)+simd128.
 - [Ref: jellyfin demux + MKV seek](reference_jellyfin_container_demux_and_mkv_seek.md) — symphonia demux AUDIO-ONLY → mp4/matroska; MKV seek=0.8 patched
