@@ -1,4 +1,4 @@
-# Task 119 — media-player real-client proof (Jellyfin + YouTube)
+# Task 119 — media-player real-client proof (Jellyfin + open DASH/HLS)
 
 > **Status: 🔲 NOT STARTED.** This is the open tail of task 117 M2 (see
 > `tasks/117-wandr-video-consolidation.md`). 117's playback *engine* is done and
@@ -23,7 +23,8 @@ A/V sync** — with the codecs the GStreamer consolidation just unified. Two cli
 easy-first:
 
 1. **Jellyfin** — a clean, stable, self-hosted HTTP media server. Do this FIRST.
-2. **YouTube (via Invidious)** — the messy real-world adaptive/DASH case. Do SECOND.
+2. **Open DASH/HLS** (CMAF test streams; optionally PeerTube) — the messy real-world
+   adaptive/DASH case, no Google fortress. Do SECOND. (YouTube parked — server-assisted only.)
 
 ## Binding architecture constraint
 
@@ -120,34 +121,76 @@ static VOD file needs. (The legitimate adaptive/DASH case is Part B YouTube, whe
 
 ---
 
-## Part B — YouTube via Invidious (do second)
+## Part B — open adaptive streaming (DASH/HLS), NOT YouTube (do second)
 
-The extraction landscape and why Invidious wins for a wasip2 guest:
+**Decision (2026-08-01): reject YouTube as the finalizer.** Prove the adaptive
+engine on OPEN protocols (DASH/HLS) — no Google anti-bot fortress, no server to
+run, genuinely standalone. YouTube is PARKED (below).
 
-| Option | Verdict for wandr |
-|---|---|
-| [`invidious`](https://docs.rs/invidious/) crate (0.7.8, active) | ⭐ **Chosen.** REST-JSON to an Invidious instance; **no YouTube token, no cipher work in-guest** (the server does the signature/n-sig). Returns `formatStreams`/`adaptiveFormats` = direct stream URLs + itag/mime/container. Guest does HTTPS-JSON (already works). |
-| [`rusty_ytdl`](https://github.com/Mithronn/rusty_ytdl) / [`rustube`](https://github.com/DzenanJupic/rustube) | ❌ Pure-Rust in-guest extractors but **go stale constantly** (YouTube breaks them); their "wasm" is wasm-bindgen/**browser**, not wasip2 — need a JS host for the cipher. Won't run in a wandr guest as-is. |
-| [`yt-dlp`](https://crates.io/crates/yt-dlp) crate | ❌ Most reliable extractor, but **shells out to the yt-dlp binary (Python)** — no subprocess in a wasip2 sandbox; host-side only, which breaks the guest-side design. |
-| [`youtubei-rs`](https://crates.io/crates/youtubei-rs) | ⚠️ Wraps YouTube's internal InnerTube API; more official-ish but you still own the cipher problem for stream URLs. |
-| `google-youtube3` (Data API v3) | ❌ Metadata only — **no downloadable stream URLs**. Useless for playback. |
+### Why not YouTube (parked, not chosen)
+YouTube has no open stream API and gates streams behind an anti-abuse moat —
+**PoToken/BotGuard + DroidGuard + SABR**. Getting stream URLs means running
+Google's obfuscated, *rotating* attestation program (BotGuard = JS web VM;
+DroidGuard = native MBA-obfuscated VM) in a genuine-enough environment. For the
+software (web) path it's **not a crypto wall** — it's a perpetual **maintenance
+treadmill** (Google rotates; you re-reverse forever). And a wandr `--no-art` guest
+can't use the LineageOS-style *genuine Play Services* path (no ART → no Play
+Services → no genuine DroidGuard; rooted also fails hardware attestation). So
+YouTube is viable only **server-assisted** (Invidious + `invidious-companion`, which
+runs BotGuard server-side) on a residential IP with hotfix upkeep — a moving target,
+not a finalizer. **→ PARKED: revisit only if you specifically want the demo and will
+run the server.** Rejected in-guest extractors (`rusty_ytdl`/`rustube` = wasm-bindgen
+browser, stale; `yt-dlp` crate = Python subprocess; Data-API-v3 = metadata only)
+still apply. Full attestation reasoning: this session's YouTube deep-dive.
 
-### Approach
-- Use the `invidious` crate against a **self-hosted Invidious instance** (public instances
-  are rate-limited/flaky and YouTube periodically breaks Invidious — self-hosting keeps the
-  demo stable; the *guest code* stays simple either way since the fragility is off-sandbox).
-- B1: `formatStreams` (muxed 360p MP4, video+audio in one container) → simplest light-up,
-  reuses the Jellyfin A2 path almost verbatim.
-- B2: `adaptiveFormats` (separate video itag + Opus/AAC audio itag) → exercises the REAL
-  DASH-style A/V-sync path (two range-fetched streams, guest muxes/syncs, host decodes video,
-  Symphonia decodes audio, both against `wasi:audio position()`).
+### The open adaptive path — everything reuses the shipped engine
+Goal: separate video-only + audio-only streams, **segmented + byte-range**,
+guest-demuxed, host-decoded, `wasi:audio`-synced, with **bitrate switching**. DASH
+and HLS both converge on **CMAF / fragmented-MP4 (fMP4)** segments → one container
+path covers both.
+
+| Piece | Component | Status |
+|---|---|---|
+| HTTPS + byte-range | `wandr-reqwest` (wasi:tls) | ✅ shipped |
+| DASH manifest (`.mpd`) | `dash-mpd` 0.20.4 | new (small) |
+| HLS manifest (`.m3u8`) | `m3u8-rs` 6.0.1 | new (small) |
+| **fMP4/CMAF segment demux** | **`mp4` 0.14 — PROVEN handles fragments** | ✅ shipped, no new demuxer |
+| WebM-DASH segment demux (VP9/Opus) | `matroska-demuxer` (vendored+patched) | ✅ shipped |
+| Audio decode (AAC/Opus) | `symphonia` / `ropus` | ✅ shipped |
+| Video decode + `present(at-ns)` | host `wandr:video` | ✅ shipped |
+| A/V sync | `wasi:audio` | ✅ shipped |
+
+**fMP4 probe result (2026-08-01, `repros/fmp4-probe`):** the `mp4` crate 0.14
+(already a jellyfin dep) has FULL fragmented-MP4 support — `moofs: Vec<MoofBox>`,
+`traf`/`trun`/`tfhd`/`tfdt`/`mvex`/`trex`, `is_fragmented()`, and the **SAME
+`read_sample()`/`sample_count()`/`tracks()` API works for CMAF** (codec config read
+from the init segment's `moov` `stsd.avc1/hev1/vp09/mp4a`). **⇒ no new demuxer — the
+CMAF segment demux is the exact `mp4` API jellyfin already uses.** Only new code is
+manifest parsing + segment-fetch/adaptive logic.
+
+### Milestones
+- **B1 — raw DASH (CMAF) test stream** ⭐ the standalone engine proof. Point at a
+  public DASH-IF / Unified-Streaming / Bitmovin `.mpd` (Big Buck Bunny / Tears of
+  Steel). `dash-mpd` → pick one video + one audio Representation → fetch init + media
+  segments (byte-range) → `mp4` `read_sample` → host-decode video + `symphonia` audio
+  → `wasi:audio`-sync. **Zero infrastructure.** Closes Part B's technical goal.
+- **B2 — adaptive bitrate switch.** Change video Representation mid-stream → the real
+  ABR path (re-init decoder on rendition change).
+- **B3 — HLS (CMAF) test stream.** `m3u8-rs` master+media playlists → same fMP4 demux
+  → proves the second protocol with one container path. (Skip TS-HLS: needs a separate
+  `mpeg2ts` demuxer; CMAF-HLS avoids it.)
+- **B4 (optional) — PeerTube real-client.** Federated, open API, serves HLS — the
+  "real streaming service" story without a fortress: browse a PeerTube instance → play
+  its HLS. Same engine.
 
 ---
 
 ## Done when
 1. A Jellyfin DirectPlay library item plays on-screen through the guest client + host
    GStreamer decoder, A/V in sync, seek works (A1–A4).
-2. A YouTube video plays via Invidious — muxed first, then adaptive video+audio (B1–B2).
+2. An open **DASH (CMAF)** test stream plays on-screen — separate video+audio, segmented,
+   A/V-synced, with a mid-stream bitrate switch (B1–B2); **HLS** proven with the same
+   fMP4 demuxer (B3). No infrastructure, no Google. (YouTube parked — server-assisted only.)
 3. The upstream `wandr:video` proposal is drafted with these two as the "real consumers"
    that justify the playback contract (opaque `decoded-frame` + `present(at-ns)` +
    `flush`/`reset` + `timestamp-us`). → closes the last of task 117 M2.
