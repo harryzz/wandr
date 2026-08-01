@@ -183,6 +183,18 @@ manifest parsing + segment-fetch/adaptive logic.
   "real streaming service" story without a fortress: browse a PeerTube instance → play
   its HLS. Same engine.
 
+### Verified test streams (checked live 2026-08-01 — clear/no-DRM, CMAF/fMP4, H.264+AAC)
+All HTTPS (wandr-reqwest/wasi:tls, trusted CDN roots), HTTP-Range-capable, multi-bitrate,
+separate A/V — exactly the adaptive path. Codecs avc1 (host `wandr:video`) + mp4a
+(`symphonia`), already shipped.
+- **⭐ Unified Streaming — Tears of Steel** (one asset serves BOTH DASH + HLS → covers B1 & B3):
+  - DASH: `https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.mpd`
+  - HLS:  `https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8`
+- **DASH-IF Big Buck Bunny** (11 Representations → ideal for B2 bitrate switching):
+  `https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd`
+- **Axinom CMAF clear 1080p H.264** (11 reps): `https://media.axprod.net/TestVectors/Cmaf/clear_1080p_h264/manifest.mpd`
+- Catalogs for more: DASH-IF reference player list, Unified Streaming demos, Axinom test vectors.
+
 ---
 
 ## Done when
