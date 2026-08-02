@@ -40,3 +40,15 @@ pub async fn fetch_range(client: &Client, media_url: &str, start: u64, end: Opti
     let bytes = resp.bytes().await.map_err(|e| format!("range body: {e}"))?.to_vec();
     Ok(Range { bytes, total_len })
 }
+
+/// GET a whole `url` → its bytes. Used by the DASH per-segment streaming demux
+/// (`Fmp4Source`/`SegStream`) to fetch one CMAF media segment at a time.
+pub async fn fetch_url(client: &Client, url: &str) -> Result<Vec<u8>, String> {
+    let u = Url::parse(url).map_err(|e| format!("bad url: {e}"))?;
+    let resp = client.get(u).send().await.map_err(|e| format!("fetch: {e}"))?;
+    let status = resp.status();
+    if status != StatusCode::OK && status != StatusCode::PARTIAL_CONTENT {
+        return Err(format!("fetch: unexpected status {status}"));
+    }
+    Ok(resp.bytes().await.map_err(|e| format!("body: {e}"))?.to_vec())
+}

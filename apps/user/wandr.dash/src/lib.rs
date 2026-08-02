@@ -44,7 +44,7 @@ use std::cell::RefCell;
 /// adaptive path). Verified live 2026-08-01 (see tasks/119-…-real-client-proof.md).
 /// The SAME asset also serves HLS (`…/.m3u8`) for B3.
 const DEFAULT_MPD: &str =
-    "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.mpd";
+    "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd";
 
 /// Where the client is in the fetch-manifest → resolve → play lifecycle. The
 /// render loop reads this to decide what to draw; the async engine advances it.
@@ -110,24 +110,32 @@ fn build_client() -> Option<reqwest::Client> {
         .ok()
 }
 
-/// Download-then-play first cut: fetch a BOUNDED prefix of segments so playback
-/// starts quickly and memory stays bounded (a full movie is streamed in a later
-/// pass). ~40 × ~4 s ≈ 160 s of A/V — enough to prove sustained, synced playback.
-const SEG_LIMIT: usize = 30;
+/// Safety cap on how many segments we ENUMERATE from the manifest (URLs are cheap
+/// strings; the engine fetches them lazily one at a time, so this just bounds a
+/// pathological manifest — well above a full VOD's segment count).
+const SEG_LIMIT: usize = 100_000;
 
-/// A resolved Representation: the absolute init-segment URL + ordered media URLs.
+/// A resolved Representation: the absolute init-segment URL, ordered media URLs, and
+/// each media segment's absolute start time (µs) — used by the streaming demux to
+/// map a seek target to the segment covering it.
 struct RepPlan {
     init: String,
     segs: Vec<String>,
+    starts_us: Vec<i64>,
 }
 
-/// $Template$ substitution (DASH SegmentTemplate identifiers we use).
-fn subst(tmpl: &str, rep_id: &str, bw: u64, time: Option<u64>) -> String {
+/// $Template$ substitution (DASH SegmentTemplate identifiers we use): the two
+/// media-addressing modes are `$Time$` (with SegmentTimeline) and `$Number$` (with
+/// a fixed `@duration` + `@startNumber`).
+fn subst(tmpl: &str, rep_id: &str, bw: u64, time: Option<u64>, number: Option<u64>) -> String {
     let mut s = tmpl
         .replace("$RepresentationID$", rep_id)
         .replace("$Bandwidth$", &bw.to_string());
     if let Some(t) = time {
         s = s.replace("$Time$", &t.to_string());
+    }
+    if let Some(n) = number {
+        s = s.replace("$Number$", &n.to_string());
     }
     s
 }
@@ -153,27 +161,57 @@ fn timeline_times(tl: &dash_mpd::SegmentTimeline, limit: usize) -> Vec<u64> {
     out
 }
 
-/// Resolve one Representation's init + media segment URLs against `base`.
+/// Resolve one Representation's init + media segment URLs against `base`, plus each
+/// segment's absolute start time (µs). Handles both DASH addressing modes:
+/// `$Time$` (SegmentTimeline) and `$Number$` (fixed `@duration` + `@startNumber`,
+/// segment count derived from the presentation duration).
 fn resolve_rep(
     base: &url::Url,
     tmpl: &dash_mpd::SegmentTemplate,
     rep_id: &str,
     bw: u64,
     limit: usize,
+    total_dur_us: i64,
 ) -> Option<RepPlan> {
     let init_t = tmpl.initialization.as_ref()?;
-    let init = base.join(&subst(init_t, rep_id, bw, None)).ok()?.to_string();
+    let init = base.join(&subst(init_t, rep_id, bw, None, None)).ok()?.to_string();
     let media_t = tmpl.media.as_ref()?;
-    let times = tmpl
-        .SegmentTimeline
-        .as_ref()
-        .map(|tl| timeline_times(tl, limit))
-        .unwrap_or_default();
-    let segs = times
-        .iter()
-        .filter_map(|&t| base.join(&subst(media_t, rep_id, bw, Some(t))).ok().map(|u| u.to_string()))
-        .collect();
-    Some(RepPlan { init, segs })
+    let timescale = tmpl.timescale.unwrap_or(1).max(1);
+    let mut segs = Vec::new();
+    let mut starts_us = Vec::new();
+
+    if let Some(tl) = &tmpl.SegmentTimeline {
+        // $Time$ mode: each SegmentTimeline entry's cumulative `t`.
+        for t in timeline_times(tl, limit) {
+            if let Ok(u) = base.join(&subst(media_t, rep_id, bw, Some(t), None)) {
+                segs.push(u.to_string());
+                starts_us.push((t as i128 * 1_000_000 / timescale as i128) as i64);
+            }
+        }
+    } else if let Some(dur) = tmpl.duration.filter(|d| *d > 0.0) {
+        // $Number$ mode: fixed-duration segments, count from the presentation length.
+        let start_number = tmpl.startNumber.unwrap_or(1);
+        let seg_dur_us = (dur * 1_000_000.0 / timescale as f64) as i64;
+        let count = if seg_dur_us > 0 && total_dur_us > 0 {
+            (((total_dur_us + seg_dur_us - 1) / seg_dur_us) as usize).min(limit)
+        } else {
+            0
+        };
+        for n in 0..count {
+            let number = start_number + n as u64;
+            if let Ok(u) = base.join(&subst(media_t, rep_id, bw, None, Some(number))) {
+                segs.push(u.to_string());
+                starts_us.push(n as i64 * seg_dur_us);
+            }
+        }
+    } else {
+        return None; // no SegmentTimeline and no @duration — unsupported addressing
+    }
+
+    if segs.is_empty() {
+        return None;
+    }
+    Some(RepPlan { init, segs, starts_us })
 }
 
 /// Pick an AdaptationSet of `kind` ("video"/"audio") and its LOWEST-bandwidth
@@ -198,28 +236,9 @@ async fn fetch_bytes(client: &reqwest::Client, url_str: &str) -> Option<Vec<u8>>
     Some(resp.bytes().await.ok()?.to_vec())
 }
 
-/// Download init + all planned media segments, concatenated into one fragmented-MP4
-/// byte stream (the shape `oxideav-mp4` demuxes). Stops on the first fetch error.
-async fn download(client: &reqwest::Client, plan: &RepPlan, what: &str) -> Option<Vec<u8>> {
-    let mut buf = fetch_bytes(client, &plan.init).await?;
-    for (i, s) in plan.segs.iter().enumerate() {
-        match fetch_bytes(client, s).await {
-            Some(b) => buf.extend_from_slice(&b),
-            None => {
-                log(format!("{what}: seg {i} fetch failed — stopping at {} segs", i));
-                break;
-            }
-        }
-        if i % 10 == 9 {
-            log(format!("{what}: {}/{} segs, {} KB", i + 1, plan.segs.len(), buf.len() / 1024));
-        }
-    }
-    Some(buf)
-}
-
-/// bg-tick driver (spawned once): fetch + parse the MPD, resolve a low video +
-/// audio Representation, download a bounded prefix of segments, and hand the two
-/// concatenated fragmented-MP4 buffers to the engine (`Demux::Fmp4`).
+/// bg-tick driver (spawned once): fetch + parse the MPD, resolve a video + audio
+/// Representation, fetch ONLY each rep's init segment, and hand the ordered media
+/// segment URLs to the engine — which streams them one at a time (`Demux::Fmp4`).
 async fn driver() {
     let url = ENGINE.with(|e| {
         let mut e = e.borrow_mut();
@@ -265,34 +284,45 @@ async fn driver() {
         if let Ok(j) = base.join(&b.base) { base = j; }
     }
 
+    let dur_us = mpd.mediaPresentationDuration.map(|d| d.as_micros() as i64).unwrap_or(0);
+
     // Video is required; audio is best-effort.
     let Some((v_tmpl, v_id, v_bw)) = pick(period, "video") else {
         log("FAILED: no video adaptation");
         return set_phase(Phase::Ended);
     };
-    let Some(vplan) = resolve_rep(&base, v_tmpl, &v_id, v_bw, SEG_LIMIT) else {
+    let Some(vplan) = resolve_rep(&base, v_tmpl, &v_id, v_bw, SEG_LIMIT, dur_us) else {
         log("FAILED: video SegmentTemplate/Timeline missing");
         return set_phase(Phase::Ended);
     };
     let aplan = pick(period, "audio")
-        .and_then(|(t, id, bw)| resolve_rep(&base, t, &id, bw, SEG_LIMIT));
+        .and_then(|(t, id, bw)| resolve_rep(&base, t, &id, bw, SEG_LIMIT, dur_us));
 
-    log(format!("video rep {v_id} ({} segs); audio {}", vplan.segs.len(),
+    log(format!("video rep {v_id} ({} segs, streaming); audio {}", vplan.segs.len(),
         aplan.as_ref().map(|p| format!("{} segs", p.segs.len())).unwrap_or_else(|| "none".into())));
 
-    let Some(vbuf) = download(&client, &vplan, "video").await else {
-        log("FAILED: video download");
+    // Fetch ONLY the init segments (config); media segments stream on demand.
+    let Some(video_init) = fetch_bytes(&client, &vplan.init).await else {
+        log("FAILED: video init fetch");
         return set_phase(Phase::Ended);
     };
-    let abuf = match &aplan {
-        Some(ap) => download(&client, ap, "audio").await,
+    let audio_arg = match &aplan {
+        Some(ap) => match fetch_bytes(&client, &ap.init).await {
+            Some(ainit) => Some((ainit, ap.segs.clone(), ap.starts_us.clone())),
+            None => {
+                log("audio: init fetch failed — video only");
+                None
+            }
+        },
         None => None,
     };
 
-    let dur_us = mpd.mediaPresentationDuration.map(|d| d.as_micros() as i64).unwrap_or(0);
     let surface = engine::CONTROLS.with(|c| c.borrow().surface);
-    log(format!("opening: video {} KB, audio {} KB", vbuf.len() / 1024, abuf.as_ref().map(|b| b.len() / 1024).unwrap_or(0)));
-    match engine::open_fmp4(vbuf, abuf, "Tears of Steel".to_string(), dur_us, surface) {
+    log(format!("opening (streaming): video init {} KB, {} media segs", video_init.len() / 1024, vplan.segs.len()));
+    match engine::open_fmp4_streaming(
+        video_init, vplan.segs, vplan.starts_us, audio_arg, client,
+        "Big Buck Bunny".to_string(), dur_us, surface,
+    ) {
         Ok(()) => {
             // Reset controls for a fresh stream (mirrors jellyfin's on_stream_started).
             engine::CONTROLS.with(|c| {
@@ -303,7 +333,7 @@ async fn driver() {
             set_phase(Phase::Playing);
         }
         Err(e) => {
-            log(format!("FAILED: open_fmp4: {e}"));
+            log(format!("FAILED: open_fmp4_streaming: {e}"));
             set_phase(Phase::Ended);
         }
     }

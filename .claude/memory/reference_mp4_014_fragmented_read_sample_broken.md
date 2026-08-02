@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: reference
   originSessionId: c6bfd2e3-58ed-44e9-8de8-85655ad45867
-  modified: 2026-08-01T18:51:07.428Z
+  modified: 2026-08-02T12:27:26.038Z
 ---
 
 **`mp4` crate 0.14 CANNOT read fragmented/CMAF (DASH/HLS) samples** — verified by
@@ -60,7 +60,21 @@ of `init + seg0 + seg1 + seg2` (each media segment = `styp`+`moof`+`mdat`)
 continuously — 288 video + 563 audio packets, monotonic PTS spanning 12.0s across
 all 3 segment boundaries. So `open_fmp4`'s download-then-play (concat all rep
 segments into one Cursor, one demuxer) is sound. WIRED: `wandr-media-engine`
-`Demux::Fmp4` + `open_fmp4` (two demuxers, video+audio); `apps/user/wandr.dash`
-driver (dash-mpd parse → resolve `$RepresentationID$`/`$Time$` SegmentTimeline →
-download bounded prefix). All build green; on-screen playback pending a desktop
-play-test.
+`Demux::Fmp4` + `apps/user/wandr.dash` (dash-mpd parse → resolve segment URLs →
+engine). Verified playing on desktop (WSLg), video+audio+seek.
+
+**STREAMING (per-segment) — the design forced by oxideav's open():**
+`oxideav_mp4::demux::open()` WALKS THE WHOLE INPUT TO EOF (`while let Some(hdr) =
+read_box_header(...)`) to index every fragment, so you CANNOT hand it a lazy
+"virtual concat" reader and expect streaming — it would fetch everything up front.
+Instead `Demux::Fmp4` holds a `SegStream` per rep that opens a FRESH demuxer per
+`init + ONE media segment` (each segment is a keyframe-aligned, self-contained
+fragmented file; PTS is ABSOLUTE from its `tfdt` — verified: init+seg1 alone →
+first pts = the segment's start, not 0). Fetch is blocking (`wit_bindgen …
+block_on(net::fetch_url)`) — legal because fill_queues runs in the async bg-tick
+(same as the MP4/MKV Range reader). Seek = jump `SegStream.idx` to the segment
+covering the target (segment-granular, lands on a keyframe). Result: ~1 s startup
+(vs ~90 s download-then-play), bounded memory (init + 1 segment), fetch-on-demand.
+DASH addressing: `apps/user/wandr.dash` handles BOTH `$Time$` (SegmentTimeline) and
+`$Number$` (fixed `@duration`+`@startNumber`) modes. Default stream = DASH-IF Big
+Buck Bunny (dash.akamaized.net); unified-streaming rate-limits after heavy use.

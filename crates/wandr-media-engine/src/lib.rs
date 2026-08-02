@@ -165,70 +165,137 @@ pub enum Demux {
     /// It handles all the container detail (lacing, block groups, Cues seek) that a
     /// hand-rolled parser misses. Boxed because MatroskaFile is large.
     Mkv(Box<MkvSource>),
-    /// DASH/HLS fragmented MP4 (CMAF): TWO oxideav-mp4 demuxers, one per DASH
-    /// Representation (video-only + audio-only segment streams are SEPARATE), each
-    /// over an in-memory Cursor of concat(init, media segments). The `mp4` crate
-    /// can't read fragments (broken sample offsets) — oxideav-mp4's next_packet is
-    /// correct + streaming. Both tracks feed the same VFrame/AFrame queues.
+    /// DASH/HLS fragmented MP4 (CMAF): STREAMING per-segment demux. Video and audio
+    /// arrive as SEPARATE segment streams (each a DASH Representation), so this holds
+    /// two independent `SegStream`s whose packets merge into the frame queues. Each
+    /// fetches ONE CMAF media segment at a time (init + segment = a tiny self-
+    /// contained fragmented file oxideav-mp4 opens); bounded memory, fast startup.
+    /// (The `mp4` crate can't read fragments at all — broken sample offsets.)
     Fmp4(Box<Fmp4Source>),
 }
 
-/// A DASH/CMAF fragmented-MP4 demux session — one oxideav demuxer per rep. Video
-/// and audio arrive as SEPARATE segment streams (unlike MP4/MKV's single file), so
-/// this holds two independent demuxers whose packets merge into the frame queues.
+/// One DASH Representation streamed segment-by-segment. `oxideav_mp4::demux::open`
+/// walks the whole input to EOF to index fragments, so we DON'T hand it the entire
+/// stream — instead we open a fresh demuxer per `init + segment` (each segment is a
+/// keyframe-aligned, self-contained fragmented file whose PTS is ABSOLUTE from its
+/// `tfdt`, verified in repros/fmp4-probe). Fetches are blocking (`block_on`), legal
+/// because fill_queues runs in the async bg-tick (same as the MP4/MKV Range reader).
+struct SegStream {
+    /// ftyp+moov init segment — the demux prefix for every media segment.
+    init: Vec<u8>,
+    /// Media segment URLs, in presentation order.
+    urls: Vec<String>,
+    /// Each segment's absolute start time (µs) — the seek target → segment map.
+    starts_us: Vec<i64>,
+    client: reqwest::Client,
+    /// Next segment to fetch+open.
+    idx: usize,
+    /// Demuxer over the current `init + segment` (None until the next is opened).
+    dmx: Option<Box<dyn oxideav_core::Demuxer>>,
+    /// time_base (num,den) for pts_us = pts * num * 1e6 / den.
+    num: i64,
+    den: i64,
+    /// All segments consumed (or a fatal fetch/open error).
+    done: bool,
+}
+
+impl SegStream {
+    fn ticks_to_us(pts: i64, num: i64, den: i64) -> i64 {
+        if den == 0 { 0 } else { (pts as i128 * num as i128 * 1_000_000 / den as i128) as i64 }
+    }
+    /// Fetch + open the next media segment (`init + urls[idx]`). False = no more / error.
+    fn open_next(&mut self) -> bool {
+        if self.idx >= self.urls.len() {
+            self.done = true;
+            return false;
+        }
+        let url = self.urls[self.idx].clone();
+        let client = self.client.clone();
+        let seg = match wit_bindgen::rt::async_support::block_on(async move {
+            net::fetch_url(&client, &url).await
+        }) {
+            Ok(b) => b,
+            Err(e) => {
+                log(format!("fmp4: segment {} fetch: {e}", self.idx));
+                self.done = true;
+                return false;
+            }
+        };
+        let mut buf = Vec::with_capacity(self.init.len() + seg.len());
+        buf.extend_from_slice(&self.init);
+        buf.extend_from_slice(&seg);
+        match oxideav_mp4::demux::open(Box::new(Cursor::new(buf)), &NullCodecResolver) {
+            Ok(d) => {
+                self.dmx = Some(d);
+                self.idx += 1;
+                true
+            }
+            Err(e) => {
+                log(format!("fmp4: segment {} open: {e:?}", self.idx));
+                self.done = true;
+                false
+            }
+        }
+    }
+    /// Next packet → (pts_us, keyframe, bytes). None at end of stream. Rolls to the
+    /// next segment on the current demuxer's EOF.
+    fn next_packet(&mut self) -> Option<(i64, bool, Vec<u8>)> {
+        loop {
+            if self.dmx.is_none() && !self.open_next() {
+                return None;
+            }
+            match self.dmx.as_mut().unwrap().next_packet() {
+                Ok(pkt) => {
+                    let pts = pkt.pts.or(pkt.dts).unwrap_or(0);
+                    return Some((Self::ticks_to_us(pts, self.num, self.den), pkt.flags.keyframe, pkt.data));
+                }
+                Err(_) => self.dmx = None, // segment EOF → open the next one
+            }
+        }
+    }
+    /// Reposition to the segment covering `target_us` (segments are keyframe-aligned,
+    /// so this lands on a keyframe). Returns the landed segment's start time (µs).
+    fn seek(&mut self, target_us: i64) -> i64 {
+        let seg = self.starts_us.iter().rposition(|&s| s <= target_us).unwrap_or(0);
+        self.idx = seg;
+        self.dmx = None;
+        self.done = false;
+        self.starts_us.get(seg).copied().unwrap_or(0)
+    }
+}
+
+/// A DASH/CMAF session: a video `SegStream` + an optional audio one, streamed
+/// per-segment. Presents the same next_video/next_audio/seek surface `fill_queues`
+/// and `do_seek` use for the other containers.
 pub struct Fmp4Source {
-    video: Box<dyn oxideav_core::Demuxer>,
-    audio: Option<Box<dyn oxideav_core::Demuxer>>,
-    /// time_base (num, den) per track — pts_us = pts * num * 1e6 / den.
-    v_num: i64,
-    v_den: i64,
-    a_num: i64,
-    a_den: i64,
-    video_done: bool,
-    audio_done: bool,
+    video: SegStream,
+    audio: Option<SegStream>,
 }
 
 impl Fmp4Source {
     fn has_audio(&self) -> bool {
         self.audio.is_some()
     }
-    fn ticks_to_us(pts: i64, num: i64, den: i64) -> i64 {
-        if den == 0 { 0 } else { (pts as i128 * num as i128 * 1_000_000 / den as i128) as i64 }
+    fn video_done(&self) -> bool {
+        self.video.done
     }
-    /// Pull the next video packet → (pts_us, keyframe, raw AVCC bytes). None at EOF.
+    fn audio_done(&self) -> bool {
+        self.audio.as_ref().map(|a| a.done).unwrap_or(true)
+    }
     fn next_video(&mut self) -> Option<(i64, bool, Vec<u8>)> {
-        match self.video.next_packet() {
-            Ok(pkt) => {
-                let pts = pkt.pts.or(pkt.dts).unwrap_or(0);
-                Some((Self::ticks_to_us(pts, self.v_num, self.v_den), pkt.flags.keyframe, pkt.data))
-            }
-            Err(_) => { self.video_done = true; None }
-        }
+        self.video.next_packet()
     }
-    /// Pull the next audio packet → (pts_us, raw AAC bytes). None at EOF.
     fn next_audio(&mut self) -> Option<(i64, Vec<u8>)> {
-        let Some(a) = self.audio.as_mut() else { self.audio_done = true; return None };
-        match a.next_packet() {
-            Ok(pkt) => {
-                let pts = pkt.pts.or(pkt.dts).unwrap_or(0);
-                Some((Self::ticks_to_us(pts, self.a_num, self.a_den), pkt.data))
-            }
-            Err(_) => { self.audio_done = true; None }
-        }
+        self.audio.as_mut()?.next_packet().map(|(pts, _kf, data)| (pts, data))
     }
-    /// Seek both demuxers to `target_us` (nearest keyframe at/before). Best-effort:
-    /// oxideav uses tfra/sidx with a fragment-bounded fallback.
-    fn seek(&mut self, target_us: i64) {
-        let us_to_ticks = |num: i64, den: i64| -> i64 {
-            if num == 0 { 0 } else { (target_us as i128 * den as i128 / (num as i128 * 1_000_000)) as i64 }
-        };
-        let _ = self.video.seek_to(0, us_to_ticks(self.v_num, self.v_den));
-        self.video_done = false;
+    /// Seek both streams to the segment covering `target_us`; returns the landed
+    /// (video-segment-start) time, which is ≤ target since segments are ~seconds long.
+    fn seek(&mut self, target_us: i64) -> i64 {
+        let landed = self.video.seek(target_us);
         if let Some(a) = self.audio.as_mut() {
-            let a_ticks = us_to_ticks(self.a_num, self.a_den);
-            let _ = a.seek_to(0, a_ticks);
-            self.audio_done = false;
+            a.seek(target_us);
         }
+        landed
     }
 }
 
@@ -1154,27 +1221,29 @@ pub fn open_mkv_sync(url: String, total_len: u64, title: String, duration_us: i6
     }
 }
 
-/// Open a DASH/CMAF stream from already-downloaded rep buffers (download-then-play
-/// first cut). `video_buf` = concat(video-rep init segment, all its media segments);
-/// `audio_buf` = the same for the audio rep (None = video-only). Each rep is its own
-/// fragmented-MP4 stream, so it gets its own oxideav-mp4 demuxer over an in-memory
-/// Cursor. Codec config comes from each init segment's StreamInfo extradata (avcC →
-/// ps_prefix/nal_len; ASC → AAC decoder). Builds Demux::Fmp4 + installs the player.
-/// No HttpRangeReader (bytes are in memory), so the RollingBuffer/prefetch path is
-/// idle and demux_cursor stays u64::MAX. Framing is identical to the MP4 path
-/// (length-prefixed AVCC → Annex-B via `video_annexb`).
-pub fn open_fmp4(
-    video_buf: Vec<u8>,
-    audio_buf: Option<Vec<u8>>,
+/// Open a DASH/CMAF stream and PLAY IT STREAMING — fetch one segment at a time as
+/// playback advances (bounded memory, fast startup), instead of downloading the
+/// whole rep first. Inputs per rep: the init segment bytes + the ordered media
+/// segment URLs + each segment's absolute start time (µs, for seek), plus a shared
+/// HTTP client. Codec config is read once from the init segment (avcC → ps_prefix/
+/// nal_len; ASC → AAC decoder); each `SegStream` then fetches+opens segments on
+/// demand (oxideav-mp4 walks a whole input to EOF, so we feed it ONE init+segment
+/// at a time). Framing is identical to the MP4 path (AVCC → Annex-B via
+/// `video_annexb`); demux_cursor stays u64::MAX (the RollingBuffer path is idle).
+pub fn open_fmp4_streaming(
+    video_init: Vec<u8>,
+    video_urls: Vec<String>,
+    video_starts_us: Vec<i64>,
+    audio: Option<(Vec<u8>, Vec<String>, Vec<i64>)>,
+    client: reqwest::Client,
     title: String,
     duration_us: i64,
     surface: (u32, u32),
 ) -> Result<(), String> {
-    // ---- video rep ----
-    let vinput: Box<dyn oxideav_core::ReadSeek> = Box::new(Cursor::new(video_buf));
-    let video = oxideav_mp4::demux::open(vinput, &NullCodecResolver)
-        .map_err(|e| format!("fmp4: open video: {e:?}"))?;
-    let vstream = video
+    // ---- video config from the init segment (ftyp+moov, no fragments) ----
+    let vdmx = oxideav_mp4::demux::open(Box::new(Cursor::new(video_init.clone())), &NullCodecResolver)
+        .map_err(|e| format!("fmp4: open video init: {e:?}"))?;
+    let vstream = vdmx
         .streams()
         .iter()
         .find(|s| s.params.media_type == MediaType::Video)
@@ -1193,16 +1262,25 @@ pub fn open_fmp4(
     };
     let (width, height) = (vp.width.unwrap_or(0), vp.height.unwrap_or(0));
     let (v_num, v_den) = (vstream.time_base.num(), vstream.time_base.den());
+    drop(vdmx);
 
-    // ---- audio rep (optional) ----
-    let mut a_num = 1i64;
-    let mut a_den = OUT_RATE as i64;
-    let (audio, audio_dec, has_audio, resampler) = match audio_buf {
-        Some(abuf) => {
-            let ainput: Box<dyn oxideav_core::ReadSeek> = Box::new(Cursor::new(abuf));
-            match oxideav_mp4::demux::open(ainput, &NullCodecResolver) {
+    let video = SegStream {
+        init: video_init,
+        urls: video_urls,
+        starts_us: video_starts_us,
+        client: client.clone(),
+        idx: 0,
+        dmx: None,
+        num: v_num,
+        den: v_den,
+        done: false,
+    };
+
+    // ---- audio config from its init segment (optional) ----
+    let (audio, audio_dec, has_audio, resampler) = match audio {
+        Some((ainit, aurls, astarts)) => {
+            match oxideav_mp4::demux::open(Box::new(Cursor::new(ainit.clone())), &NullCodecResolver) {
                 Ok(admx) => {
-                    // Clone the StreamInfo so the borrow on `admx` ends before we move it.
                     let astream = admx
                         .streams()
                         .iter()
@@ -1211,14 +1289,17 @@ pub fn open_fmp4(
                     match astream {
                         Some(a) => {
                             let ap = &a.params;
-                            a_num = a.time_base.num();
-                            a_den = a.time_base.den();
+                            let (a_num, a_den) = (a.time_base.num(), a.time_base.den());
                             let rate = ap.sample_rate.unwrap_or(OUT_RATE);
-                            // CMAF AAC config = the ASC in extradata (like MP4 esds).
                             let (dec, ok, resamp) = setup_aac_audio(&ap.extradata, rate);
+                            drop(admx);
                             if ok {
                                 log(format!("audio: aac {}ch @ {} Hz", ap.channels.unwrap_or(2), rate));
-                                (Some(admx), dec, true, resamp)
+                                let ss = SegStream {
+                                    init: ainit, urls: aurls, starts_us: astarts, client: client.clone(),
+                                    idx: 0, dmx: None, num: a_num, den: a_den, done: false,
+                                };
+                                (Some(ss), dec, true, resamp)
                             } else {
                                 log("audio: aac setup failed — video only".to_string());
                                 (None, None, false, None)
@@ -1231,7 +1312,7 @@ pub fn open_fmp4(
                     }
                 }
                 Err(e) => {
-                    log(format!("audio: open failed ({e:?}) — video only"));
+                    log(format!("audio: init open failed ({e:?}) — video only"));
                     (None, None, false, None)
                 }
             }
@@ -1239,23 +1320,14 @@ pub fn open_fmp4(
         None => (None, None, false, None),
     };
 
-    let src = Box::new(Fmp4Source {
-        video,
-        audio,
-        v_num,
-        v_den,
-        a_num,
-        a_den,
-        video_done: false,
-        audio_done: false,
-    });
+    let src = Box::new(Fmp4Source { video, audio });
 
     match install_player(
         "dash".to_string(), 0, Demux::Fmp4(src), ps_prefix, nal_len, true, codec, width, height,
         surface, audio_dec, has_audio, resampler, title.clone(), duration_us, 0, None, 0,
     ) {
         Ok(impl_name) => {
-            log(format!("streaming \"{title}\" (dash/cmaf): {width}x{height}, decoder={impl_name}"));
+            log(format!("streaming \"{title}\" (dash/cmaf, per-segment): {width}x{height}, decoder={impl_name}"));
             Ok(())
         }
         Err(e) => {
@@ -1393,10 +1465,7 @@ pub fn do_seek(p: &mut StreamPlayer, target_us: i64) -> i64 {
             }
             target_us
         }
-        Demux::Fmp4(src) => {
-            src.seek(target_us);
-            target_us
-        }
+        Demux::Fmp4(src) => src.seek(target_us),
     };
     // Discontinuity reset: drop queued frames + buffered PCM, the audio ring, and
     // the decoder's reorder state; clear the clock anchors so the pump re-anchors
@@ -1543,8 +1612,8 @@ pub fn fill_queues(p: &mut StreamPlayer) {
             // Each yields already-length-prefixed AVCC (video) / raw AAC (audio),
             // framed exactly like the MP4 path (video_annexb → Annex-B).
             Demux::Fmp4(src) => {
-                let v_left = !src.video_done && !v_full && last_v <= limit;
-                let a_left = src.has_audio() && !src.audio_done && !a_full && last_a <= limit;
+                let v_left = !src.video_done() && !v_full && last_v <= limit;
+                let a_left = src.has_audio() && !src.audio_done() && !a_full && last_a <= limit;
                 let take_v = v_left && (!a_left || last_v <= last_a);
                 if take_v {
                     match src.next_video() {
@@ -1568,7 +1637,7 @@ pub fn fill_queues(p: &mut StreamPlayer) {
                         None => Prod::Skip,
                     }
                 } else {
-                    if src.video_done && (!src.has_audio() || src.audio_done) {
+                    if src.video_done() && (!src.has_audio() || src.audio_done()) {
                         p.demux_done = true;
                     }
                     Prod::Stop

@@ -144,6 +144,14 @@ fn main() {
     let v = probe("VIDEO (avc1, 224x100) × 3 segs", &vi, &[&v0, &v1, &v2]);
     let a = probe("AUDIO (mp4a AAC-LC, 48k stereo) × 3 segs", &ai, &[&a0, &a1, &a2]);
 
+    // PER-SEGMENT test: open init + ONLY the 2nd media segment ($Time$=2400).
+    // If oxideav derives PTS from the segment's tfdt (base_media_decode_time), the
+    // first packet's pts should be ~2400 ticks (video, tb 1/600) — i.e. ABSOLUTE,
+    // so per-segment streaming preserves the timeline. If it restarts at 0, we'd
+    // have to add the segment start time ourselves.
+    println!("\n##### PER-SEGMENT PTS TEST: init + video_seg1 ($Time$=2400) ALONE #####");
+    probe("VIDEO seg1 ONLY (expect first pts≈2400)", &vi, &[&v1]);
+
     println!("\n================ RESULT ================");
     println!("video: {}", if v { "PASS" } else { "FAIL" });
     println!("audio: {}", if a { "PASS" } else { "FAIL" });
