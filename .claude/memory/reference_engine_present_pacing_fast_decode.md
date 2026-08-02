@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: reference
   originSessionId: c6bfd2e3-58ed-44e9-8de8-85655ad45867
-  modified: 2026-08-02T06:57:15.729Z
+  modified: 2026-08-02T11:43:32.294Z
 ---
 
 **The `wandr-media-engine` pump (`pump_stream`) needs a TIME-based submit gate, not
@@ -28,8 +28,17 @@ SUBMIT_LEAD_US { break; }` before `submit_timed`. Caps how far ahead of the
 playback clock the decoder is fed, so present schedules ≤2 s of future frames and
 the host paces them at their `at_ns` deadlines. `SUBMIT_LEAD_US` ≫ `DECODE_AHEAD`
 (20) frames' worth, so the reorder cushion is still satisfiable. Realtime-decode
-video never hits the cap → jellyfin pacing unchanged (verified builds green;
-device re-verify pending). Diagnosed live on desktop (WSLg) via a pump heartbeat
+video never hits the cap → jellyfin pacing unchanged.
+
+‼️ **The time-gate MUST be guarded by `clock_anchored = p.first_pts_us.is_some()
+|| p.audio_pts_known`** — apply the `pts > media_now + LEAD` break ONLY when the
+clock is anchored. At stream start AND right after a seek, `media_now` reads 0
+until the first frame presents and seeds `first_pts_us` (do_seek clears it), but
+the frames are at the seek target (e.g. 1400 s) → an unguarded gate rejects every
+frame → nothing decodes → the clock never anchors → **seek DEADLOCKS** (video
+freezes after `engine: seek → Xs`). Stream start only worked because PTS starts at
+0 = media_now 0. Fix verified: jellyfin video+audio+seek/FF/REW/resume all work on
+desktop (WSLg) on the extracted engine. Diagnosed live on desktop (WSLg) via a pump heartbeat
 logging `presented`/`media_now`/`submit pts`.
 
 Desktop gotcha (unrelated but same session): the host `video_desktop` counter

@@ -1739,10 +1739,18 @@ pub fn pump_stream(nanos: u64) {
         //     movie in seconds. Large video (jellyfin) is decode-bound and never hits
         //     this cap, so its pacing is unchanged. SUBMIT_LEAD_US ≫ DECODE_AHEAD
         //     frames' worth, so the reorder cushion is always satisfiable.
+        //   ‼️ The TIME cap applies ONLY once the clock is ANCHORED. At stream start
+        //     and right after a seek, `media_now` reads 0 until the first frame
+        //     presents and seeds `first_pts_us`/the audio-master anchor — but the
+        //     frames are at the seek target (e.g. 1400 s), so gating on `media_now`
+        //     would reject every frame, nothing would decode, the clock would never
+        //     anchor, and seek would DEADLOCK. Until it anchors, submit freely (the
+        //     count cushion still bounds the burst); once anchored, apply the cap.
         const SUBMIT_LEAD_US: i64 = 2_000_000;
+        let clock_anchored = p.first_pts_us.is_some() || p.audio_pts_known;
         while p.submitted < p.presented + DECODE_AHEAD {
             let Some(vf) = p.video_q.front() else { break };
-            if vf.pts_us > media_now + SUBMIT_LEAD_US {
+            if clock_anchored && vf.pts_us > media_now + SUBMIT_LEAD_US {
                 break; // far enough ahead of the clock — let realtime catch up
             }
             let frame = TimedFrame { data: vf.data.clone(), timestamp_us: vf.pts_us, keyframe: vf.keyframe };
