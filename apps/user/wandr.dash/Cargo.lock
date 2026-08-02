@@ -958,10 +958,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "matroska-demuxer"
-version = "0.8.0"
-
-[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1158,6 +1154,13 @@ dependencies = [
  "bytemuck",
  "serde_json",
  "thiserror 2.0.19",
+]
+
+[[package]]
+name = "oxideav-mkv"
+version = "0.0.9"
+dependencies = [
+ "oxideav-core",
 ]
 
 [[package]]
@@ -2206,11 +2209,11 @@ dependencies = [
 name = "wandr-media-engine"
 version = "0.1.0"
 dependencies = [
- "matroska-demuxer",
  "mp4",
  "oxideav-ac3",
  "oxideav-container",
  "oxideav-core",
+ "oxideav-mkv",
  "oxideav-mp4",
  "ropus",
  "symphonia",

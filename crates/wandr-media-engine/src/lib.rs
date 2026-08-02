@@ -37,7 +37,6 @@ use bindings::wasi::canvas::{draw::Canvas, embedding as wembed, layout as wlayou
 use symphonia::core::audio::{Channels, SampleBuffer};
 use symphonia::core::codecs::{CodecParameters, Decoder, DecoderOptions, CODEC_TYPE_AAC};
 use symphonia::core::formats::Packet;
-use matroska_demuxer::TrackType;
 
 // Fragmented-MP4 (DASH/CMAF) demux — see Demux::Fmp4 / open_fmp4. `oxideav_core`'s
 // Demuxer trait methods resolve through the `dyn` type, so no `use` is needed.
@@ -161,7 +160,7 @@ pub enum Demux {
     /// MP4/MOV: the `mp4` crate over a blocking HTTP-Range reader (`read_sample`
     /// fetches through it). Random-access, so we pull whichever track is behind.
     Mp4(Box<Mp4Source>),
-    /// MKV/WebM: the matroska-demuxer library over a blocking HTTP-Range reader.
+    /// MKV/WebM: the oxideav-mkv `Demuxer` over a blocking HTTP-Range reader.
     /// It handles all the container detail (lacing, block groups, Cues seek) that a
     /// hand-rolled parser misses. Boxed because MatroskaFile is large.
     Mkv(Box<MkvSource>),
@@ -403,28 +402,45 @@ pub struct Mp4Source {
     audio_edit_us: i64,
 }
 
-/// One MKV audio track's decode params — kept for all tracks so the audio-track
-/// switch (C2) can rebuild the decoder in-place without re-opening the stream.
-pub struct MkvAudioTrack {
-    track_num: u64,
-    codec_id: String,       // A_AAC / A_OPUS / A_AC3 / A_EAC3 / …
-    codec_private: Vec<u8>, // ASC for AAC
-    sample_rate: u32,
-    channels: u16,
-    label: String,          // language / name for the on-screen readout
+/// A `Send` wrapper over the `Rc`-based `HttpRangeReader`. oxideav's `ReadSeek`
+/// requires `Send`, but wasip2 is single-threaded and the reader never crosses a
+/// thread (the prefetch task shares its `Rc` on the same thread), so this is sound.
+struct SendReader(httprange::HttpRangeReader);
+unsafe impl Send for SendReader {}
+impl std::io::Read for SendReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> { self.0.read(buf) }
+}
+impl std::io::Seek for SendReader {
+    fn seek(&mut self, from: std::io::SeekFrom) -> std::io::Result<u64> { self.0.seek(from) }
 }
 
-/// A live matroska-demuxer session: the demuxer over our blocking Range reader,
-/// a reusable Frame, the routed track numbers, and every audio track (for C2).
+/// One MKV audio stream's decode params — kept for all tracks so the audio-track
+/// switch (C2) can rebuild the decoder in-place without re-opening the stream.
+struct MkvAudioStream {
+    index: u32,              // oxideav stream index
+    codec_id: String,        // "aac" / "opus" / "ac3" / "eac3"
+    extradata: Vec<u8>,      // ASC for AAC
+    sample_rate: u32,
+    channels: u16,
+    num: i64,
+    den: i64,                // time_base
+    label: String,           // language / name for the on-screen readout
+}
+
+/// A live `oxideav-mkv` demux session over the (Send-wrapped) Range reader. Video +
+/// audio arrive interleaved from ONE demuxer (`next_packet`), routed by stream index;
+/// seek is Cues-indexed (SeekHead-jump, no whole-file scan — the git-pinned fix).
 pub struct MkvSource {
-    file: matroska_demuxer::MatroskaFile<httprange::HttpRangeReader>,
-    frame: matroska_demuxer::Frame,
-    video_track: u64,
-    audio_track: u64,
-    /// All audio tracks in container order (index = the cycle position for `a`).
-    audio_tracks: Vec<MkvAudioTrack>,
-    /// Nanoseconds per timestamp tick (Frame.timestamp is in ticks).
-    ts_scale_ns: u64,
+    dmx: Box<dyn oxideav_core::Demuxer>,
+    video_stream: u32,
+    /// Currently-consumed audio stream index (`u32::MAX` = none).
+    audio_stream: u32,
+    v_num: i64,
+    v_den: i64,
+    a_num: i64,
+    a_den: i64,
+    /// All audio streams in container order (index = the cycle position for `a`).
+    audio_streams: Vec<MkvAudioStream>,
 }
 
 pub struct StreamPlayer {
@@ -514,7 +530,7 @@ impl StreamPlayer {
     pub fn prefetch_handle(&self) -> Option<httprange::PrefetchHandle> { self.prefetch.clone() }
     /// Number of switchable audio tracks (MKV) — 1 for single-track / MP4.
     pub fn audio_track_count(&self) -> usize {
-        match &self.demux { Demux::Mkv(src) => src.audio_tracks.len().max(1), _ => 1 }
+        match &self.demux { Demux::Mkv(src) => src.audio_streams.len().max(1), _ => 1 }
     }
 }
 
@@ -720,15 +736,15 @@ pub fn parse_vtt(text: &str) -> Vec<Cue> {
 /// the decoder (codecs may differ) + flush the ring and re-anchor. Video untouched.
 pub fn switch_audio(p: &mut StreamPlayer, pref: usize) {
     let info = match &p.demux {
-        Demux::Mkv(src) => src.audio_tracks.get(pref).map(|t|
-            (t.codec_id.clone(), t.codec_private.clone(), t.sample_rate, t.channels, t.track_num, t.label.clone())),
+        Demux::Mkv(src) => src.audio_streams.get(pref).map(|t|
+            (t.codec_id.clone(), t.extradata.clone(), t.sample_rate, t.channels, t.index, t.num, t.den, t.label.clone())),
         Demux::Mp4(_) => { log("audio: MP4 is single-track (switch is MKV-only for now)"); return; }
         Demux::Fmp4(_) => { log("audio: DASH audio-track switch = re-open a rep (not in-place; TODO)"); return; }
     };
-    let Some((cid, cpriv, sr, ch, track_num, label)) = info else { return };
-    let (dec, ok, resampler) = setup_mkv_audio(&cid, &cpriv, sr, ch);
+    let Some((cid, cpriv, sr, ch, index, num, den, label)) = info else { return };
+    let (dec, ok, resampler) = setup_audio_by_codec(&cid, &cpriv, sr, ch);
     if !ok { log(format!("audio: {label} not decodable — keeping current")); return; }
-    if let Demux::Mkv(src) = &mut p.demux { src.audio_track = track_num; }
+    if let Demux::Mkv(src) = &mut p.demux { src.audio_stream = index; src.a_num = num; src.a_den = den; }
     p.audio_dec = dec;
     p.has_audio = ok;
     p.resampler = resampler;
@@ -943,19 +959,19 @@ fn setup_opus_audio(channels: usize) -> (Option<AudioDec>, bool, Option<LinearRe
     }
 }
 
-/// Build the audio decoder for an MKV audio track by its matroska codec id (C2 —
-/// reused by open + the in-place audio-track switch).
-fn setup_mkv_audio(codec_id: &str, codec_private: &[u8], sr: u32, chans: u16)
+/// Build the audio decoder for an MKV audio stream by its oxideav codec id (reused
+/// by open + the in-place audio-track switch).
+/// Audio decoder for an oxideav-normalized codec id ("aac"/"opus"/"ac3"/"eac3").
+/// `extradata` is the ASC for AAC. (oxideav-mp4 and oxideav-mkv report the same ids.)
+fn setup_audio_by_codec(codec_id: &str, extradata: &[u8], sr: u32, chans: u16)
     -> (Option<AudioDec>, bool, Option<LinearResampler>)
 {
-    if codec_id.starts_with("A_AAC") {
-        setup_aac_audio(codec_private, sr)
-    } else if codec_id == "A_OPUS" {
-        setup_opus_audio(chans as usize)
-    } else if codec_id == "A_AC3" || codec_id == "A_EAC3" {
-        setup_ac3_audio(sr, codec_id == "A_EAC3")
-    } else {
-        (None, false, None)
+    match codec_id {
+        "aac" => setup_aac_audio(extradata, sr),
+        "opus" => setup_opus_audio(chans as usize),
+        "ac3" => setup_ac3_audio(sr, false),
+        "eac3" => setup_ac3_audio(sr, true),
+        _ => (None, false, None),
     }
 }
 
@@ -1032,7 +1048,7 @@ pub fn open_mp4_sync(url: String, total_len: u64, title: String, duration_us: i6
         let h = r.handle();
         (r, h)
     };
-    let mut mp4r = match mp4::Mp4Reader::read_header(reader, total_len) {
+    let mp4r = match mp4::Mp4Reader::read_header(reader, total_len) {
         Ok(r) => r,
         Err(e) => return fail(format!("stream: mp4 header: {e}")),
     };
@@ -1185,9 +1201,10 @@ fn fetch_moov_for_config(url: &str, total_len: u64) -> Option<Vec<u8>> {
     if streaming::top_level_box(&tail, b"moov").is_some() { Some(tail) } else { None }
 }
 
-/// Open an MKV/WebM stream via the matroska-demuxer library. SYNCHRONOUS: the
-/// library pulls bytes through a blocking HTTP-Range reader (block_on), which must
-/// run in a sync context — so this is called from the consumer's bg-tick open path.
+/// Open an MKV/WebM stream via the oxideav-mkv `Demuxer`. SYNCHRONOUS: the demuxer
+/// pulls bytes through a blocking HTTP-Range reader (block_on), which must run in a
+/// sync context — so this is called from the consumer's bg-tick open path. The
+/// SeekHead-directed open reads only headers + Cues (no whole-file scan).
 pub fn open_mkv_sync(url: String, total_len: u64, title: String, duration_us: i64, surface: (u32, u32)) -> Result<(), String> {
     let fail = |msg: String| -> Result<(), String> {
         log(msg.clone());
@@ -1207,73 +1224,72 @@ pub fn open_mkv_sync(url: String, total_len: u64, title: String, duration_us: i6
         let h = r.handle();
         (r, h)
     };
-    let mut file = match matroska_demuxer::MatroskaFile::open(reader) {
-        Ok(f) => f,
+    // oxideav-mkv over the Send-wrapped reader — the wandr fork's `open_streaming`:
+    // header-only open (front + SeekHead-reachable Cues parsed, but NO whole-file
+    // Cluster scan). A cue-less remux over HTTP-Range therefore opens with one small
+    // read instead of a per-Cluster fetch storm; seek then reports Unsupported below.
+    let input: Box<dyn oxideav_core::ReadSeek> = Box::new(SendReader(reader));
+    let dmx = match oxideav_mkv::demux::open_streaming(input, &NullCodecResolver) {
+        Ok(d) => d,
         Err(e) => return fail(format!("stream: mkv open: {e:?}")),
     };
-    let ts_scale_ns = file.info().timestamp_scale().get();
+    let streams: Vec<oxideav_core::StreamInfo> = dmx.streams().to_vec();
 
-    // Pull everything we need out of the (borrowed) track list, then release the
-    // borrow so `file` can move into MkvSource.
-    let (codec_id, codec_private, width, height, video_track_num, default_dur_ns, audio_tracks) = {
-        let tracks = file.tracks();
-        let Some(v) = tracks.iter().find(|t| t.track_type() == TrackType::Video) else {
-            return fail("stream: mkv has no video track".into());
-        };
-        // ALL audio tracks (container order) — C2 cycles them in place.
-        let audio_tracks: Vec<MkvAudioTrack> = tracks.iter()
-            .filter(|t| t.track_type() == TrackType::Audio)
-            .map(|a| MkvAudioTrack {
-                track_num: a.track_number().get(),
-                codec_id: a.codec_id().to_string(),
-                codec_private: a.codec_private().map(|c| c.to_vec()).unwrap_or_default(),
-                sample_rate: a.audio().map(|au| au.sampling_frequency() as u32).unwrap_or(OUT_RATE),
-                channels: a.audio().map(|au| au.channels().get() as u16).unwrap_or(2),
-                label: a.language().or_else(|| a.name()).unwrap_or("und").to_string(),
-            }).collect();
-        (
-            v.codec_id().to_string(),
-            v.codec_private().map(|c| c.to_vec()).unwrap_or_default(),
-            v.video().map(|vv| vv.pixel_width().get() as u32).unwrap_or(0),
-            v.video().map(|vv| vv.pixel_height().get() as u32).unwrap_or(0),
-            v.track_number().get(),
-            v.default_duration().map(|d| d.get()).unwrap_or(0),
-            audio_tracks,
-        )
+    // Video config from the video stream (avcC/hvcC in extradata, like the MP4 path).
+    let Some(vs) = streams.iter().find(|s| s.params.media_type == MediaType::Video) else {
+        return fail("stream: mkv has no video track".into());
     };
-    // Estimate the total frame count from the segment duration and the frame
-    // duration (matroska has no explicit sample count like MP4).
-    let total_video = if default_dur_ns > 0 {
-        (file.info().duration().unwrap_or(0.0) * ts_scale_ns as f64 / default_dur_ns as f64) as usize
-    } else {
-        0
-    };
-
-    let (codec, video_annexb, ps_prefix, nal_len) = match codec_id.as_str() {
-        "V_MPEG4/ISO/AVC" => match mkv::parse_avcc(&codec_private) {
-            Some((p, n)) => (Codec::H264, true, p, n),
+    let vp = &vs.params;
+    let (codec, video_annexb, ps_prefix, nal_len) = match vp.codec_id.as_str() {
+        "h264" | "avc1" => match mkv::parse_avcc(&vp.extradata) {
+            Some((pfx, n)) => (Codec::H264, true, pfx, n),
             None => return fail("stream: mkv avcC parse".into()),
         },
-        "V_MPEGH/ISO/HEVC" => match mkv::parse_hvcc(&codec_private) {
-            Some((p, n)) => (Codec::H265, true, p, n),
+        "hevc" | "h265" => match mkv::parse_hvcc(&vp.extradata) {
+            Some((pfx, n)) => (Codec::H265, true, pfx, n),
             None => return fail("stream: mkv hvcC parse".into()),
         },
-        "V_VP9" => (Codec::Vp9, false, Vec::new(), 0),
-        "V_VP8" => (Codec::Vp8, false, Vec::new(), 0),
-        "V_AV1" => (Codec::Av1, false, Vec::new(), 0),
+        "vp9" => (Codec::Vp9, false, Vec::new(), 0),
+        "vp8" => (Codec::Vp8, false, Vec::new(), 0),
+        "av1" => (Codec::Av1, false, Vec::new(), 0),
         other => return fail(format!("stream: mkv video codec {other} unsupported")),
     };
+    let (width, height) = (vp.width.unwrap_or(0), vp.height.unwrap_or(0));
+    let (v_num, v_den) = (vs.time_base.num(), vs.time_base.den());
+    let video_stream = vs.index;
 
-    // Audio: set up the FIRST track; C2's 'a' key cycles the rest in place.
-    let mut audio_track_num = u64::MAX; // never matches → audio frames skipped
-    let (audio_dec, has_audio, resampler) = match audio_tracks.first() {
+    // All audio streams (container order) — C2's 'a' cycles them in place.
+    let audio_streams: Vec<MkvAudioStream> = streams
+        .iter()
+        .filter(|s| s.params.media_type == MediaType::Audio)
+        .map(|a| MkvAudioStream {
+            index: a.index,
+            codec_id: a.params.codec_id.as_str().to_string(),
+            extradata: a.params.extradata.clone(),
+            sample_rate: a.params.sample_rate.unwrap_or(OUT_RATE),
+            channels: a.params.channels.unwrap_or(2),
+            num: a.time_base.num(),
+            den: a.time_base.den(),
+            label: a.params.language.clone().unwrap_or_else(|| "und".to_string()),
+        })
+        .collect();
+
+    // Set up the FIRST audio stream; 'a' cycles the rest in place.
+    let mut audio_stream = u32::MAX;
+    let mut a_num = 1i64;
+    let mut a_den = OUT_RATE as i64;
+    let (audio_dec, has_audio, resampler) = match audio_streams.first() {
         Some(t) => {
-            let (d, ok, r) = setup_mkv_audio(&t.codec_id, &t.codec_private, t.sample_rate, t.channels);
+            let (d, ok, r) = setup_audio_by_codec(&t.codec_id, &t.extradata, t.sample_rate, t.channels);
             if ok {
-                audio_track_num = t.track_num;
-                let more = if audio_tracks.len() > 1 {
-                    format!("  (+{} more — press 'a')", audio_tracks.len() - 1)
-                } else { String::new() };
+                audio_stream = t.index;
+                a_num = t.num;
+                a_den = t.den;
+                let more = if audio_streams.len() > 1 {
+                    format!("  (+{} more — press 'a')", audio_streams.len() - 1)
+                } else {
+                    String::new()
+                };
                 log(format!("audio: {} {}ch @ {} Hz [{}]{more}", t.codec_id, t.channels, t.sample_rate, t.label));
                 (d, ok, r)
             } else {
@@ -1284,20 +1300,20 @@ pub fn open_mkv_sync(url: String, total_len: u64, title: String, duration_us: i6
         None => (None, false, None),
     };
 
-    let title = title;
-    let duration_us = duration_us;
     let src = Box::new(MkvSource {
-        file,
-        frame: matroska_demuxer::Frame::default(),
-        video_track: video_track_num,
-        audio_track: audio_track_num,
-        audio_tracks,
-        ts_scale_ns,
+        dmx,
+        video_stream,
+        audio_stream,
+        v_num,
+        v_den,
+        a_num,
+        a_den,
+        audio_streams,
     });
 
     match install_player(
         url, total_len, Demux::Mkv(src), ps_prefix, nal_len, video_annexb, codec, width, height,
-        surface, audio_dec, has_audio, resampler, title.clone(), duration_us, total_video, None, 0,
+        surface, audio_dec, has_audio, resampler, title.clone(), duration_us, 0, None, 0,
     ) {
         Ok(impl_name) => {
             STREAM.with(|s| if let Some(p) = s.borrow_mut().as_mut() { p.prefetch = handle; });
@@ -1594,17 +1610,30 @@ pub fn do_seek(p: &mut StreamPlayer, target_us: i64) -> i64 {
             };
             src.next_v = kf;
             src.next_a = a_sid;
-            land_us
+            Some(land_us)
         }
         Demux::Mkv(src) => {
-            let ticks = (target_us.max(0) as u64) * 1000 / src.ts_scale_ns.max(1);
-            if let Err(e) = src.file.seek(ticks) {
-                log(format!("seek: mkv seek to {ticks} ticks failed: {e:?}"));
+            // us → video-stream ticks; oxideav Cues-seek returns the ACTUAL landed
+            // pts, so the clock re-anchors to where we truly landed (not the request).
+            let ticks = if src.v_num == 0 {
+                0
+            } else {
+                (target_us.max(0) as i128 * src.v_den as i128 / (src.v_num as i128 * 1_000_000)) as i64
+            };
+            match src.dmx.seek_to(src.video_stream, ticks) {
+                Ok(landed) => Some(SegStream::ticks_to_us(landed, src.v_num, src.v_den)),
+                // Cue-less MKV (streaming open skipped the scan): seek is unsupported.
+                // Return None so the seek is a NO-OP — do NOT move the clock or reset
+                // the queues (the demuxer never moved; playback continues untouched).
+                Err(e) => {
+                    log(format!("seek: mkv unsupported (no Cues index): {e:?} — staying put"));
+                    None
+                }
             }
-            target_us
         }
-        Demux::Fmp4(src) => src.seek(target_us),
+        Demux::Fmp4(src) => Some(src.seek(target_us)),
     };
+    let Some(landed_us) = landed_us else { return p.clock_us };
     // Discontinuity reset: drop queued frames + buffered PCM, the audio ring, and
     // the decoder's reorder state; clear the clock anchors so the pump re-anchors
     // `media_now` at the first frame after the seek.
@@ -1722,29 +1751,31 @@ pub fn fill_queues(p: &mut StreamPlayer) {
                     Prod::Stop
                 }
             }
-            // matroska-demuxer pulls a frame (blocking on its Range reader as
-            // needed); it handles lacing / block groups / seeking internally.
-            Demux::Mkv(src) => match src.file.next_frame(&mut src.frame) {
-                Ok(true) => {
-                    let f = &src.frame;
-                    let pts = f.timestamp as i64 * src.ts_scale_ns as i64 / 1000;
-                    if f.track == src.video_track {
+            // oxideav-mkv: one interleaved packet stream, routed by index. Any Err
+            // (incl. Eof) ends the stream. Video packets are length-prefixed AVCC
+            // (→ Annex-B like the MP4 path); audio packets are raw codec frames.
+            Demux::Mkv(src) => match src.dmx.next_packet() {
+                Ok(pkt) => {
+                    let si = pkt.stream_index;
+                    if si == src.video_stream {
+                        let pts = SegStream::ticks_to_us(pkt.pts.or(pkt.dts).unwrap_or(0), src.v_num, src.v_den);
+                        let kf = pkt.flags.keyframe;
                         let data = if p.video_annexb {
-                            streaming::to_annexb(&f.data, p.nal_len, &p.ps_prefix, f.is_keyframe.unwrap_or(false))
+                            streaming::to_annexb(&pkt.data, p.nal_len, &p.ps_prefix, kf)
                         } else {
-                            f.data.clone()
+                            pkt.data
                         };
-                        p.video_q.push_back(VFrame { pts_us: pts, keyframe: f.is_keyframe.unwrap_or(true), data });
+                        p.video_q.push_back(VFrame { pts_us: pts, keyframe: kf, data });
                         Prod::Frame(pts, true)
-                    } else if f.track == src.audio_track {
-                        p.audio_q.push_back(AFrame { pts_us: pts, data: f.data.clone() });
+                    } else if si == src.audio_stream {
+                        let pts = SegStream::ticks_to_us(pkt.pts.or(pkt.dts).unwrap_or(0), src.a_num, src.a_den);
+                        p.audio_q.push_back(AFrame { pts_us: pts, data: pkt.data });
                         Prod::Frame(pts, false)
                     } else {
-                        Prod::Skip // subtitle/other track — ignore, keep going
+                        Prod::Skip // other track (subtitle / inactive audio) — keep going
                     }
                 }
-                Ok(false) => { p.demux_done = true; Prod::Stop }
-                Err(e) => { log(format!("stream: mkv demux: {e:?}")); p.demux_done = true; Prod::Stop }
+                Err(_) => { p.demux_done = true; Prod::Stop }
             },
             // DASH/CMAF: pull whichever of the two rep demuxers is behind in PTS.
             // Each yields already-length-prefixed AVCC (video) / raw AAC (audio),

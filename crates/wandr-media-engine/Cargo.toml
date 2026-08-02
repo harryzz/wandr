@@ -30,10 +30,20 @@ wit-bindgen = "0.59"
 # uses for its API calls (cargo unifies to one version/feature set).
 reqwest = { path = "../wandr-reqwest", package = "wandr-reqwest", default-features = false }
 
-# Guest-side container demux. MP4/MOV sample-table -> Annex-B AUs (mp4); MKV/WebM
-# header-only streaming open (matroska-demuxer, vendored one-line Cues-seek fix).
+# Guest-side container demux. MP4/MOV sample-table -> Annex-B AUs (mp4 crate).
 mp4 = "0.14"
-matroska-demuxer = "0.8"
+
+# MKV/WebM demux — a VENDORED wandr fork of oxideav-mkv (upstream git rev 79faa268,
+# the July-17 SeekHead→post-cluster-Cues jump) plus a one-function addition:
+# `demux::open_streaming`, which skips the open-time late-Cues *scan* fallback.
+# Upstream `open` walks every Cluster header to segment-end when the Cues index is
+# neither front-stored nor SeekHead-reachable — over an HTTP-Range reader that is one
+# range request per Cluster across the whole movie (a "fetch storm" on open of a
+# cue-less remux, e.g. some Jellyfin MKVs). `open_streaming` accepts an empty index
+# instead; seek on a genuinely cue-less file then reports Unsupported (no storm).
+# Promote to a pushed harryzz/oxideav-mkv fork + upstream PR when convenient.
+# See [[reference_jellyfin_container_demux_and_mkv_seek]].
+oxideav-mkv = { path = "vendor/oxideav-mkv" }
 
 # Fragmented MP4 / CMAF (DASH/HLS) demux — the `mp4` crate's read_sample() is
 # BROKEN for fragments (constant sample offset; see the memory), so Demux::Fmp4
@@ -56,9 +66,3 @@ ropus        = "0.12"
 opt-level = "s"
 lto       = true
 strip     = true
-
-# The matroska-demuxer 0.8.0 CueRelativePosition seek fix (see the vendored crate's
-# note + [[reference_jellyfin_container_demux_and_mkv_seek]]). [patch] is per
-# build-root, so EACH consumer app ALSO carries this patch line pointing here.
-[patch.crates-io]
-matroska-demuxer = { path = "vendor/matroska-demuxer" }

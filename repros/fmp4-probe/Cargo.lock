@@ -106,6 +106,7 @@ dependencies = [
  "mp4",
  "oxideav-container",
  "oxideav-core",
+ "oxideav-mkv",
  "oxideav-mp4",
 ]
 
@@ -219,6 +220,13 @@ dependencies = [
  "bytemuck",
  "serde_json",
  "thiserror 2.0.19",
+]
+
+[[package]]
+name = "oxideav-mkv"
+version = "0.0.9"
+dependencies = [
+ "oxideav-core",
 ]
 
 [[package]]

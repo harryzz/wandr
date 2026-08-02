@@ -34,7 +34,7 @@ wit-bindgen = "0.59"
 reqwest = { path = "../../../crates/wandr-reqwest", package = "wandr-reqwest", default-features = false }
 
 # The shared guest-side playback ENGINE (extracted from this app): container demux
-# (mp4 + matroska-demuxer), guest-side audio decode (Symphonia/OxideAV/ropus), the
+# (mp4 + oxideav-mkv), guest-side audio decode (Symphonia/OxideAV/ropus), the
 # A/V master clock + present(at-ns) sync, and the transport/scrub/subtitle overlay.
 # It owns the video/audio/canvas IMPORTS bindgen; this app keeps only its EXPORTS.
 wandr-media-engine = { path = "../../../crates/wandr-media-engine", default-features = false }
@@ -47,13 +47,3 @@ url        = "2"
 opt-level = "s"
 lto       = true
 strip     = true
-
-# One-line fix for matroska-demuxer 0.8.0's CueRelativePosition seek bug:
-# seek_broad_phase resolved CueRelativePosition against the FIRST cluster instead
-# of the cue's own cluster → the reader landed mid-element → InvalidEbmlDataSize on
-# every non-zero seek ("only Home works"). Fix (verified in repros/mkv-seek-probe):
-# pass point.track_position.cluster_position to get_cluster_offset_and_timestamp.
-# Vendored as a temporary bridge; promote to a GitHub fork (harryzz/matroska-demuxer)
-# for upstreaming when convenient. Revisit oxideav-mkv once its open is streaming-lazy.
-[patch.crates-io]
-matroska-demuxer = { path = "../../../crates/wandr-media-engine/vendor/matroska-demuxer" }

@@ -1,0 +1,20 @@
+[package]
+name = "oxideav-mkv"
+version = "0.0.9"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT"
+repository = "https://github.com/OxideAV/oxideav-mkv"
+authors = ["Mark Karpeles"]
+description = "Pure-Rust Matroska (MKV/WebM) container for oxideav"
+
+readme = "README.md"
+homepage = "https://github.com/OxideAV/oxideav-mkv"
+keywords = ["multimedia", "mkv", "matroska", "webm", "pure-rust"]
+categories = ["multimedia::video", "parser-implementations"]
+
+[dependencies]
+oxideav-core = "0.1"
+
+[dev-dependencies]
+oxideav-basic = "0.0"

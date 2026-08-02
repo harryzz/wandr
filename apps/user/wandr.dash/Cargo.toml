@@ -45,8 +45,3 @@ m3u8-rs = "6.0.1"
 opt-level = "s"
 lto       = true
 strip     = true
-
-# [patch] is per build-root: the engine crate depends on matroska-demuxer with the
-# vendored one-line Cues-seek fix, so THIS build-root must carry the same patch.
-[patch.crates-io]
-matroska-demuxer = { path = "../../../crates/wandr-media-engine/vendor/matroska-demuxer" }
