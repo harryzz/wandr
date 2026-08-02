@@ -132,3 +132,5 @@
 - [Ref: dav1ddec (AV1 SW) GStreamer](reference_dav1ddec_gstreamer_install.md) — build gst-plugin-dav1d
 - [Ref: jellyfin Opus = ropus](reference_jellyfin_opus_ropus.md) — ropus (xiph)+simd128.
 - [Ref: jellyfin demux + MKV seek](reference_jellyfin_container_demux_and_mkv_seek.md) — symphonia demux AUDIO-ONLY → mp4/matroska; MKV seek=0.8 patched
+- [⚠️ mp4 0.14 fragmented read_sample BROKEN](reference_mp4_014_fragmented_read_sample_broken.md) — CMAF sample offsets wrong; use oxideav-mp4 (PROVEN) for task 119 Demux::Fmp4.
+- [Engine present pacing (fast decode)](reference_engine_present_pacing_fast_decode.md) — DECODE_AHEAD count-gate defeated by presented-counts-dropped; needs TIME submit-lead gate; desktop live-textures=0 is normal; kill stale players (audio contention).

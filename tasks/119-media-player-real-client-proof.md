@@ -154,26 +154,43 @@ path covers both.
 | HTTPS + byte-range | `wandr-reqwest` (wasi:tls) | ✅ shipped |
 | DASH manifest (`.mpd`) | `dash-mpd` 0.20.4 | new (small) |
 | HLS manifest (`.m3u8`) | `m3u8-rs` 6.0.1 | new (small) |
-| **fMP4/CMAF segment demux** | **`mp4` 0.14 — PROVEN handles fragments** | ✅ shipped, no new demuxer |
+| **fMP4/CMAF segment demux** | **`oxideav-mp4` `=0.0.9` — streaming CMAF demuxer, EMPIRICALLY PROVEN on Tears-of-Steel (`mp4` 0.14 `read_sample` is broken for fragments; see note)** | ✅ verified (probe), wire `Demux::Fmp4` |
 | WebM-DASH segment demux (VP9/Opus) | `matroska-demuxer` (vendored+patched) | ✅ shipped |
 | Audio decode (AAC/Opus) | `symphonia` / `ropus` | ✅ shipped |
 | Video decode + `present(at-ns)` | host `wandr:video` | ✅ shipped |
 | A/V sync | `wasi:audio` | ✅ shipped |
 
-**fMP4 probe result (2026-08-01, `repros/fmp4-probe`):** the `mp4` crate 0.14
-(already a jellyfin dep) has FULL fragmented-MP4 support — `moofs: Vec<MoofBox>`,
-`traf`/`trun`/`tfhd`/`tfdt`/`mvex`/`trex`, `is_fragmented()`, and the **SAME
-`read_sample()`/`sample_count()`/`tracks()` API works for CMAF** (codec config read
-from the init segment's `moov` `stsd.avc1/hev1/vp09/mp4a`). **⇒ no new demuxer — the
-CMAF segment demux is the exact `mp4` API jellyfin already uses.** Only new code is
-manifest parsing + segment-fetch/adaptive logic.
+**fMP4 CMAF demux — CORRECTED (2026-08-01, verified by reading `mp4` 0.14 source;
+the earlier "PROVEN" claim was DOC-ONLY — `repros/fmp4-probe` is empty, commit
+`bd892f17` changed only docs):** the `mp4` crate 0.14 *parses* the fragment box
+tree — `moofs: Vec<MoofBox>` with `traf`/`trun`/`tfhd`/`tfdt`, `is_fragmented()`,
+and codec config from the init segment's `moov` `stsd` all work. **BUT its
+`read_sample()` cannot read fragmented samples**: `track.rs::sample_offset()` for
+the `!trafs.is_empty()` path returns a *constant* `tfhd.base_data_offset.unwrap_or(0)`
+per fragment — it ignores the sample index, never adds `trun.data_offset` or the
+accumulated prior-sample sizes, and yields `0` when `tfhd` omits `base_data_offset`
+(the normal CMAF "default-base-is-moof" case). So `read_sample` seeks to the same
+wrong byte for every sample and returns garbage. **⇒ we DO need a small fragmented
+sample reader.** Plan: use `mp4::read_header` (or a tiny box walker) to get the
+init-segment codec config + the parsed `trun`/`tfhd`/`tfdt` per fragment, then
+compute sample byte-range (`moof_start + trun.data_offset + Σsizes`) and PTS
+(`tfdt.base_media_decode_time + Σdurations`, `+ trun.sample_cts` for composition)
+OURSELVES — reusing the crate's box parsing, replacing only the offset math. This is
+the `Demux::Fmp4` variant. New code = manifest parse + segment fetch + this reader.
 
 ### Milestones
-- **B1 — raw DASH (CMAF) test stream** ⭐ the standalone engine proof. Point at a
-  public DASH-IF / Unified-Streaming / Bitmovin `.mpd` (Big Buck Bunny / Tears of
-  Steel). `dash-mpd` → pick one video + one audio Representation → fetch init + media
-  segments (byte-range) → `mp4` `read_sample` → host-decode video + `symphonia` audio
-  → `wasi:audio`-sync. **Zero infrastructure.** Closes Part B's technical goal.
+- **B1 — raw DASH (CMAF) test stream** ✅ **DONE (2026-08-02, user-confirmed on
+  desktop WSLg).** `wandr.dash` (new app) plays Tears of Steel on-screen with
+  VIDEO + AUDIO, A/V synced. Chain: `dash-mpd` parse → pick 1 video + 1 audio
+  Representation → resolve `$RepresentationID$`/`$Time$` SegmentTimeline → download
+  a bounded prefix (`SEG_LIMIT`) → **`oxideav-mp4` CMAF demux** (NOT `mp4`
+  `read_sample` — that's broken for fragments) → host gstreamer H.264 decode →
+  paced `present(at-ns)` + `symphonia` AAC → `wasi:audio`. Runs on the EXTRACTED
+  `wandr-media-engine` crate (shared with jellyfin). Two bugs fixed live: a pump
+  pacing race (fast tiny rep raced ~2.5× — added a time-based submit clock-gate,
+  see `[[reference_engine_present_pacing_fast_decode]]`) and stale-player audio
+  contention. Remaining polish: higher video rep (quality); streaming vs
+  download-then-play. **Zero infrastructure — Part B's technical goal is proven.**
 - **B2 — adaptive bitrate switch.** Change video Representation mid-stream → the real
   ABR path (re-init decoder on rendition change).
 - **B3 — HLS (CMAF) test stream.** `m3u8-rs` master+media playlists → same fMP4 demux

@@ -1,0 +1,64 @@
+# wandr-media-engine — the shared guest-side playback ENGINE for task 119.
+#
+# Extracted verbatim from wandr.jellyfin (the first consumer): container demux
+# (MP4 sample-table + MKV/Matroska), guest-side audio decode (AAC/MP3/Opus/AC-3),
+# the A/V master clock + present(at-ns) sync, the wandr:video decode-feed, and the
+# on-screen transport/scrub/subtitle overlay. It owns an IMPORTS-ONLY
+# `wit_bindgen::generate!` (video + audio + canvas) so it composes with each
+# consumer app's own EXPORTS `generate!` in the same cdylib (no cabi_realloc
+# clash — same trick wandr-reqwest uses). A thin app (wandr.jellyfin source layer,
+# wandr.dash source layer) depends only on this crate + wandr-reqwest.
+#
+# rlib (no crate-type): statically linked into the consumer's wasm32-wasip2 cdylib.
+[package]
+name    = "wandr-media-engine"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[features]
+# Mirror the consumer's p3-async: httprange fetches media over reqwest's p3
+# wasi:tls async streams. Cargo unifies this with the app's own p3-async feature.
+default  = ["p3-async"]
+p3-async = ["reqwest/p3-async"]
+
+[dependencies]
+# Owns the imports-only generate! (video/audio/canvas) + re-exports __wit_bindgen.
+wit-bindgen = "0.59"
+
+# HTTPS byte-range media fetch over wasi:tls — the same in-tree client the app
+# uses for its API calls (cargo unifies to one version/feature set).
+reqwest = { path = "../wandr-reqwest", package = "wandr-reqwest", default-features = false }
+
+# Guest-side container demux. MP4/MOV sample-table -> Annex-B AUs (mp4); MKV/WebM
+# header-only streaming open (matroska-demuxer, vendored one-line Cues-seek fix).
+mp4 = "0.14"
+matroska-demuxer = "0.8"
+
+# Fragmented MP4 / CMAF (DASH/HLS) demux — the `mp4` crate's read_sample() is
+# BROKEN for fragments (constant sample offset; see the memory), so Demux::Fmp4
+# uses oxideav-mp4's streaming Demuxer (next_packet/seek_to). EMPIRICALLY PROVEN on
+# real Tears-of-Steel CMAF (repros/fmp4-probe). Pinned EXACT (0.0.x, API churns).
+oxideav-mp4       = "=0.0.9"
+oxideav-container = "0.1"
+
+# Media-URL parsing for the byte-range fetch (net module).
+url = "2"
+
+# Guest-side audio decode -> interleaved f32 PCM. Symphonia (AAC/MP3/isomp4);
+# OxideAV (AC-3/E-AC-3, pure-Rust, has a 5.1->stereo downmix); ropus (Opus).
+symphonia    = { version = "0.5", features = ["mp3", "aac", "isomp4"] }
+oxideav-core = "0.1"
+oxideav-ac3  = "=0.0.10"
+ropus        = "0.12"
+
+[profile.release]
+opt-level = "s"
+lto       = true
+strip     = true
+
+# The matroska-demuxer 0.8.0 CueRelativePosition seek fix (see the vendored crate's
+# note + [[reference_jellyfin_container_demux_and_mkv_seek]]). [patch] is per
+# build-root, so EACH consumer app ALSO carries this patch line pointing here.
+[patch.crates-io]
+matroska-demuxer = { path = "vendor/matroska-demuxer" }

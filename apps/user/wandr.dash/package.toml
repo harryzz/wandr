@@ -1,0 +1,19 @@
+# wandr.dash — task 119 Part B (B1). A standalone open DASH/CMAF streaming client.
+#
+# No [[mounts]]: the media + manifest arrive over HTTPS; there is no local sample
+# path and nothing app-specific baked into the host. Same shape as wandr.jellyfin
+# (background bg-tick engine + frame-rate pacing during playback).
+app_id      = "wandr.dash"
+version     = "0.1.0"
+world       = "wandr:dash/dash-app"
+composition = "same-store"
+orientation = "auto"
+label       = "DASH"
+# Content is 24-30 fps; 60 gives the pump headroom over the frame rate.
+max_fps     = 60
+# Enables the host bg-tick pump — the async manifest+segment+decode engine runs
+# there, render-independently (same as wandr.jellyfin / wandr.audio.player).
+background  = true
+
+[components]
+ui = "components/ui.wasm"

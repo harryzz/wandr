@@ -1,0 +1,51 @@
+# wandr.dash — task 119 Part B (B1). Open DASH/CMAF streaming client.
+#
+#   cargo build --target wasm32-wasip2 --release
+#   cp target/wasm32-wasip2/release/wandr_dash.wasm components/ui.wasm
+#
+# A REACTOR (cdylib): the host drives us through frame-handler (render) and
+# bg-tick (the async manifest+segment+decode engine). No main loop of our own.
+# All the playback machinery is the shared `wandr-media-engine` crate; this app is
+# just the DASH source layer (manifest parse + adaptive segment fetch) on top.
+[package]
+name    = "wandr-dash"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+default  = ["p3-async"]
+# p3-async gives wasi:tls 0.3 async streams through reqwest; fan it out to the
+# engine so its httprange fetch uses the same flavor.
+p3-async = ["reqwest/p3-async", "wandr-media-engine/p3-async"]
+
+[dependencies]
+# The app owns the EXPORTS generate! (frame/key/pointer/pacing/background).
+wit-bindgen = "0.59"
+
+# The shared playback engine: demux (incl. the new Demux::Fmp4) + audio decode +
+# A/V clock + present + transport overlay, and the video/audio/canvas IMPORTS
+# bindgen. The app depends ONLY on this for playback.
+wandr-media-engine = { path = "../../../crates/wandr-media-engine", default-features = false }
+
+# HTTPS: the manifest (.mpd) fetch + byte-range segment fetch, over wasi:tls.
+reqwest = { path = "../../../crates/wandr-reqwest", package = "wandr-reqwest", default-features = false }
+
+# DASH manifest (.mpd) parsing. Small, pure-Rust XML model of the MPD.
+dash-mpd = { version = "0.20", default-features = false }
+
+# Media-URL parsing for the manifest + segment fetches.
+url = "2"
+
+[profile.release]
+opt-level = "s"
+lto       = true
+strip     = true
+
+# [patch] is per build-root: the engine crate depends on matroska-demuxer with the
+# vendored one-line Cues-seek fix, so THIS build-root must carry the same patch.
+[patch.crates-io]
+matroska-demuxer = { path = "../../../crates/wandr-media-engine/vendor/matroska-demuxer" }

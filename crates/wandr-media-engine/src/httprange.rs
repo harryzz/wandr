@@ -117,7 +117,7 @@ impl HttpRangeReader {
             return Err(io::Error::new(io::ErrorKind::Other, "no client (local mode)"));
         };
         let res = wit_bindgen::rt::async_support::block_on(async move {
-            crate::jellyfin::fetch_range(&client, &url, at, Some(end)).await
+            crate::net::fetch_range(&client, &url, at, Some(end)).await
         });
         let mut s = self.shared.borrow_mut();
         s.blocking_fetches += 1;
@@ -182,7 +182,7 @@ pub fn drive_prefetch(h: &PrefetchHandle) {
     reqwest::task::spawn(async move {
         let total = shared.borrow().total_len;
         let end = (start + WINDOW - 1).min(total.saturating_sub(1));
-        let res = crate::jellyfin::fetch_range(&client, &url, start, Some(end)).await;
+        let res = crate::net::fetch_range(&client, &url, start, Some(end)).await;
         let mut s = shared.borrow_mut();
         s.prefetches += 1;
         if let Ok(r) = res {

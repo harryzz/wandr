@@ -1,0 +1,32 @@
+// wandr-media-engine — the shared guest-side playback ENGINE (task 119).
+//
+// This world is IMPORTS-ONLY on purpose. The engine crate generates bindings
+// for exactly the host contracts it CALLS — video decode, audio out, canvas —
+// and nothing it exports. An imports-only `generate!` emits no component-export
+// machinery (no `cabi_realloc`, no `Guest` export glue), so it composes cleanly
+// with the CONSUMER app's own export `generate!` in the same cdylib — the same
+// way wandr-reqwest's tls/sockets bindgen already coexists with an app's world.
+//
+//   crate  (this world):  import video/decoder + audio/pcm + canvas  -> engine fns
+//   app    (its world):   export frame/key/pointer/pacing/background  -> Guest bodies
+//                         that CALL the engine fns.
+//
+// The consumer (wandr.jellyfin / wandr.dash) depends only on this crate; it never
+// names a decoder/playback/canvas type of its own — those resources live entirely
+// crate-side in the engine's STREAM thread-local. The crate re-exports the canvas
+// bindings + draw helpers so the app can still paint its own (browse) UI.
+package wandr:media-engine@0.1.0;
+
+world media-engine-imports {
+    // ---- playback lane: host GStreamer/MediaCodec decode -> present(at-ns) ----
+    import wandr:video/decoder@0.1.0;
+
+    // ---- guest-side audio decode -> host device; position() is the A/V clock ----
+    import wasi:audio/pcm@0.0.1;
+
+    // ---- canvas: the engine paints the player overlay; app paints browse UI ----
+    import wasi:canvas/types@0.0.2;
+    import wasi:canvas/draw@0.0.2;
+    import wasi:canvas/layout@0.0.2;
+    import wasi:canvas/embedding@0.0.2;
+}

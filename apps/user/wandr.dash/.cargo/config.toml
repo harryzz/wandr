@@ -1,0 +1,6 @@
+# Enable wasm SIMD (simd128) for the guest build. ropus (Opus decode) uses the
+# `wide` portable-SIMD crate, which maps to simd128 — without this its hot CELT/
+# SILK loops run scalar (~1x realtime, hiccups); with it they vectorize (fast).
+# The host's wasmtime enables the SIMD proposal by default, so it runs unchanged.
+[target.wasm32-wasip2]
+rustflags = ["-C", "target-feature=+simd128"]

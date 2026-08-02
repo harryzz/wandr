@@ -1,0 +1,10 @@
+[package]
+name = "fmp4-probe"
+version = "0.0.0"
+edition = "2021"
+[dependencies]
+mp4 = "0.14"
+oxideav-container = "0.1.1"
+oxideav-core = "0.1.34"
+oxideav-mp4 = "0.0.9"
+[workspace]

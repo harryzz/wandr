@@ -1,0 +1,30 @@
+// wandr.dash — task 119 Part B (B1). A standalone OPEN adaptive-streaming client:
+// it fetches a public DASH manifest (.mpd) over HTTPS, picks one video + one audio
+// Representation, byte-range-fetches the CMAF/fMP4 init + media segments, and plays
+// them through the SHIPPED pipeline unchanged —
+//
+//   guest: HTTPS byte-range (wandr-reqwest/wasi:tls) -> fMP4 segment demux
+//   host:  wandr:video/decoder (GStreamer/MediaCodec) -> present(at-ns)
+//   audio: guest-side Symphonia -> wasi:audio/pcm; position() = A/V master clock
+//
+// It reuses the EXACT engine `wandr.jellyfin` uses — extracted into the
+// `wandr-media-engine` crate — proving the playback contract with a SECOND, open
+// real-world consumer (no server, no Google fortress). The only new code vs
+// jellyfin is manifest parsing + adaptive segment-fetch feeding a `Demux::Fmp4`.
+//
+// Like jellyfin, this world is EXPORTS-ONLY: the video/audio/canvas IMPORTS live
+// in wandr-media-engine's own imports-only bindgen (linked into this cdylib), so
+// there is exactly one cabi_realloc. wasi:tls/wasi:sockets come from
+// wandr-reqwest's bindgen, granted per-app by the host (never named here).
+package wandr:dash@0.1.0;
+
+world dash-app {
+    // ---- host drives UI through frame-handler; keys + pointer = transport ----
+    export wasi:input-handlers/frame-handler@0.0.2;
+    export wasi:input-handlers/key-handler@0.0.2;
+    export wasi:input-handlers/pointer-handler@0.0.2;
+    export wandr:ui-shell/frame-pacing@0.1.0;
+
+    // ---- the async manifest+segment-fetch+decode engine (render-independent) ----
+    export wandr:background/background@0.1.0;
+}

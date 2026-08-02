@@ -20,7 +20,9 @@ crate-type = ["cdylib"]
 # flavor wandr.signal and wandr.audio.player ship. There is no meaningful p2 path
 # for this app, so p3-async is the only feature and the default.
 default  = ["p3-async"]
-p3-async = ["reqwest/p3-async"]
+# p3-async threads through to BOTH the HTTP client and the shared playback engine
+# (their httprange fetch uses reqwest's p3 wasi:tls streams — cargo unifies them).
+p3-async = ["reqwest/p3-async", "wandr-media-engine/p3-async"]
 
 [dependencies]
 wit-bindgen = "0.59"
@@ -31,37 +33,11 @@ wit-bindgen = "0.59"
 # included — so movies.zaharievi.eu is trusted without any host change).
 reqwest = { path = "../../../crates/wandr-reqwest", package = "wandr-reqwest", default-features = false }
 
-# Guest-side container demux (MP4/MOV sample table -> Annex-B AUs with real PTS).
-# Demux is GUEST-side by design (proposals/wasi-media-source); host never learns
-# containers. Same crate + version wandr.video.player and the host diagnostic use.
-mp4 = "0.14"
-# MKV/WebM container demux. Header-only open (streaming-friendly over HTTP-Range,
-# unlike oxideav-mkv 0.0.9 whose open scans to EOF for Cues). The stock crate's
-# seek() mis-resolves CueRelativePosition Cues → patched via a [patch.crates-io]
-# fork (harryzz/matroska-demuxer, one-line fix). Revisit oxideav-mkv once its open
-# is lazy/streaming. See [[reference_jellyfin_container_demux_and_mkv_seek]].
-matroska-demuxer = "0.8"
-
-# Guest-side audio decode (AAC/MP3-in-MP4 -> interleaved f32 PCM). Same crate +
-# features wandr.audio.player uses; defaults add FLAC/WAV/Vorbis, and these add
-# MP3 + AAC.
-symphonia = { version = "0.5", features = ["mp3", "aac", "isomp4"] }
-
-# Pure-Rust AC-3/E-AC-3 + Opus decoders (OxideAV) — Symphonia has NEITHER, and the
-# alternatives are C (libopus/liba52, and liba52 is GPL). These are from-scratch
-# spec implementations (MIT), so no C bindings and no GPL. oxideav-ac3 even ships a
-# 5.1→stereo LoRo/LtRt downmix. Pinned EXACT: they are young 0.0.x crates whose API
-# will churn. Both pull `oxideav-core` (their Packet/Frame/Decoder types).
-oxideav-core = "0.1"
-oxideav-ac3  = "=0.0.10"
-
-# Opus: pure-Rust `ropus` (full xiph/opus port) — bit-exact conformant (all 24
-# RFC 6716/8251 vectors + all 7 xiph reference test binaries) AND fast: measured
-# 117× realtime native decode (≈1× libopus), 40–42 dB SNR clean, via the `wide`
-# portable-SIMD crate (→ wasm simd128, enabled in .cargo/config.toml). Ends the
-# decoder saga: opus-rs=noise, oxideav & opus-decoder=too slow (~1× realtime).
-# Only dep is `wide`; its optional DNN/PLC C shim is off (no weights → no cc).
-ropus = "0.12"
+# The shared guest-side playback ENGINE (extracted from this app): container demux
+# (mp4 + matroska-demuxer), guest-side audio decode (Symphonia/OxideAV/ropus), the
+# A/V master clock + present(at-ns) sync, and the transport/scrub/subtitle overlay.
+# It owns the video/audio/canvas IMPORTS bindgen; this app keeps only its EXPORTS.
+wandr-media-engine = { path = "../../../crates/wandr-media-engine", default-features = false }
 
 # JSON for the Jellyfin REST API; Url for reqwest.
 serde_json = "1"
@@ -80,4 +56,4 @@ strip     = true
 # Vendored as a temporary bridge; promote to a GitHub fork (harryzz/matroska-demuxer)
 # for upstreaming when convenient. Revisit oxideav-mkv once its open is streaming-lazy.
 [patch.crates-io]
-matroska-demuxer = { path = "vendor/matroska-demuxer" }
+matroska-demuxer = { path = "../../../crates/wandr-media-engine/vendor/matroska-demuxer" }

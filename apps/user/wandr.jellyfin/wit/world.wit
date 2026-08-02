@@ -20,20 +20,10 @@
 package wandr:jellyfin@0.1.0;
 
 world jellyfin-app {
-    // ---- the playback lane (host GStreamer decode -> present) ----
-    import wandr:video/decoder@0.1.0;
-
-    // ---- guest-side audio decode -> host device; position() is the A/V clock ----
-    import wasi:audio/pcm@0.0.1;
-
-    // ---- UI: browse list + player overlay drawn guest-side over the video ----
-    // Required even to show a black background — the host composites video
-    // surfaces inside embedding.context.present(); a guest that never presents
-    // shows nothing (see wandr.video.player world note).
-    import wasi:canvas/types@0.0.2;
-    import wasi:canvas/draw@0.0.2;
-    import wasi:canvas/layout@0.0.2;   // text layout w/ host-owned fonts (titles, subtitles)
-    import wasi:canvas/embedding@0.0.2;
+    // The video/audio/canvas IMPORTS now live in wandr-media-engine's own
+    // imports-only bindgen world (linked into this cdylib); this app world is
+    // EXPORTS-ONLY so there is exactly one cabi_realloc (the export half). The
+    // engine crate re-exports the canvas bindings the browse UI draws against.
 
     // ---- host drives UI guests through frame-handler; keys + pointer navigate ----
     export wasi:input-handlers/frame-handler@0.0.2;
