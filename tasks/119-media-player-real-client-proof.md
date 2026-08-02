@@ -194,8 +194,13 @@ the `Demux::Fmp4` variant. New code = manifest parse + segment fetch + this read
   segment-jump; handles `$Time$` AND `$Number$` addressing; default stream = DASH-IF
   Big Buck Bunny. Remaining polish: higher video rep (quality), bounded-prefetch
   tuning. **Zero infrastructure — Part B's technical goal is proven.**
-- **B2 — adaptive bitrate switch.** Change video Representation mid-stream → the real
-  ABR path (re-init decoder on rendition change).
+- **B2 — adaptive bitrate switch.** ✅ **DONE (2026-08-02, user-confirmed).** Mid-stream
+  video-rep switch: `wandr.dash` resolves ALL video reps (sorted by bandwidth), `b`
+  cycles them; the engine's `switch_video_rep` re-opens the decoder with the new rep's
+  config (resolution/SPS change ⇒ genuine re-init), swaps the video `SegStream`, and
+  re-syncs to the current position (segment-aligned/keyframe). Audio is only briefly
+  re-synced (the master clock keeps running). MANUAL trigger proves the mechanism;
+  automatic ABR (bandwidth/buffer-driven rep selection) is the follow-up.
 - **B3 — HLS (CMAF) test stream.** `m3u8-rs` master+media playlists → same fMP4 demux
   → proves the second protocol with one container path. (Skip TS-HLS: needs a separate
   `mpeg2ts` demuxer; CMAF-HLS avoids it.)

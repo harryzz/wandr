@@ -1221,6 +1221,76 @@ pub fn open_mkv_sync(url: String, total_len: u64, title: String, duration_us: i6
     }
 }
 
+/// Extract the video codec config from a DASH rep's init segment (ftyp+moov):
+/// (codec, ps_prefix, nal_len, width, height, time_base num, den). Used by both the
+/// initial open and the mid-stream bitrate switch.
+fn video_config_from_init(init: &[u8]) -> Result<(Codec, Vec<u8>, usize, u32, u32, i64, i64), String> {
+    let vdmx = oxideav_mp4::demux::open(Box::new(Cursor::new(init.to_vec())), &NullCodecResolver)
+        .map_err(|e| format!("fmp4: open video init: {e:?}"))?;
+    let vstream = vdmx
+        .streams()
+        .iter()
+        .find(|s| s.params.media_type == MediaType::Video)
+        .ok_or_else(|| "fmp4: no video stream".to_string())?;
+    let vp = &vstream.params;
+    let (codec, ps_prefix, nal_len) = match vp.codec_id.as_str() {
+        "h264" | "avc1" => mkv::parse_avcc(&vp.extradata)
+            .map(|(p, n)| (Codec::H264, p, n))
+            .ok_or_else(|| "fmp4: avcC parse failed".to_string())?,
+        "hevc" | "h265" | "hvc1" => mkv::parse_hvcc(&vp.extradata)
+            .map(|(p, n)| (Codec::H265, p, n))
+            .ok_or_else(|| "fmp4: hvcC parse failed".to_string())?,
+        other => return Err(format!("fmp4: unsupported video codec {other}")),
+    };
+    Ok((
+        codec, ps_prefix, nal_len,
+        vp.width.unwrap_or(0), vp.height.unwrap_or(0),
+        vstream.time_base.num(), vstream.time_base.den(),
+    ))
+}
+
+/// ABR: switch the video Representation mid-stream. Re-opens the video decoder with
+/// the new rep's config (resolution/SPS change ⇒ a genuine decoder re-init), swaps
+/// the video `SegStream` to the new rep, and re-syncs to the current playback
+/// position (segment-aligned, lands on a keyframe). AUDIO IS UNTOUCHED — only the
+/// video bitrate changes — so the audio-master clock keeps running and the video
+/// catches back up. Runs in bg-tick (the config-init fetch + do_seek do I/O).
+pub fn switch_video_rep(
+    new_init: Vec<u8>,
+    new_urls: Vec<String>,
+    new_starts_us: Vec<i64>,
+) -> Result<(), String> {
+    let (codec, ps_prefix, nal_len, width, height, num, den) = video_config_from_init(&new_init)?;
+    let (sw, sh) = CONTROLS.with(|c| c.borrow().surface);
+    // Open the NEW decoder before touching the stream, so a failure leaves playback
+    // running on the old rep.
+    let dec = VideoDecoder::open_accelerated(
+        DecoderConfig { codec, width, height, rect: video_rect(sw, sh), rotation: 0, layer: ZLayer::BehindUi },
+        Acceleration::NoPreference,
+    )
+    .map_err(|e| format!("switch: decoder open: {e:?}"))?;
+
+    STREAM.with(|s| {
+        let mut g = s.borrow_mut();
+        let Some(p) = g.as_mut() else { return Err("switch: no active stream".to_string()) };
+        let Demux::Fmp4(src) = &mut p.demux else { return Err("switch: not a DASH stream".to_string()) };
+        let client = src.video.client.clone();
+        src.video = SegStream {
+            init: new_init, urls: new_urls, starts_us: new_starts_us, client,
+            idx: 0, dmx: None, num, den, done: false,
+        };
+        p.dec = dec;
+        p.ps_prefix = ps_prefix;
+        p.nal_len = nal_len;
+        p.video_annexb = true;
+        // Re-sync both streams to the current position on the new video rep.
+        let clk = p.clock_us;
+        do_seek(p, clk);
+        log(format!("switched video rep → {width}x{height}"));
+        Ok(())
+    })
+}
+
 /// Open a DASH/CMAF stream and PLAY IT STREAMING — fetch one segment at a time as
 /// playback advances (bounded memory, fast startup), instead of downloading the
 /// whole rep first. Inputs per rep: the init segment bytes + the ordered media
@@ -1241,28 +1311,8 @@ pub fn open_fmp4_streaming(
     surface: (u32, u32),
 ) -> Result<(), String> {
     // ---- video config from the init segment (ftyp+moov, no fragments) ----
-    let vdmx = oxideav_mp4::demux::open(Box::new(Cursor::new(video_init.clone())), &NullCodecResolver)
-        .map_err(|e| format!("fmp4: open video init: {e:?}"))?;
-    let vstream = vdmx
-        .streams()
-        .iter()
-        .find(|s| s.params.media_type == MediaType::Video)
-        .ok_or_else(|| "fmp4: no video stream".to_string())?;
-    let vp = &vstream.params;
-    let (codec, ps_prefix, nal_len) = match vp.codec_id.as_str() {
-        "h264" | "avc1" => match mkv::parse_avcc(&vp.extradata) {
-            Some((p, n)) => (Codec::H264, p, n),
-            None => return Err("fmp4: avcC parse failed".into()),
-        },
-        "hevc" | "h265" | "hvc1" => match mkv::parse_hvcc(&vp.extradata) {
-            Some((p, n)) => (Codec::H265, p, n),
-            None => return Err("fmp4: hvcC parse failed".into()),
-        },
-        other => return Err(format!("fmp4: unsupported video codec {other}")),
-    };
-    let (width, height) = (vp.width.unwrap_or(0), vp.height.unwrap_or(0));
-    let (v_num, v_den) = (vstream.time_base.num(), vstream.time_base.den());
-    drop(vdmx);
+    let (codec, ps_prefix, nal_len, width, height, v_num, v_den) =
+        video_config_from_init(&video_init)?;
 
     let video = SegStream {
         init: video_init,

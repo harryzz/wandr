@@ -68,6 +68,14 @@ struct Engine {
     driver_spawned: bool,
     /// The manifest URL to play (default overridable later via /state).
     mpd_url: String,
+    /// All video Representations (B2 ABR), sorted by bandwidth ascending — the
+    /// switch cycles through these.
+    video_reps: Vec<RepInfo>,
+    /// Currently-playing video rep (index into `video_reps`).
+    cur_rep: usize,
+    /// A pending bitrate switch (index into `video_reps`); bg-tick fetches its init
+    /// and calls the engine's `switch_video_rep`.
+    pending_rep: Option<usize>,
 }
 
 impl Engine {
@@ -77,8 +85,17 @@ impl Engine {
             log: Vec::new(),
             driver_spawned: false,
             mpd_url: String::new(),
+            video_reps: Vec::new(),
+            cur_rep: 0,
+            pending_rep: None,
         }
     }
+}
+
+/// One video Representation: a display label (e.g. "1280x720") + its resolved plan.
+struct RepInfo {
+    label: String,
+    plan: RepPlan,
 }
 
 thread_local! {
@@ -118,6 +135,7 @@ const SEG_LIMIT: usize = 100_000;
 /// A resolved Representation: the absolute init-segment URL, ordered media URLs, and
 /// each media segment's absolute start time (µs) — used by the streaming demux to
 /// map a seek target to the segment covering it.
+#[derive(Clone)]
 struct RepPlan {
     init: String,
     segs: Vec<String>,
@@ -286,19 +304,49 @@ async fn driver() {
 
     let dur_us = mpd.mediaPresentationDuration.map(|d| d.as_micros() as i64).unwrap_or(0);
 
-    // Video is required; audio is best-effort.
-    let Some((v_tmpl, v_id, v_bw)) = pick(period, "video") else {
+    // Resolve ALL video reps (B2 ABR) and keep them, sorted by bandwidth ascending.
+    let Some(vadapt) = period.adaptations.iter().find(|a| {
+        a.contentType.as_deref() == Some("video")
+            || a.mimeType.as_deref().map(|m| m.starts_with("video")).unwrap_or(false)
+    }) else {
         log("FAILED: no video adaptation");
         return set_phase(Phase::Ended);
     };
-    let Some(vplan) = resolve_rep(&base, v_tmpl, &v_id, v_bw, SEG_LIMIT, dur_us) else {
-        log("FAILED: video SegmentTemplate/Timeline missing");
+    let mut reps: Vec<(u64, RepInfo)> = Vec::new();
+    for rep in &vadapt.representations {
+        let id = rep.id.clone().unwrap_or_default();
+        let bw = rep.bandwidth.unwrap_or(0);
+        let label = match (rep.width, rep.height) {
+            (Some(w), Some(h)) => format!("{w}x{h}"),
+            _ => format!("{}k", bw / 1000),
+        };
+        let tmpl = vadapt.SegmentTemplate.as_ref().or(rep.SegmentTemplate.as_ref());
+        if let Some(t) = tmpl {
+            if let Some(plan) = resolve_rep(&base, t, &id, bw, SEG_LIMIT, dur_us) {
+                reps.push((bw, RepInfo { label, plan }));
+            }
+        }
+    }
+    reps.sort_by_key(|(bw, _)| *bw);
+    let video_reps: Vec<RepInfo> = reps.into_iter().map(|(_, r)| r).collect();
+    if video_reps.is_empty() {
+        log("FAILED: no video reps resolved");
         return set_phase(Phase::Ended);
-    };
+    }
+    let n_reps = video_reps.len();
+    let vplan = video_reps[0].plan.clone(); // start on the lowest rep
+    let v_label = video_reps[0].label.clone();
+    ENGINE.with(|e| {
+        let mut e = e.borrow_mut();
+        e.video_reps = video_reps;
+        e.cur_rep = 0;
+        e.pending_rep = None;
+    });
+
     let aplan = pick(period, "audio")
         .and_then(|(t, id, bw)| resolve_rep(&base, t, &id, bw, SEG_LIMIT, dur_us));
 
-    log(format!("video rep {v_id} ({} segs, streaming); audio {}", vplan.segs.len(),
+    log(format!("video {v_label} ({n_reps} reps — press 'b' to switch); audio {}",
         aplan.as_ref().map(|p| format!("{} segs", p.segs.len())).unwrap_or_else(|| "none".into())));
 
     // Fetch ONLY the init segments (config); media segments stream on demand.
@@ -439,6 +487,18 @@ impl KeyGuest for Component {
                 }
             }
         });
+        // B2 ABR: 'b' cycles the video Representation (bandwidth ↑, wraps to lowest);
+        // bg-tick fetches the new rep's init and re-inits the decoder.
+        if ev.code == "KeyB" || ev.text.eq_ignore_ascii_case("b") {
+            ENGINE.with(|e| {
+                let mut e = e.borrow_mut();
+                let n = e.video_reps.len();
+                if n > 1 && e.pending_rep.is_none() {
+                    let next = (e.cur_rep + 1) % n;
+                    e.pending_rep = Some(next);
+                }
+            });
+        }
     }
 }
 
@@ -513,6 +573,28 @@ impl BgGuest for Component {
             engine::STREAM.with(|s| *s.borrow_mut() = None);
             let _ = engine::with_audio(|pb| pb.flush());
             set_phase(Phase::Ended);
+        }
+
+        // B2 ABR: apply a pending video-rep switch — fetch the new rep's init segment
+        // and hand it to the engine, which re-inits the decoder + re-syncs (audio
+        // keeps playing). Only the init is fetched here; media segments stream as usual.
+        if let Some(target) = ENGINE.with(|e| e.borrow_mut().pending_rep.take()) {
+            let sel = ENGINE.with(|e| {
+                let e = e.borrow();
+                e.video_reps.get(target).map(|r| (r.label.clone(), r.plan.clone()))
+            });
+            if let (Some((label, plan)), Some(client)) = (sel, build_client()) {
+                match fetch_bytes(&client, &plan.init).await {
+                    Some(init) => match engine::switch_video_rep(init, plan.segs, plan.starts_us) {
+                        Ok(()) => {
+                            ENGINE.with(|e| e.borrow_mut().cur_rep = target);
+                            log(format!("bitrate → {label}"));
+                        }
+                        Err(e) => log(format!("switch failed: {e}")),
+                    },
+                    None => log("switch: init fetch failed"),
+                }
+            }
         }
 
         // While a stream is active, drive the engine off the RT path: seek (blocking
