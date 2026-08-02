@@ -157,13 +157,12 @@ pub struct AFrame {
 /// Container-specific demux state. Both containers feed the same frame queues, so
 /// everything downstream (decode, audio, A/V sync) is container-agnostic.
 pub enum Demux {
-    /// MP4/MOV: the `mp4` crate over a blocking HTTP-Range reader (`read_sample`
-    /// fetches through it). Random-access, so we pull whichever track is behind.
-    Mp4(Box<Mp4Source>),
-    /// MKV/WebM: the oxideav-mkv `Demuxer` over a blocking HTTP-Range reader.
-    /// It handles all the container detail (lacing, block groups, Cues seek) that a
-    /// hand-rolled parser misses. Boxed because MatroskaFile is large.
-    Mkv(Box<MkvSource>),
+    /// Whole-file random-access via the oxideav `Demuxer` trait — ONE path for both
+    /// progressive MP4/MOV (`oxideav-mp4`) and MKV/WebM (`oxideav-mkv`). Both parse
+    /// the index at open (moov sample tables / Cues) and serve `next_packet` by
+    /// seeking into the media, so demux/seek/audio-switch are identical; the open
+    /// site just picks the demuxer by container. Boxed because the state is large.
+    Ox(Box<OxSource>),
     /// DASH/HLS fragmented MP4 (CMAF): STREAMING per-segment demux. Video and audio
     /// arrive as SEPARATE segment streams (each a DASH Representation), so this holds
     /// two independent `SegStream`s whose packets merge into the frame queues. Each
@@ -385,23 +384,6 @@ pub fn drive_fmp4_prefetch() {
     });
 }
 
-/// A live `mp4`-crate demux session over the blocking Range reader.
-pub struct Mp4Source {
-    reader: mp4::Mp4Reader<httprange::HttpRangeReader>,
-    video_track_id: u32,
-    audio_track_id: u32, // 0 = no audio
-    next_v: u32,         // next sample id (1-based)
-    next_a: u32,
-    video_count: u32,
-    audio_count: u32,
-    timescale_v: u32,
-    timescale_a: u32,
-    /// Edit-list presentation offsets (µs) — added to each track's raw sample PTS
-    /// to put both tracks on one movie timeline (audio +delay, video −trim).
-    video_edit_us: i64,
-    audio_edit_us: i64,
-}
-
 /// A `Send` wrapper over the `Rc`-based `HttpRangeReader`. oxideav's `ReadSeek`
 /// requires `Send`, but wasip2 is single-threaded and the reader never crosses a
 /// thread (the prefetch task shares its `Rc` on the same thread), so this is sound.
@@ -414,12 +396,13 @@ impl std::io::Seek for SendReader {
     fn seek(&mut self, from: std::io::SeekFrom) -> std::io::Result<u64> { self.0.seek(from) }
 }
 
-/// One MKV audio stream's decode params — kept for all tracks so the audio-track
-/// switch (C2) can rebuild the decoder in-place without re-opening the stream.
-struct MkvAudioStream {
+/// One audio stream's decode params — kept for all tracks so the audio-track switch
+/// can rebuild the decoder in-place without re-opening the stream. Works the same for
+/// MP4 (esds ASC) and MKV (CodecPrivate) since both surface via `params.extradata`.
+struct OxAudioStream {
     index: u32,              // oxideav stream index
     codec_id: String,        // "aac" / "opus" / "ac3" / "eac3"
-    extradata: Vec<u8>,      // ASC for AAC
+    extradata: Vec<u8>,      // ASC (AAC) / CodecPrivate
     sample_rate: u32,
     channels: u16,
     num: i64,
@@ -427,10 +410,11 @@ struct MkvAudioStream {
     label: String,           // language / name for the on-screen readout
 }
 
-/// A live `oxideav-mkv` demux session over the (Send-wrapped) Range reader. Video +
-/// audio arrive interleaved from ONE demuxer (`next_packet`), routed by stream index;
-/// seek is Cues-indexed (SeekHead-jump, no whole-file scan — the git-pinned fix).
-pub struct MkvSource {
+/// A live oxideav demux session (MP4 via `oxideav-mp4`, MKV via `oxideav-mkv`) over
+/// the (Send-wrapped) Range reader. Video + audio arrive interleaved from ONE demuxer
+/// (`next_packet`), routed by stream index; seek is index-driven (MP4 sample tables /
+/// MKV Cues), returning the actual landed pts (or `Err` on a cue-less MKV → seek no-op).
+pub struct OxSource {
     dmx: Box<dyn oxideav_core::Demuxer>,
     video_stream: u32,
     /// Currently-consumed audio stream index (`u32::MAX` = none).
@@ -440,7 +424,7 @@ pub struct MkvSource {
     a_num: i64,
     a_den: i64,
     /// All audio streams in container order (index = the cycle position for `a`).
-    audio_streams: Vec<MkvAudioStream>,
+    audio_streams: Vec<OxAudioStream>,
 }
 
 pub struct StreamPlayer {
@@ -530,7 +514,7 @@ impl StreamPlayer {
     pub fn prefetch_handle(&self) -> Option<httprange::PrefetchHandle> { self.prefetch.clone() }
     /// Number of switchable audio tracks (MKV) — 1 for single-track / MP4.
     pub fn audio_track_count(&self) -> usize {
-        match &self.demux { Demux::Mkv(src) => src.audio_streams.len().max(1), _ => 1 }
+        match &self.demux { Demux::Ox(src) => src.audio_streams.len().max(1), _ => 1 }
     }
 }
 
@@ -736,15 +720,14 @@ pub fn parse_vtt(text: &str) -> Vec<Cue> {
 /// the decoder (codecs may differ) + flush the ring and re-anchor. Video untouched.
 pub fn switch_audio(p: &mut StreamPlayer, pref: usize) {
     let info = match &p.demux {
-        Demux::Mkv(src) => src.audio_streams.get(pref).map(|t|
+        Demux::Ox(src) => src.audio_streams.get(pref).map(|t|
             (t.codec_id.clone(), t.extradata.clone(), t.sample_rate, t.channels, t.index, t.num, t.den, t.label.clone())),
-        Demux::Mp4(_) => { log("audio: MP4 is single-track (switch is MKV-only for now)"); return; }
         Demux::Fmp4(_) => { log("audio: DASH audio-track switch = re-open a rep (not in-place; TODO)"); return; }
     };
     let Some((cid, cpriv, sr, ch, index, num, den, label)) = info else { return };
     let (dec, ok, resampler) = setup_audio_by_codec(&cid, &cpriv, sr, ch);
     if !ok { log(format!("audio: {label} not decodable — keeping current")); return; }
-    if let Demux::Mkv(src) = &mut p.demux { src.audio_stream = index; src.a_num = num; src.a_den = den; }
+    if let Demux::Ox(src) = &mut p.demux { src.audio_stream = index; src.a_num = num; src.a_den = den; }
     p.audio_dec = dec;
     p.has_audio = ok;
     p.resampler = resampler;
@@ -1001,268 +984,102 @@ fn setup_ac3_audio(src_rate: u32, eac3: bool) -> (Option<AudioDec>, bool, Option
     (Some(AudioDec::Ac3(dec)), true, resampler)
 }
 
-/// Presentation offset (µs) an MP4 edit list applies to a track, mapping raw
-/// sample times onto the movie timeline. `+` for an EMPTY edit (media_time = -1
-/// = a DELAY, e.g. an 11 s audio pre-roll); `−` for a media_time TRIM (skips the
-/// front, e.g. the 83 ms B-frame reorder trim). Ignoring these is what plays the
-/// audio seconds ahead of the video. `movie_ts` = mvhd timescale (the unit of
-/// `segment_duration`); `media_ts` = the track's mdhd timescale (`media_time`).
-fn edit_offset_us(track: &mp4::Mp4Track, movie_ts: u32, media_ts: u32) -> i64 {
-    let Some(elst) = track.trak.edts.as_ref().and_then(|e| e.elst.as_ref()) else { return 0 };
-    let mut off = 0i64;
-    for e in &elst.entries {
-        // media_time == -1 is the empty-edit sentinel: u64::MAX (v1) / 0xFFFF_FFFF (v0).
-        if e.media_time == u64::MAX || e.media_time == 0xFFFF_FFFF {
-            off += e.segment_duration as i64 * 1_000_000 / movie_ts.max(1) as i64;
-        } else {
-            off -= e.media_time as i64 * 1_000_000 / media_ts.max(1) as i64;
-        }
+/// Reader setup shared by every whole-file open: `file://<path>` reads from disk,
+/// otherwise an HTTP-Range reader (with a prefetch handle). Identical transport for
+/// MP4 and MKV, so both open paths reduce to `ox_reader` → `demux::open*` → finisher.
+fn ox_reader(url: &str, total_len: u64) -> Result<(httprange::HttpRangeReader, Option<httprange::PrefetchHandle>), String> {
+    if let Some(path) = url.strip_prefix("file://") {
+        httprange::HttpRangeReader::new_local(path, total_len)
+            .map(|r| (r, None))
+            .map_err(|e| { let m = format!("stream: local open {path}: {e}"); log(m.clone()); m })
+    } else {
+        let Some(client) = build_client() else {
+            let m = "stream: no HTTP client".to_string();
+            log(m.clone());
+            return Err(m);
+        };
+        let r = httprange::HttpRangeReader::new(url.to_string(), total_len, client);
+        let h = r.handle();
+        Ok((r, h))
     }
-    off
 }
 
-// ---- open / demux / seek ---------------------------------------------------
-
-/// Open an MP4/MOV stream via the `mp4` crate over the blocking Range reader
-/// (`read_sample` fetches through it). SYNCHRONOUS (block_on) — called from
-/// the consumer's bg-tick. `title`/`duration_us` come from the app's catalog item.
+/// Open a progressive MP4/MOV via `oxideav-mp4`. Its open() parses the moov sample
+/// tables and SKIPS mdat by seeking, so over an HTTP-Range reader it fetches only
+/// ftyp + moov + box headers (random access, not a whole-file read). Packet PTS carry
+/// the full §8.6.6 edit-list presentation mapping (git-pinned rev), so there is no
+/// hand-rolled edit_offset_us — the engine consumes the mapped pts directly.
 pub fn open_mp4_sync(url: String, total_len: u64, title: String, duration_us: i64, surface: (u32, u32)) -> Result<(), String> {
-    const START: [u8; 4] = [0, 0, 0, 1];
-    let fail = |msg: String| -> Result<(), String> {
-        log(msg.clone());
-        Err(msg)
+    let (reader, handle) = ox_reader(&url, total_len)?;
+    let input: Box<dyn oxideav_core::ReadSeek> = Box::new(SendReader(reader));
+    let dmx = match oxideav_mp4::demux::open(input, &NullCodecResolver) {
+        Ok(d) => d,
+        Err(e) => { let m = format!("stream: mp4 open: {e:?}"); log(m.clone()); return Err(m); }
     };
-    // LOCAL-FILE test mode (transport exclusion): `file://<path>` reads from disk
-    // via the SAME reader type — everything downstream (demux/audio/clock) is
-    // identical to the HTTP path, so this isolates whether the bug is transport.
-    let (reader, handle) = if let Some(path) = url.strip_prefix("file://") {
-        match httprange::HttpRangeReader::new_local(path, total_len) {
-            Ok(r) => (r, None),
-            Err(e) => return fail(format!("stream: local open {path}: {e}")),
-        }
-    } else {
-        let Some(client) = build_client() else {
-            return fail("stream: no HTTP client".into());
-        };
-        let r = httprange::HttpRangeReader::new(url.clone(), total_len, client);
-        let h = r.handle();
-        (r, h)
-    };
-    let mp4r = match mp4::Mp4Reader::read_header(reader, total_len) {
-        Ok(r) => r,
-        Err(e) => return fail(format!("stream: mp4 header: {e}")),
-    };
-
-    // Movie (mvhd) timescale — the unit of edit-list `segment_duration`.
-    let movie_ts = mp4r.timescale();
-
-    // Pull codec config + track ids out of the (borrowed) track map, then drop
-    // the borrow so `mp4r` can move into Mp4Source.
-    struct V { tid: u32, ts: u32, w: u32, h: u32, is264: bool, count: u32, sps: Option<Vec<u8>>, pps: Option<Vec<u8>>, edit_us: i64 }
-    struct A { tid: u32, ts: u32, count: u32, asc: Option<Vec<u8>>, edit_us: i64 }
-    let (vopt, aopt): (Option<V>, Option<A>) = {
-        let tracks = mp4r.tracks();
-        let v = tracks.values()
-            .find(|t| matches!(t.media_type(), Ok(mp4::MediaType::H264 | mp4::MediaType::H265)))
-            .map(|t| {
-                let is264 = matches!(t.media_type(), Ok(mp4::MediaType::H264));
-                let (sps, pps) = if is264 {
-                    (t.sequence_parameter_set().ok().map(|s| s.to_vec()),
-                     t.picture_parameter_set().ok().map(|s| s.to_vec()))
-                } else { (None, None) };
-                V { tid: t.track_id(), ts: t.timescale(), w: t.width() as u32, h: t.height() as u32,
-                    is264, count: t.sample_count(), sps, pps,
-                    edit_us: edit_offset_us(t, movie_ts, t.timescale()) }
-            });
-        let a = tracks.values()
-            .find(|t| matches!(t.media_type(), Ok(mp4::MediaType::AAC)))
-            .map(|t| {
-                let edit_us = edit_offset_us(t, movie_ts, t.timescale());
-                // Reconstruct the AAC ASC from freq/chan (LC only — Symphonia
-                // rejects >2ch, which channel_config() reports as Err → None).
-                let asc = match (t.sample_freq_index(), t.channel_config()) {
-                    (Ok(fi), Ok(cc)) => {
-                        let freq_idx = freq_to_index(fi.freq());
-                        let chan = match cc { mp4::ChannelConfig::Mono => 1u8, mp4::ChannelConfig::Stereo => 2, _ => 0 };
-                        if chan == 0 { None } else {
-                            Some(vec![(2u8 << 3) | (freq_idx >> 1), ((freq_idx & 1) << 7) | (chan << 3)])
-                        }
-                    }
-                    _ => None,
-                };
-                A { tid: t.track_id(), ts: t.timescale(), count: t.sample_count(), asc, edit_us }
-            });
-        (v, a)
-    };
-
-    let Some(v) = vopt else { return fail("stream: mp4 has no H.264/H.265 track".into()); };
-
-    // Video parameter sets. NAL length prefix is 4 in practice for MP4 (h264);
-    // for h265 we read it from the fetched hvcC.
-    let (codec, ps_prefix, nal_len) = if v.is264 {
-        let (Some(sps), Some(pps)) = (v.sps.as_ref(), v.pps.as_ref()) else {
-            return fail("stream: mp4 missing SPS/PPS".into());
-        };
-        let mut p = Vec::new();
-        p.extend_from_slice(&START); p.extend_from_slice(sps);
-        p.extend_from_slice(&START); p.extend_from_slice(pps);
-        (Codec::H264, p, 4usize)
-    } else {
-        // H.265: the crate discards hvcC, so fetch the moov and parse it.
-        match fetch_moov_for_config(&url, total_len) {
-            Some(moov) => match streaming::parse_hvcc(&moov) {
-                Some(pfx) => (Codec::H265, pfx, streaming::nal_length_size(&moov, false).unwrap_or(4)),
-                None => return fail("stream: mp4 hvcC parse".into()),
-            },
-            None => return fail("stream: mp4 h265 moov fetch".into()),
-        }
-    };
-
-    // Audio.
-    let mut audio_track_id = 0u32;
-    let mut timescale_a = 1u32;
-    let mut audio_count = 0u32;
-    // Edit-list offsets (µs): the audio empty-edit DELAY and the video reorder TRIM.
-    // The net audio-vs-video skew is what plays audio ahead when ignored.
-    let audio_edit_us = aopt.as_ref().map(|a| a.edit_us).unwrap_or(0);
-    if v.edit_us != 0 || audio_edit_us != 0 {
-        log(format!(
-            "edit-list: video {:+}ms, audio {:+}ms (audio starts {:+}ms vs video)",
-            v.edit_us / 1000, audio_edit_us / 1000, (audio_edit_us - v.edit_us) / 1000
-        ));
-    }
-    let (audio_dec, has_audio, resampler) = match aopt.and_then(|a| a.asc.map(|asc| (a.tid, a.ts, a.count, asc))) {
-        Some((tid, ts, count, asc)) => {
-            let asc_sr = aac_freq_hz(((asc[0] & 0x07) << 1) | (asc[1] >> 7)).unwrap_or(OUT_RATE);
-            // The TRUE playback rate is the media timescale (mdhd), not the ASC's
-            // frequency index — an SBR/HE-AAC ASC signals the CORE rate while the
-            // track plays at 2×, and some muxes simply disagree. Playing at the
-            // wrong rate makes audio drift FAST ahead of video. Trust the timescale.
-            let true_sr = if ts >= 8000 && ts <= 192_000 { ts } else { asc_sr };
-            let (d, ok, r) = setup_aac_audio(&asc, true_sr);
-            if ok {
-                audio_track_id = tid; timescale_a = ts.max(1); audio_count = count;
-                log(format!(
-                    "audio: AAC ASC={asc_sr}Hz timescale={ts}Hz → using {true_sr}Hz → stereo 48k{}",
-                    if asc_sr != true_sr { " (RATE MISMATCH — timescale wins)" } else { "" }
-                ));
-                (d, ok, r)
-            } else { (None, false, None) }
-        }
-        None => { log("audio: no decodable AAC — video only"); (None, false, None) }
-    };
-
-    let title = title;
-    let duration_us = duration_us;
-    let src = Box::new(Mp4Source {
-        reader: mp4r,
-        video_track_id: v.tid,
-        audio_track_id,
-        next_v: 1, next_a: 1,
-        video_count: v.count, audio_count,
-        timescale_v: v.ts.max(1), timescale_a,
-        video_edit_us: v.edit_us, audio_edit_us,
-    });
-
-    match install_player(
-        url, total_len, Demux::Mp4(src), ps_prefix, nal_len, true, codec, v.w, v.h, surface,
-        audio_dec, has_audio, resampler, title.clone(), duration_us, v.count as usize, None, 0,
-    ) {
-        Ok(name) => {
-            STREAM.with(|s| if let Some(p) = s.borrow_mut().as_mut() { p.prefetch = handle; });
-            log(format!("streaming \"{title}\" (mp4): {} frames, {}x{}, decoder={name}", v.count, v.w, v.h));
-            Ok(())
-        }
-        Err(e) => { log(e.clone()); Err(e) }
-    }
+    finish_ox_open(dmx, url, total_len, handle, title, duration_us, surface, "mp4")
 }
 
-/// MPEG-4 sampling-frequency Hz → index (for ASC reconstruction).
-fn freq_to_index(hz: u32) -> u8 {
-    const T: [u32; 13] = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
-    T.iter().position(|&f| f == hz).unwrap_or(3) as u8
-}
-
-/// Block_on fetch of the moov region (faststart head, else tail) for H.265 hvcC —
-/// the mp4 crate discards hvcC. Called from bg-tick (block_on legal there).
-fn fetch_moov_for_config(url: &str, total_len: u64) -> Option<Vec<u8>> {
-    let client = build_client()?;
-    let head_end = (16 * 1024 * 1024).min(total_len);
-    let head = wit_bindgen::rt::async_support::block_on(async {
-        net::fetch_range(&client, url, 0, Some(head_end - 1)).await
-    }).ok()?.bytes;
-    if streaming::top_level_box(&head, b"moov").is_some() {
-        return Some(head);
-    }
-    let tail_start = total_len.saturating_sub(32 * 1024 * 1024);
-    let tail = wit_bindgen::rt::async_support::block_on(async {
-        net::fetch_range(&client, url, tail_start, None).await
-    }).ok()?.bytes;
-    if streaming::top_level_box(&tail, b"moov").is_some() { Some(tail) } else { None }
-}
-
-/// Open an MKV/WebM stream via the oxideav-mkv `Demuxer`. SYNCHRONOUS: the demuxer
-/// pulls bytes through a blocking HTTP-Range reader (block_on), which must run in a
-/// sync context — so this is called from the consumer's bg-tick open path. The
-/// SeekHead-directed open reads only headers + Cues (no whole-file scan).
+/// Open an MKV/WebM via the oxideav-mkv fork's `open_streaming` — header-only open
+/// (front + SeekHead-reachable Cues parsed, but NO whole-file Cluster scan; see the
+/// vendored fork). SYNCHRONOUS: the demuxer pulls bytes through the blocking Range
+/// reader, so this runs on the consumer's bg-tick open path.
 pub fn open_mkv_sync(url: String, total_len: u64, title: String, duration_us: i64, surface: (u32, u32)) -> Result<(), String> {
-    let fail = |msg: String| -> Result<(), String> {
-        log(msg.clone());
-        Err(msg)
-    };
-    // LOCAL-FILE test mode: `file://<path>` reads from disk via the SAME reader.
-    let (reader, handle) = if let Some(path) = url.strip_prefix("file://") {
-        match httprange::HttpRangeReader::new_local(path, total_len) {
-            Ok(r) => (r, None),
-            Err(e) => return fail(format!("stream: local open {path}: {e}")),
-        }
-    } else {
-        let Some(client) = build_client() else {
-            return fail("stream: no HTTP client".into());
-        };
-        let r = httprange::HttpRangeReader::new(url.clone(), total_len, client);
-        let h = r.handle();
-        (r, h)
-    };
-    // oxideav-mkv over the Send-wrapped reader — the wandr fork's `open_streaming`:
-    // header-only open (front + SeekHead-reachable Cues parsed, but NO whole-file
-    // Cluster scan). A cue-less remux over HTTP-Range therefore opens with one small
-    // read instead of a per-Cluster fetch storm; seek then reports Unsupported below.
+    let (reader, handle) = ox_reader(&url, total_len)?;
     let input: Box<dyn oxideav_core::ReadSeek> = Box::new(SendReader(reader));
     let dmx = match oxideav_mkv::demux::open_streaming(input, &NullCodecResolver) {
         Ok(d) => d,
-        Err(e) => return fail(format!("stream: mkv open: {e:?}")),
+        Err(e) => { let m = format!("stream: mkv open: {e:?}"); log(m.clone()); return Err(m); }
     };
+    finish_ox_open(dmx, url, total_len, handle, title, duration_us, surface, "mkv")
+}
+
+/// Shared post-open for every whole-file oxideav demuxer (MP4 + MKV): pull the video
+/// codec config + all audio streams from `dmx.streams()`, set up the first audio
+/// decoder, and install the player. Container-agnostic — `dmx` is already a
+/// `dyn Demuxer`, so demux/seek/audio-switch downstream are identical. `kind` is only
+/// a log/error label ("mp4" / "mkv").
+fn finish_ox_open(
+    dmx: Box<dyn oxideav_core::Demuxer>,
+    url: String,
+    total_len: u64,
+    handle: Option<httprange::PrefetchHandle>,
+    title: String,
+    duration_us: i64,
+    surface: (u32, u32),
+    kind: &str,
+) -> Result<(), String> {
+    let fail = |msg: String| -> Result<(), String> { log(msg.clone()); Err(msg) };
     let streams: Vec<oxideav_core::StreamInfo> = dmx.streams().to_vec();
 
-    // Video config from the video stream (avcC/hvcC in extradata, like the MP4 path).
+    // Video config from the video stream (avcC/hvcC live in `extradata` for both
+    // containers — MP4 avc1/hvc1 config records and MKV CodecPrivate share the layout).
     let Some(vs) = streams.iter().find(|s| s.params.media_type == MediaType::Video) else {
-        return fail("stream: mkv has no video track".into());
+        return fail(format!("stream: {kind} has no video track"));
     };
     let vp = &vs.params;
     let (codec, video_annexb, ps_prefix, nal_len) = match vp.codec_id.as_str() {
         "h264" | "avc1" => match mkv::parse_avcc(&vp.extradata) {
             Some((pfx, n)) => (Codec::H264, true, pfx, n),
-            None => return fail("stream: mkv avcC parse".into()),
+            None => return fail(format!("stream: {kind} avcC parse")),
         },
         "hevc" | "h265" => match mkv::parse_hvcc(&vp.extradata) {
             Some((pfx, n)) => (Codec::H265, true, pfx, n),
-            None => return fail("stream: mkv hvcC parse".into()),
+            None => return fail(format!("stream: {kind} hvcC parse")),
         },
         "vp9" => (Codec::Vp9, false, Vec::new(), 0),
         "vp8" => (Codec::Vp8, false, Vec::new(), 0),
         "av1" => (Codec::Av1, false, Vec::new(), 0),
-        other => return fail(format!("stream: mkv video codec {other} unsupported")),
+        other => return fail(format!("stream: {kind} video codec {other} unsupported")),
     };
     let (width, height) = (vp.width.unwrap_or(0), vp.height.unwrap_or(0));
     let (v_num, v_den) = (vs.time_base.num(), vs.time_base.den());
     let video_stream = vs.index;
 
-    // All audio streams (container order) — C2's 'a' cycles them in place.
-    let audio_streams: Vec<MkvAudioStream> = streams
+    // All audio streams (container order) — 'a' cycles them in place.
+    let audio_streams: Vec<OxAudioStream> = streams
         .iter()
         .filter(|s| s.params.media_type == MediaType::Audio)
-        .map(|a| MkvAudioStream {
+        .map(|a| OxAudioStream {
             index: a.index,
             codec_id: a.params.codec_id.as_str().to_string(),
             extradata: a.params.extradata.clone(),
@@ -1300,7 +1117,7 @@ pub fn open_mkv_sync(url: String, total_len: u64, title: String, duration_us: i6
         None => (None, false, None),
     };
 
-    let src = Box::new(MkvSource {
+    let src = Box::new(OxSource {
         dmx,
         video_stream,
         audio_stream,
@@ -1312,12 +1129,12 @@ pub fn open_mkv_sync(url: String, total_len: u64, title: String, duration_us: i6
     });
 
     match install_player(
-        url, total_len, Demux::Mkv(src), ps_prefix, nal_len, video_annexb, codec, width, height,
+        url, total_len, Demux::Ox(src), ps_prefix, nal_len, video_annexb, codec, width, height,
         surface, audio_dec, has_audio, resampler, title.clone(), duration_us, 0, None, 0,
     ) {
         Ok(impl_name) => {
             STREAM.with(|s| if let Some(p) = s.borrow_mut().as_mut() { p.prefetch = handle; });
-            log(format!("streaming \"{title}\" (mkv): {width}x{height}, decoder={impl_name}"));
+            log(format!("streaming \"{title}\" ({kind}): {width}x{height}, decoder={impl_name}"));
             Ok(())
         }
         Err(e) => { log(e.clone()); Err(e) }
@@ -1491,12 +1308,6 @@ pub fn open_fmp4_streaming(
     }
 }
 
-/// MPEG-4 sampling-frequency index → Hz.
-fn aac_freq_hz(idx: u8) -> Option<u32> {
-    const T: [u32; 13] = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
-    T.get(idx as usize).copied()
-}
-
 /// Range-fetch one window and append it to the rolling buffer. Spawned by the
 /// fetch driver in bg-tick; never holds the STREAM borrow across the await.
 async fn fetch_window(url: String, start: u64) {
@@ -1525,40 +1336,6 @@ fn demux_cursor(_d: &Demux) -> u64 {
 
 // ---- seek ------------------------------------------------------------------
 
-/// Walk an `stts` table (entries = (sample_count, sample_delta); the crate's
-/// `SttsEntry` is `pub(crate)`, so we pass the fields as tuples) → (1-based sample
-/// id, its start tick) for the sample whose [start, start+delta) contains `target`.
-fn stts_sample_at(entries: &[(u32, u32)], target_tick: u64) -> (u32, u64) {
-    let mut sid: u32 = 1;
-    let mut t: u64 = 0;
-    for &(count, delta) in entries {
-        let d = delta as u64;
-        let span = d * count as u64;
-        if d > 0 && target_tick < t + span {
-            let n = (target_tick - t) / d;
-            return (sid + n as u32, t + n * d);
-        }
-        t += span;
-        sid += count;
-    }
-    (sid.saturating_sub(1).max(1), t)
-}
-
-/// Start tick of a 1-based `sample_id` (walk `stts` tuples).
-fn stts_time_of(entries: &[(u32, u32)], sample_id: u32) -> u64 {
-    let before = sample_id.saturating_sub(1); // samples before it
-    let mut seen: u32 = 0;
-    let mut t: u64 = 0;
-    for &(count, delta) in entries {
-        if seen + count >= before {
-            return t + (before - seen) as u64 * delta as u64;
-        }
-        t += delta as u64 * count as u64;
-        seen += count;
-    }
-    t
-}
-
 /// Current playback clock + `delta_us`, clamped to [0, duration]. Read from the
 /// active stream so input handlers (which have no `nanos`) can build a seek target.
 pub fn seek_from_clock(delta_us: i64) -> i64 {
@@ -1578,43 +1355,11 @@ pub fn seek_from_clock(delta_us: i64) -> i64 {
 pub fn do_seek(p: &mut StreamPlayer, target_us: i64) -> i64 {
     let target_us = target_us.clamp(0, p.duration_us.max(0));
     let landed_us = match &mut p.demux {
-        Demux::Mp4(src) => {
-            let (kf, land_us, a_sid) = {
-                let tracks = src.reader.tracks();
-                let vstbl = &tracks[&src.video_track_id].trak.mdia.minf.stbl;
-                let v_stts: Vec<(u32, u32)> =
-                    vstbl.stts.entries.iter().map(|e| (e.sample_count, e.sample_delta)).collect();
-                let v_raw = (target_us - src.video_edit_us).max(0) as u64;
-                let v_tick = v_raw.saturating_mul(src.timescale_v as u64) / 1_000_000;
-                let (s_at, _) = stts_sample_at(&v_stts, v_tick);
-                // Largest sync sample ≤ s_at (no stss ⇒ every sample is a keyframe).
-                let kf = match &vstbl.stss {
-                    Some(stss) => stss.entries.iter().rev().copied().find(|&s| s <= s_at).unwrap_or(1),
-                    None => s_at.max(1),
-                };
-                let land_tick = stts_time_of(&v_stts, kf);
-                let land_us = land_tick as i64 * 1_000_000 / src.timescale_v.max(1) as i64
-                    + src.video_edit_us;
-                // Audio: the sample at the landed time (no keyframe constraint).
-                let a_sid = if src.audio_track_id != 0 {
-                    let astbl = &tracks[&src.audio_track_id].trak.mdia.minf.stbl;
-                    let a_stts: Vec<(u32, u32)> =
-                        astbl.stts.entries.iter().map(|e| (e.sample_count, e.sample_delta)).collect();
-                    let a_raw = (land_us - src.audio_edit_us).max(0) as u64;
-                    let a_tick = a_raw.saturating_mul(src.timescale_a as u64) / 1_000_000;
-                    stts_sample_at(&a_stts, a_tick).0
-                } else {
-                    1
-                };
-                (kf, land_us, a_sid)
-            };
-            src.next_v = kf;
-            src.next_a = a_sid;
-            Some(land_us)
-        }
-        Demux::Mkv(src) => {
-            // us → video-stream ticks; oxideav Cues-seek returns the ACTUAL landed
-            // pts, so the clock re-anchors to where we truly landed (not the request).
+        Demux::Ox(src) => {
+            // us → video-stream ticks; oxideav `seek_to` snaps to the keyframe at/before
+            // the target and returns the ACTUAL landed pts, so the clock re-anchors to
+            // where we truly landed (not the request). MP4 seeks via its sample tables;
+            // MKV via Cues.
             let ticks = if src.v_num == 0 {
                 0
             } else {
@@ -1626,7 +1371,7 @@ pub fn do_seek(p: &mut StreamPlayer, target_us: i64) -> i64 {
                 // Return None so the seek is a NO-OP — do NOT move the clock or reset
                 // the queues (the demuxer never moved; playback continues untouched).
                 Err(e) => {
-                    log(format!("seek: mkv unsupported (no Cues index): {e:?} — staying put"));
+                    log(format!("seek: unsupported (no seek index): {e:?} — staying put"));
                     None
                 }
             }
@@ -1692,69 +1437,11 @@ pub fn fill_queues(p: &mut StreamPlayer) {
         }
         // Produce one frame.
         let produced: Prod = match &mut p.demux {
-            // mp4 crate read_sample (random access; blocks on its reader). Pull
-            // whichever track is behind in PTS so both stay fed — but never a track
-            // whose queue is already full (produce the other instead).
-            Demux::Mp4(src) => {
-                // Gate each track by BOTH queue space AND the lookahead limit, so a
-                // full/slow video queue never keeps producing audio past the lead
-                // (which over-buffered audio to a ~13 s lead).
-                let v_left = src.next_v <= src.video_count && !v_full && last_v <= limit;
-                let a_left = src.audio_track_id != 0 && src.next_a <= src.audio_count && !a_full && last_a <= limit;
-                let take_v = v_left && (!a_left || last_v <= last_a);
-                if take_v {
-                    match src.reader.read_sample(src.video_track_id, src.next_v) {
-                        Ok(Some(s)) => {
-                            let pts = (s.start_time as i64 + s.rendering_offset as i64) * 1_000_000
-                                / src.timescale_v as i64
-                                + src.video_edit_us;
-                            let data = if p.video_annexb {
-                                streaming::to_annexb(&s.bytes, p.nal_len, &p.ps_prefix, s.is_sync)
-                            } else {
-                                s.bytes.to_vec()
-                            };
-                            p.video_q.push_back(VFrame { pts_us: pts, keyframe: s.is_sync, data });
-                            src.next_v += 1;
-                            Prod::Frame(pts, true)
-                        }
-                        Ok(None) => { src.next_v = src.video_count + 1; Prod::Skip }
-                        Err(e) => {
-                            log(format!("stream: mp4 read video {}: {e}", src.next_v));
-                            src.next_v = src.video_count + 1;
-                            Prod::Skip
-                        }
-                    }
-                } else if a_left {
-                    match src.reader.read_sample(src.audio_track_id, src.next_a) {
-                        Ok(Some(s)) => {
-                            let pts = s.start_time as i64 * 1_000_000 / src.timescale_a as i64
-                                + src.audio_edit_us;
-                            p.audio_q.push_back(AFrame { pts_us: pts, data: s.bytes.to_vec() });
-                            src.next_a += 1;
-                            Prod::Frame(pts, false)
-                        }
-                        Ok(None) => { src.next_a = src.audio_count + 1; Prod::Skip }
-                        Err(e) => {
-                            log(format!("stream: mp4 read audio {}: {e}", src.next_a));
-                            src.next_a = src.audio_count + 1;
-                            Prod::Skip
-                        }
-                    }
-                } else {
-                    // Neither track can produce now. Mark done only if both are
-                    // truly EXHAUSTED (by sample count) — not merely queue-blocked.
-                    let v_exhausted = src.next_v > src.video_count;
-                    let a_exhausted = src.audio_track_id == 0 || src.next_a > src.audio_count;
-                    if v_exhausted && a_exhausted {
-                        p.demux_done = true;
-                    }
-                    Prod::Stop
-                }
-            }
-            // oxideav-mkv: one interleaved packet stream, routed by index. Any Err
-            // (incl. Eof) ends the stream. Video packets are length-prefixed AVCC
-            // (→ Annex-B like the MP4 path); audio packets are raw codec frames.
-            Demux::Mkv(src) => match src.dmx.next_packet() {
+            // oxideav (MP4 + MKV): ONE interleaved packet stream, routed by stream
+            // index. `next_packet` serves samples in decode order by seeking into the
+            // media; any Err (incl. Eof) ends the stream. Video packets are
+            // length-prefixed AVCC (→ Annex-B); audio packets are raw codec frames.
+            Demux::Ox(src) => match src.dmx.next_packet() {
                 Ok(pkt) => {
                     let si = pkt.stream_index;
                     if si == src.video_stream {

@@ -1,12 +1,28 @@
 ---
 name: reference_jellyfin_container_demux_and_mkv_seek
-description: "wandr media demux: mp4-crate (MP4) + VENDORED oxideav-mkv FORK (MKV, added open_streaming to kill the cue-less-file open-time scan storm; replaced matroska-demuxer 2026-08-02) + oxideav-mp4 (CMAF); NOT symphonia (audio-only). Storm = range-reqs/cluster not bytes."
+description: "wandr media demux ALL oxideav (mp4-crate RETIRED 2026-08-02): oxideav-mp4 @git-HEAD for progressive MP4 + CMAF, VENDORED oxideav-mkv fork (open_streaming) for MKV — one Demux::Ox path. NOT symphonia (audio-only). MKV storm = range-reqs/cluster not bytes; MP4 open skips mdat via seek."
 metadata: 
   node_type: memory
   type: reference
   originSessionId: 8f923d2a-de3d-450d-8444-07ecb72775c5
-  modified: 2026-08-02T16:50:00.593Z
+  modified: 2026-08-02T17:58:50.798Z
 ---
+
+**UPDATE 2026-08-02 (later) — `mp4` 0.14 crate RETIRED; progressive MP4/MOV now
+oxideav-mp4 too.** The engine unified progressive MP4 and MKV into ONE `Demux::Ox`
+path (both are `Box<dyn oxideav_core::Demuxer>`): `finish_ox_open` pulls config from
+`dmx.streams()`, and `fill_queues`/`do_seek`/`switch_audio` have a single arm. Deleted
+the mp4-crate `Mp4Source`, `edit_offset_us`, `stts_sample_at`/`stts_time_of`,
+`freq_to_index`, `fetch_moov_for_config`, `aac_freq_hz` (~230 lines). `oxideav-mp4` is
+now PINNED to git HEAD `e9e8b579` (NOT crates.io 0.0.9, 2 months stale): the 2026-07-17
+commits add FULL §8.6.6 edit-list timeline mapping on demux (empty-edit start delay +
+trim + dwell + multi-segment) so packet PTS carries the mapped presentation time — the
+engine dropped its bespoke `edit_offset_us` (A/V-sync edit handling is upstream now).
+oxideav-mp4 `open()` skips `mdat` via `seek` (`skip_box_body`), so progressive open
+over HTTP-Range = ~2 range-reqs / 0.4% even with moov AFTER mdat (proven
+`repros/fmp4-probe/src/bin/mp4_probe.rs`). Device-verified: MP4 plays video+audio+seek.
+MP4 also gained multi-audio-track switch ('a') for free. The same HEAD bump feeds the
+DASH/CMAF Fmp4 path. See [[project_wasi_canvas_migration]] / task 119–120.
 
 **UPDATE 2026-08-02 — MKV demux SWAPPED to a VENDORED wandr FORK of `oxideav-mkv`;
 matroska-demuxer GONE.** The shared engine `crates/wandr-media-engine` demuxes MKV

@@ -9,5 +9,7 @@ oxideav-core = "0.1.34"
 # The wandr fork (vendored) — adds `demux::open_streaming` (header-only, skips the
 # open-time whole-file Cue scan). The probe compares it against upstream `open`.
 oxideav-mkv = { path = "../../crates/wandr-media-engine/vendor/oxideav-mkv" }
-oxideav-mp4 = "0.0.9"
+# HEAD git pin (matches the engine) — full §8.6.6 edit-list mapping + the mdat-skip
+# open the mp4_probe measures.
+oxideav-mp4 = { git = "https://github.com/OxideAV/oxideav-mp4", rev = "e9e8b579335a1e6ee8bb26163cccdf086923da4a" }
 [workspace]

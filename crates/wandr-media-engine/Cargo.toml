@@ -30,9 +30,6 @@ wit-bindgen = "0.59"
 # uses for its API calls (cargo unifies to one version/feature set).
 reqwest = { path = "../wandr-reqwest", package = "wandr-reqwest", default-features = false }
 
-# Guest-side container demux. MP4/MOV sample-table -> Annex-B AUs (mp4 crate).
-mp4 = "0.14"
-
 # MKV/WebM demux — a VENDORED wandr fork of oxideav-mkv (upstream git rev 79faa268,
 # the July-17 SeekHead→post-cluster-Cues jump) plus a one-function addition:
 # `demux::open_streaming`, which skips the open-time late-Cues *scan* fallback.
@@ -45,11 +42,17 @@ mp4 = "0.14"
 # See [[reference_jellyfin_container_demux_and_mkv_seek]].
 oxideav-mkv = { path = "vendor/oxideav-mkv" }
 
-# Fragmented MP4 / CMAF (DASH/HLS) demux — the `mp4` crate's read_sample() is
-# BROKEN for fragments (constant sample offset; see the memory), so Demux::Fmp4
-# uses oxideav-mp4's streaming Demuxer (next_packet/seek_to). EMPIRICALLY PROVEN on
-# real Tears-of-Steel CMAF (repros/fmp4-probe). Pinned EXACT (0.0.x, API churns).
-oxideav-mp4       = "=0.0.9"
+# MP4/MOV demux — oxideav-mp4, the SOLE MP4 demuxer (retired the `mp4` 0.14 crate):
+#   * progressive MP4/MOV (Demux::Ox): open() parses moov sample tables and skips
+#     mdat via seek (HTTP-Range-friendly random access), next_packet/seek_to serve
+#     samples — replaces mp4-crate read_sample + our hand-rolled stts/edit-list code.
+#   * fragmented MP4 / CMAF (Demux::Fmp4): the `mp4` crate's read_sample() was BROKEN
+#     for fragments (constant sample offset), which is why we moved here first.
+# PINNED to a GIT rev (not crates.io 0.0.9, 2 months stale): the 2026-07-17 commits
+# add FULL §8.6.6 edit-list timeline mapping on demux (empty-edit start delay + trim +
+# dwell + multi-segment; packet PTS carries the mapped presentation time) — so the
+# engine no longer needs a bespoke edit_offset_us. Empty-edit A/V-sync now upstream.
+oxideav-mp4       = { git = "https://github.com/OxideAV/oxideav-mp4", rev = "e9e8b579335a1e6ee8bb26163cccdf086923da4a" }
 oxideav-container = "0.1"
 
 # Media-URL parsing for the byte-range fetch (net module).

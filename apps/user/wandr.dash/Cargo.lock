@@ -997,20 +997,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mp4"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9ef834d5ed55e494a2ae350220314dc4aacd1c43a9498b00e320e0ea352a5c3"
-dependencies = [
- "byteorder",
- "bytes",
- "num-rational",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "mp4-atom"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1109,7 +1095,6 @@ dependencies = [
  "num-bigint",
  "num-integer",
  "num-traits",
- "serde",
 ]
 
 [[package]]
@@ -1166,8 +1151,7 @@ dependencies = [
 [[package]]
 name = "oxideav-mp4"
 version = "0.0.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35fae0533d7bc733d2b13ffb849e08415ef5f040634ebac09e6dcd1bed70c55f"
+source = "git+https://github.com/OxideAV/oxideav-mp4?rev=e9e8b579335a1e6ee8bb26163cccdf086923da4a#e9e8b579335a1e6ee8bb26163cccdf086923da4a"
 dependencies = [
  "aes",
  "cbc",
@@ -2209,7 +2193,6 @@ dependencies = [
 name = "wandr-media-engine"
 version = "0.1.0"
 dependencies = [
- "mp4",
  "oxideav-ac3",
  "oxideav-container",
  "oxideav-core",
