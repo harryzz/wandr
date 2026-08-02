@@ -189,8 +189,11 @@ the `Demux::Fmp4` variant. New code = manifest parse + segment fetch + this read
   `wandr-media-engine` crate (shared with jellyfin). Two bugs fixed live: a pump
   pacing race (fast tiny rep raced ~2.5× — added a time-based submit clock-gate,
   see `[[reference_engine_present_pacing_fast_decode]]`) and stale-player audio
-  contention. Remaining polish: higher video rep (quality); streaming vs
-  download-then-play. **Zero infrastructure — Part B's technical goal is proven.**
+  contention. NOW STREAMING (2026-08-02): per-segment demux (`SegStream`) replaces
+  download-then-play — ~1 s startup, bounded memory, fetch-on-demand, seek =
+  segment-jump; handles `$Time$` AND `$Number$` addressing; default stream = DASH-IF
+  Big Buck Bunny. Remaining polish: higher video rep (quality), bounded-prefetch
+  tuning. **Zero infrastructure — Part B's technical goal is proven.**
 - **B2 — adaptive bitrate switch.** Change video Representation mid-stream → the real
   ABR path (re-init decoder on rendition change).
 - **B3 — HLS (CMAF) test stream.** `m3u8-rs` master+media playlists → same fMP4 demux
