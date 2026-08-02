@@ -180,11 +180,28 @@ pub enum Demux {
 /// keyframe-aligned, self-contained fragmented file whose PTS is ABSOLUTE from its
 /// `tfdt`, verified in repros/fmp4-probe). Fetches are blocking (`block_on`), legal
 /// because fill_queues runs in the async bg-tick (same as the MP4/MKV Range reader).
+/// One media segment reference: a URL, optionally a byte range within it. DASH and
+/// whole-file HLS use `range: None` (fetch the whole URL); HLS byte-range playlists
+/// (`#EXT-X-BYTERANGE`, one file split into segments) use `Some((offset, length))`.
+#[derive(Clone)]
+pub struct Seg {
+    pub url: String,
+    pub range: Option<(u64, u64)>, // (offset, length)
+}
+
+/// A one-segment read-ahead buffer, shared with the async prefetch task so the NEXT
+/// segment's bytes are ready before the current one is exhausted (no boundary stall).
+#[derive(Default)]
+struct Prefetch {
+    ready: Option<(usize, Vec<u8>)>, // (segment idx, bytes)
+    inflight: bool,
+}
+
 struct SegStream {
     /// ftyp+moov init segment — the demux prefix for every media segment.
     init: Vec<u8>,
-    /// Media segment URLs, in presentation order.
-    urls: Vec<String>,
+    /// Media segments (url + optional byte range), in presentation order.
+    segs: Vec<Seg>,
     /// Each segment's absolute start time (µs) — the seek target → segment map.
     starts_us: Vec<i64>,
     client: reqwest::Client,
@@ -197,28 +214,77 @@ struct SegStream {
     den: i64,
     /// All segments consumed (or a fatal fetch/open error).
     done: bool,
+    /// Read-ahead for the next segment (filled by `drive_prefetch`, consumed by
+    /// `open_next` — so the segment-boundary fetch is off the critical path).
+    pf: std::rc::Rc<RefCell<Prefetch>>,
+}
+
+/// Fetch one segment's bytes (whole URL or byte range).
+async fn fetch_seg_bytes(client: &reqwest::Client, s: &Seg) -> Result<Vec<u8>, String> {
+    match s.range {
+        Some((off, len)) => net::fetch_range(client, &s.url, off, Some(off + len - 1)).await.map(|r| r.bytes),
+        None => net::fetch_url(client, &s.url).await,
+    }
 }
 
 impl SegStream {
     fn ticks_to_us(pts: i64, num: i64, den: i64) -> i64 {
         if den == 0 { 0 } else { (pts as i128 * num as i128 * 1_000_000 / den as i128) as i64 }
     }
-    /// Fetch + open the next media segment (`init + urls[idx]`). False = no more / error.
+    /// Spawn an async fetch of the NEXT segment into the shared prefetch slot (if not
+    /// already ready/in-flight). Called from bg-tick so the boundary fetch is hidden.
+    fn drive_prefetch(&self) {
+        let idx = self.idx;
+        if idx >= self.segs.len() {
+            return;
+        }
+        {
+            let pf = self.pf.borrow();
+            if pf.inflight || pf.ready.as_ref().map(|(i, _)| *i == idx).unwrap_or(false) {
+                return;
+            }
+        }
+        self.pf.borrow_mut().inflight = true;
+        let pf = self.pf.clone();
+        let s = self.segs[idx].clone();
+        let client = self.client.clone();
+        reqwest::task::spawn(async move {
+            let bytes = fetch_seg_bytes(&client, &s).await;
+            let mut p = pf.borrow_mut();
+            p.inflight = false;
+            if let Ok(b) = bytes {
+                p.ready = Some((idx, b));
+            }
+        });
+    }
+    /// Fetch + open the next media segment (`init + segs[idx]`). False = no more / error.
+    /// Uses the prefetched bytes if ready; otherwise blocks (legal in the bg-tick).
     fn open_next(&mut self) -> bool {
-        if self.idx >= self.urls.len() {
+        if self.idx >= self.segs.len() {
             self.done = true;
             return false;
         }
-        let url = self.urls[self.idx].clone();
-        let client = self.client.clone();
-        let seg = match wit_bindgen::rt::async_support::block_on(async move {
-            net::fetch_url(&client, &url).await
-        }) {
-            Ok(b) => b,
-            Err(e) => {
-                log(format!("fmp4: segment {} fetch: {e}", self.idx));
-                self.done = true;
-                return false;
+        // Prefer the prefetched bytes for this idx; else block-fetch.
+        let prefetched = {
+            let mut pf = self.pf.borrow_mut();
+            match &pf.ready {
+                Some((i, _)) if *i == self.idx => pf.ready.take().map(|(_, b)| b),
+                _ => None,
+            }
+        };
+        let seg = match prefetched {
+            Some(b) => b,
+            None => {
+                let s = self.segs[self.idx].clone();
+                let client = self.client.clone();
+                match wit_bindgen::rt::async_support::block_on(async move { fetch_seg_bytes(&client, &s).await }) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        log(format!("fmp4: segment {} fetch: {e}", self.idx));
+                        self.done = true;
+                        return false;
+                    }
+                }
             }
         };
         let mut buf = Vec::with_capacity(self.init.len() + seg.len());
@@ -260,6 +326,8 @@ impl SegStream {
         self.idx = seg;
         self.dmx = None;
         self.done = false;
+        // Drop any read-ahead for the pre-seek position.
+        *self.pf.borrow_mut() = Prefetch::default();
         self.starts_us.get(seg).copied().unwrap_or(0)
     }
 }
@@ -297,6 +365,25 @@ impl Fmp4Source {
         }
         landed
     }
+    /// Kick off read-ahead of the next video + audio segment (off the critical path).
+    fn drive_prefetch(&self) {
+        self.video.drive_prefetch();
+        if let Some(a) = &self.audio {
+            a.drive_prefetch();
+        }
+    }
+}
+
+/// Drive the DASH/CMAF read-ahead for the active stream (no-op for MP4/MKV, which
+/// have their own HttpRangeReader prefetch). Called from the consumer's bg-tick.
+pub fn drive_fmp4_prefetch() {
+    STREAM.with(|s| {
+        if let Some(p) = s.borrow().as_ref() {
+            if let Demux::Fmp4(src) = &p.demux {
+                src.drive_prefetch();
+            }
+        }
+    });
 }
 
 /// A live `mp4`-crate demux session over the blocking Range reader.
@@ -1257,7 +1344,7 @@ fn video_config_from_init(init: &[u8]) -> Result<(Codec, Vec<u8>, usize, u32, u3
 /// catches back up. Runs in bg-tick (the config-init fetch + do_seek do I/O).
 pub fn switch_video_rep(
     new_init: Vec<u8>,
-    new_urls: Vec<String>,
+    new_segs: Vec<Seg>,
     new_starts_us: Vec<i64>,
 ) -> Result<(), String> {
     let (codec, ps_prefix, nal_len, width, height, num, den) = video_config_from_init(&new_init)?;
@@ -1276,8 +1363,8 @@ pub fn switch_video_rep(
         let Demux::Fmp4(src) = &mut p.demux else { return Err("switch: not a DASH stream".to_string()) };
         let client = src.video.client.clone();
         src.video = SegStream {
-            init: new_init, urls: new_urls, starts_us: new_starts_us, client,
-            idx: 0, dmx: None, num, den, done: false,
+            init: new_init, segs: new_segs, starts_us: new_starts_us, client,
+            idx: 0, dmx: None, num, den, done: false, pf: Default::default(),
         };
         p.dec = dec;
         p.ps_prefix = ps_prefix;
@@ -1302,9 +1389,9 @@ pub fn switch_video_rep(
 /// `video_annexb`); demux_cursor stays u64::MAX (the RollingBuffer path is idle).
 pub fn open_fmp4_streaming(
     video_init: Vec<u8>,
-    video_urls: Vec<String>,
+    video_segs: Vec<Seg>,
     video_starts_us: Vec<i64>,
-    audio: Option<(Vec<u8>, Vec<String>, Vec<i64>)>,
+    audio: Option<(Vec<u8>, Vec<Seg>, Vec<i64>)>,
     client: reqwest::Client,
     title: String,
     duration_us: i64,
@@ -1316,7 +1403,7 @@ pub fn open_fmp4_streaming(
 
     let video = SegStream {
         init: video_init,
-        urls: video_urls,
+        segs: video_segs,
         starts_us: video_starts_us,
         client: client.clone(),
         idx: 0,
@@ -1324,6 +1411,7 @@ pub fn open_fmp4_streaming(
         num: v_num,
         den: v_den,
         done: false,
+        pf: Default::default(),
     };
 
     // ---- audio config from its init segment (optional) ----
@@ -1346,8 +1434,8 @@ pub fn open_fmp4_streaming(
                             if ok {
                                 log(format!("audio: aac {}ch @ {} Hz", ap.channels.unwrap_or(2), rate));
                                 let ss = SegStream {
-                                    init: ainit, urls: aurls, starts_us: astarts, client: client.clone(),
-                                    idx: 0, dmx: None, num: a_num, den: a_den, done: false,
+                                    init: ainit, segs: aurls, starts_us: astarts, client: client.clone(),
+                                    idx: 0, dmx: None, num: a_num, den: a_den, done: false, pf: Default::default(),
                                 };
                                 (Some(ss), dec, true, resamp)
                             } else {

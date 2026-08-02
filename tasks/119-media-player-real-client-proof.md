@@ -201,9 +201,14 @@ the `Demux::Fmp4` variant. New code = manifest parse + segment fetch + this read
   re-syncs to the current position (segment-aligned/keyframe). Audio is only briefly
   re-synced (the master clock keeps running). MANUAL trigger proves the mechanism;
   automatic ABR (bandwidth/buffer-driven rep selection) is the follow-up.
-- **B3 — HLS (CMAF) test stream.** `m3u8-rs` master+media playlists → same fMP4 demux
-  → proves the second protocol with one container path. (Skip TS-HLS: needs a separate
-  `mpeg2ts` demuxer; CMAF-HLS avoids it.)
+- **B3 — HLS (CMAF) test stream.** ✅ **DONE (2026-08-02, user-confirmed).** `m3u8-rs`
+  master + media playlists → the SAME per-segment `oxideav-mp4` demux + engine as DASH
+  (only the manifest parse differs). `wandr.dash` auto-detects `.m3u8`/`#EXTM3U` vs
+  `.mpd`; HLS `#EXT-X-MAP` init + `#EXT-X-BYTERANGE` segments handled (a `Seg` carries an
+  optional byte range, so byte-range AND whole-file segments both work). Verified on
+  Axinom `clear_1080p_h264` (H.264 + AAC-LC): plays, seek + bitrate switch work. A
+  read-ahead prefetch (fetch the next segment before the current runs out) smooths the
+  boundary. (Skip TS-HLS: CMAF-HLS avoids the `mpeg2ts` demuxer.)
 - **B4 (optional) — PeerTube real-client.** Federated, open API, serves HLS — the
   "real streaming service" story without a fortress: browse a PeerTube instance → play
   its HLS. Same engine.
@@ -228,9 +233,13 @@ separate A/V — exactly the adaptive path. Codecs avc1 (host `wandr:video`) + m
 2. An open **DASH (CMAF)** test stream plays on-screen — separate video+audio, segmented,
    A/V-synced, with a mid-stream bitrate switch (B1–B2); **HLS** proven with the same
    fMP4 demuxer (B3). No infrastructure, no Google. (YouTube parked — server-assisted only.)
-3. The upstream `wandr:video` proposal is drafted with these two as the "real consumers"
-   that justify the playback contract (opaque `decoded-frame` + `present(at-ns)` +
-   `flush`/`reset` + `timestamp-us`). → closes the last of task 117 M2.
+3. ✅ **DONE.** The upstream `wasi-video-decoder` proposal's playback lane is drafted
+   with these as the "real consumers" — `contracts/proposals/wasi-video-decoder/NOTES.md`
+   records the **necessary-and-sufficient** argument: every playback verb (`submit-timed`,
+   `next-decoded`, `decoded-frame.present(at-ns)` + `timestamp-us`, `flush`/`reset`,
+   `open-accelerated`, `presented-rect`) tied to the consumer behaviour that requires it,
+   and sufficiency = zero contract edits across 3 containers / 2 protocols / seek /
+   bitrate-switch. → **closes the last of task 117 M2.**
 
 ## Explicitly NOT doing
 - **Server-side transcoding as the path** — must be DirectPlay/`static=true`, or the proof

@@ -44,7 +44,7 @@ use std::cell::RefCell;
 /// adaptive path). Verified live 2026-08-01 (see tasks/119-…-real-client-proof.md).
 /// The SAME asset also serves HLS (`…/.m3u8`) for B3.
 const DEFAULT_MPD: &str =
-    "https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd";
+    "https://media.axprod.net/TestVectors/Cmaf/clear_1080p_h264/manifest.m3u8";
 
 /// Where the client is in the fetch-manifest → resolve → play lifecycle. The
 /// render loop reads this to decide what to draw; the async engine advances it.
@@ -137,9 +137,33 @@ const SEG_LIMIT: usize = 100_000;
 /// map a seek target to the segment covering it.
 #[derive(Clone)]
 struct RepPlan {
-    init: String,
-    segs: Vec<String>,
+    /// Init segment (whole URL for DASH/HLS, or a byte range for byte-range HLS).
+    init: engine::Seg,
+    /// Media segments (url + optional byte range).
+    segs: Vec<engine::Seg>,
     starts_us: Vec<i64>,
+}
+
+/// Whole URL as a segment (DASH + whole-file HLS: no byte range).
+fn seg(url: String) -> engine::Seg {
+    engine::Seg { url, range: None }
+}
+
+/// Fetch a segment's bytes (whole URL or byte range).
+async fn fetch_seg(client: &reqwest::Client, s: &engine::Seg) -> Option<Vec<u8>> {
+    match s.range {
+        Some((off, len)) => {
+            let u = url::Url::parse(&s.url).ok()?;
+            let resp = client
+                .get(u)
+                .header("Range", format!("bytes={}-{}", off, off + len - 1))
+                .send()
+                .await
+                .ok()?;
+            Some(resp.bytes().await.ok()?.to_vec())
+        }
+        None => fetch_bytes(client, &s.url).await,
+    }
 }
 
 /// $Template$ substitution (DASH SegmentTemplate identifiers we use): the two
@@ -192,7 +216,7 @@ fn resolve_rep(
     total_dur_us: i64,
 ) -> Option<RepPlan> {
     let init_t = tmpl.initialization.as_ref()?;
-    let init = base.join(&subst(init_t, rep_id, bw, None, None)).ok()?.to_string();
+    let init = seg(base.join(&subst(init_t, rep_id, bw, None, None)).ok()?.to_string());
     let media_t = tmpl.media.as_ref()?;
     let timescale = tmpl.timescale.unwrap_or(1).max(1);
     let mut segs = Vec::new();
@@ -202,7 +226,7 @@ fn resolve_rep(
         // $Time$ mode: each SegmentTimeline entry's cumulative `t`.
         for t in timeline_times(tl, limit) {
             if let Ok(u) = base.join(&subst(media_t, rep_id, bw, Some(t), None)) {
-                segs.push(u.to_string());
+                segs.push(seg(u.to_string()));
                 starts_us.push((t as i128 * 1_000_000 / timescale as i128) as i64);
             }
         }
@@ -218,7 +242,7 @@ fn resolve_rep(
         for n in 0..count {
             let number = start_number + n as u64;
             if let Ok(u) = base.join(&subst(media_t, rep_id, bw, None, Some(number))) {
-                segs.push(u.to_string());
+                segs.push(seg(u.to_string()));
                 starts_us.push(n as i64 * seg_dur_us);
             }
         }
@@ -254,6 +278,120 @@ async fn fetch_bytes(client: &reqwest::Client, url_str: &str) -> Option<Vec<u8>>
     Some(resp.bytes().await.ok()?.to_vec())
 }
 
+// ---- HLS (m3u8) — same CMAF/fMP4 segments as DASH, just a different manifest ----
+
+/// Parse one HLS MEDIA playlist into a RepPlan (init from `#EXT-X-MAP`, segments
+/// from `#EXTINF` with optional `#EXT-X-BYTERANGE`) + its total duration (µs).
+fn hls_media_to_plan(media_url: &url::Url, text: &[u8]) -> Option<(RepPlan, i64)> {
+    let media = match m3u8_rs::parse_playlist(text) {
+        Ok((_, m3u8_rs::Playlist::MediaPlaylist(m))) => m,
+        _ => return None,
+    };
+    // The init segment (EXT-X-MAP) rides on each MediaSegment; take the first.
+    let map = media.segments.first()?.map.as_ref()?;
+    let init_url = media_url.join(&map.uri).ok()?.to_string();
+    let init = match &map.byte_range {
+        Some(br) => engine::Seg { url: init_url, range: Some((br.offset.unwrap_or(0), br.length)) },
+        None => seg(init_url),
+    };
+    let mut segs = Vec::new();
+    let mut starts_us = Vec::new();
+    let mut cur_us = 0i64;
+    let mut running_off = 0u64; // for EXT-X-BYTERANGE entries with no explicit offset
+    for m in &media.segments {
+        let su = media_url.join(&m.uri).ok()?.to_string();
+        let s = match &m.byte_range {
+            Some(br) => {
+                let off = br.offset.unwrap_or(running_off);
+                running_off = off + br.length;
+                engine::Seg { url: su, range: Some((off, br.length)) }
+            }
+            None => seg(su),
+        };
+        segs.push(s);
+        starts_us.push(cur_us);
+        cur_us += (m.duration as f64 * 1_000_000.0) as i64;
+    }
+    if segs.is_empty() {
+        return None;
+    }
+    Some((RepPlan { init, segs, starts_us }, cur_us))
+}
+
+/// Resolve an HLS MASTER playlist → (video reps sorted by bandwidth, audio plan,
+/// duration µs, title). Each H.264/H.265 variant's media playlist becomes a RepInfo;
+/// the audio group's rendition becomes the audio plan. Fetches media playlists.
+async fn resolve_hls(
+    client: &reqwest::Client,
+    master_url: &url::Url,
+    text: &[u8],
+) -> Option<(Vec<RepInfo>, Option<RepPlan>, i64, String)> {
+    let master = match m3u8_rs::parse_playlist(text) {
+        Ok((_, m3u8_rs::Playlist::MasterPlaylist(m))) => m,
+        Ok((_, m3u8_rs::Playlist::MediaPlaylist(_))) => {
+            log("hls: got a media playlist, need a master");
+            return None;
+        }
+        Err(_) => {
+            log("hls: master parse failed");
+            return None;
+        }
+    };
+    let mut reps: Vec<(u64, RepInfo)> = Vec::new();
+    let mut dur_us = 0i64;
+    let mut audio_group: Option<String> = None;
+    for v in &master.variants {
+        if v.is_i_frame {
+            continue;
+        }
+        let codecs = v.codecs.as_deref().unwrap_or("");
+        if !codecs.contains("avc1") && !codecs.contains("hvc") && !codecs.contains("hev") {
+            continue; // only H.264/H.265 fMP4
+        }
+        if audio_group.is_none() {
+            audio_group = v.audio.clone();
+        }
+        let Ok(media_url) = master_url.join(&v.uri) else { continue };
+        let Some(mtext) = fetch_bytes(client, media_url.as_str()).await else { continue };
+        if let Some((plan, d)) = hls_media_to_plan(&media_url, &mtext) {
+            dur_us = dur_us.max(d);
+            let label = v
+                .resolution
+                .map(|r| format!("{}x{}", r.width, r.height))
+                .unwrap_or_else(|| format!("{}k", v.bandwidth / 1000));
+            reps.push((v.bandwidth, RepInfo { label, plan }));
+        }
+    }
+    reps.sort_by_key(|(bw, _)| *bw);
+    let video_reps: Vec<RepInfo> = reps.into_iter().map(|(_, r)| r).collect();
+    if video_reps.is_empty() {
+        log("hls: no playable (H.264/H.265) video variants");
+        return None;
+    }
+    // Audio: a rendition in the group the video variants reference.
+    let aplan = match audio_group {
+        Some(gid) => {
+            let alt = master.alternatives.iter().find(|a| {
+                matches!(a.media_type, m3u8_rs::AlternativeMediaType::Audio)
+                    && a.group_id == gid
+                    && a.uri.is_some()
+            });
+            match alt.and_then(|a| a.uri.as_ref()) {
+                Some(auri) => match master_url.join(auri) {
+                    Ok(au) => match fetch_bytes(client, au.as_str()).await {
+                        Some(atext) => hls_media_to_plan(&au, &atext).map(|(p, _)| p),
+                        None => None,
+                    },
+                    Err(_) => None,
+                },
+                None => None,
+            }
+        }
+        None => None,
+    };
+    Some((video_reps, aplan, dur_us, "HLS stream".to_string()))
+}
+
 /// bg-tick driver (spawned once): fetch + parse the MPD, resolve a video + audio
 /// Representation, fetch ONLY each rep's init segment, and hand the ordered media
 /// segment URLs to the engine — which streams them one at a time (`Demux::Fmp4`).
@@ -277,60 +415,75 @@ async fn driver() {
         return set_phase(Phase::Ended);
     };
     let Some(text) = fetch_bytes(&client, mpd_url.as_str()).await else {
-        log("FAILED: mpd fetch");
-        return set_phase(Phase::Ended);
-    };
-    let text = String::from_utf8_lossy(&text).into_owned();
-    let mpd = match dash_mpd::parse(&text) {
-        Ok(m) => m,
-        Err(e) => {
-            log(format!("FAILED: mpd parse: {e}"));
-            return set_phase(Phase::Ended);
-        }
-    };
-    let Some(period) = mpd.periods.first() else {
-        log("FAILED: no period");
+        log("FAILED: manifest fetch");
         return set_phase(Phase::Ended);
     };
 
-    // BaseURL resolution: MPD-level then Period-level, relative to the manifest URL.
-    let mut base = mpd_url.clone();
-    for b in &mpd.base_url {
-        if let Ok(j) = base.join(&b.base) { base = j; }
-    }
-    for b in &period.BaseURL {
-        if let Ok(j) = base.join(&b.base) { base = j; }
-    }
-
-    let dur_us = mpd.mediaPresentationDuration.map(|d| d.as_micros() as i64).unwrap_or(0);
-
-    // Resolve ALL video reps (B2 ABR) and keep them, sorted by bandwidth ascending.
-    let Some(vadapt) = period.adaptations.iter().find(|a| {
-        a.contentType.as_deref() == Some("video")
-            || a.mimeType.as_deref().map(|m| m.starts_with("video")).unwrap_or(false)
-    }) else {
-        log("FAILED: no video adaptation");
-        return set_phase(Phase::Ended);
-    };
-    let mut reps: Vec<(u64, RepInfo)> = Vec::new();
-    for rep in &vadapt.representations {
-        let id = rep.id.clone().unwrap_or_default();
-        let bw = rep.bandwidth.unwrap_or(0);
-        let label = match (rep.width, rep.height) {
-            (Some(w), Some(h)) => format!("{w}x{h}"),
-            _ => format!("{}k", bw / 1000),
-        };
-        let tmpl = vadapt.SegmentTemplate.as_ref().or(rep.SegmentTemplate.as_ref());
-        if let Some(t) = tmpl {
-            if let Some(plan) = resolve_rep(&base, t, &id, bw, SEG_LIMIT, dur_us) {
-                reps.push((bw, RepInfo { label, plan }));
+    // Dispatch on protocol (HLS `.m3u8` / `#EXTM3U` vs DASH `.mpd`); both resolve to
+    // the SAME shape: video reps (sorted) + an audio plan + duration + title.
+    let is_hls = mpd_url.as_str().split('?').next().unwrap_or("").ends_with(".m3u8")
+        || text.starts_with(b"#EXTM3U");
+    let (video_reps, aplan, dur_us, title) = if is_hls {
+        match resolve_hls(&client, &mpd_url, &text).await {
+            Some(t) => t,
+            None => {
+                log("FAILED: hls resolve");
+                return set_phase(Phase::Ended);
             }
         }
-    }
-    reps.sort_by_key(|(bw, _)| *bw);
-    let video_reps: Vec<RepInfo> = reps.into_iter().map(|(_, r)| r).collect();
+    } else {
+        let text = String::from_utf8_lossy(&text).into_owned();
+        let mpd = match dash_mpd::parse(&text) {
+            Ok(m) => m,
+            Err(e) => {
+                log(format!("FAILED: mpd parse: {e}"));
+                return set_phase(Phase::Ended);
+            }
+        };
+        let Some(period) = mpd.periods.first() else {
+            log("FAILED: no period");
+            return set_phase(Phase::Ended);
+        };
+        // BaseURL resolution: MPD-level then Period-level, relative to the manifest URL.
+        let mut base = mpd_url.clone();
+        for b in &mpd.base_url {
+            if let Ok(j) = base.join(&b.base) { base = j; }
+        }
+        for b in &period.BaseURL {
+            if let Ok(j) = base.join(&b.base) { base = j; }
+        }
+        let dur_us = mpd.mediaPresentationDuration.map(|d| d.as_micros() as i64).unwrap_or(0);
+        let Some(vadapt) = period.adaptations.iter().find(|a| {
+            a.contentType.as_deref() == Some("video")
+                || a.mimeType.as_deref().map(|m| m.starts_with("video")).unwrap_or(false)
+        }) else {
+            log("FAILED: no video adaptation");
+            return set_phase(Phase::Ended);
+        };
+        let mut reps: Vec<(u64, RepInfo)> = Vec::new();
+        for rep in &vadapt.representations {
+            let id = rep.id.clone().unwrap_or_default();
+            let bw = rep.bandwidth.unwrap_or(0);
+            let label = match (rep.width, rep.height) {
+                (Some(w), Some(h)) => format!("{w}x{h}"),
+                _ => format!("{}k", bw / 1000),
+            };
+            let tmpl = vadapt.SegmentTemplate.as_ref().or(rep.SegmentTemplate.as_ref());
+            if let Some(t) = tmpl {
+                if let Some(plan) = resolve_rep(&base, t, &id, bw, SEG_LIMIT, dur_us) {
+                    reps.push((bw, RepInfo { label, plan }));
+                }
+            }
+        }
+        reps.sort_by_key(|(bw, _)| *bw);
+        let video_reps: Vec<RepInfo> = reps.into_iter().map(|(_, r)| r).collect();
+        let aplan = pick(period, "audio")
+            .and_then(|(t, id, bw)| resolve_rep(&base, t, &id, bw, SEG_LIMIT, dur_us));
+        (video_reps, aplan, dur_us, "Big Buck Bunny".to_string())
+    };
+
     if video_reps.is_empty() {
-        log("FAILED: no video reps resolved");
+        log("FAILED: no playable video reps");
         return set_phase(Phase::Ended);
     }
     let n_reps = video_reps.len();
@@ -343,19 +496,16 @@ async fn driver() {
         e.pending_rep = None;
     });
 
-    let aplan = pick(period, "audio")
-        .and_then(|(t, id, bw)| resolve_rep(&base, t, &id, bw, SEG_LIMIT, dur_us));
-
-    log(format!("video {v_label} ({n_reps} reps — press 'b' to switch); audio {}",
+    log(format!("{title}: video {v_label} ({n_reps} reps — 'b' switches); audio {}",
         aplan.as_ref().map(|p| format!("{} segs", p.segs.len())).unwrap_or_else(|| "none".into())));
 
     // Fetch ONLY the init segments (config); media segments stream on demand.
-    let Some(video_init) = fetch_bytes(&client, &vplan.init).await else {
+    let Some(video_init) = fetch_seg(&client, &vplan.init).await else {
         log("FAILED: video init fetch");
         return set_phase(Phase::Ended);
     };
     let audio_arg = match &aplan {
-        Some(ap) => match fetch_bytes(&client, &ap.init).await {
+        Some(ap) => match fetch_seg(&client, &ap.init).await {
             Some(ainit) => Some((ainit, ap.segs.clone(), ap.starts_us.clone())),
             None => {
                 log("audio: init fetch failed — video only");
@@ -369,7 +519,7 @@ async fn driver() {
     log(format!("opening (streaming): video init {} KB, {} media segs", video_init.len() / 1024, vplan.segs.len()));
     match engine::open_fmp4_streaming(
         video_init, vplan.segs, vplan.starts_us, audio_arg, client,
-        "Big Buck Bunny".to_string(), dur_us, surface,
+        title, dur_us, surface,
     ) {
         Ok(()) => {
             // Reset controls for a fresh stream (mirrors jellyfin's on_stream_started).
@@ -584,7 +734,7 @@ impl BgGuest for Component {
                 e.video_reps.get(target).map(|r| (r.label.clone(), r.plan.clone()))
             });
             if let (Some((label, plan)), Some(client)) = (sel, build_client()) {
-                match fetch_bytes(&client, &plan.init).await {
+                match fetch_seg(&client, &plan.init).await {
                     Some(init) => match engine::switch_video_rep(init, plan.segs, plan.starts_us) {
                         Ok(()) => {
                             ENGINE.with(|e| e.borrow_mut().cur_rep = target);
@@ -615,6 +765,9 @@ impl BgGuest for Component {
             if let Some(h) = engine::STREAM.with(|s| s.borrow().as_ref().and_then(|p| p.prefetch_handle())) {
                 engine::drive_prefetch(&h);
             }
+            // DASH/CMAF read-ahead: fetch the next video+audio segment before the
+            // current one runs out, so segment boundaries don't stall.
+            engine::drive_fmp4_prefetch();
         }
 
         // bg-tick cadence (ms): brisk while loading/playing, lazy otherwise.
