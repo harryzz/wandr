@@ -2149,6 +2149,34 @@ pub fn draw_text(cv: &Canvas, text: &str, x: f32, y: f32, size: f32, weight: u32
     para.paint(cv, wtypes::Point { x, y });
 }
 
+/// Decode PNG/JPEG/WebP/GIF/BMP bytes to a host-resident image via the canvas
+/// `graphics` factory (host-side Skia decode — no guest image codec). `None` on
+/// unrecognized/truncated data. Used for Subsonic cover art / thumbnails.
+pub fn decode_image(bytes: &[u8]) -> Option<wtypes::Image> {
+    wctx(|x| x.graphics().decode_image(bytes).ok())
+}
+
+/// Draw `img` aspect-fill ("cover") into the dst rect: scale so the image fills
+/// the box, cropping the overflowing axis symmetrically (centered). One source of
+/// truth for cover-art tiles so every view places art identically.
+pub fn draw_image_cover(cv: &Canvas, img: &wtypes::Image, x: f32, y: f32, w: f32, h: f32) {
+    let (iw, ih) = (img.width().max(1) as f32, img.height().max(1) as f32);
+    let scale = (w / iw).max(h / ih); // fill the longer-constraining axis
+    let (sw, sh) = ((w / scale).min(iw), (h / scale).min(ih)); // src crop in image px
+    let (sx, sy) = ((iw - sw) / 2.0, (ih - sh) / 2.0);
+    let sampling = wtypes::Sampling {
+        filter: wtypes::FilterMode::Linear,
+        mipmap: wtypes::MipmapMode::Linear,
+    };
+    cv.draw_image_rect(
+        img,
+        wtypes::Rect { x: sx, y: sy, width: sw, height: sh },
+        wtypes::Rect { x, y, width: w, height: h },
+        sampling,
+        &fill_paint(0xFFFF_FFFF),
+    );
+}
+
 pub fn wctx<R>(f: impl FnOnce(&wembed::CanvasContext) -> R) -> R {
     WCTX.with(|c| {
         if c.borrow().is_none() {
@@ -2216,7 +2244,18 @@ pub fn draw_pause(cv: &Canvas, x: f32, y: f32, s: f32, color: u32) {
 pub fn render_playing(nanos: u64) {
     let cv = wctx(|x| x.get_current_buffer());
     cv.clear(0x0000_0000); // transparent — the decoded video shows through
+    render_transport(nanos, &cv);
+    drop(cv);
+    wctx(|x| x.present());
+}
 
+/// The transport chrome — title bar, bottom control panel (scrub/play/stop/mute/vol),
+/// subtitles, paused pill — drawn over an ALREADY-PREPARED canvas (does NOT clear or
+/// present). `render_playing` calls this over a transparent buffer (video shows
+/// through the host composite); an audio client calls it over its own cover-art
+/// background. One source of truth for the transport, so the hit-testing in
+/// `control_bar` matches whatever draws it.
+pub fn render_transport(nanos: u64, cv: &Canvas) {
     let (sw, sh) = CONTROLS.with(|e| e.borrow().surface);
     let (sw, sh) = (sw as f32, sh as f32);
     let (paused, muted, volume, controls_until_ns, scrubbing, scrub_frac, subs_on) = CONTROLS.with(|e| {
@@ -2247,24 +2286,24 @@ pub fn render_playing(nanos: u64) {
 
     // Always-on: a thin progress sliver at the very bottom + the small A/V-sync
     // dev readout (VIDEO clock vs AUDIO device position; Δ≈0 = in sync).
-    draw_rect(&cv, 0.0, sh - 3.0, sw, 3.0, 0x40FF_FFFF);
-    draw_rect(&cv, 0.0, sh - 3.0, sw * pct, 3.0, 0xFF7B_FFB0);
+    draw_rect(cv, 0.0, sh - 3.0, sw, 3.0, 0x40FF_FFFF);
+    draw_rect(cv, 0.0, sh - 3.0, sw * pct, 3.0, 0xFF7B_FFB0);
     let diag = format!(
         "V {:.2}s | A {:.2}s | Δ {:+.2}s",
         clock_us as f64 / 1e6, audio_pos_us as f64 / 1e6,
         (audio_pos_us - clock_us) as f64 / 1e6,
     );
-    draw_text(&cv, &diag, 12.0, 8.0, 12.0, 600, 0xC0FF_D060, sw - 24.0);
+    draw_text(cv, &diag, 12.0, 8.0, 12.0, 600, 0xC0FF_D060, sw - 24.0);
 
     if show {
         // Title bar.
-        draw_rect(&cv, 0.0, 0.0, sw, 44.0, 0xCC10_1216);
-        draw_text(&cv, &title, 16.0, 12.0, 20.0, 700, 0xFFFF_FFFF, sw - 120.0);
-        draw_text(&cv, "Esc: list", sw - 92.0, 15.0, 14.0, 500, 0xFF8A_9098, 92.0);
+        draw_rect(cv, 0.0, 0.0, sw, 44.0, 0xCC10_1216);
+        draw_text(cv, &title, 16.0, 12.0, 20.0, 700, 0xFFFF_FFFF, sw - 120.0);
+        draw_text(cv, "Esc: list", sw - 92.0, 15.0, 14.0, 500, 0xFF8A_9098, 92.0);
 
         // Bottom transport panel.
         let c = control_bar(sw, sh);
-        draw_rect(&cv, c.panel.0, c.panel.1, c.panel.2, c.panel.3, 0xCC10_1216);
+        draw_rect(cv, c.panel.0, c.panel.1, c.panel.2, c.panel.3, 0xCC10_1216);
 
         // Scrub: track + buffered-ahead + played + knob.
         let buf_pct = if dur_us > 0 {
@@ -2272,12 +2311,12 @@ pub fn render_playing(nanos: u64) {
         } else { 0.0 };
         // While dragging, the played fill + knob preview the drag position.
         let disp_frac = if scrubbing { scrub_frac } else { pct };
-        draw_rect(&cv, c.scrub.0, c.scrub.1, c.scrub.2, c.scrub.3, 0x40FF_FFFF);
-        draw_rect(&cv, c.scrub.0, c.scrub.1, c.scrub.2 * buf_pct, c.scrub.3, 0x66FF_FFFF);
-        draw_rect(&cv, c.scrub.0, c.scrub.1, c.scrub.2 * disp_frac, c.scrub.3,
+        draw_rect(cv, c.scrub.0, c.scrub.1, c.scrub.2, c.scrub.3, 0x40FF_FFFF);
+        draw_rect(cv, c.scrub.0, c.scrub.1, c.scrub.2 * buf_pct, c.scrub.3, 0x66FF_FFFF);
+        draw_rect(cv, c.scrub.0, c.scrub.1, c.scrub.2 * disp_frac, c.scrub.3,
             if scrubbing { 0xFFFF_D060 } else { 0xFF7B_FFB0 });
         let kx = c.scrub.0 + c.scrub.2 * disp_frac;
-        draw_rect(&cv, kx - 3.0, c.scrub.1 - 4.0, 6.0, c.scrub.3 + 8.0, 0xFFFF_FFFF);
+        draw_rect(cv, kx - 3.0, c.scrub.1 - 4.0, 6.0, c.scrub.3 + 8.0, 0xFFFF_FFFF);
 
         // Times + frame counter. While scrubbing, show the DRAG-TARGET time.
         let frames = if total > 0 { format!("{presented}/{total}") } else { format!("{presented}") };
@@ -2289,26 +2328,26 @@ pub fn render_playing(nanos: u64) {
                 fmt_dur(clock_us as f64 / 1e6), fmt_dur(dur_us as f64 / 1e6), aud_buf_s
             )
         };
-        draw_text(&cv, &tline, c.scrub.0, c.scrub.1 + 11.0, 12.0, 400, 0xFFB0_B4BC, sw - 32.0);
+        draw_text(cv, &tline, c.scrub.0, c.scrub.1 + 11.0, 12.0, 400, 0xFFB0_B4BC, sw - 32.0);
 
         // Play/pause button — icon shows the ACTION (play when paused, else pause).
-        draw_rect(&cv, c.playpause.0, c.playpause.1, c.playpause.2, c.playpause.3, 0x33FF_FFFF);
+        draw_rect(cv, c.playpause.0, c.playpause.1, c.playpause.2, c.playpause.3, 0x33FF_FFFF);
         if paused {
-            draw_play(&cv, c.playpause.0 + 11.0, c.playpause.1 + 8.0, 18.0, 0xFFFF_FFFF);
+            draw_play(cv, c.playpause.0 + 11.0, c.playpause.1 + 8.0, 18.0, 0xFFFF_FFFF);
         } else {
-            draw_pause(&cv, c.playpause.0 + 10.0, c.playpause.1 + 8.0, 18.0, 0xFFFF_FFFF);
+            draw_pause(cv, c.playpause.0 + 10.0, c.playpause.1 + 8.0, 18.0, 0xFFFF_FFFF);
         }
         // Stop button (filled square).
-        draw_rect(&cv, c.stop.0, c.stop.1, c.stop.2, c.stop.3, 0x33FF_FFFF);
-        draw_rect(&cv, c.stop.0 + 10.0, c.stop.1 + 10.0, 14.0, 14.0, 0xFFFF_FFFF);
+        draw_rect(cv, c.stop.0, c.stop.1, c.stop.2, c.stop.3, 0x33FF_FFFF);
+        draw_rect(cv, c.stop.0 + 10.0, c.stop.1 + 10.0, 14.0, 14.0, 0xFFFF_FFFF);
 
         // Mute button + volume slider (red when muted).
         let vcol: u32 = if muted { 0xFFE0_5050 } else { 0xFFFF_FFFF };
-        draw_rect(&cv, c.mute.0, c.mute.1, c.mute.2, c.mute.3, 0x33FF_FFFF);
-        draw_rect(&cv, c.mute.0 + 9.0, c.mute.1 + 10.0, 12.0, 10.0, vcol);
-        draw_rect(&cv, c.vol.0, c.vol.1, c.vol.2, c.vol.3, 0x40FF_FFFF);
+        draw_rect(cv, c.mute.0, c.mute.1, c.mute.2, c.mute.3, 0x33FF_FFFF);
+        draw_rect(cv, c.mute.0 + 9.0, c.mute.1 + 10.0, 12.0, 10.0, vcol);
+        draw_rect(cv, c.vol.0, c.vol.1, c.vol.2, c.vol.3, 0x40FF_FFFF);
         let vlev = if muted { 0.0 } else { volume };
-        draw_rect(&cv, c.vol.0, c.vol.1, c.vol.2 * vlev, c.vol.3, vcol);
+        draw_rect(cv, c.vol.0, c.vol.1, c.vol.2 * vlev, c.vol.3, vcol);
     }
 
     // Subtitles: the active cue at the current clock, bottom-center, lifted above
@@ -2328,8 +2367,8 @@ pub fn render_playing(nanos: u64) {
                 let y = base_y + i as f32 * lh;
                 let w = (ln.chars().count() as f32 * fs * 0.52).min(sw - 24.0);
                 let x = ((sw - w) / 2.0).max(12.0);
-                draw_rect(&cv, x - 8.0, y - 2.0, w + 16.0, lh, 0xA000_0000);
-                draw_text(&cv, ln, x, y, fs, 600, 0xFFFF_FFFF, sw - 24.0);
+                draw_rect(cv, x - 8.0, y - 2.0, w + 16.0, lh, 0xA000_0000);
+                draw_text(cv, ln, x, y, fs, 600, 0xFFFF_FFFF, sw - 24.0);
             }
         }
     }
@@ -2339,12 +2378,9 @@ pub fn render_playing(nanos: u64) {
         let (pw, ph) = (150.0_f32, 46.0_f32);
         let px = (sw - pw) / 2.0;
         let py = (sh - ph) / 2.0;
-        draw_rect(&cv, px, py, pw, ph, 0xB01A_1D22);
-        draw_rect(&cv, px + 20.0, py + 13.0, 7.0, 20.0, 0xFFFF_FFFF);
-        draw_rect(&cv, px + 32.0, py + 13.0, 7.0, 20.0, 0xFFFF_FFFF);
-        draw_text(&cv, "PAUSED", px + 54.0, py + 14.0, 18.0, 700, 0xFFFF_FFFF, pw - 54.0);
+        draw_rect(cv, px, py, pw, ph, 0xB01A_1D22);
+        draw_rect(cv, px + 20.0, py + 13.0, 7.0, 20.0, 0xFFFF_FFFF);
+        draw_rect(cv, px + 32.0, py + 13.0, 7.0, 20.0, 0xFFFF_FFFF);
+        draw_text(cv, "PAUSED", px + 54.0, py + 14.0, 18.0, 700, 0xFFFF_FFFF, pw - 54.0);
     }
-
-    drop(cv);
-    wctx(|x| x.present());
 }
