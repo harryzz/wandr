@@ -34,9 +34,14 @@ use bindings::wandr::video::types::{Codec, DecoderConfig, TimedFrame, VideoError
 use bindings::wasi::audio::pcm as wpcm;
 use bindings::wasi::canvas::{draw::Canvas, embedding as wembed, layout as wlayout, types as wtypes};
 
-use symphonia::core::audio::{Channels, SampleBuffer};
-use symphonia::core::codecs::{CodecParameters, Decoder, DecoderOptions, CODEC_TYPE_AAC};
-use symphonia::core::formats::Packet;
+use symphonia::core::codecs::audio::well_known::CODEC_ID_AAC;
+use symphonia::core::codecs::audio::{AudioCodecParameters, AudioDecoder, AudioDecoderOptions};
+use symphonia::core::formats::probe::Hint;
+use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType};
+use symphonia::core::io::{MediaSource, MediaSourceStream};
+use symphonia::core::meta::MetadataOptions;
+use symphonia::core::packet::Packet;
+use symphonia::core::units::{Duration as SymDuration, Time, Timestamp};
 
 // Fragmented-MP4 (DASH/CMAF) demux — see Demux::Fmp4 / open_fmp4. `oxideav_core`'s
 // Demuxer trait methods resolve through the `dyn` type, so no `use` is needed.
@@ -170,6 +175,12 @@ pub enum Demux {
     /// contained fragmented file oxideav-mp4 opens); bounded memory, fast startup.
     /// (The `mp4` crate can't read fragments at all — broken sample offsets.)
     Fmp4(Box<Fmp4Source>),
+    /// Raw-audio containers (FLAC / MP3 / Ogg-Vorbis / WAV) for a music client — demuxed
+    /// AND decoded by symphonia natively (its `FormatReader` over the Range reader). No
+    /// video; the decoded PCM path + audio-master clock are shared with every other
+    /// source. Startup is header-only and seek is bounded (symphonia bisects frames when
+    /// a FLAC has no SEEKTABLE). See `open_audio_sync`.
+    Audio(Box<SymSource>),
 }
 
 /// One DASH Representation streamed segment-by-segment. `oxideav_mp4::demux::open`
@@ -396,6 +407,39 @@ impl std::io::Seek for SendReader {
     fn seek(&mut self, from: std::io::SeekFrom) -> std::io::Result<u64> { self.0.seek(from) }
 }
 
+/// A symphonia `MediaSource` over the Rc-based Range reader (for `Demux::Audio`).
+/// `MediaSource: Send + Sync`, which the Rc reader is not — but wasip2 is single-
+/// threaded and the reader never crosses a thread, so the unsafe impls are sound
+/// (same rationale as `SendReader`). `is_seekable`/`byte_len` advertise random access,
+/// which is what lets symphonia stream + seek without buffering the whole file.
+struct HttpMediaSource {
+    r: httprange::HttpRangeReader,
+    len: u64,
+}
+unsafe impl Send for HttpMediaSource {}
+unsafe impl Sync for HttpMediaSource {}
+impl std::io::Read for HttpMediaSource {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> { self.r.read(buf) }
+}
+impl std::io::Seek for HttpMediaSource {
+    fn seek(&mut self, from: std::io::SeekFrom) -> std::io::Result<u64> { self.r.seek(from) }
+}
+impl MediaSource for HttpMediaSource {
+    fn is_seekable(&self) -> bool { true }
+    fn byte_len(&self) -> Option<u64> { Some(self.len) }
+}
+
+/// A symphonia-native raw-audio demux session (FLAC / MP3 / Ogg-Vorbis / WAV) over the
+/// Range reader — for a music client (Subsonic/Navidrome). symphonia does BOTH demux
+/// (`FormatReader`) and, via `AudioDec::Sym`, decode; the FormatReader yields compressed
+/// packets that decode to PCM through the shared audio path. No video.
+pub struct SymSource {
+    format: Box<dyn FormatReader>,
+    track_id: u32,
+    num: i64,
+    den: i64,
+}
+
 /// One audio stream's decode params — kept for all tracks so the audio-track switch
 /// can rebuild the decoder in-place without re-opening the stream. Works the same for
 /// MP4 (esds ASC) and MKV (CodecPrivate) since both surface via `params.extradata`.
@@ -613,41 +657,39 @@ impl LinearResampler {
 /// Downmix any channel layout to interleaved stereo by CHANNEL ROLE (not by
 /// guessing order): the device only offers mono/stereo, but AAC here is 5.1.
 /// ITU-style coefficients — centre and surrounds fold in at -3 dB, LFE dropped.
-fn downmix_to_stereo(samples: &[f32], chans: &[Channels]) -> Vec<f32> {
-    let n = chans.len();
-    if n == 0 {
-        return Vec::new();
-    }
-    if n == 1 {
-        // Mono → duplicate.
-        let mut out = Vec::with_capacity(samples.len() * 2);
-        for &s in samples {
-            out.push(s);
-            out.push(s);
-        }
-        return out;
-    }
-    let frames = samples.len() / n;
-    let mut out = Vec::with_capacity(frames * 2);
-    const C: f32 = 0.707;
-    for f in 0..frames {
-        let (mut l, mut r) = (0.0f32, 0.0f32);
-        for (k, ch) in chans.iter().enumerate() {
-            let s = samples[f * n + k];
-            match *ch {
-                Channels::FRONT_LEFT => l += s,
-                Channels::FRONT_RIGHT => r += s,
-                Channels::FRONT_CENTRE => { l += C * s; r += C * s; }
-                Channels::REAR_LEFT | Channels::SIDE_LEFT => l += C * s,
-                Channels::REAR_RIGHT | Channels::SIDE_RIGHT => r += C * s,
-                Channels::LFE1 => {} // drop the sub
-                _ => { l += 0.5 * s; r += 0.5 * s; }
+fn downmix_to_stereo(samples: &[f32], ch: usize) -> Vec<f32> {
+    match ch {
+        0 => Vec::new(),
+        // Mono → duplicate to both.
+        1 => {
+            let mut out = Vec::with_capacity(samples.len() * 2);
+            for &s in samples {
+                out.push(s);
+                out.push(s);
             }
+            out
         }
-        out.push(l.clamp(-1.0, 1.0));
-        out.push(r.clamp(-1.0, 1.0));
+        // Stereo → pass through.
+        2 => samples.to_vec(),
+        // ≥3ch: fold by the SMPTE/WAVEFORMATEXTENSIBLE canonical channel ORDER that
+        // symphonia interleaves in — [FL, FR, FC, LFE, BL, BR, SL, SR, …]. Centre and
+        // surrounds fold in at -3 dB, LFE dropped. (Position-exact matching isn't needed:
+        // the interleave order is canonical, so index == position.)
+        _ => {
+            const C: f32 = 0.707;
+            let frames = samples.len() / ch;
+            let mut out = Vec::with_capacity(frames * 2);
+            for f in 0..frames {
+                let base = f * ch;
+                let g = |i: usize| samples.get(base + i).copied().unwrap_or(0.0);
+                let (fl, fr, fc) = (g(0), g(1), g(2)); // g(3) = LFE, dropped
+                let (bl, br) = (g(4), g(5));
+                out.push((fl + C * fc + C * bl).clamp(-1.0, 1.0));
+                out.push((fr + C * fc + C * br).clamp(-1.0, 1.0));
+            }
+            out
+        }
     }
-    out
 }
 
 // ---- subtitles (generic WebVTT overlay) ------------------------------------
@@ -723,6 +765,7 @@ pub fn switch_audio(p: &mut StreamPlayer, pref: usize) {
         Demux::Ox(src) => src.audio_streams.get(pref).map(|t|
             (t.codec_id.clone(), t.extradata.clone(), t.sample_rate, t.channels, t.index, t.num, t.den, t.label.clone())),
         Demux::Fmp4(_) => { log("audio: DASH audio-track switch = re-open a rep (not in-place; TODO)"); return; }
+        Demux::Audio(_) => { log("audio: raw-audio stream is single-track — no switch"); return; }
     };
     let Some((cid, cpriv, sr, ch, index, num, den, label)) = info else { return };
     let (dec, ok, resampler) = setup_audio_by_codec(&cid, &cpriv, sr, ch);
@@ -790,10 +833,15 @@ pub fn install_player(
 /// variant decodes one packet to interleaved STEREO f32 at the codec's native rate;
 /// the StreamPlayer's `resampler` then converts that rate → 48 kHz.
 pub enum AudioDec {
-    Aac(Box<dyn Decoder>),
+    Aac(Box<dyn AudioDecoder>),
     /// ropus decoder + channel count (needed to interleave→stereo).
     Opus(ropus::Decoder, usize),
     Ac3(Box<dyn oxideav_core::Decoder>),
+    /// A symphonia-NATIVE decoder for the raw-audio source (Demux::Audio): FLAC / MP3 /
+    /// Vorbis / WAV, built from the format track's CodecParameters. Same decode path as
+    /// AAC (a symphonia `AudioDecoder` over a fabricated packet) — the frames are
+    /// self-describing so the fabricated packet's duration is irrelevant.
+    Sym(Box<dyn AudioDecoder>),
 }
 
 impl AudioDec {
@@ -801,15 +849,18 @@ impl AudioDec {
     /// the codec's native sample rate. Empty on a decode hiccup (skip the packet).
     fn decode(&mut self, data: &[u8]) -> Vec<f32> {
         match self {
-            AudioDec::Aac(dec) => {
-                let packet = Packet::new_from_slice(0, 0, 1024, data);
+            AudioDec::Aac(dec) | AudioDec::Sym(dec) => {
+                // Symphonia 0.6: fabricate a packet (frames are self-describing, so the
+                // timestamps are irrelevant), decode to a GenericAudioBufferRef, and copy
+                // to interleaved f32.
+                let packet = Packet::new(0, Timestamp::ZERO, SymDuration::default(), Box::<[u8]>::from(data));
                 match dec.decode(&packet) {
-                    Ok(decoded) => {
-                        let spec = *decoded.spec();
-                        let chans: Vec<Channels> = spec.channels.iter().collect();
-                        let mut sb = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
-                        sb.copy_interleaved_ref(decoded);
-                        downmix_to_stereo(sb.samples(), &chans)
+                    Ok(buf) => {
+                        let ch = buf.spec().channels().count();
+                        let n = buf.samples_interleaved();
+                        let mut ilv = vec![0f32; n];
+                        buf.copy_to_slice_interleaved::<f32, _>(&mut ilv);
+                        downmix_to_stereo(&ilv, ch)
                     }
                     Err(_) => Vec::new(),
                 }
@@ -901,9 +952,9 @@ fn setup_aac_audio(asc: &[u8], src_rate: u32) -> (Option<AudioDec>, bool, Option
         log("audio: ASC too short — video only");
         return (None, false, None);
     }
-    let mut params = CodecParameters::new();
-    params.for_codec(CODEC_TYPE_AAC).with_sample_rate(src_rate).with_extra_data(asc.to_vec().into_boxed_slice());
-    let dec = match symphonia::default::get_codecs().make(&params, &DecoderOptions::default()) {
+    let mut params = AudioCodecParameters::new();
+    params.for_codec(CODEC_ID_AAC).with_sample_rate(src_rate).with_extra_data(asc.to_vec().into_boxed_slice());
+    let dec = match symphonia::default::get_codecs().make_audio_decoder(&params, &AudioDecoderOptions::default()) {
         Ok(d) => d,
         Err(e) => {
             log(format!("audio: decoder init failed ({e}) — video only"));
@@ -1135,6 +1186,77 @@ fn finish_ox_open(
         Ok(impl_name) => {
             STREAM.with(|s| if let Some(p) = s.borrow_mut().as_mut() { p.prefetch = handle; });
             log(format!("streaming \"{title}\" ({kind}): {width}x{height}, decoder={impl_name}"));
+            Ok(())
+        }
+        Err(e) => { log(e.clone()); Err(e) }
+    }
+}
+
+/// Open a raw-audio stream (FLAC / MP3 / Ogg-Vorbis / WAV) for a music client
+/// (Subsonic/Navidrome). symphonia probes the container, demuxes it, and — via
+/// `AudioDec::Sym` — decodes it to PCM through the shared audio path + clock. Startup is
+/// header-only and seek is bounded (symphonia bisects FLAC frames without a SEEKTABLE).
+/// PROTOTYPE: audio-only has no video track, but the shared `StreamPlayer` still wants a
+/// `VideoDecoder`, so this opens a tiny idle one (the video queue stays empty). The true
+/// audio-only profile — no video decoder / `wandr:video` import — is the deferred `video`
+/// feature-gate (task 120).
+pub fn open_audio_sync(url: String, total_len: u64, title: String, duration_us: i64, surface: (u32, u32)) -> Result<(), String> {
+    let fail = |m: String| -> Result<(), String> { log(m.clone()); Err(m) };
+    let (reader, handle) = ox_reader(&url, total_len)?;
+    let mss = MediaSourceStream::new(
+        Box::new(HttpMediaSource { r: reader, len: total_len }),
+        Default::default(),
+    );
+    let mut hint = Hint::new();
+    if let Some(ext) = url.split('?').next().and_then(|p| p.rsplit('.').next()) {
+        hint.with_extension(ext);
+    }
+    let format = match symphonia::default::get_probe()
+        .probe(&hint, mss, FormatOptions::default(), MetadataOptions::default())
+    {
+        Ok(f) => f,
+        Err(e) => return fail(format!("stream: audio probe: {e}")),
+    };
+    // Pull track info + build the decoder while `format` is borrowed, then release the
+    // borrow so `format` can move into SymSource.
+    let (track_id, num, den, sr, ch, dec) = {
+        let Some(track) = format.default_track(TrackType::Audio) else {
+            return fail("stream: audio has no track".into());
+        };
+        let track_id = track.id;
+        let (num, den) = track
+            .time_base
+            .map(|t| (t.numer.get() as i64, t.denom.get() as i64))
+            .unwrap_or((1, OUT_RATE as i64));
+        let Some(params) = track.codec_params.as_ref().and_then(|c| c.audio()) else {
+            return fail("stream: audio track has no codec params".into());
+        };
+        let sr = params.sample_rate.unwrap_or(OUT_RATE);
+        let ch = params.channels.as_ref().map(|c| c.count()).unwrap_or(2);
+        let dec = match symphonia::default::get_codecs()
+            .make_audio_decoder(params, &AudioDecoderOptions::default())
+        {
+            Ok(d) => d,
+            Err(e) => return fail(format!("stream: audio decoder init: {e}")),
+        };
+        (track_id, num, den, sr, ch, dec)
+    };
+
+    if !ensure_audio_device() {
+        return fail("stream: audio device unavailable".into());
+    }
+    let resampler = if sr != OUT_RATE { Some(LinearResampler::new(sr, 2)) } else { None };
+    log(format!("audio: {ch}ch @ {sr} Hz → stereo 48k"));
+
+    let src = Box::new(SymSource { format, track_id, num, den });
+    // Tiny idle H.264 decoder (64×64, never fed) so the shared StreamPlayer is happy.
+    match install_player(
+        url, total_len, Demux::Audio(src), Vec::new(), 0, false, Codec::H264, 64, 64, surface,
+        Some(AudioDec::Sym(dec)), true, resampler, title.clone(), duration_us, 0, None, 0,
+    ) {
+        Ok(impl_name) => {
+            STREAM.with(|s| if let Some(p) = s.borrow_mut().as_mut() { p.prefetch = handle; });
+            log(format!("streaming \"{title}\" (audio): {sr}Hz, decoder={impl_name}"));
             Ok(())
         }
         Err(e) => { log(e.clone()); Err(e) }
@@ -1378,6 +1500,20 @@ pub fn do_seek(p: &mut StreamPlayer, target_us: i64) -> i64 {
             }
         }
         Demux::Fmp4(src) => Some(src.seek(target_us)),
+        // Raw-audio: symphonia seeks by Time (bisects FLAC frames without a SEEKTABLE);
+        // Coarse is fine for music. Returns the actual landed pts → the clock re-anchors.
+        Demux::Audio(src) => {
+            let secs = (target_us / 1_000_000).max(0);
+            let nanos = ((target_us.max(0) % 1_000_000) * 1000) as u32;
+            match Time::try_new(secs, nanos).and_then(|time| {
+                src.format
+                    .seek(SeekMode::Coarse, SeekTo::Time { time, track_id: Some(src.track_id) })
+                    .ok()
+            }) {
+                Some(seeked) => Some(SegStream::ticks_to_us(seeked.actual_ts.get(), src.num, src.den)),
+                None => { log("seek: audio seek failed — staying put".to_string()); None }
+            }
+        }
     };
     let Some(landed_us) = landed_us else { return p.clock_us };
     // Discontinuity reset: drop queued frames + buffered PCM, the audio ring, and
@@ -1463,6 +1599,22 @@ pub fn fill_queues(p: &mut StreamPlayer) {
                         Prod::Skip // other track (subtitle / inactive audio) — keep going
                     }
                 }
+                Err(_) => { p.demux_done = true; Prod::Stop }
+            },
+            // Raw-audio music source (symphonia FormatReader): one audio track, no video.
+            // `next_packet` → Ok(Some) packet / Ok(None) = EOF / Err = stop. The packet is
+            // a compressed audio frame decoded later by `AudioDec::Sym`.
+            Demux::Audio(src) => match src.format.next_packet() {
+                Ok(Some(pkt)) => {
+                    if pkt.track_id == src.track_id {
+                        let pts = SegStream::ticks_to_us(pkt.pts.get(), src.num, src.den);
+                        p.audio_q.push_back(AFrame { pts_us: pts, data: pkt.data.into_vec() });
+                        Prod::Frame(pts, false)
+                    } else {
+                        Prod::Skip
+                    }
+                }
+                Ok(None) => { p.demux_done = true; Prod::Stop }
                 Err(_) => { p.demux_done = true; Prod::Stop }
             },
             // DASH/CMAF: pull whichever of the two rep demuxers is behind in PTS.

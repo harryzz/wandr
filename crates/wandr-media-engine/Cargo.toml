@@ -60,7 +60,10 @@ url = "2"
 
 # Guest-side audio decode -> interleaved f32 PCM. Symphonia (AAC/MP3/isomp4);
 # OxideAV (AC-3/E-AC-3, pure-Rust, has a 5.1->stereo downmix); ropus (Opus).
-symphonia    = { version = "0.5", features = ["mp3", "aac", "isomp4"] }
+# Audio decode (all guest-side). mp3/aac/isomp4 = the container-demuxed lanes;
+# flac/vorbis/ogg/wav = the symphonia-NATIVE audio source (Demux::Audio) for raw music
+# files streamed by a Subsonic/Navidrome server. All royalty-free.
+symphonia    = { version = "0.6.0", features = ["mp3", "aac", "isomp4", "flac", "vorbis", "ogg", "wav"] }
 oxideav-core = "0.1"
 oxideav-ac3  = "=0.0.10"
 ropus        = "0.12"
