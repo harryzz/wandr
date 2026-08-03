@@ -29,7 +29,10 @@ wit-bindgen = "0.59"
 # The shared playback engine: demux (incl. the new Demux::Fmp4) + audio decode +
 # A/V clock + present + transport overlay, and the video/audio/canvas IMPORTS
 # bindgen. The app depends ONLY on this for playback.
-wandr-media-engine = { path = "../../../crates/wandr-media-engine", default-features = false }
+# `video` = the wandr:video decode-feed + present + subtitle overlay lane (DASH/CMAF
+# is a video player). `default-features = false` drops the engine default so p3-async
+# is chosen explicitly below; the video lane is re-enabled here.
+wandr-media-engine = { path = "../../../crates/wandr-media-engine", default-features = false, features = ["video"] }
 
 # HTTPS: the manifest (.mpd) fetch + byte-range segment fetch, over wasi:tls.
 reqwest = { path = "../../../crates/wandr-reqwest", package = "wandr-reqwest", default-features = false }

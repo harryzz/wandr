@@ -37,7 +37,10 @@ reqwest = { path = "../../../crates/wandr-reqwest", package = "wandr-reqwest", d
 # (mp4 + oxideav-mkv), guest-side audio decode (Symphonia/OxideAV/ropus), the
 # A/V master clock + present(at-ns) sync, and the transport/scrub/subtitle overlay.
 # It owns the video/audio/canvas IMPORTS bindgen; this app keeps only its EXPORTS.
-wandr-media-engine = { path = "../../../crates/wandr-media-engine", default-features = false }
+# `video` = the wandr:video decode-feed + present + subtitle overlay lane (this is a
+# video player). `default-features = false` drops the engine's own default so p3-async
+# is chosen explicitly below; the video lane is re-enabled here.
+wandr-media-engine = { path = "../../../crates/wandr-media-engine", default-features = false, features = ["video"] }
 
 # JSON for the Jellyfin REST API; Url for reqwest.
 serde_json = "1"

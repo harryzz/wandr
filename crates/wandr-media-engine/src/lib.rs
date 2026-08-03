@@ -29,7 +29,9 @@ pub use self::bindings::wasi::canvas;
 // can keep the stream's cache warm (the reader's block_on fallback stays quiet).
 pub use httprange::{drive_prefetch, PrefetchHandle};
 
+#[cfg(feature = "video")]
 use bindings::wandr::video::decoder::{Acceleration, VideoDecoder};
+#[cfg(feature = "video")]
 use bindings::wandr::video::types::{Codec, DecoderConfig, TimedFrame, VideoError, VideoRect, ZLayer};
 use bindings::wasi::audio::pcm as wpcm;
 use bindings::wasi::canvas::{draw::Canvas, embedding as wembed, layout as wlayout, types as wtypes};
@@ -45,10 +47,12 @@ use symphonia::core::units::{Duration as SymDuration, Time, Timestamp};
 
 // Fragmented-MP4 (DASH/CMAF) demux — see Demux::Fmp4 / open_fmp4. `oxideav_core`'s
 // Demuxer trait methods resolve through the `dyn` type, so no `use` is needed.
+#[cfg(feature = "video")]
 use oxideav_core::{MediaType, NullCodecResolver};
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
+#[cfg(feature = "video")]
 use std::io::Cursor;
 
 pub mod net;
@@ -148,6 +152,7 @@ thread_local! {
 
 /// One demuxed video frame — already Annex-B framed (H.264/5) or raw (VP9/AV1),
 /// ready to submit with its presentation time.
+#[cfg(feature = "video")]
 pub struct VFrame {
     pts_us: i64,
     keyframe: bool,
@@ -167,6 +172,7 @@ pub enum Demux {
     /// the index at open (moov sample tables / Cues) and serve `next_packet` by
     /// seeking into the media, so demux/seek/audio-switch are identical; the open
     /// site just picks the demuxer by container. Boxed because the state is large.
+    #[cfg(feature = "video")]
     Ox(Box<OxSource>),
     /// DASH/HLS fragmented MP4 (CMAF): STREAMING per-segment demux. Video and audio
     /// arrive as SEPARATE segment streams (each a DASH Representation), so this holds
@@ -174,6 +180,7 @@ pub enum Demux {
     /// fetches ONE CMAF media segment at a time (init + segment = a tiny self-
     /// contained fragmented file oxideav-mp4 opens); bounded memory, fast startup.
     /// (The `mp4` crate can't read fragments at all — broken sample offsets.)
+    #[cfg(feature = "video")]
     Fmp4(Box<Fmp4Source>),
     /// Raw-audio containers (FLAC / MP3 / Ogg-Vorbis / WAV) for a music client — demuxed
     /// AND decoded by symphonia natively (its `FormatReader` over the Range reader). No
@@ -201,11 +208,13 @@ pub struct Seg {
 /// A one-segment read-ahead buffer, shared with the async prefetch task so the NEXT
 /// segment's bytes are ready before the current one is exhausted (no boundary stall).
 #[derive(Default)]
+#[cfg(feature = "video")]
 struct Prefetch {
     ready: Option<(usize, Vec<u8>)>, // (segment idx, bytes)
     inflight: bool,
 }
 
+#[cfg(feature = "video")]
 struct SegStream {
     /// ftyp+moov init segment — the demux prefix for every media segment.
     init: Vec<u8>,
@@ -236,10 +245,14 @@ async fn fetch_seg_bytes(client: &reqwest::Client, s: &Seg) -> Result<Vec<u8>, S
     }
 }
 
+/// pts in a time base (num/den seconds per tick) → µs. Free helper — used by every
+/// demux lane (audio + video), so it lives outside the video-gated `SegStream`.
+fn ticks_to_us(pts: i64, num: i64, den: i64) -> i64 {
+    if den == 0 { 0 } else { (pts as i128 * num as i128 * 1_000_000 / den as i128) as i64 }
+}
+
+#[cfg(feature = "video")]
 impl SegStream {
-    fn ticks_to_us(pts: i64, num: i64, den: i64) -> i64 {
-        if den == 0 { 0 } else { (pts as i128 * num as i128 * 1_000_000 / den as i128) as i64 }
-    }
     /// Spawn an async fetch of the NEXT segment into the shared prefetch slot (if not
     /// already ready/in-flight). Called from bg-tick so the boundary fetch is hidden.
     fn drive_prefetch(&self) {
@@ -322,7 +335,7 @@ impl SegStream {
             match self.dmx.as_mut().unwrap().next_packet() {
                 Ok(pkt) => {
                     let pts = pkt.pts.or(pkt.dts).unwrap_or(0);
-                    return Some((Self::ticks_to_us(pts, self.num, self.den), pkt.flags.keyframe, pkt.data));
+                    return Some((ticks_to_us(pts, self.num, self.den), pkt.flags.keyframe, pkt.data));
                 }
                 Err(_) => self.dmx = None, // segment EOF → open the next one
             }
@@ -344,11 +357,13 @@ impl SegStream {
 /// A DASH/CMAF session: a video `SegStream` + an optional audio one, streamed
 /// per-segment. Presents the same next_video/next_audio/seek surface `fill_queues`
 /// and `do_seek` use for the other containers.
+#[cfg(feature = "video")]
 pub struct Fmp4Source {
     video: SegStream,
     audio: Option<SegStream>,
 }
 
+#[cfg(feature = "video")]
 impl Fmp4Source {
     fn has_audio(&self) -> bool {
         self.audio.is_some()
@@ -385,6 +400,7 @@ impl Fmp4Source {
 
 /// Drive the DASH/CMAF read-ahead for the active stream (no-op for MP4/MKV, which
 /// have their own HttpRangeReader prefetch). Called from the consumer's bg-tick.
+#[cfg(feature = "video")]
 pub fn drive_fmp4_prefetch() {
     STREAM.with(|s| {
         if let Some(p) = s.borrow().as_ref() {
@@ -458,6 +474,7 @@ struct OxAudioStream {
 /// the (Send-wrapped) Range reader. Video + audio arrive interleaved from ONE demuxer
 /// (`next_packet`), routed by stream index; seek is index-driven (MP4 sample tables /
 /// MKV Cues), returning the actual landed pts (or `Err` on a cue-less MKV → seek no-op).
+#[cfg(feature = "video")]
 pub struct OxSource {
     dmx: Box<dyn oxideav_core::Demuxer>,
     video_stream: u32,
@@ -476,30 +493,42 @@ pub struct StreamPlayer {
     total_len: u64,
     demux: Demux,
     /// Start-coded parameter-set prefix (H.264/H.265), prepended at sync frames.
+    #[cfg(feature = "video")]
     ps_prefix: Vec<u8>,
+    #[cfg(feature = "video")]
     nal_len: usize,
     /// true = H.264/H.265 (length-prefixed NALs → Annex-B); false = VP9/AV1 raw.
+    #[cfg(feature = "video")]
     video_annexb: bool,
+    #[cfg(feature = "video")]
     dec: VideoDecoder,
     buf: streaming::RollingBuffer,
     fetch_inflight: bool,
     /// Demuxed-but-not-yet-submitted frames.
+    #[cfg(feature = "video")]
     video_q: VecDeque<VFrame>,
     audio_q: VecDeque<AFrame>,
     /// Set once the demuxer has produced its last frame.
     demux_done: bool,
+    #[cfg(feature = "video")]
     submitted: usize,
+    #[cfg(feature = "video")]
     presented: usize,
     /// PTS (µs) of the last video frame actually shown — for the sync diagnostic.
+    #[cfg(feature = "video")]
     last_pres_pts: i64,
     /// Host clock (ns) at the first pump — to measure the true wall-clock rate of
     /// the audio clock (is position() advancing at realtime?).
     t0_ns: u64,
     /// Total video frames if known (MP4 sample count); 0 = unknown (MKV stream).
+    #[cfg(feature = "video")]
     total_video: usize,
     /// PTS of the first decoded frame; playback clock anchors to its emergence.
+    #[cfg(feature = "video")]
     first_pts_us: Option<i64>,
+    #[cfg(feature = "video")]
     origin_ns: u64,
+    #[cfg(feature = "video")]
     flushed: bool,
     done: bool,
     title: String,
@@ -561,7 +590,11 @@ impl StreamPlayer {
     pub fn prefetch_handle(&self) -> Option<httprange::PrefetchHandle> { self.prefetch.clone() }
     /// Number of switchable audio tracks (MKV) — 1 for single-track / MP4.
     pub fn audio_track_count(&self) -> usize {
-        match &self.demux { Demux::Ox(src) => src.audio_streams.len().max(1), _ => 1 }
+        match &self.demux {
+            #[cfg(feature = "video")]
+            Demux::Ox(src) => src.audio_streams.len().max(1),
+            _ => 1,
+        }
     }
 }
 
@@ -605,6 +638,7 @@ pub fn with_audio<R>(f: impl FnOnce(&wpcm::Playback) -> R) -> Option<R> {
 
 /// 16:9 letterbox centered vertically, full width — one source of truth so open
 /// and resize place the video identically (mirrors wandr.video.player).
+#[cfg(feature = "video")]
 fn video_rect(w: u32, h: u32) -> VideoRect {
     let vh = (w * 9 / 16).min(h);
     VideoRect { x: 0, y: (h.saturating_sub(vh)) / 2, width: w, height: vh }
@@ -614,6 +648,7 @@ fn video_rect(w: u32, h: u32) -> VideoRect {
 /// on CONTROLS (drives the overlay layout) and live-reconciles the decoder rect.
 pub fn set_surface(w: u32, h: u32) {
     CONTROLS.with(|c| c.borrow_mut().surface = (w.max(1), h.max(1)));
+    #[cfg(feature = "video")]
     STREAM.with(|s| {
         if let Some(p) = s.borrow().as_ref() {
             p.dec.set_rect(video_rect(w.max(1), h.max(1)));
@@ -763,6 +798,9 @@ pub fn parse_vtt(text: &str) -> Vec<Cue> {
 
 /// C2: switch the active MKV audio track IN PLACE — re-route the demux + rebuild
 /// the decoder (codecs may differ) + flush the ring and re-anchor. Video untouched.
+/// (Video-lane only — the Ox/Fmp4 multi-track containers; the raw-audio source is
+/// single-track, so an audio-only build omits this.)
+#[cfg(feature = "video")]
 pub fn switch_audio(p: &mut StreamPlayer, pref: usize) {
     let info = match &p.demux {
         Demux::Ox(src) => src.audio_streams.get(pref).map(|t|
@@ -790,6 +828,7 @@ pub fn switch_audio(p: &mut StreamPlayer, pref: usize) {
     log(format!("audio → {label} ({cid})"));
 }
 
+#[cfg(feature = "video")]
 pub fn install_player(
     url: String, total_len: u64, demux: Demux, ps_prefix: Vec<u8>, nal_len: usize,
     video_annexb: bool, codec: Codec, width: u32, height: u32, surface: (u32, u32),
@@ -829,6 +868,57 @@ pub fn install_player(
         with_audio(|pb| pb.flush());
     });
     Ok(impl_name)
+}
+
+/// Audio-only install (no video) for a `Demux::Audio` music stream. In an AUDIO-ONLY
+/// build the StreamPlayer's video fields are gated out entirely — no VideoDecoder is
+/// opened. In a video-enabled build (where this fn compiles but only an audio-only app
+/// would ever call it) they're set to inert defaults (a tiny idle decoder for `dec`).
+pub fn install_audio_player(
+    url: String, total_len: u64, demux: Demux, surface: (u32, u32),
+    audio_dec: Option<AudioDec>, has_audio: bool, resampler: Option<LinearResampler>,
+    title: String, duration_us: i64,
+) -> Result<String, String> {
+    #[cfg(feature = "video")]
+    let dec = {
+        let (w, h) = surface;
+        VideoDecoder::open_accelerated(
+            DecoderConfig { codec: Codec::H264, width: 64, height: 64, rect: video_rect(w, h), rotation: 0, layer: ZLayer::BehindUi },
+            Acceleration::NoPreference,
+        )
+        .map_err(|e| format!("stream: decoder open: {e:?}"))?
+    };
+    #[cfg(not(feature = "video"))]
+    let _ = surface;
+    STREAM.with(|s| {
+        let mut buf = streaming::RollingBuffer::new();
+        buf.reset_to(0);
+        *s.borrow_mut() = Some(StreamPlayer {
+            url, total_len, demux, buf,
+            fetch_inflight: false,
+            audio_q: VecDeque::new(), demux_done: false,
+            t0_ns: 0, done: false,
+            title, duration_us, clock_us: 0, audio_pos_us: 0,
+            audio_dec, has_audio, resampler, dev_start: 0, dev_start_set: false, audio_start_ns: 0,
+            audio_first_pts_us: 0, audio_first_pts_known: false, audio_pts_known: false, pending_pcm: Vec::new(),
+            prefetch: None,
+            paused: false, paused_at_ns: 0,
+            #[cfg(feature = "video")] ps_prefix: Vec::new(),
+            #[cfg(feature = "video")] nal_len: 0,
+            #[cfg(feature = "video")] video_annexb: false,
+            #[cfg(feature = "video")] dec,
+            #[cfg(feature = "video")] video_q: VecDeque::new(),
+            #[cfg(feature = "video")] submitted: 0,
+            #[cfg(feature = "video")] presented: 0,
+            #[cfg(feature = "video")] last_pres_pts: 0,
+            #[cfg(feature = "video")] total_video: 0,
+            #[cfg(feature = "video")] first_pts_us: None,
+            #[cfg(feature = "video")] origin_ns: 0,
+            #[cfg(feature = "video")] flushed: false,
+        });
+        with_audio(|pb| pb.flush());
+    });
+    Ok("audio".to_string())
 }
 
 /// The guest's audio decoders behind one interface. AAC/MP3 via Symphonia; Opus
@@ -1063,6 +1153,7 @@ fn ox_reader(url: &str, total_len: u64) -> Result<(httprange::HttpRangeReader, O
 /// ftyp + moov + box headers (random access, not a whole-file read). Packet PTS carry
 /// the full §8.6.6 edit-list presentation mapping (git-pinned rev), so there is no
 /// hand-rolled edit_offset_us — the engine consumes the mapped pts directly.
+#[cfg(feature = "video")]
 pub fn open_mp4_sync(url: String, total_len: u64, title: String, duration_us: i64, surface: (u32, u32)) -> Result<(), String> {
     let (reader, handle) = ox_reader(&url, total_len)?;
     let input: Box<dyn oxideav_core::ReadSeek> = Box::new(SendReader(reader));
@@ -1077,6 +1168,7 @@ pub fn open_mp4_sync(url: String, total_len: u64, title: String, duration_us: i6
 /// (front + SeekHead-reachable Cues parsed, but NO whole-file Cluster scan; see the
 /// vendored fork). SYNCHRONOUS: the demuxer pulls bytes through the blocking Range
 /// reader, so this runs on the consumer's bg-tick open path.
+#[cfg(feature = "video")]
 pub fn open_mkv_sync(url: String, total_len: u64, title: String, duration_us: i64, surface: (u32, u32)) -> Result<(), String> {
     let (reader, handle) = ox_reader(&url, total_len)?;
     let input: Box<dyn oxideav_core::ReadSeek> = Box::new(SendReader(reader));
@@ -1092,6 +1184,7 @@ pub fn open_mkv_sync(url: String, total_len: u64, title: String, duration_us: i6
 /// decoder, and install the player. Container-agnostic — `dmx` is already a
 /// `dyn Demuxer`, so demux/seek/audio-switch downstream are identical. `kind` is only
 /// a log/error label ("mp4" / "mkv").
+#[cfg(feature = "video")]
 fn finish_ox_open(
     dmx: Box<dyn oxideav_core::Demuxer>,
     url: String,
@@ -1244,7 +1337,7 @@ pub fn open_audio_sync(url: String, total_len: u64, title: String, duration_us: 
             .num_frames
             .filter(|&n| n > 0)
             .map(|n| (n as i128 * 1_000_000 / sr.max(1) as i128) as i64)
-            .or_else(|| track.duration.map(|d| SegStream::ticks_to_us(d.get() as i64, num, den)))
+            .or_else(|| track.duration.map(|d| ticks_to_us(d.get() as i64, num, den)))
             .filter(|&d| d > 0)
             .unwrap_or(duration_us);
         let dec = match symphonia::default::get_codecs()
@@ -1263,10 +1356,11 @@ pub fn open_audio_sync(url: String, total_len: u64, title: String, duration_us: 
     log(format!("audio: {ch}ch @ {sr} Hz → stereo 48k"));
 
     let src = Box::new(SymSource { format, track_id, num, den });
-    // Tiny idle H.264 decoder (64×64, never fed) so the shared StreamPlayer is happy.
-    match install_player(
-        url, total_len, Demux::Audio(src), Vec::new(), 0, false, Codec::H264, 64, 64, surface,
-        Some(AudioDec::Sym(dec)), true, resampler, title.clone(), dur_us, 0, None, 0,
+    // Audio-only install: no video decoder (in an audio-only build the video lane isn't
+    // even compiled; see the `video` feature).
+    match install_audio_player(
+        url, total_len, Demux::Audio(src), surface,
+        Some(AudioDec::Sym(dec)), true, resampler, title.clone(), dur_us,
     ) {
         Ok(impl_name) => {
             STREAM.with(|s| if let Some(p) = s.borrow_mut().as_mut() { p.prefetch = handle; });
@@ -1280,6 +1374,7 @@ pub fn open_audio_sync(url: String, total_len: u64, title: String, duration_us: 
 /// Extract the video codec config from a DASH rep's init segment (ftyp+moov):
 /// (codec, ps_prefix, nal_len, width, height, time_base num, den). Used by both the
 /// initial open and the mid-stream bitrate switch.
+#[cfg(feature = "video")]
 fn video_config_from_init(init: &[u8]) -> Result<(Codec, Vec<u8>, usize, u32, u32, i64, i64), String> {
     let vdmx = oxideav_mp4::demux::open(Box::new(Cursor::new(init.to_vec())), &NullCodecResolver)
         .map_err(|e| format!("fmp4: open video init: {e:?}"))?;
@@ -1311,6 +1406,7 @@ fn video_config_from_init(init: &[u8]) -> Result<(Codec, Vec<u8>, usize, u32, u3
 /// position (segment-aligned, lands on a keyframe). AUDIO IS UNTOUCHED — only the
 /// video bitrate changes — so the audio-master clock keeps running and the video
 /// catches back up. Runs in bg-tick (the config-init fetch + do_seek do I/O).
+#[cfg(feature = "video")]
 pub fn switch_video_rep(
     new_init: Vec<u8>,
     new_segs: Vec<Seg>,
@@ -1356,6 +1452,7 @@ pub fn switch_video_rep(
 /// demand (oxideav-mp4 walks a whole input to EOF, so we feed it ONE init+segment
 /// at a time). Framing is identical to the MP4 path (AVCC → Annex-B via
 /// `video_annexb`); demux_cursor stays u64::MAX (the RollingBuffer path is idle).
+#[cfg(feature = "video")]
 pub fn open_fmp4_streaming(
     video_init: Vec<u8>,
     video_segs: Vec<Seg>,
@@ -1497,6 +1594,7 @@ pub fn seek_from_clock(delta_us: i64) -> i64 {
 pub fn do_seek(p: &mut StreamPlayer, target_us: i64) -> i64 {
     let target_us = target_us.clamp(0, p.duration_us.max(0));
     let landed_us = match &mut p.demux {
+        #[cfg(feature = "video")]
         Demux::Ox(src) => {
             // us → video-stream ticks; oxideav `seek_to` snaps to the keyframe at/before
             // the target and returns the ACTUAL landed pts, so the clock re-anchors to
@@ -1508,7 +1606,7 @@ pub fn do_seek(p: &mut StreamPlayer, target_us: i64) -> i64 {
                 (target_us.max(0) as i128 * src.v_den as i128 / (src.v_num as i128 * 1_000_000)) as i64
             };
             match src.dmx.seek_to(src.video_stream, ticks) {
-                Ok(landed) => Some(SegStream::ticks_to_us(landed, src.v_num, src.v_den)),
+                Ok(landed) => Some(ticks_to_us(landed, src.v_num, src.v_den)),
                 // MP4 sample-table seek, MKV Cues seek, and (vendored fork) MKV
                 // cue-less BISECTION seek all return the landed pts above. An Err
                 // here is now only the pathological case (zero-Cluster / unknown-size
@@ -1519,6 +1617,7 @@ pub fn do_seek(p: &mut StreamPlayer, target_us: i64) -> i64 {
                 }
             }
         }
+        #[cfg(feature = "video")]
         Demux::Fmp4(src) => Some(src.seek(target_us)),
         // Raw-audio: symphonia seeks by Time (bisects FLAC frames without a SEEKTABLE);
         // Coarse is fine for music. Returns the actual landed pts → the clock re-anchors.
@@ -1530,7 +1629,7 @@ pub fn do_seek(p: &mut StreamPlayer, target_us: i64) -> i64 {
                     .seek(SeekMode::Coarse, SeekTo::Time { time, track_id: Some(src.track_id) })
                     .ok()
             }) {
-                Some(seeked) => Some(SegStream::ticks_to_us(seeked.actual_ts.get(), src.num, src.den)),
+                Some(seeked) => Some(ticks_to_us(seeked.actual_ts.get(), src.num, src.den)),
                 None => { log("seek: audio seek failed — staying put".to_string()); None }
             }
         }
@@ -1539,23 +1638,26 @@ pub fn do_seek(p: &mut StreamPlayer, target_us: i64) -> i64 {
     // Discontinuity reset: drop queued frames + buffered PCM, the audio ring, and
     // the decoder's reorder state; clear the clock anchors so the pump re-anchors
     // `media_now` at the first frame after the seek.
-    p.video_q.clear();
+    #[cfg(feature = "video")]
+    {
+        p.video_q.clear();
+        let _ = p.dec.reset();
+        p.first_pts_us = None;
+        p.origin_ns = 0;
+        p.submitted = 0;
+        p.presented = 0;
+        p.last_pres_pts = 0;
+        p.flushed = false;
+    }
     p.audio_q.clear();
     p.pending_pcm.clear();
-    let _ = p.dec.reset();
     with_audio(|pb| pb.flush());
-    p.first_pts_us = None;
-    p.origin_ns = 0;
     p.audio_pts_known = false;
     p.audio_first_pts_known = false;
     p.audio_first_pts_us = 0;
     p.audio_start_ns = 0;
     p.dev_start = 0;
     p.dev_start_set = false;
-    p.submitted = 0;
-    p.presented = 0;
-    p.last_pres_pts = 0;
-    p.flushed = false;
     p.done = false;
     p.demux_done = false;
     p.clock_us = landed_us;
@@ -1583,13 +1685,17 @@ pub fn fill_queues(p: &mut StreamPlayer) {
         // Hard backstop: stop only when BOTH queues are full. (A `||` here would
         // let a full, slowly-draining video queue block audio production entirely
         // — which froze the audio-master clock and collapsed video to ~1 fps.)
+        #[cfg(feature = "video")]
         let v_full = p.video_q.len() >= VQ_CAP;
+        #[cfg(not(feature = "video"))]
+        let v_full = true; // audio-only: no video queue to fill
         let a_full = p.audio_q.len() >= AQ_CAP;
         if v_full && a_full {
             break;
         }
-        // Both tracks demuxed past the lookahead → done for now.
-        if last_v > limit && (!has_audio || last_a > limit) {
+        // Both tracks demuxed past the lookahead → done for now. (Audio-only has no
+        // video track, so `!cfg!(video)` satisfies the video half.)
+        if (last_v > limit || !cfg!(feature = "video")) && (!has_audio || last_a > limit) {
             break;
         }
         // Produce one frame.
@@ -1598,11 +1704,12 @@ pub fn fill_queues(p: &mut StreamPlayer) {
             // index. `next_packet` serves samples in decode order by seeking into the
             // media; any Err (incl. Eof) ends the stream. Video packets are
             // length-prefixed AVCC (→ Annex-B); audio packets are raw codec frames.
+            #[cfg(feature = "video")]
             Demux::Ox(src) => match src.dmx.next_packet() {
                 Ok(pkt) => {
                     let si = pkt.stream_index;
                     if si == src.video_stream {
-                        let pts = SegStream::ticks_to_us(pkt.pts.or(pkt.dts).unwrap_or(0), src.v_num, src.v_den);
+                        let pts = ticks_to_us(pkt.pts.or(pkt.dts).unwrap_or(0), src.v_num, src.v_den);
                         let kf = pkt.flags.keyframe;
                         let data = if p.video_annexb {
                             streaming::to_annexb(&pkt.data, p.nal_len, &p.ps_prefix, kf)
@@ -1612,7 +1719,7 @@ pub fn fill_queues(p: &mut StreamPlayer) {
                         p.video_q.push_back(VFrame { pts_us: pts, keyframe: kf, data });
                         Prod::Frame(pts, true)
                     } else if si == src.audio_stream {
-                        let pts = SegStream::ticks_to_us(pkt.pts.or(pkt.dts).unwrap_or(0), src.a_num, src.a_den);
+                        let pts = ticks_to_us(pkt.pts.or(pkt.dts).unwrap_or(0), src.a_num, src.a_den);
                         p.audio_q.push_back(AFrame { pts_us: pts, data: pkt.data });
                         Prod::Frame(pts, false)
                     } else {
@@ -1627,7 +1734,7 @@ pub fn fill_queues(p: &mut StreamPlayer) {
             Demux::Audio(src) => match src.format.next_packet() {
                 Ok(Some(pkt)) => {
                     if pkt.track_id == src.track_id {
-                        let pts = SegStream::ticks_to_us(pkt.pts.get(), src.num, src.den);
+                        let pts = ticks_to_us(pkt.pts.get(), src.num, src.den);
                         p.audio_q.push_back(AFrame { pts_us: pts, data: pkt.data.into_vec() });
                         Prod::Frame(pts, false)
                     } else {
@@ -1640,6 +1747,7 @@ pub fn fill_queues(p: &mut StreamPlayer) {
             // DASH/CMAF: pull whichever of the two rep demuxers is behind in PTS.
             // Each yields already-length-prefixed AVCC (video) / raw AAC (audio),
             // framed exactly like the MP4 path (video_annexb → Annex-B).
+            #[cfg(feature = "video")]
             Demux::Fmp4(src) => {
                 let v_left = !src.video_done() && !v_full && last_v <= limit;
                 let a_left = src.has_audio() && !src.audio_done() && !a_full && last_a <= limit;
@@ -1763,7 +1871,10 @@ pub fn pump_stream(nanos: u64) {
             if p.audio_start_ns > 0 {
                 p.audio_start_ns = p.audio_start_ns.saturating_add(dt);
             }
-            p.origin_ns = p.origin_ns.saturating_add(dt);
+            #[cfg(feature = "video")]
+            {
+                p.origin_ns = p.origin_ns.saturating_add(dt);
+            }
             p.paused = false;
             let _ = with_audio(|pb| pb.start());
         }
@@ -1785,10 +1896,21 @@ pub fn pump_stream(nanos: u64) {
         let mut media_now: i64 = if audio_master {
             let buffered_us = buffered_frames as i64 * 1_000_000 / OUT_RATE as i64;
             (p.audio_first_pts_us + nanos.saturating_sub(p.audio_start_ns) as i64 / 1000 - buffered_us).max(0)
-        } else if let Some(first) = p.first_pts_us {
-            first + nanos.saturating_sub(p.origin_ns) as i64 / 1000
         } else {
-            0
+            // VIDEO free-run clock (video builds only); audio-only holds at 0 until the
+            // audio-master hand-off above takes over.
+            #[cfg(feature = "video")]
+            {
+                if let Some(first) = p.first_pts_us {
+                    first + nanos.saturating_sub(p.origin_ns) as i64 / 1000
+                } else {
+                    0
+                }
+            }
+            #[cfg(not(feature = "video"))]
+            {
+                0
+            }
         };
         // Audio-only END-OF-TRACK: with no video to bound the clock, once the demux is
         // exhausted AND all decoded PCM has drained to AND out of the device, freeze the
@@ -1873,18 +1995,21 @@ pub fn pump_stream(nanos: u64) {
         //     would reject every frame, nothing would decode, the clock would never
         //     anchor, and seek would DEADLOCK. Until it anchors, submit freely (the
         //     count cushion still bounds the burst); once anchored, apply the cap.
-        const SUBMIT_LEAD_US: i64 = 2_000_000;
-        let clock_anchored = p.first_pts_us.is_some() || p.audio_pts_known;
-        while p.submitted < p.presented + DECODE_AHEAD {
-            let Some(vf) = p.video_q.front() else { break };
-            if clock_anchored && vf.pts_us > media_now + SUBMIT_LEAD_US {
-                break; // far enough ahead of the clock — let realtime catch up
-            }
-            let frame = TimedFrame { data: vf.data.clone(), timestamp_us: vf.pts_us, keyframe: vf.keyframe };
-            match p.dec.submit_timed(&frame) {
-                Ok(()) => { p.submitted += 1; p.video_q.pop_front(); }
-                Err(VideoError::QueueFull) => break,
-                Err(e) => { log(format!("stream: submit: {e:?}")); p.video_q.pop_front(); break; }
+        #[cfg(feature = "video")]
+        {
+            const SUBMIT_LEAD_US: i64 = 2_000_000;
+            let clock_anchored = p.first_pts_us.is_some() || p.audio_pts_known;
+            while p.submitted < p.presented + DECODE_AHEAD {
+                let Some(vf) = p.video_q.front() else { break };
+                if clock_anchored && vf.pts_us > media_now + SUBMIT_LEAD_US {
+                    break; // far enough ahead of the clock — let realtime catch up
+                }
+                let frame = TimedFrame { data: vf.data.clone(), timestamp_us: vf.pts_us, keyframe: vf.keyframe };
+                match p.dec.submit_timed(&frame) {
+                    Ok(()) => { p.submitted += 1; p.video_q.pop_front(); }
+                    Err(VideoError::QueueFull) => break,
+                    Err(e) => { log(format!("stream: submit: {e:?}")); p.video_q.pop_front(); break; }
+                }
             }
         }
 
@@ -1895,33 +2020,36 @@ pub fn pump_stream(nanos: u64) {
         }
 
         // 5. EOS: flush so the decoder releases its reorder-held tail.
-        if p.demux_done && p.video_q.is_empty() && !p.flushed {
-            let _ = p.dec.flush();
-            p.flushed = true;
-        }
-
         // 6. Present decoded video against the unified `media_now` (computed at the
         //    top). Both tracks share ONE edit-corrected movie timeline, so video
         //    ALWAYS presents: free-run before audio starts, audio-master after —
         //    a continuous hand-off, no "hold video until audio" gate.
-        const LATE_DROP_US: i64 = 150_000;
-        while let Some(frame) = p.dec.next_decoded() {
-            let pts = frame.timestamp_us();
-            p.presented += 1; // count for decode-ahead pacing regardless
-            p.last_pres_pts = pts;
-            // Establish the free-run origin at the first presented frame — media_now
-            // reads it until audio takes over.
-            if p.first_pts_us.is_none() {
-                p.first_pts_us = Some(pts);
-                p.origin_ns = nanos;
+        #[cfg(feature = "video")]
+        {
+            if p.demux_done && p.video_q.is_empty() && !p.flushed {
+                let _ = p.dec.flush();
+                p.flushed = true;
             }
-            // Drop frames far behind the clock so video catches up instead of
-            // replaying a backlog at realtime. (Safe — decoder already produced it.)
-            if pts < media_now - LATE_DROP_US {
-                continue;
+
+            const LATE_DROP_US: i64 = 150_000;
+            while let Some(frame) = p.dec.next_decoded() {
+                let pts = frame.timestamp_us();
+                p.presented += 1; // count for decode-ahead pacing regardless
+                p.last_pres_pts = pts;
+                // Establish the free-run origin at the first presented frame — media_now
+                // reads it until audio takes over.
+                if p.first_pts_us.is_none() {
+                    p.first_pts_us = Some(pts);
+                    p.origin_ns = nanos;
+                }
+                // Drop frames far behind the clock so video catches up instead of
+                // replaying a backlog at realtime. (Safe — decoder already produced it.)
+                if pts < media_now - LATE_DROP_US {
+                    continue;
+                }
+                let at_ns = nanos.saturating_add((pts - media_now).max(0) as u64 * 1_000);
+                frame.present(at_ns);
             }
-            let at_ns = nanos.saturating_add((pts - media_now).max(0) as u64 * 1_000);
-            frame.present(at_ns);
         }
 
         // Overlay clock = the unified playback clock; plus the audio device's own
@@ -1935,6 +2063,7 @@ pub fn pump_stream(nanos: u64) {
 
         // Done when the demuxer is exhausted and the video decoder has fully drained.
         // (Audio-only sets `done` at true audio EOF above, so exclude it here.)
+        #[cfg(feature = "video")]
         if !audio_only && p.flushed && p.video_q.is_empty() && p.submitted == p.presented && !p.done {
             p.done = true;
             log(format!("stream: DONE — presented {} frames", p.presented));
@@ -2099,7 +2228,9 @@ pub fn render_playing(nanos: u64) {
         let b = s.borrow();
         match b.as_ref() {
             Some(p) => (
-                p.title.clone(), p.clock_us, p.duration_us, p.presented, p.total_video,
+                p.title.clone(), p.clock_us, p.duration_us,
+                { #[cfg(feature = "video")] { p.presented } #[cfg(not(feature = "video"))] { 0 } },
+                { #[cfg(feature = "video")] { p.total_video } #[cfg(not(feature = "video"))] { 0 } },
                 // Audio buffered ahead, in seconds (queue frames + device ring).
                 p.audio_q.len() as f32 * 1024.0 / OUT_RATE as f32
                     + if p.has_audio { with_audio(|pb| pb.buffered_frames()).unwrap_or(0) as f32 / OUT_RATE as f32 } else { 0.0 },
