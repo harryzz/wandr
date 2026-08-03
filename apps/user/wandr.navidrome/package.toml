@@ -1,0 +1,14 @@
+# wandr.navidrome — Subsonic/OpenSubsonic (Navidrome) music client. No [[mounts]]:
+# server + media arrive over HTTPS; credentials are in the app (prototype). Same reactor
+# shape as wandr.dash / wandr.flac.test (background bg-tick + frame-rate pacing).
+app_id      = "wandr.navidrome"
+version     = "0.1.0"
+world       = "wandr:navidrome/navidrome-app"
+composition = "same-store"
+orientation = "auto"
+label       = "Navidrome"
+max_fps     = 60
+background  = true
+
+[components]
+ui = "components/ui.wasm"

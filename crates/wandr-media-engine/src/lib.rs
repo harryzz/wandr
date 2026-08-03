@@ -554,6 +554,9 @@ impl StreamPlayer {
     pub fn clock_us(&self) -> i64 { self.clock_us }
     /// Total duration (µs) as passed at open.
     pub fn duration_us(&self) -> i64 { self.duration_us }
+    /// True once playback has fully finished (video drained, or audio-only played out) —
+    /// a music client polls this to advance to the next track / return to its list.
+    pub fn is_ended(&self) -> bool { self.done }
     /// Handle for driving async prefetch from the app's bg-tick (None on file://).
     pub fn prefetch_handle(&self) -> Option<httprange::PrefetchHandle> { self.prefetch.clone() }
     /// Number of switchable audio tracks (MKV) — 1 for single-track / MP4.
@@ -1777,15 +1780,36 @@ pub fn pump_stream(nanos: u64) {
         //    audio-master hand-off is continuous and video plays from movie-0 while
         //    a pre-rolled audio track stays silent until its (shifted) start.
         let audio_master = p.audio_pts_known && p.has_audio && p.audio_start_ns > 0;
-        let media_now: i64 = if audio_master {
-            let buffered_us = with_audio(|pb| pb.buffered_frames()).unwrap_or(0) as i64
-                * 1_000_000 / OUT_RATE as i64;
+        let audio_only = matches!(p.demux, Demux::Audio(_));
+        let buffered_frames = with_audio(|pb| pb.buffered_frames()).unwrap_or(0);
+        let mut media_now: i64 = if audio_master {
+            let buffered_us = buffered_frames as i64 * 1_000_000 / OUT_RATE as i64;
             (p.audio_first_pts_us + nanos.saturating_sub(p.audio_start_ns) as i64 / 1000 - buffered_us).max(0)
         } else if let Some(first) = p.first_pts_us {
             first + nanos.saturating_sub(p.origin_ns) as i64 / 1000
         } else {
             0
         };
+        // Audio-only END-OF-TRACK: with no video to bound the clock, once the demux is
+        // exhausted AND all decoded PCM has drained to AND out of the device, freeze the
+        // clock at its last value (the wall clock would otherwise run on past the final
+        // sample — the "counts up past the duration" bug) and mark the stream done.
+        if audio_only
+            && p.demux_done
+            && p.audio_q.is_empty()
+            && p.pending_pcm.is_empty()
+            && buffered_frames == 0
+        {
+            media_now = p.clock_us;
+            if !p.done {
+                p.done = true;
+                log("stream: audio DONE".to_string());
+            }
+        }
+        // Cap the shown clock to the known duration (guards a duration/estimate mismatch).
+        if p.duration_us > 0 {
+            media_now = media_now.min(p.duration_us);
+        }
 
         // 2. Audio OUTPUT stage — drain already-decoded PCM to the device ring.
         //    NO codec work here: decode runs in bg-tick (`decode_audio`), so this
@@ -1799,12 +1823,11 @@ pub fn pump_stream(nanos: u64) {
             p.dev_start = with_audio(|pb| pb.position()).unwrap_or(0);
             p.dev_start_set = true;
         }
-        // Audio-only (Demux::Audio) has NO video to advance the free-run `media_now`,
-        // so the pre-roll gate `media_now >= audio_first_pts_us` would never fire after a
-        // non-zero seek (media_now sits at 0) — audio must anchor immediately at its own
-        // first PTS instead. With video present, keep the gate so a pre-rolled audio track
-        // still waits for the picture.
-        let audio_only = matches!(p.demux, Demux::Audio(_));
+        // Audio-only (Demux::Audio, `audio_only` computed above) has NO video to advance
+        // the free-run `media_now`, so the pre-roll gate `media_now >= audio_first_pts_us`
+        // would never fire after a non-zero seek (media_now sits at 0) — audio must anchor
+        // immediately at its own first PTS. With video present, keep the gate so a
+        // pre-rolled audio track still waits for the picture.
         if p.has_audio && p.audio_first_pts_known {
             if !p.audio_pts_known
                 && (audio_only || media_now >= p.audio_first_pts_us)
@@ -1910,8 +1933,9 @@ pub fn pump_stream(nanos: u64) {
                 + pos.saturating_sub(p.dev_start) as i64 * 1_000_000 / OUT_RATE as i64;
         }
 
-        // Done when the demuxer is exhausted and the decoder has fully drained.
-        if p.flushed && p.video_q.is_empty() && p.submitted == p.presented && !p.done {
+        // Done when the demuxer is exhausted and the video decoder has fully drained.
+        // (Audio-only sets `done` at true audio EOF above, so exclude it here.)
+        if !audio_only && p.flushed && p.video_q.is_empty() && p.submitted == p.presented && !p.done {
             p.done = true;
             log(format!("stream: DONE — presented {} frames", p.presented));
         }

@@ -1,0 +1,41 @@
+# wandr.navidrome — a Subsonic/OpenSubsonic (Navidrome) music client.
+#
+#   cargo build --target wasm32-wasip2 --release
+#   cp target/wasm32-wasip2/release/wandr_navidrome.wasm components/ui.wasm
+#
+# A REACTOR (cdylib): bg-tick runs the async Subsonic API calls + the block_on audio
+# open + the decode pump; on-frame draws the browse list / now-playing. All playback is
+# the shared `wandr-media-engine` (Demux::Audio); this app is the Subsonic layer + UI.
+[package]
+name    = "wandr-navidrome"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+default  = ["p3-async"]
+p3-async = ["reqwest/p3-async", "wandr-media-engine/p3-async"]
+
+[dependencies]
+wit-bindgen = "0.59"
+
+# The shared playback engine (Demux::Audio + clock + wasi:audio + transport overlay).
+wandr-media-engine = { path = "../../../crates/wandr-media-engine", default-features = false }
+
+# HTTPS over wasi:tls — the Subsonic REST calls + the stream fetch.
+reqwest = { path = "../../../crates/wandr-reqwest", package = "wandr-reqwest", default-features = false }
+
+# Subsonic responses are JSON (`&f=json`).
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# URL building for the REST + stream endpoints.
+url = "2"
+
+[profile.release]
+opt-level = "s"
+lto       = true
+strip     = true
