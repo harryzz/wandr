@@ -1,0 +1,17 @@
+# wandr.flac.test — minimal raw-audio (FLAC/MP3/Ogg/WAV) call site for the engine's
+# Demux::Audio path. No [[mounts]]: the media arrives over HTTPS byte-range; nothing
+# app-specific is baked into the host. Same reactor shape as wandr.dash / wandr.jellyfin
+# (background bg-tick engine + frame-rate pacing during playback).
+app_id      = "wandr.flac.test"
+version     = "0.1.0"
+world       = "wandr:flac-test/flac-app"
+composition = "same-store"
+orientation = "auto"
+label       = "FLAC test"
+# Audio-only, but the frame-rate pump still drives the transport overlay redraw.
+max_fps     = 60
+# The async fetch + the block_on audio open + the decode pump run in bg-tick.
+background  = true
+
+[components]
+ui = "components/ui.wasm"

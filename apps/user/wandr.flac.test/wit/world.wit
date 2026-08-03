@@ -1,0 +1,19 @@
+// wandr.flac.test — the minimal call site for the engine's Demux::Audio path.
+// It fetches a raw FLAC (or MP3/Ogg/WAV) over HTTPS byte-range and plays it through
+// the SHIPPED playback engine unchanged, via `engine::open_audio_sync`:
+//
+//   guest: HTTPS byte-range (wandr-reqwest/wasi:tls) -> symphonia FormatReader demux
+//   audio: guest-side symphonia decode -> wasi:audio/pcm; position() = master clock
+//
+// EXPORTS-ONLY (like wandr.dash): the audio/canvas IMPORTS live in
+// wandr-media-engine's own imports-only bindgen. This proves the audio-only source
+// end-to-end before building the Navidrome/Subsonic client on top.
+package wandr:flac-test@0.1.0;
+
+world flac-app {
+    export wasi:input-handlers/frame-handler@0.0.2;
+    export wasi:input-handlers/key-handler@0.0.2;
+    export wasi:input-handlers/pointer-handler@0.0.2;
+    export wandr:ui-shell/frame-pacing@0.1.0;
+    export wandr:background/background@0.1.0;
+}

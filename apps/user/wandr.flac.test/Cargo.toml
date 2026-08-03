@@ -1,0 +1,40 @@
+# wandr.flac.test — the minimal call site for the engine's Demux::Audio path.
+#
+#   cargo build --target wasm32-wasip2 --release
+#   cp target/wasm32-wasip2/release/wandr_flac_test.wasm components/ui.wasm
+#
+# A REACTOR (cdylib): the host drives us via frame-handler (render) + bg-tick (the
+# async fetch + the block_on audio open + the pump). All playback machinery is the
+# shared `wandr-media-engine`; this app is ~one screenful: HEAD the URL for its size,
+# call `engine::open_audio_sync`, and delegate transport to the engine.
+[package]
+name    = "wandr-flac-test"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+default  = ["p3-async"]
+p3-async = ["reqwest/p3-async", "wandr-media-engine/p3-async"]
+
+[dependencies]
+# The app owns the EXPORTS generate! (frame/key/pointer/pacing/background).
+wit-bindgen = "0.59"
+
+# The shared playback engine: symphonia-native audio demux+decode (Demux::Audio),
+# the A/V clock, wasi:audio output, seek, and the transport overlay + IMPORTS bindgen.
+wandr-media-engine = { path = "../../../crates/wandr-media-engine", default-features = false }
+
+# HTTPS byte-range fetch over wasi:tls (the size probe; the engine streams the rest).
+reqwest = { path = "../../../crates/wandr-reqwest", package = "wandr-reqwest", default-features = false }
+
+# Media-URL parsing.
+url = "2"
+
+[profile.release]
+opt-level = "s"
+lto       = true
+strip     = true

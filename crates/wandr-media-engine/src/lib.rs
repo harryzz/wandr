@@ -51,7 +51,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::io::Cursor;
 
-mod net;
+pub mod net;
 mod streaming;
 mod mkv;
 mod httprange;
@@ -1219,7 +1219,7 @@ pub fn open_audio_sync(url: String, total_len: u64, title: String, duration_us: 
     };
     // Pull track info + build the decoder while `format` is borrowed, then release the
     // borrow so `format` can move into SymSource.
-    let (track_id, num, den, sr, ch, dec) = {
+    let (track_id, num, den, sr, ch, dur_us, dec) = {
         let Some(track) = format.default_track(TrackType::Audio) else {
             return fail("stream: audio has no track".into());
         };
@@ -1233,13 +1233,24 @@ pub fn open_audio_sync(url: String, total_len: u64, title: String, duration_us: 
         };
         let sr = params.sample_rate.unwrap_or(OUT_RATE);
         let ch = params.channels.as_ref().map(|c| c.count()).unwrap_or(2);
+        // Duration for the transport bar + seek clamp: prefer the track's frame count
+        // (FLAC STREAMINFO / MP3 Xing / WAV data size), else its declared duration,
+        // else the caller's hint. WITHOUT this the seek clamp `[0, duration]` collapses
+        // every seek target to 0.
+        let dur_us = track
+            .num_frames
+            .filter(|&n| n > 0)
+            .map(|n| (n as i128 * 1_000_000 / sr.max(1) as i128) as i64)
+            .or_else(|| track.duration.map(|d| SegStream::ticks_to_us(d.get() as i64, num, den)))
+            .filter(|&d| d > 0)
+            .unwrap_or(duration_us);
         let dec = match symphonia::default::get_codecs()
             .make_audio_decoder(params, &AudioDecoderOptions::default())
         {
             Ok(d) => d,
             Err(e) => return fail(format!("stream: audio decoder init: {e}")),
         };
-        (track_id, num, den, sr, ch, dec)
+        (track_id, num, den, sr, ch, dur_us, dec)
     };
 
     if !ensure_audio_device() {
@@ -1252,11 +1263,11 @@ pub fn open_audio_sync(url: String, total_len: u64, title: String, duration_us: 
     // Tiny idle H.264 decoder (64×64, never fed) so the shared StreamPlayer is happy.
     match install_player(
         url, total_len, Demux::Audio(src), Vec::new(), 0, false, Codec::H264, 64, 64, surface,
-        Some(AudioDec::Sym(dec)), true, resampler, title.clone(), duration_us, 0, None, 0,
+        Some(AudioDec::Sym(dec)), true, resampler, title.clone(), dur_us, 0, None, 0,
     ) {
         Ok(impl_name) => {
             STREAM.with(|s| if let Some(p) = s.borrow_mut().as_mut() { p.prefetch = handle; });
-            log(format!("streaming \"{title}\" (audio): {sr}Hz, decoder={impl_name}"));
+            log(format!("streaming \"{title}\" (audio): {sr}Hz {:.0}s, decoder={impl_name}", dur_us as f64 / 1e6));
             Ok(())
         }
         Err(e) => { log(e.clone()); Err(e) }
@@ -1464,7 +1475,13 @@ pub fn seek_from_clock(delta_us: i64) -> i64 {
     STREAM.with(|s| {
         s.borrow()
             .as_ref()
-            .map(|p| (p.clock_us + delta_us).clamp(0, p.duration_us.max(0)))
+            .map(|p| {
+                let t = (p.clock_us + delta_us).max(0);
+                // Only clamp to the end when the duration is actually known; a stream
+                // with an unknown length (some MP3/Ogg without a header) reports 0, and
+                // clamping to [0,0] would collapse EVERY relative seek to the start.
+                if p.duration_us > 0 { t.min(p.duration_us) } else { t }
+            })
             .unwrap_or(0)
     })
 }
@@ -1782,8 +1799,17 @@ pub fn pump_stream(nanos: u64) {
             p.dev_start = with_audio(|pb| pb.position()).unwrap_or(0);
             p.dev_start_set = true;
         }
+        // Audio-only (Demux::Audio) has NO video to advance the free-run `media_now`,
+        // so the pre-roll gate `media_now >= audio_first_pts_us` would never fire after a
+        // non-zero seek (media_now sits at 0) — audio must anchor immediately at its own
+        // first PTS instead. With video present, keep the gate so a pre-rolled audio track
+        // still waits for the picture.
+        let audio_only = matches!(p.demux, Demux::Audio(_));
         if p.has_audio && p.audio_first_pts_known {
-            if !p.audio_pts_known && media_now >= p.audio_first_pts_us && !p.pending_pcm.is_empty() {
+            if !p.audio_pts_known
+                && (audio_only || media_now >= p.audio_first_pts_us)
+                && !p.pending_pcm.is_empty()
+            {
                 p.audio_pts_known = true;
                 p.audio_start_ns = nanos;
             }
