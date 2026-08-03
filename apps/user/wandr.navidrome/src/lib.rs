@@ -1,13 +1,14 @@
 //! wandr.navidrome — a Subsonic/OpenSubsonic (Navidrome) music client.
 //!
-//! It talks the Subsonic REST API over HTTPS (auth + browse + stream) and plays the
-//! returned audio through the SHIPPED engine's audio path (`engine::open_audio_sync` →
-//! `Demux::Audio` → symphonia demux+decode → `wasi:audio` + the master clock + seek).
-//! First cut: `getRandomSongs` → a scrollable list; Enter plays the selected song via
-//! `stream?…&format=raw`; the engine's transport drives playback; Esc returns to browse.
+//! Talks the Subsonic REST API via the `opensubsonic` crate (a vendored fork wired to
+//! our `wasi:tls` transport — see crates/opensubsonic-rs) and plays the returned audio
+//! through the SHIPPED engine audio path (`engine::open_audio_sync` → Demux::Audio →
+//! symphonia demux+decode → `wasi:audio` + the master clock + seek). First cut:
+//! `get_random_songs` → a scrollable list; Enter plays the selected song via
+//! `stream?…&format=raw`; the engine transport drives playback; Esc returns to the list.
 //!
-//! CONFIG below — set your server + credentials. Auth is plaintext `u`/`p` over HTTPS
-//! (standard Subsonic; Navidrome accepts it). Swap for token/apiKey later if desired.
+//! CONFIG is read from `/state/navidrome/config.json` (server/user/pass) — never baked
+//! in. Token auth (md5(pass+salt)) is done by the `opensubsonic` crate.
 #![allow(clippy::too_many_arguments)]
 
 wit_bindgen::generate!({
@@ -26,14 +27,14 @@ use crate::exports::wasi::input_handlers::pointer_handler::{
     Button, Guest as PointerGuest, Kind as PtrKind, PointerEvent,
 };
 
+use opensubsonic::data::Child;
+use opensubsonic::{Auth, Client};
 use serde::Deserialize;
 use std::cell::RefCell;
 
 // ---- config (read from the per-app /state preopen, NOT baked in) -----------
 const STATE_DIR: &str = "/state/navidrome";
 const CONFIG_PATH: &str = "/state/navidrome/config.json";
-/// Written on first run so the user has a file to edit (consistent with jellyfin's
-/// JSON state). Pretty so it's human-editable.
 const CONFIG_TEMPLATE: &str = r#"{
   "server": "https://music.example.com",
   "user": "youruser",
@@ -51,14 +52,9 @@ struct Config {
     pass: String,
 }
 
-thread_local! {
-    static CFG: RefCell<Config> = RefCell::new(Config::default());
-}
-
-/// Load the config from `/state/navidrome/config.json`. On first run (no file) writes
-/// the template and asks the user to edit it — so the server + password live in /state
-/// (like jellyfin's session.json) and never need a rebuild or land in git.
-fn load_config() -> Result<(), String> {
+/// Load config from `/state/navidrome/config.json`; on first run write the template and
+/// ask the user to edit it (server + password live in /state, never in the binary/git).
+fn load_config() -> Result<Config, String> {
     let text = match std::fs::read_to_string(CONFIG_PATH) {
         Ok(t) => t,
         Err(_) => {
@@ -72,78 +68,7 @@ fn load_config() -> Result<(), String> {
     if cfg.server.is_empty() || cfg.user.is_empty() {
         return Err(format!("{CONFIG_PATH}: need \"server\" and \"user\""));
     }
-    CFG.with(|c| *c.borrow_mut() = cfg);
-    Ok(())
-}
-
-/// Subsonic auth + client params, appended to every REST call (plaintext over HTTPS).
-fn auth() -> String {
-    CFG.with(|c| {
-        let c = c.borrow();
-        format!("u={}&p={}&v=1.16.1&c=wandr&f=json", urlenc(&c.user), urlenc(&c.pass))
-    })
-}
-fn api_url(method: &str, extra: &str) -> String {
-    let server = CFG.with(|c| c.borrow().server.clone());
-    let sep = if extra.is_empty() { "" } else { "&" };
-    format!("{server}/rest/{method}?{}{sep}{extra}", auth())
-}
-/// Stream the ORIGINAL file (`format=raw`) so our Demux::Audio decodes it natively at
-/// full quality and byte-range seek is precise (a transcode seeks poorly server-side).
-fn stream_url(id: &str) -> String {
-    let server = CFG.with(|c| c.borrow().server.clone());
-    format!("{server}/rest/stream?id={}&format=raw&{}", urlenc(id), auth())
-}
-/// Minimal percent-encoding for query values (space + a few reserved chars).
-fn urlenc(s: &str) -> String {
-    let mut o = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => o.push(b as char),
-            _ => o.push_str(&format!("%{b:02X}")),
-        }
-    }
-    o
-}
-
-// ---- Subsonic JSON (only the fields we use) --------------------------------
-
-#[derive(Deserialize)]
-struct Wrapper {
-    #[serde(rename = "subsonic-response")]
-    resp: Resp,
-}
-#[derive(Deserialize)]
-struct Resp {
-    status: String,
-    #[serde(default)]
-    error: Option<SubError>,
-    #[serde(rename = "randomSongs", default)]
-    random_songs: Option<SongList>,
-}
-#[derive(Deserialize)]
-struct SubError {
-    #[serde(default)]
-    message: String,
-}
-#[derive(Deserialize)]
-struct SongList {
-    #[serde(default)]
-    song: Vec<Song>,
-}
-#[derive(Deserialize, Clone)]
-struct Song {
-    id: String,
-    #[serde(default)]
-    title: String,
-    #[serde(default)]
-    artist: String,
-    #[serde(default)]
-    album: String,
-    #[serde(default)]
-    duration: u32,
-    #[serde(default)]
-    suffix: String,
+    Ok(cfg)
 }
 
 // ---- app state -------------------------------------------------------------
@@ -160,12 +85,13 @@ enum Phase {
 struct App {
     phase: Phase,
     driver_spawned: bool,
-    songs: Vec<Song>,
+    /// The typed Subsonic client (built once in the driver); stream URLs are derived from
+    /// it synchronously. `None` until connected.
+    client: Option<Client>,
+    songs: Vec<Child>,
     sel: usize,
-    /// Enter in Browse → the song to play; bg-tick spawns the stream open.
-    pending_play: Option<Song>,
-    /// The async open handoff (url, total_len, title, duration_us): bg-tick calls
-    /// open_audio_sync, where the demuxer's block_on Range reader is legal.
+    pending_play: Option<Child>,
+    /// Async open handoff (url, total_len, title, duration_us) → bg-tick open_audio_sync.
     pending_open: Option<(String, u64, String, i64)>,
     now: String,
     last: String,
@@ -175,6 +101,7 @@ thread_local! {
     static APP: RefCell<App> = RefCell::new(App {
         phase: Phase::Loading,
         driver_spawned: false,
+        client: None,
         songs: Vec::new(),
         sel: 0,
         pending_play: None,
@@ -192,55 +119,50 @@ fn note(msg: impl Into<String>) {
     APP.with(|a| a.borrow_mut().last = m.clone());
     engine::log(m);
 }
-fn build_client() -> Option<reqwest::Client> {
+/// A `wandr-reqwest` client for the byte-range size probe (the engine streams the media
+/// itself; `opensubsonic` only builds the authed URLs + the API calls).
+fn probe_client() -> Option<reqwest::Client> {
     reqwest::Client::builder()
         .user_agent("wandr-navidrome/0.1 ( https://github.com/harryzz/wandr )")
         .build()
         .ok()
 }
 
-async fn api_get(client: &reqwest::Client, method: &str, extra: &str) -> Result<Resp, String> {
-    let u = url::Url::parse(&api_url(method, extra)).map_err(|e| format!("bad url: {e}"))?;
-    let resp = client.get(u).send().await.map_err(|e| format!("{method}: {e}"))?;
-    let text = resp.text().await.map_err(|e| format!("{method} body: {e}"))?;
-    let w: Wrapper = serde_json::from_str(&text).map_err(|e| format!("{method} json: {e}"))?;
-    if w.resp.status != "ok" {
-        return Err(w.resp.error.map(|e| e.message).unwrap_or_else(|| "server error".into()));
-    }
-    Ok(w.resp)
-}
-
-/// Async: read config from /state, authenticate (ping), then load songs to browse.
+/// Async: read config, build the client, authenticate, load songs to browse.
 async fn driver() {
-    if let Err(e) = load_config() {
-        note(e);
-        return set_phase(Phase::Error);
-    }
-    let Some(client) = build_client() else {
-        note("no HTTP client");
-        return set_phase(Phase::Error);
-    };
-    match api_get(&client, "ping", "").await {
-        Ok(_) => note(format!("connected to {}", CFG.with(|c| c.borrow().server.clone()))),
+    let cfg = match load_config() {
+        Ok(c) => c,
         Err(e) => {
-            note(format!("login failed: {e}"));
+            note(e);
             return set_phase(Phase::Error);
         }
+    };
+    let client = match Client::new(&cfg.server, Auth::token(&cfg.user, &cfg.pass)) {
+        Ok(c) => c.with_client_name("wandr"),
+        Err(e) => {
+            note(format!("client: {e}"));
+            return set_phase(Phase::Error);
+        }
+    };
+    if let Err(e) = client.ping().await {
+        note(format!("login failed: {e}"));
+        return set_phase(Phase::Error);
     }
-    match api_get(&client, "getRandomSongs", "size=200").await {
-        Ok(r) => {
-            let songs = r.random_songs.map(|s| s.song).unwrap_or_default();
-            if songs.is_empty() {
-                note("no songs returned");
-                return set_phase(Phase::Error);
-            }
+    note(format!("connected to {}", cfg.server));
+    match client.get_random_songs(Some(200), None, None, None, None).await {
+        Ok(songs) if !songs.is_empty() => {
             note(format!("{} songs", songs.len()));
             APP.with(|a| {
                 let mut a = a.borrow_mut();
                 a.songs = songs;
                 a.sel = 0;
+                a.client = Some(client);
             });
             set_phase(Phase::Browse);
+        }
+        Ok(_) => {
+            note("no songs returned");
+            set_phase(Phase::Error);
         }
         Err(e) => {
             note(format!("library: {e}"));
@@ -249,15 +171,22 @@ async fn driver() {
     }
 }
 
-/// Async: probe the stream's size, then hand off to bg-tick for the open.
-async fn play(song: Song) {
+/// Async: build the stream URL from the client, probe its size, hand off to bg-tick.
+async fn play(song: Child) {
     set_phase(Phase::Opening);
-    let Some(client) = build_client() else {
+    // stream_url is synchronous (URL + auth only) — pull it from the stored client.
+    let url = match APP.with(|a| a.borrow().client.as_ref().and_then(|c| c.stream_url(&song.id, None, Some("raw")).ok())) {
+        Some(u) => u.to_string(),
+        None => {
+            note("no stream url");
+            return set_phase(Phase::Browse);
+        }
+    };
+    let Some(hc) = probe_client() else {
         note("no HTTP client");
         return set_phase(Phase::Browse);
     };
-    let url = stream_url(&song.id);
-    let total_len = match engine::net::fetch_range(&client, &url, 0, Some(0)).await {
+    let total_len = match engine::net::fetch_range(&hc, &url, 0, Some(0)).await {
         Ok(r) if r.total_len > 0 => r.total_len,
         Ok(_) => {
             note("stream: server did not report a length");
@@ -268,10 +197,13 @@ async fn play(song: Song) {
             return set_phase(Phase::Browse);
         }
     };
-    let title = format!("{} — {}", song.artist, song.title);
-    // Navidrome's scanned duration is authoritative — pass it so the transport total is
-    // exact even when symphonia can't derive it (e.g. a headerless MP3).
-    let dur_us = song.duration as i64 * 1_000_000;
+    let title = format!(
+        "{} — {}",
+        song.artist.clone().unwrap_or_default(),
+        song.title
+    );
+    // Subsonic's scanned duration is authoritative → exact transport total.
+    let dur_us = song.duration.unwrap_or(0).max(0) * 1_000_000;
     APP.with(|a| {
         let mut a = a.borrow_mut();
         a.now = title.clone();
@@ -325,7 +257,6 @@ impl KeyGuest for Component {
                 }
             }),
             Phase::Playing => {
-                // Transport → engine CONTROLS; Esc/q returns to the library.
                 engine::CONTROLS.with(|c| {
                     let mut c = c.borrow_mut();
                     c.controls_bump = true;
@@ -358,7 +289,6 @@ impl PointerGuest for Component {
     fn on_pointer(ev: PointerEvent) {
         let phase = APP.with(|a| a.borrow().phase);
         if phase == Phase::Browse {
-            // Click a row to select; a second click (or on the selected row) plays it.
             if matches!(ev.kind, PtrKind::Down) && matches!(ev.button, Button::Primary) {
                 let (_, sh) = engine::CONTROLS.with(|c| c.borrow().surface);
                 let row = ((ev.y - LIST_TOP) / ROW_H).floor();
@@ -383,7 +313,6 @@ impl PointerGuest for Component {
         if phase != Phase::Playing {
             return;
         }
-        // Playing: reuse the engine transport bar (same as flac.test / dash).
         let (sw, sh) = engine::CONTROLS.with(|c| c.borrow().surface);
         let bar = engine::control_bar(sw as f32, sh as f32);
         let scrub_hit = (bar.scrub.0, bar.scrub.1 - 8.0, bar.scrub.2, bar.scrub.3 + 16.0);
@@ -439,12 +368,10 @@ impl BgGuest for Component {
             reqwest::task::spawn(driver());
         }
 
-        // Enter in Browse → start streaming the selected song.
         if let Some(song) = APP.with(|a| a.borrow_mut().pending_play.take()) {
             reqwest::task::spawn(play(song));
         }
 
-        // Stop (Esc/q or the stop button): tear the stream down, return to the library.
         if engine::CONTROLS.with(|c| std::mem::take(&mut c.borrow_mut().stop_requested)) {
             engine::STREAM.with(|s| *s.borrow_mut() = None);
             let _ = engine::with_audio(|pb| pb.flush());
@@ -452,7 +379,6 @@ impl BgGuest for Component {
             set_phase(Phase::Browse);
         }
 
-        // The block_on audio open runs HERE (async-lifted export), not on-frame.
         if let Some((u, total, title, dur)) = APP.with(|a| a.borrow_mut().pending_open.take()) {
             let surface = engine::CONTROLS.with(|c| c.borrow().surface);
             match engine::open_audio_sync(u, total, title, dur, surface) {
@@ -474,7 +400,6 @@ impl BgGuest for Component {
             set_phase(Phase::Browse);
         }
 
-        // Drive the active stream: seek (blocking I/O), demux, decode.
         if engine::STREAM.with(|s| s.borrow().is_some()) {
             let seek = engine::CONTROLS.with(|c| c.borrow_mut().seek_request.take());
             engine::STREAM.with(|s| {
@@ -504,7 +429,6 @@ impl BgGuest for Component {
 const LIST_TOP: f32 = 96.0;
 const ROW_H: f32 = 28.0;
 
-/// First visible row index so the selection stays on screen.
 fn list_top_index(sel: usize, n: usize, sh: f32) -> usize {
     let rows = (((sh - LIST_TOP) / ROW_H).floor() as usize).max(1);
     if n <= rows {
@@ -544,11 +468,18 @@ fn render() {
                 let y = LIST_TOP + i as f32 * ROW_H + 18.0;
                 let (color, weight) = if idx == sel { (0xFFFF_FFFF, 700) } else { (0xFFB0_B4BC, 400) };
                 if idx == sel {
-                    // selection bar
                     engine::draw_text(&cv, "▶", pad, y, 15.0, 700, 0xFF4A_C0FF, 20.0);
                 }
-                let dur = format!("{}:{:02}", s.duration / 60, s.duration % 60);
-                let line = format!("{}   {} · {}   [{}] {}", s.title, s.artist, s.album, s.suffix, dur);
+                let d = s.duration.unwrap_or(0).max(0);
+                let dur = format!("{}:{:02}", d / 60, d % 60);
+                let line = format!(
+                    "{}   {} · {}   [{}] {}",
+                    s.title,
+                    s.artist.clone().unwrap_or_default(),
+                    s.album.clone().unwrap_or_default(),
+                    s.suffix.clone().unwrap_or_default(),
+                    dur
+                );
                 engine::draw_text(&cv, &line, pad + 22.0, y, 14.0, weight, color, sw - 2.0 * pad - 22.0);
             }
         });

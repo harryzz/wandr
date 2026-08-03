@@ -51,12 +51,15 @@ impl Certificate {
 
 // ---- Client / ClientBuilder ----
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Default)]
 pub struct Client {
     user_agent: Option<String>,
 }
 
 impl Client {
+    pub fn new() -> Self {
+        Client::default()
+    }
     pub fn builder() -> ClientBuilder {
         ClientBuilder::new()
     }
@@ -78,6 +81,10 @@ impl Client {
     pub fn get(&self, url: Url) -> RequestBuilder {
         self.request(Method::GET, url)
     }
+
+    pub fn post(&self, url: Url) -> RequestBuilder {
+        self.request(Method::POST, url)
+    }
 }
 
 #[derive(Default)]
@@ -90,6 +97,9 @@ impl ClientBuilder {
         ClientBuilder::default()
     }
     pub fn tls_built_in_root_certs(self, _enabled: bool) -> Self {
+        self
+    }
+    pub fn danger_accept_invalid_certs(self, _enabled: bool) -> Self {
         self
     }
     pub fn add_root_certificate(self, _cert: Certificate) -> Self {
