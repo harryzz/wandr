@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: reference
   originSessionId: 8f923d2a-de3d-450d-8444-07ecb72775c5
-  modified: 2026-08-02T17:58:50.798Z
+  modified: 2026-08-03T06:39:24.595Z
 ---
 
 **UPDATE 2026-08-02 (later) — `mp4` 0.14 crate RETIRED; progressive MP4/MOV now
@@ -45,6 +45,18 @@ counts RANGE REQUESTS (a read after a discontiguous seek), not bytes. On a 4.8 M
 `open_streaming` = **7** (flat); on `big.mkv` (SeekHead-reachable Cues) both = 13 (no
 regression). Make the storm-repro file with `mkvmerge --no-cues big.mkv` (an
 `ffmpeg -live 1` file does NOT repro — it's unknown-size, a different no-scan path).
+
+**Cue-less TRUE seek (added later, same fork):** `seek_by_bisection` + `probe_cluster_from`
+in the vendored `demux.rs` give a byte-offset binary-search seek for cue-less files
+(Clusters ascending-Timestamp, §11.1), superseding the linear `seek_by_cluster_scan`
+(now `#[allow(dead_code)]`) and the strict-mode `unsupported`. So the engine `do_seek`
+NO LONGER no-ops on cue-less MKV — it seeks (Err only on zero-Cluster/unknown-size).
+Proven: seek reqs stay ~flat (≈36→43) as clusters grow 10× (54→540) vs a linear scan
+(63→558); lands at/just-before target. fmt+clippy clean → upstream-PR-ready (issue
+drafted, NOT yet posted — pending user OK). **Device note: seek WORKS but needs polish**
+(short FF has ~1 s+ delay, grows with delta) — deferred backlog (interpolation search +
+in-cluster keyframe refinement + small-seek fast path) recorded in
+[[tasks/120-wandr-media-abstraction]]. `repros/fmp4-probe/src/bin/mkv_probe.rs` measures it.
 
 **The fork = one added fn `demux::open_streaming`** (+`open_streaming_typed`): identical
 to `open` but threads `scan_late_cues=false` into `open_typed_impl`, gating ONLY the

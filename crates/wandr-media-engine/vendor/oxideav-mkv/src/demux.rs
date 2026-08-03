@@ -8104,16 +8104,13 @@ impl Demuxer for MkvDemuxer {
             )));
         }
         if self.cues.is_empty() {
-            if self.resilient {
-                // Cues-less / damaged-Cues fallback (RFC 9559 §22.1 only
-                // RECOMMENDS a Cues element): linearly scan Cluster
-                // Timestamps and land on the last Cluster at or before
-                // the target.
-                return self.seek_by_cluster_scan(stream_index, pts);
-            }
-            return Err(Error::unsupported(
-                "MKV: no Cues index in file — cannot seek",
-            ));
+            // Cues-less / damaged-Cues (RFC 9559 §22.1 only RECOMMENDS a Cues
+            // element). wandr fork: seek by byte-offset BISECTION over the Cluster
+            // region — ~log2 probes, no whole-file scan — so a cue-less file is
+            // seekable over an HTTP-Range reader without a fetch storm. Supersedes
+            // the linear `seek_by_cluster_scan` (kept for reference) and the former
+            // strict-mode `unsupported`.
+            return self.seek_by_bisection(stream_index, pts);
         }
         let track_number = self.track_number_by_index[stream_index as usize];
 
@@ -9525,6 +9522,9 @@ impl MkvDemuxer {
     /// unparseable stretch is stepped over with the same Top-Level scan
     /// `next_packet` resynchronisation uses (no [`DamageEvent`] is
     /// recorded — the scan is navigation, not packet loss).
+    // Superseded by `seek_by_bisection` (wandr fork) for the cue-less path; retained
+    // for reference / as a linear-scan comparison point.
+    #[allow(dead_code)]
     fn seek_by_cluster_scan(&mut self, stream_index: u32, pts: i64) -> Result<i64> {
         let target_ticks = self.stream_pts_to_ticks(stream_index, pts);
         // A zero-Cluster Segment has nothing to scan — same signal the
@@ -9622,6 +9622,135 @@ impl MkvDemuxer {
         self.last_block_additions = None;
         self.last_block_group_meta = None;
         Ok(self.ticks_to_stream_pts(stream_index, landed_ticks))
+    }
+
+    /// Cue-less seek by BYTE-OFFSET BISECTION (wandr fork). Clusters are stored in
+    /// ascending `Timestamp` order (RFC 9559 §11.1), so the Cluster region of the
+    /// Segment can be binary-searched instead of walked. Where [`Self::seek_by_cluster_scan`]
+    /// reads one Cluster header per Cluster from the first — O(Clusters), and over an
+    /// HTTP-Range reader one range request per Cluster (a fetch storm on a large file) —
+    /// this issues ~log2(segment_size / cluster_size) probes, each bounded by a single
+    /// Cluster's worth of forward resync, and lands on the last Cluster whose Timestamp
+    /// is <= the target (mirroring the Cues-path landing + first-Cluster fallback).
+    /// Derived from the Segment/Cluster spec structure; no other implementation consulted.
+    fn seek_by_bisection(&mut self, stream_index: u32, pts: i64) -> Result<i64> {
+        let target_ticks = self.stream_pts_to_ticks(stream_index, pts);
+        let Some(first) = self.first_cluster_offset else {
+            return Err(Error::unsupported(
+                "MKV: no Clusters in Segment — cannot seek",
+            ));
+        };
+        // Best-so-far (Cluster header offset, Timestamp). Seed with the first Cluster
+        // so a target before it lands there, exactly like the Cues first-cue fallback.
+        let mut best: Option<(u64, u64)> = self
+            .probe_cluster_from(first, self.segment_data_end)?
+            .map(|(off, tc, _)| (off, tc));
+        // Invariant: the Cluster we want has its header in [lo, hi). Each probe either
+        // raises `lo` past a Cluster that is <= target, or lowers `hi` below one that
+        // is > target (or that could not be found forward), so the window shrinks.
+        let mut lo = first;
+        let mut hi = self.segment_data_end;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            match self.probe_cluster_from(mid, hi)? {
+                Some((off, tc, bounded_end)) => {
+                    if tc <= target_ticks {
+                        best = Some((off, tc));
+                        // Search right: step past this Cluster to the next candidate.
+                        let next = match bounded_end {
+                            Some(end) if end > off => end,
+                            _ => off.saturating_add(1),
+                        };
+                        if next <= lo {
+                            break; // no forward progress possible (unknown-size tail)
+                        }
+                        lo = next;
+                    } else {
+                        // This Cluster is already past the target; the answer is left.
+                        hi = off;
+                    }
+                }
+                // No Cluster found in [mid, hi): the answer is left of the probe point.
+                None => hi = mid,
+            }
+        }
+        let (cluster_off, landed_ticks) = best
+            .ok_or_else(|| Error::unsupported("MKV: no parseable Cluster Timestamp to seek by"))?;
+        self.input.seek(SeekFrom::Start(cluster_off))?;
+        self.cluster_state = ClusterState::Idle;
+        self.out_queue.clear();
+        self.last_block_additions = None;
+        self.last_block_group_meta = None;
+        Ok(self.ticks_to_stream_pts(stream_index, landed_ticks))
+    }
+
+    /// Find the first Cluster at or after byte `from` (searching up to `end`), reading
+    /// only element headers + the Cluster's leading `Timestamp`. Returns its
+    /// `(header offset, Timestamp ticks, bounded end)`; `bounded_end` is `None` for an
+    /// unknown-size (live) Cluster. Tolerates `from` landing mid-element by scanning
+    /// forward for the next Top-Level id (RFC 9559 §6.2), the same recovery the linear
+    /// scan uses — so a probe reads at most one Cluster's worth before it resyncs.
+    fn probe_cluster_from(
+        &mut self,
+        from: u64,
+        end: u64,
+    ) -> Result<Option<(u64, u64, Option<u64>)>> {
+        // NEVER parse a header at the raw probe point — `from` is an arbitrary byte,
+        // almost always mid-element. Resync to a *vetted* Top-Level element first
+        // (`scan_top_level_element` is inclusive of `from`), then walk forward over
+        // Top-Level elements until we meet a Cluster with a readable Timestamp.
+        let mut pos = from;
+        while let Some(off) = scan_top_level_element(&mut *self.input, pos, end)? {
+            self.input.seek(SeekFrom::Start(off))?;
+            let e = match read_element_header(&mut *self.input) {
+                Ok(e) => e,
+                Err(_) => {
+                    pos = off.saturating_add(1);
+                    continue;
+                }
+            };
+            let body_start = self.input.stream_position()?;
+            let bounded_end = if e.size == VINT_UNKNOWN_SIZE {
+                None
+            } else {
+                Some(body_start.saturating_add(e.size).min(self.segment_data_end))
+            };
+            if e.id == ids::CLUSTER {
+                // Pull the Cluster's Timestamp from its leading children (§5.1.3.1
+                // SHOULD be first, or second after a CRC-32) — same tolerance as
+                // `seek_by_cluster_scan`.
+                let mut tc: Option<u64> = None;
+                let child_limit = bounded_end.unwrap_or(self.segment_data_end);
+                while self.input.stream_position()? < child_limit {
+                    let c = match read_element_header(&mut *self.input) {
+                        Ok(c) => c,
+                        Err(_) => break,
+                    };
+                    match c.id {
+                        ids::TIMECODE => {
+                            tc = read_uint(&mut *self.input, c.size as usize).ok();
+                            break;
+                        }
+                        ids::CRC32 | ids::POSITION | ids::PREV_SIZE | ids::SILENT_TRACKS => {
+                            if skip(&mut *self.input, c.size).is_err() {
+                                break;
+                            }
+                        }
+                        _ => break,
+                    }
+                }
+                if let Some(tc) = tc {
+                    return Ok(Some((off, tc, bounded_end)));
+                }
+            }
+            // Not a Cluster (or a Cluster with no readable Timestamp): step past this
+            // Top-Level element and keep scanning forward.
+            pos = match bounded_end {
+                Some(x) if x > off => x,
+                _ => off.saturating_add(1),
+            };
+        }
+        Ok(None)
     }
 
     /// Parse a `Tags` element encountered during the Cluster walk and

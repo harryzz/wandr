@@ -1367,11 +1367,12 @@ pub fn do_seek(p: &mut StreamPlayer, target_us: i64) -> i64 {
             };
             match src.dmx.seek_to(src.video_stream, ticks) {
                 Ok(landed) => Some(SegStream::ticks_to_us(landed, src.v_num, src.v_den)),
-                // Cue-less MKV (streaming open skipped the scan): seek is unsupported.
-                // Return None so the seek is a NO-OP — do NOT move the clock or reset
-                // the queues (the demuxer never moved; playback continues untouched).
+                // MP4 sample-table seek, MKV Cues seek, and (vendored fork) MKV
+                // cue-less BISECTION seek all return the landed pts above. An Err
+                // here is now only the pathological case (zero-Cluster / unknown-size
+                // Segment): make the seek a NO-OP — leave the clock + queues untouched.
                 Err(e) => {
-                    log(format!("seek: unsupported (no seek index): {e:?} — staying put"));
+                    log(format!("seek: not seekable here ({e:?}) — staying put"));
                     None
                 }
             }

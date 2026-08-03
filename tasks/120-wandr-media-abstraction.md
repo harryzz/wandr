@@ -66,3 +66,34 @@ backbone** + adapters:
 Related: [[reference_jellyfin_container_demux_and_mkv_seek]] (the swap that motivated
 this), [[reference_gstreamer_desktop_backend_spike]] (host-side decode consolidation —
 the same "one abstraction, swappable backend" lesson, but for the HOST decoder).
+
+## Backlog — cue-less MKV seek polish (DEFERRED; reported, not blocking)
+
+The vendored oxideav-mkv fork now does a true cue-less seek by **byte-offset
+bisection** (`seek_by_bisection`, superseding the linear `seek_by_cluster_scan`),
+paired with `open_streaming` (no open-time cue scan). Device-tested on "Home Alone 2":
+seek WORKS but needs polish — a short FF (~1 s) has ≥~1 s delay, and the delay grows
+with seek delta. The bisection range-request count is FLAT across distance, so the lag
+is NOT the search I/O; it's two other costs. Polish when it matters (not now):
+
+1. **Interpolation search** (kills the ~constant floor). Midpoint bisection takes
+   ~log2(clusters) probes, each an HTTP round-trip. Cluster time is ~linear in byte
+   offset, so seed the probe from the time fraction:
+   `byte ≈ first + (target/duration)·(end−first)`; refine, keeping bisection bounds as
+   the VBR fallback. ~10 probes → ~2–3, roughly independent of seek distance.
+2. **In-cluster keyframe refinement** (kills the delta-proportional decode catch-up).
+   We land on the CLUSTER ≤ target, not the KEYFRAME ≤ target, so the decoder grinds
+   every frame from the cluster's keyframe up to target. Scan the target cluster's
+   blocks for the last keyframe ≤ target (step back one cluster if it opens mid-GOP —
+   usually a no-op for remuxes) so catch-up is < 1 GOP regardless of delta.
+3. **Small-seek fast path**: a short FF/RW should keep demuxing forward + drop to
+   target WITHOUT a full decoder reset + whole-file reseek.
+4. **Measure first** (project rule): add probe-count / seek wall-time /
+   frames-to-catch-up counters to confirm I/O-bound (→ #1) vs decode-bound (→ #2) on
+   the real device network before patching.
+
+Recommendation: #1 + #2 together (then #3 for nudge feel); these also strengthen the
+upstream oxideav-mkv PR (a proper interpolation+keyframe seek, not a plain bisection).
+Prototype numbers + the bisection impl live in `crates/wandr-media-engine/vendor/
+oxideav-mkv/src/demux.rs` and `repros/fmp4-probe/src/bin/mkv_probe.rs`. See
+[[reference_jellyfin_container_demux_and_mkv_seek]].
