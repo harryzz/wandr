@@ -97,3 +97,33 @@ upstream oxideav-mkv PR (a proper interpolation+keyframe seek, not a plain bisec
 Prototype numbers + the bisection impl live in `crates/wandr-media-engine/vendor/
 oxideav-mkv/src/demux.rs` and `repros/fmp4-probe/src/bin/mkv_probe.rs`. See
 [[reference_jellyfin_container_demux_and_mkv_seek]].
+
+## Audio backbone (Navidrome client) — DECISION: symphonia now, oxideav later
+
+The engine is already ~90% an audio player (httprange → demux → decode → PCM →
+wasi:audio → audio-master clock + seek; proven by jellyfin). An audio-only music
+client (Navidrome/Subsonic) is that path with the video lane off + a Subsonic API
+layer. PROVEN raw-FLAC-over-byte-range (repros/audio-decode-probe/src/bin/
+flac_stream_probe.rs): startup reads 1.9% (header-only), seektable-less seek Δ24 ms in
+7 reqs / 3.7% (symphonia bisects frames). symphonia default features are royalty-free
+and already cover FLAC/Vorbis/Ogg/WAV (+ mp3/aac/isomp4 opt-in) — one lib, demux+decode.
+
+**Decision (2026-08-03): use symphonia for the audio path now; monitor oxideav-* and
+migrate when it matures.** oxideav DOES cover the audio codecs too (oxideav-flac +
+mp3/ogg/opus crates) on the SAME Demuxer/Decoder traits as mp4/mkv/ac3 — the unified
+"one framework" endgame — but it needs time to grow. Evidence
+(repros/fmp4-probe/src/bin/flac_ox_probe.rs, oxideav-flac @ git HEAD 1c410d85, NOT
+crates.io 0.0.11 which errors "no SEEKTABLE"): demux+decode work (startup 2.1%, decodes
+to PCM), seek LANDS correctly (Δ24 ms) — BUT the seektable-less seek is a LINEAR forward
+scan (read 51% of file for a midpoint) vs symphonia's bisection (3.7%). Same class as
+the oxideav-mkv cue-less linear scan we replaced with bisection (issue #9); a bisection/
+interpolation contribution to oxideav-flac would close it. Most library FLACs carry a
+SEEKTABLE → oxideav-flac's seektable path is O(1) anyway. Third time the oxideav fix is
+on HEAD not the published crate (mp4, mkv, flac) — always check GitHub HEAD.
+
+Next build increments (symphonia): (1) add a symphonia-native audio `Demux` source to
+the engine (raw FLAC/MP3/Ogg/WAV over httprange → wasi:audio), additive, doesn't touch
+the video lane; (2) `Player` facade + queue + gapless; (3) feature-gate the video lane
+(needs a WIT-world decision — rule #4 — or reuse the full world, host provides unused
+video); (4) `wandr.navidrome` = Subsonic/OpenSubsonic API + the source + music UI,
+request `format=raw` for native decode + precise seek.

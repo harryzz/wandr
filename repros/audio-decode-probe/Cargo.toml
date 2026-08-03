@@ -1,0 +1,18 @@
+# Risk probe (task 108 / M1): does Symphonia decode FLAC on wasm32-wasip2?
+# Isolated from the wasi:audio wiring — a plain wasip2 CLI binary run via
+# `wasmtime run`. Proves the pure-Rust decode pipeline compiles + runs on the
+# target before scaffolding the real guest. Throwaway.
+[package]
+name    = "audio-decode-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# Default features = royalty-free codecs/formats (FLAC is in default — no flag,
+# no licensing concern). mp3/aac would be additive feature flags later.
+symphonia = "0.5"
+
+[profile.release]
+opt-level = "s"
+strip = true

@@ -72,6 +72,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "compcol"
+version = "0.6.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "28b37ce533aa0fddc1e6820e331968ba72aa48b5c8bbb2bebdc03d48b6ed0f16"
+
+[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -106,6 +112,7 @@ dependencies = [
  "mp4",
  "oxideav-container",
  "oxideav-core",
+ "oxideav-flac",
  "oxideav-mkv",
  "oxideav-mp4",
 ]
@@ -220,6 +227,25 @@ dependencies = [
  "bytemuck",
  "serde_json",
  "thiserror 2.0.19",
+]
+
+[[package]]
+name = "oxideav-flac"
+version = "0.0.11"
+source = "git+https://github.com/OxideAV/oxideav-flac?rev=1c410d85156b06c3752e3c41f32c465efc7ddc05#1c410d85156b06c3752e3c41f32c465efc7ddc05"
+dependencies = [
+ "oxideav-core",
+ "oxideav-id3",
+]
+
+[[package]]
+name = "oxideav-id3"
+version = "0.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4f495efcedb7db3d0f5d9e8cfa0ff23b36a608d0abfc060029b1719ec76c06a"
+dependencies = [
+ "compcol",
+ "oxideav-core",
 ]
 
 [[package]]

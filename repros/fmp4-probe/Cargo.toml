@@ -12,4 +12,9 @@ oxideav-mkv = { path = "../../crates/wandr-media-engine/vendor/oxideav-mkv" }
 # HEAD git pin (matches the engine) — full §8.6.6 edit-list mapping + the mdat-skip
 # open the mp4_probe measures.
 oxideav-mp4 = { git = "https://github.com/OxideAV/oxideav-mp4", rev = "e9e8b579335a1e6ee8bb26163cccdf086923da4a" }
+# oxideav-flac: native FLAC container demuxer + decoder on the SAME oxideav traits —
+# the audio-only-profile candidate to replace symphonia (one framework). GIT HEAD, not
+# crates.io 0.0.11: HEAD adds `scan_for_target` (seektable-less seek, RFC 9639 §8.5,
+# commit 2ac449a) — the published 0.0.11 errors "no SEEKTABLE; cannot seek".
+oxideav-flac = { git = "https://github.com/OxideAV/oxideav-flac", rev = "1c410d85156b06c3752e3c41f32c465efc7ddc05" }
 [workspace]
