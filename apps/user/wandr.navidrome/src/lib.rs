@@ -137,7 +137,8 @@ async fn driver() {
             return set_phase(Phase::Error);
         }
     };
-    let client = match Client::new(&cfg.server, Auth::token(&cfg.user, &cfg.pass)) {
+    // Plaintext `u`/`p` over HTTPS: this server rejects token auth (Subsonic error 41).
+    let client = match Client::new(&cfg.server, Auth::plain(&cfg.user, &cfg.pass)) {
         Ok(c) => c.with_client_name("wandr"),
         Err(e) => {
             note(format!("client: {e}"));
