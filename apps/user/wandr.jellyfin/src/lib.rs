@@ -177,7 +177,7 @@ slint::slint! {
                 Rectangle {
                     height: root.width * 0.56; clip: true; background: #16202a;
                     if root.d-has-backdrop : Image { width: 100%; height: 100%; source: root.d-backdrop; image-fit: ImageFit.cover; }
-                    Rectangle { width: 100%; height: 100%; background: @linear-gradient(0deg, #ff0b0d10 0%, #000b0d10 60%); }
+                    Rectangle { width: 100%; height: 100%; background: @linear-gradient(0deg, #0b0d10ff 0%, #0b0d1000 60%); }
                     Rectangle { width: 40px; height: 40px; x: 12px; y: 12px;
                         Path { width: 100%; height: 100%; viewbox-width: 100; viewbox-height: 100; commands: "M 62 20 L 34 50 L 62 80"; stroke: white; stroke-width: 9px; fill: transparent; }
                         TouchArea { clicked => { root.back(); } } }
@@ -211,14 +211,14 @@ slint::slint! {
             TouchArea { clicked => { root.player-tap(); } }
             if root.overlay : Rectangle {
                 width: 100%; height: 100%;
-                Rectangle { y: 0; width: 100%; height: 96px; background: @linear-gradient(180deg, #d0000000 0%, #00000000 100%);
+                Rectangle { y: 0; width: 100%; height: 96px; background: @linear-gradient(180deg, #000000d0 0%, #00000000 100%);
                     HorizontalLayout { padding: 14px; spacing: 12px;
                         Rectangle { width: 40px; height: 40px;
                             Path { width: 100%; height: 100%; viewbox-width: 100; viewbox-height: 100; commands: "M 62 20 L 34 50 L 62 80"; stroke: white; stroke-width: 9px; fill: transparent; }
                             TouchArea { clicked => { root.back(); } } }
                         Text { text: root.np-title; color: white; font-size: 18px; font-weight: 700; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; } } }
                 if root.opening : Text { text: "opening…"; color: white; font-size: 16px; x: (parent.width - self.width)/2; y: (parent.height - self.height)/2; }
-                Rectangle { y: parent.height - self.height; width: 100%; height: 150px; background: @linear-gradient(0deg, #d0000000 0%, #00000000 100%);
+                Rectangle { y: parent.height - self.height; width: 100%; height: 150px; background: @linear-gradient(0deg, #000000d0 0%, #00000000 100%);
                     VerticalLayout { padding: 18px; spacing: 8px; alignment: end;
                         prog := Rectangle {
                             height: 44px; // tall hit area — easy to tap/drag the thin bar
@@ -244,7 +244,7 @@ slint::slint! {
                         HorizontalLayout {
                             Text { text: root.elapsed; color: #d0d4d8; font-size: 13px; vertical-alignment: center; }
                             Rectangle { horizontal-stretch: 1; }
-                            Rectangle { width: 54px; height: 54px; border-radius: 27px; background: #b04ac0ff;
+                            Rectangle { width: 54px; height: 54px; border-radius: 27px; background: #4ac0ffcc;
                                 if !root.playing : Path { width: 100%; height: 100%; viewbox-width: 100; viewbox-height: 100; commands: "M 38 26 L 74 50 L 38 74 Z"; fill: white; }
                                 if root.playing : Path { width: 100%; height: 100%; viewbox-width: 100; viewbox-height: 100; commands: "M 35 28 L 45 28 L 45 72 L 35 72 Z M 55 28 L 65 28 L 65 72 L 55 72 Z"; fill: white; }
                                 TouchArea { clicked => { root.toggle(); } } }
@@ -349,6 +349,9 @@ struct Eng {
     view: i32,
     overlay_until_ns: u64,
     last_surface: (u32, u32),
+    /// Current immersive (chrome-hidden) state pushed to the arbiter — hide the status
+    /// bar + taskbar whenever the player's transport controls are hidden.
+    immersive: bool,
     // posters (by item id)
     posters: HashMap<String, Image>,
     poster_inflight: HashSet<String>,
@@ -382,6 +385,7 @@ thread_local! {
         view: 0,
         overlay_until_ns: 0,
         last_surface: (0, 0),
+        immersive: false,
         posters: HashMap::new(),
         poster_inflight: HashSet::new(),
         pending_posters: Vec::new(),
@@ -659,6 +663,10 @@ fn stop_playback() {
     engine::STREAM.with(|s| *s.borrow_mut() = None);
     let _ = engine::with_audio(|pb| pb.flush());
     slint_wandr::set_continuous_render(false);
+    // Restore the system chrome we hid for fullscreen playback.
+    if ENG.with(|e| std::mem::replace(&mut e.borrow_mut().immersive, false)) {
+        slint_wandr::set_immersive(false);
+    }
     ENG.with(|e| {
         let mut e = e.borrow_mut();
         e.resolved = None;
@@ -1149,6 +1157,7 @@ fn on_render_frame(nanos: u64) {
                 if e.last_surface != cur { e.last_surface = cur; true } else { false }
             });
             if changed {
+                engine::log(format!("jf-geo: surface {}x{} scale {:.2}", cur.0, cur.1, ui.window().scale_factor()));
                 engine::set_surface(cur.0, cur.1);
             }
         }
@@ -1170,7 +1179,18 @@ fn on_render_frame(nanos: u64) {
             ui.set_progress(if tot > 0 { (clk as f32 / tot as f32).clamp(0.0, 1.0) } else { 0.0 });
             let is_playing = playing && !engine::CONTROLS.with(|c| c.borrow().paused);
             ui.set_playing(is_playing);
-            ui.set_overlay(ENG.with(|e| nanos < e.borrow().overlay_until_ns));
+            let overlay_vis = ENG.with(|e| nanos < e.borrow().overlay_until_ns);
+            ui.set_overlay(overlay_vis);
+            // Fullscreen immersive: chrome (status + task bar) hides in lockstep with the
+            // transport controls — hidden controls → immersive on. Only fire on a change so
+            // we hit the arbiter socket at transitions, not every frame.
+            let want_imm = !overlay_vis;
+            if ENG.with(|e| {
+                let mut e = e.borrow_mut();
+                if e.immersive != want_imm { e.immersive = want_imm; true } else { false }
+            }) {
+                slint_wandr::set_immersive(want_imm);
+            }
         });
     }
 }

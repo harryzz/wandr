@@ -53,8 +53,22 @@ mod bindings {
     });
 }
 pub(crate) use bindings::wandr::ui_shell::{
-    ime as host_ime, metrics as host_window, theme as host_theme,
+    ime as host_ime, metrics as host_window, shell_control as host_shell, theme as host_theme,
 };
+
+/// Hide (true) / show (false) the system chrome (status bar + task bar) at runtime —
+/// dynamic override of the manifest `immersive` flag, forwarded to the arbiter. A media
+/// guest calls `set_immersive(true)` entering fullscreen playback and `false` on exit.
+/// No-op unless this guest is the foreground app.
+pub fn set_immersive(on: bool) {
+    host_shell::set_immersive(on);
+}
+
+/// Lock (true) / unlock (false) orientation to the current device rotation at runtime —
+/// dynamic override of the manifest `orientation` flag, forwarded to the arbiter.
+pub fn set_orientation_lock(on: bool) {
+    host_shell::set_orientation_lock(on);
+}
 
 /// Drawing comes from the wasi:canvas DRAFT (proposals/wasi-canvas) — this
 /// crate is its proving consumer. Single source of truth: the generate!
@@ -221,6 +235,15 @@ impl WandrWindowAdapter {
         let ctx = self.context.get_or_init(wembed::get_context);
         let graphics = self.graphics.get_or_init(|| ctx.graphics());
         let canvas = ctx.get_current_buffer();
+        // Behind-ui video hole-punch: on Android the host clears this canvas BLACK
+        // (opaque), which would cover a `wandr:video ZLayer::BehindUi` layer (composited
+        // via a SurfaceView BELOW a hole-punched UI buffer). A media guest sets
+        // continuous-render while playing; clear the whole buffer TRANSPARENT so the video
+        // shows through wherever no Slint chrome is drawn (the WIT's "UI punches a
+        // transparent hole"). No-op on desktop — the host already cleared transparent.
+        if CONTINUOUS.with(|c| c.get()) {
+            canvas.clear(0x0000_0000);
+        }
         // The canvas handle carries the surface size — sync Slint's window
         // before drawing (covers both the first frame and embedder-side
         // resizes the on-resize export may not have delivered yet).

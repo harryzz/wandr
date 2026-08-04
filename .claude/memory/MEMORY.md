@@ -71,6 +71,8 @@
 - [Ref: "resource impl missing"](reference_missing_instance_error_stale_zygote.md) — forked old zygote image
 - [Ref: ART-off Magisk am-spin](reference_artoff_magisk_am_spin.md) — am-loop starves HALs; adb root to probe.
 - [Ref: --install APPS_ROOT](reference_wandr_apps_root_install.md) — adb push nesting + chmod 755 traps.
+- [Ref: adb already root](reference_adb_already_root.md) — drop `su -c` wrapper on the Pixel 2 XL dev device.
+- [🐛 Signal video size jitter](reference_signal_video_size_jitter.md) — remote video ~10% wobble = VP8 macroblock aspect; fix=fit-rect hysteresis (deferred, noted in call.rs).
 - [Ref: host AOT codegen corruption](reference_host_aot_codegen_corruption.md) — SIGSEGV cwasm = cargo clean.
 - [Ref: a-03 fast ninja](reference_a03_ninja_build.md) — direct-ninja. · [rsbinder pin](reference_rsbinder_version.md)
 - [Ref: on-demand rendering](reference_on_demand_rendering.md) — statusbar clock-refresh

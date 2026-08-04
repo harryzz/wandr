@@ -33,8 +33,21 @@ interface theme {
     get-accent-color: func() -> u32;
 }
 
+/// Runtime chrome/orientation control (task 120) — dynamic overrides of the
+/// static manifest `immersive`/`orientation` flags, forwarded by the host to the
+/// arbiter's existing `set-immersive`/`set-orientation-lock` commands. A media app
+/// hides chrome + locks orientation during fullscreen playback, restoring on exit.
+/// No-op unless this guest is the foreground app (the arbiter keys on the visible app).
+interface shell-control {
+    /// Hide (true) / show (false) the system chrome (status bar + task bar).
+    set-immersive: func(on: bool);
+    /// Lock (true) orientation to the current device rotation / unlock (false) → auto-rotate.
+    set-orientation-lock: func(on: bool);
+}
+
 world slint-wandr-imports {
     import metrics;
     import ime;
     import theme;
+    import shell-control;
 }

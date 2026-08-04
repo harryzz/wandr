@@ -151,7 +151,7 @@ fn main() {
                     // Chrome-coherence — host→arbiter verbs, exposed on the CLI
                     // for testing/debugging (register-chrome <app-id> <pid>,
                     // set-orientation-lock <0|1>).
-                    | "register-chrome" | "set-orientation-lock"
+                    | "register-chrome" | "set-orientation-lock" | "set-immersive"
                     // Arbiter Inc. 3c — alarm verbs (host→arbiter; CLI for testing):
                     // schedule-alarm <app-id> <id> <when-unix-ms> <repeat-ms> [kind],
                     // cancel-alarm <app-id> <id>.

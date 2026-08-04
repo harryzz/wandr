@@ -872,6 +872,16 @@ world input-guest {
                     __dioxus_render_frame_impl();
                 }
                 fn on_resize(width: u32, height: u32) {
+                    // Refresh the out-of-frame size cache to the NEW dims BEFORE the
+                    // resize re-runs the component tree. Component bodies run before
+                    // begin_frame (which is where __WC_LAST_SIZE is otherwise set, from
+                    // the drawn buffer), so a body that reads `surface_size()` during a
+                    // resize-triggered relayout would otherwise see the LAST-DRAWN frame's
+                    // size — i.e. the pre-rotation size. That made rotation-derived layout
+                    // (e.g. Signal's video-call PiP/remote rects via push_video_layout)
+                    // compute against the old orientation and land off-screen. Setting it
+                    // here makes the very next component run see the post-rotation size.
+                    super::__WC_LAST_SIZE.with(|v| v.set((width as f32, height as f32)));
                     __dioxus_canvas_with(|r| r.on_resize(width as f32, height as f32));
                 }
             }
