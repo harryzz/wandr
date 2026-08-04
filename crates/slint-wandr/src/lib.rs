@@ -462,11 +462,24 @@ fn has_active_animations() -> bool {
     i_slint_core::animations::CURRENT_ANIMATION_DRIVER.with(|d| d.has_active_animations())
 }
 
-/// Host `render-frame`: tick timers/animations, redraw if dirty or animating.
-pub fn handle_render_frame(_nanos: u64) {
+/// Host `render-frame`: tick timers/animations, run the per-frame hook, redraw if
+/// dirty/animating — or unconditionally while a continuous-render (video) client is
+/// active, since a `ZLayer::BehindUi` video is only composited inside the canvas
+/// `present()`, which only runs when we render. `nanos` is the host monotonic clock
+/// (the same timeline `wandr:video present(at-ns)` schedules on) — forwarded to the
+/// frame hook so a media guest can pump/submit/present video with correct timing.
+pub fn handle_render_frame(nanos: u64) {
     i_slint_core::platform::update_timers_and_animations();
+    // Per-frame guest hook (e.g. engine::pump_stream(nanos)) — BEFORE render so any
+    // freshly-presented video / state lands in this frame. No-op if unregistered.
+    FRAME_CB.with(|c| {
+        if let Some(f) = c.borrow_mut().as_mut() {
+            f(nanos);
+        }
+    });
+    let force = CONTINUOUS.with(|c| c.get());
     with_adapter(|adapter| {
-        if adapter.needs_redraw.replace(false) || has_active_animations() {
+        if adapter.needs_redraw.replace(false) || has_active_animations() || force {
             adapter.render();
         }
     });
@@ -680,6 +693,12 @@ pub fn handle_resize(w: u32, h: u32) {
 /// animating or dirty; otherwise the next Slint timer deadline; large when
 /// fully idle (the host clamps to its idle cap).
 pub fn next_frame_delay() -> u32 {
+    // A continuous-render (video) client needs a steady frame cadence: the BehindUi
+    // video is composited only when we render, so keep asking for frames. 8 ms lets the
+    // host cap to its max_fps rather than spinning.
+    if CONTINUOUS.with(|c| c.get()) {
+        return 8;
+    }
     let dirty = ADAPTER.with(|a| {
         a.borrow().as_ref().map_or(false, |adapter| adapter.needs_redraw.get())
     });
@@ -695,6 +714,34 @@ pub fn next_frame_delay() -> u32 {
 thread_local! {
     static LIFECYCLE_CB: core::cell::RefCell<Option<Box<dyn FnMut(bool)>>> =
         const { core::cell::RefCell::new(None) };
+    /// Per-render-frame hook (host nanos). A media guest pumps its engine here so
+    /// video submit/present runs on the render path with the correct present clock.
+    static FRAME_CB: core::cell::RefCell<Option<Box<dyn FnMut(u64)>>> =
+        const { core::cell::RefCell::new(None) };
+    /// While true, render every frame regardless of Slint dirtiness (BehindUi video
+    /// only composites when we render). Off by default → non-video guests keep
+    /// on-demand rendering unchanged.
+    static CONTINUOUS: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+}
+
+/// Register a per-render-frame callback receiving the host monotonic `nanos` (the
+/// `wandr:video present(at-ns)` timeline). Called every frame the host renders, BEFORE
+/// the Slint paint. A media guest calls `engine::pump_stream(nanos)` here so video
+/// frames submit/present with correct timing. No-op for guests that don't register one.
+pub fn on_render_frame(f: impl FnMut(u64) + 'static) {
+    FRAME_CB.with(|c| *c.borrow_mut() = Some(Box::new(f)));
+}
+
+/// Turn continuous rendering on/off. Set TRUE while a `ZLayer::BehindUi` video is
+/// playing so the host keeps calling render-frame (the video is composited inside the
+/// canvas present, which only runs when we render) and the frame hook keeps pumping.
+/// Set FALSE when playback stops to return to on-demand (battery-friendly) rendering.
+pub fn set_continuous_render(active: bool) {
+    CONTINUOUS.with(|c| c.set(active));
+    // Nudge the host to (re)start the render loop immediately.
+    if active {
+        with_adapter(|a| a.needs_redraw.set(true));
+    }
 }
 
 /// Register a foreground/background callback. `true` on Resumed (foreground),

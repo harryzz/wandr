@@ -1,11 +1,16 @@
-# wandr.jellyfin — task 119 Part A. A real Jellyfin streaming client that plays
-# DirectPlay media through the shipped wandr:video + wasi:audio pipeline.
+# wandr.jellyfin — a Jellyfin DirectPlay streaming client, Slint UI (task 120).
 #
 #   cargo build --target wasm32-wasip2 --release
 #   cp target/wasm32-wasip2/release/wandr_jellyfin.wasm components/ui.wasm
 #
-# A REACTOR (cdylib): the host drives us through frame-handler (render) and
-# bg-tick (the async network+decode engine). No main loop of our own.
+# A REACTOR (cdylib) with a Slint UI (crates/slint-wandr → density-correct). The
+# Jellyfin REST client (src/jellyfin.rs, hand-rolled over wandr-reqwest/wasi:tls —
+# the published SDKs are all tokio+reqwest-native and won't run in a wasip2 guest)
+# + the headless wandr-media-engine drive playback. VIDEO composites behind the UI
+# via wandr:video ZLayer::BehindUi; Slint draws transport chrome on top through a
+# transparent window. The video PUMP (submit/present) runs on the render path via
+# slint_wandr::on_render_frame (host present clock); demux/decode/seek/reporting run
+# in bg-tick. See task 120.
 [package]
 name    = "wandr-jellyfin"
 version = "0.1.0"
@@ -16,35 +21,38 @@ publish = false
 crate-type = ["cdylib"]
 
 [features]
-# p3-async is what gives us wasi:tls 0.3 async streams through reqwest — the same
-# flavor wandr.signal and wandr.audio.player ship. There is no meaningful p2 path
-# for this app, so p3-async is the only feature and the default.
 default  = ["p3-async"]
-# p3-async threads through to BOTH the HTTP client and the shared playback engine
-# (their httprange fetch uses reqwest's p3 wasi:tls streams — cargo unifies them).
 p3-async = ["reqwest/p3-async", "wandr-media-engine/p3-async"]
 
 [dependencies]
-wit-bindgen = "0.59"
+# UI via Slint over crates/slint-wandr. MUST pin the same git rev as slint-wandr's
+# i-slint-core (one crate instance = one platform global); the WIT bindings reuse
+# slint_wandr::__wit_bindgen so there is one wit-bindgen runtime in the cdylib.
+slint = { git = "https://github.com/slint-ui/slint", rev = "46cfde659f21de52bb0fa3693826ca99a6466d88", default-features = false, features = ["compat-1-2", "std"] }
+slint-wandr = { path = "../../../crates/slint-wandr" }
 
-# HTTPS over wasi:tls (auth + browse + PlaybackInfo + byte-range media). Same
-# in-tree client Signal and audio.player use; renamed to `reqwest` so call sites
-# read naturally. Trust is host-delegated (webpki public roots — Let's Encrypt
-# included — so movies.zaharievi.eu is trusted without any host change).
-reqwest = { path = "../../../crates/wandr-reqwest", package = "wandr-reqwest", default-features = false }
-
-# The shared guest-side playback ENGINE (extracted from this app): container demux
-# (mp4 + oxideav-mkv), guest-side audio decode (Symphonia/OxideAV/ropus), the
-# A/V master clock + present(at-ns) sync, and the transport/scrub/subtitle overlay.
-# It owns the video/audio/canvas IMPORTS bindgen; this app keeps only its EXPORTS.
-# `video` = the wandr:video decode-feed + present + subtitle overlay lane (this is a
-# video player). `default-features = false` drops the engine's own default so p3-async
-# is chosen explicitly below; the video lane is re-enabled here.
+# The shared playback engine WITH the video lane (wandr:video decode-feed + present +
+# compositing). `default-features = false` drops its default so p3-async is chosen
+# explicitly below; `video` re-enables the video path. It owns the imports-only
+# generate! for wasi:audio/wandr:video/wasi:canvas (deduped with slint-wandr's canvas).
 wandr-media-engine = { path = "../../../crates/wandr-media-engine", default-features = false, features = ["video"] }
 
-# JSON for the Jellyfin REST API; Url for reqwest.
+# The full typed Jellyfin API — vendored fork of Latias94/jellyfin-sdk, decoupled from
+# native tokio/reqwest onto wandr-reqwest/wasi:tls (see crates/jellyfin-sdk). Drives
+# browse (Views/Latest/Resume/Items) + PlaybackInfo + images + session reporting.
+jellyfin-sdk = { path = "../../../crates/jellyfin-sdk" }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# HTTPS over wasi:tls — the Quick Connect pairing bridge (the one thing the SDK lacks)
+# + the byte-range media stream URL the engine fetches.
+reqwest = { path = "../../../crates/wandr-reqwest", package = "wandr-reqwest", default-features = false }
+
+# JSON for the Quick Connect pairing bridge; Url for building request/stream URLs.
 serde_json = "1"
 url        = "2"
+
+# Guest-side poster/backdrop decode (Jellyfin serves WebP; jpeg/png as fallbacks).
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 
 [profile.release]
 opt-level = "s"

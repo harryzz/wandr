@@ -1,0 +1,38 @@
+[package]
+name = "jellyfin-sdk"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+description = "Async Jellyfin API client SDK for Rust (reqwest-based)."
+readme = "README.md"
+documentation = "https://docs.rs/jellyfin-sdk"
+repository = "https://github.com/Latias94/jellyfin-sdk"
+homepage = "https://github.com/Latias94/jellyfin-sdk"
+keywords = ["jellyfin", "api", "client", "sdk", "media"]
+categories = ["api-bindings", "multimedia", "web-programming::http-client"]
+exclude = ["repo-ref/**"]
+
+[dependencies]
+# DECOUPLE SPIKE: native reqwest → wandr-reqwest (wasi:tls drop-in), same as the
+# libsignal fork. Package-rename so the SDK's `reqwest::` call sites compile unchanged.
+reqwest = { package = "wandr-reqwest", path = "../wandr-reqwest", default-features = false, features = ["p3-async"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+futures-util = "0.3"
+tracing = "0.1"
+# tokio removed — the only uses were tokio::time::sleep (→ reqwest::task::sleep) and
+# tokio::fs in the download/upload file helpers (not needed for streaming playback).
+url = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+base64 = "0.22"
+
+[build-dependencies]
+serde_json = "1"
+
+[dev-dependencies]
+anyhow = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing-subscriber = "0.3"
+clap = { version = "4", features = ["derive"] }

@@ -1,0 +1,12 @@
+// wandr.jellyfin — the client's non-UI contract. The Slint UI + canvas/input/
+// frame-pacing come from slint_wandr::launch! (hermetic inline WIT); wasi:audio +
+// wandr:video are imported by wandr-media-engine's OWN imports-only generate!, NOT
+// here. So this world is the app's SECOND generate!/export!: it exports only
+// wandr:background/background — the bg-tick that drives the headless engine (Jellyfin
+// API + DirectPlay demux/decode + wasi:audio/wandr:video). Video PRESENT runs on the
+// render path via slint_wandr::on_render_frame (host present clock), not bg-tick.
+package wandr:jellyfin;
+
+world jellyfin-extras {
+    export wandr:background/background@0.1.0;
+}

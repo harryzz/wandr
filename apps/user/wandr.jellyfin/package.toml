@@ -5,7 +5,9 @@
 # app-specific is baked into the host, and there is no local sample path.
 app_id      = "wandr.jellyfin"
 version     = "0.1.0"
-world       = "wandr:jellyfin/jellyfin-app"
+# Slint UI over crates/slint-wandr; the host UI path probes the input-handlers exports,
+# so `world` is informational (the Slint launch! provides the skiko-ui exports).
+world       = "my:skiko-gfx/skiko-ui"
 composition = "same-store"
 orientation = "auto"
 label       = "Jellyfin"
