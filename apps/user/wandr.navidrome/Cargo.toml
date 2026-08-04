@@ -3,9 +3,11 @@
 #   cargo build --target wasm32-wasip2 --release
 #   cp target/wasm32-wasip2/release/wandr_navidrome.wasm components/ui.wasm
 #
-# A REACTOR (cdylib): bg-tick runs the async Subsonic API calls + the block_on audio
-# open + the decode pump; on-frame draws the browse list / now-playing. All playback is
-# the shared `wandr-media-engine` (Demux::Audio); this app is the Subsonic layer + UI.
+# A REACTOR (cdylib) with a Slint UI (crates/slint-wandr → density-correct on device).
+# The Subsonic API calls + the headless `wandr-media-engine` audio (stream open + demux
+# + decode + wasi:audio pump) run in the wandr:background/background bg-tick; Slint owns
+# render/input/frame-pacing. The engine stays HEADLESS (no canvas UI) — bg-tick pushes
+# its state into Slint properties. See project_navidrome_slint_migration.
 [package]
 name    = "wandr-navidrome"
 version = "0.1.0"
@@ -20,18 +22,28 @@ default  = ["p3-async"]
 p3-async = ["reqwest/p3-async", "wandr-media-engine/p3-async"]
 
 [dependencies]
-wit-bindgen = "0.59"
+# UI via Slint over crates/slint-wandr. MUST pin the same git rev as slint-wandr's
+# i-slint-core (one crate instance = one platform global); the WIT bindings reuse
+# slint_wandr::__wit_bindgen so there is one wit-bindgen runtime in the cdylib.
+slint = { git = "https://github.com/slint-ui/slint", rev = "46cfde659f21de52bb0fa3693826ca99a6466d88", default-features = false, features = ["compat-1-2", "std"] }
+slint-wandr = { path = "../../../crates/slint-wandr" }
 
-# The shared playback engine (Demux::Audio + clock + wasi:audio + transport overlay).
+# The shared playback engine (Demux::Audio + clock + wasi:audio + HTTP streaming).
+# `default-features = false` → audio-only (video lane compiled out); it owns the
+# imports-only generate! for wasi:audio/canvas so no wasi:audio import is declared here.
 wandr-media-engine = { path = "../../../crates/wandr-media-engine", default-features = false }
 
-# HTTPS over wasi:tls — the Subsonic REST calls + the stream fetch.
+# HTTPS over wasi:tls — the Subsonic REST calls + the stream size-probe + cover art.
 reqwest = { path = "../../../crates/wandr-reqwest", package = "wandr-reqwest", default-features = false }
 
 # Subsonic responses are JSON (`&f=json`).
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
 opensubsonic = { version = "0.4.0", path = "../../../crates/opensubsonic-rs" }
+
+# Guest-side cover-art decode (Subsonic getCoverArt JPEG/PNG → RGBA → Slint Image).
+# Pure-Rust jpeg+png only (wasm-ok), no default codecs.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
 [profile.release]
 opt-level = "s"

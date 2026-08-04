@@ -1,0 +1,12 @@
+// wandr.navidrome — the client's non-UI contract. The Slint UI + canvas/input/
+// frame-pacing all come from slint_wandr::launch! (hermetic inline WIT); the
+// audio device (wasi:audio) is imported by wandr-media-engine's OWN imports-only
+// generate!, NOT here. So this world is the app's SECOND generate!/export!: it
+// exports only wandr:background/background — the bg-tick that drives the headless
+// media engine (Subsonic API calls + stream open + demux/decode/audio pump) while
+// the app is foregrounded OR backgrounded (screen locked, audio keeps playing).
+package wandr:navidrome;
+
+world navidrome-extras {
+    export wandr:background/background@0.1.0;
+}
