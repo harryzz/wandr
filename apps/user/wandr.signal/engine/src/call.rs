@@ -597,6 +597,18 @@ impl ActiveCall {
         while let Some(vf) = self.call.recv_video() {
             if vf.keyframe {
                 if let Some(dims) = vp8_keyframe_dims(&vf.data) {
+                    // KNOWN ISSUE (reported, low priority): the remote video
+                    // occasionally jumps ~10% in size mid-call. Root cause: the peer's
+                    // WebRTC encoder adapts resolution (bandwidth/CPU) and VP8 codes in
+                    // 16px macroblocks, so the coded width snaps to multiples of 16 —
+                    // making the aspect wobble slightly (observed 0.50↔0.55) even for a
+                    // stationary peer. We re-fit on ANY dims change here, so every
+                    // macroblock wobble moves the layout. FIX (future): add hysteresis on
+                    // the RESULT, not a time debounce (a debounce would lag genuine
+                    // portrait↔landscape flips) — recompute fit_rect and only set_rect
+                    // when it moves more than a few percent from the current rect, so
+                    // sub-threshold wobble is ignored but a real aspect/orientation change
+                    // still updates immediately. Same applies to the rotation re-fit below.
                     if v.peer_dims != Some(dims) {
                         crate::engine::dbg_line(&format!(
                             "video: peer coded dims {}x{} (rot {}°)", dims.0, dims.1, vf.rotation
