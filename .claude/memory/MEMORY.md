@@ -17,6 +17,8 @@
 - [RULE: never create branches unasked](feedback_no_new_branches.md) — work on main; merge+delete promptly.
 
 ## Projects / tasks
+- [🔲 NEXT: Navidrome→Slint UI](project_navidrome_slint_migration.md) — fix tiny-font density via Slint (not canvas patch); reuse engine headless audio; jellyfin/dash after.
+- [✅ media-engine device-audio fix](reference_media_engine_device_audio_fix.md) — block_on deadlock + gate-margin stall + write-then-start HAL standby (95c1e588).
 - [✅ Codeberg→GitHub migration](project_codeberg_to_github_migration.md) — remote now github.com/harryzz; stripped 100MB blob.
 - [✅ Task 115: Signal wasip3 async](project_task115_wasip3_async.md) — M0-M4 device-verified incl A/V. · [wasi:canvas migration](project_wasi_canvas_migration.md)
 - [🔲 OpenSwiftUI cleanup + blur](project_openswiftui_structural_cleanup.md) — NEXT: CWASICanvas leaf, OCG CGContext, THEN blur.
