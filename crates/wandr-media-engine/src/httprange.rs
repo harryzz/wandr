@@ -4,9 +4,18 @@
 //!
 //! The cache is SHARED (`Rc<RefCell<..>>`) between the reader and a proactive,
 //! ASYNC prefetch task: `drive_prefetch` (called from bg-tick) keeps the cache a
-//! window ahead of the read position without blocking, so `read()` almost always
-//! hits the cache. Only a true miss falls back to a synchronous `block_on` fetch
-//! (waitable-set.wait) — legal because the demux runs in the async bg-tick.
+//! window ahead of the read position without blocking, so `read()` hits the cache.
+//!
+//! ASYNC-NATIVE, no `block_on` during playback. Once a stream is playing
+//! (`mark_streaming`), a cache MISS returns `WouldBlock` instead of a synchronous
+//! `block_on` fetch. `block_on` inside the async `bg-tick` re-enters the host's
+//! single-threaded wasip3 executor: the fetch it waits on can only progress if the
+//! executor polls it, but the executor is stuck inside `block_on` — a deadlock that
+//! wedges playback on device (the desktop wasmtime executor tolerated it). Instead
+//! the demux GATES on `ready_ahead` (only pulls when the prefetch cache is far
+//! enough ahead) and treats `WouldBlock` as "retry next tick". `block_on` survives
+//! ONLY for the one-shot open-time probe (before `mark_streaming`) and local-file
+//! mode (disk, no executor re-entry).
 
 use std::cell::RefCell;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -29,6 +38,10 @@ pub struct ReaderShared {
     total_len: u64,
     /// A prefetch fetch is in flight (don't spawn another).
     inflight: bool,
+    /// Once true (playback started), a cache miss returns `WouldBlock` rather than a
+    /// synchronous `block_on` — see the module docs. False during the open-time probe
+    /// so the header read can block-fetch once.
+    streaming: bool,
     /// Diagnostics.
     pub blocking_fetches: u64,
     pub prefetches: u64,
@@ -42,6 +55,25 @@ pub struct PrefetchHandle {
     pub shared: Shared,
     pub url: String,
     pub client: reqwest::Client,
+}
+
+impl PrefetchHandle {
+    /// Switch the reader to async-native playback mode: from now on a cache miss
+    /// returns `WouldBlock` (the demux retries) instead of a deadlocking `block_on`.
+    /// Called once, after the open-time probe has parsed the header.
+    pub fn mark_streaming(&self) {
+        self.shared.borrow_mut().streaming = true;
+    }
+
+    /// (contiguous bytes the prefetch cache has ready AHEAD of the read cursor,
+    /// whether the read cursor is at/after EOF). The demux gates on this so it only
+    /// pulls packets whose bytes are already cached — never forcing a blocking fetch.
+    pub fn ready_ahead(&self) -> (u64, bool) {
+        let s = self.shared.borrow();
+        let end = contiguous_end(&s.chunks, s.read_pos);
+        let at_eof = s.read_pos >= s.total_len || end >= s.total_len;
+        (end.saturating_sub(s.read_pos), at_eof)
+    }
 }
 
 pub struct HttpRangeReader {
@@ -63,6 +95,7 @@ impl HttpRangeReader {
             read_pos: 0,
             total_len,
             inflight: false,
+            streaming: false,
             blocking_fetches: 0,
             prefetches: 0,
         }));
@@ -77,6 +110,7 @@ impl HttpRangeReader {
             read_pos: 0,
             total_len,
             inflight: false,
+            streaming: false,
             blocking_fetches: 0,
             prefetches: 0,
         }));
@@ -209,7 +243,16 @@ impl Read for HttpRangeReader {
         // evicted the instant it's inserted (which panicked as "just fetched").
         self.shared.borrow_mut().read_pos = self.pos;
         if chunk_covering(&self.shared.borrow().chunks, self.pos).is_none() {
-            self.block_fetch(self.pos)?; // miss → synchronous fallback
+            // MISS. During playback (`streaming`) over the network, do NOT block_on —
+            // that deadlocks the wasip3 executor (module docs). Signal "not ready"; the
+            // demux gates on `ready_ahead` and retries next tick once prefetch catches
+            // up. `block_fetch` survives for the open-time probe and local-file mode.
+            let block_ok = self.local.is_some() || !self.shared.borrow().streaming;
+            if block_ok {
+                self.block_fetch(self.pos)?;
+            } else {
+                return Err(io::Error::new(io::ErrorKind::WouldBlock, "prefetch not ready"));
+            }
         }
         let n = {
             let s = self.shared.borrow();

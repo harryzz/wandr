@@ -82,12 +82,23 @@ const LOOKAHEAD_US: i64 = 4_000_000;
 const VQ_CAP: usize = 150;
 const AQ_CAP: usize = 250;
 
+/// Async-native demux gate: require this many bytes cached contiguously ahead of the
+/// read cursor before pulling a packet (see `fill_queues`). Just needs to exceed ONE
+/// produce-iteration's read (a packet + the demuxer's block read-ahead), NOT the whole
+/// prefetch window — sizing it near the 2 MiB fetch window stalled startup for seconds
+/// (decode blocked until prefetch crawled one window past the margin, and the device
+/// ring drained to a HAL-standby before the first write). Small keeps startup instant
+/// (the initial window is ≫ this); a rare miss returns `WouldBlock` and the demux
+/// retries next tick. Prefetch still targets ~8 MiB ahead.
+const FILL_GATE_MARGIN: u64 = 256 * 1024;
+
 // ---- app-coupling seams ----------------------------------------------------
 
-/// Simple log — prints to stdout (headless proof). The app keeps its own on-screen
-/// ring; the engine no longer writes into it (that was the `ENGINE.log` coupling).
+/// Simple log — to STDERR so it reaches the device (the standalone host redirects
+/// guest stderr to logcat; stdout is detached to /dev/null). The app keeps its own
+/// on-screen ring; the engine no longer writes into it (the old `ENGINE.log` coupling).
 pub fn log(msg: impl Into<String>) {
-    println!("engine: {}", msg.into());
+    eprintln!("engine: {}", msg.into());
 }
 
 /// A generic HTTP client (no server auth — Jellyfin/DASH put auth in the URL).
@@ -549,6 +560,9 @@ pub struct StreamPlayer {
     /// origin for turning the cumulative device clock into this stream's media time.
     dev_start: u64,
     dev_start_set: bool,
+    /// The device has been `start()`ed for this stream (after its ring was first fed —
+    /// the write-then-start handshake). Prevents starting an empty deep-buffer ring.
+    audio_started: bool,
     /// Host time (ns) when this stream's audio actually began playing (position
     /// first advanced past dev_start). The A/V clock advances at WALL rate from
     /// here — position()'s own rate is mis-scaled when the device's native rate
@@ -622,7 +636,12 @@ pub fn ensure_audio_device() -> bool {
         };
         match wpcm::Playback::open(cfg) {
             Ok(pb) => {
-                let _ = pb.start();
+                // Do NOT start() here. The device is started only AFTER its ring has
+                // been fed the first PCM (the write-then-start handshake in pump_stream)
+                // — a deep-buffer HAL that is started with an empty ring underruns into
+                // a standby it never recovers from (device audio stays silent; the
+                // startup latency of a network stream is what exposes it). See the
+                // `audio_started` gate.
                 *d.borrow_mut() = Some(pb);
                 true
             }
@@ -858,7 +877,7 @@ pub fn install_player(
             submitted: 0, presented: 0, last_pres_pts: 0, t0_ns: 0, total_video,
             first_pts_us: None, origin_ns: 0, flushed: false, done: false,
             title, duration_us, clock_us: 0, audio_pos_us: 0,
-            audio_dec, has_audio, resampler, dev_start: 0, dev_start_set: false, audio_start_ns: 0,
+            audio_dec, has_audio, resampler, dev_start: 0, dev_start_set: false, audio_started: false, audio_start_ns: 0,
             audio_first_pts_us: 0, audio_first_pts_known: false, audio_pts_known: false, pending_pcm: Vec::new(),
             prefetch: None,
             paused: false, paused_at_ns: 0,
@@ -899,7 +918,7 @@ pub fn install_audio_player(
             audio_q: VecDeque::new(), demux_done: false,
             t0_ns: 0, done: false,
             title, duration_us, clock_us: 0, audio_pos_us: 0,
-            audio_dec, has_audio, resampler, dev_start: 0, dev_start_set: false, audio_start_ns: 0,
+            audio_dec, has_audio, resampler, dev_start: 0, dev_start_set: false, audio_started: false, audio_start_ns: 0,
             audio_first_pts_us: 0, audio_first_pts_known: false, audio_pts_known: false, pending_pcm: Vec::new(),
             prefetch: None,
             paused: false, paused_at_ns: 0,
@@ -1280,6 +1299,9 @@ fn finish_ox_open(
         surface, audio_dec, has_audio, resampler, title.clone(), duration_us, 0, None, 0,
     ) {
         Ok(impl_name) => {
+            // moov/header parsed → async-native playback (miss = WouldBlock, no
+            // deadlocking block_on); fill_queues gates on prefetch readiness.
+            if let Some(h) = &handle { h.mark_streaming(); }
             STREAM.with(|s| if let Some(p) = s.borrow_mut().as_mut() { p.prefetch = handle; });
             log(format!("streaming \"{title}\" ({kind}): {width}x{height}, decoder={impl_name}"));
             Ok(())
@@ -1363,6 +1385,9 @@ pub fn open_audio_sync(url: String, total_len: u64, title: String, duration_us: 
         Some(AudioDec::Sym(dec)), true, resampler, title.clone(), dur_us,
     ) {
         Ok(impl_name) => {
+            // Header probe is done → switch to async-native playback (miss = WouldBlock,
+            // no deadlocking block_on). The demux now gates on prefetch readiness.
+            if let Some(h) = &handle { h.mark_streaming(); }
             STREAM.with(|s| if let Some(p) = s.borrow_mut().as_mut() { p.prefetch = handle; });
             log(format!("streaming \"{title}\" (audio): {sr}Hz {:.0}s, decoder={impl_name}", dur_us as f64 / 1e6));
             Ok(())
@@ -1682,6 +1707,19 @@ pub fn fill_queues(p: &mut StreamPlayer) {
     let mut last_v = i64::MIN;
     let mut last_a = i64::MIN;
     loop {
+        // ASYNC-NATIVE gate: only pull a packet when the async prefetch already has
+        // ≥ FILL_GATE_MARGIN bytes cached contiguously ahead of the read cursor — more
+        // than any single packet's read, so the demux read stays in cache and never
+        // triggers a (deadlocking) block_on. When prefetch is behind, stop for this
+        // tick; `drive_prefetch` advances the cache and we retry next tick. `at_eof`
+        // bypasses the gate so the final sub-margin tail still decodes. (None = local
+        // file or Fmp4 segment reader — those don't use this reader's prefetch.)
+        if let Some(h) = p.prefetch.as_ref() {
+            let (ahead, at_eof) = h.ready_ahead();
+            if !at_eof && ahead < FILL_GATE_MARGIN {
+                break;
+            }
+        }
         // Hard backstop: stop only when BOTH queues are full. (A `||` here would
         // let a full, slowly-draining video queue block audio production entirely
         // — which froze the audio-master clock and collapsed video to ~1 fps.)
@@ -1698,6 +1736,13 @@ pub fn fill_queues(p: &mut StreamPlayer) {
         if (last_v > limit || !cfg!(feature = "video")) && (!has_audio || last_a > limit) {
             break;
         }
+        // Whether the reader is genuinely at end-of-file (vs. a transient prefetch
+        // miss). A streaming read that misses the async cache returns `WouldBlock`;
+        // the demuxer surfaces that as an error indistinguishable from real EOF, so we
+        // disambiguate here: only finish (`demux_done`) when the cursor is actually at
+        // EOF — otherwise the miss is transient and we retry next tick. (None = local
+        // file / Fmp4: their reads don't miss this way, so treat an error as real EOF.)
+        let demux_at_eof = p.prefetch.as_ref().map(|h| h.ready_ahead().1).unwrap_or(true);
         // Produce one frame.
         let produced: Prod = match &mut p.demux {
             // oxideav (MP4 + MKV): ONE interleaved packet stream, routed by stream
@@ -1726,7 +1771,7 @@ pub fn fill_queues(p: &mut StreamPlayer) {
                         Prod::Skip // other track (subtitle / inactive audio) — keep going
                     }
                 }
-                Err(_) => { p.demux_done = true; Prod::Stop }
+                Err(_) => { if demux_at_eof { p.demux_done = true; } Prod::Stop }
             },
             // Raw-audio music source (symphonia FormatReader): one audio track, no video.
             // `next_packet` → Ok(Some) packet / Ok(None) = EOF / Err = stop. The packet is
@@ -1742,7 +1787,9 @@ pub fn fill_queues(p: &mut StreamPlayer) {
                     }
                 }
                 Ok(None) => { p.demux_done = true; Prod::Stop }
-                Err(_) => { p.demux_done = true; Prod::Stop }
+                // Only real EOF finishes; a not-at-EOF error is a transient prefetch
+                // miss (WouldBlock) → retry next tick.
+                Err(_) => { if demux_at_eof { p.demux_done = true; } Prod::Stop }
             },
             // DASH/CMAF: pull whichever of the two rep demuxers is behind in PTS.
             // Each yields already-length-prefixed AVCC (video) / raw AAC (audio),
@@ -1974,6 +2021,13 @@ pub fn pump_stream(nanos: u64) {
                 };
                 let consumed = (accepted * 2).min(p.pending_pcm.len());
                 p.pending_pcm.drain(0..consumed);
+                // WRITE-THEN-START handshake: kick the device only once its ring holds
+                // data, so a deep-buffer HAL never starts on an empty ring (→ an
+                // unrecoverable standby). Pause/resume re-starts separately.
+                if accepted > 0 && !p.audio_started {
+                    let _ = with_audio(|pb| pb.start());
+                    p.audio_started = true;
+                }
             }
         }
 
