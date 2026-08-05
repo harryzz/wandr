@@ -1,11 +1,20 @@
 ---
 name: reference_swift_foundation_wasi_filemanager_bug
-description: "Upstream swift-foundation bug (filed swiftlang/swift-foundation#2120): FileManager.contents(atPath:)/Data(contentsOfFile:) silently returns empty Data on WASI when fstat reports size 0 — check for a fix periodically"
+description: "RESOLVED UPSTREAM (PR #2134, merged 2026-08-04): swift-foundation #2120 — FileManager.contents(atPath:)/Data(contentsOfFile:) returned empty Data on WASI when fstat size=0. Fix on main, not yet in a tagged SDK release; workaround still fine to keep."
 metadata: 
   node_type: memory
   type: reference
   originSessionId: efb9ba77-bb47-4ab5-bbac-3dcd59e2771e
+  modified: 2026-08-05T05:18:59.277Z
 ---
+
+**✅ RESOLVED UPSTREAM 2026-08-04** — PR https://github.com/swiftlang/swift-foundation/pull/2134
+added `os(WASI)` to the `os(Linux) || os(Android)` chunked-read fallback guard (exactly the
+root cause diagnosed below), merged to swift-foundation `main`. NOT yet in a tagged Swift
+toolchain/SDK release as of 2026-08-04 (pinned SDK here is `swift-6.3.2-RELEASE_wasm`). When the
+pin bumps to a release that includes #2134, the `FileManager.contents(atPath:)`/`Data(contentsOfFile:)`
+workaround is no longer necessary — but there's NO urgency to switch back (the POSIX `readAsset`
+path already works), so this is informational, not an action item.
 
 **Filed 2026-07-17**: https://github.com/swiftlang/swift-foundation/issues/2120
 

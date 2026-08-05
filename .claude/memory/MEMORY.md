@@ -64,7 +64,7 @@
 - [✅ Task 36 step 7](project_task_36_step_7_pending.md) — cross-app dep chain. · [✅ Task 38 assets](project_task_38_wandrpkg_assets.md)
 
 ## References / gotchas
-- [Ref: swift-foundation WASI FileManager bug](reference_swift_foundation_wasi_filemanager_bug.md) — upstream#2120; contents(atPath:) empty.
+- [✅ swift-foundation WASI FileManager bug](reference_swift_foundation_wasi_filemanager_bug.md) — upstream#2120 RESOLVED (PR #2134, os(WASI) added); not yet in a tagged SDK; workaround still fine.
 - [Ref: host build scripts](reference_host_build_scripts.md) — use the 4 committed scripts, not inline cargo; p3-async ON
 - [Ref: p3 WSS stalls](reference_wasmtime46_p3_stream_bugs.md) — wit-bindgen 0.53 bug; needs 0.59+.
 - [Ref: wasmtime version status](reference_wasmtime_version_status.md) — PINNED =46.0.1 (harryzz fork); 47.x worth-it-not-urgent; 47.0.3/46.0.2=2 Low GHSAs NOT affected; bumps invalidate cwasm.
@@ -80,6 +80,7 @@
 - [Ref: compose-wasi consumption](reference_compose_wasi_consumption.md) — use in-tree *-wasm-wasi:9999.0.0-SNAPSHOT.
 - [Ref: wandrpkg manifest](reference_wandrpkg_manifest_convention.md) — package.toml in app dir. · [photon image](reference_photon_image_lib.md)
 - [Ref: dioxus+taffy](reference_dioxus_taffy_rust_ui.md) — crates/dioxus-canvas. · [wasi-webgpu/gfx](reference_wasi_webgpu_gfx.md) — COMPLEMENTS wasi:canvas (WebGPU vs Canvas2D), not competitors.
+- [Ref: wasi-gfx ecosystem relation](reference_wasi_gfx_ecosystem_relation.md) — graphics-context=shared socket; wasi-gfx owns surface/frame-buffer, webgpu=Phase2 defers windowing; wandr ADDS canvas+video-decoder/encoder consumers (surface NOT owned).
 - [Ref: Avalonia SHIPPED](reference_avalonia_wandr.md) — pin Avalonia 11.3.17 + ILC alpha.
 - [Ref: Swift/OpenSwiftUI eleev 2048](reference_swift_openswiftui_wandr.md) — port overview; UAF fix → [[reference_openswiftui_headless_uaf_repro]].
 - [Ref: OpenSwiftUI @main boot](reference_openswiftui_reactor_main_boot.md) — unmodified @main App on reactor; opt-in export libs.
