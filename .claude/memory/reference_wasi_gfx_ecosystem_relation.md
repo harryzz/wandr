@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: reference
   originSessionId: a14a1f7f-f5fb-44f9-a0e5-3879acecf911
-  modified: 2026-08-05T06:55:30.081Z
+  modified: 2026-08-05T07:49:02.227Z
 ---
 
 The unifying abstraction across all of wandr's graphics/media WIT is
@@ -34,37 +34,37 @@ The unifying abstraction across all of wandr's graphics/media WIT is
 ## wandr's ADDITIONS (new graphics-context consumers of the same socket)
 - **`wasi:canvas`** — a Canvas2D producer (`[[reference_wasi_webgpu_gfx]]` notes it
   COMPLEMENTS webgpu, not competes).
-- **`wasi:video-decoder`** / **`wasi:video-encoder`** — the "media element": a HW codec
-  fills (decoder) / captures-and-encodes (encoder) into the connected surface's
-  buffers, pixels never crossing the sandbox. These are the factored halves of the
-  production-proven `wandr:video@0.1.0` (jellyfin player + Signal calls).
+- **`wasi:video-codec`** — the "media element": ONE package (decoder + encoder +
+  the shared `frame`/VideoFrame), parallel to `wasi:audio-codec` and to WebCodecs.
+  Decoder fills the connected surface host-side (decode-to-surface); encoder is pure
+  codec (consumes a `frame`). Pixels never cross the sandbox. The factored form of the
+  production-proven `wandr:video@0.1.0` (jellyfin player + Signal calls). (Superseded
+  the earlier split `wasi:video-decoder`/`-encoder`/`-frame` drafts — consolidated
+  2026-08-05.)
 
 So the socket's producers are: **surface** (compositor-fill), **webgpu** (GPU-fill),
-**frame-buffer** (CPU-pixel-fill) — upstream; **canvas** (Canvas2D), **video-decoder**
-(host-codec-fill), **video-encoder/camera** (capture-fill) — wandr additions.
+**frame-buffer** (CPU-pixel-fill) — upstream; **canvas** (Canvas2D), **video-codec**
+decoder (host-codec-fill), **camera** viewfinder (capture-fill) — wandr additions.
 
 ## Practical implications for the extraction (task 120 follow-on)
 - wandr's video factoring is "add two consumers to wasi-gfx's socket," not "invent a
   stack." Adoption trigger = the same as wasi:surface wiring (R3 coexistence: the fused
   `wandr:video` keeps shipping until then).
-- Camera source is a future `wasi:camera` (the encoder's `facing`/`source-camera` +
-  `display-rotation` factor out there). **W3C PRECEDENT for that split:** the web
-  platform already separates camera CAPTURE from CODEC — `wasi:video-encoder` mirrors
-  WebCodecs `VideoEncoder`, and `wasi:camera` mirrors the W3C WebRTC WG's **Media
-  Capture and Streams** (`getUserMedia`/`MediaStreamTrack`; `facingMode` == our
-  `facing`), with **Image Capture** (torch/zoom/focus stills), **Screen Capture**
-  (`getDisplayMedia` == the encoder's future screen-share/"guest supplies YUV" lane),
-  and **MediaStreamTrack Insertable Streams** (`MediaStreamTrackProcessor` == the raw-
-  frame bridge from a capture track into a codec). So the pipeline getUserMedia →
-  track-processor → WebCodecs VideoEncoder is exactly wasi:camera → wasi:video-encoder.
-  No upstream `wasi:camera` exists — greenfield draft from that W3C family (the
-  wasi:canvas/wasi:audio playbook). Note WebCodecs is tracked near the wasi-webgpu org,
-  but Media/Image/Screen Capture are WebRTC-WG specs. **`wasi:camera` now DRAFTED**
-  (`contracts/proposals/wasi-camera/`, 2026-08-05): opaque host-held `frame` (=
-  VideoFrame; zero-copy default + `read-rgba` opt-out), `list-cameras`/`open(facing)`,
-  viewfinder `connect-preview(ctx)` = the fifth graphics-context producer, torch/zoom,
-  `frame.rotation` (the encoder's old display-rotation, now a source property).
-  Companion step (noted in wasi-camera/NOTES.md, NOT done): `wasi:video-encoder` drops
-  camera-ownership + `connect-preview` and gains `encode(frame)` — pure WebCodecs codec.
+- **`wasi:camera` DRAFTED** (`contracts/proposals/wasi-camera/`, 2026-08-05) — the
+  camera SOURCE, separate from the CODEC (`wasi:video-codec`). **W3C PRECEDENT:** the
+  web platform separates capture from codec — `wasi:video-codec` mirrors WebCodecs
+  (VideoDecoder/Encoder + VideoFrame in one spec), `wasi:camera` mirrors the W3C
+  WebRTC-WG **Media Capture and Streams** (`getUserMedia`/`MediaStreamTrack`;
+  `facingMode` == our `facing`), with **Image Capture** (torch/zoom/focus stills),
+  **Screen Capture** (`getDisplayMedia` == a future screen-share source lane), and
+  **MediaStreamTrack Insertable Streams** (`MediaStreamTrackProcessor` == the raw-frame
+  bridge). So `getUserMedia → track-processor → VideoEncoder` is exactly
+  `wasi:camera → wasi:video-codec`. Greenfield (no upstream wasi:camera); WebCodecs is
+  tracked near wasi-webgpu, Media/Image/Screen Capture are WebRTC-WG. Camera shape:
+  opaque host-held `frame` (shared, lives in `wasi:video-codec`; zero-copy + `read-rgba`
+  opt-out), `list-cameras`/`open(facing)`, viewfinder `connect-preview(ctx)` = the fifth
+  graphics-context producer, torch/zoom, `frame.rotation` (the encoder's old
+  display-rotation, now a source property). The encoder was factored to a pure codec
+  inside `wasi:video-codec` (`encode(frame)`; no camera/surface).
 - Related: [[reference_wasi_webgpu_gfx]] (canvas vs webgpu), [[project_wandr_video_host]],
   [[project_wandr_call_video_track]].
