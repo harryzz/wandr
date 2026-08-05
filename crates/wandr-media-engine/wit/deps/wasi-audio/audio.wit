@@ -23,6 +23,20 @@
 // >2-channel layouts + compressed-audio passthrough = R3 version events;
 // device enumeration = deliberately ABSENT (no ambient authority — the
 // embedder routes).
+//
+// DEFERRED (R3 candidate) — DEVICE OUTPUT LATENCY for frame-accurate A/V sync:
+// `position`/`buffered-frames` account for the RING (frames written vs pulled),
+// but NOT the device buffer + hardware-DAC delay between a frame leaving the ring
+// and being AUDIBLE (the write→audible latency — WASAPI ~10 ms, PulseAudio a
+// period, + DAC; ~10–50 ms total, a CONSTANT offset that leaves video slightly
+// ahead of audio). Good sync doesn't need it (the residual is under the ~40 ms
+// lip-sync threshold, and the dominant ring term is already subtracted). For
+// TRULY perfect sync a small ADDITIVE verb — e.g. `output-latency-frames:
+// func() -> u32` (or -us) — lets the guest do `now = position − ring − latency`.
+// The host already knows the number (it sets the buffer period), so exposing it
+// is cheap; hardcoding an estimate guest-side would break no-hardcoding, which is
+// exactly why it belongs here. NOT added yet — recorded so the proposal captures
+// the one thing missing for frame-accurate sync (task 119, the jellyfin player).
 package wasi:audio@0.0.1;
 
 interface pcm {

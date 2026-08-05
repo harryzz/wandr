@@ -1,4 +1,6 @@
-// wasi:audio — DRAFT (wandr, 2026-06-12). NOT WIRED.
+// wasi:audio — DRAFT (wandr, 2026-06-12). WIRED + device-verified
+// (task 108 M1, 2026-06-14): a pure-Rust guest decodes FLAC with Symphonia
+// and plays it through `playback` — audible on a Pixel 2 XL.
 //
 // PCM device I/O for WebAssembly components: the AUDIO slot of the WASI
 // Charter ("APIs for graphics, audio, input devices"), which the
@@ -16,11 +18,25 @@
 // decides/applies split the shipped contract proved: guest intends,
 // embedder decides, host applies.
 //
-// Named lanes (decided, not hidden): `playback.position` (frames played
-// — the A/V-sync master clock a wandr:media composition needs) = R2
-// additive method when that consumer ships; >2-channel layouts +
-// compressed-audio passthrough = R3 version events; device enumeration
-// = deliberately ABSENT (no ambient authority — the embedder routes).
+// Named lanes: `playback.position` (frames played — the seekbar/A-V-sync
+// master clock) PROMOTED 2026-06-14 (task 108, the player is the consumer);
+// >2-channel layouts + compressed-audio passthrough = R3 version events;
+// device enumeration = deliberately ABSENT (no ambient authority — the
+// embedder routes).
+//
+// DEFERRED (R3 candidate) — DEVICE OUTPUT LATENCY for frame-accurate A/V sync:
+// `position`/`buffered-frames` account for the RING (frames written vs pulled),
+// but NOT the device buffer + hardware-DAC delay between a frame leaving the ring
+// and being AUDIBLE (the write→audible latency — WASAPI ~10 ms, PulseAudio a
+// period, + DAC; ~10–50 ms total, a CONSTANT offset that leaves video slightly
+// ahead of audio). Good sync doesn't need it (the residual is under the ~40 ms
+// lip-sync threshold, and the dominant ring term is already subtracted). For
+// TRULY perfect sync a small ADDITIVE verb — e.g. `output-latency-frames:
+// func() -> u32` (or -us) — lets the guest do `now = position − ring − latency`.
+// The host already knows the number (it sets the buffer period), so exposing it
+// is cheap; hardcoding an estimate guest-side would break no-hardcoding, which is
+// exactly why it belongs here. NOT added yet — recorded so the proposal captures
+// the one thing missing for frame-accurate sync (task 119, the jellyfin player).
 package wasi:audio@0.0.1;
 
 interface pcm {
@@ -65,9 +81,27 @@ interface pcm {
         /// near-underrun cue (write more per call).
         buffered-frames: func() -> u32;
 
+        /// Total frames consumed by the device since `open` — the monotonic
+        /// playback clock (seekbar position + A/V-sync master). Derived as
+        /// frames-written − buffered-frames, so it advances at the device
+        /// rate and never exceeds what was written. Promoted 2026-06-14
+        /// (task 108); the player is the promoting consumer.
+        position: func() -> u64;
+
         start: func() -> result<_, audio-error>;
         /// Stops flow without dropping buffered frames; start resumes.
         pause: func() -> result<_, audio-error>;
+
+        /// Discard all buffered (unplayed) frames immediately — the seek/flush
+        /// primitive (no need to close+reopen the stream). `position` stays
+        /// continuous: the dropped frames count as neither played nor pending,
+        /// so the playhead does not jump. Added 2026-06-14 (task 108; the
+        /// player's tap-seek is the promoting consumer).
+        flush: func();
+
+        /// Play out the buffered frames, then stop (clickless end-of-track) —
+        /// vs `pause` (stops now, keeps buffer) and `flush` (drops now).
+        drain: func();
     }
 
     resource capture {
