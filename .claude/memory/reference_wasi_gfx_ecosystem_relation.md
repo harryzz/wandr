@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: reference
   originSessionId: a14a1f7f-f5fb-44f9-a0e5-3879acecf911
-  modified: 2026-08-05T06:29:06.677Z
+  modified: 2026-08-05T06:55:30.081Z
 ---
 
 The unifying abstraction across all of wandr's graphics/media WIT is
@@ -48,6 +48,23 @@ So the socket's producers are: **surface** (compositor-fill), **webgpu** (GPU-fi
   stack." Adoption trigger = the same as wasi:surface wiring (R3 coexistence: the fused
   `wandr:video` keeps shipping until then).
 - Camera source is a future `wasi:camera` (the encoder's `facing`/`source-camera` +
-  `display-rotation` factor out there).
+  `display-rotation` factor out there). **W3C PRECEDENT for that split:** the web
+  platform already separates camera CAPTURE from CODEC — `wasi:video-encoder` mirrors
+  WebCodecs `VideoEncoder`, and `wasi:camera` mirrors the W3C WebRTC WG's **Media
+  Capture and Streams** (`getUserMedia`/`MediaStreamTrack`; `facingMode` == our
+  `facing`), with **Image Capture** (torch/zoom/focus stills), **Screen Capture**
+  (`getDisplayMedia` == the encoder's future screen-share/"guest supplies YUV" lane),
+  and **MediaStreamTrack Insertable Streams** (`MediaStreamTrackProcessor` == the raw-
+  frame bridge from a capture track into a codec). So the pipeline getUserMedia →
+  track-processor → WebCodecs VideoEncoder is exactly wasi:camera → wasi:video-encoder.
+  No upstream `wasi:camera` exists — greenfield draft from that W3C family (the
+  wasi:canvas/wasi:audio playbook). Note WebCodecs is tracked near the wasi-webgpu org,
+  but Media/Image/Screen Capture are WebRTC-WG specs. **`wasi:camera` now DRAFTED**
+  (`contracts/proposals/wasi-camera/`, 2026-08-05): opaque host-held `frame` (=
+  VideoFrame; zero-copy default + `read-rgba` opt-out), `list-cameras`/`open(facing)`,
+  viewfinder `connect-preview(ctx)` = the fifth graphics-context producer, torch/zoom,
+  `frame.rotation` (the encoder's old display-rotation, now a source property).
+  Companion step (noted in wasi-camera/NOTES.md, NOT done): `wasi:video-encoder` drops
+  camera-ownership + `connect-preview` and gains `encode(frame)` — pure WebCodecs codec.
 - Related: [[reference_wasi_webgpu_gfx]] (canvas vs webgpu), [[project_wandr_video_host]],
   [[project_wandr_call_video_track]].
