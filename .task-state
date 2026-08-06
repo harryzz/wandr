@@ -1,5 +1,5 @@
 TASK=120
-STEP=video-rotation-committed
-STATUS=complete
-LAST_SUCCESS=Task 120 wrapped + committed. Video rotation fixed for Signal + jellyfin (host consistent-resize + dioxus-canvas surface_size on_resize). Immersive/keep-awake/shell-control landed. Signal av1 wit sync. Instrumentation stripped, clean host redeployed.
-NOTES=Commits: contracts(host-nested)=b05d7b1, wandr-host=2b0f4c4, contracts(top)=ca1e4f1, parent=pending. Residual (NOT bugs): remote video ~10% size variation = peer_dims aspect from VP8 stream (signalling); ~15ms transient on return-to-portrait (host re-applies stored rect before guest re-pushes). NOT pushed. Open idea from user: debounce peer_dims to avoid size jitter.
+STEP=rewire-video-player
+STATUS=in-progress
+LAST_SUCCESS=Host compiles clean against split world (wasi:video-codec+camera+eme+wandr:video+diag over reused backend)
+NOTES=Next: rewrite video.player world.wit + lib.rs (decoder→wasi:video-codec, present→wandr:video video-surface, list/impl→diag); build wasm; then desktop smoke. contracts relocated wit/video/ ; host WIT vendored-synced.

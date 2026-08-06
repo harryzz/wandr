@@ -42,8 +42,11 @@ wit_bindgen::generate!({
 use crate::exports::wandr::ui_shell::frame_pacing::Guest as PacingGuest;
 use crate::exports::wasi::input_handlers::frame_handler::Guest as FrameGuest;
 use crate::exports::wasi::input_handlers::key_handler::{Guest as KeyGuest, KeyEvent};
-use crate::wandr::video::decoder::{self as decoder_api, Acceleration, VideoDecoder};
-use crate::wandr::video::types::{Codec, DecoderConfig, TimedFrame, VideoError, VideoRect, ZLayer};
+use crate::wasi::video_codec::decoder::VideoDecoder;
+use crate::wasi::video_codec::types::{Acceleration, Codec, CodecError, DecoderConfig, EncodedChunk};
+use crate::wandr::video::present::VideoSurface;
+use crate::wandr::video::types::{VideoRect, ZLayer};
+use crate::wandr::video_diag::diag as diag_api;
 use crate::wasi::canvas::embedding as wembed;
 use crate::wasi::canvas::types as wtypes;
 use crate::wasi::canvas::layout as wlayout;
@@ -364,6 +367,9 @@ fn parse_srt(text: &str) -> Vec<Cue> {
 
 struct Player {
     dec: Option<VideoDecoder>,
+    /// The embedder-owned compositing surface (task 120 split): the codec decoder
+    /// is surface-free; `present(frame, at-ns)` schedules onto THIS.
+    surf: Option<VideoSurface>,
     aus: Vec<Au>,
     /// Whether `aus` carry real presentation times or synthesised ones.
     timing: Timing,
@@ -424,6 +430,7 @@ impl Player {
     const fn new() -> Self {
         Self {
             dec: None,
+            surf: None,
             aus: Vec::new(),
             timing: Timing::SynthesizedDts,
             next_au: 0,
@@ -500,7 +507,7 @@ impl Player {
 
         // What can this MACHINE actually decode? Probed host-side, so an empty
         // list for a codec means "not decodable here" — not "not built in".
-        let available = decoder_api::list_decoders();
+        let available = diag_api::list_decoders();
         if available.is_empty() {
             println!("player: host reports NO enumerable decoders");
         } else {
@@ -522,47 +529,55 @@ impl Player {
         let (w, h) = self.surface;
         let rect = video_rect(w, h);
         let vh = rect.height;
-        match VideoDecoder::open_accelerated(
-            DecoderConfig {
-                codec: self.codec,
-                width: 1280,
-                height: 720,
-                rect,
-                rotation: 0,
-                // behind-ui: the video sits UNDER our UI, so the caption bar we draw
-                // below lands on top of the picture. This is what a real player wants.
-                // (Needs the app EGL surface to carry alpha + sf_set_opaque(false) so
-                // the transparent hole reveals the video — see egl.rs EGL_ALPHA_SIZE.)
-                layer: ZLayer::BehindUi,
-            },
-            self.accel,
+        // Task 120: the CODEC (surface-free) and the SURFACE (placement) are now
+        // separate resources. `decoder-config` carries only codec + acceleration —
+        // no width/height (the stream overrides them) and no rect/layer (those move
+        // to `video-surface`). `None` keys = cleartext (no DRM).
+        let dec = match VideoDecoder::open(
+            DecoderConfig { codec: self.codec, acceleration: self.accel },
+            None,
         ) {
-            Ok(d) => {
-                // Report what we GOT, not what we asked for: `prefer-*` is a hint,
-                // so a request for hardware can be quietly served by software and
-                // the difference is exactly what we are here to measure.
-                let got = d.implementation();
-                println!(
-                    "player: decoder OPEN ✓ decode-to-surface {w}x{vh} — asked {:?}, got {} ({})",
-                    self.accel,
-                    got.name,
-                    if got.hardware { "HARDWARE" } else { "software" }
-                );
-                self.dec = Some(d);
-            }
+            Ok(d) => d,
             Err(e) => {
                 println!("player: decoder open FAILED: {e:?}");
                 self.done = true;
+                return;
             }
-        }
+        };
+        // Report what we GOT, not what we asked for (diag): `prefer-*` is a hint, so
+        // a request for hardware can be quietly served by software — the difference
+        // is exactly what we are here to measure.
+        let got = diag_api::implementation(&dec);
+        // behind-ui: the video sits UNDER our UI, so the caption bar we draw below
+        // lands on top of the picture. This is what a real player wants. (Needs the
+        // app EGL surface to carry alpha + sf_set_opaque(false) so the transparent
+        // hole reveals the video — see egl.rs EGL_ALPHA_SIZE.)
+        let surf = match VideoSurface::open(rect, ZLayer::BehindUi, 0) {
+            Ok(s) => s,
+            Err(e) => {
+                println!("player: surface open FAILED: {e:?}");
+                self.done = true;
+                return;
+            }
+        };
+        println!(
+            "player: decoder OPEN ✓ decode-to-surface {w}x{vh} — asked {:?}, got {} ({})",
+            self.accel,
+            got.name,
+            if got.hardware { "HARDWARE" } else { "software" }
+        );
+        self.dec = Some(dec);
+        self.surf = Some(surf);
     }
 
     /// Tear down and replay from the top with the currently selected
-    /// acceleration. Dropping the decoder is what releases the host's surface and
-    /// any frames it still holds — there is no reopen-in-place verb, and `reset`
-    /// would keep the SAME backend, which is precisely what we want to change.
+    /// acceleration. Dropping the decoder + surface is what releases the host's
+    /// compositing surface and any frames it still holds — there is no
+    /// reopen-in-place verb, and `reset` would keep the SAME backend, which is
+    /// precisely what we want to change.
     fn restart(&mut self, nanos: u64) {
         self.dec = None;
+        self.surf = None;
         self.first_pts_us = None;
         self.next_au = 0;
         self.submitted = 0;
@@ -584,6 +599,7 @@ impl Player {
             self.restart(nanos);
         }
         let Some(dec) = self.dec.as_ref() else { return };
+        let Some(surf) = self.surf.as_ref() else { return };
         // `nanos` is sampled by the host at the TOP of this render-frame, but the
         // first pump then decodes the whole reorder window synchronously before a
         // frame surfaces (HW decode ~28 ms/frame × ~16 ≈ 0.4 s), so `nanos` is
@@ -612,12 +628,13 @@ impl Player {
             && self.submitted < self.presented + DECODE_AHEAD
         {
             let au = &self.aus[self.next_au];
-            let frame = TimedFrame {
+            let chunk = EncodedChunk {
                 data: au.data.clone(),
                 timestamp_us: au.pts_us,
                 keyframe: au.keyframe,
+                decrypt: None,
             };
-            match dec.submit_timed(&frame) {
+            match dec.submit(&chunk) {
                 Ok(()) => {
                     self.submitted += 1;
                     self.next_au += 1;
@@ -625,12 +642,12 @@ impl Player {
                 }
                 // Back-pressure, NOT loss: retry this same frame next pump. A file
                 // player cannot resync at the next keyframe the way RTP can.
-                Err(VideoError::QueueFull) => {
+                Err(CodecError::QueueFull) => {
                     self.queue_full_hits += 1;
                     break;
                 }
                 Err(e) => {
-                    println!("player: submit-timed failed at AU {}: {e:?}", self.next_au);
+                    println!("player: submit failed at AU {}: {e:?}", self.next_au);
                     self.done = true;
                     return;
                 }
@@ -684,7 +701,9 @@ impl Player {
                 }
             };
             let at_ns = self.origin_ns.saturating_add(((pts - first).max(0) as u64) * 1_000);
-            frame.present(at_ns);
+            // Present through the embedder surface (consumes the frame). The codec
+            // decoder is surface-free; the surface owns compositing + scheduling.
+            surf.present(frame, at_ns);
             self.presented += 1;
         }
 
@@ -856,9 +875,9 @@ impl FrameGuest for Component {
             let p = p.borrow();
             let clock_us = (nanos.saturating_sub(p.origin_ns) / 1_000) as i64;
             let rect = p
-                .dec
+                .surf
                 .as_ref()
-                .and_then(|d| d.presented_rect())
+                .and_then(|s| s.presented_rect())
                 .map(|r| (r.x as f32, r.y as f32, r.width as f32, r.height as f32))
                 .unwrap_or((0.0, 0.0, sw as f32, sh as f32));
             // The active cue for `clock_us`. Cues are short and few; a linear
@@ -894,8 +913,8 @@ impl FrameGuest for Component {
             // `surface` was at open (a placeholder until the first resize), so a
             // resize/rotation would otherwise leave the video mis-placed until
             // the next replay. `set_rect` is exactly the live-reconcile verb.
-            if let Some(dec) = p.dec.as_ref() {
-                dec.set_rect(video_rect(w, h));
+            if let Some(surf) = p.surf.as_ref() {
+                surf.set_rect(video_rect(w, h));
             }
         });
     }

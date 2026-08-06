@@ -8,8 +8,13 @@
 package wandr:video-player-app@0.1.0;
 
 world video-player-app {
-    // The playback lane under test (task 117 M2).
-    import wandr:video/decoder@0.1.0;
+    // The playback lane under test — the LAYERED stack (task 120): the codec is a
+    // surface-free wasi primitive; presentation is the wandr embedder; diagnostics
+    // are off-standard.
+    import wasi:video-codec/types@0.0.1;
+    import wasi:video-codec/decoder@0.0.1;
+    import wandr:video/present@0.1.0;
+    import wandr:video-diag/diag@0.1.0;
 
     // wasi:canvas is REQUIRED even though this app draws nothing but a black
     // background. On desktop the host composites video surfaces inside
