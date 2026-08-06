@@ -1,169 +1,210 @@
-// wandr:video — host-side hardware video codec for calls. (Drafted 2026-06-08;
-// host impl task 93 Phase 1 — encoder + decode-to-buffer; decode-to-surface /
-// arbiter Role::Video lands in Phase 4.) See project_crypto_hw_offload (offload
-// layer 2), task 93/95.
+// wandr:video — the EMBEDDER. (Drafted 2026-06-08; host impl task 93; re-expressed as an
+// importer/embedder task 120.) See project_crypto_hw_offload (offload layer 2), task 93/95.
 //
-// WHY. A wasm guest cannot encode/decode VP8/VP9 in real time and can't reach the
-// hardware codec. This interface drives the device's HW MediaCodec (NDK AMediaCodec
-// -> Codec2 HAL android.hardware.media.c2, which SURVIVES --no-art — proven by
-// `wandr-host --probe-video`: camera->HW VP8 encode 17.4 fps). The guest does only RTP
-// framing + SRTP (wandr:crypto); the pixels never enter the wasm sandbox.
+// WHAT THIS IS NOW. wandr:video no longer defines the codec. It `use`s the two portable
+// wasi primitives —
+//   * wasi:video-codec  (HW decoder/encoder + the opaque VideoFrame; pure WebCodecs), and
+//   * wasi:camera       (the capture SOURCE that produces those frames) —
+// and adds ONLY the wandr-stack compositing layer that upstream WASI/wasi-gfx cannot
+// express: HOST-FILL decode-to-surface (pixels never enter the sandbox), child-surface
+// z-layers, `present(frame, at-ns)` on the wasi:clocks timeline, the camera->encoder call
+// glue, and the PiP self-view. Upstream `wasi-gfx:surface` is GUEST-FILLS/pump only, so
+// host-fill decode-to-surface is genuinely a wandr stack decision — hence `wandr:`, not
+// `wasi:`. The split's proof: `wasi:video-codec` + `wasi:camera` `use` cleanly here with
+// no forced change back into them.
 //
-// BIDIRECTIONAL (both need HW):
-//   * encoder (OUTGOING, our camera): host captures (camera NDK) + HW-encodes; the
-//     guest PULLS encoded frames to RTP-packetize + SRTP-seal + send.
-//   * decoder (INCOMING, peer): the guest PUSHES reassembled encoded frames; the host
-//     HW-decodes and COMPOSITES to a video surface (decode-to-surface — zero per-frame
-//     copy, the right choice at 30 fps; decoded pixels do NOT return to the guest).
+// WHY host-fill (unchanged from task 93). A wasm guest cannot encode/decode VP8/VP9 in
+// real time and can't reach the HW codec; and at 30 fps a decoded frame must NOT be
+// copied into the sandbox just to be drawn. So the codec hands the host a `frame`
+// (opaque) and this embedder composites it directly onto a child surface — the guest does
+// only RTP framing + SRTP (wandr:crypto); pixels never enter the wasm sandbox.
 //
-// DEVICE HW (confirmed 2026-06-08, /vendor/etc/media_codecs*.xml): clear HW
-// OMX.qcom.video.decoder.{vp9,vp8} + .encoder.vp8 (avc/hevc too). NOTE: VP9 HW ENCODE
-// is software-only on this SoC (only OMX.google.vp9.encoder) — so OUTGOING should
-// prefer VP8 HW; INCOMING decodes VP9 or VP8 in HW.
-
+// TWO PRESENTATION MODES (both host-fill; the codec is identical, only the embedder path
+// differs):
+//   * AUTO / real-time (RTP calls) — `video-surface.attach(decoder)`: the host presents
+//     each decoded frame ASAP; the guest submits chunks to the codec decoder and NEVER
+//     pulls `next-decoded`.
+//   * GUEST-TIMED (file playback) — the guest pulls `next-decoded` -> `frame` from the
+//     codec, reads `frame.timestamp-us`, and calls `video-surface.present(frame, at-ns)`
+//     on the wasi:clocks monotonic timeline (video slaved to the wasi:audio master clock
+//     for A/V sync). This is the shape the hardware already exposes (Android
+//     `MediaCodec.releaseOutputBuffer(index, renderTimestampNs)`, Apple
+//     `AVSampleBufferDisplayLayer`), and it gives WebCodecs' control flow with `<video>`'s
+//     zero-copy, which neither W3C model provides alone.
+//
+// DIAGNOSTICS (`list-decoders`, `implementation`, `decoded-frames`) live in the separate
+// `wandr:video-diag` package — out of this contract and out of the standard.
+//
+// Deps (wit/deps/): wasi:video-codec + wasi:camera (+ transitive wasi:eme).
 package wandr:video@0.1.0;
 
 interface types {
-    enum codec { vp8, vp9, h264, h265 }
+    // The codec params + camera source selector are REUSED from the primitives — this
+    // embedder does not redefine them.
+    use wasi:video-codec/types@0.0.1.{encoder-config as codec-encoder-config};
+    use wasi:camera/types@0.0.1.{facing};
 
-    /// Which camera feeds the encoder (a call self-view wants front).
-    enum camera-facing { front, back }
-
-    /// Where a video surface composites relative to the app's own UI buffer
-    /// (the guest owns this policy). `behind-ui` = the SurfaceView model: the
-    /// UI punches a transparent hole and may draw controls OVER the video
-    /// (host clears the layer's opaque flag while video is up). `above-ui` =
-    /// video covers the rect; the UI lays out around it — no hole needed.
+    /// Where a video surface composites relative to the app's own UI buffer.
+    /// `behind-ui` = the SurfaceView model: the UI punches a transparent hole and may
+    /// draw controls OVER the video (the host clears the layer's opaque flag while video
+    /// is up). `above-ui` = video covers the rect; the UI lays out around it.
+    ///
+    /// This is a wandr COMPOSITING decision — a guest cannot hold global z, so it
+    /// EXPRESSES a relationship and the embedder configures actual stacking.
     enum z-layer { behind-ui, above-ui }
 
-    enum video-error {
-        unsupported-codec,
-        no-hw-codec,         // only a software codec exists (e.g. VP9 encode here)
-        codec-init-failed,
-        bad-frame,
-        queue-full,          // decoder input queue full — frame dropped, resend after a keyframe
-        surface-unavailable,
-    }
-
-    /// One compressed frame between the guest's RTP layer and the host codec.
-    record encoded-frame {
-        data: list<u8>,
-        timestamp: u32,      // 90 kHz RTP timestamp
-        keyframe: bool,      // true = IDR / VP8 key; decoders need one to start
-    }
-
     /// Where the host paints video, in the GUEST'S OWN surface pixels (the same
-    /// coordinate space the guest draws in). The host realizes it as a child of
-    /// the app's SurfaceFlinger surface (the SurfaceView model), so it moves,
-    /// hides, rotates and z-orders with the app automatically; it composites
-    /// BELOW the app's UI buffer, which punches a transparent hole where video
-    /// should show and may draw controls over it. (In a surfaceless process —
-    /// `--run-once` diagnostics — the rect is panel pixels on a top-level layer.)
+    /// coordinate space the guest draws in). The host realizes it as a CHILD of the app's
+    /// SurfaceFlinger surface (the SurfaceView model), so it moves, hides, rotates and
+    /// z-orders with the app automatically. (In a surfaceless process — `--run-once`
+    /// diagnostics — the rect is panel pixels on a top-level layer.)
     record video-rect { x: u32, y: u32, width: u32, height: u32 }
 
-    record encoder-config {
-        codec: codec,
-        width: u32, height: u32,
-        bitrate-bps: u32,
-        framerate: u32,
-        /// true = camera frames captured host-side (the call self-view), the default.
-        /// false (future) = guest supplies YUV (screen-share).
-        source-camera: bool,
-        /// Which camera to capture from when source-camera (falls back to the
-        /// first camera if the requested facing doesn't exist).
-        facing: camera-facing,
-        /// PiP self-view: where to composite the local camera preview (the
-        /// camera streams to a second surface host-side; frames never cross
-        /// the boundary). `none` = no self-view. Move via set-preview-rect.
+    /// Failures of the wandr compositing/glue layer (the codec's own failures stay in
+    /// wasi:video-codec's `codec-error`). ABI-positional; APPEND only.
+    enum surface-error {
+        /// No host surface is available to composite into (surfaceless / lost surface).
+        surface-unavailable,
+        /// A `call-encoder` could not open its camera (absent / permission-denied / in-use).
+        camera-unavailable,
+        /// The underlying wasi:video-codec encoder/decoder failed to open.
+        codec-unavailable,
+    }
+
+    /// Config for the fused call self-view encoder. Composes the codec's `encoder-config`
+    /// (codec/width/height/bitrate/framerate/acceleration) + the wasi:camera source
+    /// selector + wandr PiP placement. There is deliberately NO `source-camera` bool: this
+    /// resource IS the camera-sourced path (host-side capture -> encode -> send, frames
+    /// never cross); a guest that supplies its OWN frames uses `wasi:video-codec.encoder`
+    /// directly with a frame source.
+    record call-encoder-config {
+        /// The pure-codec output config (from wasi:video-codec).
+        codec: codec-encoder-config,
+        /// Which camera to capture (wasi:camera facing; a call self-view wants front).
+        facing: facing,
+        /// PiP self-view: where to composite the local camera preview as a second child
+        /// surface (frames never cross the boundary). `none` = no self-view.
         preview: option<video-rect>,
         /// Compositing layer for the self-view (see `z-layer`).
         preview-layer: z-layer,
     }
+}
 
-    record decoder-config {
-        codec: codec,
-        /// Coded-size hint for codec init (from signaling); the stream's actual
-        /// size wins — VP8/VP9 keyframes carry their own dimensions.
-        width: u32, height: u32,
-        rect: video-rect,    // initial geometry; resizable via set-rect
-        /// Degrees CW to rotate decoded frames for upright display — the
-        /// peer's CVO rotation (wandr-call `VideoFrame.rotation`). Fixed at
-        /// open (MediaCodec rotation-degrees); reopen if the peer rotates.
-        rotation: u32,
-        /// Compositing layer for the remote video (see `z-layer`).
-        layer: z-layer,
+/// HOST-FILL decode-to-surface — the wandr compositing primitive that imports the codec's
+/// decoder + frame and binds them to a child surface. This is the whole reason wandr:video
+/// exists on top of wasi:video-codec.
+interface present {
+    use types.{video-rect, z-layer, surface-error};
+    use wasi:video-codec/types@0.0.1.{frame};
+    use wasi:video-codec/decoder@0.0.1.{video-decoder};
+
+    /// A host-filled child surface of the app's own surface (the SurfaceView model: z
+    /// below UI, moves/hides/rotates with the app). Placement is wandr's; pixels never
+    /// cross. Bind it to a decoder ONE of two ways (mutually exclusive per surface):
+    /// `attach` for AUTO real-time, or `present` for GUEST-TIMED playback.
+    resource video-surface {
+        /// Open a compositing child surface at `rect` on `layer`, with an initial content
+        /// rotation `degrees` CW (the peer's CVO; 0 for local playback).
+        open: static func(rect: video-rect, layer: z-layer, degrees: u32)
+              -> result<video-surface, surface-error>;
+
+        /// AUTO path (RTP calls): bind a codec decoder's output straight to this surface;
+        /// the host auto-presents each decoded frame ASAP. The guest then only submits
+        /// chunks to the decoder and NEVER pulls `next-decoded`. The decoder is BORROWED —
+        /// the guest keeps ownership.
+        attach: func(dec: borrow<video-decoder>) -> result<_, surface-error>;
+
+        /// GUEST-TIMED path (file playback): present a `frame` the guest pulled from the
+        /// decoder's `next-decoded`, scheduled at `at-ns` on the wasi:clocks monotonic
+        /// timeline (video slaved to the wasi:audio master clock). `0` = ASAP. Takes
+        /// OWNERSHIP — presenting consumes the frame; dropping a frame instead == discard
+        /// (a player that falls behind drops rather than accumulating latency). Mutually
+        /// exclusive with `attach` on the same surface.
+        present: func(frame: frame, at-ns: u64);
+
+        /// Move/resize the surface (layout change, rotation).
+        set-rect: func(rect: video-rect);
+
+        /// Where the host has ACTUALLY placed the video, in guest-surface pixels, after
+        /// letterboxing/pillarboxing — `none` until the first frame is composited. A guest
+        /// asks `set-rect` where it WANTS the video; this reports where it LANDED, which
+        /// differs once aspect correction is applied. NECESSARY here (not in the codec)
+        /// precisely because HOST-FILL letterboxing is a wandr compositing act: the guest
+        /// draws subtitles/controls (in its own UI layer, at display resolution) over the
+        /// picture and in the black bars, and needs this rect to place them; the pixels
+        /// never cross. Every mature player carries the equivalent (mpv `mp_osd_res`).
+        presented-rect: func() -> option<video-rect>;
+
+        /// Update the content (peer CVO) rotation live at the compositor — no codec
+        /// reconfigure. (Frame-intrinsic rotation rides on `frame.rotation`; this is the
+        /// live composition override.)
+        set-rotation: func(degrees: u32);
     }
 }
 
-interface encoder {
-    use types.{encoder-config, encoded-frame, video-error, video-rect};
+/// The fused call self-view encoder — the wandr camera->encoder glue. Internally owns a
+/// wasi:camera session + a wasi:video-codec encoder + (optionally) a PiP preview surface,
+/// so camera frames stay HOST-SIDE (captured -> encoded -> sent, never crossing the
+/// sandbox — the zero-copy call path). A guest that wants to supply its own frames uses
+/// `wasi:video-codec.encoder` directly instead.
+interface capture-encode {
+    use types.{call-encoder-config, video-rect, surface-error};
+    use wasi:video-codec/types@0.0.1.{encoded-chunk};
 
-    /// Opens the camera (if source-camera) + a HW encoder. One per outgoing stream.
-    resource video-encoder {
-        open: static func(config: encoder-config) -> result<video-encoder, video-error>;
-        /// Pull the next encoded frame (non-blocking; none if not ready). The guest
-        /// then RTP-packetizes + SRTP-seals (wandr:crypto) + sends. (A callback export
-        /// is the alternative if polling proves wasteful at the frame cadence.)
-        next-frame: func() -> option<encoded-frame>;
-        /// Force a keyframe (on the receiver's RTCP PLI/FIR).
+    resource call-encoder {
+        /// Open the camera (per `config.facing`) + a HW encoder + an optional PiP preview
+        /// surface. One per outgoing stream.
+        open: static func(config: call-encoder-config)
+              -> result<call-encoder, surface-error>;
+
+        /// Pull the next encoded chunk (non-blocking; none = not ready). The guest
+        /// RTP-packetizes + SRTP-seals (wandr:crypto) + sends. (Delegates the codec
+        /// encoder's `next-chunk`.)
+        next-chunk: func() -> option<encoded-chunk>;
+        /// Force a keyframe (on the receiver's RTCP PLI/FIR). (Delegates the codec.)
         request-keyframe: func();
-        /// Adapt to congestion (the guest drives this from REMB/TWCC).
+        /// Adapt to congestion (the guest drives this from REMB/TWCC). (Delegates the codec.)
         set-bitrate: func(bitrate-bps: u32);
         /// Move/resize the PiP self-view (no-op if opened without `preview`).
         set-preview-rect: func(rect: video-rect);
-        /// Show/hide the PiP self-view (no-op if opened without `preview`).
-        set-preview-visible: func(visible: bool);
-        /// Degrees CW a receiver must rotate our frames for upright display
-        /// (the facing-adjusted camera sensor orientation) — feed it to the
-        /// call engine's outgoing CVO (`set_video_rotation`). The PiP
-        /// self-view already compensates host-side.
+
+        /// Degrees CW a receiver must rotate our frames for upright display (the
+        /// facing-adjusted camera sensor CVO) — feed it to the call engine's outgoing CVO
+        /// (`set_video_rotation`). Re-exposed HERE (rather than read off `frame.rotation`
+        /// like the general codec path) because the fused glue keeps camera frames
+        /// host-side, so the guest never sees a `frame` to read it from. The PiP self-view
+        /// already compensates host-side.
         display-rotation: func() -> u32;
     }
 }
 
-interface decoder {
-    use types.{decoder-config, encoded-frame, video-rect, video-error};
-
-    /// Opens a HW decoder + a compositing surface at `rect`. Decode-to-surface: the
-    /// host decodes + paints directly; frames do not return to the guest.
-    resource video-decoder {
-        open: static func(config: decoder-config) -> result<video-decoder, video-error>;
-        /// Push a reassembled encoded frame (after SRTP-open + RTP depacketize).
-        submit: func(frame: encoded-frame) -> result<_, video-error>;
-        /// Move/resize the video surface (layout change, rotation).
-        set-rect: func(rect: video-rect);
-        /// Show/hide the video surface (e.g. the peer paused video).
-        set-visible: func(visible: bool);
-        /// Update the peer's CVO rotation live (applied at the compositor —
-        /// no codec reconfigure; pairs with the engine's VideoFrame.rotation).
-        set-rotation: func(degrees: u32);
-        /// true once >=1 keyframe has decoded (UI can drop the placeholder).
-        ready: func() -> bool;
-        /// Frames decoded so far (diagnostics; Phase 1 decode-to-buffer counts
-        /// + drops them — Phase 4 composites instead).
-        decoded-frames: func() -> u64;
-    }
-}
-
-/// Imported by a call-engine guest (crates/wandr-call). The host implements both.
+/// Imported by a call-engine / player guest. The host implements all of it.
 ///
-/// DESIGN DECISION (task 93 Phase 4, was an open question): video surfaces are
-/// CHILDREN of the app's own SurfaceFlinger surface (Android's SurfaceView
-/// model — `sf_media_*` in the libgui shim), NOT separate arbiter
-/// `Role::Video` surfaces. Z-order/visibility/rotation/occlusion are inherited
-/// from the app's existing role for free — backgrounding the app hides its
-/// video, no new arbiter state or IPC. Remote video sits at child z = -2, the
-/// PiP self-view at -1, both BELOW the app's UI buffer; while a decoder
-/// surface is up the host clears the layer's opaque flag so the guest's
-/// transparent hole blends (controls can overlap video). Rects are
-/// guest-surface pixels (see `video-rect`).
+/// DESIGN DECISION (task 93 Phase 4): video surfaces are CHILDREN of the app's own
+/// SurfaceFlinger surface (Android's SurfaceView model — `sf_media_*` in the libgui
+/// shim), NOT separate arbiter `Role::Video` surfaces. Z-order/visibility/rotation/
+/// occlusion are inherited from the app's existing role for free — backgrounding the app
+/// hides its video, no new arbiter state or IPC. Remote video sits at child z = -2, the
+/// PiP self-view at -1, both BELOW the app's UI buffer; while a decoder surface is up the
+/// host clears the layer's opaque flag so the guest's transparent hole blends (controls
+/// can overlap video). Rects are guest-surface pixels (see `video-rect`).
+///
+/// The guest reaches the raw codec (submit RTP chunks, pull decoded frames for playback,
+/// or encode its own frames) via the imported wasi:video-codec interfaces, and the wandr
+/// compositing/glue via `present` + `capture-encode`.
 world video-client {
-    import encoder;
-    import decoder;
+    import wasi:video-codec/types@0.0.1;
+    import wasi:video-codec/decoder@0.0.1;
+    import wasi:video-codec/encoder@0.0.1;
+    import present;
+    import capture-encode;
 }
 
 /// Host-side import world the runtime `add_to_linker`s (the host implements all of it).
 world video-host {
-    import encoder;
-    import decoder;
+    import wasi:video-codec/types@0.0.1;
+    import wasi:video-codec/decoder@0.0.1;
+    import wasi:video-codec/encoder@0.0.1;
+    import present;
+    import capture-encode;
 }

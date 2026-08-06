@@ -3,6 +3,9 @@
 package wandr:video-test;
 
 world video-test {
-    import wandr:video/encoder@0.1.0;
-    import wandr:video/decoder@0.1.0;
+    import wasi:video-codec/types@0.0.1;
+    import wasi:video-codec/decoder@0.0.1;
+    import wandr:video/present@0.1.0;         // decode-to-surface (attach for AUTO)
+    import wandr:video/capture-encode@0.1.0;  // fused call-encoder (camera+encode+PiP)
+    import wandr:video-diag/diag@0.1.0;       // decoded-frames
 }

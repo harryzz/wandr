@@ -1,0 +1,40 @@
+// wandr:video-diag — DRAFT. NOT WIRED.
+//
+// Diagnostics / TEST surface for wasi:video-codec, deliberately OUTSIDE the standard.
+// A real guest negotiates capability with wasi:video-codec's `probe(config) -> support`
+// and needs NOTHING here. This wandr:* package exists for TESTING and tooling — to
+// enumerate the whole decoder table and to confirm which implementation an open decoder
+// actually got — so the standard `wasi:video-codec` stays necessary-and-sufficient
+// (nothing a real guest doesn't use). The wandr namespace is deliberate: this is
+// wandr's test hook, not a portability contract, and it may change freely.
+package wandr:video-diag@0.1.0;
+
+interface diag {
+    use wasi:video-codec/types@0.0.1.{codec};
+    use wasi:video-codec/decoder@0.0.1.{video-decoder};
+
+    /// One decoder implementation the host offers for a codec (diagnostic — a guest
+    /// that must pick chooses on `hardware`, not the per-platform `name`).
+    record decoder-info {
+        codec: codec,
+        name: string,
+        hardware: bool,
+    }
+
+    /// Enumerate the whole decoder table — "what can this host decode" (a device-
+    /// capabilities readout / test). PROBED, not declared: an empty result for a codec
+    /// means "not decodable here". A real guest uses `wasi:video-codec` `probe` for the
+    /// actionable per-config answer.
+    list-decoders: func() -> list<decoder-info>;
+
+    /// Which implementation an OPEN decoder actually got — for a test that verifies the
+    /// hardware path was taken. (A real guest that MUST have hardware passes
+    /// `require-hardware` at open and lets a soft failure surface as an error.)
+    implementation: func(dec: borrow<video-decoder>) -> decoder-info;
+
+    /// Frames an open decoder has decoded so far (diagnostics / telemetry). A real
+    /// guest that wants a count tracks its own `next-decoded` pulls.
+    decoded-frames: func(dec: borrow<video-decoder>) -> u64;
+}
+
+world video-diag { import diag; }

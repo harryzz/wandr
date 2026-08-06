@@ -1,0 +1,190 @@
+// wasi:camera — DRAFT (wandr). NOT WIRED.
+//
+// The camera SOURCE, factored out of the codec. The web platform already draws this
+// line — capture and codec are SEPARATE specs — and wandr mirrors it:
+//   * wasi:camera       == W3C **Media Capture and Streams** (getUserMedia /
+//                          MediaStreamTrack; `facing` == `facingMode`) + **Image
+//                          Capture** (torch/zoom/still) [W3C WebRTC WG].
+//   * wasi:video-codec  == WebCodecs **VideoDecoder/VideoEncoder + VideoFrame**
+//                          (codec; source-agnostic; holds the shared `frame`).
+//   * the bridge        == W3C **MediaStreamTrack Insertable Streams**
+//                          (`MediaStreamTrackProcessor` -> VideoFrame): a camera
+//                          `frame` is the opaque currency the encoder consumes.
+// So the web pipeline getUserMedia -> track-processor -> VideoEncoder is exactly
+// wasi:camera -> wasi:video-codec here. No wasi:camera proposal exists upstream at
+// any phase — this is a greenfield draft derived from the W3C family (the
+// wasi:canvas / wasi:audio playbook).
+//
+// SURFACE-FREE (task 120 strip). The old `connect-preview(ctx)` viewfinder verb and its
+// `wasi:graphics-context` dep are GONE: compositing the live capture into a surface is
+// host-fill placement — a stack decision that belongs to the wandr:video EMBEDDER, not
+// to a capture primitive (exactly as the web leaves `<video>` rendering to the DOM, not
+// to getUserMedia). Removing it also makes this package fully VIRTUALIZABLE — a Wasm
+// component can back a virtual camera end-to-end (list/open/next-frame/controls), with no
+// host-only verb remaining. The camera device ITSELF was never surface-related.
+//
+// PORTABLE DEVICE SELECTION (two constructors, both necessary for a universal contract):
+//   * `open(facing, want)`     — mobile self-view: pick the nearest front/back camera.
+//   * `open-device(id, want)`  — DESKTOP and multi-camera: `facing` is a 3-value hint the
+//                                web itself does not require and most desktop/USB webcams
+//                                do NOT report, so it cannot disambiguate two external
+//                                cams. Enumeration (`list-cameras` -> `open-device`) is
+//                                the only portable way to pick a specific device — the
+//                                = MediaDevices.enumerateDevices path. A camera-picker or
+//                                desktop app needs it even though the call proof-app opens
+//                                by `facing`.
+//
+// The `frame` is the SHARED wasi:video-codec VideoFrame (that package holds the codec
+// AND the frame, parallel to wasi:audio-codec): the camera PRODUCES it, the encoder
+// CONSUMES it. `frame.rotation` carries the facing-adjusted sensor CVO. (A future
+// wasi:screen-capture source would import the same `frame`.)
+package wasi:camera@0.0.1;
+
+interface types {
+    /// Which way the camera points. = MediaTrackConstraints `facingMode`
+    /// (user/environment) + `external` for a plugged-in / desktop webcam. `open(facing,
+    /// …)` picks the nearest device; the granted device's facing is reported back.
+    /// Discriminants are ABI-positional and stable — front=0, back=1, external=2;
+    /// APPEND only. `external` is a DELIBERATE divergence from W3C `VideoFacingModeEnum`
+    /// {user, environment, left, right} — it names "not an integrated front/back sensor"
+    /// (a USB / desktop webcam), the case the web leaves with no facingMode at all. Omits
+    /// facingMode's rare `left`/`right` (dual-camera stereo rigs); add by appending if a
+    /// consumer needs them. On a device that cannot classify a camera, use `external` and
+    /// select it by id via enumeration.
+    enum facing { front, back, external }
+
+    /// A camera the host can offer right now (PROBED, not declared — an unplugged or
+    /// unpermitted device is simply absent). = a videoinput `MediaDeviceInfo`.
+    record camera-info {
+        /// Opaque, stable device id for `open-device`. Host-scoped; not a compatibility
+        /// promise. Per the getUserMedia privacy rule it MAY be an empty / non-openable
+        /// placeholder until the guest has been granted camera access; a real id is
+        /// revealed once permission exists.
+        device-id: string,
+        facing: facing,
+        /// Human label for a picker. `none` = WITHHELD — the getUserMedia privacy rule
+        /// withholds labels from an unauthorized app (this is why it is `option`, so
+        /// "withheld" is expressible rather than an ambiguous empty string). Diagnostic
+        /// only; never a selection key.
+        name: option<string>,
+    }
+
+    /// Requested capture format (a MediaTrackConstraints subset). Nearest-match: the
+    /// GRANTED format may differ (a sensor has fixed modes) and is reported by the
+    /// opened camera's `format`.
+    record format {
+        width: u32,
+        height: u32,
+        framerate: u32,
+    }
+
+    /// What an OPEN camera can do (= W3C `getCapabilities` — the third of the
+    /// constrainable triad, alongside the `format`/`facing` REQUEST and the granted
+    /// `format()`/`facing()` SETTINGS). Post-open, so it is privacy-clean. Without it a
+    /// guest can't tell "no torch" from "torch failed", bound a zoom slider, or offer a
+    /// resolution picker — `set-torch`/`set-zoom` are otherwise silent no-ops.
+    record camera-capabilities {
+        /// true if the device has a controllable torch/flash; else `set-torch` is a
+        /// no-op and the UI should hide the button.
+        has-torch: bool,
+        /// Maximum `set-zoom` ratio (min is 1.0); 1.0 = zoom unsupported. Bound a zoom
+        /// slider to this. (A lossy reduction of Image Capture's zoom
+        /// MediaSettingsRange{min,max,step} with min fixed at 1.0 — additive room for the
+        /// full range if a consumer needs step/min.)
+        max-zoom: f32,
+        /// Capture modes the sensor supports, for a resolution/framerate picker. `open`
+        /// already nearest-matches, so a call/viewfinder that doesn't pick can ignore it.
+        formats: list<format>,
+    }
+
+    /// Discriminants are ABI-positional and stable (no-camera=0 … device-lost=4);
+    /// APPEND only.
+    enum camera-error {
+        /// No camera matches (facing/device absent, or none present at all).
+        no-camera,
+        /// The host/embedder denies access (= a rejected getUserMedia). Camera access
+        /// is the host's policy to enforce; the WIT never grants ambient authority.
+        permission-denied,
+        /// The requested format has no acceptable near-match.
+        unsupported-format,
+        /// Another owner holds the device.
+        in-use,
+        /// The device went away mid-capture (unplugged / revoked).
+        device-lost,
+    }
+}
+
+interface camera {
+    use types.{facing, camera-info, format, camera-capabilities, camera-error};
+    use wasi:video-codec/types@0.0.1.{frame};
+
+    /// Cameras available to THIS guest right now (= MediaDevices.enumerateDevices
+    /// filtered to videoinput). Empty list = none present OR none revealed pre-permission
+    /// — the getUserMedia privacy rule withholds device ids/labels from an unauthorized
+    /// app, so before a grant the host MAY return an empty list (or entries with
+    /// `name` = none and a placeholder `device-id`). Necessary for the desktop /
+    /// camera-picker / multi-camera app class, where `facing` cannot address a specific
+    /// device.
+    list-cameras: func() -> list<camera-info>;
+
+    // Captured frames are the SHARED wasi:video-codec `frame` (= WebCodecs VideoFrame):
+    // opaque + host-held, forwarded zero-copy to a video-encoder (or, via the embedder,
+    // to a preview surface), or `read-rgba`'d for the pixels-needed path. `frame.rotation`
+    // carries the facing-adjusted sensor CVO (a source property, not an encoder verb).
+
+    /// An open capture session on one device. One owner; dropping it releases the
+    /// device (ordered teardown is the host's — the cameraserver-wedge rule).
+    resource session {
+        /// Open the nearest camera for `facing` at a requested format. `permission-
+        /// denied` if the host refuses. The granted format may differ — query it. A
+        /// mid-session facing flip (front<->back) is a warm reopen: drop this session and
+        /// `open` the other facing.
+        open: static func(facing: facing, want: format)
+              -> result<session, camera-error>;
+        /// Open a specific enumerated device (`camera-info.device-id`). The DESKTOP /
+        /// multi-camera path where `facing` cannot disambiguate.
+        open-device: static func(device-id: string, want: format)
+              -> result<session, camera-error>;
+
+        /// The format actually granted (may differ from the request) — W3C getSettings.
+        format: func() -> format;
+        /// The facing actually granted.
+        facing: func() -> facing;
+        /// What this device CAN do — torch presence, zoom range, supported modes (W3C
+        /// getCapabilities). Post-open; drives the controls UI + a resolution picker.
+        capabilities: func() -> camera-capabilities;
+
+        /// Pull the next captured frame (non-blocking; `none` = not ready yet). The
+        /// frame is opaque + host-held — see `frame`.
+        ///
+        /// POLL, not pollable: `option` suits the frame-paced reactor model (the
+        /// embedder's on-frame tick is the wakeup). A `wasi:io/poll` pollable for a
+        /// self-scheduling PULL-profile guest that wants to block on capture is a
+        /// deliberate additive deferral — the same push/pull split as
+        /// wasi:video-codec's `next-decoded`.
+        next-frame: func() -> option<frame>;
+
+        /// Pause (false) / resume (true) frame delivery WITHOUT releasing the device —
+        /// the call "video mute" (= MediaStreamTrack.enabled=false, which the spec says
+        /// yields zero-information frames but does NOT relinquish the device). Keeps the
+        /// sensor warm and the exclusive lock held, so resume is instant (no
+        /// re-permission, re-acquire, or auto-exposure/focus warm-up) and there's no
+        /// `in-use` race. Dropping the session is the full release; this is the cheap
+        /// toggle.
+        set-active: func(on: bool);
+
+        // ── controls (W3C Image Capture / MediaTrackCapabilities) — no-ops where the
+        // device lacks the capability (query `capabilities` first); additive room for
+        // focus/exposure/etc. Still-capture (Image Capture takePhoto/grabFrame) is out of
+        // scope — a single `next-frame` covers the snapshot need. ──
+
+        /// Torch / flash on/off (no-op if `capabilities.has-torch` is false).
+        set-torch: func(on: bool);
+        /// Zoom ratio (1.0 = none); clamped to `[1.0, capabilities.max-zoom]`.
+        set-zoom: func(ratio: f32);
+    }
+}
+
+world camera-guest {
+    import camera;
+}

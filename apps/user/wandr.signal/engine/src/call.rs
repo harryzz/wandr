@@ -29,9 +29,13 @@ use crate::wasi::audio::pcm::{Capture, ChannelLayout, Format, Playback, StreamCl
 use crate::wandr::audio_focus::{controls, focus};
 use crate::wandr::crypto::aead::AeadKey;
 use crate::wandr::crypto::types::AeadAlgo;
-use crate::wandr::video::decoder::VideoDecoder;
-use crate::wandr::video::encoder::VideoEncoder;
+use crate::wasi::video_codec::decoder::VideoDecoder;
+use crate::wasi::video_codec::types as vc;
+use crate::wasi::camera::types::Facing;
+use crate::wandr::video::capture_encode::CallEncoder;
+use crate::wandr::video::present::VideoSurface;
 use crate::wandr::video::types as vtypes;
+use crate::wandr::video_diag::diag as vdiag;
 use wandr_call::{AeadCtx, AeadProvider};
 
 // ── 1:1 call video (task 93 Phase 5) ────────────────────────────────────────
@@ -105,8 +109,12 @@ fn fit_rect(area: (u32, u32, u32, u32), dims: (u32, u32), rotation: u32) -> (u32
 struct VideoState {
     /// The user wants our camera on (encoder opens once layout is known).
     wanted: bool,
-    enc: Option<VideoEncoder>,
+    enc: Option<CallEncoder>,
     dec: Option<VideoDecoder>,
+    /// The embedder-owned compositing surface for the peer's video (task 120):
+    /// the codec decoder is surface-free; `attach(decoder)` binds it here so the
+    /// host AUTO-presents each RTP frame (Signal never pulls `next-decoded`).
+    surf: Option<VideoSurface>,
     layout: Option<VideoLayout>,
     /// The peer's last CVO rotation applied to the decoder surface (updated
     /// live via set-rotation when the peer rotates mid-call).
@@ -515,14 +523,17 @@ impl ActiveCall {
         // Our camera: open/close per the wanted flag.
         if v.wanted && v.enc.is_none() {
             if let Some(l) = v.layout {
-                match VideoEncoder::open(vtypes::EncoderConfig {
-                    codec: vtypes::Codec::Vp8,
-                    width: VIDEO_W,
-                    height: VIDEO_H,
-                    bitrate_bps: VIDEO_START_BITRATE_BPS,
-                    framerate: VIDEO_FPS,
-                    source_camera: true,
-                    facing: vtypes::CameraFacing::Front, // the call self-view
+                match CallEncoder::open(vtypes::CallEncoderConfig {
+                    // codec output config (wasi:video-codec)
+                    codec: vc::EncoderConfig {
+                        codec: vc::Codec::Vp8,
+                        width: VIDEO_W,
+                        height: VIDEO_H,
+                        bitrate_bps: VIDEO_START_BITRATE_BPS,
+                        framerate: VIDEO_FPS,
+                        acceleration: vc::Acceleration::NoPreference,
+                    },
+                    facing: Facing::Front, // the call self-view (wasi:camera)
                     preview: Some(vrect(l.pip)),
                     preview_layer: vtypes::ZLayer::AboveUi,
                 }) {
@@ -556,8 +567,10 @@ impl ActiveCall {
                 v.last_rotation = rot;
                 self.call.set_video_rotation(rot);
             }
-            while let Some(f) = enc.next_frame() {
-                let _ = self.call.send_video(&f.data, f.timestamp);
+            while let Some(f) = enc.next_chunk() {
+                // The codec chunk carries a µs PTS; the RTP wire clock is 90 kHz.
+                let ts_90k = (f.timestamp_us * 9 / 100) as u32;
+                let _ = self.call.send_video(&f.data, ts_90k);
             }
             if self.call.take_keyframe_request() {
                 enc.request_keyframe();
@@ -615,8 +628,8 @@ impl ActiveCall {
                         ));
                         v.peer_dims = Some(dims);
                         // Refit the live surface to the new shape.
-                        if let (Some(d), Some(l)) = (&v.dec, v.layout) {
-                            d.set_rect(vrect(fit_rect(l.remote, dims, vf.rotation)));
+                        if let (Some(sf), Some(l)) = (&v.surf, v.layout) {
+                            sf.set_rect(vrect(fit_rect(l.remote, dims, vf.rotation)));
                         }
                     }
                 }
@@ -632,42 +645,56 @@ impl ActiveCall {
                     v.peer_dims.unwrap_or((VIDEO_W, VIDEO_H)),
                     vf.rotation,
                 );
-                match VideoDecoder::open(vtypes::DecoderConfig {
-                    codec: vtypes::Codec::Vp8,
-                    width: VIDEO_W,
-                    height: VIDEO_H,
-                    rect: vrect(area),
-                    rotation: vf.rotation,
-                    layer: vtypes::ZLayer::AboveUi,
-                }) {
-                    Ok(d) => {
-                        v.dec_rotation = vf.rotation;
-                        v.dec = Some(d);
-                        crate::engine::dbg_line(&format!(
-                            "video: decoder opened (peer video, rotation {}°)", vf.rotation
-                        ));
-                    }
+                // Split (task 120): surface-free codec decoder + an embedder
+                // video-surface; `attach` binds them for the RTP AUTO path (the host
+                // presents each decoded frame ASAP — Signal never pulls next-decoded).
+                let d = match VideoDecoder::open(
+                    vc::DecoderConfig {
+                        codec: vc::Codec::Vp8,
+                        acceleration: vc::Acceleration::NoPreference,
+                    },
+                    None,
+                ) {
+                    Ok(d) => d,
                     Err(e) => {
                         crate::engine::dbg_line(&format!("video: decoder open failed: {e:?}"));
                         continue;
                     }
-                }
+                };
+                let sf = match VideoSurface::open(vrect(area), vtypes::ZLayer::AboveUi, vf.rotation) {
+                    Ok(sf) => sf,
+                    Err(e) => {
+                        crate::engine::dbg_line(&format!("video: surface open failed: {e:?}"));
+                        continue;
+                    }
+                };
+                let _ = sf.attach(&d); // AUTO: bind decoder output to the surface
+                v.dec_rotation = vf.rotation;
+                v.dec = Some(d);
+                v.surf = Some(sf);
+                crate::engine::dbg_line(&format!(
+                    "video: decoder+surface opened (peer video, rotation {}°)", vf.rotation
+                ));
             }
             if let Some(d) = &v.dec {
                 // The peer rotated mid-call: CVO changes per frame; apply at
-                // the compositor (no codec reconfigure).
+                // the compositor (no codec reconfigure) — on the SURFACE now.
                 if vf.rotation != v.dec_rotation {
                     v.dec_rotation = vf.rotation;
-                    d.set_rotation(vf.rotation);
-                    // 90/270 swap the visible shape — refit into the area.
-                    if let (Some(dims), Some(l)) = (v.peer_dims, v.layout) {
-                        d.set_rect(vrect(fit_rect(l.remote, dims, vf.rotation)));
+                    if let Some(sf) = &v.surf {
+                        sf.set_rotation(vf.rotation);
+                        // 90/270 swap the visible shape — refit into the area.
+                        if let (Some(dims), Some(l)) = (v.peer_dims, v.layout) {
+                            sf.set_rect(vrect(fit_rect(l.remote, dims, vf.rotation)));
+                        }
                     }
                 }
-                let _ = d.submit(&vtypes::EncodedFrame {
+                let _ = d.submit(&vc::EncodedChunk {
                     data: vf.data,
-                    timestamp: vf.timestamp,
+                    // RTP 90 kHz transport clock → codec µs PTS.
+                    timestamp_us: (vf.timestamp as i64) * 100 / 9,
                     keyframe: vf.keyframe,
+                    decrypt: None,
                 });
             }
         }
@@ -678,6 +705,7 @@ impl ActiveCall {
         // teardown (never leave them across a call end — cameraserver wedge).
         self.video.enc = None;
         self.video.dec = None;
+        self.video.surf = None;
         self.video.wanted = false;
         if self.video.focus_video {
             self.video.focus_video = false;
@@ -691,8 +719,8 @@ impl ActiveCall {
             return;
         }
         self.video.layout = Some(l);
-        if let Some(d) = &self.video.dec {
-            d.set_rect(vrect(fit_rect(
+        if let Some(sf) = &self.video.surf {
+            sf.set_rect(vrect(fit_rect(
                 l.remote,
                 self.video.peer_dims.unwrap_or((VIDEO_W, VIDEO_H)),
                 self.video.dec_rotation,
@@ -972,7 +1000,7 @@ impl CallEngine {
             a.video.dec.is_some(),
             tx_frames, tx_pkts, v.applied_bitrate, v.last_rotation,
             rx_pkts, rx_frames, rx_broken,
-            v.dec.as_ref().map(|d| d.decoded_frames()).unwrap_or(0),
+            v.dec.as_ref().map(|d| vdiag::decoded_frames(d)).unwrap_or(0),
             pli_tx, pli_rx, rtcp_err,
             a.call.peer_video_enabled(),
             a.call.peer_max_bitrate_bps(),

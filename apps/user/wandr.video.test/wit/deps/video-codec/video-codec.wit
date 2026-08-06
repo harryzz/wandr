@@ -1,0 +1,303 @@
+// wasi:video-codec — DRAFT (wandr). NOT WIRED.
+//
+// The video hardware CODEC — decoder + encoder + the shared VideoFrame in ONE package,
+// exactly parallel to `wasi:audio-codec` (and to WebCodecs, which ships VideoDecoder +
+// VideoEncoder + VideoFrame together). Consolidates the earlier split
+// wasi:video-decoder / wasi:video-encoder / wasi:video-frame drafts: one `codec` enum,
+// one HW/SW vocabulary, one frame currency — no cross-package duplication.
+//
+// SURFACE-FREE (task 120 strip). This package is the codec BASIC a guest cannot do
+// itself and NOTHING else — pure WebCodecs. It has NO surface, NO present, NO placement,
+// NO compositing. Everything about WHERE/WHEN decoded pixels appear (decode-to-surface,
+// z-layers, present(at-ns), letterbox) is a stack compositing decision that lives one
+// layer up in the `wandr:video` EMBEDDER, which `use`s this package. Removing the old
+// draft's `connect(ctx)` + `decoded-frame.present()` is also what makes this package
+// VIRTUALIZABLE — every verb here (submit/next-decoded/encode/…) is implementable by
+// another Wasm component (e.g. dav1d/libvpx-on-wasm), with no host compositor required.
+//
+// The A/V parallel and its ONE asymmetry: audio's raw frame (WebCodecs AudioData)
+// crosses the boundary cheaply as `list<f32>`; a raw VIDEO frame cannot, so `frame` is
+// an OPAQUE host-held resource (= WebCodecs VideoFrame) — pixels stay host-side and the
+// handle is forwarded zero-copy (camera -> encoder, decoder -> embedder surface), with
+// `read-rgba` the expensive pixels-needed opt-out. Everything else mirrors audio-codec:
+// `probe(config) -> support` (= isConfigSupported), identical `acceleration`, and the
+// same "use HW if present, fall back in-process when absent" capability negotiation.
+//
+// ONE decode path (`submit(chunk)`), TWO presentation modes — chosen ONE LAYER UP by
+// whether the embedder pulls this decoder's output, not by anything in this package:
+//   * AUTO / real-time — the wandr embedder binds the decoder to a surface and the host
+//                        presents each decoded frame ASAP (RTP calls; the guest submits
+//                        and never pulls `next-decoded`). The guest treats `queue-full`
+//                        as LOSS (resend after a keyframe).
+//   * GUEST-TIMED      — the guest pulls `next-decoded` -> `frame`, reads `frame.
+//                        timestamp-us`, and hands the frame to the embedder's
+//                        `present(frame, at-ns)` on the wasi:clocks monotonic timeline
+//                        (video slaved to the wasi:audio master clock — file playback).
+//                        `queue-full` = BACK-PRESSURE (retry the same chunk once the
+//                        embedder has drained one via `next-decoded`).
+// One `encoded-chunk` (µs PTS) feeds both; an RTP guest converts its 90 kHz clock to µs.
+// Live-verified via the wandr:video embedder: Signal calls; jellyfin + dash playback.
+//
+// DEFERRED WebCodecs fields (omitted for necessary-and-sufficient; each additively
+// re-addable without an ABI break, appended to its record/resource): decoder-config
+// `rotation`/`flip`/`description`; encoder-config `bitrate-mode`/`scalability-mode`
+// (SVC)/`latency-mode`; `frame` `flip`/`duration`/`color-space`/`format`; a `copy-to`
+// with a pixel-format param (see `read-rgba`); the encoder's first-output
+// `decoder-config`/SVC metadata. None has a proving consumer today.
+//
+// Deps (wit/deps/): wasi:eme only (decrypt-config on the chunk + the key-session bound
+// at decoder open, for encrypted playback). The old wasi:graphics-context dep is GONE.
+package wasi:video-codec@0.0.1;
+
+interface types {
+    /// Codecs a host MAY accelerate. `av1` is DECODE-ONLY (playback): the host decodes
+    /// it (dav1d / a HW block) but never encodes it — the encoder rejects av1 at
+    /// `probe`/`open` (`no-hw-codec`), a runtime fact like VP9 HW-encode being absent.
+    /// Discriminants stable: vp8=0…av1=4.
+    enum codec { vp8, vp9, h264, h265, av1 }
+
+    /// HW/SW preference. The first three map to WebCodecs `hardwareAcceleration`
+    /// (`no-preference`/`prefer-hardware`/`prefer-software`); `require-hardware` is a
+    /// wandr EXTENSION (NOT a WebCodecs value) — the honest fail-rather-than-pay-CPU
+    /// opt-out (software VIDEO decode costs real CPU at frame rate) and the ONLY value
+    /// that turns a working decode into an error. SHARED VOCABULARY kept byte-IDENTICAL
+    /// with wasi:audio-codec's `acceleration` (candidate to hoist into a common
+    /// wasi:media-types once a THIRD consumer appears). ABI-positional: no-preference=0…
+    /// require-hardware=3; APPEND only.
+    enum acceleration { no-preference, prefer-hardware, prefer-software, require-hardware }
+
+    /// `probe` result (= WebCodecs isConfigSupported, explicit about the LANE so the
+    /// guest chooses its fallback rather than having the host hide it). Shared shape
+    /// with wasi:audio-codec's `support`.
+    enum support { hardware, software, unsupported }
+
+    /// Shared error vocabulary (parallel to wasi:audio-codec's `codec-error`).
+    ///
+    /// ABI note (task 120 strip): the old `surface-unavailable` was the LAST discriminant
+    /// and was removed as a tail-removal — the surviving discriminants unsupported-codec=0
+    /// … queue-full=4 are UNCHANGED. There is no surface to be unavailable now that
+    /// decode-to-surface lives in the wandr:video embedder. APPEND only; do not re-insert
+    /// mid-enum.
+    enum codec-error {
+        unsupported-codec,
+        no-hw-codec,          // only a software codec exists (or av1-on-encode)
+        codec-init-failed,
+        bad-frame,
+        /// Input queue full. The RESPONSE is the CONSUMER's policy, decided one layer up
+        /// by whether the embedder pulls `next-decoded`:
+        ///   * AUTO / real-time (RTP, host auto-presents, guest never pulls) — LOSS:
+        ///     drop the frame and resend after a keyframe (loss-tolerant).
+        ///   * GUEST-TIMED (the embedder pulls `next-decoded` for A/V-synced playback) —
+        ///     BACK-PRESSURE: retry the SAME chunk once one frame has been drained (a
+        ///     file cannot resync on a keyframe without a visible skip).
+        queue-full,
+    }
+
+    /// ENCRYPTED MEDIA (task 108): `decrypt` carries per-frame Common-Encryption params
+    /// (= WebCodecs decryptConfig, owned by wasi:eme); the key comes from a wasi:eme
+    /// key-session bound at decoder open. Additive; cleartext when `decrypt` = none.
+    /// Proving consumer: encrypted file/adaptive playback (jellyfin / DASH CENC) — the
+    /// wandr:video embedder opens the decoder with a key-session and submits CENC chunks.
+    /// (RTP calls are SRTP-opened at the transport, so `decrypt` = none there.)
+    use wasi:eme/eme@0.0.1.{decrypt-config};
+
+    /// One compressed frame (= WebCodecs `EncodedVideoChunk`; the audio sibling's
+    /// `encoded-chunk`). ONE record for BOTH lanes — RTP/call and file/playback differ
+    /// only in how the embedder reads output back and reacts to `queue-full`, not in the
+    /// input shape.
+    ///
+    /// `timestamp-us` is a real µs PRESENTATION timestamp (WebCodecs unit, matching
+    /// wasi:audio-codec's s64), signed (containers carry negative PTS from edit lists /
+    /// encoder delay). An RTP/call guest converts its 90 kHz transport timestamp to µs
+    /// (× 100/9) before submitting — it already owns the RTP layer. Decode order in; the
+    /// host emits DISPLAY order (it reorders B-frames).
+    ///
+    /// `decrypt`: none = cleartext; some = encrypted file, decrypted host-side via the
+    /// bound key-session.
+    record encoded-chunk {
+        /// The compressed bytes of exactly one frame (Annex-B NAL units for H.264/H.265,
+        /// a VP8/VP9 frame) — reassembled by the guest from RTP, or read from a demuxed
+        /// container. Annex-B framing is why the ENCODER needs no out-of-band
+        /// `description()` (unlike wasi:audio-codec): H.26x SPS/PPS ride in-band ahead of
+        /// each IDR; VP8/9/AV1 have no out-of-band config at all.
+        data: list<u8>,
+        /// Presentation timestamp, microseconds (see the record doc above).
+        timestamp-us: s64,
+        /// KEYFRAME (= WebCodecs `EncodedVideoChunk.type` "key" vs "delta"):
+        /// true  = INTRA-coded — a complete, self-decodable picture (an H.264/H.265
+        ///         IDR, a VP8/VP9 key frame). The only valid place to START or RESUME
+        ///         decoding: a decoder must open on one, a seek jumps to the nearest
+        ///         one, and `flush`/`reset` require one to resume.
+        /// false = a DELTA / inter-coded frame (P/B): encoded as a difference from
+        ///         earlier (or, with B-frames, later) frames, meaningless until its
+        ///         reference frames have decoded.
+        /// Carried explicitly, not inferred from the bitstream, so the host and guest
+        /// act on it WITHOUT parsing the codec: the decoder rejects a stream that opens
+        /// on a delta; an RTP receiver that lost packets requests a keyframe (RTCP
+        /// PLI/FIR) and drops deltas until one arrives.
+        keyframe: bool,
+        /// Per-frame Common-Encryption params for encrypted media (see the record doc);
+        /// none = cleartext.
+        decrypt: option<decrypt-config>,
+    }
+
+    /// WebCodecs `VideoDecoderConfig` (subset). No `width`/`height`: WebCodecs
+    /// `codedWidth`/`codedHeight` are OPTIONAL, and the stream overrides them anyway
+    /// (VP8/VP9 keyframes and the in-band H.26x SPS carry dimensions), and the guest
+    /// already has the size from demux — so a decoder never needs them at init.
+    record decoder-config {
+        codec: codec,
+        /// HW/SW preference (= WebCodecs `hardwareAcceleration`). IN the config — not a
+        /// separate `open-accelerated` verb — same shape as wasi:audio-codec's
+        /// `decoder-config`. A guest that doesn't care sets `no-preference` and gets the
+        /// host default (hardware first, software fallback).
+        acceleration: acceleration,
+    }
+
+    /// WebCodecs `VideoEncoderConfig` (subset): the OUTPUT coded size + rate. Input
+    /// frames are scaled to it as needed. No source/`facing` — that is wasi:camera's.
+    record encoder-config {
+        codec: codec,
+        width: u32,
+        height: u32,
+        bitrate-bps: u32,
+        framerate: u32,
+        /// HW/SW preference (= WebCodecs `hardwareAcceleration`) — same as
+        /// `decoder-config` and wasi:audio-codec's `encoder-config`. `no-preference` =
+        /// host default (hardware first — a call encoder wants HW for battery; software
+        /// fallback where a HW encoder is absent, e.g. VP9 encode on many SoCs).
+        acceleration: acceleration,
+    }
+
+    /// The shared raw video frame — OPAQUE, host-held (= WebCodecs VideoFrame). The
+    /// currency between a SOURCE (wasi:camera; later a wasi:screen-capture), this codec's
+    /// encoder input AND its DECODER OUTPUT (`next-decoded` returns THIS), plus the
+    /// pixels-to-guest escape hatch. Pixels stay host-side; a handle is forwarded
+    /// zero-copy. (The audio sibling's AudioData is `list<f32>` instead — audio samples
+    /// are cheap to cross; video pixels are not, hence the resource.)
+    ///
+    /// There is deliberately NO separate "decoded-frame" type: WebCodecs has exactly one
+    /// VideoFrame that is both decoder output and encoder input, and — crucially — it has
+    /// NO `present()`. Scheduling a decoded frame onto a surface is the wandr:video
+    /// embedder's `present(frame, at-ns)`; dropping this resource == WebCodecs
+    /// `VideoFrame.close()` (a decoded frame the embedder chose not to show is simply
+    /// dropped).
+    resource frame {
+        /// Presentation timestamp, microseconds (the s64 WebCodecs unit — one media
+        /// clock across camera / this codec / audio-codec). The embedder reads this for
+        /// A/V sync in the guest-timed lane.
+        timestamp-us: func() -> s64;
+        /// DISPLAY (visible) width in pixels — what `read-rgba` returns and what the
+        /// embedder composites. (WebCodecs distinguishes `codedWidth` from
+        /// `displayWidth`/`visibleRect`; this is the display value, so `read-rgba` length
+        /// = width*height*4 is unambiguous.)
+        width: func() -> u32;
+        /// DISPLAY (visible) height in pixels (see `width`).
+        height: func() -> u32;
+        /// Content orientation: degrees CW for upright display (= WebCodecs
+        /// `VideoFrame.rotation`) — a source's CVO (e.g. the facing-adjusted camera
+        /// sensor). A property of the FRAME; a sink applies or forwards it. (WebCodecs
+        /// `flip` is a deferred additive — local-preview mirroring is a display/embedder
+        /// concern, and WebRTC never mirrors the transmitted stream.)
+        rotation: func() -> u32;
+        /// Copy into guest memory as tightly-packed RGBA8 (width*height*4) — the one
+        /// intentional WebCodecs-`copyTo` escape hatch for a guest that genuinely needs
+        /// the pixels IN-PROCESS: screenshot, ML, software encode, canvas/Blitz readback.
+        /// EXPENSIVE (host converts + copies); `none` if the host cannot convert. The
+        /// zero-copy paths (camera->encoder, decoder->embedder surface) never call it.
+        /// RGBA-only is deliberate minimalism; a `copy-to(dest, format)` mirroring
+        /// WebCodecs `copyTo` options is a deferred additive for a guest that wants the
+        /// native NV12/I420 planes without a host conversion.
+        read-rgba: func() -> option<list<u8>>;
+        // Dropping the resource releases the host-held pixels (== WebCodecs
+        // VideoFrame.close()); a forwarded frame is consumed by encode/present.
+    }
+}
+
+interface decoder {
+    use types.{codec, decoder-config, encoded-chunk, frame, support, codec-error};
+    use wasi:eme/eme@0.0.1.{key-session};
+
+    /// = WebCodecs VideoDecoder.isConfigSupported — the faithful per-config probe, and
+    /// the ONLY capability call a real guest needs. (Enumerating the whole decoder table
+    /// and querying which impl an open decoder got are diagnostics/testing — see
+    /// wandr:video-diag, deliberately out of this standard.)
+    probe: func(config: decoder-config) -> support;
+
+    resource video-decoder {
+        /// Open a HW/SW decoder. `config.acceleration` sets the HW/SW preference (=
+        /// WebCodecs hardwareAcceleration); `keys` binds a wasi:eme key-session for an
+        /// encrypted stream (none = cleartext). Importing this interface IS the grant —
+        /// the host decides at instantiation whether to hand out a decoder (WASI
+        /// capability model; no ambient authority).
+        open: static func(config: decoder-config,
+                          keys: option<borrow<key-session>>)
+              -> result<video-decoder, codec-error>;
+
+        /// Push one compressed frame (= WebCodecs VideoDecoder.decode(chunk)). Decode
+        /// order in; the host reorders B-frames and emits DISPLAY order via
+        /// `next-decoded`. On `queue-full` the response is the consumer's policy — see
+        /// `codec-error.queue-full`.
+        submit: func(chunk: encoded-chunk) -> result<_, codec-error>;
+
+        /// Take the next decoded frame in DISPLAY order, if ready (non-blocking; `none`
+        /// = not yet). Returns the shared opaque `frame` (= the WebCodecs VideoFrame that
+        /// decode output IS). The GUEST-TIMED lane pulls this, reads `frame.timestamp-us`
+        /// for A/V sync, and hands the frame to the wandr:video embedder's
+        /// `present(frame, at-ns)`. The AUTO lane never pulls — the embedder binds this
+        /// decoder to a surface and the host presents each frame ASAP.
+        ///
+        /// POLL, not pollable: this returns `option` for the frame-paced reactor model
+        /// (the embedder's on-frame tick is the wakeup; the embedder's `present(at-ns)`
+        /// does the precise timing, so a guest never spins). A `wasi:io/poll` pollable
+        /// for a self-scheduling PULL-profile guest is a deliberate additive deferral —
+        /// added if such a consumer ships.
+        next-decoded: func() -> option<frame>;
+
+        /// End of stream: flush the reorder buffer out via `next-decoded` (a keyframe
+        /// is required to resume).
+        flush: func() -> result<_, codec-error>;
+        /// Seek: discard queued input, reference frames, and any frames not yet drained;
+        /// back to pre-keyframe state — far cheaper than close+reopen.
+        reset: func() -> result<_, codec-error>;
+    }
+}
+
+interface encoder {
+    use types.{codec, encoder-config, encoded-chunk, frame, support, codec-error};
+
+    /// = WebCodecs VideoEncoder.isConfigSupported. (av1 -> `unsupported`: decode-only.)
+    probe: func(config: encoder-config) -> support;
+
+    resource video-encoder {
+        /// Open a hardware encoder for `config`. No camera, no surface — pure codec.
+        open: static func(config: encoder-config)
+              -> result<video-encoder, codec-error>;
+
+        /// Submit one raw frame (= WebCodecs VideoEncoder.encode(VideoFrame)). The
+        /// frame is BORROWED — the source (wasi:camera / a decoder / canvas) keeps
+        /// ownership; pixels stay host-side, so a camera frame encodes zero-copy.
+        /// `frame.rotation` travels with the frame; the encoder does not interpret it.
+        encode: func(frame: borrow<frame>) -> result<_, codec-error>;
+
+        /// Pull the next compressed chunk (= the EncodedVideoChunk output); none = not
+        /// ready yet. The guest RTP-packetizes + SRTP-seals + sends. (No out-of-band
+        /// `description()` — H.26x SPS/PPS ride in-band, VP8/9/AV1 have none; see
+        /// `encoded-chunk.data`. First-output decoder-config/SVC metadata is a deferred
+        /// additive.)
+        next-chunk: func() -> option<encoded-chunk>;
+
+        /// Force a keyframe (on the receiver's RTCP PLI/FIR). Fire-and-forget verb rather
+        /// than WebCodecs' `encode(frame, {keyFrame:true})` — cleaner for the RTP drive.
+        request-keyframe: func();
+        /// Adapt to congestion (the guest drives this from REMB/TWCC). Fire-and-forget
+        /// rather than a full reconfigure.
+        set-bitrate: func(bitrate-bps: u32);
+    }
+}
+
+world video-codec-guest {
+    import types;
+    import decoder;
+    import encoder;
+}

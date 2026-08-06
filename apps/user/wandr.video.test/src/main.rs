@@ -19,11 +19,13 @@ wit_bindgen::generate!({
     generate_all,
 });
 
-use crate::wandr::video::decoder::VideoDecoder;
-use crate::wandr::video::encoder::VideoEncoder;
-use crate::wandr::video::types::{
-    CameraFacing, Codec, DecoderConfig, EncoderConfig, VideoError, VideoRect, ZLayer,
-};
+use crate::wasi::video_codec::decoder::VideoDecoder;
+use crate::wasi::video_codec::types as vc;
+use crate::wasi::camera::types::Facing;
+use crate::wandr::video::capture_encode::CallEncoder;
+use crate::wandr::video::present::VideoSurface;
+use crate::wandr::video::types::{CallEncoderConfig, VideoRect, ZLayer};
+use crate::wandr::video_diag::diag as vdiag;
 use std::net::UdpSocket;
 use std::time::{Duration, Instant};
 use wandr_call::signaling::Signaling;
@@ -33,18 +35,20 @@ const W: u32 = 640;
 const H: u32 = 480;
 
 /// `preview` = PiP self-view rect (Phase 4); `None` = encode-only.
-fn open_encoder(preview: Option<VideoRect>) -> Option<VideoEncoder> {
+fn open_encoder(preview: Option<VideoRect>) -> Option<CallEncoder> {
     let has_preview = preview.is_some();
-    match VideoEncoder::open(EncoderConfig {
-        codec: Codec::Vp8,
-        width: W,
-        height: H,
-        bitrate_bps: 1_000_000,
-        framerate: 30,
-        source_camera: true,
+    match CallEncoder::open(CallEncoderConfig {
+        codec: vc::EncoderConfig {
+            codec: vc::Codec::Vp8,
+            width: W,
+            height: H,
+            bitrate_bps: 1_000_000,
+            framerate: 30,
+            acceleration: vc::Acceleration::NoPreference,
+        },
         // Front camera (faces up on a desk — the visual A/B for camera content;
         // the call self-view wants front anyway).
-        facing: CameraFacing::Front,
+        facing: Facing::Front,
         preview,
         // Headless diagnostic surfaces are top-level; the layer only matters
         // inside a real app (Signal uses above-ui).
@@ -65,19 +69,39 @@ fn open_encoder(preview: Option<VideoRect>) -> Option<VideoEncoder> {
 /// An empty `rect` = decode-to-buffer (Phase 1 diagnostics); a real one =
 /// decode-to-surface — the host composites the video on the panel (Phase 4).
 /// `rotation` = peer CVO degrees CW for upright display (Phase 5).
-fn open_decoder(rect: VideoRect, rotation: u32) -> Option<VideoDecoder> {
+/// Task 120 split: a surface-free codec decoder + (for the on-screen case) an
+/// embedder `video-surface` bound via `attach` (AUTO — the host presents each
+/// decoded frame ASAP, the guest never pulls). An empty `rect` = decode-to-buffer
+/// (no surface). Returns both so the caller keeps the surface alive.
+fn open_decoder(rect: VideoRect, rotation: u32) -> Option<(VideoDecoder, Option<VideoSurface>)> {
     let to_surface = rect.width > 0 && rect.height > 0;
-    match VideoDecoder::open(DecoderConfig { codec: Codec::Vp8, width: W, height: H, rect, rotation, layer: ZLayer::AboveUi }) {
-        Ok(d) => {
-            println!("decoder OPEN ✓ ({}, rotation={rotation}°)",
-                if to_surface { "decode-to-SURFACE, on-screen" } else { "decode-to-buffer" });
-            Some(d)
-        }
+    let d = match VideoDecoder::open(
+        vc::DecoderConfig { codec: vc::Codec::Vp8, acceleration: vc::Acceleration::NoPreference },
+        None,
+    ) {
+        Ok(d) => d,
         Err(e) => {
             println!("FAIL: decoder open: {e:?}");
-            None
+            return None;
         }
-    }
+    };
+    let surf = if to_surface {
+        match VideoSurface::open(rect, ZLayer::AboveUi, rotation) {
+            Ok(sf) => {
+                let _ = sf.attach(&d); // AUTO: host auto-presents into this surface
+                Some(sf)
+            }
+            Err(e) => {
+                println!("FAIL: surface open: {e:?}");
+                return None;
+            }
+        }
+    } else {
+        None
+    };
+    println!("decoder OPEN ✓ ({}, rotation={rotation}°)",
+        if to_surface { "decode-to-SURFACE, on-screen" } else { "decode-to-buffer" });
+    Some((d, surf))
 }
 
 /// Part 1 — direct WIT loopback (Phase 1 regression): encoder → guest → decoder.
@@ -87,14 +111,14 @@ fn part1_direct_loopback() -> bool {
     println!("── Part 1: direct WIT loopback (camera → HW VP8 → guest → HW decode) ──");
     let Some(enc) = open_encoder(None) else { return false };
     // Empty rect → decode-to-buffer: keeps Part 1 the pure Phase-1 regression.
-    let Some(dec) = open_decoder(VideoRect { x: 0, y: 0, width: 0, height: 0 }, 0) else { return false };
+    let Some((dec, _surf)) = open_decoder(VideoRect { x: 0, y: 0, width: 0, height: 0 }, 0) else { return false };
 
     let start = Instant::now();
     let (mut pulled, mut bytes, mut keyframes, mut submitted, mut queue_full, mut other_err) =
         (0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
     let mut first_ms: i128 = -1;
     while start.elapsed().as_secs() < RUN_SECS {
-        if let Some(frame) = enc.next_frame() {
+        if let Some(frame) = enc.next_chunk() {
             if first_ms < 0 {
                 first_ms = start.elapsed().as_millis() as i128;
             }
@@ -103,9 +127,10 @@ fn part1_direct_loopback() -> bool {
             if frame.keyframe {
                 keyframes += 1;
             }
+            // Loopback: the encoder chunk IS the decoder input (same encoded-chunk).
             match dec.submit(&frame) {
                 Ok(()) => submitted += 1,
-                Err(VideoError::QueueFull) => queue_full += 1,
+                Err(vc::CodecError::QueueFull) => queue_full += 1,
                 Err(e) => {
                     other_err += 1;
                     println!("   submit error: {e:?}");
@@ -116,7 +141,7 @@ fn part1_direct_loopback() -> bool {
         }
     }
     let secs = start.elapsed().as_secs_f64();
-    let decoded = dec.decoded_frames();
+    let decoded = vdiag::decoded_frames(&dec);
     println!("   encoded {pulled} ({:.1} fps, avg {} B, {keyframes} kf, first {first_ms} ms)",
         pulled as f64 / secs, if pulled > 0 { bytes / pulled } else { 0 });
     println!("   submitted {submitted} (queue-full {queue_full}, err {other_err}) → decoded {decoded}");
@@ -141,7 +166,7 @@ fn part2_engine_pipeline() -> bool {
     // Phase 5: the decoder opens LAZILY on the first received keyframe, with
     // that frame's CVO rotation — the exact pattern a real call uses (the
     // peer's rotation is unknown until its video arrives).
-    let mut dec: Option<VideoDecoder> = None;
+    let mut dec: Option<(VideoDecoder, Option<VideoSurface>)> = None;
     let dec_rect = VideoRect { x: 80, y: 700, width: 1280, height: 960 };
 
     // Two engine peers over real wasi:sockets UDP on loopback (the call-live pattern).
@@ -199,8 +224,8 @@ fn part2_engine_pipeline() -> bool {
     let mut pli_answered = false;
     while start.elapsed().as_secs() < RUN_SECS {
         // Camera → encoder → engine A (the Phase-5 Signal send path).
-        if let Some(frame) = enc.next_frame() {
-            if a.send_video(&frame.data, frame.timestamp).is_ok() {
+        if let Some(frame) = enc.next_chunk() {
+            if a.send_video(&frame.data, (frame.timestamp_us * 9 / 100) as u32).is_ok() {
                 sent += 1;
             }
         }
@@ -219,14 +244,15 @@ fn part2_engine_pipeline() -> bool {
                     return false;
                 }
             }
-            let f = crate::wandr::video::types::EncodedFrame {
+            let f = vc::EncodedChunk {
                 data: vf.data,
-                timestamp: vf.timestamp,
+                timestamp_us: (vf.timestamp as i64) * 100 / 9,
                 keyframe: vf.keyframe,
+                decrypt: None,
             };
-            match dec.as_ref().unwrap().submit(&f) {
+            match dec.as_ref().unwrap().0.submit(&f) {
                 Ok(()) => decoded_fed += 1,
-                Err(VideoError::QueueFull) => queue_full += 1,
+                Err(vc::CodecError::QueueFull) => queue_full += 1,
                 Err(e) => {
                     other_err += 1;
                     println!("   submit error: {e:?}");
@@ -241,8 +267,8 @@ fn part2_engine_pipeline() -> bool {
             // Phase 4 surface-control smoke, mid-run on live video: move +
             // shrink the remote rect and nudge the PiP — visibly jumps on
             // the panel and proves set-rect/set-preview-rect on a hot codec.
-            if let Some(d) = &dec {
-                d.set_rect(VideoRect { x: 240, y: 950, width: 960, height: 720 });
+            if let Some((_, Some(sf))) = &dec {
+                sf.set_rect(VideoRect { x: 240, y: 950, width: 960, height: 720 });
             }
             enc.set_preview_rect(VideoRect { x: 60, y: 1840, width: 360, height: 270 });
             println!("   mid-run: B sent PLI + remote rect moved + PiP moved");
@@ -257,7 +283,7 @@ fn part2_engine_pipeline() -> bool {
         std::thread::sleep(Duration::from_millis(5));
     }
     let secs = start.elapsed().as_secs_f64();
-    let decoded = dec.as_ref().map(|d| d.decoded_frames()).unwrap_or(0);
+    let decoded = dec.as_ref().map(|(d, _)| vdiag::decoded_frames(d)).unwrap_or(0);
     let ((_, tx_pkts, rx_pkts, _, rx_broken), _, _, rtcp_err) = b.video_diag();
 
     println!("──────── Part 2 RESULT ────────");
@@ -278,17 +304,18 @@ fn part2_engine_pipeline() -> bool {
     println!("   holding surfaces 30s for visual inspection …");
     let hold = Instant::now();
     while hold.elapsed().as_secs() < 30 {
-        if let Some(frame) = enc.next_frame() {
-            let _ = a.send_video(&frame.data, frame.timestamp);
+        if let Some(frame) = enc.next_chunk() {
+            let _ = a.send_video(&frame.data, (frame.timestamp_us * 9 / 100) as u32);
         }
         pump(&mut a, &asock, &mut b, &bsock);
         while let Some(vf) = b.recv_video() {
-            let f = crate::wandr::video::types::EncodedFrame {
+            let f = vc::EncodedChunk {
                 data: vf.data,
-                timestamp: vf.timestamp,
+                timestamp_us: (vf.timestamp as i64) * 100 / 9,
                 keyframe: vf.keyframe,
+                decrypt: None,
             };
-            if let Some(d) = &dec {
+            if let Some((d, _)) = &dec {
                 let _ = d.submit(&f);
             }
         }
