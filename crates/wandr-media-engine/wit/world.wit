@@ -18,8 +18,11 @@
 package wandr:media-engine@0.1.0;
 
 world media-engine-imports {
-    // ---- playback lane: host GStreamer/MediaCodec decode -> present(at-ns) ----
-    import wandr:video/decoder@0.1.0;
+    // ---- playback lane (task 120 layered): surface-free codec + embedder surface ----
+    import wasi:video-codec/types@0.0.1;
+    import wasi:video-codec/decoder@0.0.1;
+    import wandr:video/present@0.1.0;
+    import wandr:video-diag/diag@0.1.0;
 
     // ---- guest-side audio decode -> host device; position() is the A/V clock ----
     import wasi:audio/pcm@0.0.1;

@@ -30,9 +30,12 @@ pub use self::bindings::wasi::canvas;
 pub use httprange::{drive_prefetch, PrefetchHandle};
 
 #[cfg(feature = "video")]
-use bindings::wandr::video::decoder::{Acceleration, VideoDecoder};
+use bindings::wasi::video_codec::decoder::VideoDecoder;
+use bindings::wandr::video::present::VideoSurface;
+use bindings::wandr::video_diag::diag as diag_api;
 #[cfg(feature = "video")]
-use bindings::wandr::video::types::{Codec, DecoderConfig, TimedFrame, VideoError, VideoRect, ZLayer};
+use bindings::wasi::video_codec::types::{Acceleration, Codec, CodecError, DecoderConfig, EncodedChunk};
+use bindings::wandr::video::types::{VideoRect, ZLayer};
 use bindings::wasi::audio::pcm as wpcm;
 use bindings::wasi::canvas::{draw::Canvas, embedding as wembed, layout as wlayout, types as wtypes};
 
@@ -513,6 +516,16 @@ pub struct StreamPlayer {
     video_annexb: bool,
     #[cfg(feature = "video")]
     dec: VideoDecoder,
+    /// The embedder-owned compositing surface (task 120 split): the codec decoder is
+    /// surface-free; `present(frame, at-ns)` schedules onto THIS.
+    #[cfg(feature = "video")]
+    surf: VideoSurface,
+    /// The decoded video's native dimensions — the basis for the aspect-preserving
+    /// `video_rect` fit (needed again on resize, so stored here).
+    #[cfg(feature = "video")]
+    vid_w: u32,
+    #[cfg(feature = "video")]
+    vid_h: u32,
     buf: streaming::RollingBuffer,
     fetch_inflight: bool,
     /// Demuxed-but-not-yet-submitted frames.
@@ -655,12 +668,28 @@ pub fn with_audio<R>(f: impl FnOnce(&wpcm::Playback) -> R) -> Option<R> {
     AUDIO_DEV.with(|d| d.borrow().as_ref().map(f))
 }
 
-/// 16:9 letterbox centered vertically, full width — one source of truth so open
-/// and resize place the video identically (mirrors wandr.video.player).
+/// Aspect-preserving fit of a `vid_w`×`vid_h` video into a `surf_w`×`surf_h` surface,
+/// centered — letterbox (bars top/bottom) when the video is wider than the surface,
+/// pillarbox (bars left/right) when it's taller. One source of truth so open and resize
+/// place the video identically. Using the REAL video dimensions (not a fixed 16:9) is
+/// what stops non-16:9 titles from stretching and keeps the fit correct in either
+/// orientation.
 #[cfg(feature = "video")]
-fn video_rect(w: u32, h: u32) -> VideoRect {
-    let vh = (w * 9 / 16).min(h);
-    VideoRect { x: 0, y: (h.saturating_sub(vh)) / 2, width: w, height: vh }
+fn video_rect(surf_w: u32, surf_h: u32, vid_w: u32, vid_h: u32) -> VideoRect {
+    let (sw, sh) = (surf_w.max(1) as u64, surf_h.max(1) as u64);
+    let (vw, vh) = (vid_w.max(1) as u64, vid_h.max(1) as u64);
+    // Compare aspects by cross-multiply: the video is wider ⇔ vw/vh > sw/sh ⇔ vw*sh > vh*sw.
+    let (rw, rh) = if vw * sh >= vh * sw {
+        (sw, (sw * vh) / vw) // fit to width → letterbox
+    } else {
+        ((sh * vw) / vh, sh) // fit to height → pillarbox
+    };
+    VideoRect {
+        x: ((sw - rw) / 2) as u32,
+        y: ((sh - rh) / 2) as u32,
+        width: rw as u32,
+        height: rh as u32,
+    }
 }
 
 /// Update the render surface size (the app's on-resize forwards here): records it
@@ -670,7 +699,7 @@ pub fn set_surface(w: u32, h: u32) {
     #[cfg(feature = "video")]
     STREAM.with(|s| {
         if let Some(p) = s.borrow().as_ref() {
-            p.dec.set_rect(video_rect(w.max(1), h.max(1)));
+            p.surf.set_rect(video_rect(w.max(1), h.max(1), p.vid_w, p.vid_h));
         }
     });
 }
@@ -855,12 +884,15 @@ pub fn install_player(
     title: String, duration_us: i64, total_video: usize, seed: Option<(u64, Vec<u8>)>, first_off: u64,
 ) -> Result<String, String> {
     let (w, h) = surface;
-    let dec = VideoDecoder::open_accelerated(
-        DecoderConfig { codec, width, height, rect: video_rect(w, h), rotation: 0, layer: ZLayer::BehindUi },
-        Acceleration::NoPreference,
+    // Split (task 120): codec (surface-free) + surface (placement) are separate.
+    let dec = VideoDecoder::open(
+        DecoderConfig { codec, acceleration: Acceleration::NoPreference },
+        None,
     )
     .map_err(|e| format!("stream: decoder open: {e:?}"))?;
-    let impl_name = dec.implementation().name;
+    let surf = VideoSurface::open(video_rect(w, h, width, height), ZLayer::BehindUi, 0)
+        .map_err(|e| format!("stream: surface open: {e:?}"))?;
+    let impl_name = diag_api::implementation(&dec).name;
     STREAM.with(|s| {
         let mut buf = streaming::RollingBuffer::new();
         match seed {
@@ -871,7 +903,8 @@ pub fn install_player(
             None => buf.reset_to(first_off),
         }
         *s.borrow_mut() = Some(StreamPlayer {
-            url, total_len, demux, ps_prefix, nal_len, video_annexb, dec, buf,
+            url, total_len, demux, ps_prefix, nal_len, video_annexb, dec, surf, buf,
+            vid_w: width.max(1), vid_h: height.max(1),
             fetch_inflight: false,
             video_q: VecDeque::new(), audio_q: VecDeque::new(), demux_done: false,
             submitted: 0, presented: 0, last_pres_pts: 0, t0_ns: 0, total_video,
@@ -899,13 +932,16 @@ pub fn install_audio_player(
     title: String, duration_us: i64,
 ) -> Result<String, String> {
     #[cfg(feature = "video")]
-    let dec = {
+    let (dec, surf) = {
         let (w, h) = surface;
-        VideoDecoder::open_accelerated(
-            DecoderConfig { codec: Codec::H264, width: 64, height: 64, rect: video_rect(w, h), rotation: 0, layer: ZLayer::BehindUi },
-            Acceleration::NoPreference,
+        let dec = VideoDecoder::open(
+            DecoderConfig { codec: Codec::H264, acceleration: Acceleration::NoPreference },
+            None,
         )
-        .map_err(|e| format!("stream: decoder open: {e:?}"))?
+        .map_err(|e| format!("stream: decoder open: {e:?}"))?;
+        let surf = VideoSurface::open(video_rect(w, h, 16, 9), ZLayer::BehindUi, 0)
+            .map_err(|e| format!("stream: surface open: {e:?}"))?;
+        (dec, surf)
     };
     #[cfg(not(feature = "video"))]
     let _ = surface;
@@ -925,7 +961,10 @@ pub fn install_audio_player(
             #[cfg(feature = "video")] ps_prefix: Vec::new(),
             #[cfg(feature = "video")] nal_len: 0,
             #[cfg(feature = "video")] video_annexb: false,
+            #[cfg(feature = "video")] vid_w: 16,
+            #[cfg(feature = "video")] vid_h: 9,
             #[cfg(feature = "video")] dec,
+            #[cfg(feature = "video")] surf,
             #[cfg(feature = "video")] video_q: VecDeque::new(),
             #[cfg(feature = "video")] submitted: 0,
             #[cfg(feature = "video")] presented: 0,
@@ -1441,11 +1480,14 @@ pub fn switch_video_rep(
     let (sw, sh) = CONTROLS.with(|c| c.borrow().surface);
     // Open the NEW decoder before touching the stream, so a failure leaves playback
     // running on the old rep.
-    let dec = VideoDecoder::open_accelerated(
-        DecoderConfig { codec, width, height, rect: video_rect(sw, sh), rotation: 0, layer: ZLayer::BehindUi },
-        Acceleration::NoPreference,
+    // Rep switch swaps only the CODEC decoder; the embedder surface is reused (its
+    // `present` retargets any decoder's frames onto it), so placement is unbroken.
+    let dec = VideoDecoder::open(
+        DecoderConfig { codec, acceleration: Acceleration::NoPreference },
+        None,
     )
     .map_err(|e| format!("switch: decoder open: {e:?}"))?;
+    let _ = (sw, sh); // surface reused — no per-rep rect needed here
 
     STREAM.with(|s| {
         let mut g = s.borrow_mut();
@@ -1457,6 +1499,8 @@ pub fn switch_video_rep(
             idx: 0, dmx: None, num, den, done: false, pf: Default::default(),
         };
         p.dec = dec;
+        p.vid_w = width.max(1);
+        p.vid_h = height.max(1);
         p.ps_prefix = ps_prefix;
         p.nal_len = nal_len;
         p.video_annexb = true;
@@ -2058,10 +2102,10 @@ pub fn pump_stream(nanos: u64) {
                 if clock_anchored && vf.pts_us > media_now + SUBMIT_LEAD_US {
                     break; // far enough ahead of the clock — let realtime catch up
                 }
-                let frame = TimedFrame { data: vf.data.clone(), timestamp_us: vf.pts_us, keyframe: vf.keyframe };
-                match p.dec.submit_timed(&frame) {
+                let chunk = EncodedChunk { data: vf.data.clone(), timestamp_us: vf.pts_us, keyframe: vf.keyframe, decrypt: None };
+                match p.dec.submit(&chunk) {
                     Ok(()) => { p.submitted += 1; p.video_q.pop_front(); }
-                    Err(VideoError::QueueFull) => break,
+                    Err(CodecError::QueueFull) => break,
                     Err(e) => { log(format!("stream: submit: {e:?}")); p.video_q.pop_front(); break; }
                 }
             }
@@ -2102,7 +2146,9 @@ pub fn pump_stream(nanos: u64) {
                     continue;
                 }
                 let at_ns = nanos.saturating_add((pts - media_now).max(0) as u64 * 1_000);
-                frame.present(at_ns);
+                // Present through the embedder surface (consumes the frame); the LATE
+                // path above just drops the frame (== discard).
+                p.surf.present(frame, at_ns);
             }
         }
 
