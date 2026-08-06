@@ -4,7 +4,7 @@
 # running-app set (label, kind, state, CPU‰, mem) + a kill button per row.
 app_id      = "wandr.taskmanager"
 version     = "0.1.0"
-world       = "my:skiko-gfx/skiko-ui"
+world       = "wandr:ui-shell/skiko-ui"
 composition = "same-store"
 orientation = "auto"
 label       = "Task Manager"

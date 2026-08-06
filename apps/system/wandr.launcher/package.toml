@@ -4,7 +4,7 @@
 # loader's system-apps/ fallback (task 55).
 app_id      = "wandr.launcher"
 version     = "0.1.0"
-world       = "my:skiko-gfx/skiko-ui"
+world       = "wandr:ui-shell/skiko-ui"
 kind        = "system"
 composition = "same-store"
 # Task 63 — the home screen stays portrait; while it's foreground the

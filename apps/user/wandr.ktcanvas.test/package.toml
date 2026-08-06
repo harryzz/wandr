@@ -4,7 +4,7 @@
 # host's frame driving). See wit/ktcanvas-test.wit + build.sh.
 app_id      = "wandr.ktcanvas.test"
 version     = "0.1.0"
-world       = "my:skiko-gfx/skiko-ui"
+world       = "wandr:ui-shell/skiko-ui"
 composition = "same-store"
 orientation = "auto"
 label       = "KtCanvas"
