@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: a14a1f7f-f5fb-44f9-a0e5-3879acecf911
-  modified: 2026-08-06T07:59:01.592Z
+  modified: 2026-08-06T12:21:55.513Z
 ---
 
 # Video WIT extraction → wandr:video as embedder — DONE (WIT + audit); apps deferred
@@ -53,6 +53,36 @@ Done:
 - **WASI audit**: both `wasi:*` interfaces PASS all 6 criteria; removing `present`/`connect`
   is a net VIRTUALIZABILITY win. Doc nits folded in (queue-full comment, read-rgba as the
   copyTo escape hatch, frame display-dims, tail-removal ABI note, deferred-fields list).
+
+## REWIRE PROGRESS (in flight)
+- **✅ Desktop video.player slice VERIFIED (user-confirmed render).** Host serves the
+  split `video-host` world (one bindgen aggregating wasi:video-codec/camera/eme +
+  wandr:video present/capture-encode; second bindgen for diag with per-INTERFACE
+  add_to_linker — world-level double-adds wasi:eme). Facades over the SAME
+  video.rs/video_desktop.rs backend: codec decoder = decode-to-BUFFER; video-surface
+  = embedder child surface (`present` = TakenFrame::present_to retarget on desktop;
+  `attach` = set_surface_id for AUTO); call-encoder = fused VideoEncoder; eme = trapping
+  stub. bbb-h265 plays 300/300, back-pressure preserved. Commits: host cc06e33,
+  contracts 54a939b (wit/video/ relocation), parent 16aeb9ed.
+- **GOTCHA**: contracts is vendored as a NESTED submodule in wandr-host — bump it
+  (fetch+checkout the wandr-wit commit), don't rsync. Host bindgen path = the DIR
+  `contracts/wit/video` (single-package + deps), not the file.
+- **✅ media-engine + jellyfin**: rewired (decoder→surface; DASH rep-switch reuses the
+  surface). jellyfin composes + run-verified on desktop (layered imports, no old fused).
+  Bundled a pre-existing aspect-fit video_rect refactor (owner OK'd). Parent b0276627.
+- **✅ Android CI fixed** (host c3eac74): video.rs `mod android` parity —
+  video_surface_* over `media::` slots + TakenFrame accessors + set_surface_id.
+  build-host-android.sh (NDK r27d) clean.
+- **✅ Signal + video.test rewired** (parent 1748b690): Signal call.rs → call-encoder
+  (outgoing) + wasi:video-codec decoder + video-surface.attach (incoming RTP AUTO);
+  90kHz↔µs at the boundary. Full Signal app builds (6.5M wandrpkg). video.test (peer-free
+  Android loopback) compiles. **ALL FOUR consumers on the layered world; none import the
+  old fused wandr:video/{encoder,decoder}.**
+- **🔲 ONLY REMAINING = on-device Signal pass**: the Android AUTO zero-copy attach REBIND
+  (`set_surface_id` currently just records the id; needs MediaCodec configure-with-surface
+  / `AMediaCodec_setOutputSurface` so RTP output composites into the attached slot).
+  Desktop attach already binds (set_surface_id → dec.surface_id; submit auto-renders).
+  Dev-verify on the Pixel via the video.test loopback + a Signal video call.
 
 ## NEXT SESSION (the rewire, if/when approved)
 Execute `VIDEO-EMBEDDER-REWIRE.md`: rewire Signal call.rs (encoder→call-encoder;

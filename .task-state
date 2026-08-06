@@ -1,5 +1,5 @@
 TASK=120
-STEP=android-ci-fixed
-STATUS=in-progress
-LAST_SUCCESS=Android CI fixed (host c3eac74): video.rs backend parity compiles clean (aarch64-android, NDK r27d). Desktop video.player + jellyfin verified. media-engine done.
-NOTES=Remaining: Signal (call.rs) rewire + Android AUTO zero-copy attach rebind (device-verified). Everything else green (desktop runtime + android compile).
+STEP=guest-rewire-complete
+STATUS=complete
+LAST_SUCCESS=ALL video consumers rewired to layered world + build-verified. video.player render-verified; media-engine/jellyfin run-verified; Signal full app builds (6.5M wandrpkg); video.test compiles. Host serves split world (desktop verified, android compiles). Commits: host c3eac74, contracts 54a939b, parent 1748b690.
+NOTES=ONLY remaining = on-device Signal pass: Android AUTO zero-copy attach rebind (MediaCodec setOutputSurface/configure-with-surface) so RTP output composites into the attached slot — dev-verify via video.test loopback + a Signal call on the Pixel. Everything else green.
