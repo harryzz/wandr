@@ -1,11 +1,11 @@
-# Task 67 Phase 2 item 3 — the Signal app on device. A single skiko-ui component:
+# Task 67 Phase 2 item 3 — the Signal app on device. A single ui-shell component:
 # signal-ui (dioxus-canvas conversation) WAC-plugged onto signal-engine (Signal
 # protocol over the host wasi:tls transport), so the bundle has no [dependencies]
 # (the engine is fused in). The host grants network + Signal CA (task 66) and a
 # writable /state preopen (task 67) for the engine's account/history persistence.
 app_id      = "wandr.signal"
 version     = "0.1.0"
-world       = "wandr:ui-shell/skiko-ui"
+world       = "wandr:ui-shell/signal"
 composition = "same-store"
 orientation = "auto"
 label       = "Signal"

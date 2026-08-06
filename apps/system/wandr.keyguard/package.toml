@@ -2,7 +2,7 @@
 # launcher's apps/-only scan doesn't list it; loaded via --standalone-overlay-lock.
 app_id      = "wandr.keyguard"
 version     = "0.1.0"
-world       = "wandr:ui-shell/skiko-ui"
+world       = "wandr:ui-shell/keyguard"
 kind        = "system"
 composition = "same-store"
 orientation = "auto"

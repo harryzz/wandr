@@ -4,7 +4,7 @@
 # --standalone-overlay-top load.
 app_id      = "wandr.statusbar"
 version     = "0.1.0"
-world       = "wandr:ui-shell/skiko-ui"
+world       = "wandr:ui-shell/statusbar"
 kind        = "system"
 composition = "same-store"
 orientation = "auto"

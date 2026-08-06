@@ -4,7 +4,7 @@
 # scan never lists it.
 app_id      = "wandr.taskbar"
 version     = "0.1.0"
-world       = "wandr:ui-shell/skiko-ui"
+world       = "wandr:ui-shell/taskbar"
 kind        = "system"
 composition = "same-store"
 orientation = "auto"

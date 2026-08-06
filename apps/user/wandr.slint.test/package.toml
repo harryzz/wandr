@@ -2,7 +2,7 @@
 # apps/, listed by the launcher as a tile).
 app_id      = "wandr.slint.test"
 version     = "0.1.0"
-world       = "wandr:ui-shell/skiko-ui"
+world       = "wandr:ui-shell/slint-test"
 composition = "same-store"
 orientation = "auto"
 label       = "Slint Test"

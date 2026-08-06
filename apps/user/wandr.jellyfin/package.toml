@@ -6,8 +6,8 @@
 app_id      = "wandr.jellyfin"
 version     = "0.1.0"
 # Slint UI over crates/slint-wandr; the host UI path probes the input-handlers exports,
-# so `world` is informational (the Slint launch! provides the skiko-ui exports).
-world       = "wandr:ui-shell/skiko-ui"
+# so `world` is informational (the Slint launch! provides the ui-shell exports).
+world       = "wandr:ui-shell/jellyfin"
 composition = "same-store"
 orientation = "auto"
 label       = "Jellyfin"

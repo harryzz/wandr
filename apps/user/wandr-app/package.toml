@@ -1,6 +1,6 @@
 app_id      = "com.example.wandr-app"
 version     = "0.1.0"
-world       = "wandr:ui-shell/skiko-ui"
+world       = "wandr:ui-shell/wandr-app"
 composition = "same-store"
 orientation = "auto"
 # Task 57 — human-readable label shown by the launcher (`list-apps`).

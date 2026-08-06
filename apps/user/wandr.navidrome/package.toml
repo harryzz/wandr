@@ -1,10 +1,10 @@
 # wandr.navidrome — Subsonic/OpenSubsonic (Navidrome) music client. No [[mounts]]:
 # server + media arrive over HTTPS; credentials live in /state (never baked in). Slint
 # UI over crates/slint-wandr (density-correct); the host UI path probes the input-handlers
-# exports, so `world` is informational (the Slint launch! provides the skiko-ui exports).
+# exports, so `world` is informational (the Slint launch! provides the ui-shell exports).
 app_id      = "wandr.navidrome"
 version     = "0.1.0"
-world       = "wandr:ui-shell/skiko-ui"
+world       = "wandr:ui-shell/navidrome"
 composition = "same-store"
 orientation = "auto"
 label       = "Navidrome"

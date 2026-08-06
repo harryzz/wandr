@@ -2,7 +2,7 @@
 # by the launcher as a tile). Self-contained — no [dependencies].
 app_id      = "wandr.dioxus.demo"
 version     = "0.1.0"
-world       = "wandr:ui-shell/skiko-ui"
+world       = "wandr:ui-shell/dioxus-demo"
 composition = "same-store"
 orientation = "auto"
 label       = "Dioxus Demo"

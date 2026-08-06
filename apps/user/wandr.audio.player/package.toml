@@ -4,7 +4,7 @@
 # UI path probes the input-handlers exports); the `world` field is informational.
 app_id      = "wandr.audio.player"
 version     = "0.1.0"
-world       = "wandr:ui-shell/skiko-ui"
+world       = "wandr:ui-shell/audio-player"
 composition = "same-store"
 orientation = "auto"
 label       = "Audio Player"
