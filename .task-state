@@ -1,5 +1,5 @@
 TASK=120
-STEP=video-player-slice-VERIFIED
-STATUS=complete
-LAST_SUCCESS=Desktop video.player VERIFIED end-to-end on the split stack (user-confirmed video render, 300/300 frames). Host cc06e33, contracts 54a939b.
-NOTES=Next apps (same decoder→surface pattern): media-engine (jellyfin rides it), then Signal (camera+RTP+Android). They still import old fused world → break until rewired (nothing ships).
+STEP=android-ci-fixed
+STATUS=in-progress
+LAST_SUCCESS=Android CI fixed (host c3eac74): video.rs backend parity compiles clean (aarch64-android, NDK r27d). Desktop video.player + jellyfin verified. media-engine done.
+NOTES=Remaining: Signal (call.rs) rewire + Android AUTO zero-copy attach rebind (device-verified). Everything else green (desktop runtime + android compile).
