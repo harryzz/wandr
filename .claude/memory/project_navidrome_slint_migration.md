@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: c6bfd2e3-58ed-44e9-8de8-85655ad45867
-  modified: 2026-08-04T07:18:17.717Z
+  modified: 2026-08-04T07:57:19.543Z
 ---
 
 # Navidrome (+ jellyfin/dash) UI → Slint — fresh-session build plan
@@ -25,6 +25,30 @@ the engine presents decoded video to a HOST-composited surface via `wandr:video`
 — Signal proves this works under a **dioxus** UI. So Slint works for jellyfin/dash too:
 Slint draws chrome, host composites video behind it. My earlier "video-in-Slint unsolved"
 was WRONG.
+
+## STATUS: increment 1 BUILT + desktop-smoke OK (2026-08-04)
+Slint navidrome shipped: `apps/user/wandr.navidrome` rebuilt on slint-wandr — random-songs
+ListView (per-row cover thumbnails via a bounded `MAX_COVER_INFLIGHT=4` fetcher) + now-playing
+(large cover, draggable seek, play-pause/prev/next, auto-advance). Engine audio driven ENTIRELY
+from bg-tick (`Instant::elapsed()` nanos → fill_queues→decode_audio→pump_stream→drive_prefetch;
+audio-only, no render). Files: `Cargo.toml` (slint+slint-wandr+image, engine default-features=false),
+`wit-p3/world.wit` (navidrome-extras = export background only), `.cargo/config.toml` (simd128),
+`package.toml` (world→informational `my:skiko-gfx/skiko-ui`), full `src/lib.rs` rewrite.
+**Verified (non-visual):** builds wasm32-wasip2 (component direct, no embed/adapt); the
+double `wasi:canvas` import (slint-wandr + media-engine both) DEDUPES to one import set — the
+composition risk is a non-issue. Desktop host smoke: component instantiates, bg-tick pump
+enabled, `engine: connected to <real server>` (driver ran). **NOT yet verified (needs user):**
+density looks right on device, audio plays on tap, covers render. Screenshot blocked — WSLg is
+rootless so X_GetImage BadMatches; must eyeball on device/display.
+GOTCHA: inside `slint::slint!{}` a hex color that is `#<all-decimal-digits>e` (e.g. `#14181e`)
+fails Rust's LEXER as a float-exponent literal before Slint sees it — use a letter-containing
+variant (`#14181f`). Colors with a hex letter a–f before the trailing e are fine.
+Deploy/test flow proven this session: backup `state/navidrome/config.json` FIRST (install writes
+the version dir), `WANDR_APPS_ROOT=~/wandr-desktop-apps <host> --install apps/user/wandr.navidrome`
+(preserves state), then `tools/scripts/run-app-linux.sh wandr.navidrome`. On-device flow unchanged
+(§Deploy/test below). Old canvas `wit/` dir orphaned (rm blocked by classifier — harmless).
+NEXT: user device test → then layer back menu (Albums/Artists/Playlists/Search) + on_lifecycle
+ring-switch → then jellyfin/dash on Slint (video BehindUi).
 
 ## Order: navidrome first (audio-only, cleanest), then jellyfin/dash (video)
 

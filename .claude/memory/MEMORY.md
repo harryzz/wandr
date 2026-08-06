@@ -28,7 +28,8 @@
 - [✅ 93 P2: SRTP HW-AES](project_wandr_crypto_srtp_offload.md) — host ARMv8 AES 3-8×. · [crypto HW roadmap](project_crypto_hw_offload.md)
 - [✅ 93 P1+4: wandr:video host](project_wandr_video_host.md) — camera→HW-VP8→SURFACE/PiP; upcast gotcha.
 - [✅ 93: Signal video calls](project_wandr_call_video_track.md) — RED PT-120; TWCC mandatory; rotation=container matrix.
-- [✅ 98: AudioFlinger-direct](project_audioflinger_backend.md) — createTrack→cblk ring. · [🔲 108: audio player](project_audio_player.md)
+- [✅ 98: AudioFlinger-direct](project_audioflinger_backend.md) — createTrack→cblk ring. · [🔲 108: audio player](project_audio_player.md) · [🔲 audio.player→media-engine merge](project_audio_player_engine_consolidation.md) — FUTURE; pcm-tap+gapless-queue, crossfade deferred; NO WIT change
+- [🔲 NEXT-SESSION: video WIT extraction→embedder](project_video_wit_extraction_embedder.md) — GOAL=clean WIT proposals (apps=n&s PROOF, nothing ships). Extract codec BASICS→wasi:video-codec (strip surface); wandr:video IMPORTS it + keeps host-fill decode-to-surface as embedder. wasi-gfx surface=guest-fills so host-fill stays wandr. Verify extraction→propose embedding→minimal rewire→optional canvas connection sketch.
 - [✅ Desktop wasi:audio=cpal](project_desktop_audio_cpal.md) — WSLg `pulseaudio`; pump bg-tick.
 - [🔲 Desktop packaging](project_desktop_packaging.md) — NOT started.
 - [✅ Desktop video=nokhwa](project_desktop_video_nokhwa.md) — VP8 all-pass; WSLg cam truncates >640x480. ffmpeg→libvpx (117).
@@ -80,7 +81,7 @@
 - [Ref: compose-wasi consumption](reference_compose_wasi_consumption.md) — use in-tree *-wasm-wasi:9999.0.0-SNAPSHOT.
 - [Ref: wandrpkg manifest](reference_wandrpkg_manifest_convention.md) — package.toml in app dir. · [photon image](reference_photon_image_lib.md)
 - [Ref: dioxus+taffy](reference_dioxus_taffy_rust_ui.md) — crates/dioxus-canvas. · [wasi-webgpu/gfx](reference_wasi_webgpu_gfx.md) — COMPLEMENTS wasi:canvas (WebGPU vs Canvas2D), not competitors.
-- [Ref: wasi-gfx ecosystem relation](reference_wasi_gfx_ecosystem_relation.md) — graphics-context=shared socket; wasi-gfx owns surface/frame-buffer, webgpu=Phase2 defers windowing; wandr ADDS canvas + wasi:video-codec (decoder+encoder+frame, parallel to audio-codec) + wasi:camera (W3C Media Capture) consumers (surface NOT owned).
+- [Ref: wasi-gfx ecosystem relation](reference_wasi_gfx_ecosystem_relation.md) — ‼️UPDATED 2026-08: graphics-context DEPRECATED→per-pairing surface-* worlds @ wasi-gfx:surface@0.2.0 (webgpu stays wasi:@0.3.0-rc.2). SETTLED 2-form model: reactor `embedding` (SHIPS, wasi-gfx-FREE, host-assigned surface — canvas already has it, video-codec/camera must ADD) + optional `surface-*` pairing (portability, imports wasi-gfx:surface). Placement verbs live in embedding; drop graphics-context@0.0.2. wandr ADDS producers (surface NOT owned).
 - [Ref: Avalonia SHIPPED](reference_avalonia_wandr.md) — pin Avalonia 11.3.17 + ILC alpha.
 - [Ref: Swift/OpenSwiftUI eleev 2048](reference_swift_openswiftui_wandr.md) — port overview; UAF fix → [[reference_openswiftui_headless_uaf_repro]].
 - [Ref: OpenSwiftUI @main boot](reference_openswiftui_reactor_main_boot.md) — unmodified @main App on reactor; opt-in export libs.

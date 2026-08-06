@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: reference
   originSessionId: 8f923d2a-de3d-450d-8444-07ecb72775c5
-  modified: 2026-08-01T13:44:22.062Z
+  modified: 2026-08-01T14:14:47.731Z
 ---
 
 Tracking home for wandr's wasmtime version decisions.
@@ -46,6 +46,29 @@ Two advisories, both **Low**:
 **Action: none.** Both Low + non-applicable. **46.0.2** is the low-churn option if ever
 staying current (patch on our major → no fork rebase, security-only), but even a patch
 likely changes the cwasm hash (guest rebuild), so not worth it for these two.
+
+## Threading (wasm/wasi) — will NOT stay single-threaded forever, but is TODAY
+Checked 2026-08-01. Three layers, mid-migration:
+- **Base `threads` proposal** (shared linear memory + atomics) = approved, but only the
+  *substrate* (shared mem + `atomic.wait/notify`); **no thread *spawning***.
+- **`wasi-threads`** (old spawn mechanism) = officially **LEGACY** ("retained for
+  engines that can only support WASI v0.1"); **removed from wasmtime 47**. Never fit
+  the component model.
+- **`shared-everything-threads`** = the SUCCESSOR (component-model-native: thread
+  spawn + TLS + **component-model lifecycle builtins**). Stated plan: **"WASI v0.2 and
+  following will use shared-everything-threads once fully implemented."** But **draft**,
+  unshipped (wasmtime #9466 open, active 2026). Likely multi-year.
+- **Current reality:** the component/P2+ world is **effectively single-threaded NOW**
+  (old path gone, new path not ready — a transition gap).
+- **async ≠ threads:** p3 = single-thread async *concurrency* (shipping); threads =
+  *parallelism* (shared-everything-threads, future). Orthogonal tracks.
+- **wandr:** guests are single-threaded BY DESIGN (reactor / frame-stepped / one p3
+  loop / zygote-fork-per-app). Parallelism already comes from **separate processes**
+  (zygote fork per app) + **host native threads** (Skia/GStreamer/MediaCodec/SRTP).
+  In-guest wasm threading isn't needed, and if it landed it would NOT change the
+  `bsky-sdk` `Send` issue ([[reference_bluesky_atproto_wandr]]) — guests stay
+  single-threaded so the client stays `!Send`; fix is `?Send` regardless
+  ([[feedback_wasi_threading]]).
 
 ## Re-check trigger
 A wasmtime bump becomes worth it when: p3/component-model-async stabilizes, OR a
