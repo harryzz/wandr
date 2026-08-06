@@ -29,7 +29,7 @@
 - [✅ 93 P1+4: wandr:video host](project_wandr_video_host.md) — camera→HW-VP8→SURFACE/PiP; upcast gotcha.
 - [✅ 93: Signal video calls](project_wandr_call_video_track.md) — RED PT-120; TWCC mandatory; rotation=container matrix.
 - [✅ 98: AudioFlinger-direct](project_audioflinger_backend.md) — createTrack→cblk ring. · [🔲 108: audio player](project_audio_player.md) · [🔲 audio.player→media-engine merge](project_audio_player_engine_consolidation.md) — FUTURE; pcm-tap+gapless-queue, crossfade deferred; NO WIT change
-- [🔲 NEXT-SESSION: video WIT extraction→embedder](project_video_wit_extraction_embedder.md) — GOAL=clean WIT proposals (apps=n&s PROOF, nothing ships). Extract codec BASICS→wasi:video-codec (strip surface); wandr:video IMPORTS it + keeps host-fill decode-to-surface as embedder. wasi-gfx surface=guest-fills so host-fill stays wandr. Verify extraction→propose embedding→minimal rewire→optional canvas connection sketch.
+- [✅ video WIT extraction→embedder (WIT+audit DONE; apps deferred)](project_video_wit_extraction_embedder.md) — stripped wasi:video-codec + wasi:camera surface-free, re-expressed wandr:video@0.1.0 as embedder importing both (resolves clean = n&s proof), synced video-diag. WASI-audited PASS. Decisions: frame stays in video-codec; enum kept (desktop); n&s=app-class not proof-app. Rewire deferred → contracts/proposals/VIDEO-EMBEDDER-REWIRE.md.
 - [✅ Desktop wasi:audio=cpal](project_desktop_audio_cpal.md) — WSLg `pulseaudio`; pump bg-tick.
 - [🔲 Desktop packaging](project_desktop_packaging.md) — NOT started.
 - [✅ Desktop video=nokhwa](project_desktop_video_nokhwa.md) — VP8 all-pass; WSLg cam truncates >640x480. ffmpeg→libvpx (117).
