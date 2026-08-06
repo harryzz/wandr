@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: a14a1f7f-f5fb-44f9-a0e5-3879acecf911
-  modified: 2026-08-06T12:21:55.513Z
+  modified: 2026-08-06T14:12:09.778Z
 ---
 
 # Video WIT extraction → wandr:video as embedder — DONE (WIT + audit); apps deferred
@@ -78,11 +78,28 @@ Done:
   90kHz↔µs at the boundary. Full Signal app builds (6.5M wandrpkg). video.test (peer-free
   Android loopback) compiles. **ALL FOUR consumers on the layered world; none import the
   old fused wandr:video/{encoder,decoder}.**
-- **🔲 ONLY REMAINING = on-device Signal pass**: the Android AUTO zero-copy attach REBIND
-  (`set_surface_id` currently just records the id; needs MediaCodec configure-with-surface
-  / `AMediaCodec_setOutputSurface` so RTP output composites into the attached slot).
-  Desktop attach already binds (set_surface_id → dec.surface_id; submit auto-renders).
-  Dev-verify on the Pixel via the video.test loopback + a Signal video call.
+- **✅ UNIFIED FLOW device-verified (host 7fc650e, parent 5f3c57f4)**. RULE: the guest
+  path is OS/runtime-agnostic — ONE flow, both backends honor it:
+  `open decoder → open surface → attach(&dec) → submit → next_decoded → present(f, at_ns)`.
+  at_ns=0 = ASAP (Signal/RTP); computed = A/V-sync (players). NO host auto-present, NO
+  two submit verbs. `attach` binds codec→surface (Android: stop→configure(window)→start,
+  MediaCodec takes a surface only at configure + the split opens surface-free; desktop:
+  set surface_id). `submit` HOLDS output (no slot requirement — part-1 buffer loopback
+  has none). Android decoder-config is dimensionless → default 1280x720 at configure
+  (MediaCodec rejects 1x1; resizes from the keyframe).
+  - Guests changed: Signal now pulls+present(0) (was attach-then-never-pull → nothing
+    ever presented, broken on BOTH backends); player/media-engine add attach; video.test
+    part-1 drains, part-2 pull+present(0).
+  - **Pixel 2 XL**: video.test part-1 (camera→HW-VP8→HW-decode) 60/61; part-2 (RTP
+    pipeline, decode-to-surface) 204/205 @ 20.4fps — both PASS. Desktop video.player
+    300/300 (no regression).
+  - **DEPLOY (device)**: push host + app .wasm to an ISOLATED dir (/data/local/tmp/vt),
+    push NDK libc++_shared.so + LD_LIBRARY_PATH, `--install` (host recompiles on cache-key
+    mismatch, its OWN wasmtime — NO cwasm/CLI needed), `--run-once <app-id>`. Doesn't touch
+    the running zygote.
+- **🔲 REMAINING (visual/real-call)**: (1) eyeball on-screen video on the panel (part-2
+  holds 30s; or --standalone); (2) a real Signal video call with a peer. Codec+attach+
+  decode all PASS via the loopback proxy.
 
 ## NEXT SESSION (the rewire, if/when approved)
 Execute `VIDEO-EMBEDDER-REWIRE.md`: rewire Signal call.rs (encoder→call-encoder;

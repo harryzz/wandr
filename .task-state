@@ -1,5 +1,5 @@
 TASK=120
-STEP=guest-rewire-complete
+STEP=unified-flow-device-verified
 STATUS=complete
-LAST_SUCCESS=ALL video consumers rewired to layered world + build-verified. video.player render-verified; media-engine/jellyfin run-verified; Signal full app builds (6.5M wandrpkg); video.test compiles. Host serves split world (desktop verified, android compiles). Commits: host c3eac74, contracts 54a939b, parent 1748b690.
-NOTES=ONLY remaining = on-device Signal pass: Android AUTO zero-copy attach rebind (MediaCodec setOutputSurface/configure-with-surface) so RTP output composites into the attached slot — dev-verify via video.test loopback + a Signal call on the Pixel. Everything else green.
+LAST_SUCCESS=Unified decode flow device-verified: Android video.test part1+2 PASS (codec loopback 60/61, decode-to-surface 204/205 @20fps); desktop video.player 300/300 no regression. host 7fc650e, parent 5f3c57f4.
+NOTES=REMAINING = visual (eyeball panel during video.test part2 30s hold, or --standalone) + a real Signal video call w/ peer. Codec+attach+decode PASS via loopback proxy. Deploy recipe in memory.
