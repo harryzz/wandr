@@ -1,5 +1,5 @@
 TASK=120
-STEP=unified-flow-device-verified
+STEP=DEVICE-VERIFIED-end-to-end
 STATUS=complete
-LAST_SUCCESS=Unified decode flow device-verified: Android video.test part1+2 PASS (codec loopback 60/61, decode-to-surface 204/205 @20fps); desktop video.player 300/300 no regression. host 7fc650e, parent 5f3c57f4.
-NOTES=REMAINING = visual (eyeball panel during video.test part2 30s hold, or --standalone) + a real Signal video call w/ peer. Codec+attach+decode PASS via loopback proxy. Deploy recipe in memory.
+LAST_SUCCESS=FULL end-to-end device-verified: real Signal video call on Pixel 2 XL works (camera→HW-VP8→RTP→HW-decode→attach→decode-to-surface→present, rotation correct). All 4 consumers on the layered world, unified flow, both backends. host df0d20d.
+NOTES=Task 120 complete. WIT split (wasi:video-codec+camera / wandr:video embedder / diag) designed+audited+device-verified. Deploy recipe + gotchas in memory (nested contracts submodule; --wandr-only stack restart; NO_ART=1; force-push host if reboot loaded old one).
