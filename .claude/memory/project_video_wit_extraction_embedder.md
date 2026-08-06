@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: a14a1f7f-f5fb-44f9-a0e5-3879acecf911
-  modified: 2026-08-06T14:12:09.778Z
+  modified: 2026-08-06T15:08:11.140Z
 ---
 
 # Video WIT extraction → wandr:video as embedder — DONE (WIT + audit); apps deferred
@@ -97,9 +97,25 @@ Done:
     push NDK libc++_shared.so + LD_LIBRARY_PATH, `--install` (host recompiles on cache-key
     mismatch, its OWN wasmtime — NO cwasm/CLI needed), `--run-once <app-id>`. Doesn't touch
     the running zygote.
-- **🔲 REMAINING (visual/real-call)**: (1) eyeball on-screen video on the panel (part-2
-  holds 30s; or --standalone); (2) a real Signal video call with a peer. Codec+attach+
-  decode all PASS via the loopback proxy.
+- **✅ FULL END-TO-END DEVICE-VERIFIED (host df0d20d)**: a REAL Signal video call on the
+  Pixel 2 XL works — camera→HW-VP8 encode→RTP/SRTP→HW decode→attach→decode-to-surface→
+  present, on-screen, rotation correct portrait↔landscape. video.test part-1+2 PASS + user
+  saw video on the panel.
+  - **Rotation fix**: the split moved geometry decoder→video-surface but dropped the
+    decoder's old `apply_geometry`. Ported it into the Android video-surface: store LOGICAL
+    rect + peer CVO; `set_geometry(map_rect_to_panel(rect, dev), (cvo+dev)%360)`; re-apply
+    on every `present` via a `geom_gen` check (`video_surface_reapply_if_rotated`). Desktop
+    = no-op.
+  - **Device deploy gotchas** (learned the hard way): a phone REBOOT auto-starts the stack
+    on whatever host is at `/data/local/tmp/wandr-host` — a reboot loaded the OLD pre-split
+    host (Signal then failed `wasi:eme … resource implementation is missing`). FORCE-push
+    the host (`push_if_newer` can skip). Restart the stack with
+    `run-hybrid-stack.sh --wandr-only` (fast path, implies --no-art, skips the framework
+    HOME_PKG query that BAILS headless; plain `--no-art` is a CLI FLAG not env). Signal =
+    `apps/user/wandr.signal/build.sh --deploy` (backs up /state, per-app install, relaunch);
+    launch via `/data/local/tmp/wandr-arbiter launch wandr.signal`.
+
+## ‼️ TASK 120 COMPLETE — video WIT split designed + WASI-audited + DEVICE-VERIFIED end-to-end.
 
 ## NEXT SESSION (the rewire, if/when approved)
 Execute `VIDEO-EMBEDDER-REWIRE.md`: rewire Signal call.rs (encoder→call-encoder;
