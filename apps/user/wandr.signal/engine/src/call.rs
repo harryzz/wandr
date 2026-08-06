@@ -696,6 +696,16 @@ impl ActiveCall {
                     keyframe: vf.keyframe,
                     decrypt: None,
                 });
+                // Unified flow (identical on every backend): RTP is real-time, so
+                // pull each decoded frame and present it ASAP (at-ns 0). The host
+                // composites it into the attached surface. (The old fused contract
+                // auto-rendered inside submit; the split makes present explicit — one
+                // path, no host magic, same on desktop + Android.)
+                if let Some(sf) = &v.surf {
+                    while let Some(f) = d.next_decoded() {
+                        sf.present(f, 0);
+                    }
+                }
             }
         }
     }

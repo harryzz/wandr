@@ -892,6 +892,7 @@ pub fn install_player(
     .map_err(|e| format!("stream: decoder open: {e:?}"))?;
     let surf = VideoSurface::open(video_rect(w, h, width, height), ZLayer::BehindUi, 0)
         .map_err(|e| format!("stream: surface open: {e:?}"))?;
+    let _ = surf.attach(&dec); // bind codec→surface (unified flow)
     let impl_name = diag_api::implementation(&dec).name;
     STREAM.with(|s| {
         let mut buf = streaming::RollingBuffer::new();
@@ -941,6 +942,7 @@ pub fn install_audio_player(
         .map_err(|e| format!("stream: decoder open: {e:?}"))?;
         let surf = VideoSurface::open(video_rect(w, h, 16, 9), ZLayer::BehindUi, 0)
             .map_err(|e| format!("stream: surface open: {e:?}"))?;
+        let _ = surf.attach(&dec); // bind codec→surface (unified flow)
         (dec, surf)
     };
     #[cfg(not(feature = "video"))]
@@ -1499,6 +1501,7 @@ pub fn switch_video_rep(
             idx: 0, dmx: None, num, den, done: false, pf: Default::default(),
         };
         p.dec = dec;
+        let _ = p.surf.attach(&p.dec); // re-bind the new codec to the reused surface
         p.vid_w = width.max(1);
         p.vid_h = height.max(1);
         p.ps_prefix = ps_prefix;

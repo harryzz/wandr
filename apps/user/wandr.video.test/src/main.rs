@@ -136,6 +136,10 @@ fn part1_direct_loopback() -> bool {
                     println!("   submit error: {e:?}");
                 }
             }
+            // Unified flow: drain decoded output (buffer mode → count + drop). The
+            // codec HOLDS output until pulled, so draining also relieves input
+            // back-pressure. No surface here → the frame just drops (discard).
+            while dec.next_decoded().is_some() {}
         } else {
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -258,6 +262,12 @@ fn part2_engine_pipeline() -> bool {
                     println!("   submit error: {e:?}");
                 }
             }
+            // Unified flow: pull each decoded frame and present ASAP (on-screen).
+            if let Some((d, Some(sf))) = dec.as_ref() {
+                while let Some(fr) = d.next_decoded() {
+                    sf.present(fr, 0);
+                }
+            }
         }
         // RTCP control loop: B asks for a keyframe mid-run → PLI crosses the
         // wire → A surfaces it → encoder request-keyframe (the PLI handler).
@@ -315,8 +325,11 @@ fn part2_engine_pipeline() -> bool {
                 keyframe: vf.keyframe,
                 decrypt: None,
             };
-            if let Some((d, _)) = &dec {
+            if let Some((d, Some(sf))) = &dec {
                 let _ = d.submit(&f);
+                while let Some(fr) = d.next_decoded() {
+                    sf.present(fr, 0);
+                }
             }
         }
         let now = Instant::now();

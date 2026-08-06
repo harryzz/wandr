@@ -560,6 +560,9 @@ impl Player {
                 return;
             }
         };
+        // Bind the codec to the surface (the one unified flow; the host makes this
+        // true per-backend). Present then schedules pulled frames onto it.
+        let _ = surf.attach(&dec);
         println!(
             "player: decoder OPEN ✓ decode-to-surface {w}x{vh} — asked {:?}, got {} ({})",
             self.accel,
