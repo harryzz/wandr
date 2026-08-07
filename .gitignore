@@ -37,3 +37,6 @@ future-postings/
 # 2048 (OpenSwiftUI) app component — 67MB regenerable Swift build output; manifest is tracked,
 # the wasm is rebuilt via swift/OpenSwiftUIProject/tests/deploy/deploy-device.sh
 apps/user/wandr.swiftui.demo/components/ui.wasm
+
+# registry pack output (.wandrpkg → Release assets)
+/dist/

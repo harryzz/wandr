@@ -1,0 +1,76 @@
+{
+  "apps": [
+    {
+      "id": "wandr.video.player",
+      "name": "Video Player",
+      "version": "0.1.0",
+      "description": "HW-decoded video playback (wandr:video)",
+      "size": 99966,
+      "sha256": "92edd66f9782396eb495918b4bb3a1047b37dc525114851ee94120471cd13246",
+      "url": "https://github.com/harryzz/wandr/releases/download/apps/wandr.video.player-0.1.0.wandrpkg"
+    },
+    {
+      "id": "wandr.audio.player",
+      "name": "Audio Player",
+      "version": "0.1.0",
+      "description": "Gapless audio player",
+      "size": 4878497,
+      "sha256": "0dcffffa526fd78695f9d6f4672b9c669a918949f756fa8bbd3ca5d81144c662",
+      "url": "https://github.com/harryzz/wandr/releases/download/apps/wandr.audio.player-0.1.0.wandrpkg"
+    },
+    {
+      "id": "wandr.tetris",
+      "name": "Tetris",
+      "version": "0.1.0",
+      "description": "Tetris — tiny native demo",
+      "size": 66192,
+      "sha256": "153751840c17d0142894943347afdeb63a44b404b8e12395b6ac1efdc21e028e",
+      "url": "https://github.com/harryzz/wandr/releases/download/apps/wandr.tetris-0.1.0.wandrpkg"
+    },
+    {
+      "id": "wandr.slint.test",
+      "name": "Slint Test",
+      "version": "0.1.0",
+      "description": "Slint UI framework demo",
+      "size": 4343800,
+      "sha256": "0986e61e557de0be90332840588b7610f8fbf5e6ceff83d932017a9a98e8a1f1",
+      "url": "https://github.com/harryzz/wandr/releases/download/apps/wandr.slint.test-0.1.0.wandrpkg"
+    },
+    {
+      "id": "wandr.avalonia.demo",
+      "name": "Avalonia Demo",
+      "version": "0.1.0",
+      "description": "Avalonia (.NET) UI demo",
+      "size": 9086283,
+      "sha256": "832a671ba0346a607f33e869e275e4ed8c2e5404f71f13e08e13734f2d886649",
+      "url": "https://github.com/harryzz/wandr/releases/download/apps/wandr.avalonia.demo-0.1.0.wandrpkg"
+    },
+    {
+      "id": "wandr.swiftui.demo",
+      "name": "SwiftUI 2048",
+      "version": "0.1.0",
+      "description": "SwiftUI / OpenSwiftUI demo",
+      "size": 24729369,
+      "sha256": "af997327ab1a82be38bfb7b2c1c6b677a93a52065b911b59d5c9f581d3433bce",
+      "url": "https://github.com/harryzz/wandr/releases/download/apps/wandr.swiftui.demo-0.1.0.wandrpkg"
+    },
+    {
+      "id": "wandr.jellyfin",
+      "name": "Jellyfin",
+      "version": "0.1.0",
+      "description": "Jellyfin media client",
+      "size": 4979862,
+      "sha256": "3dfba1cd067771132746e95ceb80277ec19270cca3e5ccd6ad939aa919b20b5d",
+      "url": "https://github.com/harryzz/wandr/releases/download/apps/wandr.jellyfin-0.1.0.wandrpkg"
+    },
+    {
+      "id": "wandr.navidrome",
+      "name": "Navidrome",
+      "version": "0.1.0",
+      "description": "Navidrome music client",
+      "size": 5057257,
+      "sha256": "63e03bc77b6ba106c6901ef0a9b6bc4012f40620fda5c6abd0199ebc3a1a56cd",
+      "url": "https://github.com/harryzz/wandr/releases/download/apps/wandr.navidrome-0.1.0.wandrpkg"
+    }
+  ]
+}

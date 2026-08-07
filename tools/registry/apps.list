@@ -1,0 +1,20 @@
+# wandr app registry — curated apps to publish.
+#
+# One app per line:   <app-dir under apps/user/>  |  <short description>
+# The description is optional (used for `wandr list`); the display name comes
+# from package.toml `label`, id/version from `app_id`/`version`.
+#
+# build-registry.sh packs each app whose components/*.wasm exists on disk and
+# skips (with a warning) any that isn't built yet — so uncomment/build as needed.
+
+wandr.video.player   | HW-decoded video playback (wandr:video)
+wandr.audio.player   | Gapless audio player
+wandr.tetris         | Tetris — tiny native demo
+wandr.slint.test     | Slint UI framework demo
+wandr.avalonia.demo  | Avalonia (.NET) UI demo
+wandr.swiftui.demo   | SwiftUI / OpenSwiftUI demo
+wandr.jellyfin       | Jellyfin media client
+wandr.navidrome      | Navidrome music client
+
+# Needs a build before it can be published (no components/*.wasm on disk):
+# wandr.dioxus.demo  | Dioxus UI demo
