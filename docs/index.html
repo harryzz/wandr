@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wandr — a portable UI runtime for WASM apps</title>
+<meta name="description" content="Write a UI once in any language or framework, compile to a WASM component, and run it natively on any OS wandr has a backend for.">
+<style>
+  :root{
+    --bg:#ffffff; --fg:#1a1a2e; --muted:#5c5c72; --card:#f6f6fb; --border:#e6e6f0;
+    --accent:#6d5efc; --accent-fg:#ffffff; --code-bg:#0f1020; --code-fg:#e6e6f5;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{ --bg:#0d0d17; --fg:#ececf5; --muted:#a0a0b8; --card:#16162a; --border:#26263f;
+           --accent:#8a7bff; --accent-fg:#0d0d17; --code-bg:#05050f; --code-fg:#e6e6f5; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:840px;margin:0 auto;padding:0 20px}
+  header{padding:72px 20px 40px;text-align:center;
+    background:radial-gradient(1200px 400px at 50% -100px,color-mix(in srgb,var(--accent) 22%,transparent),transparent)}
+  h1{font-size:2.6rem;margin:0 0 8px;letter-spacing:-.02em}
+  .tag{font-size:1.2rem;color:var(--muted);max-width:640px;margin:0 auto 26px}
+  .cta{display:inline-flex;gap:10px;flex-wrap:wrap;justify-content:center}
+  .btn{display:inline-block;padding:10px 18px;border-radius:10px;font-weight:600;border:1px solid var(--border)}
+  .btn.primary{background:var(--accent);color:var(--accent-fg);border-color:transparent}
+  .btn.ghost{background:transparent;color:var(--fg)}
+  section{padding:36px 0;border-top:1px solid var(--border)}
+  h2{font-size:1.5rem;margin:0 0 14px;letter-spacing:-.01em}
+  h3{margin:22px 0 8px;font-size:1rem;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+  p{color:var(--fg)} .muted{color:var(--muted)}
+  .code{position:relative;background:var(--code-bg);color:var(--code-fg);border-radius:10px;
+    padding:14px 46px 14px 16px;font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    overflow-x:auto;white-space:pre}
+  .copy{position:absolute;top:8px;right:8px;background:color-mix(in srgb,var(--accent) 20%,transparent);
+    color:var(--code-fg);border:1px solid color-mix(in srgb,var(--accent) 40%,transparent);
+    border-radius:7px;padding:4px 9px;font-size:12px;cursor:pointer}
+  .copy:hover{background:color-mix(in srgb,var(--accent) 35%,transparent)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
+  .app{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 16px}
+  .app .name{font-weight:700}
+  .app .id{font:12px/1.4 ui-monospace,monospace;color:var(--muted);word-break:break-all}
+  .app .desc{font-size:.92rem;color:var(--fg);margin:6px 0 0}
+  .app .size{font-size:.8rem;color:var(--muted);margin-top:6px}
+  .steps{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:6px 18px}
+  table{width:100%;border-collapse:collapse;font-size:.95rem}
+  td,th{text-align:left;padding:7px 8px;border-bottom:1px solid var(--border)}
+  td:first-child{white-space:nowrap;font-weight:600}
+  footer{padding:30px 20px 60px;text-align:center;color:var(--muted);font-size:.9rem}
+  .badge{display:inline-block;font-size:.75rem;padding:2px 8px;border-radius:20px;
+    background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 35%,transparent)}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <h1>wandr</h1>
+    <p class="tag">A portable UI runtime for WASM apps. Write a UI once — in any
+      language, with any framework — compile it to a single WASM component, and
+      run it natively on any OS wandr has a backend for.</p>
+    <div class="cta">
+      <a class="btn primary" href="#install">Get started</a>
+      <a class="btn ghost" href="https://github.com/harryzz/wandr">View on GitHub</a>
+      <a class="btn ghost" href="https://youtube.com/shorts/rR4TG-I5Y58">▶ Demo video</a>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <section id="idea">
+    <h2>The one idea</h2>
+    <p>A guest app imports a fixed set of <strong>OS-agnostic WIT contracts</strong>
+      (render, input, IME, chrome, device, media, audio, events) and never names an
+      OS. <code>wandr-host</code> — wasmtime + the component model + a Skia rendering
+      core — implements those contracts and delegates only the physically OS-specific
+      bits to a per-OS <strong>backend</strong>. The contracts are portable; only the
+      backend is OS-specific — so the same guest <code>.wasm</code> runs everywhere.</p>
+    <p class="muted">Shipped guest frameworks: Compose · Slint · dioxus · Avalonia ·
+      Swift/OpenSwiftUI. Android is the production backend (post-ART, a rooted dev
+      target); Linux · macOS · Windows are the desktop way to try wandr.</p>
+  </section>
+
+  <section id="install">
+    <h2>Install <span class="badge">desktop</span></h2>
+    <p>Installs the <code>wandr-host</code> runtime and the <code>wandr</code> app
+      manager into <code>~/.wandr/bin</code>, and adds it to your <code>PATH</code>.</p>
+
+    <h3>Linux / macOS</h3>
+    <div class="code" data-copy>curl -fsSL https://raw.githubusercontent.com/harryzz/wandr-host/main/install.sh | sh</div>
+
+    <h3>Windows (PowerShell)</h3>
+    <div class="code" data-copy>irm https://raw.githubusercontent.com/harryzz/wandr-host/main/install.ps1 | iex</div>
+
+    <p class="muted" style="margin-top:14px">Video playback needs GStreamer — see the
+      <a href="install.html">full install &amp; usage guide</a> for the per-OS command.</p>
+  </section>
+
+  <section id="run">
+    <h2>Install &amp; run apps</h2>
+    <p>Open a new terminal (so <code>PATH</code> is picked up), then:</p>
+    <div class="steps">
+      <table>
+        <tr><td>wandr list</td><td>apps in the registry (● = installed)</td></tr>
+        <tr><td>wandr install &lt;id&gt;</td><td>download + install an app</td></tr>
+        <tr><td>wandr run &lt;id&gt;</td><td>run an installed app</td></tr>
+        <tr><td>wandr remove &lt;id&gt;</td><td>uninstall</td></tr>
+      </table>
+    </div>
+    <div class="code" data-copy style="margin-top:14px">wandr install wandr.tetris
+wandr run wandr.tetris</div>
+  </section>
+
+  <section id="apps">
+    <h2>Available apps</h2>
+    <p class="muted" id="apps-status">Loading the registry…</p>
+    <div class="grid" id="apps"></div>
+  </section>
+
+  <section id="docs">
+    <h2>Documentation</h2>
+    <table>
+      <tr><td><a href="install.html">Install guide</a></td><td>Install the runtime, install &amp; run apps</td></tr>
+      <tr><td><a href="overview.html">Overview</a></td><td>The layer model + per-backend/framework maturity</td></tr>
+      <tr><td><a href="repository-layout.html">Repo layout</a></td><td>Where things live</td></tr>
+      <tr><td><a href="https://github.com/harryzz/wandr">GitHub</a></td><td>Source, issues, tasks</td></tr>
+    </table>
+  </section>
+
+</div>
+
+<footer>wandr — portable WASM UI runtime · <a href="https://github.com/harryzz/wandr">github.com/harryzz/wandr</a></footer>
+
+<script>
+  // copy-to-clipboard on code blocks
+  document.querySelectorAll('.code[data-copy]').forEach(function(el){
+    var b=document.createElement('button'); b.className='copy'; b.textContent='copy';
+    b.addEventListener('click',function(){
+      navigator.clipboard.writeText(el.textContent.trim()).then(function(){
+        b.textContent='copied'; setTimeout(function(){b.textContent='copy';},1200);
+      });
+    });
+    el.appendChild(b);
+  });
+
+  // live app list from the registry (same-origin)
+  function fmtSize(n){
+    if(!n) return '';
+    var mb=n/1048576; return mb>=1 ? mb.toFixed(1)+' MB' : Math.round(n/1024)+' KB';
+  }
+  fetch('registry/index.json').then(function(r){return r.json();}).then(function(d){
+    var apps=(d&&d.apps)||[]; var grid=document.getElementById('apps');
+    var status=document.getElementById('apps-status');
+    if(!apps.length){ status.textContent='No apps in the registry yet.'; return; }
+    status.textContent=apps.length+' apps — install any with '+String.fromCharCode(96)+'wandr install <id>'+String.fromCharCode(96)+'.';
+    apps.forEach(function(a){
+      var c=document.createElement('div'); c.className='app';
+      var name=document.createElement('div'); name.className='name'; name.textContent=a.name||a.id;
+      var id=document.createElement('div'); id.className='id'; id.textContent=a.id+' · v'+(a.version||'?');
+      c.appendChild(name); c.appendChild(id);
+      if(a.description){ var ds=document.createElement('div'); ds.className='desc'; ds.textContent=a.description; c.appendChild(ds); }
+      var sz=document.createElement('div'); sz.className='size'; sz.textContent=fmtSize(a.size); c.appendChild(sz);
+      grid.appendChild(c);
+    });
+  }).catch(function(){
+    document.getElementById('apps-status').textContent='Could not load the registry.';
+  });
+</script>
+</body>
+</html>
